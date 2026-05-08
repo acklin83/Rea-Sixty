@@ -390,6 +390,17 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Btn360]    = mkBuiltin("mixer_toggle",          Behavior::Momentary, "360");
     L1[ButtonId::Pan]       = mkBuiltin("pan_force",             Behavior::Toggle,    "PAN");
 
+    // Shift+Plugin: same toggle plus open/close the focused track's
+    // user-mapped plug-in GUI.
+    {
+        auto& spShift = L1[ButtonId::PluginBtn]
+            .shortPress[static_cast<int>(Modifier::Shift)];
+        spShift.type   = ActionType::Builtin;
+        spShift.action = "ssl_strip_mode_toggle_with_gui";
+        spShift.param  = 0;
+        spShift.label  = "PLUG+UI";
+    }
+
     // Flip long-press routes the focused track's sends/receives onto
     // V-Pots: long alone = sends (LED green when active), long+Shift =
     // receives (LED red). Behavior must be Momentary for long-press to

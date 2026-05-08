@@ -1100,6 +1100,52 @@ double   uiVolLinear(MediaTrack* tr);
 // block further down. Kept in sync with that block.
 constexpr uint16_t kUf8FaderPbMax = 15583;
 
+// FX Learn UF8 — locate the user-mapped plug-in instance currently
+// targeted by the focused track + instance switcher. Used by the SSL
+// Strip Mode + GUI builtin (Phase 4) and the per-strip dispatch path
+// (Phase 5+). Domain-aware: counts CS-domain user plug-ins via
+// uc1::csInstanceIndex, BC-domain via uc1::bcInstanceIndex; domain=None
+// user plug-ins don't participate (their instance state isn't tracked).
+struct UserPluginCtx {
+    MediaTrack*               tr;
+    int                       fxIdx;
+    const uf8::UserPluginMap* map;
+};
+UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
+{
+    UserPluginCtx out{ tr, -1, nullptr };
+    if (!tr) return out;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return out;
+
+    const int wantCs = uc1::csInstanceIndex(tr);
+    const int wantBc = uc1::bcInstanceIndex(tr);
+    int seenCs = 0, seenBc = 0;
+
+    const int n = TrackFX_GetCount(tr);
+    char fxName[256];
+    for (int i = 0; i < n; ++i) {
+        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+        const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+        if (!um) continue;
+        if (um->domain == uf8::Domain::ChannelStrip) {
+            if (seenCs == wantCs) {
+                out.fxIdx = i;
+                out.map   = um;
+                return out;
+            }
+            ++seenCs;
+        } else if (um->domain == uf8::Domain::BusComp) {
+            if (seenBc == wantBc) {
+                out.fxIdx = i;
+                out.map   = um;
+                return out;
+            }
+            ++seenBc;
+        }
+    }
+    return out;
+}
+
 // CS plug-in's "Fader Level" param (= the SSL strip's own internal
 // fader, distinct from REAPER's track volume). Used when the Plugin
 // button is engaged so the UF8 motor faders drive the SSL strip
@@ -6713,6 +6759,34 @@ void registerBindingHandlers()
         },
         [](int) { return g_pluginFaderMode.load(); },
         "Toggle SSL Strip Mode", false
+    });
+
+    // Same as ssl_strip_mode_toggle but additionally opens / closes the
+    // focused track's user-mapped plug-in GUI. Default factory binding
+    // is Shift+Plugin (PluginBtn modifier slot). Built-in CS plug-ins
+    // are NOT opened — only user-learned plug-ins (per FX Learn).
+    registerBuiltin("ssl_strip_mode_toggle_with_gui", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_pluginFaderMode.load();
+            g_pluginFaderMode.store(next);
+            g_pageDirty.store(true);
+            SetExtState("ReaSixty", "pluginFaderMode",
+                        next ? "1" : "0", true);
+
+            MediaTrack* tr = nullptr;
+            if (g_uc1_surface) {
+                tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+            }
+            if (!tr) tr = GetSelectedTrack(nullptr, 0);
+            if (!tr) return;
+            const auto ctx = findUserPluginOnTrack_(tr);
+            if (ctx.fxIdx < 0) return;
+            // showflag: 3 = floating GUI shown, 2 = hide floating GUI
+            TrackFX_Show(ctx.tr, ctx.fxIdx, next ? 3 : 2);
+        },
+        [](int) { return g_pluginFaderMode.load(); },
+        "Toggle SSL Strip Mode (with GUI)", false
     });
 
     registerBuiltin("pan_force", DescBuilder{
