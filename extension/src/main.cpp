@@ -2372,6 +2372,17 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
 {
     if (!g_dev) return;
     if (cls == LedClass::Arm) return;   // gate ARM until its colour-pair is captured
+    // FX Learn UF8: in user-strip mode, Solo / Cut / Sel LEDs are driven
+    // by the per-tick poll in pushZonesForVisibleSlots from user-binding
+    // state — let it own the LED so REAPER's track-state callbacks don't
+    // overwrite it. Other LED classes (e.g. focused-FX) keep flowing.
+    if (g_pluginFaderMode.load()
+        && (cls == LedClass::Solo
+         || cls == LedClass::Mute
+         || cls == LedClass::Sel))
+    {
+        if (auto u = userStripCtxFocused_(); u.map) return;
+    }
     for (int s = 0; s < 8; ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
@@ -3330,6 +3341,12 @@ std::array<std::string, 8> g_panOverlayText{};
 // callback only fires for track mute changes, so a per-tick poll is the
 // only way to keep the LED in sync with send-mute toggles.
 std::array<int8_t, 8>      g_lastCutLed{-1, -1, -1, -1, -1, -1, -1, -1};
+// Per-strip Solo / Sel last-pushed state used by the user-strip-mode
+// LED override (Plugin Mode + a learned plug-in focused). Outside user-
+// strip mode, Solo/Sel LEDs are pushed event-driven via sendLed from
+// REAPER callbacks — these caches are unused there. -1 = unknown.
+std::array<int8_t, 8>      g_lastSoloLed{-1, -1, -1, -1, -1, -1, -1, -1};
+std::array<int8_t, 8>      g_lastSelLed {-1, -1, -1, -1, -1, -1, -1, -1};
 bool                       g_vpotBarInit{false};
 
 // Resolve the LinkSlot for one visible strip at the current page index.
@@ -3548,13 +3565,47 @@ void pushZonesForVisibleSlots()
         const bool routedVpot  = vpotRoute.active();
         const bool routedFader = faderRoute.active();
 
+        // FX Learn UF8: when Plugin Mode is on AND a learned plug-in is
+        // focused, all 8 strips' Solo/Cut/Sel LEDs reflect the user-
+        // binding state instead of the bank track's. Empty bindings
+        // render off (Frank's "buttons ohne Funktion ausblenden"
+        // request — strips without any function in the active mode
+        // shouldn't pretend to show track state).
+        bool userStripActive = false;
+        UserPluginCtx userS{nullptr, -1, nullptr};
+        int userBoundFader = -1;
+        int userBoundSolo  = -1;
+        int userBoundCut   = -1;
+        int userBoundSel   = -1;
+        int userBoundVpot  = -1;
+        if (g_pluginFaderMode.load()) {
+            userS = userStripCtxFocused_();
+            if (userS.map) {
+                userStripActive = true;
+                const auto& sb = userS.map->uf8.strips[s];
+                userBoundFader = sb.faderVst3Param;
+                userBoundSolo  = sb.soloVst3Param;
+                userBoundCut   = sb.cutVst3Param;
+                userBoundSel   = sb.selVst3Param;
+                const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                userBoundVpot  = userS.map->uf8.banks.banks[bank][s].vst3Param;
+            }
+        }
+
         // CUT LED — effective mute follows routing. Send/Receive mute
         // changes don't fire SetSurfaceMute, so we poll once per tick
         // and dedup against g_lastCutLed[s]. Empty strips (no track or
-        // routed-but-invalid) render off.
+        // routed-but-invalid) render off. User-strip mode overrides
+        // with the bound param's state.
         {
             bool effMute = false;
-            if (tr) {
+            if (userStripActive) {
+                if (userBoundCut >= 0) {
+                    effMute = TrackFX_GetParamNormalized(
+                        userS.tr, userS.fxIdx, userBoundCut) >= 0.5;
+                }
+                // userBoundCut < 0 → effMute stays false → LED off.
+            } else if (tr) {
                 if (routedFader && faderRoute.valid) {
                     effMute = GetTrackSendInfo_Value(
                         faderRoute.track, faderRoute.sendCategory,
@@ -3576,7 +3627,8 @@ void pushZonesForVisibleSlots()
                 // the Cut LED matches the strip's colour bar (which is
                 // already route-coloured via reaperColorForVisibleSlot).
                 MediaTrack* colourTr = tr;
-                if (routedFader && faderRoute.valid) {
+                if (userStripActive) colourTr = userS.tr;
+                else if (routedFader && faderRoute.valid) {
                     if (auto* rt = routeTargetTrack_(faderRoute)) colourTr = rt;
                 } else if (routedVpot && vpotRoute.valid) {
                     if (auto* rt = routeTargetTrack_(vpotRoute)) colourTr = rt;
@@ -3585,6 +3637,41 @@ void pushZonesForVisibleSlots()
                     static_cast<uint8_t>(s), uf8::LedClass::Cut, effMute,
                     ledColourFor(LedClass::Mute, colourTr)));
             }
+        }
+
+        // SOLO + SEL LEDs — only pushed per-tick in user-strip mode.
+        // Outside user-strip mode, REAPER's SetSurfaceSolo / Selected
+        // callbacks (event-driven via sendLed) handle these. We push
+        // here when entering / cycling / clearing user-strip mode so
+        // empty bindings go off. Cache resets to -1 on bank-shift to
+        // force a re-push when leaving user-strip mode.
+        if (userStripActive) {
+            const bool soloOn = (userBoundSolo >= 0)
+                && TrackFX_GetParamNormalized(
+                       userS.tr, userS.fxIdx, userBoundSolo) >= 0.5;
+            const int8_t soloKey = soloOn ? 1 : 0;
+            if (soloKey != g_lastSoloLed[s]) {
+                g_lastSoloLed[s] = soloKey;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                    ledColourFor(LedClass::Solo, userS.tr)));
+            }
+
+            const bool selOn = (userBoundSel >= 0)
+                && TrackFX_GetParamNormalized(
+                       userS.tr, userS.fxIdx, userBoundSel) >= 0.5;
+            const int8_t selKey = selOn ? 1 : 0;
+            if (selKey != g_lastSelLed[s]) {
+                g_lastSelLed[s] = selKey;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(s), uf8::LedClass::Sel, selOn,
+                    ledColourFor(LedClass::Sel, userS.tr)));
+            }
+        } else {
+            // Reset cache so the next entry into user-strip mode (or a
+            // bank shift) re-pushes against fresh data.
+            g_lastSoloLed[s] = -1;
+            g_lastSelLed[s]  = -1;
         }
 
         // Top-zone label + LED (FF 66 .. 04 + cells 0x18..0x1F).
@@ -3926,11 +4013,21 @@ void pushZonesForVisibleSlots()
 
         // Channel Number Zone — the tiny digit top-left of each strip's
         // color bar. REAPER track index is 0-based; UF8 expects 1-based
-        // ASCII.
+        // ASCII. In user-strip mode, blank when the strip has no user
+        // bindings at all (Frank's "buttons ohne Funktion ausblenden").
         {
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "%d", realSlot + 1);
-            std::string chan(buf);
+            std::string chan;
+            const bool stripHasUserFunction = userStripActive
+                && (userBoundFader >= 0 || userBoundVpot >= 0
+                 || userBoundSolo  >= 0 || userBoundCut  >= 0
+                 || userBoundSel   >= 0);
+            if (userStripActive && !stripHasUserFunction) {
+                chan = "  ";
+            } else {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%d", realSlot + 1);
+                chan = buf;
+            }
             if (chan != g_lastChanNum[s]) {
                 g_lastChanNum[s] = chan;
                 g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
@@ -4134,15 +4231,25 @@ void pushZonesForVisibleSlots()
                     userF.vst3Param, pn, sizeof(pn));
                 if (pn[0]) n = pn;
             }
-            if (n.empty()) {
+            // FX Learn UF8: in user-strip mode without a fader binding
+            // for this strip, blank the upper scribble — Frank's
+            // "channel displays ohne Funktion ausblenden". Otherwise
+            // we'd be showing the bank track's name on a strip that
+            // doesn't actually control that track in the active mode.
+            const bool blankInUserStripMode = userStripActive
+                && !userFaderActive;
+            if (n.empty() && !blankInUserStripMode) {
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
                 n = name;
             }
-            if (n.empty()) {
+            if (n.empty() && !blankInUserStripMode) {
                 char fallback[8];
                 std::snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
                 n = fallback;
+            }
+            if (blankInUserStripMode) {
+                n = "       ";   // 7 spaces, matches blank-strip path
             }
             if (n.size() > 7) n.resize(7);
             if (n != g_lastTrackName[s]) {
@@ -7280,6 +7387,10 @@ void registerBindingHandlers()
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
             g_pageDirty.store(true);
+            // Force LED + display re-push when entering / leaving the
+            // user-strip-mode override so unmapped LEDs blank out (and
+            // re-illuminate from track state on exit).
+            g_bankDirty.store(true);
             SetExtState("ReaSixty", "pluginFaderMode",
                         next ? "1" : "0", true);
         },
@@ -7302,6 +7413,10 @@ void registerBindingHandlers()
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
             g_pageDirty.store(true);
+            // Force LED + display re-push when entering / leaving the
+            // user-strip-mode override so unmapped LEDs blank out (and
+            // re-illuminate from track state on exit).
+            g_bankDirty.store(true);
             SetExtState("ReaSixty", "pluginFaderMode",
                         next ? "1" : "0", true);
             g_pluginGuiSyncRequest.store(true);
