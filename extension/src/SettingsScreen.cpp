@@ -3937,12 +3937,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_Text(ctx, hdr);
 
     // UC1 / UF8 mockup picker. Lifted to ExtState so the choice survives
-    // REAPER restart per editor pane.
+    // REAPER restart.
     static int s_mockup = -1;
     if (s_mockup < 0) {
-        char buf[8] = {};
-        GetExtState("ReaSixty/FXLearn", "mockup");
-        const char* v = GetExtState("ReaSixty/FXLearn", "mockup");
+        const char* v = GetExtState("ReaSixty", "fxLearnMockup");
         s_mockup = (v && *v == '1') ? 1 : 0;
     }
 
@@ -3951,12 +3949,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButton(ctx, "UC1##fxl_mock_uc1", s_mockup == 0)) {
         s_mockup = 0;
-        SetExtState("ReaSixty/FXLearn", "mockup", "0", true);
+        SetExtState("ReaSixty", "fxLearnMockup", "0", true);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButton(ctx, "UF8##fxl_mock_uf8", s_mockup == 1)) {
         s_mockup = 1;
-        SetExtState("ReaSixty/FXLearn", "mockup", "1", true);
+        SetExtState("ReaSixty", "fxLearnMockup", "1", true);
     }
 
     if (s_mockup == 1) {
