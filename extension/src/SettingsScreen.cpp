@@ -3236,55 +3236,43 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 // ---------------------------------------------------------------------------
 // UF8 face — Phase 2 read-only mockup.
 //
-// Layout: 8 vertical strips left-to-right, with a row of 6 bank-selectors
-// centred above them. Per strip top→bottom: top soft-key → scribble (track
-// name + value-line) → V-Pot ring → Sel/Cut/Solo trio → fader cap → fader
-// rail. Coordinates here match the Uf8Control table in the next block.
-// Pure visual rendering — Phase 3 will wire interactivity (drag-drop,
-// listening, right-click menu) on top via drawUf8Control_.
+// Geometry mirrors drawUf8Vector's strip layout (kStripW=80, kStripGap=7)
+// for hardware fidelity. Width matches the UC1 mockup (860). Solo/Cut/Sel
+// stacked vertically per real UF8 hardware. Bank-selector + bank-pick UI
+// lives outside this canvas (Phase 3 adds it as a normal ImGui combo).
 // ---------------------------------------------------------------------------
 
 namespace {
 
-constexpr float kUf8FaceW = 1080;
-constexpr float kUf8FaceH = 540;
-constexpr float kUf8StripW = 120;
-constexpr float kUf8StripGap = 8;
-constexpr float kUf8StripsOx = 32;          // (1080 - 8*120 - 7*8) / 2
+constexpr float kUf8FaceW       = 860;
+constexpr float kUf8FaceH       = 490;
+constexpr float kUf8StripW      = 80;
+constexpr float kUf8StripGap    = 7;
+// Centre 8 strips:  8*80 + 7*7 = 689.  ox = (860 - 689) / 2 = 85.5
+constexpr float kUf8StripsOx    = 86;
 
-constexpr float kUf8BankRowY = 20;
-constexpr float kUf8BankBtnW = 80;
-constexpr float kUf8BankBtnH = 28;
-constexpr float kUf8BankGap  = 12;
-constexpr float kUf8BankRowOx =                              // centred
-    (kUf8FaceW - (6.0f * kUf8BankBtnW + 5.0f * kUf8BankGap)) / 2.0f;
-
-constexpr float kUf8StripTop      = 60;
-constexpr float kUf8TopSoftKeyH   = 28;
-constexpr float kUf8ScribbleY     = kUf8StripTop + kUf8TopSoftKeyH + 4;
-constexpr float kUf8ScribbleH     = 60;
-constexpr float kUf8VPotY         = kUf8ScribbleY + kUf8ScribbleH + 4;
-constexpr float kUf8VPotH         = 80;
-constexpr float kUf8VPotR         = 32;
-constexpr float kUf8SCSY          = kUf8VPotY + kUf8VPotH + 4;
-constexpr float kUf8SCSH          = 36;
-constexpr float kUf8SCSBtnW       = 32;
-constexpr float kUf8SCSBtnH       = 32;
-constexpr float kUf8FaderCapY     = kUf8SCSY + kUf8SCSH + 4;
-constexpr float kUf8FaderCapH     = 16;
-constexpr float kUf8FaderCapW     = 24;
-constexpr float kUf8FaderRailY    = kUf8FaderCapY + kUf8FaderCapH;
-constexpr float kUf8FaderRailH    = 220;
-constexpr float kUf8FaderRailW    = 24;
+constexpr float kUf8TopSoftKeyY = 12;
+constexpr float kUf8TopSoftKeyH = 22;
+constexpr float kUf8ScribbleY   = 40;
+constexpr float kUf8ScribbleH   = 58;
+constexpr float kUf8VPotCy      = 124;
+constexpr float kUf8VPotR       = 18;
+constexpr float kUf8SoloY       = 152;
+constexpr float kUf8CutY        = 172;
+constexpr float kUf8SelY        = 192;
+constexpr float kUf8SCSBtnH     = 16;
+constexpr float kUf8FaderCapY   = 216;
+constexpr float kUf8FaderCapH   = 14;
+constexpr float kUf8FaderCapW   = 24;
+constexpr float kUf8FaderRailY  = 234;
+constexpr float kUf8FaderRailH  = 240;
+constexpr float kUf8FaderRailW  = 22;
 
 inline float uf8StripCx_(int strip)
 {
     return kUf8StripsOx + strip * (kUf8StripW + kUf8StripGap)
          + kUf8StripW / 2.0f;
 }
-
-const char* kUf8BankLabels[6] = { "V-POT", "SOFT 1", "SOFT 2",
-                                  "SOFT 3", "SOFT 4", "SOFT 5" };
 
 } // namespace
 
@@ -3297,97 +3285,73 @@ void drawUf8Face_(VCanvas& c)
     constexpr uint32_t kPanel      = 0x1A1E24FF;
     constexpr uint32_t kBtnFill    = 0x252A33FF;
     constexpr uint32_t kBtnEdge    = 0x4A5060FF;
-    constexpr uint32_t kScribble   = 0x101418FF;
-    constexpr uint32_t kScribEdge  = 0x303642FF;
+    constexpr uint32_t kScribble   = 0x080C12FF;
+    constexpr uint32_t kScribEdge  = 0x444A55FF;
     constexpr uint32_t kRingOuter  = 0x4A5060FF;
-    constexpr uint32_t kRingInner  = 0x6A707CFF;
+    constexpr uint32_t kRingInner  = 0x555A66FF;
     constexpr uint32_t kFaderCap   = 0x808890FF;
     constexpr uint32_t kFaderRail  = 0x303338FF;
     constexpr uint32_t kSilkText   = 0x9CA0AAFF;
 
-    auto labelCentered = [&](float x, float y, uint32_t col, const char* s)
-    {
-        drawTextCentered_(c, x, y, col, s);
-    };
-
     // Chassis
     rect_(c, 4, 4, W - 8, H - 8, kChassis, kEdge, /*rounding*/ 8.0);
 
-    // Bank-Selektor Reihe
-    for (int b = 0; b < 6; ++b) {
-        const float x = kUf8BankRowOx
-                      + b * (kUf8BankBtnW + kUf8BankGap);
-        rect_(c, x, kUf8BankRowY, kUf8BankBtnW, kUf8BankBtnH,
-              kBtnFill, kBtnEdge, 4.0);
-        labelCentered(x + kUf8BankBtnW / 2.0f,
-                      kUf8BankRowY + kUf8BankBtnH / 2.0f,
-                      0xC0C4CCFF, kUf8BankLabels[b]);
-    }
-
-    // Per-strip skeleton
+    // Per-strip skeleton — geometry copied from drawUf8Vector for parity.
     for (int s = 0; s < 8; ++s) {
-        const float cx = uf8StripCx_(s);
+        const float cx   = uf8StripCx_(s);
         const float colX = cx - kUf8StripW / 2.0f;
 
-        // Strip column panel
-        rect_(c, colX + 2, kUf8StripTop - 4,
-              kUf8StripW - 4, H - kUf8StripTop - 8,
-              kPanel, kEdge, 6.0);
-
         // Top soft-key
-        const float skX = colX + 8;
-        const float skW = kUf8StripW - 16;
-        rect_(c, skX, kUf8StripTop, skW, kUf8TopSoftKeyH,
-              kBtnFill, kBtnEdge, 3.0);
+        rect_(c, colX + 6, kUf8TopSoftKeyY,
+              kUf8StripW - 12, kUf8TopSoftKeyH,
+              kBtnFill, kBtnEdge, 3.5);
 
-        // Scribble — split into upper (track name) + lower (value-line)
-        rect_(c, skX, kUf8ScribbleY, skW, kUf8ScribbleH,
-              kScribble, kScribEdge, 3.0);
-        line_(c,
-              skX,       kUf8ScribbleY + kUf8ScribbleH / 2.0f,
-              skX + skW, kUf8ScribbleY + kUf8ScribbleH / 2.0f,
-              kScribEdge, 1.0);
+        // Scribble (track name + value-line stacked, no internal divider —
+        // matches drawUf8Vector's single-rect look)
+        rect_(c, colX + 4, kUf8ScribbleY,
+              kUf8StripW - 8, kUf8ScribbleH,
+              kScribble, kScribEdge, 2.0);
 
         // V-Pot ring
-        const float vy = kUf8VPotY + kUf8VPotH / 2.0f;
-        circle_(c, cx, vy, kUf8VPotR,        kRingOuter, kEdge);
-        circle_(c, cx, vy, kUf8VPotR * 0.74f, kRingInner, kBtnEdge);
-        line_(c, cx, vy - kUf8VPotR * 0.85f, cx, vy - kUf8VPotR * 0.45f,
-              0xE8E8E8FF, 1.6);
+        circle_(c, cx, kUf8VPotCy, kUf8VPotR,        kChassis,  kBtnEdge);
+        circle_(c, cx, kUf8VPotCy, kUf8VPotR - 4,    kBtnFill,  kRingInner);
+        line_(c, cx, kUf8VPotCy - kUf8VPotR + 2,
+                  cx, kUf8VPotCy - (kUf8VPotR - 10),
+              0xCCCCCCFF, 2.0);
 
-        // Sel / Cut / Solo trio
-        const float trioGap = (kUf8StripW - 3 * kUf8SCSBtnW - 16) / 2.0f;
-        const float trioOx  = colX + 8;
-        const float trioY   = kUf8SCSY + (kUf8SCSH - kUf8SCSBtnH) / 2.0f;
-        const char* sclabels[3] = { "SEL", "CUT", "SLO" };
-        for (int i = 0; i < 3; ++i) {
-            const float bx = trioOx + i * (kUf8SCSBtnW + trioGap);
-            rect_(c, bx, trioY, kUf8SCSBtnW, kUf8SCSBtnH,
-                  kBtnFill, kBtnEdge, 3.0);
-            labelCentered(bx + kUf8SCSBtnW / 2.0f,
-                          trioY + kUf8SCSBtnH / 2.0f,
-                          kSilkText, sclabels[i]);
-        }
+        // Solo / Cut / Sel — STACKED vertically per real UF8 hardware
+        rect_(c, colX + 8, kUf8SoloY,
+              kUf8StripW - 16, kUf8SCSBtnH, kBtnFill, kBtnEdge, 3.0);
+        drawTextCentered_(c, cx, kUf8SoloY + kUf8SCSBtnH / 2.0f,
+                          kSilkText, "SOLO");
+        rect_(c, colX + 8, kUf8CutY,
+              kUf8StripW - 16, kUf8SCSBtnH, kBtnFill, kBtnEdge, 3.0);
+        drawTextCentered_(c, cx, kUf8CutY + kUf8SCSBtnH / 2.0f,
+                          kSilkText, "CUT");
+        rect_(c, colX + 8, kUf8SelY,
+              kUf8StripW - 16, kUf8SCSBtnH, kBtnFill, kBtnEdge, 3.0);
+        drawTextCentered_(c, cx, kUf8SelY + kUf8SCSBtnH / 2.0f,
+                          kSilkText, "SEL");
 
         // Fader cap (touch sensor)
         rect_(c, cx - kUf8FaderCapW / 2.0f, kUf8FaderCapY,
               kUf8FaderCapW, kUf8FaderCapH,
               kFaderCap, kBtnEdge, 2.0);
 
-        // Fader rail (channel) + thumb at midpoint
+        // Fader rail + thumb at midpoint
         rect_(c, cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
               kUf8FaderRailW, kUf8FaderRailH,
               kFaderRail, kEdge, 4.0);
-        const float thumbY = kUf8FaderRailY + kUf8FaderRailH / 2.0f - 6;
+        const float thumbY = kUf8FaderRailY + kUf8FaderRailH / 2.0f - 5;
         rect_(c, cx - kUf8FaderRailW / 2.0f - 1, thumbY,
-              kUf8FaderRailW + 2, 12,
+              kUf8FaderRailW + 2, 10,
               0x60C060CC, 0xE8F0E8FF, 2.0);
 
         // Strip number under the fader rail
         char snum[8];
         std::snprintf(snum, sizeof(snum), "%d", s + 1);
-        labelCentered(cx, kUf8FaderRailY + kUf8FaderRailH + 4,
-                      0x707680FF, snum);
+        drawTextCentered_(c, cx, kUf8FaderRailY + kUf8FaderRailH + 4,
+                          0x707680FF, snum);
     }
 }
 
@@ -3401,61 +3365,50 @@ void drawUf8Face_(VCanvas& c)
 struct Uf8Control {
     enum Kind : uint8_t {
         Fader,           // strip 0..7 → uf8.strips[s].faderVst3Param
-        VPot,            // strip 0..7 → uf8.banks.banks[bank][s] (bank-active)
+        VPot,            // strip 0..7 → uf8.banks.banks[bank][s]
         TopSoftKey,      // strip 0..7 → uf8.banks.banks[bank][s] (label)
         SoloBtn,         // strip 0..7 → uf8.strips[s].soloVst3Param
         CutBtn,
         SelBtn,
-        BankSel,         // bank 0..5 (info only — not bindable)
     };
     Kind  kind;
-    int   strip;     // 0..7 for strip kinds, 0..5 for BankSel
+    int   strip;     // 0..7
     float cx, cy;    // top-left of bbox
     float w, h;
 };
 
 // Build the table programmatically — UF8 strips are uniform unlike the UC1
 // face. Lives in a function-local static so initialisation order is sane.
+// 6 control kinds × 8 strips = 48 entries.
 const Uf8Control* uf8Controls_(int* outCount)
 {
-    static Uf8Control tbl[54];
+    static Uf8Control tbl[48];
     static int count = 0;
     if (count == 0) {
         int n = 0;
-        for (int b = 0; b < 6; ++b) {
-            const float x = kUf8BankRowOx
-                          + b * (kUf8BankBtnW + kUf8BankGap);
-            tbl[n++] = { Uf8Control::BankSel, b,
-                         x, kUf8BankRowY,
-                         kUf8BankBtnW, kUf8BankBtnH };
-        }
         for (int s = 0; s < 8; ++s) {
             const float cx   = uf8StripCx_(s);
             const float colX = cx - kUf8StripW / 2.0f;
-            const float skX  = colX + 8;
-            const float skW  = kUf8StripW - 16;
 
             tbl[n++] = { Uf8Control::TopSoftKey, s,
-                         skX, kUf8StripTop, skW, kUf8TopSoftKeyH };
+                         colX + 6, kUf8TopSoftKeyY,
+                         kUf8StripW - 12, kUf8TopSoftKeyH };
 
             // V-Pot bbox = circumscribed square
             tbl[n++] = { Uf8Control::VPot, s,
                          cx - kUf8VPotR,
-                         kUf8VPotY + kUf8VPotH / 2.0f - kUf8VPotR,
+                         kUf8VPotCy - kUf8VPotR,
                          2 * kUf8VPotR, 2 * kUf8VPotR };
 
-            const float trioGap = (kUf8StripW - 3 * kUf8SCSBtnW - 16) / 2.0f;
-            const float trioOx  = colX + 8;
-            const float trioY   = kUf8SCSY
-                                + (kUf8SCSH - kUf8SCSBtnH) / 2.0f;
-            tbl[n++] = { Uf8Control::SelBtn, s,
-                         trioOx, trioY, kUf8SCSBtnW, kUf8SCSBtnH };
-            tbl[n++] = { Uf8Control::CutBtn, s,
-                         trioOx + kUf8SCSBtnW + trioGap, trioY,
-                         kUf8SCSBtnW, kUf8SCSBtnH };
             tbl[n++] = { Uf8Control::SoloBtn, s,
-                         trioOx + 2 * (kUf8SCSBtnW + trioGap), trioY,
-                         kUf8SCSBtnW, kUf8SCSBtnH };
+                         colX + 8, kUf8SoloY,
+                         kUf8StripW - 16, kUf8SCSBtnH };
+            tbl[n++] = { Uf8Control::CutBtn, s,
+                         colX + 8, kUf8CutY,
+                         kUf8StripW - 16, kUf8SCSBtnH };
+            tbl[n++] = { Uf8Control::SelBtn, s,
+                         colX + 8, kUf8SelY,
+                         kUf8StripW - 16, kUf8SCSBtnH };
 
             tbl[n++] = { Uf8Control::Fader, s,
                          cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
