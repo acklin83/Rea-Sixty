@@ -1621,6 +1621,40 @@ void drainInputQueue()
                         break;
                     }
                 }
+                // FX Learn UF8: when SSL Strip Mode is on AND the focused
+                // track has a user-mapped plug-in, the V-Pot drives the
+                // active bank's slot[strip] param on that focused
+                // instance. Toggle slots ignore rotation. Empty slots
+                // eat the event so the legacy CS/BC dispatch below
+                // doesn't hijack a different track's plug-in.
+                if (g_pluginFaderMode.load() && !g_flip.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const int s = static_cast<int>(e.strip);
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                                                    0, 5);
+                        const auto& bs =
+                            uctx.map->uf8.banks.banks[bank][s];
+                        if (bs.vst3Param >= 0
+                            && bs.vpotMode == uf8::VPotMode::Value)
+                        {
+                            const double cur = TrackFX_GetParamNormalized(
+                                uctx.tr, uctx.fxIdx, bs.vst3Param);
+                            double delta = e.value
+                                * (bs.inverted ? -1.0 : 1.0);
+                            if (g_shiftHeld.load()) delta *= 0.25;
+                            double next = cur + delta;
+                            if (next < 0.0) next = 0.0;
+                            if (next > 1.0) next = 1.0;
+                            TrackFX_SetParamNormalized(uctx.tr,
+                                uctx.fxIdx, bs.vst3Param, next);
+                            break;
+                        }
+                        // Empty / Toggle slot: do NOT fall through —
+                        // built-in CS dispatch would hijack a different
+                        // track entirely.
+                        break;
+                    }
+                }
                 // V-pot rotation: if the strip's track hosts a plug-in of
                 // the focused domain (CS / BC) AND we're not in global Pan
                 // mode, drive the focused parameter on that strip's track.
@@ -1769,6 +1803,38 @@ void drainInputQueue()
                             } else {
                                 SetTrackSendInfo_Value(vr.track, vr.sendCategory,
                                                        vr.sendIndex, "D_VOL", 1.0);
+                            }
+                        }
+                        break;
+                    }
+                }
+                // FX Learn UF8: V-Pot push on a user-bank slot.
+                //   Toggle slot → flip 0↔1 on the bound param.
+                //   Value slot  → reset to defaultNorm.
+                //   Empty slot  → eat the event (don't fall through to
+                //                 built-in CS dispatch, which would
+                //                 hijack a different track).
+                if (g_pluginFaderMode.load() && !g_flip.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const int s = static_cast<int>(e.strip);
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                                                    0, 5);
+                        const auto& bs =
+                            uctx.map->uf8.banks.banks[bank][s];
+                        if (bs.vst3Param >= 0) {
+                            if (bs.vpotMode == uf8::VPotMode::Toggle) {
+                                const double cur =
+                                    TrackFX_GetParamNormalized(uctx.tr,
+                                        uctx.fxIdx, bs.vst3Param);
+                                TrackFX_SetParamNormalized(uctx.tr,
+                                    uctx.fxIdx, bs.vst3Param,
+                                    cur < 0.5 ? 1.0 : 0.0);
+                            } else {
+                                double dn = bs.defaultNorm;
+                                if (dn < 0.0) dn = 0.0;
+                                if (dn > 1.0) dn = 1.0;
+                                TrackFX_SetParamNormalized(uctx.tr,
+                                    uctx.fxIdx, bs.vst3Param, dn);
                             }
                         }
                         break;
@@ -3407,7 +3473,42 @@ void pushZonesForVisibleSlots()
                 ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
             const int bankSk = std::clamp(g_softKeyBank.load(),
                 0, softkey::maxBankFor(domSk));
-            const auto vSk = softkey::viewFor(domSk, bankSk);
+            auto vSk = softkey::viewFor(domSk, bankSk);
+
+            // FX Learn UF8: synthesise an 8-slot view from the focused
+            // user-plug-in's bank table, overriding the hardcoded CS/BC
+            // labels. labels[] points into per-tick thread-local
+            // storage; linkIdx[] uses 0 = present / kNoSlot = empty so
+            // the existing LED + label resolution downstream reads
+            // "present" exactly when the user has bound the slot.
+            static thread_local char  s_userBankLabelBuf[8][16];
+            static thread_local const char* s_userBankLabelPtr[8];
+            static thread_local int   s_userBankLink[8];
+            if (g_pluginFaderMode.load()) {
+                if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                    const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                    for (int i = 0; i < 8; ++i) {
+                        const auto& bs =
+                            uctx.map->uf8.banks.banks[bank][i];
+                        std::string lbl = bs.label;
+                        if (lbl.empty() && bs.vst3Param >= 0) {
+                            char pn[64] = {0};
+                            TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
+                                bs.vst3Param, pn, sizeof(pn));
+                            lbl = pn;
+                        }
+                        if (lbl.size() > 11) lbl.resize(11);
+                        std::snprintf(s_userBankLabelBuf[i],
+                            sizeof(s_userBankLabelBuf[i]),
+                            "%s", lbl.c_str());
+                        s_userBankLabelPtr[i] = s_userBankLabelBuf[i];
+                        s_userBankLink[i] =
+                            (bs.vst3Param >= 0) ? 0 : softkey::kNoSlot;
+                    }
+                    vSk.labels  = s_userBankLabelPtr;
+                    vSk.linkIdx = s_userBankLink;
+                }
+            }
 
             // User-bank override: when a user soft-key bank is active,
             // each top-soft-key shows the bank's slot label instead of
@@ -3870,6 +3971,16 @@ void pushZonesForVisibleSlots()
                 const StripRoute& r = routedFader ? faderRoute : vpotRoute;
                 n = routeName_(r);
             }
+            // FX Learn UF8: when a user-mapped fader binding exists for
+            // this strip, show the bound param's name instead of the
+            // track name. Lets the user see at a glance which param
+            // each fader drives.
+            if (userFaderActive) {
+                char pn[64] = {0};
+                TrackFX_GetParamName(userF.tr, userF.fxIdx,
+                    userF.vst3Param, pn, sizeof(pn));
+                if (pn[0]) n = pn;
+            }
             if (n.empty()) {
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
@@ -4081,6 +4192,52 @@ void pushZonesForVisibleSlots()
             && (focused.slotIdx == uf8::ext::TrackPhase
              || focused.slotIdx == uf8::ext::PluginAB
              || focused.slotIdx == uf8::ext::PluginHQ);
+
+        // FX Learn UF8: when SSL Strip Mode is on and the focused track
+        // has a user-mapped plug-in, the value line shows the V-Pot's
+        // bound bank-slot param — name + formatted value. Empty bank
+        // slots leave the line blank.
+        bool userValHandled = false;
+        if (g_pluginFaderMode.load() && !flipActive && !routedFader
+            && !routedVpot)
+        {
+            if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                const auto& bs = uctx.map->uf8.banks.banks[bank][s];
+                if (bs.vst3Param >= 0) {
+                    char pn[64]  = {0};
+                    char vbuf[64] = {0};
+                    TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
+                        bs.vst3Param, pn, sizeof(pn));
+                    const double norm = TrackFX_GetParamNormalized(
+                        uctx.tr, uctx.fxIdx, bs.vst3Param);
+                    const double v = bs.inverted ? 1.0 - norm : norm;
+                    TrackFX_FormatParamValueNormalized(uctx.tr,
+                        uctx.fxIdx, bs.vst3Param, v, vbuf, sizeof(vbuf));
+                    std::string valStr(vbuf);
+                    for (size_t p = 0; p + 2 < valStr.size(); ) {
+                        if (static_cast<unsigned char>(valStr[p])     == 0xE2 &&
+                            static_cast<unsigned char>(valStr[p + 1]) == 0x88 &&
+                            static_cast<unsigned char>(valStr[p + 2]) == 0x9E) {
+                            valStr.replace(p, 3, "INF"); p += 3;
+                        } else ++p;
+                    }
+                    for (auto& c : valStr) {
+                        const unsigned char u = static_cast<unsigned char>(c);
+                        if (u < 0x20 || u > 0x7E) c = '-';
+                    }
+                    while (!valStr.empty() && valStr.front() == ' ')
+                        valStr.erase(0, 1);
+                    valLine = composeValueLine(pn, valStr);
+                } else {
+                    valLine = std::string(19, ' ');
+                }
+                userValHandled = true;
+            }
+        }
+        if (userValHandled) {
+            // skip the legacy resolution chain
+        } else
         if (routedFader || routedVpot) {
             // Routing mode value line. The strip's UPPER line already
             // shows the route name (Frank 2026-05-07), so the value
