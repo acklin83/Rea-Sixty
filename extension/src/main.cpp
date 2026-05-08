@@ -1146,6 +1146,61 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
     return out;
 }
 
+// Cached resolver — returns the user-plug-in context for the currently
+// focused track when SSL Strip Mode is on AND the focused track has a
+// user-mapped plug-in. Returns {nullptr,-1,nullptr} otherwise. All eight
+// UF8 strips drive params on this ONE plug-in instance per strip-N
+// binding in `map->uf8.strips[N]` / `map->uf8.banks.banks[bank][N]`.
+//
+// Cache invalidation on:
+//   - g_pluginFaderMode change
+//   - focused track changed
+//   - user_plugins::generation() bumped (catalog edited)
+//   - TrackFX_GetCount on the focused track changed (FX add/remove)
+UserPluginCtx userStripCtxFocused_()
+{
+    static UserPluginCtx s_cache{nullptr, -1, nullptr};
+    static bool          s_cacheMode      = false;
+    static void*         s_cacheTr        = nullptr;
+    static int           s_cacheGen       = -1;
+    static int           s_cacheFxCount   = -1;
+
+    const bool curMode = g_pluginFaderMode.load();
+    if (!curMode) {
+        s_cacheTr = nullptr;
+        return {nullptr, -1, nullptr};
+    }
+
+    MediaTrack* tr = nullptr;
+    if (g_uc1_surface) {
+        tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    }
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr) {
+        s_cacheTr = nullptr;
+        return {nullptr, -1, nullptr};
+    }
+
+    const int curGen     = uf8::user_plugins::generation();
+    const int curFxCount =
+        ValidatePtr2(nullptr, tr, "MediaTrack*") ? TrackFX_GetCount(tr) : 0;
+
+    if (curMode    == s_cacheMode  &&
+        tr         == s_cacheTr    &&
+        curGen     == s_cacheGen   &&
+        curFxCount == s_cacheFxCount)
+    {
+        return s_cache;
+    }
+
+    s_cache       = findUserPluginOnTrack_(tr);
+    s_cacheMode   = curMode;
+    s_cacheTr     = tr;
+    s_cacheGen    = curGen;
+    s_cacheFxCount= curFxCount;
+    return s_cache;
+}
+
 // CS plug-in's "Fader Level" param (= the SSL strip's own internal
 // fader, distinct from REAPER's track volume). Used when the Plugin
 // button is engaged so the UF8 motor faders drive the SSL strip
@@ -1439,6 +1494,29 @@ void drainInputQueue()
                 // Same pb14/kUf8FaderPbMax mapping the FLIP path uses
                 // — gives an even 0..1 sweep the plug-in expects.
                 if (g_pluginFaderMode.load()) {
+                    // FX Learn UF8: focused track has a user-mapped plug-in
+                    // → the 8 strip faders drive *its* params per
+                    // map->uf8.strips[strip].faderVst3Param. Empty (-1)
+                    // falls through so the fader still moves something
+                    // (built-in CS fader, then track volume).
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const int s = static_cast<int>(e.strip);
+                        const auto& sb = uctx.map->uf8.strips[s];
+                        if (sb.faderVst3Param >= 0) {
+                            const uint16_t pbU = linearVolumeToPb(e.value);
+                            double n = static_cast<double>(pbU) /
+                                       static_cast<double>(kUf8FaderPbMax);
+                            if (sb.faderInverted) n = 1.0 - n;
+                            if (n < 0.0) n = 0.0;
+                            if (n > 1.0) n = 1.0;
+                            TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+                                sb.faderVst3Param, n);
+                            break;
+                        }
+                        // Empty user fader slot — fall through to
+                        // built-in CS or track volume.
+                    }
+
                     const auto cs = csFaderForTrack(tr);
                     if (cs.vst3Param >= 0) {
                         const uint16_t pbCs = linearVolumeToPb(e.value);
@@ -3644,10 +3722,32 @@ void pushZonesForVisibleSlots()
                               && !flipActive
                               && !g_pluginFaderMode.load();
 
+        // FX Learn UF8: if SSL Strip Mode is on AND the focused track
+        // has a user-mapped plug-in AND that map binds this strip's
+        // fader to a vst3 param → the motor + value-line follow the
+        // user-plug-in's param, not REAPER track volume / built-in CS.
+        // Per-strip target is uctx.tr (focused) regardless of `tr`.
+        struct UserFaderHandle {
+            MediaTrack* tr; int fxIdx; int vst3Param; bool inverted;
+        };
+        UserFaderHandle userF{nullptr, -1, -1, false};
+        if (g_pluginFaderMode.load() && !flipActive) {
+            if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                const auto& sb = uctx.map->uf8.strips[s];
+                if (sb.faderVst3Param >= 0) {
+                    userF = { uctx.tr, uctx.fxIdx,
+                              sb.faderVst3Param, sb.faderInverted };
+                }
+            }
+        }
+        const bool userFaderActive = (userF.vst3Param >= 0);
+
         // Plugin-fader mode active on this strip = global plugin-fader
         // toggle ON + a CS plug-in is loaded. FLIP wins if both are on
         // (FLIP is per-strip and explicit; plugin-fader is global).
-        const auto cs = (g_pluginFaderMode.load() && !flipActive)
+        // User-fader wins over built-in CS-fader.
+        const auto cs = (g_pluginFaderMode.load() && !flipActive
+                          && !userFaderActive)
                           ? csFaderForTrack(tr) : CsFaderHandle{-1, -1};
         const bool csFaderActive = cs.vst3Param >= 0;
 
@@ -3806,6 +3906,30 @@ void pushZonesForVisibleSlots()
         std::string dbStr;
         if (routedFader) {
             dbStr = formatDbReadout(volLin);
+        } else if (userFaderActive) {
+            char paramBuf[64] = {0};
+            const double norm = TrackFX_GetParamNormalized(
+                userF.tr, userF.fxIdx, userF.vst3Param);
+            const double v = userF.inverted ? 1.0 - norm : norm;
+            TrackFX_FormatParamValueNormalized(userF.tr, userF.fxIdx,
+                userF.vst3Param, v, paramBuf, sizeof(paramBuf));
+            // Same sanitisation as the flipActive/csFaderActive branch
+            // below — fall through to the same post-processing block.
+            std::string s2(paramBuf);
+            for (size_t p = 0; p + 2 < s2.size(); ) {
+                if (static_cast<unsigned char>(s2[p])     == 0xE2 &&
+                    static_cast<unsigned char>(s2[p + 1]) == 0x88 &&
+                    static_cast<unsigned char>(s2[p + 2]) == 0x9E) {
+                    s2.replace(p, 3, "INF"); p += 3;
+                } else ++p;
+            }
+            for (auto& c : s2) {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u > 0x7E) c = '-';
+            }
+            while (!s2.empty() && s2.front() == ' ') s2.erase(0, 1);
+            if (s2.size() > 6) s2.resize(6);
+            dbStr = s2;
         } else if (flipActive || csFaderActive) {
             char paramBuf[64] = {0};
             const int useFx = flipActive ? fxIdx : cs.fxIndex;
@@ -3898,6 +4022,19 @@ void pushZonesForVisibleSlots()
                     // the same conversion works as track-volume.
                     pb = linearVolumeToPb(volLin);
                 }
+            } else if (userFaderActive) {
+                // User-plugin strip mode: motor echoes the bound param
+                // on the FOCUSED track instance (not this strip's bank
+                // track). All 8 strips drive different params on the
+                // same plug-in instance.
+                const double norm = TrackFX_GetParamNormalized(
+                    userF.tr, userF.fxIdx, userF.vst3Param);
+                const double v = userF.inverted ? 1.0 - norm : norm;
+                int p14 = static_cast<int>(std::round(
+                    v * static_cast<double>(kUf8FaderPbMax)));
+                if (p14 < 0)              p14 = 0;
+                if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
+                pb = static_cast<uint16_t>(p14);
             } else if (flipActive || csFaderActive) {
                 const int useFx = flipActive ? fxIdx : cs.fxIndex;
                 const int useParam = flipActive ? slot->vst3Param : cs.vst3Param;
@@ -4412,13 +4549,36 @@ void commitDebouncedTouchReleases()
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
                     SetMediaTrackInfo_Value(tr, "D_PAN", pan);
-                } else if (g_pluginFaderMode.load() && csT.vst3Param >= 0) {
-                    double n = static_cast<double>(touchPb) /
-                               static_cast<double>(kUf8FaderPbMax);
-                    if (n < 0.0) n = 0.0;
-                    if (n > 1.0) n = 1.0;
-                    TrackFX_SetParamNormalized(tr, csT.fxIndex,
-                        csT.vst3Param, n);
+                } else if (g_pluginFaderMode.load()) {
+                    // Try user-strip fader first, then built-in CS.
+                    bool wrote = false;
+                    if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
+                        const auto& sb = uctxT.map->uf8.strips[
+                            static_cast<int>(s)];
+                        if (sb.faderVst3Param >= 0) {
+                            double n = static_cast<double>(touchPb) /
+                                       static_cast<double>(kUf8FaderPbMax);
+                            if (sb.faderInverted) n = 1.0 - n;
+                            if (n < 0.0) n = 0.0;
+                            if (n > 1.0) n = 1.0;
+                            TrackFX_SetParamNormalized(uctxT.tr,
+                                uctxT.fxIdx, sb.faderVst3Param, n);
+                            wrote = true;
+                        }
+                    }
+                    if (!wrote && csT.vst3Param >= 0) {
+                        double n = static_cast<double>(touchPb) /
+                                   static_cast<double>(kUf8FaderPbMax);
+                        if (n < 0.0) n = 0.0;
+                        if (n > 1.0) n = 1.0;
+                        TrackFX_SetParamNormalized(tr, csT.fxIndex,
+                            csT.vst3Param, n);
+                        wrote = true;
+                    }
+                    if (!wrote) {
+                        CSurf_OnVolumeChange(tr,
+                            pbToLinearVolume(touchPb), false);
+                    }
                 } else {
                     CSurf_OnVolumeChange(tr, pbToLinearVolume(touchPb), false);
                 }
@@ -4440,15 +4600,32 @@ void commitDebouncedTouchReleases()
         if (userMoved) {
             uint16_t pb = linearVolumeToPb(uiVolLinear(tr));
             if (g_pluginFaderMode.load()) {
-                const auto cs = csFaderForTrack(tr);
-                if (cs.vst3Param >= 0) {
-                    const double norm = TrackFX_GetParamNormalized(
-                        tr, cs.fxIndex, cs.vst3Param);
-                    int p14 = static_cast<int>(std::round(
-                        norm * static_cast<double>(kUf8FaderPbMax)));
-                    if (p14 < 0) p14 = 0;
-                    if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
-                    pb = static_cast<uint16_t>(p14);
+                bool taken = false;
+                if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                    const auto& sb = uctx.map->uf8.strips[s];
+                    if (sb.faderVst3Param >= 0) {
+                        double norm = TrackFX_GetParamNormalized(
+                            uctx.tr, uctx.fxIdx, sb.faderVst3Param);
+                        if (sb.faderInverted) norm = 1.0 - norm;
+                        int p14 = static_cast<int>(std::round(
+                            norm * static_cast<double>(kUf8FaderPbMax)));
+                        if (p14 < 0) p14 = 0;
+                        if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
+                        pb = static_cast<uint16_t>(p14);
+                        taken = true;
+                    }
+                }
+                if (!taken) {
+                    const auto cs = csFaderForTrack(tr);
+                    if (cs.vst3Param >= 0) {
+                        const double norm = TrackFX_GetParamNormalized(
+                            tr, cs.fxIndex, cs.vst3Param);
+                        int p14 = static_cast<int>(std::round(
+                            norm * static_cast<double>(kUf8FaderPbMax)));
+                        if (p14 < 0) p14 = 0;
+                        if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
+                        pb = static_cast<uint16_t>(p14);
+                    }
                 }
             }
             g_dev->send(uf8::buildMotorEnable(s, true));
