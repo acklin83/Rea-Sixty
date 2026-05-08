@@ -1201,6 +1201,8 @@ UserPluginCtx userStripCtxFocused_()
     static void*         s_cacheTr        = nullptr;
     static int           s_cacheGen       = -1;
     static int           s_cacheFxCount   = -1;
+    static int           s_cacheCsInst    = -1;
+    static int           s_cacheBcInst    = -1;
 
     const bool curMode = g_pluginFaderMode.load();
     if (!curMode) {
@@ -1221,11 +1223,15 @@ UserPluginCtx userStripCtxFocused_()
     const int curGen     = uf8::user_plugins::generation();
     const int curFxCount =
         ValidatePtr2(nullptr, tr, "MediaTrack*") ? TrackFX_GetCount(tr) : 0;
+    const int curCsInst  = uc1::csInstanceIndex(tr);
+    const int curBcInst  = uc1::bcInstanceIndex(tr);
 
     if (curMode    == s_cacheMode  &&
         tr         == s_cacheTr    &&
         curGen     == s_cacheGen   &&
-        curFxCount == s_cacheFxCount)
+        curFxCount == s_cacheFxCount &&
+        curCsInst  == s_cacheCsInst &&
+        curBcInst  == s_cacheBcInst)
     {
         return s_cache;
     }
@@ -1260,6 +1266,8 @@ UserPluginCtx userStripCtxFocused_()
     s_cacheTr     = tr;
     s_cacheGen    = curGen;
     s_cacheFxCount= curFxCount;
+    s_cacheCsInst = curCsInst;
+    s_cacheBcInst = curBcInst;
     return s_cache;
 }
 
@@ -1619,6 +1627,19 @@ void drainInputQueue()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
+                            // Diagnostic — temporary, until controls verified.
+#ifdef _WIN32
+                            const char* dp = "rea_sixty_uf8.log";
+#else
+                            const char* dp = "/tmp/rea_sixty_uf8.log";
+#endif
+                            if (FILE* lf = std::fopen(dp, "a")) {
+                                std::fprintf(lf,
+                                  "FADER strip=%d → vst3Param=%d norm=%.4f "
+                                  "fxIdx=%d\n",
+                                  s, sb.faderVst3Param, n, uctx.fxIdx);
+                                std::fclose(lf);
+                            }
                             break;
                         }
                         // Empty user fader slot — fall through to
