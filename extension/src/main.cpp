@@ -81,6 +81,10 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // device, fixed by routing through onTimer().
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
+// Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
+// run on main thread or AppKit raises NSException. Set by
+// ssl_strip_mode_toggle_with_gui from the libusb input thread.
+std::atomic<bool> g_pluginGuiSyncRequest{false};
 
 // IReaperControlSurface subclass registered as a full control surface
 // class ("Rea-Sixty") so users see and add it like any other surface.
@@ -1123,14 +1127,45 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
 
     const int n = TrackFX_GetCount(tr);
     char fxName[256];
+
+    // Diagnostic log — temporary, until Frank's "FX copy not recognised"
+    // bug is root-caused. Writes ONE line per resolve attempt to
+    // /tmp/rea_sixty_uf8.log — only when SSL Strip Mode is on so it
+    // doesn't spam the file in idle.
+    auto diag = [&](const char* fmt, ...) {
+#ifdef _WIN32
+        const char* p = "rea_sixty_uf8.log";
+#else
+        const char* p = "/tmp/rea_sixty_uf8.log";
+#endif
+        if (FILE* lf = std::fopen(p, "a")) {
+            va_list ap; va_start(ap, fmt);
+            std::vfprintf(lf, fmt, ap);
+            std::fputc('\n', lf);
+            va_end(ap);
+            std::fclose(lf);
+        }
+    };
+    char trGuid[64] = {};
+    GetSetMediaTrackInfo_String(tr, "GUID", trGuid, false);
+    diag("findUserPluginOnTrack tr=%s nFx=%d wantCs=%d wantBc=%d",
+         trGuid, n, wantCs, wantBc);
+
     for (int i = 0; i < n; ++i) {
         if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
         const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+        diag("  fx[%d]='%s' match=%s%s",
+             i, fxName,
+             um ? "YES " : "no",
+             um ? (um->domain == uf8::Domain::ChannelStrip ? "[CS]"
+                 : um->domain == uf8::Domain::BusComp ? "[BC]" : "[None]")
+                : "");
         if (!um) continue;
         if (um->domain == uf8::Domain::ChannelStrip) {
             if (seenCs == wantCs) {
                 out.fxIdx = i;
                 out.map   = um;
+                diag("  -> picked fxIdx=%d (CS instance %d)", i, seenCs);
                 return out;
             }
             ++seenCs;
@@ -1138,11 +1173,13 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
             if (seenBc == wantBc) {
                 out.fxIdx = i;
                 out.map   = um;
+                diag("  -> picked fxIdx=%d (BC instance %d)", i, seenBc);
                 return out;
             }
             ++seenBc;
         }
     }
+    diag("  -> NO MATCH (seenCs=%d seenBc=%d)", seenCs, seenBc);
     return out;
 }
 
@@ -1191,6 +1228,31 @@ UserPluginCtx userStripCtxFocused_()
         curFxCount == s_cacheFxCount)
     {
         return s_cache;
+    }
+
+    // Diagnostic — log what we're about to resolve. One line per cache
+    // miss; matches the per-resolve diag in findUserPluginOnTrack_.
+    {
+#ifdef _WIN32
+        const char* p = "rea_sixty_uf8.log";
+#else
+        const char* p = "/tmp/rea_sixty_uf8.log";
+#endif
+        if (FILE* lf = std::fopen(p, "a")) {
+            char trGuid[64] = {};
+            if (tr) GetSetMediaTrackInfo_String(tr, "GUID", trGuid, false);
+            char trName[128] = {};
+            if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+                GetTrackName(tr, trName, sizeof(trName));
+            std::fprintf(lf,
+                "userStripCtxFocused: mode=%d trGuid=%s name='%s' "
+                "uc1Focused=%p selFallback=%d gen=%d fxCount=%d\n",
+                curMode ? 1 : 0, trGuid, trName,
+                g_uc1_surface ? g_uc1_surface->focusedTrack() : nullptr,
+                g_uc1_surface && g_uc1_surface->focusedTrack() ? 0 : 1,
+                curGen, curFxCount);
+            std::fclose(lf);
+        }
     }
 
     s_cache       = findUserPluginOnTrack_(tr);
@@ -6106,6 +6168,26 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
+    // Shift+Plugin (ssl_strip_mode_toggle_with_gui): the off-thread
+    // handler toggled g_pluginFaderMode and set the request flag. Open
+    // / close the focused track's user-plug-in GUI here on the main
+    // thread (AppKit NSException if called off-thread).
+    if (g_pluginGuiSyncRequest.exchange(false)) {
+        MediaTrack* tr = nullptr;
+        if (g_uc1_surface) {
+            tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        }
+        if (!tr) tr = GetSelectedTrack(nullptr, 0);
+        if (tr) {
+            const auto ctx = findUserPluginOnTrack_(tr);
+            if (ctx.fxIdx >= 0) {
+                // showflag: 3 = floating GUI shown, 2 = hide floating GUI
+                TrackFX_Show(ctx.tr, ctx.fxIdx,
+                             g_pluginFaderMode.load() ? 3 : 2);
+            }
+        }
+    }
+
     // REAPER Action picker poll — drives the Bindings editor's
     // "Browse Action..." flow. Cheap when no session is active.
     reasixty_actionPickerPoll();
@@ -7188,6 +7270,11 @@ void registerBindingHandlers()
     // focused track's user-mapped plug-in GUI. Default factory binding
     // is Shift+Plugin (PluginBtn modifier slot). Built-in CS plug-ins
     // are NOT opened — only user-learned plug-ins (per FX Learn).
+    //
+    // The GUI side-effect must run on the main thread (TrackFX_Show
+    // creates an AppKit window). This handler runs from the libusb
+    // input thread, so it just toggles the mode + sets a request flag.
+    // The main-thread timer drains the flag and calls TrackFX_Show.
     registerBuiltin("ssl_strip_mode_toggle_with_gui", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -7196,17 +7283,7 @@ void registerBindingHandlers()
             g_pageDirty.store(true);
             SetExtState("ReaSixty", "pluginFaderMode",
                         next ? "1" : "0", true);
-
-            MediaTrack* tr = nullptr;
-            if (g_uc1_surface) {
-                tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-            }
-            if (!tr) tr = GetSelectedTrack(nullptr, 0);
-            if (!tr) return;
-            const auto ctx = findUserPluginOnTrack_(tr);
-            if (ctx.fxIdx < 0) return;
-            // showflag: 3 = floating GUI shown, 2 = hide floating GUI
-            TrackFX_Show(ctx.tr, ctx.fxIdx, next ? 3 : 2);
+            g_pluginGuiSyncRequest.store(true);
         },
         [](int) { return g_pluginFaderMode.load(); },
         "Toggle SSL Strip Mode (with GUI)", false
