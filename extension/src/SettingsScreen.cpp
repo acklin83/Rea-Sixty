@@ -3233,6 +3233,256 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
 }
 
+// ---------------------------------------------------------------------------
+// UF8 face — Phase 2 read-only mockup.
+//
+// Layout: 8 vertical strips left-to-right, with a row of 6 bank-selectors
+// centred above them. Per strip top→bottom: top soft-key → scribble (track
+// name + value-line) → V-Pot ring → Sel/Cut/Solo trio → fader cap → fader
+// rail. Coordinates here match the Uf8Control table in the next block.
+// Pure visual rendering — Phase 3 will wire interactivity (drag-drop,
+// listening, right-click menu) on top via drawUf8Control_.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr float kUf8FaceW = 1080;
+constexpr float kUf8FaceH = 540;
+constexpr float kUf8StripW = 120;
+constexpr float kUf8StripGap = 8;
+constexpr float kUf8StripsOx = 32;          // (1080 - 8*120 - 7*8) / 2
+
+constexpr float kUf8BankRowY = 20;
+constexpr float kUf8BankBtnW = 80;
+constexpr float kUf8BankBtnH = 28;
+constexpr float kUf8BankGap  = 12;
+constexpr float kUf8BankRowOx =                              // centred
+    (kUf8FaceW - (6.0f * kUf8BankBtnW + 5.0f * kUf8BankGap)) / 2.0f;
+
+constexpr float kUf8StripTop      = 60;
+constexpr float kUf8TopSoftKeyH   = 28;
+constexpr float kUf8ScribbleY     = kUf8StripTop + kUf8TopSoftKeyH + 4;
+constexpr float kUf8ScribbleH     = 60;
+constexpr float kUf8VPotY         = kUf8ScribbleY + kUf8ScribbleH + 4;
+constexpr float kUf8VPotH         = 80;
+constexpr float kUf8VPotR         = 32;
+constexpr float kUf8SCSY          = kUf8VPotY + kUf8VPotH + 4;
+constexpr float kUf8SCSH          = 36;
+constexpr float kUf8SCSBtnW       = 32;
+constexpr float kUf8SCSBtnH       = 32;
+constexpr float kUf8FaderCapY     = kUf8SCSY + kUf8SCSH + 4;
+constexpr float kUf8FaderCapH     = 16;
+constexpr float kUf8FaderCapW     = 24;
+constexpr float kUf8FaderRailY    = kUf8FaderCapY + kUf8FaderCapH;
+constexpr float kUf8FaderRailH    = 220;
+constexpr float kUf8FaderRailW    = 24;
+
+inline float uf8StripCx_(int strip)
+{
+    return kUf8StripsOx + strip * (kUf8StripW + kUf8StripGap)
+         + kUf8StripW / 2.0f;
+}
+
+const char* kUf8BankLabels[6] = { "V-POT", "SOFT 1", "SOFT 2",
+                                  "SOFT 3", "SOFT 4", "SOFT 5" };
+
+} // namespace
+
+void drawUf8Face_(VCanvas& c)
+{
+    constexpr float W = kUf8FaceW, H = kUf8FaceH;
+
+    constexpr uint32_t kChassis    = 0x14181EFF;
+    constexpr uint32_t kEdge       = 0x2A3038FF;
+    constexpr uint32_t kPanel      = 0x1A1E24FF;
+    constexpr uint32_t kBtnFill    = 0x252A33FF;
+    constexpr uint32_t kBtnEdge    = 0x4A5060FF;
+    constexpr uint32_t kScribble   = 0x101418FF;
+    constexpr uint32_t kScribEdge  = 0x303642FF;
+    constexpr uint32_t kRingOuter  = 0x4A5060FF;
+    constexpr uint32_t kRingInner  = 0x6A707CFF;
+    constexpr uint32_t kFaderCap   = 0x808890FF;
+    constexpr uint32_t kFaderRail  = 0x303338FF;
+    constexpr uint32_t kSilkText   = 0x9CA0AAFF;
+
+    auto labelCentered = [&](float x, float y, uint32_t col, const char* s)
+    {
+        drawTextCentered_(c, x, y, col, s);
+    };
+
+    // Chassis
+    rect_(c, 4, 4, W - 8, H - 8, kChassis, kEdge, /*rounding*/ 8.0);
+
+    // Bank-Selektor Reihe
+    for (int b = 0; b < 6; ++b) {
+        const float x = kUf8BankRowOx
+                      + b * (kUf8BankBtnW + kUf8BankGap);
+        rect_(c, x, kUf8BankRowY, kUf8BankBtnW, kUf8BankBtnH,
+              kBtnFill, kBtnEdge, 4.0);
+        labelCentered(x + kUf8BankBtnW / 2.0f,
+                      kUf8BankRowY + kUf8BankBtnH / 2.0f,
+                      0xC0C4CCFF, kUf8BankLabels[b]);
+    }
+
+    // Per-strip skeleton
+    for (int s = 0; s < 8; ++s) {
+        const float cx = uf8StripCx_(s);
+        const float colX = cx - kUf8StripW / 2.0f;
+
+        // Strip column panel
+        rect_(c, colX + 2, kUf8StripTop - 4,
+              kUf8StripW - 4, H - kUf8StripTop - 8,
+              kPanel, kEdge, 6.0);
+
+        // Top soft-key
+        const float skX = colX + 8;
+        const float skW = kUf8StripW - 16;
+        rect_(c, skX, kUf8StripTop, skW, kUf8TopSoftKeyH,
+              kBtnFill, kBtnEdge, 3.0);
+
+        // Scribble — split into upper (track name) + lower (value-line)
+        rect_(c, skX, kUf8ScribbleY, skW, kUf8ScribbleH,
+              kScribble, kScribEdge, 3.0);
+        line_(c,
+              skX,       kUf8ScribbleY + kUf8ScribbleH / 2.0f,
+              skX + skW, kUf8ScribbleY + kUf8ScribbleH / 2.0f,
+              kScribEdge, 1.0);
+
+        // V-Pot ring
+        const float vy = kUf8VPotY + kUf8VPotH / 2.0f;
+        circle_(c, cx, vy, kUf8VPotR,        kRingOuter, kEdge);
+        circle_(c, cx, vy, kUf8VPotR * 0.74f, kRingInner, kBtnEdge);
+        line_(c, cx, vy - kUf8VPotR * 0.85f, cx, vy - kUf8VPotR * 0.45f,
+              0xE8E8E8FF, 1.6);
+
+        // Sel / Cut / Solo trio
+        const float trioGap = (kUf8StripW - 3 * kUf8SCSBtnW - 16) / 2.0f;
+        const float trioOx  = colX + 8;
+        const float trioY   = kUf8SCSY + (kUf8SCSH - kUf8SCSBtnH) / 2.0f;
+        const char* sclabels[3] = { "SEL", "CUT", "SLO" };
+        for (int i = 0; i < 3; ++i) {
+            const float bx = trioOx + i * (kUf8SCSBtnW + trioGap);
+            rect_(c, bx, trioY, kUf8SCSBtnW, kUf8SCSBtnH,
+                  kBtnFill, kBtnEdge, 3.0);
+            labelCentered(bx + kUf8SCSBtnW / 2.0f,
+                          trioY + kUf8SCSBtnH / 2.0f,
+                          kSilkText, sclabels[i]);
+        }
+
+        // Fader cap (touch sensor)
+        rect_(c, cx - kUf8FaderCapW / 2.0f, kUf8FaderCapY,
+              kUf8FaderCapW, kUf8FaderCapH,
+              kFaderCap, kBtnEdge, 2.0);
+
+        // Fader rail (channel) + thumb at midpoint
+        rect_(c, cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
+              kUf8FaderRailW, kUf8FaderRailH,
+              kFaderRail, kEdge, 4.0);
+        const float thumbY = kUf8FaderRailY + kUf8FaderRailH / 2.0f - 6;
+        rect_(c, cx - kUf8FaderRailW / 2.0f - 1, thumbY,
+              kUf8FaderRailW + 2, 12,
+              0x60C060CC, 0xE8F0E8FF, 2.0);
+
+        // Strip number under the fader rail
+        char snum[8];
+        std::snprintf(snum, sizeof(snum), "%d", s + 1);
+        labelCentered(cx, kUf8FaderRailY + kUf8FaderRailH + 4,
+                      0x707680FF, snum);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// kUf8Controls[] — interactive overlay positions for the UF8 face.
+// Used by Phase 3+ for drag-drop / listen / right-click context. Phase 2
+// only paints the face above; this table is included now so the layout
+// is in one place when interactivity is wired.
+// ---------------------------------------------------------------------------
+
+struct Uf8Control {
+    enum Kind : uint8_t {
+        Fader,           // strip 0..7 → uf8.strips[s].faderVst3Param
+        VPot,            // strip 0..7 → uf8.banks.banks[bank][s] (bank-active)
+        TopSoftKey,      // strip 0..7 → uf8.banks.banks[bank][s] (label)
+        SoloBtn,         // strip 0..7 → uf8.strips[s].soloVst3Param
+        CutBtn,
+        SelBtn,
+        BankSel,         // bank 0..5 (info only — not bindable)
+    };
+    Kind  kind;
+    int   strip;     // 0..7 for strip kinds, 0..5 for BankSel
+    float cx, cy;    // top-left of bbox
+    float w, h;
+};
+
+// Build the table programmatically — UF8 strips are uniform unlike the UC1
+// face. Lives in a function-local static so initialisation order is sane.
+const Uf8Control* uf8Controls_(int* outCount)
+{
+    static Uf8Control tbl[54];
+    static int count = 0;
+    if (count == 0) {
+        int n = 0;
+        for (int b = 0; b < 6; ++b) {
+            const float x = kUf8BankRowOx
+                          + b * (kUf8BankBtnW + kUf8BankGap);
+            tbl[n++] = { Uf8Control::BankSel, b,
+                         x, kUf8BankRowY,
+                         kUf8BankBtnW, kUf8BankBtnH };
+        }
+        for (int s = 0; s < 8; ++s) {
+            const float cx   = uf8StripCx_(s);
+            const float colX = cx - kUf8StripW / 2.0f;
+            const float skX  = colX + 8;
+            const float skW  = kUf8StripW - 16;
+
+            tbl[n++] = { Uf8Control::TopSoftKey, s,
+                         skX, kUf8StripTop, skW, kUf8TopSoftKeyH };
+
+            // V-Pot bbox = circumscribed square
+            tbl[n++] = { Uf8Control::VPot, s,
+                         cx - kUf8VPotR,
+                         kUf8VPotY + kUf8VPotH / 2.0f - kUf8VPotR,
+                         2 * kUf8VPotR, 2 * kUf8VPotR };
+
+            const float trioGap = (kUf8StripW - 3 * kUf8SCSBtnW - 16) / 2.0f;
+            const float trioOx  = colX + 8;
+            const float trioY   = kUf8SCSY
+                                + (kUf8SCSH - kUf8SCSBtnH) / 2.0f;
+            tbl[n++] = { Uf8Control::SelBtn, s,
+                         trioOx, trioY, kUf8SCSBtnW, kUf8SCSBtnH };
+            tbl[n++] = { Uf8Control::CutBtn, s,
+                         trioOx + kUf8SCSBtnW + trioGap, trioY,
+                         kUf8SCSBtnW, kUf8SCSBtnH };
+            tbl[n++] = { Uf8Control::SoloBtn, s,
+                         trioOx + 2 * (kUf8SCSBtnW + trioGap), trioY,
+                         kUf8SCSBtnW, kUf8SCSBtnH };
+
+            tbl[n++] = { Uf8Control::Fader, s,
+                         cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
+                         kUf8FaderRailW, kUf8FaderRailH };
+        }
+        count = n;
+    }
+    if (outCount) *outCount = count;
+    return tbl;
+}
+
+// Phase 2 placeholder — paints the face. Phase 3 will iterate uf8Controls_
+// and add the interactive overlay on top, mirroring drawFxLearnSchematic_.
+void drawFxLearnUf8Schematic_(ImGui_Context* ctx)
+{
+    double oxd = 0, oyd = 0;
+    ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
+    const float ox = float(oxd), oy = float(oyd);
+
+    ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
+    VCanvas c { ctx, dl, ox, oy };
+    drawUf8Face_(c);
+
+    ImGui_SetCursorScreenPos(ctx, oxd, oyd);
+    ImGui_Dummy(ctx, kUf8FaceW, kUf8FaceH);
+}
+
 // Render the FX-Learn schematic as the UC1 hardware face. drawUc1Face_
 // paints the chassis + colour-coded knobs + section silk-screen + dim
 // overlay over the off-domain region; we then iterate kUc1Controls and
@@ -3316,6 +3566,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     std::snprintf(hdr, sizeof(hdr), "  Editing: %s  [%s]",
                   editing->match.c_str(), domainLabel_(editing->domain));
     ImGui_Text(ctx, hdr);
+
+    // Phase 2: UF8 mockup preview toggle. Phase 3 will replace this with a
+    // proper UC1/UF8 radio in the toolbar. The mockup is read-only here —
+    // no rings, no labels, no interactions — purely a visual preview of
+    // the chassis.
+    static bool s_showUf8 = false;
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Checkbox(ctx, "Preview UF8 mockup##fxl_uf8_preview", &s_showUf8);
 
     // Reset the FX-selector key when the editing map changes — the old
     // key (track:fx pair) means nothing for a different map.
@@ -3595,6 +3853,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (ImGui_BeginChild(ctx, "fxl_slots", &leftW, &hLeft,
                          &childFlags, &winFlags)) {
         drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
+        if (s_showUf8) {
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_TextDisabled(ctx,
+                "UF8 mockup preview (Phase 2 — interactivity wires in Phase 3)");
+            ImGui_Spacing(ctx);
+            drawFxLearnUf8Schematic_(ctx);
+        }
         ImGui_EndChild(ctx);
     }
 
