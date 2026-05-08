@@ -1256,23 +1256,24 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             ImGui_TextDisabled(ctx, line);
         }
 
-        // Inactive-edge re-fire policy — Frank 2026-05-07.
-        //   Toggle action  → automatic, no checkbox; we just say so.
-        //   One-shot action → opt-in checkbox writing step.fireOnInactive.
-        // Only meaningful when the step pointer is wired (drawStepPicker
-        // passes the step's bool*; legacy single-action callers may pass
-        // nullptr and skip this block).
+        // Inactive-edge re-fire policy — Frank 2026-05-08.
+        // Always opt-in via "fire again on inactive". Behavior::Hold
+        // already double-fires via the engine's firing=true on both
+        // edges; this checkbox is for non-Hold bindings (Momentary /
+        // Toggle) that should still fire on release. Toggle-detection
+        // is informational only — the user binds to Hold for "active
+        // while held" semantics.
         if (f.fireOnInactive && !f.action->empty()) {
             const bool isToggle = reasixty_actionIsToggle(*f.action);
             if (isToggle) {
                 ImGui_TextDisabled(ctx,
-                    "  Toggle action — auto-fires on release");
-            } else {
-                std::snprintf(idbuf, sizeof(idbuf),
-                              "Fire again on inactive##%s_foi", prefix);
-                if (ImGui_Checkbox(ctx, idbuf, f.fireOnInactive)) {
-                    dirty = true;
-                }
+                    "  Toggle action — set Behavior to Hold for "
+                    "ON-while-held");
+            }
+            std::snprintf(idbuf, sizeof(idbuf),
+                          "Fire again on inactive##%s_foi", prefix);
+            if (ImGui_Checkbox(ctx, idbuf, f.fireOnInactive)) {
+                dirty = true;
             }
         }
         ImGui_Unindent(ctx, /*indent_w*/ nullptr);

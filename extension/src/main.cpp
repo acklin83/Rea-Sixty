@@ -1260,7 +1260,29 @@ void drainInputQueue()
         MediaTrack* tr = visibleTrackAt(slot);
         if (!tr) continue;
         switch (e.kind) {
-            case PendingInput::SoloToggle:     CSurf_OnSoloChange(tr, -1); break;
+            case PendingInput::SoloToggle: {
+                // Routing mode: Solo lights up the SEND/RECEIVE target
+                // track ("listen to this return only"). Same precedence
+                // as the CUT/MuteToggle handler — fader-routing wins
+                // over V-Pot routing if both are active. Hardware-output
+                // sends have no target track; eat the press silently
+                // there. Without this, a user in 8-sends mode pressing
+                // Solo on a return-strip soloed the source bank track,
+                // not the return — Frank 2026-05-08.
+                StripRoute sr = resolveFaderRoute_(e.strip, bankOffset, surfaceCount);
+                if (!sr.active())
+                    sr = resolveVpotRoute_(e.strip, bankOffset, surfaceCount);
+                if (sr.active()) {
+                    if (auto* target = routeTargetTrack_(sr)) {
+                        CSurf_OnSoloChange(target, -1);
+                    }
+                    // active-but-no-target (hardware-output send / invalid
+                    // route) → eat the press, do NOT fall through.
+                    break;
+                }
+                CSurf_OnSoloChange(tr, -1);
+                break;
+            }
             case PendingInput::MuteToggle: {
                 // Routing mode: when the strip represents a send/receive
                 // (V-Pot or fader routing active), the CUT button toggles
@@ -1347,11 +1369,13 @@ void drainInputQueue()
                         slF->vst3Param, normF);
                     break;
                 }
-                // FLIP+PAN no-slot swap: fader writes track D_PAN.
-                // pb14 → 0..1 → -1..+1 pan range. Same kUf8FaderPbMax
-                // scaling as the FLIP+slot path so a centred fader
-                // lands at exactly 0.0 pan.
-                if (g_flip.load() && forcePanF) {
+                // FLIP without slot, route, or Plugin-Fader mode: fader
+                // writes track D_PAN. The default split is V-Pots = pan,
+                // Faders = volume; FLIP swaps them, so faders take pan
+                // duty. Earlier this only kicked in when forcePan was
+                // also held — Frank 2026-05-08: just FLIP should be
+                // enough, no PAN-button-modifier required.
+                if (g_flip.load() && !g_pluginFaderMode.load()) {
                     const uint16_t pbF = linearVolumeToPb(e.value);
                     double n = static_cast<double>(pbF) /
                                static_cast<double>(kUf8FaderPbMax);
@@ -3564,11 +3588,15 @@ void pushZonesForVisibleSlots()
         // fader, so the strip falls back to normal mode silently.
         const bool flipActive = g_flip.load() && slot && fxIdx >= 0;
 
-        // FLIP+PAN with no plug-in slot to swap onto. Per the documented
-        // decision tree (line ~3446), FLIP+PAN should swap pan↔volume:
-        // V-Pots show volume, faders show pan. flipActive only handles
-        // the plug-in-param case; this covers the simple Vol/Pan swap.
-        const bool flipPanSwap = g_flip.load() && g_forcePan.load() && !flipActive;
+        // FLIP without a plug-in slot to swap onto: V-Pots show volume,
+        // faders show pan (the simple swap). Used to require holding the
+        // PAN button (g_forcePan); Frank 2026-05-08 wants FLIP alone to
+        // be enough — the swap is exactly what FLIP means without other
+        // context. plugin-fader mode still wins when active (its fader
+        // role is explicit and overrides the swap).
+        const bool flipPanSwap = g_flip.load()
+                              && !flipActive
+                              && !g_pluginFaderMode.load();
 
         // Plugin-fader mode active on this strip = global plugin-fader
         // toggle ON + a CS plug-in is loaded. FLIP wins if both are on
@@ -4327,6 +4355,17 @@ void commitDebouncedTouchReleases()
                     if (normT > 1.0) normT = 1.0;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
+                } else if (g_flip.load() && !g_pluginFaderMode.load()) {
+                    // FLIP without slot / route / plugin-fader: track D_PAN.
+                    // Mirrors the live VolumeAbs handler (Frank 2026-05-08).
+                    double n = static_cast<double>(touchPb) /
+                               static_cast<double>(kUf8FaderPbMax);
+                    if (n < 0.0) n = 0.0;
+                    if (n > 1.0) n = 1.0;
+                    double pan = n * 2.0 - 1.0;
+                    if (pan < -1.0) pan = -1.0;
+                    if (pan >  1.0) pan =  1.0;
+                    SetMediaTrackInfo_Value(tr, "D_PAN", pan);
                 } else if (g_pluginFaderMode.load() && csT.vst3Param >= 0) {
                     double n = static_cast<double>(touchPb) /
                                static_cast<double>(kUf8FaderPbMax);
@@ -6649,6 +6688,15 @@ void registerBindingHandlers()
             g_flip.store(next);
             g_pageDirty.store(true);
             SetExtState("ReaSixty", "flip", next ? "1" : "0", true);
+            // Invalidate any in-flight touch context — the captured pb14
+            // was meaningful in the OLD FLIP state (e.g. driving D_PAN
+            // when FLIP was on). After toggling, the touch-release
+            // writeback would otherwise commit that pan-encoded position
+            // as a track volume, jumping the fader to the pan value.
+            // Clearing g_lastTouchPbValid converts any pending release
+            // into a no-op; a fresh move under the new FLIP state will
+            // start a clean touch.
+            for (auto& v : g_lastTouchPbValid) v.store(false);
         },
         [](int) { return g_flip.load(); },
         "Toggle FLIP (fader ↔ V-Pot)", false

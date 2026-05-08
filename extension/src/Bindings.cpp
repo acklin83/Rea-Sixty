@@ -1441,18 +1441,19 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
                 actionId = std::atoi(a.action.c_str());
             }
             if (actionId <= 0) break;
-            // INACTIVE-edge handling: only fire on release if either the
-            // action is a REAPER toggle (state >= 0 = needs second
-            // invocation to toggle off) or the user explicitly enabled
-            // "fire again on inactive" on this step. Otherwise the
-            // release is a no-op so one-shot actions don't fire twice
-            // per press — Frank 2026-05-07.
-            if (!firing) {
-                const int state = GetToggleCommandState2(
-                    SectionFromUniqueID(0), actionId);
-                const bool isToggle = (state >= 0);
-                if (!isToggle && !a.fireOnInactive) break;
-            }
+            // Inactive-edge gate: REAPER actions fire only on the press
+            // edge (firing=true) by default. Behavior::Hold sends
+            // firing=true on BOTH press and release (engine forces it),
+            // so Hold-bindings naturally fire the action twice per press
+            // — perfect for "active while held" toggles. For non-Hold
+            // bindings (Momentary / Toggle) the user opts in to the
+            // double-fire via ActionStep::fireOnInactive.
+            //
+            // The earlier "auto-fire on toggle" heuristic (Frank
+            // 2026-05-07) overrode the user's Behavior choice and
+            // collapsed Momentary toggles to a no-op (ON+OFF on a
+            // single press) — Frank 2026-05-08, removed.
+            if (!firing && !a.fireOnInactive) break;
             auto it = g_builtins.find("__reaper_action__");
             if (it != g_builtins.end() && it->second.run) {
                 it->second.run(true, pressed, actionId);
