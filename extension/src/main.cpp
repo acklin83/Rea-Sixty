@@ -1381,6 +1381,23 @@ void drainInputQueue()
                     // route) → eat the press, do NOT fall through.
                     break;
                 }
+                // FX Learn UF8: user-strip Solo toggles a bound vst3
+                // param on the focused user-plug-in instance (e.g. a
+                // bypass / mute on that plug-in). Empty binding falls
+                // through to track solo.
+                if (g_pluginFaderMode.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const auto& sb = uctx.map->uf8.strips[
+                            static_cast<int>(e.strip)];
+                        if (sb.soloVst3Param >= 0) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sb.soloVst3Param);
+                            TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+                                sb.soloVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                            break;
+                        }
+                    }
+                }
                 CSurf_OnSoloChange(tr, -1);
                 break;
             }
@@ -1402,10 +1419,39 @@ void drainInputQueue()
                     break;
                 }
                 if (mr.active()) break;     // routed but slot empty — eat the press
+                if (g_pluginFaderMode.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const auto& sb = uctx.map->uf8.strips[
+                            static_cast<int>(e.strip)];
+                        if (sb.cutVst3Param >= 0) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sb.cutVst3Param);
+                            TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+                                sb.cutVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                            break;
+                        }
+                    }
+                }
                 CSurf_OnMuteChange(tr, -1);
                 break;
             }
-            case PendingInput::SelectToggle:   CSurf_OnSelectedChange(tr, -1); break;
+            case PendingInput::SelectToggle: {
+                if (g_pluginFaderMode.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const auto& sb = uctx.map->uf8.strips[
+                            static_cast<int>(e.strip)];
+                        if (sb.selVst3Param >= 0) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sb.selVst3Param);
+                            TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+                                sb.selVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                            break;
+                        }
+                    }
+                }
+                CSurf_OnSelectedChange(tr, -1);
+                break;
+            }
             case PendingInput::SelectExclusive:
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
