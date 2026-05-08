@@ -2897,6 +2897,155 @@ void toggleInverted_(int linkIdx)
     }
 }
 
+// ---- UF8 helpers (Phase 3) ------------------------------------------------
+//
+// Mirror the UC1 helpers above but address `editing->uf8.{strips,banks}`.
+// Listen state is a separate (kind, strip, bank) tuple stored in
+// g_listeningUf8 — mutually exclusive with g_listeningLinkIdx.
+
+// Forward-declares for the Uf8Control struct that lives further down with
+// the schematic painter. Defined in the same anonymous namespace so the
+// helpers below can reference it; the actual struct definition stays
+// local to the painter file region.
+struct Uf8Control;
+
+struct Uf8ListenSlot {
+    int kind  = -1;     // -1 = none; otherwise Uf8Control::Kind
+    int strip = 0;
+    int bank  = 0;      // VPot/TopSoftKey only — others ignore
+    bool active() const { return kind >= 0; }
+    void clear() { kind = -1; strip = 0; bank = 0; }
+    bool matches(int k, int s, int b) const {
+        return kind == k && strip == s && bank == b;
+    }
+};
+Uf8ListenSlot g_listeningUf8;
+
+// Bank index currently shown on the UF8 mockup — drives which
+// banks.banks[bank][s] entries are visible/editable.
+int g_uf8EditingBank = 0;
+
+// Mutator helpers. Each takes a copy of the catalog, mutates the editing
+// map's uf8 field, and pushes back via upsert. Callers should already
+// have validated kind/strip/bank ranges.
+template <class F>
+void mutateUf8_(F&& fn)
+{
+    if (g_editingMatch.empty()) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        fn(m.uf8);
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+
+// Read the current vst3Param for any UF8 control. Returns -1 if unmapped
+// or editing map missing.
+int mappedVst3ForUf8_(int kind, int strip, int bank)
+{
+    using uf8::user_plugins::get;
+    if (g_editingMatch.empty()) return -1;
+    for (const auto& m : get().maps) {
+        if (m.match != g_editingMatch) continue;
+        const auto& u = m.uf8;
+        switch (kind) {
+            case 0 /*Fader*/:      return u.strips[strip].faderVst3Param;
+            case 3 /*SoloBtn*/:    return u.strips[strip].soloVst3Param;
+            case 4 /*CutBtn*/:     return u.strips[strip].cutVst3Param;
+            case 5 /*SelBtn*/:     return u.strips[strip].selVst3Param;
+            case 1 /*VPot*/:
+            case 2 /*TopSoftKey*/: return u.banks.banks[bank][strip].vst3Param;
+            default: return -1;
+        }
+    }
+    return -1;
+}
+
+void bindUf8_(int kind, int strip, int bank, int vst3Param)
+{
+    if (vst3Param < 0) return;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        switch (kind) {
+            case 0: u.strips[strip].faderVst3Param = vst3Param; break;
+            case 3: u.strips[strip].soloVst3Param  = vst3Param; break;
+            case 4: u.strips[strip].cutVst3Param   = vst3Param; break;
+            case 5: u.strips[strip].selVst3Param   = vst3Param; break;
+            case 1:
+            case 2:
+                u.banks.banks[bank][strip].vst3Param = vst3Param;
+                break;
+        }
+    });
+}
+
+void unbindUf8_(int kind, int strip, int bank)
+{
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        switch (kind) {
+            case 0: u.strips[strip].faderVst3Param = -1;
+                    u.strips[strip].faderInverted  = false; break;
+            case 3: u.strips[strip].soloVst3Param  = -1; break;
+            case 4: u.strips[strip].cutVst3Param   = -1; break;
+            case 5: u.strips[strip].selVst3Param   = -1; break;
+            case 1:
+            case 2: u.banks.banks[bank][strip] = uf8::UserUf8BankSlot{}; break;
+        }
+    });
+}
+
+bool uf8Inverted_(int kind, int strip, int bank)
+{
+    if (g_editingMatch.empty()) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        const auto& u = m.uf8;
+        if (kind == 0) return u.strips[strip].faderInverted;
+        if (kind == 1 || kind == 2)
+            return u.banks.banks[bank][strip].inverted;
+        return false;
+    }
+    return false;
+}
+
+void toggleUf8Inverted_(int kind, int strip, int bank)
+{
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        if (kind == 0)
+            u.strips[strip].faderInverted = !u.strips[strip].faderInverted;
+        else if (kind == 1 || kind == 2) {
+            auto& bs = u.banks.banks[bank][strip];
+            bs.inverted = !bs.inverted;
+        }
+    });
+}
+
+void setUf8VPotMode_(int strip, int bank, uf8::VPotMode mode)
+{
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[bank][strip].vpotMode = mode;
+    });
+}
+
+void setUf8DefaultNorm_(int strip, int bank, double norm)
+{
+    if (norm < 0.0) norm = 0.0; if (norm > 1.0) norm = 1.0;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[bank][strip].defaultNorm = norm;
+    });
+}
+
+void setUf8Label_(int strip, int bank, const std::string& label)
+{
+    std::string trimmed = label;
+    if (trimmed.size() > 7) trimmed.resize(7);
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[bank][strip].label = trimmed;
+    });
+}
+
 // ---- UC1 mockup as the FX-Learn schematic --------------------------------
 //
 // Each entry binds a position on the UC1 face to an SSL 360 Link slot.
@@ -3420,9 +3569,269 @@ const Uf8Control* uf8Controls_(int* outCount)
     return tbl;
 }
 
-// Phase 2 placeholder — paints the face. Phase 3 will iterate uf8Controls_
-// and add the interactive overlay on top, mirroring drawFxLearnSchematic_.
-void drawFxLearnUf8Schematic_(ImGui_Context* ctx)
+// Per-control interactive overlay on top of drawUf8Face_'s chassis paint.
+// Mirrors drawUc1Control_'s pattern: state-aware ring/box + mapped tag +
+// inverted indicator + InvisibleButton hit area + drag-drop target +
+// right-click context menu. TopSoftKey paints the bound param's label
+// only — clicks routed via the V-Pot below it.
+void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
+                     float ox, float oy,
+                     const Uf8Control& ctrl,
+                     const EditingFx& fx)
+{
+    const int  bank      = g_uf8EditingBank;
+    const int  mapped    = mappedVst3ForUf8_(ctrl.kind, ctrl.strip, bank);
+    const bool isMapped  = (mapped >= 0);
+    const bool isListen  = g_listeningUf8.matches(ctrl.kind, ctrl.strip, bank);
+
+    const float bx = ctrl.cx, by = ctrl.cy;
+    const float bw = ctrl.w,  bh = ctrl.h;
+
+    // State → ring colour
+    uint32_t ringCol;
+    if (isListen) {
+        const double t     = ImGui_GetTime(ctx);
+        const double pulse = 0.5 + 0.5 * std::sin(t * 6.0);
+        const uint32_t bA  =
+            static_cast<uint32_t>(140 + 115 * pulse) & 0xFFu;
+        ringCol = (0xFFE040u << 8) | bA;
+    } else if (isMapped) {
+        ringCol = 0x60C060FF;
+    } else {
+        ringCol = 0x808890FF;
+    }
+
+    // Outline overlay
+    if (ctrl.kind == Uf8Control::VPot) {
+        const float r = (bw / 2.0f);
+        ImGui_DrawList_AddCircle(dl, ox + bx + r, oy + by + r, r + 2,
+                                 ringCol,
+                                 /*num_segments*/ nullptr,
+                                 /*thickness*/ nullptr);
+    } else {
+        double rounding = 3.0;
+        ImGui_DrawList_AddRect(dl,
+            ox + bx - 1, oy + by - 1,
+            ox + bx + bw + 1, oy + by + bh + 1,
+            ringCol, &rounding, /*flags*/ nullptr, /*thickness*/ nullptr);
+    }
+
+    // TopSoftKey: paint the param-name (or custom label) inside the
+    // already-drawn rect. No interactive hit-test — V-Pot is the editor.
+    if (ctrl.kind == Uf8Control::TopSoftKey) {
+        std::string label;
+        if (isMapped) {
+            // Prefer custom label, fall back to param name.
+            for (const auto& m : uf8::user_plugins::get().maps) {
+                if (m.match != g_editingMatch) continue;
+                label = m.uf8.banks.banks[bank][ctrl.strip].label;
+                break;
+            }
+            if (label.empty() && fx.ok) {
+                char pn[64] = {};
+                TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
+                                     pn, sizeof(pn));
+                label = pn;
+            }
+            if (label.size() > 8) label.resize(8);
+            if (!label.empty()) {
+                ImGui_DrawList_AddText(dl, ox + bx + 4, oy + by + 4,
+                                       0x88CCEEFF, label.c_str());
+            }
+        }
+        return;   // no hit-test for TopSoftKey
+    }
+
+    // Mapped tag — small "p<n>" inside / next to the bbox
+    if (isMapped) {
+        char tag[12];
+        std::snprintf(tag, sizeof(tag), "p%d", mapped);
+        if (ctrl.kind == Uf8Control::VPot) {
+            double tw = 0, th = 0;
+            ImGui_CalcTextSize(ctx, tag, &tw, &th, nullptr, nullptr);
+            ImGui_DrawList_AddText(dl,
+                ox + bx + (bw - float(tw)) / 2.0f,
+                oy + by + (bh - float(th)) / 2.0f,
+                0x80FF80FF, tag);
+        } else {
+            ImGui_DrawList_AddText(dl,
+                ox + bx + 2, oy + by - 12,
+                0x80FF80FF, tag);
+        }
+    }
+
+    // Inverted "i" indicator (Fader + VPot only)
+    if (isMapped &&
+        (ctrl.kind == Uf8Control::Fader || ctrl.kind == Uf8Control::VPot))
+    {
+        if (uf8Inverted_(ctrl.kind, ctrl.strip, bank)) {
+            ImGui_DrawList_AddText(dl,
+                ox + bx + bw - 6, oy + by - 4,
+                0xFFC04CFF, "i");
+        }
+    }
+
+    // Hit area — accepts click + drag-drop + popup.
+    char btnId[48];
+    std::snprintf(btnId, sizeof(btnId), "##fxl_uf8_%d_%d",
+                  int(ctrl.kind), ctrl.strip);
+    ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
+    int ibFlags = 0;
+    ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
+
+    int lbtn = 0;
+    if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
+        if (isListen) {
+            g_listeningUf8.clear();
+        } else {
+            g_listeningUf8.kind  = ctrl.kind;
+            g_listeningUf8.strip = ctrl.strip;
+            g_listeningUf8.bank  = bank;
+            g_listeningLinkIdx   = -1;   // mutually exclusive with UC1 listen
+        }
+    }
+
+    if (ImGui_IsItemHovered(ctx, nullptr)) {
+        const char* kindLabel = "?";
+        switch (ctrl.kind) {
+            case Uf8Control::Fader:   kindLabel = "Fader";   break;
+            case Uf8Control::VPot:    kindLabel = "V-Pot";   break;
+            case Uf8Control::SoloBtn: kindLabel = "Solo";    break;
+            case Uf8Control::CutBtn:  kindLabel = "Cut";     break;
+            case Uf8Control::SelBtn:  kindLabel = "Sel";     break;
+            default: break;
+        }
+        char tip[256];
+        if (isMapped) {
+            char pname[128] = {};
+            if (fx.ok) TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
+                                            pname, sizeof(pname));
+            std::snprintf(tip, sizeof(tip),
+                "%s strip %d%s\n  -> param %d  '%s'",
+                kindLabel, ctrl.strip + 1,
+                (ctrl.kind == Uf8Control::VPot
+                    ? (std::string("  bank ") +
+                       (bank == 0 ? "V-POT" :
+                        bank == 1 ? "SOFT 1" :
+                        bank == 2 ? "SOFT 2" :
+                        bank == 3 ? "SOFT 3" :
+                        bank == 4 ? "SOFT 4" : "SOFT 5")).c_str()
+                    : ""),
+                mapped, pname);
+        } else {
+            std::snprintf(tip, sizeof(tip),
+                "%s strip %d\n  unmapped — drag a param here or click to listen",
+                kindLabel, ctrl.strip + 1);
+        }
+        ImGui_SetTooltip(ctx, tip);
+    }
+
+    if (ImGui_BeginDragDropTarget(ctx)) {
+        char payload[16] = {};
+        int  dropFlags   = 0;
+        if (ImGui_AcceptDragDropPayload(ctx, "FXL_PARAM",
+                                        payload, int(sizeof(payload)),
+                                        &dropFlags)) {
+            const int p = std::atoi(payload);
+            if (p >= 0) {
+                bindUf8_(ctrl.kind, ctrl.strip, bank, p);
+                if (isListen) g_listeningUf8.clear();
+            }
+        }
+        ImGui_EndDragDropTarget(ctx);
+    }
+
+    if (isMapped) {
+        char popId[48];
+        std::snprintf(popId, sizeof(popId), "fxl_uf8_ctx_%d_%d",
+                      int(ctrl.kind), ctrl.strip);
+        if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
+            char title[160];
+            std::snprintf(title, sizeof(title),
+                "strip %d -> param %d", ctrl.strip + 1, mapped);
+            ImGui_TextDisabled(ctx, title);
+            ImGui_Separator(ctx);
+
+            if (ctrl.kind == Uf8Control::Fader ||
+                ctrl.kind == Uf8Control::VPot)
+            {
+                bool inv = uf8Inverted_(ctrl.kind, ctrl.strip, bank);
+                char invLbl[40];
+                std::snprintf(invLbl, sizeof(invLbl),
+                    inv ? "Inverted [on]" : "Inverted [off]");
+                if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
+                    toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
+                }
+            }
+
+            if (ctrl.kind == Uf8Control::VPot) {
+                // V-Pot mode (Value/Toggle) + label edit + defaultNorm
+                uf8::VPotMode curMode = uf8::VPotMode::Value;
+                std::string   curLabel;
+                double        curDeflt = 0.5;
+                for (const auto& m : uf8::user_plugins::get().maps) {
+                    if (m.match != g_editingMatch) continue;
+                    const auto& bs = m.uf8.banks.banks[bank][ctrl.strip];
+                    curMode  = bs.vpotMode;
+                    curLabel = bs.label;
+                    curDeflt = bs.defaultNorm;
+                    break;
+                }
+                bool isVal = (curMode == uf8::VPotMode::Value);
+                if (ImGui_MenuItem(ctx, "V-Pot mode: Value",
+                                   nullptr, &isVal, nullptr)) {
+                    setUf8VPotMode_(ctrl.strip, bank, uf8::VPotMode::Value);
+                }
+                bool isTgl = (curMode == uf8::VPotMode::Toggle);
+                if (ImGui_MenuItem(ctx, "V-Pot mode: Toggle",
+                                   nullptr, &isTgl, nullptr)) {
+                    setUf8VPotMode_(ctrl.strip, bank, uf8::VPotMode::Toggle);
+                }
+                ImGui_Separator(ctx);
+
+                static char s_lblBuf[16];
+                std::snprintf(s_lblBuf, sizeof(s_lblBuf), "%s",
+                              curLabel.c_str());
+                if (ImGui_InputTextWithHint(ctx,
+                        "Label##fxl_uf8_lbl",
+                        "(auto from param name)",
+                        s_lblBuf, int(sizeof(s_lblBuf)),
+                        nullptr, nullptr))
+                {
+                    setUf8Label_(ctrl.strip, bank, std::string(s_lblBuf));
+                }
+
+                if (curMode == uf8::VPotMode::Value) {
+                    double tmp = curDeflt;
+                    int sliderFlags = 0;
+                    if (ImGui_SliderDouble(ctx, "Push reset##fxl_uf8_dn",
+                            &tmp, 0.0, 1.0, "%.3f", &sliderFlags)) {
+                        setUf8DefaultNorm_(ctrl.strip, bank, tmp);
+                    }
+                    if (fx.ok) {
+                        if (ImGui_MenuItem(ctx, "Capture current value",
+                                           nullptr, nullptr, nullptr)) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                fx.tr, fx.fxIdx, mapped);
+                            setUf8DefaultNorm_(ctrl.strip, bank, cur);
+                        }
+                    }
+                }
+                ImGui_Separator(ctx);
+            }
+
+            if (ImGui_MenuItem(ctx, "Clear binding", nullptr,
+                               nullptr, nullptr)) {
+                if (isListen) g_listeningUf8.clear();
+                unbindUf8_(ctrl.kind, ctrl.strip, bank);
+            }
+            ImGui_EndPopup(ctx);
+        }
+    }
+}
+
+// Render the FX-Learn schematic as the UF8 hardware face.
+void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
     double oxd = 0, oyd = 0;
     ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
@@ -3431,6 +3840,12 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx)
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
     VCanvas c { ctx, dl, ox, oy };
     drawUf8Face_(c);
+
+    int n = 0;
+    const Uf8Control* tbl = uf8Controls_(&n);
+    for (int i = 0; i < n; ++i) {
+        drawUf8Control_(ctx, dl, ox, oy, tbl[i], fx);
+    }
 
     ImGui_SetCursorScreenPos(ctx, oxd, oyd);
     ImGui_Dummy(ctx, kUf8FaceW, kUf8FaceH);
@@ -3498,13 +3913,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         return;
     }
 
-    // ESC clears any in-progress listening — matches the plan-doc
-    // §"Interaktion" expectation. Only fires when nothing else is
-    // capturing keyboard (e.g. param-filter input box has focus).
-    if (g_listeningLinkIdx >= 0) {
+    // ESC clears any in-progress listening (UC1 or UF8 — mutually
+    // exclusive). Only fires when nothing else is capturing keyboard.
+    if (g_listeningLinkIdx >= 0 || g_listeningUf8.active()) {
         bool repeat = false;
         if (ImGui_IsKeyPressed(ctx, ImGui_Key_Escape, &repeat)) {
             g_listeningLinkIdx = -1;
+            g_listeningUf8.clear();
         }
     }
 
@@ -3512,6 +3927,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (ImGui_Button(ctx, "<- All maps##fxl_back", nullptr, nullptr)) {
         g_editingMatch.clear();
         g_listeningLinkIdx = -1;
+        g_listeningUf8.clear();
         return;
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
@@ -3520,13 +3936,60 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                   editing->match.c_str(), domainLabel_(editing->domain));
     ImGui_Text(ctx, hdr);
 
-    // Phase 2: UF8 mockup preview toggle. Phase 3 will replace this with a
-    // proper UC1/UF8 radio in the toolbar. The mockup is read-only here —
-    // no rings, no labels, no interactions — purely a visual preview of
-    // the chassis.
-    static bool s_showUf8 = false;
+    // UC1 / UF8 mockup picker. Lifted to ExtState so the choice survives
+    // REAPER restart per editor pane.
+    static int s_mockup = -1;
+    if (s_mockup < 0) {
+        char buf[8] = {};
+        GetExtState("ReaSixty/FXLearn", "mockup");
+        const char* v = GetExtState("ReaSixty/FXLearn", "mockup");
+        s_mockup = (v && *v == '1') ? 1 : 0;
+    }
+
     ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_Checkbox(ctx, "Preview UF8 mockup##fxl_uf8_preview", &s_showUf8);
+    ImGui_TextDisabled(ctx, "  Mockup:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "UC1##fxl_mock_uc1", s_mockup == 0)) {
+        s_mockup = 0;
+        SetExtState("ReaSixty/FXLearn", "mockup", "0", true);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "UF8##fxl_mock_uf8", s_mockup == 1)) {
+        s_mockup = 1;
+        SetExtState("ReaSixty/FXLearn", "mockup", "1", true);
+    }
+
+    if (s_mockup == 1) {
+        // Bank picker — only meaningful for UF8 mockup. V-POT + SOFT 1..5
+        // map to softkey-bank indices 0..5.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx, "  Bank:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* kBankNames[6] = {
+            "V-POT", "SOFT 1", "SOFT 2", "SOFT 3", "SOFT 4", "SOFT 5"
+        };
+        char prev[16];
+        std::snprintf(prev, sizeof(prev), "%s",
+                      kBankNames[std::clamp(g_uf8EditingBank, 0, 5)]);
+        int comboFlags = 0;
+        double bw = 100.0;
+        ImGui_SetNextItemWidth(ctx, bw);
+        if (ImGui_BeginCombo(ctx, "##fxl_uf8_bank", prev, &comboFlags)) {
+            for (int b = 0; b < 6; ++b) {
+                bool sel = (b == g_uf8EditingBank);
+                char rowId[24];
+                std::snprintf(rowId, sizeof(rowId),
+                              "%s##fxl_bnk_%d", kBankNames[b], b);
+                int selFlags = 0;
+                if (ImGui_Selectable(ctx, rowId, &sel, &selFlags,
+                                     nullptr, nullptr)) {
+                    g_uf8EditingBank = b;
+                    g_listeningUf8.clear();
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+    }
 
     // Reset the FX-selector key when the editing map changes — the old
     // key (track:fx pair) means nothing for a different map.
@@ -3782,6 +4245,52 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
     }
 
+    // Same click-and-turn polling for the UF8 listen state. Mutually
+    // exclusive with the UC1 listen above (clicking a UF8 control clears
+    // g_listeningLinkIdx, and vice versa).
+    static int s_uf8PrevKind = -1, s_uf8PrevStrip = -1, s_uf8PrevBank = -1;
+    const bool uf8ListenChanged =
+        g_listeningUf8.kind  != s_uf8PrevKind  ||
+        g_listeningUf8.strip != s_uf8PrevStrip ||
+        g_listeningUf8.bank  != s_uf8PrevBank;
+    if (g_listeningUf8.active() && uf8ListenChanged) {
+        int t = -1, f = -1, p = -1;
+        if (GetLastTouchedFX(&t, &f, &p)) {
+            g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
+        } else {
+            g_lastTouchedTr = -1; g_lastTouchedFx = -1; g_lastTouchedParam = -1;
+        }
+    }
+    s_uf8PrevKind  = g_listeningUf8.kind;
+    s_uf8PrevStrip = g_listeningUf8.strip;
+    s_uf8PrevBank  = g_listeningUf8.bank;
+
+    if (g_listeningUf8.active()) {
+        int t = -1, f = -1, p = -1;
+        if (GetLastTouchedFX(&t, &f, &p)) {
+            const bool changed = (t != g_lastTouchedTr ||
+                                  f != g_lastTouchedFx ||
+                                  p != g_lastTouchedParam);
+            if (changed) {
+                MediaTrack* tr = nullptr;
+                if (t == 0)      tr = GetMasterTrack(nullptr);
+                else if (t > 0)  tr = GetTrack(nullptr, t - 1);
+                if (tr) {
+                    char fxName[256] = {};
+                    if (TrackFX_GetFXName(tr, f, fxName, sizeof(fxName)) &&
+                        std::string(fxName).find(editing->match) != std::string::npos)
+                    {
+                        bindUf8_(g_listeningUf8.kind,
+                                 g_listeningUf8.strip,
+                                 g_listeningUf8.bank, p);
+                        g_listeningUf8.clear();
+                    }
+                }
+                g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
+            }
+        }
+    }
+
     double avX = 0.0, avY = 0.0;
     ImGui_GetContentRegionAvail(ctx, &avX, &avY);
     if (avX < 200.0) avX = 600.0;   // safety for embedded contexts
@@ -3797,22 +4306,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         leftW  = avX - rightW - 12.0;
     }
 
-    // Left pane — UC1 hardware face mockup. Knobs / toggles map to SSL
-    // 360 Link slots; click to listen, drag a param onto a knob to bind,
-    // right-click for Inverted/Clear context menu.
+    // Left pane — hardware face mockup. UC1 / UF8 selected via the radio
+    // in the editor header. Click to listen, drag a param onto a control
+    // to bind, right-click for Inverted/V-Pot mode/Clear context menu.
     int childFlags = 0;
     int winFlags   = ImGui_WindowFlags_HorizontalScrollbar;
     double hLeft = avY - 8.0;
     if (ImGui_BeginChild(ctx, "fxl_slots", &leftW, &hLeft,
                          &childFlags, &winFlags)) {
-        drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
-        if (s_showUf8) {
-            ImGui_Spacing(ctx);
-            ImGui_Separator(ctx);
-            ImGui_TextDisabled(ctx,
-                "UF8 mockup preview (Phase 2 — interactivity wires in Phase 3)");
-            ImGui_Spacing(ctx);
-            drawFxLearnUf8Schematic_(ctx);
+        if (s_mockup == 1) {
+            drawFxLearnUf8Schematic_(ctx, fx);
+        } else {
+            drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
         }
         ImGui_EndChild(ctx);
     }
@@ -3835,6 +4340,22 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     "  - click a parameter below, OR\n"
                     "  - wiggle the control in the plug-in window",
                     listenSlot ? listenSlot->name : "(slot)");
+                ImGui_TextColored(ctx, 0xFFE040FF, hint);
+            } else if (g_listeningUf8.active()) {
+                const char* kindLbl = "?";
+                switch (g_listeningUf8.kind) {
+                    case 0 /*Fader*/:      kindLbl = "Fader";      break;
+                    case 1 /*VPot*/:       kindLbl = "V-Pot";      break;
+                    case 3 /*SoloBtn*/:    kindLbl = "Solo";       break;
+                    case 4 /*CutBtn*/:     kindLbl = "Cut";        break;
+                    case 5 /*SelBtn*/:     kindLbl = "Sel";        break;
+                    default: break;
+                }
+                std::snprintf(hint, sizeof(hint),
+                    "Listening for UF8 %s strip %d\n"
+                    "  - click a parameter below, OR\n"
+                    "  - wiggle the control in the plug-in window",
+                    kindLbl, g_listeningUf8.strip + 1);
                 ImGui_TextColored(ctx, 0xFFE040FF, hint);
             } else {
                 ImGui_TextDisabled(ctx,
@@ -3907,6 +4428,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     if (g_listeningLinkIdx >= 0) {
                         bindSlot_(g_listeningLinkIdx, p);
                         autoAdvanceListening_(*topo);
+                    } else if (g_listeningUf8.active()) {
+                        bindUf8_(g_listeningUf8.kind,
+                                 g_listeningUf8.strip,
+                                 g_listeningUf8.bank, p);
+                        g_listeningUf8.clear();
                     }
                 }
 
