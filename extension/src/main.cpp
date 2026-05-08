@@ -3968,6 +3968,30 @@ void pushZonesForVisibleSlots()
             const uint16_t pbVol = linearVolumeToPb(volLinFlip);
             vpotBar[s] = vpotPosFromUnipolar(
                 static_cast<double>(pbVol) / 16383.0);
+        } else if (g_pluginFaderMode.load() && !flipActive
+                && [&]{ if (auto u = userStripCtxFocused_(); u.map) return true; return false; }())
+        {
+            // FX Learn UF8: user-bank V-Pot bar. Toggle slots show
+            // collapsed-bar centre marker for OFF / full-positive for
+            // ON. Value slots show unipolar L→R sweep on the bound
+            // param. Empty slots show collapsed-bar.
+            auto uctx = userStripCtxFocused_();
+            const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+            const auto& bs = uctx.map->uf8.banks.banks[bank][s];
+            if (bs.vst3Param < 0) {
+                vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
+            } else {
+                const double norm = TrackFX_GetParamNormalized(
+                    uctx.tr, uctx.fxIdx, bs.vst3Param);
+                if (bs.vpotMode == uf8::VPotMode::Toggle) {
+                    vpotBar[s] = (norm >= 0.5)
+                        ? static_cast<uint16_t>(0x7F)
+                        : (uint16_t{0x00} | (uint16_t{0x80} << 8));
+                } else {
+                    const double v = bs.inverted ? 1.0 - norm : norm;
+                    vpotBar[s] = vpotPosFromUnipolar(v);
+                }
+            }
         } else if (g_forcePan.load()) {
             const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
             vpotBar[s] = vpotPosFromPan(pan);
@@ -4480,6 +4504,25 @@ void pushZonesForVisibleSlots()
                 else if (g_forcePan.load())   vpotMode[s] = 0x08;
                 else                          vpotMode[s] = 0x01;
                 continue;
+            }
+            // FX Learn UF8: user-bank V-Pot mode register.
+            //   Toggle slot → 0x03 (binary indicator, no bar)
+            //   Value slot  → 0x01 (unipolar L→R)
+            //   Empty slot  → 0x03 (no bar)
+            if (g_pluginFaderMode.load() && !g_flip.load()) {
+                if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                    const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                    const auto& bs =
+                        uctx.map->uf8.banks.banks[bank][s];
+                    if (bs.vst3Param < 0
+                        || bs.vpotMode == uf8::VPotMode::Toggle)
+                    {
+                        vpotMode[s] = 0x03;
+                    } else {
+                        vpotMode[s] = 0x01;
+                    }
+                    continue;
+                }
             }
             MediaTrack* tr = visibleTrackAt(realSlot);
             int fxIdx = -1;
