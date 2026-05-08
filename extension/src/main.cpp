@@ -1127,45 +1127,14 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
 
     const int n = TrackFX_GetCount(tr);
     char fxName[256];
-
-    // Diagnostic log — temporary, until Frank's "FX copy not recognised"
-    // bug is root-caused. Writes ONE line per resolve attempt to
-    // /tmp/rea_sixty_uf8.log — only when SSL Strip Mode is on so it
-    // doesn't spam the file in idle.
-    auto diag = [&](const char* fmt, ...) {
-#ifdef _WIN32
-        const char* p = "rea_sixty_uf8.log";
-#else
-        const char* p = "/tmp/rea_sixty_uf8.log";
-#endif
-        if (FILE* lf = std::fopen(p, "a")) {
-            va_list ap; va_start(ap, fmt);
-            std::vfprintf(lf, fmt, ap);
-            std::fputc('\n', lf);
-            va_end(ap);
-            std::fclose(lf);
-        }
-    };
-    char trGuid[64] = {};
-    GetSetMediaTrackInfo_String(tr, "GUID", trGuid, false);
-    diag("findUserPluginOnTrack tr=%s nFx=%d wantCs=%d wantBc=%d",
-         trGuid, n, wantCs, wantBc);
-
     for (int i = 0; i < n; ++i) {
         if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
         const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-        diag("  fx[%d]='%s' match=%s%s",
-             i, fxName,
-             um ? "YES " : "no",
-             um ? (um->domain == uf8::Domain::ChannelStrip ? "[CS]"
-                 : um->domain == uf8::Domain::BusComp ? "[BC]" : "[None]")
-                : "");
         if (!um) continue;
         if (um->domain == uf8::Domain::ChannelStrip) {
             if (seenCs == wantCs) {
                 out.fxIdx = i;
                 out.map   = um;
-                diag("  -> picked fxIdx=%d (CS instance %d)", i, seenCs);
                 return out;
             }
             ++seenCs;
@@ -1173,13 +1142,11 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
             if (seenBc == wantBc) {
                 out.fxIdx = i;
                 out.map   = um;
-                diag("  -> picked fxIdx=%d (BC instance %d)", i, seenBc);
                 return out;
             }
             ++seenBc;
         }
     }
-    diag("  -> NO MATCH (seenCs=%d seenBc=%d)", seenCs, seenBc);
     return out;
 }
 
@@ -1234,31 +1201,6 @@ UserPluginCtx userStripCtxFocused_()
         curBcInst  == s_cacheBcInst)
     {
         return s_cache;
-    }
-
-    // Diagnostic — log what we're about to resolve. One line per cache
-    // miss; matches the per-resolve diag in findUserPluginOnTrack_.
-    {
-#ifdef _WIN32
-        const char* p = "rea_sixty_uf8.log";
-#else
-        const char* p = "/tmp/rea_sixty_uf8.log";
-#endif
-        if (FILE* lf = std::fopen(p, "a")) {
-            char trGuid[64] = {};
-            if (tr) GetSetMediaTrackInfo_String(tr, "GUID", trGuid, false);
-            char trName[128] = {};
-            if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
-                GetTrackName(tr, trName, sizeof(trName));
-            std::fprintf(lf,
-                "userStripCtxFocused: mode=%d trGuid=%s name='%s' "
-                "uc1Focused=%p selFallback=%d gen=%d fxCount=%d\n",
-                curMode ? 1 : 0, trGuid, trName,
-                g_uc1_surface ? g_uc1_surface->focusedTrack() : nullptr,
-                g_uc1_surface && g_uc1_surface->focusedTrack() ? 0 : 1,
-                curGen, curFxCount);
-            std::fclose(lf);
-        }
     }
 
     s_cache       = findUserPluginOnTrack_(tr);
@@ -1627,19 +1569,6 @@ void drainInputQueue()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
-                            // Diagnostic — temporary, until controls verified.
-#ifdef _WIN32
-                            const char* dp = "rea_sixty_uf8.log";
-#else
-                            const char* dp = "/tmp/rea_sixty_uf8.log";
-#endif
-                            if (FILE* lf = std::fopen(dp, "a")) {
-                                std::fprintf(lf,
-                                  "FADER strip=%d → vst3Param=%d norm=%.4f "
-                                  "fxIdx=%d\n",
-                                  s, sb.faderVst3Param, n, uctx.fxIdx);
-                                std::fclose(lf);
-                            }
                             break;
                         }
                         // Empty user fader slot — fall through to
