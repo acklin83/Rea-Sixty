@@ -164,6 +164,33 @@ Domain domainFromName_(const char* s)
     return Domain::None;
 }
 
+const char* vpotModeName_(VPotMode m)
+{
+    return m == VPotMode::Toggle ? "Toggle" : "Value";
+}
+
+VPotMode vpotModeFromName_(const char* s)
+{
+    if (s && std::strcmp(s, "Toggle") == 0) return VPotMode::Toggle;
+    return VPotMode::Value;
+}
+
+bool uf8MapHasContent_(const UserUf8Map& u)
+{
+    for (int s = 0; s < 8; ++s) {
+        const auto& sb = u.strips[s];
+        if (sb.faderVst3Param >= 0 || sb.soloVst3Param >= 0
+         || sb.cutVst3Param   >= 0 || sb.selVst3Param  >= 0) return true;
+    }
+    for (int b = 0; b < 6; ++b) {
+        for (int s = 0; s < 8; ++s) {
+            if (u.banks.banks[b][s].vst3Param >= 0) return true;
+            if (!u.banks.banks[b][s].label.empty()) return true;
+        }
+    }
+    return false;
+}
+
 void appendEscaped_(std::ostringstream& os, const std::string& s)
 {
     os << '"';
@@ -261,6 +288,42 @@ std::string serialize_(const UserPluginCatalog& c)
                << ", \"offsetDb\": " << m.metering.grOffsetDb
                << " } }";
         }
+        if (uf8MapHasContent_(m.uf8)) {
+            os << ",\n      \"uf8\": {\n";
+            os << "        \"banks\": [";
+            for (int b = 0; b < 6; ++b) {
+                if (b) os << ",";
+                os << "\n          [";
+                for (int s = 0; s < 8; ++s) {
+                    if (s) os << ",";
+                    const auto& bs = m.uf8.banks.banks[b][s];
+                    os << "\n            { \"vst3Param\": " << bs.vst3Param
+                       << ", \"label\": ";
+                    appendEscaped_(os, bs.label);
+                    os << ", \"vpotMode\": ";
+                    appendEscaped_(os, vpotModeName_(bs.vpotMode));
+                    os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
+                       << ", \"defaultNorm\": " << bs.defaultNorm
+                       << " }";
+                }
+                os << "\n          ]";
+            }
+            os << "\n        ],\n";
+            os << "        \"strips\": [";
+            for (int s = 0; s < 8; ++s) {
+                if (s) os << ",";
+                const auto& sb = m.uf8.strips[s];
+                os << "\n          { "
+                   << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
+                   << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
+                   << " }, "
+                   << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param << " }, "
+                   << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param  << " }, "
+                   << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param  << " }"
+                   << " }";
+            }
+            os << "\n        ]\n      }";
+        }
         os << "\n    }";
     }
     if (!firstPlugin) os << "\n  ";
@@ -328,6 +391,64 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getIntI_(gr, "vst3Param", gp);
                 m.metering.grVst3Param = gp;
                 getDoubleI_(gr, "offsetDb", m.metering.grOffsetDb);
+            }
+        }
+
+        if (auto* uo = po->get_item_by_name("uf8");
+            uo && uo->is_object())
+        {
+            if (auto* banksArr = uo->get_item_by_name("banks");
+                banksArr && banksArr->is_array() && banksArr->m_array)
+            {
+                const int bn = (std::min)(banksArr->m_array->GetSize(), 6);
+                for (int b = 0; b < bn; ++b) {
+                    wdl_json_element* row = banksArr->enum_item(b);
+                    if (!row || !row->is_array() || !row->m_array) continue;
+                    const int sn = (std::min)(row->m_array->GetSize(), 8);
+                    for (int s = 0; s < sn; ++s) {
+                        wdl_json_element* so = row->enum_item(s);
+                        if (!so || !so->is_object()) continue;
+                        auto& bs = m.uf8.banks.banks[b][s];
+                        getIntI_(so, "vst3Param", bs.vst3Param);
+                        getStrI_(so, "label", bs.label);
+                        std::string mode;
+                        if (getStrI_(so, "vpotMode", mode))
+                            bs.vpotMode = vpotModeFromName_(mode.c_str());
+                        getBoolI_(so, "inverted", bs.inverted);
+                        getDoubleI_(so, "defaultNorm", bs.defaultNorm);
+                    }
+                }
+            }
+            if (auto* stripsArr = uo->get_item_by_name("strips");
+                stripsArr && stripsArr->is_array() && stripsArr->m_array)
+            {
+                const int sn = (std::min)(stripsArr->m_array->GetSize(), 8);
+                for (int s = 0; s < sn; ++s) {
+                    wdl_json_element* so = stripsArr->enum_item(s);
+                    if (!so || !so->is_object()) continue;
+                    auto& sb = m.uf8.strips[s];
+                    if (auto* fo = so->get_item_by_name("fader");
+                        fo && fo->is_object())
+                    {
+                        getIntI_(fo, "vst3Param", sb.faderVst3Param);
+                        getBoolI_(fo, "inverted", sb.faderInverted);
+                    }
+                    if (auto* so2 = so->get_item_by_name("solo");
+                        so2 && so2->is_object())
+                    {
+                        getIntI_(so2, "vst3Param", sb.soloVst3Param);
+                    }
+                    if (auto* co = so->get_item_by_name("cut");
+                        co && co->is_object())
+                    {
+                        getIntI_(co, "vst3Param", sb.cutVst3Param);
+                    }
+                    if (auto* selo = so->get_item_by_name("sel");
+                        selo && selo->is_object())
+                    {
+                        getIntI_(selo, "vst3Param", sb.selVst3Param);
+                    }
+                }
             }
         }
 
@@ -532,6 +653,17 @@ const PluginMap* lookupByName(std::string_view fxName)
     // mutations off-thread this needs revisiting.
     for (const auto& e : g_viewCache) {
         if (fxName.find(e.match) != std::string_view::npos) return &e.map;
+    }
+    return nullptr;
+}
+
+const UserPluginMap* lookupOwnedByName(std::string_view fxName)
+{
+    // Same matching rule as lookupByName, but returns a pointer into the
+    // owned catalog so callers can read the uf8.* fields directly.
+    // Lifetime: until next mutation (same contract as g_viewCache).
+    for (const auto& m : g_catalog.maps) {
+        if (fxName.find(m.match) != std::string_view::npos) return &m;
     }
     return nullptr;
 }

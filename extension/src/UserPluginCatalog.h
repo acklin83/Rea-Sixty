@@ -36,6 +36,42 @@ struct UserMetering {
     double grOffsetDb  = 0.0;
 };
 
+// V-Pot push behaviour for a UF8 bank slot. User chooses since user plug-in
+// params don't carry SSL-style step-size hints we trust.
+enum class VPotMode : uint8_t {
+    Value  = 0,   // continuous; rotate scrubs, push resets to defaultNorm
+    Toggle = 1,   // binary; rotate ignored, push flips 0↔1
+};
+
+// One slot in one of six UF8 banks. vst3Param=-1 => empty slot
+// (top-soft-key blank, V-Pot no-op).
+struct UserUf8BankSlot {
+    int          vst3Param   = -1;
+    std::string  label;                       // top-soft-key label
+    VPotMode     vpotMode    = VPotMode::Value;
+    bool         inverted    = false;
+    double       defaultNorm = 0.5;           // V-Pot push reset (Value mode)
+};
+
+// 6 banks × 8 slots. Index 0 = V-POT bank, 1..5 = SOFT 1..5.
+struct UserUf8BankSet {
+    UserUf8BankSlot banks[6][8] = {};
+};
+
+// Bank-independent per-strip bindings (Fader / Solo / Cut / Sel). 8 strips.
+struct UserUf8StripBinding {
+    int  faderVst3Param = -1;                 // -1 = fall through to track vol
+    bool faderInverted  = false;
+    int  soloVst3Param  = -1;                 // -1 = track solo
+    int  cutVst3Param   = -1;                 // -1 = track mute
+    int  selVst3Param   = -1;                 // -1 = track select
+};
+
+struct UserUf8Map {
+    UserUf8BankSet      banks;
+    UserUf8StripBinding strips[8] = {};
+};
+
 struct UserPluginMap {
     std::string                match;          // substring of TrackFX_GetFXName
     Domain                     domain = Domain::None;
@@ -43,6 +79,7 @@ struct UserPluginMap {
     bool                       isDefault = false;
     std::vector<UserLinkSlot>  slots;
     UserMetering               metering;
+    UserUf8Map                 uf8;            // optional UF8 strip-mode bindings
 };
 
 struct UserPluginCatalog {
@@ -53,7 +90,9 @@ struct UserPluginCatalog {
 namespace user_plugins {
 
 // Current on-disk schema version. Bump when introducing breaking changes.
-constexpr int kCurrentFormatVersion = 1;
+// v2 (2026-05-08): added optional `uf8` block on UserPluginMap (UF8 strip-mode
+// bindings). v1 readers seeing a v2 file with no `uf8` block load identically.
+constexpr int kCurrentFormatVersion = 2;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
@@ -93,6 +132,11 @@ bool removeByMatch(std::string_view match);
 // match string are stored inside the catalog; the returned PluginMap
 // has `slots` pointing into it. Returns nullptr if no user map matches.
 const PluginMap* lookupByName(std::string_view fxName);
+
+// Same matching rule as lookupByName, but returns a pointer to the
+// owned UserPluginMap (not the synthesised PluginMap view) so callers
+// can read the uf8.* fields directly. Lifetime: until next mutation.
+const UserPluginMap* lookupOwnedByName(std::string_view fxName);
 
 // Return true iff `match` would also be matched by any built-in
 // PluginMap's `match` substring (or vice versa). Used by the editor to
