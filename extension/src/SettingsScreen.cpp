@@ -4588,8 +4588,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     }
 
     // ---- Two-column body ------------------------------------------------
+    // UF8-only maps (domain==None) have no CS/BC schematic — the UC1
+    // mockup is hidden by the picker coercion above, so topo is allowed
+    // to be nullptr here. Guards around UC1-specific paths below check
+    // for it explicitly.
     const PluginMap* topo = canonicalTopology_(editing->domain);
-    if (!topo) {
+    if (!topo && editing->domain != uf8::Domain::None) {
         ImGui_TextDisabled(ctx,
             "No canonical slot topology available for this domain.");
         return;
@@ -4909,10 +4913,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // the radio cell) so the popup ID-stack matches the BeginPopupModal
     // site — same pattern as the delete popup in the master view.
     if (g_pendingModeOpen) {
-        ImGui_OpenPopup(ctx, "fxl_mode_popup", nullptr);
+        ImGui_OpenPopup(ctx, "Change mode?###fxl_mode_popup", nullptr);
         g_pendingModeOpen = false;
     }
-    if (ImGui_BeginPopupModal(ctx, "fxl_mode_popup", nullptr, nullptr)) {
+    // Fixed size so the wrapped explanation doesn't collapse the popup
+    // to its minimum width (Frank 2026-05-12: previously a 2-pixel-wide
+    // tower). Cond_Always so resizing isn't sticky between opens.
+    int condAlways = ImGui_Cond_Always;
+    ImGui_SetNextWindowSize(ctx, 420.0, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Change mode?###fxl_mode_popup",
+                              nullptr, nullptr)) {
         const char* targetLabel =
             (g_pendingModePrimary == 1) ? "CS" :
             (g_pendingModePrimary == 2) ? "BC" : "UF8 only";
