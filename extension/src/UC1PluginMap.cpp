@@ -596,6 +596,7 @@ ControlDomain classifyButton(uint8_t buttonId)
 std::mutex                                  g_instanceMutex;
 std::unordered_map<std::string, int>        g_bcInstanceMap;
 std::unordered_map<std::string, int>        g_csInstanceMap;
+std::unordered_map<std::string, int>        g_uf8OnlyInstanceMap;
 
 std::string trackGuid_(void* trackRaw)
 {
@@ -800,6 +801,44 @@ void setCsInstanceIndex(void* trackRaw, int idx)
     if (idx < 0) idx = 0;
     std::lock_guard<std::mutex> lk(g_instanceMutex);
     g_csInstanceMap[g] = idx;
+}
+
+int uf8OnlyInstanceIndex(void* trackRaw)
+{
+    const std::string g = trackGuid_(trackRaw);
+    if (g.empty()) return 0;
+    std::lock_guard<std::mutex> lk(g_instanceMutex);
+    auto it = g_uf8OnlyInstanceMap.find(g);
+    return it == g_uf8OnlyInstanceMap.end() ? 0 : it->second;
+}
+
+void setUf8OnlyInstanceIndex(void* trackRaw, int idx)
+{
+    const std::string g = trackGuid_(trackRaw);
+    if (g.empty()) return;
+    if (idx < 0) idx = 0;
+    std::lock_guard<std::mutex> lk(g_instanceMutex);
+    g_uf8OnlyInstanceMap[g] = idx;
+}
+
+// Count UF8-only mapped plug-ins (domain==None, uf8Mode==true) on the
+// track. Walks user_plugins directly — these maps don't appear in the
+// UC1 user-binding cache, so isBusCompBinding / lookupBindingsByName
+// won't find them.
+int uf8OnlyInstanceCount(void* trackRaw)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    const int n = TrackFX_GetCount(tr);
+    char buf[256];
+    int count = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+        const auto* um = uf8::user_plugins::lookupOwnedByName(buf);
+        if (!um) continue;
+        if (um->domain == uf8::Domain::None && um->uf8Mode) ++count;
+    }
+    return count;
 }
 
 void cycleInstance(void* trackRaw, ControlDomain dom, int delta)

@@ -1105,27 +1105,46 @@ void applyInstanceCycle_(int step)
 
     struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
     std::vector<Hit> hits;
-    int csCount = 0, bcCount = 0;
+    int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
     const int n = TrackFX_GetCount(tr);
     char fxName[256];
     for (int i = 0; i < n; ++i) {
         if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
         const auto* pm = uf8::lookupPluginMapByName(fxName);
-        if (!pm) continue;
-        if (pm->domain == uf8::Domain::ChannelStrip) {
+        if (pm && pm->domain == uf8::Domain::ChannelStrip) {
             hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
-        } else if (pm->domain == uf8::Domain::BusComp) {
+            continue;
+        }
+        if (pm && pm->domain == uf8::Domain::BusComp) {
             hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+            continue;
+        }
+        // UF8-only user maps don't surface via lookupPluginMapByName
+        // (their synthesised PluginMap carries Domain::None and no
+        // slots) but they still represent instances the user might
+        // want to focus the UF8 strips on. Pull the owned record so
+        // we can include them in the cycle (Frank 2026-05-12).
+        const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+        if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+            hits.push_back({i, uf8::Domain::None, uf8OnlyCount++});
         }
     }
     if (hits.size() < 2) return;   // nothing meaningful to cycle through
 
     const auto fp = uf8::getFocusedParam();
     uf8::Domain curDom = fp.domain;
-    if (curDom == uf8::Domain::None) curDom = uf8::Domain::ChannelStrip;
-    const int curInstIdx = (curDom == uf8::Domain::BusComp)
-        ? uc1::bcInstanceIndex(tr)
-        : uc1::csInstanceIndex(tr);
+    // No CS/BC focus → start from whichever instance class actually
+    // anchors the active surface. UF8-only is the default fallback
+    // when neither CS nor BC currently drives UC1.
+    if (curDom == uf8::Domain::None) {
+        curDom = (csCount > 0) ? uf8::Domain::ChannelStrip
+              : (bcCount > 0) ? uf8::Domain::BusComp
+              :                  uf8::Domain::None;
+    }
+    const int curInstIdx =
+        (curDom == uf8::Domain::BusComp)      ? uc1::bcInstanceIndex(tr)
+      : (curDom == uf8::Domain::ChannelStrip) ? uc1::csInstanceIndex(tr)
+      :                                          uc1::uf8OnlyInstanceIndex(tr);
     int curK = 0;
     for (size_t k = 0; k < hits.size(); ++k) {
         if (hits[k].dom == curDom && hits[k].instIdx == curInstIdx) {
@@ -1135,8 +1154,8 @@ void applyInstanceCycle_(int step)
     int nextK = (curK + step) % static_cast<int>(hits.size());
     if (nextK < 0) nextK += static_cast<int>(hits.size());
     const Hit& target = hits[nextK];
-    uf8::setFocus({target.dom, 0});
     if (target.dom == uf8::Domain::ChannelStrip) {
+        uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
         // SSL Strip Mode is on → the open CS GUI should follow the
         // cycle. Raise the GUI sync request; the main-thread handler
@@ -1146,12 +1165,22 @@ void applyInstanceCycle_(int step)
         if (g_pluginFaderMode.load()) {
             g_pluginGuiSyncRequest.store(true);
         }
-    } else {
+    } else if (target.dom == uf8::Domain::BusComp) {
+        uf8::setFocus({target.dom, 0});
         uc1::setBcInstanceIndex(tr, target.instIdx);
         // Pin the BC anchor to the focused track so Encoder 2 + the
         // BC carousel agree with the cycle's selection. Idempotent
         // when tr already == bcAnchor.
         g_uc1_surface->setBcAnchorTrack(tr);
+    } else {
+        // UF8-only target: don't clobber CS/BC focus (UF8-only has no
+        // UC1 representation). Just bump the UF8-only instance picker
+        // so userStripCtxFocused_ resolves to the new instance and
+        // the UF8 strips re-route.
+        uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
+        if (g_pluginFaderMode.load()) {
+            g_pluginGuiSyncRequest.store(true);
+        }
     }
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
@@ -1259,7 +1288,7 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
             ? uc1::csInstanceIndex(tr)
             : (dom == uf8::Domain::BusComp)
                 ? uc1::bcInstanceIndex(tr)
-                : 0;   // UF8-only: pick the first match on the track
+                : uc1::uf8OnlyInstanceIndex(tr);
         int seen = 0;
         const int n = TrackFX_GetCount(tr);
         char fxName[256];
@@ -1311,6 +1340,7 @@ UserPluginCtx userStripCtxFocused_()
     static int           s_cacheFxCount   = -1;
     static int           s_cacheCsInst    = -1;
     static int           s_cacheBcInst    = -1;
+    static int           s_cacheUf8Inst   = -1;
     static uf8::Domain   s_cacheDomain    = uf8::Domain::None;
 
     const bool curMode = g_uf8PluginMode.load();
@@ -1334,6 +1364,7 @@ UserPluginCtx userStripCtxFocused_()
         ValidatePtr2(nullptr, tr, "MediaTrack*") ? TrackFX_GetCount(tr) : 0;
     const int curCsInst  = uc1::csInstanceIndex(tr);
     const int curBcInst  = uc1::bcInstanceIndex(tr);
+    const int curUf8Inst = uc1::uf8OnlyInstanceIndex(tr);
     // Focused-param domain decides which user plug-in (CS vs BC) drives
     // the strips. Q1 = CS focus, Q2 = BC focus — the same toggle that
     // selects which SSL plug-in domain UC1 navigates. None defaults to
@@ -1348,19 +1379,21 @@ UserPluginCtx userStripCtxFocused_()
         curFxCount == s_cacheFxCount &&
         curCsInst  == s_cacheCsInst &&
         curBcInst  == s_cacheBcInst &&
+        curUf8Inst == s_cacheUf8Inst &&
         wantDom    == s_cacheDomain)
     {
         return s_cache;
     }
 
-    s_cache       = findUserPluginOnTrack_(tr, wantDom);
-    s_cacheMode   = curMode;
-    s_cacheTr     = tr;
-    s_cacheGen    = curGen;
-    s_cacheFxCount= curFxCount;
-    s_cacheCsInst = curCsInst;
-    s_cacheBcInst = curBcInst;
-    s_cacheDomain = wantDom;
+    s_cache        = findUserPluginOnTrack_(tr, wantDom);
+    s_cacheMode    = curMode;
+    s_cacheTr      = tr;
+    s_cacheGen     = curGen;
+    s_cacheFxCount = curFxCount;
+    s_cacheCsInst  = curCsInst;
+    s_cacheBcInst  = curBcInst;
+    s_cacheUf8Inst = curUf8Inst;
+    s_cacheDomain  = wantDom;
     return s_cache;
 }
 
@@ -5147,6 +5180,25 @@ void chaseFocusedFxWindow()
         else if (um->domain == uf8::Domain::ChannelStrip)
             uc1::setCsInstanceIndex(tr, instIdx);
     }
+    // UF8-only maps don't show up in instanceIndexForFx (lookupBindings
+    // ByName ignores them). Walk the track ourselves to find this FX's
+    // position among UF8-only mapped plug-ins, so the cycle's index
+    // snaps to whichever UF8-only window the user just clicked.
+    if (um->domain == uf8::Domain::None && um->uf8Mode) {
+        int seen = 0;
+        char buf[256];
+        const int nFx = TrackFX_GetCount(tr);
+        for (int i = 0; i < nFx; ++i) {
+            if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+            const auto* u = uf8::user_plugins::lookupOwnedByName(buf);
+            if (!u || u->domain != uf8::Domain::None || !u->uf8Mode) continue;
+            if (i == fxIdx) {
+                uc1::setUf8OnlyInstanceIndex(tr, seen);
+                break;
+            }
+            ++seen;
+        }
+    }
 
     // UF8-only maps (domain==None) shouldn't clobber the CS/BC focus
     // when the user touches them — they have no UC1 representation.
@@ -6638,6 +6690,25 @@ void onTimer()
                 ++seen;
             }
             if (targetFx < 0) targetFx = lastCsFx;
+            // No CS instance found — fall back to a UF8-only mapped
+            // plug-in's GUI when the cycle landed on one. Same active-
+            // instance plumbing, just keyed by uf8OnlyInstanceIndex.
+            if (targetFx < 0) {
+                const int wantUf8 = uc1::uf8OnlyInstanceIndex(tr);
+                int seenU = 0, lastUf8Fx = -1;
+                for (int fx = 0; fx < n; ++fx) {
+                    nameBuf[0] = 0;
+                    TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
+                    if (!nameBuf[0]) continue;
+                    const auto* um = uf8::user_plugins::lookupOwnedByName(nameBuf);
+                    if (!um || um->domain != uf8::Domain::None || !um->uf8Mode)
+                        continue;
+                    lastUf8Fx = fx;
+                    if (seenU == wantUf8) { targetFx = fx; break; }
+                    ++seenU;
+                }
+                if (targetFx < 0) targetFx = lastUf8Fx;
+            }
             if (targetFx >= 0) targetTr = tr;
         }
 

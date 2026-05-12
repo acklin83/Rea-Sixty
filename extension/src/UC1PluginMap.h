@@ -115,6 +115,14 @@ void setBcInstanceIndex(void* track, int idx);
 void setCsInstanceIndex(void* track, int idx);
 int  bcInstanceCount(void* track);
 int  csInstanceCount(void* track);
+// UF8-only user maps (domain==None, uf8Mode==true) — same per-track
+// active-instance plumbing so the Shift+Encoder instance cycle can
+// step through them alongside CS/BC. UC1 doesn't render UF8-only
+// maps; the index is consumed by main.cpp's userStripCtxFocused_ so
+// the UF8 strips route to the picked instance.
+int  uf8OnlyInstanceIndex(void* track);
+void setUf8OnlyInstanceIndex(void* track, int idx);
+int  uf8OnlyInstanceCount(void* track);
 // Step the active instance by `delta`, wrapping around the count.
 // no-op when count <= 1.
 void cycleInstance(void* track, ControlDomain dom, int delta);
