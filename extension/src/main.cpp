@@ -2522,6 +2522,16 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
     // UC1 until a new one is picked — matches SSL 360°'s Focus Mode.
     if (sel && g_uc1_surface) {
         g_uc1_surface->setFocusedTrack(tr);
+        // SSL Strip Mode is on → the open CS GUI should switch to the
+        // newly selected track's CS plug-in. Raise the GUI sync request
+        // so the main-thread handler closes the previous floating
+        // window and opens the new track's CS GUI (built-in or
+        // user-learned via lookupPluginMapByName). Frank 2026-05-12
+        // "GUI bei select eines anderen channels auf den neu
+        // gewählten wechseln".
+        if (g_pluginFaderMode.load()) {
+            g_pluginGuiSyncRequest.store(true);
+        }
     }
     // UF8 bank follows REAPER selection. Any selection change — clicks
     // in the TCP/MCP, ReaScript, another surface — rebanks so the
@@ -3266,6 +3276,29 @@ uint32_t reaperColorForVisibleSlot(int slot)
     if (realSlot >= trackCount) return 0;
     MediaTrack* tr = visibleTrackAt(realSlot);
     if (!tr) return 0;
+
+    // SSL Strip Mode override: each strip's colour bar shows the CS
+    // plug-in variant it's currently driving — quick visual cue for
+    // "which SSL channel strip am I controlling?" without reading the
+    // scribble label. Built-in CS variants get fixed brand-ish colours;
+    // user-learned CS replacements fall through to REAPER track colour
+    // (we don't know what colour the user would want). Tracks without
+    // any CS plug-in also fall through. Frank 2026-05-12 "temporär auf
+    // UF8 color-bars die instanz anzeigen, die kontrolliert wird. Wenn
+    // keine, dann REAPER."
+    if (g_pluginFaderMode.load()) {
+        auto mm = uf8::lookupPluginOnTrack(tr, uf8::Domain::ChannelStrip);
+        if (mm.map && mm.map->displayShort) {
+            const char* sn = mm.map->displayShort;
+            if      (std::strcmp(sn, "CS 2") == 0) return 0x3070C0u;  // SSL blue
+            else if (std::strcmp(sn, "4K G") == 0) return 0x70B080u;  // green
+            else if (std::strcmp(sn, "4K E") == 0) return 0xC07040u;  // orange / brown
+            else if (std::strcmp(sn, "4K B") == 0) return 0x404048u;  // dark grey
+            else if (std::strcmp(sn, "Link") == 0) return 0xA070C0u;  // purple
+            // User-learned CS map — fall through to REAPER track colour.
+        }
+    }
+
     // REAPER returns native color as int. Bit 0x1000000 is "color set";
     // low 24 bits are 0xBBGGRR on Windows, 0xRRGGBB on mac/Linux via the
     // "native" encoding. GetTrackColor wraps that — low 24 bits are what

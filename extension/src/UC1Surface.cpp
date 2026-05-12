@@ -241,6 +241,16 @@ void UC1Surface::setBcAnchorTrack(void* track)
         device_->send(buildDisplayInvalidate(0x0F));
     }
     invalidateCache();
+    // Carousel + BC label + header repaint must run NOW — without
+    // refresh() the new bcAnchor only takes visual effect after the
+    // next external setFocusedTrack or refresh trigger. Encoder 2's
+    // own handler runs refresh() after setBcAnchorTrack; chase-driven
+    // anchor changes (UF8 V-Pot on a BC param) need the same so the
+    // BC carousel + track name update immediately, mirroring how a CS
+    // knob edit drives the CS carousel via setFocusedTrack → refresh.
+    // Frank 2026-05-12: "wenn BC parameter auf UF8 gedreht werden:
+    // wie bei CS parameter sofort carousel mit kanal updaten".
+    refresh();
 }
 
 void UC1Surface::invalidateCache()
