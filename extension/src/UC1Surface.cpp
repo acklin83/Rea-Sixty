@@ -2755,9 +2755,15 @@ void UC1Surface::refresh()
             // to BC anchor.
         }
 
-        char labelBuf[8] = {0};
-        std::strncpy(labelBuf, baseLabel, sizeof(labelBuf) - 1);
-
+        // Central label width — buildCentralLabel accepts up to 8 chars
+        // (Frank 2026-05-09 widening probe). The A/B/C multi-instance
+        // letter suffix was dropped 2026-05-09 — Frank wants the raw
+        // displayShort regardless of how many instances are on the
+        // track (instance cycling is conveyed via the encoder action,
+        // not the LCD label).
+        constexpr int kCentralLabelW = 7;
+        char labelBuf[kCentralLabelW + 1] = {0};
+        std::strncpy(labelBuf, baseLabel, kCentralLabelW);
         const int total = !instanceTrack ? 0
             : useBc ? bcInstanceCount(instanceTrack)
                     : csInstanceCount(instanceTrack);
@@ -2765,18 +2771,6 @@ void UC1Surface::refresh()
             ? (useBc ? bcInstanceIndex(instanceTrack)
                      : csInstanceIndex(instanceTrack))
             : 0;
-        if (total > 1 && instanceTrack) {
-            // Drop spaces, cap at 3 chars, append letter — keeps the
-            // total within the central-label's 4-char zone.
-            std::string compact;
-            for (const char* p = labelBuf; *p; ++p) {
-                if (*p != ' ') compact.push_back(*p);
-            }
-            if (compact.size() > 3) compact.resize(3);
-            compact.push_back(static_cast<char>('A' + (idx % 26)));
-            std::strncpy(labelBuf, compact.c_str(), sizeof(labelBuf) - 1);
-            labelBuf[sizeof(labelBuf) - 1] = 0;
-        }
         device_->send(buildCentralLabel(labelBuf));
 
         // Longer plug-in name in the LCD header zone (the same one the
@@ -2807,10 +2801,9 @@ void UC1Surface::refresh()
                 } else if (pm.map->match && *pm.map->match) {
                     longName = pm.map->match;
                 }
-                if (total > 1 && !longName.empty()) {
-                    longName += " ";
-                    longName.push_back(static_cast<char>('A' + (idx % 26)));
-                }
+                // No multi-instance letter suffix on the LCD header
+                // either — same rule as the central label (Frank
+                // 2026-05-09).
                 if (longName.size() > 16) longName.resize(16);
             }
         }

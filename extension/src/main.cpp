@@ -3840,7 +3840,7 @@ void pushZonesForVisibleSlots()
             (routedFader && !faderRoute.valid)
          || (routedVpot  && !vpotRoute.valid);
         if (!tr || routedButInvalid) {
-            const std::string blankCs   = "    ";
+            const std::string blankCs   = "";   // empty → NUL-padded to width
             const std::string blankDb   = "    ";
             const std::string blankName = "       ";   // 7 spaces — overwrites any
                                                         // residual text. Empty payload
@@ -3924,13 +3924,15 @@ void pushZonesForVisibleSlots()
             }
         }
 
-        // Channel Strip Type zone: the plug-in's short name if recognised,
-        // else a 4-char REAPER mnemonic ("RPR ").
+        // Channel Strip Type zone: the plug-in's short name if
+        // recognised, else a REAPER mnemonic. Pass the natural text
+        // length — buildChannelStripType pads with NULs internally so
+        // the trailing LCD cells render blank instead of showing space
+        // characters past the text (Frank 2026-05-09).
         std::string csType = map ? std::string(map->displayShort)
                                  : std::string{};
-        if (csType.empty()) csType = "RPR ";
-        csType.resize(std::min<size_t>(csType.size(), 4), ' ');
-        while (csType.size() < 4) csType += ' ';
+        if (csType.empty()) csType = "REAPER";
+        if (csType.size() > 7) csType.resize(7);
         if (csType != g_lastCsType[s]) {
             g_lastCsType[s] = csType;
             g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), csType));

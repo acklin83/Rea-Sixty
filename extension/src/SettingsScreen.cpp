@@ -2550,7 +2550,7 @@ namespace {
 // Inline form state for "+ New" / per-row error reporting. File-scope
 // statics — same pattern as the bindings editor's transient buffers.
 char        g_newMatch[128]      = {};
-char        g_newDisplay[8]      = {};   // 4 chars + NUL, padded for slack
+char        g_newDisplay[16]     = {};   // up to 7 chars + NUL + slack
 int         g_newDomain          = 1;    // 1=CS, 2=BC. 0=None reserved.
 std::string g_newError;                  // transient inline error text
 std::string g_pendingDeleteMatch;        // populated when the confirm popup is open
@@ -2589,22 +2589,19 @@ void loadInstalledFx_()
     }
 }
 
-// Heuristic: build a 4-char displayShort from a full FX name. Strips
-// the "VSTn: " prefix, removes trailing vendor "(...)" parens, then
-// takes the first 4 chars (with caps preserved if possible).
+// Heuristic: build a displayShort from a full FX name. Strips the
+// "VSTn: " prefix, removes trailing vendor "(...)" parens, then takes
+// the first 7 chars (UF8 / UC1 colour-bar zone width).
 std::string deriveShortLabel_(const std::string& fxName)
 {
     std::string s = fxName;
-    // Strip "VST3: " / "VST: " / "AU: " etc.
     auto colon = s.find(": ");
     if (colon != std::string::npos && colon < 8) s = s.substr(colon + 2);
-    // Strip trailing " (vendor)".
     auto paren = s.rfind(" (");
     if (paren != std::string::npos) s = s.substr(0, paren);
-    // Trim.
     while (!s.empty() && s.front() == ' ') s.erase(s.begin());
     while (!s.empty() && s.back()  == ' ') s.pop_back();
-    if (s.size() > 4) s.resize(4);
+    if (s.size() > 7) s.resize(7);
     return s;
 }
 
@@ -4558,9 +4555,30 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     }
                 }
 
+                // Short — editable inline so the user can rename the
+                // colour-bar label without re-creating the map. Persists
+                // on every keystroke (matches the V-Pot label edit
+                // pattern in the FX-Learn schematic popup). Up to 7
+                // chars (UF8 / UC1 colour-bar zone width).
                 ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx,
-                    m.displayShort.empty() ? "USR" : m.displayShort.c_str());
+                {
+                    char shortBuf[16] = {};
+                    std::strncpy(shortBuf, m.displayShort.c_str(),
+                                 sizeof(shortBuf) - 1);
+                    char shortId[64];
+                    std::snprintf(shortId, sizeof(shortId),
+                                  "##fxl_short_%zu", i);
+                    if (ImGui_InputTextWithHint(ctx, shortId, "USR",
+                            shortBuf, 8, nullptr, nullptr))
+                    {
+                        UserPluginMap copy = m;
+                        copy.displayShort = shortBuf;
+                        if (copy.displayShort.size() > 7)
+                            copy.displayShort.resize(7);
+                        user_plugins::upsert(std::move(copy));
+                        persistAndReport_();
+                    }
+                }
 
                 ImGui_TableNextColumn(ctx);
                 ImGui_Text(ctx, m.match.c_str());
@@ -4674,8 +4692,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                                  sizeof(g_newMatch) - 1);
                     g_newMatch[sizeof(g_newMatch) - 1] = '\0';
                     std::string s = deriveShortLabel_(g_installedFx[i].name);
-                    std::strncpy(g_newDisplay, s.c_str(), 4);
-                    g_newDisplay[4] = '\0';
+                    std::strncpy(g_newDisplay, s.c_str(), 7);
+                    g_newDisplay[7] = '\0';
                 }
             }
             ImGui_EndChild(ctx);
@@ -4692,11 +4710,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             nullptr, nullptr);
 
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "4-char display label (scribble-strip zone):");
-        // displayShort caps at 4 chars; back the field with a 5-byte buf.
+        ImGui_Text(ctx, "Display label (1..7 chars, scribble-strip zone):");
+        // displayShort caps at 7 chars; 8-byte buf includes terminator.
         ImGui_InputTextWithHint(ctx, "##fxl_new_short",
             "FFP4",
-            g_newDisplay, 5, nullptr, nullptr);
+            g_newDisplay, 8, nullptr, nullptr);
 
         ImGui_Spacing(ctx);
         ImGui_Text(ctx, "Domain:");
@@ -4721,7 +4739,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
             std::string match = g_newMatch;
             std::string disp  = g_newDisplay;
-            if (disp.size() > 4) disp.resize(4);
+            if (disp.size() > 7) disp.resize(7);
 
             // Trim leading/trailing whitespace from the match. Inner spaces
             // are preserved on purpose ('Pro-Q 4' is a real FX name).
@@ -4734,7 +4752,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             if (match.empty()) {
                 g_newError = "Match string is required.";
             } else if (disp.empty()) {
-                g_newError = "Display label is required (1..4 ASCII chars).";
+                g_newError = "Display label is required (1..7 ASCII chars).";
             } else if (g_newDomain != 1 && g_newDomain != 2) {
                 g_newError = "Pick a domain.";
             } else if (user_plugins::collidesWithBuiltin(match)) {

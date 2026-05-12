@@ -362,7 +362,10 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         std::string dom;
         if (getStrI_(po, "domain", dom)) m.domain = domainFromName_(dom.c_str());
         getStrI_(po, "displayShort", m.displayShort);
-        if (m.displayShort.size() > 4) m.displayShort.resize(4);
+        // Widened from 4→7 chars 2026-05-09 — UF8 / UC1 colour-bar zone
+        // accepts longer strings via length-byte protocol; older 4-char
+        // values still load identically (just no padding).
+        if (m.displayShort.size() > 7) m.displayShort.resize(7);
         getBoolI_(po, "isDefault", m.isDefault);
 
         if (auto* slotsArr = po->get_item_by_name("slots");

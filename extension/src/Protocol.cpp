@@ -152,12 +152,28 @@ std::vector<uint8_t> buildPluginSlotName(uint8_t strip, std::string_view text)
     return frame;
 }
 
-std::vector<uint8_t> buildChannelStripType(uint8_t strip, std::string_view fourChars)
+std::vector<uint8_t> buildChannelStripType(uint8_t strip, std::string_view text)
 {
-    // FF 66 06 17 <strip> <4 chars, space-padded> CKSUM
-    std::vector<uint8_t> frame{0xFF, 0x66, 0x06, 0x17, strip};
-    for (size_t i = 0; i < 4; ++i) {
-        frame.push_back(i < fourChars.size() ? static_cast<uint8_t>(fourChars[i]) : 0x20);
+    // FF 66 <N+2> 17 <strip> <N bytes, NUL-padded for short text> CKSUM.
+    // SSL 360° always ships 4 chars in this zone. Frank 2026-05-09
+    // observed pixel space for more on the LCD; the length-byte
+    // structure mirrors the variable-length zones (Selected Param /
+    // Channel Number), so the firmware accepts longer strings. Frame
+    // is always sent at a fixed width (kFrameW) so trailing cells get
+    // overwritten when the label shrinks; NUL padding keeps those
+    // cells visually blank — same pattern buildFaderDbReadout uses
+    // (Frank 2026-05-09: space-padding rendered visible spaces beyond
+    // the text, NUL-padding renders the cells truly empty).
+    constexpr size_t kFrameW = 7;
+    constexpr size_t kMaxChars = 8;
+    const size_t take = (std::min)(text.size(), kMaxChars);
+    const size_t n    = (std::max)(take, kFrameW);   // always at least kFrameW
+    const uint8_t lenByte = static_cast<uint8_t>(n + 2);
+    std::vector<uint8_t> frame{0xFF, 0x66, lenByte, 0x17, strip};
+    for (size_t i = 0; i < n; ++i) {
+        frame.push_back(i < take
+                            ? static_cast<uint8_t>(text[i])
+                            : 0x00);
     }
     std::span<const uint8_t> payload{frame.data() + 1, frame.size() - 1};
     frame.push_back(checksum(payload));
