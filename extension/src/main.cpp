@@ -1249,18 +1249,24 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
     if (!tr) return out;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return out;
 
+    // Gate: only maps with uf8Mode==true participate in UF8 strip-mode.
+    // CS-only / BC-only maps stay visible on UC1 but are invisible to
+    // the UF8 strip engine. UF8-only maps (domain==None, uf8Mode==true)
+    // match any wantDomain — they're the catch-all for plug-ins that
+    // don't fit the SSL CS/BC schematic at all (Frank 2026-05-12).
     auto tryDomain = [&](uf8::Domain dom) -> bool {
-        if (dom == uf8::Domain::None) return false;
         const int wantIdx = (dom == uf8::Domain::ChannelStrip)
             ? uc1::csInstanceIndex(tr)
-            : uc1::bcInstanceIndex(tr);
+            : (dom == uf8::Domain::BusComp)
+                ? uc1::bcInstanceIndex(tr)
+                : 0;   // UF8-only: pick the first match on the track
         int seen = 0;
         const int n = TrackFX_GetCount(tr);
         char fxName[256];
         for (int i = 0; i < n; ++i) {
             if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
             const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-            if (!um || um->domain != dom) continue;
+            if (!um || !um->uf8Mode || um->domain != dom) continue;
             if (seen == wantIdx) {
                 out.fxIdx = i;
                 out.map   = um;
@@ -1272,16 +1278,16 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
     };
 
     // 1) Try the requested domain (the one the user is focused on via
-    //    Q1=CS / Q2=BC). 2) Fall back to the other domain so a track
-    //    with only one mapped domain still drives the strips. Without
-    //    the fallback, a CS-focused user with only a BC user plug-in
-    //    learned (or vice versa) would see user-strip mode go inactive
-    //    even though there's a usable map (Frank 2026-05-09).
+    //    Q1=CS / Q2=BC). 2) Fall back to the other CS/BC domain so a
+    //    track with only one mapped domain still drives the strips
+    //    (Frank 2026-05-09). 3) Finally try UF8-only maps — they don't
+    //    care which CS/BC domain is focused.
     if (tryDomain(wantDomain)) return out;
     const uf8::Domain other = (wantDomain == uf8::Domain::ChannelStrip)
         ? uf8::Domain::BusComp
         : uf8::Domain::ChannelStrip;
-    tryDomain(other);
+    if (tryDomain(other)) return out;
+    tryDomain(uf8::Domain::None);
     return out;
 }
 
@@ -1392,7 +1398,7 @@ UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
     char fxName[512];
     TrackFX_GetFXName(tr, match.fxIndex, fxName, sizeof(fxName));
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-    if (!um) return {-1, -1, false};
+    if (!um || !um->uf8Mode) return {-1, -1, false};
     const int fp = um->uf8.strips[0].faderVst3Param;
     if (fp < 0) return {-1, -1, false};
     return {match.fxIndex, fp, um->uf8.strips[0].faderInverted};
