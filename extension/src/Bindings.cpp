@@ -1795,23 +1795,17 @@ bool hasBinding(int layer, ButtonId id)
 void setBinding(int layer, ButtonId id, const Binding& bd)
 {
     if (layer < 0 || layer > 2 || id == ButtonId::None) return;
-    // Guard: an empty-action Builtin slot is uninvocable — silently
-    // no-ops on press AND falsely registers as "bound" so the user
-    // can't see why their button does nothing. Coerce to Noop.
-    Binding clean = bd;
-    auto sanitize = [](ActionStep& sp) {
-        if (sp.type == ActionType::Builtin && sp.action.empty()) {
-            sp.type = ActionType::Noop;
-        }
-    };
-    for (int m = 0; m < kModifierCount; ++m) {
-        sanitize(clean.shortPress[m]);
-        for (auto& s : clean.shortPress[m].extraSteps) sanitize(s);
-        sanitize(clean.longPress[m]);
-        for (auto& s : clean.longPress[m].extraSteps) sanitize(s);
-    }
+    // No sanitize-on-write: the editor commits on every keystroke /
+    // radio click, including the transient state right after the user
+    // flips a slot's type to Builtin but before they pick an action.
+    // Coercing Builtin-with-empty-action back to Noop here would
+    // collapse the editor's "Native Action" view on the next frame
+    // (radio button drops off, combo disappears). Dispatch already
+    // no-ops empty-action Builtin slots (g_builtins.find("") returns
+    // end()), so leaving them as-is is safe; the v5→v6 load-time
+    // migration handles any legacy corrupt entries on disk.
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.layers[layer].bindings[id] = clean;
+    g_cfg.layers[layer].bindings[id] = bd;
     persistLocked_();
 }
 

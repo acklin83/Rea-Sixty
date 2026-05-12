@@ -1924,8 +1924,13 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                         std::snprintf(hdr, sizeof(hdr), "%s   (empty)",
                                       kModNames[m]);
                     }
+                    // `###` (not `##`) so only the slug after the ###
+                    // determines the ImGui ID — without this, picking a
+                    // native action changes the visible label, which
+                    // changes the hashed ID, which collapses the header
+                    // on the next frame.
                     char hdrId[80];
-                    std::snprintf(hdrId, sizeof(hdrId), "%s##%s_h_%s",
+                    std::snprintf(hdrId, sizeof(hdrId), "%s###%s_h_%s",
                                   hdr, tag, kModSlugs[m]);
                     if (ImGui_CollapsingHeader(ctx, hdrId, nullptr, nullptr)) {
                         char modPrefix[32];
