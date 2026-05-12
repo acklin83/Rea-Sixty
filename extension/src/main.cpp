@@ -7653,6 +7653,14 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            // Mutually exclusive with UF8 Plugin Mode — turning SSL Strip
+            // on shadows the other anyway (the UF8 path is checked first
+            // in every fader/V-Pot branch), so leaving both true just
+            // confuses the LED and the user's mental model.
+            if (next && g_uf8PluginMode.load()) {
+                g_uf8PluginMode.store(false);
+                SetExtState("ReaSixty", "uf8PluginMode", "0", true);
+            }
             g_pageDirty.store(true);
             // Force LED + display re-push when entering / leaving the
             // user-strip-mode override so unmapped LEDs blank out (and
@@ -7679,6 +7687,11 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            // See ssl_strip_mode_toggle for the mutex rationale.
+            if (next && g_uf8PluginMode.load()) {
+                g_uf8PluginMode.store(false);
+                SetExtState("ReaSixty", "uf8PluginMode", "0", true);
+            }
             g_pageDirty.store(true);
             // Force LED + display re-push when entering / leaving the
             // user-strip-mode override so unmapped LEDs blank out (and
@@ -7697,6 +7710,11 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_uf8PluginMode.load();
             g_uf8PluginMode.store(next);
+            // Mutex with SSL Strip Mode — see ssl_strip_mode_toggle.
+            if (next && g_pluginFaderMode.load()) {
+                g_pluginFaderMode.store(false);
+                SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+            }
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",
