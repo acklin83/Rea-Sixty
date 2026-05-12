@@ -2601,13 +2601,24 @@ namespace {
 // statics — same pattern as the bindings editor's transient buffers.
 char        g_newMatch[128]      = {};
 char        g_newDisplay[16]     = {};   // up to 7 chars + NUL + slack
-int         g_newDomain          = 1;    // 1=CS, 2=BC. 0=None reserved.
+// Mode picker for the "+ New" popup. 1=CS-primary, 2=BC-primary,
+// 3=UF8-only. Default 1 matches the old CS default. The UF8 checkbox is
+// stored separately so toggling mode doesn't lose it.
+int         g_newPrimaryMode     = 1;
+bool        g_newUf8Mode         = false;
 std::string g_newError;                  // transient inline error text
 std::string g_pendingDeleteMatch;        // populated when the confirm popup is open
 bool        g_pendingDeleteOpen  = false;// set when row's Del was clicked,
                                          // consumed by the OpenPopup at the
                                          // outer scope so popup id-stack
                                          // matches the BeginPopupModal site.
+// Mode-change confirm state: the per-map editor stages a primary-mode
+// switch here when the change would clear slot bindings (CS↔BC or →UF8-
+// only). The popup applies/cancels in the outer scope to keep the
+// OpenPopup ID-stack matched with BeginPopupModal.
+std::string g_pendingModeMatch;
+int         g_pendingModePrimary = 0;    // 1=CS, 2=BC, 3=UF8-only
+bool        g_pendingModeOpen    = false;
 std::string g_lastSaveError;             // last persistence error, sticky until next save
 
 // Cached list of installed FX populated lazily on first "+ New" open.
@@ -2689,6 +2700,15 @@ const char* domainLabel_(uf8::Domain d)
         case uf8::Domain::BusComp:      return "BC";
         default:                        return "—";
     }
+}
+
+// Combined mode label for the new domain structure: shows CS / BC / UF8 /
+// CS+UF8 / BC+UF8 depending on which surfaces the map drives.
+const char* modeLabel_(uf8::Domain d, bool uf8Mode)
+{
+    if (d == uf8::Domain::ChannelStrip) return uf8Mode ? "CS+UF8" : "CS";
+    if (d == uf8::Domain::BusComp)      return uf8Mode ? "BC+UF8" : "BC";
+    return uf8Mode ? "UF8" : "—";
 }
 
 void persistAndReport_()
@@ -4073,8 +4093,71 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     char hdr[256];
     std::snprintf(hdr, sizeof(hdr), "  Editing: %s  [%s]",
-                  editing->match.c_str(), domainLabel_(editing->domain));
+                  editing->match.c_str(),
+                  modeLabel_(editing->domain, editing->uf8Mode));
     ImGui_Text(ctx, hdr);
+
+    // ---- Mode-change row -------------------------------------------------
+    // Lets the user re-assign primary mode (CS / BC / UF8-only) and toggle
+    // the UF8 strip layer on an existing map. Slot-destructive switches
+    // (changing CS↔BC, or →UF8-only) defer to a confirm popup so we don't
+    // silently nuke their bindings. Toggling UF8 just flips the flag —
+    // the uf8 block is preserved either way.
+    {
+        const int curPrimary =
+            (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
+            (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+
+        ImGui_Text(ctx, "Mode:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        auto applyPrimary = [&](int newPrimary) {
+            if (newPrimary == curPrimary) return;
+            // Switching CS↔BC or anything→UF8-only invalidates the slot
+            // bindings (the schematic topology is incompatible). Stage
+            // the change and pop the confirm modal; non-destructive
+            // switches (UF8-only → CS/BC, which has no slots) apply
+            // immediately.
+            const bool destructive =
+                (newPrimary != 3) &&
+                ((curPrimary == 1 && newPrimary == 2) ||
+                 (curPrimary == 2 && newPrimary == 1));
+            const bool toUf8Only = (newPrimary == 3);
+            if (destructive || toUf8Only) {
+                g_pendingModePrimary = newPrimary;
+                g_pendingModeMatch   = editing->match;
+                g_pendingModeOpen    = true;
+                return;
+            }
+            UserPluginMap copy = *editing;
+            copy.domain  = (newPrimary == 1) ? uf8::Domain::ChannelStrip
+                         : (newPrimary == 2) ? uf8::Domain::BusComp
+                         :                     uf8::Domain::None;
+            copy.uf8Mode = copy.domain == uf8::Domain::None
+                             ? true : copy.uf8Mode;
+            uf8::user_plugins::upsert(std::move(copy));
+            persistAndReport_();
+        };
+        if (ImGui_RadioButton(ctx, "CS##fxl_mode_cs",   curPrimary == 1)) applyPrimary(1);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "BC##fxl_mode_bc",   curPrimary == 2)) applyPrimary(2);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF8 only##fxl_mode_uf8", curPrimary == 3)) applyPrimary(3);
+
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx, "   ");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (curPrimary == 3) {
+            ImGui_TextDisabled(ctx, "UF8 layer: on (required)");
+        } else {
+            bool uf8Now = editing->uf8Mode;
+            if (ImGui_Checkbox(ctx, "UF8 layer##fxl_mode_uf8layer", &uf8Now)) {
+                UserPluginMap copy = *editing;
+                copy.uf8Mode = uf8Now;
+                uf8::user_plugins::upsert(std::move(copy));
+                persistAndReport_();
+            }
+        }
+    }
 
     // UC1 / UF8 mockup picker. Lifted to ExtState so the choice survives
     // REAPER restart.
@@ -4084,17 +4167,35 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         s_mockup = (v && *v == '1') ? 1 : 0;
     }
 
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_TextDisabled(ctx, "  Mockup:");
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "UC1##fxl_mock_uc1", s_mockup == 0)) {
+    // Coerce mockup to the map's available surfaces:
+    //   UF8-only      → only UF8 mockup
+    //   CS / BC w/o UF8 layer → only UC1 mockup
+    //   CS+UF8 / BC+UF8 → both
+    const bool hasUc1 = (editing->domain != uf8::Domain::None);
+    const bool hasUf8 = editing->uf8Mode;
+    if (!hasUc1 && hasUf8 && s_mockup != 1) {
+        s_mockup = 1;
+        SetExtState("ReaSixty", "fxLearnMockup", "1", true);
+    } else if (hasUc1 && !hasUf8 && s_mockup != 0) {
         s_mockup = 0;
         SetExtState("ReaSixty", "fxLearnMockup", "0", true);
     }
+
     ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "UF8##fxl_mock_uf8", s_mockup == 1)) {
-        s_mockup = 1;
-        SetExtState("ReaSixty", "fxLearnMockup", "1", true);
+    ImGui_TextDisabled(ctx, "  Mockup:");
+    if (hasUc1) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UC1##fxl_mock_uc1", s_mockup == 0)) {
+            s_mockup = 0;
+            SetExtState("ReaSixty", "fxLearnMockup", "0", true);
+        }
+    }
+    if (hasUf8) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF8##fxl_mock_uf8", s_mockup == 1)) {
+            s_mockup = 1;
+            SetExtState("ReaSixty", "fxLearnMockup", "1", true);
+        }
     }
 
     if (s_mockup == 1) {
@@ -4653,6 +4754,56 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
         ImGui_EndChild(ctx);
     }
+
+    // Mode-change confirm popup. Hoisted to the editor scope (not nested in
+    // the radio cell) so the popup ID-stack matches the BeginPopupModal
+    // site — same pattern as the delete popup in the master view.
+    if (g_pendingModeOpen) {
+        ImGui_OpenPopup(ctx, "fxl_mode_popup", nullptr);
+        g_pendingModeOpen = false;
+    }
+    if (ImGui_BeginPopupModal(ctx, "fxl_mode_popup", nullptr, nullptr)) {
+        const char* targetLabel =
+            (g_pendingModePrimary == 1) ? "CS" :
+            (g_pendingModePrimary == 2) ? "BC" : "UF8 only";
+        ImGui_Text(ctx, "Change primary mode?");
+        ImGui_Spacing(ctx);
+        char line[256];
+        std::snprintf(line, sizeof(line),
+            "  %s  →  %s",
+            modeLabel_(editing->domain, editing->uf8Mode), targetLabel);
+        ImGui_Text(ctx, line);
+        ImGui_Spacing(ctx);
+        ImGui_TextWrapped(ctx,
+            "The SSL-Link slot bindings get cleared — the schematic "
+            "topology between CS, BC and UF8-only isn't interchangeable. "
+            "Your UF8 bank / strip bindings stay intact.");
+        ImGui_Spacing(ctx);
+
+        if (ImGui_Button(ctx, "Apply##fxl_mode_ok", nullptr, nullptr)) {
+            UserPluginMap copy = *editing;
+            copy.domain  = (g_pendingModePrimary == 1) ? uf8::Domain::ChannelStrip
+                         : (g_pendingModePrimary == 2) ? uf8::Domain::BusComp
+                         :                                uf8::Domain::None;
+            copy.uf8Mode = copy.domain == uf8::Domain::None ? true : copy.uf8Mode;
+            copy.slots.clear();
+            // GR-meter binding refers to a vst3Param index on the learned
+            // plug-in — that's still valid across mode switches, so we
+            // keep it. (User can clear it manually if they re-learn.)
+            uf8::user_plugins::upsert(std::move(copy));
+            persistAndReport_();
+            g_pendingModeMatch.clear();
+            g_pendingModePrimary = 0;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##fxl_mode_cancel", nullptr, nullptr)) {
+            g_pendingModeMatch.clear();
+            g_pendingModePrimary = 0;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
+    }
 }
 
 } // namespace
@@ -4680,7 +4831,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     if (ImGui_Button(ctx, "+ New##fxl_new", nullptr, nullptr)) {
         std::memset(g_newMatch,   0, sizeof(g_newMatch));
         std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
-        g_newDomain = 1;
+        g_newPrimaryMode = 1;
+        g_newUf8Mode     = false;
         g_newError.clear();
         std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
         g_pickerSelectedIdx = -1;
@@ -4719,11 +4871,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                              nullptr, nullptr, nullptr)) {
             int wFlag = ImGui_TableColumnFlags_WidthFixed;
             double wDefault = 36.0, wShort = 64.0, wMatch = 240.0,
-                   wDomain = 50.0, wSlots = 64.0, wActions = 100.0;
+                   wDomain = 72.0, wSlots = 64.0, wActions = 100.0;
             ImGui_TableSetupColumn(ctx, "Default", &wFlag, &wDefault, nullptr);
             ImGui_TableSetupColumn(ctx, "Short",   &wFlag, &wShort,   nullptr);
             ImGui_TableSetupColumn(ctx, "Match",   &wFlag, &wMatch,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Domain",  &wFlag, &wDomain,  nullptr);
+            ImGui_TableSetupColumn(ctx, "Mode",    &wFlag, &wDomain,  nullptr);
             ImGui_TableSetupColumn(ctx, "Slots",   &wFlag, &wSlots,   nullptr);
             ImGui_TableSetupColumn(ctx, "Actions", &wFlag, &wActions, nullptr);
             ImGui_TableHeadersRow(ctx);
@@ -4779,7 +4931,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 ImGui_Text(ctx, m.match.c_str());
 
                 ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, domainLabel_(m.domain));
+                ImGui_Text(ctx, modeLabel_(m.domain, m.uf8Mode));
 
                 ImGui_TableNextColumn(ctx);
                 {
@@ -4912,13 +5064,32 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             g_newDisplay, 8, nullptr, nullptr);
 
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Domain:");
+        ImGui_Text(ctx, "Mode:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Channel-Strip##fxl_new_cs", g_newDomain == 1))
-            g_newDomain = 1;
+        if (ImGui_RadioButton(ctx, "Channel-Strip##fxl_new_cs",
+                              g_newPrimaryMode == 1))
+            g_newPrimaryMode = 1;
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Bus-Comp##fxl_new_bc", g_newDomain == 2))
-            g_newDomain = 2;
+        if (ImGui_RadioButton(ctx, "Bus-Comp##fxl_new_bc",
+                              g_newPrimaryMode == 2))
+            g_newPrimaryMode = 2;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF8 only##fxl_new_uf8only",
+                              g_newPrimaryMode == 3))
+        {
+            g_newPrimaryMode = 3;
+            g_newUf8Mode     = true;   // UF8-only requires the UF8 layer
+        }
+
+        // UF8 strip-layer checkbox. Only meaningful when the primary mode
+        // is CS or BC — UF8-only locks it on (handled above).
+        ImGui_Spacing(ctx);
+        if (g_newPrimaryMode == 3) {
+            ImGui_TextDisabled(ctx, "UF8 strip layer: enabled (required for UF8-only)");
+        } else {
+            ImGui_Checkbox(ctx, "Enable UF8 strip layer##fxl_new_uf8",
+                           &g_newUf8Mode);
+        }
 
         if (!g_newError.empty()) {
             ImGui_Spacing(ctx);
@@ -4948,8 +5119,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_newError = "Match string is required.";
             } else if (disp.empty()) {
                 g_newError = "Display label is required (1..7 ASCII chars).";
-            } else if (g_newDomain != 1 && g_newDomain != 2) {
-                g_newError = "Pick a domain.";
+            } else if (g_newPrimaryMode < 1 || g_newPrimaryMode > 3) {
+                g_newError = "Pick a mode.";
             } else if (user_plugins::collidesWithBuiltin(match)) {
                 g_newError = "That match string collides with a built-in plugin map.";
             } else {
@@ -4965,8 +5136,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     UserPluginMap m;
                     m.match        = match;
                     m.displayShort = disp;
-                    m.domain       = (g_newDomain == 2) ? Domain::BusComp
-                                                        : Domain::ChannelStrip;
+                    m.domain       = (g_newPrimaryMode == 2) ? Domain::BusComp
+                                  : (g_newPrimaryMode == 1) ? Domain::ChannelStrip
+                                  :                            Domain::None;
+                    m.uf8Mode      = (g_newPrimaryMode == 3) ? true
+                                                              : g_newUf8Mode;
                     m.isDefault    = false;
                     user_plugins::upsert(std::move(m));
                     persistAndReport_();
