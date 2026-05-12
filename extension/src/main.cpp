@@ -5052,12 +5052,29 @@ void chaseLastTouchedFx()
     //     follows → focusedTrack_ + UF8 bank update via SetSurfaceSelected.
     //   - BC-domain edit → only bcAnchorTrack_ updates → BC encoder/
     //     section follows on UC1 without disturbing CS Channel or UF8 bank.
+    //
+    // BC anchor follows UNCONDITIONALLY whenever a BC-domain param is
+    // touched, even when the track is REAPER-selected. Frank 2026-05-12:
+    // "Parameter im display werden nur angezeigt, wenn encoder 2 auch
+    // auf dem kanal ist". The BC readout zone + UC1 BC knob rings both
+    // poll bcAnchor every tick, so a UF8 V-Pot edit on a non-anchor
+    // BC plug-in (e.g. selected track different from where Encoder 2
+    // last landed) would otherwise leave UC1 painting the wrong track's
+    // BC values. CS still gates on the opt-in setting because CS edits
+    // already drive REAPER selection through SetOnlyTrackSelected.
     const bool isSelected = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
-    if (!isSelected && g_trackSelFollowsParam.load()) {
-        if (map->domain == uf8::Domain::BusComp) {
-            if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
-            return;
+    if (map->domain == uf8::Domain::BusComp) {
+        if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
+        // Selected? Mirror focusedTrack_ too — same as the legacy
+        // isSelected branch below. Non-selected? Stay quiet: the BC
+        // anchor move is enough to keep UC1's BC half on the right
+        // plug-in without disturbing the CS Channel or UF8 bank.
+        if (isSelected && g_uc1_surface) {
+            g_uc1_surface->setFocusedTrack(tr);
         }
+        return;
+    }
+    if (!isSelected && g_trackSelFollowsParam.load()) {
         if (map->domain == uf8::Domain::ChannelStrip) {
             SetOnlyTrackSelected(tr);
             followSelectedInMixer(tr);
