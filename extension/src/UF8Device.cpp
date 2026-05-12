@@ -128,6 +128,18 @@ void UF8Device::runInit_()
     // Give the worker a beat to post its first IN transfer.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
+    // Filter out text frames: both the init capture and the
+    // plugin-mixer-layer capture contain session text ("Test", "TRACK",
+    // "Kick", "Snarer", etc.) that would briefly flash on the V-Pot
+    // labels / dB readout / value zones before the 30 Hz timer
+    // overwrites them with REAPER-derived content.
+    auto isTextFrame = [](const uint8_t* b, size_t sz) {
+        if (sz < 5 || b[0] != 0xFF || b[1] != 0x66) return false;
+        const uint8_t cmd = b[3];
+        return cmd == 0x04 || cmd == 0x0B || cmd == 0x0C
+            || cmd == 0x0E || cmd == 0x17;
+    };
+
     // Replay the SSL-360° wakeup/init sequence captured on 2026-05-07.
     // Frames carry an explicit delay_ms_before for the load-bearing
     // inter-phase pauses in the fader-tanz (SSL waits ~750 ms..3 s between
@@ -138,6 +150,7 @@ void UF8Device::runInit_()
         if (f.delay_ms_before > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(f.delay_ms_before));
         }
+        if (isTextFrame(f.bytes, f.size)) continue;
         int transferred = 0;
         int ircode = libusb_bulk_transfer(
             handle_, kEpOut,
@@ -159,16 +172,6 @@ void UF8Device::runInit_()
     // physical Plugin-Mixer-Layer button press. A single FF 66 11 0F
     // command alone doesn't switch modes — UF8 firmware needs the
     // whole fader-position/motor/label/color sequence.
-    //
-    // Filter out text frames: the capture had session text ("Kick",
-    // "Snarer", etc.) that would briefly flash before the 30 Hz timer
-    // overwrites them with REAPER-derived content.
-    auto isTextFrame = [](const uint8_t* b, size_t sz) {
-        if (sz < 5 || b[0] != 0xFF || b[1] != 0x66) return false;
-        const uint8_t cmd = b[3];
-        return cmd == 0x04 || cmd == 0x0B || cmd == 0x0C
-            || cmd == 0x0E || cmd == 0x17;
-    };
     for (const auto& f : kLayerPluginMixerSequence) {
         if (shuttingDown_.load()) { initInProgress_ = false; return; }
         if (isTextFrame(f.bytes, f.size)) continue;
@@ -192,21 +195,25 @@ void UF8Device::runInit_()
     };
 
     // Plugin-Mixer color bar requires each strip's plugin slot to be
-    // marked "populated" + non-empty slot name.
+    // marked "populated" + non-empty slot name. Spaces satisfy "non-empty"
+    // while overwriting whatever leftover text ("Test"/"TRACK") the
+    // firmware retained from the previous SSL360 session — the 30 Hz
+    // REAPER timer then paints real track-derived labels on top.
     sendFrame(buildPluginSlotActive());
     for (uint8_t s = 0; s < 8; ++s) {
         if (shuttingDown_.load()) { initInProgress_ = false; return; }
-        char name[8];
-        std::snprintf(name, sizeof(name), "TRK %u", static_cast<unsigned>(s + 1));
-        sendFrame(buildPluginSlotName(s, name));
+        sendFrame(buildPluginSlotName(s, "        "));
     }
 
-    // Blank every per-strip text zone so SSL's session text doesn't
-    // briefly flash before the 30 Hz timer paints REAPER state.
+    // Blank every per-strip text zone so SSL's session text (track names
+    // from the prior SSL360 session) doesn't linger before the 30 Hz timer
+    // paints REAPER state. buildStripTextUpper is variable-length — an
+    // empty string sends a header-only frame the firmware ignores, so
+    // pass explicit spaces to actually clear the 7-char zone.
     for (uint8_t s = 0; s < 8; ++s) {
         if (shuttingDown_.load()) { initInProgress_ = false; return; }
-        sendFrame(buildStripTextUpper(s, ""));
-        sendFrame(buildStripTextLower(s, ""));
+        sendFrame(buildStripTextUpper(s, "       "));
+        sendFrame(buildStripTextLower(s, "       "));
         sendFrame(buildChannelStripType(s, "    "));
         sendFrame(buildFaderDbReadout(s, "    "));
         sendFrame(buildValueLine(s, ""));
