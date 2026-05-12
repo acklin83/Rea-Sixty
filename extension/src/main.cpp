@@ -5162,7 +5162,11 @@ void chaseFocusedFxWindow()
             uc1::setCsInstanceIndex(tr, instIdx);
     }
 
-    uf8::setFocus({um->domain, 0});
+    // UF8-only maps (domain==None) shouldn't clobber the CS/BC focus
+    // when the user touches them — they have no UC1 representation.
+    if (um->domain != uf8::Domain::None) {
+        uf8::setFocus({um->domain, 0});
+    }
     uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                 std::memory_order_relaxed);
 
