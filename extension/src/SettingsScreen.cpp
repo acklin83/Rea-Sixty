@@ -60,6 +60,9 @@ void reasixty_exportDiagnostic();  // shows confirmation dialog itself
 // domain: 0 = ChannelStrip, 1 = BusComp.
 const char* const* reasixty_softkeyStockLabels(int domain, int bank);
 int                reasixty_softkeyStockBankCount();
+int                reasixty_focusedDomain();
+int                reasixty_activeUserBank();
+const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // Currently active SSL soft-key PAGE bank — used by the schematic
 // to highlight the matching V-POT/Bank tile and by the per-binding
 // editor header to surface the live bank context.
@@ -474,9 +477,20 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     };
     // Live SSL labels for the active PAGE bank — the top-soft-key
     // scribble area shows whatever the hardware would show right now.
-    const int sslBank = reasixty_softkeyCurrentBank();
+    // Domain follows the focused-param domain (Q1 → CS, Q2 → BC, plus
+    // anything else that calls uf8::setFocus). Earlier this hardcoded
+    // domain=0, so the preview never switched to BC labels when Q2
+    // was active (Frank 2026-05-12 "Labels für Q2 sollten auf die von
+    // der Soft-Key Bank zugewiesenen Params wechseln").
+    const int sslBank   = reasixty_softkeyCurrentBank();
+    const int sslDomain = reasixty_focusedDomain();
     const char* const* sslLabels =
-        reasixty_softkeyStockLabels(/*domain*/ 0, sslBank);
+        reasixty_softkeyStockLabels(sslDomain, sslBank);
+    // User soft-key bank override — when the user engaged a custom
+    // bank via show_user_bank, the device replaces the plug-in labels
+    // with the bank's slot labels. Mirror that here so the preview is
+    // truly WYSIWYG.
+    const int activeUserBank = reasixty_activeUserBank();
     const int activeLayer = uf8::bindings::getActiveLayer();
     for (int i = 0; i < 8; ++i) {
         const float sx = kStripX0 + i * (kStripW + kStripGap);
@@ -502,9 +516,21 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
             const bool isSslSoftkey =
                 sp.type == uf8::bindings::ActionType::Builtin &&
                 sp.action == "ssl_softkey";
+            // Resolution order mirrors pushZonesForVisibleSlots:
+            //   1. Per-binding user label (Plain slot)
+            //   2. Active user bank slot label (overrides plug-in)
+            //   3. SSL plug-in's softkey label for live (domain, bank)
+            //      — only when the binding is ssl_softkey, so an
+            //      unrelated action doesn't borrow an SSL label.
             if (!sp.label.empty()) {
                 scribble = sp.label;
-            } else if (isSslSoftkey && sslLabels && sslLabels[i] && *sslLabels[i]) {
+            } else if (activeUserBank >= 0) {
+                if (const char* ub =
+                        reasixty_userBankSlotLabel(activeUserBank, i)) {
+                    scribble = ub;
+                }
+            } else if (isSslSoftkey
+                       && sslLabels && sslLabels[i] && *sslLabels[i]) {
                 scribble = sslLabels[i];
             }
         }
@@ -1445,7 +1471,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 // as "(empty)" so the user sees the slot exists but
                 // does nothing if pressed.
                 const char* const* labels =
-                    reasixty_softkeyStockLabels(/*domain*/ 0, comboBank);
+                    reasixty_softkeyStockLabels(
+                        reasixty_focusedDomain(), comboBank);
                 // Auto-fill the display label only for explicit-bank
                 // actions where the slot's meaning is stable. ssl_softkey
                 // intentionally skipped — its label has to track the live

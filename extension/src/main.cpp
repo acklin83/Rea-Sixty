@@ -7177,6 +7177,54 @@ const char* const* reasixty_softkeyStockLabels(int domain, int bank)
 }
 int reasixty_softkeyStockBankCount() { return 6; }
 
+// Live focused-param domain — 0 = ChannelStrip (Q1 default),
+// 1 = BusComp (Q2 default). Read by the Settings hardware schematic
+// so the top-soft-key label row reflects the user's current Q1/Q2
+// selection AND any binding that calls domain_cs / domain_bc /
+// uf8::setFocus directly. Defaults to ChannelStrip when no domain is
+// set yet (matches the device-side rendering convention).
+int reasixty_focusedDomain()
+{
+    const auto fp = uf8::getFocusedParam();
+    return (fp.domain == uf8::Domain::BusComp) ? 1 : 0;
+}
+
+// -1 when no user soft-key bank is engaged; otherwise the active
+// bank's index in 0..kUserBankCount-1. Settings preview overlays the
+// bank's slot labels over the SSL plug-in labels when this is >= 0.
+int reasixty_activeUserBank()
+{
+    return g_activeUserBank.load();
+}
+
+// User-bank slot label for the Settings preview. Returns nullptr on
+// out-of-range / empty slots so the preview can fall back to the
+// plug-in label. The string lives in the bindings config storage —
+// stable for the lifetime of the bank (caller doesn't own / free).
+const char* reasixty_userBankSlotLabel(int bank, int slot)
+{
+    if (bank < 0 || bank >= uf8::bindings::kUserBankCount) return nullptr;
+    if (slot < 0 || slot >= uf8::bindings::kUserBankSlots) return nullptr;
+    static thread_local std::string s_buf;
+    const auto userSlot = uf8::bindings::getUserBankSlot(bank, slot);
+    s_buf = userSlot.label;
+    if (s_buf.empty()) {
+        // Synthesise from the action name so the preview shows
+        // SOMETHING rather than going blank — mirrors the device-side
+        // userLabel-fallback path in pushZonesForVisibleSlots.
+        const auto& sp = userSlot.shortPress[
+            static_cast<int>(uf8::bindings::Modifier::Plain)];
+        const bool slotPresent =
+            sp.type != uf8::bindings::ActionType::Noop
+            || !sp.action.empty();
+        if (slotPresent) {
+            s_buf = sp.action;
+            if (s_buf.size() > 8) s_buf.resize(8);
+        }
+    }
+    return s_buf.empty() ? nullptr : s_buf.c_str();
+}
+
 // Current SSL soft-key PAGE bank (0 = V-POT, 1..5 = Bank N) — read by
 // the Settings editor so the per-soft-key edit header shows the live
 // bank context ("Soft-Key N - Bank M (Layer L)") and the schematic
