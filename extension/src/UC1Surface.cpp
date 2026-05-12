@@ -833,6 +833,29 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     MediaTrack* tr = static_cast<MediaTrack*>(writeTrackRaw);
     double cur = TrackFX_GetParamNormalized(tr, fxIdx, vst3Param);
 
+    // User has started editing a param — the scroll-overlay flags were
+    // set so the carousel could hold the LCD after an Encoder 1/2 spin,
+    // but a knob turn means scrolling is over. Without this, an Encoder
+    // 2 scroll (3 s overlay) followed by an immediate UC1 BC knob edit
+    // left pushFocusedParamReadout_'s overlay gate suppressing the
+    // zone 0x05 readout for up to 3 s — Frank 2026-05-12: "UC1 BC
+    // controls werden nicht berücksichtigt" when BC anchor != selected.
+    // Clear both overlays so the next pushFocusedParamReadout_ (below)
+    // is allowed through and the carousel-blocked CS zone reopens too.
+    if (bcScrollOverlayActive_ || csScrollOverlayActive_) {
+        const bool wasBc = bcScrollOverlayActive_;
+        bcScrollOverlayActive_ = false;
+        csScrollOverlayActive_ = false;
+        // Drop the carousel banner if we were holding BC scroll — the
+        // user is back to a regular param edit on the BC anchor and
+        // expects the standard MAIN-mode central layout (matches the
+        // overlay-expiry path in poll()).
+        if (wasBc && device_ && mode_ == Uc1Mode::Main) {
+            device_->send(buildCentralMode(CentralMode::Main, 0x00));
+            refresh();
+        }
+    }
+
     // EQ-gain knobs use a finer per-click step than the rest of the
     // surface. With the global 1/64 the dB-per-click varies by band
     // because different SSL EQ ranges map differently into the same
