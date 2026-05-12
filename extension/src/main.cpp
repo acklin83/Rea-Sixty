@@ -3276,29 +3276,6 @@ uint32_t reaperColorForVisibleSlot(int slot)
     if (realSlot >= trackCount) return 0;
     MediaTrack* tr = visibleTrackAt(realSlot);
     if (!tr) return 0;
-
-    // SSL Strip Mode override: each strip's colour bar shows the CS
-    // plug-in variant it's currently driving — quick visual cue for
-    // "which SSL channel strip am I controlling?" without reading the
-    // scribble label. Built-in CS variants get fixed brand-ish colours;
-    // user-learned CS replacements fall through to REAPER track colour
-    // (we don't know what colour the user would want). Tracks without
-    // any CS plug-in also fall through. Frank 2026-05-12 "temporär auf
-    // UF8 color-bars die instanz anzeigen, die kontrolliert wird. Wenn
-    // keine, dann REAPER."
-    if (g_pluginFaderMode.load()) {
-        auto mm = uf8::lookupPluginOnTrack(tr, uf8::Domain::ChannelStrip);
-        if (mm.map && mm.map->displayShort) {
-            const char* sn = mm.map->displayShort;
-            if      (std::strcmp(sn, "CS 2") == 0) return 0x3070C0u;  // SSL blue
-            else if (std::strcmp(sn, "4K G") == 0) return 0x70B080u;  // green
-            else if (std::strcmp(sn, "4K E") == 0) return 0xC07040u;  // orange / brown
-            else if (std::strcmp(sn, "4K B") == 0) return 0x404048u;  // dark grey
-            else if (std::strcmp(sn, "Link") == 0) return 0xA070C0u;  // purple
-            // User-learned CS map — fall through to REAPER track colour.
-        }
-    }
-
     // REAPER returns native color as int. Bit 0x1000000 is "color set";
     // low 24 bits are 0xBBGGRR on Windows, 0xRRGGBB on mac/Linux via the
     // "native" encoding. GetTrackColor wraps that — low 24 bits are what
@@ -4406,6 +4383,13 @@ void pushZonesForVisibleSlots()
         // upper line should reflect the routing target since the user
         // is editing the route, not the bank track). Falls back to bank
         // track P_NAME outside routing.
+        //
+        // SSL Strip Mode override: shows the CS plug-in variant name
+        // ("CS 2" / "4K G" / "4K E" / "4K B" / "Link" / user displayShort)
+        // so the user sees which CS instance the fader is driving. Falls
+        // back to REAPER P_NAME when no CS plug-in is on the strip's
+        // track. Frank 2026-05-12 "auf UF8 color-bars die instanz
+        // anzeigen, die kontrolliert wird. Wenn keine, dann REAPER."
         {
             std::string n;
             if (routedFader || routedVpot) {
@@ -4429,6 +4413,22 @@ void pushZonesForVisibleSlots()
             // doesn't actually control that track in the active mode.
             const bool blankInUserStripMode = userStripActive
                 && !userFaderActive;
+            // SSL Strip Mode label override — runs AFTER routing /
+            // user-strip checks so those workflows keep their existing
+            // labels. Only applies when nothing has been resolved yet
+            // (no routing name, no user-strip fader binding) AND the
+            // strip's track hosts a CS-domain map.
+            if (n.empty() && !blankInUserStripMode
+                && g_pluginFaderMode.load())
+            {
+                auto mm = uf8::lookupPluginOnTrack(
+                    tr, uf8::Domain::ChannelStrip);
+                if (mm.map && mm.map->displayShort
+                    && *mm.map->displayShort)
+                {
+                    n = mm.map->displayShort;
+                }
+            }
             if (n.empty() && !blankInUserStripMode) {
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
