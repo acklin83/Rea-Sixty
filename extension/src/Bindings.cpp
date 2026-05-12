@@ -1658,25 +1658,28 @@ bool dispatch(ButtonId id, bool pressed)
         layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
         auto it = g_cfg.layers[layer].bindings.find(id);
-        // Release-edge stuck-key guard: if we're processing a release
-        // and the active layer has no binding for this button, look
-        // for a recorded press on another layer (g_pressStart /
-        // g_longPressStart key includes the press-time layer). If
-        // found, use that layer's binding so the release still reaches
-        // its handler. Without this, the active layer could change
-        // mid-hold (e.g. mixer-visibility auto-switch from L1 → L2)
-        // and the release dispatch would return early on L2 — the
-        // Hold-behavior press had already fired setModifierHeld(true)
-        // and Shift stayed stuck until the next press of the same
-        // button (Frank 2026-05-12 "wenn ich shift eine gewisse zeit
-        // lang benutze, hängt er aufzmal").
-        if (!pressed && it == g_cfg.layers[layer].bindings.end()) {
+        // Release-edge stuck-key guard: when the active layer changes
+        // mid-hold (mixer-visibility auto-switch, manual layer flip,
+        // SSL Strip Mode toggle, etc.), the release would otherwise
+        // fire against the NEW layer's binding for this button — or
+        // return early when the new layer has none. Both leave the
+        // press-time binding (e.g. mod_shift) without its release,
+        // and a Momentary modifier stays stuck "on" forever.
+        //
+        // Rule: on release, ALWAYS prefer the layer that recorded the
+        // press for this button. g_pressStart / g_longPressStart keys
+        // by (press-time-layer, button-id), so finding any entry
+        // pinpoints which layer originally handled this press.
+        // (Frank 2026-05-12: stuck Shift; first fix only covered the
+        // "active layer has no binding" subcase, not the
+        // "different binding on active layer" subcase that's actually
+        // common with rebind-on-layer setups.)
+        if (!pressed) {
             for (int L = 0; L < 3; ++L) {
-                if (L == layer) continue;
                 const uint32_t k = pressKey(L, id);
                 if (g_pressStart.find(k)     == g_pressStart.end()
                  && g_longPressStart.find(k) == g_longPressStart.end()) {
-                    continue;  // no recorded press on layer L
+                    continue;
                 }
                 auto altIt = g_cfg.layers[L].bindings.find(id);
                 if (altIt != g_cfg.layers[L].bindings.end()) {
