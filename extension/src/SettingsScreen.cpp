@@ -4389,14 +4389,22 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_TextColored(ctx, 0xC0C0FFFF, banner);
     }
 
-    // No-instance, no-snapshot path: only here do we force the user to
-    // insert the plug-in. With a snapshot present, the editor continues
-    // through and uses the stored param list.
-    if (fxList.empty() && editing->paramSnapshot.empty()) {
+    // No-instance path — always offer the Insert button so the user can
+    // bring the plug-in back into the session for live wiggle / GR meter
+    // verification, even when a snapshot is already available. The
+    // warning text and prefix vary depending on whether we're operating
+    // from snapshot or completely cold.
+    if (fxList.empty()) {
         ImGui_Spacing(ctx);
-        ImGui_TextColored(ctx, 0xFFC04CFF,
-            "No FX matching that name found on any track. Insert one to "
-            "see its parameter list.");
+        if (editing->paramSnapshot.empty()) {
+            ImGui_TextColored(ctx, 0xFFC04CFF,
+                "No FX matching that name found on any track. Insert one "
+                "to see its parameter list.");
+        } else {
+            ImGui_TextDisabled(ctx,
+                "Snapshot active — insert a live instance to listen / "
+                "wiggle:");
+        }
         ImGui_Spacing(ctx);
 
         // Pick target: first selected track, else first track in project,
@@ -4630,7 +4638,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         std::string(fxName).find(editing->match) != std::string::npos)
                     {
                         bindSlot_(g_listeningLinkIdx, p);
-                        autoAdvanceListening_(*topo);
+                        if (topo) autoAdvanceListening_(*topo);
                     }
                 }
                 g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
@@ -4709,7 +4717,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                          &childFlags, &winFlags)) {
         if (s_mockup == 1) {
             drawFxLearnUf8Schematic_(ctx, fx);
-        } else {
+        } else if (topo) {
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
         }
         ImGui_EndChild(ctx);
@@ -4721,11 +4729,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     int rightWinFlags = 0;
     if (ImGui_BeginChild(ctx, "fxl_params", &rightW, &hLeft,
                          &childFlags, &rightWinFlags)) {
-        if (!fx.ok) {
+        const bool haveParamSource = fx.ok || !editing->paramSnapshot.empty();
+        if (!haveParamSource) {
             ImGui_TextDisabled(ctx, "Insert a matching FX to list its params.");
         } else {
             char hint[256];
-            if (g_listeningLinkIdx >= 0) {
+            if (!fx.ok) {
+                ImGui_TextColored(ctx, 0xC0C0FFFF,
+                    "Param list from stored snapshot — drag to bind. "
+                    "Wiggle listen needs a live FX.");
+                ImGui_Spacing(ctx);
+            }
+            if (g_listeningLinkIdx >= 0 && topo) {
                 const LinkSlot* listenSlot =
                     findSlotByLinkIdx(*topo, g_listeningLinkIdx);
                 std::snprintf(hint, sizeof(hint),
@@ -4791,10 +4806,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         it->second += " (+)";
                 }
             };
-            for (const auto& slt : editing->slots) {
-                const LinkSlot* bs = findSlotByLinkIdx(*topo, slt.linkIdx);
-                noteUse_(slt.vst3Param,
-                         bs && bs->name ? bs->name : "(slot)");
+            // Slot list is empty for UF8-only maps (no schematic).
+            if (topo) {
+                for (const auto& slt : editing->slots) {
+                    const LinkSlot* bs = findSlotByLinkIdx(*topo, slt.linkIdx);
+                    noteUse_(slt.vst3Param,
+                             bs && bs->name ? bs->name : "(slot)");
+                }
             }
             for (int b = 0; b < 6; ++b) {
                 const char* bankName =
@@ -4866,7 +4884,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
                 if (ImGui_Selectable(ctx, rowLbl, &selected, &selFlags,
                                      nullptr, nullptr)) {
-                    if (g_listeningLinkIdx >= 0) {
+                    if (g_listeningLinkIdx >= 0 && topo) {
                         bindSlot_(g_listeningLinkIdx, p);
                         autoAdvanceListening_(*topo);
                     } else if (g_listeningUf8.active()) {
