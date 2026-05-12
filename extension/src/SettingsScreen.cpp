@@ -1327,6 +1327,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Selection Sets";
                 if (n == "domain_cs" || n == "domain_bc")
                     return "Domain";
+                if (n.rfind("brightness_", 0) == 0)
+                    return "Brightness";
                 if (n.rfind("__", 0) == 0)
                     return "";   // hide internals
                 return "Other";
@@ -1334,7 +1336,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             static const char* kCats[] = {
                 "Modifiers", "Mode Toggles", "Layer", "Encoder modes",
                 "Bank / Page", "Automation", "Zoom",
-                "SSL Soft-Keys", "Domain",
+                "SSL Soft-Keys", "Domain", "Brightness",
                 "Sends", "Receives", "User Soft-Key Banks",
                 "Selection Sets",
                 "Other",

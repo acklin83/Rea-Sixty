@@ -6510,40 +6510,6 @@ custom_action_register_t g_actionBrightnessDown{
 int g_cmdBrightnessUp = 0;
 int g_cmdBrightnessDown = 0;
 
-// Split brightness actions — LEDs / LCDs / Both. The legacy
-// REASIXTY_BRIGHTNESS_UP/DOWN above only step the LED level; these six
-// expose the full matrix so Bindings can map each independently.
-custom_action_register_t g_actionBrightnessLedsUp{
-    0, "REASIXTY_BRIGHTNESS_LEDS_UP",
-    "Rea-Sixty: Brightness LEDs +", nullptr,
-};
-custom_action_register_t g_actionBrightnessLedsDown{
-    0, "REASIXTY_BRIGHTNESS_LEDS_DOWN",
-    "Rea-Sixty: Brightness LEDs -", nullptr,
-};
-custom_action_register_t g_actionBrightnessLcdsUp{
-    0, "REASIXTY_BRIGHTNESS_LCDS_UP",
-    "Rea-Sixty: Brightness LCDs +", nullptr,
-};
-custom_action_register_t g_actionBrightnessLcdsDown{
-    0, "REASIXTY_BRIGHTNESS_LCDS_DOWN",
-    "Rea-Sixty: Brightness LCDs -", nullptr,
-};
-custom_action_register_t g_actionBrightnessBothUp{
-    0, "REASIXTY_BRIGHTNESS_BOTH_UP",
-    "Rea-Sixty: Brightness Both (LEDs+LCDs) +", nullptr,
-};
-custom_action_register_t g_actionBrightnessBothDown{
-    0, "REASIXTY_BRIGHTNESS_BOTH_DOWN",
-    "Rea-Sixty: Brightness Both (LEDs+LCDs) -", nullptr,
-};
-int g_cmdBrightnessLedsUp   = 0;
-int g_cmdBrightnessLedsDown = 0;
-int g_cmdBrightnessLcdsUp   = 0;
-int g_cmdBrightnessLcdsDown = 0;
-int g_cmdBrightnessBothUp   = 0;
-int g_cmdBrightnessBothDown = 0;
-
 // LED-cell discovery probe — for buttons whose LED cell hasn't been
 // captured yet. Each call dims the previous candidate cell, lights
 // the next bright-white, and logs the cell ID. User runs the action
@@ -7020,14 +6986,8 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
                   HWND /*hwnd*/)
 {
     if (command == 0) return false;
-    if (command == g_cmdBrightnessUp)       { brightnessUp();       return true; }
-    if (command == g_cmdBrightnessDown)     { brightnessDown();     return true; }
-    if (command == g_cmdBrightnessLedsUp)   { brightnessUp();       return true; }
-    if (command == g_cmdBrightnessLedsDown) { brightnessDown();     return true; }
-    if (command == g_cmdBrightnessLcdsUp)   { brightnessLcdsUp();   return true; }
-    if (command == g_cmdBrightnessLcdsDown) { brightnessLcdsDown(); return true; }
-    if (command == g_cmdBrightnessBothUp)   { brightnessBothUp();   return true; }
-    if (command == g_cmdBrightnessBothDown) { brightnessBothDown(); return true; }
+    if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
+    if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdProbeLed)       { probeNextLedCell();       return true; }
     if (command == g_cmdProbeLegacyLed) { probeNextLegacyLedCell(); return true; }
     if (command == g_cmdFrameTrace)     { toggleFrameTrace();       return true; }
@@ -7827,6 +7787,53 @@ void registerBindingHandlers()
         nullptr, "Encoder: scroll mouse-wheel under cursor", false
     });
 
+    // Brightness step builtins — same handlers as the REAPER custom_actions
+    // (REASIXTY_BRIGHTNESS_LEDS_UP etc.). Both routes coexist so users can
+    // bind via Bindings UI (Native combo) OR via REAPER's keyboard shortcut
+    // list.
+    registerBuiltin("brightness_leds_up", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessUp();
+        },
+        nullptr, "Brightness LEDs +", false
+    });
+    registerBuiltin("brightness_leds_down", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessDown();
+        },
+        nullptr, "Brightness LEDs -", false
+    });
+    registerBuiltin("brightness_lcds_up", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessLcdsUp();
+        },
+        nullptr, "Brightness LCDs +", false
+    });
+    registerBuiltin("brightness_lcds_down", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessLcdsDown();
+        },
+        nullptr, "Brightness LCDs -", false
+    });
+    registerBuiltin("brightness_both_up", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessBothUp();
+        },
+        nullptr, "Brightness Both (LEDs+LCDs) +", false
+    });
+    registerBuiltin("brightness_both_down", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            brightnessBothDown();
+        },
+        nullptr, "Brightness Both (LEDs+LCDs) -", false
+    });
+
     registerBuiltin("domain_cs", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -8340,12 +8347,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // when we register — stash it for dispatch in hookCommand.
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
-    g_cmdBrightnessLedsUp   = plugin_register("custom_action", &g_actionBrightnessLedsUp);
-    g_cmdBrightnessLedsDown = plugin_register("custom_action", &g_actionBrightnessLedsDown);
-    g_cmdBrightnessLcdsUp   = plugin_register("custom_action", &g_actionBrightnessLcdsUp);
-    g_cmdBrightnessLcdsDown = plugin_register("custom_action", &g_actionBrightnessLcdsDown);
-    g_cmdBrightnessBothUp   = plugin_register("custom_action", &g_actionBrightnessBothUp);
-    g_cmdBrightnessBothDown = plugin_register("custom_action", &g_actionBrightnessBothDown);
     g_cmdProbeLed       = plugin_register("custom_action", &g_actionProbeLed);
     g_cmdProbeLegacyLed = plugin_register("custom_action", &g_actionProbeLegacyLed);
     g_cmdFrameTrace     = plugin_register("custom_action", &g_actionFrameTrace);
