@@ -209,8 +209,14 @@ void UC1Surface::setBcAnchorTrack(void* track)
     // changes update the BC display state but the user-visible carousel
     // still shows the previous anchor.
     bcScrollOverlayActive_ = true;
+    // 3 s window matches Frank's expectation — long enough to read the
+    // prev/curr/next BC track names before pushFocusedParamReadout_ is
+    // allowed to repaint zone 0x05 again. 1.5 s (the SSL360 reference
+    // value) was too short in practice; a fresh poll-tick value-poll
+    // could re-render the BC param the moment the overlay expired and
+    // visually destroy the carousel.
     bcScrollOverlayUntil_ =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     bcAnchorTrack_ = track;
     grSettleUntil_ = std::chrono::steady_clock::now()
                    + std::chrono::milliseconds(250);
@@ -1495,7 +1501,16 @@ void UC1Surface::pushFocusedParamReadout_()
     // ValidatePtr2 guards against stale pointers across project switch /
     // track delete (crash 2026-05-05 17:18, PC tag pattern of a freed
     // MediaTrack — lookupPluginOnTrack → TrackFX_GetCount segfaulted).
-    void* lookupTrack = focusedTrack_;
+    // CS focus reads from the selected track; BC focus reads from the
+    // BC anchor (Encoder 2's target). Earlier this used focusedTrack_
+    // for BOTH domains, so a BC knob edit (which writes to the BC
+    // anchor) left the readout pinned to focusedTrack_'s BC plug-in
+    // value — same text every tick, dedup-skipped, LCD frozen.
+    // Captured via Frank 2026-05-12: "UC1 BC Parameter change wird
+    // nicht mehr geupdated".
+    void* lookupTrack = (focused.domain == uf8::Domain::BusComp)
+        ? effectiveBcTrack_()
+        : focusedTrack_;
     if (lookupTrack && !ValidatePtr2(nullptr, lookupTrack, "MediaTrack*")) {
         lookupTrack = nullptr;
     }

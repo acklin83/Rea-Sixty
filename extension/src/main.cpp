@@ -1071,71 +1071,63 @@ void applyInstanceCycle_(int step)
     if (step == 0) return;
     if (!g_uc1_surface) return;
 
-    {
-        MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-        if (!tr) tr = GetSelectedTrack(nullptr, 0);
-        if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
-            struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
-            std::vector<Hit> hits;
-            int csCount = 0, bcCount = 0;
-            const int n = TrackFX_GetCount(tr);
-            char fxName[256];
-            for (int i = 0; i < n; ++i) {
-                if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-                const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-                if (!um) continue;
-                int instIdx = -1;
-                if (um->domain == uf8::Domain::ChannelStrip)      instIdx = csCount++;
-                else if (um->domain == uf8::Domain::BusComp)      instIdx = bcCount++;
-                else continue;
-                hits.push_back({i, um->domain, instIdx});
-            }
-            if (hits.size() >= 2) {
-                const auto fp = uf8::getFocusedParam();
-                uf8::Domain curDom = fp.domain;
-                if (curDom == uf8::Domain::None)
-                    curDom = uf8::Domain::ChannelStrip;
-                int curInstIdx = (curDom == uf8::Domain::BusComp)
-                    ? uc1::bcInstanceIndex(tr)
-                    : uc1::csInstanceIndex(tr);
-                int curK = 0;
-                for (size_t k = 0; k < hits.size(); ++k) {
-                    if (hits[k].dom == curDom &&
-                        hits[k].instIdx == curInstIdx)
-                    { curK = (int)k; break; }
-                }
-                int nextK = (curK + step) % static_cast<int>(hits.size());
-                if (nextK < 0) nextK += static_cast<int>(hits.size());
-                const Hit& target = hits[nextK];
-                uf8::setFocus({target.dom, 0});
-                if (target.dom == uf8::Domain::ChannelStrip)
-                    uc1::setCsInstanceIndex(tr, target.instIdx);
-                else if (target.dom == uf8::Domain::BusComp)
-                    uc1::setBcInstanceIndex(tr, target.instIdx);
-                g_uc1_surface->invalidateCache();
-                g_uc1_surface->refresh();
-                g_pageDirty.store(true);
-                g_bankDirty.store(true);
-                return;
-            }
+    // Walk EVERY learned plug-in across both tracks-of-interest:
+    //   * CS hits — focused track's CS-domain plug-ins (built-in CS 2 /
+    //     4K G / 4K E / 4K B / Link AND user-mapped CS variants).
+    //   * BC hits — BC anchor track's BC-domain plug-ins (built-in BC 2 /
+    //     Link BC AND user-mapped BC variants). Falls back to the
+    //     focused track when no anchor is set yet.
+    // Earlier this only iterated user_plugins::lookupOwnedByName, so a
+    // track with one built-in CS + one built-in BC produced an empty
+    // hit list and the cycle did nothing — Frank had to move the BC
+    // anchor first because the legacy fall-through gated BC cycling on
+    // "anchor == focused". lookupPluginMapByName covers built-ins AND
+    // user maps in one walk.
+    MediaTrack* csTrack = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!csTrack) csTrack = GetSelectedTrack(nullptr, 0);
+    void* bcRaw = g_uc1_surface->bcAnchorTrackPublic();
+    MediaTrack* bcTrack = bcRaw ? static_cast<MediaTrack*>(bcRaw) : csTrack;
+
+    struct Hit { MediaTrack* tr; int fxIdx; uf8::Domain dom; int instIdx; };
+    std::vector<Hit> hits;
+    auto walkTrack = [&](MediaTrack* tr, uf8::Domain wantDom, int& counter) {
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+        const int n = TrackFX_GetCount(tr);
+        char fxName[256];
+        for (int i = 0; i < n; ++i) {
+            if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+            const auto* pm = uf8::lookupPluginMapByName(fxName);
+            if (!pm) continue;
+            if (pm->domain != wantDom) continue;
+            hits.push_back({tr, i, wantDom, counter++});
+        }
+    };
+    int csCount = 0, bcCount = 0;
+    walkTrack(csTrack, uf8::Domain::ChannelStrip, csCount);
+    walkTrack(bcTrack, uf8::Domain::BusComp,      bcCount);
+
+    if (hits.size() < 2) return;   // nothing meaningful to cycle through
+
+    const auto fp = uf8::getFocusedParam();
+    uf8::Domain curDom = fp.domain;
+    if (curDom == uf8::Domain::None) curDom = uf8::Domain::ChannelStrip;
+    const int curInstIdx = (curDom == uf8::Domain::BusComp)
+        ? uc1::bcInstanceIndex(bcTrack)
+        : uc1::csInstanceIndex(csTrack);
+    int curK = 0;
+    for (size_t k = 0; k < hits.size(); ++k) {
+        if (hits[k].dom == curDom && hits[k].instIdx == curInstIdx) {
+            curK = (int)k; break;
         }
     }
-
-    const auto focused = uf8::getFocusedParam();
-    const auto domain  = (focused.domain == uf8::Domain::BusComp)
-        ? uc1::ControlDomain::BusComp
-        : uc1::ControlDomain::ChannelStrip;
-    void* targetTrack = nullptr;
-    if (domain == uc1::ControlDomain::BusComp) {
-        void* anchor  = g_uc1_surface->bcAnchorTrackPublic();
-        void* focused = g_uc1_surface->focusedTrack();
-        if (!anchor || anchor != focused) return;   // gate
-        targetTrack = anchor;
-    } else {
-        targetTrack = g_uc1_surface->focusedTrack();
-    }
-    if (!targetTrack) return;
-    uc1::cycleInstance(targetTrack, domain, step);
+    int nextK = (curK + step) % static_cast<int>(hits.size());
+    if (nextK < 0) nextK += static_cast<int>(hits.size());
+    const Hit& target = hits[nextK];
+    uf8::setFocus({target.dom, 0});
+    if (target.dom == uf8::Domain::ChannelStrip)
+        uc1::setCsInstanceIndex(target.tr, target.instIdx);
+    else if (target.dom == uf8::Domain::BusComp)
+        uc1::setBcInstanceIndex(target.tr, target.instIdx);
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
     g_pageDirty.store(true);
