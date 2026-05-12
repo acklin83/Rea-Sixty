@@ -4156,14 +4156,20 @@ void pushZonesForVisibleSlots()
         // bump slotIdx to 0.
         const uf8::PluginMap* map = nullptr;
         {
-            auto mm = uf8::lookupPluginOnTrack(tr, focused.domain);
+            // SSL Strip Mode (Plugin button) routes the fader to the CS
+            // instance's Fader Level param. The colour-bar Channel Strip
+            // Type zone should reflect what the fader actually drives,
+            // so force CS lookup regardless of UC1 focus domain when
+            // pluginFaderMode is on. Outside SSL Strip Mode the zone
+            // follows focused.domain as before (Frank 2026-05-12 "auf
+            // UF8 color-bars die instanz anzeigen, die kontrolliert
+            // wird").
+            const auto typeDom = g_pluginFaderMode.load()
+                ? uf8::Domain::ChannelStrip : focused.domain;
+            auto mm = uf8::lookupPluginOnTrack(tr, typeDom);
             map = mm.map;
-            // Fallback: focused-domain has no plug-in on this track,
-            // but the OTHER domain does → show that one's short name
-            // so the user still sees what's loaded. Avoids "RPR" on a
-            // CS-only track while in BC focus.
             if (!map) {
-                const auto otherDom = (focused.domain == uf8::Domain::BusComp)
+                const auto otherDom = (typeDom == uf8::Domain::BusComp)
                     ? uf8::Domain::ChannelStrip
                     : uf8::Domain::BusComp;
                 auto mm2 = uf8::lookupPluginOnTrack(tr, otherDom);
@@ -4388,14 +4394,10 @@ void pushZonesForVisibleSlots()
         // the send/receive name here (Frank 2026-05-07: each strip's
         // upper line should reflect the routing target since the user
         // is editing the route, not the bank track). Falls back to bank
-        // track P_NAME outside routing.
-        //
-        // SSL Strip Mode override: shows the CS plug-in variant name
-        // ("CS 2" / "4K G" / "4K E" / "4K B" / "Link" / user displayShort)
-        // so the user sees which CS instance the fader is driving. Falls
-        // back to REAPER P_NAME when no CS plug-in is on the strip's
-        // track. Frank 2026-05-12 "auf UF8 color-bars die instanz
-        // anzeigen, die kontrolliert wird. Wenn keine, dann REAPER."
+        // track P_NAME outside routing. SSL Strip Mode keeps P_NAME
+        // here — the CS variant ("CS 2" / "4K G" / "Link" / user
+        // displayShort) lives in the Channel Strip Type colour bar
+        // above, not in the track-name zone (Frank 2026-05-12).
         {
             std::string n;
             if (routedFader || routedVpot) {
@@ -4419,22 +4421,6 @@ void pushZonesForVisibleSlots()
             // doesn't actually control that track in the active mode.
             const bool blankInUserStripMode = userStripActive
                 && !userFaderActive;
-            // SSL Strip Mode label override — runs AFTER routing /
-            // user-strip checks so those workflows keep their existing
-            // labels. Only applies when nothing has been resolved yet
-            // (no routing name, no user-strip fader binding) AND the
-            // strip's track hosts a CS-domain map.
-            if (n.empty() && !blankInUserStripMode
-                && g_pluginFaderMode.load())
-            {
-                auto mm = uf8::lookupPluginOnTrack(
-                    tr, uf8::Domain::ChannelStrip);
-                if (mm.map && mm.map->displayShort
-                    && *mm.map->displayShort)
-                {
-                    n = mm.map->displayShort;
-                }
-            }
             if (n.empty() && !blankInUserStripMode) {
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
