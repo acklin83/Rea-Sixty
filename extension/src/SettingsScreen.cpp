@@ -3221,8 +3221,12 @@ constexpr Uc1Control kUc1Controls[] = {
     { Uc1Control::DynBtn, 36, uf8::Domain::ChannelStrip,
       632, 536, 0, 66, 22, 0, "S/C L" },     // S/C Listen
     // Channel-IN — narrow tall button per drawUc1Face_'s c3x slot.
+    // Coords match the actual draw: drawUc1Face_ paints the IN button at
+    // (kColRx + 162 + (66 - 33)/2, 510 + (3*22 - 37)/2) = (796.5, 524.5).
+    // Using c3x directly here (= 778) made the bbox sit 18 px left of
+    // the silk drawing — Frank 2026-05-09 flagged this as "verrutscht".
     { Uc1Control::Toggle,  4, uf8::Domain::ChannelStrip,
-      778, 521, 0, 33, 37, 0, "IN" },        // Channel In / Input Trim
+      796.5f, 524.5f, 0, 33, 37, 0, "IN" },  // Channel In / Input Trim
 };
 
 constexpr int kUc1ControlsCount =
@@ -3294,21 +3298,9 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ringCol, &rounding, /*flags*/ nullptr, /*thickness*/ nullptr);
     }
 
-    // "p<n>" tag in green for mapped controls — placed at the centre
-    // of the knob (overrides the silk-screen label) or below toggles.
-    if (isMapped) {
-        char tag[12];
-        std::snprintf(tag, sizeof(tag), "p%d", mapped);
-        double tw = 0, th = 0;
-        ImGui_CalcTextSize(ctx, tag, &tw, &th, nullptr, nullptr);
-        const float tx = (ctrl.kind == Uc1Control::Knob)
-            ? ox + ctrl.cx - float(tw) / 2.0f
-            : ox + bx + (bw - float(tw)) / 2.0f;
-        const float ty = (ctrl.kind == Uc1Control::Knob)
-            ? oy + ctrl.cy - float(th) / 2.0f
-            : oy + by + bh + 2;
-        ImGui_DrawList_AddText(dl, tx, ty, 0x80FF80FF, tag);
-    }
+    // Mapped state is conveyed purely by the ring colour above — no
+    // inline text overlay (Frank 2026-05-09: text-over-silk is
+    // unreadable). Param name surfaces in the hover tooltip below.
 
     // "i" inverted-flag indicator (upper-right corner of the bbox).
     if (isMapped) {
@@ -3672,25 +3664,11 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         return;   // no hit-test for TopSoftKey
     }
 
-    // Mapped tag — small "p<n>" inside / next to the bbox
-    if (isMapped) {
-        char tag[12];
-        std::snprintf(tag, sizeof(tag), "p%d", mapped);
-        if (ctrl.kind == Uf8Control::VPot) {
-            double tw = 0, th = 0;
-            ImGui_CalcTextSize(ctx, tag, &tw, &th, nullptr, nullptr);
-            ImGui_DrawList_AddText(dl,
-                ox + bx + (bw - float(tw)) / 2.0f,
-                oy + by + (bh - float(th)) / 2.0f,
-                0x80FF80FF, tag);
-        } else {
-            ImGui_DrawList_AddText(dl,
-                ox + bx + 2, oy + by - 12,
-                0x80FF80FF, tag);
-        }
-    }
-
-    // Inverted "i" indicator (Fader + VPot only)
+    // Mapped controls are flagged purely via the green ring drawn
+    // above — no inline text overlay (Frank 2026-05-09: text-over-silk
+    // is unreadable). Param name surfaces in the hover tooltip below.
+    // Inverted "i" stays as a small corner glyph since it conveys a
+    // distinct binary state the ring can't.
     if (isMapped &&
         (ctrl.kind == Uf8Control::Fader || ctrl.kind == Uf8Control::VPot))
     {
