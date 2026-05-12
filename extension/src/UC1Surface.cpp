@@ -224,7 +224,22 @@ void UC1Surface::setBcAnchorTrack(void* track)
     // anchor's last GR value doesn't briefly read on the new anchor's
     // meter. UC1Device's 50 Hz FF 5B stream resumes from the new
     // anchor's pushGainReduction value once the settle window ends.
-    if (device_) device_->send(buildZeroGr());
+    if (device_) {
+        device_->send(buildZeroGr());
+        // Release the CS readout slot — the BC carousel claims the
+        // central upper LCD area in sub=0x02 layout, but a sticky
+        // zone 0x03 ("HF Gain  +3.0dB" etc. from the last CS knob
+        // edit) keeps painting on top of the carousel until the
+        // firmware is told to drop the slot. Symmetric with the
+        // Encoder 1 path which invalidates zone 0x03 on every CS
+        // scroll. Carousel redraw signal (0x0F) matches the same
+        // path so the firmware repaints the new BC triple cleanly.
+        if (!lastZone03Text_.empty()) {
+            lastZone03Text_.clear();
+            device_->send(buildDisplayInvalidate(zone::kChannelStripReadout));
+        }
+        device_->send(buildDisplayInvalidate(0x0F));
+    }
     invalidateCache();
 }
 
@@ -1540,8 +1555,12 @@ void UC1Surface::pushFocusedParamReadout_()
                            : zone::kChannelStripReadout;
     // Encoder-scroll overlay gates. While the CS / BC channel-encoder
     // scroll overlay is active, suppress the matching readout zone so
-    // the carousel keeps the LCD area to itself.
-    if (zoneByte == zone::kChannelStripReadout && csScrollOverlayActive_) return;
+    // the carousel keeps the LCD area to itself. BC scroll also gates
+    // the CS zone because sub=0x02 layout hands the upper LCD area to
+    // the BC carousel — a stale CS readout there paints on top
+    // (Frank 2026-05-12 "CS parameter ist immer noch dort").
+    if (zoneByte == zone::kChannelStripReadout
+        && (csScrollOverlayActive_ || bcScrollOverlayActive_)) return;
     if (zoneByte == zone::kBusCompReadout      && bcScrollOverlayActive_) return;
     std::string& cache = (zoneByte == zone::kBusCompReadout)
                        ? lastZone05Text_ : lastZone03Text_;
