@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -2905,6 +2906,69 @@ void setGrOffset_(double offsetDb)
     }
 }
 
+// Snapshot every VST3 param on `fx` into the user map identified by
+// `match` so subsequent edits can render the param list / V-Pot picker /
+// GR-meter picker even when no live instance is loaded. Overwrites any
+// previous snapshot. Persists immediately.
+void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
+{
+    if (match.empty() || !fx.ok) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        const int n = TrackFX_GetNumParams(fx.tr, fx.fxIdx);
+        m.paramSnapshot.clear();
+        m.paramSnapshot.reserve(static_cast<size_t>(n));
+        char name[256];
+        for (int p = 0; p < n; ++p) {
+            uf8::UserParamInfo pi{};
+            pi.vst3Param = p;
+            if (TrackFX_GetParamName(fx.tr, fx.fxIdx, p, name, sizeof(name)))
+                pi.name = name;
+            double mn = 0, mx = 1, def = 0;
+            TrackFX_GetParamEx(fx.tr, fx.fxIdx, p, &mn, &mx, &def);
+            const double range = mx - mn;
+            pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
+            double step = 0, smallStep = 0, largeStep = 0;
+            bool isToggle = false;
+            TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, p,
+                &step, &smallStep, &largeStep, &isToggle);
+            pi.wasEnum = isToggle || step >= 0.5;
+            m.paramSnapshot.push_back(std::move(pi));
+        }
+        m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+
+// Resolve a param name. Prefer live FX (always current), fall back to the
+// persisted snapshot when no instance is loaded. Returns false if neither
+// source has a name for this index.
+bool paramNameFor_(const UserPluginMap& map, const EditingFx& fx,
+                   int p, char* out, int outSize)
+{
+    if (outSize <= 0) return false;
+    out[0] = '\0';
+    if (fx.ok) {
+        return TrackFX_GetParamName(fx.tr, fx.fxIdx, p, out, outSize);
+    }
+    for (const auto& pi : map.paramSnapshot) {
+        if (pi.vst3Param != p) continue;
+        std::strncpy(out, pi.name.c_str(), outSize - 1);
+        out[outSize - 1] = '\0';
+        return true;
+    }
+    return false;
+}
+
+int paramCountFor_(const UserPluginMap& map, const EditingFx& fx)
+{
+    if (fx.ok) return TrackFX_GetNumParams(fx.tr, fx.fxIdx);
+    return static_cast<int>(map.paramSnapshot.size());
+}
+
 // Remove a slot binding from the editing map.
 void unbindSlot_(int linkIdx)
 {
@@ -3408,6 +3472,20 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             if (fx.ok) {
                 TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
                                      pname, sizeof(pname));
+            } else {
+                // Snapshot fallback so the tooltip stays meaningful when
+                // no instance is loaded.
+                for (const auto& um : user_plugins::get().maps) {
+                    if (um.match != g_editingMatch) continue;
+                    for (const auto& pi : um.paramSnapshot) {
+                        if (pi.vst3Param == mapped) {
+                            std::strncpy(pname, pi.name.c_str(),
+                                         sizeof(pname) - 1);
+                            break;
+                        }
+                    }
+                    break;
+                }
             }
             std::snprintf(tip, sizeof(tip),
                 "%s\n  -> param %d  '%s'",
@@ -3719,10 +3797,24 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 label = m.uf8.banks.banks[bank][ctrl.strip].label;
                 break;
             }
-            if (label.empty() && fx.ok) {
+            if (label.empty()) {
                 char pn[64] = {};
-                TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
-                                     pn, sizeof(pn));
+                if (fx.ok) {
+                    TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
+                                         pn, sizeof(pn));
+                } else {
+                    for (const auto& um : uf8::user_plugins::get().maps) {
+                        if (um.match != g_editingMatch) continue;
+                        for (const auto& pi : um.paramSnapshot) {
+                            if (pi.vst3Param == mapped) {
+                                std::strncpy(pn, pi.name.c_str(),
+                                             sizeof(pn) - 1);
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
                 label = pn;
             }
             if (label.size() > 8) label.resize(8);
@@ -3782,8 +3874,22 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         char tip[256];
         if (isMapped) {
             char pname[128] = {};
-            if (fx.ok) TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
-                                            pname, sizeof(pname));
+            if (fx.ok) {
+                TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
+                                     pname, sizeof(pname));
+            } else {
+                for (const auto& um : uf8::user_plugins::get().maps) {
+                    if (um.match != g_editingMatch) continue;
+                    for (const auto& pi : um.paramSnapshot) {
+                        if (pi.vst3Param == mapped) {
+                            std::strncpy(pname, pi.name.c_str(),
+                                         sizeof(pname) - 1);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
             std::snprintf(tip, sizeof(tip),
                 "%s strip %d%s\n  -> param %d  '%s'",
                 kindLabel, ctrl.strip + 1,
@@ -4242,7 +4348,51 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     const auto fxList = findEditingFxAll_(editing->match);
     const EditingFx fx = pickEditingFx_(fxList);
 
-    if (fxList.empty()) {
+    // Auto-snapshot: when a live FX is available AND we don't have a
+    // persisted param list yet, capture one now so the editor can keep
+    // serving param names even after the FX is removed. Subsequent
+    // sessions / projects without an instance still see the param list.
+    if (fx.ok && editing->paramSnapshot.empty()) {
+        snapshotParamsFor_(editing->match, fx);
+        // upsert above invalidated `editing` — re-resolve so subsequent
+        // code reads from the new (snapshotted) copy.
+        for (const auto& m : user_plugins::get().maps) {
+            if (m.match == g_editingMatch) { editing = &m; break; }
+        }
+    }
+
+    // "Snapshot params" button — explicit re-capture (covers plug-in
+    // updates that changed the param ordering). Disabled-style hint
+    // when no live FX is available; only callable in fx.ok scope.
+    if (fx.ok) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Snapshot params##fxl_snap", nullptr, nullptr)) {
+            snapshotParamsFor_(editing->match, fx);
+            for (const auto& m : user_plugins::get().maps) {
+                if (m.match == g_editingMatch) { editing = &m; break; }
+            }
+        }
+        if (editing->snapshotTakenAt > 0) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char info[64];
+            std::snprintf(info, sizeof(info), "(%zu params stored)",
+                          editing->paramSnapshot.size());
+            ImGui_TextDisabled(ctx, info);
+        }
+    } else if (!editing->paramSnapshot.empty()) {
+        ImGui_Spacing(ctx);
+        char banner[160];
+        std::snprintf(banner, sizeof(banner),
+            "No live FX — editing from stored snapshot (%zu params). "
+            "Listen / wiggle requires inserting the plug-in.",
+            editing->paramSnapshot.size());
+        ImGui_TextColored(ctx, 0xC0C0FFFF, banner);
+    }
+
+    // No-instance, no-snapshot path: only here do we force the user to
+    // insert the plug-in. With a snapshot present, the editor continues
+    // through and uses the stored param list.
+    if (fxList.empty() && editing->paramSnapshot.empty()) {
         ImGui_Spacing(ctx);
         ImGui_TextColored(ctx, 0xFFC04CFF,
             "No FX matching that name found on any track. Insert one to "
@@ -4284,7 +4434,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     "match an installed plug-in name.";
             }
         }
-    } else {
+    } else if (!fxList.empty()) {
         // Plugin-selector combo. Preview shows the active instance's
         // label; opening the combo lists all matches across master + tracks.
         // Auto-pick row at the top falls back to first-match behaviour.
@@ -4345,15 +4495,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (curParam < 0) {
             std::snprintf(preview, sizeof(preview),
                 "(none — fall back to GainReduction_dB)");
-        } else if (fx.ok) {
-            char pname[128] = {0};
-            TrackFX_GetParamName(fx.tr, fx.fxIdx, curParam,
-                                 pname, sizeof(pname));
-            std::snprintf(preview, sizeof(preview),
-                "[%d] %s", curParam, pname);
         } else {
-            std::snprintf(preview, sizeof(preview),
-                "[%d] (insert a matching FX to see name)", curParam);
+            char pname[128] = {0};
+            const bool gotName = paramNameFor_(*editing, fx, curParam,
+                                               pname, sizeof(pname));
+            if (gotName) {
+                std::snprintf(preview, sizeof(preview),
+                    "[%d] %s%s", curParam, pname,
+                    fx.ok ? "" : "  (from snapshot)");
+            } else {
+                std::snprintf(preview, sizeof(preview),
+                    "[%d] (no name available)", curParam);
+            }
         }
 
         ImGui_Text(ctx, "GR Meter param:");
@@ -4370,23 +4523,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     clearGrMeter_();
                 }
             }
-            if (fx.ok) {
-                const int paramCount = TrackFX_GetNumParams(fx.tr, fx.fxIdx);
-                const int kMaxParams = 1024;
-                const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
-                for (int p = 0; p < n; ++p) {
-                    char pname[128] = {0};
-                    TrackFX_GetParamName(fx.tr, fx.fxIdx, p,
-                                         pname, sizeof(pname));
-                    char rowLbl[200];
-                    std::snprintf(rowLbl, sizeof(rowLbl),
-                        "[%4d] %s##fxl_gr_p_%d", p, pname, p);
-                    bool sel = (p == curParam);
-                    int  sf  = 0;
-                    if (ImGui_Selectable(ctx, rowLbl, &sel, &sf,
-                                         nullptr, nullptr)) {
-                        bindGrMeter_(p);
-                    }
+            const int paramCount = paramCountFor_(*editing, fx);
+            const int kMaxParams = 1024;
+            const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
+            for (int p = 0; p < n; ++p) {
+                char pname[128] = {0};
+                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+                char rowLbl[200];
+                std::snprintf(rowLbl, sizeof(rowLbl),
+                    "[%4d] %s##fxl_gr_p_%d", p, pname, p);
+                bool sel = (p == curParam);
+                int  sf  = 0;
+                if (ImGui_Selectable(ctx, rowLbl, &sel, &sf,
+                                     nullptr, nullptr)) {
+                    bindGrMeter_(p);
                 }
             }
             ImGui_EndCombo(ctx);
@@ -4671,7 +4821,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 noteUse_(sb.selVst3Param,  buf);
             }
 
-            const int paramCount = TrackFX_GetNumParams(fx.tr, fx.fxIdx);
+            const int paramCount = paramCountFor_(*editing, fx);
             // Cap iteration so a 5000-param plugin doesn't tank the
             // frame; the user can always sharpen the filter to reach
             // the rest. 1024 is comfortably above any musical plugin.
@@ -4682,7 +4832,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             char pname[128];
             for (int p = 0; p < n; ++p) {
                 pname[0] = 0;
-                TrackFX_GetParamName(fx.tr, fx.fxIdx, p, pname, sizeof(pname));
+                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
 
                 if (!filt.empty()) {
                     if (std::string(pname).find(filt) == std::string::npos)
