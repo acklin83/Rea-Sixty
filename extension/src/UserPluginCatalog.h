@@ -85,14 +85,38 @@ struct UserUf8Map {
     UserUf8StripBinding strips[8] = {};
 };
 
+// Snapshot of one VST3 parameter on the learned plug-in. Captured when an
+// instance is present so the editor can offer the param list (V-Pot picker,
+// GR-meter picker, listening fallback) even on sessions where the plug-in
+// hasn't been instantiated. `name` is the live name at snapshot time;
+// `defaultNorm` lives in [0..1]; `wasEnum` is a hint from
+// TrackFX_GetParameterStepSizes (any non-zero step ⇒ likely a toggle/enum).
+struct UserParamInfo {
+    int          vst3Param   = -1;
+    std::string  name;
+    double       defaultNorm = 0.5;
+    bool         wasEnum     = false;
+};
+
+// Plugin "mode" is encoded by (domain, uf8Mode) per the new domain
+// structure (2026-05-12):
+//   domain=ChannelStrip, uf8Mode=false → CS only
+//   domain=ChannelStrip, uf8Mode=true  → CS + UF8
+//   domain=BusComp,      uf8Mode=false → BC only
+//   domain=BusComp,      uf8Mode=true  → BC + UF8
+//   domain=None,         uf8Mode=true  → UF8 only
+//   domain=None,         uf8Mode=false → invalid (filtered at load/save)
 struct UserPluginMap {
     std::string                match;          // substring of TrackFX_GetFXName
     Domain                     domain = Domain::None;
+    bool                       uf8Mode = false;
     std::string                displayShort;   // 4-char zone label
     bool                       isDefault = false;
     std::vector<UserLinkSlot>  slots;
     UserMetering               metering;
     UserUf8Map                 uf8;            // optional UF8 strip-mode bindings
+    std::vector<UserParamInfo> paramSnapshot;  // last-seen VST3 param list
+    int64_t                    snapshotTakenAt = 0;  // unix-sec; 0 = never
 };
 
 struct UserPluginCatalog {
@@ -108,7 +132,12 @@ namespace user_plugins {
 // v3 (2026-05-09): added `colour` on bank slots and per-strip Solo/Cut/Sel.
 // Missing fields parse as 0 (= class default), so v3 files load fine in v2
 // readers (they just ignore the colours), and v2 files load in v3 readers.
-constexpr int kCurrentFormatVersion = 3;
+// v4 (2026-05-12): added `uf8Mode` (decoupled UF8 layer from CS/BC domain;
+// enables UF8-only maps) and `paramSnapshot` (persisted param-name list so
+// the editor stays usable without a live FX instance). v3 readers seeing a
+// v4 file silently drop the new fields; v3 files load in v4 readers with
+// uf8Mode derived from "is the uf8 block non-empty".
+constexpr int kCurrentFormatVersion = 4;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

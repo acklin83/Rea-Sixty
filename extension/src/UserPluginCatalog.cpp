@@ -271,6 +271,9 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "      \"domain\": ";       appendEscaped_(os, domainName_(m.domain)); os << ",\n";
         os << "      \"displayShort\": "; appendEscaped_(os, m.displayShort); os << ",\n";
         os << "      \"isDefault\": "     << (m.isDefault ? "true" : "false") << ",\n";
+        os << "      \"uf8Mode\": "       << (m.uf8Mode   ? "true" : "false") << ",\n";
+        if (m.snapshotTakenAt > 0)
+            os << "      \"snapshotTakenAt\": " << m.snapshotTakenAt << ",\n";
         os << "      \"slots\": [";
         bool firstSlot = true;
         for (const auto& s : m.slots) {
@@ -331,6 +334,21 @@ std::string serialize_(const UserPluginCatalog& c)
             }
             os << "\n        ]\n      }";
         }
+        if (!m.paramSnapshot.empty()) {
+            os << ",\n      \"paramSnapshot\": [";
+            bool firstParam = true;
+            for (const auto& p : m.paramSnapshot) {
+                if (!firstParam) os << ",";
+                firstParam = false;
+                os << "\n        { \"vst3Param\": " << p.vst3Param
+                   << ", \"name\": ";
+                appendEscaped_(os, p.name);
+                os << ", \"defaultNorm\": " << p.defaultNorm
+                   << ", \"wasEnum\": " << (p.wasEnum ? "true" : "false")
+                   << " }";
+            }
+            os << "\n      ]";
+        }
         os << "\n    }";
     }
     if (!firstPlugin) os << "\n  ";
@@ -374,6 +392,16 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         // values still load identically (just no padding).
         if (m.displayShort.size() > 7) m.displayShort.resize(7);
         getBoolI_(po, "isDefault", m.isDefault);
+        // v4: explicit uf8Mode flag. For v3 files the key is missing — we
+        // derive uf8Mode below (after the uf8 block parses) from
+        // uf8MapHasContent_ so legacy maps with bank/strip bindings stay
+        // UF8-enabled.
+        bool uf8ModeRead = false;
+        const bool hadUf8Mode = getBoolI_(po, "uf8Mode", uf8ModeRead);
+        if (hadUf8Mode) m.uf8Mode = uf8ModeRead;
+        int snapTs = 0;
+        if (getIntI_(po, "snapshotTakenAt", snapTs))
+            m.snapshotTakenAt = snapTs;
 
         if (auto* slotsArr = po->get_item_by_name("slots");
             slotsArr && slotsArr->is_array() && slotsArr->m_array)
@@ -475,15 +503,48 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
             }
         }
 
-        if (m.match.empty() || m.domain == Domain::None) continue;
+        // Parse paramSnapshot array (v4+; absent in v3 files).
+        if (auto* psArr = po->get_item_by_name("paramSnapshot");
+            psArr && psArr->is_array() && psArr->m_array)
+        {
+            const int pn = psArr->m_array->GetSize();
+            m.paramSnapshot.reserve(static_cast<size_t>(pn));
+            for (int p = 0; p < pn; ++p) {
+                wdl_json_element* po2 = psArr->enum_item(p);
+                if (!po2 || !po2->is_object()) continue;
+                UserParamInfo pi{};
+                getIntI_(po2, "vst3Param", pi.vst3Param);
+                getStrI_(po2, "name", pi.name);
+                getDoubleI_(po2, "defaultNorm", pi.defaultNorm);
+                getBoolI_(po2, "wasEnum", pi.wasEnum);
+                if (pi.vst3Param < 0) continue;
+                m.paramSnapshot.push_back(std::move(pi));
+            }
+        }
+
+        if (m.match.empty()) continue;
+
+        // v3 → v4 migration: if uf8Mode wasn't in the file, derive it from
+        // the uf8 block. Maps with non-empty bank/strip bindings keep the
+        // UF8 layer active; everything else opts out.
+        if (!hadUf8Mode) m.uf8Mode = uf8MapHasContent_(m.uf8);
+
+        // A map with no domain and no UF8 layer is meaningless — drop it
+        // rather than carrying around dead entries.
+        if (m.domain == Domain::None && !m.uf8Mode) continue;
+
         out.maps.push_back(std::move(m));
     }
 
-    // Enforce isDefault one-of per domain (highest-index wins on conflict).
-    bool seenCs = false, seenBc = false;
+    // Enforce isDefault one-of per "primary mode" (highest-index wins on
+    // conflict). Primary modes are CS, BC, and UF8-only — a CS+UF8 map
+    // shares the CS default slot with a CS-only map.
+    bool seenCs = false, seenBc = false, seenUf8Only = false;
     for (auto it = out.maps.rbegin(); it != out.maps.rend(); ++it) {
         if (!it->isDefault) continue;
-        bool& seen = (it->domain == Domain::BusComp) ? seenBc : seenCs;
+        bool& seen = (it->domain == Domain::BusComp)      ? seenBc
+                  : (it->domain == Domain::ChannelStrip)  ? seenCs
+                  :                                          seenUf8Only;
         if (seen) it->isDefault = false;
         else      seen = true;
     }
@@ -638,10 +699,18 @@ void upsert(UserPluginMap m)
         [&](const UserPluginMap& x) { return x.match == m.match; });
 
     if (m.isDefault) {
+        // Buckets by primary mode (CS / BC / UF8-only). CS+UF8 shares the
+        // CS bucket with CS-only; UF8-only is its own bucket (domain=None
+        // + uf8Mode=true).
+        auto primaryOf = [](const UserPluginMap& x) -> int {
+            if (x.domain == Domain::ChannelStrip) return 1;
+            if (x.domain == Domain::BusComp)      return 2;
+            return 3;  // UF8-only
+        };
+        const int myPrimary = primaryOf(m);
         for (auto& other : g_catalog.maps) {
-            if (other.domain == m.domain && other.match != m.match) {
-                other.isDefault = false;
-            }
+            if (other.match == m.match) continue;
+            if (primaryOf(other) == myPrimary) other.isDefault = false;
         }
     }
     if (it != g_catalog.maps.end()) *it = std::move(m);
