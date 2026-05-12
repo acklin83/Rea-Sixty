@@ -265,6 +265,12 @@ struct PressRecord {
 };
 std::unordered_map<uint32_t, PressRecord> g_pressStart;
 
+// Separate tracker for Toggle / Hold + long-press. The Momentary path
+// reuses g_pressStart (deferred-primary semantics); Toggle and Hold need
+// their own map because the standard path consumes g_pressStart for Hold
+// before we can read the held duration. Keys are pressKey(layer, id).
+std::unordered_map<uint32_t, PressRecord> g_longPressStart;
+
 // Modifier state, set by main.cpp's mod_shift / mod_cmd / mod_ctrl
 // builtin handlers. dispatch reads currentModifierSnapshot() at press
 // edge; precedence at snapshot time is Ctrl > Cmd > Shift > Plain so
@@ -1753,6 +1759,39 @@ bool dispatch(ButtonId id, bool pressed)
         }
     }
     runSlot_(slot, firing, pressed);
+
+    // Long-press additive fire for Toggle / Hold. Primary already fired in
+    // the standard path above; this fires the long-press slot on release
+    // if held >= threshold. Momentary's defer-and-choose semantics is
+    // handled in the longPressArmed branch up top and never reaches here.
+    if (bd.hasLongPress && bd.behavior != Behavior::Momentary) {
+        const uint32_t k = pressKey(layer, id);
+        if (pressed) {
+            g_longPressStart[k] = { std::chrono::steady_clock::now(),
+                                    static_cast<Modifier>(slotIdx) };
+        } else {
+            auto lit = g_longPressStart.find(k);
+            if (lit != g_longPressStart.end()) {
+                const auto held = std::chrono::steady_clock::now() - lit->second.start;
+                const int  m    = static_cast<int>(lit->second.mod);
+                g_longPressStart.erase(lit);
+                if (held >= kLongPressThreshold
+                    && bd.longPress[m].type != ActionType::Noop)
+                {
+                    runSlot_(bd.longPress[m], /*firing*/ true, /*pressed*/ false);
+                    // Tag lastFired with the long-press marker so the LED
+                    // resolver picks up the long-press slot's LedOverride.
+                    const auto idx = static_cast<size_t>(id);
+                    if (idx < g_lastFiredMod.size()) {
+                        g_lastFiredMod[idx].store(
+                            static_cast<uint8_t>(m | 0x80),
+                            std::memory_order_relaxed);
+                    }
+                }
+            }
+        }
+    }
+
     return true;
 }
 

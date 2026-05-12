@@ -1822,7 +1822,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
          || shortPlain.action == "mod_ctrl");
 
     const bool momentary = (bd.behavior == Behavior::Momentary);
-    const bool modifiersAvailable = momentary && !plainIsModifier;
+    // Long-press: hidden only when this button IS itself a modifier (the
+    // modifier slots make no sense for a modifier binding) OR when it's the
+    // encoder rotate gesture (no press/hold concept on a rotation). All
+    // three behaviours (Momentary / Toggle / Hold) support long-press —
+    // Momentary picks short OR long on release; Toggle / Hold fire primary
+    // on press then long additively on hold-and-release past threshold.
+    const bool isEncoder = (id == ButtonId::ChannelEncoder);
+    const bool longPressAvailable = !plainIsModifier && !isEncoder;
 
     // Two side-by-side columns. Each child sized half the available
     // width with matching height so the bordered panels read as a pair.
@@ -1873,29 +1880,25 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 ImGui_Spacing(ctx);
                 ImGui_Separator(ctx);
             } else {
-                // Long column gets an explicit enable toggle. Greyed
-                // out for non-Momentary behaviours.
-                if (!momentary) {
-                    ImGui_TextDisabled(ctx,
-                        "Long-press is only available for Momentary.");
-                    if (bd.hasLongPress) { bd.hasLongPress = false; dirty = true; }
+                // Long column gets an explicit enable toggle. Visible for
+                // Momentary / Toggle / Hold — semantics differ at dispatch
+                // (Momentary chooses short OR long on release; Toggle and
+                // Hold fire primary on press then additionally fire long
+                // on release after the hold threshold).
+                bool en = bd.hasLongPress;
+                if (ImGui_Checkbox(ctx, "Enable long-press (held > 0.5 s)",
+                                   &en)) {
+                    bd.hasLongPress = en;
+                    if (en && slots[0].type == ActionType::Noop) {
+                        slots[0].type = ActionType::Builtin;
+                    }
+                    dirty = true;
+                }
+                if (!bd.hasLongPress) {
                     renderSlots = false;
                 } else {
-                    bool en = bd.hasLongPress;
-                    if (ImGui_Checkbox(ctx, "Enable long-press (held > 0.5 s)",
-                                       &en)) {
-                        bd.hasLongPress = en;
-                        if (en && slots[0].type == ActionType::Noop) {
-                            slots[0].type = ActionType::Builtin;
-                        }
-                        dirty = true;
-                    }
-                    if (!bd.hasLongPress) {
-                        renderSlots = false;
-                    } else {
-                        ImGui_Spacing(ctx);
-                        ImGui_Separator(ctx);
-                    }
+                    ImGui_Spacing(ctx);
+                    ImGui_Separator(ctx);
                 }
             }
 
@@ -1951,20 +1954,20 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
     drawColumn("SHORT PRESS", "sp", bd.shortPress, /*isLongCol*/ false);
     ImGui_SameLine(ctx, nullptr, nullptr);
-    if (modifiersAvailable) {
+    if (longPressAvailable) {
         drawColumn("LONG PRESS", "lp", bd.longPress, /*isLongCol*/ true);
     } else {
         // Placeholder column so the editor's two panels stay balanced
-        // for Toggle/Hold or modifier-self bindings (where long-press
-        // doesn't apply).
+        // for the two cases where long-press doesn't apply: this button
+        // is itself a modifier, or it's the encoder rotate gesture.
         double w = colW, h = colH;
         int childFlags = ImGui_ChildFlags_Borders;
         if (ImGui_BeginChild(ctx, "lp_col_disabled", &w, &h, &childFlags, nullptr)) {
             ImGui_Text(ctx, "LONG PRESS");
             ImGui_Separator(ctx);
-            if (!momentary) {
+            if (isEncoder) {
                 ImGui_TextDisabled(ctx,
-                    "Long-press only available for Momentary primary.");
+                    "Long-press doesn't apply to encoder rotation.");
             } else {
                 ImGui_TextDisabled(ctx,
                     "Long-press disabled — this button IS a modifier.");
