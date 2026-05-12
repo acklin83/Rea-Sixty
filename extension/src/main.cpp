@@ -1071,42 +1071,49 @@ void applyInstanceCycle_(int step)
     if (step == 0) return;
     if (!g_uc1_surface) return;
 
-    // Walk every learned plug-in on the focused track in track order,
-    // regardless of domain. Cycle hops freely between CS and BC — the
-    // user's "next plug-in on this strip" mental model, independent of
-    // which Quick button (Q1/Q2) is currently selected. The user's
-    // current position is identified by (domain, instance index) so a
-    // re-entry after a focus-domain change lands on the matching hit.
-    // BC anchor follows the cycle: landing on a BC plug-in on the
-    // focused track points the anchor at the focused track too, so the
-    // BC carousel + Encoder 2 line up with what's actually highlighted.
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
-    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    // Walk every learned plug-in across both tracks-of-interest:
+    //   * CS hits from focusedTrack_ (the REAPER-selected track).
+    //   * BC hits from the BC anchor track (Encoder 2's target). The
+    //     anchor is independent of focusedTrack_ — Frank's CS-on-one,
+    //     BC-on-another setup means we'd miss the BC half otherwise.
+    //     Falls back to focusedTrack_ when no anchor is set yet.
+    // lookupPluginMapByName covers built-in CS/BC variants AND user
+    // maps in a single walk. If CS and BC happen to land on the same
+    // track, dedup is implicit (we walk csTrack for CS, bcTrack for
+    // BC — if they're the same track each FX is considered once per
+    // domain). hits.size() < 2 → no cycle (single plug-in nothing to
+    // cycle to).
+    MediaTrack* csTrack = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!csTrack) csTrack = GetSelectedTrack(nullptr, 0);
+    void* bcRaw = g_uc1_surface->bcAnchorTrackPublic();
+    MediaTrack* bcTrack = bcRaw ? static_cast<MediaTrack*>(bcRaw) : csTrack;
 
-    struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
+    struct Hit { MediaTrack* tr; int fxIdx; uf8::Domain dom; int instIdx; };
     std::vector<Hit> hits;
-    int csCount = 0, bcCount = 0;
-    const int n = TrackFX_GetCount(tr);
-    char fxName[256];
-    for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-        const auto* pm = uf8::lookupPluginMapByName(fxName);
-        if (!pm) continue;
-        if (pm->domain == uf8::Domain::ChannelStrip) {
-            hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
-        } else if (pm->domain == uf8::Domain::BusComp) {
-            hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+    auto walkTrack = [&](MediaTrack* tr, uf8::Domain wantDom, int& counter) {
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+        const int n = TrackFX_GetCount(tr);
+        char fxName[256];
+        for (int i = 0; i < n; ++i) {
+            if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+            const auto* pm = uf8::lookupPluginMapByName(fxName);
+            if (!pm) continue;
+            if (pm->domain != wantDom) continue;
+            hits.push_back({tr, i, wantDom, counter++});
         }
-    }
+    };
+    int csCount = 0, bcCount = 0;
+    walkTrack(csTrack, uf8::Domain::ChannelStrip, csCount);
+    walkTrack(bcTrack, uf8::Domain::BusComp,      bcCount);
+
     if (hits.size() < 2) return;   // nothing meaningful to cycle through
 
     const auto fp = uf8::getFocusedParam();
     uf8::Domain curDom = fp.domain;
     if (curDom == uf8::Domain::None) curDom = uf8::Domain::ChannelStrip;
     const int curInstIdx = (curDom == uf8::Domain::BusComp)
-        ? uc1::bcInstanceIndex(tr)
-        : uc1::csInstanceIndex(tr);
+        ? uc1::bcInstanceIndex(bcTrack)
+        : uc1::csInstanceIndex(csTrack);
     int curK = 0;
     for (size_t k = 0; k < hits.size(); ++k) {
         if (hits[k].dom == curDom && hits[k].instIdx == curInstIdx) {
@@ -1118,15 +1125,13 @@ void applyInstanceCycle_(int step)
     const Hit& target = hits[nextK];
     uf8::setFocus({target.dom, 0});
     if (target.dom == uf8::Domain::ChannelStrip) {
-        uc1::setCsInstanceIndex(tr, target.instIdx);
+        uc1::setCsInstanceIndex(target.tr, target.instIdx);
     } else {
-        uc1::setBcInstanceIndex(tr, target.instIdx);
-        // Anchor the BC display to the focused track so Encoder 2 +
-        // the carousel reflect the same instance the cycle just
-        // selected. Without this the user lands on a BC plug-in but
-        // the BC anchor stays on a different track — Encoder 2 keeps
-        // scrolling tracks the cycle just left behind.
-        g_uc1_surface->setBcAnchorTrack(tr);
+        uc1::setBcInstanceIndex(target.tr, target.instIdx);
+        // Make sure the BC anchor still points at the track we just
+        // cycled into so Encoder 2 + the BC carousel agree with the
+        // cycle's selection. Idempotent when target.tr == bcAnchor.
+        g_uc1_surface->setBcAnchorTrack(target.tr);
     }
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
@@ -6512,18 +6517,17 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
-    // ssl_strip_mode_toggle_with_gui: SSL Strip Mode is a CS-side
-    // mode (faders → CS Fader Level), so the GUI that pops up has to
-    // be a CS-domain plug-in on the focused track. Walk track FX
-    // through lookupPluginMapByName so BOTH built-in CS variants
-    // (CS 2 / 4K G / 4K E / 4K B / Link) AND user-mapped CS plug-ins
-    // qualify — filtering to only built-ins meant tracks without an
-    // SSL CS opened nothing while a learned CS replacement was sitting
-    // right there. BC-domain plug-ins (e.g. user-learned Townhouse BC)
-    // are explicitly skipped — they belong to uf8_plugin_mode_toggle's
-    // domain. Honours csInstanceIndex for multi-instance tracks;
-    // past-end clamps to the last CS hit so a deleted instance doesn't
-    // strand the action on nothing.
+    // ssl_strip_mode_toggle_with_gui: opens / closes the built-in SSL
+    // Channel Strip GUI — the plug-in whose Fader Level param SSL
+    // Strip Mode's faders actually drive. Filter strictly by built-in
+    // CS variant names (CS 2 / 4K G / 4K E / 4K B). User-learned CS
+    // replacements are explicitly skipped: Frank uses Townhouse as a
+    // CS-domain user map but does NOT want it auto-opened by this
+    // action; that's uf8_plugin_mode_toggle's domain. Honours
+    // csInstanceIndex for multi-instance tracks; past-end clamps to
+    // the last CS hit so a deleted instance doesn't strand the
+    // action on nothing. Tracks without a built-in SSL CS produce no
+    // GUI open — better than auto-opening the user's BC plug-in.
     if (g_pluginGuiSyncRequest.exchange(false)) {
         MediaTrack* tr = nullptr;
         if (g_uc1_surface) {
@@ -6541,9 +6545,13 @@ void onTimer()
                 nameBuf[0] = 0;
                 TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
                 if (!nameBuf[0]) continue;
-                const auto* pm = uf8::lookupPluginMapByName(nameBuf);
-                if (!pm) continue;
-                if (pm->domain != uf8::Domain::ChannelStrip) continue;
+                const std::string_view sv{nameBuf};
+                const bool isBuiltInCs =
+                       sv.find("Channel Strip 2") != std::string_view::npos
+                    || sv.find("4K G") != std::string_view::npos
+                    || sv.find("4K E") != std::string_view::npos
+                    || sv.find("4K B") != std::string_view::npos;
+                if (!isBuiltInCs) continue;
                 lastCsFx = fx;
                 if (seen == wantInst) { csFx = fx; break; }
                 ++seen;
