@@ -83,8 +83,19 @@ uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
-// ssl_strip_mode_toggle_with_gui from the libusb input thread.
+// ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
+// applyInstanceCycle_ whenever the cycle lands on a CS plug-in while
+// SSL Strip Mode is on (so the open GUI follows the active instance).
 std::atomic<bool> g_pluginGuiSyncRequest{false};
+
+// Last (track, fx) shown by the SSL Strip GUI handler. Read/written
+// only on the main thread (inside the g_pluginGuiSyncRequest drain),
+// so plain types are fine. Used to close the previous floating window
+// before opening the new one on instance cycle — without this, every
+// cycle adds another floating GUI to the pile until the user manually
+// closes them.
+void* g_csGuiShownTr = nullptr;
+int   g_csGuiShownFx = -1;
 
 // IReaperControlSurface subclass registered as a full control surface
 // class ("Rea-Sixty") so users see and add it like any other surface.
@@ -1126,6 +1137,14 @@ void applyInstanceCycle_(int step)
     uf8::setFocus({target.dom, 0});
     if (target.dom == uf8::Domain::ChannelStrip) {
         uc1::setCsInstanceIndex(target.tr, target.instIdx);
+        // SSL Strip Mode is on → the open CS GUI should follow the
+        // cycle. Raise the GUI sync request; the main-thread handler
+        // closes the previous floating window and opens the new CS
+        // hit's GUI (covers built-in AND user-learned CS maps via the
+        // same lookupPluginMapByName path the handler uses).
+        if (g_pluginFaderMode.load()) {
+            g_pluginGuiSyncRequest.store(true);
+        }
     } else {
         uc1::setBcInstanceIndex(target.tr, target.instIdx);
         // Make sure the BC anchor still points at the track we just
@@ -6517,51 +6536,74 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
-    // ssl_strip_mode_toggle_with_gui: opens / closes the built-in SSL
-    // Channel Strip GUI — the plug-in whose Fader Level param SSL
-    // Strip Mode's faders actually drive. Filter strictly by built-in
-    // CS variant names (CS 2 / 4K G / 4K E / 4K B). User-learned CS
-    // replacements are explicitly skipped: Frank uses Townhouse as a
-    // CS-domain user map but does NOT want it auto-opened by this
-    // action; that's uf8_plugin_mode_toggle's domain. Honours
-    // csInstanceIndex for multi-instance tracks; past-end clamps to
-    // the last CS hit so a deleted instance doesn't strand the
-    // action on nothing. Tracks without a built-in SSL CS produce no
-    // GUI open — better than auto-opening the user's BC plug-in.
+    // ssl_strip_mode_toggle_with_gui + instance-cycle GUI follow:
+    // open / close the CS-domain plug-in at the active csInstanceIndex
+    // on the focused track. Filter is uf8::Domain::ChannelStrip via
+    // lookupPluginMapByName so BOTH built-in SSL variants (Channel Strip
+    // 2 / 4K G / 4K E / 4K B / Link) AND user-mapped CS replacements
+    // (e.g. Townhouse Channel Strip) qualify — Frank explicitly wants
+    // his learned CS plug-ins to show too. BC-domain maps are skipped:
+    // SSL Strip Mode is a CS-side mode, BC has its own toggle.
+    //
+    // Instance cycle integration: applyInstanceCycle_ raises this flag
+    // whenever the cycle lands on a CS hit while g_pluginFaderMode is
+    // on, so the open GUI follows the cycle. We close the previously-
+    // shown floating window before opening the new one (tracked in
+    // g_csGuiShownTr / g_csGuiShownFx) — without that, every cycle
+    // detent stacks another floating GUI.
     if (g_pluginGuiSyncRequest.exchange(false)) {
         MediaTrack* tr = nullptr;
         if (g_uc1_surface) {
             tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         }
         if (!tr) tr = GetSelectedTrack(nullptr, 0);
+
+        const bool wantOpen = g_pluginFaderMode.load();
+        MediaTrack* targetTr = nullptr;
+        int         targetFx = -1;
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
             const int wantInst = uc1::csInstanceIndex(tr);
             const int n = TrackFX_GetCount(tr);
             char nameBuf[256];
             int seen = 0;
-            int csFx = -1;
             int lastCsFx = -1;
             for (int fx = 0; fx < n; ++fx) {
                 nameBuf[0] = 0;
                 TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
                 if (!nameBuf[0]) continue;
-                const std::string_view sv{nameBuf};
-                const bool isBuiltInCs =
-                       sv.find("Channel Strip 2") != std::string_view::npos
-                    || sv.find("4K G") != std::string_view::npos
-                    || sv.find("4K E") != std::string_view::npos
-                    || sv.find("4K B") != std::string_view::npos;
-                if (!isBuiltInCs) continue;
+                const auto* pm = uf8::lookupPluginMapByName(nameBuf);
+                if (!pm) continue;
+                if (pm->domain != uf8::Domain::ChannelStrip) continue;
                 lastCsFx = fx;
-                if (seen == wantInst) { csFx = fx; break; }
+                if (seen == wantInst) { targetFx = fx; break; }
                 ++seen;
             }
-            if (csFx < 0) csFx = lastCsFx;
-            if (csFx >= 0) {
-                // showflag: 3 = floating GUI shown, 2 = hide floating GUI
-                TrackFX_Show(tr, csFx,
-                             g_pluginFaderMode.load() ? 3 : 2);
+            if (targetFx < 0) targetFx = lastCsFx;
+            if (targetFx >= 0) targetTr = tr;
+        }
+
+        // Close the previously-shown CS GUI if it differs from the new
+        // target (or if we're turning SSL Strip Mode off). Validate the
+        // pointer first — REAPER reuses MediaTrack* across project
+        // edits, and a deleted track returns nullptr-ish on
+        // TrackFX_Show. ValidatePtr2 is the canonical check.
+        if (g_csGuiShownTr
+            && (g_csGuiShownTr != targetTr || g_csGuiShownFx != targetFx
+                || !wantOpen))
+        {
+            if (ValidatePtr2(nullptr, g_csGuiShownTr, "MediaTrack*")) {
+                TrackFX_Show(static_cast<MediaTrack*>(g_csGuiShownTr),
+                             g_csGuiShownFx, /*hide floating*/ 2);
             }
+            g_csGuiShownTr = nullptr;
+            g_csGuiShownFx = -1;
+        }
+
+        if (wantOpen && targetTr && targetFx >= 0) {
+            // showflag: 3 = floating GUI shown.
+            TrackFX_Show(targetTr, targetFx, 3);
+            g_csGuiShownTr = targetTr;
+            g_csGuiShownFx = targetFx;
         }
     }
 
@@ -7667,9 +7709,11 @@ void registerBindingHandlers()
     });
 
     // Same as ssl_strip_mode_toggle but additionally opens / closes the
-    // focused track's user-mapped plug-in GUI. Default factory binding
-    // is Shift+Plugin (PluginBtn modifier slot). Built-in CS plug-ins
-    // are NOT opened — only user-learned plug-ins (per FX Learn).
+    // focused track's CS-domain plug-in GUI — built-in (Channel Strip 2 /
+    // 4K G / 4K E / 4K B / Link) OR user-learned (e.g. Townhouse CS), at
+    // whatever instance the cycle currently points at. Default factory
+    // binding is Shift+Plugin (PluginBtn modifier slot). BC-domain
+    // plug-ins are skipped — that's uf8_plugin_mode_toggle's domain.
     //
     // The GUI side-effect must run on the main thread (TrackFX_Show
     // creates an AppKit window). This handler runs from the libusb
