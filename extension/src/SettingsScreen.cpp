@@ -4466,12 +4466,58 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_Separator(ctx);
             ImGui_Spacing(ctx);
 
-            // Build a quick reverse-map: vst3Param -> linkIdx (any of
-            // the editing map's slots). Lets us tag the "Already mapped
-            // -> Slot Name" badge in the param list.
-            std::unordered_map<int, int> usedBy;
+            // Build a reverse-map: vst3Param -> human-readable label of
+            // where it's already bound. Covers BOTH the SSL 360 Link
+            // slots (UC1 mockup) AND the UF8 strip-mode bindings (banks
+            // + per-strip Fader / Solo / Cut / Sel). Already-bound
+            // params render as Disabled in the list (Frank 2026-05-09:
+            // greys-out so the user sees what's free to grab) and the
+            // suffix tells them where it's currently mapped.
+            std::unordered_map<int, std::string> usedBy;
+            auto noteUse_ = [&](int vp, std::string lbl) {
+                if (vp < 0) return;
+                auto it = usedBy.find(vp);
+                if (it == usedBy.end()) {
+                    usedBy.emplace(vp, std::move(lbl));
+                } else {
+                    // Multi-bound param: keep first label, append "+" so
+                    // the user knows there's more than one binding.
+                    if (it->second.find('+') == std::string::npos)
+                        it->second += " (+)";
+                }
+            };
             for (const auto& slt : editing->slots) {
-                usedBy[slt.vst3Param] = slt.linkIdx;
+                const LinkSlot* bs = findSlotByLinkIdx(*topo, slt.linkIdx);
+                noteUse_(slt.vst3Param,
+                         bs && bs->name ? bs->name : "(slot)");
+            }
+            for (int b = 0; b < 6; ++b) {
+                const char* bankName =
+                    (b == 0) ? "V-POT" :
+                    (b == 1) ? "SOFT 1" :
+                    (b == 2) ? "SOFT 2" :
+                    (b == 3) ? "SOFT 3" :
+                    (b == 4) ? "SOFT 4" : "SOFT 5";
+                for (int s = 0; s < 8; ++s) {
+                    const auto& bs = editing->uf8.banks.banks[b][s];
+                    if (bs.vst3Param < 0) continue;
+                    char buf[40];
+                    std::snprintf(buf, sizeof(buf),
+                                  "UF8 %s str %d", bankName, s + 1);
+                    noteUse_(bs.vst3Param, buf);
+                }
+            }
+            for (int s = 0; s < 8; ++s) {
+                const auto& sb = editing->uf8.strips[s];
+                char buf[40];
+                std::snprintf(buf, sizeof(buf), "UF8 Fader str %d", s + 1);
+                noteUse_(sb.faderVst3Param, buf);
+                std::snprintf(buf, sizeof(buf), "UF8 Solo str %d", s + 1);
+                noteUse_(sb.soloVst3Param, buf);
+                std::snprintf(buf, sizeof(buf), "UF8 Cut str %d",  s + 1);
+                noteUse_(sb.cutVst3Param,  buf);
+                std::snprintf(buf, sizeof(buf), "UF8 Sel str %d",  s + 1);
+                noteUse_(sb.selVst3Param,  buf);
             }
 
             const int paramCount = TrackFX_GetNumParams(fx.tr, fx.fxIdx);
@@ -4492,17 +4538,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         continue;
                 }
 
-                // Visually mark already-mapped params by appending the
-                // bound slot name as a suffix in the button label.
-                char rowLbl[256];
                 auto it = usedBy.find(p);
-                if (it != usedBy.end()) {
-                    const LinkSlot* boundSlot =
-                        findSlotByLinkIdx(*topo, it->second);
+                const bool isBound = (it != usedBy.end());
+
+                // Already-mapped rows: append the binding label and
+                // render disabled so the user can't accidentally re-bind
+                // (clear the existing binding via the schematic's right-
+                // click menu first).
+                char rowLbl[256];
+                if (isBound) {
                     std::snprintf(rowLbl, sizeof(rowLbl),
                         "  [%4d] %-32s  -> %s##fxl_param_%d",
-                        p, pname,
-                        boundSlot ? boundSlot->name : "(slot)", p);
+                        p, pname, it->second.c_str(), p);
                 } else {
                     std::snprintf(rowLbl, sizeof(rowLbl),
                         "  [%4d] %-32s##fxl_param_%d",
@@ -4511,6 +4558,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
                 bool selected = false;
                 int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
+                if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
                 if (ImGui_Selectable(ctx, rowLbl, &selected, &selFlags,
                                      nullptr, nullptr)) {
                     if (g_listeningLinkIdx >= 0) {
@@ -4526,17 +4574,21 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
                 // Drag source — payload is the vst3 param index encoded
                 // as ASCII. Schematic pads accept it via "FXL_PARAM" type.
-                int dndFlags = 0;
-                if (ImGui_BeginDragDropSource(ctx, &dndFlags)) {
-                    char payload[16];
-                    std::snprintf(payload, sizeof(payload), "%d", p);
-                    ImGui_SetDragDropPayload(ctx, "FXL_PARAM", payload,
-                                             nullptr);
-                    char preview[160];
-                    std::snprintf(preview, sizeof(preview),
-                        "param %d  %s", p, pname);
-                    ImGui_Text(ctx, preview);
-                    ImGui_EndDragDropSource(ctx);
+                // Disabled rows are still draggable would surprise the
+                // user (the row looks dim), so gate this on isBound too.
+                if (!isBound) {
+                    int dndFlags = 0;
+                    if (ImGui_BeginDragDropSource(ctx, &dndFlags)) {
+                        char payload[16];
+                        std::snprintf(payload, sizeof(payload), "%d", p);
+                        ImGui_SetDragDropPayload(ctx, "FXL_PARAM", payload,
+                                                 nullptr);
+                        char preview[160];
+                        std::snprintf(preview, sizeof(preview),
+                            "param %d  %s", p, pname);
+                        ImGui_Text(ctx, preview);
+                        ImGui_EndDragDropSource(ctx);
+                    }
                 }
             }
 
