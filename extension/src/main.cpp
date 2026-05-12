@@ -818,6 +818,15 @@ std::atomic<bool> g_routingDirty{false};
 // top-soft-key labels + presses. Set via the show_user_bank builtin.
 std::atomic<int> g_activeUserBank{-1};
 
+// User "domain" selector — three sticky slots intended for the Quick
+// 1/2/3 buttons when the user doesn't want the SSL CS/BC focus model.
+// -1 = none selected; 0..2 = the active slot's index. Mutually
+// exclusive: switching to one slot clears the others (matches the
+// hardware mental model of Q1/Q2/Q3 as a radio group). Plain state
+// only — chains / Soft-Key-Bank ties are still configured by the
+// user through additional bindings.
+std::atomic<int> g_activeUserDomain{-1};
+
 // Helper: clear every other Send/Receive mode on the same physical
 // output (V-Pot or Fader) so the user can never end up with two
 // conflicting routing modes pointing at the same strip area.
@@ -6074,18 +6083,30 @@ void pushUf8GlobalLeds()
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Plugin, pluginLit == 1);
     g_lastPluginLit = pluginLit;
 
-    // Quick 1 / Quick 2 LEDs — radio group reflecting the focused-param
-    // domain. Quick 1 bright = ChannelStrip, Quick 2 bright = BusComp.
-    // Quick 3 (= I/O meter toggle, not yet wired) stays init-dim.
-    // Cells confirmed via probe 2026-04-30: Q1 0x3C, Q2 0x3B, Q3 0x3A.
-    if (domainLed != g_lastDomainLed || !g_globalLedsInit) {
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Quick1, domainLed == 0);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Quick2, domainLed == 1);
-        if (!g_globalLedsInit) {
-            sendUf8GlobalLed(uf8::Uf8GlobalLed::Quick3, false);
+    // Quick 1 / Quick 2 / Quick 3 LEDs — driven by whatever action is
+    // bound, via boundActionIsActive_. Earlier this was hardcoded to
+    // domainLed (ChannelStrip ↔ BusComp), which chaseLastTouchedFx
+    // could clobber the same frame the user pressed Q1/Q2 — the LED
+    // flickered or never lit (Frank 2026-05-12 "Quick Key 2 selbst
+    // wird nicht aktiv wenn gewählt"). With stateful bindings
+    // (domain_cs / domain_bc / user_domain_*) each Q LED reflects
+    // its bound action's reality directly. Cells: Q1 0x3C, Q2 0x3B,
+    // Q3 0x3A (probe 2026-04-30).
+    {
+        constexpr uf8::Uf8GlobalLed kQuickLeds[] = {
+            uf8::Uf8GlobalLed::Quick1,
+            uf8::Uf8GlobalLed::Quick2,
+            uf8::Uf8GlobalLed::Quick3,
+        };
+        for (auto led : kQuickLeds) {
+            const auto bid = buttonIdForGlobalLed(led);
+            sendUf8GlobalLed(led, boundActionIsActive_(bid));
         }
-        g_lastDomainLed = domainLed;
     }
+    // domainLed dedup keeper — still drives a couple of indirect
+    // consumers (the BC carousel chase). Touching it here keeps the
+    // change/refresh signalling alive.
+    g_lastDomainLed = domainLed;
 
     // Layer 1/2/3 LEDs — radio group reflecting bindings::getActiveLayer().
     // Driven by the layer_select builtin on hardware press AND by the
@@ -8059,8 +8080,22 @@ void registerBindingHandlers()
             if (fp.domain != uf8::Domain::ChannelStrip) {
                 uf8::setFocus({uf8::Domain::ChannelStrip, 0});
             }
+            // Pressing a CS/BC focus button is an explicit domain
+            // choice — drop the user-domain slot so the Quick LEDs
+            // don't show stale "user domain 2 still active" state
+            // next to a freshly-pressed CS button.
+            g_activeUserDomain.store(-1);
         },
-        nullptr, "Focus → Channel Strip", false
+        // stateOf lets the Quick LED follow this action's reality
+        // (see kQuickStateLeds loop in pushUf8GlobalLeds). Without
+        // it Q1 only ever lit via the hardcoded domainLed compare,
+        // which chaseLastTouchedFx could flip out from under us.
+        [](int) {
+            return uf8::getFocusedParam().domain
+                == uf8::Domain::ChannelStrip
+                && g_activeUserDomain.load() < 0;
+        },
+        "Focus → Channel Strip", false
     });
     registerBuiltin("domain_bc", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -8069,9 +8104,49 @@ void registerBindingHandlers()
             if (fp.domain != uf8::Domain::BusComp) {
                 uf8::setFocus({uf8::Domain::BusComp, 0});
             }
+            g_activeUserDomain.store(-1);
         },
-        nullptr, "Focus → Bus Comp", false
+        [](int) {
+            return uf8::getFocusedParam().domain == uf8::Domain::BusComp
+                && g_activeUserDomain.load() < 0;
+        },
+        "Focus → Bus Comp", false
     });
+
+    // User domain selector — three sticky slots intended for Quick
+    // 1/2/3 when the user doesn't want the SSL CS/BC focus model.
+    // Mutually exclusive (radio group via g_activeUserDomain):
+    // selecting one clears the others. The LED state follows the
+    // slot index, not focused.domain, so chaseLastTouchedFx can't
+    // flip it out from under the user. The user wires whatever
+    // they want as additional actions in the same modifier slot
+    // (e.g. user_domain_1 + softkey_bank_select 2 in a chain) to
+    // shape the V-Pot banks per slot.
+    auto userDomainHandler = [](int slot) {
+        return DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                g_activeUserDomain.store(slot);
+            },
+            [slot](int) { return g_activeUserDomain.load() == slot; },
+            "", false
+        };
+    };
+    {
+        auto d = userDomainHandler(0);
+        d.displayName = "User Domain 1";
+        registerBuiltin("user_domain_1", d);
+    }
+    {
+        auto d = userDomainHandler(1);
+        d.displayName = "User Domain 2";
+        registerBuiltin("user_domain_2", d);
+    }
+    {
+        auto d = userDomainHandler(2);
+        d.displayName = "User Domain 3";
+        registerBuiltin("user_domain_3", d);
+    }
 
     // Multi-instance picker — bindable equivalents of Shift+Channel-Encoder.
     // Domain follows the focused-param domain (Quick1 → CS, Quick2 → BC),
