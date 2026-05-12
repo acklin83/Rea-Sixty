@@ -5713,6 +5713,28 @@ bool boundActionIsActive_(uf8::bindings::ButtonId bid)
     return false;
 }
 
+// Same idea as boundActionIsActive_, but checks every modifier slot
+// (short + long press) on this button and returns true if any of their
+// stateful builtins reports active. Lets the PLUGIN LED light bright
+// whether Plain (g_pluginFaderMode via ssl_strip_mode_toggle) OR
+// Shift (g_uf8PluginMode via uf8_plugin_mode_toggle) is engaged —
+// mirroring how Send/Plugin LEDs follow the routing-state union.
+bool anyBoundSlotIsActive_(uf8::bindings::ButtonId bid)
+{
+    if (bid == uf8::bindings::ButtonId::None) return false;
+    const auto bd = uf8::bindings::getBinding(
+        uf8::bindings::getActiveLayer(), bid);
+    using AT = uf8::bindings::ActionType;
+    auto slotActive = [](const uf8::bindings::ActionSlot& s) -> bool {
+        if (s.type != AT::Builtin) return false;
+        if (!uf8::bindings::builtinHasState(s.action)) return false;
+        return uf8::bindings::builtinStateOf(s.action, s.param);
+    };
+    for (const auto& s : bd.shortPress) if (slotActive(s)) return true;
+    for (const auto& s : bd.longPress)  if (slotActive(s)) return true;
+    return false;
+}
+
 
 // True when the currently-held modifier has a bindable, non-noop slot
 // on this cell — i.e. holding the modifier "armed" an action that a
@@ -5939,11 +5961,17 @@ void pushUf8GlobalLeds()
     // the extension is active. Page Right LED still unwired — its
     // real cell hasn't been discovered (0x5C is suspect).
 
-    // Plugin button: dim while extension is active, "bright" (= our
-    // function's on=true bytes) when push-mode is on. cap44 only ever
-    // observed off + dim for cell 0x2F so the bright variant might be
-    // visually identical to dim — user asked for both states regardless.
-    const int pluginLit = g_pluginFaderMode.load() ? 1 : 0;
+    // Plugin button: bright while ANY bound slot's stateful action is
+    // active — covers Plain → ssl_strip_mode_toggle (g_pluginFaderMode)
+    // AND Shift → uf8_plugin_mode_toggle (g_uf8PluginMode) together, so
+    // toggling either modifier-slot binding keeps the LED lit after the
+    // modifier key is released. Falls back to g_pluginFaderMode when no
+    // bound builtin reports state (e.g. user wiped the binding).
+    const bool pluginActive =
+        anyBoundSlotIsActive_(uf8::bindings::ButtonId::PluginBtn)
+        || g_pluginFaderMode.load()
+        || g_uf8PluginMode.load();
+    const int pluginLit = pluginActive ? 1 : 0;
 
     // Bindings generation — bumped on any setBinding/clearBinding/load/
     // import. Polling here keeps colour edits in Settings → Bindings
@@ -6034,17 +6062,14 @@ void pushUf8GlobalLeds()
     // Page LEDs intentionally not driven — see comment at the top of
     // pushUf8GlobalLeds explaining the cell collision with Soft 2/3.
 
-    // Plugin button — dim baseline when extension is active, bright
-    // variant when fader-push mode is on. buildUf8GlobalLed(.., false)
-    // emits 11 F1 (= dim, the only "on" state cap44 observed for cell
-    // 0x2F). buildUf8GlobalLed(.., true) emits FF FF — hardware may or
-    // may not render that as bright; cap44 didn't catch it. Both modes
-    // wired so future hardware revisions / plugin-mixer-mode contexts
-    // get visual differentiation if they support it.
-    if (pluginLit != g_lastPluginLit || !g_globalLedsInit) {
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Plugin, pluginLit == 1);
-        g_lastPluginLit = pluginLit;
-    }
+    // Plugin button — bright while ANY bound modifier-slot action is
+    // active (see pluginLit above). Pushed every tick because the
+    // colour also depends on lastFiredModifier(PluginBtn), which can
+    // flip between Plain ↔ Shift slots while pluginLit itself stays at
+    // 1 (e.g. both g_pluginFaderMode and g_uf8PluginMode true). The
+    // per-cell cache in sendUf8GlobalLed dedupes redundant USB writes.
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Plugin, pluginLit == 1);
+    g_lastPluginLit = pluginLit;
 
     // Quick 1 / Quick 2 LEDs — radio group reflecting the focused-param
     // domain. Quick 1 bright = ChannelStrip, Quick 2 bright = BusComp.
@@ -6500,27 +6525,48 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
-    // Shift+Plugin (ssl_strip_mode_toggle_with_gui): the off-thread
-    // handler toggled g_pluginFaderMode and set the request flag. Open
-    // / close the focused track's user-plug-in GUI here on the main
-    // thread (AppKit NSException if called off-thread).
+    // ssl_strip_mode_toggle_with_gui: SSL Strip Mode drives the built-in
+    // SSL Channel Strip's Fader Level param, so its GUI is what should
+    // pop up — NOT the user-mapped plug-in (that one is owned by
+    // uf8_plugin_mode_toggle / UF8 Plugin Mode). Walk track FX, pick
+    // the built-in CS variant at the user's current csInstanceIndex.
+    // Past-end falls back to the last seen CS so a deleted instance
+    // doesn't strand the action on nothing.
     if (g_pluginGuiSyncRequest.exchange(false)) {
         MediaTrack* tr = nullptr;
         if (g_uc1_surface) {
             tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         }
         if (!tr) tr = GetSelectedTrack(nullptr, 0);
-        if (tr) {
-            // Match the strip-dispatch lookup: pick by focused-param
-            // domain so the GUI auto-open follows the same plug-in the
-            // strips drive (Frank 2026-05-09 BC-domain fix).
-            auto fp = uf8::getFocusedParam();
-            uf8::Domain dom = fp.domain;
-            if (dom == uf8::Domain::None) dom = uf8::Domain::ChannelStrip;
-            const auto ctx = findUserPluginOnTrack_(tr, dom);
-            if (ctx.fxIdx >= 0) {
+        if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            const int wantInst = uc1::csInstanceIndex(tr);
+            const int n = TrackFX_GetCount(tr);
+            char nameBuf[256];
+            int seen = 0;
+            int csFx = -1;
+            int lastCsFx = -1;
+            for (int fx = 0; fx < n; ++fx) {
+                nameBuf[0] = 0;
+                TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
+                if (!nameBuf[0]) continue;
+                const std::string_view sv{nameBuf};
+                // Only the four built-in SSL CS variants — skip
+                // user-mapped plug-ins so the GUI matches what SSL
+                // Strip Mode's faders actually drive.
+                const bool isCs =
+                       sv.find("Channel Strip 2") != std::string_view::npos
+                    || sv.find("4K G") != std::string_view::npos
+                    || sv.find("4K E") != std::string_view::npos
+                    || sv.find("4K B") != std::string_view::npos;
+                if (!isCs) continue;
+                lastCsFx = fx;
+                if (seen == wantInst) { csFx = fx; break; }
+                ++seen;
+            }
+            if (csFx < 0) csFx = lastCsFx;
+            if (csFx >= 0) {
                 // showflag: 3 = floating GUI shown, 2 = hide floating GUI
-                TrackFX_Show(ctx.tr, ctx.fxIdx,
+                TrackFX_Show(tr, csFx,
                              g_pluginFaderMode.load() ? 3 : 2);
             }
         }
