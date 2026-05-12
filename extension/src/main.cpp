@@ -1010,6 +1010,70 @@ void applyInstanceCycle_(int step)
 {
     if (step == 0) return;
     if (!g_uc1_surface) return;
+
+    // SSL Strip Mode: cycle walks through ALL user plug-ins on the
+    // focused track, hopping domain when the next plug-in is BC after
+    // CS or vice versa. Without this, a track with CS+BC user maps
+    // can't reach the BC map without first pressing Q2 (Frank
+    // 2026-05-09). Each domain maintains its own instance index, so
+    // visiting BC and back to CS preserves the CS slot.
+    if (g_pluginFaderMode.load()) {
+        MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        if (!tr) tr = GetSelectedTrack(nullptr, 0);
+        if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
+            std::vector<Hit> hits;
+            int csCount = 0, bcCount = 0;
+            const int n = TrackFX_GetCount(tr);
+            char fxName[256];
+            for (int i = 0; i < n; ++i) {
+                if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+                const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+                if (!um) continue;
+                int instIdx = -1;
+                if (um->domain == uf8::Domain::ChannelStrip)      instIdx = csCount++;
+                else if (um->domain == uf8::Domain::BusComp)      instIdx = bcCount++;
+                else continue;
+                hits.push_back({i, um->domain, instIdx});
+            }
+            if (hits.size() >= 2) {
+                // Identify the current hit by domain + instance index —
+                // matches what userStripCtxFocused_() resolves to but
+                // without depending on the resolver (avoids forward
+                // declaration; this function lives ~150 lines before it).
+                const auto fp = uf8::getFocusedParam();
+                uf8::Domain curDom = fp.domain;
+                if (curDom == uf8::Domain::None)
+                    curDom = uf8::Domain::ChannelStrip;
+                int curInstIdx = (curDom == uf8::Domain::BusComp)
+                    ? uc1::bcInstanceIndex(tr)
+                    : uc1::csInstanceIndex(tr);
+                int curK = 0;
+                for (size_t k = 0; k < hits.size(); ++k) {
+                    if (hits[k].dom == curDom &&
+                        hits[k].instIdx == curInstIdx)
+                    { curK = (int)k; break; }
+                }
+                int nextK = (curK + step) % static_cast<int>(hits.size());
+                if (nextK < 0) nextK += static_cast<int>(hits.size());
+                const Hit& target = hits[nextK];
+                uf8::setFocus({target.dom, 0});
+                if (target.dom == uf8::Domain::ChannelStrip)
+                    uc1::setCsInstanceIndex(tr, target.instIdx);
+                else if (target.dom == uf8::Domain::BusComp)
+                    uc1::setBcInstanceIndex(tr, target.instIdx);
+                g_uc1_surface->invalidateCache();
+                g_uc1_surface->refresh();
+                g_pageDirty.store(true);
+                g_bankDirty.store(true);
+                return;
+            }
+            // hits.size() < 2 → fall through to legacy single-domain
+            // cycle so a single-mapped track still cycles its own
+            // domain instances normally.
+        }
+    }
+
     const auto focused = uf8::getFocusedParam();
     const auto domain  = (focused.domain == uf8::Domain::BusComp)
         ? uc1::ControlDomain::BusComp
@@ -1115,38 +1179,45 @@ struct UserPluginCtx {
     int                       fxIdx;
     const uf8::UserPluginMap* map;
 };
-UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr)
+UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
 {
     UserPluginCtx out{ tr, -1, nullptr };
     if (!tr) return out;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return out;
 
-    const int wantCs = uc1::csInstanceIndex(tr);
-    const int wantBc = uc1::bcInstanceIndex(tr);
-    int seenCs = 0, seenBc = 0;
-
-    const int n = TrackFX_GetCount(tr);
-    char fxName[256];
-    for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-        const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-        if (!um) continue;
-        if (um->domain == uf8::Domain::ChannelStrip) {
-            if (seenCs == wantCs) {
+    auto tryDomain = [&](uf8::Domain dom) -> bool {
+        if (dom == uf8::Domain::None) return false;
+        const int wantIdx = (dom == uf8::Domain::ChannelStrip)
+            ? uc1::csInstanceIndex(tr)
+            : uc1::bcInstanceIndex(tr);
+        int seen = 0;
+        const int n = TrackFX_GetCount(tr);
+        char fxName[256];
+        for (int i = 0; i < n; ++i) {
+            if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+            const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+            if (!um || um->domain != dom) continue;
+            if (seen == wantIdx) {
                 out.fxIdx = i;
                 out.map   = um;
-                return out;
+                return true;
             }
-            ++seenCs;
-        } else if (um->domain == uf8::Domain::BusComp) {
-            if (seenBc == wantBc) {
-                out.fxIdx = i;
-                out.map   = um;
-                return out;
-            }
-            ++seenBc;
+            ++seen;
         }
-    }
+        return false;
+    };
+
+    // 1) Try the requested domain (the one the user is focused on via
+    //    Q1=CS / Q2=BC). 2) Fall back to the other domain so a track
+    //    with only one mapped domain still drives the strips. Without
+    //    the fallback, a CS-focused user with only a BC user plug-in
+    //    learned (or vice versa) would see user-strip mode go inactive
+    //    even though there's a usable map (Frank 2026-05-09).
+    if (tryDomain(wantDomain)) return out;
+    const uf8::Domain other = (wantDomain == uf8::Domain::ChannelStrip)
+        ? uf8::Domain::BusComp
+        : uf8::Domain::ChannelStrip;
+    tryDomain(other);
     return out;
 }
 
@@ -1170,6 +1241,7 @@ UserPluginCtx userStripCtxFocused_()
     static int           s_cacheFxCount   = -1;
     static int           s_cacheCsInst    = -1;
     static int           s_cacheBcInst    = -1;
+    static uf8::Domain   s_cacheDomain    = uf8::Domain::None;
 
     const bool curMode = g_pluginFaderMode.load();
     if (!curMode) {
@@ -1192,24 +1264,33 @@ UserPluginCtx userStripCtxFocused_()
         ValidatePtr2(nullptr, tr, "MediaTrack*") ? TrackFX_GetCount(tr) : 0;
     const int curCsInst  = uc1::csInstanceIndex(tr);
     const int curBcInst  = uc1::bcInstanceIndex(tr);
+    // Focused-param domain decides which user plug-in (CS vs BC) drives
+    // the strips. Q1 = CS focus, Q2 = BC focus — the same toggle that
+    // selects which SSL plug-in domain UC1 navigates. None defaults to
+    // CS so initial state still picks something deterministic.
+    auto fp = uf8::getFocusedParam();
+    uf8::Domain wantDom = fp.domain;
+    if (wantDom == uf8::Domain::None) wantDom = uf8::Domain::ChannelStrip;
 
     if (curMode    == s_cacheMode  &&
         tr         == s_cacheTr    &&
         curGen     == s_cacheGen   &&
         curFxCount == s_cacheFxCount &&
         curCsInst  == s_cacheCsInst &&
-        curBcInst  == s_cacheBcInst)
+        curBcInst  == s_cacheBcInst &&
+        wantDom    == s_cacheDomain)
     {
         return s_cache;
     }
 
-    s_cache       = findUserPluginOnTrack_(tr);
+    s_cache       = findUserPluginOnTrack_(tr, wantDom);
     s_cacheMode   = curMode;
     s_cacheTr     = tr;
     s_cacheGen    = curGen;
     s_cacheFxCount= curFxCount;
     s_cacheCsInst = curCsInst;
     s_cacheBcInst = curBcInst;
+    s_cacheDomain = wantDom;
     return s_cache;
 }
 
@@ -1395,8 +1476,10 @@ void drainInputQueue()
                 }
                 // FX Learn UF8: user-strip Solo toggles a bound vst3
                 // param on the focused user-plug-in instance (e.g. a
-                // bypass / mute on that plug-in). Empty binding falls
-                // through to track solo.
+                // bypass / mute on that plug-in). Empty binding eats
+                // the event — LEDs / scribble are blank in that mode,
+                // so falling through to track Solo would be invisible
+                // and surprising (Frank 2026-05-09).
                 if (g_pluginFaderMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const auto& sb = uctx.map->uf8.strips[
@@ -1406,8 +1489,8 @@ void drainInputQueue()
                                 uctx.tr, uctx.fxIdx, sb.soloVst3Param);
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.soloVst3Param, cur < 0.5 ? 1.0 : 0.0);
-                            break;
                         }
+                        break;
                     }
                 }
                 CSurf_OnSoloChange(tr, -1);
@@ -1440,8 +1523,9 @@ void drainInputQueue()
                                 uctx.tr, uctx.fxIdx, sb.cutVst3Param);
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.cutVst3Param, cur < 0.5 ? 1.0 : 0.0);
-                            break;
                         }
+                        // Empty binding: eat the event (see Solo above).
+                        break;
                     }
                 }
                 CSurf_OnMuteChange(tr, -1);
@@ -1457,14 +1541,35 @@ void drainInputQueue()
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.selVst3Param, cur < 0.5 ? 1.0 : 0.0);
-                            break;
                         }
+                        // Empty binding: eat the event (see Solo above).
+                        break;
                     }
                 }
                 CSurf_OnSelectedChange(tr, -1);
                 break;
             }
             case PendingInput::SelectExclusive:
+                // FX Learn UF8 user-strip mode: SEL drives a bound vst3
+                // param on the focused user-plug-in, NOT a track select.
+                // Without this branch, an unmodified SEL press would
+                // toggle the bound param AND select the strip's track
+                // (because SelectToggle and SelectExclusive route to
+                // different cases) — Frank 2026-05-09 flagged the double-
+                // action. Same eat-the-event policy as Solo / Cut.
+                if (g_pluginFaderMode.load()) {
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        const auto& sb = uctx.map->uf8.strips[
+                            static_cast<int>(e.strip)];
+                        if (sb.selVst3Param >= 0) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sb.selVst3Param);
+                            TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+                                sb.selVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                        }
+                        break;
+                    }
+                }
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
@@ -1555,8 +1660,9 @@ void drainInputQueue()
                     // FX Learn UF8: focused track has a user-mapped plug-in
                     // → the 8 strip faders drive *its* params per
                     // map->uf8.strips[strip].faderVst3Param. Empty (-1)
-                    // falls through so the fader still moves something
-                    // (built-in CS fader, then track volume).
+                    // eats the event — strip is visually blank, falling
+                    // through to track volume would be invisible and
+                    // surprising (Frank 2026-05-09).
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int s = static_cast<int>(e.strip);
                         const auto& sb = uctx.map->uf8.strips[s];
@@ -1569,10 +1675,8 @@ void drainInputQueue()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
-                            break;
                         }
-                        // Empty user fader slot — fall through to
-                        // built-in CS or track volume.
+                        break;
                     }
 
                     const auto cs = csFaderForTrack(tr);
@@ -4338,6 +4442,14 @@ void pushZonesForVisibleSlots()
             }
             if (s2.size() > 6) s2.resize(6);
             dbStr = s2;
+        } else if (userStripActive) {
+            // User-strip mode + no fader binding for this strip: blank the
+            // numeric readout to match the blanked scribble / channel# /
+            // colour bar. The "dB" suffix is appended unconditionally by
+            // buildFaderDbReadout (firmware-side glyph), so we can't
+            // remove it — just show empty digits, same as the blank-strip
+            // routedButInvalid path (Frank 2026-05-09).
+            dbStr = "    ";
         } else {
             dbStr = formatDbReadout(volLin);
         }
@@ -4424,6 +4536,12 @@ void pushZonesForVisibleSlots()
                 if (p14 < 0)              p14 = 0;
                 if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
                 pb = static_cast<uint16_t>(p14);
+            } else if (userStripActive) {
+                // User-strip mode + this strip has no fader binding:
+                // park the motor at -INF so it visually matches the
+                // blanked scribble / channel# / LEDs. Same convention
+                // as routedButInvalid above (Frank 2026-05-09).
+                pb = 0;
             } else {
                 pb = linearVolumeToPb(volLin);
             }
@@ -6299,7 +6417,13 @@ void onTimer()
         }
         if (!tr) tr = GetSelectedTrack(nullptr, 0);
         if (tr) {
-            const auto ctx = findUserPluginOnTrack_(tr);
+            // Match the strip-dispatch lookup: pick by focused-param
+            // domain so the GUI auto-open follows the same plug-in the
+            // strips drive (Frank 2026-05-09 BC-domain fix).
+            auto fp = uf8::getFocusedParam();
+            uf8::Domain dom = fp.domain;
+            if (dom == uf8::Domain::None) dom = uf8::Domain::ChannelStrip;
+            const auto ctx = findUserPluginOnTrack_(tr, dom);
             if (ctx.fxIdx >= 0) {
                 // showflag: 3 = floating GUI shown, 2 = hide floating GUI
                 TrackFX_Show(ctx.tr, ctx.fxIdx,
