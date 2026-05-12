@@ -646,6 +646,48 @@ bool brightnessDown()
     return true;
 }
 
+bool brightnessLcdsUp()
+{
+    int cur = g_scribbleBrightness.load();
+    if (cur >= BL_Full) return false;
+    g_scribbleBrightness.store(cur + 1);
+    applyBrightness();
+    return true;
+}
+
+bool brightnessLcdsDown()
+{
+    int cur = g_scribbleBrightness.load();
+    if (cur <= BL_Dark) return false;
+    g_scribbleBrightness.store(cur - 1);
+    applyBrightness();
+    return true;
+}
+
+// Both stepped independently — if one is already at the rail, the other
+// still moves. Returns true if either changed.
+bool brightnessBothUp()
+{
+    bool changed = false;
+    int led = g_brightness.load();
+    if (led < BL_Full) { g_brightness.store(led + 1); changed = true; }
+    int scr = g_scribbleBrightness.load();
+    if (scr < BL_Full) { g_scribbleBrightness.store(scr + 1); changed = true; }
+    if (changed) applyBrightness();
+    return changed;
+}
+
+bool brightnessBothDown()
+{
+    bool changed = false;
+    int led = g_brightness.load();
+    if (led > BL_Dark) { g_brightness.store(led - 1); changed = true; }
+    int scr = g_scribbleBrightness.load();
+    if (scr > BL_Dark) { g_scribbleBrightness.store(scr - 1); changed = true; }
+    if (changed) applyBrightness();
+    return changed;
+}
+
 // Read the "UI" volume for a track — reflects the same value the REAPER
 // mixer displays, including automation playback and the effect of a
 // just-applied CSurf_OnVolumeChange. Safer than GetMediaTrackInfo_Value
@@ -6468,6 +6510,40 @@ custom_action_register_t g_actionBrightnessDown{
 int g_cmdBrightnessUp = 0;
 int g_cmdBrightnessDown = 0;
 
+// Split brightness actions — LEDs / LCDs / Both. The legacy
+// REASIXTY_BRIGHTNESS_UP/DOWN above only step the LED level; these six
+// expose the full matrix so Bindings can map each independently.
+custom_action_register_t g_actionBrightnessLedsUp{
+    0, "REASIXTY_BRIGHTNESS_LEDS_UP",
+    "Rea-Sixty: Brightness LEDs +", nullptr,
+};
+custom_action_register_t g_actionBrightnessLedsDown{
+    0, "REASIXTY_BRIGHTNESS_LEDS_DOWN",
+    "Rea-Sixty: Brightness LEDs -", nullptr,
+};
+custom_action_register_t g_actionBrightnessLcdsUp{
+    0, "REASIXTY_BRIGHTNESS_LCDS_UP",
+    "Rea-Sixty: Brightness LCDs +", nullptr,
+};
+custom_action_register_t g_actionBrightnessLcdsDown{
+    0, "REASIXTY_BRIGHTNESS_LCDS_DOWN",
+    "Rea-Sixty: Brightness LCDs -", nullptr,
+};
+custom_action_register_t g_actionBrightnessBothUp{
+    0, "REASIXTY_BRIGHTNESS_BOTH_UP",
+    "Rea-Sixty: Brightness Both (LEDs+LCDs) +", nullptr,
+};
+custom_action_register_t g_actionBrightnessBothDown{
+    0, "REASIXTY_BRIGHTNESS_BOTH_DOWN",
+    "Rea-Sixty: Brightness Both (LEDs+LCDs) -", nullptr,
+};
+int g_cmdBrightnessLedsUp   = 0;
+int g_cmdBrightnessLedsDown = 0;
+int g_cmdBrightnessLcdsUp   = 0;
+int g_cmdBrightnessLcdsDown = 0;
+int g_cmdBrightnessBothUp   = 0;
+int g_cmdBrightnessBothDown = 0;
+
 // LED-cell discovery probe — for buttons whose LED cell hasn't been
 // captured yet. Each call dims the previous candidate cell, lights
 // the next bright-white, and logs the cell ID. User runs the action
@@ -6944,8 +7020,14 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
                   HWND /*hwnd*/)
 {
     if (command == 0) return false;
-    if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
-    if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
+    if (command == g_cmdBrightnessUp)       { brightnessUp();       return true; }
+    if (command == g_cmdBrightnessDown)     { brightnessDown();     return true; }
+    if (command == g_cmdBrightnessLedsUp)   { brightnessUp();       return true; }
+    if (command == g_cmdBrightnessLedsDown) { brightnessDown();     return true; }
+    if (command == g_cmdBrightnessLcdsUp)   { brightnessLcdsUp();   return true; }
+    if (command == g_cmdBrightnessLcdsDown) { brightnessLcdsDown(); return true; }
+    if (command == g_cmdBrightnessBothUp)   { brightnessBothUp();   return true; }
+    if (command == g_cmdBrightnessBothDown) { brightnessBothDown(); return true; }
     if (command == g_cmdProbeLed)       { probeNextLedCell();       return true; }
     if (command == g_cmdProbeLegacyLed) { probeNextLegacyLedCell(); return true; }
     if (command == g_cmdFrameTrace)     { toggleFrameTrace();       return true; }
@@ -8258,6 +8340,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // when we register — stash it for dispatch in hookCommand.
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
+    g_cmdBrightnessLedsUp   = plugin_register("custom_action", &g_actionBrightnessLedsUp);
+    g_cmdBrightnessLedsDown = plugin_register("custom_action", &g_actionBrightnessLedsDown);
+    g_cmdBrightnessLcdsUp   = plugin_register("custom_action", &g_actionBrightnessLcdsUp);
+    g_cmdBrightnessLcdsDown = plugin_register("custom_action", &g_actionBrightnessLcdsDown);
+    g_cmdBrightnessBothUp   = plugin_register("custom_action", &g_actionBrightnessBothUp);
+    g_cmdBrightnessBothDown = plugin_register("custom_action", &g_actionBrightnessBothDown);
     g_cmdProbeLed       = plugin_register("custom_action", &g_actionProbeLed);
     g_cmdProbeLegacyLed = plugin_register("custom_action", &g_actionProbeLegacyLed);
     g_cmdFrameTrace     = plugin_register("custom_action", &g_actionFrameTrace);
