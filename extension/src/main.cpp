@@ -1082,49 +1082,41 @@ void applyInstanceCycle_(int step)
     if (step == 0) return;
     if (!g_uc1_surface) return;
 
-    // Walk every learned plug-in across both tracks-of-interest:
-    //   * CS hits from focusedTrack_ (the REAPER-selected track).
-    //   * BC hits from the BC anchor track (Encoder 2's target). The
-    //     anchor is independent of focusedTrack_ — Frank's CS-on-one,
-    //     BC-on-another setup means we'd miss the BC half otherwise.
-    //     Falls back to focusedTrack_ when no anchor is set yet.
-    // lookupPluginMapByName covers built-in CS/BC variants AND user
-    // maps in a single walk. If CS and BC happen to land on the same
-    // track, dedup is implicit (we walk csTrack for CS, bcTrack for
-    // BC — if they're the same track each FX is considered once per
-    // domain). hits.size() < 2 → no cycle (single plug-in nothing to
-    // cycle to).
-    MediaTrack* csTrack = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!csTrack) csTrack = GetSelectedTrack(nullptr, 0);
-    void* bcRaw = g_uc1_surface->bcAnchorTrackPublic();
-    MediaTrack* bcTrack = bcRaw ? static_cast<MediaTrack*>(bcRaw) : csTrack;
+    // Walk learned plug-ins ON THE SELECTED TRACK ONLY. CS and BC
+    // hits both come from the same track — pulling BC from a separate
+    // bcAnchor track meant the cycle silently picked up neighbours
+    // ("welche links und rechts mit"), surprising the user. Frank
+    // 2026-05-12: "instance cycle soll nur den selected channel
+    // durchgehen". When the cycle lands on a BC plug-in we still move
+    // the BC anchor onto the focused track so Encoder 2 + the carousel
+    // line up with what just got highlighted.
+    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
-    struct Hit { MediaTrack* tr; int fxIdx; uf8::Domain dom; int instIdx; };
+    struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
     std::vector<Hit> hits;
-    auto walkTrack = [&](MediaTrack* tr, uf8::Domain wantDom, int& counter) {
-        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
-        const int n = TrackFX_GetCount(tr);
-        char fxName[256];
-        for (int i = 0; i < n; ++i) {
-            if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-            const auto* pm = uf8::lookupPluginMapByName(fxName);
-            if (!pm) continue;
-            if (pm->domain != wantDom) continue;
-            hits.push_back({tr, i, wantDom, counter++});
-        }
-    };
     int csCount = 0, bcCount = 0;
-    walkTrack(csTrack, uf8::Domain::ChannelStrip, csCount);
-    walkTrack(bcTrack, uf8::Domain::BusComp,      bcCount);
-
+    const int n = TrackFX_GetCount(tr);
+    char fxName[256];
+    for (int i = 0; i < n; ++i) {
+        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+        const auto* pm = uf8::lookupPluginMapByName(fxName);
+        if (!pm) continue;
+        if (pm->domain == uf8::Domain::ChannelStrip) {
+            hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
+        } else if (pm->domain == uf8::Domain::BusComp) {
+            hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+        }
+    }
     if (hits.size() < 2) return;   // nothing meaningful to cycle through
 
     const auto fp = uf8::getFocusedParam();
     uf8::Domain curDom = fp.domain;
     if (curDom == uf8::Domain::None) curDom = uf8::Domain::ChannelStrip;
     const int curInstIdx = (curDom == uf8::Domain::BusComp)
-        ? uc1::bcInstanceIndex(bcTrack)
-        : uc1::csInstanceIndex(csTrack);
+        ? uc1::bcInstanceIndex(tr)
+        : uc1::csInstanceIndex(tr);
     int curK = 0;
     for (size_t k = 0; k < hits.size(); ++k) {
         if (hits[k].dom == curDom && hits[k].instIdx == curInstIdx) {
@@ -1136,7 +1128,7 @@ void applyInstanceCycle_(int step)
     const Hit& target = hits[nextK];
     uf8::setFocus({target.dom, 0});
     if (target.dom == uf8::Domain::ChannelStrip) {
-        uc1::setCsInstanceIndex(target.tr, target.instIdx);
+        uc1::setCsInstanceIndex(tr, target.instIdx);
         // SSL Strip Mode is on → the open CS GUI should follow the
         // cycle. Raise the GUI sync request; the main-thread handler
         // closes the previous floating window and opens the new CS
@@ -1146,11 +1138,11 @@ void applyInstanceCycle_(int step)
             g_pluginGuiSyncRequest.store(true);
         }
     } else {
-        uc1::setBcInstanceIndex(target.tr, target.instIdx);
-        // Make sure the BC anchor still points at the track we just
-        // cycled into so Encoder 2 + the BC carousel agree with the
-        // cycle's selection. Idempotent when target.tr == bcAnchor.
-        g_uc1_surface->setBcAnchorTrack(target.tr);
+        uc1::setBcInstanceIndex(tr, target.instIdx);
+        // Pin the BC anchor to the focused track so Encoder 2 + the
+        // BC carousel agree with the cycle's selection. Idempotent
+        // when tr already == bcAnchor.
+        g_uc1_surface->setBcAnchorTrack(tr);
     }
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
