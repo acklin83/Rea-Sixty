@@ -3037,6 +3037,31 @@ uint32_t reaperColorForVisibleSlot(int slot)
     const int bankOffset = g_bankOffset.load();
     const int realSlot   = slot + bankOffset;
 
+    // FX Learn UF8 user-strip mode: the focused track has a user-mapped
+    // plug-in and the 8 strips drive its params. The colour bar on each
+    // LCD reflects the V-Pot binding's user colour (per active bank).
+    // Empty bank slots without any per-strip binding paint the strip OFF
+    // so it visually matches the blanked scribble / channel# / LEDs.
+    // (Frank 2026-05-09.)
+    if (g_pluginFaderMode.load() && slot >= 0 && slot < 8) {
+        if (auto u = userStripCtxFocused_(); u.map) {
+            const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+            const auto& bs   = u.map->uf8.banks.banks[bank][slot];
+            const auto& strp = u.map->uf8.strips[slot];
+            if (bs.colour != 0) {
+                return bs.colour & 0x00FFFFFFu;
+            }
+            const bool anyBound = (bs.vst3Param >= 0)
+                || (strp.faderVst3Param >= 0)
+                || (strp.soloVst3Param  >= 0)
+                || (strp.cutVst3Param   >= 0)
+                || (strp.selVst3Param   >= 0);
+            if (!anyBound) return 0;
+            // Bound but no user colour → fall through to bank-track colour
+            // so the strip still shows something familiar.
+        }
+    }
+
     // Routing modes (Send/Receive on V-Pot or fader): the strip represents
     // a send/receive, not a track. Colour the strip with the OTHER end of
     // the route — destination track for a send, source track for a receive
@@ -3428,6 +3453,27 @@ void pushZonesForVisibleSlots()
         g_lastFaderDb.fill({});
         g_lastVPotBar.fill(0xFFFF);
     }
+    // FX Learn UF8: when the user edits a user-plugin map (binding /
+    // colour / label change), the catalog generation bumps. Invalidate
+    // all per-strip caches so colour, label, and binding-state edits
+    // surface on the device on the next tick rather than being pinned
+    // by stale dedup state.
+    static int s_lastUserPluginsGen = -1;
+    const int curUserPluginsGen = uf8::user_plugins::generation();
+    if (curUserPluginsGen != s_lastUserPluginsGen) {
+        s_lastUserPluginsGen = curUserPluginsGen;
+        g_lastCutLed.fill(-1);
+        g_lastSoloLed.fill(-1);
+        g_lastSelLed.fill(-1);
+        g_lastTrackName.fill({});
+        g_lastValueLine.fill({});
+        g_lastTopSoftKey.fill(-1);
+        g_lastChanNum.fill({});
+        g_lastFaderDb.fill({});
+        g_lastFaderPb.fill(0xFFFF);
+        g_lastVPotBar.fill(0xFFFF);
+        if (g_sync) g_sync->invalidate();
+    }
     if (bankChanged || routingChanged) {
         g_lastTrackName.fill({});
         g_lastSlotLabel.fill({});
@@ -3507,6 +3553,9 @@ void pushZonesForVisibleSlots()
         int userBoundCut   = -1;
         int userBoundSel   = -1;
         int userBoundVpot  = -1;
+        uint32_t userColourSolo = 0;
+        uint32_t userColourCut  = 0;
+        uint32_t userColourSel  = 0;
         if (g_pluginFaderMode.load()) {
             userS = userStripCtxFocused_();
             if (userS.map) {
@@ -3516,6 +3565,9 @@ void pushZonesForVisibleSlots()
                 userBoundSolo  = sb.soloVst3Param;
                 userBoundCut   = sb.cutVst3Param;
                 userBoundSel   = sb.selVst3Param;
+                userColourSolo = sb.soloColour;
+                userColourCut  = sb.cutColour;
+                userColourSel  = sb.selColour;
                 const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
                 userBoundVpot  = userS.map->uf8.banks.banks[bank][s].vst3Param;
             }
@@ -3562,9 +3614,12 @@ void pushZonesForVisibleSlots()
                 } else if (routedVpot && vpotRoute.valid) {
                     if (auto* rt = routeTargetTrack_(vpotRoute)) colourTr = rt;
                 }
+                uf8::LedColour cutCol = (userStripActive && userColourCut != 0)
+                    ? uf8::ledColourForTrackRgb(userColourCut)
+                    : ledColourFor(LedClass::Mute, colourTr);
                 sendLedFrames(uf8::buildLedColourPair(
                     static_cast<uint8_t>(s), uf8::LedClass::Cut, effMute,
-                    ledColourFor(LedClass::Mute, colourTr)));
+                    cutCol));
             }
         }
 
@@ -3581,9 +3636,12 @@ void pushZonesForVisibleSlots()
             const int8_t soloKey = soloOn ? 1 : 0;
             if (soloKey != g_lastSoloLed[s]) {
                 g_lastSoloLed[s] = soloKey;
+                const uf8::LedColour soloCol = (userColourSolo != 0)
+                    ? uf8::ledColourForTrackRgb(userColourSolo)
+                    : ledColourFor(LedClass::Solo, userS.tr);
                 sendLedFrames(uf8::buildLedColourPair(
                     static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
-                    ledColourFor(LedClass::Solo, userS.tr)));
+                    soloCol));
             }
 
             const bool selOn = (userBoundSel >= 0)
@@ -3592,9 +3650,12 @@ void pushZonesForVisibleSlots()
             const int8_t selKey = selOn ? 1 : 0;
             if (selKey != g_lastSelLed[s]) {
                 g_lastSelLed[s] = selKey;
+                const uf8::LedColour selCol = (userColourSel != 0)
+                    ? uf8::ledColourForTrackRgb(userColourSel)
+                    : ledColourFor(LedClass::Sel, userS.tr);
                 sendLedFrames(uf8::buildLedColourPair(
                     static_cast<uint8_t>(s), uf8::LedClass::Sel, selOn,
-                    ledColourFor(LedClass::Sel, userS.tr)));
+                    selCol));
             }
         } else {
             // Reset cache so the next entry into user-strip mode (or a

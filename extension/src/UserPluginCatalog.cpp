@@ -304,6 +304,7 @@ std::string serialize_(const UserPluginCatalog& c)
                     appendEscaped_(os, vpotModeName_(bs.vpotMode));
                     os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
                        << ", \"defaultNorm\": " << bs.defaultNorm
+                       << ", \"colour\": " << static_cast<unsigned>(bs.colour)
                        << " }";
                 }
                 os << "\n          ]";
@@ -317,9 +318,15 @@ std::string serialize_(const UserPluginCatalog& c)
                    << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
                    << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
                    << " }, "
-                   << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param << " }, "
-                   << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param  << " }, "
-                   << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param  << " }"
+                   << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param
+                   << ", \"colour\": " << static_cast<unsigned>(sb.soloColour)
+                   << " }, "
+                   << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param
+                   << ", \"colour\": " << static_cast<unsigned>(sb.cutColour)
+                   << " }, "
+                   << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
+                   << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
+                   << " }"
                    << " }";
             }
             os << "\n        ]\n      }";
@@ -419,6 +426,9 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                             bs.vpotMode = vpotModeFromName_(mode.c_str());
                         getBoolI_(so, "inverted", bs.inverted);
                         getDoubleI_(so, "defaultNorm", bs.defaultNorm);
+                        int colTmp = 0;
+                        if (getIntI_(so, "colour", colTmp))
+                            bs.colour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     }
                 }
             }
@@ -436,20 +446,30 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         getIntI_(fo, "vst3Param", sb.faderVst3Param);
                         getBoolI_(fo, "inverted", sb.faderInverted);
                     }
+                    int colTmp = 0;
                     if (auto* so2 = so->get_item_by_name("solo");
                         so2 && so2->is_object())
                     {
                         getIntI_(so2, "vst3Param", sb.soloVst3Param);
+                        colTmp = 0;
+                        if (getIntI_(so2, "colour", colTmp))
+                            sb.soloColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     }
                     if (auto* co = so->get_item_by_name("cut");
                         co && co->is_object())
                     {
                         getIntI_(co, "vst3Param", sb.cutVst3Param);
+                        colTmp = 0;
+                        if (getIntI_(co, "colour", colTmp))
+                            sb.cutColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     }
                     if (auto* selo = so->get_item_by_name("sel");
                         selo && selo->is_object())
                     {
                         getIntI_(selo, "vst3Param", sb.selVst3Param);
+                        colTmp = 0;
+                        if (getIntI_(selo, "colour", colTmp))
+                            sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     }
                 }
             }

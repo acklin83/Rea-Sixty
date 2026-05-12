@@ -3043,6 +3043,39 @@ void setUf8Label_(int strip, int bank, const std::string& label)
     });
 }
 
+// Per-binding colour read / write. V-Pot colours live per-bank slot; Solo /
+// Cut / Sel colours are bank-independent. 0 = no override (LED uses class
+// default, strip colour bar uses bank-track colour).
+uint32_t getUf8Colour_(int kind, int strip, int bank)
+{
+    if (g_editingMatch.empty()) return 0;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        const auto& u = m.uf8;
+        switch (kind) {
+            case 1 /*VPot*/: return u.banks.banks[bank][strip].colour;
+            case 3 /*SoloBtn*/: return u.strips[strip].soloColour;
+            case 4 /*CutBtn*/:  return u.strips[strip].cutColour;
+            case 5 /*SelBtn*/:  return u.strips[strip].selColour;
+            default: return 0;
+        }
+    }
+    return 0;
+}
+
+void setUf8Colour_(int kind, int strip, int bank, uint32_t rgb)
+{
+    rgb &= 0x00FFFFFFu;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        switch (kind) {
+            case 1: u.banks.banks[bank][strip].colour = rgb; break;
+            case 3: u.strips[strip].soloColour        = rgb; break;
+            case 4: u.strips[strip].cutColour         = rgb; break;
+            case 5: u.strips[strip].selColour         = rgb; break;
+        }
+    });
+}
+
 // ---- UC1 mockup as the FX-Learn schematic --------------------------------
 //
 // Each entry binds a position on the UC1 face to an SSL 360 Link slot.
@@ -3813,6 +3846,88 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             setUf8DefaultNorm_(ctrl.strip, bank, cur);
                         }
                     }
+                }
+                ImGui_Separator(ctx);
+            }
+
+            // Colour picker — V-Pot / Solo / Cut / Sel each get one. V-Pot
+            // colour drives both its LED ring AND the strip colour bar in
+            // the LCD (per active bank, since V-Pot is the bank's primary
+            // control). Solo / Cut / Sel colours override only their LEDs
+            // and are bank-independent (matching the bindings themselves).
+            // 0 = no override (LED falls back to class default; strip bar
+            // falls back to bank-track colour).
+            if (ctrl.kind == Uf8Control::VPot   ||
+                ctrl.kind == Uf8Control::SoloBtn ||
+                ctrl.kind == Uf8Control::CutBtn  ||
+                ctrl.kind == Uf8Control::SelBtn)
+            {
+                const uint32_t curRgb = getUf8Colour_(ctrl.kind, ctrl.strip, bank);
+                ImGui_Text(ctx, "Colour");
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                const int curRgba = curRgb
+                    ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
+                                     | ((curRgb & 0x00FF00u) << 8)
+                                     | ((curRgb & 0x0000FFu) << 8) | 0xFF)
+                    : 0x40404080;   // dim grey when no override
+                char swBtnId[48];
+                std::snprintf(swBtnId, sizeof(swBtnId),
+                              "##fxl_uf8_col_%d_%d", int(ctrl.kind), ctrl.strip);
+                int swBtnFlags = 0;
+                double swW = 56.0, swH = 18.0;
+                if (ImGui_ColorButton(ctx, swBtnId, curRgba,
+                                      &swBtnFlags, &swW, &swH))
+                {
+                    char popPalId[48];
+                    std::snprintf(popPalId, sizeof(popPalId),
+                                  "fxl_uf8_pal_%d_%d", int(ctrl.kind), ctrl.strip);
+                    ImGui_OpenPopup(ctx, popPalId, nullptr);
+                }
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                char clrBtnId[48];
+                std::snprintf(clrBtnId, sizeof(clrBtnId),
+                              "Default##fxl_uf8_colclr_%d_%d",
+                              int(ctrl.kind), ctrl.strip);
+                if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
+                    setUf8Colour_(ctrl.kind, ctrl.strip, bank, 0);
+                }
+
+                char popPalId[48];
+                std::snprintf(popPalId, sizeof(popPalId),
+                              "fxl_uf8_pal_%d_%d", int(ctrl.kind), ctrl.strip);
+                if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
+                    int paletteCount = 0;
+                    const uf8::PaletteRgb* palette =
+                        uf8::selPaletteRgb(&paletteCount);
+                    const double sw = 26.0;
+                    const int perRow = 5;
+                    for (int i = 0; i < paletteCount; ++i) {
+                        const auto& p = palette[i];
+                        const int packed =
+                            (int(p.r) << 24) |
+                            (int(p.g) << 16) |
+                            (int(p.b) <<  8) | 0xFF;
+                        char swId[32];
+                        std::snprintf(swId, sizeof(swId), "##fxl_uf8_pp_%d", i);
+                        int swFlags = 0;
+                        double w = sw, h = sw;
+                        if (ImGui_ColorButton(ctx, swId, packed,
+                                              &swFlags, &w, &h))
+                        {
+                            const uint32_t rgb =
+                                (uint32_t(p.r) << 16) |
+                                (uint32_t(p.g) <<  8) |
+                                 uint32_t(p.b);
+                            setUf8Colour_(ctrl.kind, ctrl.strip, bank, rgb);
+                            ImGui_CloseCurrentPopup(ctx);
+                        }
+                        if ((i % perRow) != (perRow - 1) &&
+                            i != paletteCount - 1)
+                        {
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                        }
+                    }
+                    ImGui_EndPopup(ctx);
                 }
                 ImGui_Separator(ctx);
             }

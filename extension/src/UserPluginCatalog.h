@@ -51,6 +51,13 @@ struct UserUf8BankSlot {
     VPotMode     vpotMode    = VPotMode::Value;
     bool         inverted    = false;
     double       defaultNorm = 0.5;           // V-Pot push reset (Value mode)
+    // 0xRRGGBB picked from the SSL DAW-Colour palette; 0 = "no override"
+    // (LED = white, strip colour bar = bank track's colour). Snapped to
+    // selPaletteRgb() entries by the editor so the UF8 hardware can
+    // render it faithfully. Per-bank because the V-Pot is the bank's
+    // primary control — its colour drives the strip colour bar in
+    // user-strip mode.
+    uint32_t     colour      = 0;
 };
 
 // 6 banks × 8 slots. Index 0 = V-POT bank, 1..5 = SOFT 1..5.
@@ -65,6 +72,12 @@ struct UserUf8StripBinding {
     int  soloVst3Param  = -1;                 // -1 = track solo
     int  cutVst3Param   = -1;                 // -1 = track mute
     int  selVst3Param   = -1;                 // -1 = track select
+    // Per-LED colour overrides (0xRRGGBB; 0 = class default — yellow Solo,
+    // red Cut, white Sel / track colour). Bank-independent because Solo /
+    // Cut / Sel bindings are themselves bank-independent.
+    uint32_t soloColour = 0;
+    uint32_t cutColour  = 0;
+    uint32_t selColour  = 0;
 };
 
 struct UserUf8Map {
@@ -92,7 +105,10 @@ namespace user_plugins {
 // Current on-disk schema version. Bump when introducing breaking changes.
 // v2 (2026-05-08): added optional `uf8` block on UserPluginMap (UF8 strip-mode
 // bindings). v1 readers seeing a v2 file with no `uf8` block load identically.
-constexpr int kCurrentFormatVersion = 2;
+// v3 (2026-05-09): added `colour` on bank slots and per-strip Solo/Cut/Sel.
+// Missing fields parse as 0 (= class default), so v3 files load fine in v2
+// readers (they just ignore the colours), and v2 files load in v3 readers.
+constexpr int kCurrentFormatVersion = 3;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
