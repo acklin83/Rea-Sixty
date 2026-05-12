@@ -453,6 +453,16 @@ std::atomic<bool> g_grAnyFx{true};
 // follows automatically rather than requiring a manual select).
 std::atomic<bool> g_trackSelFollowsParam{false};
 
+// When true AND SSL Strip Mode is active, the strips follow whichever
+// plugin window the user focuses in REAPER (GetFocusedFX2 poll).
+std::atomic<bool> g_stripFollowsFocusedFx{false};
+
+// UF8 Plugin Mode (deep edit): all 8 strips drive params on ONE user-
+// mapped plugin instance on the focused track. Separate from SSL Strip
+// Mode (g_pluginFaderMode) which is per-track. Toggled via the
+// uf8_plugin_mode_toggle builtin action; user-bindable, no default button.
+std::atomic<bool> g_uf8PluginMode{false};
+
 // Meter ballistic. Peak = raw peak per Track_GetPeakInfo (no smoothing
 // here; REAPER's own ballistics already apply); VU = exp-smoothed dB
 // with τ=300 ms; RMS = exp-smoothed linear power with τ=600 ms then
@@ -552,6 +562,14 @@ void loadBrightness()
     const char* tselFp = GetExtState("rea_sixty", "track_sel_follows_param");
     if (tselFp && *tselFp) {
         g_trackSelFollowsParam.store(std::atoi(tselFp) != 0);
+    }
+    const char* sff = GetExtState("rea_sixty", "strip_follows_focused_fx");
+    if (sff && *sff) {
+        g_stripFollowsFocusedFx.store(std::atoi(sff) != 0);
+    }
+    const char* upm = GetExtState("ReaSixty", "uf8PluginMode");
+    if (upm && *upm) {
+        g_uf8PluginMode.store(std::atoi(upm) != 0);
     }
     const char* bm = GetExtState("rea_sixty", "ballistic_mode");
     if (bm && *bm) {
@@ -1053,13 +1071,7 @@ void applyInstanceCycle_(int step)
     if (step == 0) return;
     if (!g_uc1_surface) return;
 
-    // SSL Strip Mode: cycle walks through ALL user plug-ins on the
-    // focused track, hopping domain when the next plug-in is BC after
-    // CS or vice versa. Without this, a track with CS+BC user maps
-    // can't reach the BC map without first pressing Q2 (Frank
-    // 2026-05-09). Each domain maintains its own instance index, so
-    // visiting BC and back to CS preserves the CS slot.
-    if (g_pluginFaderMode.load()) {
+    {
         MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         if (!tr) tr = GetSelectedTrack(nullptr, 0);
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
@@ -1079,10 +1091,6 @@ void applyInstanceCycle_(int step)
                 hits.push_back({i, um->domain, instIdx});
             }
             if (hits.size() >= 2) {
-                // Identify the current hit by domain + instance index —
-                // matches what userStripCtxFocused_() resolves to but
-                // without depending on the resolver (avoids forward
-                // declaration; this function lives ~150 lines before it).
                 const auto fp = uf8::getFocusedParam();
                 uf8::Domain curDom = fp.domain;
                 if (curDom == uf8::Domain::None)
@@ -1110,9 +1118,6 @@ void applyInstanceCycle_(int step)
                 g_bankDirty.store(true);
                 return;
             }
-            // hits.size() < 2 → fall through to legacy single-domain
-            // cycle so a single-mapped track still cycles its own
-            // domain instances normally.
         }
     }
 
@@ -1285,7 +1290,7 @@ UserPluginCtx userStripCtxFocused_()
     static int           s_cacheBcInst    = -1;
     static uf8::Domain   s_cacheDomain    = uf8::Domain::None;
 
-    const bool curMode = g_pluginFaderMode.load();
+    const bool curMode = g_uf8PluginMode.load();
     if (!curMode) {
         s_cacheTr = nullptr;
         return {nullptr, -1, nullptr};
@@ -1355,6 +1360,25 @@ CsFaderHandle csFaderForTrack(MediaTrack* tr)
     else if (std::strcmp(sn, "4K E") == 0) p = 6;
     else if (std::strcmp(sn, "4K B") == 0) p = 6;
     return { mm.fxIndex, p };
+}
+
+// Per-track user-plugin fader lookup. Returns the fader binding from
+// uf8.strips[0] of the first user-mapped plugin on this track in the
+// given domain. Used by SSL Strip Mode (per-track) so each UF8 strip
+// drives its own track's user-plugin fader param.
+struct UserFaderHandle { int fxIndex; int vst3Param; bool inverted; };
+UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
+{
+    if (!tr) return {-1, -1, false};
+    auto match = uf8::lookupPluginOnTrack(tr, domain);
+    if (!match.map) return {-1, -1, false};
+    char fxName[512];
+    TrackFX_GetFXName(tr, match.fxIndex, fxName, sizeof(fxName));
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (!um) return {-1, -1, false};
+    const int fp = um->uf8.strips[0].faderVst3Param;
+    if (fp < 0) return {-1, -1, false};
+    return {match.fxIndex, fp, um->uf8.strips[0].faderInverted};
 }
 
 // CS plug-in's Pan param (linkIdx 3 across all four CS variants). In
@@ -1522,7 +1546,7 @@ void drainInputQueue()
                 // the event — LEDs / scribble are blank in that mode,
                 // so falling through to track Solo would be invisible
                 // and surprising (Frank 2026-05-09).
-                if (g_pluginFaderMode.load()) {
+                if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const auto& sb = uctx.map->uf8.strips[
                             static_cast<int>(e.strip)];
@@ -1556,7 +1580,7 @@ void drainInputQueue()
                     break;
                 }
                 if (mr.active()) break;     // routed but slot empty — eat the press
-                if (g_pluginFaderMode.load()) {
+                if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const auto& sb = uctx.map->uf8.strips[
                             static_cast<int>(e.strip)];
@@ -1566,7 +1590,6 @@ void drainInputQueue()
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.cutVst3Param, cur < 0.5 ? 1.0 : 0.0);
                         }
-                        // Empty binding: eat the event (see Solo above).
                         break;
                     }
                 }
@@ -1574,7 +1597,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::SelectToggle: {
-                if (g_pluginFaderMode.load()) {
+                if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const auto& sb = uctx.map->uf8.strips[
                             static_cast<int>(e.strip)];
@@ -1592,14 +1615,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::SelectExclusive:
-                // FX Learn UF8 user-strip mode: SEL drives a bound vst3
-                // param on the focused user-plug-in, NOT a track select.
-                // Without this branch, an unmodified SEL press would
-                // toggle the bound param AND select the strip's track
-                // (because SelectToggle and SelectExclusive route to
-                // different cases) — Frank 2026-05-09 flagged the double-
-                // action. Same eat-the-event policy as Solo / Cut.
-                if (g_pluginFaderMode.load()) {
+                if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const auto& sb = uctx.map->uf8.strips[
                             static_cast<int>(e.strip)];
@@ -1681,7 +1697,8 @@ void drainInputQueue()
                 // duty. Earlier this only kicked in when forcePan was
                 // also held — Frank 2026-05-08: just FLIP should be
                 // enough, no PAN-button-modifier required.
-                if (g_flip.load() && !g_pluginFaderMode.load()) {
+                if (g_flip.load() && !g_pluginFaderMode.load()
+                    && !g_uf8PluginMode.load()) {
                     const uint16_t pbF = linearVolumeToPb(e.value);
                     double n = static_cast<double>(pbF) /
                                static_cast<double>(kUf8FaderPbMax);
@@ -1698,13 +1715,7 @@ void drainInputQueue()
                 // variant) instead of REAPER's post-FX track volume.
                 // Same pb14/kUf8FaderPbMax mapping the FLIP path uses
                 // — gives an even 0..1 sweep the plug-in expects.
-                if (g_pluginFaderMode.load()) {
-                    // FX Learn UF8: focused track has a user-mapped plug-in
-                    // → the 8 strip faders drive *its* params per
-                    // map->uf8.strips[strip].faderVst3Param. Empty (-1)
-                    // eats the event — strip is visually blank, falling
-                    // through to track volume would be invisible and
-                    // surprising (Frank 2026-05-09).
+                if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int s = static_cast<int>(e.strip);
                         const auto& sb = uctx.map->uf8.strips[s];
@@ -1720,7 +1731,8 @@ void drainInputQueue()
                         }
                         break;
                     }
-
+                }
+                if (g_pluginFaderMode.load()) {
                     const auto cs = csFaderForTrack(tr);
                     if (cs.vst3Param >= 0) {
                         const uint16_t pbCs = linearVolumeToPb(e.value);
@@ -1732,8 +1744,6 @@ void drainInputQueue()
                             cs.vst3Param, n);
                         break;
                     }
-                    // No CS plug-in on this track — fall through to track
-                    // volume so the fader still does *something*.
                 }
                 // Normal: CSurf_OnVolumeChange applies the new position to
                 // the track AND broadcasts to other surfaces. We do not
@@ -1831,7 +1841,7 @@ void drainInputQueue()
                 // instance. Toggle slots ignore rotation. Empty slots
                 // eat the event so the legacy CS/BC dispatch below
                 // doesn't hijack a different track's plug-in.
-                if (g_pluginFaderMode.load() && !g_flip.load()) {
+                if (g_uf8PluginMode.load() && !g_flip.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
@@ -1853,9 +1863,6 @@ void drainInputQueue()
                                 uctx.fxIdx, bs.vst3Param, next);
                             break;
                         }
-                        // Empty / Toggle slot: do NOT fall through —
-                        // built-in CS dispatch would hijack a different
-                        // track entirely.
                         break;
                     }
                 }
@@ -2018,7 +2025,7 @@ void drainInputQueue()
                 //   Empty slot  → eat the event (don't fall through to
                 //                 built-in CS dispatch, which would
                 //                 hijack a different track).
-                if (g_pluginFaderMode.load() && !g_flip.load()) {
+                if (g_uf8PluginMode.load() && !g_flip.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
@@ -2451,7 +2458,7 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     // by the per-tick poll in pushZonesForVisibleSlots from user-binding
     // state — let it own the LED so REAPER's track-state callbacks don't
     // overwrite it. Other LED classes (e.g. focused-FX) keep flowing.
-    if (g_pluginFaderMode.load()
+    if (g_uf8PluginMode.load()
         && (cls == LedClass::Solo
          || cls == LedClass::Mute
          || cls == LedClass::Sel))
@@ -3189,7 +3196,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
     // Empty bank slots without any per-strip binding paint the strip OFF
     // so it visually matches the blanked scribble / channel# / LEDs.
     // (Frank 2026-05-09.)
-    if (g_pluginFaderMode.load() && slot >= 0 && slot < 8) {
+    if (g_uf8PluginMode.load() && slot >= 0 && slot < 8) {
         if (auto u = userStripCtxFocused_(); u.map) {
             const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
             const auto& bs   = u.map->uf8.banks.banks[bank][slot];
@@ -3702,7 +3709,7 @@ void pushZonesForVisibleSlots()
         uint32_t userColourSolo = 0;
         uint32_t userColourCut  = 0;
         uint32_t userColourSel  = 0;
-        if (g_pluginFaderMode.load()) {
+        if (g_uf8PluginMode.load()) {
             userS = userStripCtxFocused_();
             if (userS.map) {
                 userStripActive = true;
@@ -3836,7 +3843,7 @@ void pushZonesForVisibleSlots()
             static thread_local char  s_userBankLabelBuf[8][16];
             static thread_local const char* s_userBankLabelPtr[8];
             static thread_local int   s_userBankLink[8];
-            if (g_pluginFaderMode.load()) {
+            if (g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
                     for (int i = 0; i < 8; ++i) {
@@ -4185,18 +4192,14 @@ void pushZonesForVisibleSlots()
         // role is explicit and overrides the swap).
         const bool flipPanSwap = g_flip.load()
                               && !flipActive
-                              && !g_pluginFaderMode.load();
+                              && !g_pluginFaderMode.load()
+                              && !g_uf8PluginMode.load();
 
-        // FX Learn UF8: if SSL Strip Mode is on AND the focused track
-        // has a user-mapped plug-in AND that map binds this strip's
-        // fader to a vst3 param → the motor + value-line follow the
-        // user-plug-in's param, not REAPER track volume / built-in CS.
-        // Per-strip target is uctx.tr (focused) regardless of `tr`.
         struct UserFaderHandle {
             MediaTrack* tr; int fxIdx; int vst3Param; bool inverted;
         };
         UserFaderHandle userF{nullptr, -1, -1, false};
-        if (g_pluginFaderMode.load() && !flipActive) {
+        if (g_uf8PluginMode.load() && !flipActive) {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const auto& sb = uctx.map->uf8.strips[s];
                 if (sb.faderVst3Param >= 0) {
@@ -4286,7 +4289,7 @@ void pushZonesForVisibleSlots()
             const uint16_t pbVol = linearVolumeToPb(volLinFlip);
             vpotBar[s] = vpotPosFromUnipolar(
                 static_cast<double>(pbVol) / 16383.0);
-        } else if (g_pluginFaderMode.load() && !flipActive
+        } else if (g_uf8PluginMode.load() && !flipActive
                 && [&]{ if (auto u = userStripCtxFocused_(); u.map) return true; return false; }())
         {
             // FX Learn UF8: user-bank V-Pot bar. Toggle slots show
@@ -4610,7 +4613,7 @@ void pushZonesForVisibleSlots()
         // bound bank-slot param — name + formatted value. Empty bank
         // slots leave the line blank.
         bool userValHandled = false;
-        if (g_pluginFaderMode.load() && !flipActive && !routedFader
+        if (g_uf8PluginMode.load() && !flipActive && !routedFader
             && !routedVpot)
         {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
@@ -4851,7 +4854,7 @@ void pushZonesForVisibleSlots()
             //   Toggle slot → 0x03 (binary indicator, no bar)
             //   Value slot  → 0x01 (unipolar L→R)
             //   Empty slot  → 0x03 (no bar)
-            if (g_pluginFaderMode.load() && !g_flip.load()) {
+            if (g_uf8PluginMode.load() && !g_flip.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
                     const auto& bs =
@@ -4883,7 +4886,8 @@ void pushZonesForVisibleSlots()
             } else if (!slot && focused.slotIdx != -1
                        && !isVPotPanFocus(focused)
                        && !g_forcePan.load()
-                       && !g_pluginFaderMode.load()) {
+                       && !g_pluginFaderMode.load()
+                       && !g_uf8PluginMode.load()) {
                 // A param is focused but doesn't resolve on this strip:
                 // synthetic toggles (Phase / A/B / HQ) that aren't VST3
                 // params, or a continuous param this strip's plug-in
@@ -5048,6 +5052,58 @@ void chaseLastTouchedFx()
     }
 }
 
+// Poll GetFocusedFX2 and switch the SSL strip context to whichever
+// user-mapped plugin window the user brings to front. Only active
+// when SSL Strip Mode is on AND the setting is enabled.
+void chaseFocusedFxWindow()
+{
+    if (!g_pluginFaderMode.load() && !g_uf8PluginMode.load()) return;
+    if (!g_stripFollowsFocusedFx.load()) return;
+
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
+    if (!(ret & 1)) return;          // no track-FX window focused
+    if (trNum <= 0) return;          // master or invalid
+
+    MediaTrack* tr = GetTrack(nullptr, trNum - 1);
+    if (!tr) return;
+
+    const int fxIdx = fxNum & 0x00FFFFFF;
+
+    static MediaTrack* s_lastTr  = nullptr;
+    static int         s_lastFx  = -1;
+    if (tr == s_lastTr && fxIdx == s_lastFx) return;
+    s_lastTr = tr; s_lastFx = fxIdx;
+
+    char fxName[512] = {0};
+    TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName));
+
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (!um) return;
+
+    const int instIdx = uc1::instanceIndexForFx(tr, fxIdx);
+    if (instIdx >= 0) {
+        if (um->domain == uf8::Domain::BusComp)
+            uc1::setBcInstanceIndex(tr, instIdx);
+        else if (um->domain == uf8::Domain::ChannelStrip)
+            uc1::setCsInstanceIndex(tr, instIdx);
+    }
+
+    uf8::setFocus({um->domain, 0});
+    uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
+                                std::memory_order_relaxed);
+
+    const bool isSelected = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
+    if (!isSelected) SetOnlyTrackSelected(tr);
+
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->setFocusedTrack(tr);
+    }
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -5126,9 +5182,8 @@ void commitDebouncedTouchReleases()
                     if (normT > 1.0) normT = 1.0;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
-                } else if (g_flip.load() && !g_pluginFaderMode.load()) {
-                    // FLIP without slot / route / plugin-fader: track D_PAN.
-                    // Mirrors the live VolumeAbs handler (Frank 2026-05-08).
+                } else if (g_flip.load() && !g_pluginFaderMode.load()
+                           && !g_uf8PluginMode.load()) {
                     double n = static_cast<double>(touchPb) /
                                static_cast<double>(kUf8FaderPbMax);
                     if (n < 0.0) n = 0.0;
@@ -5137,9 +5192,7 @@ void commitDebouncedTouchReleases()
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
                     SetMediaTrackInfo_Value(tr, "D_PAN", pan);
-                } else if (g_pluginFaderMode.load()) {
-                    // Try user-strip fader first, then built-in CS.
-                    bool wrote = false;
+                } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
                         const auto& sb = uctxT.map->uf8.strips[
                             static_cast<int>(s)];
@@ -5151,19 +5204,20 @@ void commitDebouncedTouchReleases()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctxT.tr,
                                 uctxT.fxIdx, sb.faderVst3Param, n);
-                            wrote = true;
                         }
+                    } else {
+                        CSurf_OnVolumeChange(tr,
+                            pbToLinearVolume(touchPb), false);
                     }
-                    if (!wrote && csT.vst3Param >= 0) {
+                } else if (g_pluginFaderMode.load()) {
+                    if (csT.vst3Param >= 0) {
                         double n = static_cast<double>(touchPb) /
                                    static_cast<double>(kUf8FaderPbMax);
                         if (n < 0.0) n = 0.0;
                         if (n > 1.0) n = 1.0;
                         TrackFX_SetParamNormalized(tr, csT.fxIndex,
                             csT.vst3Param, n);
-                        wrote = true;
-                    }
-                    if (!wrote) {
+                    } else {
                         CSurf_OnVolumeChange(tr,
                             pbToLinearVolume(touchPb), false);
                     }
@@ -5187,8 +5241,7 @@ void commitDebouncedTouchReleases()
         // so the re-enable lands at the correct target with no jerk.
         if (userMoved) {
             uint16_t pb = linearVolumeToPb(uiVolLinear(tr));
-            if (g_pluginFaderMode.load()) {
-                bool taken = false;
+            if (g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const auto& sb = uctx.map->uf8.strips[s];
                     if (sb.faderVst3Param >= 0) {
@@ -5200,20 +5253,18 @@ void commitDebouncedTouchReleases()
                         if (p14 < 0) p14 = 0;
                         if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
                         pb = static_cast<uint16_t>(p14);
-                        taken = true;
                     }
                 }
-                if (!taken) {
-                    const auto cs = csFaderForTrack(tr);
-                    if (cs.vst3Param >= 0) {
-                        const double norm = TrackFX_GetParamNormalized(
-                            tr, cs.fxIndex, cs.vst3Param);
-                        int p14 = static_cast<int>(std::round(
-                            norm * static_cast<double>(kUf8FaderPbMax)));
-                        if (p14 < 0) p14 = 0;
-                        if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
-                        pb = static_cast<uint16_t>(p14);
-                    }
+            } else if (g_pluginFaderMode.load()) {
+                const auto cs = csFaderForTrack(tr);
+                if (cs.vst3Param >= 0) {
+                    const double norm = TrackFX_GetParamNormalized(
+                        tr, cs.fxIndex, cs.vst3Param);
+                    int p14 = static_cast<int>(std::round(
+                        norm * static_cast<double>(kUf8FaderPbMax)));
+                    if (p14 < 0) p14 = 0;
+                    if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
+                    pb = static_cast<uint16_t>(p14);
                 }
             }
             g_dev->send(uf8::buildMotorEnable(s, true));
@@ -6174,6 +6225,7 @@ void onTimer()
     }
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
+    chaseFocusedFxWindow();
     uf8::bindings::tickPending();
     drainInputQueue();
     commitDebouncedTouchReleases();
@@ -7149,6 +7201,17 @@ void reasixty_setTrackSelFollowsParam(bool follow)
     SetExtState("rea_sixty", "track_sel_follows_param", follow ? "1" : "0", true);
 }
 
+bool reasixty_stripFollowsFocusedFx()
+{
+    return g_stripFollowsFocusedFx.load();
+}
+
+void reasixty_setStripFollowsFocusedFx(bool follow)
+{
+    g_stripFollowsFocusedFx.store(follow);
+    SetExtState("rea_sixty", "strip_follows_focused_fx", follow ? "1" : "0", true);
+}
+
 // Build a diagnostic .zip on the user's Desktop with extension state +
 // any of our existing trace logs (frame trace, ColorSync log) so a user
 // can email us a single archive when something misbehaves. Cheap; runs
@@ -7581,6 +7644,20 @@ void registerBindingHandlers()
         },
         [](int) { return g_pluginFaderMode.load(); },
         "Toggle SSL Strip Mode (with GUI)", false
+    });
+
+    registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_uf8PluginMode.load();
+            g_uf8PluginMode.store(next);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+            SetExtState("ReaSixty", "uf8PluginMode",
+                        next ? "1" : "0", true);
+        },
+        [](int) { return g_uf8PluginMode.load(); },
+        "Toggle UF8 Plugin Mode (deep edit)", false
     });
 
     registerBuiltin("pan_force", DescBuilder{

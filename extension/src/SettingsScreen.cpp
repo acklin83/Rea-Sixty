@@ -51,6 +51,8 @@ bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
 bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
+bool reasixty_stripFollowsFocusedFx();
+void reasixty_setStripFollowsFocusedFx(bool follow);
 int  reasixty_ballisticMode();
 void reasixty_setBallisticMode(int mode);
 void reasixty_exportDiagnostic();  // shows confirmation dialog itself
@@ -198,6 +200,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Track selection follows parameter change",
                        &tsfp)) {
         reasixty_setTrackSelFollowsParam(tsfp);
+    }
+
+    bool sff = reasixty_stripFollowsFocusedFx();
+    if (ImGui_Checkbox(ctx, "SSL Strip Mode follows focused plugin window",
+                       &sff)) {
+        reasixty_setStripFollowsFocusedFx(sff);
     }
 
     // Ballistic dropdown. Combo's `items` arg is a NUL-separated list
