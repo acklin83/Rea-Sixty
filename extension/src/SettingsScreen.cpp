@@ -2331,7 +2331,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             char label[32];
             // U+25CF BLACK CIRCLE marks the layer that's currently
             // driving the hardware so it's visible at a glance.
-            std::snprintf(label, sizeof(label), "Layer %d%s##layer_tab_%d",
+            // `###` (not `##`) so the trailing slug owns the ID — the
+            // visible "● active" dot toggling per frame must not reshape
+            // the widget hash. With `##`, ImGui reissues an ID each time
+            // the dot appears/disappears, which on some hosts (observed
+            // on Layer 3 here) loses the click between frames.
+            std::snprintf(label, sizeof(label), "Layer %d%s###layer_tab_%d",
                           li + 1,
                           (li == active) ? "  \xE2\x97\x8F" : "",
                           li);

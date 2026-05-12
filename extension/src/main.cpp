@@ -5659,10 +5659,22 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
                          ? bd.longPress[static_cast<int>(mod)]
                          : bd.shortPress[static_cast<int>(mod)];
 
+    // Slot has no action to be "active" against, but the binding entry
+    // exists — user opened the editor and customised the LED without
+    // assigning an action. Render the Active appearance so their
+    // bd.color/brightness choice is actually visible. Without this the
+    // resolver fell through to effectiveLedInactive (= bd.inactiveColor
+    // @ Dim default), and a freshly-customised button looked dark on
+    // hardware regardless of what the user picked.
+    bool useActive = active;
+    if (!useActive && slot.type == uf8::bindings::ActionType::Noop) {
+        useActive = true;
+    }
+
     uint8_t rgb[3];
     uf8::bindings::Brightness bri;
-    if (active) uf8::bindings::effectiveLedActive  (bd, slot, rgb, bri);
-    else        uf8::bindings::effectiveLedInactive(bd, slot, rgb, bri);
+    if (useActive) uf8::bindings::effectiveLedActive  (bd, slot, rgb, bri);
+    else           uf8::bindings::effectiveLedInactive(bd, slot, rgb, bri);
     r.state = brightnessToState_(bri);
     const uint32_t packed = (uint32_t(rgb[0]) << 16)
                           | (uint32_t(rgb[1]) << 8)
@@ -5683,57 +5695,40 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
 bool boundActionIsActive_(uf8::bindings::ButtonId bid)
 {
     if (bid == uf8::bindings::ButtonId::None) return false;
-    const int activeLayer = uf8::bindings::getActiveLayer();
-    const auto bd = uf8::bindings::getBinding(activeLayer, bid);
-    const auto& sp = bd.shortPress[
-        static_cast<int>(uf8::bindings::Modifier::Plain)];
-    using AT = uf8::bindings::ActionType;
-    switch (sp.type) {
-        case AT::Noop: return false;
-        case AT::Builtin:
-            if (uf8::bindings::builtinHasState(sp.action)) {
-                return uf8::bindings::builtinStateOf(sp.action, sp.param);
-            }
-            return false;
-        case AT::Reaper: {
-            if (sp.action.empty()) return false;
-            int aid = std::atoi(sp.action.c_str());
-            if (aid <= 0) aid = NamedCommandLookup(sp.action.c_str());
-            if (aid > 0) {
-                const int s = GetToggleCommandState2(
-                    SectionFromUniqueID(0), aid);
-                if (s >= 0) return (s == 1);
-            }
-            return false;
-        }
-        case AT::Keyboard:
-        case AT::Midi:
-            return false;
-    }
-    return false;
-}
-
-// Same idea as boundActionIsActive_, but checks every modifier slot
-// (short + long press) on this button and returns true if any of their
-// stateful builtins reports active. Lets the PLUGIN LED light bright
-// whether Plain (g_pluginFaderMode via ssl_strip_mode_toggle) OR
-// Shift (g_uf8PluginMode via uf8_plugin_mode_toggle) is engaged —
-// mirroring how Send/Plugin LEDs follow the routing-state union.
-bool anyBoundSlotIsActive_(uf8::bindings::ButtonId bid)
-{
-    if (bid == uf8::bindings::ButtonId::None) return false;
     const auto bd = uf8::bindings::getBinding(
         uf8::bindings::getActiveLayer(), bid);
     using AT = uf8::bindings::ActionType;
     auto slotActive = [](const uf8::bindings::ActionSlot& s) -> bool {
-        if (s.type != AT::Builtin) return false;
-        if (!uf8::bindings::builtinHasState(s.action)) return false;
-        return uf8::bindings::builtinStateOf(s.action, s.param);
+        switch (s.type) {
+            case AT::Noop: return false;
+            case AT::Builtin:
+                return uf8::bindings::builtinHasState(s.action)
+                    && uf8::bindings::builtinStateOf(s.action, s.param);
+            case AT::Reaper: {
+                if (s.action.empty()) return false;
+                int aid = std::atoi(s.action.c_str());
+                if (aid <= 0) aid = NamedCommandLookup(s.action.c_str());
+                if (aid > 0) {
+                    const int st = GetToggleCommandState2(
+                        SectionFromUniqueID(0), aid);
+                    if (st >= 0) return st == 1;
+                }
+                return false;
+            }
+            case AT::Keyboard:
+            case AT::Midi:
+                return false;
+        }
+        return false;
     };
+    // Walk all modifier slots (short + long press) — a stateful action
+    // bound to e.g. Shift+Btn360 should light the cell after toggling
+    // even when Plain is Noop. Matches the routing-row LED convention.
     for (const auto& s : bd.shortPress) if (slotActive(s)) return true;
     for (const auto& s : bd.longPress)  if (slotActive(s)) return true;
     return false;
 }
+
 
 
 // True when the currently-held modifier has a bindable, non-noop slot
@@ -5968,7 +5963,7 @@ void pushUf8GlobalLeds()
     // modifier key is released. Falls back to g_pluginFaderMode when no
     // bound builtin reports state (e.g. user wiped the binding).
     const bool pluginActive =
-        anyBoundSlotIsActive_(uf8::bindings::ButtonId::PluginBtn)
+        boundActionIsActive_(uf8::bindings::ButtonId::PluginBtn)
         || g_pluginFaderMode.load()
         || g_uf8PluginMode.load();
     const int pluginLit = pluginActive ? 1 : 0;
