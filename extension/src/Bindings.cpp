@@ -1651,6 +1651,178 @@ void upgradeRetireQuickSelect_(Config& c)
     }
 }
 
+// Sanitize the Sub-Bank-selector + Quick-button bindings against
+// data corruption from previous migrations. Two distinct cases:
+//
+// 1) *Bank cells (VPotBank, SoftKey1-5Bank). These are HARD-CODED
+//    invariants: drawSubBankCellEditor_ doesn't expose a Bindings
+//    picker so a user cannot legitimately customize the action.
+//    Force action='softkey_bank_select' with param = cell index.
+//    Fixes the case where upgradeRetireQuickSelect_ cleared a stale
+//    'show_user_bank' to an empty ActionSlot AND
+//    upgradeBackfillBankSelectorsAllLayers_'s fillIfMissing then
+//    refused to fill (because the binding key already existed with
+//    empty action). Symptom 2026-05-13: Frank's L2.VPotBank +
+//    L2.SoftKey1Bank were stuck with action='' → banks 0+1 dark.
+//
+// 2) Quick cells (Quick1/Quick2/Quick3). Reset to canonical only
+//    in narrow cases:
+//      a) action is empty (no Builtin name set).
+//      b) action is "softkey_bank_N" with N != the cell's canonical
+//         and the canonical is itself a "softkey_bank_M" jump (i.e.
+//         L1.Q3 + L2/L3 Q1/Q2/Q3). Catches the case where
+//         upgradeRetireQuickSelect_ rewrote a user's old
+//         quick_select_N on a Quick-M cell into a wrong-target jump.
+//         Symptom 2026-05-13: Frank's L1.Q3 = softkey_bank_1
+//         (= jump to L1 Q1) → pressing Q3 yanked the ring back.
+//    L1.Q1/Q2 canonicals are domain_cs/domain_bc (not jumps); we
+//    only reset those when empty so user customizations to other
+//    builtins / REAPER actions / cross-layer jumps survive.
+//
+// Both passes preserve color, brightness, inactive*, label, and
+// any modifier-row / longPress slots. They only touch
+// shortPress[Plain].
+void upgradeSanitizeBankAndQuickActions_(Config& c)
+{
+    FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
+    auto logReset = [&](int li, const char* cellName,
+                        const std::string& oldAction,
+                        const std::string& newAction) {
+        if (!lg) return;
+        std::fprintf(lg,
+            "  [sanitize] L%d %s reset: action='%s' → '%s'\n",
+            li + 1, cellName,
+            oldAction.empty() ? "(empty)" : oldAction.c_str(),
+            newAction.c_str());
+    };
+
+    static const ButtonId kBankIds[6] = {
+        ButtonId::VPotBank,
+        ButtonId::SoftKey1Bank, ButtonId::SoftKey2Bank,
+        ButtonId::SoftKey3Bank, ButtonId::SoftKey4Bank,
+        ButtonId::SoftKey5Bank,
+    };
+    static const char* kBankNames[6] = {
+        "VPotBank", "SoftKey1Bank", "SoftKey2Bank",
+        "SoftKey3Bank", "SoftKey4Bank", "SoftKey5Bank",
+    };
+    static const char* kBankLabels[6] = {
+        "V-POT", "BANK 1", "BANK 2", "BANK 3", "BANK 4", "BANK 5",
+    };
+    for (int li = 0; li < 3; ++li) {
+        auto& L = c.layers[li];
+        for (int i = 0; i < 6; ++i) {
+            auto it = L.bindings.find(kBankIds[i]);
+            if (it == L.bindings.end()) {
+                L.bindings[kBankIds[i]] = mkBuiltin(
+                    "softkey_bank_select", Behavior::Momentary,
+                    kBankLabels[i], 255, 255, 255, i);
+                if (lg) {
+                    std::fprintf(lg,
+                        "  [sanitize] L%d %s created: "
+                        "softkey_bank_select param=%d\n",
+                        li + 1, kBankNames[i], i);
+                }
+                continue;
+            }
+            Binding& bd = it->second;
+            auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+            const bool needsAction =
+                sp.type != ActionType::Builtin
+                || sp.action != "softkey_bank_select";
+            const bool needsParam = sp.param != i;
+            if (needsAction || needsParam) {
+                const std::string oldAction = sp.action;
+                sp.type   = ActionType::Builtin;
+                sp.action = "softkey_bank_select";
+                sp.param  = i;
+                if (bd.label.empty()) bd.label = kBankLabels[i];
+                if (bd.behavior == Behavior::Toggle) {
+                    bd.behavior = Behavior::Momentary;
+                }
+                logReset(li, kBankNames[i], oldAction,
+                         "softkey_bank_select");
+            }
+        }
+    }
+
+    static const ButtonId kQuickIds[3] = {
+        ButtonId::Quick1, ButtonId::Quick2, ButtonId::Quick3,
+    };
+    static const char* kQuickNames[3] = {"Quick1", "Quick2", "Quick3"};
+    for (int li = 0; li < 3; ++li) {
+        auto& L = c.layers[li];
+        for (int qN = 0; qN < 3; ++qN) {
+            std::string canonical;
+            const char* canonLabel = nullptr;
+            bool canonIsJump = false;
+            if (li == 0 && qN == 0) {
+                canonical  = "domain_cs";
+                canonLabel = "CS";
+            } else if (li == 0 && qN == 1) {
+                canonical  = "domain_bc";
+                canonLabel = "BC";
+            } else {
+                char buf[24];
+                std::snprintf(buf, sizeof(buf),
+                              "softkey_bank_%d", li * 3 + qN + 1);
+                canonical    = buf;
+                canonIsJump  = true;
+                canonLabel   = (qN == 0) ? "Q1"
+                             : (qN == 1) ? "Q2"
+                                         : "Q3";
+            }
+
+            auto it = L.bindings.find(kQuickIds[qN]);
+            if (it == L.bindings.end()) {
+                L.bindings[kQuickIds[qN]] = mkBuiltin(
+                    canonical.c_str(), Behavior::Momentary, canonLabel);
+                if (lg) {
+                    std::fprintf(lg,
+                        "  [sanitize] L%d %s created: '%s'\n",
+                        li + 1, kQuickNames[qN], canonical.c_str());
+                }
+                continue;
+            }
+            Binding& bd = it->second;
+            auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+
+            const bool actionEmpty =
+                sp.type != ActionType::Builtin
+                || sp.action.empty();
+
+            // Mismatched-jump: action is "softkey_bank_N" (a layer-
+            // jump) pointing elsewhere than this cell's canonical
+            // self-jump. Only fires when canonical is itself a jump
+            // (otherwise we'd nuke valid cross-jump customizations
+            // on L1.Q1/Q2).
+            bool mismatchedJump = false;
+            if (canonIsJump
+                && sp.type == ActionType::Builtin
+                && sp.action.rfind("softkey_bank_", 0) == 0
+                && sp.action != "softkey_bank_select"
+                && sp.action != canonical) {
+                mismatchedJump = true;
+            }
+
+            if (actionEmpty || mismatchedJump) {
+                const std::string oldAction = sp.action;
+                sp = ActionSlot{};
+                sp.type   = ActionType::Builtin;
+                sp.action = canonical;
+                sp.param  = 0;
+                if (bd.label.empty()) bd.label = canonLabel;
+                if (bd.behavior == Behavior::Toggle) {
+                    bd.behavior = Behavior::Momentary;
+                }
+                logReset(li, kQuickNames[qN], oldAction, canonical);
+            }
+        }
+    }
+
+    if (lg) std::fclose(lg);
+}
+
 // Upgrade hook: existing configs get factory long-press defaults on
 // the FLIP button (send_this / recv_this+Shift) without touching any
 // other field. Skipped if the user has already set their own
@@ -1734,6 +1906,15 @@ void load()
             // that somehow ended up past v10 without the action-name
             // migration sticking. Idempotent on already-migrated data.
             upgradeRetireQuickSelect_(tmp);
+
+            // Bank/Quick action sanitize. Always runs. Fixes two
+            // 2026-05-13 data-corruption patterns: (1) *Bank cells
+            // left empty after show_user_bank → '' cleared and
+            // fillIfMissing wouldn't re-fill an existing-but-empty
+            // entry; (2) Quick cells with mismatched softkey_bank_N
+            // jumps produced by the quick_select_N migration. See
+            // upgradeSanitizeBankAndQuickActions_ above for rules.
+            upgradeSanitizeBankAndQuickActions_(tmp);
 
             // Diagnostic snapshot. Dumps the resolved bindings for the
             // load-bearing buttons so "press did nothing" / "LED dark"
