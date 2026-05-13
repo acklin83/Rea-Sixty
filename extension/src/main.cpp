@@ -2457,6 +2457,9 @@ uint16_t linearVolumeToPb(double linear);
 // Defined alongside pushUf8GlobalLeds — see comment there.
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on);
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState state);
+// True iff any modifier-slot in the binding has an active stateful
+// action (toggle on, REAPER GetToggleCommandState2 == 1).
+bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd);
 extern int g_lastAutoMode;
 
 // Cell 0x24 sits outside the per-strip LED range. cap33 shows SSL360
@@ -4047,13 +4050,25 @@ void pushZonesForVisibleSlots()
             uf8::TopSoftKeyState tssk;
             int8_t ledCacheKey;
             if (curQuick >= 0) {
-                // User-Quick context: bright when this slot has an
-                // action, dim otherwise. Lets the user see which
-                // positions in the active sub-bank are populated.
-                tssk = userBankSlotPresent
+                // User-Quick context. Three-tier rendering:
+                //   empty slot                       → Dim (row stays
+                //                                       visibly populated)
+                //   filled, action's toggle ON       → On
+                //   filled, no active toggle state   → Dim
+                // Previously any filled slot rendered permanent-Bright
+                // (Frank 2026-05-13: "user-defined leuchten immer hell,
+                // bringen sie nicht auf dim") which made stateless one-
+                // shot bindings indistinguishable from latched toggles.
+                bool slotActive = false;
+                if (userBankSlotPresent) {
+                    const auto userSlot = uf8::bindings::getUserQuickSlot(
+                        curLayer, curQuick, curSub, s);
+                    slotActive = bindingHasActiveSlot_(userSlot);
+                }
+                tssk = slotActive
                     ? uf8::TopSoftKeyState::On
                     : uf8::TopSoftKeyState::Dim;
-                ledCacheKey = static_cast<int8_t>(userBankSlotPresent ? 8 : 7);
+                ledCacheKey = static_cast<int8_t>(slotActive ? 8 : 7);
             } else if (isToggleCell) {
                 // Bright when this synthetic-toggle slot is the focused
                 // parameter OR the toggle's own state is "on". Frank
@@ -5889,11 +5904,8 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
 // permanently bright (Frank 2026-05-06). Press feedback through the
 // builtin handler (sendUf8GlobalLed(led, true) at press, false at
 // release) still gives the brief highlight users expect.
-bool boundActionIsActive_(uf8::bindings::ButtonId bid)
+bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd)
 {
-    if (bid == uf8::bindings::ButtonId::None) return false;
-    const auto bd = uf8::bindings::getBinding(
-        uf8::bindings::getActiveLayer(), bid);
     using AT = uf8::bindings::ActionType;
     auto slotActive = [](const uf8::bindings::ActionSlot& s) -> bool {
         switch (s.type) {
@@ -5924,6 +5936,13 @@ bool boundActionIsActive_(uf8::bindings::ButtonId bid)
     for (const auto& s : bd.shortPress) if (slotActive(s)) return true;
     for (const auto& s : bd.longPress)  if (slotActive(s)) return true;
     return false;
+}
+
+bool boundActionIsActive_(uf8::bindings::ButtonId bid)
+{
+    if (bid == uf8::bindings::ButtonId::None) return false;
+    return bindingHasActiveSlot_(uf8::bindings::getBinding(
+        uf8::bindings::getActiveLayer(), bid));
 }
 
 
