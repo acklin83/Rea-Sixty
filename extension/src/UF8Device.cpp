@@ -140,6 +140,39 @@ void UF8Device::runInit_()
             || cmd == 0x0E || cmd == 0x17;
     };
 
+    auto sendFrame = [&](const std::vector<uint8_t>& f) {
+        int t = 0;
+        libusb_bulk_transfer(handle_, kEpOut,
+                             const_cast<uint8_t*>(f.data()),
+                             static_cast<int>(f.size()),
+                             &t, 500);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    };
+
+    // Blank every text/graphical zone BEFORE the captured init replays.
+    // The UF8 retains whatever SSL360 last painted (track names, dB
+    // values, plug-in slot labels, V-Pot bar positions), and that
+    // garbage stays visible for the ~9 s the fader-tanz is running
+    // unless we wipe it first. Same primitives are re-sent post-init
+    // (see below) as a defensive second pass — cheap and idempotent.
+    auto blankAllZones = [&]() {
+        if (shuttingDown_.load()) return;
+        sendFrame(buildPluginSlotActive());
+        for (uint8_t s = 0; s < 8; ++s) {
+            if (shuttingDown_.load()) return;
+            sendFrame(buildPluginSlotName(s,    "        "));
+            sendFrame(buildStripTextUpper(s,    "       "));
+            sendFrame(buildStripTextLower(s,    "       "));
+            sendFrame(buildChannelStripType(s,  "    "));
+            sendFrame(buildFaderDbReadout(s,    "    "));
+            sendFrame(buildValueLine(s,         ""));
+            sendFrame(buildChannelNumber(s,     "  "));
+        }
+        const std::array<uint16_t, 8> zeros{};
+        sendFrame(buildVPotReadoutBar(zeros));
+    };
+    blankAllZones();
+
     // Replay the SSL-360° wakeup/init sequence captured on 2026-05-07.
     // Frames carry an explicit delay_ms_before for the load-bearing
     // inter-phase pauses in the fader-tanz (SSL waits ~750 ms..3 s between
@@ -185,39 +218,11 @@ void UF8Device::runInit_()
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    auto sendFrame = [&](const std::vector<uint8_t>& f) {
-        int t = 0;
-        libusb_bulk_transfer(handle_, kEpOut,
-                             const_cast<uint8_t*>(f.data()),
-                             static_cast<int>(f.size()),
-                             &t, 500);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    };
-
-    // Plugin-Mixer color bar requires each strip's plugin slot to be
-    // marked "populated" + non-empty slot name. Spaces satisfy "non-empty"
-    // while overwriting whatever leftover text ("Test"/"TRACK") the
-    // firmware retained from the previous SSL360 session — the 30 Hz
-    // REAPER timer then paints real track-derived labels on top.
-    sendFrame(buildPluginSlotActive());
-    for (uint8_t s = 0; s < 8; ++s) {
-        if (shuttingDown_.load()) { initInProgress_ = false; return; }
-        sendFrame(buildPluginSlotName(s, "        "));
-    }
-
-    // Blank every per-strip text zone so SSL's session text (track names
-    // from the prior SSL360 session) doesn't linger before the 30 Hz timer
-    // paints REAPER state. buildStripTextUpper is variable-length — an
-    // empty string sends a header-only frame the firmware ignores, so
-    // pass explicit spaces to actually clear the 7-char zone.
-    for (uint8_t s = 0; s < 8; ++s) {
-        if (shuttingDown_.load()) { initInProgress_ = false; return; }
-        sendFrame(buildStripTextUpper(s, "       "));
-        sendFrame(buildStripTextLower(s, "       "));
-        sendFrame(buildChannelStripType(s, "    "));
-        sendFrame(buildFaderDbReadout(s, "    "));
-        sendFrame(buildValueLine(s, ""));
-    }
+    // Second pass — the captured init/layer sequences may have repainted
+    // some zones with leftover SSL360 content via non-text frames the
+    // isTextFrame filter doesn't catch. Re-blank everything before the
+    // 30 Hz REAPER timer takes over.
+    blankAllZones();
 
     // Re-engage all 8 motors after the init sequence. The captured init
     // ends with FF 1D 02 strip 00 (motor DISABLE) for all strips; without
