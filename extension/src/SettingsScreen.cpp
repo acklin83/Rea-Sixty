@@ -1,6 +1,7 @@
 #include "SettingsScreen.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -3127,6 +3128,83 @@ void unbindUf8_(int kind, int strip, int bank)
     });
 }
 
+// "Fill sequential" — when a UF8 control is mapped to a parameter whose
+// name carries a digit run (e.g. "CH1 Volume"), populate strips to the
+// right with params whose names match the same pattern at successive
+// numbers ("CH2 Volume", "CH3 Volume", ...). Width is preserved so
+// "CH01" steps to "CH02", not "CH2". Strips with no matching param
+// are left untouched. One atomic save. Returns strips bound.
+int fillSequentialUf8_(int kind, int strip, int bank,
+                       int curParam, const EditingFx& fx)
+{
+    if (curParam < 0 || strip < 0 || strip >= 7) return 0;
+    if (g_editingMatch.empty()) return 0;
+
+    auto cat = uf8::user_plugins::get();
+    UserPluginMap* editing = nullptr;
+    for (auto& m : cat.maps) {
+        if (m.match == g_editingMatch) { editing = &m; break; }
+    }
+    if (!editing) return 0;
+
+    char curName[256] = {};
+    if (!paramNameFor_(*editing, fx, curParam, curName, sizeof(curName)))
+        return 0;
+    const std::string base(curName);
+
+    size_t ds = std::string::npos, de = 0;
+    for (size_t i = 0; i < base.size(); ++i) {
+        if (std::isdigit(static_cast<unsigned char>(base[i]))) {
+            ds = i; de = i + 1;
+            while (de < base.size() &&
+                   std::isdigit(static_cast<unsigned char>(base[de]))) ++de;
+            break;
+        }
+    }
+    if (ds == std::string::npos) return 0;
+
+    const int curNum = std::atoi(base.substr(ds, de - ds).c_str());
+    const int width  = static_cast<int>(de - ds);
+    const std::string prefix = base.substr(0, ds);
+    const std::string suffix = base.substr(de);
+
+    const int total = paramCountFor_(*editing, fx);
+    if (total <= 0) return 0;
+
+    int filled = 0;
+    for (int s = strip + 1; s < 8; ++s) {
+        const int targetNum = curNum + (s - strip);
+        char numBuf[16];
+        std::snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
+        const std::string target = prefix + numBuf + suffix;
+
+        int found = -1;
+        char nm[256];
+        for (int p = 0; p < total; ++p) {
+            if (!paramNameFor_(*editing, fx, p, nm, sizeof(nm))) continue;
+            if (target == nm) { found = p; break; }
+        }
+        if (found < 0) continue;
+
+        auto& u = editing->uf8;
+        switch (kind) {
+            case 0: u.strips[s].faderVst3Param = found; break;
+            case 3: u.strips[s].soloVst3Param  = found; break;
+            case 4: u.strips[s].cutVst3Param   = found; break;
+            case 5: u.strips[s].selVst3Param   = found; break;
+            case 1:
+            case 2: u.banks.banks[bank][s].vst3Param = found; break;
+            default: continue;
+        }
+        ++filled;
+    }
+    if (filled > 0) {
+        uf8::user_plugins::upsert(*editing);
+        persistAndReport_();
+    }
+    return filled;
+}
+
 bool uf8Inverted_(int kind, int strip, int bank)
 {
     if (g_editingMatch.empty()) return false;
@@ -4082,6 +4160,40 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                         }
                     }
                     ImGui_EndPopup(ctx);
+                }
+                ImGui_Separator(ctx);
+            }
+
+            // Fill strips to the right with sequentially-numbered params
+            // derived from the current mapping's name (e.g. "CH1 Volume"
+            // → "CH2 Volume"..."CH8 Volume"). Disabled when the mapped
+            // param has no digit run or this is already the last strip.
+            {
+                const UserPluginMap* editing = nullptr;
+                for (const auto& m : uf8::user_plugins::get().maps) {
+                    if (m.match == g_editingMatch) { editing = &m; break; }
+                }
+                bool hasDigits = false;
+                if (editing) {
+                    char nm[256];
+                    if (paramNameFor_(*editing, fx, mapped,
+                                      nm, sizeof(nm))) {
+                        for (size_t i = 0; nm[i]; ++i) {
+                            if (std::isdigit(
+                                    static_cast<unsigned char>(nm[i]))) {
+                                hasDigits = true; break;
+                            }
+                        }
+                    }
+                }
+                const bool canFill = hasDigits && ctrl.strip < 7;
+                static bool s_fillDisabled = false;
+                if (ImGui_MenuItem(ctx, "Fill sequential (right)",
+                                   nullptr, nullptr,
+                                   canFill ? nullptr : &s_fillDisabled))
+                {
+                    fillSequentialUf8_(ctrl.kind, ctrl.strip, bank,
+                                       mapped, fx);
                 }
                 ImGui_Separator(ctx);
             }
