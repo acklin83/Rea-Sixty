@@ -8247,15 +8247,54 @@ void registerBindingHandlers()
         nullptr, "Brightness Both (LEDs+LCDs) -", false
     });
 
+    // domain_cs / domain_bc — SSL CS/BC focus buttons. EXACT pre-Quick-
+    // refactor behaviour: Momentary, sets focused-param domain, clears
+    // any active user-Quick on the current layer so the top-soft-key
+    // row goes back to plug-in-driven labels. NEVER engages
+    // g_activeQuick — that would route the row to empty user-Quick
+    // slots and break the SSL CS/BC plug-in maps (Bug 5, 2026-05-13).
+    auto domainFocus = [](uf8::Domain target) {
+        return DescBuilder{
+            [target](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                if (uf8::getFocusedParam().domain != target) {
+                    uf8::setFocus({target, 0});
+                }
+                // Drop user-Quick on this layer so the SSL plug-in
+                // row reappears immediately.
+                const int layer = uf8::bindings::getActiveLayer();
+                if (layer >= 0 && layer <= 2
+                    && g_activeQuick[layer].exchange(-1) != -1) {
+                    g_bankDirty.store(true);
+                    g_softKeyDirty.store(true);
+                }
+            },
+            [target](int) {
+                if (uf8::getFocusedParam().domain != target) return false;
+                const int layer = uf8::bindings::getActiveLayer();
+                if (layer < 0 || layer > 2) return true;
+                return g_activeQuick[layer].load() < 0;
+            },
+            "", false
+        };
+    };
+    {
+        auto d = domainFocus(uf8::Domain::ChannelStrip);
+        d.displayName = "Focus → Channel Strip";
+        registerBuiltin("domain_cs", d);
+    }
+    {
+        auto d = domainFocus(uf8::Domain::BusComp);
+        d.displayName = "Focus → Bus Comp";
+        registerBuiltin("domain_bc", d);
+    }
+
     // Quick selector — one builtin per Q (Q1/Q2/Q3). Toggle, per-layer
-    // mutex: pressing the same Q again deactivates; pressing a different
-    // Q implicitly deactivates the prior because state is a single
-    // "which Quick is engaged" int per layer.
-    //
-    // Layer 1 (index 0): Q1/Q2 still drive SSL CS/BC focus as a side
-    // effect (back-compat with the hardcoded plug-in maps). Q3 is pure
-    // user-Quick. Layers 2 + 3: all three are pure user-Quick toggles.
-    // The render path (label/dispatch) uses g_activeQuick[layer].
+    // mutex via g_activeQuick[layer]. Used as the factory binding for
+    // Q3 on every layer, plus Q1/Q2 on Layer 2/3 if the user assigns
+    // them. Layer 1 Q1/Q2 stay on domain_cs / domain_bc; quick_select_1
+    // and quick_select_2 are still registered for editor visibility +
+    // Layer 2/3 use, they just aren't the Layer-1 factory mapping.
     auto quickSelect = [](int qIdx) {
         return DescBuilder{
             [qIdx](bool firing, bool /*pressed*/, int /*param*/) {
@@ -8264,21 +8303,8 @@ void registerBindingHandlers()
                 if (layer < 0 || layer > 2) return;
                 const int cur = g_activeQuick[layer].load();
                 g_activeQuick[layer].store(cur == qIdx ? -1 : qIdx);
-                // Force a top-soft-key + V-Pot label repaint on the
-                // next render tick — the row's source switches between
-                // SSL plug-in map and user-Quick slot table.
                 g_bankDirty.store(true);
                 g_softKeyDirty.store(true);
-                if (layer == 0) {
-                    // Back-compat: Q1 = CS focus, Q2 = BC focus.
-                    if (qIdx == 0 && cur != qIdx) {
-                        if (uf8::getFocusedParam().domain != uf8::Domain::ChannelStrip)
-                            uf8::setFocus({uf8::Domain::ChannelStrip, 0});
-                    } else if (qIdx == 1 && cur != qIdx) {
-                        if (uf8::getFocusedParam().domain != uf8::Domain::BusComp)
-                            uf8::setFocus({uf8::Domain::BusComp, 0});
-                    }
-                }
             },
             [qIdx](int) {
                 const int layer = uf8::bindings::getActiveLayer();
@@ -8301,18 +8327,10 @@ void registerBindingHandlers()
         registerBuiltin("quick_select_3", d);
     }
 
-    // Back-compat aliases. Existing v6 bindings.json files reference
-    // domain_cs / domain_bc / user_domain_1/2/3 — re-register them as
-    // shims pointing at the same handler so old configs keep working.
-    // No new factory binding uses these names.
-    {
-        auto d = quickSelect(0); d.displayName = "Focus → Channel Strip";
-        registerBuiltin("domain_cs", d);
-    }
-    {
-        auto d = quickSelect(1); d.displayName = "Focus → Bus Comp";
-        registerBuiltin("domain_bc", d);
-    }
+    // Back-compat aliases for v6 configs that still reference
+    // user_domain_1/2/3. Map them to quick_select_* so the named
+    // builtin parses; hidden from the picker via SettingsScreen.cpp
+    // categoryFor().
     {
         auto d = quickSelect(0); d.displayName = "User Domain 1";
         registerBuiltin("user_domain_1", d);

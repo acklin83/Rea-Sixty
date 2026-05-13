@@ -1353,7 +1353,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Sends";
                 if (n.rfind("recv_", 0) == 0)
                     return "Receives";
-                if (n.rfind("quick_select_", 0) == 0)
+                if (n.rfind("quick_select_", 0) == 0
+                 || n == "domain_cs" || n == "domain_bc")
                     return "Quick";
                 if (n == "flip" || n == "pan_force"
                  || n == "ssl_strip_mode_toggle"
@@ -1364,12 +1365,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Selection Sets";
                 if (n.rfind("brightness_", 0) == 0)
                     return "Brightness";
-                // Deprecated v6 aliases — still registered as no-op /
-                // shim builtins so old configs parse, but hidden from
-                // the picker. New configs use quick_select_* / inline
-                // user-Quick UI instead.
+                // Deprecated v6 aliases — kept registered so old
+                // configs parse but hidden from the picker.
                 if (n == "show_user_bank"
-                 || n == "domain_cs" || n == "domain_bc"
                  || n == "user_domain_1" || n == "user_domain_2"
                  || n == "user_domain_3")
                     return "";

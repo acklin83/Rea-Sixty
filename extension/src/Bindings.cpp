@@ -498,13 +498,12 @@ void seedFactoryDefaults_(Config& c)
                                     255, 255, 255, /*param*/ i);
     }
 
-    // Quick keys on Layer 1: Q1/Q2 map onto SSL CS/BC focus + user-Quick
-    // slot 0/1; Q3 is pure user-Quick (toggle). All three use the new
-    // quick_select_* builtins so they share the per-layer mutex group
-    // (resolved Q7 — all three Layer-1 Quicks are mutex'd).
-    L1[ButtonId::Quick1] = mkBuiltin("quick_select_1", Behavior::Toggle, "Q1");
-    L1[ButtonId::Quick2] = mkBuiltin("quick_select_2", Behavior::Toggle, "Q2");
-    L1[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle, "Q3");
+    // Quick keys on Layer 1: Q1/Q2 stay hardcoded SSL CS/BC focus —
+    // exact pre-2026-05-13 behaviour (Momentary, no user-Quick engage).
+    // Q3 is the only user-fillable Quick on Layer 1 (Toggle).
+    L1[ButtonId::Quick1] = mkBuiltin("domain_cs",      Behavior::Momentary, "CS");
+    L1[ButtonId::Quick2] = mkBuiltin("domain_bc",      Behavior::Momentary, "BC");
+    L1[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle,    "Q3");
 
     // Bank scroll (8-strip) and soft-key bank navigation (page).
     L1[ButtonId::BankLeft]  = mkBuiltin("bank_left",  Behavior::Momentary, "BANK <");
@@ -1299,7 +1298,38 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // swatches (auto_read/green, zoom_up/green, …) back to white.
 // v4 (2026-05-07): unused — bumped only to gate the colour-migration
 // fix that landed mid-day; superseded by v5 the same day.
-constexpr int kCurrentBindingsVersion = 7;
+// v8 (2026-05-13): undo the Layer-1 Q1/Q2 Quick-select mapping from v7.
+// v7's factory swap to quick_select_1/2 broke the SSL CS/BC plug-in
+// labels + soft-key dispatch on Layer 1 (engaging g_activeQuick[0]
+// routed the top-soft-key row to empty user-Quick slots). Q1/Q2 go
+// back to domain_cs/domain_bc Momentary. Q3 stays quick_select_3.
+constexpr int kCurrentBindingsVersion = 8;
+
+// v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
+// Only touches bindings that exactly match the v7 factory swap (so
+// users who customised these slots themselves keep their choice).
+void upgradeRestoreLayer1Quicks_(Layer& L1)
+{
+    auto restore = [&](ButtonId id, const char* fromAction,
+                       const char* toAction, const char* label) {
+        auto it = L1.bindings.find(id);
+        if (it == L1.bindings.end()) return;
+        Binding& bd = it->second;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        if (sp.type != ActionType::Builtin) return;
+        if (sp.action != fromAction) return;
+        // Reset short-press to a clean Builtin slot pointing at the
+        // canonical CS/BC focus builtin. Behavior flips back to
+        // Momentary; label restored to the SSL-style 2-char tag.
+        sp = ActionSlot{};
+        sp.type     = ActionType::Builtin;
+        sp.action   = toAction;
+        bd.label    = label;
+        bd.behavior = Behavior::Momentary;
+    };
+    restore(ButtonId::Quick1, "quick_select_1", "domain_cs", "CS");
+    restore(ButtonId::Quick2, "quick_select_2", "domain_bc", "BC");
+}
 
 // Upgrade hook: existing configs get factory long-press defaults on
 // the FLIP button (send_this / recv_this+Shift) without touching any
@@ -1364,6 +1394,9 @@ void load()
             }
             if (tmp.version < 6) {
                 for (auto& L : tmp.layers) upgradeEmptyBuiltinSlots_(L);
+            }
+            if (tmp.version < 8) {
+                upgradeRestoreLayer1Quicks_(tmp.layers[0]);
             }
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);
