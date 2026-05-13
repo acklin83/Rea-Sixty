@@ -246,19 +246,25 @@ struct Binding {
     bool        ledShowWhenEmpty = false;
 };
 
-// User-defined Soft-Key Bank. The 8 slots map 1:1 onto the top-soft-key
-// row above the strips (one per V-Pot column). Each slot is a full
-// Binding so it carries the same modifier matrix, long-press, and LED
-// config as a regular button binding. The bank's `name` is what the
-// editor lists and what pushZonesForVisibleSlots can show next to the
-// active-bank indicator. Slots default to empty (no action). 12 banks
-// total per Config — matches the user's "12 storage slots" ask.
-constexpr int kUserBankCount   = 12;
-constexpr int kUserBankSlots   = 8;
+// User-defined Quick context. Each layer has 3 Quick buttons (Q1/Q2/Q3);
+// each Quick holds 6 sub-banks (V-POT default + Soft 1..5, picked via
+// the hardware bank-select row); each sub-bank carries 8 top-soft-key
+// slots (one per V-Pot column). Total user-fillable slots per layer:
+//   3 × 6 × 8 = 144. Layer 1 Q1/Q2 stay hardcoded for SSL CS/BC; only
+//   Q3 there is user-fillable. Layer 2 + Layer 3 all three Quicks are
+//   user-fillable. Replaces the flat 12 × 8 UserBank model.
+constexpr int kQuicksPerLayer    = 3;
+constexpr int kSubBanksPerQuick  = 6;
+constexpr int kSlotsPerSubBank   = 8;
 
-struct UserBank {
-    std::string name;                       // user label, e.g. "Vocals", "Drums"
-    Binding     slots[kUserBankSlots];      // 0..7 = top-soft-key positions
+struct UserQuickSubBank {
+    Binding slots[kSlotsPerSubBank];   // top-soft-key positions
+};
+struct UserQuick {
+    UserQuickSubBank subBanks[kSubBanksPerQuick];  // V-POT, Soft 1..5
+};
+struct LayerUserQuicks {
+    UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
 };
 
 struct Layer {
@@ -269,10 +275,10 @@ struct Layer {
 };
 
 struct Config {
-    int      version     = 1;
-    int      activeLayer = 0;
-    Layer    layers[3];
-    UserBank userBanks[kUserBankCount];
+    int             version     = 1;
+    int             activeLayer = 0;
+    Layer           layers[3];
+    LayerUserQuicks userQuicks[3];        // per-layer user-Quick data
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -403,21 +409,19 @@ Binding getBinding(int layer, ButtonId id);
 // white because Binding{} also has white as default.
 bool hasBinding(int layer, ButtonId id);
 
-// User Soft-Key Bank accessors. bankIdx 0..kUserBankCount-1, slotIdx
-// 0..kUserBankSlots-1. Out-of-range indices return defaults / silently
-// ignore writes.
-UserBank getUserBank(int bankIdx);
-void     setUserBank(int bankIdx, const UserBank& bank);
-Binding  getUserBankSlot(int bankIdx, int slotIdx);
-void     setUserBankSlot(int bankIdx, int slotIdx, const Binding& bd);
+// User-Quick slot accessors. layer 0..2, quick 0..2, subBank 0..5,
+// slot 0..7. Out-of-range returns defaults / silently ignores writes.
+Binding  getUserQuickSlot(int layer, int quick, int subBank, int slot);
+void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
+                          const Binding& bd);
 
-// Dispatch a press/release through a user-bank slot. Same long-press
+// Dispatch a press/release through a user-quick slot. Same long-press
 // + modifier-matrix logic as dispatch(ButtonId), but the slot is
-// addressed by (bankIdx, slotIdx) so the press timer keys stay
-// distinct from layer-button presses. Returns true if the slot
-// actually had an action to fire (lets the caller fall through to
-// legacy MCU passthrough for empty slots if it wants).
-bool     dispatchUserBankSlot(int bankIdx, int slotIdx, bool pressed);
+// addressed by (layer, quick, subBank, slot) so press-timer keys stay
+// distinct from layer-button presses. Returns true if the slot has an
+// action; callers can fall through on empty.
+bool     dispatchUserQuickSlot(int layer, int quick, int subBank,
+                               int slot, bool pressed);
 
 // Replace (or insert) a single binding and persist. Caller is the UI;
 // any in-flight USB-thread dispatch holding the lock blocks briefly.

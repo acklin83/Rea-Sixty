@@ -812,20 +812,19 @@ std::atomic<bool> g_recvFaderThisTrack {false};
 // scribble strips / V-Pot bars to stale state).
 std::atomic<bool> g_routingDirty{false};
 
-// Active user-defined Soft-Key Bank. -1 = no user bank active (top-soft
-// keys behave as today, driven by softkey::viewFor plugin maps).
-// 0..kUserBankCount-1 = the corresponding bank's 8 slots drive the
-// top-soft-key labels + presses. Set via the show_user_bank builtin.
-std::atomic<int> g_activeUserBank{-1};
-
-// User "domain" selector — three sticky slots intended for the Quick
-// 1/2/3 buttons when the user doesn't want the SSL CS/BC focus model.
-// -1 = none selected; 0..2 = the active slot's index. Mutually
-// exclusive: switching to one slot clears the others (matches the
-// hardware mental model of Q1/Q2/Q3 as a radio group). Plain state
-// only — chains / Soft-Key-Bank ties are still configured by the
-// user through additional bindings.
-std::atomic<int> g_activeUserDomain{-1};
+// Per-layer Quick context state.
+//   g_activeQuick[layer]   = -1 when no Quick is engaged on that layer
+//                          (top-soft-keys behave as the layer's default —
+//                          on Layer 1 that's the SSL plug-in maps).
+//                          0..2 = Q1/Q2/Q3 engaged.
+//   g_activeSubBank[layer] = 0..5 — V-POT default + Soft 1..5. The
+//                          hardware bank-select row mutates this in
+//                          user-Quick context (in SSL CS/BC context it
+//                          mutates g_softKeyBank instead).
+// Replaces the legacy g_activeUserBank (flat 12-bank model) and
+// g_activeUserDomain (global radio without per-layer scope).
+std::atomic<int> g_activeQuick[3]   = { -1, -1, -1 };
+std::atomic<int> g_activeSubBank[3] = {  0,  0,  0 };
 
 // Helper: clear every other Send/Receive mode on the same physical
 // output (V-Pot or Fader) so the user can never end up with two
@@ -2966,16 +2965,20 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 
             bool handledNatively = false;
 
-            // Top-soft-key user-bank override has the highest priority:
-            // when a user-defined Soft-Key Bank is active, route the
-            // press straight to its slot's binding, bypassing the
-            // default ssl_softkey factory binding that would otherwise
-            // steal the press through bindings::dispatch.
+            // Top-soft-key user-Quick override has the highest priority:
+            // when a Quick is engaged on the active layer, route the
+            // press into the matching (layer, quick, sub-bank, slot)
+            // user-Quick binding, bypassing the default ssl_softkey
+            // factory binding that would otherwise steal the press
+            // through bindings::dispatch.
             if (id >= 0x18 && id <= 0x1F) {
-                const int activeUserBank = g_activeUserBank.load();
-                if (activeUserBank >= 0) {
-                    uf8::bindings::dispatchUserBankSlot(
-                        activeUserBank, id - 0x18, pressed);
+                const int layer = uf8::bindings::getActiveLayer();
+                const int aq = (layer >= 0 && layer <= 2)
+                               ? g_activeQuick[layer].load() : -1;
+                if (aq >= 0) {
+                    const int sb = g_activeSubBank[layer].load();
+                    uf8::bindings::dispatchUserQuickSlot(
+                        layer, aq, sb, id - 0x18, pressed);
                     handledNatively = true;
                 }
             }
@@ -3929,16 +3932,21 @@ void pushZonesForVisibleSlots()
                 }
             }
 
-            // User-bank override: when a user soft-key bank is active,
-            // each top-soft-key shows the bank's slot label instead of
-            // the plugin-driven param label. The LED tracks bank-slot
+            // User-Quick override: when a Quick is engaged on the
+            // current layer, each top-soft-key shows the matching
+            // (layer, quick, sub-bank, slot) binding's label instead
+            // of the plugin-driven param label. The LED tracks slot
             // populated/empty rather than focused-param state.
-            const int activeUserBank = g_activeUserBank.load();
+            const int curLayer  = uf8::bindings::getActiveLayer();
+            const int curQuick  = (curLayer >= 0 && curLayer <= 2)
+                                  ? g_activeQuick[curLayer].load()  : -1;
+            const int curSub    = (curLayer >= 0 && curLayer <= 2)
+                                  ? g_activeSubBank[curLayer].load() : 0;
             std::string userLabel;
             bool userBankSlotPresent = false;
-            if (activeUserBank >= 0) {
-                const auto userSlot = uf8::bindings::getUserBankSlot(
-                    activeUserBank, s);
+            if (curQuick >= 0) {
+                const auto userSlot = uf8::bindings::getUserQuickSlot(
+                    curLayer, curQuick, curSub, s);
                 userLabel = userSlot.label;
                 const auto& sp = userSlot.shortPress[
                     static_cast<int>(uf8::bindings::Modifier::Plain)];
@@ -3946,8 +3954,6 @@ void pushZonesForVisibleSlots()
                     sp.type != uf8::bindings::ActionType::Noop
                     || !sp.action.empty();
                 if (userLabel.empty() && userBankSlotPresent) {
-                    // No user-supplied label — synthesise one from the
-                    // action name so the user at least sees SOMETHING.
                     userLabel = sp.action;
                     if (userLabel.size() > 8) userLabel.resize(8);
                 }
@@ -3990,7 +3996,7 @@ void pushZonesForVisibleSlots()
                 }
             }
             if (label.empty()) {
-                label = (activeUserBank >= 0)
+                label = (curQuick >= 0)
                     ? userLabel : std::string(vSk.labels[s]);
             }
             // Pad to 12 chars centred (leading + trailing spaces) so
@@ -4008,7 +4014,7 @@ void pushZonesForVisibleSlots()
                 label = std::string(lead, ' ') + label
                       + std::string(pad - lead, ' ');
             }
-            const int slotLink = (activeUserBank >= 0)
+            const int slotLink = (curQuick >= 0)
                 ? (userBankSlotPresent ? 0 : softkey::kNoSlot)
                 : vSk.linkIdx[s];
             // Synthetic toggle columns: read the per-strip state directly
@@ -4040,10 +4046,10 @@ void pushZonesForVisibleSlots()
             }
             uf8::TopSoftKeyState tssk;
             int8_t ledCacheKey;
-            if (activeUserBank >= 0) {
-                // User bank: bright when this slot has an action,
-                // dim otherwise. Lets the user see which positions in
-                // the active bank are populated.
+            if (curQuick >= 0) {
+                // User-Quick context: bright when this slot has an
+                // action, dim otherwise. Lets the user see which
+                // positions in the active sub-bank are populated.
                 tssk = userBankSlotPresent
                     ? uf8::TopSoftKeyState::On
                     : uf8::TopSoftKeyState::Dim;
@@ -6157,17 +6163,23 @@ void pushUf8GlobalLeds()
         g_lastShiftHeld = shiftHeld;
     }
 
-    // Soft-key bank LEDs — exactly one of V-POT / Soft 1..5 is lit
-    // matching g_softKeyBank (0..5). Single dirty-check rewrites all 6
-    // since the user expects a clean radio-button look on every change.
-    if (softKeyBank != g_lastSoftKeyBank || !g_globalLedsInit) {
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, softKeyBank == 0);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    softKeyBank == 1);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    softKeyBank == 2);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    softKeyBank == 3);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    softKeyBank == 4);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    softKeyBank == 5);
-        g_lastSoftKeyBank = softKeyBank;
+    // Soft-key bank LEDs — exactly one of V-POT / Soft 1..5 is lit.
+    // In user-Quick context the row tracks g_activeSubBank[layer] (0..5);
+    // otherwise it tracks the SSL plug-in's PAGE bank in g_softKeyBank.
+    const int activeQuickForBanks = (activeLayer >= 0 && activeLayer <= 2)
+                                    ? g_activeQuick[activeLayer].load() : -1;
+    const int subBankForLeds      = (activeQuickForBanks >= 0
+                                     && activeLayer >= 0 && activeLayer <= 2)
+                                    ? g_activeSubBank[activeLayer].load()
+                                    : softKeyBank;
+    if (subBankForLeds != g_lastSoftKeyBank || !g_globalLedsInit) {
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    subBankForLeds == 2);
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    subBankForLeds == 3);
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    subBankForLeds == 4);
+        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    subBankForLeds == 5);
+        g_lastSoftKeyBank = subBankForLeds;
     }
 
     // Page LEDs intentionally not driven — see comment at the top of
@@ -7328,24 +7340,31 @@ int reasixty_focusedDomain()
     return (fp.domain == uf8::Domain::BusComp) ? 1 : 0;
 }
 
-// -1 when no user soft-key bank is engaged; otherwise the active
-// bank's index in 0..kUserBankCount-1. Settings preview overlays the
-// bank's slot labels over the SSL plug-in labels when this is >= 0.
+// -1 when no Quick is engaged on the active layer; otherwise the active
+// Quick index 0..2. Settings preview overlays the slot labels for the
+// current Quick + sub-bank when this is >= 0.
 int reasixty_activeUserBank()
 {
-    return g_activeUserBank.load();
+    const int layer = uf8::bindings::getActiveLayer();
+    if (layer < 0 || layer > 2) return -1;
+    return g_activeQuick[layer].load();
 }
 
-// User-bank slot label for the Settings preview. Returns nullptr on
-// out-of-range / empty slots so the preview can fall back to the
-// plug-in label. The string lives in the bindings config storage —
-// stable for the lifetime of the bank (caller doesn't own / free).
+// User-Quick slot label for the Settings preview. `bank` is interpreted
+// as the active Quick index (0..2) on the currently-active layer; the
+// active sub-bank decides which of the 6 slot tables the label comes
+// from. Returns nullptr on out-of-range / empty slots so the preview
+// falls back to the plug-in label. The string lives in caller-owned
+// thread-local storage and is stable until the next call.
 const char* reasixty_userBankSlotLabel(int bank, int slot)
 {
-    if (bank < 0 || bank >= uf8::bindings::kUserBankCount) return nullptr;
-    if (slot < 0 || slot >= uf8::bindings::kUserBankSlots) return nullptr;
+    if (bank < 0 || bank >= uf8::bindings::kQuicksPerLayer) return nullptr;
+    if (slot < 0 || slot >= uf8::bindings::kSlotsPerSubBank) return nullptr;
+    const int layer = uf8::bindings::getActiveLayer();
+    if (layer < 0 || layer > 2) return nullptr;
+    const int sub = g_activeSubBank[layer].load();
     static thread_local std::string s_buf;
-    const auto userSlot = uf8::bindings::getUserBankSlot(bank, slot);
+    const auto userSlot = uf8::bindings::getUserQuickSlot(layer, bank, sub, slot);
     s_buf = userSlot.label;
     if (s_buf.empty()) {
         // Synthesise from the action name so the preview shows
@@ -8210,78 +8229,82 @@ void registerBindingHandlers()
         nullptr, "Brightness Both (LEDs+LCDs) -", false
     });
 
-    registerBuiltin("domain_cs", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            const auto fp = uf8::getFocusedParam();
-            if (fp.domain != uf8::Domain::ChannelStrip) {
-                uf8::setFocus({uf8::Domain::ChannelStrip, 0});
-            }
-            // Pressing a CS/BC focus button is an explicit domain
-            // choice — drop the user-domain slot so the Quick LEDs
-            // don't show stale "user domain 2 still active" state
-            // next to a freshly-pressed CS button.
-            g_activeUserDomain.store(-1);
-        },
-        // stateOf lets the Quick LED follow this action's reality
-        // (see kQuickStateLeds loop in pushUf8GlobalLeds). Without
-        // it Q1 only ever lit via the hardcoded domainLed compare,
-        // which chaseLastTouchedFx could flip out from under us.
-        [](int) {
-            return uf8::getFocusedParam().domain
-                == uf8::Domain::ChannelStrip
-                && g_activeUserDomain.load() < 0;
-        },
-        "Focus → Channel Strip", false
-    });
-    registerBuiltin("domain_bc", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            const auto fp = uf8::getFocusedParam();
-            if (fp.domain != uf8::Domain::BusComp) {
-                uf8::setFocus({uf8::Domain::BusComp, 0});
-            }
-            g_activeUserDomain.store(-1);
-        },
-        [](int) {
-            return uf8::getFocusedParam().domain == uf8::Domain::BusComp
-                && g_activeUserDomain.load() < 0;
-        },
-        "Focus → Bus Comp", false
-    });
-
-    // User domain selector — three sticky slots intended for Quick
-    // 1/2/3 when the user doesn't want the SSL CS/BC focus model.
-    // Mutually exclusive (radio group via g_activeUserDomain):
-    // selecting one clears the others. The LED state follows the
-    // slot index, not focused.domain, so chaseLastTouchedFx can't
-    // flip it out from under the user. The user wires whatever
-    // they want as additional actions in the same modifier slot
-    // (e.g. user_domain_1 + softkey_bank_select 2 in a chain) to
-    // shape the V-Pot banks per slot.
-    auto userDomainHandler = [](int slot) {
+    // Quick selector — one builtin per Q (Q1/Q2/Q3). Toggle, per-layer
+    // mutex: pressing the same Q again deactivates; pressing a different
+    // Q implicitly deactivates the prior because state is a single
+    // "which Quick is engaged" int per layer.
+    //
+    // Layer 1 (index 0): Q1/Q2 still drive SSL CS/BC focus as a side
+    // effect (back-compat with the hardcoded plug-in maps). Q3 is pure
+    // user-Quick. Layers 2 + 3: all three are pure user-Quick toggles.
+    // The render path (label/dispatch) uses g_activeQuick[layer].
+    auto quickSelect = [](int qIdx) {
         return DescBuilder{
-            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+            [qIdx](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
-                g_activeUserDomain.store(slot);
+                const int layer = uf8::bindings::getActiveLayer();
+                if (layer < 0 || layer > 2) return;
+                const int cur = g_activeQuick[layer].load();
+                g_activeQuick[layer].store(cur == qIdx ? -1 : qIdx);
+                // Force a top-soft-key + V-Pot label repaint on the
+                // next render tick — the row's source switches between
+                // SSL plug-in map and user-Quick slot table.
+                g_bankDirty.store(true);
+                g_softKeyDirty.store(true);
+                if (layer == 0) {
+                    // Back-compat: Q1 = CS focus, Q2 = BC focus.
+                    if (qIdx == 0 && cur != qIdx) {
+                        if (uf8::getFocusedParam().domain != uf8::Domain::ChannelStrip)
+                            uf8::setFocus({uf8::Domain::ChannelStrip, 0});
+                    } else if (qIdx == 1 && cur != qIdx) {
+                        if (uf8::getFocusedParam().domain != uf8::Domain::BusComp)
+                            uf8::setFocus({uf8::Domain::BusComp, 0});
+                    }
+                }
             },
-            [slot](int) { return g_activeUserDomain.load() == slot; },
+            [qIdx](int) {
+                const int layer = uf8::bindings::getActiveLayer();
+                if (layer < 0 || layer > 2) return false;
+                return g_activeQuick[layer].load() == qIdx;
+            },
             "", false
         };
     };
     {
-        auto d = userDomainHandler(0);
-        d.displayName = "User Domain 1";
+        auto d = quickSelect(0); d.displayName = "Quick 1";
+        registerBuiltin("quick_select_1", d);
+    }
+    {
+        auto d = quickSelect(1); d.displayName = "Quick 2";
+        registerBuiltin("quick_select_2", d);
+    }
+    {
+        auto d = quickSelect(2); d.displayName = "Quick 3";
+        registerBuiltin("quick_select_3", d);
+    }
+
+    // Back-compat aliases. Existing v6 bindings.json files reference
+    // domain_cs / domain_bc / user_domain_1/2/3 — re-register them as
+    // shims pointing at the same handler so old configs keep working.
+    // No new factory binding uses these names.
+    {
+        auto d = quickSelect(0); d.displayName = "Focus → Channel Strip";
+        registerBuiltin("domain_cs", d);
+    }
+    {
+        auto d = quickSelect(1); d.displayName = "Focus → Bus Comp";
+        registerBuiltin("domain_bc", d);
+    }
+    {
+        auto d = quickSelect(0); d.displayName = "User Domain 1";
         registerBuiltin("user_domain_1", d);
     }
     {
-        auto d = userDomainHandler(1);
-        d.displayName = "User Domain 2";
+        auto d = quickSelect(1); d.displayName = "User Domain 2";
         registerBuiltin("user_domain_2", d);
     }
     {
-        auto d = userDomainHandler(2);
-        d.displayName = "User Domain 3";
+        auto d = quickSelect(2); d.displayName = "User Domain 3";
         registerBuiltin("user_domain_3", d);
     }
 
@@ -8500,6 +8523,25 @@ void registerBindingHandlers()
     registerBuiltin("softkey_bank_select", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
+            const int layer = uf8::bindings::getActiveLayer();
+            const int activeQuick =
+                (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
+            // User-Quick context: the same hardware bank-row keys now
+            // pick which of the 6 sub-banks (V-POT + Soft 1..5) drives
+            // the top-soft-key row. SSL g_softKeyBank stays untouched
+            // so re-entering CS/BC context resumes whatever the user
+            // last navigated on the plug-in side.
+            if (activeQuick >= 0) {
+                int target = param;
+                if (target < 0) target = 0;
+                if (target >= uf8::bindings::kSubBanksPerQuick)
+                    target = uf8::bindings::kSubBanksPerQuick - 1;
+                if (g_activeSubBank[layer].exchange(target) != target) {
+                    g_softKeyDirty.store(true);
+                    g_bankDirty.store(true);
+                }
+                return;
+            }
             const auto fp = uf8::getFocusedParam();
             const auto domain = (fp.domain == uf8::Domain::BusComp)
                 ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
@@ -8519,8 +8561,16 @@ void registerBindingHandlers()
                 SetExtState("ReaSixty", "forcePan", "0", true);
             }
         },
-        [](int param) { return g_softKeyBank.load() == param; },
-        "Select SSL soft-key bank (param 0..5)", true
+        [](int param) {
+            const int layer = uf8::bindings::getActiveLayer();
+            const int activeQuick =
+                (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
+            if (activeQuick >= 0) {
+                return g_activeSubBank[layer].load() == param;
+            }
+            return g_softKeyBank.load() == param;
+        },
+        "Select soft-key bank (param 0..5)", true
     });
 
     // SSL_SOFTKEY — default action for the per-strip top-soft-keys.
@@ -8587,49 +8637,33 @@ void registerBindingHandlers()
         registerBuiltin(name, d);
     }
 
-    // SHOW USER BANK — switches the top-soft-key row (8 buttons above
-    // the V-Pots) to a user-defined bank. param 0..kUserBankCount-1
-    // selects which bank. Toggle: pressing the same bank again
-    // deactivates (back to plugin softkey::viewFor labels). Pressing a
-    // different bank's button switches directly. The actual label /
-    // LED / press routing changes happen in pushZonesForVisibleSlots
-    // and the top-soft-key input handler — both check g_activeUserBank.
+    // SHOW USER BANK — legacy back-compat shim. The flat 12-bank model
+    // is gone; this builtin now does nothing. Kept registered so v6
+    // configs that reference it still parse without warnings.
     registerBuiltin("show_user_bank", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            if (param < 0 || param >= uf8::bindings::kUserBankCount) return;
-            const int cur = g_activeUserBank.load();
-            g_activeUserBank.store(cur == param ? -1 : param);
-            // The top-soft-key labels live in the per-strip cache that
-            // bankChanged invalidates, so reuse the bank-shift signal
-            // to force a repaint on the next render tick.
-            g_bankDirty.store(true);
-        },
-        [](int param) {
-            return g_activeUserBank.load() == param;
-        },
-        "Show user soft-key bank (param 0..11)", true
+        [](bool /*firing*/, bool /*pressed*/, int /*param*/) {},
+        [](int) { return false; },
+        "Show user soft-key bank (deprecated)", true
     });
 
     // HOME — one-press exit from every routing toggle. Restores V-Pots
     // and faders to their normal track-volume + pan view. Default for
     // the Channel button so the user always has a "go back" button no
-    // matter how many routing modes they layered on.
+    // matter how many routing modes they layered on. Also drops the
+    // active Quick on the current layer so the top-soft-key row returns
+    // to its plugin-driven labels.
     registerBuiltin("home", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
             clearVpotRouting_();
             clearFaderRouting_();
-            // Drop any active user soft-key bank so the row returns to
-            // its plugin-driven labels. Treated as a bank-shift so the
-            // top-soft-key cache repaints next tick.
-            if (g_activeUserBank.exchange(-1) != -1) {
+            const int layer = uf8::bindings::getActiveLayer();
+            if (layer >= 0 && layer <= 2
+                && g_activeQuick[layer].exchange(-1) != -1) {
                 g_bankDirty.store(true);
+                g_softKeyDirty.store(true);
             }
         },
-        // No state to read — HOME is a one-shot. stateOf left unset so
-        // the LED render falls back to the binding's configured colours
-        // (default white).
         nullptr, "Home (clear routing toggles)", false
     });
 

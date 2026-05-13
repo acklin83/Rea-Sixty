@@ -1353,8 +1353,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Sends";
                 if (n.rfind("recv_", 0) == 0)
                     return "Receives";
-                if (n == "show_user_bank")
-                    return "User Soft-Key Banks";
+                if (n.rfind("quick_select_", 0) == 0)
+                    return "Quick";
                 if (n == "flip" || n == "pan_force"
                  || n == "ssl_strip_mode_toggle"
                  || n == "mixer_toggle" || n == "home"
@@ -1362,10 +1362,17 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Mode Toggles";
                 if (n.rfind("selset_", 0) == 0)
                     return "Selection Sets";
-                if (n == "domain_cs" || n == "domain_bc")
-                    return "Domain";
                 if (n.rfind("brightness_", 0) == 0)
                     return "Brightness";
+                // Deprecated v6 aliases — still registered as no-op /
+                // shim builtins so old configs parse, but hidden from
+                // the picker. New configs use quick_select_* / inline
+                // user-Quick UI instead.
+                if (n == "show_user_bank"
+                 || n == "domain_cs" || n == "domain_bc"
+                 || n == "user_domain_1" || n == "user_domain_2"
+                 || n == "user_domain_3")
+                    return "";
                 if (n.rfind("__", 0) == 0)
                     return "";   // hide internals
                 return "Other";
@@ -1373,8 +1380,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             static const char* kCats[] = {
                 "Modifiers", "Mode Toggles", "Layer", "Encoder modes",
                 "Bank / Page", "Automation", "Zoom",
-                "SSL Soft-Keys", "Domain", "Brightness",
-                "Sends", "Receives", "User Soft-Key Banks",
+                "SSL Soft-Keys", "Quick", "Brightness",
+                "Sends", "Receives",
                 "Selection Sets",
                 "Other",
             };
@@ -2327,6 +2334,164 @@ void drawCsiImportSection(ImGui_Context* ctx, int editLayer)
     }
 }
 
+// ---- User-Quick slot editor ----------------------------------------------
+// Renders the per-layer Quick + sub-bank selector and 8 slot editors.
+// Layer 0 (Layer 1 in the UI): Q1/Q2 are SSL CS/BC plug-in slots and not
+// user-editable here; the tabs render disabled. Q3 + everything on
+// Layers 2/3 are user-fillable.
+//
+// State scope: editor-local (which Quick + sub-bank the user is currently
+// editing). Live hardware engagement of a Quick is independent — driven
+// by quick_select_* builtins fired from physical buttons.
+void drawUserQuickSection_(ImGui_Context* ctx, int editLayer)
+{
+    using namespace uf8::bindings;
+
+    static int s_editQuick   = 0;   // 0..2 (Q1/Q2/Q3)
+    static int s_editSubBank = 0;   // 0..5 (V-POT, Soft 1..5)
+
+    if (editLayer < 0 || editLayer > 2) return;
+
+    char hdr[96];
+    std::snprintf(hdr, sizeof(hdr),
+                  "User-Quick slots for Layer %d", editLayer + 1);
+    ImGui_Text(ctx, hdr);
+    if (editLayer == 0) {
+        ImGui_TextDisabled(ctx,
+            "Layer 1 Q1/Q2 are hardcoded SSL CS/BC and not editable. "
+            "Q3 is free for user actions.");
+    } else {
+        ImGui_TextDisabled(ctx,
+            "Each Quick (Q1/Q2/Q3) carries 6 sub-banks (V-POT + Soft 1-5). "
+            "Each sub-bank holds 8 top-soft-key slots.");
+    }
+    ImGui_Spacing(ctx);
+
+    // Quick selector — radio across Q1/Q2/Q3. Q1/Q2 disabled on Layer 1.
+    {
+        ImGui_Text(ctx, "Quick:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* qLabels[3] = { "Q1", "Q2", "Q3" };
+        for (int qi = 0; qi < 3; ++qi) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            const bool locked = (editLayer == 0 && qi <= 1);
+            bool selected = (s_editQuick == qi) && !locked;
+            int flags = 0;
+            if (locked) {
+                // No native disabled-radio in the wrapper — render as
+                // disabled text inside a fake group so it visibly differs.
+                char tag[16];
+                std::snprintf(tag, sizeof(tag), "[%s]", qLabels[qi]);
+                ImGui_TextDisabled(ctx, tag);
+                continue;
+            }
+            char tag[16];
+            std::snprintf(tag, sizeof(tag), "%s##quick_pick_%d",
+                          qLabels[qi], qi);
+            if (ImGui_RadioButton(ctx, tag, selected)) {
+                s_editQuick = qi;
+            }
+        }
+    }
+    if (editLayer == 0 && s_editQuick <= 1) s_editQuick = 2;   // jump to Q3
+
+    // Sub-bank selector — radio across V-POT + Soft 1..5.
+    {
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Sub-bank:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* sLabels[6] = {
+            "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+        };
+        for (int bi = 0; bi < 6; ++bi) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            bool selected = (s_editSubBank == bi);
+            char tag[24];
+            std::snprintf(tag, sizeof(tag), "%s##subbank_pick_%d",
+                          sLabels[bi], bi);
+            if (ImGui_RadioButton(ctx, tag, selected)) {
+                s_editSubBank = bi;
+            }
+        }
+    }
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // 8 slot editors — same shape as the old user-bank editor (label
+    // input + action picker per slot). Plain-modifier slot only —
+    // user-Quick slots intentionally stay simple; the full modifier
+    // matrix sits in the regular per-button editor above.
+    for (int si = 0; si < kSlotsPerSubBank; ++si) {
+        Binding bd = getUserQuickSlot(editLayer, s_editQuick,
+                                      s_editSubBank, si);
+        char idtag[32];
+        std::snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_slot%d",
+                      editLayer, s_editQuick, s_editSubBank, si);
+        ImGui_PushID(ctx, idtag);
+
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+
+        // `###` suffix: collapsing-header ID stays stable while the
+        // visible label changes mid-edit. Same trap that bit the old
+        // bank editor — see feedback-bindings-imgui-id-traps.md.
+        char header[96];
+        const std::string& act = sp.action;
+        if (act.empty()) {
+            std::snprintf(header, sizeof(header),
+                          "Slot %d   (empty)###uqslot%d", si + 1, si);
+        } else {
+            std::snprintf(header, sizeof(header),
+                          "Slot %d   %s###uqslot%d", si + 1,
+                          bd.label.empty() ? act.c_str() : bd.label.c_str(),
+                          si);
+        }
+        if (ImGui_CollapsingHeader(ctx, header, nullptr, nullptr)) {
+            ImGui_Indent(ctx, nullptr);
+            bool dirty = false;
+            char labelBuf[64] = {0};
+            std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
+            double w = 200;
+            ImGui_PushItemWidth(ctx, w);
+            if (ImGui_InputTextWithHint(ctx, "Label##uqslotlabel",
+                                        "shown on the top-soft-key LCD",
+                                        labelBuf, sizeof(labelBuf),
+                                        nullptr, nullptr)) {
+                bd.label = labelBuf;
+                dirty = true;
+            }
+            ImGui_PopItemWidth(ctx);
+
+            ActionFieldsRef ref{
+                &sp.type, &sp.action, &sp.param, &sp.label,
+                &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
+                &sp.midiData1, &sp.midiData2,
+                &sp.fireOnInactive,
+            };
+            char prefix[40];
+            std::snprintf(prefix, sizeof(prefix), "uq%d_%d_%d_s%d",
+                          editLayer, s_editQuick, s_editSubBank, si);
+            if (drawActionPicker(ctx, prefix, ref,
+                                 /*layer*/ -1, ButtonId::None,
+                                 /*isLongPress*/ false)) {
+                dirty = true;
+            }
+            if (ImGui_Button(ctx, "Clear slot##uqclr",
+                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                bd = Binding{};
+                dirty = true;
+            }
+            ImGui_Unindent(ctx, nullptr);
+
+            if (dirty) {
+                setUserQuickSlot(editLayer, s_editQuick,
+                                 s_editSubBank, si, bd);
+            }
+        }
+        ImGui_PopID(ctx);
+    }
+}
+
 } // namespace
 
 // Phase C UI — hardware-schematic view. Click a button on the schematic
@@ -2452,144 +2617,19 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     } else {
         drawBindingEditor(ctx, s_editLayer, s_selected);
     }
-}
 
-// ---- Soft-Key Banks -------------------------------------------------------
-// User-defined Soft-Key Banks: 12 storage slots, each holding 8 binding
-// slots (mapped 1:1 onto the top-soft-key row above the strips). When
-// activated via the `show_user_bank` builtin, the bank's slots
-// override the plugin-driven labels + actions for the duration.
-//
-// MVP editor: bank picker, name input, 8 slots × (label + action picker).
-// Modifier matrix / long-press / LED config per slot reuse the existing
-// per-binding editor wiring once the user clicks "Edit slot N".
-// Render one user-bank's editing surface — bank name + 8 slot
-// collapsibles. Mutates `bank` in-place; caller persists via setUserBank
-// when `dirty` is true.
-void drawUserBankEditor_(ImGui_Context* ctx, int bankIdx,
-                         uf8::bindings::UserBank& bank, bool& dirty)
-{
-    using namespace uf8::bindings;
-    {
-        char nameBuf[128] = {0};
-        std::strncpy(nameBuf, bank.name.c_str(), sizeof(nameBuf) - 1);
-        double w = 280;
-        ImGui_PushItemWidth(ctx, w);
-        if (ImGui_InputTextWithHint(ctx, "Bank name##bank_name",
-                                    "e.g. Vocals, Drums, Mixdown",
-                                    nameBuf, sizeof(nameBuf),
-                                    /*flags*/ nullptr,
-                                    /*callback*/ nullptr)) {
-            bank.name = nameBuf;
-            dirty = true;
-        }
-        ImGui_PopItemWidth(ctx);
-    }
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    for (int i = 0; i < uf8::bindings::kUserBankSlots; ++i) {
-        char idtag[32];
-        std::snprintf(idtag, sizeof(idtag), "ub%d_slot%d", bankIdx, i);
-        ImGui_PushID(ctx, idtag);
-        Binding& bd = bank.slots[i];
-        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
-
-        // `###` suffix so the collapsing-header ID stays stable when
-        // bd.label changes mid-edit — without it, the visible header text
-        // changes per keystroke, ImGui treats it as a new header, and
-        // the InputText below loses focus on every character.
-        char header[96];
-        const std::string& act = sp.action;
-        if (act.empty()) {
-            std::snprintf(header, sizeof(header),
-                          "Slot %d   (empty)###skbslot%d", i + 1, i);
-        } else {
-            std::snprintf(header, sizeof(header),
-                          "Slot %d   %s###skbslot%d", i + 1,
-                          bd.label.empty() ? act.c_str() : bd.label.c_str(),
-                          i);
-        }
-        if (ImGui_CollapsingHeader(ctx, header, nullptr, nullptr)) {
-            ImGui_Indent(ctx, nullptr);
-            char labelBuf[64] = {0};
-            std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
-            double w = 200;
-            ImGui_PushItemWidth(ctx, w);
-            if (ImGui_InputTextWithHint(ctx, "Label##slotlabel",
-                                        "shown on the top-soft-key LCD",
-                                        labelBuf, sizeof(labelBuf),
-                                        nullptr, nullptr)) {
-                bd.label = labelBuf;
-                dirty = true;
-            }
-            ImGui_PopItemWidth(ctx);
-
-            ActionFieldsRef ref{
-                &sp.type, &sp.action, &sp.param, &sp.label,
-                &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
-                &sp.midiData1, &sp.midiData2,
-                &sp.fireOnInactive,
-            };
-            char prefix[32];
-            std::snprintf(prefix, sizeof(prefix), "ub%d_s%d", bankIdx, i);
-            if (drawActionPicker(ctx, prefix, ref,
-                                 /*layer*/ -1, ButtonId::None,
-                                 /*isLongPress*/ false)) {
-                dirty = true;
-            }
-            if (ImGui_Button(ctx, "Clear slot##clr",
-                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                bd = Binding{};
-                dirty = true;
-            }
-            ImGui_Unindent(ctx, nullptr);
-        }
-        ImGui_PopID(ctx);
-    }
-}
-
-void SettingsScreen::drawSoftKeyBanks(ImGui_Context* ctx)
-{
-    using namespace uf8::bindings;
-
-    ImGui_Text(ctx, "User Soft-Key Banks");
-    ImGui_TextDisabled(ctx,
-        "12 user-defined banks. Bind a button to \"Show user soft-key "
-        "bank\" (param 0..11) to activate one of these banks at "
-        "runtime — the top-soft-key row above the V-Pots loads the "
-        "bank's 8 slot bindings. SSL Channel-Strip stock banks are "
-        "addressable directly via the \"SSL Standard Bank N\" actions "
-        "in the per-binding action picker; no separate page needed.");
-    ImGui_Spacing(ctx);
-
-    int barFlags = 0;
-    if (!ImGui_BeginTabBar(ctx, "skbanks_tabs", &barFlags)) return;
-
-    // ---- 12 user banks (editable) --------------------------------------
-    for (int i = 0; i < uf8::bindings::kUserBankCount; ++i) {
-        UserBank b = getUserBank(i);
-        char tab[64];
-        // `###` (not `##`) so only the suffix hashes — keeps the tab's
-        // ImGui ID stable when bank.name changes mid-edit. With `##`,
-        // typing into the bank-name InputText changed the visible label,
-        // which changed the full-text hash, which made ImGui treat each
-        // keystroke as a new tab and yank focus away.
-        if (b.name.empty()) {
-            std::snprintf(tab, sizeof(tab), "Bank %d###utab%d", i + 1, i);
-        } else {
-            std::snprintf(tab, sizeof(tab), "%s###utab%d", b.name.c_str(), i);
-        }
-        if (ImGui_BeginTabItem(ctx, tab, nullptr, nullptr)) {
-            bool dirty = false;
-            drawUserBankEditor_(ctx, i, b, dirty);
-            if (dirty) setUserBank(i, b);
-            ImGui_EndTabItem(ctx);
-        }
-    }
-
-    ImGui_EndTabBar(ctx);
+    // ---- User-Quick slot editor ------------------------------------------
+    // Each layer carries 3 Quick contexts (Q1/Q2/Q3); each Quick holds
+    // 6 sub-banks (V-POT default + Soft 1..5); each sub-bank carries 8
+    // top-soft-key slots. Layer 1 Q1/Q2 stay hardcoded for SSL CS/BC —
+    // those tabs are disabled. Q3 + Layer 2/3 all-three are user-filled
+    // here. Editor state is local to this tab; live engagement of a
+    // Quick happens through quick_select_* builtins / hardware.
+    drawUserQuickSection_(ctx, s_editLayer);
 }
 
 // ---- FX Learn -------------------------------------------------------------

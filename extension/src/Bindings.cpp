@@ -498,10 +498,13 @@ void seedFactoryDefaults_(Config& c)
                                     255, 255, 255, /*param*/ i);
     }
 
-    // Quick keys: Q1=CS domain, Q2=BC domain, Q3 reserved (no factory binding —
-    // falls through to legacy MCU path, matching today's behaviour).
-    L1[ButtonId::Quick1] = mkBuiltin("domain_cs", Behavior::Momentary, "CS");
-    L1[ButtonId::Quick2] = mkBuiltin("domain_bc", Behavior::Momentary, "BC");
+    // Quick keys on Layer 1: Q1/Q2 map onto SSL CS/BC focus + user-Quick
+    // slot 0/1; Q3 is pure user-Quick (toggle). All three use the new
+    // quick_select_* builtins so they share the per-layer mutex group
+    // (resolved Q7 — all three Layer-1 Quicks are mutex'd).
+    L1[ButtonId::Quick1] = mkBuiltin("quick_select_1", Behavior::Toggle, "Q1");
+    L1[ButtonId::Quick2] = mkBuiltin("quick_select_2", Behavior::Toggle, "Q2");
+    L1[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle, "Q3");
 
     // Bank scroll (8-strip) and soft-key bank navigation (page).
     L1[ButtonId::BankLeft]  = mkBuiltin("bank_left",  Behavior::Momentary, "BANK <");
@@ -736,44 +739,55 @@ void serializeLayerBody_(const Layer& L, std::ostringstream& os,
     os << "}\n";
 }
 
-void serializeUserBanks_(const Config& c, std::ostringstream& os)
+// Emits all populated (layer, quick, subBank, slot) entries as a flat
+// list. Empty slots are skipped so a default-constructed Config writes
+// nothing here (no 432-line empty matrix in the JSON).
+void serializeUserQuicks_(const Config& c, std::ostringstream& os)
 {
-    // Skip emission entirely when every bank is at default — keeps
-    // pre-existing configs from gaining a noisy 200-line empty array.
+    auto slotIsEmptyAll_ = [](const Binding& bd) {
+        for (int m = 0; m < kModifierCount; ++m) {
+            if (!slotIsEmpty_(bd.shortPress[m])) return false;
+            if (!slotIsEmpty_(bd.longPress[m]))  return false;
+        }
+        return bd.label.empty();
+    };
+
     bool anyData = false;
-    for (const auto& b : c.userBanks) {
-        if (!b.name.empty()) { anyData = true; break; }
-        for (const auto& s : b.slots) {
-            for (int m = 0; m < kModifierCount && !anyData; ++m) {
-                if (!slotIsEmpty_(s.shortPress[m]) ||
-                    !slotIsEmpty_(s.longPress[m])) {
-                    anyData = true;
+    for (int li = 0; li < 3 && !anyData; ++li) {
+        for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi) {
+            for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi) {
+                for (int si = 0; si < kSlotsPerSubBank && !anyData; ++si) {
+                    if (!slotIsEmptyAll_(
+                            c.userQuicks[li].quicks[qi].subBanks[bi].slots[si])) {
+                        anyData = true;
+                    }
                 }
             }
-            if (anyData) break;
         }
-        if (anyData) break;
     }
     if (!anyData) return;
 
-    os << ",\n  \"user_banks\": [";
-    bool firstBank = true;
-    for (int i = 0; i < kUserBankCount; ++i) {
-        const auto& bank = c.userBanks[i];
-        if (!firstBank) os << ",";
-        firstBank = false;
-        os << "\n    {\"index\": " << i;
-        os << ", \"name\": "; appendEscaped(os, bank.name);
-        os << ", \"slots\": [";
-        bool firstSlot = true;
-        for (int s = 0; s < kUserBankSlots; ++s) {
-            if (!firstSlot) os << ",";
-            firstSlot = false;
-            os << "\n      {";
-            serializeBindingBody_(bank.slots[s], os);
-            os << "}";
+    os << ",\n  \"user_quicks\": [";
+    bool first = true;
+    for (int li = 0; li < 3; ++li) {
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
+                for (int si = 0; si < kSlotsPerSubBank; ++si) {
+                    const auto& bd = c.userQuicks[li].quicks[qi]
+                                        .subBanks[bi].slots[si];
+                    if (slotIsEmptyAll_(bd)) continue;
+                    if (!first) os << ",";
+                    first = false;
+                    os << "\n    {\"layer\": " << li
+                       << ", \"quick\": " << qi
+                       << ", \"sub_bank\": " << bi
+                       << ", \"slot\": " << si
+                       << ", \"binding\": {";
+                    serializeBindingBody_(bd, os);
+                    os << "}}";
+                }
+            }
         }
-        os << "\n    ]}";
     }
     os << "\n  ]";
 }
@@ -791,7 +805,7 @@ std::string serialize(const Config& c)
         os << "    }" << (i < 2 ? "," : "") << "\n";
     }
     os << "  ]";
-    serializeUserBanks_(c, os);
+    serializeUserQuicks_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -922,7 +936,7 @@ void parseMatrixRow_(wdl_json_element* obj, ActionSlot (&row)[kModifierCount])
 }
 
 // Parse a Binding from its JSON object (new-schema only — no
-// type/action/param/midi/long_press fallback). Used by parseUserBanks_.
+// type/action/param/midi/long_press fallback). Used by parseUserQuicks_.
 // parseLayer_ has its own inline logic that also covers the old
 // pre-matrix schema, so it doesn't go through this helper.
 void parseBindingBody_(wdl_json_element* be, Binding& bd)
@@ -970,31 +984,33 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
     }
 }
 
-void parseUserBanks_(wdl_json_element* root, Config& out)
+void parseUserQuicks_(wdl_json_element* root, Config& out)
 {
-    auto* arr = root->get_item_by_name("user_banks");
+    auto* arr = root->get_item_by_name("user_quicks");
     if (!arr || !arr->is_array() || !arr->m_array) return;
     const int n = arr->m_array->GetSize();
     for (int i = 0; i < n; ++i) {
-        wdl_json_element* bo = arr->enum_item(i);
-        if (!bo || !bo->is_object()) continue;
-        int idx = -1;
-        if (auto* v = bo->get_item_by_name("index"))
-            if (auto* s = v->get_string_value(true)) idx = std::atoi(s);
-        if (idx < 0 || idx >= kUserBankCount) continue;
-        UserBank& bank = out.userBanks[idx];
-        if (auto* v = bo->get_item_by_name("name"))
-            if (auto* s = v->get_string_value()) bank.name = s;
-        auto* slots = bo->get_item_by_name("slots");
-        if (!slots || !slots->is_array() || !slots->m_array) continue;
-        const int m = slots->m_array->GetSize();
-        for (int s = 0; s < m && s < kUserBankSlots; ++s) {
-            wdl_json_element* slotObj = slots->enum_item(s);
-            // Reset to default first so omitted JSON fields fall back
-            // to defaults (matches the parseLayer_ semantics).
-            bank.slots[s] = Binding{};
-            parseBindingBody_(slotObj, bank.slots[s]);
-        }
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int layer = -1, quick = -1, subBank = -1, slot = -1;
+        if (auto* v = eo->get_item_by_name("layer"))
+            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("quick"))
+            if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("sub_bank"))
+            if (auto* s = v->get_string_value(true)) subBank = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("slot"))
+            if (auto* s = v->get_string_value(true)) slot = std::atoi(s);
+        if (layer   < 0 || layer   >= 3)                 continue;
+        if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
+        if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
+        if (slot    < 0 || slot    >= kSlotsPerSubBank)  continue;
+        auto* bodyObj = eo->get_item_by_name("binding");
+        if (!bodyObj || !bodyObj->is_object()) continue;
+        Binding& bd = out.userQuicks[layer].quicks[quick]
+                          .subBanks[subBank].slots[slot];
+        bd = Binding{};
+        parseBindingBody_(bodyObj, bd);
     }
 }
 
@@ -1249,7 +1265,7 @@ bool tryParse_(const std::string& json, Config& out)
             parseLayer_(arr->enum_item(i), out.layers[i]);
         }
     }
-    parseUserBanks_(root, out);
+    parseUserQuicks_(root, out);
     return true;
 }
 
@@ -1265,6 +1281,13 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // reach existing configs. load() runs every defined upgrade step in
 // order, then writes the bumped version back so the upgrade is
 // idempotent across REAPER restarts.
+// v7 (2026-05-13): Quick = user-key-bank container refactor. The flat
+// 12 × 8 UserBank model is gone; per-layer LayerUserQuicks (3 quicks ×
+// 6 sub-banks × 8 slots) replaces it. Old v6 "user_banks" data is
+// discarded on upgrade (clean slate per Frank's resolved Q6).
+// Quick factory bindings become quick_select_1/2/3 (Layer 0 Q1/Q2 keep
+// the SSL CS/BC focus side-effect; everywhere else they are pure
+// user-Quick toggles).
 // v6 (2026-05-07): clean up corrupt "type=Builtin, action=empty"
 // entries left behind by the Settings UI's combo-picker race (user
 // clicks Built-in radio, picks no name in the combo, dirty flag
@@ -1276,7 +1299,7 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // swatches (auto_read/green, zoom_up/green, …) back to white.
 // v4 (2026-05-07): unused — bumped only to gate the colour-migration
 // fix that landed mid-day; superseded by v5 the same day.
-constexpr int kCurrentBindingsVersion = 6;
+constexpr int kCurrentBindingsVersion = 7;
 
 // Upgrade hook: existing configs get factory long-press defaults on
 // the FLIP button (send_this / recv_this+Shift) without touching any
@@ -1898,21 +1921,6 @@ void clearBinding(int layer, ButtonId id)
     persistLocked_();
 }
 
-UserBank getUserBank(int bankIdx)
-{
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
-    if (bankIdx < 0 || bankIdx >= kUserBankCount) return {};
-    return g_cfg.userBanks[bankIdx];
-}
-
-void setUserBank(int bankIdx, const UserBank& bank)
-{
-    if (bankIdx < 0 || bankIdx >= kUserBankCount) return;
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.userBanks[bankIdx] = bank;
-    persistLocked_();
-}
-
 bool dispatchEncoder(ButtonId id, int stepDelta)
 {
     if (id == ButtonId::None || stepDelta == 0) return false;
@@ -1945,41 +1953,52 @@ bool dispatchEncoder(ButtonId id, int stepDelta)
     return true;
 }
 
-Binding getUserBankSlot(int bankIdx, int slotIdx)
+static bool userQuickSlotInRange_(int layer, int quick, int subBank, int slot)
 {
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
-    if (bankIdx < 0 || bankIdx >= kUserBankCount) return {};
-    if (slotIdx < 0 || slotIdx >= kUserBankSlots) return {};
-    return g_cfg.userBanks[bankIdx].slots[slotIdx];
+    return layer    >= 0 && layer    < 3
+        && quick    >= 0 && quick    < kQuicksPerLayer
+        && subBank  >= 0 && subBank  < kSubBanksPerQuick
+        && slot     >= 0 && slot     < kSlotsPerSubBank;
 }
 
-void setUserBankSlot(int bankIdx, int slotIdx, const Binding& bd)
+Binding getUserQuickSlot(int layer, int quick, int subBank, int slot)
 {
-    if (bankIdx < 0 || bankIdx >= kUserBankCount) return;
-    if (slotIdx < 0 || slotIdx >= kUserBankSlots) return;
+    if (!userQuickSlotInRange_(layer, quick, subBank, slot)) return {};
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.userBanks[bankIdx].slots[slotIdx] = bd;
+    return g_cfg.userQuicks[layer].quicks[quick]
+              .subBanks[subBank].slots[slot];
+}
+
+void setUserQuickSlot(int layer, int quick, int subBank, int slot,
+                      const Binding& bd)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, slot)) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick]
+        .subBanks[subBank].slots[slot] = bd;
     persistLocked_();
 }
 
-bool dispatchUserBankSlot(int bankIdx, int slotIdx, bool pressed)
+bool dispatchUserQuickSlot(int layer, int quick, int subBank,
+                           int slot, bool pressed)
 {
-    if (bankIdx < 0 || bankIdx >= kUserBankCount) return false;
-    if (slotIdx < 0 || slotIdx >= kUserBankSlots) return false;
+    if (!userQuickSlotInRange_(layer, quick, subBank, slot)) return false;
 
     Binding bd;
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
-        bd = g_cfg.userBanks[bankIdx].slots[slotIdx];
+        bd = g_cfg.userQuicks[layer].quicks[quick]
+                .subBanks[subBank].slots[slot];
     }
 
-    // Reuse the same long-press / modifier-snapshot logic that
-    // dispatch(ButtonId) implements. Press-key namespace uses a
-    // synthetic "layer" of 100 + bankIdx so the keys can never
-    // collide with real (layer 0..2, id) keys.
-    const int  syntheticLayer = 100 + bankIdx;
-    const ButtonId pseudoId   = static_cast<ButtonId>(
-        0x4000 + slotIdx);   // outside the real ButtonId range
+    // Press-key namespace uses a synthetic "layer" derived from
+    // (layer, quick, subBank) so the keys never collide with the real
+    // (layer 0..2, id) press-timer keyspace.
+    const int  syntheticLayer = 100
+                              + layer * (kQuicksPerLayer * kSubBanksPerQuick)
+                              + quick * kSubBanksPerQuick
+                              + subBank;
+    const ButtonId pseudoId   = static_cast<ButtonId>(0x4000 + slot);
     const uint32_t k = pressKey(syntheticLayer, pseudoId);
 
     const bool longPressArmed =
