@@ -7591,13 +7591,28 @@ static BrowseForSaveFile_t loadBrowseForSaveFile_()
     return p;
 }
 
+// Invalidate the LED dedup so the next pushLayerLeds actually emits,
+// then push immediately. Called when the editor switches the active
+// layer — the 30 Hz tick would catch up eventually but at the cost of
+// a visible delay on the hardware LEDs (observed for Layer 3).
+void reasixty_onActiveLayerChanged()
+{
+    g_lastActiveLayer = -1;
+    pushLayerLeds(uf8::bindings::getActiveLayer());
+}
+
 // Per-layer export — Save-As dialog → write the single layer as a
 // {"type":"layer", ...} JSON file. The default filename embeds the layer
 // number so users with three saved layers can tell them apart.
 bool reasixty_exportLayerViaDialog(int layer)
 {
+    FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
+    if (lg) std::fprintf(lg, "[exportLayer] enter layer=%d\n", layer);
     auto* browse = loadBrowseForSaveFile_();
-    if (!browse) return false;  // SWELL not reachable (very unexpected on macOS)
+    if (!browse) {
+        if (lg) { std::fprintf(lg, "[exportLayer] BrowseForSaveFile not loaded\n"); std::fclose(lg); }
+        return false;  // SWELL not reachable (very unexpected on macOS)
+    }
     char fn[4096] = {0};
     char defName[64];
     std::snprintf(defName, sizeof(defName),
@@ -7610,9 +7625,13 @@ bool reasixty_exportLayerViaDialog(int layer)
     if (!browse(title, nullptr, defName,
                 "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0",
                 fn, sizeof(fn))) {
+        if (lg) { std::fprintf(lg, "[exportLayer] browse() returned 0 (cancel or OS issue), fn='%s'\n", fn); std::fclose(lg); }
         return false;
     }
-    return uf8::bindings::exportLayerTo(layer, fn);
+    if (lg) std::fprintf(lg, "[exportLayer] browse OK, path='%s'\n", fn);
+    const bool ok = uf8::bindings::exportLayerTo(layer, fn);
+    if (lg) { std::fprintf(lg, "[exportLayer] exportLayerTo => %s\n", ok ? "true" : "false"); std::fclose(lg); }
+    return ok;
 }
 
 // Per-layer import — Open dialog → parse + replace named layer. Returns

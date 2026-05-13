@@ -76,6 +76,7 @@ const char*        reasixty_softkeyCurrentBankName();
 // cancel or I/O error.
 bool reasixty_exportLayerViaDialog(int layer);
 bool reasixty_importLayerViaDialog(int layer);
+void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
 void reasixty_openUrl(const char* url);
 void reasixty_revealInFinder(const char* path);
@@ -2340,7 +2341,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
 {
     using namespace uf8::bindings;
 
-    static int      s_editLayer = 0;
+    int             s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
     drawCsiImportSection(ctx, s_editLayer);
@@ -2380,22 +2381,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             double bw = 110, bh = 28;
             if (ImGui_Button(ctx, label, &bw, &bh)) {
                 s_editLayer = li;
+                setActiveLayer(li);
+                reasixty_onActiveLayerChanged();
             }
             if (pushed) {
                 ImGui_PopStyleColor(ctx, &pushed);
             }
             if (li < 2) sameLine(ctx);
-        }
-        sameLine(ctx);
-        ImGui_Text(ctx, "  ");
-        sameLine(ctx);
-        if (s_editLayer == active) {
-            ImGui_TextDisabled(ctx, "(this layer is active on hardware)");
-        } else {
-            if (ImGui_Button(ctx, "Make this layer active",
-                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                setActiveLayer(s_editLayer);
-            }
         }
     }
 
