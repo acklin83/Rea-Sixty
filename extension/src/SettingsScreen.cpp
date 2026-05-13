@@ -64,6 +64,8 @@ const char* const* reasixty_softkeyStockLabels(int domain, int bank);
 int                reasixty_softkeyStockBankCount();
 int                reasixty_focusedDomain();
 int                reasixty_activeUserBank();
+int                reasixty_activeQuickFor(int layer);
+int                reasixty_activeSubBankFor(int layer);
 const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // Currently active SSL soft-key PAGE bank — used by the schematic
 // to highlight the matching V-POT/Bank tile and by the per-binding
@@ -1831,22 +1833,37 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     Binding bd    = getBinding(layer, id);
     bool    dirty = false;
 
-    char header[120];
+    char header[180];
     // Top-soft-keys' default action follows the live PAGE bank — show
     // it in the header so the user always knows which bank's slot N
-    // they're looking at on the hardware right now.
+    // they're looking at on the hardware right now. The Quick context
+    // ("Q1" / "Q2" / "Q3" or CS/BC on Layer 1) is appended too so the
+    // user can tell at a glance which path the button is wired to.
     const bool isTopSoftKey =
         id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8;
+    // Build the "Quick" suffix. Priority: live user-Quick engagement on
+    // the editor's layer, then Layer-1 CS/BC focus, otherwise nothing.
+    char qBuf[24] = {0};
+    {
+        const int liveQ = reasixty_activeQuickFor(layer);
+        if (liveQ >= 0) {
+            std::snprintf(qBuf, sizeof(qBuf), ", Q%d", liveQ + 1);
+        } else if (layer == 0) {
+            const int dom = reasixty_focusedDomain();
+            if      (dom == 0) std::snprintf(qBuf, sizeof(qBuf), ", CS");
+            else if (dom == 1) std::snprintf(qBuf, sizeof(qBuf), ", BC");
+        }
+    }
     if (isTopSoftKey) {
         std::snprintf(header, sizeof(header),
-                      "Editing: %s — %s   (Layer %d)",
+                      "Editing: %s — %s   (Layer %d%s)",
                       hwFaceLabel(id),
                       reasixty_softkeyCurrentBankName(),
-                      layer + 1);
+                      layer + 1, qBuf);
     } else {
         std::snprintf(header, sizeof(header),
-                      "Editing: %s   (Layer %d)",
-                      hwFaceLabel(id), layer + 1);
+                      "Editing: %s   (Layer %d%s)",
+                      hwFaceLabel(id), layer + 1, qBuf);
     }
     ImGui_Text(ctx, header);
     ImGui_Separator(ctx);
@@ -2334,30 +2351,66 @@ void drawCsiImportSection(ImGui_Context* ctx, int editLayer)
 
 // ---- User-Quick slot editor ----------------------------------------------
 // Renders the per-layer Quick + sub-bank selector and 8 slot editors.
-// Layer 0 (Layer 1 in the UI): Q1/Q2 are SSL CS/BC plug-in slots and not
-// user-editable here; the tabs render disabled. Q3 + everything on
-// Layers 2/3 are user-fillable.
+// WYSIWYG sync: when the user clicks a Quick button (Q1/Q2/Q3) in the
+// hardware schematic above, the slot editor here jumps straight to
+// that Quick. A live-state badge shows which Quick + sub-bank are
+// currently engaged on the hardware (independent of what's being
+// edited).
 //
-// State scope: editor-local (which Quick + sub-bank the user is currently
-// editing). Live hardware engagement of a Quick is independent — driven
-// by quick_select_* builtins fired from physical buttons.
-void drawUserQuickSection_(ImGui_Context* ctx, int editLayer)
+// Layer 1 Q1/Q2 fire domain_cs / domain_bc and never engage
+// g_activeQuick — their user-Quick slots are unreachable, so the
+// editor surfaces an explanation instead of pretending. Q3 on Layer 1
+// + all three Quicks on Layer 2/3 are user-fillable.
+void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
+                           uf8::bindings::ButtonId selected)
 {
     using namespace uf8::bindings;
 
-    static int s_editQuick   = 0;   // 0..2 (Q1/Q2/Q3)
+    static int s_editQuick   = -1;  // -1 = uninitialised; 0..2 = Q1/Q2/Q3
     static int s_editSubBank = 0;   // 0..5 (V-POT, Soft 1..5)
 
     if (editLayer < 0 || editLayer > 2) return;
 
-    char hdr[96];
+    // WYSIWYG: schematic-click on a Quick button pivots the editor to
+    // that Quick. Keeps the section in lock-step with what the user
+    // visually selected up there.
+    if      (selected == ButtonId::Quick1) s_editQuick = 0;
+    else if (selected == ButtonId::Quick2) s_editQuick = 1;
+    else if (selected == ButtonId::Quick3) s_editQuick = 2;
+    if (s_editQuick < 0) s_editQuick = (editLayer == 0) ? 2 : 0;
+
+    // Live state on this layer's hardware right now.
+    const int liveQuick   = reasixty_activeQuickFor(editLayer);
+    const int liveSubBank = reasixty_activeSubBankFor(editLayer);
+
+    const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
+    const char* sbLabels[6] = {
+        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+    };
+
+    // Header + live badge -----------------------------------------------
+    char hdr[160];
     std::snprintf(hdr, sizeof(hdr),
-                  "User-Quick slots for Layer %d", editLayer + 1);
+                  "User-Quick slots — Layer %d", editLayer + 1);
     ImGui_Text(ctx, hdr);
+
+    {
+        char liveBadge[200];
+        const char* qLive = liveQuick < 0
+            ? "none (plug-in driven)"
+            : (liveQuick == 0 ? "Q1" : liveQuick == 1 ? "Q2" : "Q3");
+        const char* sbLive = sbLabels[
+            (liveSubBank < 0 || liveSubBank > 5) ? 0 : liveSubBank];
+        std::snprintf(liveBadge, sizeof(liveBadge),
+                      "Live on Layer %d hardware:   Quick = %s   |   "
+                      "Sub-bank = %s",
+                      editLayer + 1, qLive, sbLive);
+        ImGui_TextColored(ctx, 0x55DD77FF, liveBadge);
+    }
     if (editLayer == 0) {
         ImGui_TextDisabled(ctx,
-            "Layer 1 Q1/Q2 are hardcoded SSL CS/BC and not editable. "
-            "Q3 is free for user actions.");
+            "Layer 1: Q1/Q2 are hardcoded SSL CS/BC focus and have no "
+            "user-Quick slots — Q3 is free for user actions.");
     } else {
         ImGui_TextDisabled(ctx,
             "Each Quick (Q1/Q2/Q3) carries 6 sub-banks (V-POT + Soft 1-5). "
@@ -2365,49 +2418,61 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer)
     }
     ImGui_Spacing(ctx);
 
-    // Quick selector — radio across Q1/Q2/Q3. Q1/Q2 disabled on Layer 1.
+    // Quick selector — radio across Q1/Q2/Q3. Layer 1 Q1/Q2 disabled.
+    // Dot marker (●) on the radio of the Quick that's live-engaged on
+    // this layer's hardware right now.
     {
-        ImGui_Text(ctx, "Quick:");
+        ImGui_Text(ctx, "Edit Quick:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        const char* qLabels[3] = { "Q1", "Q2", "Q3" };
         for (int qi = 0; qi < 3; ++qi) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             const bool locked = (editLayer == 0 && qi <= 1);
-            bool selected = (s_editQuick == qi) && !locked;
-            int flags = 0;
             if (locked) {
-                // No native disabled-radio in the wrapper — render as
-                // disabled text inside a fake group so it visibly differs.
                 char tag[16];
                 std::snprintf(tag, sizeof(tag), "[%s]", qLabels[qi]);
                 ImGui_TextDisabled(ctx, tag);
                 continue;
             }
-            char tag[16];
-            std::snprintf(tag, sizeof(tag), "%s##quick_pick_%d",
-                          qLabels[qi], qi);
-            if (ImGui_RadioButton(ctx, tag, selected)) {
+            const bool isLive = (liveQuick == qi);
+            char tag[32];
+            std::snprintf(tag, sizeof(tag), "%s%s##quick_pick_%d",
+                          qLabels[qi], isLive ? "  \xE2\x97\x8F" : "", qi);
+            if (ImGui_RadioButton(ctx, tag, s_editQuick == qi)) {
                 s_editQuick = qi;
             }
         }
     }
-    if (editLayer == 0 && s_editQuick <= 1) s_editQuick = 2;   // jump to Q3
+    // If the user lands on Layer 1 with s_editQuick still pointing at
+    // Q1/Q2 (carried over from another layer), nudge to Q3.
+    if (editLayer == 0 && s_editQuick <= 1) s_editQuick = 2;
 
-    // Sub-bank selector — radio across V-POT + Soft 1..5.
+    // The Layer-1 Q1/Q2 user-Quick slots have no path to fire (the
+    // buttons trigger domain_cs/bc, not quick_select_*), so editing
+    // them would be pure cosmetics. Bail out with an explanation.
+    const bool unreachable = (editLayer == 0 && s_editQuick <= 1);
+    if (unreachable) {
+        ImGui_Spacing(ctx);
+        ImGui_TextDisabled(ctx,
+            "Layer 1 Q1 = SSL CS focus, Q2 = SSL BC focus. Pressing "
+            "them doesn't engage a user-Quick context. Pick Q3 above "
+            "to edit Layer 1's user-Quick slots.");
+        return;
+    }
+
+    // Sub-bank selector — same dot rule.
     {
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Sub-bank:");
+        ImGui_Text(ctx, "Edit sub-bank:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        const char* sLabels[6] = {
-            "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
-        };
         for (int bi = 0; bi < 6; ++bi) {
             ImGui_SameLine(ctx, nullptr, nullptr);
-            bool selected = (s_editSubBank == bi);
-            char tag[24];
-            std::snprintf(tag, sizeof(tag), "%s##subbank_pick_%d",
-                          sLabels[bi], bi);
-            if (ImGui_RadioButton(ctx, tag, selected)) {
+            const bool isLive = (liveSubBank == bi
+                                  && liveQuick == s_editQuick);
+            char tag[40];
+            std::snprintf(tag, sizeof(tag), "%s%s##subbank_pick_%d",
+                          sbLabels[bi],
+                          isLive ? "  \xE2\x97\x8F" : "", bi);
+            if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi)) {
                 s_editSubBank = bi;
             }
         }
@@ -2416,36 +2481,44 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // 8 slot editors — same shape as the old user-bank editor (label
-    // input + action picker per slot). Plain-modifier slot only —
-    // user-Quick slots intentionally stay simple; the full modifier
-    // matrix sits in the regular per-button editor above.
+    // 8 slot editors with full breadcrumb in the header + a clear
+    // "Editing:" line inside each expanded slot.
+    const char* qName  = qLabels[s_editQuick];
+    const char* sbName = sbLabels[s_editSubBank];
     for (int si = 0; si < kSlotsPerSubBank; ++si) {
         Binding bd = getUserQuickSlot(editLayer, s_editQuick,
                                       s_editSubBank, si);
-        char idtag[32];
+        char idtag[40];
         std::snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_slot%d",
                       editLayer, s_editQuick, s_editSubBank, si);
         ImGui_PushID(ctx, idtag);
 
         auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
 
-        // `###` suffix: collapsing-header ID stays stable while the
-        // visible label changes mid-edit. Same trap that bit the old
-        // bank editor — see feedback-bindings-imgui-id-traps.md.
-        char header[96];
+        // `###` suffix: header ID stays stable while visible text
+        // changes mid-edit. Same trap that bit the old bank editor.
+        char header[200];
         const std::string& act = sp.action;
-        if (act.empty()) {
-            std::snprintf(header, sizeof(header),
-                          "Slot %d   (empty)###uqslot%d", si + 1, si);
-        } else {
-            std::snprintf(header, sizeof(header),
-                          "Slot %d   %s###uqslot%d", si + 1,
-                          bd.label.empty() ? act.c_str() : bd.label.c_str(),
-                          si);
-        }
+        const char* visText = act.empty()
+            ? "(empty)"
+            : (bd.label.empty() ? act.c_str() : bd.label.c_str());
+        std::snprintf(header, sizeof(header),
+                      "Slot %d  —  %s (Layer %d, %s):   %s###uqslot%d",
+                      si + 1, sbName, editLayer + 1, qName,
+                      visText, si);
         if (ImGui_CollapsingHeader(ctx, header, nullptr, nullptr)) {
             ImGui_Indent(ctx, nullptr);
+
+            // Echo the full path so the user can never mistake what
+            // context they're editing — the per-slot breadcrumb is
+            // load-bearing (Frank: "selbstverständlich", 2026-05-13).
+            char editingLine[200];
+            std::snprintf(editingLine, sizeof(editingLine),
+                          "Editing: %s slot %d   (Layer %d, %s)",
+                          sbName, si + 1, editLayer + 1, qName);
+            ImGui_Text(ctx, editingLine);
+            ImGui_Spacing(ctx);
+
             bool dirty = false;
             char labelBuf[64] = {0};
             std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
@@ -2466,7 +2539,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer)
                 &sp.midiData1, &sp.midiData2,
                 &sp.fireOnInactive,
             };
-            char prefix[40];
+            char prefix[48];
             std::snprintf(prefix, sizeof(prefix), "uq%d_%d_%d_s%d",
                           editLayer, s_editQuick, s_editSubBank, si);
             if (drawActionPicker(ctx, prefix, ref,
@@ -2625,9 +2698,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // 6 sub-banks (V-POT default + Soft 1..5); each sub-bank carries 8
     // top-soft-key slots. Layer 1 Q1/Q2 stay hardcoded for SSL CS/BC —
     // those tabs are disabled. Q3 + Layer 2/3 all-three are user-filled
-    // here. Editor state is local to this tab; live engagement of a
-    // Quick happens through quick_select_* builtins / hardware.
-    drawUserQuickSection_(ctx, s_editLayer);
+    // here. WYSIWYG: clicking a Quick button in the schematic above
+    // pivots this section straight to that Quick's slots.
+    drawUserQuickSection_(ctx, s_editLayer, s_selected);
 }
 
 // ---- FX Learn -------------------------------------------------------------

@@ -7350,6 +7350,20 @@ int reasixty_activeUserBank()
     return g_activeQuick[layer].load();
 }
 
+// Per-layer accessors so the Bindings editor can show a live-state
+// badge for whichever layer the user is editing (not just the
+// currently-active one). Out-of-range returns -1 / 0 defaults.
+int reasixty_activeQuickFor(int layer)
+{
+    if (layer < 0 || layer > 2) return -1;
+    return g_activeQuick[layer].load();
+}
+int reasixty_activeSubBankFor(int layer)
+{
+    if (layer < 0 || layer > 2) return 0;
+    return g_activeSubBank[layer].load();
+}
+
 // User-Quick slot label for the Settings preview. `bank` is interpreted
 // as the active Quick index (0..2) on the currently-active layer; the
 // active sub-bank decides which of the 6 slot tables the label comes
