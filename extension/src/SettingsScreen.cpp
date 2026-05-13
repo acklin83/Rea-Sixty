@@ -1646,19 +1646,59 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
     sectionRadio("rd_midi", "MIDI Command", ActionType::Midi);
     if (*f.type == ActionType::Midi) {
         ImGui_Indent(ctx, nullptr);
-        // Device (free-text — Phase D will swap to a combo of REAPER's
-        // enumerated MIDI outputs).
-        char dbuf[64] = {0};
-        std::strncpy(dbuf, f.midiDevice->c_str(), sizeof(dbuf) - 1);
+        // Device — combo over REAPER's enumerated MIDI outputs.
+        // Sentinel "(all enabled outputs)" stores empty string,
+        // routing to every enabled output at dispatch time. Stored
+        // device names that aren't currently enumerated (e.g. usb
+        // device unplugged) surface as an "(offline)" entry so the
+        // binding isn't silently lost when the user re-opens the
+        // editor without that hardware connected.
+        const std::string preview = f.midiDevice->empty()
+            ? std::string("(all enabled outputs)")
+            : *f.midiDevice;
         std::snprintf(idbuf, sizeof(idbuf), "Device##%s_dev", prefix);
-        double w = 200;
+        double w = 280;
         ImGui_PushItemWidth(ctx, w);
-        if (ImGui_InputTextWithHint(ctx, idbuf, "(empty = all enabled outputs)",
-                                    dbuf, sizeof(dbuf),
-                                    /*flags*/ nullptr,
-                                    /*callback*/ nullptr)) {
-            *f.midiDevice = dbuf;
-            dirty = true;
+        if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), nullptr)) {
+            bool selAny = f.midiDevice->empty();
+            char anyId[64];
+            std::snprintf(anyId, sizeof(anyId),
+                          "(all enabled outputs)##%s_devany", prefix);
+            if (ImGui_Selectable(ctx, anyId, &selAny, nullptr,
+                                 nullptr, nullptr)) {
+                f.midiDevice->clear();
+                dirty = true;
+            }
+            const int nOut = GetNumMIDIOutputs();
+            bool sawCurrent = f.midiDevice->empty();
+            for (int i = 0; i < nOut; ++i) {
+                char nm[256] = {0};
+                if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
+                if (!*nm) continue;
+                bool sel = (*f.midiDevice == nm);
+                if (sel) sawCurrent = true;
+                char rowId[320];
+                std::snprintf(rowId, sizeof(rowId),
+                              "%s##%s_devo%d", nm, prefix, i);
+                if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
+                                     nullptr, nullptr)) {
+                    *f.midiDevice = nm;
+                    dirty = true;
+                }
+            }
+            if (!sawCurrent) {
+                bool sel = true;
+                char rowId[320];
+                std::snprintf(rowId, sizeof(rowId),
+                              "%s (offline)##%s_devstale",
+                              f.midiDevice->c_str(), prefix);
+                // Selecting an offline entry is a no-op — it just
+                // confirms the stored name. Kept selectable so the
+                // user can see it's still set.
+                ImGui_Selectable(ctx, rowId, &sel, nullptr,
+                                 nullptr, nullptr);
+            }
+            ImGui_EndCombo(ctx);
         }
         ImGui_PopItemWidth(ctx);
 
