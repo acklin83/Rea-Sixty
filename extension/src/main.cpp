@@ -7652,8 +7652,15 @@ const char* reasixty_reaperVersion()
 // here (main.cpp owns the onTimer) so the poll keeps running even if the
 // user navigates away from the editor while the picker dialog is open.
 // One picker session at a time; starting a new one cancels the previous.
+//
+// Two destination modes: Layer mode writes back to layers[L].bindings[id]
+// (the original use); UserQuick mode writes back to userQuicks[L].quicks[Q]
+// .subBanks[SB].slots[s]. Picker editor calls Start for the matching mode;
+// the poll branches accordingly.
 namespace {
+    enum class PickerMode { Layer, UserQuick };
     bool                         g_pickerActive    = false;
+    PickerMode                   g_pickerMode      = PickerMode::Layer;
     int                          g_pickerLayer     = 0;
     uf8::bindings::ButtonId      g_pickerId        = uf8::bindings::ButtonId::None;
     bool                         g_pickerLongPress = false;
@@ -7667,11 +7674,17 @@ namespace {
     // Action..." button was clicked (Frank 2026-05-07 — Lua picked for
     // step 2 landed in step 1).
     int                          g_pickerStepIdx   = 0;
+    // User-Quick destination coords. Only valid when mode == UserQuick.
+    int                          g_pickerUQLayer   = 0;
+    int                          g_pickerUQQuick   = 0;
+    int                          g_pickerUQSubBank = 0;
+    int                          g_pickerUQSlot    = 0;
 }
 
 void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
                                 bool longPress, int modIdx, int stepIdx)
 {
+    g_pickerMode      = PickerMode::Layer;
     g_pickerLayer     = layer;
     g_pickerId        = id;
     g_pickerLongPress = longPress;
@@ -7685,9 +7698,42 @@ bool reasixty_actionPickerActiveFor(int layer, uf8::bindings::ButtonId id,
                                     bool longPress, int modIdx, int stepIdx)
 {
     return g_pickerActive
+        && g_pickerMode == PickerMode::Layer
         && g_pickerLayer == layer
         && g_pickerId == id
         && g_pickerLongPress == longPress
+        && g_pickerModIdx == modIdx
+        && g_pickerStepIdx == stepIdx;
+}
+
+void reasixty_actionPickerStartUserQuick(int uqLayer, int uqQuick,
+                                         int uqSubBank, int uqSlot,
+                                         int modIdx, int stepIdx)
+{
+    g_pickerMode      = PickerMode::UserQuick;
+    g_pickerUQLayer   = uqLayer;
+    g_pickerUQQuick   = uqQuick;
+    g_pickerUQSubBank = uqSubBank;
+    g_pickerUQSlot    = uqSlot;
+    g_pickerLongPress = false;       // user-Quick editor currently exposes
+                                     // only shortPress[Plain] — long-press
+                                     // can be added later.
+    g_pickerModIdx    = modIdx;
+    g_pickerStepIdx   = stepIdx;
+    g_pickerActive    = true;
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+}
+
+bool reasixty_actionPickerActiveForUserQuick(int uqLayer, int uqQuick,
+                                             int uqSubBank, int uqSlot,
+                                             int modIdx, int stepIdx)
+{
+    return g_pickerActive
+        && g_pickerMode == PickerMode::UserQuick
+        && g_pickerUQLayer == uqLayer
+        && g_pickerUQQuick == uqQuick
+        && g_pickerUQSubBank == uqSubBank
+        && g_pickerUQSlot == uqSlot
         && g_pickerModIdx == modIdx
         && g_pickerStepIdx == stepIdx;
 }
@@ -7863,7 +7909,10 @@ void reasixty_actionPickerPoll()
     if (nc && *nc) actionStr = std::string("_") + nc;
     else           actionStr = std::to_string(r);
     using namespace uf8::bindings;
-    Binding bd = getBinding(g_pickerLayer, g_pickerId);
+    Binding bd = (g_pickerMode == PickerMode::UserQuick)
+        ? getUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
+                           g_pickerUQSubBank, g_pickerUQSlot)
+        : getBinding(g_pickerLayer, g_pickerId);
     const int modIdx = (g_pickerModIdx < 0 || g_pickerModIdx >= kModifierCount)
                          ? static_cast<int>(Modifier::Plain)
                          : g_pickerModIdx;
@@ -7882,7 +7931,12 @@ void reasixty_actionPickerPoll()
     // step to BE a REAPER action — set the type so the inline picker
     // re-renders into the REAPER section without a separate radio click.
     target.type   = ActionType::Reaper;
-    setBinding(g_pickerLayer, g_pickerId, bd);
+    if (g_pickerMode == PickerMode::UserQuick) {
+        setUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
+                         g_pickerUQSubBank, g_pickerUQSlot, bd);
+    } else {
+        setBinding(g_pickerLayer, g_pickerId, bd);
+    }
 }
 
 // About tab uses these to launch the system handler. macOS-only path

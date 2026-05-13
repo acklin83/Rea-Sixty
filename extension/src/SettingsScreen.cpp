@@ -37,6 +37,16 @@ void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
 bool reasixty_actionPickerActiveFor(int layer, uf8::bindings::ButtonId id,
                                     bool longPress, int modIdx = 0,
                                     int stepIdx = 0);
+// User-Quick destination variant — picked action is stored into
+// userQuicks[L].quicks[Q].subBanks[SB].slots[s], not into a layer
+// binding. Layer-mode and User-Quick-mode share the picker session;
+// only one can be open at a time.
+void reasixty_actionPickerStartUserQuick(int uqLayer, int uqQuick,
+                                         int uqSubBank, int uqSlot,
+                                         int modIdx = 0, int stepIdx = 0);
+bool reasixty_actionPickerActiveForUserQuick(int uqLayer, int uqQuick,
+                                             int uqSubBank, int uqSlot,
+                                             int modIdx = 0, int stepIdx = 0);
 void reasixty_actionPickerCancel();
 std::string reasixty_resolveActionName(const std::string& action);
 bool        reasixty_actionIsToggle(const std::string& action);
@@ -1242,11 +1252,21 @@ struct ActionFieldsRef {
 bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       ActionFieldsRef f, int layer,
                       uf8::bindings::ButtonId id, bool isLongPress,
-                      int modIdx = 0, int stepIdx = 0)
+                      int modIdx = 0, int stepIdx = 0,
+                      // User-Quick destination coords. When uqLayer >= 0,
+                      // the "Browse Action..." button routes the picked
+                      // REAPER action into the User-Quick slot rather than
+                      // a layer binding. Bug fix 2026-05-13: Frank's
+                      // Transport:Play binding on an L1.Q3 soft-key slot
+                      // never fired because the picker poll wrote to
+                      // layers[-1].bindings[None] (a no-op).
+                      int uqLayer = -1, int uqQuick = -1,
+                      int uqSubBank = -1, int uqSlot = -1)
 {
     using namespace uf8::bindings;
     bool dirty = false;
     char idbuf[80];
+    const bool isUserQuick = (uqLayer >= 0);
 
     auto sectionRadio = [&](const char* tag, const char* label, ActionType t) {
         const bool on = (*f.type == t);
@@ -1306,17 +1326,26 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // close it without picking. Polling is owned by main.cpp's
         // onTimer hook so the result lands even if the user navigates
         // away from this editor before the picker closes.
-        const bool pickerOpen = reasixty_actionPickerActiveFor(
-            layer, id, isLongPress, modIdx, stepIdx);
+        const bool pickerOpen = isUserQuick
+            ? reasixty_actionPickerActiveForUserQuick(
+                uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx)
+            : reasixty_actionPickerActiveFor(
+                layer, id, isLongPress, modIdx, stepIdx);
         std::snprintf(idbuf, sizeof(idbuf), "%s##%s_browse",
                       pickerOpen ? "Cancel Action Pick" : "Browse Action...",
                       prefix);
         if (ImGui_Button(ctx, idbuf,
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            if (pickerOpen) reasixty_actionPickerCancel();
-            else            reasixty_actionPickerStart(layer, id,
-                                                       isLongPress,
-                                                       modIdx, stepIdx);
+            if (pickerOpen) {
+                reasixty_actionPickerCancel();
+            } else if (isUserQuick) {
+                reasixty_actionPickerStartUserQuick(
+                    uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx);
+            } else {
+                reasixty_actionPickerStart(layer, id,
+                                           isLongPress,
+                                           modIdx, stepIdx);
+            }
         }
         sameLine(ctx);
         std::snprintf(idbuf, sizeof(idbuf), "Load ReaScript...##%s_load",
@@ -2518,7 +2547,10 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
     };
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
-                         /*isLongPress*/ false)) {
+                         /*isLongPress*/ false,
+                         /*modIdx*/ 0, /*stepIdx*/ 0,
+                         /*uqLayer*/ editLayer, /*uqQuick*/ qIdx,
+                         /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx)) {
         dirty = true;
     }
     if (ImGui_Button(ctx, "Clear slot##uqclr_inl",
