@@ -511,7 +511,17 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::PageLeft]  = mkBuiltin("page_left",  Behavior::Momentary, "PAGE <");
     L1[ButtonId::PageRight] = mkBuiltin("page_right", Behavior::Momentary, "PAGE >");
 
-    // Layers 2 + 3 start fully empty per resolved Q3.
+    // Layer 2 + 3 — Quick buttons are pure user-Quick toggles (all three
+    // user-fillable). Without these factory entries the LED resolver
+    // returns Off ("no binding → dark", Frank 2026-05-07) and the
+    // user-Quick render never engages because pressing Q1/Q2/Q3 finds
+    // no builtin to fire.
+    for (int li = 1; li <= 2; ++li) {
+        auto& L = c.layers[li].bindings;
+        L[ButtonId::Quick1] = mkBuiltin("quick_select_1", Behavior::Toggle, "Q1");
+        L[ButtonId::Quick2] = mkBuiltin("quick_select_2", Behavior::Toggle, "Q2");
+        L[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle, "Q3");
+    }
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -1303,7 +1313,17 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // labels + soft-key dispatch on Layer 1 (engaging g_activeQuick[0]
 // routed the top-soft-key row to empty user-Quick slots). Q1/Q2 go
 // back to domain_cs/domain_bc Momentary. Q3 stays quick_select_3.
-constexpr int kCurrentBindingsVersion = 8;
+// v9 (2026-05-13): backfill the Quick + Layer-select bindings that
+// seedFactoryDefaults_ now puts on Layer 2 + 3 but that historical
+// configs are missing. Without them the layer-indicator + Quick-
+// button LEDs sit dark on Layer 2/3 (resolveLed_ returns Off when
+// the active layer has no binding for the button) and the user-
+// Quick render never engages because pressing Q1/Q2/Q3 finds no
+// builtin to fire. Also rewrites stale domain_cs / domain_bc that
+// older factories planted on Layer 2 + 3's Q1/Q2 — those make no
+// sense outside Layer 1 and were Frank's surface complaint
+// ("Quick 1 + 2 show same values as Layer 1 instead of empty").
+constexpr int kCurrentBindingsVersion = 9;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -1329,6 +1349,79 @@ void upgradeRestoreLayer1Quicks_(Layer& L1)
     };
     restore(ButtonId::Quick1, "quick_select_1", "domain_cs", "CS");
     restore(ButtonId::Quick2, "quick_select_2", "domain_bc", "BC");
+}
+
+// v8→v9: ensure every layer carries the factory-baseline bindings
+// for Layer-select + Quick. Missing entries are filled; stale entries
+// on L2/L3 (Quick1=domain_cs, Quick2=domain_bc) get rewritten to the
+// canonical user-Quick toggles. Layer-1 user customisations survive
+// because we only touch L1 Q1/Q2 if they're already the v7-style
+// quick_select_* (handled by v7→v8 above) — v9 doesn't re-touch L1.
+void upgradeBackfillQuickAndLayerLeds_(Config& c)
+{
+    auto fillIfMissing = [](Layer& L, ButtonId id, const char* action,
+                            Behavior beh, const char* label) {
+        if (L.bindings.find(id) != L.bindings.end()) return;
+        Binding bd;
+        bd.behavior = beh;
+        bd.label    = label;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = action;
+        L.bindings[id] = bd;
+    };
+    auto rewriteIfMatches = [](Layer& L, ButtonId id, const char* fromAction,
+                               const char* toAction, const char* label) {
+        auto it = L.bindings.find(id);
+        if (it == L.bindings.end()) return false;
+        Binding& bd = it->second;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        if (sp.type != ActionType::Builtin) return false;
+        if (sp.action != fromAction) return false;
+        sp = ActionSlot{};
+        sp.type     = ActionType::Builtin;
+        sp.action   = toAction;
+        bd.label    = label;
+        bd.behavior = Behavior::Toggle;
+        return true;
+    };
+
+    for (int li = 0; li < 3; ++li) {
+        Layer& L = c.layers[li];
+        fillIfMissing(L, ButtonId::Layer1,
+                      "layer_select_1", Behavior::Momentary, "LAYER 1");
+        fillIfMissing(L, ButtonId::Layer2,
+                      "layer_select_2", Behavior::Momentary, "LAYER 2");
+        fillIfMissing(L, ButtonId::Layer3,
+                      "layer_select_3", Behavior::Momentary, "LAYER 3");
+    }
+    // Layer 1: keep the canonical domain_cs/bc on Q1/Q2 + quick_select_3
+    // on Q3. Only fill missing slots — don't stomp user customisations.
+    {
+        Layer& L1 = c.layers[0];
+        fillIfMissing(L1, ButtonId::Quick1,
+                      "domain_cs",      Behavior::Momentary, "CS");
+        fillIfMissing(L1, ButtonId::Quick2,
+                      "domain_bc",      Behavior::Momentary, "BC");
+        fillIfMissing(L1, ButtonId::Quick3,
+                      "quick_select_3", Behavior::Toggle,    "Q3");
+    }
+    // Layers 2 + 3: rewrite stale domain_cs / domain_bc → quick_select_*
+    // (Layer 1's CS/BC focus only makes sense on Layer 1), then fill
+    // anything still missing.
+    for (int li = 1; li <= 2; ++li) {
+        Layer& L = c.layers[li];
+        rewriteIfMatches(L, ButtonId::Quick1, "domain_cs",
+                         "quick_select_1", "Q1");
+        rewriteIfMatches(L, ButtonId::Quick2, "domain_bc",
+                         "quick_select_2", "Q2");
+        fillIfMissing(L, ButtonId::Quick1,
+                      "quick_select_1", Behavior::Toggle, "Q1");
+        fillIfMissing(L, ButtonId::Quick2,
+                      "quick_select_2", Behavior::Toggle, "Q2");
+        fillIfMissing(L, ButtonId::Quick3,
+                      "quick_select_3", Behavior::Toggle, "Q3");
+    }
 }
 
 // Upgrade hook: existing configs get factory long-press defaults on
@@ -1397,6 +1490,9 @@ void load()
             }
             if (tmp.version < 8) {
                 upgradeRestoreLayer1Quicks_(tmp.layers[0]);
+            }
+            if (tmp.version < 9) {
+                upgradeBackfillQuickAndLayerLeds_(tmp);
             }
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);
