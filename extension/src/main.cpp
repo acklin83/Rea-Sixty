@@ -3295,8 +3295,8 @@ uint32_t reaperColorForVisibleSlot(int slot)
             const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
             const auto& bs   = u.map->uf8.banks.banks[bank][slot];
             const auto& strp = u.map->uf8.strips[slot];
-            if (bs.colour != 0) {
-                return bs.colour & 0x00FFFFFFu;
+            if (bs.stripColour != 0) {
+                return bs.stripColour & 0x00FFFFFFu;
             }
             const bool anyBound = (bs.vst3Param >= 0)
                 || (strp.faderVst3Param >= 0)
@@ -4145,15 +4145,16 @@ void pushZonesForVisibleSlots()
                 tssk = uf8::TopSoftKeyState::Dim;
                 ledCacheKey = 1;
             }
-            // Per-strip TopSoftKey LED colour. In UF8 Plugin Mode, use
-            // the V-Pot colour for strip s in the active bank — same
-            // colour the editor's right-click on the mockup TopSoftKey
-            // sets via setUf8Colour_(VPot, s, bank, rgb) (Frank
-            // 2026-05-13: "LED Farbe bei Soft-Key wird nicht von Soft-
-            // Key reflektiert"). Falls back to white when no override
-            // or no user-mapped plug-in is focused. Pack colour into
-            // ledCacheKey via low/high bits so a colour change re-emits
-            // the frame without piggybacking on tssk transitions.
+            // Per-TopSoftKey LED colour + brightness. In Plugin Mode
+            // each TopSoftKey N (= bank N selector) carries its own
+            // active + inactive RGB + brightness in
+            // uf8.topSoftKeyLeds[N] — bank-scoped, not strip-scoped
+            // (Frank 2026-05-13: "Soft-Key: rechtsklick farbe dimm/
+            // bright für inactive/active. V-Pot Farbe raus."). The
+            // tssk computed above (On/Dim per the bank-active branch
+            // ~Z. 4070) is overridden here with the user-chosen
+            // brightness, then folded into a composite cache key so
+            // both state + colour changes re-emit cleanly.
             uf8::LedColour ledClr = uf8::ledColourWhite();
             uint32_t ledColRgb = 0xFFFFFFu;
             if (pluginModeLocal) {
@@ -4161,11 +4162,27 @@ void pushZonesForVisibleSlots()
                     const int activeBank = std::clamp(
                         g_softKeyBank.load(),
                         0, uf8::kUserUf8BankCount - 1);
-                    const uint32_t bc = uctx.map->uf8.banks
-                        .banks[activeBank][s].colour & 0x00FFFFFFu;
+                    const bool isActive = (s == activeBank);
+                    const auto& tl = uctx.map->uf8.topSoftKeyLeds[s];
+                    const uint32_t bc = (isActive ? tl.activeColour
+                                                  : tl.inactiveColour)
+                                        & 0x00FFFFFFu;
                     if (bc != 0) {
                         ledColRgb = bc;
                         ledClr = uf8::ledColourForTrackRgb(bc);
+                    }
+                    // Brightness override — Off/Dim/Bright registers
+                    // are independent per state. Maps directly onto
+                    // TopSoftKeyState.
+                    const auto bri = isActive ? tl.activeBri
+                                              : tl.inactiveBri;
+                    switch (bri) {
+                        case uf8::UserUf8Brightness::Off:
+                            tssk = uf8::TopSoftKeyState::Off;    break;
+                        case uf8::UserUf8Brightness::Dim:
+                            tssk = uf8::TopSoftKeyState::Dim;    break;
+                        case uf8::UserUf8Brightness::Bright:
+                            tssk = uf8::TopSoftKeyState::On;     break;
                     }
                 }
             }
@@ -4173,6 +4190,7 @@ void pushZonesForVisibleSlots()
             // hash so colour changes re-emit even when state is steady.
             const int32_t composite =
                 (int32_t(ledCacheKey) << 24)
+              ^ (int32_t(static_cast<int>(tssk)) << 28)
               ^ static_cast<int32_t>(ledColRgb & 0x00FFFFFFu);
             // g_lastTopSoftKey is int8_t — keep just a hash; identical
             // composites short-circuit, distinct composites push.

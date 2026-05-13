@@ -307,7 +307,8 @@ std::string serialize_(const UserPluginCatalog& c)
                     appendEscaped_(os, vpotModeName_(bs.vpotMode));
                     os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
                        << ", \"defaultNorm\": " << bs.defaultNorm
-                       << ", \"colour\": " << static_cast<unsigned>(bs.colour)
+                       << ", \"stripColour\": "
+                       << static_cast<unsigned>(bs.stripColour)
                        << " }";
                 }
                 os << "\n          ]";
@@ -330,6 +331,23 @@ std::string serialize_(const UserPluginCatalog& c)
                    << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
                    << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
                    << " }"
+                   << " }";
+            }
+            os << "\n        ],\n";
+            // Per-bank TopSoftKey LED appearance.
+            os << "        \"topSoftKeyLeds\": [";
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
+                if (b) os << ",";
+                const auto& l = m.uf8.topSoftKeyLeds[b];
+                os << "\n          { "
+                   << "\"activeColour\": "
+                   << static_cast<unsigned>(l.activeColour)
+                   << ", \"activeBri\": "
+                   << static_cast<unsigned>(l.activeBri)
+                   << ", \"inactiveColour\": "
+                   << static_cast<unsigned>(l.inactiveColour)
+                   << ", \"inactiveBri\": "
+                   << static_cast<unsigned>(l.inactiveBri)
                    << " }";
             }
             os << "\n        ]\n      }";
@@ -456,8 +474,16 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         getBoolI_(so, "inverted", bs.inverted);
                         getDoubleI_(so, "defaultNorm", bs.defaultNorm);
                         int colTmp = 0;
-                        if (getIntI_(so, "colour", colTmp))
-                            bs.colour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                        // Migrate legacy "colour" → "stripColour"
+                        // (Frank 2026-05-13 split V-Pot / TopSoftKey /
+                        // strip-bar colour into independent registers).
+                        if (getIntI_(so, "stripColour", colTmp)) {
+                            bs.stripColour =
+                                static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                        } else if (getIntI_(so, "colour", colTmp)) {
+                            bs.stripColour =
+                                static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                        }
                     }
                 }
             }
@@ -499,6 +525,40 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         colTmp = 0;
                         if (getIntI_(selo, "colour", colTmp))
                             sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    }
+                }
+            }
+            // Per-bank TopSoftKey LED state — absent in pre-2026-05-13
+            // configs; missing entries keep struct defaults (white
+            // bright when active, white dim when inactive).
+            if (auto* tslArr = uo->get_item_by_name("topSoftKeyLeds");
+                tslArr && tslArr->is_array() && tslArr->m_array)
+            {
+                const int ln = (std::min)(tslArr->m_array->GetSize(),
+                                          uf8::kUserUf8BankCount);
+                for (int b = 0; b < ln; ++b) {
+                    wdl_json_element* lo = tslArr->enum_item(b);
+                    if (!lo || !lo->is_object()) continue;
+                    auto& l = m.uf8.topSoftKeyLeds[b];
+                    int colTmp = 0;
+                    if (getIntI_(lo, "activeColour", colTmp))
+                        l.activeColour =
+                            static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    if (getIntI_(lo, "inactiveColour", colTmp))
+                        l.inactiveColour =
+                            static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    int briTmp = 0;
+                    if (getIntI_(lo, "activeBri", briTmp)
+                        && briTmp >= 0 && briTmp <= 2)
+                    {
+                        l.activeBri =
+                            static_cast<uf8::UserUf8Brightness>(briTmp);
+                    }
+                    if (getIntI_(lo, "inactiveBri", briTmp)
+                        && briTmp >= 0 && briTmp <= 2)
+                    {
+                        l.inactiveBri =
+                            static_cast<uf8::UserUf8Brightness>(briTmp);
                     }
                 }
             }

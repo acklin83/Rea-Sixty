@@ -43,7 +43,12 @@ enum class VPotMode : uint8_t {
     Toggle = 1,   // binary; rotate ignored, push flips 0↔1
 };
 
-// One slot in one of six UF8 banks. vst3Param=-1 => empty slot
+// Independent brightness register for TopSoftKey LED states.
+// Mirrors uf8::bindings::Brightness without forcing a Bindings.h
+// dependency on the user-plug-in catalogue header.
+enum class UserUf8Brightness : uint8_t { Off, Dim, Bright };
+
+// One slot in one of eight UF8 banks. vst3Param=-1 => empty slot
 // (top-soft-key blank, V-Pot no-op).
 struct UserUf8BankSlot {
     int          vst3Param   = -1;
@@ -51,13 +56,27 @@ struct UserUf8BankSlot {
     VPotMode     vpotMode    = VPotMode::Value;
     bool         inverted    = false;
     double       defaultNorm = 0.5;           // V-Pot push reset (Value mode)
-    // 0xRRGGBB picked from the SSL DAW-Colour palette; 0 = "no override"
-    // (LED = white, strip colour bar = bank track's colour). Snapped to
-    // selPaletteRgb() entries by the editor so the UF8 hardware can
-    // render it faithfully. Per-bank because the V-Pot is the bank's
-    // primary control — its colour drives the strip colour bar in
-    // user-strip mode.
-    uint32_t     colour      = 0;
+    // LCD colour bar override (Frank 2026-05-13: "Farbe für Farbbalken
+    // auf UF8 Display"). 0xRRGGBB picked from the SSL DAW-Colour
+    // palette; 0 = "no override" (falls back to bank-track colour).
+    // Per (bank, strip) — each strip's bar can carry its own colour
+    // within a given bank. Was named `colour` and shared by V-Pot ring
+    // + TopSoftKey LED + strip bar; the V-Pot/Soft-Key sharing was
+    // removed when Frank split those into independent registers.
+    uint32_t     stripColour = 0;
+};
+
+// TopSoftKey LED state register — Frank 2026-05-13: TopSoftKey N in
+// UF8 Plugin Mode is bank-N's selector, so its LED's active/inactive
+// appearance is bank-scoped, not strip-scoped. One entry per bank
+// (= per TopSoftKey position) carrying independent RGB + brightness
+// for active (this bank == g_softKeyBank) and inactive (other bank
+// active) states.
+struct UserUf8TopSoftKeyLed {
+    uint32_t          activeColour   = 0xFFFFFFu;   // white
+    UserUf8Brightness activeBri      = UserUf8Brightness::Bright;
+    uint32_t          inactiveColour = 0xFFFFFFu;
+    UserUf8Brightness inactiveBri    = UserUf8Brightness::Dim;
 };
 
 // 8 banks × 8 slots. Frank 2026-05-13: UF8 Plugin Mode now uses the
@@ -89,8 +108,11 @@ struct UserUf8StripBinding {
 };
 
 struct UserUf8Map {
-    UserUf8BankSet      banks;
-    UserUf8StripBinding strips[8] = {};
+    UserUf8BankSet       banks;
+    UserUf8StripBinding  strips[8] = {};
+    // Per-bank TopSoftKey LED appearance (Plugin Mode). Index = bank
+    // index 0..7; matches TopSoftKey position 1..8 on the hardware.
+    UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8BankCount] = {};
 };
 
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an

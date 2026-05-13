@@ -3836,9 +3836,11 @@ void setUf8Label_(int strip, int bank, const std::string& label)
     });
 }
 
-// Per-binding colour read / write. V-Pot colours live per-bank slot; Solo /
-// Cut / Sel colours are bank-independent. 0 = no override (LED uses class
-// default, strip colour bar uses bank-track colour).
+// Per-binding colour read / write. V-Pot no longer carries a colour
+// (Frank 2026-05-13: "V-Pot Farbe raus, bringt nichts.") — the LCD
+// strip-colour-bar uses stripColour read via getUf8StripColour_ below.
+// Solo / Cut / Sel colours remain bank-independent. 0 = no override
+// (LED uses class default).
 uint32_t getUf8Colour_(int kind, int strip, int bank)
 {
     if (g_editingMatch.empty()) return 0;
@@ -3846,13 +3848,13 @@ uint32_t getUf8Colour_(int kind, int strip, int bank)
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
         switch (kind) {
-            case 1 /*VPot*/: return u.banks.banks[bank][strip].colour;
             case 3 /*SoloBtn*/: return u.strips[strip].soloColour;
             case 4 /*CutBtn*/:  return u.strips[strip].cutColour;
             case 5 /*SelBtn*/:  return u.strips[strip].selColour;
             default: return 0;
         }
     }
+    (void)bank;
     return 0;
 }
 
@@ -3861,11 +3863,73 @@ void setUf8Colour_(int kind, int strip, int bank, uint32_t rgb)
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 1: u.banks.banks[bank][strip].colour = rgb; break;
             case 3: u.strips[strip].soloColour        = rgb; break;
             case 4: u.strips[strip].cutColour         = rgb; break;
             case 5: u.strips[strip].selColour         = rgb; break;
         }
+    });
+    (void)bank;
+}
+
+// Strip colour bar — per (bank, strip). Drives the LCD's coloured
+// stripe under the V-Pot (Frank 2026-05-13: "Farbe für Farbbalken auf
+// UF8 Display"). 0 = no override (falls back to bank-track colour).
+uint32_t getUf8StripColour_(int strip, int bank)
+{
+    if (g_editingMatch.empty()) return 0;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        return m.uf8.banks.banks[bank][strip].stripColour & 0x00FFFFFFu;
+    }
+    return 0;
+}
+void setUf8StripColour_(int strip, int bank, uint32_t rgb)
+{
+    rgb &= 0x00FFFFFFu;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[bank][strip].stripColour = rgb;
+    });
+}
+
+// Per-bank TopSoftKey LED appearance. Plugin Mode reads these for
+// active/inactive state — bank-N's TopSoftKey-N selector LED.
+uint32_t getUf8TopSoftKeyColour_(int bank, bool active)
+{
+    if (g_editingMatch.empty()) return 0xFFFFFFu;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        const auto& l = m.uf8.topSoftKeyLeds[bank];
+        return (active ? l.activeColour : l.inactiveColour) & 0x00FFFFFFu;
+    }
+    return 0xFFFFFFu;
+}
+uf8::UserUf8Brightness getUf8TopSoftKeyBri_(int bank, bool active)
+{
+    if (g_editingMatch.empty()) {
+        return active ? uf8::UserUf8Brightness::Bright
+                      : uf8::UserUf8Brightness::Dim;
+    }
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        const auto& l = m.uf8.topSoftKeyLeds[bank];
+        return active ? l.activeBri : l.inactiveBri;
+    }
+    return active ? uf8::UserUf8Brightness::Bright
+                  : uf8::UserUf8Brightness::Dim;
+}
+void setUf8TopSoftKeyColour_(int bank, bool active, uint32_t rgb)
+{
+    rgb &= 0x00FFFFFFu;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        if (active) u.topSoftKeyLeds[bank].activeColour   = rgb;
+        else        u.topSoftKeyLeds[bank].inactiveColour = rgb;
+    });
+}
+void setUf8TopSoftKeyBri_(int bank, bool active, uf8::UserUf8Brightness br)
+{
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        if (active) u.topSoftKeyLeds[bank].activeBri   = br;
+        else        u.topSoftKeyLeds[bank].inactiveBri = br;
     });
 }
 
@@ -4508,55 +4572,61 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             reasixty_setSoftKeyBank(ctrl.strip);
         }
 
-        // Right-click menu — Frank 2026-05-13: "Rechtsklick Menu wie
-        // z.B. solo-button machen (color, fill seq, clear)". TopSoftKey
-        // in the mockup represents this bank's V-Pot slot; the menu
-        // mirrors V-Pot's colour / fill-sequential / clear options for
-        // the same (bank, strip). Operates on Uf8Control::VPot under
-        // the hood — the V-Pot slot IS what TopSoftKey labels and the
-        // strip colour bar reflects.
-        if (isMapped) {
+        // Right-click menu — Frank 2026-05-13. TopSoftKey N in the
+        // mockup represents the hardware bank-N selector; the menu
+        // edits TopSoftKey N's own LED active/inactive colour +
+        // brightness (bank-scoped, NOT per-(bank, strip)) plus the
+        // bank-N V-Pot slot's label. Right-click works whether the
+        // slot is bound or not — empty banks need to be paintable.
+        char popId[48];
+        std::snprintf(popId, sizeof(popId),
+                      "fxl_uf8_tsk_ctx_%d", ctrl.strip);
+        if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
+            const int softKeyBank = ctrl.strip;  // TopSoftKey N → bank N
+            char title[160];
+            std::snprintf(title, sizeof(title),
+                "TopSoftKey %d — Bank %d LED",
+                ctrl.strip + 1, softKeyBank + 1);
+            ImGui_TextDisabled(ctx, title);
+            ImGui_Separator(ctx);
 
-            char popId[48];
-            std::snprintf(popId, sizeof(popId),
-                          "fxl_uf8_tsk_ctx_%d", ctrl.strip);
-            if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
-                char title[160];
-                std::snprintf(title, sizeof(title),
-                    "TopSoft %d — Bank %d V-Pot -> param %d",
-                    ctrl.strip + 1, bank + 1, mapped);
-                ImGui_TextDisabled(ctx, title);
-                ImGui_Separator(ctx);
+            // Label edit for the V-Pot slot in the current editing
+            // bank — Frank 2026-05-13: "Ich muss die Labels für die
+            // Soft-Keys benennen können!". The label is per
+            // (bank, strip) since each bank has its own param row
+            // under this strip column, so the label tracks the
+            // currently-active bank (bank var, not softKeyBank).
+            std::string curLabel;
+            for (const auto& m : uf8::user_plugins::get().maps) {
+                if (m.match != g_editingMatch) continue;
+                curLabel = m.uf8.banks.banks[bank][ctrl.strip].label;
+                break;
+            }
+            static char s_tskLblBuf[16];
+            std::snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
+                          curLabel.c_str());
+            if (ImGui_InputTextWithHint(ctx,
+                    "Label##fxl_uf8_tsk_lbl",
+                    "(auto from param name)",
+                    s_tskLblBuf, int(sizeof(s_tskLblBuf)),
+                    nullptr, nullptr))
+            {
+                setUf8Label_(ctrl.strip, bank,
+                             std::string(s_tskLblBuf));
+            }
+            ImGui_Separator(ctx);
 
-                // Label edit — Frank 2026-05-13: "Ich muss die Labels
-                // für die Soft-Keys benennen können!". Same field
-                // the V-Pot popup edits; stored in banks[bank][strip]
-                // .label and surfaces on the UF8 TopSoftKey LCD.
-                std::string curLabel;
-                for (const auto& m : uf8::user_plugins::get().maps) {
-                    if (m.match != g_editingMatch) continue;
-                    curLabel = m.uf8.banks.banks[bank][ctrl.strip].label;
-                    break;
-                }
-                static char s_tskLblBuf[16];
-                std::snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
-                              curLabel.c_str());
-                if (ImGui_InputTextWithHint(ctx,
-                        "Label##fxl_uf8_tsk_lbl",
-                        "(auto from param name)",
-                        s_tskLblBuf, int(sizeof(s_tskLblBuf)),
-                        nullptr, nullptr))
-                {
-                    setUf8Label_(ctrl.strip, bank,
-                                 std::string(s_tskLblBuf));
-                }
-                ImGui_Separator(ctx);
-
-                // Colour picker (V-Pot colour drives both LED + strip
-                // colour bar; same handler used by the V-Pot row).
-                const uint32_t curRgb = getUf8Colour_(
-                    Uf8Control::VPot, ctrl.strip, bank);
-                ImGui_Text(ctx, "Colour");
+            // Two-row LED state editor (active + inactive). Each row:
+            // colour swatch (opens palette popup) + brightness radio
+            // group (Off / Dim / Bright).
+            auto drawSoftKeyLedRow = [&](const char* rowLabel,
+                                         bool activeState,
+                                         const char* idTag) {
+                const uint32_t curRgb =
+                    getUf8TopSoftKeyColour_(softKeyBank, activeState);
+                const auto curBri =
+                    getUf8TopSoftKeyBri_(softKeyBank, activeState);
+                ImGui_Text(ctx, rowLabel);
                 ImGui_SameLine(ctx, nullptr, nullptr);
                 const int curRgba = curRgb
                     ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
@@ -4565,28 +4635,37 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     : 0x40404080;
                 char swBtnId[48];
                 std::snprintf(swBtnId, sizeof(swBtnId),
-                              "##fxl_uf8_tsk_col_%d", ctrl.strip);
+                              "##fxl_uf8_tskcol_%s_%d",
+                              idTag, ctrl.strip);
                 int swBtnFlags = 0;
                 double swW = 56.0, swH = 18.0;
                 if (ImGui_ColorButton(ctx, swBtnId, curRgba,
                                       &swBtnFlags, &swW, &swH))
                 {
-                    char popPalId[48];
+                    char popPalId[64];
                     std::snprintf(popPalId, sizeof(popPalId),
-                                  "fxl_uf8_tsk_pal_%d", ctrl.strip);
+                                  "fxl_uf8_tskpal_%s_%d",
+                                  idTag, ctrl.strip);
                     ImGui_OpenPopup(ctx, popPalId, nullptr);
                 }
                 ImGui_SameLine(ctx, nullptr, nullptr);
-                char clrBtnId[48];
-                std::snprintf(clrBtnId, sizeof(clrBtnId),
-                              "Default##fxl_uf8_tsk_colclr_%d", ctrl.strip);
-                if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
-                    setUf8Colour_(Uf8Control::VPot, ctrl.strip, bank, 0);
+                const char* briNames[3] = {"Off", "Dim", "Bright"};
+                for (int i = 0; i < 3; ++i) {
+                    char rbId[40];
+                    std::snprintf(rbId, sizeof(rbId), "%s##fxl_uf8_tskbri_%s_%d_%d",
+                                  briNames[i], idTag, ctrl.strip, i);
+                    if (ImGui_RadioButton(ctx, rbId,
+                                          static_cast<int>(curBri) == i))
+                    {
+                        setUf8TopSoftKeyBri_(softKeyBank, activeState,
+                            static_cast<uf8::UserUf8Brightness>(i));
+                    }
+                    if (i < 2) ImGui_SameLine(ctx, nullptr, nullptr);
                 }
-
-                char popPalId[48];
+                char popPalId[64];
                 std::snprintf(popPalId, sizeof(popPalId),
-                              "fxl_uf8_tsk_pal_%d", ctrl.strip);
+                              "fxl_uf8_tskpal_%s_%d",
+                              idTag, ctrl.strip);
                 if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
                     int paletteCount = 0;
                     const uf8::PaletteRgb* palette =
@@ -4599,9 +4678,10 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             (int(p.r) << 24) |
                             (int(p.g) << 16) |
                             (int(p.b) <<  8) | 0xFF;
-                        char swId[32];
+                        char swId[40];
                         std::snprintf(swId, sizeof(swId),
-                                      "##fxl_uf8_tsk_pp_%d", i);
+                                      "##fxl_uf8_tskpp_%s_%d_%d",
+                                      idTag, ctrl.strip, i);
                         int swFlags = 0;
                         double w = sw, h = sw;
                         if (ImGui_ColorButton(ctx, swId, packed,
@@ -4611,8 +4691,8 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                 (uint32_t(p.r) << 16) |
                                 (uint32_t(p.g) <<  8) |
                                  uint32_t(p.b);
-                            setUf8Colour_(Uf8Control::VPot,
-                                          ctrl.strip, bank, rgb);
+                            setUf8TopSoftKeyColour_(softKeyBank,
+                                                    activeState, rgb);
                             ImGui_CloseCurrentPopup(ctx);
                         }
                         if ((i % perRow) != (perRow - 1) &&
@@ -4623,8 +4703,13 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     }
                     ImGui_EndPopup(ctx);
                 }
-                ImGui_Separator(ctx);
+            };
+            drawSoftKeyLedRow("Active  ", /*activeState*/ true,  "act");
+            drawSoftKeyLedRow("Inactive", /*activeState*/ false, "ina");
 
+            ImGui_Separator(ctx);
+
+            if (isMapped) {
                 // Fill sequential (right) — same heuristic as V-Pot:
                 // the bound param's name must carry a digit run.
                 if (ctrl.strip < 7) {
@@ -4657,12 +4742,12 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     }
                 }
 
-                if (ImGui_MenuItem(ctx, "Clear binding", nullptr,
+                if (ImGui_MenuItem(ctx, "Clear V-Pot binding", nullptr,
                                    nullptr, nullptr)) {
                     unbindUf8_(Uf8Control::VPot, ctrl.strip, bank);
                 }
-                ImGui_EndPopup(ctx);
             }
+            ImGui_EndPopup(ctx);
         }
         return;   // no left-click hit-test for TopSoftKey — V-Pot owns it
     }
@@ -4845,15 +4930,14 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 ImGui_Separator(ctx);
             }
 
-            // Colour picker — V-Pot / Solo / Cut / Sel each get one. V-Pot
-            // colour drives both its LED ring AND the strip colour bar in
-            // the LCD (per active bank, since V-Pot is the bank's primary
-            // control). Solo / Cut / Sel colours override only their LEDs
-            // and are bank-independent (matching the bindings themselves).
-            // 0 = no override (LED falls back to class default; strip bar
-            // falls back to bank-track colour).
-            if (ctrl.kind == Uf8Control::VPot   ||
-                ctrl.kind == Uf8Control::SoloBtn ||
+            // Colour picker — Solo / Cut / Sel only. V-Pot colour
+            // removed (Frank 2026-05-13: "V-Pot Farbe raus, bringt
+            // nichts.") — the V-Pot LED ring stays at the hardware
+            // default; the strip colour bar moved to its own swatch
+            // on the LCD mockup. Solo / Cut / Sel colours override
+            // only their LEDs and are bank-independent. 0 = no
+            // override (LED falls back to class default).
+            if (ctrl.kind == Uf8Control::SoloBtn ||
                 ctrl.kind == Uf8Control::CutBtn  ||
                 ctrl.kind == Uf8Control::SelBtn)
             {
@@ -4971,6 +5055,113 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 }
 
 // Render the FX-Learn schematic as the UF8 hardware face.
+// Strip colour-bar overlay (Frank 2026-05-13: "Farbe für Farbbalken
+// auf UF8 Display im Mockup des Displays anzeigen und per klick
+// veränderbar machen"). Painted across the bottom edge of the
+// scribble (LCD) rectangle on each of the 8 strips, with an
+// invisible hit-area that opens a palette popup on click. Stored
+// in banks[currentBank][strip].stripColour; 0 = no override (falls
+// back to a dim grey marker so the user can still see the cell).
+void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
+                              float ox, float oy)
+{
+    using uf8::user_plugins::get;
+    const int bank = reasixty_softKeyBankRaw();
+
+    constexpr float kBarH = 8.0f;
+    for (int s = 0; s < 8; ++s) {
+        const float cx   = uf8StripCx_(s);
+        const float colX = cx - kUf8StripW / 2.0f;
+        const float bx   = colX + 6;
+        const float by   = kUf8ScribbleY + kUf8ScribbleH - kBarH - 2;
+        const float bw   = kUf8StripW - 12;
+        const float bh   = kBarH;
+
+        const uint32_t rgb = getUf8StripColour_(s, bank);
+        uint32_t fill;
+        if (rgb != 0) {
+            // RGB 0xRRGGBB → ImGui ABGR 0xAABBGGRR
+            fill = 0xFF000000u
+                 | ((rgb & 0x0000FFu) << 16)
+                 | ( rgb & 0x00FF00u)
+                 | ((rgb & 0xFF0000u) >> 16);
+        } else {
+            fill = 0x40404080u;   // dim grey placeholder
+        }
+        ImGui_DrawList_AddRectFilled(dl,
+            ox + bx, oy + by, ox + bx + bw, oy + by + bh,
+            fill, /*rounding*/ nullptr, /*flags*/ nullptr);
+
+        // Hit area + palette popup
+        char btnId[48];
+        std::snprintf(btnId, sizeof(btnId),
+                      "##fxl_uf8_stripbar_%d", s);
+        ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
+        int ibFlags = 0;
+        ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
+        int lbtn = 0;
+        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
+            char popId[48];
+            std::snprintf(popId, sizeof(popId),
+                          "fxl_uf8_stripbar_pal_%d", s);
+            ImGui_OpenPopup(ctx, popId, nullptr);
+        }
+        if (ImGui_IsItemHovered(ctx, nullptr)) {
+            char tip[96];
+            std::snprintf(tip, sizeof(tip),
+                "Strip %d colour bar — click to pick (bank %d)",
+                s + 1, bank + 1);
+            ImGui_SetTooltip(ctx, tip);
+        }
+        char popId[48];
+        std::snprintf(popId, sizeof(popId),
+                      "fxl_uf8_stripbar_pal_%d", s);
+        if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+            // "Default" clears the override.
+            char clrId[40];
+            std::snprintf(clrId, sizeof(clrId),
+                          "Default##stripbarclr_%d", s);
+            if (ImGui_Button(ctx, clrId, nullptr, nullptr)) {
+                setUf8StripColour_(s, bank, 0);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            int paletteCount = 0;
+            const uf8::PaletteRgb* palette =
+                uf8::selPaletteRgb(&paletteCount);
+            const double sw = 26.0;
+            const int perRow = 5;
+            for (int i = 0; i < paletteCount; ++i) {
+                const auto& p = palette[i];
+                const int packed =
+                    (int(p.r) << 24) |
+                    (int(p.g) << 16) |
+                    (int(p.b) <<  8) | 0xFF;
+                char swId[40];
+                std::snprintf(swId, sizeof(swId),
+                              "##stripbarpp_%d_%d", s, i);
+                int swFlags = 0;
+                double w = sw, h = sw;
+                if (ImGui_ColorButton(ctx, swId, packed,
+                                      &swFlags, &w, &h))
+                {
+                    const uint32_t r =
+                        (uint32_t(p.r) << 16) |
+                        (uint32_t(p.g) <<  8) |
+                         uint32_t(p.b);
+                    setUf8StripColour_(s, bank, r);
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+                if ((i % perRow) != (perRow - 1) &&
+                    i != paletteCount - 1)
+                {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                }
+            }
+            ImGui_EndPopup(ctx);
+        }
+    }
+}
+
 void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
     double oxd = 0, oyd = 0;
@@ -4980,6 +5171,11 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
     VCanvas c { ctx, dl, ox, oy };
     drawUf8Face_(c);
+
+    // Strip colour bars first so the per-control overlays paint on
+    // top (so the TopSoftKey's invisible-button still receives clicks
+    // in its full area).
+    drawFxLearnUf8StripBars_(ctx, dl, ox, oy);
 
     int n = 0;
     const Uf8Control* tbl = uf8Controls_(&n);
