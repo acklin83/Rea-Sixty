@@ -2506,8 +2506,12 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
     }
     ImGui_PopItemWidth(ctx);
 
+    // Slot's action picker. f.label = nullptr — the slot has only ONE
+    // label (the binding's bd.label above), Frank's request 2026-05-13:
+    // "für was Label UND display label? Label reicht."
     ActionFieldsRef ref{
-        &sp.type, &sp.action, &sp.param, &sp.label,
+        &sp.type, &sp.action, &sp.param,
+        /*label*/ nullptr,
         &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
         &sp.midiData1, &sp.midiData2,
         &sp.fireOnInactive,
@@ -2522,6 +2526,82 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
         bd = Binding{};
         dirty = true;
     }
+
+    // LED appearance for this slot. Same Active / Inactive split the
+    // regular binding editor exposes, scoped to this user-Quick slot.
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "LED");
+    ImGui_TextDisabled(ctx,
+        "Active = slot's bound action is engaged. Inactive = idle.");
+    ImGui_Spacing(ctx);
+
+    auto drawSlotLedRow = [&](const char* label, uint8_t (&rgb)[3],
+                              Brightness& bri, const char* idTag) {
+        ImGui_Text(ctx, label);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetCursorPosX(ctx, 80.0);
+        const int curRgba =
+            (int(rgb[0]) << 24) | (int(rgb[1]) << 16)
+          | (int(rgb[2]) <<  8) | 0xFF;
+        char btnId[48];
+        std::snprintf(btnId, sizeof(btnId), "##uqled_cur_%s", idTag);
+        int btnFlags = 0;
+        double bw = 56.0, bh = 22.0;
+        if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
+            char popId[48];
+            std::snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
+            ImGui_OpenPopup(ctx, popId, nullptr);
+        }
+        char popId[48];
+        std::snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
+        if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+            int paletteCount = 0;
+            const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
+            const double sw = 26.0;
+            const int perRow = 5;
+            for (int i = 0; i < paletteCount; ++i) {
+                const auto& p = palette[i];
+                const int packed =
+                    (int(p.r) << 24) | (int(p.g) << 16)
+                  | (int(p.b) <<  8) | 0xFF;
+                char swId[48];
+                std::snprintf(swId, sizeof(swId), "##uqled_pp_%s_%d",
+                              idTag, i);
+                int swFlags = 0;
+                double w = sw, h = sw;
+                if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                    rgb[0] = p.r; rgb[1] = p.g; rgb[2] = p.b;
+                    dirty = true;
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+                if ((i % perRow) != (perRow - 1) && i != paletteCount - 1)
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+            }
+            ImGui_EndPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "  ");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* names[] = {"Off", "Dim", "Bright"};
+        for (int i = 0; i < 3; ++i) {
+            char idbuf[48];
+            std::snprintf(idbuf, sizeof(idbuf), "%s##uqled_b_%s_%d",
+                          names[i], idTag, i);
+            if (ImGui_RadioButton(ctx, idbuf,
+                                  static_cast<int>(bri) == i)) {
+                bri = static_cast<Brightness>(i);
+                dirty = true;
+            }
+            if (i < 2) ImGui_SameLine(ctx, nullptr, nullptr);
+        }
+    };
+    char tagA[24], tagI[24];
+    std::snprintf(tagA, sizeof(tagA), "act_%s",  idtag);
+    std::snprintf(tagI, sizeof(tagI), "inact_%s", idtag);
+    drawSlotLedRow("Active",   bd.color,         bd.brightness,         tagA);
+    drawSlotLedRow("Inactive", bd.inactiveColor, bd.inactiveBrightness, tagI);
 
     if (dirty) {
         setUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx, bd);
@@ -2737,14 +2817,17 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
 }
 #endif
 
-// ---- Per-(Layer, Quick) Sub-Bank LED override editor ---------------------
-// Shows below the regular drawBindingEditor when the selected button is
-// one of the 6 sub-bank selector cells (V-POT / Soft 1-5) AND a Quick
-// is engaged on editLayer. Edits the SubBankLed appearance for the
-// current (Layer, engaged Quick, sub-bank-index) coordinate — gives
-// each (L, Q) coord its own V-POT/Soft 1-5 LED palette.
-void drawSubBankLedOverride_(ImGui_Context* ctx, int editLayer,
-                             uf8::bindings::ButtonId id)
+// ---- Sub-Bank cell editor (V-POT / Soft 1-5 in the mockup) --------------
+// Replaces the regular drawBindingEditor for these cells — they don't
+// carry a user-editable action (the binding is always
+// softkey_bank_select with a fixed param). Shows what's selected +
+// where to go next (click a Top-Soft-Key to configure a slot) + the
+// per-(Layer, Quick) LED colour override. Frank 2026-05-13:
+// "Dort soll nichts eingestellt werden können, sondern einfach
+// stehen: Click Soft-Keys 1-8 to configure Soft-Key Bank N.
+// LED-optionen einblenden für V-POT (oder whatever selected)".
+void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
+                            uf8::bindings::ButtonId id)
 {
     using namespace uf8::bindings;
     int sbIdx = -1;
@@ -2759,33 +2842,54 @@ void drawSubBankLedOverride_(ImGui_Context* ctx, int editLayer,
     }
     if (editLayer < 0 || editLayer > 2) return;
 
+    const char* sbLabels[6] = {
+        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+    };
     const int engagedQ = reasixty_activeQuickFor(editLayer);
+
+    // ---- Header + navigation hint -------------------------------------
+    char hdr[160];
+    if (engagedQ >= 0) {
+        std::snprintf(hdr, sizeof(hdr),
+                      "Editing: %s   (Layer %d, Quick %d)",
+                      sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+    } else {
+        std::snprintf(hdr, sizeof(hdr),
+                      "Editing: %s   (Layer %d — no Quick engaged)",
+                      sbLabels[sbIdx], editLayer + 1);
+    }
+    ImGui_Text(ctx, hdr);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
     if (engagedQ < 0) {
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
         ImGui_TextDisabled(ctx,
-            "Per-Quick LED override: engage Q1, Q2 or Q3 on this layer "
-            "(click in the mockup) to edit this Sub-Bank's per-Quick "
-            "colour palette.");
+            "Click Q1, Q2 or Q3 in the mockup above to engage a Quick "
+            "on this Layer first. Then click any of the 8 Top-Soft-Keys "
+            "to configure this Sub-Bank's slots, or stay here to set "
+            "this button's per-Quick LED colours.");
         return;
     }
 
+    char nav[160];
+    std::snprintf(nav, sizeof(nav),
+                  "Click any of the 8 Top-Soft-Keys above to configure "
+                  "this Sub-Bank's slots (Layer %d, Quick %d, %s).",
+                  editLayer + 1, engagedQ + 1, sbLabels[sbIdx]);
+    ImGui_Text(ctx, nav);
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    const char* sbLabels[6] = {
-        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
-    };
-    char hdr[128];
-    std::snprintf(hdr, sizeof(hdr),
-                  "Per-Quick LED override — %s @ Layer %d, Quick %d",
+    // ---- Per-(Layer, Quick) LED override -----------------------------
+    char ledHdr[160];
+    std::snprintf(ledHdr, sizeof(ledHdr),
+                  "LED colours for %s on (Layer %d, Quick %d)",
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
-    ImGui_Text(ctx, hdr);
+    ImGui_Text(ctx, ledHdr);
     ImGui_TextDisabled(ctx,
-        "Active = sub-bank selected on hardware. Inactive = other "
-        "sub-banks in this Quick. Only applies while this Quick is "
-        "engaged on this Layer.");
+        "Active = this Sub-Bank is the selected one. Inactive = "
+        "another Sub-Bank is selected in this Quick.");
     ImGui_Spacing(ctx);
 
     SubBankLed app = getSubBankLed(editLayer, engagedQ, sbIdx);
@@ -2919,12 +3023,23 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             - static_cast<int>(ButtonId::TopSoftKey1);
         drawUserQuickSlotEditor_(ctx, s_editLayer, slotIdx);
     } else {
-        drawBindingEditor(ctx, s_editLayer, s_selected);
-        // Sub-bank cells get an extra Per-Quick LED override editor
-        // below the regular binding editor. Frank 2026-05-13: each
-        // (Layer, Quick) coord should be able to colour its V-POT /
-        // Soft 1-5 row distinctly.
-        drawSubBankLedOverride_(ctx, s_editLayer, s_selected);
+        const bool isSubBankCell =
+            s_selected == ButtonId::VPotBank
+         || s_selected == ButtonId::SoftKey1Bank
+         || s_selected == ButtonId::SoftKey2Bank
+         || s_selected == ButtonId::SoftKey3Bank
+         || s_selected == ButtonId::SoftKey4Bank
+         || s_selected == ButtonId::SoftKey5Bank;
+        if (isSubBankCell) {
+            // Sub-bank selectors don't carry a user-editable action —
+            // they pick which of the 6 sub-banks renders into the 8
+            // top-soft-key slots. The editor below shows what's
+            // selected + a Per-Quick LED override so the user can
+            // distinguish (L, Q) contexts visually. Frank 2026-05-13.
+            drawSubBankCellEditor_(ctx, s_editLayer, s_selected);
+        } else {
+            drawBindingEditor(ctx, s_editLayer, s_selected);
+        }
     }
 
     ImGui_Spacing(ctx);
