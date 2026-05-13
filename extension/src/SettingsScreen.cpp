@@ -83,6 +83,8 @@ const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // editor header to surface the live bank context.
 int                reasixty_softkeyCurrentBank();
 const char*        reasixty_softkeyCurrentBankName();
+int                reasixty_softKeyBankRaw();
+void               reasixty_setSoftKeyBank(int bank);
 // Bindings save/load to user-chosen path. Both spawn a native file
 // dialog and persist via uf8::bindings::exportLayerTo / importLayerFrom
 // for the layer index passed in. Returns true on success, false on
@@ -4396,7 +4398,15 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                      const Uf8Control& ctrl,
                      const EditingFx& fx)
 {
-    const int  bank      = g_uf8EditingBank;
+    // Live-follow hardware: bank index is the current g_softKeyBank,
+    // so a hardware TopSoftKey press immediately re-renders the mockup
+    // and a mockup TopSoftKey click writes back via the same global
+    // (Frank 2026-05-13: "Soll Live bei Soft-Key press umschalten").
+    // Use the raw accessor — reasixty_softkeyCurrentBank() returns the
+    // user-Quick activeSubBank (0..5) when a Quick is engaged, which
+    // would clip the 8-bank range; FX-Learn always wants g_softKeyBank.
+    const int  bank      = reasixty_softKeyBankRaw();
+    g_uf8EditingBank     = bank;
     const int  mapped    = mappedVst3ForUf8_(ctrl.kind, ctrl.strip, bank);
     const bool isMapped  = (mapped >= 0);
     const bool isListen  = g_listeningUf8.matches(ctrl.kind, ctrl.strip, bank);
@@ -4471,6 +4481,23 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             }
         }
 
+        // Left-click → bank switch (Frank 2026-05-13: "klick auf UF8
+        // mockup soft-key"). Always-on, regardless of whether the
+        // bank has a binding — the user has to be able to navigate
+        // to an empty bank to start mapping it.
+        char btnId[48];
+        std::snprintf(btnId, sizeof(btnId),
+                      "##fxl_uf8_tsk_%d", ctrl.strip);
+        ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
+        int ibFlags = 0;
+        ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
+        int lbtn = 0;
+        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
+            // Mockup TopSoftKey N click = hardware TopSoftKey N press
+            // = bank N switch. Strips are 0-indexed → bank index.
+            reasixty_setSoftKeyBank(ctrl.strip);
+        }
+
         // Right-click menu — Frank 2026-05-13: "Rechtsklick Menu wie
         // z.B. solo-button machen (color, fill seq, clear)". TopSoftKey
         // in the mockup represents this bank's V-Pot slot; the menu
@@ -4479,12 +4506,6 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // the hood — the V-Pot slot IS what TopSoftKey labels and the
         // strip colour bar reflects.
         if (isMapped) {
-            char btnId[48];
-            std::snprintf(btnId, sizeof(btnId),
-                          "##fxl_uf8_tsk_%d", ctrl.strip);
-            ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
-            int ibFlags = 0;
-            ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
 
             char popId[48];
             std::snprintf(popId, sizeof(popId),
@@ -4495,6 +4516,30 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     "TopSoft %d — Bank %d V-Pot -> param %d",
                     ctrl.strip + 1, bank + 1, mapped);
                 ImGui_TextDisabled(ctx, title);
+                ImGui_Separator(ctx);
+
+                // Label edit — Frank 2026-05-13: "Ich muss die Labels
+                // für die Soft-Keys benennen können!". Same field
+                // the V-Pot popup edits; stored in banks[bank][strip]
+                // .label and surfaces on the UF8 TopSoftKey LCD.
+                std::string curLabel;
+                for (const auto& m : uf8::user_plugins::get().maps) {
+                    if (m.match != g_editingMatch) continue;
+                    curLabel = m.uf8.banks.banks[bank][ctrl.strip].label;
+                    break;
+                }
+                static char s_tskLblBuf[16];
+                std::snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
+                              curLabel.c_str());
+                if (ImGui_InputTextWithHint(ctx,
+                        "Label##fxl_uf8_tsk_lbl",
+                        "(auto from param name)",
+                        s_tskLblBuf, int(sizeof(s_tskLblBuf)),
+                        nullptr, nullptr))
+                {
+                    setUf8Label_(ctrl.strip, bank,
+                                 std::string(s_tskLblBuf));
+                }
                 ImGui_Separator(ctx);
 
                 // Colour picker (V-Pot colour drives both LED + strip
@@ -5123,41 +5168,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
     }
 
-    if (s_mockup == 1) {
-        // Bank picker — only meaningful for UF8 mockup. 8 banks driven
-        // by the TopSoftKey row (Plugin Mode bank-switcher, Frank
-        // 2026-05-13). Labels are "Bank N" since the bank selector is
-        // no longer the V-POT/Soft 1-5 row.
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_TextDisabled(ctx, "  Bank:");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        const char* kBankNames[uf8::kUserUf8BankCount] = {
-            "Bank 1", "Bank 2", "Bank 3", "Bank 4",
-            "Bank 5", "Bank 6", "Bank 7", "Bank 8",
-        };
-        char prev[16];
-        std::snprintf(prev, sizeof(prev), "%s",
-                      kBankNames[std::clamp(g_uf8EditingBank,
-                                            0, uf8::kUserUf8BankCount - 1)]);
-        int comboFlags = 0;
-        double bw = 100.0;
-        ImGui_SetNextItemWidth(ctx, bw);
-        if (ImGui_BeginCombo(ctx, "##fxl_uf8_bank", prev, &comboFlags)) {
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
-                bool sel = (b == g_uf8EditingBank);
-                char rowId[24];
-                std::snprintf(rowId, sizeof(rowId),
-                              "%s##fxl_bnk_%d", kBankNames[b], b);
-                int selFlags = 0;
-                if (ImGui_Selectable(ctx, rowId, &sel, &selFlags,
-                                     nullptr, nullptr)) {
-                    g_uf8EditingBank = b;
-                    g_listeningUf8.clear();
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-    }
+    // Bank-combo removed (Frank 2026-05-13: "Bank dropdown oben weg").
+    // The editing bank now lives in g_softKeyBank — the same global that
+    // drives the hardware — so a hardware TopSoftKey press updates the
+    // mockup live, and a mockup TopSoftKey click drives the hardware via
+    // reasixty_setSoftKeyBank. drawUf8Control_ reads g_softKeyBank
+    // directly; g_uf8EditingBank kept for legacy code paths that haven't
+    // been swept yet (left intentionally as the seed for the live read).
 
     // Reset the FX-selector key when the editing map changes — the old
     // key (track:fx pair) means nothing for a different map.

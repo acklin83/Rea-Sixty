@@ -4145,14 +4145,43 @@ void pushZonesForVisibleSlots()
                 tssk = uf8::TopSoftKeyState::Dim;
                 ledCacheKey = 1;
             }
-            if (ledCacheKey != g_lastTopSoftKey[s]) {
-                g_lastTopSoftKey[s] = ledCacheKey;
-                // SSL-mode default: white. Two visible levels —
-                // dim white (11 F1) for available / unbound, bright
-                // white (FF FF) for focused. Settings UI will let the
-                // user pick per-strip colours later.
+            // Per-strip TopSoftKey LED colour. In UF8 Plugin Mode, use
+            // the V-Pot colour for strip s in the active bank — same
+            // colour the editor's right-click on the mockup TopSoftKey
+            // sets via setUf8Colour_(VPot, s, bank, rgb) (Frank
+            // 2026-05-13: "LED Farbe bei Soft-Key wird nicht von Soft-
+            // Key reflektiert"). Falls back to white when no override
+            // or no user-mapped plug-in is focused. Pack colour into
+            // ledCacheKey via low/high bits so a colour change re-emits
+            // the frame without piggybacking on tssk transitions.
+            uf8::LedColour ledClr = uf8::ledColourWhite();
+            uint32_t ledColRgb = 0xFFFFFFu;
+            if (pluginModeLocal) {
+                if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                    const int activeBank = std::clamp(
+                        g_softKeyBank.load(),
+                        0, uf8::kUserUf8BankCount - 1);
+                    const uint32_t bc = uctx.map->uf8.banks
+                        .banks[activeBank][s].colour & 0x00FFFFFFu;
+                    if (bc != 0) {
+                        ledColRgb = bc;
+                        ledClr = uf8::ledColourForTrackRgb(bc);
+                    }
+                }
+            }
+            // Cache key folds tssk state + 24-bit colour into a single
+            // hash so colour changes re-emit even when state is steady.
+            const int32_t composite =
+                (int32_t(ledCacheKey) << 24)
+              ^ static_cast<int32_t>(ledColRgb & 0x00FFFFFFu);
+            // g_lastTopSoftKey is int8_t — keep just a hash; identical
+            // composites short-circuit, distinct composites push.
+            const int8_t shortKey =
+                static_cast<int8_t>(((composite >> 16) ^ composite) & 0x7F);
+            if (shortKey != g_lastTopSoftKey[s]) {
+                g_lastTopSoftKey[s] = shortKey;
                 sendLedFrames(uf8::buildTopSoftKeyLed(
-                    static_cast<uint8_t>(s), tssk, uf8::ledColourWhite()));
+                    static_cast<uint8_t>(s), tssk, ledClr));
             }
             if (label != g_lastSlotLabel[s]) {
                 g_lastSlotLabel[s] = label;
@@ -5861,6 +5890,16 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
         case uf8::Uf8GlobalLed::Soft4:    sbIdx = 4; break;
         case uf8::Uf8GlobalLed::Soft5:    sbIdx = 5; break;
         default: break;
+    }
+    // UF8 Plugin Mode: Sub-Bank cells (V-POT/Soft 1-5) are no-function
+    // in this mode (bank navigation moved to the 8 TopSoftKeys). Force
+    // their LEDs to plain Dim white so the row stays visibly there
+    // but doesn't track any active/inactive state (Frank 2026-05-13:
+    // "Soft-Key Banks machen LED mit — sollen sie nicht — alle dimm").
+    if (sbIdx >= 0 && g_uf8PluginMode.load()) {
+        r.state  = uf8::GlobalLedState::Dim;
+        r.colour = uf8::ledColourForTrackRgb(0xFFFFFF);
+        return r;
     }
     if (sbIdx >= 0 && activeLayer >= 0 && activeLayer <= 2) {
         const int engagedQ = g_activeQuick[activeLayer].load();
@@ -7573,6 +7612,34 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
 // the Settings editor so the per-soft-key edit header shows the live
 // bank context ("Soft-Key N - Bank M (Layer L)") and the schematic
 // can highlight the active V-POT/Bank tile.
+// FX-Learn editor's direct g_softKeyBank accessor — bypasses
+// reasixty_softkeyCurrentBank's user-Quick branch so the editor mockup
+// always shows the live hardware FX-Learn bank (0..7) regardless of
+// what's happening with user-Quick sub-banks. Independent of the
+// Plugin Mode gate.
+int reasixty_softKeyBankRaw()
+{
+    return std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
+}
+
+// FX-Learn editor's mockup TopSoftKey click → bank switch (Frank
+// 2026-05-13: "klick auf UF8 mockup soft-key" should drive hardware).
+// Same path as the hardware TopSoftKey press handler — exchanges
+// g_softKeyBank, dirties the bank/softkey state machines, persists the
+// new bank to ExtState. Layer/Quick state untouched.
+void reasixty_setSoftKeyBank(int b)
+{
+    if (b < 0) b = 0;
+    if (b >= uf8::kUserUf8BankCount) b = uf8::kUserUf8BankCount - 1;
+    if (g_softKeyBank.exchange(b) != b) {
+        g_softKeyDirty.store(true);
+        g_bankDirty.store(true);
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%d", b);
+        SetExtState("ReaSixty", "softKeyBank", buf, true);
+    }
+}
+
 int reasixty_softkeyCurrentBank()
 {
     // When a Quick is engaged on the active layer, the sub-bank
