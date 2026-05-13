@@ -1734,6 +1734,53 @@ void load()
             // that somehow ended up past v10 without the action-name
             // migration sticking. Idempotent on already-migrated data.
             upgradeRetireQuickSelect_(tmp);
+
+            // Diagnostic snapshot. Dumps the resolved bindings for the
+            // load-bearing buttons so "press did nothing" / "LED dark"
+            // reports can be diagnosed from a single shared file.
+            if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+                std::fprintf(lg,
+                    "[bindings::load] version_read=%d → migrated_to=%d\n",
+                    tmp.version, kCurrentBindingsVersion);
+                auto dumpBtn = [&](int li, ButtonId id, const char* name) {
+                    auto it = tmp.layers[li].bindings.find(id);
+                    if (it == tmp.layers[li].bindings.end()) {
+                        std::fprintf(lg,
+                            "  L%d %-14s : (missing)\n", li + 1, name);
+                        return;
+                    }
+                    const Binding& bd = it->second;
+                    const auto& sp =
+                        bd.shortPress[static_cast<int>(Modifier::Plain)];
+                    std::fprintf(lg,
+                        "  L%d %-14s : action='%s' param=%d "
+                        "behav=%d  rgb=(%d,%d,%d) bri=%d  "
+                        "inact_rgb=(%d,%d,%d) inact_bri=%d\n",
+                        li + 1, name,
+                        sp.action.c_str(), sp.param,
+                        static_cast<int>(bd.behavior),
+                        bd.color[0], bd.color[1], bd.color[2],
+                        static_cast<int>(bd.brightness),
+                        bd.inactiveColor[0], bd.inactiveColor[1],
+                        bd.inactiveColor[2],
+                        static_cast<int>(bd.inactiveBrightness));
+                };
+                for (int li = 0; li < 3; ++li) {
+                    dumpBtn(li, ButtonId::Layer1, "Layer1");
+                    dumpBtn(li, ButtonId::Layer2, "Layer2");
+                    dumpBtn(li, ButtonId::Layer3, "Layer3");
+                    dumpBtn(li, ButtonId::Quick1, "Quick1");
+                    dumpBtn(li, ButtonId::Quick2, "Quick2");
+                    dumpBtn(li, ButtonId::Quick3, "Quick3");
+                    dumpBtn(li, ButtonId::VPotBank,     "VPotBank");
+                    dumpBtn(li, ButtonId::SoftKey1Bank, "SoftKey1Bank");
+                    dumpBtn(li, ButtonId::SoftKey2Bank, "SoftKey2Bank");
+                    dumpBtn(li, ButtonId::SoftKey3Bank, "SoftKey3Bank");
+                    dumpBtn(li, ButtonId::SoftKey4Bank, "SoftKey4Bank");
+                    dumpBtn(li, ButtonId::SoftKey5Bank, "SoftKey5Bank");
+                }
+                std::fclose(lg);
+            }
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);
             // Persist the upgraded config so the next load doesn't

@@ -6222,21 +6222,24 @@ void pushUf8GlobalLeds()
     // Soft-key bank LEDs — exactly one of V-POT / Soft 1..5 is lit.
     // In user-Quick context the row tracks g_activeSubBank[layer] (0..5);
     // otherwise it tracks the SSL plug-in's PAGE bank in g_softKeyBank.
+    // Always call sendUf8GlobalLed every tick — the per-cell dedup in
+    // sendUf8GlobalLed catches no-change cases. An outer dedup on the
+    // selected sub-bank would block colour edits via the per-(L, Q)
+    // override editor whenever the user keeps the same active
+    // sub-bank (Frank 2026-05-13).
     const int activeQuickForBanks = (activeLayer >= 0 && activeLayer <= 2)
                                     ? g_activeQuick[activeLayer].load() : -1;
     const int subBankForLeds      = (activeQuickForBanks >= 0
                                      && activeLayer >= 0 && activeLayer <= 2)
                                     ? g_activeSubBank[activeLayer].load()
                                     : softKeyBank;
-    if (subBankForLeds != g_lastSoftKeyBank || !g_globalLedsInit) {
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    subBankForLeds == 2);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    subBankForLeds == 3);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    subBankForLeds == 4);
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    subBankForLeds == 5);
-        g_lastSoftKeyBank = subBankForLeds;
-    }
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    subBankForLeds == 2);
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    subBankForLeds == 3);
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    subBankForLeds == 4);
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    subBankForLeds == 5);
+    g_lastSoftKeyBank = subBankForLeds;
 
     // Page LEDs intentionally not driven — see comment at the top of
     // pushUf8GlobalLeds explaining the cell collision with Soft 2/3.
@@ -6276,12 +6279,12 @@ void pushUf8GlobalLeds()
     g_lastDomainLed = domainLed;
 
     // Layer 1/2/3 LEDs — radio group reflecting bindings::getActiveLayer().
-    // Driven by the layer_select builtin on hardware press AND by the
-    // mixer-visibility auto-switch hook, so this dedup catches both
-    // sources cleanly via g_lastActiveLayer.
-    if (activeLayer != g_lastActiveLayer || !g_globalLedsInit) {
-        pushLayerLeds(activeLayer);
-    }
+    // Always pushed (no outer dedup): per-cell dedup in sendUf8GlobalLed
+    // catches no-change. An outer activeLayer != g_lastActiveLayer gate
+    // would block re-pushes when the user edits the Layer LED's colour
+    // / brightness via the binding editor without switching layers
+    // (Frank 2026-05-13: "Layer 3 LED leuchtet nicht").
+    pushLayerLeds(activeLayer);
 
     // Stateless-cell sweep: cells that have no hardcoded state machine
     // in this pusher (Btn360, Channel, BankL/R, Zoom*) — drive their
