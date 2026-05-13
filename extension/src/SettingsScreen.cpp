@@ -4569,11 +4569,13 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         }
 
         // Left-click → bank switch (Frank 2026-05-13: "klick auf UF8
-        // mockup soft-key"). Skip when the bank has no V-Pot bindings
-        // — "unzugewiesene Soft-Key V-Pot banks no-function". Right-
-        // click still works (label / colour editable) so the user can
-        // configure the bank before assigning V-Pots to it.
-        const bool bankAssigned = bankHasVPotBindings_(ctrl.strip);
+        // mockup soft-key"). Unlike the hardware press handler, the
+        // mockup-click does NOT skip unassigned banks — the user has
+        // to be able to navigate to an empty bank in the editor in
+        // order to populate its V-Pots (Frank 2026-05-13: "Neuer,
+        // leerer soft-key v-pot bank kann nicht editiert werden an
+        // den v-pots"). The hardware-side skip stays — empty banks
+        // are still no-function on the device itself.
         char btnId[48];
         std::snprintf(btnId, sizeof(btnId),
                       "##fxl_uf8_tsk_%d", ctrl.strip);
@@ -4581,9 +4583,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         int ibFlags = 0;
         ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
         int lbtn = 0;
-        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0 && bankAssigned) {
-            // Mockup TopSoftKey N click = hardware TopSoftKey N press
-            // = bank N switch. Strips are 0-indexed → bank index.
+        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
+            // Mockup TopSoftKey N click = bank N switch in the
+            // editor's view. Strips are 0-indexed → bank index.
             reasixty_setSoftKeyBank(ctrl.strip);
         }
 
@@ -4806,17 +4808,19 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     break;
                 }
             }
+            // Bank name follows the new 8-bank TopSoftKey scheme
+            // (Frank 2026-05-13: V-POT/SOFT 1-5 labels retired in
+            // favour of "Soft-Key N"). Only V-Pots are bank-scoped;
+            // Solo/Cut/Sel/Fader stay bank-independent so the bank
+            // suffix is V-Pot-only.
+            char bankSuffix[32] = {0};
+            if (ctrl.kind == Uf8Control::VPot) {
+                std::snprintf(bankSuffix, sizeof(bankSuffix),
+                              "  Soft-Key %d", bank + 1);
+            }
             std::snprintf(tip, sizeof(tip),
                 "%s strip %d%s\n  -> param %d  '%s'",
-                kindLabel, ctrl.strip + 1,
-                (ctrl.kind == Uf8Control::VPot
-                    ? (std::string("  bank ") +
-                       (bank == 0 ? "V-POT" :
-                        bank == 1 ? "SOFT 1" :
-                        bank == 2 ? "SOFT 2" :
-                        bank == 3 ? "SOFT 3" :
-                        bank == 4 ? "SOFT 4" : "SOFT 5")).c_str()
-                    : ""),
+                kindLabel, ctrl.strip + 1, bankSuffix,
                 mapped, pname);
         } else {
             std::snprintf(tip, sizeof(tip),
