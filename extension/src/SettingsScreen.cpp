@@ -1399,6 +1399,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "Sends";
                 if (n.rfind("recv_", 0) == 0)
                     return "Receives";
+                if (n.rfind("softkey_bank_", 0) == 0
+                 && n != "softkey_bank_select")
+                    return "Soft-Key Bank";
                 if (n.rfind("quick_select_", 0) == 0
                  || n == "domain_cs" || n == "domain_bc")
                     return "Quick";
@@ -1424,7 +1427,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             static const char* kCats[] = {
                 "Modifiers", "Mode Toggles", "Layer", "Encoder modes",
                 "Bank / Page", "Automation", "Zoom",
-                "SSL Soft-Keys", "Quick", "Brightness",
+                "SSL Soft-Keys", "Quick", "Soft-Key Bank", "Brightness",
                 "Sends", "Receives",
                 "Selection Sets",
                 "Other",
@@ -1877,21 +1880,41 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     Binding bd    = getBinding(layer, id);
     bool    dirty = false;
 
-    char header[180];
-    // Quick context suffix — only the user-Quick engagement counts.
-    // Layer 1's SSL CS/BC focus is NOT shown here because it's not a
-    // Quick in the data model (Frank 2026-05-13: "Es gibt nur Layer
-    // 1-3 mit je Quick 1-3 — nicht CS oder BC").
-    char qBuf[24] = {0};
-    {
+    char header[200];
+    // Header reads left-to-right with broadest context first
+    // ("Editing: Layer 2, Quick 1, FLIP") — Frank 2026-05-13.
+    // Layer / Quick buttons are self-identifying, so their header
+    // skips the redundant "1" face label entirely.
+    const bool idIsLayer =
+        id == ButtonId::Layer1 || id == ButtonId::Layer2
+     || id == ButtonId::Layer3;
+    const bool idIsQuick =
+        id == ButtonId::Quick1 || id == ButtonId::Quick2
+     || id == ButtonId::Quick3;
+    const int  quickNum =
+        (id == ButtonId::Quick1) ? 1
+      : (id == ButtonId::Quick2) ? 2
+      : (id == ButtonId::Quick3) ? 3 : 0;
+
+    if (idIsLayer) {
+        std::snprintf(header, sizeof(header),
+                      "Editing: Layer %d", layer + 1);
+    } else if (idIsQuick) {
+        std::snprintf(header, sizeof(header),
+                      "Editing: Layer %d, Quick %d", layer + 1, quickNum);
+    } else {
+        // Generic button: layer + (engaged Quick) breadcrumb, then face.
         const int liveQ = reasixty_activeQuickFor(layer);
         if (liveQ >= 0) {
-            std::snprintf(qBuf, sizeof(qBuf), ", Q%d", liveQ + 1);
+            std::snprintf(header, sizeof(header),
+                          "Editing: Layer %d, Quick %d, %s",
+                          layer + 1, liveQ + 1, hwFaceLabel(id));
+        } else {
+            std::snprintf(header, sizeof(header),
+                          "Editing: Layer %d, %s",
+                          layer + 1, hwFaceLabel(id));
         }
     }
-    std::snprintf(header, sizeof(header),
-                  "Editing: %s   (Layer %d%s)",
-                  hwFaceLabel(id), layer + 1, qBuf);
     ImGui_Text(ctx, header);
     ImGui_Separator(ctx);
 

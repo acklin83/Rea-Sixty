@@ -5761,13 +5761,29 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
     if (bid == uf8::bindings::ButtonId::None) return r;
     const int activeLayer = uf8::bindings::getActiveLayer();
 
-    // No binding entry → LED OFF. Frank 2026-05-07: every LED is user-
-    // chosen, full stop. Without an entry in the layer's bindings map,
-    // the cell stays dark — no hardware-table colour, no "this button
-    // exists" hint. The act of saving anything in the Bindings editor
-    // creates the entry; clearing it removes the entry; the LED
-    // pusher's behaviour follows that signal exactly.
+    // Layer indicator LEDs (Layer1/2/3) are system state indicators,
+    // NOT user-chosen feature LEDs — they have to follow activeLayer
+    // regardless of whether the user has a binding for them on the
+    // active layer. Without this bypass, switching to a layer whose
+    // bindings map is missing the corresponding Layer1/2/3 entry
+    // would leave the indicator dark (observed for Layer 3 on
+    // long-lived configs, 2026-05-13). Default-render bright white
+    // when the cell is asked to be Bright; respect the binding if
+    // one happens to exist for colour/brightness overrides.
+    const bool isLayerIndicator =
+        cell == uf8::Uf8GlobalLed::Layer1
+     || cell == uf8::Uf8GlobalLed::Layer2
+     || cell == uf8::Uf8GlobalLed::Layer3;
     if (!uf8::bindings::hasBinding(activeLayer, bid)) {
+        if (isLayerIndicator) {
+            // No binding → fall back to plain bright/dim with the
+            // hardware-default colour (white from the protocol table).
+            // r.state already carries the caller's intent.
+            r.colour = uf8::ledColourForTrackRgb(0xFFFFFF);
+            return r;
+        }
+        // Frank 2026-05-07: every other LED is user-chosen, full stop.
+        // Without a binding entry the cell stays dark.
         r.state = uf8::GlobalLedState::Off;
         return r;
     }
@@ -8374,6 +8390,45 @@ void registerBindingHandlers()
     {
         auto d = quickSelect(2); d.displayName = "User Domain 3";
         registerBuiltin("user_domain_3", d);
+    }
+
+    // Soft-Key Bank 1..9 — direct (Layer, Quick) jumps. Banks 1-3 are
+    // Layer 1 Q1-Q3, 4-6 are Layer 2 Q1-Q3, 7-9 are Layer 3 Q1-Q3.
+    // Pressing switches the active layer AND engages that layer's
+    // Quick in one shot. Lets the user wire a flat 3 × 3 grid of
+    // hardware buttons that addresses any (Layer, Quick) slot
+    // directly, independent of which layer the user is on right now.
+    // quick_select_* stays around for the "switch quick on current
+    // layer" use case (e.g. 3 buttons that select Q1/Q2/Q3 on
+    // whichever layer happens to be active).
+    auto softKeyBank = [](int bankN) {
+        const int layer = (bankN - 1) / 3;
+        const int quick = (bankN - 1) % 3;
+        return DescBuilder{
+            [layer, quick](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                if (uf8::bindings::getActiveLayer() != layer) {
+                    uf8::bindings::setActiveLayer(layer);
+                    pushLayerLeds(layer);
+                }
+                if (g_activeQuick[layer].exchange(quick) != quick) {
+                    g_bankDirty.store(true);
+                    g_softKeyDirty.store(true);
+                }
+            },
+            [layer, quick](int) {
+                return uf8::bindings::getActiveLayer() == layer
+                    && g_activeQuick[layer].load() == quick;
+            },
+            "", false
+        };
+    };
+    for (int n = 1; n <= 9; ++n) {
+        auto d = softKeyBank(n);
+        char name[32]; std::snprintf(name, sizeof(name), "softkey_bank_%d", n);
+        char dn[40];   std::snprintf(dn,   sizeof(dn),   "Soft-Key Bank %d", n);
+        d.displayName = dn;
+        registerBuiltin(name, d);
     }
 
     // Multi-instance picker — bindable equivalents of Shift+Channel-Encoder.
