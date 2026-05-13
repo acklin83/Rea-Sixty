@@ -95,7 +95,7 @@ struct MixerWindow::Impl {
         int sizeW = 1400;
         int sizeH = 1200;
         ctx = ImGui_CreateContext(
-            "Rea-Sixty v3",
+            "Rea-Sixty v4",
             &sizeW, &sizeH,
             /*pos_x*/ nullptr, /*pos_y*/ nullptr);
     }
