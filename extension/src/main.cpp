@@ -2458,9 +2458,6 @@ uint16_t linearVolumeToPb(double linear);
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on);
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState state);
 extern int g_lastAutoMode;
-// Suspends pushLayerLeds while the Layer-3 cell-discovery probe is
-// active — defined alongside the action handler at REASIXTY_PROBE_LAYER3.
-extern std::atomic<int> g_layer3ProbeIndex;
 
 // Cell 0x24 sits outside the per-strip LED range. cap33 shows SSL360
 // firing a fixed off→on toggle on this cell at every selection event,
@@ -6095,11 +6092,6 @@ void pushAutoModeLeds(int mode)
 void pushLayerLeds(int active)
 {
     if (!g_dev || !g_dev->isOpen()) return;
-    // Layer-3 cell probe (REASIXTY_PROBE_LAYER3) needs the row's cells
-    // free of the radio-group writes. While the probe is walking
-    // candidate cells, skip the regular push so the probe frame stays
-    // on the wire long enough for Frank to see which LED lights.
-    if (g_layer3ProbeIndex.load() >= 0) return;
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Layer1, active == 0);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Layer2, active == 1);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Layer3, active == 2);
@@ -7127,68 +7119,6 @@ custom_action_register_t g_actionUc1TestIndicator{
 };
 int g_cmdUc1TestIndicator = 0;
 
-// Layer-3 LED diagnostic. The 2026-04-30 probe placed Layer3's LED at
-// cell 0x3D, but Frank reports that cell never lights on his unit
-// (Layer1 at 0x3F + Layer2 at 0x3E work, Layer3 at 0x3D stays dark
-// regardless of which layer is active). Run this action to walk
-// through candidate cells in the Selection-Mode row + the
-// button-ID-adjacent range above it. Each call dims the previous
-// candidate and lights the next bright-white. While the probe is
-// active, the normal pushLayerLeds is suppressed so the probe's
-// frame stays on the wire. End the probe by running it past the
-// last cell — it wraps to -1 and lets pushLayerLeds resume.
-constexpr uint8_t kLayer3ProbeCells[] = {
-    0x3D,                                          // current table value
-    0x3C, 0x3B, 0x3A, 0x39,                        // adjacent (Quick1/2/3, 360)
-    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, // button-ID-adjacent
-};
-constexpr size_t kLayer3ProbeCellCount =
-    sizeof(kLayer3ProbeCells) / sizeof(kLayer3ProbeCells[0]);
-std::atomic<int> g_layer3ProbeIndex{-1};
-
-void probeNextLayer3Cell()
-{
-    if (!g_dev || !g_dev->isOpen()) {
-        ShowConsoleMsg("Layer3 probe: UF8 not open\n");
-        return;
-    }
-    const int prev = g_layer3ProbeIndex.load();
-    if (prev >= 0 && prev < static_cast<int>(kLayer3ProbeCellCount)) {
-        // Turn previous candidate off cleanly (true off, not dim, so
-        // wir den vorher beleuchteten Kandidaten klar abgrenzen können).
-        const uint8_t pc = kLayer3ProbeCells[prev];
-        sendProbeFrame(0x38, pc, 0x00, 0xF0);
-        sendProbeFrame(0x39, pc, 0x00, 0xF0);
-    }
-    const int next = prev + 1;
-    if (next >= static_cast<int>(kLayer3ProbeCellCount)) {
-        g_layer3ProbeIndex.store(-1);
-        ShowConsoleMsg("Layer3 probe: end. pushLayerLeds resumed.\n");
-        return;
-    }
-    g_layer3ProbeIndex.store(next);
-    const uint8_t cell = kLayer3ProbeCells[next];
-    sendProbeFrame(0x38, cell, 0xFF, 0xFF);
-    sendProbeFrame(0x39, cell, 0x00, 0xF0);
-    char line[96];
-    std::snprintf(line, sizeof(line),
-        "Layer3 probe: cell 0x%02X bright (step %d/%zu) — "
-        "watch which LED in the row above the strips lights\n",
-        static_cast<unsigned>(cell), next + 1, kLayer3ProbeCellCount);
-    ShowConsoleMsg(line);
-    if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
-        std::fprintf(lg, "[layer3_probe] step=%d cell=0x%02X\n",
-                     next + 1, static_cast<unsigned>(cell));
-        std::fclose(lg);
-    }
-}
-
-custom_action_register_t g_actionProbeLayer3{
-    0, "REASIXTY_PROBE_LAYER3",
-    "Rea-Sixty: Probe Layer-3 LED cell (debug)", nullptr,
-};
-int g_cmdProbeLayer3 = 0;
-
 // Diagnostic: poll a battery of TrackFX_GetNamedConfigParm candidate
 // names against the focused track's CS plug-in and dump the returned
 // values to the REAPER console. Used to find the data source for Gate
@@ -7418,7 +7348,6 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdToggleFaderCal) { toggleFaderCal();         return true; }
     if (command == g_cmdToggleFaderInputLog) { toggleFaderInputLog(); return true; }
     if (command == g_cmdUc1TestIndicator) { uc1FireTestIndicator();  return true; }
-    if (command == g_cmdProbeLayer3)      { probeNextLayer3Cell();   return true; }
     if (command == g_cmdProbeGateGr)    { probeGateGrSources();     return true; }
     if (command == g_cmdDumpParams)     { dumpCsPluginParams();     return true; }
     if (command == g_cmdDumpChunk)      { dumpCsChunk();            return true; }
@@ -9011,7 +8940,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdToggleFaderCal = plugin_register("custom_action", &g_actionToggleFaderCal);
     g_cmdToggleFaderInputLog = plugin_register("custom_action", &g_actionToggleFaderInputLog);
     g_cmdUc1TestIndicator = plugin_register("custom_action", &g_actionUc1TestIndicator);
-    g_cmdProbeLayer3      = plugin_register("custom_action", &g_actionProbeLayer3);
     g_cmdProbeGateGr    = plugin_register("custom_action", &g_actionProbeGateGr);
     g_cmdDumpParams     = plugin_register("custom_action", &g_actionDumpParams);
     g_cmdDumpChunk      = plugin_register("custom_action", &g_actionDumpChunk);
