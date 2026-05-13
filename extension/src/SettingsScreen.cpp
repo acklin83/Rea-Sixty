@@ -2504,15 +2504,20 @@ void drawUserBankEditor_(ImGui_Context* ctx, int bankIdx,
         Binding& bd = bank.slots[i];
         auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
 
-        char header[80];
+        // `###` suffix so the collapsing-header ID stays stable when
+        // bd.label changes mid-edit — without it, the visible header text
+        // changes per keystroke, ImGui treats it as a new header, and
+        // the InputText below loses focus on every character.
+        char header[96];
         const std::string& act = sp.action;
         if (act.empty()) {
             std::snprintf(header, sizeof(header),
-                          "Slot %d   (empty)", i + 1);
+                          "Slot %d   (empty)###skbslot%d", i + 1, i);
         } else {
             std::snprintf(header, sizeof(header),
-                          "Slot %d   %s", i + 1,
-                          bd.label.empty() ? act.c_str() : bd.label.c_str());
+                          "Slot %d   %s###skbslot%d", i + 1,
+                          bd.label.empty() ? act.c_str() : bd.label.c_str(),
+                          i);
         }
         if (ImGui_CollapsingHeader(ctx, header, nullptr, nullptr)) {
             ImGui_Indent(ctx, nullptr);
@@ -2574,10 +2579,15 @@ void SettingsScreen::drawSoftKeyBanks(ImGui_Context* ctx)
     for (int i = 0; i < uf8::bindings::kUserBankCount; ++i) {
         UserBank b = getUserBank(i);
         char tab[64];
+        // `###` (not `##`) so only the suffix hashes — keeps the tab's
+        // ImGui ID stable when bank.name changes mid-edit. With `##`,
+        // typing into the bank-name InputText changed the visible label,
+        // which changed the full-text hash, which made ImGui treat each
+        // keystroke as a new tab and yank focus away.
         if (b.name.empty()) {
-            std::snprintf(tab, sizeof(tab), "Bank %d##utab%d", i + 1, i);
+            std::snprintf(tab, sizeof(tab), "Bank %d###utab%d", i + 1, i);
         } else {
-            std::snprintf(tab, sizeof(tab), "%s##utab%d", b.name.c_str(), i);
+            std::snprintf(tab, sizeof(tab), "%s###utab%d", b.name.c_str(), i);
         }
         if (ImGui_BeginTabItem(ctx, tab, nullptr, nullptr)) {
             bool dirty = false;
