@@ -4166,9 +4166,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             // Fill strips to the right with sequentially-numbered params
             // derived from the current mapping's name (e.g. "CH1 Volume"
-            // → "CH2 Volume"..."CH8 Volume"). Only shown when the mapped
-            // param has a digit run and this isn't already the last strip.
-            if (ctrl.strip < 7) {
+            // → "CH2 Volume"..."CH8 Volume"). Disabled when the mapped
+            // param has no digit run or this is already the last strip.
+            {
                 const UserPluginMap* editing = nullptr;
                 for (const auto& m : uf8::user_plugins::get().maps) {
                     if (m.match == g_editingMatch) { editing = &m; break; }
@@ -4186,15 +4186,16 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                         }
                     }
                 }
-                if (hasDigits) {
-                    if (ImGui_MenuItem(ctx, "Fill sequential (right)",
-                                       nullptr, nullptr, nullptr))
-                    {
-                        fillSequentialUf8_(ctrl.kind, ctrl.strip, bank,
-                                           mapped, fx);
-                    }
-                    ImGui_Separator(ctx);
+                const bool canFill = hasDigits && ctrl.strip < 7;
+                static bool s_fillDisabled = false;
+                if (ImGui_MenuItem(ctx, "Fill sequential (right)",
+                                   nullptr, nullptr,
+                                   canFill ? nullptr : &s_fillDisabled))
+                {
+                    fillSequentialUf8_(ctrl.kind, ctrl.strip, bank,
+                                       mapped, fx);
                 }
+                ImGui_Separator(ctx);
             }
 
             if (ImGui_MenuItem(ctx, "Clear binding", nullptr,
