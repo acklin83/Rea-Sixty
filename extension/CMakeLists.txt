@@ -80,13 +80,22 @@ add_library(reaper_uf8 MODULE
     src/VirtualNotch.cpp
 )
 
+if(APPLE)
+    # NSSavePanel-backed save dialog for layer export. See
+    # macos_save_dialog.mm for why we bypass SWELL/plugin_getapi.
+    target_sources(reaper_uf8 PRIVATE src/macos_save_dialog.mm)
+    set_source_files_properties(src/macos_save_dialog.mm PROPERTIES
+        COMPILE_FLAGS "-fno-objc-arc")
+endif()
+
 target_link_libraries(reaper_uf8 PRIVATE PkgConfig::HIDAPI)
 
 if(APPLE)
     target_link_libraries(reaper_uf8 PRIVATE
         "-framework CoreMIDI"
         "-framework CoreFoundation"
-        "-framework ApplicationServices")
+        "-framework ApplicationServices"
+        "-framework AppKit")
 endif()
 
 target_include_directories(reaper_uf8 PRIVATE

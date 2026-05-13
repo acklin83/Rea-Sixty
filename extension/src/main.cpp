@@ -7584,16 +7584,25 @@ bool reasixty_actionIsToggle(const std::string& action)
     return GetToggleCommandState2(SectionFromUniqueID(0), cmd) >= 0;
 }
 
-// SWELL's BrowseForSaveFile isn't in REAPER's plug-in SDK header but
-// REAPER's GetFunc does expose it by name. dlsym(RTLD_DEFAULT, ...)
-// USED to resolve it on macOS, but Frank's REAPER on a newer macOS
-// returns null from that path (hardened-runtime / dyld scope shrink
-// 2026-05-06). We capture rec->GetFunc at REAPER_PLUGIN_ENTRY time
-// and use it as the canonical loader.
+// Save-file dialog. macOS goes straight to NSSavePanel via the small
+// Cocoa stub in `macos_save_dialog.mm` — SWELL's BrowseForSaveFile is
+// not reliably reachable from a REAPER extension on macOS 15 (both
+// rec->GetFunc("BrowseForSaveFile") and dlsym(RTLD_DEFAULT, ...) return
+// null because REAPER doesn't export the symbol under the hardened
+// runtime). Win/Linux still try the legacy SWELL path. g_reaperGetFunc
+// is captured at REAPER_PLUGIN_ENTRY for other GetFunc-backed lookups.
+static void* (*g_reaperGetFunc)(const char*) = nullptr;
+
+#ifdef __APPLE__
+namespace uf8 {
+std::string macosSaveDialog(const char* title,
+                            const char* defaultName,
+                            const char* extension);
+}
+#else
 using BrowseForSaveFile_t = bool(*)(const char* text, const char* initialdir,
                                     const char* initialfile, const char* extlist,
                                     char* fn, int fnsize);
-static void* (*g_reaperGetFunc)(const char*) = nullptr;
 static BrowseForSaveFile_t loadBrowseForSaveFile_()
 {
     static BrowseForSaveFile_t p = nullptr;
@@ -7603,12 +7612,11 @@ static BrowseForSaveFile_t loadBrowseForSaveFile_()
             g_reaperGetFunc("BrowseForSaveFile"));
         if (p) return p;
     }
-    // Last-ditch fallback for dev builds where rec->GetFunc somehow
-    // wasn't captured. dlsym still works on most setups.
     p = reinterpret_cast<BrowseForSaveFile_t>(
         dlsym(RTLD_DEFAULT, "BrowseForSaveFile"));
     return p;
 }
+#endif
 
 // Invalidate the LED dedup so the next pushLayerLeds actually emits,
 // then push immediately. Called when the editor switches the active
@@ -7627,28 +7635,38 @@ bool reasixty_exportLayerViaDialog(int layer)
 {
     FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
     if (lg) std::fprintf(lg, "[exportLayer] enter layer=%d\n", layer);
-    auto* browse = loadBrowseForSaveFile_();
-    if (!browse) {
-        if (lg) { std::fprintf(lg, "[exportLayer] BrowseForSaveFile not loaded\n"); std::fclose(lg); }
-        return false;  // SWELL not reachable (very unexpected on macOS)
-    }
-    char fn[4096] = {0};
+
     char defName[64];
     std::snprintf(defName, sizeof(defName),
                   "rea-sixty-layer-%d.json", layer + 1);
     char title[64];
     std::snprintf(title, sizeof(title),
                   "Export Rea-Sixty layer %d", layer + 1);
-    // SWELL extlist format mirrors GetSaveFileName: pairs of label\0pattern\0
-    // terminated by an extra \0. The string literal embeds the NULs.
+
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosSaveDialog(title, defName, "json");
+    if (chosen.empty()) {
+        if (lg) { std::fprintf(lg, "[exportLayer] NSSavePanel cancel/empty\n"); std::fclose(lg); }
+        return false;
+    }
+#else
+    auto* browse = loadBrowseForSaveFile_();
+    if (!browse) {
+        if (lg) { std::fprintf(lg, "[exportLayer] BrowseForSaveFile not loaded\n"); std::fclose(lg); }
+        return false;
+    }
+    char fn[4096] = {0};
     if (!browse(title, nullptr, defName,
                 "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0",
                 fn, sizeof(fn))) {
         if (lg) { std::fprintf(lg, "[exportLayer] browse() returned 0 (cancel or OS issue), fn='%s'\n", fn); std::fclose(lg); }
         return false;
     }
-    if (lg) std::fprintf(lg, "[exportLayer] browse OK, path='%s'\n", fn);
-    const bool ok = uf8::bindings::exportLayerTo(layer, fn);
+    chosen = fn;
+#endif
+    if (lg) std::fprintf(lg, "[exportLayer] dialog OK, path='%s'\n", chosen.c_str());
+    const bool ok = uf8::bindings::exportLayerTo(layer, chosen);
     if (lg) { std::fprintf(lg, "[exportLayer] exportLayerTo => %s\n", ok ? "true" : "false"); std::fclose(lg); }
     return ok;
 }
