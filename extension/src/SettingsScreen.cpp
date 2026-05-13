@@ -2737,6 +2737,131 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
 }
 #endif
 
+// ---- Per-(Layer, Quick) Sub-Bank LED override editor ---------------------
+// Shows below the regular drawBindingEditor when the selected button is
+// one of the 6 sub-bank selector cells (V-POT / Soft 1-5) AND a Quick
+// is engaged on editLayer. Edits the SubBankLed appearance for the
+// current (Layer, engaged Quick, sub-bank-index) coordinate — gives
+// each (L, Q) coord its own V-POT/Soft 1-5 LED palette.
+void drawSubBankLedOverride_(ImGui_Context* ctx, int editLayer,
+                             uf8::bindings::ButtonId id)
+{
+    using namespace uf8::bindings;
+    int sbIdx = -1;
+    switch (id) {
+        case ButtonId::VPotBank:     sbIdx = 0; break;
+        case ButtonId::SoftKey1Bank: sbIdx = 1; break;
+        case ButtonId::SoftKey2Bank: sbIdx = 2; break;
+        case ButtonId::SoftKey3Bank: sbIdx = 3; break;
+        case ButtonId::SoftKey4Bank: sbIdx = 4; break;
+        case ButtonId::SoftKey5Bank: sbIdx = 5; break;
+        default: return;
+    }
+    if (editLayer < 0 || editLayer > 2) return;
+
+    const int engagedQ = reasixty_activeQuickFor(editLayer);
+    if (engagedQ < 0) {
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_TextDisabled(ctx,
+            "Per-Quick LED override: engage Q1, Q2 or Q3 on this layer "
+            "(click in the mockup) to edit this Sub-Bank's per-Quick "
+            "colour palette.");
+        return;
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    const char* sbLabels[6] = {
+        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+    };
+    char hdr[128];
+    std::snprintf(hdr, sizeof(hdr),
+                  "Per-Quick LED override — %s @ Layer %d, Quick %d",
+                  sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+    ImGui_Text(ctx, hdr);
+    ImGui_TextDisabled(ctx,
+        "Active = sub-bank selected on hardware. Inactive = other "
+        "sub-banks in this Quick. Only applies while this Quick is "
+        "engaged on this Layer.");
+    ImGui_Spacing(ctx);
+
+    SubBankLed app = getSubBankLed(editLayer, engagedQ, sbIdx);
+    bool dirty = false;
+
+    auto drawRow = [&](const char* label, uint8_t (&rgb)[3],
+                       Brightness& bri, const char* idTag) {
+        ImGui_Text(ctx, label);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetCursorPosX(ctx, 80.0);
+        const int curRgba =
+            (int(rgb[0]) << 24) | (int(rgb[1]) << 16)
+          | (int(rgb[2]) <<  8) | 0xFF;
+        char btnId[40];
+        std::snprintf(btnId, sizeof(btnId), "##sbov_cur_%s", idTag);
+        int btnFlags = 0;
+        double bw = 56.0, bh = 22.0;
+        if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
+            char popId[40];
+            std::snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
+            ImGui_OpenPopup(ctx, popId, nullptr);
+        }
+        char popId[40];
+        std::snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
+        if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+            int paletteCount = 0;
+            const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
+            const double sw = 26.0;
+            const int perRow = 5;
+            for (int i = 0; i < paletteCount; ++i) {
+                const auto& p = palette[i];
+                const int packed =
+                    (int(p.r) << 24) | (int(p.g) << 16)
+                  | (int(p.b) <<  8) | 0xFF;
+                char swId[40];
+                std::snprintf(swId, sizeof(swId), "##sbov_pp_%s_%d",
+                              idTag, i);
+                int swFlags = 0;
+                double w = sw, h = sw;
+                if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                    rgb[0] = p.r; rgb[1] = p.g; rgb[2] = p.b;
+                    dirty = true;
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+                if ((i % perRow) != (perRow - 1) && i != paletteCount - 1)
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+            }
+            ImGui_EndPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "  ");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* names[] = {"Off", "Dim", "Bright"};
+        for (int i = 0; i < 3; ++i) {
+            char idbuf[40];
+            std::snprintf(idbuf, sizeof(idbuf), "%s##sbov_b_%s_%d",
+                          names[i], idTag, i);
+            if (ImGui_RadioButton(ctx, idbuf,
+                                  static_cast<int>(bri) == i)) {
+                bri = static_cast<Brightness>(i);
+                dirty = true;
+            }
+            if (i < 2) ImGui_SameLine(ctx, nullptr, nullptr);
+        }
+    };
+    char tagA[16], tagI[16];
+    std::snprintf(tagA, sizeof(tagA), "act_L%d_Q%d_S%d",
+                  editLayer, engagedQ, sbIdx);
+    std::snprintf(tagI, sizeof(tagI), "inact_L%d_Q%d_S%d",
+                  editLayer, engagedQ, sbIdx);
+    drawRow("Active",   app.color,         app.brightness,         tagA);
+    drawRow("Inactive", app.inactiveColor, app.inactiveBrightness, tagI);
+
+    if (dirty) setSubBankLed(editLayer, engagedQ, sbIdx, app);
+}
+
 } // namespace
 
 // Phase C UI — hardware-schematic view. Click a button on the schematic
@@ -2795,6 +2920,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         drawUserQuickSlotEditor_(ctx, s_editLayer, slotIdx);
     } else {
         drawBindingEditor(ctx, s_editLayer, s_selected);
+        // Sub-bank cells get an extra Per-Quick LED override editor
+        // below the regular binding editor. Frank 2026-05-13: each
+        // (Layer, Quick) coord should be able to colour its V-POT /
+        // Soft 1-5 row distinctly.
+        drawSubBankLedOverride_(ctx, s_editLayer, s_selected);
     }
 
     ImGui_Spacing(ctx);

@@ -260,8 +260,20 @@ constexpr int kSlotsPerSubBank   = 8;
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
 };
+// LED appearance override for one Sub-Bank selector button (V-POT or
+// Soft 1..5) under a specific (Layer, Quick) context. Lets the user
+// give each (L, Q) coordinate its own 6 sub-bank-button colours so
+// Quick contexts are visually distinguishable on the hardware
+// (Frank 2026-05-13: "Soll auch pro Quick-Layer einstellbar sein").
+struct SubBankLed {
+    uint8_t     color[3]              = {255, 255, 255};
+    Brightness  brightness            = Brightness::Bright;
+    uint8_t     inactiveColor[3]      = {255, 255, 255};
+    Brightness  inactiveBrightness    = Brightness::Dim;
+};
 struct UserQuick {
-    UserQuickSubBank subBanks[kSubBanksPerQuick];  // V-POT, Soft 1..5
+    UserQuickSubBank subBanks[kSubBanksPerQuick];     // V-POT, Soft 1..5
+    SubBankLed       subBankLeds[kSubBanksPerQuick];  // per-(L,Q) LED override
 };
 struct LayerUserQuicks {
     UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
@@ -414,6 +426,14 @@ bool hasBinding(int layer, ButtonId id);
 Binding  getUserQuickSlot(int layer, int quick, int subBank, int slot);
 void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
                           const Binding& bd);
+
+// Per-(Layer, Quick) Sub-Bank LED appearance override. resolveLed_
+// reads these for the 6 sub-bank-selector cells when a Quick is
+// engaged on the editor's layer, so V-POT/Soft 1-5 can have
+// distinct colours per (L, Q) coordinate.
+SubBankLed getSubBankLed(int layer, int quick, int subBank);
+void       setSubBankLed(int layer, int quick, int subBank,
+                         const SubBankLed& app);
 
 // Dispatch a press/release through a user-quick slot. Same long-press
 // + modifier-matrix logic as dispatch(ButtonId), but the slot is

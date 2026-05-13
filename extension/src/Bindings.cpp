@@ -811,6 +811,55 @@ void serializeUserQuicks_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Per-(Layer, Quick) Sub-Bank LED overrides. Emitted as a flat list of
+// entries — one per (L, Q, SB) with non-default appearance. Default
+// is white/bright/dim, so an unmodified config writes nothing here.
+void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
+{
+    auto isDefault_ = [](const SubBankLed& a) {
+        return a.color[0] == 255 && a.color[1] == 255 && a.color[2] == 255
+            && a.brightness == Brightness::Bright
+            && a.inactiveColor[0] == 255 && a.inactiveColor[1] == 255
+            && a.inactiveColor[2] == 255
+            && a.inactiveBrightness == Brightness::Dim;
+    };
+
+    bool anyData = false;
+    for (int li = 0; li < 3 && !anyData; ++li)
+        for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
+            for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
+                if (!isDefault_(c.userQuicks[li].quicks[qi].subBankLeds[bi]))
+                    anyData = true;
+    if (!anyData) return;
+
+    os << ",\n  \"sub_bank_leds\": [";
+    bool first = true;
+    for (int li = 0; li < 3; ++li) {
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
+                const auto& a = c.userQuicks[li].quicks[qi].subBankLeds[bi];
+                if (isDefault_(a)) continue;
+                if (!first) os << ",";
+                first = false;
+                os << "\n    {\"layer\": " << li
+                   << ", \"quick\": " << qi
+                   << ", \"sub_bank\": " << bi
+                   << ", \"color\": [" << int(a.color[0]) << ", "
+                                       << int(a.color[1]) << ", "
+                                       << int(a.color[2]) << "]"
+                   << ", \"brightness\": \"" << brightnessName(a.brightness) << "\""
+                   << ", \"inactive_color\": [" << int(a.inactiveColor[0]) << ", "
+                                                 << int(a.inactiveColor[1]) << ", "
+                                                 << int(a.inactiveColor[2]) << "]"
+                   << ", \"inactive_brightness\": \""
+                   << brightnessName(a.inactiveBrightness) << "\""
+                   << "}";
+            }
+        }
+    }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -825,6 +874,7 @@ std::string serialize(const Config& c)
     }
     os << "  ]";
     serializeUserQuicks_(c, os);
+    serializeSubBankLeds_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -1030,6 +1080,53 @@ void parseUserQuicks_(wdl_json_element* root, Config& out)
                           .subBanks[subBank].slots[slot];
         bd = Binding{};
         parseBindingBody_(bodyObj, bd);
+    }
+}
+
+void parseSubBankLeds_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("sub_bank_leds");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int layer = -1, quick = -1, subBank = -1;
+        if (auto* v = eo->get_item_by_name("layer"))
+            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("quick"))
+            if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("sub_bank"))
+            if (auto* s = v->get_string_value(true)) subBank = std::atoi(s);
+        if (layer   < 0 || layer   >= 3)                 continue;
+        if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
+        if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
+        SubBankLed& a = out.userQuicks[layer].quicks[quick]
+                            .subBankLeds[subBank];
+        a = SubBankLed{};
+        if (auto* v = eo->get_item_by_name("color"); v && v->is_array()) {
+            for (int k = 0; k < 3 && k < v->m_array->GetSize(); ++k) {
+                if (auto* s = v->enum_item(k)->get_string_value(true)) {
+                    int x = std::atoi(s);
+                    if (x < 0) x = 0; else if (x > 255) x = 255;
+                    a.color[k] = static_cast<uint8_t>(x);
+                }
+            }
+        }
+        if (auto* v = eo->get_item_by_name("brightness"))
+            a.brightness = brightnessFromName(v->get_string_value());
+        if (auto* v = eo->get_item_by_name("inactive_color");
+            v && v->is_array()) {
+            for (int k = 0; k < 3 && k < v->m_array->GetSize(); ++k) {
+                if (auto* s = v->enum_item(k)->get_string_value(true)) {
+                    int x = std::atoi(s);
+                    if (x < 0) x = 0; else if (x > 255) x = 255;
+                    a.inactiveColor[k] = static_cast<uint8_t>(x);
+                }
+            }
+        }
+        if (auto* v = eo->get_item_by_name("inactive_brightness"))
+            a.inactiveBrightness = brightnessFromName(v->get_string_value());
     }
 }
 
@@ -1285,6 +1382,7 @@ bool tryParse_(const std::string& json, Config& out)
         }
     }
     parseUserQuicks_(root, out);
+    parseSubBankLeds_(root, out);
     return true;
 }
 
@@ -1345,7 +1443,13 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // (VPotBank / SoftKey1Bank..SoftKey5Bank) on Layer 2 + 3 in
 // historical configs. Without those entries the buttons were
 // dead on the upper layers — pressing them did nothing.
-constexpr int kCurrentBindingsVersion = 11;
+// v12 (2026-05-13): add per-(Layer, Quick) Sub-Bank LED overrides
+// (SubBankLed). Lets each (L, Q) coordinate define its own 6
+// V-POT/Soft 1-5 LED colours so engaged Quick contexts are
+// visually distinguishable. Default-construct on existing configs
+// (white/bright/dim) — no behaviour change until the user starts
+// setting overrides in the editor.
+constexpr int kCurrentBindingsVersion = 12;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2234,6 +2338,29 @@ void setUserQuickSlot(int layer, int quick, int subBank, int slot,
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.userQuicks[layer].quicks[quick]
         .subBanks[subBank].slots[slot] = bd;
+    persistLocked_();
+}
+
+static bool subBankLedInRange_(int layer, int quick, int subBank)
+{
+    return layer    >= 0 && layer    < 3
+        && quick    >= 0 && quick    < kQuicksPerLayer
+        && subBank  >= 0 && subBank  < kSubBanksPerQuick;
+}
+
+SubBankLed getSubBankLed(int layer, int quick, int subBank)
+{
+    if (!subBankLedInRange_(layer, quick, subBank)) return {};
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank];
+}
+
+void setSubBankLed(int layer, int quick, int subBank,
+                   const SubBankLed& app)
+{
+    if (!subBankLedInRange_(layer, quick, subBank)) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank] = app;
     persistLocked_();
 }
 

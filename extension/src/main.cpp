@@ -5774,6 +5774,46 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
         cell == uf8::Uf8GlobalLed::Layer1
      || cell == uf8::Uf8GlobalLed::Layer2
      || cell == uf8::Uf8GlobalLed::Layer3;
+    // Per-(Layer, Quick) Sub-Bank LED override. When a Quick is engaged
+    // on the active layer, the V-POT / Soft 1-5 buttons render with
+    // colours from g_cfg.userQuicks[layer].quicks[quick].subBankLeds[sb]
+    // instead of the layer-wide binding. Lets each (L, Q) coordinate
+    // light its sub-bank row distinctly (Frank 2026-05-13: "Soll auch
+    // pro Quick-Layer einstellbar sein").
+    int sbIdx = -1;
+    switch (cell) {
+        case uf8::Uf8GlobalLed::VPotBank: sbIdx = 0; break;
+        case uf8::Uf8GlobalLed::Soft1:    sbIdx = 1; break;
+        case uf8::Uf8GlobalLed::Soft2:    sbIdx = 2; break;
+        case uf8::Uf8GlobalLed::Soft3:    sbIdx = 3; break;
+        case uf8::Uf8GlobalLed::Soft4:    sbIdx = 4; break;
+        case uf8::Uf8GlobalLed::Soft5:    sbIdx = 5; break;
+        default: break;
+    }
+    if (sbIdx >= 0 && activeLayer >= 0 && activeLayer <= 2) {
+        const int engagedQ = g_activeQuick[activeLayer].load();
+        if (engagedQ >= 0 && engagedQ < uf8::bindings::kQuicksPerLayer) {
+            const auto a = uf8::bindings::getSubBankLed(
+                activeLayer, engagedQ, sbIdx);
+            uint8_t rgb[3];
+            uf8::bindings::Brightness bri;
+            if (active) {
+                rgb[0] = a.color[0]; rgb[1] = a.color[1]; rgb[2] = a.color[2];
+                bri    = a.brightness;
+            } else {
+                rgb[0] = a.inactiveColor[0]; rgb[1] = a.inactiveColor[1];
+                rgb[2] = a.inactiveColor[2];
+                bri    = a.inactiveBrightness;
+            }
+            r.state = brightnessToState_(bri);
+            const uint32_t packed = (uint32_t(rgb[0]) << 16)
+                                  | (uint32_t(rgb[1]) << 8)
+                                  |  uint32_t(rgb[2]);
+            r.colour = uf8::ledColourForTrackRgb(packed);
+            return r;
+        }
+    }
+
     if (!uf8::bindings::hasBinding(activeLayer, bid)) {
         if (isLayerIndicator) {
             // No binding → fall back to plain bright/dim with the
