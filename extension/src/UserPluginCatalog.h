@@ -43,11 +43,6 @@ enum class VPotMode : uint8_t {
     Toggle = 1,   // binary; rotate ignored, push flips 0↔1
 };
 
-// Independent brightness register for TopSoftKey LED states.
-// Mirrors uf8::bindings::Brightness without forcing a Bindings.h
-// dependency on the user-plug-in catalogue header.
-enum class UserUf8Brightness : uint8_t { Off, Dim, Bright };
-
 // One slot in one of eight UF8 banks. vst3Param=-1 => empty slot
 // (top-soft-key blank, V-Pot no-op).
 struct UserUf8BankSlot {
@@ -66,17 +61,18 @@ struct UserUf8BankSlot {
     uint32_t     stripColour = 0;
 };
 
-// TopSoftKey LED state register — Frank 2026-05-13: TopSoftKey N in
-// UF8 Plugin Mode is bank-N's selector, so its LED's active/inactive
-// appearance is bank-scoped, not strip-scoped. One entry per bank
-// (= per TopSoftKey position) carrying independent RGB + brightness
-// for active (this bank == g_softKeyBank) and inactive (other bank
-// active) states.
+// TopSoftKey LED appearance — bank-scoped (Frank 2026-05-13:
+// TopSoftKey N in Plugin Mode is bank-N's selector). One entry per
+// bank. Single colour + a fixed-label string for the bank. Active
+// state (bank == g_softKeyBank) always renders Bright, inactive
+// always Dim — no separate per-state colour or brightness; Frank
+// 2026-05-13: "nicht separat für inactive/active... nur eine farbe.
+// active immer bright, inactive immer dimm".
 struct UserUf8TopSoftKeyLed {
-    uint32_t          activeColour   = 0xFFFFFFu;   // white
-    UserUf8Brightness activeBri      = UserUf8Brightness::Bright;
-    uint32_t          inactiveColour = 0xFFFFFFu;
-    UserUf8Brightness inactiveBri    = UserUf8Brightness::Dim;
+    uint32_t     colour = 0xFFFFFFu;   // white
+    std::string  label;                // shown on TopSoftKey LCD;
+                                        // bank-scoped so bank switches
+                                        // don't rewrite the row.
 };
 
 // 8 banks × 8 slots. Frank 2026-05-13: UF8 Plugin Mode now uses the

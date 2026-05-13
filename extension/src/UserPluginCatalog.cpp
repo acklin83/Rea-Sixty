@@ -340,15 +340,11 @@ std::string serialize_(const UserPluginCatalog& c)
                 if (b) os << ",";
                 const auto& l = m.uf8.topSoftKeyLeds[b];
                 os << "\n          { "
-                   << "\"activeColour\": "
-                   << static_cast<unsigned>(l.activeColour)
-                   << ", \"activeBri\": "
-                   << static_cast<unsigned>(l.activeBri)
-                   << ", \"inactiveColour\": "
-                   << static_cast<unsigned>(l.inactiveColour)
-                   << ", \"inactiveBri\": "
-                   << static_cast<unsigned>(l.inactiveBri)
-                   << " }";
+                   << "\"colour\": "
+                   << static_cast<unsigned>(l.colour)
+                   << ", \"label\": ";
+                appendEscaped_(os, l.label);
+                os << " }";
             }
             os << "\n        ]\n      }";
         }
@@ -528,9 +524,11 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     }
                 }
             }
-            // Per-bank TopSoftKey LED state — absent in pre-2026-05-13
-            // configs; missing entries keep struct defaults (white
-            // bright when active, white dim when inactive).
+            // Per-bank TopSoftKey LED state. New shape (single colour
+            // + label); legacy entries with activeColour/inactiveColour
+            // get their activeColour migrated into colour, brightness
+            // fields are dropped (Frank 2026-05-13 simplified to one
+            // colour, active=bright, inactive=dim fixed).
             if (auto* tslArr = uo->get_item_by_name("topSoftKeyLeds");
                 tslArr && tslArr->is_array() && tslArr->m_array)
             {
@@ -541,25 +539,14 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     if (!lo || !lo->is_object()) continue;
                     auto& l = m.uf8.topSoftKeyLeds[b];
                     int colTmp = 0;
-                    if (getIntI_(lo, "activeColour", colTmp))
-                        l.activeColour =
+                    if (getIntI_(lo, "colour", colTmp)) {
+                        l.colour =
                             static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                    if (getIntI_(lo, "inactiveColour", colTmp))
-                        l.inactiveColour =
+                    } else if (getIntI_(lo, "activeColour", colTmp)) {
+                        l.colour =
                             static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                    int briTmp = 0;
-                    if (getIntI_(lo, "activeBri", briTmp)
-                        && briTmp >= 0 && briTmp <= 2)
-                    {
-                        l.activeBri =
-                            static_cast<uf8::UserUf8Brightness>(briTmp);
                     }
-                    if (getIntI_(lo, "inactiveBri", briTmp)
-                        && briTmp >= 0 && briTmp <= 2)
-                    {
-                        l.inactiveBri =
-                            static_cast<uf8::UserUf8Brightness>(briTmp);
-                    }
+                    getStrI_(lo, "label", l.label);
                 }
             }
         }

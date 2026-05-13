@@ -3891,45 +3891,39 @@ void setUf8StripColour_(int strip, int bank, uint32_t rgb)
     });
 }
 
-// Per-bank TopSoftKey LED appearance. Plugin Mode reads these for
-// active/inactive state — bank-N's TopSoftKey-N selector LED.
-uint32_t getUf8TopSoftKeyColour_(int bank, bool active)
+// Per-bank TopSoftKey LED appearance. Plugin Mode reads these to
+// drive bank-N's TopSoftKey-N selector LED (active = Bright, inactive
+// = Dim, both fixed; only the colour and label are user-set).
+uint32_t getUf8TopSoftKeyColour_(int bank)
 {
     if (g_editingMatch.empty()) return 0xFFFFFFu;
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
-        const auto& l = m.uf8.topSoftKeyLeds[bank];
-        return (active ? l.activeColour : l.inactiveColour) & 0x00FFFFFFu;
+        return m.uf8.topSoftKeyLeds[bank].colour & 0x00FFFFFFu;
     }
     return 0xFFFFFFu;
 }
-uf8::UserUf8Brightness getUf8TopSoftKeyBri_(int bank, bool active)
+std::string getUf8TopSoftKeyLabel_(int bank)
 {
-    if (g_editingMatch.empty()) {
-        return active ? uf8::UserUf8Brightness::Bright
-                      : uf8::UserUf8Brightness::Dim;
-    }
+    if (g_editingMatch.empty()) return {};
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
-        const auto& l = m.uf8.topSoftKeyLeds[bank];
-        return active ? l.activeBri : l.inactiveBri;
+        return m.uf8.topSoftKeyLeds[bank].label;
     }
-    return active ? uf8::UserUf8Brightness::Bright
-                  : uf8::UserUf8Brightness::Dim;
+    return {};
 }
-void setUf8TopSoftKeyColour_(int bank, bool active, uint32_t rgb)
+void setUf8TopSoftKeyColour_(int bank, uint32_t rgb)
 {
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        if (active) u.topSoftKeyLeds[bank].activeColour   = rgb;
-        else        u.topSoftKeyLeds[bank].inactiveColour = rgb;
+        u.topSoftKeyLeds[bank].colour = rgb;
     });
 }
-void setUf8TopSoftKeyBri_(int bank, bool active, uf8::UserUf8Brightness br)
+void setUf8TopSoftKeyLabel_(int bank, std::string lbl)
 {
+    if (lbl.size() > 16) lbl.resize(16);
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        if (active) u.topSoftKeyLeds[bank].activeBri   = br;
-        else        u.topSoftKeyLeds[bank].inactiveBri = br;
+        u.topSoftKeyLeds[bank].label = std::move(lbl);
     });
 }
 
@@ -4517,42 +4511,18 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ringCol, &rounding, /*flags*/ nullptr, /*thickness*/ nullptr);
     }
 
-    // TopSoftKey: paint the param-name (or custom label) inside the
-    // already-drawn rect. No interactive hit-test — V-Pot is the editor.
+    // TopSoftKey: paint the bank-scoped label inside the already-drawn
+    // rect. The label is bank-N's fixed text (Frank 2026-05-13: soft-
+    // key press doesn't rewrite the other soft-keys), so it reads from
+    // topSoftKeyLeds[ctrl.strip] regardless of the currently active
+    // bank. No interactive hit-test for the label — the InvisibleButton
+    // below handles left-click (bank switch) + right-click (popup).
     if (ctrl.kind == Uf8Control::TopSoftKey) {
-        std::string label;
-        if (isMapped) {
-            // Prefer custom label, fall back to param name.
-            for (const auto& m : uf8::user_plugins::get().maps) {
-                if (m.match != g_editingMatch) continue;
-                label = m.uf8.banks.banks[bank][ctrl.strip].label;
-                break;
-            }
-            if (label.empty()) {
-                char pn[64] = {};
-                if (fx.ok) {
-                    TrackFX_GetParamName(fx.tr, fx.fxIdx, mapped,
-                                         pn, sizeof(pn));
-                } else {
-                    for (const auto& um : uf8::user_plugins::get().maps) {
-                        if (um.match != g_editingMatch) continue;
-                        for (const auto& pi : um.paramSnapshot) {
-                            if (pi.vst3Param == mapped) {
-                                std::strncpy(pn, pi.name.c_str(),
-                                             sizeof(pn) - 1);
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                }
-                label = pn;
-            }
-            if (label.size() > 8) label.resize(8);
-            if (!label.empty()) {
-                ImGui_DrawList_AddText(dl, ox + bx + 4, oy + by + 4,
-                                       0x88CCEEFF, label.c_str());
-            }
+        std::string label = getUf8TopSoftKeyLabel_(ctrl.strip);
+        if (label.size() > 8) label.resize(8);
+        if (!label.empty()) {
+            ImGui_DrawList_AddText(dl, ox + bx + 4, oy + by + 4,
+                                   0x88CCEEFF, label.c_str());
         }
 
         // Left-click → bank switch (Frank 2026-05-13: "klick auf UF8
@@ -4573,11 +4543,12 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         }
 
         // Right-click menu — Frank 2026-05-13. TopSoftKey N in the
-        // mockup represents the hardware bank-N selector; the menu
-        // edits TopSoftKey N's own LED active/inactive colour +
-        // brightness (bank-scoped, NOT per-(bank, strip)) plus the
-        // bank-N V-Pot slot's label. Right-click works whether the
-        // slot is bound or not — empty banks need to be paintable.
+        // mockup represents the hardware bank-N selector. Menu edits
+        // bank-N's TopSoftKey label (fixed across bank switches) +
+        // a single colour (active = Bright, inactive = Dim — no
+        // separate state, Frank: "nur eine farbe. active immer
+        // bright, inactive immer dimm"). Right-click works whether
+        // the V-Pot slot is bound or not.
         char popId[48];
         std::snprintf(popId, sizeof(popId),
                       "fxl_uf8_tsk_ctx_%d", ctrl.strip);
@@ -4585,127 +4556,101 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             const int softKeyBank = ctrl.strip;  // TopSoftKey N → bank N
             char title[160];
             std::snprintf(title, sizeof(title),
-                "TopSoftKey %d — Bank %d LED",
+                "TopSoftKey %d — Bank %d",
                 ctrl.strip + 1, softKeyBank + 1);
             ImGui_TextDisabled(ctx, title);
             ImGui_Separator(ctx);
 
-            // Label edit for the V-Pot slot in the current editing
-            // bank — Frank 2026-05-13: "Ich muss die Labels für die
-            // Soft-Keys benennen können!". The label is per
-            // (bank, strip) since each bank has its own param row
-            // under this strip column, so the label tracks the
-            // currently-active bank (bank var, not softKeyBank).
-            std::string curLabel;
-            for (const auto& m : uf8::user_plugins::get().maps) {
-                if (m.match != g_editingMatch) continue;
-                curLabel = m.uf8.banks.banks[bank][ctrl.strip].label;
-                break;
-            }
+            // Bank-scoped label — shown on the hardware TopSoftKey
+            // LCD regardless of which bank is currently active, so
+            // pressing TopSoftKey M doesn't rewrite TopSoftKey N's
+            // label (Frank 2026-05-13: "soft-key press soll nicht
+            // die anderen soft-keys verändern").
+            std::string curLabel = getUf8TopSoftKeyLabel_(softKeyBank);
             static char s_tskLblBuf[16];
             std::snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
                           curLabel.c_str());
             if (ImGui_InputTextWithHint(ctx,
                     "Label##fxl_uf8_tsk_lbl",
-                    "(auto from param name)",
+                    "(bank N label, shown above the strip)",
                     s_tskLblBuf, int(sizeof(s_tskLblBuf)),
                     nullptr, nullptr))
             {
-                setUf8Label_(ctrl.strip, bank,
-                             std::string(s_tskLblBuf));
+                setUf8TopSoftKeyLabel_(softKeyBank,
+                                       std::string(s_tskLblBuf));
             }
             ImGui_Separator(ctx);
 
-            // Two-row LED state editor (active + inactive). Each row:
-            // colour swatch (opens palette popup) + brightness radio
-            // group (Off / Dim / Bright).
-            auto drawSoftKeyLedRow = [&](const char* rowLabel,
-                                         bool activeState,
-                                         const char* idTag) {
-                const uint32_t curRgb =
-                    getUf8TopSoftKeyColour_(softKeyBank, activeState);
-                const auto curBri =
-                    getUf8TopSoftKeyBri_(softKeyBank, activeState);
-                ImGui_Text(ctx, rowLabel);
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                const int curRgba = curRgb
-                    ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
-                                     | ((curRgb & 0x00FF00u) << 8)
-                                     | ((curRgb & 0x0000FFu) << 8) | 0xFF)
-                    : 0x40404080;
-                char swBtnId[48];
-                std::snprintf(swBtnId, sizeof(swBtnId),
-                              "##fxl_uf8_tskcol_%s_%d",
-                              idTag, ctrl.strip);
-                int swBtnFlags = 0;
-                double swW = 56.0, swH = 18.0;
-                if (ImGui_ColorButton(ctx, swBtnId, curRgba,
-                                      &swBtnFlags, &swW, &swH))
-                {
-                    char popPalId[64];
-                    std::snprintf(popPalId, sizeof(popPalId),
-                                  "fxl_uf8_tskpal_%s_%d",
-                                  idTag, ctrl.strip);
-                    ImGui_OpenPopup(ctx, popPalId, nullptr);
-                }
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                const char* briNames[3] = {"Off", "Dim", "Bright"};
-                for (int i = 0; i < 3; ++i) {
-                    char rbId[40];
-                    std::snprintf(rbId, sizeof(rbId), "%s##fxl_uf8_tskbri_%s_%d_%d",
-                                  briNames[i], idTag, ctrl.strip, i);
-                    if (ImGui_RadioButton(ctx, rbId,
-                                          static_cast<int>(curBri) == i))
-                    {
-                        setUf8TopSoftKeyBri_(softKeyBank, activeState,
-                            static_cast<uf8::UserUf8Brightness>(i));
-                    }
-                    if (i < 2) ImGui_SameLine(ctx, nullptr, nullptr);
-                }
+            // Single colour swatch — palette popup mirrors the
+            // pattern used elsewhere. Active = Bright, inactive = Dim
+            // is fixed on the hardware side.
+            const uint32_t curRgb = getUf8TopSoftKeyColour_(softKeyBank);
+            ImGui_Text(ctx, "Colour");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            const int curRgba = curRgb
+                ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
+                                 | ((curRgb & 0x00FF00u) << 8)
+                                 | ((curRgb & 0x0000FFu) << 8) | 0xFF)
+                : 0x40404080;
+            char swBtnId[48];
+            std::snprintf(swBtnId, sizeof(swBtnId),
+                          "##fxl_uf8_tskcol_%d", ctrl.strip);
+            int swBtnFlags = 0;
+            double swW = 56.0, swH = 18.0;
+            if (ImGui_ColorButton(ctx, swBtnId, curRgba,
+                                  &swBtnFlags, &swW, &swH))
+            {
                 char popPalId[64];
                 std::snprintf(popPalId, sizeof(popPalId),
-                              "fxl_uf8_tskpal_%s_%d",
-                              idTag, ctrl.strip);
-                if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
-                    int paletteCount = 0;
-                    const uf8::PaletteRgb* palette =
-                        uf8::selPaletteRgb(&paletteCount);
-                    const double sw = 26.0;
-                    const int perRow = 5;
-                    for (int i = 0; i < paletteCount; ++i) {
-                        const auto& p = palette[i];
-                        const int packed =
-                            (int(p.r) << 24) |
-                            (int(p.g) << 16) |
-                            (int(p.b) <<  8) | 0xFF;
-                        char swId[40];
-                        std::snprintf(swId, sizeof(swId),
-                                      "##fxl_uf8_tskpp_%s_%d_%d",
-                                      idTag, ctrl.strip, i);
-                        int swFlags = 0;
-                        double w = sw, h = sw;
-                        if (ImGui_ColorButton(ctx, swId, packed,
-                                              &swFlags, &w, &h))
-                        {
-                            const uint32_t rgb =
-                                (uint32_t(p.r) << 16) |
-                                (uint32_t(p.g) <<  8) |
-                                 uint32_t(p.b);
-                            setUf8TopSoftKeyColour_(softKeyBank,
-                                                    activeState, rgb);
-                            ImGui_CloseCurrentPopup(ctx);
-                        }
-                        if ((i % perRow) != (perRow - 1) &&
-                            i != paletteCount - 1)
-                        {
-                            ImGui_SameLine(ctx, nullptr, nullptr);
-                        }
+                              "fxl_uf8_tskpal_%d", ctrl.strip);
+                ImGui_OpenPopup(ctx, popPalId, nullptr);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char clrBtnId[48];
+            std::snprintf(clrBtnId, sizeof(clrBtnId),
+                          "Default##fxl_uf8_tskclr_%d", ctrl.strip);
+            if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
+                setUf8TopSoftKeyColour_(softKeyBank, 0xFFFFFFu);
+            }
+            char popPalId[64];
+            std::snprintf(popPalId, sizeof(popPalId),
+                          "fxl_uf8_tskpal_%d", ctrl.strip);
+            if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
+                int paletteCount = 0;
+                const uf8::PaletteRgb* palette =
+                    uf8::selPaletteRgb(&paletteCount);
+                const double sw = 26.0;
+                const int perRow = 5;
+                for (int i = 0; i < paletteCount; ++i) {
+                    const auto& p = palette[i];
+                    const int packed =
+                        (int(p.r) << 24) |
+                        (int(p.g) << 16) |
+                        (int(p.b) <<  8) | 0xFF;
+                    char swId[40];
+                    std::snprintf(swId, sizeof(swId),
+                                  "##fxl_uf8_tskpp_%d_%d",
+                                  ctrl.strip, i);
+                    int swFlags = 0;
+                    double w = sw, h = sw;
+                    if (ImGui_ColorButton(ctx, swId, packed,
+                                          &swFlags, &w, &h))
+                    {
+                        const uint32_t rgb =
+                            (uint32_t(p.r) << 16) |
+                            (uint32_t(p.g) <<  8) |
+                             uint32_t(p.b);
+                        setUf8TopSoftKeyColour_(softKeyBank, rgb);
+                        ImGui_CloseCurrentPopup(ctx);
                     }
-                    ImGui_EndPopup(ctx);
+                    if ((i % perRow) != (perRow - 1) &&
+                        i != paletteCount - 1)
+                    {
+                        ImGui_SameLine(ctx, nullptr, nullptr);
+                    }
                 }
-            };
-            drawSoftKeyLedRow("Active  ", /*activeState*/ true,  "act");
-            drawSoftKeyLedRow("Inactive", /*activeState*/ false, "ina");
+                ImGui_EndPopup(ctx);
+            }
 
             ImGui_Separator(ctx);
 

@@ -3939,22 +3939,31 @@ void pushZonesForVisibleSlots()
             static thread_local int   s_userBankLink[8];
             if (g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
+                    const int bank = std::clamp(g_softKeyBank.load(),
+                        0, uf8::kUserUf8BankCount - 1);
                     for (int i = 0; i < 8; ++i) {
-                        const auto& bs =
-                            uctx.map->uf8.banks.banks[bank][i];
-                        std::string lbl = bs.label;
-                        if (lbl.empty() && bs.vst3Param >= 0) {
-                            char pn[64] = {0};
-                            TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
-                                bs.vst3Param, pn, sizeof(pn));
-                            lbl = pn;
-                        }
+                        // TopSoftKey N's label is bank-N-scoped (Frank
+                        // 2026-05-13: "soft-key press soll nicht die
+                        // anderen soft-keys verändern"), so bank-switch
+                        // doesn't rewrite the row. Read from
+                        // topSoftKeyLeds[i] which is independent of the
+                        // currently active bank.
+                        std::string lbl =
+                            uctx.map->uf8.topSoftKeyLeds[i].label;
                         if (lbl.size() > 11) lbl.resize(11);
                         std::snprintf(s_userBankLabelBuf[i],
                             sizeof(s_userBankLabelBuf[i]),
                             "%s", lbl.c_str());
                         s_userBankLabelPtr[i] = s_userBankLabelBuf[i];
+                        // linkIdx surfaces "present vs empty" for the
+                        // existing LED resolver. With bank-scoped
+                        // TopSoftKey labels the per-(bank, strip) V-Pot
+                        // mapping no longer drives the TopSoftKey label
+                        // — keep linkIdx=present so any param assigned
+                        // to the strip column in the active bank still
+                        // counts as "bound" downstream.
+                        const auto& bs =
+                            uctx.map->uf8.banks.banks[bank][i];
                         s_userBankLink[i] =
                             (bs.vst3Param >= 0) ? 0 : softkey::kNoSlot;
                     }
@@ -4145,44 +4154,23 @@ void pushZonesForVisibleSlots()
                 tssk = uf8::TopSoftKeyState::Dim;
                 ledCacheKey = 1;
             }
-            // Per-TopSoftKey LED colour + brightness. In Plugin Mode
-            // each TopSoftKey N (= bank N selector) carries its own
-            // active + inactive RGB + brightness in
-            // uf8.topSoftKeyLeds[N] — bank-scoped, not strip-scoped
-            // (Frank 2026-05-13: "Soft-Key: rechtsklick farbe dimm/
-            // bright für inactive/active. V-Pot Farbe raus."). The
-            // tssk computed above (On/Dim per the bank-active branch
-            // ~Z. 4070) is overridden here with the user-chosen
-            // brightness, then folded into a composite cache key so
-            // both state + colour changes re-emit cleanly.
+            // Per-TopSoftKey LED colour. Plugin Mode: each TopSoftKey
+            // N (= bank N selector) carries one bank-scoped colour in
+            // uf8.topSoftKeyLeds[N].colour. Brightness is fixed —
+            // active bank = Bright, inactive = Dim (Frank 2026-05-13:
+            // "nur eine farbe. active immer bright, inactive immer
+            // dimm"). The earlier active/inactive Brightness split is
+            // gone; tssk from the bank-active branch above already
+            // carries Bright/Dim so no override is needed.
             uf8::LedColour ledClr = uf8::ledColourWhite();
             uint32_t ledColRgb = 0xFFFFFFu;
             if (pluginModeLocal) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const int activeBank = std::clamp(
-                        g_softKeyBank.load(),
-                        0, uf8::kUserUf8BankCount - 1);
-                    const bool isActive = (s == activeBank);
                     const auto& tl = uctx.map->uf8.topSoftKeyLeds[s];
-                    const uint32_t bc = (isActive ? tl.activeColour
-                                                  : tl.inactiveColour)
-                                        & 0x00FFFFFFu;
+                    const uint32_t bc = tl.colour & 0x00FFFFFFu;
                     if (bc != 0) {
                         ledColRgb = bc;
                         ledClr = uf8::ledColourForTrackRgb(bc);
-                    }
-                    // Brightness override — Off/Dim/Bright registers
-                    // are independent per state. Maps directly onto
-                    // TopSoftKeyState.
-                    const auto bri = isActive ? tl.activeBri
-                                              : tl.inactiveBri;
-                    switch (bri) {
-                        case uf8::UserUf8Brightness::Off:
-                            tssk = uf8::TopSoftKeyState::Off;    break;
-                        case uf8::UserUf8Brightness::Dim:
-                            tssk = uf8::TopSoftKeyState::Dim;    break;
-                        case uf8::UserUf8Brightness::Bright:
-                            tssk = uf8::TopSoftKeyState::On;     break;
                     }
                 }
             }
