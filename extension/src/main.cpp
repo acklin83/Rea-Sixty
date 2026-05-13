@@ -2968,6 +2968,26 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 
             bool handledNatively = false;
 
+            // UF8 Plugin Mode: TopSoftKey 1..8 (0x18..0x1F) become bank
+            // selectors for the user-mapped plug-in's 8 V-Pot banks
+            // (Frank 2026-05-13). Press → g_softKeyBank = (id - 0x18);
+            // mirrors the FX-Learn UF8 window's bank-combo behaviour
+            // exactly. SSL Soft-Key Bank cells (V-POT/Soft 1-5) are
+            // no-op in this mode — handled in softkey_bank_select.
+            if (id >= 0x18 && id <= 0x1F && g_uf8PluginMode.load()) {
+                if (pressed) {
+                    const int target = id - 0x18;
+                    if (g_softKeyBank.exchange(target) != target) {
+                        g_softKeyDirty.store(true);
+                        g_bankDirty.store(true);
+                        char buf[8];
+                        std::snprintf(buf, sizeof(buf), "%d", target);
+                        SetExtState("ReaSixty", "softKeyBank", buf, true);
+                    }
+                }
+                handledNatively = true;
+            }
+
             // Top-soft-key user-Quick override has the highest priority:
             // when a Quick is engaged on the active layer, route the
             // press into the matching (layer, quick, sub-bank, slot)
@@ -2981,7 +3001,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // 2026-05-13: "die Quick Buttons dürfen nichts an den
             // Soft-Keys ändern, sonst kommt man nicht mehr auf die
             // gelearnten Parameter").
-            if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()) {
+            if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
+                && !handledNatively) {
                 const int layer = uf8::bindings::getActiveLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
@@ -3271,7 +3292,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
     // (Frank 2026-05-09.)
     if (g_uf8PluginMode.load() && slot >= 0 && slot < 8) {
         if (auto u = userStripCtxFocused_(); u.map) {
-            const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+            const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
             const auto& bs   = u.map->uf8.banks.banks[bank][slot];
             const auto& strp = u.map->uf8.strips[slot];
             if (bs.colour != 0) {
@@ -3794,7 +3815,7 @@ void pushZonesForVisibleSlots()
                 userColourSolo = sb.soloColour;
                 userColourCut  = sb.cutColour;
                 userColourSel  = sb.selColour;
-                const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                 userBoundVpot  = userS.map->uf8.banks.banks[bank][s].vst3Param;
             }
         }
@@ -3918,7 +3939,7 @@ void pushZonesForVisibleSlots()
             static thread_local int   s_userBankLink[8];
             if (g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                    const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                     for (int i = 0; i < 8; ++i) {
                         const auto& bs =
                             uctx.map->uf8.banks.banks[bank][i];
@@ -4063,7 +4084,20 @@ void pushZonesForVisibleSlots()
             }
             uf8::TopSoftKeyState tssk;
             int8_t ledCacheKey;
-            if (curQuick >= 0) {
+            if (pluginModeLocal) {
+                // UF8 Plugin Mode: TopSoftKey N = bank-N selector.
+                // Active bank bright, rest dim. Replaces the SSL-mode
+                // "focused param" + user-Quick branches entirely
+                // (Frank 2026-05-13: "nur aktiven bright machen").
+                const int activeBank = std::clamp(
+                    g_softKeyBank.load(), 0,
+                    uf8::kUserUf8BankCount - 1);
+                const bool isActive = (s == activeBank);
+                tssk = isActive
+                    ? uf8::TopSoftKeyState::On
+                    : uf8::TopSoftKeyState::Dim;
+                ledCacheKey = static_cast<int8_t>(isActive ? 10 : 9);
+            } else if (curQuick >= 0) {
                 // User-Quick context. Three-tier rendering:
                 //   empty slot                       → Dim (row stays
                 //                                       visibly populated)
@@ -4405,7 +4439,7 @@ void pushZonesForVisibleSlots()
             // ON. Value slots show unipolar L→R sweep on the bound
             // param. Empty slots show collapsed-bar.
             auto uctx = userStripCtxFocused_();
-            const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+            const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
             const auto& bs = uctx.map->uf8.banks.banks[bank][s];
             if (bs.vst3Param < 0) {
                 vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
@@ -4728,7 +4762,7 @@ void pushZonesForVisibleSlots()
             && !routedVpot)
         {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                 const auto& bs = uctx.map->uf8.banks.banks[bank][s];
                 if (bs.vst3Param >= 0) {
                     char pn[64]  = {0};
@@ -4967,7 +5001,7 @@ void pushZonesForVisibleSlots()
             //   Empty slot  → 0x03 (no bar)
             if (g_uf8PluginMode.load() && !g_flip.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const int bank = std::clamp(g_softKeyBank.load(), 0, 5);
+                    const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                     const auto& bs =
                         uctx.map->uf8.banks.banks[bank][s];
                     if (bs.vst3Param < 0
@@ -7556,7 +7590,7 @@ int reasixty_softkeyCurrentBank()
             return std::clamp(g_activeSubBank[layer].load(), 0, 5);
         }
     }
-    return std::clamp(g_softKeyBank.load(), 0, 5);
+    return std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
 }
 const char* reasixty_softkeyCurrentBankName()
 {
@@ -8764,15 +8798,13 @@ void registerBindingHandlers()
     registerBuiltin("softkey_bank_select", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
+            // UF8 Plugin Mode: SSL Soft-Key Bank cells (V-POT + Soft
+            // 1-5) are no-function — bank navigation moves to the 8
+            // TopSoftKeys (Frank 2026-05-13: "Soft-Key Banks
+            // no-function in UF8 plugin mode").
+            if (g_uf8PluginMode.load()) return;
             const int layer = uf8::bindings::getActiveLayer();
-            // UF8 Plugin Mode: V-POT / Soft 1-5 navigate the
-            // FX-Learn-mode plug-in's own bank set via g_softKeyBank.
-            // Skip the user-Quick branch even if a Quick happens to be
-            // engaged in some background state — in Plugin Mode the
-            // top-soft-key row is owned by the user-mapped plug-in,
-            // not by user-Quick slots (Frank 2026-05-13).
-            const bool pluginMode = g_uf8PluginMode.load();
-            const int activeQuick = (!pluginMode && layer >= 0 && layer <= 2)
+            const int activeQuick = (layer >= 0 && layer <= 2)
                 ? g_activeQuick[layer].load() : -1;
             // User-Quick context: the same hardware bank-row keys now
             // pick which of the 6 sub-banks (V-POT + Soft 1..5) drives

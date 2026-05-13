@@ -182,7 +182,7 @@ bool uf8MapHasContent_(const UserUf8Map& u)
         if (sb.faderVst3Param >= 0 || sb.soloVst3Param >= 0
          || sb.cutVst3Param   >= 0 || sb.selVst3Param  >= 0) return true;
     }
-    for (int b = 0; b < 6; ++b) {
+    for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
         for (int s = 0; s < 8; ++s) {
             if (u.banks.banks[b][s].vst3Param >= 0) return true;
             if (!u.banks.banks[b][s].label.empty()) return true;
@@ -294,7 +294,7 @@ std::string serialize_(const UserPluginCatalog& c)
         if (uf8MapHasContent_(m.uf8)) {
             os << ",\n      \"uf8\": {\n";
             os << "        \"banks\": [";
-            for (int b = 0; b < 6; ++b) {
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
                 if (b) os << ",";
                 os << "\n          [";
                 for (int s = 0; s < 8; ++s) {
@@ -438,7 +438,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
             if (auto* banksArr = uo->get_item_by_name("banks");
                 banksArr && banksArr->is_array() && banksArr->m_array)
             {
-                const int bn = (std::min)(banksArr->m_array->GetSize(), 6);
+                const int bn = (std::min)(banksArr->m_array->GetSize(),
+                                          uf8::kUserUf8BankCount);
                 for (int b = 0; b < bn; ++b) {
                     wdl_json_element* row = banksArr->enum_item(b);
                     if (!row || !row->is_array() || !row->m_array) continue;

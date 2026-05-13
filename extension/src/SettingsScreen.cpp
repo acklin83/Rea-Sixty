@@ -4470,7 +4470,146 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                        0x88CCEEFF, label.c_str());
             }
         }
-        return;   // no hit-test for TopSoftKey
+
+        // Right-click menu — Frank 2026-05-13: "Rechtsklick Menu wie
+        // z.B. solo-button machen (color, fill seq, clear)". TopSoftKey
+        // in the mockup represents this bank's V-Pot slot; the menu
+        // mirrors V-Pot's colour / fill-sequential / clear options for
+        // the same (bank, strip). Operates on Uf8Control::VPot under
+        // the hood — the V-Pot slot IS what TopSoftKey labels and the
+        // strip colour bar reflects.
+        if (isMapped) {
+            char btnId[48];
+            std::snprintf(btnId, sizeof(btnId),
+                          "##fxl_uf8_tsk_%d", ctrl.strip);
+            ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
+            int ibFlags = 0;
+            ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
+
+            char popId[48];
+            std::snprintf(popId, sizeof(popId),
+                          "fxl_uf8_tsk_ctx_%d", ctrl.strip);
+            if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
+                char title[160];
+                std::snprintf(title, sizeof(title),
+                    "TopSoft %d — Bank %d V-Pot -> param %d",
+                    ctrl.strip + 1, bank + 1, mapped);
+                ImGui_TextDisabled(ctx, title);
+                ImGui_Separator(ctx);
+
+                // Colour picker (V-Pot colour drives both LED + strip
+                // colour bar; same handler used by the V-Pot row).
+                const uint32_t curRgb = getUf8Colour_(
+                    Uf8Control::VPot, ctrl.strip, bank);
+                ImGui_Text(ctx, "Colour");
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                const int curRgba = curRgb
+                    ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
+                                     | ((curRgb & 0x00FF00u) << 8)
+                                     | ((curRgb & 0x0000FFu) << 8) | 0xFF)
+                    : 0x40404080;
+                char swBtnId[48];
+                std::snprintf(swBtnId, sizeof(swBtnId),
+                              "##fxl_uf8_tsk_col_%d", ctrl.strip);
+                int swBtnFlags = 0;
+                double swW = 56.0, swH = 18.0;
+                if (ImGui_ColorButton(ctx, swBtnId, curRgba,
+                                      &swBtnFlags, &swW, &swH))
+                {
+                    char popPalId[48];
+                    std::snprintf(popPalId, sizeof(popPalId),
+                                  "fxl_uf8_tsk_pal_%d", ctrl.strip);
+                    ImGui_OpenPopup(ctx, popPalId, nullptr);
+                }
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                char clrBtnId[48];
+                std::snprintf(clrBtnId, sizeof(clrBtnId),
+                              "Default##fxl_uf8_tsk_colclr_%d", ctrl.strip);
+                if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
+                    setUf8Colour_(Uf8Control::VPot, ctrl.strip, bank, 0);
+                }
+
+                char popPalId[48];
+                std::snprintf(popPalId, sizeof(popPalId),
+                              "fxl_uf8_tsk_pal_%d", ctrl.strip);
+                if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
+                    int paletteCount = 0;
+                    const uf8::PaletteRgb* palette =
+                        uf8::selPaletteRgb(&paletteCount);
+                    const double sw = 26.0;
+                    const int perRow = 5;
+                    for (int i = 0; i < paletteCount; ++i) {
+                        const auto& p = palette[i];
+                        const int packed =
+                            (int(p.r) << 24) |
+                            (int(p.g) << 16) |
+                            (int(p.b) <<  8) | 0xFF;
+                        char swId[32];
+                        std::snprintf(swId, sizeof(swId),
+                                      "##fxl_uf8_tsk_pp_%d", i);
+                        int swFlags = 0;
+                        double w = sw, h = sw;
+                        if (ImGui_ColorButton(ctx, swId, packed,
+                                              &swFlags, &w, &h))
+                        {
+                            const uint32_t rgb =
+                                (uint32_t(p.r) << 16) |
+                                (uint32_t(p.g) <<  8) |
+                                 uint32_t(p.b);
+                            setUf8Colour_(Uf8Control::VPot,
+                                          ctrl.strip, bank, rgb);
+                            ImGui_CloseCurrentPopup(ctx);
+                        }
+                        if ((i % perRow) != (perRow - 1) &&
+                            i != paletteCount - 1)
+                        {
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                        }
+                    }
+                    ImGui_EndPopup(ctx);
+                }
+                ImGui_Separator(ctx);
+
+                // Fill sequential (right) — same heuristic as V-Pot:
+                // the bound param's name must carry a digit run.
+                if (ctrl.strip < 7) {
+                    const UserPluginMap* editing = nullptr;
+                    for (const auto& m : uf8::user_plugins::get().maps) {
+                        if (m.match == g_editingMatch) { editing = &m; break; }
+                    }
+                    bool hasDigits = false;
+                    if (editing) {
+                        char nm[256];
+                        if (paramNameFor_(*editing, fx, mapped,
+                                          nm, sizeof(nm))) {
+                            for (size_t i = 0; nm[i]; ++i) {
+                                if (std::isdigit(
+                                        static_cast<unsigned char>(nm[i])))
+                                {
+                                    hasDigits = true; break;
+                                }
+                            }
+                        }
+                    }
+                    if (hasDigits) {
+                        if (ImGui_MenuItem(ctx, "Fill sequential (right)",
+                                           nullptr, nullptr, nullptr))
+                        {
+                            fillSequentialUf8_(Uf8Control::VPot,
+                                ctrl.strip, bank, mapped, fx);
+                        }
+                        ImGui_Separator(ctx);
+                    }
+                }
+
+                if (ImGui_MenuItem(ctx, "Clear binding", nullptr,
+                                   nullptr, nullptr)) {
+                    unbindUf8_(Uf8Control::VPot, ctrl.strip, bank);
+                }
+                ImGui_EndPopup(ctx);
+            }
+        }
+        return;   // no left-click hit-test for TopSoftKey — V-Pot owns it
     }
 
     // Mapped controls are flagged purely via the green ring drawn
@@ -4985,22 +5124,26 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     }
 
     if (s_mockup == 1) {
-        // Bank picker — only meaningful for UF8 mockup. V-POT + SOFT 1..5
-        // map to softkey-bank indices 0..5.
+        // Bank picker — only meaningful for UF8 mockup. 8 banks driven
+        // by the TopSoftKey row (Plugin Mode bank-switcher, Frank
+        // 2026-05-13). Labels are "Bank N" since the bank selector is
+        // no longer the V-POT/Soft 1-5 row.
         ImGui_SameLine(ctx, nullptr, nullptr);
         ImGui_TextDisabled(ctx, "  Bank:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        const char* kBankNames[6] = {
-            "V-POT", "SOFT 1", "SOFT 2", "SOFT 3", "SOFT 4", "SOFT 5"
+        const char* kBankNames[uf8::kUserUf8BankCount] = {
+            "Bank 1", "Bank 2", "Bank 3", "Bank 4",
+            "Bank 5", "Bank 6", "Bank 7", "Bank 8",
         };
         char prev[16];
         std::snprintf(prev, sizeof(prev), "%s",
-                      kBankNames[std::clamp(g_uf8EditingBank, 0, 5)]);
+                      kBankNames[std::clamp(g_uf8EditingBank,
+                                            0, uf8::kUserUf8BankCount - 1)]);
         int comboFlags = 0;
         double bw = 100.0;
         ImGui_SetNextItemWidth(ctx, bw);
         if (ImGui_BeginCombo(ctx, "##fxl_uf8_bank", prev, &comboFlags)) {
-            for (int b = 0; b < 6; ++b) {
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
                 bool sel = (b == g_uf8EditingBank);
                 char rowId[24];
                 std::snprintf(rowId, sizeof(rowId),

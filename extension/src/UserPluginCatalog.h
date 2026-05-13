@@ -60,10 +60,18 @@ struct UserUf8BankSlot {
     uint32_t     colour      = 0;
 };
 
-// 6 banks × 8 slots. Index 0 = V-POT bank, 1..5 = SOFT 1..5.
+// 8 banks × 8 slots. Frank 2026-05-13: UF8 Plugin Mode now uses the
+// 8 TopSoftKey cells as bank selectors (was the 6 V-POT/Soft 1-5
+// Sub-Bank cells, which become no-op in Plugin Mode). Bank index
+// 0..7 = TopSoftKey 1..8. The FX-Learn editor's bank combo follows.
+// Older configs (6-bank serialised) load with banks 6+7 empty.
 struct UserUf8BankSet {
-    UserUf8BankSlot banks[6][8] = {};
+    UserUf8BankSlot banks[8][8] = {};
 };
+
+// Bank count constant — surfaces in header so editor + dispatch
+// can share a single source of truth.
+constexpr int kUserUf8BankCount = 8;
 
 // Bank-independent per-strip bindings (Fader / Solo / Cut / Sel). 8 strips.
 struct UserUf8StripBinding {
