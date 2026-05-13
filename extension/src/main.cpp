@@ -5828,6 +5828,25 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
         return r;
     }
 
+    // Layer indicator special-case (Layer1/2/3). These are system state
+    // indicators — they MUST be visible when the layer is active,
+    // regardless of any user-customised brightness on the binding.
+    // Otherwise a stale brightness=Off in the binding would leave the
+    // hardware showing "no layer active" (Frank 2026-05-13: "Layer 3
+    // LED leuchtet nicht"). Allow colour customisation from the
+    // binding, but force the state to caller's intent (Bright when
+    // active, Dim otherwise).
+    if (isLayerIndicator) {
+        const auto bd = uf8::bindings::getBinding(activeLayer, bid);
+        const uint32_t packed = (uint32_t(bd.color[0]) << 16)
+                              | (uint32_t(bd.color[1]) << 8)
+                              |  uint32_t(bd.color[2]);
+        r.state  = active ? uf8::GlobalLedState::Bright
+                          : uf8::GlobalLedState::Dim;
+        r.colour = uf8::ledColourForTrackRgb(packed);
+        return r;
+    }
+
     const auto bd = uf8::bindings::getBinding(activeLayer, bid);
     // Pick the slot the active state is being driven by. Long-press
     // actions (e.g. send_this on FLIP) live in bd.longPress[]; reading
@@ -7480,6 +7499,21 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
 // can highlight the active V-POT/Bank tile.
 int reasixty_softkeyCurrentBank()
 {
+    // When a Quick is engaged on the active layer, the sub-bank
+    // selector follows g_activeSubBank[layer] (V-POT / Soft 1-5
+    // within that user-Quick). Otherwise the SSL plug-in PAGE bank
+    // in g_softKeyBank wins. The schematic ring and the per-binding
+    // header derive their "current bank" from this — without the
+    // user-Quick branch the ring would stick to g_softKeyBank even
+    // after the user navigated sub-banks in a Quick (Frank 2026-05-13
+    // "UF8 → Bindings doesn't reflect sub-bank press").
+    const int layer = uf8::bindings::getActiveLayer();
+    if (layer >= 0 && layer <= 2) {
+        const int q = g_activeQuick[layer].load();
+        if (q >= 0) {
+            return std::clamp(g_activeSubBank[layer].load(), 0, 5);
+        }
+    }
     return std::clamp(g_softKeyBank.load(), 0, 5);
 }
 const char* reasixty_softkeyCurrentBankName()
