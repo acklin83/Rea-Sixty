@@ -500,10 +500,11 @@ void seedFactoryDefaults_(Config& c)
 
     // Quick keys on Layer 1: Q1/Q2 stay hardcoded SSL CS/BC focus —
     // exact pre-2026-05-13 behaviour (Momentary, no user-Quick engage).
-    // Q3 is the only user-fillable Quick on Layer 1 (Toggle).
+    // Q3 is the only user-fillable Quick on Layer 1; defaults to
+    // softkey_bank_3 (= L1 Q3 direct jump, always-engage).
     L1[ButtonId::Quick1] = mkBuiltin("domain_cs",      Behavior::Momentary, "CS");
     L1[ButtonId::Quick2] = mkBuiltin("domain_bc",      Behavior::Momentary, "BC");
-    L1[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle,    "Q3");
+    L1[ButtonId::Quick3] = mkBuiltin("softkey_bank_3", Behavior::Momentary, "Q3");
 
     // Bank scroll (8-strip) and soft-key bank navigation (page).
     L1[ButtonId::BankLeft]  = mkBuiltin("bank_left",  Behavior::Momentary, "BANK <");
@@ -511,16 +512,22 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::PageLeft]  = mkBuiltin("page_left",  Behavior::Momentary, "PAGE <");
     L1[ButtonId::PageRight] = mkBuiltin("page_right", Behavior::Momentary, "PAGE >");
 
-    // Layer 2 + 3 — Quick buttons are pure user-Quick toggles (all three
-    // user-fillable). Without these factory entries the LED resolver
-    // returns Off ("no binding → dark", Frank 2026-05-07) and the
-    // user-Quick render never engages because pressing Q1/Q2/Q3 finds
-    // no builtin to fire.
+    // Layer 2 + 3 — Quick buttons engage the matching (Layer, Quick)
+    // user position via the softkey_bank_N direct-jump builtin.
+    // Without these factory entries the LED resolver returns Off
+    // ("no binding → dark", Frank 2026-05-07) and pressing Q1/Q2/Q3
+    // has no effect.
+    //   L2 Q1=softkey_bank_4, Q2=5, Q3=6
+    //   L3 Q1=softkey_bank_7, Q2=8, Q3=9
     for (int li = 1; li <= 2; ++li) {
         auto& L = c.layers[li].bindings;
-        L[ButtonId::Quick1] = mkBuiltin("quick_select_1", Behavior::Toggle, "Q1");
-        L[ButtonId::Quick2] = mkBuiltin("quick_select_2", Behavior::Toggle, "Q2");
-        L[ButtonId::Quick3] = mkBuiltin("quick_select_3", Behavior::Toggle, "Q3");
+        char nA[24], nB[24], nC[24];
+        std::snprintf(nA, sizeof(nA), "softkey_bank_%d", li * 3 + 1);
+        std::snprintf(nB, sizeof(nB), "softkey_bank_%d", li * 3 + 2);
+        std::snprintf(nC, sizeof(nC), "softkey_bank_%d", li * 3 + 3);
+        L[ButtonId::Quick1] = mkBuiltin(nA, Behavior::Momentary, "Q1");
+        L[ButtonId::Quick2] = mkBuiltin(nB, Behavior::Momentary, "Q2");
+        L[ButtonId::Quick3] = mkBuiltin(nC, Behavior::Momentary, "Q3");
     }
 }
 
@@ -1323,7 +1330,15 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // older factories planted on Layer 2 + 3's Q1/Q2 — those make no
 // sense outside Layer 1 and were Frank's surface complaint
 // ("Quick 1 + 2 show same values as Layer 1 instead of empty").
-constexpr int kCurrentBindingsVersion = 9;
+// v10 (2026-05-13): drop the dead-builtin set entirely
+// (quick_select_X / user_domain_X / show_user_bank / layer_select
+// param-form) and migrate every binding that referenced them to
+// the surviving builtins: quick_select_N → softkey_bank_(L×3+N) for
+// the binding's owning layer; user_domain_N → same; show_user_bank
+// → Noop; "layer_select" + param → layer_select_(param+1). Toggle
+// behaviour for Quick is gone — Frank 2026-05-13: "Toggle für Quick
+// macht null Sinn".
+constexpr int kCurrentBindingsVersion = 10;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -1424,6 +1439,72 @@ void upgradeBackfillQuickAndLayerLeds_(Config& c)
     }
 }
 
+// v9 → v10: scrub the dead builtins out of every binding slot
+// (shortPress + longPress, all modifier rows). Maps each old action
+// to its surviving equivalent. The replacement for quick_select_N /
+// user_domain_N depends on the layer the binding lives on — Quick-N
+// engaged on layer L maps to softkey_bank_(L*3+N+1) (1-indexed).
+void upgradeRetireQuickSelect_(Config& c)
+{
+    auto migrateSlot = [](int layer, ActionSlot& s) {
+        if (s.type != ActionType::Builtin) return;
+        const std::string& a = s.action;
+        auto isQuickFamily = [&](int& outN) {
+            if (a == "quick_select_1" || a == "user_domain_1") { outN = 0; return true; }
+            if (a == "quick_select_2" || a == "user_domain_2") { outN = 1; return true; }
+            if (a == "quick_select_3" || a == "user_domain_3") { outN = 2; return true; }
+            return false;
+        };
+        int qN = -1;
+        if (isQuickFamily(qN)) {
+            char buf[24];
+            std::snprintf(buf, sizeof(buf), "softkey_bank_%d",
+                          layer * 3 + qN + 1);
+            s.action = buf;
+            return;
+        }
+        if (a == "show_user_bank") {
+            // The flat-bank model is gone. The action is a pure no-op.
+            // Clear the slot so the picker shows it as unbound rather
+            // than carrying a phantom builtin reference.
+            s = ActionSlot{};
+            return;
+        }
+        if (a == "layer_select") {
+            // param 0..2 → layer_select_1..3
+            const int p = s.param;
+            if (p >= 0 && p <= 2) {
+                char buf[24];
+                std::snprintf(buf, sizeof(buf), "layer_select_%d", p + 1);
+                s.action = buf;
+                s.param  = 0;
+            } else {
+                s = ActionSlot{};
+            }
+            return;
+        }
+    };
+    for (int li = 0; li < 3; ++li) {
+        for (auto& kv : c.layers[li].bindings) {
+            Binding& bd = kv.second;
+            for (int m = 0; m < kModifierCount; ++m) {
+                migrateSlot(li, bd.shortPress[m]);
+                migrateSlot(li, bd.longPress[m]);
+            }
+            // Behavior was Toggle for the Quick buttons under the old
+            // model — flip to Momentary so the new softkey_bank_N
+            // press semantics match the factory default.
+            const ButtonId id = kv.first;
+            if (id == ButtonId::Quick1 || id == ButtonId::Quick2
+             || id == ButtonId::Quick3) {
+                if (bd.behavior == Behavior::Toggle) {
+                    bd.behavior = Behavior::Momentary;
+                }
+            }
+        }
+    }
+}
+
 // Upgrade hook: existing configs get factory long-press defaults on
 // the FLIP button (send_this / recv_this+Shift) without touching any
 // other field. Skipped if the user has already set their own
@@ -1493,6 +1574,9 @@ void load()
             }
             if (tmp.version < 9) {
                 upgradeBackfillQuickAndLayerLeds_(tmp);
+            }
+            if (tmp.version < 10) {
+                upgradeRetireQuickSelect_(tmp);
             }
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);

@@ -1374,63 +1374,75 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         ImGui_PushItemWidth(ctx, w);
         if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), /*flags*/ nullptr)) {
             // Categorise the builtin catalogue so the dropdown stays
-            // browseable as it grows. Each builtin gets bucketed by
-            // name prefix; the buckets render in the order kCats
-            // dictates with a Separator + disabled "header" entry
-            // between groups. Anything that doesn't match a known
-            // prefix falls into "Other" at the bottom.
+            // browseable as it grows. Buckets render in kCats order
+            // with a Separator + disabled header between groups.
+            // Exhaustive: every builtin maps to a category (no "Other"
+            // catchall). Internals starting with "__" are hidden.
             auto categoryFor = [](const std::string& n) -> const char* {
-                if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
-                    return "Modifiers";
+                if (n.rfind("__", 0) == 0)
+                    return "";  // hidden internals (e.g. __reaper_action__)
+
+                // Layer / Quick / Soft-Key Bank navigation.
                 if (n.rfind("layer_select", 0) == 0)
                     return "Layer";
-                if (n.rfind("encoder_", 0) == 0)
-                    return "Encoder modes";
-                if (n == "bank_left"  || n == "bank_right" ||
-                    n == "page_left"  || n == "page_right")
+                if (n.rfind("softkey_bank_", 0) == 0)
+                    return "Soft-Key Bank";
+
+                // SSL plug-in standard factory actions: CS/BC focus,
+                // plug-in mixer mode toggles, stock soft-key/V-POT
+                // banks. All consolidated per Frank 2026-05-13.
+                if (n == "domain_cs" || n == "domain_bc"
+                 || n == "ssl_strip_mode_toggle"
+                 || n == "ssl_strip_mode_toggle_with_gui"
+                 || n == "ssl_softkey"
+                 || n.rfind("ssl_bank_", 0) == 0)
+                    return "SSL";
+
+                if (n == "flip" || n == "pan_force"
+                 || n == "mixer_toggle" || n == "home"
+                 || n == "folder_mode" || n == "show_only_selected"
+                 || n == "uf8_plugin_mode_toggle")
+                    return "Mode Toggles";
+
+                if (n == "bank_left"  || n == "bank_right"
+                 || n == "page_left"  || n == "page_right")
                     return "Bank / Page";
+
+                if (n.rfind("encoder_", 0) == 0
+                 || n.rfind("instance_", 0) == 0
+                 || n == "select_relative"
+                 || n == "playhead_nudge"
+                 || n == "mouse_scroll")
+                    return "Encoder Modes";
+
                 if (n.rfind("auto_", 0) == 0 || n == "automation_mode")
                     return "Automation";
+
                 if (n.rfind("zoom_", 0) == 0)
                     return "Zoom";
-                if (n.rfind("ssl_", 0) == 0 || n == "softkey_bank_select")
-                    return "SSL Soft-Keys";
-                if (n.rfind("send_", 0) == 0)
-                    return "Sends";
-                if (n.rfind("recv_", 0) == 0)
-                    return "Receives";
-                if (n.rfind("softkey_bank_", 0) == 0
-                 && n != "softkey_bank_select")
-                    return "Soft-Key Bank";
-                if (n.rfind("quick_select_", 0) == 0
-                 || n == "domain_cs" || n == "domain_bc")
-                    return "Quick";
-                if (n == "flip" || n == "pan_force"
-                 || n == "ssl_strip_mode_toggle"
-                 || n == "mixer_toggle" || n == "home"
-                 || n == "folder_mode" || n == "show_only_selected")
-                    return "Mode Toggles";
+
+                if (n == "send_this" || n == "recv_this")
+                    return "Sends / Receives";
+
                 if (n.rfind("selset_", 0) == 0)
                     return "Selection Sets";
+
                 if (n.rfind("brightness_", 0) == 0)
                     return "Brightness";
-                // Deprecated v6 aliases — kept registered so old
-                // configs parse but hidden from the picker.
-                if (n == "show_user_bank"
-                 || n == "user_domain_1" || n == "user_domain_2"
-                 || n == "user_domain_3")
-                    return "";
-                if (n.rfind("__", 0) == 0)
-                    return "";   // hide internals
-                return "Other";
+
+                if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
+                    return "Modifiers";
+
+                // Anything not categorised: hide. New builtins must be
+                // added to the table above explicitly.
+                return "";
             };
             static const char* kCats[] = {
-                "Modifiers", "Mode Toggles", "Layer", "Encoder modes",
-                "Bank / Page", "Automation", "Zoom",
-                "SSL Soft-Keys", "Quick", "Soft-Key Bank", "Brightness",
-                "Sends", "Receives",
-                "Selection Sets",
-                "Other",
+                "Layer", "Soft-Key Bank", "SSL",
+                "Mode Toggles", "Bank / Page", "Encoder Modes",
+                "Automation", "Zoom",
+                "Sends / Receives", "Selection Sets",
+                "Brightness", "Modifiers",
             };
             std::unordered_map<std::string, std::vector<std::string>> bucket;
             for (auto& n : builtinNames()) {

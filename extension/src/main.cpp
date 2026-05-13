@@ -8337,70 +8337,13 @@ void registerBindingHandlers()
         registerBuiltin("domain_bc", d);
     }
 
-    // Quick selector — one builtin per Q (Q1/Q2/Q3). Toggle, per-layer
-    // mutex via g_activeQuick[layer]. Used as the factory binding for
-    // Q3 on every layer, plus Q1/Q2 on Layer 2/3 if the user assigns
-    // them. Layer 1 Q1/Q2 stay on domain_cs / domain_bc; quick_select_1
-    // and quick_select_2 are still registered for editor visibility +
-    // Layer 2/3 use, they just aren't the Layer-1 factory mapping.
-    auto quickSelect = [](int qIdx) {
-        return DescBuilder{
-            [qIdx](bool firing, bool /*pressed*/, int /*param*/) {
-                if (!firing) return;
-                const int layer = uf8::bindings::getActiveLayer();
-                if (layer < 0 || layer > 2) return;
-                const int cur = g_activeQuick[layer].load();
-                g_activeQuick[layer].store(cur == qIdx ? -1 : qIdx);
-                g_bankDirty.store(true);
-                g_softKeyDirty.store(true);
-            },
-            [qIdx](int) {
-                const int layer = uf8::bindings::getActiveLayer();
-                if (layer < 0 || layer > 2) return false;
-                return g_activeQuick[layer].load() == qIdx;
-            },
-            "", false
-        };
-    };
-    {
-        auto d = quickSelect(0); d.displayName = "Quick 1";
-        registerBuiltin("quick_select_1", d);
-    }
-    {
-        auto d = quickSelect(1); d.displayName = "Quick 2";
-        registerBuiltin("quick_select_2", d);
-    }
-    {
-        auto d = quickSelect(2); d.displayName = "Quick 3";
-        registerBuiltin("quick_select_3", d);
-    }
-
-    // Back-compat aliases for v6 configs that still reference
-    // user_domain_1/2/3. Map them to quick_select_* so the named
-    // builtin parses; hidden from the picker via SettingsScreen.cpp
-    // categoryFor().
-    {
-        auto d = quickSelect(0); d.displayName = "User Domain 1";
-        registerBuiltin("user_domain_1", d);
-    }
-    {
-        auto d = quickSelect(1); d.displayName = "User Domain 2";
-        registerBuiltin("user_domain_2", d);
-    }
-    {
-        auto d = quickSelect(2); d.displayName = "User Domain 3";
-        registerBuiltin("user_domain_3", d);
-    }
-
     // Soft-Key Bank 1..9 — direct (Layer, Quick) jumps. Banks 1-3 are
     // Layer 1 Q1-Q3, 4-6 are Layer 2 Q1-Q3, 7-9 are Layer 3 Q1-Q3.
     // Pressing switches the active layer AND engages that layer's
-    // Quick in one shot. Lets the user wire a flat 3 × 3 grid of
-    // hardware buttons that addresses any (Layer, Quick) slot
-    // directly, independent of which layer the user is on right now.
-    // quick_select_* stays around for the "switch quick on current
-    // layer" use case (e.g. 3 buttons that select Q1/Q2/Q3 on
-    // whichever layer happens to be active).
+    // Quick in one shot. Always engages (no toggle — Frank 2026-05-13:
+    // "Toggle für Quick macht null Sinn — dann wären ja alle Soft-Key
+    // Banks leer"). The 9 builtins replace the older quick_select_X
+    // / user_domain_X / show_user_bank set entirely.
     auto softKeyBank = [](int bankN) {
         const int layer = (bankN - 1) / 3;
         const int quick = (bankN - 1) % 3;
@@ -8471,17 +8414,6 @@ void registerBindingHandlers()
     registerBuiltin("layer_select_1", layerSelect(0));
     registerBuiltin("layer_select_2", layerSelect(1));
     registerBuiltin("layer_select_3", layerSelect(2));
-    // Backwards-compat shim — older configs reference layer_select with
-    // param 0..2. Keep working but UI uses the split builtins above.
-    registerBuiltin("layer_select", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            if (param < 0 || param > 2) return;
-            uf8::bindings::setActiveLayer(param);
-            pushLayerLeds(param);
-        },
-        nullptr, "Switch to layer (param 0..2)", true
-    });
 
     // Automation modes — one builtin per REAPER mode so the picker
     // shows self-documenting names. Off and Trim both map to mode 0
@@ -8759,15 +8691,6 @@ void registerBindingHandlers()
         d.displayName = desc;
         registerBuiltin(name, d);
     }
-
-    // SHOW USER BANK — legacy back-compat shim. The flat 12-bank model
-    // is gone; this builtin now does nothing. Kept registered so v6
-    // configs that reference it still parse without warnings.
-    registerBuiltin("show_user_bank", DescBuilder{
-        [](bool /*firing*/, bool /*pressed*/, int /*param*/) {},
-        [](int) { return false; },
-        "Show user soft-key bank (deprecated)", true
-    });
 
     // HOME — one-press exit from every routing toggle. Restores V-Pots
     // and faders to their normal track-volume + pan view. Default for
