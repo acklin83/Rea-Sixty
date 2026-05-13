@@ -3927,6 +3927,36 @@ void setUf8TopSoftKeyLabel_(int bank, std::string lbl)
     });
 }
 
+// True iff bank N has at least one V-Pot binding. Unassigned banks
+// (all 8 strips' vst3Param == -1) are no-function in Plugin Mode
+// (Frank 2026-05-13: "unzugewiesene Soft-Key V-Pot banks no-function
+// machen") — hardware press skipped, mockup click ignored, LED dark.
+bool bankHasVPotBindings_(int bank)
+{
+    if (g_editingMatch.empty()) return false;
+    if (bank < 0 || bank >= uf8::kUserUf8BankCount) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (int s = 0; s < 8; ++s) {
+            if (m.uf8.banks.banks[bank][s].vst3Param >= 0) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// Fill all 8 strips' colour bars in the given bank with a single
+// colour (Frank 2026-05-13: "rechtsklickmenu -> fill all").
+void fillAllStripColours_(int bank, uint32_t rgb)
+{
+    rgb &= 0x00FFFFFFu;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        for (int s = 0; s < 8; ++s) {
+            u.banks.banks[bank][s].stripColour = rgb;
+        }
+    });
+}
+
 // ---- UC1 mockup as the FX-Learn schematic --------------------------------
 //
 // Each entry binds a position on the UC1 face to an SSL 360 Link slot.
@@ -4525,10 +4555,25 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                    0x88CCEEFF, label.c_str());
         }
 
+        // Active-bank ring — Frank 2026-05-13: "anzeigen, welche soft-
+        // key v-pot bank grad aktiv ist". Green outline around the
+        // TopSoftKey whose bank matches the current g_softKeyBank;
+        // matches the layer/quick ring pattern in the Bindings editor
+        // mockup.
+        if (ctrl.strip == reasixty_softKeyBankRaw()) {
+            ImGui_DrawList_AddRect(dl,
+                ox + bx - 2, oy + by - 2,
+                ox + bx + bw + 2, oy + by + bh + 2,
+                0x40C040FF, /*rounding*/ nullptr,
+                /*flags*/ nullptr, /*thickness*/ nullptr);
+        }
+
         // Left-click → bank switch (Frank 2026-05-13: "klick auf UF8
-        // mockup soft-key"). Always-on, regardless of whether the
-        // bank has a binding — the user has to be able to navigate
-        // to an empty bank to start mapping it.
+        // mockup soft-key"). Skip when the bank has no V-Pot bindings
+        // — "unzugewiesene Soft-Key V-Pot banks no-function". Right-
+        // click still works (label / colour editable) so the user can
+        // configure the bank before assigning V-Pots to it.
+        const bool bankAssigned = bankHasVPotBindings_(ctrl.strip);
         char btnId[48];
         std::snprintf(btnId, sizeof(btnId),
                       "##fxl_uf8_tsk_%d", ctrl.strip);
@@ -4536,7 +4581,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         int ibFlags = 0;
         ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);
         int lbtn = 0;
-        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
+        if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0 && bankAssigned) {
             // Mockup TopSoftKey N click = hardware TopSoftKey N press
             // = bank N switch. Strips are 0-indexed → bank index.
             reasixty_setSoftKeyBank(ctrl.strip);
@@ -5037,7 +5082,11 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ox + bx, oy + by, ox + bx + bw, oy + by + bh,
             fill, /*rounding*/ nullptr, /*flags*/ nullptr);
 
-        // Hit area + palette popup
+        // Hit area + palette popup. Left-click = pick this strip's
+        // colour. Right-click = "Fill all" menu (Frank 2026-05-13:
+        // "rechtsklickmenu -> fill all (alle farbbalken dieselbe
+        // farbe)") which opens a separate palette popup that writes
+        // to all 8 strips of the active bank in one shot.
         char btnId[48];
         std::snprintf(btnId, sizeof(btnId),
                       "##fxl_uf8_stripbar_%d", s);
@@ -5052,17 +5101,39 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ImGui_OpenPopup(ctx, popId, nullptr);
         }
         if (ImGui_IsItemHovered(ctx, nullptr)) {
-            char tip[96];
+            char tip[128];
             std::snprintf(tip, sizeof(tip),
-                "Strip %d colour bar — click to pick (bank %d)",
+                "Strip %d colour bar (bank %d)\n"
+                "  left-click: pick this strip\n"
+                "  right-click: fill all 8 strips",
                 s + 1, bank + 1);
             ImGui_SetTooltip(ctx, tip);
         }
+        char ctxId[48];
+        std::snprintf(ctxId, sizeof(ctxId),
+                      "fxl_uf8_stripbar_ctx_%d", s);
+        if (ImGui_BeginPopupContextItem(ctx, ctxId, nullptr)) {
+            if (ImGui_MenuItem(ctx, "Fill all (pick colour)...",
+                               nullptr, nullptr, nullptr))
+            {
+                char fillId[48];
+                std::snprintf(fillId, sizeof(fillId),
+                              "fxl_uf8_stripbar_fillpal_%d", s);
+                ImGui_OpenPopup(ctx, fillId, nullptr);
+            }
+            if (ImGui_MenuItem(ctx, "Clear all", nullptr,
+                               nullptr, nullptr))
+            {
+                fillAllStripColours_(bank, 0);
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        // Per-strip palette popup (left-click destination).
         char popId[48];
         std::snprintf(popId, sizeof(popId),
                       "fxl_uf8_stripbar_pal_%d", s);
         if (ImGui_BeginPopup(ctx, popId, nullptr)) {
-            // "Default" clears the override.
             char clrId[40];
             std::snprintf(clrId, sizeof(clrId),
                           "Default##stripbarclr_%d", s);
@@ -5094,6 +5165,48 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
                         (uint32_t(p.g) <<  8) |
                          uint32_t(p.b);
                     setUf8StripColour_(s, bank, r);
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+                if ((i % perRow) != (perRow - 1) &&
+                    i != paletteCount - 1)
+                {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                }
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        // "Fill all" palette popup (right-click destination). Same
+        // palette swatch grid, but selecting a colour writes to all
+        // 8 strips in the active bank.
+        char fillId[48];
+        std::snprintf(fillId, sizeof(fillId),
+                      "fxl_uf8_stripbar_fillpal_%d", s);
+        if (ImGui_BeginPopup(ctx, fillId, nullptr)) {
+            int paletteCount = 0;
+            const uf8::PaletteRgb* palette =
+                uf8::selPaletteRgb(&paletteCount);
+            const double sw = 26.0;
+            const int perRow = 5;
+            for (int i = 0; i < paletteCount; ++i) {
+                const auto& p = palette[i];
+                const int packed =
+                    (int(p.r) << 24) |
+                    (int(p.g) << 16) |
+                    (int(p.b) <<  8) | 0xFF;
+                char swId[40];
+                std::snprintf(swId, sizeof(swId),
+                              "##stripbarfillpp_%d_%d", s, i);
+                int swFlags = 0;
+                double w = sw, h = sw;
+                if (ImGui_ColorButton(ctx, swId, packed,
+                                      &swFlags, &w, &h))
+                {
+                    const uint32_t r =
+                        (uint32_t(p.r) << 16) |
+                        (uint32_t(p.g) <<  8) |
+                         uint32_t(p.b);
+                    fillAllStripColours_(bank, r);
                     ImGui_CloseCurrentPopup(ctx);
                 }
                 if ((i % perRow) != (perRow - 1) &&

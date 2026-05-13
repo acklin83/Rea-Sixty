@@ -2974,10 +2974,25 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // mirrors the FX-Learn UF8 window's bank-combo behaviour
             // exactly. SSL Soft-Key Bank cells (V-POT/Soft 1-5) are
             // no-op in this mode — handled in softkey_bank_select.
+            //
+            // Unassigned banks (no V-Pot bindings on any of 8 strips)
+            // are skipped — Frank 2026-05-13: "unzugewiesene Soft-Key
+            // V-Pot banks no-function machen".
             if (id >= 0x18 && id <= 0x1F && g_uf8PluginMode.load()) {
                 if (pressed) {
                     const int target = id - 0x18;
-                    if (g_softKeyBank.exchange(target) != target) {
+                    bool anyAssigned = false;
+                    if (auto uctx = userStripCtxFocused_(); uctx.map) {
+                        for (int sIdx = 0; sIdx < 8; ++sIdx) {
+                            if (uctx.map->uf8.banks
+                                .banks[target][sIdx].vst3Param >= 0)
+                            {
+                                anyAssigned = true; break;
+                            }
+                        }
+                    }
+                    if (anyAssigned
+                        && g_softKeyBank.exchange(target) != target) {
                         g_softKeyDirty.store(true);
                         g_bankDirty.store(true);
                         char buf[8];
@@ -4095,17 +4110,35 @@ void pushZonesForVisibleSlots()
             int8_t ledCacheKey;
             if (pluginModeLocal) {
                 // UF8 Plugin Mode: TopSoftKey N = bank-N selector.
-                // Active bank bright, rest dim. Replaces the SSL-mode
-                // "focused param" + user-Quick branches entirely
-                // (Frank 2026-05-13: "nur aktiven bright machen").
+                // Active bank bright, assigned-but-inactive dim,
+                // unassigned banks Off (Frank 2026-05-13: "unzu-
+                // gewiesene Soft-Key V-Pot banks no-function" →
+                // visually dark so the user sees which banks are
+                // empty and can't navigate there).
                 const int activeBank = std::clamp(
                     g_softKeyBank.load(), 0,
                     uf8::kUserUf8BankCount - 1);
+                bool bankAssigned = false;
+                if (auto uctxBank = userStripCtxFocused_(); uctxBank.map) {
+                    for (int sIdx = 0; sIdx < 8; ++sIdx) {
+                        if (uctxBank.map->uf8.banks
+                            .banks[s][sIdx].vst3Param >= 0)
+                        {
+                            bankAssigned = true; break;
+                        }
+                    }
+                }
                 const bool isActive = (s == activeBank);
-                tssk = isActive
-                    ? uf8::TopSoftKeyState::On
-                    : uf8::TopSoftKeyState::Dim;
-                ledCacheKey = static_cast<int8_t>(isActive ? 10 : 9);
+                if (!bankAssigned) {
+                    tssk = uf8::TopSoftKeyState::Off;
+                    ledCacheKey = 11;
+                } else if (isActive) {
+                    tssk = uf8::TopSoftKeyState::On;
+                    ledCacheKey = 10;
+                } else {
+                    tssk = uf8::TopSoftKeyState::Dim;
+                    ledCacheKey = 9;
+                }
             } else if (curQuick >= 0) {
                 // User-Quick context. Three-tier rendering:
                 //   empty slot                       → Dim (row stays
