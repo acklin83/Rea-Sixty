@@ -478,11 +478,11 @@ void seedFactoryDefaults_(Config& c)
                                           255, 255, 255, /*param*/ i);
     }
 
-    // SSL soft-key bank selectors. Default: each switches the SSL
-    // plug-in's PAGE bank (0 = V-POT, 1..5 = Bank N) — same row that
-    // SSL 360°'s PAGE ←/→ navigates between. User can rebind any
-    // button to softkey_bank_select with a different param to jump
-    // directly to a specific bank.
+    // Soft-Key Bank selectors (V-POT + Soft 1..5). All three layers
+    // get the same factory binding — the handler picks SSL plug-in
+    // bank or user-Quick sub-bank automatically based on whether a
+    // Quick is engaged. Without entries on L2/L3 the buttons were
+    // dead there (Frank's complaint, 2026-05-13).
     static const ButtonId kBankIds[6] = {
         ButtonId::VPotBank,
         ButtonId::SoftKey1Bank, ButtonId::SoftKey2Bank,
@@ -492,10 +492,13 @@ void seedFactoryDefaults_(Config& c)
     static const char* kBankLabels[6] = {
         "V-POT", "BANK 1", "BANK 2", "BANK 3", "BANK 4", "BANK 5",
     };
-    for (int i = 0; i < 6; ++i) {
-        L1[kBankIds[i]] = mkBuiltin("softkey_bank_select",
-                                    Behavior::Momentary, kBankLabels[i],
-                                    255, 255, 255, /*param*/ i);
+    for (int li = 0; li < 3; ++li) {
+        auto& L = c.layers[li].bindings;
+        for (int i = 0; i < 6; ++i) {
+            L[kBankIds[i]] = mkBuiltin("softkey_bank_select",
+                                       Behavior::Momentary, kBankLabels[i],
+                                       255, 255, 255, /*param*/ i);
+        }
     }
 
     // Quick keys on Layer 1: Q1/Q2 stay hardcoded SSL CS/BC focus —
@@ -1338,7 +1341,11 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // → Noop; "layer_select" + param → layer_select_(param+1). Toggle
 // behaviour for Quick is gone — Frank 2026-05-13: "Toggle für Quick
 // macht null Sinn".
-constexpr int kCurrentBindingsVersion = 10;
+// v11 (2026-05-13): backfill the Soft-Key Bank selectors
+// (VPotBank / SoftKey1Bank..SoftKey5Bank) on Layer 2 + 3 in
+// historical configs. Without those entries the buttons were
+// dead on the upper layers — pressing them did nothing.
+constexpr int kCurrentBindingsVersion = 11;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -1436,6 +1443,41 @@ void upgradeBackfillQuickAndLayerLeds_(Config& c)
                       "quick_select_2", Behavior::Toggle, "Q2");
         fillIfMissing(L, ButtonId::Quick3,
                       "quick_select_3", Behavior::Toggle, "Q3");
+    }
+}
+
+// v10 → v11: seed the Soft-Key Bank selectors on Layer 2 + 3 for
+// configs whose seedFactoryDefaults_ ran before those bindings
+// moved out of L1-only territory.
+void upgradeBackfillBankSelectorsAllLayers_(Config& c)
+{
+    static const ButtonId kBankIds[6] = {
+        ButtonId::VPotBank,
+        ButtonId::SoftKey1Bank, ButtonId::SoftKey2Bank,
+        ButtonId::SoftKey3Bank, ButtonId::SoftKey4Bank,
+        ButtonId::SoftKey5Bank,
+    };
+    static const char* kBankLabels[6] = {
+        "V-POT", "BANK 1", "BANK 2", "BANK 3", "BANK 4", "BANK 5",
+    };
+    auto fillIfMissing = [](Layer& L, ButtonId id, const char* action,
+                            const char* label, int param) {
+        if (L.bindings.find(id) != L.bindings.end()) return;
+        Binding bd;
+        bd.behavior = Behavior::Momentary;
+        bd.label    = label;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = action;
+        sp.param  = param;
+        L.bindings[id] = bd;
+    };
+    for (int li = 1; li <= 2; ++li) {
+        auto& L = c.layers[li];
+        for (int i = 0; i < 6; ++i) {
+            fillIfMissing(L, kBankIds[i], "softkey_bank_select",
+                          kBankLabels[i], i);
+        }
     }
 }
 
@@ -1577,6 +1619,9 @@ void load()
             }
             if (tmp.version < 10) {
                 upgradeRetireQuickSelect_(tmp);
+            }
+            if (tmp.version < 11) {
+                upgradeBackfillBankSelectorsAllLayers_(tmp);
             }
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);
