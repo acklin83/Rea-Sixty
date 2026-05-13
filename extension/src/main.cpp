@@ -1157,12 +1157,11 @@ void applyInstanceCycle_(int step)
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
-        // SSL Strip Mode is on → the open CS GUI should follow the
-        // cycle. Raise the GUI sync request; the main-thread handler
-        // closes the previous floating window and opens the new CS
-        // hit's GUI (covers built-in AND user-learned CS maps via the
-        // same lookupPluginMapByName path the handler uses).
-        if (g_pluginFaderMode.load()) {
+        // Only follow with the GUI when the "with GUI" variant opened
+        // one (g_csGuiShownTr != nullptr). Plain ssl_strip_mode_toggle
+        // leaves g_csGuiShownTr null, so the instance cycle stays
+        // headless.
+        if (g_csGuiShownTr) {
             g_pluginGuiSyncRequest.store(true);
         }
     } else if (target.dom == uf8::Domain::BusComp) {
@@ -1178,7 +1177,7 @@ void applyInstanceCycle_(int step)
         // so userStripCtxFocused_ resolves to the new instance and
         // the UF8 strips re-route.
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
-        if (g_pluginFaderMode.load()) {
+        if (g_csGuiShownTr) {
             g_pluginGuiSyncRequest.store(true);
         }
     }
@@ -2561,14 +2560,13 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
     // UC1 until a new one is picked — matches SSL 360°'s Focus Mode.
     if (sel && g_uc1_surface) {
         g_uc1_surface->setFocusedTrack(tr);
-        // SSL Strip Mode is on → the open CS GUI should switch to the
-        // newly selected track's CS plug-in. Raise the GUI sync request
-        // so the main-thread handler closes the previous floating
-        // window and opens the new track's CS GUI (built-in or
-        // user-learned via lookupPluginMapByName). Frank 2026-05-12
+        // When the "with GUI" variant opened a CS GUI, follow the
+        // track selection so the floating window switches to the new
+        // track's CS plug-in. Plain ssl_strip_mode_toggle (no GUI)
+        // leaves g_csGuiShownTr null → no GUI churn. Frank 2026-05-12
         // "GUI bei select eines anderen channels auf den neu
         // gewählten wechseln".
-        if (g_pluginFaderMode.load()) {
+        if (g_csGuiShownTr) {
             g_pluginGuiSyncRequest.store(true);
         }
     }

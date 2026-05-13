@@ -1770,6 +1770,17 @@ bool dispatch(ButtonId id, bool pressed)
     } else {  // Behavior::Toggle — fires only on press-edge, uses live mod.
         if (pressed) slotIdx = static_cast<int>(currentModifierSnapshot());
     }
+    // Noop-slot fallback: a Hold-bound modifier button (mod_shift on Fine)
+    // sees its own held state in currentModifierSnapshot(), selects the
+    // (empty) Shift slot, and the release handler never fires — leaving
+    // the modifier stuck permanently. Fall back to Plain so both press
+    // and release edges always reach the handler.
+    if (bd.shortPress[slotIdx].type == ActionType::Noop
+        && slotIdx != static_cast<int>(Modifier::Plain)
+        && bd.shortPress[static_cast<int>(Modifier::Plain)].type != ActionType::Noop)
+    {
+        slotIdx = static_cast<int>(Modifier::Plain);
+    }
     bool firing;
     switch (bd.behavior) {
         case Behavior::Momentary: firing = pressed; break;
