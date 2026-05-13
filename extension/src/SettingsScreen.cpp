@@ -5058,7 +5058,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
     using uf8::user_plugins::get;
     const int bank = reasixty_softKeyBankRaw();
 
-    constexpr float kBarH = 8.0f;
+    constexpr float kBarH = 16.0f;
     for (int s = 0; s < 8; ++s) {
         const float cx   = uf8StripCx_(s);
         const float colX = cx - kUf8StripW / 2.0f;
@@ -5109,6 +5109,13 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 s + 1, bank + 1);
             ImGui_SetTooltip(ctx, tip);
         }
+        // Defer-open flag for the Fill-all palette popup. Calling
+        // ImGui_OpenPopup directly inside the context-menu's
+        // MenuItem callback gets eaten — the context popup closes
+        // on click and the new popup's state never reaches the next
+        // frame. Stash the request and re-issue OpenPopup after
+        // EndPopup at the outer scope.
+        static int s_pendingFillAllStrip = -1;
         char ctxId[48];
         std::snprintf(ctxId, sizeof(ctxId),
                       "fxl_uf8_stripbar_ctx_%d", s);
@@ -5116,10 +5123,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
             if (ImGui_MenuItem(ctx, "Fill all (pick colour)...",
                                nullptr, nullptr, nullptr))
             {
-                char fillId[48];
-                std::snprintf(fillId, sizeof(fillId),
-                              "fxl_uf8_stripbar_fillpal_%d", s);
-                ImGui_OpenPopup(ctx, fillId, nullptr);
+                s_pendingFillAllStrip = s;
             }
             if (ImGui_MenuItem(ctx, "Clear all", nullptr,
                                nullptr, nullptr))
@@ -5127,6 +5131,13 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 fillAllStripColours_(bank, 0);
             }
             ImGui_EndPopup(ctx);
+        }
+        if (s_pendingFillAllStrip == s) {
+            s_pendingFillAllStrip = -1;
+            char fillId[48];
+            std::snprintf(fillId, sizeof(fillId),
+                          "fxl_uf8_stripbar_fillpal_%d", s);
+            ImGui_OpenPopup(ctx, fillId, nullptr);
         }
 
         // Per-strip palette popup (left-click destination).
