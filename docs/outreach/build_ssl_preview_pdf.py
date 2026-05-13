@@ -3,6 +3,9 @@
 Builds rea-sixty-ssl-preview.pdf — a project explainer + user manual
 preview document intended to share with SSL.
 
+Rewritten 2026-05-13 against origin/main. Replaces the earlier draft;
+all content reflects what actually ships today.
+
 Regenerate with:
     python3 docs/outreach/build_ssl_preview_pdf.py
 """
@@ -33,73 +36,52 @@ OUT = Path(__file__).parent / "rea-sixty-ssl-preview.pdf"
 
 INK = colors.HexColor("#111419")
 MUTED = colors.HexColor("#5a6270")
-ACCENT = colors.HexColor("#009FD5")  # REAPER default blue, also a UF8 palette entry
+ACCENT = colors.HexColor("#009FD5")   # REAPER default blue, also UF8 palette 0x05
+OK = colors.HexColor("#1f8a4c")
+WAIT = colors.HexColor("#b87a00")
 RULE = colors.HexColor("#d6dadf")
 PANEL = colors.HexColor("#f4f6f8")
+DEEP = colors.HexColor("#0d2436")
 
 base = getSampleStyleSheet()
 
-H1 = ParagraphStyle(
-    "H1", parent=base["Heading1"],
-    fontName="Helvetica-Bold", fontSize=22, leading=26,
-    textColor=INK, spaceBefore=0, spaceAfter=10,
-)
-H2 = ParagraphStyle(
-    "H2", parent=base["Heading2"],
-    fontName="Helvetica-Bold", fontSize=14, leading=18,
-    textColor=INK, spaceBefore=14, spaceAfter=6,
-)
-H3 = ParagraphStyle(
-    "H3", parent=base["Heading3"],
-    fontName="Helvetica-Bold", fontSize=11, leading=14,
-    textColor=INK, spaceBefore=10, spaceAfter=3,
-)
-BODY = ParagraphStyle(
-    "Body", parent=base["BodyText"],
-    fontName="Helvetica", fontSize=10, leading=14,
-    textColor=INK, alignment=TA_JUSTIFY, spaceAfter=6,
-)
-BODY_L = ParagraphStyle(
-    "BodyL", parent=BODY, alignment=TA_LEFT,
-)
-SMALL = ParagraphStyle(
-    "Small", parent=BODY, fontSize=8.5, leading=11, textColor=MUTED,
-)
-LEAD = ParagraphStyle(
-    "Lead", parent=BODY, fontSize=11, leading=15, spaceAfter=10,
-)
-MONO = ParagraphStyle(
-    "Mono", parent=BODY, fontName="Courier", fontSize=9, leading=12,
-    textColor=INK, alignment=TA_LEFT, spaceAfter=6,
-)
-BULLET = ParagraphStyle(
-    "Bullet", parent=BODY, leftIndent=14, bulletIndent=2,
-    spaceAfter=2, alignment=TA_LEFT,
-)
-EYEBROW = ParagraphStyle(
-    "Eyebrow", parent=BODY, fontSize=8.5, leading=11,
-    textColor=ACCENT, alignment=TA_LEFT,
-    fontName="Helvetica-Bold", spaceAfter=2,
-)
+H1 = ParagraphStyle("H1", parent=base["Heading1"],
+                    fontName="Helvetica-Bold", fontSize=22, leading=26,
+                    textColor=INK, spaceBefore=0, spaceAfter=10)
+H2 = ParagraphStyle("H2", parent=base["Heading2"],
+                    fontName="Helvetica-Bold", fontSize=14, leading=18,
+                    textColor=INK, spaceBefore=14, spaceAfter=6)
+H3 = ParagraphStyle("H3", parent=base["Heading3"],
+                    fontName="Helvetica-Bold", fontSize=11, leading=14,
+                    textColor=INK, spaceBefore=10, spaceAfter=3)
+BODY = ParagraphStyle("Body", parent=base["BodyText"],
+                      fontName="Helvetica", fontSize=10, leading=14,
+                      textColor=INK, alignment=TA_JUSTIFY, spaceAfter=6)
+BODY_L = ParagraphStyle("BodyL", parent=BODY, alignment=TA_LEFT)
+SMALL = ParagraphStyle("Small", parent=BODY, fontSize=8.5, leading=11, textColor=MUTED)
+LEAD = ParagraphStyle("Lead", parent=BODY, fontSize=11, leading=15, spaceAfter=10)
+MONO = ParagraphStyle("Mono", parent=BODY, fontName="Courier", fontSize=9,
+                      leading=12, textColor=INK, alignment=TA_LEFT, spaceAfter=6)
+BULLET = ParagraphStyle("Bullet", parent=BODY, leftIndent=14, bulletIndent=2,
+                        spaceAfter=2, alignment=TA_LEFT)
+EYEBROW = ParagraphStyle("Eyebrow", parent=BODY, fontSize=8.5, leading=11,
+                         textColor=ACCENT, alignment=TA_LEFT,
+                         fontName="Helvetica-Bold", spaceAfter=2)
 
 
-# ---------- page frame -----------------------------------------------------
+# ---------- page chrome ----------------------------------------------------
 
 def _page_chrome(canvas, doc):
     canvas.saveState()
     w, h = A4
-    # header rule
     canvas.setStrokeColor(RULE)
     canvas.setLineWidth(0.4)
     canvas.line(2.0 * cm, h - 1.6 * cm, w - 2.0 * cm, h - 1.6 * cm)
-    # header text
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(MUTED)
-    canvas.drawString(2.0 * cm, h - 1.35 * cm,
-                      "Rea-Sixty  ·  SSL preview")
+    canvas.drawString(2.0 * cm, h - 1.35 * cm, "Rea-Sixty  ·  SSL preview")
     canvas.drawRightString(w - 2.0 * cm, h - 1.35 * cm,
                            "Independent open-source REAPER extension for UF8 / UC1")
-    # footer
     canvas.line(2.0 * cm, 1.6 * cm, w - 2.0 * cm, 1.6 * cm)
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(MUTED)
@@ -112,10 +94,8 @@ def _page_chrome(canvas, doc):
 def _cover(canvas, doc):
     canvas.saveState()
     w, h = A4
-    # accent bar
     canvas.setFillColor(ACCENT)
     canvas.rect(0, h - 1.0 * cm, w, 1.0 * cm, fill=1, stroke=0)
-    # bottom note
     canvas.setStrokeColor(RULE)
     canvas.setLineWidth(0.4)
     canvas.line(2.0 * cm, 1.6 * cm, w - 2.0 * cm, 1.6 * cm)
@@ -138,10 +118,8 @@ def build_doc():
         author="Rea-Sixty project (acklin83/reaper-uf8)",
         subject="Project explainer and user-manual preview for Solid State Logic",
     )
-    frame = Frame(
-        doc.leftMargin, doc.bottomMargin,
-        doc.width, doc.height, id="body",
-    )
+    frame = Frame(doc.leftMargin, doc.bottomMargin,
+                  doc.width, doc.height, id="body")
     doc.addPageTemplates([
         PageTemplate(id="cover", frames=frame, onPage=_cover),
         PageTemplate(id="body",  frames=frame, onPage=_page_chrome),
@@ -160,15 +138,16 @@ def bullets(items, style=BULLET):
 
 
 def code(text):
-    # escape minimal HTML entities
     safe = (text.replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;"))
     safe = safe.replace("\n", "<br/>")
-    return Paragraph(f'<font face="Courier" size="9">{safe}</font>',
-                     ParagraphStyle("c", parent=MONO, backColor=PANEL,
-                                    borderPadding=6, leftIndent=0,
-                                    spaceBefore=2, spaceAfter=10))
+    return Paragraph(
+        f'<font face="Courier" size="9">{safe}</font>',
+        ParagraphStyle("c", parent=MONO, backColor=PANEL,
+                       borderPadding=6, leftIndent=0,
+                       spaceBefore=2, spaceAfter=10),
+    )
 
 
 def panel(flowables, bg=PANEL, pad=8):
@@ -218,11 +197,20 @@ def grid_table(headers, rows, col_widths):
     return t
 
 
+def badge(text, color=OK):
+    return Paragraph(
+        f'<font face="Helvetica-Bold" size="8" color="white">'
+        f'&nbsp;{text}&nbsp;</font>',
+        ParagraphStyle("badge", parent=BODY, backColor=color,
+                       alignment=TA_LEFT, leading=11,
+                       borderPadding=2, leftIndent=0))
+
+
 # ---------- content --------------------------------------------------------
 
 def cover_page():
     s = []
-    s.append(Spacer(1, 5.5 * cm))
+    s.append(Spacer(1, 5.0 * cm))
     s.append(p("Project preview &amp; user manual",
                ParagraphStyle("eyebrow_cover", parent=EYEBROW, fontSize=10)))
     s.append(p("Rea-Sixty",
@@ -236,14 +224,17 @@ def cover_page():
     s.append(panel([
         p("Prepared for Solid State Logic as a courtesy preview ahead of "
           "any formal correspondence. The aim is transparency: what the "
-          "project is, how it works, what it does today, and what it asks "
-          "of SSL — nothing more.", BODY),
+          "project is, how it works, what ships today, and what it asks "
+          "of SSL &mdash; nothing more.", BODY),
     ], bg=PANEL))
-    s.append(Spacer(1, 1.5 * cm))
+    s.append(Spacer(1, 1.2 * cm))
     s.append(kv_table([
         ("Project", "Rea-Sixty (repository: <i>reaper-uf8</i>)"),
-        ("Type", "REAPER extension &mdash; C++, csurf_inst, libusb"),
-        ("Status", "Working, near feature-complete on macOS (Phase 1 + Phase 2)"),
+        ("Type", "REAPER extension &mdash; C++, csurf_inst, libusb, Dear ImGui"),
+        ("Status",
+         "macOS: feature-complete for Phase 1 &amp; 2; Plug-in Mixer + "
+         "Settings shipped (Phase 2.6 / 2.7); FX-Learn production-ready."),
+        ("Hardware", "SSL UF8 (PID 0x0021) and SSL UC1 (PID 0x0023)"),
         ("Source", '<font color="#009FD5">github.com/acklin83/reaper-uf8</font>'),
         ("License", "MIT &mdash; original code only, no SSL material redistributed"),
         ("Document date", "2026-05-13"),
@@ -259,22 +250,23 @@ def toc_page():
     s.append(Spacer(1, 4 * mm))
     items = [
         ("PART 1", "PROJECT"),
-        ("1.", "Executive summary"),
-        ("2.", "Why this exists"),
-        ("3.", "How it works"),
-        ("4.", "What works today"),
-        ("5.", "Legal posture"),
-        ("6.", "Asks of SSL"),
+        ("1.",  "Executive summary"),
+        ("2.",  "Why this exists"),
+        ("3.",  "How it works"),
+        ("4.",  "Feature matrix"),
+        ("5.",  "Legal posture"),
+        ("6.",  "Asks of SSL"),
         ("PART 2", "USER MANUAL (preview)"),
-        ("7.", "Installation"),
-        ("8.", "First run &mdash; what to expect"),
-        ("9.", "Day-to-day operation"),
-        ("10.","UF8 button &amp; LED reference"),
-        ("11.","UC1 reference"),
-        ("12.","Bindings &amp; Learn Mode"),
-        ("13.","Plug-in Mixer window &amp; Settings"),
-        ("14.","Troubleshooting"),
-        ("15.","Uninstall"),
+        ("7.",  "Installation"),
+        ("8.",  "First run &mdash; what to expect"),
+        ("9.",  "Day-to-day operation"),
+        ("10.", "Layers, modifiers, and the Channel encoder"),
+        ("11.", "SSL Strip Mode and Instance Cycle"),
+        ("12.", "FX-Learn and the Plug-in Mixer window"),
+        ("13.", "Settings screen"),
+        ("14.", "Bindings file &amp; CSI import"),
+        ("15.", "Troubleshooting"),
+        ("16.", "Uninstall"),
     ]
     rows = []
     for n, name in items:
@@ -304,70 +296,70 @@ def toc_page():
     return s
 
 
-def part_one_project():
+# ----- Part 1: Project -----
+
+def part_project():
     s = []
 
     # 1. Executive summary
     s.append(p("1. Executive summary", H2))
     s.append(p(
         "Rea-Sixty is an independent open-source REAPER extension that "
-        "drives the SSL UF8 and UC1 directly from REAPER. It opens the "
-        "controllers' vendor-USB interface, replays the host-side init "
-        "sequence, and emits the same Plug-in-Mixer-mode frames that SSL "
-        "360&deg; produces &mdash; reading track state from REAPER's C API "
-        "(name, colour, fader, pan, sends, automation, focused FX, gain "
-        "reduction). The result: REAPER users get the colour-aware "
-        "scribble-strip experience natively, without an SSL VST3 on every "
-        "track, and the SSL Bus Compressor's GR meter on the UC1 follows "
-        "audio-driven gain reduction on the focused track.", LEAD))
+        "drives the SSL UF8 and UC1 directly. It opens the controllers' "
+        "vendor-USB interface, replays the host-side init sequence we "
+        "observed SSL 360&deg; sending, and runs the keepalive cycle the "
+        "Plug-in Mixer rendering path requires. From there everything "
+        "&mdash; track name, colour, fader, pan, sends, automation, "
+        "focused FX parameters, audio-driven gain reduction &mdash; "
+        "comes from REAPER's C API.", LEAD))
     s.append(p(
-        "The extension is a single shared library (<font face='Courier'>"
-        "reaper_uf8.dylib</font> on macOS), MIT-licensed. It does not "
-        "redistribute, decompile, or reproduce any SSL software, plug-in, "
-        "firmware, or trademark; all interoperability is established by "
-        "passive USB observation of legally purchased SSL hardware running "
-        "legally licensed SSL 360&deg;.", BODY))
+        "On macOS the project is feature-complete for its first two "
+        "phases. Phase&nbsp;1 (UF8 standalone replacement) and "
+        "Phase&nbsp;2 (UC1 parameter mirror + GR pipeline) ship today. "
+        "Phase&nbsp;2.6 (an in-REAPER Plug-in Mixer window) and "
+        "Phase&nbsp;2.7 (an in-app Settings screen) are also shipping "
+        "&mdash; both render in a vendored Dear ImGui inside a dockable "
+        "SWELL window and follow the user's REAPER theme.", BODY))
+    s.append(p(
+        "The extension ships as a single shared library "
+        "(<font face='Courier'>reaper_uf8.dylib</font> on macOS) under "
+        "the MIT licence. It does not redistribute, decompile, or "
+        "reproduce SSL software, plug-in, firmware, or trademarks. All "
+        "interoperability rests on passive USB observation of legally "
+        "purchased SSL hardware running legally licensed SSL 360&deg;.", BODY))
 
     # 2. Why
     s.append(p("2. Why this exists", H2))
     s.append(p(
-        "The SSL UF8's scribble strips can render DAW track colours, but "
-        "only when the controller is in Plug-in Mixer Mode &mdash; which in "
-        "turn requires an SSL VST3 (Channel Strip 2 / 4K B / E / G, 360 "
-        "Link, or Bus Compressor) on every track that should appear. For "
-        "100+ track REAPER sessions this is impractical, and it is the most "
-        "frequent feature request we hear from REAPER users with UF8s.", BODY))
+        "The UF8's scribble strips can render DAW track colours, but "
+        "only when the controller is in Plug-in Mixer Mode, which in turn "
+        "requires an SSL VST3 (Channel Strip 2 / 4K B / E / G, 360 Link, "
+        "or Bus Compressor) on every track that should appear. For "
+        "100+ track REAPER sessions this is impractical, and it is the "
+        "single most common complaint we hear from REAPER users with a "
+        "UF8 on the desk. MCU and HUI carry no colour at all, so any "
+        "&ldquo;just talk MCU&rdquo; workaround is dead on arrival for "
+        "the colour use case.", BODY))
     s.append(p(
-        "MCU and HUI cannot carry colour at all, so any &ldquo;just talk "
-        "MCU&rdquo; workaround is dead on arrival for the colour use case. "
-        "And SSL 360&deg; holds the UF8's vendor-USB interface with an "
-        "exclusive claim, so a quiet side-car next to 360&deg; is not "
-        "possible either. The only technically honest path was to "
-        "re-implement 360&deg;'s host-side responsibilities for REAPER "
-        "specifically &mdash; which is exactly what Rea-Sixty does.", BODY))
+        "SSL 360&deg; also holds the UF8's vendor-USB interface with an "
+        "exclusive claim, so coexisting next to it is not possible. The "
+        "only honest path was to re-implement 360&deg;'s host-side "
+        "responsibilities for REAPER specifically &mdash; which is what "
+        "Rea-Sixty does.", BODY))
 
     # 3. How
     s.append(p("3. How it works", H2))
     s.append(p(
-        "Rea-Sixty registers with REAPER as a <font face='Courier'>"
-        "csurf_inst</font> (<font face='Courier'>"
-        "IReaperControlSurface</font>). On load it enumerates SSL devices "
-        "via libusb (VID <font face='Courier'>0x31E9</font>, PIDs "
-        "<font face='Courier'>0x0021</font> UF8 / <font face='Courier'>"
-        "0x0023</font> UC1), claims the vendor interface, and replays the "
-        "init sequence we observed 360&deg; sending at startup. It then "
-        "runs the keepalive cycle the controllers require to stay in "
-        "Plug-in Mixer mode, and pushes frames driven by REAPER state on a "
-        "single timer.", BODY))
-    s.append(p(
-        "Inputs from the controller (button events, fader motion + touch, "
-        "V-Pot deltas, UC1 knob deltas) are parsed from vendor-USB packets "
-        "and dispatched through the REAPER C API "
-        "(<font face='Courier'>CSurf_OnVolumeChange</font>, "
-        "<font face='Courier'>CSurf_OnMuteChange</font>, "
-        "<font face='Courier'>Main_OnCommand</font>, "
-        "<font face='Courier'>TrackFX_SetParam</font>, &hellip;). No "
-        "virtual MIDI port, no Control Surface Integrator, no MCU bridge.", BODY))
+        "Rea-Sixty registers with REAPER as a "
+        "<font face='Courier'>csurf_inst</font>. On load it enumerates "
+        "SSL devices over libusb (VID&nbsp;0x31E9; PID&nbsp;0x0021 UF8, "
+        "PID&nbsp;0x0023 UC1), claims the vendor interface, and replays "
+        "the init sequence. From there a single ~30&nbsp;Hz timer drives "
+        "everything: inbound vendor-USB frames are parsed into press / "
+        "release / fader / V-Pot / knob events and dispatched through "
+        "the REAPER C API; outbound state is pushed to the controllers "
+        "as scribble text, colour bars, LED frames, fader motor, GR and "
+        "VU meters.", BODY))
     s.append(panel([
         p("Topology", ParagraphStyle("ph", parent=H3, spaceBefore=0)),
         code("REAPER  <->  Rea-Sixty extension (csurf_inst)  <->  UF8 / UC1 (vendor-USB, libusb)"),
@@ -375,67 +367,121 @@ def part_one_project():
         code("REAPER  <->  CSI  <->  virtual MCU MIDI  <->  bridge  <->  UF8"),
     ]))
 
-    # The decoded surface
     s.append(p("Decoded protocol surface", H3))
-    s.append(p("The following are implemented and verified on the hardware:", BODY))
     for b in [
-        "Frame format and checksum on both endpoints (<font face='Courier'>FF &lt;cmd&gt; &lt;len&gt; &lt;data&gt; &lt;chk&gt;</font>).",
-        "UF8 vendor init sequence + Plug-in-Mixer keepalive pair (13&nbsp;B / 64&nbsp;B cycling, ~150&nbsp;ms).",
-        "Per-strip TFT colour command and the 16-entry palette (12 of 16 indices mapped; remainder snap nearest-RGB).",
+        "UF8 + UC1 frame format and checksum "
+        "(<font face='Courier'>FF &lt;cmd&gt; &lt;len&gt; &lt;data&gt; &lt;chk&gt;</font>).",
+        "UF8 vendor init sequence plus the 13&nbsp;B / 64&nbsp;B Plug-in-Mixer keepalive pair (~150&nbsp;ms cadence).",
+        "Per-strip TFT colour command, the 16-entry palette, and a chromaticity-quantising matcher for arbitrary REAPER colours.",
+        "All Plug-in Mixer scribble zones: track name, parameter label, value line, channel-strip type, O/PdB fader readout, channel number, colour bar.",
         "Per-strip SEL / MUTE / SOLO LED frames; transport LEDs; 12-segment metering frame.",
-        "Display zones: scribble text, parameter label, value line, channel-strip type, O/PdB readout, channel-number, color bar.",
-        "UF8 inbound button-ID map (per-strip + globals, full table on page 9).",
-        "UC1 inbound button + knob ID map; outbound LED frames per cell; GR meter (16-bit BE dB&times;10), VU bands, display zones.",
+        "UF8 inbound button-ID map (per-strip + globals); fader 16-bit position + touch.",
+        "UC1 inbound button + knob IDs (stable across plug-in contexts); GR meter "
+        "(16-bit BE dB&times;10, ladder calibrated to the SSL plug-in's native 0–3–6–10–14–20&nbsp;dB scale); VU bars; display zones.",
+        "UF8 + UC1 keepalive cadence (loss = device times out / reverts to idle screen).",
     ]:
         s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
+    s.append(p("Key components in the source tree", H3))
+    s.append(grid_table(
+        ["Component", "Owns"],
+        [
+            ["<font face='Courier'>Protocol</font>, <font face='Courier'>UC1Protocol</font>", "Frame parser / builder; checksum; init bytes; keepalive."],
+            ["<font face='Courier'>UF8Device</font>, <font face='Courier'>UC1Device</font>", "libusb I/O; per-device init replay; outbound push pipeline."],
+            ["<font face='Courier'>ColorSync</font>",          "Polls <font face='Courier'>GetTrackColor()</font>; per-bank colour push; chromaticity-aware palette match."],
+            ["<font face='Courier'>UC1Surface</font>, <font face='Courier'>PluginMap</font>, <font face='Courier'>UserPluginCatalog</font>", "Focused-FX parameter mirror; built-in SSL plug-in tables and runtime user maps."],
+            ["<font face='Courier'>FocusedParam</font>",        "Last-touched / focused FX tracking; instance bookkeeping."],
+            ["<font face='Courier'>Bindings</font>",            "Press/release dispatch, modifier-aware lookup, multi-action chains, Learn mode."],
+            ["<font face='Courier'>MixerWindow</font>, <font face='Courier'>MixerLayout</font>", "Dockable Dear ImGui Plug-in Mixer (8 channel-strip columns + Bus-Comp rack)."],
+            ["<font face='Courier'>SettingsScreen</font>",      "Tabbed Settings UI inside MixerWindow."],
+            ["<font face='Courier'>ThemeBridge</font>",         "Polls REAPER theme; live-updates ImGui colours."],
+            ["<font face='Courier'>VirtualNotch</font>",        "EQ-gain soft-touch (magnet-only behaviour for 0 dB)."],
+        ],
+        col_widths=[5.5 * cm, 11.5 * cm],
+    ))
     return s
 
 
-def part_one_status():
+def part_feature_matrix():
     s = []
-    # 4. What works today
-    s.append(p("4. What works today", H2))
+    s.append(p("4. Feature matrix", H2))
     s.append(p(
-        "Status as of the document date. macOS is the lead platform; "
-        "Windows and Linux ports are tracked but not yet shipped.", BODY))
+        "Status as of the document date. All entries are macOS; "
+        "Windows and Linux are tracked but not yet shipped.", BODY))
 
     rows = [
-        ["UF8 standalone replacement",        "Shipping",   "Phase 1 complete &mdash; no SSL 360&deg; required for UF8."],
-        ["DAW-layer scribble strip colours",  "Shipping",   "Polled from <font face='Courier'>GetTrackColor()</font>; pushed on bank shifts. Not offered by SSL 360&deg;."],
-        ["Full 16-bit fader resolution",      "Shipping",   "Direct <font face='Courier'>CSurf_OnVolumeChange</font>; no MCU 14-bit lossy stage."],
-        ["UC1 parameter mirror (focused FX)", "Shipping",   "Knobs follow Channel Strip 2 / Bus Comp 2 on the focused track; values mirrored on the UC1 displays."],
-        ["UC1 GR display (audio-driven)",     "Shipping",   "Driven by <font face='Courier'>TrackFX_GetNamedConfigParm(\"GainReduction_dB\", &hellip;)</font> &mdash; the PreSonus VST3 GR extension that REAPER exposes for the SSL plug-ins."],
-        ["Bindings (per-strip / transport / global / soft-keys / Learn)", "Shipping", "12 user soft-key banks + the 6 SSL stock banks; modifier combos."],
-        ["Generic FX-parameter learn",        "Shipping",   "GUID-keyed; survives FX-slot reorders. Works for any VST/JS/AU param."],
-        ["On-screen Plug-in Mixer + Settings", "Shipping",  "Vendored Dear ImGui in a dockable SWELL window; picks up the user's REAPER theme."],
-        ["Folder mode + selection sets + send/receive layers", "Landing", "Phase 2.5 in progress."],
-        ["Windows / Linux ports",             "Planned",    "Phase 4. Capture workflow already runs on Windows."],
+        ["UF8 standalone replacement (Phase&nbsp;1)",
+         "Shipping",
+         "No SSL 360&deg; required for UF8; init, keepalive, scribble, colour, LEDs, meters, fader motor, buttons all native."],
+        ["DAW-layer scribble-strip colours",
+         "Shipping",
+         "Polled from REAPER on bank shift / theme change. Chromaticity-quantising palette match (incl. dark-colour HSV polar matching)."],
+        ["Full 16-bit fader resolution",
+         "Shipping",
+         "Direct <font face='Courier'>CSurf_OnVolumeChange</font>; no MCU 14-bit lossy stage."],
+        ["UC1 parameter mirror (Phase&nbsp;2)",
+         "Shipping",
+         "Knobs follow the focused track's SSL Channel Strip&nbsp;2 / Bus Compressor&nbsp;2 / 4K&nbsp;B&nbsp;/&nbsp;E&nbsp;/&nbsp;G in real time. Values mirrored back to UC1 displays."],
+        ["UC1 + UF8 GR meter (audio-driven)",
+         "Shipping",
+         "Driven by <font face='Courier'>TrackFX_GetNamedConfigParm(\"GainReduction_dB\", &hellip;)</font>. UC1 and UF8 share a 30-sub-step ladder calibrated to the SSL plug-in's 3 / 6 / 10 / 14 / 20&nbsp;dB scale."],
+        ["SSL Strip Mode",
+         "Shipping",
+         "Shift+Plugin toggles fader / V-Pot from DAW track to the focused SSL plug-in's output level / pan. Variant name (CS2 / 4K&nbsp;B / &hellip;) shown in the scribble strip."],
+        ["Instance cycle",
+         "Shipping",
+         "Channel encoder + modifier walks instances within a domain (Channel Strip / Bus Comp). Includes UF8-only user-mapped plug-ins."],
+        ["Bindings + Learn mode",
+         "Shipping",
+         "Per-strip, transport, global, soft-keys per layer. Modifier combos; multi-action chains; per-binding label / colour / brightness overrides; release-time fallback to press-time binding."],
+        ["12 user Soft-Key Banks + 6 SSL stock banks",
+         "Shipping",
+         "Editable in the Settings screen. Bank tabs and slot headers use stable IDs so ImGui input fields keep focus across keystrokes."],
+        ["FX-Learn (any VST / JS / AU)",
+         "Shipping",
+         "GUID-keyed bindings survive FX-slot reorders. Param-snapshot persistence so a learned slot stays editable without the live FX. &ldquo;Fill sequential&rdquo; / &ldquo;Fill sequential (right)&rdquo; for batch assignment. UF8-only or UC1-shared mode flag per entry."],
+        ["EXT_FUNCS V-Pot push builtins",
+         "Shipping",
+         "Auto-Makeup, Width Mode, Width Freq, Filters In &mdash; built-in extensions for UC1 Comp / Gate page that SSL 360&deg; reaches via a hidden right-click."],
+        ["Virtual notch (EQ gains, pan)",
+         "Shipping",
+         "Magnet-only soft-touch around 0&nbsp;dB / centre; passes through on continued motion."],
+        ["Plug-in Mixer window (Phase&nbsp;2.6)",
+         "Shipping",
+         "Dockable Dear ImGui window, 8 channel-strip columns + Bus-Comp rack. Reads track colours, focused-FX params, audio meters live."],
+        ["Settings screen (Phase&nbsp;2.7)",
+         "Shipping",
+         "Tabbed UI: Device, Bindings, Soft-Key Banks, FX-Learn, Modes, Selection Sets, About. CSI-import preview for migration."],
+        ["Selection Sets (8 slots)",
+         "Partial",
+         "UI shell and data model present (GUID-keyed, project-local). End-to-end recall ergonomics still under iteration."],
+        ["Folder Mode (Phase&nbsp;2.5a)",
+         "Backlog",
+         "Designed; not yet implemented."],
+        ["Send / Receive layers",
+         "Partial / Backlog",
+         "UF8 Sends focus-variant is in; full Sends / Receives layer flow still on the backlog."],
+        ["Windows / Linux ports (Phase&nbsp;4)",
+         "Planned",
+         "Capture workflow already runs on Windows. Native build not started."],
     ]
     s.append(grid_table(
         ["Capability", "State", "Notes"],
         rows,
-        col_widths=[5.5 * cm, 2.2 * cm, 9.3 * cm],
+        col_widths=[5.5 * cm, 2.0 * cm, 9.5 * cm],
     ))
+    return s
 
-    s.append(p("Known limitations", H3))
-    for b in [
-        "SSL 360&deg; must be quit before REAPER starts &mdash; the exclusive USB claim is unchanged.",
-        "Some palette indices (likely greys) still snap to nearest match instead of being decoded.",
-        "Coexistence with 360&deg; is not pursued; a complete replacement is the explicit goal.",
-        "Hardware behaviour under unforeseen frames is not part of SSL's documented public API; we ship with a clear &ldquo;use at your own risk &mdash; may void warranty&rdquo; notice (see Legal).",
-    ]:
-        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
-    # 5. Legal
+def part_legal_asks():
+    s = []
     s.append(p("5. Legal posture", H2))
-    s.append(p(
-        "We took care to be on solid legal footing before publishing.", BODY))
+    s.append(p("The project was published only after deliberately establishing each of the points below.", BODY))
     s.append(panel([
         p("Trademarks", H3),
         p("&ldquo;SSL&rdquo;, &ldquo;Solid State Logic&rdquo;, &ldquo;SSL "
           "360&deg;&rdquo;, &ldquo;UF8&rdquo;, and &ldquo;UC1&rdquo; are "
-          "trademarks of Solid State Logic Ltd. They are used in the "
+          "trademarks of Solid State Logic Ltd. They appear in the "
           "project documentation solely to identify the hardware and "
           "software this extension interoperates with (nominative fair "
           "use). The project is not affiliated with, endorsed by, or "
@@ -443,35 +489,33 @@ def part_one_status():
         p("Interoperability basis", H3),
         p("Developed via independent passive observation of the USB wire "
           "protocol between legally purchased SSL UF8 / UC1 hardware and "
-          "legally licensed SSL 360&deg; software, for the sole purpose of "
-          "achieving interoperability with REAPER. No SSL code, firmware, "
-          "binaries, or proprietary creative content is decompiled, "
-          "reproduced, or redistributed. Cited authorities: EU Software "
-          "Directive 2009/24/EC Art. 6 (interoperability exception); "
-          "&sect;69e UrhG (Germany); 17 USC &sect;1201(f) (US "
-          "interoperability exception).", BODY),
+          "legally licensed SSL 360&deg; software, for the sole purpose "
+          "of achieving interoperability with REAPER. No SSL code, "
+          "firmware, binaries, or proprietary creative content is "
+          "decompiled, reproduced, or redistributed. Cited authorities: "
+          "EU Software Directive 2009/24/EC Art.&nbsp;6 (interoperability "
+          "exception); &sect;69e UrhG (Germany); 17 USC &sect;1201(f) "
+          "(US interoperability exception).", BODY),
         p("No warranty", H3),
-        p("The project ships under MIT with an explicit &ldquo;use at your "
-          "own risk&rdquo; notice that running third-party firmware-level "
-          "communication with SSL hardware may void the user's warranty.", BODY),
+        p("MIT licence, with an explicit &ldquo;use at your own "
+          "risk&rdquo; notice in the README that running third-party "
+          "firmware-level communication with SSL hardware may void the "
+          "user's warranty with SSL.", BODY),
     ]))
 
-    # 6. Asks
     s.append(p("6. Asks of SSL", H2))
-    s.append(p(
-        "We would much rather collaborate than work in parallel. "
-        "Concretely:", BODY))
+    s.append(p("We would much rather collaborate than work in parallel. Concretely:", BODY))
     s.append(panel([
         p("1. &mdash; Any objection to this being a public, open-source "
           "project? We would rather hear it now than after the fact, and "
           "we are open to changing how the project is shaped.", BODY),
         p("2. &mdash; Would SSL be willing to share protocol "
           "documentation, under NDA if needed? Even partial reference "
-          "would save us substantial capture-and-decode effort and produce "
-          "a more robust result for shared customers.", BODY),
-        p("3. &mdash; If this could grow into something more formal &mdash; "
-          "a documented partner extension, a listing alongside SSL's "
-          "supported integrations &mdash; we'd be glad to talk.", BODY),
+          "would save us substantial capture-and-decode effort and "
+          "produce a more robust result for shared customers.", BODY),
+        p("3. &mdash; If this could grow into something more formal "
+          "&mdash; a documented partner extension, a listing alongside "
+          "SSL's supported integrations &mdash; we'd be glad to talk.", BODY),
     ]))
     s.append(p(
         "We did this because we love the hardware and were curious what "
@@ -479,27 +523,29 @@ def part_one_status():
     return s
 
 
-def part_two_manual_intro():
+# ----- Part 2: Manual -----
+
+def manual_intro():
     s = []
     s.append(PageBreak())
     s.append(p("USER MANUAL (preview)", EYEBROW))
     s.append(p("Rea-Sixty for REAPER", H1))
     s.append(p(
-        "The following sections are the user-facing manual that ships with "
-        "the extension. Included here as a preview so SSL can see exactly "
-        "what end-users are told to do.", LEAD))
+        "The following sections are the user-facing manual that ships "
+        "with the extension. Included here so SSL can see exactly what "
+        "end-users are told to do.", LEAD))
     return s
 
 
-def part_two_install():
+def manual_install():
     s = []
     s.append(p("7. Installation", H2))
 
     s.append(p("Prerequisites", H3))
     for b in [
-        "REAPER (any recent version, 6.x / 7.x).",
+        "REAPER 6.x or 7.x.",
         "An SSL UF8, UC1, or both, connected via USB.",
-        "macOS: Homebrew &mdash; <font face='Courier'>brew install libusb cmake pkg-config</font>.",
+        "macOS &mdash; Homebrew: <font face='Courier'>brew install libusb cmake pkg-config</font>.",
         "<b>SSL 360&deg; must be quit before REAPER starts.</b> 360&deg; holds the controller's vendor interface exclusively; Rea-Sixty cannot open it while 360&deg; is running.",
     ]:
         s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
@@ -508,7 +554,7 @@ def part_two_install():
     s.append(code(
         "git clone https://github.com/acklin83/reaper-uf8.git\n"
         "cd reaper-uf8/extension\n"
-        "cmake -B build -G \"Unix Makefiles\"\n"
+        "cmake -B build\n"
         "cmake --build build -j$(sysctl -n hw.ncpu)"
     ))
 
@@ -524,267 +570,293 @@ def part_two_install():
         '   ~/Library/Application\\ Support/REAPER/UserPlugins/'
     ))
     s.append(p("Restart REAPER.", BODY))
+    s.append(p(
+        "<b>Windows / Linux:</b> not shipping yet (Phase&nbsp;4). The "
+        "capture and analysis tooling runs on Windows today, but the "
+        "extension itself is macOS-only at this time.", BODY))
     return s
 
 
-def part_two_first_run():
+def manual_first_run():
     s = []
-    s.append(p("8. First run &mdash; what to expect", H2))
+    s.append(p("8. First run — what to expect", H2))
     for b in [
         "On load, nothing is visible inside REAPER itself. The extension is a control-surface plug-in; there is no menu entry to open.",
         "The UF8 wakes from the &ldquo;Awaiting Connection to SSL 360&deg; Software&rdquo; idle screen and enters Plug-in Mixer Mode.",
-        "Scribble strips show the first eight tracks: track number, name, fader dB readout, V-Pot ring (Pan by default), and the DAW track colour bar.",
+        "Scribble strips show the first eight tracks: track number, name, fader dB readout, V-Pot ring (Pan by default), and the DAW track-colour bar.",
         "The 12-segment meter on each strip follows REAPER's track meter.",
-        "If a UC1 is connected, its knobs follow the focused track's SSL Channel Strip 2 / Bus Compressor 2 (whichever is present); the GR meter follows the plug-in's gain reduction.",
-        "If something fails, REAPER's Console (View &rarr; Console) shows <font face='Courier'>reaper_uf8: &lt;reason&gt;</font>. The most common reason is <font face='Courier'>SSL360Core owns the device</font>.",
+        "If a UC1 is connected, its knobs follow the focused track's SSL Channel Strip / Bus Compressor variant (Channel Strip&nbsp;2 / Bus Comp&nbsp;2 / 4K&nbsp;B / 4K&nbsp;E / 4K&nbsp;G). The GR meter follows the plug-in's gain reduction.",
+        "Triggering the action <font face='Courier'>Rea-Sixty: Toggle Plug-in Mixer Window</font> opens the on-screen mixer + settings window. Dock it anywhere in REAPER's layout.",
+        "If something fails, REAPER's Console (View &rarr; Console) shows <font face='Courier'>reaper_uf8: &lt;reason&gt;</font>. The most common reason is <font face='Courier'>SSL360Core owns the device</font> &mdash; see Troubleshooting.",
     ]:
         s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
     s.append(p("9. Day-to-day operation", H2))
-    s.append(p("The control surface behaves the way a UF8/UC1 owner already expects, with a few REAPER-native specifics:", BODY))
-
+    s.append(p("The controllers behave the way their owners already expect, with a few REAPER-native specifics:", BODY))
     s.append(grid_table(
         ["Control", "Default behaviour"],
         [
-            ["Fader",                    "REAPER track volume, full 16-bit. Touch is detected; automation latches honour REAPER's automation modes."],
-            ["V-Pot rotate",             "Pan by default. <i>Flip</i> swaps with the fader. <i>Plugin</i> targets the focused FX param."],
-            ["V-Pot push",               "Reset target to default (pan = 0; param = default value)."],
-            ["SOLO / CUT / SEL",         "Solo / Mute / Select on the strip's track. SEL behaves as &ldquo;exclusive select&rdquo; on a single press (no MCU double-press needed)."],
-            ["BANK &lt; / &gt;",         "Shift visible 8 by 8 tracks. CHANNEL &lt; / &gt; shifts by 1."],
-            ["LAYER 1 / 2 / 3",          "Cycle the user-defined layer (DAW / FX / Sends, configurable)."],
-            ["QUICK 1 / 2 / 3",          "Plug-in Mixer assignments: 1 = Channel Strip, 2 = Bus Comp, 3 = I/O meter toggle (matches the SSL stock layout)."],
-            ["Soft keys (above strips)", "Per-strip parameter-page key in PM mode; bind to any REAPER action via Learn Mode."],
-            ["Transport",                "Standard REAPER Play / Stop / Record / Rewind / Fast-forward."],
-            ["CHANNEL encoder",          "Standard = bank &plusmn;1; NAV = scrub; NUDGE; FOCUS = mouse-wheel emulation. Press-and-hold = Cursor-Transport mode."],
-            ["360&deg; key",             "Opens the on-screen Plug-in Mixer + Settings window (Rea-Sixty's, not SSL 360&deg;'s)."],
-            ["UC1 knobs",                "Drive the focused track's Channel Strip / Bus Compressor in real time. <i>Fine</i> halves the step size."],
-            ["UC1 GR meter",             "Audio-driven gain reduction for the focused track's SSL compressor."],
+            ["Fader",
+             "REAPER track volume, full 16-bit. Touch is detected; automation latches honour REAPER's automation mode."],
+            ["V-Pot rotate",
+             "Pan by default. Flip swaps with the fader. In SSL Strip Mode the V-Pot retargets the focused plug-in's pan."],
+            ["V-Pot push",
+             "Reset target to default (pan = 0; param = the plug-in's default value)."],
+            ["SOLO / CUT / SEL",
+             "Solo / Mute / Select on the strip's track. Single-press SEL is &ldquo;exclusive select&rdquo; (no MCU double-press)."],
+            ["BANK &lt; / &gt;",
+             "Shift visible 8 by 8 tracks. CHANNEL &lt; / &gt; shifts by 1."],
+            ["LAYER 1 / 2 / 3",
+             "Cycle the user-defined layer (e.g. DAW / FX / Sends; configurable)."],
+            ["QUICK 1 / 2 / 3",
+             "Plug-in Mixer assignments: 1&nbsp;=&nbsp;Channel Strip, 2&nbsp;=&nbsp;Bus Comp, 3&nbsp;=&nbsp;I/O meter toggle (matches the SSL stock layout)."],
+            ["Soft keys (above strips)",
+             "Per-strip parameter-page key in PM mode; bind to any REAPER action via Learn Mode."],
+            ["Transport",
+             "REAPER Play / Stop / Record / Rewind / Fast-forward."],
+            ["360&deg; key",
+             "Opens Rea-Sixty's on-screen Plug-in Mixer + Settings window (not SSL 360&deg;)."],
+            ["UC1 knobs",
+             "Drive the focused track's Channel Strip / Bus Compressor in real time. <i>Fine</i> halves the step size."],
+            ["UC1 GR meter",
+             "Audio-driven gain reduction for the focused track's SSL compressor."],
         ],
         col_widths=[3.8 * cm, 13.2 * cm],
     ))
     return s
 
 
-def part_two_button_ref():
+def manual_layers():
     s = []
-    s.append(p("10. UF8 button &amp; LED reference", H2))
+    s.append(p("10. Layers, modifiers, and the Channel encoder", H2))
     s.append(p(
-        "The IDs below are the values the UF8 emits on its vendor-USB IN "
-        "endpoint &mdash; documented here so users writing their own "
-        "ReaScript automations can identify which physical control fired. "
-        "Per-strip indices are <font face='Courier'>N = 0..7</font>, left "
-        "to right.", BODY))
+        "Three building blocks shape what every UF8 button does at any "
+        "moment: the active layer, the held modifier, and the Channel "
+        "encoder mode.", BODY))
 
-    s.append(p("Per-strip buttons", H3))
-    s.append(grid_table(
-        ["Button", "Formula", "Strip&nbsp;0", "Strip&nbsp;7"],
-        [
-            ["V-Pot push",                          "0x08 + N",       "0x08", "0x0F"],
-            ["Top soft-key (above scribble)",       "0x18 + N",       "0x18", "0x1F"],
-            ["SOLO",                                "0x20 + 3&middot;N", "0x20", "0x35"],
-            ["CUT (Mute)",                          "0x21 + 3&middot;N", "0x21", "0x36"],
-            ["SEL (Select)",                        "0x22 + 3&middot;N", "0x22", "0x37"],
-        ],
-        col_widths=[6.5 * cm, 4.0 * cm, 3.25 * cm, 3.25 * cm],
-    ))
+    s.append(p("Layers", H3))
+    for b in [
+        "Layers select the meaning of soft-keys, V-Pot rotation, and any binding marked as layer-aware.",
+        "Stock layers ship with sensible defaults; user layers are added in the Settings &rarr; Bindings tab.",
+        "Per-strip controls (Select / Mute / Solo / Rec-Arm) and the Transport row stay layer-independent.",
+    ]:
+        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
-    s.append(p("Global buttons (selection)", H3))
-    s.append(grid_table(
-        ["ID", "Name", "ID", "Name"],
-        [
-            ["0x40", "Layer 1",            "0x41", "Layer 2"],
-            ["0x42", "Layer 3",            "0x43", "Quick 1 (Channel Strip)"],
-            ["0x44", "Quick 2 (Bus Comp)", "0x45", "Quick 3 (I/O meter)"],
-            ["0x46", "360&deg; / Settings","0x50", "Plugin"],
-            ["0x51", "Channel",            "0x52", "Page &larr;"],
-            ["0x53", "Page &rarr;",        "0x54", "Flip"],
-            ["0x58", "Automation Off",     "0x59", "Read"],
-            ["0x5A", "Write",              "0x5B", "Trim"],
-            ["0x5C", "Latch",              "0x5D", "Touch"],
-            ["0x6E", "PAN",                "0x6F", "Fine / Shift"],
-            ["0x70", "Norm / Clear",       "0x71", "Rec / All"],
-            ["0x72", "Auto / Zero",        "0x76", "Channel encoder push"],
-            ["0x78", "Bank &larr;",        "0x79", "Bank &rarr;"],
-        ],
-        col_widths=[2.0 * cm, 6.5 * cm, 2.0 * cm, 6.5 * cm],
-    ))
+    s.append(p("Modifiers", H3))
+    for b in [
+        "<b>Shift</b> (Fine) and the SSL stock Norm / Rec / Auto modifier row are dispatched as press/hold/release flags.",
+        "Each binding can match plain, Shift, Shift+Modifier, etc. The matcher prefers the most specific binding present.",
+        "On release, the binding fires under the modifier that was held at press time &mdash; so a modifier released early still produces the &ldquo;intended&rdquo; release event.",
+        "LEDs preview the result: dim when the modifier-specific binding is inactive, bright when held active. Per-binding colour overrides win over the stock SSL colour.",
+    ]:
+        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
-    s.append(p("Outbound LED / colour", H3))
+    s.append(p("Channel encoder modes", H3))
     s.append(grid_table(
-        ["Function", "Frame"],
+        ["Mode", "Behaviour"],
         [
-            ["Per-strip TFT colour",               "<font face='Courier'>FF 66 09 18 &lt;8 palette indices&gt; &lt;chk&gt;</font>"],
-            ["Per-strip SEL / MUTE / SOLO LED",    "<font face='Courier'>FF 3B 03 &lt;id&gt; 00 &lt;state&gt; &lt;chk&gt;</font>"],
-            ["12-segment track meter",             "<font face='Courier'>FF 38 04 &hellip; / FF 39 04 &hellip;</font>"],
-            ["Layer / page (also PM keepalive)",   "<font face='Courier'>FF 1B 01 &lt;XX&gt; &lt;chk&gt;</font>"],
+            ["<b>Standard</b>",       "Bank &plusmn;1 track."],
+            ["<b>NAV</b>",            "Transport scrub."],
+            ["<b>NUDGE</b>",          "Nudge selection / edit-cursor by the REAPER nudge amount."],
+            ["<b>FOCUS</b>",          "Mouse-wheel emulation at the cursor."],
+            ["<b>Instance cycle</b>", "With the appropriate modifier held, walks plug-in instances on the focused track within the current domain (Channel Strip / Bus Comp). Picks up UF8-only user-mapped plug-ins as well."],
+            ["<b>Press-and-hold</b>", "Toggles Cursor-Transport mode &mdash; the cursor / mode keys become Stop / Play / Rewind / Fast-forward / Record."],
         ],
-        col_widths=[6.5 * cm, 10.5 * cm],
+        col_widths=[3.5 * cm, 13.5 * cm],
     ))
     return s
 
 
-def part_two_uc1():
+def manual_strip_mode():
     s = []
-    s.append(p("11. UC1 reference", H2))
+    s.append(p("11. SSL Strip Mode and Instance Cycle", H2))
+
+    s.append(p("SSL Strip Mode", H3))
     s.append(p(
-        "UC1 button IDs are stable across plug-in contexts (Channel Strip "
-        "vs Bus Comp). Knob IDs in the dedicated EQ / Dynamics zone always "
-        "map to their named function. The top-centre V-Pot row is "
-        "soft-mapped per focused plug-in.", BODY))
+        "<b>Shift + Plugin</b> toggles SSL Strip Mode. In this mode the "
+        "UF8 fader and V-Pot leave DAW-track volume / pan behind and "
+        "track the focused SSL plug-in instead: the fader drives the "
+        "plug-in's output level, the V-Pot drives the plug-in's pan, "
+        "and the scribble strip shows the variant name "
+        "(<font face='Courier'>CS2</font>, <font face='Courier'>4K&nbsp;B</font>, "
+        "<font face='Courier'>4K&nbsp;E</font>, <font face='Courier'>4K&nbsp;G</font>, "
+        "<font face='Courier'>Bus Comp</font>) in the track row.", BODY))
+    s.append(p(
+        "Strip Mode also rewires the modifier row to the plug-in's "
+        "&ldquo;hidden&rdquo; controls (Auto-Makeup, Filters In, Width "
+        "Mode, Width Frequency) &mdash; the parameters SSL 360&deg; "
+        "exposes via right-click menus on the UC1 are first-class V-Pot "
+        "pushes here.", BODY))
 
-    s.append(p("Buttons", H3))
-    s.append(grid_table(
-        ["ID", "Button", "ID", "Button"],
-        [
-            ["0x08", "HF Bell",           "0x09", "EQ Type"],
-            ["0x0A", "EQ In",             "0x0B", "LF Bell"],
-            ["0x0C", "Bus Comp IN",       "0x14", "Fast Attack (Comp)"],
-            ["0x15", "Peak",              "0x16", "Dyn In"],
-            ["0x17", "Expand",            "0x18", "Fast Attack (Gate)"],
-            ["0x19", "Polarity",          "0x1A", "S/C Listen"],
-            ["0x1B", "Solo Clear",        "0x1C", "Solo"],
-            ["0x1D", "Cut",               "0x1E", "Channel IN"],
-            ["0x1F", "Fine",              "",     ""],
-        ],
-        col_widths=[2.0 * cm, 6.5 * cm, 2.0 * cm, 6.5 * cm],
-    ))
+    s.append(p("Instance cycle", H3))
+    for b in [
+        "Holding the appropriate modifier and turning the Channel encoder walks instances of the focused-domain plug-in on the selected track.",
+        "Channel-Strip domain: cycles through CS2 / 4K B / 4K E / 4K G / 360-Link variants present on the track.",
+        "Bus-Comp domain: cycles through every Bus Comp instance on the track.",
+        "User-mapped UF8-only plug-ins participate &mdash; the encoder picks them up alongside the stock SSL ones.",
+        "The current anchor track is preserved when the BC carousel chases a focus change &mdash; you don't lose the instance you were editing because focus shifted.",
+    ]:
+        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
+    return s
 
-    s.append(p("Channel-strip knobs (always CS params)", H3))
-    s.append(grid_table(
-        ["ID", "Knob", "ID", "Knob"],
-        [
-            ["0x00", "LPF freq",          "0x07", "LMF Gain"],
-            ["0x01", "HPF freq",          "0x08", "LMF Frequency"],
-            ["0x02", "HF Gain",           "0x09", "LMF Q"],
-            ["0x03", "HF Frequency",      "0x0A", "LF Frequency"],
-            ["0x04", "HMF Gain",          "0x0B", "LF Gain"],
-            ["0x05", "HMF Frequency",     "0x17", "Gate Release"],
-            ["0x06", "HMF Q",             "0x18", "Gate Hold"],
-            ["0x19", "Gate Threshold",    "0x1A", "Gate Range"],
-            ["0x1B", "Comp Release",      "0x1C", "Comp Threshold"],
-            ["0x1D", "Comp Ratio",        "",     ""],
-        ],
-        col_widths=[2.0 * cm, 6.5 * cm, 2.0 * cm, 6.5 * cm],
-    ))
 
-    s.append(p("Outbound (selected)", H3))
+def manual_fx_learn_mixer():
+    s = []
+    s.append(p("12. FX-Learn and the Plug-in Mixer window", H2))
+
+    s.append(p("Plug-in Mixer window (Phase 2.6)", H3))
+    s.append(p(
+        "Triggering the REAPER action <font face='Courier'>Rea-Sixty: "
+        "Toggle Plug-in Mixer Window</font> opens a dockable Dear ImGui "
+        "window that mirrors the eight currently-banked tracks &mdash; "
+        "track name, colour, fader, pan, focused-FX parameter &mdash; "
+        "alongside a Bus-Comp rack. The window reads REAPER's theme via "
+        "the SDK and re-tints itself in real time when you switch "
+        "between light and dark themes.", BODY))
+
+    s.append(p("FX-Learn (Phase 2.5d)", H3))
+    s.append(p(
+        "FX-Learn is the user-programmable Plug-in Mixer for "
+        "third-party plug-ins. Open <b>Settings &rarr; FX-Learn</b>:", BODY))
+    for b in [
+        "Pick an FX on the focused track from the catalogue list; the schematic UI shows a UF8 or UC1 mockup with bindable cells.",
+        "Arm a cell &rarr; touch a parameter in the plug-in window &rarr; the binding is recorded with the plug-in's GUID and the parameter index. GUID-keyed means FX-slot reorders never break it.",
+        "<b>Fill sequential</b> / <b>Fill sequential (right)</b> on a learned slot's right-click menu auto-assigns consecutive parameters of the same plug-in to the cells to its right &mdash; useful for plug-ins whose params come in a sensible order.",
+        "Each entry has a UF8-only / shared mode flag, label, colour, and brightness override.",
+        "Parameter values are formatted via <font face='Courier'>TrackFX_GetFormattedParamValue</font> &mdash; the plug-in's own formatter (&ldquo;−3.5 dB&rdquo;, &ldquo;42 %&rdquo;), no per-plug-in formatter code needed.",
+        "Snapshot persistence means a learned slot is editable even when no live FX instance is present &mdash; the schematic remembers the last seen state.",
+    ]:
+        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
+    return s
+
+
+def manual_settings():
+    s = []
+    s.append(p("13. Settings screen", H2))
+    s.append(p(
+        "The Settings screen lives inside the same window as the "
+        "Plug-in Mixer (Phase&nbsp;2.7). Left-rail navigation, ImGui "
+        "tabs; everything writes through to the bindings JSON file the "
+        "extension watches at runtime.", BODY))
     s.append(grid_table(
-        ["Function", "Frame"],
+        ["Tab", "What it does"],
         [
-            ["GR meter",                 "<font face='Courier'>FF 5B 02 &lt;BE-16 dB&times;10&gt; &lt;chk&gt;</font>"],
-            ["VU meter",                 "<font face='Courier'>FF 13 04 01 &lt;level&gt; 01 &lt;in/out&gt;</font>"],
-            ["Per-button LED",           "<font face='Courier'>FF 13 04 &lt;bank&gt; &lt;cell&gt; 01 &lt;state&gt;</font>"],
-            ["Display zone text",        "<font face='Courier'>FF 66 &lt;len&gt; &lt;zone&gt; &lt;ascii&hellip;&gt; &lt;chk&gt;</font>"],
-            ["Keepalive (required)",     "<font face='Courier'>FF 1B 01 &lt;counter&gt; &lt;chk&gt;</font>  (~1 Hz)"],
+            ["<b>Device</b>",
+             "LED brightness, scribble brightness, meter ballistic, SEL-follows-colour toggle, list of connected devices."],
+            ["<b>Bindings</b>",
+             "Per-button mapper for Per-strip / Transport / Global / Soft-keys. Learn workflow. CSI-import preview for users migrating from a CSI zone file."],
+            ["<b>Soft-Key Banks</b>",
+             "Editor for 12 user banks plus the 6 SSL stock banks (CS&nbsp;6 + BC&nbsp;2). Per-slot label, colour, and brightness; stable ImGui IDs keep the cursor inside the input fields across keystrokes."],
+            ["<b>FX-Learn</b>",
+             "User-plug-in catalogue editor. UC1 / UF8 / shared mockups. Param-snapshot rendering and persistence."],
+            ["<b>Modes</b>",
+             "Folder Mode, Selection Sets, Send / Receive layer toggles. Folder Mode and full Receives are still on the backlog at the time of this document."],
+            ["<b>Selection Sets</b>",
+             "Eight project-local slots, GUID-keyed so reorders and deletes don't corrupt them."],
+            ["<b>About</b>",
+             "Version, build hash, log file links, links to the GitHub issues tracker."],
         ],
-        col_widths=[5.5 * cm, 11.5 * cm],
+        col_widths=[3.5 * cm, 13.5 * cm],
     ))
     return s
 
 
-def part_two_bindings():
+def manual_bindings_file():
     s = []
-    s.append(p("12. Bindings &amp; Learn Mode", H2))
+    s.append(p("14. Bindings file &amp; CSI import", H2))
     s.append(p(
-        "Mappings live in a single JSON file. The on-screen Settings "
-        "screen and the Learn Mode workflow both edit it; the extension "
-        "watches it on disk and reloads on change &mdash; no REAPER "
-        "restart needed.", BODY))
+        "Bindings live in a single JSON file. The Settings screen and "
+        "the Learn-Mode workflow both edit it; the extension watches "
+        "its mtime and reloads on change &mdash; no REAPER restart "
+        "needed. Schema-version bumps trigger a migration on load; the "
+        "previous version is archived as "
+        "<font face='Courier'>bindings.json.v&lt;N&gt;.bak</font>.", BODY))
 
-    s.append(p("Config file location", H3))
+    s.append(p("Location", H3))
     s.append(grid_table(
         ["OS", "Path"],
         [
-            ["macOS",   "<font face='Courier'>~/Library/Application Support/REAPER/rea_sixty/bindings.json</font>"],
-            ["Windows", "<font face='Courier'>%APPDATA%\\REAPER\\rea_sixty\\bindings.json</font>"],
-            ["Linux",   "<font face='Courier'>~/.config/REAPER/rea_sixty/bindings.json</font>"],
+            ["macOS",
+             "<font face='Courier'>~/Library/Application Support/REAPER/rea_sixty/bindings.json</font>"],
+            ["Windows (future)",
+             "<font face='Courier'>%APPDATA%\\REAPER\\rea_sixty\\bindings.json</font>"],
+            ["Linux (future)",
+             "<font face='Courier'>~/.config/REAPER/rea_sixty/bindings.json</font>"],
         ],
-        col_widths=[2.5 * cm, 14.5 * cm],
+        col_widths=[3.5 * cm, 13.5 * cm],
     ))
 
     s.append(p("Binding types", H3))
     for b in [
-        "<b>reaper_action</b> &mdash; dispatches a REAPER action (numeric ID or named SWS / ReaPack command).",
-        "<b>builtin</b> &mdash; surface behaviour (bank navigation, layer cycle, V-Pot mode, flip, mute/solo clear, &hellip;).",
+        "<b>reaper_action</b> &mdash; dispatches a REAPER action (numeric ID or named SWS / ReaPack / user-macro).",
+        "<b>builtin</b> &mdash; surface behaviour (bank nav, layer cycle, V-Pot mode, flip, mute/solo clear, instance cycle, Strip-Mode toggle, &hellip;).",
         "<b>track_target</b> &mdash; per-strip standard target (select, mute, solo, rec_arm, phase, monitor, fx_bypass, automation_mode).",
-        "<b>fx_param</b> &mdash; bind a V-Pot or soft-key to an FX parameter, GUID-keyed so FX-slot reorders don't break the mapping.",
+        "<b>fx_param</b> &mdash; bind a V-Pot or soft-key to an FX parameter; GUID-keyed.",
+        "<b>chain</b> &mdash; multi-action chain: a single press fires several bindings in order. Useful for &ldquo;solo this track + scroll to it + open its FX&rdquo; macros.",
     ]:
         s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
 
-    s.append(p("Learn Mode", H3))
-    for b in [
-        "Open the Settings screen, click <b>Learn</b>.",
-        "Press the UF8 / UC1 control you want to bind. The extension reports the captured control back to the UI.",
-        "Trigger the REAPER action (or move the FX parameter) you want to bind to it.",
-        "The binding is written to <font face='Courier'>bindings.json</font> and the extension reloads it.",
-        "Right-click a learned slot for <b>Fill sequential (right)</b> &mdash; auto-fills the strips to the right with consecutive parameters of the same FX.",
-        "ESC at any time cancels Learn Mode.",
-    ]:
-        s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
-
-    s.append(p("13. Plug-in Mixer window &amp; Settings", H2))
+    s.append(p("CSI import", H3))
     s.append(p(
-        "The on-screen Plug-in Mixer mirrors the eight currently-banked "
-        "tracks &mdash; track name, colour, fader, pan, focused FX "
-        "parameter &mdash; in a dockable window inside REAPER. It uses a "
-        "vendored Dear ImGui inside a SWELL host window, and picks up the "
-        "user's REAPER theme automatically (light or dark).", BODY))
-    s.append(p(
-        "The Settings screen lives in the same window. It exposes "
-        "controller brightness, sleep timeout, default V-Pot mode per "
-        "layer, the soft-key bank editor, and the Learn-Mode workflow. "
-        "All settings persist to the same JSON file the extension reads "
-        "at startup.", BODY))
+        "Users migrating from a CSI-based setup can drop their CSI zone "
+        "file into the import dialog. The Bindings tab shows a preview "
+        "table of how each CSI line will land in Rea-Sixty's "
+        "<font face='Courier'>bindings.json</font>; the user can accept "
+        "or hand-edit before commit. Defensive logging guards "
+        "malformed zone files.", BODY))
     return s
 
 
-def part_two_trouble():
+def manual_trouble_uninstall():
     s = []
-    s.append(p("14. Troubleshooting", H2))
+    s.append(p("15. Troubleshooting", H2))
     s.append(grid_table(
         ["Symptom", "Cause / fix"],
         [
             ["UF8 stays on the &ldquo;Awaiting Connection to SSL 360&deg;&rdquo; screen.",
              "SSL 360&deg; is still running. Quit it, then restart REAPER."],
             ["REAPER Console: <font face='Courier'>SSL360Core owns the device</font>.",
-             "Same as above &mdash; the vendor interface is exclusively claimed."],
+             "Same root cause &mdash; the vendor interface is exclusively claimed."],
             ["Scribble strips light up but stay blank.",
-             "Init replayed but Plug-in Mixer keepalive lost. Check the Console for libusb timeout errors and reseat the USB cable."],
+             "Init replayed but the Plug-in-Mixer keepalive was lost. Check the Console for libusb timeout errors, reseat the USB cable, restart REAPER."],
             ["Track colour on the strip is &ldquo;close but not exact&rdquo;.",
-             "REAPER colour is being snapped to the nearest 360&deg; palette entry. Some palette indices are still unmapped; the snap is by design."],
+             "The REAPER colour is being snapped to the nearest 360&deg; palette entry. The matcher prefers chromaticity over RGB distance, but the palette is still 16 entries deep."],
             ["UC1 GR meter sits at zero with audio playing.",
-             "The focused track has no SSL Bus Comp / Channel Strip, or the plug-in's GR readout extension is unavailable in this REAPER build."],
-            ["Fader feels less responsive than under SSL 360&deg;.",
-             "Should not happen &mdash; we use full 16-bit. If it does, please open a GitHub issue with a session description."],
-            ["UF8 LCDs show no colour bar despite seeing the strips.",
-             "The colour command sits in PM mode only. Confirm the layer is not set to Plug-in Mixer Off."],
+             "The focused track has no SSL Bus Comp / Channel Strip with the PreSonus GR extension, or the focus has slipped to a different track. Re-focus and verify in <b>Settings &rarr; Device</b>."],
+            ["Shift / Fine appears &ldquo;stuck&rdquo;.",
+             "Fixed in 2026-05-09 build. If you still see it, please report with the steps that produced it."],
+            ["ImGui input fields lose focus after every keystroke.",
+             "Fixed for Soft-Key Banks in 2026-05-13. If you see it elsewhere, please report &mdash; it's almost certainly the same ImGui-ID hashing bug we've been hunting."],
+            ["FX-Learn binding disappears after rearranging FX slots.",
+             "Should not happen &mdash; bindings are GUID-keyed. If it does, the FX was removed and re-added with a fresh GUID; re-learn the slot."],
         ],
         col_widths=[6.5 * cm, 10.5 * cm],
     ))
     s.append(p("Anything not on the list goes to the issue tracker:", BODY))
     s.append(p('<font face="Courier" color="#009FD5">github.com/acklin83/reaper-uf8/issues</font>', BODY_L))
 
-    s.append(p("15. Uninstall", H2))
-    s.append(p("Remove the symlink (or copy) from REAPER's UserPlugins folder and restart REAPER:", BODY))
+    s.append(p("16. Uninstall", H2))
+    s.append(p("Remove the dylib (or symlink) from REAPER's UserPlugins folder and restart REAPER:", BODY))
     s.append(code(
         "rm ~/Library/Application\\ Support/REAPER/UserPlugins/reaper_uf8.dylib"
     ))
     s.append(p(
-        "The bindings JSON is left in place so re-installing later "
-        "preserves the user's mappings. Delete the <font face='Courier'>"
-        "rea_sixty</font> folder under REAPER's resource directory to "
-        "remove it as well.", BODY))
+        "The <font face='Courier'>rea_sixty</font> folder under "
+        "REAPER's resource directory is left in place so re-installing "
+        "preserves the user's bindings, soft-key banks, and FX-Learn "
+        "catalogue. Delete that folder to remove every trace.", BODY))
 
-    s.append(Spacer(1, 1.0 * cm))
+    s.append(Spacer(1, 0.7 * cm))
     s.append(panel([
         p("End of preview", ParagraphStyle("end", parent=H3, spaceBefore=0)),
-        p("This document is a snapshot for SSL of the project as it stands "
-          "today. The living source of truth is the GitHub repository: "
-          "<font face='Courier' color='#009FD5'>github.com/acklin83/reaper-uf8</font>.", BODY),
-        p("Questions, objections, or an opening to collaborate &mdash; all "
-          "very welcome. See section 6 for the asks; the outreach email "
-          "draft is in <font face='Courier'>docs/outreach/</font> in the "
-          "repository.", BODY),
+        p("This document is a snapshot of the project for SSL as of "
+          "2026-05-13. The living source of truth is the GitHub "
+          "repository: <font face='Courier' color='#009FD5'>"
+          "github.com/acklin83/reaper-uf8</font>.", BODY),
+        p("Questions, objections, or an opening to collaborate &mdash; "
+          "all very welcome. See section&nbsp;6 for the asks; the "
+          "outreach email draft is in <font face='Courier'>"
+          "docs/outreach/</font> in the repository.", BODY),
     ]))
     return s
 
@@ -794,15 +866,18 @@ def main():
     story = []
     story += cover_page()
     story += toc_page()
-    story += part_one_project()
-    story += part_one_status()
-    story += part_two_manual_intro()
-    story += part_two_install()
-    story += part_two_first_run()
-    story += part_two_button_ref()
-    story += part_two_uc1()
-    story += part_two_bindings()
-    story += part_two_trouble()
+    story += part_project()
+    story += part_feature_matrix()
+    story += part_legal_asks()
+    story += manual_intro()
+    story += manual_install()
+    story += manual_first_run()
+    story += manual_layers()
+    story += manual_strip_mode()
+    story += manual_fx_learn_mixer()
+    story += manual_settings()
+    story += manual_bindings_file()
+    story += manual_trouble_uninstall()
     doc.build(story)
     print(f"wrote {OUT}")
 
