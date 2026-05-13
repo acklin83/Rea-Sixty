@@ -1136,7 +1136,7 @@ void applyInstanceCycle_(int step)
     // No CS/BC focus → start from whichever instance class actually
     // anchors the active surface. UF8-only is the default fallback
     // when neither CS nor BC currently drives UC1.
-    if (curDom == uf8::Domain::None) {
+    if (curDom == uf8::Domain::None && uf8OnlyCount == 0) {
         curDom = (csCount > 0) ? uf8::Domain::ChannelStrip
               : (bcCount > 0) ? uf8::Domain::BusComp
               :                  uf8::Domain::None;
@@ -1172,10 +1172,7 @@ void applyInstanceCycle_(int step)
         // when tr already == bcAnchor.
         g_uc1_surface->setBcAnchorTrack(tr);
     } else {
-        // UF8-only target: don't clobber CS/BC focus (UF8-only has no
-        // UC1 representation). Just bump the UF8-only instance picker
-        // so userStripCtxFocused_ resolves to the new instance and
-        // the UF8 strips re-route.
+        uf8::setFocus({uf8::Domain::None, 0});
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
         if (g_csGuiShownTr) {
             g_pluginGuiSyncRequest.store(true);
@@ -1293,11 +1290,14 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
         char fxName[256];
         for (int i = 0; i < n; ++i) {
             if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-            const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-            if (!um || !um->uf8Mode || um->domain != dom) continue;
+            const auto* pm = uf8::lookupPluginMapByName(fxName);
+            if (!pm || pm->domain != dom) continue;
             if (seen == wantIdx) {
-                out.fxIdx = i;
-                out.map   = um;
+                const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+                if (um && um->uf8Mode) {
+                    out.fxIdx = i;
+                    out.map   = um;
+                }
                 return true;
             }
             ++seen;
@@ -1305,11 +1305,12 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
         return false;
     };
 
-    // 1) Try the requested domain (the one the user is focused on via
-    //    Q1=CS / Q2=BC). 2) Fall back to the other CS/BC domain so a
-    //    track with only one mapped domain still drives the strips
-    //    (Frank 2026-05-09). 3) Finally try UF8-only maps — they don't
-    //    care which CS/BC domain is focused.
+    if (wantDomain == uf8::Domain::None) {
+        if (tryDomain(uf8::Domain::None)) return out;
+        if (tryDomain(uf8::Domain::ChannelStrip)) return out;
+        tryDomain(uf8::Domain::BusComp);
+        return out;
+    }
     if (tryDomain(wantDomain)) return out;
     const uf8::Domain other = (wantDomain == uf8::Domain::ChannelStrip)
         ? uf8::Domain::BusComp
@@ -1364,13 +1365,8 @@ UserPluginCtx userStripCtxFocused_()
     const int curCsInst  = uc1::csInstanceIndex(tr);
     const int curBcInst  = uc1::bcInstanceIndex(tr);
     const int curUf8Inst = uc1::uf8OnlyInstanceIndex(tr);
-    // Focused-param domain decides which user plug-in (CS vs BC) drives
-    // the strips. Q1 = CS focus, Q2 = BC focus — the same toggle that
-    // selects which SSL plug-in domain UC1 navigates. None defaults to
-    // CS so initial state still picks something deterministic.
     auto fp = uf8::getFocusedParam();
     uf8::Domain wantDom = fp.domain;
-    if (wantDom == uf8::Domain::None) wantDom = uf8::Domain::ChannelStrip;
 
     if (curMode    == s_cacheMode  &&
         tr         == s_cacheTr    &&
@@ -4213,8 +4209,15 @@ void pushZonesForVisibleSlots()
         // length — buildChannelStripType pads with NULs internally so
         // the trailing LCD cells render blank instead of showing space
         // characters past the text (Frank 2026-05-09).
-        std::string csType = map ? std::string(map->displayShort)
-                                 : std::string{};
+        std::string csType;
+        if (userStripActive) {
+            csType = userS.map->displayShort;
+        } else if (focused.domain == uf8::Domain::None) {
+            auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
+            if (uf8Ctx.map) csType = uf8Ctx.map->displayShort;
+        } else {
+            csType = map ? std::string(map->displayShort) : std::string{};
+        }
         if (csType.empty()) csType = "REAPER";
         if (csType.size() > 7) csType.resize(7);
         if (csType != g_lastCsType[s]) {

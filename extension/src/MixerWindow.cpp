@@ -86,8 +86,8 @@ struct MixerWindow::Impl {
         // recent debugging sessions — bumping the suffix forces v0.10
         // to treat us as a brand-new context with no carried-over
         // collapsed / off-screen / closed pose.
-        int sizeW = 1280;
-        int sizeH = 720;
+        int sizeW = 1375;
+        int sizeH = 980;
         ctx = ImGui_CreateContext(
             "Rea-Sixty v2",
             &sizeW, &sizeH,
