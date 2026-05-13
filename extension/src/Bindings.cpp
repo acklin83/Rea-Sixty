@@ -1727,6 +1727,13 @@ void load()
             if (tmp.version < 11) {
                 upgradeBackfillBankSelectorsAllLayers_(tmp);
             }
+            // Belt-and-suspenders sanitize. Always runs, regardless of
+            // version, so any stale references to removed builtins
+            // (quick_select_X / user_domain_X / show_user_bank /
+            // layer_select param-form) get rewritten even in configs
+            // that somehow ended up past v10 without the action-name
+            // migration sticking. Idempotent on already-migrated data.
+            upgradeRetireQuickSelect_(tmp);
             tmp.version = kCurrentBindingsVersion;
             g_cfg = std::move(tmp);
             // Persist the upgraded config so the next load doesn't
@@ -1869,6 +1876,20 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             auto it = g_builtins.find(a.action);
             if (it != g_builtins.end() && it->second.run) {
                 it->second.run(firing, pressed, a.param);
+            } else if (firing) {
+                // Diagnostic: an action name references a builtin that
+                // isn't registered. Usually means a stale dead-builtin
+                // reference (e.g. quick_select_3 in a not-fully-migrated
+                // config) that dispatch silently no-op'd. Logging once
+                // per firing gives a paper trail for "press did nothing"
+                // bug reports.
+                if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+                    std::fprintf(lg,
+                        "[dispatch] unknown builtin action='%s' (firing press); "
+                        "config may need re-migration or rebind\n",
+                        a.action.c_str());
+                    std::fclose(lg);
+                }
             }
             break;
         }
