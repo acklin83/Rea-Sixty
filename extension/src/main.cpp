@@ -2974,7 +2974,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // user-Quick binding, bypassing the default ssl_softkey
             // factory binding that would otherwise steal the press
             // through bindings::dispatch.
-            if (id >= 0x18 && id <= 0x1F) {
+            //
+            // UF8 Plugin Mode bypasses this so a stale activeQuick from
+            // before the mode-flip doesn't hijack presses meant for the
+            // FX-Learn-mapped plug-in param under each strip (Frank
+            // 2026-05-13: "die Quick Buttons dürfen nichts an den
+            // Soft-Keys ändern, sonst kommt man nicht mehr auf die
+            // gelearnten Parameter").
+            if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()) {
                 const int layer = uf8::bindings::getActiveLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
@@ -3940,8 +3947,15 @@ void pushZonesForVisibleSlots()
             // (layer, quick, sub-bank, slot) binding's label instead
             // of the plugin-driven param label. The LED tracks slot
             // populated/empty rather than focused-param state.
+            //
+            // UF8 Plugin Mode bypasses this entirely — the top-soft-
+            // key row hosts the FX-Learn-mapped plug-in's params, and
+            // letting a stale activeQuick paint over them would hide
+            // the user's gelearnte parameter (Frank 2026-05-13).
             const int curLayer  = uf8::bindings::getActiveLayer();
-            const int curQuick  = (curLayer >= 0 && curLayer <= 2)
+            const bool pluginModeLocal = g_uf8PluginMode.load();
+            const int curQuick  = (!pluginModeLocal
+                                   && curLayer >= 0 && curLayer <= 2)
                                   ? g_activeQuick[curLayer].load()  : -1;
             const int curSub    = (curLayer >= 0 && curLayer <= 2)
                                   ? g_activeSubBank[curLayer].load() : 0;
@@ -5483,6 +5497,15 @@ void pushVuMeter()
 {
     if (!g_dev || !g_dev->isOpen()) return;
 
+    // UF8 Plugin Mode: scribble strips host FX-Learn-mapped plug-in
+    // params, not REAPER tracks — the per-strip Peak-Meter LEDs would
+    // show track levels that aren't related to what the strip is
+    // controlling. Force all levels to 0 (silent) so the meter row is
+    // blank. The s_held cache + g_lastVuLevels dedup below still apply,
+    // so we only emit the "all zero" frame on the transition into
+    // Plugin Mode; subsequent ticks short-circuit (Frank 2026-05-13).
+    const bool pluginModeBlank = g_uf8PluginMode.load();
+
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
     std::array<uint8_t, 16> levels{};
@@ -5523,7 +5546,7 @@ void pushVuMeter()
     for (int s = 0; s < 8; ++s) {
         const int idx = s + bankOffset;
         uint8_t rawL = 0, rawR = 0;
-        if (idx < trackCount) {
+        if (!pluginModeBlank && idx < trackCount) {
             if (MediaTrack* tr = visibleTrackAt(idx)) {
                 // Left = channel 0, right = channel 1. REAPER's peak is
                 // the channel's post-fader tap; pre-fader VU isn't
@@ -8455,6 +8478,13 @@ void registerBindingHandlers()
         return DescBuilder{
             [target](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
+                // UF8 Plugin Mode: top-soft-keys host FX-Learn params,
+                // changing focused-param domain would re-route them
+                // away from the user-mapped plug-in. Frank 2026-05-13:
+                // "die Quick Buttons dürfen nichts an den Soft-Keys
+                // ändern, sonst kommt man nicht mehr auf die gelearnten
+                // Parameter."
+                if (g_uf8PluginMode.load()) return;
                 if (uf8::getFocusedParam().domain != target) {
                     uf8::setFocus({target, 0});
                 }
@@ -8500,6 +8530,12 @@ void registerBindingHandlers()
         return DescBuilder{
             [layer, quick](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
+                // UF8 Plugin Mode: locked out — same reason as
+                // domain_cs/bc above. The Quick-jump would engage a
+                // user-Quick which would replace the FX-Learn-driven
+                // top-soft-key labels and break access to gelearnte
+                // Parameter (Frank 2026-05-13).
+                if (g_uf8PluginMode.load()) return;
                 if (uf8::bindings::getActiveLayer() != layer) {
                     uf8::bindings::setActiveLayer(layer);
                     pushLayerLeds(layer);
@@ -8729,8 +8765,15 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
             const int layer = uf8::bindings::getActiveLayer();
-            const int activeQuick =
-                (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
+            // UF8 Plugin Mode: V-POT / Soft 1-5 navigate the
+            // FX-Learn-mode plug-in's own bank set via g_softKeyBank.
+            // Skip the user-Quick branch even if a Quick happens to be
+            // engaged in some background state — in Plugin Mode the
+            // top-soft-key row is owned by the user-mapped plug-in,
+            // not by user-Quick slots (Frank 2026-05-13).
+            const bool pluginMode = g_uf8PluginMode.load();
+            const int activeQuick = (!pluginMode && layer >= 0 && layer <= 2)
+                ? g_activeQuick[layer].load() : -1;
             // User-Quick context: the same hardware bank-row keys now
             // pick which of the 6 sub-banks (V-POT + Soft 1..5) drives
             // the top-soft-key row. SSL g_softKeyBank stays untouched
