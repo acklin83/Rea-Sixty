@@ -86,16 +86,10 @@ struct MixerWindow::Impl {
         // recent debugging sessions — bumping the suffix forces v0.10
         // to treat us as a brand-new context with no carried-over
         // collapsed / off-screen / closed pose.
-        // Host (OS-level ReaImGui window) must be at least as tall as the
-        // inner ImGui window set at SetNextWindowSize() below (1280×1080
-        // at pos 60,60). When host height < inner height + padding, the
-        // inner window overflows the host bounds and clicks below the
-        // host's clip rect get swallowed — symptom is a settings window
-        // that renders but refuses all mouse input.
-        int sizeW = 1400;
-        int sizeH = 1200;
+        int sizeW = 1280;
+        int sizeH = 720;
         ctx = ImGui_CreateContext(
-            "Rea-Sixty v4",
+            "Rea-Sixty v2",
             &sizeW, &sizeH,
             /*pos_x*/ nullptr, /*pos_y*/ nullptr);
     }
