@@ -606,6 +606,16 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         {15, 74, ButtonId::Layer3, "3", 2},
     };
     for (auto& b : layerBtns) {
+        // Layer 3 is conceptually removed (Frank 2026-05-13:
+        // "Layer 3 komplett ausgrauen, haben wir rausgeworfen").
+        // Render as locked / non-interactive — no hover, no click,
+        // no active-ring overlay. Data model still carries 3 layers
+        // so hardware presses can still flip activeLayer, but the
+        // editor doesn't let you navigate there.
+        if (b.idx == 2) {
+            drawLocked(b.x, b.y, 36, 22, b.lbl);
+            continue;
+        }
         const bool justClicked = drawHwBtn(b.x, b.y, 36, 22, b.id, b.lbl);
         if (justClicked) {
             uf8::bindings::dispatch(b.id, /*pressed*/ true);
