@@ -246,7 +246,7 @@ def cover_page():
         ("Status", "Working, near feature-complete on macOS (Phase 1 + Phase 2)"),
         ("Source", '<font color="#009FD5">github.com/acklin83/reaper-uf8</font>'),
         ("License", "MIT &mdash; original code only, no SSL material redistributed"),
-        ("Document date", "2026-05-09"),
+        ("Document date", "2026-05-13"),
     ]))
     s.append(NextPageTemplate("body"))
     s.append(PageBreak())
@@ -717,6 +717,7 @@ def part_two_bindings():
         "Press the UF8 / UC1 control you want to bind. The extension reports the captured control back to the UI.",
         "Trigger the REAPER action (or move the FX parameter) you want to bind to it.",
         "The binding is written to <font face='Courier'>bindings.json</font> and the extension reloads it.",
+        "Right-click a learned slot for <b>Fill sequential (right)</b> &mdash; auto-fills the strips to the right with consecutive parameters of the same FX.",
         "ESC at any time cancels Learn Mode.",
     ]:
         s.append(Paragraph(f"&bull;&nbsp;&nbsp;{b}", BULLET))
