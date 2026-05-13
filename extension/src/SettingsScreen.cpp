@@ -66,6 +66,7 @@ int                reasixty_focusedDomain();
 int                reasixty_activeUserBank();
 int                reasixty_activeQuickFor(int layer);
 int                reasixty_activeSubBankFor(int layer);
+int                reasixty_engagedQuickFor(int layer);
 const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // Currently active SSL soft-key PAGE bank — used by the schematic
 // to highlight the matching V-POT/Bank tile and by the per-binding
@@ -576,12 +577,55 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     // into the button border).
     drawGroupLabel(20, 6, "LAYER");
     drawGroupLabel(64, 6, "QUICK");
-    drawHwBtn(15, 22, 36, 22, ButtonId::Layer1, "1");
-    drawHwBtn(15, 48, 36, 22, ButtonId::Layer2, "2");
-    drawHwBtn(15, 74, 36, 22, ButtonId::Layer3, "3");
-    drawHwBtn(57, 22, 36, 22, ButtonId::Quick1, "1");
-    drawHwBtn(57, 48, 36, 22, ButtonId::Quick2, "2");
-    drawHwBtn(57, 74, 36, 22, ButtonId::Quick3, "3");
+    // Layer + Quick buttons follow the same hardware-proxy + live-ring
+    // pattern as the sub-bank selectors below: click dispatches the
+    // binding (so the schematic click switches the actual layer / engages
+    // the actual Quick), and a green outline marks whichever entry is
+    // currently live on the hardware. `activeLayer` is the function-
+    // scope live layer captured earlier (line 500); we just need the
+    // matching Quick here.
+    const int activeQuickRing = (activeLayer >= 0 && activeLayer <= 2)
+                                ? reasixty_engagedQuickFor(activeLayer) : -1;
+
+    struct LqBtn { float x, y; ButtonId id; const char* lbl; int idx; };
+    const LqBtn layerBtns[3] = {
+        {15, 22, ButtonId::Layer1, "1", 0},
+        {15, 48, ButtonId::Layer2, "2", 1},
+        {15, 74, ButtonId::Layer3, "3", 2},
+    };
+    for (auto& b : layerBtns) {
+        const bool justClicked = drawHwBtn(b.x, b.y, 36, 22, b.id, b.lbl);
+        if (justClicked) {
+            uf8::bindings::dispatch(b.id, /*pressed*/ true);
+            uf8::bindings::dispatch(b.id, /*pressed*/ false);
+        }
+        if (b.idx == activeLayer) {
+            ImGui_DrawList_AddRect(c.dl,
+                c.ox + b.x - 2, c.oy + b.y - 2,
+                c.ox + b.x + 36 + 2, c.oy + b.y + 22 + 2,
+                0x40C040FF, /*rounding*/ nullptr,
+                /*flags*/ nullptr, /*thickness*/ nullptr);
+        }
+    }
+    const LqBtn quickBtns[3] = {
+        {57, 22, ButtonId::Quick1, "1", 0},
+        {57, 48, ButtonId::Quick2, "2", 1},
+        {57, 74, ButtonId::Quick3, "3", 2},
+    };
+    for (auto& b : quickBtns) {
+        const bool justClicked = drawHwBtn(b.x, b.y, 36, 22, b.id, b.lbl);
+        if (justClicked) {
+            uf8::bindings::dispatch(b.id, /*pressed*/ true);
+            uf8::bindings::dispatch(b.id, /*pressed*/ false);
+        }
+        if (b.idx == activeQuickRing) {
+            ImGui_DrawList_AddRect(c.dl,
+                c.ox + b.x - 2, c.oy + b.y - 2,
+                c.ox + b.x + 36 + 2, c.oy + b.y + 22 + 2,
+                0x40C040FF, /*rounding*/ nullptr,
+                /*flags*/ nullptr, /*thickness*/ nullptr);
+        }
+    }
 
     drawHwBtn(15, 108, 78, 24, ButtonId::Btn360, "360\xC2\xB0");
 
@@ -1834,37 +1878,20 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     bool    dirty = false;
 
     char header[180];
-    // Top-soft-keys' default action follows the live PAGE bank — show
-    // it in the header so the user always knows which bank's slot N
-    // they're looking at on the hardware right now. The Quick context
-    // ("Q1" / "Q2" / "Q3" or CS/BC on Layer 1) is appended too so the
-    // user can tell at a glance which path the button is wired to.
-    const bool isTopSoftKey =
-        id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8;
-    // Build the "Quick" suffix. Priority: live user-Quick engagement on
-    // the editor's layer, then Layer-1 CS/BC focus, otherwise nothing.
+    // Quick context suffix — only the user-Quick engagement counts.
+    // Layer 1's SSL CS/BC focus is NOT shown here because it's not a
+    // Quick in the data model (Frank 2026-05-13: "Es gibt nur Layer
+    // 1-3 mit je Quick 1-3 — nicht CS oder BC").
     char qBuf[24] = {0};
     {
         const int liveQ = reasixty_activeQuickFor(layer);
         if (liveQ >= 0) {
             std::snprintf(qBuf, sizeof(qBuf), ", Q%d", liveQ + 1);
-        } else if (layer == 0) {
-            const int dom = reasixty_focusedDomain();
-            if      (dom == 0) std::snprintf(qBuf, sizeof(qBuf), ", CS");
-            else if (dom == 1) std::snprintf(qBuf, sizeof(qBuf), ", BC");
         }
     }
-    if (isTopSoftKey) {
-        std::snprintf(header, sizeof(header),
-                      "Editing: %s — %s   (Layer %d%s)",
-                      hwFaceLabel(id),
-                      reasixty_softkeyCurrentBankName(),
-                      layer + 1, qBuf);
-    } else {
-        std::snprintf(header, sizeof(header),
-                      "Editing: %s   (Layer %d%s)",
-                      hwFaceLabel(id), layer + 1, qBuf);
-    }
+    std::snprintf(header, sizeof(header),
+                  "Editing: %s   (Layer %d%s)",
+                  hwFaceLabel(id), layer + 1, qBuf);
     ImGui_Text(ctx, header);
     ImGui_Separator(ctx);
 
@@ -2349,18 +2376,129 @@ void drawCsiImportSection(ImGui_Context* ctx, int editLayer)
     }
 }
 
-// ---- User-Quick slot editor ----------------------------------------------
-// Renders the per-layer Quick + sub-bank selector and 8 slot editors.
-// WYSIWYG sync: when the user clicks a Quick button (Q1/Q2/Q3) in the
-// hardware schematic above, the slot editor here jumps straight to
-// that Quick. A live-state badge shows which Quick + sub-bank are
-// currently engaged on the hardware (independent of what's being
-// edited).
+// ---- User-Quick slot editor (per-slot, driven by TopSoftKey click) ------
+// Edits ONE user-Quick slot at coordinates (editLayer, engaged Quick on
+// editLayer, active Sub-Bank on editLayer, slotIdx). The Quick + Sub-
+// Bank halves of the coordinate come from the live hardware state —
+// the user already switched them by clicking Q1/Q2/Q3 + V-POT/Soft 1-5
+// in the mockup above (those clicks engage on the hardware via the
+// schematic-proxy dispatch). All the user does here is fill the slot.
 //
-// Layer 1 Q1/Q2 fire domain_cs / domain_bc and never engage
-// g_activeQuick — their user-Quick slots are unreachable, so the
-// editor surfaces an explanation instead of pretending. Q3 on Layer 1
-// + all three Quicks on Layer 2/3 are user-fillable.
+// Layer 1 Q1/Q2 = SSL CS/BC are plug-in-driven; their slots are filled
+// by the SSL plug-in's stock soft-key labels and not user-editable.
+// Pop a clear notice instead of pretending an editor.
+void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
+{
+    using namespace uf8::bindings;
+    if (editLayer < 0 || editLayer > 2)               return;
+    if (slotIdx < 0 || slotIdx >= kSlotsPerSubBank)   return;
+
+    const int liveQ  = reasixty_activeQuickFor(editLayer);
+    const int liveSB = reasixty_activeSubBankFor(editLayer);
+
+    const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
+    const char* sbLabels[6] = {
+        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+    };
+
+    // Layer 1 Q1/Q2 = SSL CS/BC. Engaged via domain_cs / domain_bc;
+    // g_activeQuick stays at -1 on press, so we detect this state by
+    // looking at the focused-domain. Slots are filled by the plug-in.
+    const int engagedForDisplay = reasixty_engagedQuickFor(editLayer);
+    const bool isSslCsBc = (editLayer == 0
+                            && engagedForDisplay >= 0
+                            && engagedForDisplay <= 1);
+    if (isSslCsBc) {
+        char hdr[160];
+        std::snprintf(hdr, sizeof(hdr),
+                      "Top Soft-Key %d   (Layer 1, %s)",
+                      slotIdx + 1,
+                      engagedForDisplay == 0 ? "Q1 = SSL CS"
+                                             : "Q2 = SSL BC");
+        ImGui_Text(ctx, hdr);
+        ImGui_TextDisabled(ctx,
+            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) auto-fill the top-soft-"
+            "key row from the SSL plug-in's stock soft-key labels. "
+            "Nothing to edit here — pick Q3 (or switch to Layer 2/3) "
+            "for free user-Quick slots.");
+        return;
+    }
+    if (liveQ < 0) {
+        ImGui_Text(ctx, "(no Quick engaged on this layer)");
+        ImGui_TextDisabled(ctx,
+            "Click Q1, Q2, or Q3 in the mockup above to engage a Quick "
+            "context, then click a top-soft-key tile to edit its slot. "
+            "On Layer 1 you can engage Q1 (SSL CS), Q2 (SSL BC), or Q3 "
+            "(user-fillable).");
+        return;
+    }
+
+    const int  qIdx  = liveQ;
+    const int  sbIdx = (liveSB < 0 || liveSB > 5) ? 0 : liveSB;
+    const char* qName  = qLabels[qIdx];
+    const char* sbName = sbLabels[sbIdx];
+
+    Binding bd = getUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx);
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+
+    // Full breadcrumb. Frank 2026-05-13: "selbstverständlich" that the
+    // header carries every coordinate that defines what this slot is.
+    char hdr[200];
+    std::snprintf(hdr, sizeof(hdr),
+                  "Editing: Top Soft-Key %d — %s   (Layer %d, %s)",
+                  slotIdx + 1, sbName, editLayer + 1, qName);
+    ImGui_Text(ctx, hdr);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    ImGui_PushID(ctx, "uqslot_inline");
+    char idtag[48];
+    std::snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_s%d",
+                  editLayer, qIdx, sbIdx, slotIdx);
+    ImGui_PushID(ctx, idtag);
+
+    bool dirty = false;
+    char labelBuf[64] = {0};
+    std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
+    double w = 240;
+    ImGui_PushItemWidth(ctx, w);
+    if (ImGui_InputTextWithHint(ctx, "Label##uqslotlabel_inl",
+                                "shown on the top-soft-key LCD",
+                                labelBuf, sizeof(labelBuf),
+                                nullptr, nullptr)) {
+        bd.label = labelBuf;
+        dirty = true;
+    }
+    ImGui_PopItemWidth(ctx);
+
+    ActionFieldsRef ref{
+        &sp.type, &sp.action, &sp.param, &sp.label,
+        &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
+        &sp.midiData1, &sp.midiData2,
+        &sp.fireOnInactive,
+    };
+    if (drawActionPicker(ctx, idtag, ref,
+                         /*layer*/ -1, ButtonId::None,
+                         /*isLongPress*/ false)) {
+        dirty = true;
+    }
+    if (ImGui_Button(ctx, "Clear slot##uqclr_inl",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+        bd = Binding{};
+        dirty = true;
+    }
+
+    if (dirty) {
+        setUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx, bd);
+    }
+    ImGui_PopID(ctx);   // idtag
+    ImGui_PopID(ctx);   // "uqslot_inline"
+}
+
+// ---- User-Quick slot editor (OLD section-style) — UNUSED ---------------
+// Kept under #if 0 for one revision until Frank confirms the new TopSoft-
+// Key-click flow lands cleanly. Remove on the next commit.
+#if 0
 void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
                            uf8::bindings::ButtonId selected)
 {
@@ -2562,6 +2700,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
         ImGui_PopID(ctx);
     }
 }
+#endif
 
 } // namespace
 
@@ -2577,56 +2716,57 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
 {
     using namespace uf8::bindings;
 
-    int             s_editLayer = getActiveLayer();
+    // The editor's "current layer" follows the live hardware layer at
+    // all times — the user changes layer exclusively by clicking the
+    // Layer 1/2/3 buttons in the mockup below (which fire the
+    // layer_select_* bindings via the schematic-proxy click). No
+    // separate tab strip; the mockup's green outline ring around the
+    // active Layer button is the single source of truth.
+    const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
     drawCsiImportSection(ctx, s_editLayer);
     ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
 
-    // ---- Top: layer-pick row + activate ----
-    // Three big tab-like buttons replace the old combo so the user can
-    // jump between layers with a single click. The currently-edited
-    // layer is highlighted (blue fill); the hardware-active layer is
-    // marked with a green dot so the two states stay distinguishable.
-    {
-        const int active = getActiveLayer();
-        const uint32_t kSelFill   = 0x4477CCFF;
-        const uint32_t kSelHover  = 0x5588DDFF;
-        const uint32_t kSelActive = 0x6699EEFF;
-        for (int li = 0; li < 3; ++li) {
-            char label[32];
-            // U+25CF BLACK CIRCLE marks the layer that's currently
-            // driving the hardware so it's visible at a glance.
-            // `###` (not `##`) so the trailing slug owns the ID — the
-            // visible "● active" dot toggling per frame must not reshape
-            // the widget hash. With `##`, ImGui reissues an ID each time
-            // the dot appears/disappears, which on some hosts (observed
-            // on Layer 3 here) loses the click between frames.
-            std::snprintf(label, sizeof(label), "Layer %d%s###layer_tab_%d",
-                          li + 1,
-                          (li == active) ? "  \xE2\x97\x8F" : "",
-                          li);
-            const bool selected = (s_editLayer == li);
-            int pushed = 0;
-            if (selected) {
-                ImGui_PushStyleColor(ctx, ImGui_Col_Button,        kSelFill);
-                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, kSelHover);
-                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  kSelActive);
-                pushed = 3;
-            }
-            double bw = 110, bh = 28;
-            if (ImGui_Button(ctx, label, &bw, &bh)) {
-                s_editLayer = li;
-                setActiveLayer(li);
-                reasixty_onActiveLayerChanged();
-            }
-            if (pushed) {
-                ImGui_PopStyleColor(ctx, &pushed);
-            }
-            if (li < 2) sameLine(ctx);
-        }
+    // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
+    // Click → selects the button for editing AND, for Layer / Quick /
+    // Sub-Bank tiles, dispatches the binding so the hardware engages
+    // the same as a real press would. WYSIWYG end-to-end.
+    drawUf8Vector(ctx, s_selected);
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ---- Editor — branches on what the user clicked ---------------------
+    // A top-soft-key tile pivots to the user-Quick slot editor for the
+    // live (Layer, Quick, Sub-Bank, slot) combination. Everything else
+    // goes through the regular per-button binding editor.
+    const bool isTopSoftKey =
+        s_selected >= ButtonId::TopSoftKey1
+        && s_selected <= ButtonId::TopSoftKey8;
+    if (s_selected == ButtonId::None) {
+        ImGui_Text(ctx,
+            "Click a button in the mockup above to edit its binding. "
+            "Click Layer 1/2/3 + Q1/Q2/Q3 + V-POT/Soft 1-5 to switch "
+            "what's live on the hardware; click a top-soft-key tile to "
+            "edit the slot at that (Layer, Quick, Sub-Bank) coordinate.");
+    } else if (isTopSoftKey) {
+        const int slotIdx =
+            static_cast<int>(s_selected)
+            - static_cast<int>(ButtonId::TopSoftKey1);
+        drawUserQuickSlotEditor_(ctx, s_editLayer, slotIdx);
+    } else {
+        drawBindingEditor(ctx, s_editLayer, s_selected);
     }
 
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ---- Per-layer admin row (auto-mixer / reset / save / load) ---------
     if (s_editLayer >= 1) {
         bool autoMixer = get().layers[s_editLayer].autoWhenMixerVisible;
         if (ImGui_Checkbox(ctx,
@@ -2635,8 +2775,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             setLayerAutoMixer(s_editLayer, autoMixer);
         }
     } else {
-        ImGui_Text(ctx, "(Layer 1 is the default — mixer auto-switch lives "
-                        "on Layer 2 / 3.)");
+        ImGui_TextDisabled(ctx,
+            "(Layer 1 — mixer auto-switch lives on Layer 2 / 3.)");
     }
 
     if (ImGui_Button(ctx, "Reset this layer to factory defaults",
@@ -2644,10 +2784,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         resetLayerToDefaults(s_editLayer);
     }
 
-    // ---- Portable per-layer save / load ----
-    // Both buttons act on the layer currently selected in the editor
-    // (s_editLayer). The status line is sticky-but-cheap: the last
-    // action's outcome shows until the next action overwrites it.
     static std::string s_portMsg;
     char btnSave[40], btnLoad[40];
     std::snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
@@ -2666,41 +2802,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ? "Layer imported."
             : "Import cancelled or failed.";
     }
-    // CSI import lives in its own panel at the top of this tab
-    // (drawCsiImportSection) — its target-layer follows s_editLayer.
     if (!s_portMsg.empty()) {
         ImGui_TextDisabled(ctx, s_portMsg.c_str());
     }
-
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
-    drawUf8Vector(ctx, s_selected);
-
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // ---- Editor (only when a button is selected) ----
-    if (s_selected == ButtonId::None) {
-        ImGui_Text(ctx, "Click a button above to edit its binding.");
-    } else {
-        drawBindingEditor(ctx, s_editLayer, s_selected);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // ---- User-Quick slot editor ------------------------------------------
-    // Each layer carries 3 Quick contexts (Q1/Q2/Q3); each Quick holds
-    // 6 sub-banks (V-POT default + Soft 1..5); each sub-bank carries 8
-    // top-soft-key slots. Layer 1 Q1/Q2 stay hardcoded for SSL CS/BC —
-    // those tabs are disabled. Q3 + Layer 2/3 all-three are user-filled
-    // here. WYSIWYG: clicking a Quick button in the schematic above
-    // pivots this section straight to that Quick's slots.
-    drawUserQuickSection_(ctx, s_editLayer, s_selected);
 }
 
 // ---- FX Learn -------------------------------------------------------------

@@ -7364,6 +7364,24 @@ int reasixty_activeSubBankFor(int layer)
     return g_activeSubBank[layer].load();
 }
 
+// "Which Quick button looks engaged from the user's perspective" —
+// handles Layer 1's special case where Q1 = SSL CS focus and Q2 = SSL
+// BC focus instead of going through g_activeQuick. Priority order:
+// (1) g_activeQuick wins (user-Quick toggle is the explicit choice),
+// (2) Layer 1 focus.domain falls back to Q1/Q2, (3) else -1.
+int reasixty_engagedQuickFor(int layer)
+{
+    if (layer < 0 || layer > 2) return -1;
+    const int gq = g_activeQuick[layer].load();
+    if (gq >= 0) return gq;
+    if (layer == 0) {
+        const auto dom = uf8::getFocusedParam().domain;
+        if (dom == uf8::Domain::ChannelStrip) return 0;   // Q1 = CS
+        if (dom == uf8::Domain::BusComp)      return 1;   // Q2 = BC
+    }
+    return -1;
+}
+
 // User-Quick slot label for the Settings preview. `bank` is interpreted
 // as the active Quick index (0..2) on the currently-active layer; the
 // active sub-bank decides which of the 6 slot tables the label comes
