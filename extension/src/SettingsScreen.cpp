@@ -4328,7 +4328,7 @@ constexpr float kUf8CutY        = 172;
 constexpr float kUf8SelY        = 192;
 constexpr float kUf8SCSBtnH     = 16;
 constexpr float kUf8FaderRailY  = 216;
-constexpr float kUf8FaderRailH  = 258;
+constexpr float kUf8FaderRailH  = 240;
 constexpr float kUf8FaderRailW  = 22;
 
 inline float uf8StripCx_(int strip)
