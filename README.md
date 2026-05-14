@@ -25,7 +25,7 @@ Working extension, near feature-complete on macOS. Phase 1 (UF8 standalone repla
 
 SSL's UF8 scribble strips can display track colors, but **only** in SSL 360°'s Plugin-Mixer layer, **only** with an SSL plugin loaded on every track — unworkable for 100+ track sessions. SSL 360° also holds the UF8 vendor-USB interface with an exclusive claim, so coexistence isn't an option. Either replace SSL 360°, or live with the limitation. Rea-Sixty replaces it.
 
-The protocols, capture workflow, and decisions are documented under `docs/` — start with `docs/protocol-notes.md`, `docs/protocol-notes-uc1.md`, and `docs/architecture-decision.md`.
+The protocols, capture workflow, and decisions are documented under `docs/` — start with `docs/protocol-notes.md`, `docs/protocol-notes-uc1.md`, and `docs/architecture-decision.md`. For user-facing terminology (e.g. **FX vs. Instance** — the V-Pot FX-Cycle walks all FX on a track, the Encoder Instance Cycle walks only surface-mapped CS / BC / UF8 plug-ins including combos and 360° Link), see [`docs/concepts.md`](docs/concepts.md).
 
 ## Repo layout
 

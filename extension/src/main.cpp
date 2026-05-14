@@ -107,13 +107,12 @@ std::atomic<bool> g_uf8PluginModeWithGui{false};
 void* g_uf8GuiShownTr = nullptr;
 int   g_uf8GuiShownFx = -1;
 
-// Selection-Mode Instance "with GUI" variant — push opens the active
-// per-strip FX window AND rotation auto-follows the cycle. Plain
-// Instance mode leaves this flag false; push toggles GUI manually
-// per-strip but rotation does not move the window. Owner-strip is
-// the strip that last opened a GUI — only its rotation triggers
-// auto-follow.
-std::atomic<bool> g_instanceWithGui{false};
+// V-POTS → FX Cycle GUI ownership. V-Pot push toggles ownership for a
+// strip; the GUI sync drain opens/closes the floating window based on
+// who owns it. V-Pot rotation on the owner strip re-points the open
+// window to the new active FX automatically — no separate "with GUI"
+// variant needed (Frank 2026-05-14 "kann weg - wir können eh mit V-Pot
+// push GUI einblenden").
 std::atomic<int>  g_instanceGuiOwnerStrip{-1};
 void* g_instanceGuiShownTr = nullptr;
 int   g_instanceGuiShownFx = -1;
@@ -1262,6 +1261,15 @@ void applyInstanceCycle_(int step)
     int nextK = (curK + step) % static_cast<int>(hits.size());
     if (nextK < 0) nextK += static_cast<int>(hits.size());
     const Hit& target = hits[nextK];
+    // Sync the per-strip Instance index on the focused track so the
+    // Selection-Mode Instance colour-bar readout (stripInstanceActiveFx_)
+    // moves with the Encoder cycle on the focused/selected strip. Other
+    // strips keep their own per-strip g_stripInstanceFxIdx, so the
+    // Encoder Cycle only visibly affects the selected channel (Frank
+    // 2026-05-14 "soll nur beim selected channel wie vorher"). The
+    // per-strip V-Pot path in StripInstanceDelta still updates this
+    // map independently for non-focused strips.
+    g_stripInstanceFxIdx[tr] = target.fxIdx;
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
@@ -2412,13 +2420,12 @@ void drainInputQueue()
                         int next = ((cur + step) % n + n) % n;
                         g_stripInstanceFxIdx[tr] = next;
                         g_bankDirty.store(true);   // refresh scribble strip
-                        // with-GUI variant: re-point the floating
-                        // window to the new FX when this strip owns
-                        // the open GUI (Frank "wenn GUI sichtbar und
-                        // weiter gecyclet wird, GUI auf neue aktive
-                        // instanz wechseln").
-                        if (g_instanceWithGui.load()
-                            && g_instanceGuiOwnerStrip.load() == s) {
+                        // If this strip owns the open FX-Cycle GUI,
+                        // re-point the window to the new active FX so
+                        // the user sees the cycle in the floating
+                        // editor too. Strips that haven't been pushed
+                        // own no GUI → no-op.
+                        if (g_instanceGuiOwnerStrip.load() == s) {
                             g_pluginGuiSyncRequest.store(true);
                         }
                     }
@@ -4697,15 +4704,35 @@ void pushZonesForVisibleSlots()
         // recognised, else a REAPER mnemonic. Pass the natural text
         // length — buildChannelStripType pads with NULs internally so
         // the trailing LCD cells render blank instead of showing space
-        // characters past the text (Frank 2026-05-09). This is the
-        // "Quick Bank" indicator (CS 2 / BC 1 / 4K B / ...) and stays
-        // independent of Selection Mode so Encoder → Instance Cycle
-        // can refresh it through the standard lookupPluginOnTrack path
-        // (Frank 2026-05-14 "V-POTS → Instance zeigt die aktive Quick
-        // Bank nicht mehr an").
+        // characters past the text (Frank 2026-05-09).
+        //
+        // Frank 2026-05-14: plug-in / FX names belong here in the
+        // colour bar, NEVER in the upper track-name zone. Two modes
+        // override the default CS/BC variant label:
+        //   - SSL Strip Mode (g_pluginFaderMode): the CS variant name
+        //     must show while the mode is active, even with no UC1
+        //     focus, and even if Instance Selection Mode is also
+        //     active — SSL Strip wins because the fader is literally
+        //     routed to the CS instance's Fader Level param, so the
+        //     colour bar must reflect that target.
+        //   - Instance Selection Mode: each strip's colour bar shows
+        //     that strip's active FX (rotates with the strip's own
+        //     V-Pot). Encoder Instance Cycle only updates the focused
+        //     track's g_stripInstanceFxIdx (see applyInstanceCycle_),
+        //     so it visibly moves only the selected strip — other
+        //     strips stay parked on whatever their V-Pots have dialed
+        //     in (Frank 2026-05-14 "Encoder Instance Cycle soll nur
+        //     beim selected channel" AND "v-pots → instance cycle
+        //     geht nicht mit nur v-pot wenn track nicht selected").
         std::string csType;
         if (userStripActive) {
             csType = userS.map->displayShort;
+        } else if (g_pluginFaderMode.load()) {
+            if (map) csType = map->displayShort;
+        } else if (g_selectionMode.load() == SelectionMode::Instance) {
+            const int instFxIdx = stripInstanceActiveFx_(tr);
+            if (instFxIdx >= 0) csType = shortFxName_(tr, instFxIdx);
+            if (csType.empty()) csType = "-";
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
             if (uf8Ctx.map) csType = uf8Ctx.map->displayShort;
@@ -4931,21 +4958,6 @@ void pushZonesForVisibleSlots()
             if (routedFader || routedVpot) {
                 const StripRoute& r = routedFader ? faderRoute : vpotRoute;
                 n = routeName_(r);
-            }
-            // Selection-Mode Instance: per-strip active FX name lives
-            // here so the user can see WHICH plug-in the V-Pot will
-            // toggle / cycle next, while the colour-bar Quick-Bank
-            // label below stays at the CS/BC variant string (Frank
-            // 2026-05-14). Wins over user-fader-name binding only when
-            // no routing is active.
-            if (n.empty()
-                && g_selectionMode.load() == SelectionMode::Instance)
-            {
-                const int instFxIdx = stripInstanceActiveFx_(tr);
-                if (instFxIdx >= 0) {
-                    n = shortFxName_(tr, instFxIdx);
-                }
-                if (n.empty()) n = "-";
             }
             // FX Learn UF8: when a user-mapped fader binding exists for
             // this strip, show the bound param's name instead of the
@@ -8865,9 +8877,6 @@ void registerBindingHandlers()
                     const auto next = (cur == mode) ? SelectionMode::Norm
                                                     : mode;
                     g_selectionMode.store(next);
-                    // Plain mode helpers clear the with-GUI flag —
-                    // only the dedicated `_with_gui` builtin sets it.
-                    g_instanceWithGui.store(false);
                     // Leaving Instance → drop any GUI ownership and
                     // ask the sync drain to close an open window.
                     if (cur == SelectionMode::Instance
@@ -8885,13 +8894,6 @@ void registerBindingHandlers()
                     g_bankDirty.store(true);
                 },
                 [mode](int) {
-                    // Plain Instance lights only when with-GUI is OFF
-                    // — keeps the two variants visually distinct on
-                    // the hardware button row.
-                    if (mode == SelectionMode::Instance) {
-                        return g_selectionMode.load() == SelectionMode::Instance
-                            && !g_instanceWithGui.load();
-                    }
                     return g_selectionMode.load() == mode;
                 },
                 display, false
@@ -8906,39 +8908,15 @@ void registerBindingHandlers()
     registerSelectionModeToggle("selection_mode_auto",
                                 SelectionMode::Auto,
                                 "Selection Mode → AUTO (toggle)");
+    // FX Cycle — per-strip V-Pot rotation walks ALL FX on the strip's
+    // track (not limited to learned CS/BC/UF8 plug-ins, which is what
+    // Encoder Instance Cycle does). Named "FX Cycle" to reflect the
+    // broader scope (Frank 2026-05-14). V-Pot push toggles the GUI of
+    // the active FX on the rotating strip; rotation while the GUI is
+    // open auto-follows the cycle to the new FX.
     registerSelectionModeToggle("selection_mode_instance",
                                 SelectionMode::Instance,
-                                "Toggle V-POTS → Instance");
-
-    // Same toggle as selection_mode_instance, but the with-GUI flag
-    // makes V-Pot rotation auto-follow the cycle while a GUI is open
-    // (push opens / closes the window manually per-strip). Plain
-    // Instance leaves the GUI frozen on whatever fx the user last
-    // pushed; the with-GUI variant re-points it on every cycle.
-    registerBuiltin("selection_mode_instance_with_gui", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            const auto cur  = g_selectionMode.load();
-            const auto next = (cur == SelectionMode::Instance)
-                              ? SelectionMode::Norm
-                              : SelectionMode::Instance;
-            g_selectionMode.store(next);
-            g_instanceWithGui.store(next == SelectionMode::Instance);
-            if (next != SelectionMode::Instance) {
-                g_instanceGuiOwnerStrip.store(-1);
-                g_pluginGuiSyncRequest.store(true);
-            }
-            SetExtState("ReaSixty", "selectionMode",
-                        selectionModeStr(next), true);
-            g_pageDirty.store(true);
-            g_bankDirty.store(true);
-        },
-        [](int) {
-            return g_selectionMode.load() == SelectionMode::Instance
-                && g_instanceWithGui.load();
-        },
-        "Toggle V-POTS → Instance (with GUI)", false
-    });
+                                "Toggle V-POTS → FX Cycle");
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
@@ -9090,6 +9068,19 @@ void registerBindingHandlers()
                 g_pluginFaderMode.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
             }
+            // Mutex with Selection Mode — the V-Pot rotation/push
+            // dispatcher (3507, 3351) routes through SelectionMode
+            // first, so an active Instance/Auto/REC mode preempts
+            // UF8 Plugin Mode's user-param V-Pot routing. Kicking
+            // Selection Mode back to Norm on entry lets the deep-edit
+            // controls actually reach the strip (Frank 2026-05-14
+            // "instance mit v-pots ausgewählt, UF8 Plugin Mode öffnet
+            // nur GUI aber nicht die controls auf UF8").
+            if (next && g_selectionMode.load() != SelectionMode::Norm) {
+                g_selectionMode.store(SelectionMode::Norm);
+                g_instanceGuiOwnerStrip.store(-1);
+                SetExtState("ReaSixty", "selectionMode", "norm", true);
+            }
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",
@@ -9111,6 +9102,12 @@ void registerBindingHandlers()
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+            }
+            // Mutex with Selection Mode — see uf8_plugin_mode_toggle.
+            if (next && g_selectionMode.load() != SelectionMode::Norm) {
+                g_selectionMode.store(SelectionMode::Norm);
+                g_instanceGuiOwnerStrip.store(-1);
+                SetExtState("ReaSixty", "selectionMode", "norm", true);
             }
             g_pageDirty.store(true);
             g_bankDirty.store(true);
