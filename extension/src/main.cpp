@@ -9178,22 +9178,21 @@ void registerBindingHandlers()
         };
     registerSelectionModeToggle("selection_mode_rec",
                                 SelectionMode::Rec,
-                                "Selection Mode → REC (toggle)");
+                                "Selection Mode → REC");
     registerSelectionModeToggle("selection_mode_rec_mon",
                                 SelectionMode::RecMon,
-                                "Selection Mode → REC + MON (toggle)");
+                                "Selection Mode → REC + MON");
     registerSelectionModeToggle("selection_mode_auto",
                                 SelectionMode::Auto,
-                                "Selection Mode → AUTO (toggle)");
-    // FX Cycle — per-strip V-Pot rotation walks ALL FX on the strip's
+                                "Selection Mode → AUTO");
+    // Instance Mode — per-strip V-Pot rotation walks ALL FX on the strip's
     // track (not limited to learned CS/BC/UF8 plug-ins, which is what
-    // Encoder Instance Cycle does). Named "FX Cycle" to reflect the
-    // broader scope (Frank 2026-05-14). V-Pot push toggles the GUI of
-    // the active FX on the rotating strip; rotation while the GUI is
-    // open auto-follows the cycle to the new FX.
+    // Encoder Instance Cycle does). V-Pot push toggles the GUI of the
+    // active FX on the rotating strip; rotation while the GUI is open
+    // auto-follows the cycle to the new FX.
     registerSelectionModeToggle("selection_mode_instance",
                                 SelectionMode::Instance,
-                                "Toggle V-POTS → FX Cycle");
+                                "Selection Mode → Instance");
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
@@ -9438,7 +9437,7 @@ void registerBindingHandlers()
         // window-visible state lets the LED track open/closed
         // honestly.
         [](int /*param*/) -> bool { return g_mixerWindow.isOpen(); },
-        "Open / close Plugin Mixer", false
+        "Open / Close Rea-Sixty Settings", false
     });
 
     // ---- Phase 2.5 surface-filter modes ----------------------------------
@@ -9463,7 +9462,7 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "folderMode", next ? "1" : "0", true);
         },
         [](int) { return g_folderMode.load(); },
-        "Folder Mode (parents only)", false
+        "Toggle Folder Mode (parents only)", false
     });
 
     registerBuiltin("show_only_selected", DescBuilder{
@@ -9477,7 +9476,7 @@ void registerBindingHandlers()
                         next ? "1" : "0", true);
         },
         [](int) { return g_showOnlySelected.load(); },
-        "Show Only Selected", false
+        "Toggle Show Only Selected", false
     });
 
     // Selection-Set recall — single param-driven builtin. param = slot 1..8.
@@ -9542,7 +9541,7 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "encoderMode", "Nav", true);
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Nav; },
-        "Encoder → Nav", false
+        "Encoder Mode → Nav", false
     });
     registerBuiltin("encoder_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -9551,7 +9550,7 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "encoderMode", "Nudge", true);
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Nudge; },
-        "Encoder → Nudge", false
+        "Encoder Mode → Nudge", false
     });
     registerBuiltin("encoder_focus", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -9560,7 +9559,7 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "encoderMode", "Focus", true);
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Focus; },
-        "Encoder → Focus", false
+        "Encoder Mode → Focus", false
     });
     registerBuiltin("encoder_instance", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -9569,7 +9568,7 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "encoderMode", "Instance", true);
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Instance; },
-        "Encoder → Instance cycle", false
+        "Encoder Mode → Instance Cycle", false
     });
 
     // ---- Channel-encoder rotation builtins ------------------------------
