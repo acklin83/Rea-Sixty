@@ -1283,6 +1283,18 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         const bool on = (*f.type == t);
         std::snprintf(idbuf, sizeof(idbuf), "%s##%s_%s", label, prefix, tag);
         if (ImGui_RadioButton(ctx, idbuf, on)) {
+            // Switching action type — clear payload that doesn't transfer
+            // across types. A REAPER action ID is meaningless as a Native
+            // builtin name (and vice versa), and the integer param's
+            // semantics differ per type. Frank 2026-05-14: dropping the
+            // old value avoids the "preview blank but stale ID under it"
+            // state that left a hidden action sitting in the binding
+            // after a type swap. MIDI fields stay (they're MIDI-only
+            // anyway and won't fire unless type == Midi).
+            if (*f.type != t) {
+                f.action->clear();
+                *f.param = 0;
+            }
             *f.type = t;
             dirty = true;
         }
@@ -1412,7 +1424,17 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         std::snprintf(idbuf, sizeof(idbuf), "Built-in##%s_native", prefix);
         double w = 280;
         ImGui_PushItemWidth(ctx, w);
-        if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), /*flags*/ nullptr)) {
+        // HeightLargest = ~20 rows visible — short popup forced two
+        // page-scrolls to find anything past the first category. We
+        // also auto-scroll the popup so the currently-selected entry
+        // is visible the moment it opens (see SetScrollHereY below).
+        int comboFlags = ImGui_ComboFlags_HeightLargest;
+        if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), &comboFlags)) {
+            // Capture popup-just-opened on the first frame so we can
+            // request a scroll-to-selected exactly once per open. Reading
+            // it later in the loop returns false (the popup is no longer
+            // "appearing").
+            const bool popupJustOpened = ImGui_IsWindowAppearing(ctx);
             // Categorise the builtin catalogue so the dropdown stays
             // browseable as it grows. Buckets render in kCats order
             // with a Separator + disabled header between groups.
@@ -1508,6 +1530,13 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                                          nullptr, nullptr, nullptr)) {
                         *f.action = n;
                         dirty = true;
+                    }
+                    // Centre the selected row on first open so the user
+                    // sees what's currently bound instead of always
+                    // staring at "Layer" at the top.
+                    if (s && popupJustOpened) {
+                        double centre = 0.5;
+                        ImGui_SetScrollHereY(ctx, &centre);
                     }
                 }
             }
