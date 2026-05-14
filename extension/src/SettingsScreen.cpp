@@ -1492,7 +1492,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n.rfind("zoom_", 0) == 0)
                     return "Zoom";
 
-                if (n == "send_this" || n == "recv_this")
+                if (n == "send_this" || n == "recv_this"
+                 || n.rfind("send_all_", 0) == 0
+                 || n.rfind("recv_all_", 0) == 0)
                     return "Sends / Receives";
 
                 if (n.rfind("selset_", 0) == 0)

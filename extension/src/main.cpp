@@ -4576,16 +4576,28 @@ void pushZonesForVisibleSlots()
                 tssk = uf8::TopSoftKeyState::Dim;
                 ledCacheKey = 1;
             }
-            // Per-TopSoftKey LED colour. Plugin Mode: each TopSoftKey
-            // N (= bank N selector) carries one bank-scoped colour in
-            // uf8.topSoftKeyLeds[N].colour. Brightness is fixed —
-            // active bank = Bright, inactive = Dim (Frank 2026-05-13:
-            // "nur eine farbe. active immer bright, inactive immer
-            // dimm"). The earlier active/inactive Brightness split is
-            // gone; tssk from the bank-active branch above already
-            // carries Bright/Dim so no override is needed.
+            // Per-TopSoftKey LED colour resolution. Three sources, in
+            // order of precedence:
+            //   1. UF8 Plugin Mode: each TopSoftKey N (= bank N selector)
+            //      carries one bank-scoped colour in
+            //      uf8.topSoftKeyLeds[N].colour. Brightness is fixed —
+            //      active bank Bright, inactive Dim (Frank 2026-05-13).
+            //   2. User-Quick context: the user-defined slot Binding's
+            //      colour / inactiveColor; picked by `tssk`.
+            //   3. Layer-level Binding on TopSoftKey1..8 (the per-button
+            //      override the user can edit in the Bindings editor —
+            //      Frank 2026-05-14 "LED Farbe für Soft-Keys werden
+            //      nicht übernommen von bindings"). Same active /
+            //      inactive split.
+            // Falls back to white if nothing overrides.
             uf8::LedColour ledClr = uf8::ledColourWhite();
             uint32_t ledColRgb = 0xFFFFFFu;
+            auto packRgb_ = [](const uint8_t (&c)[3]) -> uint32_t {
+                return (uint32_t(c[0]) << 16)
+                     | (uint32_t(c[1]) << 8)
+                     |  uint32_t(c[2]);
+            };
+            const bool wantActive = (tssk == uf8::TopSoftKeyState::On);
             if (pluginModeLocal) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const auto& tl = uctx.map->uf8.topSoftKeyLeds[s];
@@ -4594,6 +4606,35 @@ void pushZonesForVisibleSlots()
                         ledColRgb = bc;
                         ledClr = uf8::ledColourForTrackRgb(bc);
                     }
+                }
+            } else if (curQuick >= 0 && userBankSlotPresent) {
+                const auto userSlot = uf8::bindings::getUserQuickSlot(
+                    curLayer, curQuick, curSub, s);
+                const uint32_t bc = wantActive
+                    ? packRgb_(userSlot.color)
+                    : packRgb_(userSlot.inactiveColor);
+                ledColRgb = bc;
+                ledClr = uf8::ledColourForTrackRgb(bc);
+            } else {
+                static const uf8::bindings::ButtonId kTskIdsForLed[8] = {
+                    uf8::bindings::ButtonId::TopSoftKey1,
+                    uf8::bindings::ButtonId::TopSoftKey2,
+                    uf8::bindings::ButtonId::TopSoftKey3,
+                    uf8::bindings::ButtonId::TopSoftKey4,
+                    uf8::bindings::ButtonId::TopSoftKey5,
+                    uf8::bindings::ButtonId::TopSoftKey6,
+                    uf8::bindings::ButtonId::TopSoftKey7,
+                    uf8::bindings::ButtonId::TopSoftKey8,
+                };
+                const auto bid = kTskIdsForLed[s];
+                if (uf8::bindings::hasBinding(curLayer, bid)) {
+                    const auto bd =
+                        uf8::bindings::getBinding(curLayer, bid);
+                    const uint32_t bc = wantActive
+                        ? packRgb_(bd.color)
+                        : packRgb_(bd.inactiveColor);
+                    ledColRgb = bc;
+                    ledClr = uf8::ledColourForTrackRgb(bc);
                 }
             }
             // Cache key folds tssk state + 24-bit colour into a single
