@@ -20,6 +20,10 @@
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+// Folder Mode reveal: when a UC1 knob writes a param on `tr`, the UF8
+// strip displaying that track should briefly show the real value
+// instead of the "Folder" placeholder. No-op outside folder mode.
+void reasixty_bumpFolderReveal(MediaTrack* tr);
 
 namespace uc1 {
 
@@ -506,6 +510,8 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             TrackFX_SetParamNormalized(
                 static_cast<MediaTrack*>(focusedTrack_),
                 match.fxIndex, s.vst3Param, next);
+            reasixty_bumpFolderReveal(
+                static_cast<MediaTrack*>(focusedTrack_));
             break;
         }
         renderExtFuncsSubscreen_();
@@ -621,6 +627,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         setFlag("EqToSC",         p.eqSC);
         setFlag("DynamicsPreEq",  p.dynPreEq);
         setFlag("ExternalSC",     newExtSC);
+        reasixty_bumpFolderReveal(static_cast<MediaTrack*>(focusedTrack_));
         // LCD routing-order indicator: byte 0x01..0x0A for main, 0x80
         // OR'd in for b-variants.
         const uint8_t orderByte = static_cast<uint8_t>(
@@ -889,6 +896,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                                  /*zone*/0.015, 0.0, 1.0)
         : std::clamp(cur + delta, 0.0, 1.0);
     TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
+    reasixty_bumpFolderReveal(tr);
 
     // Project the focused-param onto UF8: turning a UC1 knob makes the
     // touched parameter the new focused param across the bank. We look
@@ -1295,6 +1303,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         const double cur = TrackFX_GetParamNormalized(targetTr, fxIdx, m->bypassParam);
         const double next = (cur > 0.5) ? 0.0 : 1.0;
         TrackFX_SetParamNormalized(targetTr, fxIdx, m->bypassParam, next);
+        reasixty_bumpFolderReveal(targetTr);
         const bool inActive = next < 0.5;
         pushButtonLed_(ev.id, inActive);
         pushButtonReadout_(ev.id, labelLong,
@@ -1349,6 +1358,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         next = (cur < 0.5) ? 1.0 : 0.0;
     }
     TrackFX_SetParamNormalized(tr, bindings.channelFxIdx, vst3Param, next);
+    reasixty_bumpFolderReveal(tr);
     pushButtonLed_(ev.id, next >= 0.5);
 
     // Project the toggled param onto UF8 so all 8 V-Pots show + control

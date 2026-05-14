@@ -8734,6 +8734,24 @@ void reasixty_setShowOnlySelected(bool on)
     SetExtState("ReaSixty", "showOnlySelected", on ? "1" : "0", true);
 }
 
+// Called from UC1Surface after any TrackFX_SetParamNormalized so the
+// strip(s) displaying `tr` switch off the "Folder" label and show the
+// actual parameter for kFolderRevealMs. No-op when folder mode is off.
+void reasixty_bumpFolderReveal(MediaTrack* tr)
+{
+    if (!tr || !g_folderMode.load()) return;
+    const int n = visibleTrackCount();
+    const int bankOffset = g_bankOffset.load();
+    const int64_t until = nowMs_() + kFolderRevealMs;
+    for (int s = 0; s < 8; ++s) {
+        const int realSlot = s + bankOffset;
+        if (realSlot >= n) break;
+        if (visibleTrackAt(realSlot) == tr) {
+            g_folderRevealUntilMs[s] = until;
+        }
+    }
+}
+
 // Build a diagnostic .zip on the user's Desktop with extension state +
 // any of our existing trace logs (frame trace, ColorSync log) so a user
 // can email us a single archive when something misbehaves. Cheap; runs
