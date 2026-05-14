@@ -808,9 +808,12 @@ struct PendingInput {
         RecArmToggle,        // REC: SEL push toggles I_RECARM
         RecArmMonToggle,     // REC+MON: SEL push toggles I_RECARM + I_RECMON
         AutoModeStep,        // AUTO: SEL push cycles auto-mode 0..5 wraparound
-        OpenFxWindow,        // Instance: V-Pot push opens active instance FX
-        InstanceCycleDelta,  // Instance: V-Pot rotation cycles plug-in
-                             //           instance on the focused track
+        AutoModeSet,         // AUTO: V-Pot push sets strip auto-mode = value
+        AutoModeDelta,       // AUTO: V-Pot rotation steps strip auto-mode
+        StripInstanceDelta,  // Instance: V-Pot rotation cycles strip's
+                             //           track's FX list per-strip
+        StripInstanceOpen,   // Instance: V-Pot push opens / closes strip's
+                             //           track's active FX window
     };
     Kind    kind;
     uint8_t strip;
@@ -1076,10 +1079,40 @@ double g_encoderAccum  = 0.0;   // unified accumulator for the bindings-routed
                                 // Ctrl all share so the user can change
                                 // modifier mid-rotation without losing detents).
 
-// Instance-mode V-Pot rotation accumulator. Shared across all 8
-// strips since applyInstanceCycle_ targets the focused track no
-// matter which V-Pot moved — keeps the behaviour predictable.
-double g_selectionInstanceAccum = 0.0;
+// Selection-Mode AUTO V-Pot rotation accumulators — per strip so each
+// V-Pot scrolls its own track's auto-mode. Slower scale than pan
+// (kAutoModeRotateScale) so one mode-step takes a few detents instead
+// of a flick.
+double g_autoModeAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+constexpr double kAutoModeRotateScale = 6.0;
+
+// Selection-Mode Instance per-strip V-Pot rotation accumulators.
+// Each strip cycles its own track's FX list independently — the V-Pot
+// doesn't touch global focus or the track's selection (Frank
+// 2026-05-14 "soll ohne track selection gehen - einfach nur den track
+// des v-pots verändern").
+double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
+// Per-track active-FX index for Selection-Mode Instance. Survives
+// bank scrolls so the user's last-cycled FX on each track stays
+// remembered. Keyed by MediaTrack* — entries for deleted tracks
+// linger harmlessly until plug-in reload.
+std::unordered_map<MediaTrack*, int> g_stripInstanceFxIdx;
+
+// Returns the current Instance-mode active FX index for `tr`,
+// defaulting to 0 when the user hasn't cycled this track yet (or 0
+// when the index drifted out of bounds because the user removed FX).
+int stripInstanceActiveFx_(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const int n = TrackFX_GetCount(tr);
+    if (n <= 0) return -1;
+    auto it = g_stripInstanceFxIdx.find(tr);
+    int idx = (it == g_stripInstanceFxIdx.end()) ? 0 : it->second;
+    if (idx < 0)  idx = 0;
+    if (idx >= n) idx = n - 1;
+    return idx;
+}
 
 // Forward decls — implementations live further down (followSelectedInMixer
 // after the encoder mode toggles, emitMouseScroll near the input dispatch).
@@ -1245,47 +1278,6 @@ constexpr double kChannelEncoderScale = 4.0;
 // hard-coded ON because the mixer-follow behaviour is what makes the
 // wheel feel right in every test session.
 constexpr bool kSelectFollowsMixer = true;
-
-// Resolve the FX index of the currently-active plug-in instance on
-// `tr`: the FX matching getFocusedParam().domain at the per-track
-// instance index that applyInstanceCycle_ last set (CS / BC / UF8-
-// only). Walks the track's FX list the same way applyInstanceCycle_
-// does. Returns -1 if no matching instance is present.
-int activeInstanceFxIdx(MediaTrack* tr)
-{
-    if (!tr) return -1;
-    const auto fp = uf8::getFocusedParam();
-    const int instIdx =
-        (fp.domain == uf8::Domain::BusComp)      ? uc1::bcInstanceIndex(tr)
-      : (fp.domain == uf8::Domain::ChannelStrip) ? uc1::csInstanceIndex(tr)
-      :                                            uc1::uf8OnlyInstanceIndex(tr);
-    int counter = 0;
-    const int nFx = TrackFX_GetCount(tr);
-    char fxName[256];
-    for (int i = 0; i < nFx; ++i) {
-        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
-        const auto* pm = uf8::lookupPluginMapByName(fxName);
-        if (fp.domain == uf8::Domain::ChannelStrip) {
-            if (pm && pm->domain == uf8::Domain::ChannelStrip) {
-                if (counter == instIdx) return i;
-                ++counter;
-            }
-        } else if (fp.domain == uf8::Domain::BusComp) {
-            if (pm && pm->domain == uf8::Domain::BusComp) {
-                if (counter == instIdx) return i;
-                ++counter;
-            }
-        } else {
-            const auto* um =
-                uf8::user_plugins::lookupOwnedByName(fxName);
-            if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
-                if (counter == instIdx) return i;
-                ++counter;
-            }
-        }
-    }
-    return -1;
-}
 
 // Short, LCD-friendly plug-in name. Strips "VST3i: " / "VST: " / etc.
 // prefixes and any trailing " (Vendor)" suffix. Used for the
@@ -1641,42 +1633,6 @@ void drainInputQueue()
             if (g_instanceAccum >=  1.0) { step = static_cast<int>(g_instanceAccum); g_instanceAccum -= step; }
             if (g_instanceAccum <= -1.0) { step = static_cast<int>(g_instanceAccum); g_instanceAccum -= step; }
             applyInstanceCycle_(step);
-            continue;
-        }
-        // Selection-Mode Instance V-Pot events. Both operate on the
-        // focused track (not the strip's track), so they MUST live in
-        // the global-scope block — the per-strip resolve below would
-        // drop them whenever the V-Pot's strip has no track (empty
-        // strips at the end of a short bank). That's why V-Pot
-        // rotation appeared dead on Frank's last test (2026-05-14).
-        if (e.kind == PendingInput::InstanceCycleDelta) {
-            g_selectionInstanceAccum += e.value / kChannelEncoderScale;
-            int step = 0;
-            if (g_selectionInstanceAccum >=  1.0) {
-                step = static_cast<int>(g_selectionInstanceAccum);
-                g_selectionInstanceAccum -= step;
-            }
-            if (g_selectionInstanceAccum <= -1.0) {
-                step = static_cast<int>(g_selectionInstanceAccum);
-                g_selectionInstanceAccum -= step;
-            }
-            if (step != 0) applyInstanceCycle_(step);
-            continue;
-        }
-        if (e.kind == PendingInput::OpenFxWindow) {
-            MediaTrack* fTr =
-                g_uc1_surface
-                  ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-                  : nullptr;
-            if (!fTr) fTr = GetSelectedTrack(nullptr, 0);
-            if (!fTr) continue;
-            int fxIdx = activeInstanceFxIdx(fTr);
-            if (fxIdx < 0 && TrackFX_GetCount(fTr) > 0) fxIdx = 0;
-            if (fxIdx < 0) continue;
-            if (TrackFX_GetFloatingWindow(fTr, fxIdx))
-                TrackFX_Show(fTr, fxIdx, 2);
-            else
-                TrackFX_Show(fTr, fxIdx, 3);
             continue;
         }
         if (e.kind == PendingInput::EncoderRotation) {
@@ -2376,9 +2332,81 @@ void drainInputQueue()
                 SetTrackAutomationMode(tr, next);
                 break;
             }
-            // OpenFxWindow / InstanceCycleDelta are dispatched in the
-            // global-scope block above — they don't need a per-strip
-            // track resolve.
+            case PendingInput::AutoModeSet: {
+                // AUTO mode V-Pot push: snap the strip's auto-mode to
+                // the value carried in e.value (0 = Trim/Read by
+                // default). Frank 2026-05-14 "v-pot push soll auf
+                // trim/read schalten".
+                int mode = static_cast<int>(e.value);
+                if (mode < 0) mode = 0;
+                if (mode > 5) mode = 5;
+                SetTrackAutomationMode(tr, mode);
+                break;
+            }
+            case PendingInput::AutoModeDelta: {
+                // AUTO mode V-Pot rotation: accumulate detents, step
+                // strip's auto-mode ±1 within [0..5]. Per-strip accum
+                // so two V-Pots scrolling at once don't fight.
+                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                g_autoModeAccum[s] += e.value / kAutoModeRotateScale;
+                int step = 0;
+                if (g_autoModeAccum[s] >=  1.0) {
+                    step = static_cast<int>(g_autoModeAccum[s]);
+                    g_autoModeAccum[s] -= step;
+                }
+                if (g_autoModeAccum[s] <= -1.0) {
+                    step = static_cast<int>(g_autoModeAccum[s]);
+                    g_autoModeAccum[s] -= step;
+                }
+                if (step != 0) {
+                    int cur = GetTrackAutomationMode(tr);
+                    int next = cur + step;
+                    if (next < 0) next = 0;
+                    if (next > 5) next = 5;
+                    if (next != cur) SetTrackAutomationMode(tr, next);
+                }
+                break;
+            }
+            case PendingInput::StripInstanceDelta: {
+                // Instance mode V-Pot rotation: cycle the strip's
+                // track's FX list per-strip, no focus / selection
+                // changes (Frank 2026-05-14 "ohne track selection,
+                // einfach den track des v-pots verändern"). Walks all
+                // FX on the track, wraps. Per-strip accumulator.
+                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                g_stripInstanceAccum[s] += e.value / kChannelEncoderScale;
+                int step = 0;
+                if (g_stripInstanceAccum[s] >=  1.0) {
+                    step = static_cast<int>(g_stripInstanceAccum[s]);
+                    g_stripInstanceAccum[s] -= step;
+                }
+                if (g_stripInstanceAccum[s] <= -1.0) {
+                    step = static_cast<int>(g_stripInstanceAccum[s]);
+                    g_stripInstanceAccum[s] -= step;
+                }
+                if (step != 0) {
+                    const int n = TrackFX_GetCount(tr);
+                    if (n > 0) {
+                        const int cur = stripInstanceActiveFx_(tr);
+                        int next = ((cur + step) % n + n) % n;
+                        g_stripInstanceFxIdx[tr] = next;
+                        g_bankDirty.store(true);   // refresh scribble strip
+                    }
+                }
+                break;
+            }
+            case PendingInput::StripInstanceOpen: {
+                // Instance mode V-Pot push: toggle FX window of the
+                // strip's track's active instance via TrackFX_Get
+                // FloatingWindow + Show 2 (hide) / 3 (show).
+                const int fxIdx = stripInstanceActiveFx_(tr);
+                if (fxIdx < 0) break;
+                if (TrackFX_GetFloatingWindow(tr, fxIdx))
+                    TrackFX_Show(tr, fxIdx, 2);
+                else
+                    TrackFX_Show(tr, fxIdx, 3);
+                break;
+            }
         }
     }
 }
@@ -3276,23 +3304,28 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             if (!handledNatively) {
                 if (id >= 0x08 && id <= 0x0F) {
                     // V-Pot push. Routed by Selection Mode:
-                    //   Norm / REC / AUTO → PanCenter (modes only affect
-                    //                       SEL push + scribble strip,
-                    //                       not V-Pots).
-                    //   Instance          → open / close active instance
-                    //                       FX window on the strip's
-                    //                       track.
+                    //   Norm / REC / REC+MON → PanCenter (modes
+                    //                          only affect SEL).
+                    //   AUTO                 → set strip's auto-mode to
+                    //                          Trim/Read (0).
+                    //   Instance             → toggle FX window of the
+                    //                          strip's track's active
+                    //                          instance.
                     if (pressed) {
                         const uint8_t strip =
                             static_cast<uint8_t>(id - 0x08);
                         switch (g_selectionMode.load()) {
+                            case SelectionMode::Auto:
+                                queueInput({PendingInput::AutoModeSet,
+                                            strip, 0.0});
+                                break;
                             case SelectionMode::Instance:
-                                queueInput({PendingInput::OpenFxWindow,
+                                queueInput({PendingInput::StripInstanceOpen,
                                             strip, 0.0});
                                 break;
                             case SelectionMode::Norm:
                             case SelectionMode::Rec:
-                            case SelectionMode::Auto:
+                            case SelectionMode::RecMon:
                             default:
                                 queueInput({PendingInput::PanCenter,
                                             strip, 0.0});
@@ -3432,28 +3465,25 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             if (strip < 8) {
-                // Per-strip V-Pot rotation. Norm / REC / AUTO use the
-                // legacy pan-delta wiring (those modes are SEL-only).
-                // Instance cycles the focused track's plug-in instance
-                // — shared accumulator across all 8 strips because
-                // applyInstanceCycle_ targets the focused track.
-                // Scale: pan uses signed6/128 (fine), but Instance
-                // needs the raw signed6 so its accumulator scale
-                // (kChannelEncoderScale = 4) matches the channel-
-                // encoder Shift+rotate path — Frank 2026-05-14
-                // "V-Pots sollen die instances cyclen, genau wie
-                // shift+encoder". Dividing by 128 first made one
-                // step take ~500 detents.
+                // Per-strip V-Pot rotation. Scale: pan keeps signed6/
+                // 128 (1 detent = 0.78% pan); AUTO + Instance need raw
+                // signed6 so their accumulators feel like the channel-
+                // encoder Shift+rotate path. Norm / REC / REC+MON
+                // stay on the legacy pan wiring.
                 switch (g_selectionMode.load()) {
+                    case SelectionMode::Auto:
+                        queueInput({PendingInput::AutoModeDelta,
+                                    strip,
+                                    static_cast<double>(signed6)});
+                        break;
                     case SelectionMode::Instance:
-                        queueInput({PendingInput::InstanceCycleDelta,
+                        queueInput({PendingInput::StripInstanceDelta,
                                     strip,
                                     static_cast<double>(signed6)});
                         break;
                     case SelectionMode::Norm:
                     case SelectionMode::Rec:
                     case SelectionMode::RecMon:
-                    case SelectionMode::Auto:
                     default:
                         queueInput({PendingInput::PanDelta, strip,
                                     static_cast<double>(signed6) / 128.0});
@@ -5129,22 +5159,18 @@ void pushZonesForVisibleSlots()
             valLine = composeValueLine("Auto", modeName);
             selectionModeHandled = true;
         } else if (g_selectionMode.load() == SelectionMode::Instance) {
-            MediaTrack* fTr =
-                g_uc1_surface
-                  ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-                  : nullptr;
-            if (!fTr) fTr = GetSelectedTrack(nullptr, 0);
-            std::string instName = "-";
-            if (fTr) {
-                int fxIdx = activeInstanceFxIdx(fTr);
-                if (fxIdx < 0 && TrackFX_GetCount(fTr) > 0) fxIdx = 0;
-                if (fxIdx >= 0) {
-                    instName = shortFxName_(fTr, fxIdx);
-                    if (instName.empty()) instName = "-";
-                }
-            }
-            if (instName.size() > 14) instName.resize(14);
-            valLine = composeValueLine("Inst", instName);
+            // Per-strip: each scribble shows its own track's active
+            // instance — Frank 2026-05-14 "soll ohne track selection
+            // gehen, einfach den track des v-pots verändern". No
+            // "Inst:" label — takes too much LCD space, so just
+            // the truncated plug-in name fills the value zone.
+            const int fxIdx = stripInstanceActiveFx_(tr);
+            std::string instName = (fxIdx >= 0) ? shortFxName_(tr, fxIdx)
+                                                : std::string{};
+            if (instName.empty()) instName = "-";
+            if (instName.size() > 19) instName.resize(19);
+            valLine = std::move(instName);
+            valLine.resize(19, ' ');
             selectionModeHandled = true;
         }
 

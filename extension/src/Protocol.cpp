@@ -217,22 +217,24 @@ LedColour ledColourRedBrightSolid() { return {0x0F, 0xF0, 0x0F, 0xF0}; }
 
 LedColour ledColourForAutoMode(int mode)
 {
-    // Mode-to-colour mapping mirrors the AutoOff/Read/Touch/Write/Latch/
-    // LatchPreview rows on the global Auto LED bank (Protocol.cpp lines
-    // 697-702). Both bright AND dim bytes carry the same pair so the
-    // SEL LED renders steadily — selection state is invisible in AUTO
-    // mode by design.
+    // Solid SEL palette per REAPER automation mode. Each mode picks a
+    // distinct colour so the user can read off the row at a glance.
+    // LatchPrev is purple (was previously sharing yellow with Touch —
+    // Frank 2026-05-14 "LatchPrv wird gelb angezeigt anstatt
+    // violett"); Latch is orange so it's distinct from Write's red.
+    // Bright AND dim bytes carry the same pair so the LED renders
+    // steadily regardless of REAPER's selection bit.
     auto solid = [](uint8_t a, uint8_t b) {
         return LedColour{a, b, a, b};
     };
     switch (mode) {
-        case 1:  return solid(0xF0, 0xF0); // Read         → green
-        case 2:  return solid(0xEF, 0xF0); // Touch        → yellow
-        case 3:  return solid(0x0F, 0xF0); // Write        → red
-        case 4:  return solid(0x0F, 0xF0); // Latch        → red
-        case 5:  return solid(0xEF, 0xF0); // Latch-Prev   → yellow
+        case 1:  return solid(0xF0, 0xF0); // Read       → green
+        case 2:  return solid(0xEF, 0xF0); // Touch      → yellow
+        case 3:  return solid(0x0F, 0xF0); // Write      → red
+        case 4:  return solid(0x3F, 0xF0); // Latch      → orange
+        case 5:  return solid(0x03, 0xFF); // Latch-Prev → purple
         case 0:
-        default: return solid(0xFF, 0xFF); // Trim/Read    → white
+        default: return solid(0xFF, 0xFF); // Trim/Read  → white
     }
 }
 
