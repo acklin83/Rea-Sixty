@@ -5612,12 +5612,15 @@ void pushZonesForVisibleSlots()
         // For folder-parent tracks, swap the value line for "Folder"
         // unless the user just turned the V-Pot (reveal window from
         // drainInputQueue). Independent of whatever pan / param /
-        // routing branch wrote the value above.
+        // routing branch wrote the value above. The LCD splits the
+        // 19-char zone at position 11 (left = label/white, right =
+        // value/yellow) so "Folder" must live entirely in the label
+        // half — composeValueLine left-aligns it for free.
         if (g_folderMode.load()
             && nowMs_() >= g_folderRevealUntilMs[s]
             && GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5)
         {
-            valLine = "      Folder       ";   // 19 chars, centred
+            valLine = composeValueLine("Folder", "");
         }
         if (valLine != g_lastValueLine[s]) {
             g_lastValueLine[s] = valLine;
