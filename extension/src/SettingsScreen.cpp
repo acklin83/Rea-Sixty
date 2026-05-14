@@ -5072,16 +5072,14 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         const float bh   = kBarH;
 
         const uint32_t rgb = getUf8StripColour_(s, bank);
-        uint32_t fill;
-        if (rgb != 0) {
-            // RGB 0xRRGGBB → ImGui ABGR 0xAABBGGRR
-            fill = 0xFF000000u
-                 | ((rgb & 0x0000FFu) << 16)
-                 | ( rgb & 0x00FF00u)
-                 | ((rgb & 0xFF0000u) >> 16);
-        } else {
-            fill = 0x40404080u;   // dim grey placeholder
-        }
+        // reaimgui's DrawList colours are RGBA-packed (0xRRGGBBAA),
+        // same as every other rect_() literal in this file. Earlier
+        // code swapped R↔B as if it were IM_COL32, which displayed
+        // yellow as pink and zero-alpha'd anything with B=0
+        // (green, cyan).
+        const uint32_t fill = (rgb != 0)
+            ? ((rgb << 8) | 0xFFu)
+            : 0x40404080u;   // dim grey placeholder
         ImGui_DrawList_AddRectFilled(dl,
             ox + bx, oy + by, ox + bx + bw, oy + by + bh,
             fill, /*rounding*/ nullptr, /*flags*/ nullptr);
