@@ -2482,10 +2482,13 @@ void sendSelRenderTrigger()
     g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x63});
     g_dev->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x3F, 0xF0, 0x8F});
     g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x00, 0xF0, 0x51});
-    // Restore AutoTrim to the value driven by the current REAPER auto
-    // mode (lit only when mode == 0/Trim/Read).
-    const bool trimActive = (autoModeToLedIndex(g_lastAutoMode) == 2);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::AutoTrim, trimActive);
+    // Force AutoTrim back to Off after the cap33 trigger sequence. No
+    // REAPER mode currently lights TRIM, so the LED is always Off
+    // outside of the brief sequence pulse above. Use the explicit
+    // GlobalLedState::Off — the bool overload maps false→Dim, which
+    // would leave TRIM dimly lit.
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::AutoTrim,
+                     uf8::GlobalLedState::Off);
 }
 
 // Push the selected-strip bitmask. cap33: SSL360 sends this after the
@@ -6237,8 +6240,14 @@ void pushAutoModeLeds(int mode)
 {
     if (!g_dev || !g_dev->isOpen()) return;
     const int active = autoModeToLedIndex(mode);
+    // Inactive auto LEDs must go FULLY Off, not Dim — the Layer row
+    // (one bright, two dim) is a different convention. Using the
+    // bool overload here painted Dim on every inactive button, which
+    // left TRIM visibly lit (dim) whenever another mode was active.
     for (int i = 0; i < 5; ++i) {
-        sendUf8GlobalLed(kAutoLeds[i], i == active);
+        sendUf8GlobalLed(kAutoLeds[i],
+            (i == active) ? uf8::GlobalLedState::Bright
+                          : uf8::GlobalLedState::Off);
     }
     g_lastAutoMode = mode;
 }
