@@ -336,6 +336,9 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::SoftKey3Bank: return "BANK 3";
         case ButtonId::SoftKey4Bank: return "BANK 4";
         case ButtonId::SoftKey5Bank: return "BANK 5";
+        case ButtonId::SelectionNorm: return "NORM";
+        case ButtonId::SelectionRec:  return "REC";
+        case ButtonId::SelectionAuto: return "AUTO";
         case ButtonId::ChannelEncoder: return "Channel Encoder";
         default:                     return uf8::bindings::toName(id);
     }
@@ -736,9 +739,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(921, 80, 64, 22, ButtonId::Fine, "FINE");
 
     drawGroupLabel(852, 112, "SELECTION MODE");
-    drawLocked(852, 128, 43, 20, "NORM");
-    drawLocked(899, 128, 43, 20, "REC");
-    drawLocked(946, 128, 39, 20, "AUTO");
+    drawHwBtn(852, 128, 43, 20, ButtonId::SelectionNorm, "NORM");
+    drawHwBtn(899, 128, 43, 20, ButtonId::SelectionRec,  "REC");
+    drawHwBtn(946, 128, 39, 20, ButtonId::SelectionAuto, "AUTO");
 
     // CHANNEL encoder — clickable hit-area covers the dial body so users
     // can edit the encoder push binding directly from the schematic.
