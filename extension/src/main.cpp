@@ -4697,18 +4697,14 @@ void pushZonesForVisibleSlots()
         // recognised, else a REAPER mnemonic. Pass the natural text
         // length — buildChannelStripType pads with NULs internally so
         // the trailing LCD cells render blank instead of showing space
-        // characters past the text (Frank 2026-05-09).
+        // characters past the text (Frank 2026-05-09). This is the
+        // "Quick Bank" indicator (CS 2 / BC 1 / 4K B / ...) and stays
+        // independent of Selection Mode so Encoder → Instance Cycle
+        // can refresh it through the standard lookupPluginOnTrack path
+        // (Frank 2026-05-14 "V-POTS → Instance zeigt die aktive Quick
+        // Bank nicht mehr an").
         std::string csType;
-        if (g_selectionMode.load() == SelectionMode::Instance) {
-            // Instance mode hijacks the yellow Type zone so the user
-            // sees the per-strip active FX name AND it rotates with
-            // the V-Pot (Frank 2026-05-14 "Instance soll auch oben im
-            // farbfeld rotieren"). Replaces the legacy CS/BC label
-            // ("BC/CS Standard Bezeichnung raus damit").
-            const int instFxIdx = stripInstanceActiveFx_(tr);
-            if (instFxIdx >= 0) csType = shortFxName_(tr, instFxIdx);
-            if (csType.empty()) csType = "-";
-        } else if (userStripActive) {
+        if (userStripActive) {
             csType = userS.map->displayShort;
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
@@ -4935,6 +4931,21 @@ void pushZonesForVisibleSlots()
             if (routedFader || routedVpot) {
                 const StripRoute& r = routedFader ? faderRoute : vpotRoute;
                 n = routeName_(r);
+            }
+            // Selection-Mode Instance: per-strip active FX name lives
+            // here so the user can see WHICH plug-in the V-Pot will
+            // toggle / cycle next, while the colour-bar Quick-Bank
+            // label below stays at the CS/BC variant string (Frank
+            // 2026-05-14). Wins over user-fader-name binding only when
+            // no routing is active.
+            if (n.empty()
+                && g_selectionMode.load() == SelectionMode::Instance)
+            {
+                const int instFxIdx = stripInstanceActiveFx_(tr);
+                if (instFxIdx >= 0) {
+                    n = shortFxName_(tr, instFxIdx);
+                }
+                if (n.empty()) n = "-";
             }
             // FX Learn UF8: when a user-mapped fader binding exists for
             // this strip, show the bound param's name instead of the
