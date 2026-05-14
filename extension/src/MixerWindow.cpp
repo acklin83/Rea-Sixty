@@ -1,5 +1,4 @@
 #include "MixerWindow.h"
-#include "MixerLayout.h"
 #include "SettingsScreen.h"
 #include "ThemeBridge.h"
 
@@ -16,12 +15,12 @@ namespace uf8 {
 
 namespace {
 
-// Left-rail navigation. Mixer sits at the top; settings sections follow,
-// separated by a divider. Order chosen to put the high-frequency view
-// (Mixer) first and the static info (About) last.
+// Left-rail navigation. Settings only — Mixer entry was removed
+// 2026-05-14 after the worktree-mixer-standalone experiment was
+// reverted; the Plugin Mixer view will land later as its own
+// dedicated window, not as a tab in here.
 enum Section : int {
-    kSecMixer = 0,
-    kSecDevice,
+    kSecDevice = 0,
     kSecBindings,
     kSecFxLearn,
     kSecModes,
@@ -38,8 +37,7 @@ struct RailEntry {
 };
 
 constexpr RailEntry kRail[] = {
-    { "Mixer",          kSecMixer,         false, &MixerLayout::draw                 },
-    { "Device",         kSecDevice,        true,  &SettingsScreen::drawDevice        },
+    { "Device",         kSecDevice,        false, &SettingsScreen::drawDevice        },
     { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
     { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
@@ -61,7 +59,7 @@ struct MixerWindow::Impl {
     // ReaImGui closes the OS window. Re-toggling resumes drawing.
     ImGui_Context* ctx = nullptr;
     bool           visible = false;
-    int            selected = kSecMixer;
+    int            selected = kSecDevice;
     // Session counter — bumped on every closed→open transition. Used to
     // suffix the Begin window-id so each session is a fresh ImGui
     // window object. Required because ReaImGui v0.10 retains stale

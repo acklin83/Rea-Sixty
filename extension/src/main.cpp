@@ -8343,7 +8343,7 @@ int g_cmdDumpRouting = 0;
 // declared earlier in this TU so onTimer() can call it; this block keeps
 // the action wiring next to its brightness siblings for readability.
 custom_action_register_t g_actionToggleMixer{
-    0, "REASIXTY_TOGGLE_MIXER", "Rea-Sixty: Toggle Plugin Mixer Window", nullptr,
+    0, "REASIXTY_TOGGLE_SETTINGS", "Rea-Sixty: Open / Close Rea-Sixty Settings", nullptr,
 };
 int g_cmdToggleMixer = 0;
 
