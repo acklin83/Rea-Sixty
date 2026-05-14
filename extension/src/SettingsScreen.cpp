@@ -1755,16 +1755,33 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         }
         ImGui_PopItemWidth(ctx);
 
-        // Message type
-        static char kMidiMsgItems[] =
-            "Note On\0Note Off\0Control Change\0Program Change\0";
+        // Message type. BeginCombo + Selectable instead of ImGui_Combo
+        // because ReaImGui's ImGui_Combo silently rendered nothing for
+        // the \0-separated items format here (Frank 2026-05-14: "da ist
+        // kein dropdown!"), so the user could never change msgType from
+        // its NoteOn default — every "send CC" binding actually sent
+        // Note On. The explicit popup form is the same one we use for
+        // the Native-action picker and definitely works.
+        static const char* kMidiMsgNames[] = {
+            "Note On", "Note Off", "Control Change", "Program Change"
+        };
+        constexpr int kMidiMsgCount =
+            sizeof(kMidiMsgNames) / sizeof(kMidiMsgNames[0]);
         std::snprintf(idbuf, sizeof(idbuf), "Message##%s_msg", prefix);
-        double mw = 160;
+        const int curMsg = std::clamp(*f.midiMsgType, 0, kMidiMsgCount - 1);
+        double mw = 200;
         ImGui_PushItemWidth(ctx, mw);
-        int msg = *f.midiMsgType;
-        if (ImGui_Combo(ctx, idbuf, &msg, kMidiMsgItems, nullptr)) {
-            *f.midiMsgType = msg;
-            dirty = true;
+        if (ImGui_BeginCombo(ctx, idbuf, kMidiMsgNames[curMsg],
+                             /*flags*/ nullptr)) {
+            for (int i = 0; i < kMidiMsgCount; ++i) {
+                bool sel = (i == curMsg);
+                if (ImGui_Selectable(ctx, kMidiMsgNames[i], &sel,
+                                     nullptr, nullptr, nullptr)) {
+                    *f.midiMsgType = i;
+                    dirty = true;
+                }
+            }
+            ImGui_EndCombo(ctx);
         }
         ImGui_PopItemWidth(ctx);
 
