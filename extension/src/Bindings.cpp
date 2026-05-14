@@ -24,7 +24,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "reaper_plugin.h"            // midi_Output
 #include "reaper_plugin_functions.h"
 
 #include "WDL/jsonparse.h"
@@ -2065,39 +2064,17 @@ namespace {
 
 // ---- MIDI output dispatch ------------------------------------------------
 //
-// Per-device midi_Output cache. Opened lazily on first dispatch to a
-// given device name; never explicitly destroyed. REAPER's plugin-unload
-// path (REAPER_PLUGIN_ENTRYPOINT with rec==nullptr) doesn't give a
-// reliable hook to tear them down without racing the bindings timer
-// drain, so we let the OS reclaim handles on process exit. The map is
-// bounded by the set of MIDI device names the user binds to —
-// realistically a handful, so leaking a few midi_Output instances at
-// shutdown is acceptable.
-std::mutex                                    g_midiOutMutex;
-std::unordered_map<std::string, midi_Output*> g_midiOutCache;
-
-midi_Output* getMidiOutputForIdx_(int devIdx)
-{
-    char nm[256] = {0};
-    if (!GetMIDIOutputName(devIdx, nm, sizeof(nm))) return nullptr;
-    if (!*nm) return nullptr;
-    std::lock_guard<std::mutex> lock(g_midiOutMutex);
-    auto& slot = g_midiOutCache[nm];
-    if (!slot) {
-        slot = CreateMIDIOutput(devIdx, /*streamMode*/ false,
-                                /*msoffset100*/ nullptr);
-        if (!slot) {
-            if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
-                std::fprintf(lg,
-                    "[midi] CreateMIDIOutput failed for dev=%d '%s' "
-                    "(device disabled in REAPER prefs?)\n",
-                    devIdx, nm);
-                std::fclose(lg);
-            }
-        }
-    }
-    return slot;
-}
+// We use StuffMIDIMessage rather than CreateMIDIOutput + midi_Output::Send.
+// StuffMIDIMessage(16+N, …) writes to MIDI hardware output device N
+// without needing the device to be "enabled for output" in REAPER's
+// MIDI prefs (Preferences → MIDI Devices). CreateMIDIOutput returns
+// nullptr for not-enabled devices — which Frank hit with his RME
+// Fireface UFX+ on 2026-05-14: the device enumerated via
+// GetMIDIOutputName but CreateMIDIOutput failed silently, and no MIDI
+// reached the destination. StuffMIDIMessage matches the behaviour of
+// the equivalent Lua (`reaper.StuffMIDIMessage(28, status, cc, val)` →
+// device 12, 28-16=12) so any device the user can see in the dropdown
+// is reachable.
 
 // Build the MIDI status byte for the binding's MidiMsgType + channel
 // (1..16). Returns -1 on invalid input. Program Change is single-data-
@@ -2120,44 +2097,42 @@ void dispatchMidi_(const ActionStep& a)
 {
     const int status = midiStatusByte_(a.midiMsgType, a.midiChannel);
     if (status < 0) return;
-    const uint8_t st  = static_cast<uint8_t>(status);
-    const int   d1clamped = std::clamp(a.midiData1, 0, 127);
-    const int   d2clamped = std::clamp(a.midiData2, 0, 127);
-    const bool  isPC = (static_cast<MidiMsgType>(a.midiMsgType)
-                        == MidiMsgType::ProgramChange);
-    const uint8_t d1 = static_cast<uint8_t>(d1clamped);
-    const uint8_t d2 = isPC ? 0 : static_cast<uint8_t>(d2clamped);
+    const int d1 = std::clamp(a.midiData1, 0, 127);
+    const bool isPC = (static_cast<MidiMsgType>(a.midiMsgType)
+                       == MidiMsgType::ProgramChange);
+    // Program Change has only one data byte; force d2=0 so we don't
+    // send stray velocity-shaped trailing bytes.
+    const int d2 = isPC ? 0 : std::clamp(a.midiData2, 0, 127);
 
     const int n = GetNumMIDIOutputs();
     if (a.midiDevice.empty()) {
         // "(all enabled outputs)" — iterate every enumerated device.
-        // CreateMIDIOutput returns nullptr for devices disabled in
-        // REAPER prefs; those are silently skipped.
-        for (int i = 0; i < n; ++i) {
-            if (auto* o = getMidiOutputForIdx_(i)) {
-                o->Send(st, d1, d2, /*frame_offset*/ -1);
-            }
-        }
-    } else {
+        // StuffMIDIMessage silently drops messages destined for
+        // unmapped indices, so over-shooting is harmless.
         for (int i = 0; i < n; ++i) {
             char nm[256] = {0};
             if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
-            if (a.midiDevice == nm) {
-                if (auto* o = getMidiOutputForIdx_(i)) {
-                    o->Send(st, d1, d2, /*frame_offset*/ -1);
-                }
-                return;
-            }
+            if (!*nm) continue;
+            StuffMIDIMessage(16 + i, status, d1, d2);
         }
-        // Bound device name no longer enumerated — log once for
-        // diagnosis but don't surface a UI error every press.
-        if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
-            std::fprintf(lg,
-                "[midi] bound device '%s' not in current MIDI output list "
-                "(unplugged or renamed)\n",
-                a.midiDevice.c_str());
-            std::fclose(lg);
+        return;
+    }
+    for (int i = 0; i < n; ++i) {
+        char nm[256] = {0};
+        if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
+        if (a.midiDevice == nm) {
+            StuffMIDIMessage(16 + i, status, d1, d2);
+            return;
         }
+    }
+    // Bound device name no longer enumerated (unplugged or renamed) —
+    // log once for diagnosis but don't surface a UI error every press.
+    if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+        std::fprintf(lg,
+            "[midi] bound device '%s' not in current MIDI output list "
+            "(unplugged or renamed)\n",
+            a.midiDevice.c_str());
+        std::fclose(lg);
     }
 }
 
