@@ -1028,16 +1028,18 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         drawTextCentered_(c, mcx, my + mh - 12, kVuBlue, "GR");
     }
 
-    // BC knob 4×2 grid centred in the wider column, plus Input-Gain
-    // and Output-Gain flanking the bottom row at the same y as
-    // S/C HPF / MIX (per Frank's UC1 layout note).
+    // BC knob 4×2 grid centred in the wider column. Input-Gain and
+    // Output-Gain flank the bottom row but belong to the CHANNEL STRIP
+    // domain — they're physically inside the BC chassis on UC1 (knobs
+    // 0x0C / 0x16, above the I/O VU strips), but they drive CS Input
+    // Trim + Fader Level even with a BC plug-in on the track (see
+    // UC1PluginMap.cpp::classifyKnob). Drawing them AFTER the dim
+    // overlay below so the CS/BC dim masks treat them correctly:
+    // bright when editing a CS map, dimmed when editing a BC map.
     //   col 1 (THR / ATTACK / RATIO / S/C HPF)
     //   col 2 (MAKE-UP / RELEASE / IN-toggle / MIX)
-    //   bottom-row only: INPUT-GAIN flanks col 1 on the left,
-    //                    OUTPUT-GAIN flanks col 2 on the right.
     {
         const float c1x = kColCx + 120, c2x = kColCx + 240;
-        const float cInL = kColCx + 60,  cInR = kColCx + 300;
         const float ry[4] = { 172, 234, 296, 358 };
         knob(c1x, ry[0], 20, kAccentBC, "THR");
         knob(c2x, ry[0], 20, kAccentBC, "MAKE-UP");
@@ -1051,9 +1053,19 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         drawTextCentered_(c, c2x, ry[2] + 26, 0x9CA0AAFF, "IN");
         knob(c1x,  ry[3], 20, kAccentBC, "S/C HPF");
         knob(c2x,  ry[3], 20, kAccentBC, "MIX");
-        knob(cInL, ry[3], 20, kAccentBC, "INPUT");
-        knob(cInR, ry[3], 20, kAccentBC, "OUTPUT");
     }
+    // CS-domain Input / Output Gain — drawn last so they sit on top of
+    // any dim overlay applied below (see "Section dim overlay" footer).
+    // Coordinates mirror the BC bottom-row y so they visually align with
+    // S/C HPF and MIX, but the kGreyCap accent + dim-after rendering
+    // make their CS domain explicit.
+    constexpr float kInOutY  = 358;
+    constexpr float kInOutCxL = 60, kInOutCxR = 300;
+    auto drawInOutGain = [&]() {
+        const float cInL = kColCx + kInOutCxL, cInR = kColCx + kInOutCxR;
+        knob(cInL, kInOutY, 20, kGreyCap, "INPUT");
+        knob(cInR, kInOutY, 20, kGreyCap, "OUTPUT");
+    };
 
     // Central Control Panel
     rect_(c, kColCx, 440, kColCw, H - 452, 0x1A1E24FF, kAccentCC, 6.0);
@@ -1196,6 +1208,27 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         // Editing a BC map → dim left (EQ/Filters) + right (DYN/Channel).
         rect_(c, kColLxDim, 12, kColLwDim, H - 24, kDim, 0, 6.0);
         rect_(c, kColRxDim, 12, kColRwDim, H - 24, kDim, 0, 6.0);
+    }
+
+    // Input / Output Gain belong to the Channel Strip domain (knobs 0x0C
+    // / 0x16 on UC1 — see UC1PluginMap.cpp::classifyKnob). Draw them on
+    // top of the dim overlay so:
+    //   - dimDomain=None         → bright (passive face)
+    //   - dimDomain=ChannelStrip → bright (peek through the BC dim, they
+    //                              ARE CS)
+    //   - dimDomain=BusComp      → drawn bright, then a small dim rect
+    //                              put OVER them so they read as off-
+    //                              domain (they're not BC)
+    drawInOutGain();
+    if (dimDomain == uf8::Domain::BusComp) {
+        // Two ~36 px squares centred on the knob positions, covering the
+        // knob + label so the CS-domain pair reads dim while editing BC.
+        constexpr float kInOutDimSize = 50;
+        const float dimX_L = kColCx + kInOutCxL - kInOutDimSize / 2.0f;
+        const float dimX_R = kColCx + kInOutCxR - kInOutDimSize / 2.0f;
+        const float dimY   = kInOutY - 22;        // ring top
+        rect_(c, dimX_L, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
+        rect_(c, dimX_R, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
     }
 }
 
@@ -4193,6 +4226,20 @@ constexpr Uc1Control kUc1Controls[] = {
     { Uc1Control::Toggle, 21, uf8::Domain::ChannelStrip,
       204, 591, 0, 28, 14, 0, "LFBL" },
 
+    // ---- CENTRE COLUMN — Input/Output Gain (CS, physically on BC strip) -
+    // Input-Gain knob (UC1 0x0C) → CS Input Trim slot (linkIdx 4). Same
+    // slot as the Channel-IN button on the right column — clicking either
+    // binds the same param; the ImGui ID is uniquified via cx/cy in
+    // drawUc1Control_ so they don't collide.
+    // Output-Gain knob (UC1 0x16) → CS Fader Level slot (linkIdx 1). Only
+    // exists on the SSL 360 Link CS canonical topology; user-CS maps that
+    // omit this slot will render it as ghost (off-domain). Coordinates
+    // mirror drawUc1Face_'s kInOutCxL/kInOutCxR/kInOutY (310/550, 358).
+    { Uc1Control::Knob,    4, uf8::Domain::ChannelStrip,
+      310, 358, 20, 0, 0, kCapGrey, "IN G" },
+    { Uc1Control::Knob,    1, uf8::Domain::ChannelStrip,
+      550, 358, 20, 0, 0, kCapGrey, "OUT G" },
+
     // ---- CENTRE COLUMN — BC ---------------------------------------------
     // Threshold, Make-Up, Attack, Release, Ratio, S/C HPF, Mix.
     { Uc1Control::Knob,    1, uf8::Domain::BusComp,
@@ -4349,8 +4396,14 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
 
     // Hit area + interactions — same pattern drawSchematicPad_ used.
-    char btnId[40];
-    std::snprintf(btnId, sizeof(btnId), "##fxl_pad_%d", ctrl.linkIdx);
+    // ID includes the screen position so two controls bound to the same
+    // linkIdx (e.g. Channel-IN button + Input-Gain knob, both → CS Input
+    // Trim) don't collide in ImGui's widget table.
+    char btnId[64];
+    std::snprintf(btnId, sizeof(btnId), "##fxl_pad_%d_%d_%d",
+                  ctrl.linkIdx,
+                  static_cast<int>(ctrl.cx),
+                  static_cast<int>(ctrl.cy));
     ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
     int ibFlags = 0;
     ImGui_InvisibleButton(ctx, btnId, bw, bh, &ibFlags);

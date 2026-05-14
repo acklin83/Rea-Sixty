@@ -1561,25 +1561,86 @@ UserPluginCtx userStripCtxFocused_()
     return s_cache;
 }
 
+// SSL Strip Mode's per-track CS resolver. Walks all FX on the track
+// and returns the highest-priority CS-domain plug-in for fader / pan /
+// Type-zone routing. Priority (Frank 2026-05-14):
+//   1. User-CS map with isDefault=true (overrides built-in SSL CS on
+//      tracks where the user has nominated a different "channel strip"
+//      e.g. bx SSL9k as their default).
+//   2. Built-in SSL CS variant (CS 2 / 4K G/E/B / SSL 360 Link CS).
+//   3. User-CS map without isDefault (fallback for tracks that have
+//      ONLY a user CS and no built-in SSL CS).
+//
+// Differs from uf8::lookupPluginOnTrack(tr, ChannelStrip): that one
+// walks first-hit and bumps via the instance-cycle index. This one
+// applies the isDefault tiebreak and ignores instance cycling, because
+// in SSL Strip Mode the user has explicitly nominated the priority
+// plug-in for fader / pan / Type-zone — the V-Pot instance cycle is
+// a separate concern (which CS instance's params show on V-Pots).
+struct CsStripPick {
+    int                fxIndex;
+    const uf8::PluginMap* map;
+    bool               isUser;
+};
+CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
+{
+    CsStripPick out{ -1, nullptr, false };
+    if (!tr) return out;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return out;
+    const int n = TrackFX_GetCount(tr);
+    int fxBuiltin = -1, fxUser = -1;
+    const uf8::PluginMap* mapBuiltin = nullptr;
+    const uf8::PluginMap* mapUser    = nullptr;
+    char buf[512];
+    for (int fx = 0; fx < n; ++fx) {
+        buf[0] = 0;
+        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
+        if (buf[0] == 0) continue;
+        const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
+        if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
+
+        const uf8::UserPluginMap* owned = uf8::user_plugins::lookupOwnedByName(buf);
+        if (owned) {
+            if (owned->isDefault) {
+                // Highest tier — no need to keep walking.
+                return { fx, m, true };
+            }
+            if (fxUser < 0) { fxUser = fx; mapUser = m; }
+        } else {
+            if (fxBuiltin < 0) { fxBuiltin = fx; mapBuiltin = m; }
+        }
+    }
+    if (fxBuiltin >= 0) return { fxBuiltin, mapBuiltin, false };
+    if (fxUser    >= 0) return { fxUser,    mapUser,    true  };
+    return out;
+}
+
 // CS plug-in's "Fader Level" param (= the SSL strip's own internal
 // fader, distinct from REAPER's track volume). Used when the Plugin
 // button is engaged so the UF8 motor faders drive the SSL strip
-// fader instead of post-effect track volume. The vst3 param index
-// differs per CS variant — looked up by the plug-in's display short
-// name. Returns {-1, -1} when the track has no CS plug-in.
+// fader instead of post-effect track volume. For built-in CS variants
+// the vst3 param index is hardcoded (FaderLevel is NOT a Link-map slot
+// for the native plug-ins — only the SSL 360 Link wrapper exposes it
+// at linkIdx 1). For SSL 360 Link CS + user-CS maps we fall back to
+// the FaderLevel slot lookup. Returns {-1, -1} when the track has no
+// CS plug-in or the user CS has no FaderLevel slot mapped.
 struct CsFaderHandle { int fxIndex; int vst3Param; };
 CsFaderHandle csFaderForTrack(MediaTrack* tr)
 {
-    if (!tr) return { -1, -1 };
-    auto mm = uf8::lookupPluginOnTrack(tr, uf8::Domain::ChannelStrip);
-    if (!mm.map) return { -1, -1 };
+    const auto pick = csForStripModeOnTrack_(tr);
+    if (!pick.map) return { -1, -1 };
     int p = -1;
-    const char* sn = mm.map->displayShort;
+    const char* sn = pick.map->displayShort;
     if      (std::strcmp(sn, "CS 2") == 0) p = 38;
     else if (std::strcmp(sn, "4K G") == 0) p = 12;
     else if (std::strcmp(sn, "4K E") == 0) p = 6;
     else if (std::strcmp(sn, "4K B") == 0) p = 6;
-    return { mm.fxIndex, p };
+    else {
+        // SSL 360 Link CS + all user-CS maps: slot lookup.
+        if (const auto* sl = uf8::findSlotByLinkIdx(*pick.map, 1 /*FaderLevel*/))
+            p = sl->vst3Param;
+    }
+    return { pick.fxIndex, p };
 }
 
 // Per-track user-plugin fader lookup. Returns the fader binding from
@@ -1601,18 +1662,19 @@ UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
     return {match.fxIndex, fp, um->uf8.strips[0].faderInverted};
 }
 
-// CS plug-in's Pan param (linkIdx 3 across all four CS variants). In
-// Plugin mode, the V-Pot's Pan-fallback drives this instead of REAPER's
+// CS plug-in's Pan param (linkIdx 3 across all CS variants). In SSL
+// Strip Mode, the V-Pot's Pan-fallback drives this instead of REAPER's
 // track pan, so the SSL strip Pan stays the surface's source-of-truth.
+// Uses the same isDefault-aware resolver as csFaderForTrack so the
+// fader + pan target stay in sync on multi-CS tracks.
 struct CsPanHandle { int fxIndex; int vst3Param; };
 CsPanHandle csPanForTrack(MediaTrack* tr)
 {
-    if (!tr) return { -1, -1 };
-    auto mm = uf8::lookupPluginOnTrack(tr, uf8::Domain::ChannelStrip);
-    if (!mm.map) return { -1, -1 };
-    const auto* sl = uf8::findSlotByLinkIdx(*mm.map, 3);
+    const auto pick = csForStripModeOnTrack_(tr);
+    if (!pick.map) return { -1, -1 };
+    const auto* sl = uf8::findSlotByLinkIdx(*pick.map, 3);
     if (!sl) return { -1, -1 };
-    return { mm.fxIndex, sl->vst3Param };
+    return { pick.fxIndex, sl->vst3Param };
 }
 
 void queueInput(PendingInput e)
@@ -4758,16 +4820,31 @@ void pushZonesForVisibleSlots()
             // follows focused.domain as before (Frank 2026-05-12 "auf
             // UF8 color-bars die instanz anzeigen, die kontrolliert
             // wird").
-            const auto typeDom = g_pluginFaderMode.load()
-                ? uf8::Domain::ChannelStrip : focused.domain;
-            auto mm = uf8::lookupPluginOnTrack(tr, typeDom);
-            map = mm.map;
-            if (!map) {
-                const auto otherDom = (typeDom == uf8::Domain::BusComp)
-                    ? uf8::Domain::ChannelStrip
-                    : uf8::Domain::BusComp;
-                auto mm2 = uf8::lookupPluginOnTrack(tr, otherDom);
-                map = mm2.map;
+            //
+            // In SSL Strip Mode, csForStripModeOnTrack_ applies the
+            // isDefault tiebreak so the Type zone tracks the same
+            // user-CS that csFaderForTrack/csPanForTrack route to —
+            // not the instance-cycle CS, which would desync the label
+            // from the actual fader target on tracks with multiple CS
+            // plug-ins (Frank 2026-05-14).
+            if (g_pluginFaderMode.load()) {
+                const auto pick = csForStripModeOnTrack_(tr);
+                map = pick.map;
+                if (!map) {
+                    auto mm2 = uf8::lookupPluginOnTrack(tr, uf8::Domain::BusComp);
+                    map = mm2.map;
+                }
+            } else {
+                const auto typeDom = focused.domain;
+                auto mm = uf8::lookupPluginOnTrack(tr, typeDom);
+                map = mm.map;
+                if (!map) {
+                    const auto otherDom = (typeDom == uf8::Domain::BusComp)
+                        ? uf8::Domain::ChannelStrip
+                        : uf8::Domain::BusComp;
+                    auto mm2 = uf8::lookupPluginOnTrack(tr, otherDom);
+                    map = mm2.map;
+                }
             }
         }
 

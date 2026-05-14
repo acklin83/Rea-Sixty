@@ -377,6 +377,12 @@ struct LinkToUc1 {
 };
 
 constexpr LinkToUc1 kCsLinkToUc1[] = {
+    // FaderLevel (slot 1) → UC1 Output Gain knob (0x16). On SSL CS the
+    // "Output Gain" knob IS the channel's Fader Level (same vst3 param,
+    // dual label). For user-CS plug-ins that learn a FaderLevel slot,
+    // wire the UC1 Output Gain knob to drive that param too — keeps
+    // built-in CS and user-CS symmetric (Frank 2026-05-14).
+    {  1, knob::kCSFaderLevel,   kNoUc1               },
     {  4, knob::kCSInputTrim,    kNoUc1               },
     {  5, kNoUc1,                button::kPolarity    },
     {  6, knob::kCSLowPass,      kNoUc1               },
