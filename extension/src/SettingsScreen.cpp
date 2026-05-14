@@ -1792,8 +1792,6 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         }
         ImGui_PopItemWidth(ctx);
 
-        ImGui_Text(ctx, "(Phase D wires real MIDI out — for now logs to "
-                        "/tmp/rea_sixty_midi.log)");
         ImGui_Unindent(ctx, nullptr);
     }
 

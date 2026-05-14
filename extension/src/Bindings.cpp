@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "reaper_plugin.h"            // midi_Output
 #include "reaper_plugin_functions.h"
 
 #include "WDL/jsonparse.h"
@@ -2062,6 +2063,104 @@ const Config& get()
 
 namespace {
 
+// ---- MIDI output dispatch ------------------------------------------------
+//
+// Per-device midi_Output cache. Opened lazily on first dispatch to a
+// given device name; never explicitly destroyed. REAPER's plugin-unload
+// path (REAPER_PLUGIN_ENTRYPOINT with rec==nullptr) doesn't give a
+// reliable hook to tear them down without racing the bindings timer
+// drain, so we let the OS reclaim handles on process exit. The map is
+// bounded by the set of MIDI device names the user binds to —
+// realistically a handful, so leaking a few midi_Output instances at
+// shutdown is acceptable.
+std::mutex                                    g_midiOutMutex;
+std::unordered_map<std::string, midi_Output*> g_midiOutCache;
+
+midi_Output* getMidiOutputForIdx_(int devIdx)
+{
+    char nm[256] = {0};
+    if (!GetMIDIOutputName(devIdx, nm, sizeof(nm))) return nullptr;
+    if (!*nm) return nullptr;
+    std::lock_guard<std::mutex> lock(g_midiOutMutex);
+    auto& slot = g_midiOutCache[nm];
+    if (!slot) {
+        slot = CreateMIDIOutput(devIdx, /*streamMode*/ false,
+                                /*msoffset100*/ nullptr);
+        if (!slot) {
+            if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+                std::fprintf(lg,
+                    "[midi] CreateMIDIOutput failed for dev=%d '%s' "
+                    "(device disabled in REAPER prefs?)\n",
+                    devIdx, nm);
+                std::fclose(lg);
+            }
+        }
+    }
+    return slot;
+}
+
+// Build the MIDI status byte for the binding's MidiMsgType + channel
+// (1..16). Returns -1 on invalid input. Program Change is single-data-
+// byte and uses only midiData1 (the program number); midiData2 is
+// ignored at dispatch.
+int midiStatusByte_(int msgType, int channel1Based)
+{
+    if (channel1Based < 1 || channel1Based > 16) return -1;
+    const uint8_t chBits = static_cast<uint8_t>(channel1Based - 1);
+    switch (static_cast<MidiMsgType>(msgType)) {
+        case MidiMsgType::NoteOn:        return 0x90 | chBits;
+        case MidiMsgType::NoteOff:       return 0x80 | chBits;
+        case MidiMsgType::ControlChange: return 0xB0 | chBits;
+        case MidiMsgType::ProgramChange: return 0xC0 | chBits;
+    }
+    return -1;
+}
+
+void dispatchMidi_(const ActionStep& a)
+{
+    const int status = midiStatusByte_(a.midiMsgType, a.midiChannel);
+    if (status < 0) return;
+    const uint8_t st  = static_cast<uint8_t>(status);
+    const int   d1clamped = std::clamp(a.midiData1, 0, 127);
+    const int   d2clamped = std::clamp(a.midiData2, 0, 127);
+    const bool  isPC = (static_cast<MidiMsgType>(a.midiMsgType)
+                        == MidiMsgType::ProgramChange);
+    const uint8_t d1 = static_cast<uint8_t>(d1clamped);
+    const uint8_t d2 = isPC ? 0 : static_cast<uint8_t>(d2clamped);
+
+    const int n = GetNumMIDIOutputs();
+    if (a.midiDevice.empty()) {
+        // "(all enabled outputs)" — iterate every enumerated device.
+        // CreateMIDIOutput returns nullptr for devices disabled in
+        // REAPER prefs; those are silently skipped.
+        for (int i = 0; i < n; ++i) {
+            if (auto* o = getMidiOutputForIdx_(i)) {
+                o->Send(st, d1, d2, /*frame_offset*/ -1);
+            }
+        }
+    } else {
+        for (int i = 0; i < n; ++i) {
+            char nm[256] = {0};
+            if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
+            if (a.midiDevice == nm) {
+                if (auto* o = getMidiOutputForIdx_(i)) {
+                    o->Send(st, d1, d2, /*frame_offset*/ -1);
+                }
+                return;
+            }
+        }
+        // Bound device name no longer enumerated — log once for
+        // diagnosis but don't surface a UI error every press.
+        if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+            std::fprintf(lg,
+                "[midi] bound device '%s' not in current MIDI output list "
+                "(unplugged or renamed)\n",
+                a.midiDevice.c_str());
+            std::fclose(lg);
+        }
+    }
+}
+
 void runStep_(const ActionStep& a, bool firing, bool pressed)
 {
     switch (a.type) {
@@ -2122,17 +2221,14 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             break;
         }
         case ActionType::Midi: {
+            // Fire on the press edge only. Note Off as a message type
+            // is a deliberate user choice (separate option in the
+            // editor); we don't auto-pair a Note Off with a preceding
+            // Note On. For paired note-on/note-off behaviour the user
+            // can build a multi-step chain (Note On step + Note Off
+            // step with a wait_ms) in the editor.
             if (!firing) break;
-            // Phase D wiring: real MIDI out via REAPER's API. For now log
-            // the intent so the user can see their binding is reaching
-            // dispatch. File-log instead of ShowConsoleMsg to stay quiet
-            // on rapid presses.
-            if (FILE* f = std::fopen("/tmp/rea_sixty_midi.log", "a")) {
-                std::fprintf(f, "midi: dev='%s' ch=%d msg=%d d1=%d d2=%d\n",
-                             a.midiDevice.c_str(), a.midiChannel,
-                             a.midiMsgType, a.midiData1, a.midiData2);
-                std::fclose(f);
-            }
+            dispatchMidi_(a);
             break;
         }
     }
