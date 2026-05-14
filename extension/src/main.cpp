@@ -262,6 +262,12 @@ constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
 extern std::array<std::string, 8> g_panOverlayText;
 
+// Folder Mode value-line override: parent tracks normally show "Folder"
+// in the V-Pot value line; turning the V-Pot reveals the actual value
+// for kFolderRevealMs, then it reverts to "Folder".
+constexpr int64_t kFolderRevealMs = 3000;
+extern std::array<int64_t, 8>     g_folderRevealUntilMs;
+
 // Surface-visible track list — REAPER's full track set filtered by
 // g_folderMode (parents-only: only top-level / depth-0 tracks pass,
 // plus the children of g_spilledParent when one is held expanded) and
@@ -2049,6 +2055,12 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::PanDelta: {
+                // Folder Mode reveal: any V-Pot rotation on a parent strip
+                // briefly shows the real value before snapping back to
+                // "Folder". Set unconditionally — the value-line resolver
+                // gates on folder_mode + parent-track itself.
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Send/Receive routing on the V-Pot wins everything else.
                 // Treat V-Pot detents as a volume scrub against the routed
                 // level — same conversion the FLIP fader path uses below
@@ -2268,6 +2280,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::PanCenter: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // V-pot push: with a plug-in of the focused domain present
                 // (and not in global Pan mode), reset the focused param to
                 // its midpoint. Otherwise, re-center pan.
@@ -2454,6 +2468,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeStep: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode SEL push: cycle auto-mode 0..5 with
                 // wraparound, ledColourFor and the scribble strip's
                 // value line update on the next render tick.
@@ -2463,6 +2479,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeSet: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode V-Pot push: snap the strip's auto-mode to
                 // the value carried in e.value (0 = Trim/Read by
                 // default). Frank 2026-05-14 "v-pot push soll auf
@@ -2474,6 +2492,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeDelta: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode V-Pot rotation: accumulate detents, step
                 // strip's auto-mode ±1 within [0..5]. Per-strip accum
                 // so two V-Pots scrolling at once don't fight.
@@ -2498,6 +2518,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::StripInstanceDelta: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Instance mode V-Pot rotation: cycle the strip's
                 // track's FX list per-strip, no focus / selection
                 // changes (Frank 2026-05-14 "ohne track selection,
@@ -2534,6 +2556,8 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::StripInstanceOpen: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Instance mode V-Pot push: toggle the FX window for
                 // this strip's active instance. Tracks ownership so
                 // the with-GUI rotation handler knows which strip's
@@ -4014,6 +4038,11 @@ std::array<uint8_t, 8>     g_lastVPotMode{};     // FF 66 09 0D mode byte per st
 // (also main thread) — plain types are sufficient.
 std::array<int64_t, 8>     g_panOverlayUntilMs{};
 std::array<std::string, 8> g_panOverlayText{};
+
+// Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
+// drainInputQueue so a parent strip briefly shows the real value before
+// reverting to "Folder". See kFolderRevealMs in the forward decls.
+std::array<int64_t, 8>     g_folderRevealUntilMs{};
 
 // CUT LED last-pushed state per strip — int8_t with -1 = unknown / force
 // re-push, 0/1 = effective mute state. Effective mute follows routing:
@@ -5578,6 +5607,17 @@ void pushZonesForVisibleSlots()
             // zone above, so we don't need to repeat volume here.
             const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
             valLine = composeValueLine("Pan", formatPanReadout(pan));
+        }
+        // Folder Mode override — final stop in the value-line chain.
+        // For folder-parent tracks, swap the value line for "Folder"
+        // unless the user just turned the V-Pot (reveal window from
+        // drainInputQueue). Independent of whatever pan / param /
+        // routing branch wrote the value above.
+        if (g_folderMode.load()
+            && nowMs_() >= g_folderRevealUntilMs[s]
+            && GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5)
+        {
+            valLine = "      Folder       ";   // 19 chars, centred
         }
         if (valLine != g_lastValueLine[s]) {
             g_lastValueLine[s] = valLine;
