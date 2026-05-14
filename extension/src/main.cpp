@@ -8771,8 +8771,7 @@ void registerBindingHandlers()
     // Automation modes — one builtin per REAPER mode so the picker
     // shows self-documenting names. Off and Trim both map to mode 0
     // (REAPER has no separate "off"; SSL convention puts both on the
-    // hardware row). The legacy "automation_mode" + param entry stays
-    // registered for backwards-compat.
+    // hardware row).
     auto autoMode = [](int reaperMode, const char* label) {
         return DescBuilder{
             [reaperMode](bool firing, bool /*pressed*/, int /*param*/) {
@@ -8784,22 +8783,13 @@ void registerBindingHandlers()
             nullptr, label, false
         };
     };
-    registerBuiltin("auto_off",   autoMode(0, "Automation: Off / Trim"));
-    registerBuiltin("auto_read",  autoMode(1, "Automation: Read"));
-    registerBuiltin("auto_write", autoMode(3, "Automation: Write"));
-    registerBuiltin("auto_trim",  autoMode(0, "Automation: Trim"));
-    registerBuiltin("auto_latch", autoMode(4, "Automation: Latch"));
-    registerBuiltin("auto_touch", autoMode(2, "Automation: Touch"));
-    // Backwards-compat shim.
-    registerBuiltin("automation_mode", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            queueInput({PendingInput::AutomationMode, 0,
-                        static_cast<double>(param)});
-            pushAutoModeLeds(param);
-        },
-        nullptr, "Automation mode (param = REAPER mode 0..4)", true
-    });
+    registerBuiltin("auto_off",       autoMode(0, "Automation: Off / Trim"));
+    registerBuiltin("auto_read",      autoMode(1, "Automation: Read"));
+    registerBuiltin("auto_write",     autoMode(3, "Automation: Write"));
+    registerBuiltin("auto_trim",      autoMode(0, "Automation: Trim"));
+    registerBuiltin("auto_latch",     autoMode(4, "Automation: Latch"));
+    registerBuiltin("auto_latch_prv", autoMode(5, "Automation: Latch Prv"));
+    registerBuiltin("auto_touch",     autoMode(2, "Automation: Touch"));
 
     registerBuiltin("bank_left", DescBuilder{
         [](bool firing, bool pressed, int /*param*/) {

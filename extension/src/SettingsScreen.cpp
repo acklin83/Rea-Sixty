@@ -1456,7 +1456,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "mouse_scroll")
                     return "Encoder Modes";
 
-                if (n.rfind("auto_", 0) == 0 || n == "automation_mode")
+                if (n.rfind("auto_", 0) == 0)
                     return "Automation";
 
                 if (n.rfind("zoom_", 0) == 0)
