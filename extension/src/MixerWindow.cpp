@@ -131,12 +131,15 @@ void MixerWindow::onRunTick()
     // Begin entirely — that's fine because we ALSO touch the context
     // through the SetNextWindowSize / SetNextWindowPos calls above
     // and through ThemeBridge::pushAll, all of which count as "use".
-    // Initial size sized to fit the UF8 schematic at full width without
-    // horizontal scroll. Schematic canvas is 1000×490 (drawUf8Vector);
-    // add the 160 px left rail + ~20 px frame padding either side +
-    // the 4×2 binding-editor matrix and CSI panel below = ~1280×1100.
+    // Initial size sized to fit the FX-Learn pane (860 px schematic +
+    // 280 px param list + 12 px gap + chrome) without horizontal scroll
+    // on first open. 2026-05-14: bumped width 1280→1500 so both the
+    // UC1 (content fills to chassis edge) and UF8 (strips + bezel)
+    // mockups display fully without the schematic-pane scrollbar.
+    // CreateContext host stays at 1280×720 / "Rea-Sixty v2" — see
+    // memory/reaimgui-host-size-bisect.md for why host size is sacred.
     int condFirst = ImGui_Cond_FirstUseEver;
-    ImGui_SetNextWindowSize(impl_->ctx, /*w*/ 1280, /*h*/ 1080,
+    ImGui_SetNextWindowSize(impl_->ctx, /*w*/ 1500, /*h*/ 1080,
                             &condFirst);
     ImGui_SetNextWindowPos(impl_->ctx, /*x*/ 60, /*y*/ 60,
                            &condFirst, /*pivot_x*/ nullptr,
