@@ -4665,7 +4665,16 @@ void pushZonesForVisibleSlots()
         // the trailing LCD cells render blank instead of showing space
         // characters past the text (Frank 2026-05-09).
         std::string csType;
-        if (userStripActive) {
+        if (g_selectionMode.load() == SelectionMode::Instance) {
+            // Instance mode hijacks the yellow Type zone so the user
+            // sees the per-strip active FX name AND it rotates with
+            // the V-Pot (Frank 2026-05-14 "Instance soll auch oben im
+            // farbfeld rotieren"). Replaces the legacy CS/BC label
+            // ("BC/CS Standard Bezeichnung raus damit").
+            const int instFxIdx = stripInstanceActiveFx_(tr);
+            if (instFxIdx >= 0) csType = shortFxName_(tr, instFxIdx);
+            if (csType.empty()) csType = "-";
+        } else if (userStripActive) {
             csType = userS.map->displayShort;
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
@@ -5158,21 +5167,13 @@ void pushZonesForVisibleSlots()
             }
             valLine = composeValueLine("Auto", modeName);
             selectionModeHandled = true;
-        } else if (g_selectionMode.load() == SelectionMode::Instance) {
-            // Per-strip: each scribble shows its own track's active
-            // instance — Frank 2026-05-14 "soll ohne track selection
-            // gehen, einfach den track des v-pots verändern". No
-            // "Inst:" label — takes too much LCD space, so just
-            // the truncated plug-in name fills the value zone.
-            const int fxIdx = stripInstanceActiveFx_(tr);
-            std::string instName = (fxIdx >= 0) ? shortFxName_(tr, fxIdx)
-                                                : std::string{};
-            if (instName.empty()) instName = "-";
-            if (instName.size() > 19) instName.resize(19);
-            valLine = std::move(instName);
-            valLine.resize(19, ' ');
-            selectionModeHandled = true;
         }
+        // Instance mode: the active FX name is rendered in the
+        // colour-bar Channel-Strip-Type zone (see csType override
+        // below), so the value line is left to the normal pipeline
+        // (volume, pan, focused-param). Frank 2026-05-14 — the
+        // "Inst:" label took too much space AND duplicated content
+        // with the colour-bar zone.
 
         // FX Learn UF8: when SSL Strip Mode is on and the focused track
         // has a user-mapped plug-in, the value line shows the V-Pot's
