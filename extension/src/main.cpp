@@ -3399,20 +3399,28 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // Per-strip V-Pot rotation. Norm / REC / AUTO use the
                 // legacy pan-delta wiring (those modes are SEL-only).
                 // Instance cycles the focused track's plug-in instance
-                // (shared accumulator across all 8 strips since
-                // applyInstanceCycle_ targets the focused track).
-                // Scale: single detent = 1/128 of full pan range.
-                const double delta = static_cast<double>(signed6) / 128.0;
+                // — shared accumulator across all 8 strips because
+                // applyInstanceCycle_ targets the focused track.
+                // Scale: pan uses signed6/128 (fine), but Instance
+                // needs the raw signed6 so its accumulator scale
+                // (kChannelEncoderScale = 4) matches the channel-
+                // encoder Shift+rotate path — Frank 2026-05-14
+                // "V-Pots sollen die instances cyclen, genau wie
+                // shift+encoder". Dividing by 128 first made one
+                // step take ~500 detents.
                 switch (g_selectionMode.load()) {
                     case SelectionMode::Instance:
                         queueInput({PendingInput::InstanceCycleDelta,
-                                    strip, delta});
+                                    strip,
+                                    static_cast<double>(signed6)});
                         break;
                     case SelectionMode::Norm:
                     case SelectionMode::Rec:
+                    case SelectionMode::RecMon:
                     case SelectionMode::Auto:
                     default:
-                        queueInput({PendingInput::PanDelta, strip, delta});
+                        queueInput({PendingInput::PanDelta, strip,
+                                    static_cast<double>(signed6) / 128.0});
                         break;
                 }
             } else if (strip == 0x08) {
@@ -8654,7 +8662,7 @@ void registerBindingHandlers()
                                 "Selection Mode → AUTO (toggle)");
     registerSelectionModeToggle("selection_mode_instance",
                                 SelectionMode::Instance,
-                                "Selection Mode → Instance (toggle)");
+                                "Toggle V-POTS → Instance");
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
@@ -8688,11 +8696,31 @@ void registerBindingHandlers()
     registerBuiltin("tracks_arm_all", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            // 40490 = "Track: Arm all tracks for recording". Routed via
-            // MainAction so Main_OnCommand fires on the main thread.
-            queueInput({PendingInput::MainAction, 0, 40490.0});
+            // Toggle: any unarmed track → arm everything; all armed →
+            // unarm everything. REAPER action 40490 only arms (no
+            // toggle), which left users stuck with everything armed
+            // (Frank 2026-05-14). Loop is fine from the input thread —
+            // same pattern as the auto_off / auto_read / automation_
+            // zero_all builtins.
+            const int n = CountTracks(nullptr);
+            bool anyUnarmed = false;
+            for (int i = 0; i < n && !anyUnarmed; ++i) {
+                if (auto* tr = GetTrack(nullptr, i)) {
+                    if (GetMediaTrackInfo_Value(tr, "I_RECARM") < 0.5)
+                        anyUnarmed = true;
+                }
+            }
+            const int targetArm = anyUnarmed ? 1 : 0;
+            for (int i = 0; i < n; ++i) {
+                if (auto* tr = GetTrack(nullptr, i)) {
+                    const bool armed =
+                        GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5;
+                    if (armed != (targetArm == 1))
+                        CSurf_OnRecArmChange(tr, targetArm);
+                }
+            }
         },
-        nullptr, "Tracks: Arm All for Recording", false
+        nullptr, "Tracks: Arm All / Unarm All (toggle)", false
     });
     registerBuiltin("automation_zero_all", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
