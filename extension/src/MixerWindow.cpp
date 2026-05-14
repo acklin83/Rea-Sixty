@@ -1,93 +1,41 @@
 #include "MixerWindow.h"
 #include "MixerLayout.h"
-#include "SettingsScreen.h"
 #include "ThemeBridge.h"
 
 #include <cstdio>
 
-// One translation unit must define REAIMGUIAPI_IMPLEMENT before including the
-// header — this materialises the storage for the lazy-resolved ReaImGuiFunc
-// instances. Every other TU just `#include "reaper_imgui_functions.h"` and
-// uses them as if they were free functions.
-#define REAIMGUIAPI_IMPLEMENT
+// REAIMGUIAPI_IMPLEMENT lives in SettingsWindow.cpp (only one TU per dylib
+// may define it — multiple definitions would multiply-define the lazy-
+// resolved ReaImGuiFunc storage at link time). This TU just consumes the
+// already-materialised bindings.
 #include "reaper_imgui_functions.h"
 
 namespace uf8 {
 
-namespace {
-
-// Left-rail navigation. Mixer sits at the top; settings sections follow,
-// separated by a divider. Order chosen to put the high-frequency view
-// (Mixer) first and the static info (About) last.
-enum Section : int {
-    kSecMixer = 0,
-    kSecDevice,
-    kSecBindings,
-    kSecFxLearn,
-    kSecModes,
-    kSecSelectionSets,
-    kSecAbout,
-    kSecCount,
-};
-
-struct RailEntry {
-    const char* label;
-    Section     section;
-    bool        separatorBefore;
-    void (*draw)(ImGui_Context*);
-};
-
-constexpr RailEntry kRail[] = {
-    { "Mixer",          kSecMixer,         false, &MixerLayout::draw                 },
-    { "Device",         kSecDevice,        true,  &SettingsScreen::drawDevice        },
-    { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
-    { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
-    { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
-    { "Selection Sets", kSecSelectionSets, false, &SettingsScreen::drawSelectionSets },
-    { "About",          kSecAbout,         true,  &SettingsScreen::drawAbout         },
-};
-
-constexpr double kRailWidthPx = 160.0;
-
-} // namespace
-
 struct MixerWindow::Impl {
-    // v0.10+ owns context lifetime itself: ImGui_CreateContext returns a
-    // context that auto-destroys when the calling extension unloads. There
-    // is no ImGui_DestroyContext export in v0.10 — calling the vendored
-    // binding for it crashes with PC=0 (plugin_getapi returns null for the
-    // missing symbol). So we never destroy. Toggle instead flips a
-    // visibility flag; when invisible, we skip Begin/End entirely and
-    // ReaImGui closes the OS window. Re-toggling resumes drawing.
+    // ReaImGui v0.10 GCs contexts that don't get touched each defer cycle.
+    // We never call DestroyContext (the binding is missing in v0.10 — calling
+    // it crashes with PC=0). Toggle flips a visibility flag; when invisible
+    // we still keep the context alive across one defer cycle, but Begin/End
+    // is skipped so ReaImGui closes the OS window.
     ImGui_Context* ctx = nullptr;
     bool           visible = false;
-    int            selected = kSecMixer;
-    // Session counter — bumped on every closed→open transition. Used to
-    // suffix the Begin window-id so each session is a fresh ImGui
-    // window object. Required because ReaImGui v0.10 retains stale
-    // window state (collapsed/closed/off-screen pose) under the old
-    // id and refuses to re-show after a single open/close cycle. New
-    // id = no carried-over state.
+    // Session counter — bumped on every closed→open transition. Suffixed
+    // onto the Begin window-id so each session is a fresh ImGui window
+    // object. Defeats stale collapsed/closed/off-screen state under the
+    // old id (same trap that bit the Settings window).
     int            sessionGen = 0;
 
     void ensureCtx()
     {
         if (ctx) return;
-        // v0.10+ ImGui_CreateContext takes optional int* for all four
-        // dimension args — passing raw ints (1280, 720) crashed because
-        // the dylib's trampoline dereferenced them as pointers (= addr
-        // 0x500). Must pass &int or nullptr. See learnings.md rule 17.
-        //
-        // Context name carries a version suffix so a fresh ReaImGui
-        // state file is allocated. Stale persisted state under the bare
-        // "Rea-Sixty" key prevented the window from reopening across
-        // recent debugging sessions — bumping the suffix forces v0.10
-        // to treat us as a brand-new context with no carried-over
-        // collapsed / off-screen / closed pose.
+        // 1280×720 host context is sacred — see memory/reaimgui-host-size-
+        // bisect.md. Inner-window size set via SetNextWindowSize below is
+        // free to change.
         int sizeW = 1280;
         int sizeH = 720;
         ctx = ImGui_CreateContext(
-            "Rea-Sixty v2",
+            "Rea-Sixty Mixer v1",
             &sizeW, &sizeH,
             /*pos_x*/ nullptr, /*pos_y*/ nullptr);
     }
@@ -102,14 +50,9 @@ void MixerWindow::toggle()
     impl_->visible = !wasOpen;
     if (impl_->visible) {
         ++impl_->sessionGen;
-        // Drop the old context pointer so ensureCtx() creates a brand
-        // new ImGui_Context on the next onRunTick. ReaImGui v0.10 GCs
-        // contexts that go unused for a defer cycle (per its embedded
-        // docs), so the orphaned previous context cleans up on its
-        // own — we don't have DestroyContext available in v0.10. A
-        // fresh ctx per open guarantees zero state carry-over from
-        // any prior session: no remembered id-stack, no stale window
-        // pose, no half-popped style stack.
+        // Drop the old context so ensureCtx() builds a fresh one on the
+        // next tick. ReaImGui auto-GCs the orphan. Fresh ctx = zero state
+        // carry-over from any prior session.
         impl_->ctx = nullptr;
     }
 }
@@ -119,112 +62,49 @@ bool MixerWindow::isOpen() const { return impl_->visible; }
 void MixerWindow::onRunTick()
 {
     impl_->ensureCtx();
-    if (!impl_->ctx) return;  // CreateContext failed (ReaImGui not installed?)
+    if (!impl_->ctx) return;
 
-    // ReaImGui v0.10 GCs objects that don't get touched each defer
-    // cycle (the dylib's embedded docs spell it out: "valid as long as
-    // it is used in each defer cycle unless attached to a context").
-    // We must call into the context every tick or it dies; we must
-    // also call End() exactly once for each Begin() that returned true
-    // (modern ImGui rule, RAPID uses the same pattern). When the user
-    // wants the window hidden, we still tick the context but skip
-    // Begin entirely — that's fine because we ALSO touch the context
-    // through the SetNextWindowSize / SetNextWindowPos calls above
-    // and through ThemeBridge::pushAll, all of which count as "use".
-    // Initial size sized to fit the FX-Learn pane (860 px schematic +
-    // 280 px param list + 12 px gap + chrome) without horizontal scroll
-    // on first open. 2026-05-14: bumped width 1280→1500 so both the
-    // UC1 (content fills to chassis edge) and UF8 (strips + bezel)
-    // mockups display fully without the schematic-pane scrollbar.
-    // CreateContext host stays at 1280×720 / "Rea-Sixty v2" — see
-    // memory/reaimgui-host-size-bisect.md for why host size is sacred.
+    // 1600×1000 first-use size — wide enough to show ~12-14 strips before
+    // horizontal scrolling kicks in; user can resize freely afterwards.
+    // Native OS fullscreen (macOS green button, Windows maximise) works
+    // on this window because ReaImGui floats it as a real OS window when
+    // undocked.
     int condFirst = ImGui_Cond_FirstUseEver;
-    ImGui_SetNextWindowSize(impl_->ctx, /*w*/ 1500, /*h*/ 1080,
+    ImGui_SetNextWindowSize(impl_->ctx, /*w*/ 1600, /*h*/ 1000,
                             &condFirst);
-    ImGui_SetNextWindowPos(impl_->ctx, /*x*/ 60, /*y*/ 60,
+    ImGui_SetNextWindowPos(impl_->ctx, /*x*/ 80, /*y*/ 80,
                            &condFirst, /*pivot_x*/ nullptr,
                            /*pivot_y*/ nullptr);
 
     const int pushed = ThemeBridge::pushAll(impl_->ctx);
 
-    // NoSavedSettings tells ImGui not to persist closed/collapsed/
-    // off-screen pose for this window across toggles — without it,
-    // a single X-click leaves the window's "open=false" state stuck
-    // in ImGui's internal storage on the same id, so the very next
-    // *p_open=true couldn't override and the window silently failed
-    // to reopen. Combined with the per-session id suffix this gives
-    // a guaranteed-fresh window every open.
-    // NoCollapse: prevent the window from going into the title-bar-only
-    // state that breaks rendering. Repro: clicking the FX Learn rail entry
-    // some way triggered a one-frame collapse, after which Begin returned
-    // false forever and the Settings window appeared "dead" until REAPER
-    // restart. There's no UX reason to allow collapsing — the user toggles
-    // the whole window via a REAPER action, not via the title-bar arrow.
+    // NoSavedSettings: don't persist collapsed/closed pose across toggles
+    // (see SettingsWindow comments for the trap).
+    // NoCollapse: title-bar-only state breaks rendering — no UX reason to
+    // allow it (user toggles via REAPER action, not title-bar arrow).
     int winFlags = ImGui_WindowFlags_NoSavedSettings
                  | ImGui_WindowFlags_NoCollapse;
     char winId[64];
     std::snprintf(winId, sizeof(winId),
-                  "Rea-Sixty##session_%d", impl_->sessionGen);
+                  "Rea-Sixty Mixer##session_%d", impl_->sessionGen);
     bool open = impl_->visible;
     if (impl_->visible) {
-        // Dear ImGui >=1.89 rule: End() MUST always be called for every
-        // Begin(), regardless of return value. Begin returns false when
-        // the window is collapsed or fully clipped — body is skipped, but
-        // End still required so the window stack stays balanced. Skipping
-        // End on a false-return frame imbalances the stack, and every
-        // subsequent Begin returns false → window bricked until REAPER
-        // restart. Repro: clicking the FX Learn rail entry caused Begin
-        // to return false on the next frame; without an unconditional
-        // End() the Settings window died permanently.
-        // Force-uncollapse every frame. Combined with NoCollapse this is
-        // bulletproof against any state weirdness that flips the window
-        // into a title-bar-only state on a frame transition.
+        // Force-uncollapse every frame. With NoCollapse this is belt-and-
+        // braces against any state weirdness that flips us into title-bar-
+        // only mode.
         int condAlways = ImGui_Cond_Always;
         ImGui_SetNextWindowCollapsed(impl_->ctx, false, &condAlways);
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
         if (bodyVisible) {
-            // -- Left rail: section list ---------------------------------
-            double railW = kRailWidthPx;
-            const bool railVisible =
-                ImGui_BeginChild(impl_->ctx, "rail", &railW,
-                                 /*size_h*/ nullptr, /*border*/ nullptr,
-                                 /*flags*/ nullptr);
-            if (railVisible) {
-                for (const RailEntry& e : kRail) {
-                    if (e.separatorBefore) ImGui_Separator(impl_->ctx);
-                    bool isSelected = (impl_->selected == e.section);
-                    if (ImGui_Selectable(impl_->ctx, e.label, &isSelected,
-                                         /*flags*/ nullptr,
-                                         /*size_w*/ nullptr,
-                                         /*size_h*/ nullptr)) {
-                        impl_->selected = e.section;
-                    }
-                }
-            }
-            ImGui_EndChild(impl_->ctx);
-
-            ImGui_SameLine(impl_->ctx, /*offset_from_start_x*/ nullptr,
-                           /*spacing*/ nullptr);
-
-            // -- Right content pane --------------------------------------
-            const bool contentVisible =
-                ImGui_BeginChild(impl_->ctx, "content", /*size_w*/ nullptr,
-                                 /*size_h*/ nullptr, /*border*/ nullptr,
-                                 /*flags*/ nullptr);
-            if (contentVisible) {
-                for (const RailEntry& e : kRail) {
-                    if (e.section == impl_->selected) {
-                        e.draw(impl_->ctx);
-                        break;
-                    }
-                }
-            }
-            ImGui_EndChild(impl_->ctx);
+            MixerLayout::draw(impl_->ctx);
         }
+        // End MUST be called for every Begin, regardless of return value
+        // (Dear ImGui ≥1.89). Skipping it on a false-return frame imbalances
+        // the stack permanently.
         ImGui_End(impl_->ctx);
-        // Mirror ImGui's title-bar X click back to our flag so the
-        // next 360 toggle correctly moves false→true.
+        // Mirror ImGui's title-bar X click back to our flag so the next
+        // toggle action correctly moves false→true.
         impl_->visible = open;
     }
 

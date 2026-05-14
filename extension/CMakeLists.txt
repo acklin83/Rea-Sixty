@@ -70,6 +70,7 @@ add_library(reaper_uf8 MODULE
     # Phase 2.6 — Plugin Mixer Window + Phase 2.7 — Settings Screen
     src/MixerWindow.cpp
     src/MixerLayout.cpp
+    src/SettingsWindow.cpp
     src/SettingsScreen.cpp
     src/ThemeBridge.cpp
     # Phase 2.7 Bindings — Phase A
