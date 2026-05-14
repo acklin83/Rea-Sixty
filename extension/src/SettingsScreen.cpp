@@ -2833,6 +2833,266 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
+    // ---- Soft-Key Bank preset save/recall -----------------------------
+    // Snapshot all 8 top-soft-key slots in the current (L, Q, SB)
+    // tuple as a named preset; recall a preset into any (L, Q, SB).
+    // LED-override is NOT part of the preset — it belongs to the
+    // engaged-Quick context, not the bank's identity.
+    {
+        char presetHdr[160];
+        std::snprintf(presetHdr, sizeof(presetHdr),
+                      "Preset for %s   (Layer %d, Quick %d)",
+                      sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+        ImGui_Text(ctx, presetHdr);
+        ImGui_TextDisabled(ctx,
+            "Snapshot the 8 Top-Soft-Key slots in this Sub-Bank as a "
+            "named preset, or recall one into this Sub-Bank.");
+        ImGui_Spacing(ctx);
+
+        // Per (L, Q, SB) selection — different sub-bank cells keep
+        // their own combo state so navigating between them doesn't
+        // reset the user's choice.
+        static int s_selPreset[3][kQuicksPerLayer][kSubBanksPerQuick]
+            = {};
+        int& selRef = s_selPreset[editLayer][engagedQ][sbIdx];
+
+        const int nPresets = bankPresetCount();
+        if (selRef >= nPresets) selRef = -1;
+        if (selRef < -1)        selRef = -1;
+
+        std::string preview = "(none)";
+        if (selRef >= 0 && selRef < nPresets) {
+            preview = bankPresetAt(selRef).name;
+        }
+
+        double comboW = 240;
+        ImGui_PushItemWidth(ctx, comboW);
+        if (ImGui_BeginCombo(ctx, "##bp_combo", preview.c_str(),
+                             nullptr)) {
+            bool selNone = (selRef < 0);
+            if (ImGui_Selectable(ctx, "(none)##bp_none", &selNone,
+                                 nullptr, nullptr, nullptr)) {
+                selRef = -1;
+            }
+            for (int i = 0; i < nPresets; ++i) {
+                SoftKeyBankPreset p = bankPresetAt(i);
+                char rowId[160];
+                std::snprintf(rowId, sizeof(rowId), "%s##bp_row_%d",
+                              p.name.c_str(), i);
+                bool sel = (i == selRef);
+                if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
+                                     nullptr, nullptr)) {
+                    selRef = i;
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_PopItemWidth(ctx);
+
+        const bool hasSel = (selRef >= 0 && selRef < nPresets);
+
+        // Deferred-open: button click only sets s_pendingOp; the
+        // OpenPopup call lives at the bottom of this block so the
+        // ID-stack matches the BeginPopupModal site exactly. Same
+        // pattern the FX-Learn editor uses for its mode/del popups.
+        static char s_nameBuf[64] = {};
+        enum Op { OpNone, OpRecall, OpSaveAs, OpRename, OpDelete };
+        static int s_pendingOp  = OpNone;
+        static int s_pendingIdx = -1;
+
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Save as…##bp_saveas",
+                         nullptr, nullptr)) {
+            s_nameBuf[0] = '\0';
+            s_pendingOp  = OpSaveAs;
+        }
+        if (hasSel) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Recall##bp_recall",
+                             nullptr, nullptr)) {
+                s_pendingOp  = OpRecall;
+                s_pendingIdx = selRef;
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Rename…##bp_rename",
+                             nullptr, nullptr)) {
+                SoftKeyBankPreset p = bankPresetAt(selRef);
+                std::strncpy(s_nameBuf, p.name.c_str(),
+                             sizeof(s_nameBuf) - 1);
+                s_nameBuf[sizeof(s_nameBuf) - 1] = '\0';
+                s_pendingOp  = OpRename;
+                s_pendingIdx = selRef;
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Delete##bp_delete",
+                             nullptr, nullptr)) {
+                s_pendingOp  = OpDelete;
+                s_pendingIdx = selRef;
+            }
+        } else {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextDisabled(ctx,
+                "  (pick a preset to Recall / Rename / Delete)");
+        }
+
+        if (s_pendingOp == OpRecall)
+            ImGui_OpenPopup(ctx, "bp_recall_confirm",  nullptr);
+        else if (s_pendingOp == OpSaveAs)
+            ImGui_OpenPopup(ctx, "bp_save_as",         nullptr);
+        else if (s_pendingOp == OpRename)
+            ImGui_OpenPopup(ctx, "bp_rename",          nullptr);
+        else if (s_pendingOp == OpDelete)
+            ImGui_OpenPopup(ctx, "bp_delete_confirm",  nullptr);
+        s_pendingOp = OpNone;
+
+        // Helper: trim leading/trailing spaces from s_nameBuf.
+        auto trimmedName = []() {
+            std::string t = s_nameBuf;
+            while (!t.empty() && t.back()  == ' ') t.pop_back();
+            while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+            return t;
+        };
+
+        // ---- Recall confirm -------------------------------------
+        if (ImGui_BeginPopupModal(ctx, "bp_recall_confirm",
+                                  nullptr, nullptr)) {
+            SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                "Overwrite the 8 slots of %s on (Layer %d, Quick %d) "
+                "with preset '%s'?",
+                sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
+                p.name.c_str());
+            ImGui_TextWrapped(ctx, line);
+            ImGui_Spacing(ctx);
+            if (ImGui_Button(ctx, "Recall##bp_recall_ok",
+                             nullptr, nullptr)) {
+                recallBankPreset(s_pendingIdx, editLayer, engagedQ,
+                                 sbIdx);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##bp_recall_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        // ---- Save as … ------------------------------------------
+        if (ImGui_BeginPopupModal(ctx, "bp_save_as",
+                                  nullptr, nullptr)) {
+            ImGui_Text(ctx, "Save current 8 slots as preset");
+            ImGui_Spacing(ctx);
+            ImGui_PushItemWidth(ctx, 280);
+            ImGui_InputTextWithHint(ctx, "Name##bp_saveas_name",
+                "e.g. 'Drum compression'",
+                s_nameBuf, static_cast<int>(sizeof(s_nameBuf)),
+                nullptr, nullptr);
+            ImGui_PopItemWidth(ctx);
+            ImGui_Spacing(ctx);
+            std::string nm = trimmedName();
+            const bool nameOk = !nm.empty();
+            const int  existing = nameOk ? findBankPreset(nm) : -1;
+            if (!nameOk) {
+                ImGui_TextDisabled(ctx, "Enter a name.");
+            } else if (existing >= 0) {
+                ImGui_TextDisabled(ctx,
+                    "A preset with that name exists — Save will "
+                    "overwrite it.");
+            } else {
+                ImGui_TextDisabled(ctx, "New preset.");
+            }
+            ImGui_Spacing(ctx);
+            if (nameOk) {
+                const char* label = (existing >= 0)
+                    ? "Save (overwrite)##bp_saveas_ok"
+                    : "Save##bp_saveas_ok";
+                if (ImGui_Button(ctx, label, nullptr, nullptr)) {
+                    saveBankPreset(nm, editLayer, engagedQ, sbIdx);
+                    selRef = findBankPreset(nm);
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+            } else {
+                ImGui_TextDisabled(ctx, "Save");
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##bp_saveas_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        // ---- Rename ---------------------------------------------
+        if (ImGui_BeginPopupModal(ctx, "bp_rename",
+                                  nullptr, nullptr)) {
+            ImGui_Text(ctx, "Rename preset");
+            ImGui_Spacing(ctx);
+            ImGui_PushItemWidth(ctx, 280);
+            ImGui_InputTextWithHint(ctx, "Name##bp_rename_name",
+                "preset name",
+                s_nameBuf, static_cast<int>(sizeof(s_nameBuf)),
+                nullptr, nullptr);
+            ImGui_PopItemWidth(ctx);
+            ImGui_Spacing(ctx);
+            std::string nm = trimmedName();
+            const bool nameOk = !nm.empty();
+            const int  dup    = nameOk ? findBankPreset(nm) : -1;
+            const bool valid  =
+                nameOk && (dup < 0 || dup == s_pendingIdx);
+            if (!nameOk) {
+                ImGui_TextDisabled(ctx, "Enter a name.");
+            } else if (!valid) {
+                ImGui_TextDisabled(ctx,
+                    "Another preset already has that name.");
+            }
+            ImGui_Spacing(ctx);
+            if (valid) {
+                if (ImGui_Button(ctx, "Rename##bp_rename_ok",
+                                 nullptr, nullptr)) {
+                    renameBankPreset(s_pendingIdx, nm);
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+            } else {
+                ImGui_TextDisabled(ctx, "Rename");
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##bp_rename_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        // ---- Delete confirm -------------------------------------
+        if (ImGui_BeginPopupModal(ctx, "bp_delete_confirm",
+                                  nullptr, nullptr)) {
+            SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                "Delete preset '%s'? This cannot be undone.",
+                p.name.c_str());
+            ImGui_TextWrapped(ctx, line);
+            ImGui_Spacing(ctx);
+            if (ImGui_Button(ctx, "Delete##bp_delete_ok",
+                             nullptr, nullptr)) {
+                deleteBankPreset(s_pendingIdx);
+                if (selRef >= bankPresetCount()) selRef = -1;
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##bp_delete_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+    }
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
     std::snprintf(ledHdr, sizeof(ledHdr),
