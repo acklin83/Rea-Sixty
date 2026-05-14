@@ -4327,11 +4327,8 @@ constexpr float kUf8SoloY       = 152;
 constexpr float kUf8CutY        = 172;
 constexpr float kUf8SelY        = 192;
 constexpr float kUf8SCSBtnH     = 16;
-constexpr float kUf8FaderCapY   = 216;
-constexpr float kUf8FaderCapH   = 14;
-constexpr float kUf8FaderCapW   = 24;
-constexpr float kUf8FaderRailY  = 234;
-constexpr float kUf8FaderRailH  = 240;
+constexpr float kUf8FaderRailY  = 216;
+constexpr float kUf8FaderRailH  = 258;
 constexpr float kUf8FaderRailW  = 22;
 
 inline float uf8StripCx_(int strip)
@@ -4355,7 +4352,6 @@ void drawUf8Face_(VCanvas& c)
     constexpr uint32_t kScribEdge  = 0x444A55FF;
     constexpr uint32_t kRingOuter  = 0x4A5060FF;
     constexpr uint32_t kRingInner  = 0x555A66FF;
-    constexpr uint32_t kFaderCap   = 0x808890FF;
     constexpr uint32_t kFaderRail  = 0x303338FF;
     constexpr uint32_t kSilkText   = 0x9CA0AAFF;
 
@@ -4398,11 +4394,6 @@ void drawUf8Face_(VCanvas& c)
               kUf8StripW - 16, kUf8SCSBtnH, kBtnFill, kBtnEdge, 3.0);
         drawTextCentered_(c, cx, kUf8SelY + kUf8SCSBtnH / 2.0f,
                           kSilkText, "SEL");
-
-        // Fader cap (touch sensor)
-        rect_(c, cx - kUf8FaderCapW / 2.0f, kUf8FaderCapY,
-              kUf8FaderCapW, kUf8FaderCapH,
-              kFaderCap, kBtnEdge, 2.0);
 
         // Fader rail + thumb at midpoint
         rect_(c, cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
