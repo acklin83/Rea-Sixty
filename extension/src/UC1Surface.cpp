@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "reaper_plugin_functions.h"
+#include "Bindings.h"  // dispatch / dispatchEncoder for Uc1Encoder2
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
@@ -257,6 +258,92 @@ void UC1Surface::setBcAnchorTrack(void* track)
     refresh();
 }
 
+void UC1Surface::applyBcTrackScroll(int step)
+{
+    // Legacy MAIN-mode BC-encoder behaviour, now exposed as a public
+    // method so the `bc_track_scroll` builtin can reach it after
+    // bindings dispatch. Walks BC-bearing tracks in project order
+    // relative to the current BC anchor, re-anchors to the hit.
+    // Encoder 2 only moves the BC carousel — REAPER track selection
+    // and UF8 bank stay put (Frank 2026-05-07).
+    if (step == 0) return;
+    const int n = CountTracks(nullptr);
+    if (n <= 0) return;
+
+    int curIdx = -1;
+    if (void* anchor = effectiveBcTrack_()) {
+        curIdx = static_cast<int>(GetMediaTrackInfo_Value(
+            static_cast<MediaTrack*>(anchor), "IP_TRACKNUMBER")) - 1;
+    } else if (focusedTrack_) {
+        curIdx = static_cast<int>(GetMediaTrackInfo_Value(
+            static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
+    }
+
+    const bool forward = step > 0;
+    const int stepsAbs = forward ? step : -step;
+    int probe = curIdx;
+    int found = -1;
+    for (int k = 0; k < stepsAbs; ++k) {
+        int next = -1;
+        if (forward) {
+            for (int i = probe + 1; i < n; ++i) {
+                auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
+                if (b.busCompMap) { next = i; break; }
+            }
+        } else {
+            for (int i = probe - 1; i >= 0; --i) {
+                auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
+                if (b.busCompMap) { next = i; break; }
+            }
+        }
+        if (next < 0) break;  // no more BC tracks in this direction
+        found = next;
+        probe = next;
+    }
+    if (found < 0) return;
+    MediaTrack* tr = GetTrack(nullptr, found);
+    if (!tr) return;
+    setBcAnchorTrack(tr);
+    refresh();
+}
+
+void UC1Surface::showInstanceCarousel(const std::string& prev,
+                                     const std::string& curr,
+                                     const std::string& next,
+                                     const std::string& header)
+{
+    if (!device_) return;
+    // Mutually exclusive with the BC-scroll overlay — clear it before
+    // we claim the same layout slot so the header doesn't flicker
+    // between "BUS COMP 2" and the instance header for a frame.
+    bcScrollOverlayActive_ = false;
+    // CS-scroll overlay (Encoder 1) suppresses zone 0x03; we want
+    // both zones suppressed while the instance carousel holds the
+    // upper LCD, so leave csScrollOverlayActive_ alone (it'll either
+    // expire naturally or be unset on its own timeout).
+    instanceCarouselActive_ = true;
+    instanceCarouselUntil_  = std::chrono::steady_clock::now()
+                            + std::chrono::milliseconds(3000);
+    instanceCarouselHeader_ = header;
+    instanceCarouselTripleFrame_ =
+        buildTrackNameTripleLarge(prev, curr, next);
+    // Match BC-scroll overlay's frame order: invalidate old text
+    // zones, claim sub=0x02 layout, header, triple, redraw signal.
+    if (!lastZone03Text_.empty()) {
+        lastZone03Text_.clear();
+        device_->send(buildDisplayInvalidate(zone::kChannelStripReadout));
+    }
+    if (!lastZone05Text_.empty()) {
+        lastZone05Text_.clear();
+        device_->send(buildDisplayInvalidate(zone::kBusCompReadout));
+    }
+    device_->send(buildCentralMode(CentralMode::Main, 0x02));
+    device_->send(buildLcdHeader(header));
+    device_->send(std::vector<uint8_t>(instanceCarouselTripleFrame_));
+    lastLargeTripleFrame_ = instanceCarouselTripleFrame_;
+    device_->send(buildDisplayInvalidate(0x0F));
+}
+
 void UC1Surface::invalidateCache()
 {
     ringCellCache_.clear();
@@ -305,6 +392,20 @@ int UC1Surface::poll()
         && mode_ == Uc1Mode::Main)
     {
         csScrollOverlayActive_ = false;
+    }
+
+    // Instance / FX cycle carousel revert. Same shape as the BC-scroll
+    // revert: reset sub=0x00 then refresh() so the central-label branch
+    // picks the regular MAIN/CS 2/BC 2 label and the LARGE triple
+    // repopulates from the BC carousel data.
+    if (instanceCarouselActive_
+        && std::chrono::steady_clock::now() >= instanceCarouselUntil_
+        && device_
+        && mode_ == Uc1Mode::Main)
+    {
+        instanceCarouselActive_ = false;
+        device_->send(buildCentralMode(CentralMode::Main, 0x00));
+        refresh();
     }
 
     // Per-tick value poll. Catches every cause of focused-param change:
@@ -703,70 +804,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point lastT{};
         int step = stepFromAccumulator(acc, lastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
-        const int n = CountTracks(nullptr);
-        if (n <= 0) return;
-
-        int curIdx = -1;
-        if (void* anchor = effectiveBcTrack_()) {
-            curIdx = static_cast<int>(GetMediaTrackInfo_Value(
-                static_cast<MediaTrack*>(anchor), "IP_TRACKNUMBER")) - 1;
-        } else if (focusedTrack_) {
-            curIdx = static_cast<int>(GetMediaTrackInfo_Value(
-                static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
-        }
-
-        const bool forward = step > 0;
-        const int stepsAbs = forward ? step : -step;
-        int probe = curIdx;
-        int found = -1;
-        for (int k = 0; k < stepsAbs; ++k) {
-            int next = -1;
-            if (forward) {
-                for (int i = probe + 1; i < n; ++i) {
-                    auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
-                    if (b.busCompMap) { next = i; break; }
-                }
-            } else {
-                for (int i = probe - 1; i >= 0; --i) {
-                    auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
-                    if (b.busCompMap) { next = i; break; }
-                }
-            }
-            if (next < 0) break;  // no more BC tracks in this direction
-            found = next;
-            probe = next;
-        }
-
-        if (found < 0) {
-            ++stats_.knobEventsHandled;
-            return;
-        }
-
-        MediaTrack* tr = GetTrack(nullptr, found);
-        if (tr) {
-            // Set overlay flag BEFORE refresh chain so refresh()'s
-            // central-label branch picks the "BUS COMP 2" header. If
-            // we set it after, refresh would emit buildCentralLabel
-            // ("MAIN"/"CS 2") and overwrite the overlay header on the
-            // same frame slot (FF 66 …01…). Decoded uc1_41 2026-05-01.
-            // Encoder 2 (BC encoder) ONLY moves the BC anchor + carousel
-            // display. It does NOT change REAPER's selected track, does
-            // NOT move the UF8 bank, does NOT touch focusedTrack_ (CS
-            // Channel). Frank 2026-05-07: "Encoder 2 soll nicht die
-            // channel-selection ändern, sondern einfach die anzeige BC
-            // und Channel für BC im UC1 display". Earlier behaviour
-            // (SetOnlyTrackSelected + setFocusedTrack) coupled the two
-            // independent track focuses and dragged UF8 along.
-            setBcAnchorTrack(tr);
-            // Explicit refresh — refresh() is gated to MAIN mode
-            // internally and idempotent.
-            refresh();
-        }
-        if (logThis) {
-            char line[96];
-            std::snprintf(line, sizeof(line),
-                "UC1 BC delta=%d step=%d → track %d\n",
-                (int)ev.delta, step, found + 1);
+        // Bindings-routed dispatch (Uc1Encoder2). Falls back to the
+        // legacy BC-track-scroll when no binding exists (older
+        // bindings.json files saved before this surface became
+        // bindable) so behaviour is preserved across upgrades.
+        if (!uf8::bindings::dispatchEncoder(
+                uf8::bindings::ButtonId::Uc1Encoder2, step)) {
+            applyBcTrackScroll(step);
         }
         ++stats_.knobEventsHandled;
         return;
@@ -1105,14 +1149,32 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         return;
     }
     if (ev.id == button::kSecEncPush) {
+        // MAIN mode: dispatch via Bindings. Default Plain binding is
+        // `show_focused_plugin_gui` (Frank 2026-05-14 "das könnte
+        // show plugin gui werden"), but the user can swap in any
+        // builtin via Settings → Bindings → UC1 Encoder 2 Push. Also
+        // dispatch the release edge so Hold-behaviour bindings work.
+        // Non-MAIN modes still own the encoder push for menu navigation
+        // (Manual p.20-21: Presets confirm, ExtFuncs toggle, Transport
+        // exit) — those branches stay hardcoded so the menu UX matches
+        // SSL360 regardless of user binding.
+        if (mode_ == Uc1Mode::Main) {
+            const bool handled = uf8::bindings::dispatch(
+                uf8::bindings::ButtonId::Uc1Encoder2Push, ev.pressed);
+            if (!handled && ev.pressed) {
+                // Legacy fallback: bindings.json saved before Uc1Encoder2Push
+                // existed has no entry for this button. Preserve SSL's
+                // factory MAIN→TRANSPORT toggle so the user can still
+                // reach transport mode without re-saving their config.
+                setMode(Uc1Mode::Transport);
+            }
+            if (ev.pressed) ++stats_.buttonEventsHandled;
+            return;
+        }
         if (ev.pressed) {
-            // Manual p.21: Sec-Encoder push toggles MAIN ↔ TRANSPORT.
-            // In Presets it confirms the CS/BC selector and drills into
-            // the chosen domain's preset list (matches SSL360 manual
-            // p.20 "Push to confirm").
             switch (mode_) {
-                case Uc1Mode::Main:      setMode(Uc1Mode::Transport); break;
-                case Uc1Mode::Transport: setMode(Uc1Mode::Main);      break;
+                case Uc1Mode::Main:      /* handled above */            break;
+                case Uc1Mode::Transport: setMode(Uc1Mode::Main);        break;
                 case Uc1Mode::Presets:
                     if (presetsSub_ == PresetsSubMode::Selector) {
                         presetsSub_ = PresetsSubMode::Browse;
@@ -1603,8 +1665,10 @@ void UC1Surface::pushFocusedParamReadout_()
     // the BC carousel — a stale CS readout there paints on top
     // (Frank 2026-05-12 "CS parameter ist immer noch dort").
     if (zoneByte == zone::kChannelStripReadout
-        && (csScrollOverlayActive_ || bcScrollOverlayActive_)) return;
-    if (zoneByte == zone::kBusCompReadout      && bcScrollOverlayActive_) return;
+        && (csScrollOverlayActive_ || bcScrollOverlayActive_
+            || instanceCarouselActive_)) return;
+    if (zoneByte == zone::kBusCompReadout
+        && (bcScrollOverlayActive_ || instanceCarouselActive_)) return;
     std::string& cache = (zoneByte == zone::kBusCompReadout)
                        ? lastZone05Text_ : lastZone03Text_;
     if (readout == cache) return;
@@ -2795,7 +2859,21 @@ void UC1Surface::refresh()
         lastZone05Text_.clear();
         device_->send(buildDisplayInvalidate(zone::kBusCompReadout));
     }
-    if (bcScrollOverlayActive_) {
+    if (instanceCarouselActive_) {
+        // Instance / FX cycle carousel — claim the same layout slot
+        // as the BC-scroll overlay but with the caller-supplied
+        // header (e.g. track name) and our own LARGE triple. The
+        // triple was already sent inside showInstanceCarousel; we
+        // refresh the central mode + header here so a refresh()
+        // triggered while the overlay is active (e.g. from an FX
+        // GUI sync) doesn't drop sub=0x02.
+        device_->send(buildCentralMode(CentralMode::Main, 0x02));
+        device_->send(buildLcdHeader(instanceCarouselHeader_));
+        if (!instanceCarouselTripleFrame_.empty()) {
+            device_->send(std::vector<uint8_t>(instanceCarouselTripleFrame_));
+            lastLargeTripleFrame_ = instanceCarouselTripleFrame_;
+        }
+    } else if (bcScrollOverlayActive_) {
         device_->send(buildCentralMode(CentralMode::Main, 0x02));
         device_->send(buildLcdHeader("BUS COMP 2"));
     } else {

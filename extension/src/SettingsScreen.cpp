@@ -361,6 +361,8 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::SelectionRec:  return "REC";
         case ButtonId::SelectionAuto: return "AUTO";
         case ButtonId::ChannelEncoder: return "Channel Encoder";
+        case ButtonId::Uc1Encoder2:    return "UC1 Encoder 2";
+        case ButtonId::Uc1Encoder2Push: return "UC1 Encoder 2 Push";
         default:                     return uf8::bindings::toName(id);
     }
 }
@@ -829,6 +831,16 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         drawHwBtn(cx - 17, baseY + 32, 34, 26, ButtonId::ZoomDown,
                   "\xE2\x96\xBC");
     }
+
+    // UC1 Encoder 2 tiles. The UC1 has its own schematic elsewhere but
+    // it's a passive viewer (no click-to-bind hooks); piggy-back on the
+    // UF8 page so users can edit Uc1Encoder2 / Uc1Encoder2Push bindings
+    // from the existing Bindings tab. Placed below the Zoom pad,
+    // clear of the brand line. Rotate default = bc_track_scroll
+    // (legacy SSL); Push default = show_focused_plugin_gui.
+    drawGroupLabel(852, 442, "UC1 ENC 2");
+    drawHwBtn(852, 458, 65, 18, ButtonId::Uc1Encoder2Push, "PUSH");
+    drawHwBtn(919, 458, 66, 18, ButtonId::Uc1Encoder2,     "ROTATE");
 
     // Brand line — replaces the SSL silk-screen with our product name.
     drawTextCentered_(c, 500, 470, 0x9CA0AAFF, "Rea-Sixty");
@@ -2140,7 +2152,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // three behaviours (Momentary / Toggle / Hold) support long-press —
     // Momentary picks short OR long on release; Toggle / Hold fire primary
     // on press then long additively on hold-and-release past threshold.
-    const bool isEncoder = (id == ButtonId::ChannelEncoder);
+    const bool isEncoder = (id == ButtonId::ChannelEncoder
+                          || id == ButtonId::Uc1Encoder2);
     const bool longPressAvailable = !plainIsModifier && !isEncoder;
 
     // Two side-by-side columns. Each child sized half the available

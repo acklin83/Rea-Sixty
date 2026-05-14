@@ -87,6 +87,25 @@ public:
     // put. Validates the pointer; nullptr / stale = no-op.
     void setBcAnchorTrack(void* track /*MediaTrack**/);
 
+    // BC-track scroll (was the hardcoded MAIN-mode behaviour of
+    // Encoder 2). Walks BC-bearing tracks in project order relative to
+    // the current BC anchor, then re-anchors to the hit. Now exposed
+    // publicly so the `bc_track_scroll` builtin can reach it after
+    // bindings dispatch. step < 0 = previous BC track, step > 0 = next.
+    void applyBcTrackScroll(int step);
+
+    // Show a 3-slot instance/FX-cycle carousel on the central LCD.
+    // Mirrors the BC-scroll overlay UX: claims the central layout
+    // sub=0x02, writes `header` to the LCD top label, and replaces
+    // the LARGE track-name triple with the supplied strings for ~3 s.
+    // After timeout, refresh() repaints the regular MAIN layout
+    // (BC carousel + central label). Mutually exclusive with the
+    // BC-scroll overlay — switching either way clears the other.
+    void showInstanceCarousel(const std::string& prev,
+                              const std::string& curr,
+                              const std::string& next,
+                              const std::string& header);
+
     // Drain queued hardware events. Call from REAPER's main thread on a
     // timer (Run() or a deferred action). Returns the number of events
     // handled this tick.
@@ -274,6 +293,19 @@ private:
     // Set on each Encoder 1 detent; reverts after the timeout.
     bool                                  csScrollOverlayActive_ = false;
     std::chrono::steady_clock::time_point csScrollOverlayUntil_{};
+
+    // Instance / FX-cycle carousel overlay. Driven by showInstanceCarousel
+    // (called from applyInstanceCycle_ / applyFxCycle_ via the bindings
+    // builtins). Same layout slot (sub=0x02) as the BC-scroll overlay —
+    // they're mutually exclusive. While active, pushFocusedParamReadout_
+    // suppresses BOTH zone 0x03 and zone 0x05 so the carousel + header
+    // own the upper LCD area uninterrupted. After the deadline poll()
+    // emits the revert (sub=0x00) + refresh() to repaint the regular
+    // MAIN layout.
+    bool                                  instanceCarouselActive_ = false;
+    std::chrono::steady_clock::time_point instanceCarouselUntil_{};
+    std::string                           instanceCarouselHeader_;
+    std::vector<uint8_t>                  instanceCarouselTripleFrame_;
 
     std::mutex               queueMu_;
     std::deque<ButtonEvent>  buttonQueue_;

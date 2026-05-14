@@ -97,6 +97,8 @@ constexpr NameEntry kNames[] = {
     { ButtonId::SelectionRec,  "selection_rec"  },
     { ButtonId::SelectionAuto, "selection_auto" },
     { ButtonId::ChannelEncoder, "channel_encoder" },
+    { ButtonId::Uc1Encoder2,      "uc1_encoder_2"      },
+    { ButtonId::Uc1Encoder2Push,  "uc1_encoder_2_push" },
 };
 
 } // namespace
@@ -375,6 +377,28 @@ void seedFactoryDefaults_(Config& c)
         spShift.type   = ActionType::Builtin;
         spShift.action = "instance_cycle";
     }
+
+    // UC1 Encoder 2 rotation. Plain = BC track scroll (legacy default
+    // SSL behaviour). Shift = instance cycle with the new instance
+    // carousel. Cmd/Ctrl free.
+    {
+        auto& e2 = L1[ButtonId::Uc1Encoder2];
+        e2.behavior = Behavior::Momentary;
+        e2.label    = "UC1 Enc 2";
+        auto& spPlain = e2.shortPress[static_cast<int>(Modifier::Plain)];
+        spPlain.type   = ActionType::Builtin;
+        spPlain.action = "bc_track_scroll";
+        auto& spShift = e2.shortPress[static_cast<int>(Modifier::Shift)];
+        spShift.type   = ActionType::Builtin;
+        spShift.action = "instance_cycle";
+    }
+
+    // UC1 Encoder 2 push. Plain = toggle floating GUI of the focused
+    // plug-in instance. Mode-specific behaviour (Presets confirm,
+    // ExtFuncs toggle, Transport exit) is handled inside UC1Surface
+    // before dispatch ever runs.
+    L1[ButtonId::Uc1Encoder2Push] =
+        mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "");
 
     // Automation row — one builtin per mode. Factory colours all white;
     // the user sets each LED themselves via Settings → Bindings (Frank

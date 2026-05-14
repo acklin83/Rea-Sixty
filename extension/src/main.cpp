@@ -1163,6 +1163,11 @@ int stripInstanceActiveFx_(MediaTrack* tr)
 // after the encoder mode toggles, emitMouseScroll near the input dispatch).
 void followSelectedInMixer(MediaTrack* tr);
 void emitMouseScroll(int32_t delta);
+// applyInstanceCycle_ / applyFxCycle_ feed the UC1 instance carousel with
+// the same displayShort that the FX-Cycle colour-bar uses. The function
+// is defined further down; declare it here so the apply* helpers below
+// can reference it.
+std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx);
 
 // Encoder-action helpers — extracted so both the legacy per-mode drain
 // handlers (kept for backward-compat) AND the bindings-routed dispatch
@@ -1322,7 +1327,134 @@ void applyInstanceCycle_(int step)
     g_uc1_surface->refresh();
     g_pageDirty.store(true);
     g_bankDirty.store(true);
+
+    // Follow show_focused_plugin_gui's floating window across the cycle
+    // (same trick as applyFxCycle_). Independent of SSL Strip Mode's
+    // with-GUI flag — the user opens this window explicitly via Encoder 2
+    // push and expects it to track whatever the cycle just landed on.
+    {
+        extern void* g_focusedGuiShownTr;
+        extern int   g_focusedGuiShownFx;
+        if (g_focusedGuiShownTr == tr
+            && g_focusedGuiShownFx >= 0
+            && g_focusedGuiShownFx != target.fxIdx)
+        {
+            TrackFX_Show(tr, g_focusedGuiShownFx, 2);
+            TrackFX_Show(tr, target.fxIdx, 3);
+            g_focusedGuiShownFx = target.fxIdx;
+        }
+    }
+
+    // Instance carousel — feed the UC1 central LCD with the prev/curr/next
+    // displayShort labels of the cycle's neighbours, plus the track name
+    // as the header (parallel to BC-scroll's "BUS COMP 2" banner). The
+    // overlay is mutually exclusive with bcScrollOverlay; showInstanceCarousel
+    // clears that flag so the headers don't fight.
+    auto hitLabel = [&](int idx) -> std::string {
+        if (idx < 0 || idx >= static_cast<int>(hits.size())) return {};
+        return fxCycleDisplayName_(tr, hits[idx].fxIdx);
+    };
+    char trkName[128] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
+    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    g_uc1_surface->showInstanceCarousel(
+        hitLabel(nextK - 1), hitLabel(nextK), hitLabel(nextK + 1), header);
 }
+
+// Walk ALL FX on the focused track. Unlike applyInstanceCycle_ which
+// filters to SSL-mapped CS/BC/UF8 plug-ins, fx_cycle walks every plug-in
+// the user has on the track. Frank 2026-05-14: "show plugin gui" — pairs
+// with `show_focused_plugin_gui` on the Encoder 2 push so the floating
+// window follows whichever FX the cycle landed on.
+void applyFxCycle_(int step)
+{
+    if (step == 0) return;
+    if (!g_uc1_surface) return;
+    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+
+    const int n = TrackFX_GetCount(tr);
+    if (n < 2) return;  // nothing meaningful to cycle through
+
+    const int cur  = stripInstanceActiveFx_(tr);
+    int nextIdx = ((cur + step) % n + n) % n;
+    g_stripInstanceFxIdx[tr] = nextIdx;
+    g_bankDirty.store(true);
+    // Follow with the floating GUI when show_focused_plugin_gui has the
+    // window open. Re-point directly (we're on the main thread already;
+    // dispatchEncoder runs from drainInputQueue). Stack-clean by closing
+    // the old window before opening the new one.
+    extern void* g_focusedGuiShownTr;
+    extern int   g_focusedGuiShownFx;
+    if (g_focusedGuiShownTr == tr
+        && g_focusedGuiShownFx >= 0
+        && g_focusedGuiShownFx != nextIdx)
+    {
+        TrackFX_Show(tr, g_focusedGuiShownFx, 2);
+        TrackFX_Show(tr, nextIdx, 3);
+        g_focusedGuiShownFx = nextIdx;
+    }
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+
+    // Feed the carousel with prev/curr/next FX display names.
+    auto fxLabel = [&](int idx) -> std::string {
+        if (idx < 0 || idx >= n) return {};
+        return fxCycleDisplayName_(tr, idx);
+    };
+    const int prevIdx = (nextIdx - 1 + n) % n;
+    const int nIdxN   = (nextIdx + 1) % n;
+    char trkName[128] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
+    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    g_uc1_surface->showInstanceCarousel(
+        fxLabel(prevIdx), fxLabel(nextIdx), fxLabel(nIdxN), header);
+}
+
+// Toggle floating GUI of the currently-focused plug-in instance on the
+// UC1's focused track. Pairs with Encoder 2 rotation: instance_cycle /
+// fx_cycle moves `g_stripInstanceFxIdx[tr]`, this builtin opens or
+// closes the window on whichever FX is currently active. While the
+// window is open, subsequent cycle rotations re-point it (via
+// g_pluginGuiSyncRequest) so the GUI follows the cycle. Independent of
+// SSL Strip Mode's CS-GUI ownership.
+void* g_focusedGuiShownTr = nullptr;
+int   g_focusedGuiShownFx = -1;
+
+void applyShowFocusedPluginGui_()
+{
+    MediaTrack* tr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+        : nullptr;
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const int fxIdx = stripInstanceActiveFx_(tr);
+    if (fxIdx < 0) return;
+
+    const bool alreadyShown =
+        g_focusedGuiShownTr == tr && g_focusedGuiShownFx == fxIdx;
+    if (alreadyShown) {
+        TrackFX_Show(tr, fxIdx, /*hide floating*/ 2);
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
+    // Close any previously-owned window before opening the new one so
+    // repeated cycles don't stack floating GUIs.
+    if (g_focusedGuiShownTr
+        && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+    {
+        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                     g_focusedGuiShownFx, 2);
+    }
+    TrackFX_Show(tr, fxIdx, /*float window*/ 3);
+    g_focusedGuiShownTr = tr;
+    g_focusedGuiShownFx = fxIdx;
+}
+
 constexpr double kChannelEncoderScale = 4.0;
 
 // When set, the Channel-Encoder Select also shifts the UF8 bank and the
@@ -9892,6 +10024,44 @@ void registerBindingHandlers()
         },
         nullptr, "Instance: previous (focused domain)", false
     });
+
+    // UC1 Encoder 2 builtins — rotation routes through these via
+    // ButtonId::Uc1Encoder2. fx_cycle walks ALL FX on the focused track
+    // (no Domain filter, unlike instance_cycle). bc_track_scroll keeps
+    // the legacy MAIN-mode BC-encoder behaviour available as a bindable
+    // action so users who don't want instance/FX cycling can stay on
+    // SSL's factory mapping.
+    registerBuiltin("fx_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyFxCycle_(param);
+        },
+        nullptr, "Encoder: cycle FX (all on focused track)", false
+    });
+    registerBuiltin("bc_track_scroll", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            if (g_uc1_surface) g_uc1_surface->applyBcTrackScroll(param);
+        },
+        nullptr, "Encoder 2: scroll BC anchor track (legacy SSL)", false
+    });
+
+    // UC1 Encoder 2 push — default Plain action: toggle the floating
+    // window of whatever instance is currently focused on the UC1's
+    // focused track. Pairs with fx_cycle / instance_cycle on the
+    // rotation so the GUI follows the cycle (handled inside both
+    // apply*Cycle_ helpers).
+    registerBuiltin("show_focused_plugin_gui", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            applyShowFocusedPluginGui_();
+        },
+        [](int) {
+            return g_focusedGuiShownTr != nullptr && g_focusedGuiShownFx >= 0;
+        },
+        "Plugin GUI: toggle focused instance floating window", false
+    });
+
 
     // Layer select — one builtin per layer so the picker shows
     // self-documenting rows (no magic param). The legacy

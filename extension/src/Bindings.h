@@ -98,6 +98,24 @@ enum class ButtonId : uint16_t {
     // Shift defaults to `instance_cycle`. Cmd/Ctrl empty until user
     // binds them in Settings.
     ChannelEncoder,
+
+    // UC1 Encoder 2 (Secondary Encoder right of the central LCD).
+    // Rotation = `bc_track_scroll` by default (preserves the pre-bind
+    // behaviour); Shift = `instance_cycle`. User can swap in `fx_cycle`
+    // or any other delta-aware builtin via Settings. Mode-specific
+    // overrides (Presets / ExtFuncs / Routing / Transport) still
+    // intercept the rotation inside UC1Surface before dispatch reaches
+    // the bindings — those menus own the secondary encoder.
+    Uc1Encoder2,
+
+    // UC1 Encoder 2 push. Default Plain = `show_focused_plugin_gui`
+    // so the user toggles the floating window of whatever instance the
+    // rotation just landed on. Legacy MAIN<->TRANSPORT toggle stays
+    // available as `uc1_transport_toggle` builtin for users who prefer
+    // SSL's factory mapping. Presets / ExtFuncs / Transport modes keep
+    // their built-in confirm semantics inside UC1Surface; bindings only
+    // fire when the surface is in MAIN.
+    Uc1Encoder2Push,
 };
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None
