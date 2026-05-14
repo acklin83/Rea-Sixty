@@ -64,6 +64,10 @@ bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
+bool reasixty_folderMode();
+void reasixty_setFolderMode(bool on);
+bool reasixty_showOnlySelected();
+void reasixty_setShowOnlySelected(bool on);
 int  reasixty_ballisticMode();
 void reasixty_setBallisticMode(int mode);
 void reasixty_exportDiagnostic();  // shows confirmation dialog itself
@@ -238,6 +242,23 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
                     kBallisticItems,
                     /*popup_max_height_in_items*/ nullptr)) {
         reasixty_setBallisticMode(ballistic);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Surface filters");
+    ImGui_Separator(ctx);
+
+    // Mirror the `folder_mode` / `show_only_selected` builtins. Same
+    // atomics, same ExtState — toggling here stays in sync with any
+    // hardware button bound to the matching builtin.
+    bool folderMode = reasixty_folderMode();
+    if (ImGui_Checkbox(ctx, "Folder Mode (parents only)", &folderMode)) {
+        reasixty_setFolderMode(folderMode);
+    }
+    bool selOnly = reasixty_showOnlySelected();
+    if (ImGui_Checkbox(ctx, "Show Only Selected tracks", &selOnly)) {
+        reasixty_setShowOnlySelected(selOnly);
     }
 
     ImGui_Spacing(ctx);
@@ -6684,31 +6705,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         }
         ImGui_EndPopup(ctx);
     }
-}
-
-// ---- Modes ----------------------------------------------------------------
-// Phase 2.5 features per ROADMAP.md §"Phase 2.5":
-//   2.5a Folder Mode          — long-press SEL toggles parent expand
-//   2.5b Show Only Selected   — 8 selection slots persisted by GUID
-//   2.5c Show Sends/Receives  — focus-variant Send Layer
-//   2.5d Generic FX-param map — Learn-mode for any V-Pot/soft-button
-// Plus V-Pot Behaviour (ships in 2.7d alongside the rest of this section):
-//   - Always Fine Pan, Always Fine Sends, Show Auto State
-// All three SSL-equivalent toggles per docs/ssl-360-settings-inventory.md.
-void SettingsScreen::drawModes(ImGui_Context* ctx)
-{
-    ImGui_Text(ctx, "Modes");
-    ImGui_Text(ctx, "");
-    ImGui_Text(ctx, "Phase 2.5 features:");
-    ImGui_Text(ctx, "  TODO: Folder Mode — long-press duration slider, expand depth");
-    ImGui_Text(ctx, "  TODO: Show Only Selected — auto-save toggle");
-    ImGui_Text(ctx, "  TODO: Send / Receive Layer — enable per-direction");
-    ImGui_Text(ctx, "  TODO: Generic FX Mapping — Learn modifier + display format");
-    ImGui_Text(ctx, "");
-    ImGui_Text(ctx, "V-Pot Behaviour:");
-    ImGui_Text(ctx, "  TODO: Always Fine Pan toggle");
-    ImGui_Text(ctx, "  TODO: Always Fine Sends toggle");
-    ImGui_Text(ctx, "  TODO: Show Auto State on scribble (GetTrackAutomationMode)");
 }
 
 // ---- Selection Sets -------------------------------------------------------

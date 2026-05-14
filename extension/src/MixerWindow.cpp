@@ -23,7 +23,6 @@ enum Section : int {
     kSecDevice = 0,
     kSecBindings,
     kSecFxLearn,
-    kSecModes,
     kSecSelectionSets,
     kSecAbout,
     kSecCount,
@@ -40,7 +39,6 @@ constexpr RailEntry kRail[] = {
     { "Device",         kSecDevice,        false, &SettingsScreen::drawDevice        },
     { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
-    { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
     { "Selection Sets", kSecSelectionSets, false, &SettingsScreen::drawSelectionSets },
     { "About",          kSecAbout,         true,  &SettingsScreen::drawAbout         },
 };

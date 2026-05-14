@@ -8659,6 +8659,36 @@ void reasixty_setStripFollowsFocusedFx(bool follow)
     SetExtState("rea_sixty", "strip_follows_focused_fx", follow ? "1" : "0", true);
 }
 
+// Surface filters. Backing atomics are also driven by the `folder_mode`
+// and `show_only_selected` builtins (so a hardware-bound button stays in
+// sync with the Settings UI). ExtState key matches the builtin handler.
+bool reasixty_folderMode()
+{
+    return g_folderMode.load();
+}
+
+void reasixty_setFolderMode(bool on)
+{
+    g_folderMode.store(on);
+    if (!on) g_spilledParent.store(nullptr);
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    SetExtState("ReaSixty", "folderMode", on ? "1" : "0", true);
+}
+
+bool reasixty_showOnlySelected()
+{
+    return g_showOnlySelected.load();
+}
+
+void reasixty_setShowOnlySelected(bool on)
+{
+    g_showOnlySelected.store(on);
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    SetExtState("ReaSixty", "showOnlySelected", on ? "1" : "0", true);
+}
+
 // Build a diagnostic .zip on the user's Desktop with extension state +
 // any of our existing trace logs (frame trace, ColorSync log) so a user
 // can email us a single archive when something misbehaves. Cheap; runs
