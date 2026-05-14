@@ -1603,10 +1603,36 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     if (!tr) return out;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return out;
     const int n = TrackFX_GetCount(tr);
+    char buf[512];
+
+    // Honour Encoder Instance Cycle first: walk CS-domain plug-ins in
+    // FX-list order and pick the Nth, where N = uc1::csInstanceIndex(tr).
+    // V-Pots already follow csInstanceIndex (via findUserPluginOnTrack_),
+    // so making fader / pan / Type label do the same keeps all three
+    // pointing at the same instance — cycling to 4K E now also moves
+    // the fader and label off the default bx_ssl (Frank 2026-05-14).
+    const int wantIdx = uc1::csInstanceIndex(tr);
+    int csSeen = 0;
+    for (int fx = 0; fx < n; ++fx) {
+        buf[0] = 0;
+        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
+        if (buf[0] == 0) continue;
+        const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
+        if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
+        if (csSeen == wantIdx) {
+            const uf8::UserPluginMap* owned =
+                uf8::user_plugins::lookupOwnedByName(buf);
+            return { fx, m, owned != nullptr };
+        }
+        ++csSeen;
+    }
+
+    // Instance index out of bounds (csInstanceIndex stale after FX
+    // removed, or just never set) → fall back to the isDefault tiebreak
+    // so a fresh project with no cycle history still resolves cleanly.
     int fxBuiltin = -1, fxUser = -1;
     const uf8::PluginMap* mapBuiltin = nullptr;
     const uf8::PluginMap* mapUser    = nullptr;
-    char buf[512];
     for (int fx = 0; fx < n; ++fx) {
         buf[0] = 0;
         TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
@@ -1616,10 +1642,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
 
         const uf8::UserPluginMap* owned = uf8::user_plugins::lookupOwnedByName(buf);
         if (owned) {
-            if (owned->isDefault) {
-                // Highest tier — no need to keep walking.
-                return { fx, m, true };
-            }
+            if (owned->isDefault) return { fx, m, true };
             if (fxUser < 0) { fxUser = fx; mapUser = m; }
         } else {
             if (fxBuiltin < 0) { fxBuiltin = fx; mapBuiltin = m; }
