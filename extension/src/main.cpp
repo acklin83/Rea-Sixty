@@ -5762,8 +5762,12 @@ uint64_t g_lastRoutingKey = ~uint64_t(0);
 bool g_globalLedsInit = false;
 
 // Map REAPER's automation-mode integer to a position in kAutoLeds.
-//   0 = Trim/Read (REAPER's per-track default; reads automation, no
-//                  punch-in writing) → light the dedicated Trim LED.
+//   0 = Trim/Read (REAPER's per-track default) → no LED lit. Every
+//                  fresh track sits at mode 0, so lighting Trim here
+//                  pinned the LED on for every project; treat mode 0
+//                  as the neutral "no automation override" state. The
+//                  auto_trim / auto_off builtins still set mode 0,
+//                  they just don't paint an LED.
 //   1 = Read     → AutoRead.
 //   2 = Touch    → AutoTouch.
 //   3 = Write    → AutoWrite.
@@ -6215,12 +6219,12 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on)
 int autoModeToLedIndex(int mode)
 {
     switch (mode) {
-        case 0:         return 2;   // Trim/Read → Trim LED
         case 1:         return 0;   // Read
         case 2:         return 4;   // Touch
         case 3:         return 1;   // Write
         case 4: case 5: return 3;   // Latch / Latch Preview
-        default:        return -1;  // No selection — clear all
+        default:        return -1;  // Mode 0 (Trim/Read) or no track —
+                                    // clear all auto LEDs.
     }
 }
 
