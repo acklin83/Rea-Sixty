@@ -2457,6 +2457,10 @@ uint16_t linearVolumeToPb(double linear);
 // Defined alongside pushUf8GlobalLeds — see comment there.
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on);
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState state);
+// Drop a single cell's dedup entry so the next sendUf8GlobalLed for it
+// writes through unconditionally. Needed when raw frames bypass the
+// cache and the next state-assertion would otherwise be skipped.
+void invalidateGlobalLedCell_(uf8::Uf8GlobalLed cell);
 // True iff any modifier-slot in the binding has an active stateful
 // action (toggle on, REAPER GetToggleCommandState2 == 1).
 bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd);
@@ -2482,11 +2486,13 @@ void sendSelRenderTrigger()
     g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x63});
     g_dev->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x3F, 0xF0, 0x8F});
     g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x00, 0xF0, 0x51});
-    // Force AutoTrim back to Off after the cap33 trigger sequence. No
-    // REAPER mode currently lights TRIM, so the LED is always Off
-    // outside of the brief sequence pulse above. Use the explicit
-    // GlobalLedState::Off — the bool overload maps false→Dim, which
-    // would leave TRIM dimly lit.
+    // The 4 raw frames above leave cell 0x24 in a bright-ish leftover
+    // state (a=0x3F 0xF0, b=0x00 0xF0). The dedup cache in
+    // sendUf8GlobalLed is unaware of those raw writes and still thinks
+    // AutoTrim is at whatever state we last *wrote through it* — so a
+    // plain re-assertion gets dedup'd out and the bright leftover sticks
+    // on the LED. Invalidate the cache entry first, then force Off.
+    invalidateGlobalLedCell_(uf8::Uf8GlobalLed::AutoTrim);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::AutoTrim,
                      uf8::GlobalLedState::Off);
 }
@@ -6136,6 +6142,14 @@ std::array<GlobalLedKey, kGlobalLedCacheSize> g_lastGlobalLedPush{};
 void invalidateGlobalLedCache_()
 {
     for (auto& k : g_lastGlobalLedPush) k.valid = false;
+}
+
+void invalidateGlobalLedCell_(uf8::Uf8GlobalLed cell)
+{
+    const size_t idx = static_cast<size_t>(cell);
+    if (idx < g_lastGlobalLedPush.size()) {
+        g_lastGlobalLedPush[idx].valid = false;
+    }
 }
 
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState callerState)
