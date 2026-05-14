@@ -88,6 +88,15 @@ std::atomic<bool> g_mixerToggleRequest{false};
 // SSL Strip Mode is on (so the open GUI follows the active instance).
 std::atomic<bool> g_pluginGuiSyncRequest{false};
 
+// Entry-time snap for UF8 Plugin Mode. Set by uf8_plugin_mode_toggle{,_with_gui}
+// from the libusb input thread when the mode is being switched ON. The
+// main-thread GUI-sync drain consumes it via snapUf8PluginModeToFocusedFx_,
+// which points the mode at whichever UF8-mapped plug-in window REAPER
+// currently reports as focused (Frank 2026-05-14 "wenn UF8 Plugin Mode
+// aufgerufen wird und ein UF8-gemappter Plug-in-Fenster offen ist, direkt
+// Instance auf dieses Plugin setzen").
+std::atomic<bool> g_uf8PluginModeSnapRequest{false};
+
 // Last (track, fx) shown by the SSL Strip GUI handler. Read/written
 // only on the main thread (inside the g_pluginGuiSyncRequest drain),
 // so plain types are fine. Used to close the previous floating window
@@ -1309,8 +1318,9 @@ constexpr double kChannelEncoderScale = 4.0;
 constexpr bool kSelectFollowsMixer = true;
 
 // Short, LCD-friendly plug-in name. Strips "VST3i: " / "VST: " / etc.
-// prefixes and any trailing " (Vendor)" suffix. Used for the
-// Selection-Mode Instance scribble-strip readout.
+// prefixes and any trailing " (Vendor)" suffix. Generic fallback used
+// when the FX is not a recognised Instance — see fxCycleDisplayName_
+// for the Instance-aware variant the FX-Cycle colour-bar uses.
 std::string shortFxName_(MediaTrack* tr, int fxIdx)
 {
     if (!tr || fxIdx < 0) return std::string{};
@@ -1329,6 +1339,26 @@ std::string shortFxName_(MediaTrack* tr, int fxIdx)
     }
     if (auto p = s.find(" ("); p != std::string::npos) s.erase(p);
     return s;
+}
+
+// Display name for the FX-Cycle colour-bar — when the FX is an
+// Instance (built-in PluginMap or user-mapped via FX Learn), use the
+// same `displayShort` that Encoder → Instance Cycle uses ("Townhou",
+// not "bx_town"). Falls back to the prefix-stripped REAPER name for
+// non-Instance FX. Frank 2026-05-14: "Für FX Cycle bitte dieselben
+// Namen für Instances verwenden, wie bei Instance Cycle".
+std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return std::string{};
+    char buf[256] = {0};
+    if (!TrackFX_GetFXName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
+    if (const auto* pm = uf8::lookupPluginMapByName(buf)) {
+        return pm->displayShort;
+    }
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(buf)) {
+        return um->displayShort;
+    }
+    return shortFxName_(tr, fxIdx);
 }
 
 void followSelectedInMixer(MediaTrack* tr)
@@ -4731,7 +4761,7 @@ void pushZonesForVisibleSlots()
             if (map) csType = map->displayShort;
         } else if (g_selectionMode.load() == SelectionMode::Instance) {
             const int instFxIdx = stripInstanceActiveFx_(tr);
-            if (instFxIdx >= 0) csType = shortFxName_(tr, instFxIdx);
+            if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
             if (csType.empty()) csType = "-";
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
@@ -5691,6 +5721,113 @@ void chaseLastTouchedFx()
     if (g_uc1_surface && isSelected) {
         g_uc1_surface->setFocusedTrack(tr);
     }
+}
+
+// One-shot snap on UF8 Plugin Mode entry. Two-pass:
+//   1. If REAPER reports a focused FX (`GetFocusedFX2 & 1`) and it's a
+//      UF8-mapped (`uf8Mode`) plug-in, snap to that.
+//   2. Otherwise walk every track / FX looking for an OPEN window
+//      (`TrackFX_GetOpen`) on a UF8-mapped plug-in and snap to the
+//      first hit. This is the case Frank cares about — "Fenster ist
+//      offen" doesn't always mean "REAPER says it's focused" (the
+//      user may have clicked elsewhere since opening it).
+// Snap = select the track, set the UC1 Instance index for the matched
+// plug-in's domain, point `g_uc1_surface->focusedTrack` at it, dirty
+// the page so `userStripCtxFocused_`'s cache invalidates on the next
+// render tick. No-op if nothing qualifies.
+bool snapUf8PluginModeToFocusedFx_()
+{
+    if (!g_uf8PluginMode.load()) return false;
+
+    MediaTrack* targetTr = nullptr;
+    int targetFx = -1;
+    uf8::Domain targetDom = uf8::Domain::None;
+
+    auto qualify = [&](MediaTrack* tr, int fxIdx) -> bool {
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+        if (fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return false;
+        char fxName[512] = {0};
+        if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return false;
+        const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+        if (!um || !um->uf8Mode) return false;
+        targetTr  = tr;
+        targetFx  = fxIdx;
+        targetDom = um->domain;
+        return true;
+    };
+
+    // Pass 1: REAPER's focused FX.
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
+    if ((ret & 1) && trNum > 0) {
+        MediaTrack* tr = GetTrack(nullptr, trNum - 1);
+        qualify(tr, fxNum & 0x00FFFFFF);
+    }
+    // Pass 2: any open window on any track. First UF8-mapped hit wins.
+    if (!targetTr) {
+        const int trackCount = CountTracks(nullptr);
+        for (int t = 0; t < trackCount && !targetTr; ++t) {
+            MediaTrack* tr = GetTrack(nullptr, t);
+            if (!tr) continue;
+            const int n = TrackFX_GetCount(tr);
+            for (int f = 0; f < n; ++f) {
+                if (!TrackFX_GetOpen(tr, f)) continue;
+                if (qualify(tr, f)) break;
+            }
+        }
+    }
+
+    if (!targetTr || targetFx < 0) return false;
+
+    if (targetDom == uf8::Domain::None) {
+        // UF8-only mapping — count this FX's position among UF8-only
+        // mapped plug-ins on the same track, snap that Instance index.
+        int seen = 0;
+        char buf[256];
+        const int n = TrackFX_GetCount(targetTr);
+        for (int i = 0; i < n; ++i) {
+            if (!TrackFX_GetFXName(targetTr, i, buf, sizeof(buf))) continue;
+            const auto* u = uf8::user_plugins::lookupOwnedByName(buf);
+            if (!u || u->domain != uf8::Domain::None || !u->uf8Mode)
+                continue;
+            if (i == targetFx) {
+                uc1::setUf8OnlyInstanceIndex(targetTr, seen);
+                break;
+            }
+            ++seen;
+        }
+        // Drop any stale CS/BC focused-domain — `userStripCtxFocused_`
+        // dispatches `findUserPluginOnTrack_` with this domain first.
+        // Leaving it as CS/BC after snapping to a UF8-only plug-in
+        // means the cached resolver burns a domain attempt before
+        // falling through to None.
+        if (uf8::getFocusedParam().domain != uf8::Domain::None) {
+            uf8::setFocus({uf8::Domain::None, 0});
+        }
+    } else {
+        const int instIdx = uc1::instanceIndexForFx(targetTr, targetFx);
+        if (instIdx >= 0) {
+            if (targetDom == uf8::Domain::BusComp)
+                uc1::setBcInstanceIndex(targetTr, instIdx);
+            else if (targetDom == uf8::Domain::ChannelStrip)
+                uc1::setCsInstanceIndex(targetTr, instIdx);
+        }
+        uf8::setFocus({targetDom, 0});
+    }
+
+    uf8::g_focusedFxTrack.store(static_cast<void*>(targetTr),
+                                std::memory_order_relaxed);
+
+    if (GetMediaTrackInfo_Value(targetTr, "I_SELECTED") < 0.5) {
+        SetOnlyTrackSelected(targetTr);
+    }
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->setFocusedTrack(targetTr);
+    }
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    return true;
 }
 
 // Poll GetFocusedFX2 and switch the SSL strip context to whichever
@@ -7391,6 +7528,13 @@ void onTimer()
     // shown floating window before opening the new one (tracked in
     // g_csGuiShownTr / g_csGuiShownFx) — without that, every cycle
     // detent stacks another floating GUI.
+    // UF8 Plugin Mode entry snap — fires before the GUI sync drain so
+    // the focused-track / Instance-index moves first; the GUI sync below
+    // then opens the floating window for the just-snapped target.
+    if (g_uf8PluginModeSnapRequest.exchange(false)) {
+        snapUf8PluginModeToFocusedFx_();
+    }
+
     if (g_pluginGuiSyncRequest.exchange(false)) {
         MediaTrack* tr = nullptr;
         if (g_uc1_surface) {
@@ -7466,33 +7610,29 @@ void onTimer()
         }
 
         // ---- UF8 Plugin Mode (with GUI) -----------------------------
-        // Open the first user-mapped UF8-only plug-in on the focused
-        // track when the mode is on AND the with-GUI flag is set; close
-        // on exit. Separate (tr, fx) tracking so SSL Strip Mode and
-        // UF8 Plugin Mode can each own a window independently.
+        // Open the plug-in the strips are currently driving — same
+        // (tr, fxIdx) that `userStripCtxFocused_` resolved, which
+        // already honours the snap-on-entry and the UC1 Instance index.
+        // Previously this block opened the FIRST UF8-mapped plug-in on
+        // the focused track regardless of Instance index, so opening
+        // UF8 Plugin Mode while Trigger (instance 1) was open snapped
+        // the strips to Trigger but then re-opened Traps (instance 0)
+        // and chaseFocusedFxWindow re-followed → strips landed on
+        // Traps instead of Trigger (Frank 2026-05-14). Separate (tr,
+        // fx) tracking so SSL Strip Mode and UF8 Plugin Mode can each
+        // own a window independently.
         {
             const bool uf8WantOpen =
                 g_uf8PluginMode.load() && g_uf8PluginModeWithGui.load();
             MediaTrack* uf8TargetTr = nullptr;
             int         uf8TargetFx = -1;
-            if (uf8WantOpen && tr
-                && ValidatePtr2(nullptr, tr, "MediaTrack*"))
-            {
-                const int n = TrackFX_GetCount(tr);
-                char nameBuf[256];
-                for (int fx = 0; fx < n; ++fx) {
-                    nameBuf[0] = 0;
-                    TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
-                    if (!nameBuf[0]) continue;
-                    const auto* um =
-                        uf8::user_plugins::lookupOwnedByName(nameBuf);
-                    if (um && um->domain == uf8::Domain::None
-                        && um->uf8Mode)
-                    {
-                        uf8TargetTr = tr;
-                        uf8TargetFx = fx;
-                        break;
-                    }
+            if (uf8WantOpen) {
+                auto uctx = userStripCtxFocused_();
+                if (uctx.map && uctx.tr && uctx.fxIdx >= 0
+                    && ValidatePtr2(nullptr, uctx.tr, "MediaTrack*"))
+                {
+                    uf8TargetTr = uctx.tr;
+                    uf8TargetFx = uctx.fxIdx;
                 }
             }
             if (g_uf8GuiShownTr
@@ -9081,6 +9221,12 @@ void registerBindingHandlers()
                 g_instanceGuiOwnerStrip.store(-1);
                 SetExtState("ReaSixty", "selectionMode", "norm", true);
             }
+            // Snap-on-entry: if the currently focused FX in REAPER is a
+            // UF8-mapped plug-in, the next main-thread drain points the
+            // mode at it (track + Instance index) so UF8 starts driving
+            // the open plug-in instead of whatever the focus/selection
+            // happened to be.
+            if (next) g_uf8PluginModeSnapRequest.store(true);
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",
@@ -9109,6 +9255,8 @@ void registerBindingHandlers()
                 g_instanceGuiOwnerStrip.store(-1);
                 SetExtState("ReaSixty", "selectionMode", "norm", true);
             }
+            // Snap-on-entry: see uf8_plugin_mode_toggle.
+            if (next) g_uf8PluginModeSnapRequest.store(true);
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",
