@@ -2936,14 +2936,21 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         if (s_pendingOp == OpRecall)
-            ImGui_OpenPopup(ctx, "bp_recall_confirm",  nullptr);
+            ImGui_OpenPopup(ctx, "Recall preset?###bp_recall_confirm",
+                            nullptr);
         else if (s_pendingOp == OpSaveAs)
-            ImGui_OpenPopup(ctx, "bp_save_as",         nullptr);
+            ImGui_OpenPopup(ctx, "Save preset###bp_save_as",   nullptr);
         else if (s_pendingOp == OpRename)
-            ImGui_OpenPopup(ctx, "bp_rename",          nullptr);
+            ImGui_OpenPopup(ctx, "Rename preset###bp_rename",  nullptr);
         else if (s_pendingOp == OpDelete)
-            ImGui_OpenPopup(ctx, "bp_delete_confirm",  nullptr);
+            ImGui_OpenPopup(ctx, "Delete preset?###bp_delete_confirm",
+                            nullptr);
         s_pendingOp = OpNone;
+
+        // Fixed popup width so wrapped text doesn't collapse the modal
+        // to a 2-pixel tower (same trick as fxl_mode_popup).
+        const double kBpPopupW = 420.0;
+        int condAlways = ImGui_Cond_Always;
 
         // Helper: trim leading/trailing spaces from s_nameBuf.
         auto trimmedName = []() {
@@ -2954,7 +2961,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         };
 
         // ---- Recall confirm -------------------------------------
-        if (ImGui_BeginPopupModal(ctx, "bp_recall_confirm",
+        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
+        if (ImGui_BeginPopupModal(ctx,
+                                  "Recall preset?###bp_recall_confirm",
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
@@ -2980,7 +2989,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Save as … ------------------------------------------
-        if (ImGui_BeginPopupModal(ctx, "bp_save_as",
+        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
+        if (ImGui_BeginPopupModal(ctx, "Save preset###bp_save_as",
                                   nullptr, nullptr)) {
             ImGui_Text(ctx, "Save current 8 slots as preset");
             ImGui_Spacing(ctx);
@@ -3025,7 +3035,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Rename ---------------------------------------------
-        if (ImGui_BeginPopupModal(ctx, "bp_rename",
+        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
+        if (ImGui_BeginPopupModal(ctx, "Rename preset###bp_rename",
                                   nullptr, nullptr)) {
             ImGui_Text(ctx, "Rename preset");
             ImGui_Spacing(ctx);
@@ -3066,7 +3077,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Delete confirm -------------------------------------
-        if (ImGui_BeginPopupModal(ctx, "bp_delete_confirm",
+        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
+        if (ImGui_BeginPopupModal(ctx,
+                                  "Delete preset?###bp_delete_confirm",
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
