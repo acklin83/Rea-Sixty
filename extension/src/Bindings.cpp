@@ -860,6 +860,30 @@ void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Named Sub-Bank snapshots — flat list, each entry holds the preset's
+// name + an array of 8 Binding bodies. Empty list writes nothing.
+void serializeBankPresets_(const Config& c, std::ostringstream& os)
+{
+    if (c.bankPresets.empty()) return;
+    os << ",\n  \"bank_presets\": [";
+    bool first = true;
+    for (const auto& p : c.bankPresets) {
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"name\": ";
+        appendEscaped(os, p.name);
+        os << ", \"slots\": [";
+        for (int s = 0; s < kSlotsPerSubBank; ++s) {
+            if (s) os << ",";
+            os << "\n      {";
+            serializeBindingBody_(p.slots[s], os);
+            os << "}";
+        }
+        os << "\n    ]}";
+    }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -875,6 +899,7 @@ std::string serialize(const Config& c)
     os << "  ]";
     serializeUserQuicks_(c, os);
     serializeSubBankLeds_(c, os);
+    serializeBankPresets_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -1127,6 +1152,32 @@ void parseSubBankLeds_(wdl_json_element* root, Config& out)
         }
         if (auto* v = eo->get_item_by_name("inactive_brightness"))
             a.inactiveBrightness = brightnessFromName(v->get_string_value());
+    }
+}
+
+void parseBankPresets_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("bank_presets");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        SoftKeyBankPreset p;
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* s = v->get_string_value()) p.name = s;
+        if (p.name.empty()) continue;     // skip nameless garbage
+        auto* slots = eo->get_item_by_name("slots");
+        if (slots && slots->is_array() && slots->m_array) {
+            const int sn = slots->m_array->GetSize();
+            for (int s = 0; s < sn && s < kSlotsPerSubBank; ++s) {
+                wdl_json_element* sl = slots->enum_item(s);
+                if (sl && sl->is_object()) {
+                    parseBindingBody_(sl, p.slots[s]);
+                }
+            }
+        }
+        out.bankPresets.push_back(std::move(p));
     }
 }
 
@@ -1383,6 +1434,7 @@ bool tryParse_(const std::string& json, Config& out)
     }
     parseUserQuicks_(root, out);
     parseSubBankLeds_(root, out);
+    parseBankPresets_(root, out);
     return true;
 }
 
@@ -1449,7 +1501,13 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // visually distinguishable. Default-construct on existing configs
 // (white/bright/dim) — no behaviour change until the user starts
 // setting overrides in the editor.
-constexpr int kCurrentBindingsVersion = 12;
+// v13 (2026-05-14): introduce named Soft-Key Bank presets — a flat
+// list of {name, slots[8]} entries stored alongside the userQuicks.
+// Persisted under the top-level "bank_presets" key. Older configs
+// load with an empty list (no migration needed; presets are an
+// additive feature). The Bindings → Sub-Bank cell editor exposes
+// Save/Recall/Rename/Delete.
+constexpr int kCurrentBindingsVersion = 13;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2682,6 +2740,94 @@ void setSubBankLed(int layer, int quick, int subBank,
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank] = app;
     persistLocked_();
+}
+
+// ---- Soft-Key Bank presets -----------------------------------------------
+
+int bankPresetCount()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return static_cast<int>(g_cfg.bankPresets.size());
+}
+
+SoftKeyBankPreset bankPresetAt(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
+        return {};
+    return g_cfg.bankPresets[idx];
+}
+
+int findBankPreset(const std::string& name)
+{
+    if (name.empty()) return -1;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
+        if (g_cfg.bankPresets[i].name == name) return i;
+    }
+    return -1;
+}
+
+bool saveBankPreset(const std::string& name,
+                    int layer, int quick, int subBank)
+{
+    if (name.empty()) return false;
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    SoftKeyBankPreset p;
+    p.name = name;
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        p.slots[s] = g_cfg.userQuicks[layer].quicks[quick]
+                        .subBanks[subBank].slots[s];
+    }
+    int existing = -1;
+    for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
+        if (g_cfg.bankPresets[i].name == name) { existing = i; break; }
+    }
+    if (existing >= 0) g_cfg.bankPresets[existing] = std::move(p);
+    else               g_cfg.bankPresets.push_back(std::move(p));
+    persistLocked_();
+    return true;
+}
+
+bool renameBankPreset(int idx, const std::string& newName)
+{
+    if (newName.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
+        return false;
+    for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
+        if (i == idx) continue;
+        if (g_cfg.bankPresets[i].name == newName) return false;   // duplicate
+    }
+    g_cfg.bankPresets[idx].name = newName;
+    persistLocked_();
+    return true;
+}
+
+bool deleteBankPreset(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
+        return false;
+    g_cfg.bankPresets.erase(g_cfg.bankPresets.begin() + idx);
+    persistLocked_();
+    return true;
+}
+
+bool recallBankPreset(int idx, int layer, int quick, int subBank)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
+        return false;
+    const SoftKeyBankPreset& p = g_cfg.bankPresets[idx];
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        g_cfg.userQuicks[layer].quicks[quick]
+            .subBanks[subBank].slots[s] = p.slots[s];
+    }
+    persistLocked_();
+    return true;
 }
 
 bool dispatchUserQuickSlot(int layer, int quick, int subBank,

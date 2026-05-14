@@ -286,11 +286,23 @@ struct Layer {
     std::unordered_map<ButtonId, Binding> bindings;
 };
 
+// A named snapshot of one Sub-Bank's 8 top-soft-key slots, recallable
+// into any (Layer, Quick, Sub-Bank) coordinate. Stored as a flat list
+// in Config so presets are independent of the (L, Q, SB) they were
+// captured from. The LED override (SubBankLed) is intentionally NOT
+// snapshotted — it belongs to the engaged Quick context, not the
+// bank's identity. See Frank's plan 2026-05-14.
+struct SoftKeyBankPreset {
+    std::string name;                              // unique, user-editable
+    Binding     slots[kSlotsPerSubBank];           // 8 top-soft-key bindings
+};
+
 struct Config {
-    int             version     = 1;
-    int             activeLayer = 0;
-    Layer           layers[3];
-    LayerUserQuicks userQuicks[3];        // per-layer user-Quick data
+    int                            version     = 1;
+    int                            activeLayer = 0;
+    Layer                          layers[3];
+    LayerUserQuicks                userQuicks[3];     // per-layer user-Quick data
+    std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -434,6 +446,25 @@ void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
 SubBankLed getSubBankLed(int layer, int quick, int subBank);
 void       setSubBankLed(int layer, int quick, int subBank,
                          const SubBankLed& app);
+
+// Soft-Key Bank presets — named snapshots of one Sub-Bank's 8 slots
+// that can be recalled into any (Layer, Quick, Sub-Bank) coordinate.
+// All write operations persist via the regular configPath_().
+int               bankPresetCount();
+SoftKeyBankPreset bankPresetAt(int idx);                 // copy; out-of-range = empty
+int               findBankPreset(const std::string& name); // -1 if not found
+// Snapshot the 8 slots currently in (layer, quick, subBank) under
+// `name`. Overwrites an existing preset with the same name. Returns
+// false on out-of-range coords or empty name.
+bool              saveBankPreset(const std::string& name,
+                                 int layer, int quick, int subBank);
+// Replace an existing preset's name. Returns false on duplicate name,
+// empty new name, or out-of-range idx.
+bool              renameBankPreset(int idx, const std::string& newName);
+bool              deleteBankPreset(int idx);
+// Copy the named preset's 8 slots into (layer, quick, subBank),
+// overwriting whatever was there. Returns false on out-of-range.
+bool              recallBankPreset(int idx, int layer, int quick, int subBank);
 
 // Dispatch a press/release through a user-quick slot. Same long-press
 // + modifier-matrix logic as dispatch(ButtonId), but the slot is
