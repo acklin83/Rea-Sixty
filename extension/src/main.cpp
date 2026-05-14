@@ -10043,7 +10043,7 @@ void registerBindingHandlers()
             if (!firing) return;
             if (g_uc1_surface) g_uc1_surface->applyBcTrackScroll(param);
         },
-        nullptr, "Encoder 2: scroll BC anchor track (legacy SSL)", false
+        nullptr, "Encoder: scroll BC anchor track", false
     });
 
     // UC1 Encoder 2 push — default Plain action: toggle the floating
@@ -10059,7 +10059,7 @@ void registerBindingHandlers()
         [](int) {
             return g_focusedGuiShownTr != nullptr && g_focusedGuiShownFx >= 0;
         },
-        "Plugin GUI: toggle focused instance floating window", false
+        "Plug-in: toggle focused GUI", false
     });
 
 

@@ -832,16 +832,6 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
                   "\xE2\x96\xBC");
     }
 
-    // UC1 Encoder 2 tiles. The UC1 has its own schematic elsewhere but
-    // it's a passive viewer (no click-to-bind hooks); piggy-back on the
-    // UF8 page so users can edit Uc1Encoder2 / Uc1Encoder2Push bindings
-    // from the existing Bindings tab. Placed below the Zoom pad,
-    // clear of the brand line. Rotate default = bc_track_scroll
-    // (legacy SSL); Push default = show_focused_plugin_gui.
-    drawGroupLabel(852, 442, "UC1 ENC 2");
-    drawHwBtn(852, 458, 65, 18, ButtonId::Uc1Encoder2Push, "PUSH");
-    drawHwBtn(919, 458, 66, 18, ButtonId::Uc1Encoder2,     "ROTATE");
-
     // Brand line — replaces the SSL silk-screen with our product name.
     drawTextCentered_(c, 500, 470, 0x9CA0AAFF, "Rea-Sixty");
 }
@@ -1281,6 +1271,73 @@ void drawUc1Vector(ImGui_Context* ctx)
     drawUc1Face_(c, uf8::Domain::None);
 }
 
+// Click-to-bind variant: paints the UC1 face + a small "bindings strip"
+// below the chassis with tiles for every bindable UC1 control. Mirrors
+// drawUf8Vector's selection/hover/click model so the editor below the
+// schematic picks up s_selected the same way regardless of which tab
+// you're on. Today only Encoder 2 (rotation + push) is bindable —
+// future bindable UC1 controls slot into the same strip.
+void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
+{
+    constexpr float W       = 860;
+    constexpr float faceH   = 660;
+    constexpr float stripH  = 56;
+    constexpr float H       = faceH + stripH;
+
+    double oxd = 0, oyd = 0;
+    ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
+    ImGui_InvisibleButton(ctx, "uc1_bindings_canvas", W, H, /*flags*/ nullptr);
+    const bool canvasHovered = ImGui_IsItemHovered(ctx, /*flags*/ nullptr);
+    int leftBtn = 0;
+    const bool canvasClicked = ImGui_IsItemClicked(ctx, &leftBtn);
+
+    double mxd = 0, myd = 0;
+    ImGui_GetMousePos(ctx, &mxd, &myd);
+
+    VCanvas c {
+        ctx, ImGui_GetWindowDrawList(ctx),
+        static_cast<float>(oxd), static_cast<float>(oyd)
+    };
+    const float mx = static_cast<float>(mxd) - c.ox;
+    const float my = static_cast<float>(myd) - c.oy;
+
+    drawUc1Face_(c, uf8::Domain::None);
+
+    auto inside = [&](float x, float y, float w, float h) {
+        return canvasHovered
+            && mx >= x && mx <= x + w
+            && my >= y && my <= y + h;
+    };
+
+    auto drawHwBtn = [&](float x, float y, float w, float h,
+                         ButtonId id, const char* label)
+    {
+        const bool hot      = inside(x, y, w, h);
+        const bool selected = (id == sel);
+        const bool clicked  = hot && canvasClicked && leftBtn == 0;
+        if (clicked) sel = id;
+        const uint32_t fill   = selected ? 0x4477CCFF
+                                : hot     ? 0x3A4253FF
+                                          : 0x252A33FF;
+        const uint32_t border = selected ? 0xAACCFFFF : 0x4A5060FF;
+        const uint32_t txt    = selected ? 0xFFFFFFFF : 0xD0D4DAFF;
+        rect_(c, x, y, w, h, fill, border, /*rounding*/ 3.5);
+        drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
+    };
+
+    // Bindings strip below the chassis. Reads as continuous with the
+    // UC1 face above (same chassis fill + outline colours).
+    const float stripY = faceH + 4;
+    rect_(c, 4, stripY, W - 8, stripH - 8,
+          0x14181EFF, 0x2A3038FF, /*rounding*/ 6.0);
+    drawText_(c, 18, stripY + 8, 0x9CA0AAFF, "ENCODER 2");
+    const float tileY = stripY + 24;
+    drawHwBtn(W / 2.0f - 100, tileY, 90, 22,
+              ButtonId::Uc1Encoder2,     "ROTATE");
+    drawHwBtn(W / 2.0f + 10,  tileY, 90, 22,
+              ButtonId::Uc1Encoder2Push, "PUSH");
+}
+
 // Push a Rea-Sixty-themed colour set so the editor's combos / buttons /
 // inputs match the schematic palette (dark blue-grey, soft accents)
 // instead of the default ImGui orange/red. Returns count to pop.
@@ -1549,8 +1606,16 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("instance_", 0) == 0
                  || n == "select_relative"
                  || n == "playhead_nudge"
-                 || n == "mouse_scroll")
+                 || n == "mouse_scroll"
+                 || n == "fx_cycle"
+                 || n == "bc_track_scroll")
                     return "Encoder Modes";
+
+                // Plug-in family — actions that operate on the currently
+                // focused FX on the focused track (toggle GUI, future:
+                // bypass, preset prev/next, offline, etc.).
+                if (n == "show_focused_plugin_gui")
+                    return "Plug-in";
 
                 if (n.rfind("auto_", 0) == 0)
                     return "Automation";
@@ -1579,6 +1644,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             static const char* kCats[] = {
                 "Layer", "Soft-Key Bank", "SSL",
                 "Mode Toggles", "Bank / Page", "Encoder Modes",
+                "Plug-in",
                 "Automation", "Zoom",
                 "Sends / Receives", "Selection Sets",
                 "Tracks",
@@ -3313,7 +3379,25 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // Click → selects the button for editing AND, for Layer / Quick /
     // Sub-Bank tiles, dispatches the binding so the hardware engages
     // the same as a real press would. WYSIWYG end-to-end.
-    drawUf8Vector(ctx, s_selected);
+    //
+    // UF8 / UC1 split tabs: each device has its own bindable surface.
+    // The editor + admin row below are SHARED — they accept any
+    // ButtonId from either device, so switching tabs just changes
+    // which schematic you click on. s_selected is preserved across
+    // tab switches so the editor stays open on the last-clicked
+    // button.
+    int tabBarFlags = 0;
+    if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
+        if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
+            drawUf8Vector(ctx, s_selected);
+            ImGui_EndTabItem(ctx);
+        }
+        if (ImGui_BeginTabItem(ctx, "UC1", nullptr, nullptr)) {
+            drawUc1BindingsVector(ctx, s_selected);
+            ImGui_EndTabItem(ctx);
+        }
+        ImGui_EndTabBar(ctx);
+    }
 
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
