@@ -8857,7 +8857,23 @@ void registerBindingHandlers()
                                        GetGlobalAutomationOverride(),
                                        uf8::bindings::getActiveLayer());
             },
-            nullptr, label, false
+            // stateOf — selected-track mode matches reaperMode. Mode 0
+            // is suppressed (REAPER's per-track default applies to
+            // every fresh track, so reporting auto_off/auto_trim as
+            // active everywhere would pin TRIM/OFF on). auto_latch
+            // also reports active for Latch Preview (mode 5) since the
+            // shared LATCH LED covers both — keeps cells bound to
+            // auto_latch outside the Auto row consistent with the
+            // Auto-row LATCH cell's special-case.
+            [reaperMode](int) -> bool {
+                if (reaperMode == 0) return false;
+                MediaTrack* sel = GetSelectedTrack(nullptr, 0);
+                if (!sel) return false;
+                const int cur = GetTrackAutomationMode(sel);
+                if (reaperMode == 4 && cur == 5) return true;
+                return cur == reaperMode;
+            },
+            label, false
         };
     };
     registerBuiltin("auto_off",       autoMode(0, "Automation: Off / Trim"));
@@ -8886,7 +8902,17 @@ void registerBindingHandlers()
                 pushAutoModeLedsMixed_(perTrack, reaperMode,
                                        uf8::bindings::getActiveLayer());
             },
-            nullptr, label, false
+            // stateOf — global override matches reaperMode. No mode-0
+            // suppression here: a global override of 0 is an explicit
+            // user choice (vs default -1 = no override). auto_latch
+            // also covers Latch Preview (mode 5) to match the per-
+            // track variant.
+            [reaperMode](int) -> bool {
+                const int cur = GetGlobalAutomationOverride();
+                if (reaperMode == 4 && cur == 5) return true;
+                return cur == reaperMode;
+            },
+            label, false
         };
     };
     registerBuiltin("auto_off_global",
