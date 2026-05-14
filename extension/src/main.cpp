@@ -7167,12 +7167,13 @@ void pushUf8GlobalLeds()
     // other consumers that may still read it (Frank 2026-05-14).
     g_lastAnyArmed = anyArmed;
 
-    // Pan LED tracks the global "force all V-Pots to Pan" toggle so the
-    // hardware shows the active mode at a glance.
-    if (forcePan != g_lastForcePan || !g_globalLedsInit) {
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Pan, forcePan);
-        g_lastForcePan = forcePan;
-    }
+    // Pan LED — driven through the stateless-cell sweep below so the
+    // binding's combined short+long-press state lights the cell. The
+    // older hardcoded `forcePan` path lost the long-press LED state on
+    // any unrelated refresh (Frank 2026-05-14: folder_mode long-press
+    // on PAN went dim after bank switch / pan toggle). g_lastForcePan
+    // stays touched for callers that still read it.
+    g_lastForcePan = forcePan;
 
     // FLIP LED — bright when V-Pots are being used for something OTHER
     // than pan: flip toggle on (V-Pots driving plug-in params), or any
@@ -7282,6 +7283,7 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::ZoomCenter,
             uf8::Uf8GlobalLed::Norm, uf8::Uf8GlobalLed::Rec,
             uf8::Uf8GlobalLed::Auto,
+            uf8::Uf8GlobalLed::Pan,
         };
         for (auto led : kStateless) {
             const auto bid = buttonIdForGlobalLed(led);

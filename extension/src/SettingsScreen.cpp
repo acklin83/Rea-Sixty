@@ -2204,8 +2204,24 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     if (en && slots[0].type == ActionType::Noop) {
                         slots[0].type = ActionType::Builtin;
                     }
+                    // Auto-coerce to Momentary so short and long are
+                    // mutually exclusive (defer-and-choose). Otherwise
+                    // a Toggle / Hold binding fires the short action on
+                    // press-edge AND the long action on release-after-
+                    // threshold — almost never what the user wants
+                    // when they attach a long-press (Frank 2026-05-14:
+                    // folder_mode on PAN long-press also flipped pan
+                    // mode). Override by re-picking Toggle / Hold in
+                    // the Behavior combo above.
+                    if (en && bd.behavior != Behavior::Momentary) {
+                        bd.behavior = Behavior::Momentary;
+                    }
                     dirty = true;
                 }
+                ImGui_TextDisabled(ctx,
+                    "Long-press auto-sets Behavior to Momentary so the");
+                ImGui_TextDisabled(ctx,
+                    "short action doesn't also fire on release.");
                 if (!bd.hasLongPress) {
                     renderSlots = false;
                 } else {
