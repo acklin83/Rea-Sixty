@@ -97,6 +97,27 @@ std::atomic<bool> g_pluginGuiSyncRequest{false};
 void* g_csGuiShownTr = nullptr;
 int   g_csGuiShownFx = -1;
 
+// UF8 Plugin Mode "with GUI" variant — when this flag is on, entering
+// UF8 Plugin Mode also pops the focused track's user-mapped plug-in
+// GUI; leaving the mode closes it. Tracked as a separate flag so the
+// plain `uf8_plugin_mode_toggle` builtin stays headless. Tr+Fx
+// remember what window we opened so the next toggle / focus change
+// can close it cleanly (main-thread access only).
+std::atomic<bool> g_uf8PluginModeWithGui{false};
+void* g_uf8GuiShownTr = nullptr;
+int   g_uf8GuiShownFx = -1;
+
+// Selection-Mode Instance "with GUI" variant — push opens the active
+// per-strip FX window AND rotation auto-follows the cycle. Plain
+// Instance mode leaves this flag false; push toggles GUI manually
+// per-strip but rotation does not move the window. Owner-strip is
+// the strip that last opened a GUI — only its rotation triggers
+// auto-follow.
+std::atomic<bool> g_instanceWithGui{false};
+std::atomic<int>  g_instanceGuiOwnerStrip{-1};
+void* g_instanceGuiShownTr = nullptr;
+int   g_instanceGuiShownFx = -1;
+
 // IReaperControlSurface subclass registered as a full control surface
 // class ("Rea-Sixty") so users see and add it like any other surface.
 // GetTouchState lets Touch-mode automation see the user is holding the
@@ -2391,20 +2412,33 @@ void drainInputQueue()
                         int next = ((cur + step) % n + n) % n;
                         g_stripInstanceFxIdx[tr] = next;
                         g_bankDirty.store(true);   // refresh scribble strip
+                        // with-GUI variant: re-point the floating
+                        // window to the new FX when this strip owns
+                        // the open GUI (Frank "wenn GUI sichtbar und
+                        // weiter gecyclet wird, GUI auf neue aktive
+                        // instanz wechseln").
+                        if (g_instanceWithGui.load()
+                            && g_instanceGuiOwnerStrip.load() == s) {
+                            g_pluginGuiSyncRequest.store(true);
+                        }
                     }
                 }
                 break;
             }
             case PendingInput::StripInstanceOpen: {
-                // Instance mode V-Pot push: toggle FX window of the
-                // strip's track's active instance via TrackFX_Get
-                // FloatingWindow + Show 2 (hide) / 3 (show).
-                const int fxIdx = stripInstanceActiveFx_(tr);
-                if (fxIdx < 0) break;
-                if (TrackFX_GetFloatingWindow(tr, fxIdx))
-                    TrackFX_Show(tr, fxIdx, 2);
-                else
-                    TrackFX_Show(tr, fxIdx, 3);
+                // Instance mode V-Pot push: toggle the FX window for
+                // this strip's active instance. Tracks ownership so
+                // the with-GUI rotation handler knows which strip's
+                // cycle to follow. The unified GUI sync drain at
+                // tickFollowSelected_ (g_pluginGuiSyncRequest exchange)
+                // does the show/hide; we just flip ownership here.
+                const int s = static_cast<int>(e.strip);
+                if (g_instanceGuiOwnerStrip.load() == s) {
+                    g_instanceGuiOwnerStrip.store(-1);   // toggle off
+                } else {
+                    g_instanceGuiOwnerStrip.store(s);    // claim
+                }
+                g_pluginGuiSyncRequest.store(true);
                 break;
             }
         }
@@ -7407,6 +7441,106 @@ void onTimer()
             g_csGuiShownTr = targetTr;
             g_csGuiShownFx = targetFx;
         }
+
+        // ---- UF8 Plugin Mode (with GUI) -----------------------------
+        // Open the first user-mapped UF8-only plug-in on the focused
+        // track when the mode is on AND the with-GUI flag is set; close
+        // on exit. Separate (tr, fx) tracking so SSL Strip Mode and
+        // UF8 Plugin Mode can each own a window independently.
+        {
+            const bool uf8WantOpen =
+                g_uf8PluginMode.load() && g_uf8PluginModeWithGui.load();
+            MediaTrack* uf8TargetTr = nullptr;
+            int         uf8TargetFx = -1;
+            if (uf8WantOpen && tr
+                && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+            {
+                const int n = TrackFX_GetCount(tr);
+                char nameBuf[256];
+                for (int fx = 0; fx < n; ++fx) {
+                    nameBuf[0] = 0;
+                    TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
+                    if (!nameBuf[0]) continue;
+                    const auto* um =
+                        uf8::user_plugins::lookupOwnedByName(nameBuf);
+                    if (um && um->domain == uf8::Domain::None
+                        && um->uf8Mode)
+                    {
+                        uf8TargetTr = tr;
+                        uf8TargetFx = fx;
+                        break;
+                    }
+                }
+            }
+            if (g_uf8GuiShownTr
+                && (g_uf8GuiShownTr != uf8TargetTr
+                 || g_uf8GuiShownFx != uf8TargetFx
+                 || !uf8WantOpen))
+            {
+                if (ValidatePtr2(nullptr, g_uf8GuiShownTr, "MediaTrack*")) {
+                    TrackFX_Show(static_cast<MediaTrack*>(g_uf8GuiShownTr),
+                                 g_uf8GuiShownFx, 2);
+                }
+                g_uf8GuiShownTr = nullptr;
+                g_uf8GuiShownFx = -1;
+            }
+            if (uf8WantOpen && uf8TargetTr && uf8TargetFx >= 0) {
+                TrackFX_Show(uf8TargetTr, uf8TargetFx, 3);
+                g_uf8GuiShownTr = uf8TargetTr;
+                g_uf8GuiShownFx = uf8TargetFx;
+            }
+        }
+
+        // ---- Selection-Mode Instance (push toggle, with-GUI follow) -
+        // Owner-strip drives which strip's active FX is shown. -1 =
+        // no GUI requested. Used in BOTH plain and with-GUI variants —
+        // plain only toggles on push (rotation does nothing); with-GUI
+        // also re-fires this drain on rotation so the window follows.
+        {
+            const int ownerStrip = g_instanceGuiOwnerStrip.load();
+            const bool instWantOpen =
+                g_selectionMode.load() == SelectionMode::Instance
+                && ownerStrip >= 0 && ownerStrip < 8;
+            MediaTrack* instTargetTr = nullptr;
+            int         instTargetFx = -1;
+            if (instWantOpen) {
+                const int bankOffset   = g_bankOffset.load();
+                const int surfaceCount = visibleTrackCount();
+                const int slot = ownerStrip + bankOffset;
+                if (slot >= 0 && slot < surfaceCount) {
+                    MediaTrack* stripTr = visibleTrackAt(slot);
+                    if (stripTr
+                        && ValidatePtr2(nullptr, stripTr, "MediaTrack*"))
+                    {
+                        const int fxIdx = stripInstanceActiveFx_(stripTr);
+                        if (fxIdx >= 0) {
+                            instTargetTr = stripTr;
+                            instTargetFx = fxIdx;
+                        }
+                    }
+                }
+            }
+            if (g_instanceGuiShownTr
+                && (g_instanceGuiShownTr != instTargetTr
+                 || g_instanceGuiShownFx != instTargetFx
+                 || !instWantOpen))
+            {
+                if (ValidatePtr2(nullptr, g_instanceGuiShownTr,
+                                 "MediaTrack*"))
+                {
+                    TrackFX_Show(
+                        static_cast<MediaTrack*>(g_instanceGuiShownTr),
+                        g_instanceGuiShownFx, 2);
+                }
+                g_instanceGuiShownTr = nullptr;
+                g_instanceGuiShownFx = -1;
+            }
+            if (instWantOpen && instTargetTr && instTargetFx >= 0) {
+                TrackFX_Show(instTargetTr, instTargetFx, 3);
+                g_instanceGuiShownTr = instTargetTr;
+                g_instanceGuiShownFx = instTargetFx;
+            }
+        }
     }
 
     // REAPER Action picker poll — drives the Bindings editor's
@@ -8720,6 +8854,16 @@ void registerBindingHandlers()
                     const auto next = (cur == mode) ? SelectionMode::Norm
                                                     : mode;
                     g_selectionMode.store(next);
+                    // Plain mode helpers clear the with-GUI flag —
+                    // only the dedicated `_with_gui` builtin sets it.
+                    g_instanceWithGui.store(false);
+                    // Leaving Instance → drop any GUI ownership and
+                    // ask the sync drain to close an open window.
+                    if (cur == SelectionMode::Instance
+                        && next != SelectionMode::Instance) {
+                        g_instanceGuiOwnerStrip.store(-1);
+                        g_pluginGuiSyncRequest.store(true);
+                    }
                     SetExtState("ReaSixty", "selectionMode",
                                 selectionModeStr(next), true);
                     // Force a full LED + bank re-push so the SEL row
@@ -8729,7 +8873,16 @@ void registerBindingHandlers()
                     g_pageDirty.store(true);
                     g_bankDirty.store(true);
                 },
-                [mode](int) { return g_selectionMode.load() == mode; },
+                [mode](int) {
+                    // Plain Instance lights only when with-GUI is OFF
+                    // — keeps the two variants visually distinct on
+                    // the hardware button row.
+                    if (mode == SelectionMode::Instance) {
+                        return g_selectionMode.load() == SelectionMode::Instance
+                            && !g_instanceWithGui.load();
+                    }
+                    return g_selectionMode.load() == mode;
+                },
                 display, false
             });
         };
@@ -8745,6 +8898,36 @@ void registerBindingHandlers()
     registerSelectionModeToggle("selection_mode_instance",
                                 SelectionMode::Instance,
                                 "Toggle V-POTS → Instance");
+
+    // Same toggle as selection_mode_instance, but the with-GUI flag
+    // makes V-Pot rotation auto-follow the cycle while a GUI is open
+    // (push opens / closes the window manually per-strip). Plain
+    // Instance leaves the GUI frozen on whatever fx the user last
+    // pushed; the with-GUI variant re-points it on every cycle.
+    registerBuiltin("selection_mode_instance_with_gui", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const auto cur  = g_selectionMode.load();
+            const auto next = (cur == SelectionMode::Instance)
+                              ? SelectionMode::Norm
+                              : SelectionMode::Instance;
+            g_selectionMode.store(next);
+            g_instanceWithGui.store(next == SelectionMode::Instance);
+            if (next != SelectionMode::Instance) {
+                g_instanceGuiOwnerStrip.store(-1);
+                g_pluginGuiSyncRequest.store(true);
+            }
+            SetExtState("ReaSixty", "selectionMode",
+                        selectionModeStr(next), true);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+        },
+        [](int) {
+            return g_selectionMode.load() == SelectionMode::Instance
+                && g_instanceWithGui.load();
+        },
+        "Toggle V-POTS → Instance (with GUI)", false
+    });
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
@@ -8885,6 +9068,12 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_uf8PluginMode.load();
             g_uf8PluginMode.store(next);
+            // Plain variant is headless — drop the with-GUI flag if
+            // it was set (e.g. user switched from the GUI builtin to
+            // the plain one). The next sync drain will then close any
+            // GUI we'd opened.
+            g_uf8PluginModeWithGui.store(false);
+            g_pluginGuiSyncRequest.store(true);
             // Mutex with SSL Strip Mode — see ssl_strip_mode_toggle.
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
@@ -8895,8 +9084,32 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "uf8PluginMode",
                         next ? "1" : "0", true);
         },
-        [](int) { return g_uf8PluginMode.load(); },
-        "Toggle UF8 Plugin Mode (deep edit)", false
+        [](int) { return g_uf8PluginMode.load()
+                       && !g_uf8PluginModeWithGui.load(); },
+        "Toggle UF8 Plugin Mode", false
+    });
+
+    // GUI variant: same as uf8_plugin_mode_toggle but pops the user
+    // plug-in window on entry and closes it on exit. Frank 2026-05-14.
+    registerBuiltin("uf8_plugin_mode_toggle_with_gui", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_uf8PluginMode.load();
+            g_uf8PluginMode.store(next);
+            g_uf8PluginModeWithGui.store(next);
+            if (next && g_pluginFaderMode.load()) {
+                g_pluginFaderMode.store(false);
+                SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+            }
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+            SetExtState("ReaSixty", "uf8PluginMode",
+                        next ? "1" : "0", true);
+            g_pluginGuiSyncRequest.store(true);
+        },
+        [](int) { return g_uf8PluginMode.load()
+                       && g_uf8PluginModeWithGui.load(); },
+        "Toggle UF8 Plugin Mode (with GUI)", false
     });
 
     registerBuiltin("pan_force", DescBuilder{

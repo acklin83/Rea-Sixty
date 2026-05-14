@@ -1466,7 +1466,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "flip" || n == "pan_force"
                  || n == "mixer_toggle" || n == "home"
                  || n == "folder_mode" || n == "show_only_selected"
-                 || n == "uf8_plugin_mode_toggle"
+                 || n.rfind("uf8_plugin_mode_", 0) == 0
                  || n.rfind("selection_mode_", 0) == 0)
                     return "Mode Toggles";
 
