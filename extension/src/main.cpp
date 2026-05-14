@@ -187,13 +187,14 @@ std::atomic<bool> g_showOnlySelected{false};
 // & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
 // cycles the plug-in instance on the strip's track. Bindable via the
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
-enum class SelectionMode : uint8_t { Norm = 0, Rec, Auto, Instance };
+enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 
 inline const char* selectionModeStr(SelectionMode m)
 {
     switch (m) {
         case SelectionMode::Rec:      return "rec";
+        case SelectionMode::RecMon:   return "rec_mon";
         case SelectionMode::Auto:     return "auto";
         case SelectionMode::Instance: return "instance";
         case SelectionMode::Norm:
@@ -205,6 +206,7 @@ inline SelectionMode parseSelectionMode(const char* s)
 {
     if (!s) return SelectionMode::Norm;
     if (std::strcmp(s, "rec")      == 0) return SelectionMode::Rec;
+    if (std::strcmp(s, "rec_mon")  == 0) return SelectionMode::RecMon;
     if (std::strcmp(s, "auto")     == 0) return SelectionMode::Auto;
     if (std::strcmp(s, "instance") == 0) return SelectionMode::Instance;
     return SelectionMode::Norm;
@@ -804,6 +806,7 @@ struct PendingInput {
         // V-Pot rotation in Instance mode → InstanceCycleDelta.
         // (REC and AUTO leave V-Pots on the Norm wiring.)
         RecArmToggle,        // REC: SEL push toggles I_RECARM
+        RecArmMonToggle,     // REC+MON: SEL push toggles I_RECARM + I_RECMON
         AutoModeStep,        // AUTO: SEL push cycles auto-mode 0..5 wraparound
         OpenFxWindow,        // Instance: V-Pot push opens active instance FX
         InstanceCycleDelta,  // Instance: V-Pot rotation cycles plug-in
@@ -2238,12 +2241,30 @@ void drainInputQueue()
 
             // ---- Selection-Mode per-strip events --------------------------
             case PendingInput::RecArmToggle: {
-                // REC mode SEL push: toggle I_RECARM on the strip's
-                // track. ledColourFor picks up the change on the next
-                // sendLed pass.
-                const double cur = GetMediaTrackInfo_Value(tr, "I_RECARM");
-                SetMediaTrackInfo_Value(tr, "I_RECARM",
-                                        cur > 0.5 ? 0.0 : 1.0);
+                // REC mode SEL push: toggle I_RECARM via the canonical
+                // CSurf path. SetMediaTrackInfo_Value direct triggers
+                // REAPER's "auto-select armed tracks" preference (if
+                // on) which fires SetSurfaceSelected → followSelected
+                // InMixer → bank jumps to the armed track. CSurf_On
+                // RecArmChange skips that broadcast, matching how the
+                // user clicking the TCP arm button behaves (Frank
+                // 2026-05-14: "wenn nicht auf bank 1 hüpft er nach
+                // rec-arm sofort zurück zu bank 1").
+                CSurf_OnRecArmChange(tr, -1);
+                break;
+            }
+            case PendingInput::RecArmMonToggle: {
+                // REC+MON mode SEL push: arm + monitor flip together.
+                // Same CSurf_OnRecArmChange call (toggle) for the arm
+                // half; monitor follows the new arm state — set
+                // I_RECMON=1 when arming, =0 when disarming. We toggle
+                // via CSurf_OnInputMonitorChange to stay surface-aware
+                // and avoid the SetMediaTrackInfo direct-write path.
+                const double prevArm =
+                    GetMediaTrackInfo_Value(tr, "I_RECARM");
+                CSurf_OnRecArmChange(tr, -1);
+                const bool nowArmed = prevArm < 0.5; // post-toggle state
+                CSurf_OnInputMonitorChange(tr, nowArmed ? 1 : 0);
                 break;
             }
             case PendingInput::AutoModeStep: {
@@ -2560,6 +2581,7 @@ uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
         //   Norm     — legacy: rec-armed-red, then SEL-follows-colour.
         switch (mode) {
             case SelectionMode::Rec:
+            case SelectionMode::RecMon:
                 return armed ? uf8::ledColourRedBrightSolid()
                              : uf8::ledColourRedDimSolid();
             case SelectionMode::Auto:
@@ -3252,10 +3274,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         } else if (which == 2) {
                             // SEL press is the only per-strip input the
                             // Selection-Mode group hijacks (V-Pots stay
-                            // on their Norm wiring for REC + AUTO).
+                            // on their Norm wiring for REC / RecMon /
+                            // AUTO).
                             switch (g_selectionMode.load()) {
                                 case SelectionMode::Rec:
                                     k = PendingInput::RecArmToggle;
+                                    break;
+                                case SelectionMode::RecMon:
+                                    k = PendingInput::RecArmMonToggle;
                                     break;
                                 case SelectionMode::Auto:
                                     k = PendingInput::AutoModeStep;
@@ -3268,9 +3294,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                         : PendingInput::SelectExclusive;
                                     // Arm long-press detection — only
                                     // relevant when SEL is doing track-
-                                    // selection (Norm / Instance). REC
-                                    // and AUTO short-circuit before
-                                    // the spill timer touches.
+                                    // selection (Norm / Instance). The
+                                    // mode-specific cases short-circuit
+                                    // before the spill timer touches.
                                     g_selPressMs[strip].store(nowMs_());
                                     g_selSpillFired[strip].store(false);
                                     break;
@@ -8620,6 +8646,9 @@ void registerBindingHandlers()
     registerSelectionModeToggle("selection_mode_rec",
                                 SelectionMode::Rec,
                                 "Selection Mode → REC (toggle)");
+    registerSelectionModeToggle("selection_mode_rec_mon",
+                                SelectionMode::RecMon,
+                                "Selection Mode → REC + MON (toggle)");
     registerSelectionModeToggle("selection_mode_auto",
                                 SelectionMode::Auto,
                                 "Selection Mode → AUTO (toggle)");
