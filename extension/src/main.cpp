@@ -196,6 +196,16 @@ std::atomic<bool> g_flip{false};
 // the Plugin LED feedback land in this commit.
 std::atomic<bool> g_pluginFaderMode{false};
 
+// SSL Strip Mode "with GUI" variant — when on, entering SSL Strip Mode
+// pops the focused track's CS plug-in GUI and follows selection / Instance
+// cycle changes; leaving the mode closes it. Tracked as a separate flag
+// so the plain `ssl_strip_mode_toggle` builtin stays headless. Without
+// this flag, the GUI-follow trigger relied on g_csGuiShownTr being
+// non-null — which broke after the GUI was closed once (e.g. user
+// selected a track with no CS plug-in): g_csGuiShownTr cleared, future
+// selections never re-opened the GUI (Frank 2026-05-14).
+std::atomic<bool> g_pluginFaderModeWithGui{false};
+
 // Phase 2.5 mode toggles. State-of-record only — bind-able via builtins
 // registered in registerBindingHandlers() and surfaced as Settings
 // checkboxes. Filter / selection-set logic wires up in a follow-up phase.
@@ -1282,11 +1292,10 @@ void applyInstanceCycle_(int step)
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
-        // Only follow with the GUI when the "with GUI" variant opened
-        // one (g_csGuiShownTr != nullptr). Plain ssl_strip_mode_toggle
-        // leaves g_csGuiShownTr null, so the instance cycle stays
-        // headless.
-        if (g_csGuiShownTr) {
+        // Only follow with the GUI when the "with GUI" variant of SSL
+        // Strip Mode is active. Plain ssl_strip_mode_toggle leaves the
+        // with-Gui flag false, so the instance cycle stays headless.
+        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
             g_pluginGuiSyncRequest.store(true);
         }
     } else if (target.dom == uf8::Domain::BusComp) {
@@ -1299,7 +1308,7 @@ void applyInstanceCycle_(int step)
     } else {
         uf8::setFocus({uf8::Domain::None, 0});
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
-        if (g_csGuiShownTr) {
+        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
             g_pluginGuiSyncRequest.store(true);
         }
     }
@@ -2946,13 +2955,18 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
     // UC1 until a new one is picked — matches SSL 360°'s Focus Mode.
     if (sel && g_uc1_surface) {
         g_uc1_surface->setFocusedTrack(tr);
-        // When the "with GUI" variant opened a CS GUI, follow the
-        // track selection so the floating window switches to the new
-        // track's CS plug-in. Plain ssl_strip_mode_toggle (no GUI)
-        // leaves g_csGuiShownTr null → no GUI churn. Frank 2026-05-12
-        // "GUI bei select eines anderen channels auf den neu
-        // gewählten wechseln".
-        if (g_csGuiShownTr) {
+        // When the "with GUI" variant of SSL Strip Mode is active,
+        // follow the track selection so the floating window switches
+        // to the new track's CS plug-in. Plain ssl_strip_mode_toggle
+        // (no GUI) leaves g_pluginFaderModeWithGui false → no GUI
+        // churn (Frank 2026-05-12 "GUI bei select eines anderen
+        // channels auf den neu gewählten wechseln"). Use the
+        // with-Gui flag rather than the g_csGuiShownTr pointer
+        // because the latter clears whenever the drain closes a GUI
+        // (e.g. user selected a track with no CS plug-in) — leaving
+        // the follow logic permanently disarmed for the rest of the
+        // session (Frank 2026-05-14).
+        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
             g_pluginGuiSyncRequest.store(true);
         }
     }
@@ -7660,7 +7674,12 @@ void onTimer()
         }
         if (!tr) tr = GetSelectedTrack(nullptr, 0);
 
-        const bool wantOpen = g_pluginFaderMode.load();
+        // Only open a CS GUI when SSL Strip Mode's with-GUI variant is
+        // active. The plain variant raises the sync request too (so it
+        // can close a GUI opened by a previous with-GUI session) but
+        // must not pop a new one.
+        const bool wantOpen = g_pluginFaderMode.load()
+                           && g_pluginFaderModeWithGui.load();
         MediaTrack* targetTr = nullptr;
         int         targetFx = -1;
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
@@ -9256,6 +9275,12 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            // Plain variant is headless — drop the with-GUI flag so a
+            // user switching from the GUI builtin to the plain one stops
+            // following the GUI. The sync drain then closes any window
+            // we'd previously opened.
+            g_pluginFaderModeWithGui.store(false);
+            g_pluginGuiSyncRequest.store(true);
             // Mutually exclusive with UF8 Plugin Mode — turning SSL Strip
             // on shadows the other anyway (the UF8 path is checked first
             // in every fader/V-Pot branch), so leaving both true just
@@ -9272,7 +9297,8 @@ void registerBindingHandlers()
             SetExtState("ReaSixty", "pluginFaderMode",
                         next ? "1" : "0", true);
         },
-        [](int) { return g_pluginFaderMode.load(); },
+        [](int) { return g_pluginFaderMode.load()
+                       && !g_pluginFaderModeWithGui.load(); },
         "Toggle SSL Strip Mode", false
     });
 
@@ -9292,6 +9318,7 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            g_pluginFaderModeWithGui.store(next);
             // See ssl_strip_mode_toggle for the mutex rationale.
             if (next && g_uf8PluginMode.load()) {
                 g_uf8PluginMode.store(false);
@@ -9306,7 +9333,8 @@ void registerBindingHandlers()
                         next ? "1" : "0", true);
             g_pluginGuiSyncRequest.store(true);
         },
-        [](int) { return g_pluginFaderMode.load(); },
+        [](int) { return g_pluginFaderMode.load()
+                       && g_pluginFaderModeWithGui.load(); },
         "Toggle SSL Strip Mode (with GUI)", false
     });
 
@@ -9324,6 +9352,7 @@ void registerBindingHandlers()
             // Mutex with SSL Strip Mode — see ssl_strip_mode_toggle.
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
+                g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
             }
             // Mutex with Selection Mode — the V-Pot rotation/push
@@ -9365,6 +9394,7 @@ void registerBindingHandlers()
             g_uf8PluginModeWithGui.store(next);
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
+                g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
             }
             // Mutex with Selection Mode — see uf8_plugin_mode_toggle.
