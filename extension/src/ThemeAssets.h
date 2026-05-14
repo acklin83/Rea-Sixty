@@ -1,18 +1,23 @@
 #pragma once
 //
-// ThemeAssets — loads the active REAPER theme's WALTER PNG sprite-sheets
-// (mcp_vu.png, mcp_fader*.png, mcp_knob.png, mcp_button.png, etc.) and
-// exposes them to the Mixer as ImGui image handles.
+// ThemeAssets — loads the active REAPER theme's PNG sprite-sheets (mcp_vol*,
+// gen_mute_*, gen_solo_*, mcp_recarm_*, gen_knob_bg_*, meter_bg_mcp, ...)
+// and exposes them to the Mixer as ImGui image handles.
 //
 // Resolution path:
 //   GetLastColorThemeFile() → either a `.ReaperTheme` file (PNG resources
-//   in a sibling folder of the same basename) OR a `.ReaperThemeZip`
-//   bundle (PNGs live inside the zip). Both are handled transparently.
+//   in a sibling folder) OR a `.ReaperThemeZip` bundle (PNGs live inside
+//   the zip). Both are handled transparently.
+//
+// Filename conventions vary across themes (Default 6/7, WT, Reapertips,
+// Imperial etc.), so each Slot has an ordered candidate list — the loader
+// walks it and picks the first hit. HiDPI subfolder priority is "200/"
+// then "150/" then base, so Retina users get crisp sprites where the
+// theme ships them.
 //
 // Lifetime:
-//   - Raw PNG bytes are cached in memory; theme switches invalidate and
-//     reload them (poll on mtime each tick).
-//   - ImGui image handles are attached to the calling context. When the
+//   - Raw PNG bytes cached in memory; theme switches invalidate + reload.
+//   - ImGui image handles attached to the calling context. When the
 //     MixerWindow recreates its context on toggle, tick() detects the
 //     change and re-materialises the handles automatically.
 //
@@ -22,35 +27,40 @@ class ImGui_Image;
 
 namespace uf8::theme_assets {
 
+// Logical asset slots. Multiple slots can resolve to the same file in
+// some themes (e.g. mute_on / mute_off may live in one sprite-sheet on
+// older themes); the loader still treats them independently.
 enum class Slot : int {
-    kMcpVU = 0,          // mcp_vu.png   — 4 vertical strips (W/4 each)
-    kTcpVU,              // tcp_vu.png   — 8 horizontal slices (H/8 each)
-    kMcpFader,           // mcp_fader.png — fader background/track
-    kMcpFaderHandle,     // mcp_fader_handle.png — fader handle cap
-    kMcpKnob,            // mcp_knob.png — knob rotation frames
-    kMcpPanKnob,         // mcp_panknob.png — pan-knob rotation frames
-    kMcpRecArm,          // mcp_recarm.png — rec-arm button
-    kMcpMute,            // mcp_mute.png   — mute button
-    kMcpSolo,            // mcp_solo.png   — solo button
+    kMcpFaderBg = 0,     // vertical fader groove
+    kMcpFaderHandle,     // fader thumb/cap
+
+    kMcpMuteOff,         // mute button — inactive frame
+    kMcpMuteOn,          // mute button — active frame
+    kMcpSoloOff,         // solo button — inactive frame
+    kMcpSoloOn,          // solo button — active frame
+    kMcpRecArmOff,       // record-arm button — inactive
+    kMcpRecArmOn,        // record-arm button — armed
+
+    kMcpMeterBg,         // VU meter background panel
+    kMcpKnob,            // small knob (pan / aux)
+    kMcpKnobLarge,       // large knob (EQ / comp / gate)
+
     kCount,
 };
 
 // Call once per Mixer frame. Detects theme switches, reloads PNG bytes
-// on change, materialises ImGui image handles attached to ctx. Cheap
-// (one stat() syscall) when nothing has changed.
+// on change, materialises ImGui image handles attached to ctx.
 void tick(ImGui_Context* ctx);
 
-// Returns the image handle for the slot, or nullptr if the theme does
-// not provide that asset (caller falls back to ImGui primitive drawing).
+// Returns the image handle for the slot, or nullptr if no theme PNG
+// satisfied the candidate list (caller falls back to primitive draw).
 ImGui_Image* get(Slot s);
 
-// Computes UV coords for a particular frame within a sprite-sheet.
-// Returns false (and fills uv=0..1) if the slot has no defined slicing —
-// treat the image as a single frame in that case.
-bool getUv(Slot s, int frame, double* u0, double* v0, double* u1, double* v1);
+// Pixel size of the resolved sprite — used by layout to compute scale.
+// Returns false (and writes 0,0) when the slot isn't loaded.
+bool getSize(Slot s, double* w, double* h);
 
-// Diagnostics for the debug pane (Phase B3): returns the active theme
-// file path and a per-slot "loaded?" snapshot.
+// Diagnostics for the debug pane: active theme path + per-slot status.
 const char* activeThemePath();
 bool slotLoaded(Slot s);
 

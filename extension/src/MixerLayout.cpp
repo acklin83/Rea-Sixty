@@ -13,18 +13,43 @@ namespace uf8 {
 
 namespace {
 
-// Strip dimensions — tuned to fit ~14 strips in the 1600 px default
+// Strip dimensions — tuned to fit ~13 strips in the 1600 px default
 // window width with horizontal scrolling for more. Mirrors SSL 360°'s
-// channel-strip proportions (tall + narrow).
-constexpr double kStripW         = 96.0;
+// channel-strip proportions (tall + narrow). Widened slightly vs. v1.0
+// to host theme-PNG sprites without scaling them down so far they alias.
+constexpr double kStripW         = 110.0;
 constexpr double kStripGap       = 4.0;
 constexpr double kColorBarH      = 6.0;
 constexpr double kHeaderH        = 40.0;
 constexpr double kFaderColumnH   = 360.0;
-constexpr double kFaderW         = 28.0;
-constexpr double kMeterW         = 18.0;
+constexpr double kFaderW         = 36.0;
+constexpr double kMeterW         = 22.0;
 constexpr double kFaderGap       = 6.0;   // between fader and meter
-constexpr double kBtnRowH        = 22.0;
+constexpr double kBtnRowH        = 24.0;
+
+// Helper: draw a theme PNG into a rect with a primitive-fill fallback
+// when the slot is missing. Returns true if the PNG was drawn so the
+// caller can suppress its own fallback paint.
+bool drawSpriteOrFill(ImGui_DrawList* dl,
+                      theme_assets::Slot slot,
+                      double x0, double y0, double x1, double y1,
+                      int fallbackRgba)
+{
+    ImGui_Image* img = theme_assets::get(slot);
+    if (img && dl) {
+        ImGui_DrawList_AddImage(dl, img, x0, y0, x1, y1,
+                                /*uv_min_x*/ nullptr, /*uv_min_y*/ nullptr,
+                                /*uv_max_x*/ nullptr, /*uv_max_y*/ nullptr,
+                                /*col_rgba*/ nullptr);
+        return true;
+    }
+    if (dl) {
+        ImGui_DrawList_AddRectFilled(
+            dl, x0, y0, x1, y1, fallbackRgba,
+            /*rounding*/ nullptr, /*flags*/ nullptr);
+    }
+    return false;
+}
 
 // REAPER COLORREF (0x00BBGGRR, R at byte 0) → ImGui RGBA (0xRRGGBBAA).
 inline int rgbaFromReaperColor(int reaperColor, int alpha = 0xFF)
@@ -184,14 +209,15 @@ void drawStrip_(ImGui_Context* ctx, MediaTrack* tr, int trackIdx)
             const double meterX1 = meterX0 + kMeterW;
 
             // ----- Backgrounds first (drawn behind interactive surface) ---
-            if (dl) {
-                ImGui_DrawList_AddRectFilled(
-                    dl, faderX0, faderY0, faderX1, faderY1,
-                    0x202530FF, /*rounding*/ nullptr, /*flags*/ nullptr);
-                ImGui_DrawList_AddRectFilled(
-                    dl, meterX0, faderY0, meterX1, faderY1,
-                    0x181C22FF, /*rounding*/ nullptr, /*flags*/ nullptr);
-            }
+            // Theme PNG groove (gen_volbg_vert.png / mcp_volbg.png) stretched
+            // to fader column dimensions. Falls back to flat dark grey.
+            drawSpriteOrFill(dl, theme_assets::Slot::kMcpFaderBg,
+                             faderX0, faderY0, faderX1, faderY1,
+                             0x202530FF);
+            // Meter background — theme's meter_bg_mcp if present, else flat.
+            drawSpriteOrFill(dl, theme_assets::Slot::kMcpMeterBg,
+                             meterX0, faderY0, meterX1, faderY1,
+                             0x181C22FF);
 
             // ----- Peak meter columns -------------------------------------
             const int nch = (int)GetMediaTrackInfo_Value(tr, "I_NCHAN");
@@ -240,14 +266,29 @@ void drawStrip_(ImGui_Context* ctx, MediaTrack* tr, int trackIdx)
 
             // ----- Handle on top of everything ----------------------------
             const double pos = volToFaderPos(linVol);
-            const double handleY = faderY1 - pos * regionH;
-            constexpr double kHandleH = 12.0;
-            if (dl) {
-                ImGui_DrawList_AddRectFilled(
-                    dl, faderX0 - 2, handleY - kHandleH * 0.5,
-                    faderX1 + 2, handleY + kHandleH * 0.5,
-                    0xD0D4DAFF, /*rounding*/ nullptr, /*flags*/ nullptr);
+            const double handleCenterY = faderY1 - pos * regionH;
+            // Use the sprite's native aspect ratio when available; widened
+            // 4 px past the groove so the cap visually grips the column.
+            double thumbSrcW = 0, thumbSrcH = 0;
+            const bool gotThumb = theme_assets::getSize(
+                theme_assets::Slot::kMcpFaderHandle, &thumbSrcW, &thumbSrcH);
+            double thumbW, thumbH;
+            if (gotThumb && thumbSrcW > 0 && thumbSrcH > 0) {
+                thumbW = kFaderW + 4;
+                thumbH = thumbW * (thumbSrcH / thumbSrcW);
+                if (thumbH > 36) thumbH = 36;          // cap so tall caps don't dominate
+                if (thumbH < 10) thumbH = 10;
+            } else {
+                thumbW = kFaderW + 4;
+                thumbH = 12;
             }
+            const double thumbX0 = faderX0 + (kFaderW - thumbW) * 0.5;
+            const double thumbY0 = handleCenterY - thumbH * 0.5;
+            const double thumbX1 = thumbX0 + thumbW;
+            const double thumbY1 = thumbY0 + thumbH;
+            drawSpriteOrFill(dl, theme_assets::Slot::kMcpFaderHandle,
+                             thumbX0, thumbY0, thumbX1, thumbY1,
+                             0xD0D4DAFF);
 
             // Cursor: place at bottom of region for the next widget row.
             ImGui_SetCursorScreenPos(ctx, sx, sy + regionH);
@@ -271,42 +312,73 @@ void drawStrip_(ImGui_Context* ctx, MediaTrack* tr, int trackIdx)
         }
 
         // ------------------------------------------------------------------
-        // Solo / Mute / Arm buttons.
+        // Solo / Mute / Arm buttons. Each renders via theme PNG when
+        // available (off/on states), with a flat ImGui_Button fallback so
+        // the buttons remain functional on themes that lack the sprites.
         // ------------------------------------------------------------------
         {
             const bool isSolo = GetMediaTrackInfo_Value(tr, "I_SOLO")  != 0.0;
             const bool isMute = GetMediaTrackInfo_Value(tr, "B_MUTE")  != 0.0;
             const bool isArm  = GetMediaTrackInfo_Value(tr, "I_RECARM") != 0.0;
 
-            double bw = kStripW - 16;
-            double bh = kBtnRowH;
-
-            // Solo button — coloured backdrop when active.
-            const int oldBtnColIdx = ImGui_Col_Button;
-            int pushed = 0;
-            auto pushIf = [&](bool on, int rgba) {
-                if (on) {
-                    ImGui_PushStyleColor(ctx, oldBtnColIdx, rgba);
-                    ++pushed;
+            auto themeButton = [&](const char* id,
+                                   theme_assets::Slot offSlot,
+                                   theme_assets::Slot onSlot,
+                                   bool state,
+                                   const char* fallbackLabel,
+                                   int fallbackActiveRgba) -> bool
+            {
+                const theme_assets::Slot slot = state ? onSlot : offSlot;
+                ImGui_Image* img = theme_assets::get(slot);
+                if (!img) {
+                    // No theme PNG → flat ImGui_Button with active tint.
+                    int pushed = 0;
+                    if (state) {
+                        ImGui_PushStyleColor(ctx, ImGui_Col_Button,
+                                             fallbackActiveRgba);
+                        ++pushed;
+                    }
+                    double bw = kStripW - 16;
+                    double bh = kBtnRowH;
+                    const bool clicked =
+                        ImGui_Button(ctx, fallbackLabel, &bw, &bh);
+                    if (pushed > 0) ImGui_PopStyleColor(ctx, &pushed);
+                    return clicked;
                 }
+                // Theme PNG path — InvisibleButton supplies the hit region,
+                // AddImage paints the sprite at the cursor's screen pos.
+                double sx = 0, sy = 0;
+                ImGui_GetCursorScreenPos(ctx, &sx, &sy);
+                const double bw = kStripW - 16;
+                const double bh = kBtnRowH;
+                const bool clicked = ImGui_InvisibleButton(
+                    ctx, id, bw, bh, /*flagsInOptional*/ nullptr);
+                ImGui_DrawList_AddImage(
+                    dl, img, sx, sy, sx + bw, sy + bh,
+                    /*uv_min_x*/ nullptr, /*uv_min_y*/ nullptr,
+                    /*uv_max_x*/ nullptr, /*uv_max_y*/ nullptr,
+                    /*col_rgba*/ nullptr);
+                return clicked;
             };
-            pushIf(isSolo, 0xE0C040FF);   // yellow when soloed
-            if (ImGui_Button(ctx, "Solo", &bw, &bh)) {
+
+            if (themeButton("solo",
+                            theme_assets::Slot::kMcpSoloOff,
+                            theme_assets::Slot::kMcpSoloOn,
+                            isSolo, "Solo", 0xE0C040FF)) {
                 CSurf_OnSoloChange(tr, /*toggle*/ -1);
             }
-            if (pushed > 0) { ImGui_PopStyleColor(ctx, &pushed); pushed = 0; }
-
-            pushIf(isMute, 0xE05050FF);   // red when muted
-            if (ImGui_Button(ctx, "Mute", &bw, &bh)) {
+            if (themeButton("mute",
+                            theme_assets::Slot::kMcpMuteOff,
+                            theme_assets::Slot::kMcpMuteOn,
+                            isMute, "Mute", 0xE05050FF)) {
                 CSurf_OnMuteChange(tr, /*toggle*/ -1);
             }
-            if (pushed > 0) { ImGui_PopStyleColor(ctx, &pushed); pushed = 0; }
-
-            pushIf(isArm,  0xE03030FF);   // red when armed
-            if (ImGui_Button(ctx, "Arm", &bw, &bh)) {
+            if (themeButton("arm",
+                            theme_assets::Slot::kMcpRecArmOff,
+                            theme_assets::Slot::kMcpRecArmOn,
+                            isArm,  "Arm",  0xE03030FF)) {
                 CSurf_OnRecArmChange(tr, /*toggle*/ -1);
             }
-            if (pushed > 0) { ImGui_PopStyleColor(ctx, &pushed); pushed = 0; }
         }
     }
     ImGui_EndChild(ctx);
