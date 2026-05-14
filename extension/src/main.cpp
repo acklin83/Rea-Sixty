@@ -1246,6 +1246,70 @@ constexpr double kChannelEncoderScale = 4.0;
 // wheel feel right in every test session.
 constexpr bool kSelectFollowsMixer = true;
 
+// Resolve the FX index of the currently-active plug-in instance on
+// `tr`: the FX matching getFocusedParam().domain at the per-track
+// instance index that applyInstanceCycle_ last set (CS / BC / UF8-
+// only). Walks the track's FX list the same way applyInstanceCycle_
+// does. Returns -1 if no matching instance is present.
+int activeInstanceFxIdx(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const auto fp = uf8::getFocusedParam();
+    const int instIdx =
+        (fp.domain == uf8::Domain::BusComp)      ? uc1::bcInstanceIndex(tr)
+      : (fp.domain == uf8::Domain::ChannelStrip) ? uc1::csInstanceIndex(tr)
+      :                                            uc1::uf8OnlyInstanceIndex(tr);
+    int counter = 0;
+    const int nFx = TrackFX_GetCount(tr);
+    char fxName[256];
+    for (int i = 0; i < nFx; ++i) {
+        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+        const auto* pm = uf8::lookupPluginMapByName(fxName);
+        if (fp.domain == uf8::Domain::ChannelStrip) {
+            if (pm && pm->domain == uf8::Domain::ChannelStrip) {
+                if (counter == instIdx) return i;
+                ++counter;
+            }
+        } else if (fp.domain == uf8::Domain::BusComp) {
+            if (pm && pm->domain == uf8::Domain::BusComp) {
+                if (counter == instIdx) return i;
+                ++counter;
+            }
+        } else {
+            const auto* um =
+                uf8::user_plugins::lookupOwnedByName(fxName);
+            if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+                if (counter == instIdx) return i;
+                ++counter;
+            }
+        }
+    }
+    return -1;
+}
+
+// Short, LCD-friendly plug-in name. Strips "VST3i: " / "VST: " / etc.
+// prefixes and any trailing " (Vendor)" suffix. Used for the
+// Selection-Mode Instance scribble-strip readout.
+std::string shortFxName_(MediaTrack* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return std::string{};
+    char buf[64] = {0};
+    if (!TrackFX_GetFXName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
+    std::string s(buf);
+    static const char* kPrefixes[] = {
+        "VST3i: ", "VST3: ", "VSTi: ", "VST: ", "AU: ", "AUi: ", "JS: "
+    };
+    for (auto* p : kPrefixes) {
+        const size_t l = std::strlen(p);
+        if (s.size() >= l && s.compare(0, l, p) == 0) {
+            s.erase(0, l);
+            break;
+        }
+    }
+    if (auto p = s.find(" ("); p != std::string::npos) s.erase(p);
+    return s;
+}
+
 void followSelectedInMixer(MediaTrack* tr)
 {
     if (!kSelectFollowsMixer || !tr) return;
@@ -1577,6 +1641,42 @@ void drainInputQueue()
             if (g_instanceAccum >=  1.0) { step = static_cast<int>(g_instanceAccum); g_instanceAccum -= step; }
             if (g_instanceAccum <= -1.0) { step = static_cast<int>(g_instanceAccum); g_instanceAccum -= step; }
             applyInstanceCycle_(step);
+            continue;
+        }
+        // Selection-Mode Instance V-Pot events. Both operate on the
+        // focused track (not the strip's track), so they MUST live in
+        // the global-scope block — the per-strip resolve below would
+        // drop them whenever the V-Pot's strip has no track (empty
+        // strips at the end of a short bank). That's why V-Pot
+        // rotation appeared dead on Frank's last test (2026-05-14).
+        if (e.kind == PendingInput::InstanceCycleDelta) {
+            g_selectionInstanceAccum += e.value / kChannelEncoderScale;
+            int step = 0;
+            if (g_selectionInstanceAccum >=  1.0) {
+                step = static_cast<int>(g_selectionInstanceAccum);
+                g_selectionInstanceAccum -= step;
+            }
+            if (g_selectionInstanceAccum <= -1.0) {
+                step = static_cast<int>(g_selectionInstanceAccum);
+                g_selectionInstanceAccum -= step;
+            }
+            if (step != 0) applyInstanceCycle_(step);
+            continue;
+        }
+        if (e.kind == PendingInput::OpenFxWindow) {
+            MediaTrack* fTr =
+                g_uc1_surface
+                  ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                  : nullptr;
+            if (!fTr) fTr = GetSelectedTrack(nullptr, 0);
+            if (!fTr) continue;
+            int fxIdx = activeInstanceFxIdx(fTr);
+            if (fxIdx < 0 && TrackFX_GetCount(fTr) > 0) fxIdx = 0;
+            if (fxIdx < 0) continue;
+            if (TrackFX_GetFloatingWindow(fTr, fxIdx))
+                TrackFX_Show(fTr, fxIdx, 2);
+            else
+                TrackFX_Show(fTr, fxIdx, 3);
             continue;
         }
         if (e.kind == PendingInput::EncoderRotation) {
@@ -2276,73 +2376,9 @@ void drainInputQueue()
                 SetTrackAutomationMode(tr, next);
                 break;
             }
-            case PendingInput::OpenFxWindow: {
-                // Instance mode V-Pot push: toggle the FX window for
-                // the active (= currently focused / cycled) instance on
-                // the strip's track. TrackFX_Show(..., 3) is a toggle —
-                // re-pushing closes it. We resolve the active FX by
-                // walking the track's plug-ins for one matching the
-                // focused domain at the per-track instance index that
-                // applyInstanceCycle_ left in place.
-                const auto fp = uf8::getFocusedParam();
-                const int instIdx =
-                    (fp.domain == uf8::Domain::BusComp)
-                      ? uc1::bcInstanceIndex(tr)
-                  : (fp.domain == uf8::Domain::ChannelStrip)
-                      ? uc1::csInstanceIndex(tr)
-                  :     uc1::uf8OnlyInstanceIndex(tr);
-                int fxIdx = -1;
-                int counter = 0;
-                const int nFx = TrackFX_GetCount(tr);
-                char fxName[256];
-                for (int i = 0; i < nFx && fxIdx < 0; ++i) {
-                    if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName)))
-                        continue;
-                    const auto* pm = uf8::lookupPluginMapByName(fxName);
-                    if (fp.domain == uf8::Domain::ChannelStrip) {
-                        if (pm && pm->domain == uf8::Domain::ChannelStrip) {
-                            if (counter == instIdx) fxIdx = i;
-                            ++counter;
-                        }
-                    } else if (fp.domain == uf8::Domain::BusComp) {
-                        if (pm && pm->domain == uf8::Domain::BusComp) {
-                            if (counter == instIdx) fxIdx = i;
-                            ++counter;
-                        }
-                    } else {
-                        // UF8-only / no focus → first UF8-only instance.
-                        const auto* um =
-                            uf8::user_plugins::lookupOwnedByName(fxName);
-                        if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
-                            if (counter == instIdx) fxIdx = i;
-                            ++counter;
-                        }
-                    }
-                }
-                // Nothing focused / cycle hasn't started yet → fall back
-                // to the first FX so the user always sees a window.
-                if (fxIdx < 0 && nFx > 0) fxIdx = 0;
-                if (fxIdx >= 0) TrackFX_Show(tr, fxIdx, 3);
-                break;
-            }
-            case PendingInput::InstanceCycleDelta: {
-                // Instance mode V-Pot rotation: shared accumulator
-                // across strips — applyInstanceCycle_ targets the
-                // focused track. Same behaviour as the existing
-                // instance_cycle builtin / channel-encoder Shift slot.
-                g_selectionInstanceAccum += e.value / kChannelEncoderScale;
-                int step = 0;
-                if (g_selectionInstanceAccum >=  1.0) {
-                    step = static_cast<int>(g_selectionInstanceAccum);
-                    g_selectionInstanceAccum -= step;
-                }
-                if (g_selectionInstanceAccum <= -1.0) {
-                    step = static_cast<int>(g_selectionInstanceAccum);
-                    g_selectionInstanceAccum -= step;
-                }
-                if (step != 0) applyInstanceCycle_(step);
-                break;
-            }
+            // OpenFxWindow / InstanceCycleDelta are dispatched in the
+            // global-scope block above — they don't need a per-strip
+            // track resolve.
         }
     }
 }
@@ -5073,11 +5109,12 @@ void pushZonesForVisibleSlots()
              || focused.slotIdx == uf8::ext::PluginAB
              || focused.slotIdx == uf8::ext::PluginHQ);
 
-        // Selection-Mode AUTO: every strip's value line shows the
-        // track's current automation-mode name. Wins over the legacy
-        // resolution chain (route / FLIP / focused-param / volume) so
-        // the user sees the mode at-a-glance while in AUTO mode.
-        bool autoModeHandled = false;
+        // Selection-Mode overrides for the value line — AUTO shows the
+        // per-strip automation-mode name; Instance shows the focused
+        // track's active plug-in instance name (same on all 8 strips
+        // since the cycle targets the focused track). Both win over
+        // the legacy resolution chain.
+        bool selectionModeHandled = false;
         if (g_selectionMode.load() == SelectionMode::Auto) {
             const char* modeName = "Trim";
             switch (GetTrackAutomationMode(tr)) {
@@ -5090,14 +5127,32 @@ void pushZonesForVisibleSlots()
                 default: break;
             }
             valLine = composeValueLine("Auto", modeName);
-            autoModeHandled = true;
+            selectionModeHandled = true;
+        } else if (g_selectionMode.load() == SelectionMode::Instance) {
+            MediaTrack* fTr =
+                g_uc1_surface
+                  ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                  : nullptr;
+            if (!fTr) fTr = GetSelectedTrack(nullptr, 0);
+            std::string instName = "-";
+            if (fTr) {
+                int fxIdx = activeInstanceFxIdx(fTr);
+                if (fxIdx < 0 && TrackFX_GetCount(fTr) > 0) fxIdx = 0;
+                if (fxIdx >= 0) {
+                    instName = shortFxName_(fTr, fxIdx);
+                    if (instName.empty()) instName = "-";
+                }
+            }
+            if (instName.size() > 14) instName.resize(14);
+            valLine = composeValueLine("Inst", instName);
+            selectionModeHandled = true;
         }
 
         // FX Learn UF8: when SSL Strip Mode is on and the focused track
         // has a user-mapped plug-in, the value line shows the V-Pot's
         // bound bank-slot param — name + formatted value. Empty bank
         // slots leave the line blank.
-        bool userValHandled = autoModeHandled;
+        bool userValHandled = selectionModeHandled;
         if (g_uf8PluginMode.load() && !flipActive && !routedFader
             && !routedVpot)
         {
