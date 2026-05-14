@@ -83,6 +83,13 @@ enum class ButtonId : uint16_t {
     VPotBank,
     SoftKey1Bank, SoftKey2Bank, SoftKey3Bank, SoftKey4Bank, SoftKey5Bank,
 
+    // Selection-mode row — three buttons next to the channel-encoder
+    // column (device IDs 0x70/0x71/0x72; hardware labels Norm/CLEAR,
+    // Rec/ALL, Auto/ZERO). No factory defaults — user assigns the
+    // matching selection_mode_* builtins (or anything else) via
+    // Settings → Bindings.
+    SelectionNorm, SelectionRec, SelectionAuto,
+
     // Channel encoder rotation — not a press-event button; dispatched
     // via dispatchEncoder(stepDelta). Carries 4 modifier slots like any
     // ButtonId, so Plain (default) / Shift / Cmd / Ctrl can each map to

@@ -93,6 +93,9 @@ constexpr NameEntry kNames[] = {
     { ButtonId::SoftKey3Bank,  "softkey_bank_3" },
     { ButtonId::SoftKey4Bank,  "softkey_bank_4" },
     { ButtonId::SoftKey5Bank,  "softkey_bank_5" },
+    { ButtonId::SelectionNorm, "selection_norm" },
+    { ButtonId::SelectionRec,  "selection_rec"  },
+    { ButtonId::SelectionAuto, "selection_auto" },
     { ButtonId::ChannelEncoder, "channel_encoder" },
 };
 
@@ -170,6 +173,10 @@ ButtonId fromUf8DeviceId(uint8_t id)
         case 0x6B: return ButtonId::SoftKey3Bank;
         case 0x6C: return ButtonId::SoftKey4Bank;
         case 0x6D: return ButtonId::SoftKey5Bank;
+        // Selection-mode row 0x70/0x71/0x72 (Norm/CLEAR, Rec/ALL, Auto/ZERO).
+        case 0x70: return ButtonId::SelectionNorm;
+        case 0x71: return ButtonId::SelectionRec;
+        case 0x72: return ButtonId::SelectionAuto;
         default:   return ButtonId::None;
     }
 }

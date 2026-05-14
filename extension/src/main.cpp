@@ -180,6 +180,36 @@ std::atomic<bool> g_pluginFaderMode{false};
 std::atomic<bool> g_folderMode{false};
 std::atomic<bool> g_showOnlySelected{false};
 
+// Selection-Mode group. Mutually-exclusive global state that retargets
+// the 8 SEL LEDs and the V-Pot push/rotation. Norm = legacy behaviour
+// (track-select, pan, etc.); Rec = SEL shows rec-arm status & push
+// toggles I_RECARM; Auto = SEL coloured by per-track automation mode
+// & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
+// cycles the plug-in instance on the strip's track. Bindable via the
+// `selection_mode_*` builtins (registered in registerBindingHandlers).
+enum class SelectionMode : uint8_t { Norm = 0, Rec, Auto, Instance };
+std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
+
+inline const char* selectionModeStr(SelectionMode m)
+{
+    switch (m) {
+        case SelectionMode::Rec:      return "rec";
+        case SelectionMode::Auto:     return "auto";
+        case SelectionMode::Instance: return "instance";
+        case SelectionMode::Norm:
+        default:                      return "norm";
+    }
+}
+
+inline SelectionMode parseSelectionMode(const char* s)
+{
+    if (!s) return SelectionMode::Norm;
+    if (std::strcmp(s, "rec")      == 0) return SelectionMode::Rec;
+    if (std::strcmp(s, "auto")     == 0) return SelectionMode::Auto;
+    if (std::strcmp(s, "instance") == 0) return SelectionMode::Instance;
+    return SelectionMode::Norm;
+}
+
 // Forward decl — defined further down with the other clock helpers.
 int64_t nowMs_();
 
@@ -582,6 +612,10 @@ void loadBrightness()
     if (upm && *upm) {
         g_uf8PluginMode.store(std::atoi(upm) != 0);
     }
+    const char* selm = GetExtState("ReaSixty", "selectionMode");
+    if (selm && *selm) {
+        g_selectionMode.store(parseSelectionMode(selm));
+    }
     const char* bm = GetExtState("rea_sixty", "ballistic_mode");
     if (bm && *bm) {
         const int v = std::atoi(bm);
@@ -763,6 +797,15 @@ struct PendingInput {
         AutomationModeGlobal, // value = REAPER mode (0..5) for the global
                               // automation override (SetGlobalAutomationOverride)
         FocusSelected,   // re-scroll REAPER MCP + UF8 bank to currently selected track
+
+        // Selection-Mode V-Pot per-strip events. Strip = 0..7, value
+        // carries the per-event payload described inline.
+        RecArmToggle,        // REC mode: V-Pot push toggles I_RECARM on strip
+        AutoModeSet,         // AUTO mode: V-Pot push sets strip auto-mode = value
+        OpenFxWindow,        // Instance mode: V-Pot push opens focused FX on strip
+        AutoModeDelta,       // AUTO mode: V-Pot rotation steps strip auto-mode
+        InstanceCycleDelta,  // Instance mode: V-Pot rotation cycles plug-in
+                             //                 instance on the focused track
     };
     Kind    kind;
     uint8_t strip;
@@ -1027,6 +1070,17 @@ double g_encoderAccum  = 0.0;   // unified accumulator for the bindings-routed
                                 // EncoderRotation pipeline (Plain / Shift / Cmd /
                                 // Ctrl all share so the user can change
                                 // modifier mid-rotation without losing detents).
+
+// Selection-Mode V-Pot rotation accumulators. Eight strips × two modes
+// (AUTO scrolls per-strip auto-mode; Instance cycles the focused
+// track's plug-in instance — shared because applyInstanceCycle_
+// targets the focused track regardless of which V-Pot moved).
+double g_autoModeAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+double g_selectionInstanceAccum = 0.0;
+// AUTO mode is intentionally slower than the channel encoder so a
+// short scroll doesn't whip past all 6 auto-modes — one auto-mode
+// step per ~half-detent of physical rotation.
+constexpr double kSelectionAutoModeScale = 6.0;
 
 // Forward decls — implementations live further down (followSelectedInMixer
 // after the encoder mode toggles, emitMouseScroll near the input dispatch).
@@ -2185,6 +2239,82 @@ void drainInputQueue()
                 }
                 break;
             }
+
+            // ---- Selection-Mode V-Pot per-strip events --------------------
+            case PendingInput::RecArmToggle: {
+                // REC mode: V-Pot push toggles I_RECARM on the strip's
+                // track. ledColourFor() picks up the change on the next
+                // sendLed pass.
+                const double cur = GetMediaTrackInfo_Value(tr, "I_RECARM");
+                SetMediaTrackInfo_Value(tr, "I_RECARM",
+                                        cur > 0.5 ? 0.0 : 1.0);
+                break;
+            }
+            case PendingInput::AutoModeSet: {
+                // AUTO mode: V-Pot push resets the strip's auto-mode to
+                // the value carried in `e.value` (default 0 = Trim/Read).
+                int mode = static_cast<int>(e.value);
+                if (mode < 0) mode = 0;
+                if (mode > 5) mode = 5;
+                SetTrackAutomationMode(tr, mode);
+                break;
+            }
+            case PendingInput::OpenFxWindow: {
+                // Instance mode: open the FX window for the focused FX
+                // on the strip's track. Falls back to FX 0 when nothing
+                // is focused. TrackFX_Show(..., 3) toggles the floating
+                // window — re-pushing closes it.
+                int fxIdx = 0;
+                if (const int n = TrackFX_GetCount(tr); n > 0) {
+                    const int focused = TrackFX_GetByName(tr, "", false);
+                    fxIdx = (focused >= 0 && focused < n) ? focused : 0;
+                    TrackFX_Show(tr, fxIdx, 3);
+                }
+                break;
+            }
+            case PendingInput::AutoModeDelta: {
+                // AUTO mode V-Pot rotation: accumulate detents, step the
+                // strip's auto-mode ±1 within [0..5] when accumulator
+                // crosses a unit.
+                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                g_autoModeAccum[s] += e.value * kSelectionAutoModeScale;
+                int step = 0;
+                if (g_autoModeAccum[s] >=  1.0) {
+                    step = static_cast<int>(g_autoModeAccum[s]);
+                    g_autoModeAccum[s] -= step;
+                }
+                if (g_autoModeAccum[s] <= -1.0) {
+                    step = static_cast<int>(g_autoModeAccum[s]);
+                    g_autoModeAccum[s] -= step;
+                }
+                if (step != 0) {
+                    int cur = GetTrackAutomationMode(tr);
+                    int next = cur + step;
+                    if (next < 0) next = 0;
+                    if (next > 5) next = 5;
+                    if (next != cur) SetTrackAutomationMode(tr, next);
+                }
+                break;
+            }
+            case PendingInput::InstanceCycleDelta: {
+                // Instance mode V-Pot rotation: shared accumulator across
+                // all strips since applyInstanceCycle_ targets the
+                // focused track. Any V-Pot moves the cycle — keeps the
+                // behaviour predictable when the user grabs whatever
+                // knob is closest.
+                g_selectionInstanceAccum += e.value / kChannelEncoderScale;
+                int step = 0;
+                if (g_selectionInstanceAccum >=  1.0) {
+                    step = static_cast<int>(g_selectionInstanceAccum);
+                    g_selectionInstanceAccum -= step;
+                }
+                if (g_selectionInstanceAccum <= -1.0) {
+                    step = static_cast<int>(g_selectionInstanceAccum);
+                    g_selectionInstanceAccum -= step;
+                }
+                if (step != 0) applyInstanceCycle_(step);
+                break;
+            }
         }
     }
 }
@@ -2411,10 +2541,29 @@ enum class LedClass : uint8_t { Sel = 0, Mute = 1, Solo = 2, Arm = 3 };
 uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
 {
     if (cls == LedClass::Sel && tr) {
+        const auto mode  = g_selectionMode.load();
+        const bool armed = GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5;
+        // Selection-Mode overrides the legacy SEL palette so the SEL row
+        // becomes a per-mode indicator. Norm falls through to the
+        // original logic (track-colour / rec-armed-red / SEL-follows-
+        // colour gate).
+        switch (mode) {
+            case SelectionMode::Rec:
+                return armed ? uf8::ledColourRedBrightSolid()
+                             : uf8::ledColourRedDimSolid();
+            case SelectionMode::Auto:
+                return uf8::ledColourForAutoMode(
+                    GetTrackAutomationMode(tr));
+            case SelectionMode::Instance:
+                return uf8::ledColourCyanSolid();
+            case SelectionMode::Norm:
+            default:
+                break;
+        }
         // Rec-armed override: SSL UF8 paints the SEL LED red when the
         // track is armed (no separate Rec-Arm LED — same physical LED).
         // Confirmed by user against SSL 360°'s rendering (2026-04-26).
-        if (GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5) {
+        if (armed) {
             return uf8::ledColourRed();
         }
         // Setting → Device → "SEL follows track color" gate. Off = plain
@@ -3063,10 +3212,33 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // softkey_bank_select factory binding.
             if (!handledNatively) {
                 if (id >= 0x08 && id <= 0x0F) {
-                    // V-Pot push: reset focused param / pan to neutral.
+                    // V-Pot push. Routed by Selection Mode:
+                    //   Norm     → PanCenter (reset focused param / pan)
+                    //   REC      → toggle I_RECARM on the strip
+                    //   AUTO     → set strip auto-mode → Trim/Read (0)
+                    //   Instance → open FX window for focused FX on strip
                     if (pressed) {
-                        queueInput({PendingInput::PanCenter,
-                                    static_cast<uint8_t>(id - 0x08), 0.0});
+                        const uint8_t strip =
+                            static_cast<uint8_t>(id - 0x08);
+                        switch (g_selectionMode.load()) {
+                            case SelectionMode::Rec:
+                                queueInput({PendingInput::RecArmToggle,
+                                            strip, 0.0});
+                                break;
+                            case SelectionMode::Auto:
+                                queueInput({PendingInput::AutoModeSet,
+                                            strip, 0.0});
+                                break;
+                            case SelectionMode::Instance:
+                                queueInput({PendingInput::OpenFxWindow,
+                                            strip, 0.0});
+                                break;
+                            case SelectionMode::Norm:
+                            default:
+                                queueInput({PendingInput::PanCenter,
+                                            strip, 0.0});
+                                break;
+                        }
                     }
                     handledNatively = true;
                 } else if (id >= 0x20 && id <= 0x37) {
@@ -3182,10 +3354,27 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             if (strip < 8) {
-                // Per-strip V-Pot — currently wired to track pan.
-                // Scale: single detent = 1/128 of full pan range (≈0.78 %).
+                // Per-strip V-Pot rotation. Norm / REC keep the legacy
+                // pan-delta wiring; AUTO scrolls the strip's auto-mode;
+                // Instance cycles the focused track's plug-in instance.
+                // Scale: single detent = 1/128 of full pan range
+                // (≈0.78 %); drain handlers re-scale where needed.
                 const double delta = static_cast<double>(signed6) / 128.0;
-                queueInput({PendingInput::PanDelta, strip, delta});
+                switch (g_selectionMode.load()) {
+                    case SelectionMode::Auto:
+                        queueInput({PendingInput::AutoModeDelta,
+                                    strip, delta});
+                        break;
+                    case SelectionMode::Instance:
+                        queueInput({PendingInput::InstanceCycleDelta,
+                                    strip, delta});
+                        break;
+                    case SelectionMode::Norm:
+                    case SelectionMode::Rec:
+                    default:
+                        queueInput({PendingInput::PanDelta, strip, delta});
+                        break;
+                }
             } else if (strip == 0x08) {
                 // Channel encoder — dispatched through the bindings
                 // system (ButtonId::ChannelEncoder) from the drain
@@ -5859,12 +6048,12 @@ uf8::bindings::ButtonId buttonIdForGlobalLed(uf8::Uf8GlobalLed cell)
         case L::ZoomCenter:   return B::ZoomCenter;
         case L::ZoomRight:    return B::ZoomRight;
         case L::ZoomDown:     return B::ZoomDown;
-        // Norm / Rec / Auto have no ButtonId in the v1 catalogue —
-        // they're driven by REAPER state, not by user-bindable actions.
-        case L::Norm:
-        case L::Rec:
-        case L::Auto:
-            return B::None;
+        // Selection-mode row — bindable since 2026-05-14 (Selection Mode
+        // feature). LEDs follow whatever binding the user attaches; the
+        // factory ships them unbound so users opt in via Settings.
+        case L::Norm:         return B::SelectionNorm;
+        case L::Rec:          return B::SelectionRec;
+        case L::Auto:         return B::SelectionAuto;
     }
     return B::None;
 }
@@ -8376,6 +8565,98 @@ void registerBindingHandlers()
         },
         [](int) { return g_flip.load(); },
         "Toggle FLIP (fader ↔ V-Pot)", false
+    });
+
+    // ---- Selection-Mode toggles --------------------------------------
+    // Four mutually-exclusive modes; firing a mode while it is already
+    // active returns to Norm. Setting a different mode while another is
+    // active switches directly (no Norm intermediate step). Each toggle
+    // persists via ExtState so REAPER restarts preserve the mode.
+    auto registerSelectionModeToggle =
+        [](const char* name, SelectionMode mode, const char* display) {
+            registerBuiltin(name, DescBuilder{
+                [mode](bool firing, bool /*pressed*/, int /*param*/) {
+                    if (!firing) return;
+                    const auto cur  = g_selectionMode.load();
+                    const auto next = (cur == mode) ? SelectionMode::Norm
+                                                    : mode;
+                    g_selectionMode.store(next);
+                    SetExtState("ReaSixty", "selectionMode",
+                                selectionModeStr(next), true);
+                    // Force a full LED + bank re-push so the SEL row
+                    // recolours immediately and the mode-button LEDs
+                    // (driven by StateOf via the bindings layer) flip
+                    // on / off without waiting for the next track event.
+                    g_pageDirty.store(true);
+                    g_bankDirty.store(true);
+                },
+                [mode](int) { return g_selectionMode.load() == mode; },
+                display, false
+            });
+        };
+    registerSelectionModeToggle("selection_mode_rec",
+                                SelectionMode::Rec,
+                                "Selection Mode → REC (toggle)");
+    registerSelectionModeToggle("selection_mode_auto",
+                                SelectionMode::Auto,
+                                "Selection Mode → AUTO (toggle)");
+    registerSelectionModeToggle("selection_mode_instance",
+                                SelectionMode::Instance,
+                                "Selection Mode → Instance (toggle)");
+
+    // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
+    // Always sets Norm (no toggle); pressing it from Norm is a no-op
+    // change but still forces a re-push so the LED layer stays in sync.
+    registerBuiltin("selection_mode_norm", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_selectionMode.store(SelectionMode::Norm);
+            SetExtState("ReaSixty", "selectionMode", "norm", true);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+        },
+        [](int) { return g_selectionMode.load() == SelectionMode::Norm; },
+        "Selection Mode → Norm", false
+    });
+
+    // ---- One-shot "all tracks" actions -------------------------------
+    // Match the SSL UF8 mode buttons' secondary hardware labels
+    // (CLEAR / ALL / ZERO). Standalone so the user binds them wherever
+    // they like — no factory long-press defaults seeded.
+    registerBuiltin("selection_clear_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // REAPER action 40297 = "Track: Unselect (clear selection
+            // of) all tracks". Funnel through MainAction so the call
+            // lands on the main thread (Main_OnCommand contract).
+            queueInput({PendingInput::MainAction, 0, 40297.0});
+        },
+        nullptr, "Selection: Clear All Tracks", false
+    });
+    registerBuiltin("tracks_arm_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // 40490 = "Track: Arm all tracks for recording". Routed via
+            // MainAction so Main_OnCommand fires on the main thread.
+            queueInput({PendingInput::MainAction, 0, 40490.0});
+        },
+        nullptr, "Tracks: Arm All for Recording", false
+    });
+    registerBuiltin("automation_zero_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // SSL "ZERO" semantic interpreted as: every track's auto
+            // mode → Trim/Read (0). Frank can rebind for a different
+            // interpretation. SetTrackAutomationMode pattern matches
+            // the existing AutoOff/AutoRead builtins (called direct
+            // from the input thread).
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i) {
+                if (MediaTrack* tr = GetTrack(nullptr, i))
+                    SetTrackAutomationMode(tr, 0);
+            }
+        },
+        nullptr, "Automation: Zero All Tracks (→ Trim/Read)", false
     });
 
     registerBuiltin("ssl_strip_mode_toggle", DescBuilder{

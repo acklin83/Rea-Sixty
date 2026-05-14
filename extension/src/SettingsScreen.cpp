@@ -1463,8 +1463,14 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "flip" || n == "pan_force"
                  || n == "mixer_toggle" || n == "home"
                  || n == "folder_mode" || n == "show_only_selected"
-                 || n == "uf8_plugin_mode_toggle")
+                 || n == "uf8_plugin_mode_toggle"
+                 || n.rfind("selection_mode_", 0) == 0)
                     return "Mode Toggles";
+
+                if (n == "selection_clear_all"
+                 || n == "tracks_arm_all"
+                 || n == "automation_zero_all")
+                    return "Tracks";
 
                 if (n == "bank_left"  || n == "bank_right"
                  || n == "page_left"  || n == "page_right")
@@ -1504,6 +1510,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 "Mode Toggles", "Bank / Page", "Encoder Modes",
                 "Automation", "Zoom",
                 "Sends / Receives", "Selection Sets",
+                "Tracks",
                 "Brightness", "Modifiers",
             };
             std::unordered_map<std::string, std::vector<std::string>> bucket;
