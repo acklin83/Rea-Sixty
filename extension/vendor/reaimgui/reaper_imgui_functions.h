@@ -18,6 +18,13 @@ class ImGui_ListClipper;
 // to several text-input APIs (e.g. InputTextWithHint). Forward-declare so
 // patched sigs compile; we only ever pass nullptr.
 class ImGui_Function;
+// Patched 2026-05-14 — opaque image resource type for the v0.10 image API
+// (CreateImage / CreateImageFromMem / DrawList_AddImage / Attach). At the
+// runtime ABI level Image* IS-A Resource* with the same pointer value
+// (single-inheritance, vtable offset 0 in cfillion's implementation), so
+// passing ImGui_Image* to the function pointer expecting Resource* is
+// pointer-identical and ABI-safe. Used by uf8::theme_assets.
+class ImGui_Image;
 
 struct reaper_array;
 
@@ -765,6 +772,27 @@ REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_WindowFlags_NoTitleBar REAIMGUIAPI_INIT("I
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_WindowFlags_NoSavedSettings REAIMGUIAPI_INIT("ImGui_WindowFlags_NoSavedSettings");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_WindowFlags_None REAIMGUIAPI_INIT("ImGui_WindowFlags_None");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_WindowFlags_UnsavedDocument REAIMGUIAPI_INIT("ImGui_WindowFlags_UnsavedDocument");
+
+// ----------------------------------------------------------------------
+// Image API patch — added 2026-05-14 against ReaImGui v0.10.0.5 source
+// (api/image.cpp, api/drawlist.cpp, api/context.cpp).
+//
+// Signatures hand-derived from upstream rather than via a full binding
+// regen so the rest of the v0.1.1 binding (which we've debugged into
+// stability) stays untouched. Used exclusively by uf8::theme_assets and
+// the mixer-strip drawing code in MixerLayout.cpp.
+//
+// Attach takes a Resource* in upstream; we declare it as ImGui_Image*
+// because Image is the only Resource subtype we use, and Image inherits
+// Resource at offset 0 so the pointer cast is ABI-safe (see comment on
+// the ImGui_Image forward decl up top).
+// ----------------------------------------------------------------------
+REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_Image*(const char* file, int* flagsInOptional)> ImGui_CreateImage REAIMGUIAPI_INIT("ImGui_CreateImage");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_Image*(const char* data, int data_sz, int* flagsInOptional)> ImGui_CreateImageFromMem REAIMGUIAPI_INIT("ImGui_CreateImageFromMem");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Image* image, double* w, double* h)> ImGui_Image_GetSize REAIMGUIAPI_INIT("ImGui_Image_GetSize");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, ImGui_Image* obj)> ImGui_Attach REAIMGUIAPI_INIT("ImGui_Attach");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, ImGui_Image* obj)> ImGui_Detach REAIMGUIAPI_INIT("ImGui_Detach");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_DrawList* draw_list, ImGui_Image* image, double p_min_x, double p_min_y, double p_max_x, double p_max_y, double* uv_min_xInOptional, double* uv_min_yInOptional, double* uv_max_xInOptional, double* uv_max_yInOptional, int* col_rgbaInOptional)> ImGui_DrawList_AddImage REAIMGUIAPI_INIT("ImGui_DrawList_AddImage");
 
 #undef REAIMGUIAPI_EXTERN
 #undef REAIMGUIAPI_INIT
