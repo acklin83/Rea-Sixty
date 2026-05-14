@@ -759,7 +759,9 @@ struct PendingInput {
                          // the user can rebind Plain / Shift / Cmd / Ctrl
                          // slots on ButtonId::ChannelEncoder.
         MainAction,      // value = REAPER action ID (Main_OnCommand)
-        AutomationMode,  // value = REAPER automation mode (0..4) on selected track
+        AutomationMode,  // value = REAPER automation mode (0..5) on selected track
+        AutomationModeGlobal, // value = REAPER mode (0..5) for the global
+                              // automation override (SetGlobalAutomationOverride)
         FocusSelected,   // re-scroll REAPER MCP + UF8 bank to currently selected track
     };
     Kind    kind;
@@ -1487,6 +1489,10 @@ void drainInputQueue()
             if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
                 SetTrackAutomationMode(tr, static_cast<int>(e.value));
             }
+            continue;
+        }
+        if (e.kind == PendingInput::AutomationModeGlobal) {
+            SetGlobalAutomationOverride(static_cast<int>(e.value));
             continue;
         }
         if (e.kind == PendingInput::FocusSelected) {
@@ -8790,6 +8796,36 @@ void registerBindingHandlers()
     registerBuiltin("auto_latch",     autoMode(4, "Automation: Latch"));
     registerBuiltin("auto_latch_prv", autoMode(5, "Automation: Latch Prv"));
     registerBuiltin("auto_touch",     autoMode(2, "Automation: Touch"));
+
+    // Global automation override — mirrors every per-track action above
+    // but routes through REAPER's SetGlobalAutomationOverride so the
+    // chosen mode applies to all tracks regardless of their per-track
+    // setting. No LED feedback yet (the Auto-row LEDs reflect the
+    // selected track's mode, not the global override).
+    auto autoModeGlobal = [](int reaperMode, const char* label) {
+        return DescBuilder{
+            [reaperMode](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                queueInput({PendingInput::AutomationModeGlobal, 0,
+                            static_cast<double>(reaperMode)});
+            },
+            nullptr, label, false
+        };
+    };
+    registerBuiltin("auto_off_global",
+                    autoModeGlobal(0, "Automation: Off / Trim (Global)"));
+    registerBuiltin("auto_read_global",
+                    autoModeGlobal(1, "Automation: Read (Global)"));
+    registerBuiltin("auto_write_global",
+                    autoModeGlobal(3, "Automation: Write (Global)"));
+    registerBuiltin("auto_trim_global",
+                    autoModeGlobal(0, "Automation: Trim (Global)"));
+    registerBuiltin("auto_latch_global",
+                    autoModeGlobal(4, "Automation: Latch (Global)"));
+    registerBuiltin("auto_latch_prv_global",
+                    autoModeGlobal(5, "Automation: Latch Prv (Global)"));
+    registerBuiltin("auto_touch_global",
+                    autoModeGlobal(2, "Automation: Touch (Global)"));
 
     registerBuiltin("bank_left", DescBuilder{
         [](bool firing, bool pressed, int /*param*/) {

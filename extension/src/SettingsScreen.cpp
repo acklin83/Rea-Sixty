@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "Bindings.h"
-#include "CsiImport.h"
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
@@ -2315,182 +2314,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
 } // namespace
 
-// CSI-import sub-section — collapsed by default. Lets the user point at
-// an existing CSI Surface directory (defaults to REAPER's bundled
-// SSLUF8) and translate the Home zone into a Rea-Sixty layer. See
-// CsiImport.cpp for the translation rules.
 namespace {
-
-void drawCsiImportSection(ImGui_Context* ctx, int editLayer)
-{
-    if (!ImGui_CollapsingHeader(ctx, "Import from CSI configuration",
-                                /*p_visible*/ nullptr, /*flags*/ nullptr)) {
-        return;
-    }
-
-    static char s_path[1024] = {0};
-    static bool s_pathInited = false;
-    static bool s_clearLayerFirst = true;
-    static uf8::csi_import::ImportReport s_report;
-
-    // Target layer follows the editor's layer combo on every frame —
-    // avoids a duplicate selector here and keeps "Apply" semantically
-    // tied to the layer the user currently has open.
-    const int s_targetLayer = editLayer;
-
-    if (!s_pathInited) {
-        const std::string def = uf8::csi_import::defaultSurfaceDir();
-        if (!def.empty()) {
-            std::strncpy(s_path, def.c_str(), sizeof(s_path) - 1);
-        }
-        s_pathInited = true;
-    }
-
-    ImGui_TextWrapped(ctx,
-        "Reads CSI's Home.zon and translates each global key assignment "
-        "into a Rea-Sixty binding. Per-strip rows (Sel/Cut/Solo/Rec) and "
-        "modifier-prefixed lines (Shift+, Global+, …) are skipped — they "
-        "remain hardcoded in v1.");
-    ImGui_Spacing(ctx);
-
-    ImGui_Text(ctx, "CSI surface directory:");
-    {
-        double w = 600;
-        ImGui_PushItemWidth(ctx, w);
-        ImGui_InputTextWithHint(ctx, "##csi_path",
-            "e.g. ~/Library/Application Support/REAPER/CSI/Surfaces/SSLUF8",
-            s_path, sizeof(s_path),
-            /*flags*/ nullptr, /*callback*/ nullptr);
-        ImGui_PopItemWidth(ctx);
-    }
-    if (ImGui_Button(ctx, "Reset to default path",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        const std::string def = uf8::csi_import::defaultSurfaceDir();
-        std::memset(s_path, 0, sizeof(s_path));
-        std::strncpy(s_path, def.c_str(), sizeof(s_path) - 1);
-    }
-
-    ImGui_Spacing(ctx);
-    {
-        char info[64];
-        std::snprintf(info, sizeof(info),
-                      "Target: Layer %d  (follows the editor combo above)",
-                      s_targetLayer + 1);
-        ImGui_TextDisabled(ctx, info);
-    }
-    ImGui_Checkbox(ctx, "Clear target layer before import",
-                   &s_clearLayerFirst);
-
-    ImGui_Spacing(ctx);
-    if (ImGui_Button(ctx, "Preview", /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        // Logging the click + result so a future Settings-window crash
-        // points at the exact step that died — Frank 2026-05-06
-        // reported clicking Preview hanged the window with no recovery.
-        if (FILE* f = std::fopen("/tmp/rea_sixty_csi_import.log", "a")) {
-            std::fprintf(f, "preview click path=%s\n", s_path);
-            std::fclose(f);
-        }
-        s_report = uf8::csi_import::preview(s_path);
-        if (FILE* f = std::fopen("/tmp/rea_sixty_csi_import.log", "a")) {
-            std::fprintf(f, "preview done loaded=%d err='%s' "
-                            "entries=%zu mapped=%d skipped=%d warn=%d\n",
-                         (int)s_report.loaded, s_report.error.c_str(),
-                         s_report.entries.size(),
-                         s_report.appliedCount, s_report.skippedCount,
-                         s_report.warningCount);
-            std::fclose(f);
-        }
-    }
-    ImGui_SameLine(ctx, /*offset_from_start_x*/ nullptr, /*spacing*/ nullptr);
-    if (ImGui_Button(ctx, "Apply now",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        if (FILE* f = std::fopen("/tmp/rea_sixty_csi_import.log", "a")) {
-            std::fprintf(f, "apply click path=%s layer=%d clear=%d\n",
-                         s_path, s_targetLayer, (int)s_clearLayerFirst);
-            std::fclose(f);
-        }
-        s_report = uf8::csi_import::apply(s_path, s_targetLayer,
-                                          s_clearLayerFirst);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-
-    if (!s_report.loaded && s_report.error.empty()) {
-        ImGui_TextWrapped(ctx,
-            "Click \"Preview\" to scan the chosen directory, or \"Apply\" "
-            "to write the result into the target layer.");
-        return;
-    }
-
-    if (!s_report.loaded) {
-        ImGui_TextColored(ctx, 0xFF6666FF, s_report.error.c_str());
-        return;
-    }
-
-    char hdr[256];
-    std::snprintf(hdr, sizeof(hdr),
-                  "Source: %s   |   Mapped: %d   Skipped: %d   Warnings: %d",
-                  s_report.zonePath.c_str(),
-                  s_report.appliedCount, s_report.skippedCount,
-                  s_report.warningCount);
-    ImGui_TextWrapped(ctx, hdr);
-
-    ImGui_Spacing(ctx);
-    {
-        // ReaImGui v0.10 — EndChild MUST be unconditional (must pair with
-        // every BeginChild call, regardless of its return value).
-        // Same root cause as commit 95405b2 in MixerWindow: a missed
-        // EndChild leaves the ImGui stack desynced and the next frame
-        // tears down the parent window.
-        double childH = 240;
-        const bool childOpen = ImGui_BeginChild(
-            ctx, "csi_import_log",
-            /*size_w*/ nullptr, &childH,
-            /*child_flags*/ nullptr,
-            /*window_flags*/ nullptr);
-        if (childOpen) {
-            // Cap how many rows we render in one frame — a misconfigured
-            // CSI Home.zon can produce hundreds of entries and ImGui
-            // doesn't degrade gracefully past a few thousand text widgets
-            // per frame. 200 is plenty for any sane SSL UF8 surface
-            // (the stock config is ~50 lines).
-            constexpr size_t kMaxRows = 200;
-            const size_t total = s_report.entries.size();
-            const size_t shown = total < kMaxRows ? total : kMaxRows;
-            for (size_t i = 0; i < shown; ++i) {
-                const auto& e = s_report.entries[i];
-                int colour;
-                if (!e.applied)        colour = 0x888888FF; // skipped (grey)
-                else if (e.warning)    colour = 0xFFC050FF; // warning (amber)
-                else                   colour = 0x80FF80FF; // applied (green)
-                char line[512];
-                std::snprintf(line, sizeof(line), "  %-14s  ->  %s",
-                              e.widget.c_str(), e.mappedTo.c_str());
-                ImGui_TextColored(ctx, colour, line);
-                if (!e.action.empty()) {
-                    std::snprintf(line, sizeof(line),
-                                  "                CSI: %s", e.action.c_str());
-                    // Plain Text instead of TextColored with the
-                    // alpha=0x99 grey — that uncommon colour was the
-                    // outlier in the previous render path; eliminating
-                    // it removes one suspect for the 2026-05-06 crash
-                    // report. ImGui's own TextDisabled style handles
-                    // the de-emphasis just as well.
-                    ImGui_TextDisabled(ctx, line);
-                }
-            }
-            if (total > shown) {
-                char foot[96];
-                std::snprintf(foot, sizeof(foot),
-                              "  ... %zu more entries (capped at %zu)",
-                              total - shown, kMaxRows);
-                ImGui_TextDisabled(ctx, foot);
-            }
-        }
-        ImGui_EndChild(ctx);
-    }
-}
 
 // ---- User-Quick slot editor (per-slot, driven by TopSoftKey click) ------
 // Edits ONE user-Quick slot at coordinates (editLayer, engaged Quick on
@@ -3072,11 +2896,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // active Layer button is the single source of truth.
     const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
-
-    drawCsiImportSection(ctx, s_editLayer);
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
 
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
