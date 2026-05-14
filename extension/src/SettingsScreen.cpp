@@ -5804,15 +5804,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_GetContentRegionAvail(ctx, &avX, &avY);
     if (avX < 200.0) avX = 600.0;   // safety for embedded contexts
     if (avY < 200.0) avY = 360.0;
-    // UC1 mockup is 860 px wide — give the schematic pane the lion's
-    // share of the available width. Right (param-list) pane gets the
-    // remainder; child has horizontal scrollbar if the window's narrow
-    // enough that 860 still doesn't fit.
-    double leftW  = avX * 0.72;
-    double rightW = avX - leftW - 12.0;
-    if (rightW < 280.0) {
-        rightW = 280.0;
-        leftW  = avX - rightW - 12.0;
+    // Both UC1 and UF8 mockups are 860 px wide. Pin the left pane at
+    // 860 whenever the window is wide enough to also satisfy the right
+    // pane's 280 px floor — this avoids horizontal scrolling in the
+    // schematic pane, which Frank noticed cut off the right edge of
+    // the UC1 (content fills to the chassis edge, unlike the UF8 which
+    // has 85 px of empty bezel and stays visible). When the window is
+    // narrow, fall back to the previous 72%/28% split.
+    constexpr double kMockupW  = 860.0;
+    constexpr double kRightMin = 280.0;
+    constexpr double kPaneGap  = 12.0;
+    double leftW, rightW;
+    if (avX >= kMockupW + kPaneGap + kRightMin) {
+        leftW  = kMockupW;
+        rightW = avX - leftW - kPaneGap;
+    } else {
+        leftW  = avX * 0.72;
+        rightW = avX - leftW - kPaneGap;
+        if (rightW < kRightMin) {
+            rightW = kRightMin;
+            leftW  = avX - rightW - kPaneGap;
+        }
     }
 
     // Left pane — hardware face mockup. UC1 / UF8 selected via the radio
