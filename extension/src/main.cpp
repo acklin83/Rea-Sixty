@@ -2455,9 +2455,9 @@ void sendLedFrames(uf8::LedColourFrames frames)
 // sendSelRenderTrigger to restore the AutoTrim LED after the cap33
 // trigger sequence, and by drainInputQueue's FLIP path which routes
 // fader pb14 → focused-param normalised position).
-void pushAutoModeLeds(int mode);
+void pushAutoModeLedsMixed_(int perTrackMode, int globalMode,
+                            int activeLayer);
 void pushLayerLeds(int active);
-int  autoModeToLedIndex(int mode);
 uint16_t linearVolumeToPb(double linear);
 // Folds the active layer's per-binding LED colour into a global-LED push.
 // Defined alongside pushUf8GlobalLeds — see comment there.
@@ -5756,6 +5756,10 @@ void pushSelColourBar()
 // docs/uf8-global-led-map.md and Protocol::buildUf8GlobalLed when we
 // get to it.
 int g_lastAutoMode = -2;          // -1 = no track, 0..5 = REAPER auto modes
+int g_lastGlobalAutoMode = -2;    // REAPER's global automation override
+                                  // (GetGlobalAutomationOverride). -1 =
+                                  // no override, 0..5 = override modes,
+                                  // 6 = bypass.
 bool g_lastAnyArmed = false;
 bool g_lastForcePan = false;
 bool g_lastFlip = false;
@@ -5776,18 +5780,24 @@ int  g_lastActiveLayer  = -1;     // -1 = unknown, 0..2 = Layer 1..3 (Phase B)
 uint64_t g_lastRoutingKey = ~uint64_t(0);
 bool g_globalLedsInit = false;
 
-// Map REAPER's automation-mode integer to a position in kAutoLeds.
-//   0 = Trim/Read (REAPER's per-track default) → no LED lit. Every
-//                  fresh track sits at mode 0, so lighting Trim here
-//                  pinned the LED on for every project; treat mode 0
-//                  as the neutral "no automation override" state. The
-//                  auto_trim / auto_off builtins still set mode 0,
-//                  they just don't paint an LED.
-//   1 = Read     → AutoRead.
-//   2 = Touch    → AutoTouch.
-//   3 = Write    → AutoWrite.
-//   4 = Latch / 5 = Latch Preview → AutoLatch.
-constexpr uf8::Uf8GlobalLed kAutoLeds[5] = {
+// The 6 physical Auto-row cells on the UF8. pushAutoModeLedsMixed_
+// walks this list and decides each cell's state based on the binding
+// currently in place — see autoCellBinding_ for the per-cell decision.
+// LED on/off semantics:
+//   - Cells bound to a per-track auto_X builtin light when the SELECTED
+//     track's automation mode matches X. REAPER per-track mode 0
+//     (Trim/Read) is REAPER's default for every fresh track, so the
+//     LED is suppressed there — otherwise TRIM/OFF would be pinned ON
+//     for every project (Frank 2026-05-14).
+//   - Cells bound to an auto_X_global builtin light when the GLOBAL
+//     automation override matches X. Mode 0 is NOT suppressed for the
+//     global path — the user actively chose it (vs default -1).
+//   - auto_latch / auto_latch_global light their cell for both REAPER
+//     mode 4 (Latch) and 5 (Latch Preview).
+//   - Cells bound to anything else fall back to boundActionIsActive_
+//     so user-remapped Auto buttons follow their new binding's state.
+constexpr uf8::Uf8GlobalLed kAutoLeds[6] = {
+    uf8::Uf8GlobalLed::AutoOff,
     uf8::Uf8GlobalLed::AutoRead,
     uf8::Uf8GlobalLed::AutoWrite,
     uf8::Uf8GlobalLed::AutoTrim,
@@ -6239,37 +6249,88 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on)
         on ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
 }
 
-int autoModeToLedIndex(int mode)
+// Per-cell binding lookup for the Auto row. Returns the REAPER mode the
+// cell should light for + whether the binding is the GLOBAL variant
+// (auto_X_global) or the per-track variant (auto_X). targetMode == -1
+// means the cell isn't bound to an auto_* builtin — caller falls back
+// to boundActionIsActive_ so user-remapped Auto buttons still light.
+struct AutoCellBinding {
+    int  targetMode = -1;
+    bool isGlobal   = false;
+};
+
+AutoCellBinding autoCellBinding_(uf8::Uf8GlobalLed cell, int activeLayer)
 {
-    switch (mode) {
-        case 1:         return 0;   // Read
-        case 2:         return 4;   // Touch
-        case 3:         return 1;   // Write
-        case 4: case 5: return 3;   // Latch / Latch Preview
-        default:        return -1;  // Mode 0 (Trim/Read) or no track —
-                                    // clear all auto LEDs.
+    AutoCellBinding out;
+    const auto bid = buttonIdForGlobalLed(cell);
+    if (bid == uf8::bindings::ButtonId::None) return out;
+    if (!uf8::bindings::hasBinding(activeLayer, bid)) return out;
+    const auto bd = uf8::bindings::getBinding(activeLayer, bid);
+    const auto& sp = bd.shortPress[static_cast<int>(
+        uf8::bindings::Modifier::Plain)];
+    if (sp.type != uf8::bindings::ActionType::Builtin) return out;
+
+    struct Row { const char* name; int mode; bool global; };
+    static constexpr Row kMap[] = {
+        {"auto_off",              0, false},
+        {"auto_trim",             0, false},
+        {"auto_read",             1, false},
+        {"auto_touch",            2, false},
+        {"auto_write",            3, false},
+        {"auto_latch",            4, false},
+        {"auto_latch_prv",        5, false},
+        {"auto_off_global",       0, true },
+        {"auto_trim_global",      0, true },
+        {"auto_read_global",      1, true },
+        {"auto_touch_global",     2, true },
+        {"auto_write_global",     3, true },
+        {"auto_latch_global",     4, true },
+        {"auto_latch_prv_global", 5, true },
+    };
+    for (const auto& r : kMap) {
+        if (sp.action == r.name) {
+            out.targetMode = r.mode;
+            out.isGlobal   = r.global;
+            return out;
+        }
     }
+    return out;
 }
 
-// Push the 5-button Auto LED state for `mode`. Used both by the periodic
-// LED refresh in pushUf8GlobalLeds and by the press handler — pre-empting
-// the firmware's auto-button "transition flash" through TRIM that would
-// otherwise be visible during the ~33 ms gap before our next tick reads
-// the new mode back from REAPER.
-void pushAutoModeLeds(int mode)
+// Push the 6-button Auto LED state. Each cell is decided independently
+// from its binding's primary builtin — see kAutoLeds for the semantics.
+// Used both by the periodic LED refresh in pushUf8GlobalLeds and by the
+// auto_* press handlers, which pre-empt the firmware's transition flash
+// through TRIM that would otherwise be visible during the ~33 ms gap
+// before our next tick reads the new mode back from REAPER.
+void pushAutoModeLedsMixed_(int perTrackMode, int globalMode,
+                            int activeLayer)
 {
     if (!g_dev || !g_dev->isOpen()) return;
-    const int active = autoModeToLedIndex(mode);
-    // Inactive auto LEDs must go FULLY Off, not Dim — the Layer row
-    // (one bright, two dim) is a different convention. Using the
-    // bool overload here painted Dim on every inactive button, which
-    // left TRIM visibly lit (dim) whenever another mode was active.
-    for (int i = 0; i < 5; ++i) {
-        sendUf8GlobalLed(kAutoLeds[i],
-            (i == active) ? uf8::GlobalLedState::Bright
-                          : uf8::GlobalLedState::Off);
+    for (auto cell : kAutoLeds) {
+        const auto ab = autoCellBinding_(cell, activeLayer);
+        bool active = false;
+        if (ab.targetMode < 0) {
+            // Non-auto binding — defer to its own active-state.
+            const auto bid = buttonIdForGlobalLed(cell);
+            if (bid != uf8::bindings::ButtonId::None) {
+                active = boundActionIsActive_(bid);
+            }
+        } else {
+            const int src = ab.isGlobal ? globalMode : perTrackMode;
+            active = (src == ab.targetMode);
+            // auto_latch covers REAPER mode 5 (Latch Preview) too.
+            if (ab.targetMode == 4 && src == 5) active = true;
+            // Per-track mode 0 is REAPER's default for every fresh
+            // track; suppress so OFF/TRIM don't get pinned ON. Global
+            // mode 0 is NOT suppressed — user explicitly chose it.
+            if (ab.targetMode == 0 && !ab.isGlobal) active = false;
+        }
+        sendUf8GlobalLed(cell, active ? uf8::GlobalLedState::Bright
+                                      : uf8::GlobalLedState::Off);
     }
-    g_lastAutoMode = mode;
+    g_lastAutoMode       = perTrackMode;
+    g_lastGlobalAutoMode = globalMode;
 }
 
 // Layer 1/2/3 radio LEDs — one bright, two dim. Used both by the
@@ -6386,8 +6447,12 @@ void pushUf8GlobalLeds()
     // after some unrelated state change happened to break the gate
     // (Frank 2026-05-06).
 
-    if (autoMode != g_lastAutoMode || !g_globalLedsInit) {
-        pushAutoModeLeds(autoMode);
+    const int globalAutoMode = GetGlobalAutomationOverride();
+    if (autoMode      != g_lastAutoMode
+     || globalAutoMode != g_lastGlobalAutoMode
+     || !g_globalLedsInit)
+    {
+        pushAutoModeLedsMixed_(autoMode, globalAutoMode, activeLayer);
     }
 
     if (anyArmed != g_lastAnyArmed || !g_globalLedsInit) {
@@ -6499,8 +6564,10 @@ void pushUf8GlobalLeds()
     // mixer_toggle on Btn360) lights up bright while engaged; a
     // bound momentary builtin (bank_left) returns false from stateOf
     // so the cell stays dim until the press handler flashes it.
-    // AutoOff / Auto / Norm stay init-dim — REAPER drives Auto via
-    // pushAutoModeLeds and Norm has no v1 binding.
+    // Auto / Norm stay init-dim — Norm has no v1 binding, and the Auto
+    // helper-row cell (distinct from the 6 mode cells AutoOff/Read/...)
+    // isn't wired yet. AutoOff is now part of the Auto-row push and
+    // doesn't need a separate init-dim.
     {
         constexpr uf8::Uf8GlobalLed kStateless[] = {
             uf8::Uf8GlobalLed::Btn360,
@@ -6522,8 +6589,7 @@ void pushUf8GlobalLeds()
             sendUf8GlobalLed(led, active);
         }
         if (!g_globalLedsInit) {
-            for (auto led : { uf8::Uf8GlobalLed::AutoOff,
-                              uf8::Uf8GlobalLed::Auto,
+            for (auto led : { uf8::Uf8GlobalLed::Auto,
                               uf8::Uf8GlobalLed::Norm }) {
                 sendUf8GlobalLed(led, false);
             }
@@ -8777,14 +8843,19 @@ void registerBindingHandlers()
     // Automation modes — one builtin per REAPER mode so the picker
     // shows self-documenting names. Off and Trim both map to mode 0
     // (REAPER has no separate "off"; SSL convention puts both on the
-    // hardware row).
+    // hardware row). LED pre-empt re-evaluates all 6 Auto-row cells with
+    // the new mode + the current global override so cells bound to
+    // either variant land on the right state instantly, masking the
+    // firmware's transition flash through TRIM.
     auto autoMode = [](int reaperMode, const char* label) {
         return DescBuilder{
             [reaperMode](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
                 queueInput({PendingInput::AutomationMode, 0,
                             static_cast<double>(reaperMode)});
-                pushAutoModeLeds(reaperMode);
+                pushAutoModeLedsMixed_(reaperMode,
+                                       GetGlobalAutomationOverride(),
+                                       uf8::bindings::getActiveLayer());
             },
             nullptr, label, false
         };
@@ -8800,14 +8871,20 @@ void registerBindingHandlers()
     // Global automation override — mirrors every per-track action above
     // but routes through REAPER's SetGlobalAutomationOverride so the
     // chosen mode applies to all tracks regardless of their per-track
-    // setting. No LED feedback yet (the Auto-row LEDs reflect the
-    // selected track's mode, not the global override).
+    // setting. Same LED pre-empt as the per-track variants, with the
+    // new value supplied as the global override.
     auto autoModeGlobal = [](int reaperMode, const char* label) {
         return DescBuilder{
             [reaperMode](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
                 queueInput({PendingInput::AutomationModeGlobal, 0,
                             static_cast<double>(reaperMode)});
+                int perTrack = -1;
+                if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) {
+                    perTrack = GetTrackAutomationMode(sel);
+                }
+                pushAutoModeLedsMixed_(perTrack, reaperMode,
+                                       uf8::bindings::getActiveLayer());
             },
             nullptr, label, false
         };
