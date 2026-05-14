@@ -798,14 +798,16 @@ struct PendingInput {
                               // automation override (SetGlobalAutomationOverride)
         FocusSelected,   // re-scroll REAPER MCP + UF8 bank to currently selected track
 
-        // Selection-Mode V-Pot per-strip events. Strip = 0..7, value
-        // carries the per-event payload described inline.
-        RecArmToggle,        // REC mode: V-Pot push toggles I_RECARM on strip
-        AutoModeSet,         // AUTO mode: V-Pot push sets strip auto-mode = value
-        OpenFxWindow,        // Instance mode: V-Pot push opens focused FX on strip
-        AutoModeDelta,       // AUTO mode: V-Pot rotation steps strip auto-mode
-        InstanceCycleDelta,  // Instance mode: V-Pot rotation cycles plug-in
-                             //                 instance on the focused track
+        // Selection-Mode per-strip events. Strip = 0..7. SEL-press in
+        // REC mode → RecArmToggle; SEL-press in AUTO mode →
+        // AutoModeStep. V-Pot push in Instance mode → OpenFxWindow.
+        // V-Pot rotation in Instance mode → InstanceCycleDelta.
+        // (REC and AUTO leave V-Pots on the Norm wiring.)
+        RecArmToggle,        // REC: SEL push toggles I_RECARM
+        AutoModeStep,        // AUTO: SEL push cycles auto-mode 0..5 wraparound
+        OpenFxWindow,        // Instance: V-Pot push opens active instance FX
+        InstanceCycleDelta,  // Instance: V-Pot rotation cycles plug-in
+                             //           instance on the focused track
     };
     Kind    kind;
     uint8_t strip;
@@ -1071,16 +1073,10 @@ double g_encoderAccum  = 0.0;   // unified accumulator for the bindings-routed
                                 // Ctrl all share so the user can change
                                 // modifier mid-rotation without losing detents).
 
-// Selection-Mode V-Pot rotation accumulators. Eight strips × two modes
-// (AUTO scrolls per-strip auto-mode; Instance cycles the focused
-// track's plug-in instance — shared because applyInstanceCycle_
-// targets the focused track regardless of which V-Pot moved).
-double g_autoModeAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+// Instance-mode V-Pot rotation accumulator. Shared across all 8
+// strips since applyInstanceCycle_ targets the focused track no
+// matter which V-Pot moved — keeps the behaviour predictable.
 double g_selectionInstanceAccum = 0.0;
-// AUTO mode is intentionally slower than the channel encoder so a
-// short scroll doesn't whip past all 6 auto-modes — one auto-mode
-// step per ~half-detent of physical rotation.
-constexpr double kSelectionAutoModeScale = 6.0;
 
 // Forward decls — implementations live further down (followSelectedInMixer
 // after the encoder mode toggles, emitMouseScroll near the input dispatch).
@@ -2240,68 +2236,79 @@ void drainInputQueue()
                 break;
             }
 
-            // ---- Selection-Mode V-Pot per-strip events --------------------
+            // ---- Selection-Mode per-strip events --------------------------
             case PendingInput::RecArmToggle: {
-                // REC mode: V-Pot push toggles I_RECARM on the strip's
-                // track. ledColourFor() picks up the change on the next
+                // REC mode SEL push: toggle I_RECARM on the strip's
+                // track. ledColourFor picks up the change on the next
                 // sendLed pass.
                 const double cur = GetMediaTrackInfo_Value(tr, "I_RECARM");
                 SetMediaTrackInfo_Value(tr, "I_RECARM",
                                         cur > 0.5 ? 0.0 : 1.0);
                 break;
             }
-            case PendingInput::AutoModeSet: {
-                // AUTO mode: V-Pot push resets the strip's auto-mode to
-                // the value carried in `e.value` (default 0 = Trim/Read).
-                int mode = static_cast<int>(e.value);
-                if (mode < 0) mode = 0;
-                if (mode > 5) mode = 5;
-                SetTrackAutomationMode(tr, mode);
+            case PendingInput::AutoModeStep: {
+                // AUTO mode SEL push: cycle auto-mode 0..5 with
+                // wraparound, ledColourFor and the scribble strip's
+                // value line update on the next render tick.
+                const int cur  = GetTrackAutomationMode(tr);
+                const int next = (cur + 1) % 6;
+                SetTrackAutomationMode(tr, next);
                 break;
             }
             case PendingInput::OpenFxWindow: {
-                // Instance mode: open the FX window for the focused FX
-                // on the strip's track. Falls back to FX 0 when nothing
-                // is focused. TrackFX_Show(..., 3) toggles the floating
-                // window — re-pushing closes it.
-                int fxIdx = 0;
-                if (const int n = TrackFX_GetCount(tr); n > 0) {
-                    const int focused = TrackFX_GetByName(tr, "", false);
-                    fxIdx = (focused >= 0 && focused < n) ? focused : 0;
-                    TrackFX_Show(tr, fxIdx, 3);
+                // Instance mode V-Pot push: toggle the FX window for
+                // the active (= currently focused / cycled) instance on
+                // the strip's track. TrackFX_Show(..., 3) is a toggle —
+                // re-pushing closes it. We resolve the active FX by
+                // walking the track's plug-ins for one matching the
+                // focused domain at the per-track instance index that
+                // applyInstanceCycle_ left in place.
+                const auto fp = uf8::getFocusedParam();
+                const int instIdx =
+                    (fp.domain == uf8::Domain::BusComp)
+                      ? uc1::bcInstanceIndex(tr)
+                  : (fp.domain == uf8::Domain::ChannelStrip)
+                      ? uc1::csInstanceIndex(tr)
+                  :     uc1::uf8OnlyInstanceIndex(tr);
+                int fxIdx = -1;
+                int counter = 0;
+                const int nFx = TrackFX_GetCount(tr);
+                char fxName[256];
+                for (int i = 0; i < nFx && fxIdx < 0; ++i) {
+                    if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName)))
+                        continue;
+                    const auto* pm = uf8::lookupPluginMapByName(fxName);
+                    if (fp.domain == uf8::Domain::ChannelStrip) {
+                        if (pm && pm->domain == uf8::Domain::ChannelStrip) {
+                            if (counter == instIdx) fxIdx = i;
+                            ++counter;
+                        }
+                    } else if (fp.domain == uf8::Domain::BusComp) {
+                        if (pm && pm->domain == uf8::Domain::BusComp) {
+                            if (counter == instIdx) fxIdx = i;
+                            ++counter;
+                        }
+                    } else {
+                        // UF8-only / no focus → first UF8-only instance.
+                        const auto* um =
+                            uf8::user_plugins::lookupOwnedByName(fxName);
+                        if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+                            if (counter == instIdx) fxIdx = i;
+                            ++counter;
+                        }
+                    }
                 }
-                break;
-            }
-            case PendingInput::AutoModeDelta: {
-                // AUTO mode V-Pot rotation: accumulate detents, step the
-                // strip's auto-mode ±1 within [0..5] when accumulator
-                // crosses a unit.
-                const uint8_t s = e.strip < 8 ? e.strip : 0;
-                g_autoModeAccum[s] += e.value * kSelectionAutoModeScale;
-                int step = 0;
-                if (g_autoModeAccum[s] >=  1.0) {
-                    step = static_cast<int>(g_autoModeAccum[s]);
-                    g_autoModeAccum[s] -= step;
-                }
-                if (g_autoModeAccum[s] <= -1.0) {
-                    step = static_cast<int>(g_autoModeAccum[s]);
-                    g_autoModeAccum[s] -= step;
-                }
-                if (step != 0) {
-                    int cur = GetTrackAutomationMode(tr);
-                    int next = cur + step;
-                    if (next < 0) next = 0;
-                    if (next > 5) next = 5;
-                    if (next != cur) SetTrackAutomationMode(tr, next);
-                }
+                // Nothing focused / cycle hasn't started yet → fall back
+                // to the first FX so the user always sees a window.
+                if (fxIdx < 0 && nFx > 0) fxIdx = 0;
+                if (fxIdx >= 0) TrackFX_Show(tr, fxIdx, 3);
                 break;
             }
             case PendingInput::InstanceCycleDelta: {
-                // Instance mode V-Pot rotation: shared accumulator across
-                // all strips since applyInstanceCycle_ targets the
-                // focused track. Any V-Pot moves the cycle — keeps the
-                // behaviour predictable when the user grabs whatever
-                // knob is closest.
+                // Instance mode V-Pot rotation: shared accumulator
+                // across strips — applyInstanceCycle_ targets the
+                // focused track. Same behaviour as the existing
+                // instance_cycle builtin / channel-encoder Shift slot.
                 g_selectionInstanceAccum += e.value / kChannelEncoderScale;
                 int step = 0;
                 if (g_selectionInstanceAccum >=  1.0) {
@@ -2543,10 +2550,14 @@ uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
     if (cls == LedClass::Sel && tr) {
         const auto mode  = g_selectionMode.load();
         const bool armed = GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5;
-        // Selection-Mode overrides the legacy SEL palette so the SEL row
-        // becomes a per-mode indicator. Norm falls through to the
-        // original logic (track-colour / rec-armed-red / SEL-follows-
-        // colour gate).
+        // Selection-Mode overrides for the SEL palette:
+        //   REC      — red dim/bright per I_RECARM (selection bit
+        //              invisible in this mode by design).
+        //   AUTO     — colour per track automation mode.
+        //   Instance — fall through to Norm (track colour). Instance
+        //              keeps the SEL row readable so the user still
+        //              sees track selection while cycling FX windows.
+        //   Norm     — legacy: rec-armed-red, then SEL-follows-colour.
         switch (mode) {
             case SelectionMode::Rec:
                 return armed ? uf8::ledColourRedBrightSolid()
@@ -2554,20 +2565,14 @@ uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
             case SelectionMode::Auto:
                 return uf8::ledColourForAutoMode(
                     GetTrackAutomationMode(tr));
-            case SelectionMode::Instance:
-                return uf8::ledColourCyanSolid();
             case SelectionMode::Norm:
+            case SelectionMode::Instance:
             default:
                 break;
         }
-        // Rec-armed override: SSL UF8 paints the SEL LED red when the
-        // track is armed (no separate Rec-Arm LED — same physical LED).
-        // Confirmed by user against SSL 360°'s rendering (2026-04-26).
         if (armed) {
             return uf8::ledColourRed();
         }
-        // Setting → Device → "SEL follows track color" gate. Off = plain
-        // white, matching the default for unselected MCU surfaces.
         if (!g_selFollowsColor.load()) {
             return uf8::ledColourWhite();
         }
@@ -3213,27 +3218,23 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             if (!handledNatively) {
                 if (id >= 0x08 && id <= 0x0F) {
                     // V-Pot push. Routed by Selection Mode:
-                    //   Norm     → PanCenter (reset focused param / pan)
-                    //   REC      → toggle I_RECARM on the strip
-                    //   AUTO     → set strip auto-mode → Trim/Read (0)
-                    //   Instance → open FX window for focused FX on strip
+                    //   Norm / REC / AUTO → PanCenter (modes only affect
+                    //                       SEL push + scribble strip,
+                    //                       not V-Pots).
+                    //   Instance          → open / close active instance
+                    //                       FX window on the strip's
+                    //                       track.
                     if (pressed) {
                         const uint8_t strip =
                             static_cast<uint8_t>(id - 0x08);
                         switch (g_selectionMode.load()) {
-                            case SelectionMode::Rec:
-                                queueInput({PendingInput::RecArmToggle,
-                                            strip, 0.0});
-                                break;
-                            case SelectionMode::Auto:
-                                queueInput({PendingInput::AutoModeSet,
-                                            strip, 0.0});
-                                break;
                             case SelectionMode::Instance:
                                 queueInput({PendingInput::OpenFxWindow,
                                             strip, 0.0});
                                 break;
                             case SelectionMode::Norm:
+                            case SelectionMode::Rec:
+                            case SelectionMode::Auto:
                             default:
                                 queueInput({PendingInput::PanCenter,
                                             strip, 0.0});
@@ -3249,16 +3250,31 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         if (which == 1) {
                             k = PendingInput::MuteToggle;
                         } else if (which == 2) {
-                            k = g_shiftHeld.load() ? PendingInput::SelectToggle
-                                                   : PendingInput::SelectExclusive;
-                            // Arm long-press detection. The press still
-                            // fires SelectExclusive immediately so a
-                            // quick tap selects without delay; if the
-                            // user keeps holding past kSelLongPressMs,
-                            // checkSelLongPressSpill on the next tick
-                            // toggles g_spilledParent.
-                            g_selPressMs[strip].store(nowMs_());
-                            g_selSpillFired[strip].store(false);
+                            // SEL press is the only per-strip input the
+                            // Selection-Mode group hijacks (V-Pots stay
+                            // on their Norm wiring for REC + AUTO).
+                            switch (g_selectionMode.load()) {
+                                case SelectionMode::Rec:
+                                    k = PendingInput::RecArmToggle;
+                                    break;
+                                case SelectionMode::Auto:
+                                    k = PendingInput::AutoModeStep;
+                                    break;
+                                case SelectionMode::Norm:
+                                case SelectionMode::Instance:
+                                default:
+                                    k = g_shiftHeld.load()
+                                        ? PendingInput::SelectToggle
+                                        : PendingInput::SelectExclusive;
+                                    // Arm long-press detection — only
+                                    // relevant when SEL is doing track-
+                                    // selection (Norm / Instance). REC
+                                    // and AUTO short-circuit before
+                                    // the spill timer touches.
+                                    g_selPressMs[strip].store(nowMs_());
+                                    g_selSpillFired[strip].store(false);
+                                    break;
+                            }
                         }
                         queueInput({k, strip, 0.0});
                     } else if (which == 2) {
@@ -3354,23 +3370,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             if (strip < 8) {
-                // Per-strip V-Pot rotation. Norm / REC keep the legacy
-                // pan-delta wiring; AUTO scrolls the strip's auto-mode;
-                // Instance cycles the focused track's plug-in instance.
-                // Scale: single detent = 1/128 of full pan range
-                // (≈0.78 %); drain handlers re-scale where needed.
+                // Per-strip V-Pot rotation. Norm / REC / AUTO use the
+                // legacy pan-delta wiring (those modes are SEL-only).
+                // Instance cycles the focused track's plug-in instance
+                // (shared accumulator across all 8 strips since
+                // applyInstanceCycle_ targets the focused track).
+                // Scale: single detent = 1/128 of full pan range.
                 const double delta = static_cast<double>(signed6) / 128.0;
                 switch (g_selectionMode.load()) {
-                    case SelectionMode::Auto:
-                        queueInput({PendingInput::AutoModeDelta,
-                                    strip, delta});
-                        break;
                     case SelectionMode::Instance:
                         queueInput({PendingInput::InstanceCycleDelta,
                                     strip, delta});
                         break;
                     case SelectionMode::Norm:
                     case SelectionMode::Rec:
+                    case SelectionMode::Auto:
                     default:
                         queueInput({PendingInput::PanDelta, strip, delta});
                         break;
@@ -5025,11 +5039,31 @@ void pushZonesForVisibleSlots()
              || focused.slotIdx == uf8::ext::PluginAB
              || focused.slotIdx == uf8::ext::PluginHQ);
 
+        // Selection-Mode AUTO: every strip's value line shows the
+        // track's current automation-mode name. Wins over the legacy
+        // resolution chain (route / FLIP / focused-param / volume) so
+        // the user sees the mode at-a-glance while in AUTO mode.
+        bool autoModeHandled = false;
+        if (g_selectionMode.load() == SelectionMode::Auto) {
+            const char* modeName = "Trim";
+            switch (GetTrackAutomationMode(tr)) {
+                case 0: modeName = "Trim";  break;
+                case 1: modeName = "Read";  break;
+                case 2: modeName = "Touch"; break;
+                case 3: modeName = "Write"; break;
+                case 4: modeName = "Latch"; break;
+                case 5: modeName = "LtPrv"; break;
+                default: break;
+            }
+            valLine = composeValueLine("Auto", modeName);
+            autoModeHandled = true;
+        }
+
         // FX Learn UF8: when SSL Strip Mode is on and the focused track
         // has a user-mapped plug-in, the value line shows the V-Pot's
         // bound bank-slot param — name + formatted value. Empty bank
         // slots leave the line blank.
-        bool userValHandled = false;
+        bool userValHandled = autoModeHandled;
         if (g_uf8PluginMode.load() && !flipActive && !routedFader
             && !routedVpot)
         {
@@ -6644,11 +6678,12 @@ void pushUf8GlobalLeds()
         pushAutoModeLedsMixed_(autoMode, globalAutoMode, activeLayer);
     }
 
-    if (anyArmed != g_lastAnyArmed || !g_globalLedsInit) {
-        // Rec has no ButtonId; sendUf8GlobalLed falls through to table colour.
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Rec, anyArmed);
-        g_lastAnyArmed = anyArmed;
-    }
+    // Rec LED no longer driven by anyArmed — it's now a bindable
+    // Selection-Mode button (ButtonId::SelectionRec) and goes through
+    // the stateless-cell sweep at the bottom so the binding's
+    // colour / brightness apply. g_lastAnyArmed kept updated for any
+    // other consumers that may still read it (Frank 2026-05-14).
+    g_lastAnyArmed = anyArmed;
 
     // Pan LED tracks the global "force all V-Pots to Pan" toggle so the
     // hardware shows the active mode at a glance.
@@ -6747,16 +6782,14 @@ void pushUf8GlobalLeds()
     pushLayerLeds(activeLayer);
 
     // Stateless-cell sweep: cells that have no hardcoded state machine
-    // in this pusher (Btn360, Channel, BankL/R, Zoom*) — drive their
-    // Bright/Dim from the bound builtin's stateOf, same pattern as
-    // the encoder-mode block below. A user-bound toggle (e.g.
-    // mixer_toggle on Btn360) lights up bright while engaged; a
-    // bound momentary builtin (bank_left) returns false from stateOf
-    // so the cell stays dim until the press handler flashes it.
-    // Auto / Norm stay init-dim — Norm has no v1 binding, and the Auto
-    // helper-row cell (distinct from the 6 mode cells AutoOff/Read/...)
-    // isn't wired yet. AutoOff is now part of the Auto-row push and
-    // doesn't need a separate init-dim.
+    // in this pusher (Btn360, Channel, BankL/R, Zoom*, Norm/Rec/Auto)
+    // — drive their Bright/Dim from the bound builtin's stateOf, same
+    // pattern as the encoder-mode block below. A user-bound toggle
+    // (e.g. mixer_toggle on Btn360, selection_mode_rec on Rec) lights
+    // up bright while engaged; a bound momentary builtin returns false
+    // from stateOf so the cell stays dim until the press handler
+    // flashes it. Norm/Rec/Auto live here so the binding editor's
+    // colour + brightness overrides apply (Frank 2026-05-14).
     {
         constexpr uf8::Uf8GlobalLed kStateless[] = {
             uf8::Uf8GlobalLed::Btn360,
@@ -6765,23 +6798,13 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::ZoomUp, uf8::Uf8GlobalLed::ZoomDown,
             uf8::Uf8GlobalLed::ZoomLeft, uf8::Uf8GlobalLed::ZoomRight,
             uf8::Uf8GlobalLed::ZoomCenter,
+            uf8::Uf8GlobalLed::Norm, uf8::Uf8GlobalLed::Rec,
+            uf8::Uf8GlobalLed::Auto,
         };
         for (auto led : kStateless) {
             const auto bid = buttonIdForGlobalLed(led);
-            // Stateful action → query state. Stateless action (one-
-            // shot REAPER, builtin without stateOf, keyboard, MIDI)
-            // → render as active so the user's Active settings are
-            // visible. Without this, every zoom / bank / page button
-            // stayed at the inactive default and any colour edit was
-            // invisible.
             const bool active = boundActionIsActive_(bid);
             sendUf8GlobalLed(led, active);
-        }
-        if (!g_globalLedsInit) {
-            for (auto led : { uf8::Uf8GlobalLed::Auto,
-                              uf8::Uf8GlobalLed::Norm }) {
-                sendUf8GlobalLed(led, false);
-            }
         }
     }
 

@@ -153,22 +153,19 @@ LedColour ledColourYellow();   // SOLO
 LedColour ledColourRed();      // CUT
 LedColour ledColourWhite();    // SEL when track has no custom colour
 LedColour ledColourOrange();   // SSL360 default for CUT (cap31), still available
-LedColour ledColourGreen();    // SEL when track auto-mode = Read
-LedColour ledColourCyan();     // Selection-Mode Instance indicator
 
-// "Solid" variants — same byte pair for both bright AND dim states, so
+// "Solid" variants — same byte pair for both bright AND dim states so
 // the SEL LED renders identically whether `I_SELECTED` happens to be
-// set or not. Selection-Mode (REC / Instance) uses these so the
-// per-mode visual isn't disturbed by REAPER's selection bit (which is
-// still used internally for track-state tracking).
+// set or not. Selection-Mode REC uses these so the per-mode visual
+// isn't disturbed by REAPER's selection bit (the bit is still used
+// internally for track-state tracking).
 LedColour ledColourRedDimSolid();      // REC mode, not rec-armed
 LedColour ledColourRedBrightSolid();   // REC mode, rec-armed
-LedColour ledColourCyanSolid();        // Instance mode placeholder
 
 // Map a REAPER automation-mode index (0..5: Trim/Read=off, Read, Touch,
-// Write, Latch, Latch-Preview/Touch) to a "solid" SEL LED colour matching
-// the global Auto-row palette (Protocol.cpp:697-702). All four bytes use
-// the same pair so the LED reads as a steady colour regardless of the
+// Write, Latch, Latch-Preview) to a "solid" SEL LED colour matching the
+// global Auto-row palette (Protocol.cpp:697-702). All four bytes use the
+// same pair so the LED reads as a steady colour regardless of the
 // selection bit.
 LedColour ledColourForAutoMode(int mode);
 

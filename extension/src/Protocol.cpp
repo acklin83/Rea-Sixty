@@ -207,16 +207,13 @@ LedColour ledColourYellow() { return {0xEF, 0xF0, 0x11, 0xF0}; }
 LedColour ledColourOrange() { return {0x3F, 0xF0, 0x12, 0xF0}; }
 LedColour ledColourRed()    { return {0x0F, 0xF0, 0x01, 0xF0}; }
 LedColour ledColourWhite()  { return {0xFF, 0xFF, 0x11, 0xF1}; }
-LedColour ledColourGreen()  { return {0xF0, 0xF0, 0x10, 0xF0}; }
-LedColour ledColourCyan()   { return {0xF1, 0xF1, 0x10, 0xF0}; }
 
-// Solid variants: aBright/bBright == aDim/bDim, so the LED ignores the
+// Solid variants: aBright/bBright == aDim/bDim so the LED ignores the
 // `on` flag the caller passes to buildLedColourPair and always renders
 // at the same brightness. REC mode flips between Dim and Bright by
 // returning a different "solid" colour, not by toggling the on bit.
 LedColour ledColourRedDimSolid()    { return {0x01, 0xF0, 0x01, 0xF0}; }
 LedColour ledColourRedBrightSolid() { return {0x0F, 0xF0, 0x0F, 0xF0}; }
-LedColour ledColourCyanSolid()      { return {0xF1, 0xF1, 0xF1, 0xF1}; }
 
 LedColour ledColourForAutoMode(int mode)
 {
