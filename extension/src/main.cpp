@@ -42,7 +42,6 @@
 #include "HidDevice.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
-#include "SettingsWindow.h"
 #include "PluginChunkPatch.h"
 #include "PluginMap.h"
 #include "Protocol.h"
@@ -80,10 +79,8 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // handlers, libusb readCallbacks, etc.). ImGui_CreateContext crashes
 // hard if invoked off-main; reproducible via the 360 button on either
 // device, fixed by routing through onTimer().
-uf8::MixerWindow    g_mixerWindow;
-uf8::SettingsWindow g_settingsWindow;
+uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
-std::atomic<bool> g_settingsToggleRequest{false};
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -7647,9 +7644,6 @@ void onTimer()
     if (g_mixerToggleRequest.exchange(false)) {
         g_mixerWindow.toggle();
     }
-    if (g_settingsToggleRequest.exchange(false)) {
-        g_settingsWindow.toggle();
-    }
 
     // ssl_strip_mode_toggle_with_gui + instance-cycle GUI follow:
     // open / close the CS-domain plug-in at the active csInstanceIndex
@@ -7867,7 +7861,6 @@ void onTimer()
     // onRunTick.
     static bool s_lastMixerVisible = false;
     g_mixerWindow.onRunTick();
-    g_settingsWindow.onRunTick();
     const bool nowVisible = g_mixerWindow.isOpen();
     if (nowVisible != s_lastMixerVisible) {
         uf8::bindings::onMixerVisibilityChanged(nowVisible);
@@ -8354,11 +8347,6 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
-custom_action_register_t g_actionToggleSettings{
-    0, "REASIXTY_TOGGLE_SETTINGS", "Rea-Sixty: Toggle Settings Window", nullptr,
-};
-int g_cmdToggleSettings = 0;
-
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
 // triggered via menu/keyboard, not custom_action registered entries.
@@ -8380,7 +8368,6 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdDumpChunk)      { dumpCsChunk();            return true; }
     if (command == g_cmdDumpRouting)    { dumpRoutingFlags();       return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
-    if (command == g_cmdToggleSettings) { g_settingsToggleRequest.store(true); return true; }
     return false;
 }
 
@@ -10328,7 +10315,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdDumpChunk      = plugin_register("custom_action", &g_actionDumpChunk);
     g_cmdDumpRouting    = plugin_register("custom_action", &g_actionDumpRouting);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
-    g_cmdToggleSettings = plugin_register("custom_action", &g_actionToggleSettings);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
 
     return 1;

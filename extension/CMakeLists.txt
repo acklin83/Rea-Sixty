@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(reaper_uf8 LANGUAGES C CXX)
+project(reaper_uf8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -70,23 +70,13 @@ add_library(reaper_uf8 MODULE
     # Phase 2.6 — Plugin Mixer Window + Phase 2.7 — Settings Screen
     src/MixerWindow.cpp
     src/MixerLayout.cpp
-    src/SettingsWindow.cpp
     src/SettingsScreen.cpp
     src/ThemeBridge.cpp
-    src/ThemeAssets.cpp
     # Phase 2.7 Bindings — Phase A
     src/Bindings.cpp
     # Virtual notch / detent for relative-encoder writes
     src/VirtualNotch.cpp
-    # miniz — single-file zip reader, used by ThemeAssets to extract PNGs
-    # from .ReaperThemeZip bundles. C source compiled alongside our C++.
-    vendor/miniz/miniz.c
 )
-# miniz declares some unused-parameter / sign-compare cases that fire under
-# our -Wall baseline. The vendor file is otherwise untouched upstream code;
-# suppress its warnings without lowering them for our own sources.
-set_source_files_properties(vendor/miniz/miniz.c PROPERTIES
-    COMPILE_FLAGS "-Wno-unused-parameter -Wno-sign-compare -Wno-unused-but-set-variable")
 
 if(APPLE)
     # NSSavePanel-backed save dialog for layer export. See
@@ -110,7 +100,6 @@ target_include_directories(reaper_uf8 PRIVATE
     src
     "${REAPER_SDK_DIR}/sdk"
     "${VENDOR_DIR}/reaimgui"
-    "${VENDOR_DIR}/miniz"
     "${WDL_DIR}"
 )
 

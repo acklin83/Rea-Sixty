@@ -50,69 +50,26 @@ inline int shade(int rgba, int amount)
 
 int ThemeBridge::pushAll(ImGui_Context* ctx)
 {
-    // ----------------------------------------------------------------------
-    // Palette is sourced from REAPER's active theme via GetColorTheme(idx).
-    // Indices below are the deprecated indexed API — kept because it still
-    // works on every REAPER ≥ 6.x and we haven't vendored icontheme.h yet
-    // (the structured GetColorThemeStruct path is the long-term home for
-    // mixer-specific slots like mcp_track_bg / mcp_track_text). Hardcoded
-    // SSL-schematic constants stay as fallbacks for slots a theme leaves
-    // empty — that way the mixer is always readable, even on themes that
-    // only define the bare minimum.
-    //
-    // Index meanings per reaper_plugin.h (REAPER_WANT_DEPRECATED_COLOR-
-    // THEMESTUFF section). Inlined as ints so we don't have to define the
-    // SDK macro and pull in its deprecation noise.
-    // ----------------------------------------------------------------------
-    constexpr int kIdxTimelineFG    = 0;   // primary text-on-timeline
-    constexpr int kIdxItemText      = 1;   // item label text
-    constexpr int kIdxItemBg        = 2;   // item / frame fill
-    constexpr int kIdxTimelineBg    = 4;   // global background
-    constexpr int kIdxTimelineSelBg = 5;   // selection accent
-    constexpr int kIdxItemControls  = 6;   // button / control face
-    constexpr int kIdxTrackBg1      = 24;  // primary track lane bg
-    constexpr int kIdxTrackBg2      = 25;  // alt track lane bg / borders
-    constexpr int kIdxPeaks1        = 28;  // meter foreground
-    (void)kIdxItemText; (void)kIdxTimelineFG;  // reserved for plotting/labels
-
-    // Fallback palette (mirrors the prior hardcoded SSL-schematic look).
-    constexpr int kBg          = 0x1A1E24FF;
-    constexpr int kChild       = 0x202530FF;
-    constexpr int kFrame       = 0x252A33FF;
+    // Palette mirrors the UF8-schematic colours in drawUf8Vector so the
+    // surrounding ImGui surface reads as one continuous mock-up rather
+    // than "REAPER widget on top of a custom canvas". Hardware-button
+    // tones come from drawHwBtn (kSelFill 0x4477CC, idle 0x252A33,
+    // hover 0x3A4253, border 0x4A5060, txt 0xD0D4DA).
+    constexpr int kBg          = 0x1A1E24FF;   // canvas background
+    constexpr int kChild       = 0x202530FF;   // panel inset
+    constexpr int kFrame       = 0x252A33FF;   // input fields, combos
     constexpr int kFrameHover  = 0x2E3440FF;
     constexpr int kFrameActive = 0x3A4253FF;
     constexpr int kBorder      = 0x4A5060FF;
     constexpr int kButton      = 0x2A3140FF;
-    constexpr int kButtonAct   = 0x4477CCFF;
-    constexpr int kAccent      = 0x4477CCFF;
-    constexpr int kAccentBri   = 0x6699EEFF;
-    constexpr int kAccentDim   = 0x2A3F66FF;
-    constexpr int kText        = 0xD0D4DAFF;
+    constexpr int kButtonHover = 0x3A4253FF;
+    constexpr int kButtonAct   = 0x4477CCFF;   // schematic selection blue
+    constexpr int kAccent      = 0x4477CCFF;   // headers / tabs / sliders
+    constexpr int kAccentBri   = 0x6699EEFF;   // hover lift
+    constexpr int kAccentDim   = 0x2A3F66FF;   // dimmed selection (inactive)
+    constexpr int kText        = 0xD0D4DAFF;   // primary text
     constexpr int kTextDim     = 0x70747CFF;
     constexpr int kSeparator   = 0x383C44FF;
-
-    // Pull theme slots once per frame.
-    const int bg     = themeRgba(kIdxTrackBg1,      kBg);
-    const int child  = themeRgba(kIdxTrackBg2,      kChild);
-    const int frame  = themeRgba(kIdxItemBg,        kFrame);
-    const int border = themeRgba(kIdxTrackBg2,      kBorder);
-    const int btn    = themeRgba(kIdxItemControls,  kButton);
-    const int accent = themeRgba(kIdxTimelineSelBg, kAccent);
-    const int text   = themeRgba(kIdxItemText,      kText);
-    const int peak   = themeRgba(kIdxPeaks1,        0x40C040FF);
-    (void)kIdxTimelineBg;  // currently unused — picked TRACKBG1 over it
-
-    // Derive Hovered/Active variants by shading the base colour: REAPER's
-    // indexed theme doesn't carry dedicated hover/active slots.
-    const int frameHover  = shade(frame, +12);
-    const int frameActive = shade(frame, +24);
-    const int btnHover    = shade(btn,   +18);
-    const int accentBri   = shade(accent, +24);
-    const int accentDim   = shade(accent, -32);
-    const int textDim     = shade(text,  -64);
-    const int separator   = shade(border, -16);
-    (void)kFrameHover; (void)kFrameActive; (void)kAccentBri;
-    (void)kAccentDim;  (void)kTextDim;     (void)kSeparator;
 
     int n = 0;
     auto push = [&](int colIdx, int rgba) {
@@ -121,35 +78,36 @@ int ThemeBridge::pushAll(ImGui_Context* ctx)
     };
 
     // Conservative set — sticks to enum names that have been stable
-    // across ImGui 1.89..1.91+. Skips the Tab* family which renamed in
-    // 1.91 and crashes here as a NULL function pointer when the deployed
-    // dylib doesn't export the old names.
-    push(ImGui_Col_WindowBg,         bg);
-    push(ImGui_Col_ChildBg,          child);
-    push(ImGui_Col_PopupBg,          child);
-    push(ImGui_Col_Border,           border);
+    // across ImGui 1.89..1.91+. Skips the Tab* family (renamed to
+    // TabSelected* etc. in 1.91, ReaImGui follows DearImGui), which
+    // crashes here as a NULL function pointer when the deployed
+    // dylib doesn't export the old names. Same caution for any
+    // enum I can't verify against the user's installed version —
+    // safer to undertheme than to take down REAPER on every tick.
+    push(ImGui_Col_WindowBg,         kBg);
+    push(ImGui_Col_ChildBg,          kChild);
+    push(ImGui_Col_PopupBg,          kChild);
+    push(ImGui_Col_Border,           kBorder);
 
-    push(ImGui_Col_FrameBg,          frame);
-    push(ImGui_Col_FrameBgHovered,   frameHover);
-    push(ImGui_Col_FrameBgActive,    frameActive);
+    push(ImGui_Col_FrameBg,          kFrame);
+    push(ImGui_Col_FrameBgHovered,   kFrameHover);
+    push(ImGui_Col_FrameBgActive,    kFrameActive);
 
-    push(ImGui_Col_Button,           btn);
-    push(ImGui_Col_ButtonHovered,    btnHover);
-    push(ImGui_Col_ButtonActive,     accent);
+    push(ImGui_Col_Button,           kButton);
+    push(ImGui_Col_ButtonHovered,    kButtonHover);
+    push(ImGui_Col_ButtonActive,     kButtonAct);
 
-    push(ImGui_Col_Header,           accentDim);
-    push(ImGui_Col_HeaderHovered,    accentBri);
-    push(ImGui_Col_HeaderActive,     accent);
+    push(ImGui_Col_Header,           kAccentDim);
+    push(ImGui_Col_HeaderHovered,    kAccentBri);
+    push(ImGui_Col_HeaderActive,     kAccent);
 
-    push(ImGui_Col_CheckMark,        accentBri);
-    push(ImGui_Col_Separator,        separator);
+    push(ImGui_Col_CheckMark,        kAccentBri);
+    push(ImGui_Col_Separator,        kSeparator);
 
-    push(ImGui_Col_Text,             text);
-    push(ImGui_Col_TextDisabled,     textDim);
+    push(ImGui_Col_Text,             kText);
+    push(ImGui_Col_TextDisabled,     kTextDim);
 
-    push(ImGui_Col_PlotLines,        peak);
-
-    (void)kButtonAct;  // future: a brighter "button pressed" variant
+    push(ImGui_Col_PlotLines,        0x40C040FF);
     return n;
 }
 
