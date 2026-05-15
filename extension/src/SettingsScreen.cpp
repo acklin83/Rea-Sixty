@@ -486,6 +486,49 @@ void line_(VCanvas& c, float x1, float y1, float x2, float y2,
                            c.ox + x2, c.oy + y2, col, &thickness);
 }
 
+// Right-click "Copy / Paste binding" clipboard, shared between the UF8
+// and UC1 schematic tabs. Right-clicking a binding tile captures the
+// Binding into s_bindingClipboard; pasting writes it to whichever
+// tile was right-clicked next. Frank 2026-05-15. The Binding struct
+// holds behavior, label, both LED state pairs, the 4×2 modifier
+// action matrix (with extraSteps + per-slot LedOverride) and the
+// ledShowWhenEmpty toggle — a full deep copy.
+uf8::bindings::Binding  s_bindingClipboard;
+bool                    s_bindingClipboardFull = false;
+uf8::bindings::ButtonId s_bindingCtxBtn        = uf8::bindings::ButtonId::None;
+bool                    s_bindingCtxOpenRequested = false;
+
+// Helper invoked at the bottom of each Bindings schematic (drawUf8Vector
+// and drawUc1BindingsVector). Opens the context menu when a right-click
+// landed on a hardware button this frame and renders the Copy / Paste
+// items. Layer is the editor's active layer (= uf8::bindings::
+// getActiveLayer()); keeping the popup tied to the canvas's ID stack
+// avoids the cross-tab ID mismatch that would happen if OpenPopup was
+// inside a tab but BeginPopup outside.
+void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
+{
+    if (s_bindingCtxOpenRequested) {
+        ImGui_OpenPopup(ctx, "##binding_ctx_menu", nullptr);
+        s_bindingCtxOpenRequested = false;
+    }
+    if (!ImGui_BeginPopup(ctx, "##binding_ctx_menu", nullptr)) return;
+
+    if (ImGui_MenuItem(ctx, "Copy binding",  nullptr, nullptr, nullptr)) {
+        s_bindingClipboard = uf8::bindings::getBinding(
+            layer, s_bindingCtxBtn);
+        s_bindingClipboardFull = true;
+    }
+    bool pasteEnabled = s_bindingClipboardFull
+                     && s_bindingCtxBtn != uf8::bindings::ButtonId::None;
+    if (ImGui_MenuItem(ctx, "Paste binding", nullptr, nullptr,
+                       &pasteEnabled))
+    {
+        uf8::bindings::setBinding(
+            layer, s_bindingCtxBtn, s_bindingClipboard);
+    }
+    ImGui_EndPopup(ctx);
+}
+
 // Render the full UF8 schematic. Click hit-test goes against the
 // canvas-wide InvisibleButton; per-rect hits are computed by comparing
 // the cached mouse-coords against each button's local rectangle.
@@ -505,6 +548,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     const bool canvasHovered = ImGui_IsItemHovered(ctx, /*flags*/ nullptr);
     int leftBtn = 0;
     const bool canvasClicked = ImGui_IsItemClicked(ctx, &leftBtn);
+    // Right-click → "Copy / Paste binding" context menu (Frank 2026-05-15).
+    // ImGui_IsItemClicked takes the mouse-button index as input; passing
+    // 1 (= ImGui_MouseButton_Right) reads a fresh right-click on the
+    // same canvas item.
+    int rightBtn = 1;
+    const bool canvasRightClicked = ImGui_IsItemClicked(ctx, &rightBtn);
 
     double mxd = 0, myd = 0;
     ImGui_GetMousePos(ctx, &mxd, &myd);
@@ -535,6 +584,13 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         const bool selected = (id == sel);
         const bool clicked  = hot && canvasClicked && leftBtn == 0;
         if (clicked) sel = id;
+        // Right-click on a tile → arm the Copy / Paste context menu
+        // for this ButtonId. Renderer (renderBindingContextMenu_) runs
+        // at the bottom of this canvas function and consumes the flag.
+        if (hot && canvasRightClicked && id != ButtonId::None) {
+            s_bindingCtxBtn           = id;
+            s_bindingCtxOpenRequested = true;
+        }
 
         const uint32_t fill   = selected ? 0x4477CCFF
                                 : hot     ? 0x3A4253FF
@@ -887,6 +943,10 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
 
     // Brand line — replaces the SSL silk-screen with our product name.
     drawTextCentered_(c, 500, 470, 0x9CA0AAFF, "Rea-Sixty");
+
+    // Right-click context menu — must live inside the same canvas ID
+    // scope as the OpenPopup call so the popup ID matches.
+    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
 }
 
 // Render the full UC1 schematic. Layout follows the SSL UC1 hardware
@@ -1393,6 +1453,9 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
     const bool canvasHovered = ImGui_IsItemHovered(ctx, /*flags*/ nullptr);
     int leftBtn = 0;
     const bool canvasClicked = ImGui_IsItemClicked(ctx, &leftBtn);
+    // Right-click → "Copy / Paste binding" context menu (mirrors UF8).
+    int rightBtn = 1;
+    const bool canvasRightClicked = ImGui_IsItemClicked(ctx, &rightBtn);
 
     double mxd = 0, myd = 0;
     ImGui_GetMousePos(ctx, &mxd, &myd);
@@ -1419,6 +1482,12 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
         const bool selected = (id == sel);
         const bool clicked  = hot && canvasClicked && leftBtn == 0;
         if (clicked) sel = id;
+        // Right-click → "Copy / Paste binding" context menu (Frank
+        // 2026-05-15). Mirrors the UF8 schematic's drawHwBtn.
+        if (hot && canvasRightClicked && id != ButtonId::None) {
+            s_bindingCtxBtn           = id;
+            s_bindingCtxOpenRequested = true;
+        }
         const uint32_t fill   = selected ? 0x4477CCFF
                                 : hot     ? 0x3A4253FF
                                           : 0x252A33FF;
@@ -1454,6 +1523,9 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
               ButtonId::Uc1Encoder2,     "ROTATE");
     drawHwBtn(W / 2.0f + 10,  tileY, 90, 22,
               ButtonId::Uc1Encoder2Push, "PUSH");
+
+    // Right-click context menu — same canvas ID scope as drawUf8Vector.
+    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
 }
 
 // Push a Rea-Sixty-themed colour set so the editor's combos / buttons /
