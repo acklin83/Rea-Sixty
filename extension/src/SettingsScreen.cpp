@@ -72,6 +72,16 @@ bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
+bool reasixty_recRmeEnabled();
+bool reasixty_recVpotRotateGain();
+int  reasixty_recVpotPush();
+int  reasixty_recCut();
+int  reasixty_recSolo();
+void reasixty_setRecRmeEnabled(bool on);
+void reasixty_setRecVpotRotateGain(bool on);
+void reasixty_setRecVpotPush(int v);
+void reasixty_setRecCut(int v);
+void reasixty_setRecSolo(int v);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -7389,9 +7399,58 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "REC");
     ImGui_Separator(ctx);
-    ImGui_Text(ctx, "  TODO: RME TotalReaper integration on/off");
-    ImGui_Text(ctx, "  TODO: V-Pot rotation / push / Cut / Solo "
-                    "→ TotalReaper action assignment");
+    bool rmeOn = reasixty_recRmeEnabled();
+    if (ImGui_Checkbox(ctx,
+                       "Enable RME / TotalReaper integration",
+                       &rmeOn))
+    {
+        reasixty_setRecRmeEnabled(rmeOn);
+    }
+    ImGui_Text(ctx,
+        "  Requires the TotalReaper extension. While REC Selection Mode "
+        "is active, the assignments below dispatch TotalReaper named "
+        "actions against the strip's track. \"None\" leaves the button's "
+        "default REC behaviour intact.");
+
+    if (rmeOn) {
+        ImGui_Spacing(ctx);
+        bool gainRot = reasixty_recVpotRotateGain();
+        if (ImGui_Checkbox(ctx,
+                           "V-Pot rotation → Preamp gain ±1 dB",
+                           &gainRot))
+        {
+            reasixty_setRecVpotRotateGain(gainRot);
+        }
+
+        // Per-button action assignment. Index order MUST match
+        // RecRmeAction enum in main.cpp (None=0, Toggle48V=1, …).
+        // ImGui_Combo wants a mutable buffer for the items list.
+        static char kRecBtnItems[] =
+            "None\0"
+            "Toggle 48V phantom\0"
+            "Toggle pad\0"
+            "Toggle phase invert\0"
+            "Toggle AutoLevel\0";
+
+        int vpotPush = reasixty_recVpotPush();
+        if (ImGui_Combo(ctx, "V-Pot push", &vpotPush,
+                        kRecBtnItems, nullptr))
+        {
+            reasixty_setRecVpotPush(vpotPush);
+        }
+        int cut = reasixty_recCut();
+        if (ImGui_Combo(ctx, "Cut button", &cut,
+                        kRecBtnItems, nullptr))
+        {
+            reasixty_setRecCut(cut);
+        }
+        int solo = reasixty_recSolo();
+        if (ImGui_Combo(ctx, "Solo button", &solo,
+                        kRecBtnItems, nullptr))
+        {
+            reasixty_setRecSolo(solo);
+        }
+    }
 }
 
 // ---- Selection Sets -------------------------------------------------------

@@ -273,6 +273,51 @@ std::atomic<bool> g_showOnlySelected{false};
 // per-track automation-mode state.
 std::atomic<bool> g_autoHideReadTrim{false};
 
+// Settings → Modes → REC: RME TotalReaper integration. When the master
+// switch is on AND SelectionMode == Rec, the strip's V-Pot push / Cut /
+// Solo buttons dispatch the assigned TotalReaper named action against
+// the strip's track instead of their default REC-mode behaviour
+// (rec-arm). V-Pot rotation steps preamp gain ±1 dB. Display zone
+// reads P_EXT:totalreaper_* for live values.
+//
+// Per-button assignment uses RecRmeAction; "None" means leave the
+// default REC behaviour intact. Talkback / Routing Mirror / etc. are
+// global (not per-track) so they're not in the button menu.
+enum class RecRmeAction : uint8_t {
+    None = 0,
+    Toggle48V,
+    TogglePad,
+    TogglePhase,
+    ToggleAutolevel,
+};
+std::atomic<bool>         g_recRmeEnabled{false};
+std::atomic<bool>         g_recVpotRotateGain{false};
+std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
+std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
+std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
+
+inline const char* recRmeActionStr(RecRmeAction a)
+{
+    switch (a) {
+        case RecRmeAction::Toggle48V:       return "toggle_48v";
+        case RecRmeAction::TogglePad:       return "toggle_pad";
+        case RecRmeAction::TogglePhase:     return "toggle_phase";
+        case RecRmeAction::ToggleAutolevel: return "toggle_autolevel";
+        case RecRmeAction::None:
+        default:                            return "none";
+    }
+}
+
+inline RecRmeAction parseRecRmeAction(const char* s)
+{
+    if (!s) return RecRmeAction::None;
+    if (std::strcmp(s, "toggle_48v")       == 0) return RecRmeAction::Toggle48V;
+    if (std::strcmp(s, "toggle_pad")       == 0) return RecRmeAction::TogglePad;
+    if (std::strcmp(s, "toggle_phase")     == 0) return RecRmeAction::TogglePhase;
+    if (std::strcmp(s, "toggle_autolevel") == 0) return RecRmeAction::ToggleAutolevel;
+    return RecRmeAction::None;
+}
+
 // Selection-Mode group. Mutually-exclusive global state that retargets
 // the 8 SEL LEDs and the V-Pot push/rotation. Norm = legacy behaviour
 // (track-select, pan, etc.); Rec = SEL shows rec-arm status & push
@@ -878,6 +923,21 @@ void loadBrightness()
     const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
     if (autoHide && *autoHide) {
         g_autoHideReadTrim.store(std::atoi(autoHide) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
+        g_recRmeEnabled.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_vpot_rotate_gain"); v && *v) {
+        g_recVpotRotateGain.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
+        g_recVpotPush.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_cut"); v && *v) {
+        g_recCut.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_solo"); v && *v) {
+        g_recSolo.store(parseRecRmeAction(v));
     }
     const char* sff = GetExtState("rea_sixty", "strip_follows_focused_fx");
     if (sff && *sff) {
@@ -9804,6 +9864,42 @@ void reasixty_setAutoHideReadTrim(bool hide)
     g_autoHideReadTrim.store(hide);
     SetExtState("rea_sixty", "auto_hide_read_trim", hide ? "1" : "0", true);
     g_bankDirty.store(true);   // visible list may have shrunk/grown
+}
+
+bool reasixty_recRmeEnabled()        { return g_recRmeEnabled.load(); }
+bool reasixty_recVpotRotateGain()    { return g_recVpotRotateGain.load(); }
+int  reasixty_recVpotPush()          { return static_cast<int>(g_recVpotPush.load()); }
+int  reasixty_recCut()               { return static_cast<int>(g_recCut.load()); }
+int  reasixty_recSolo()              { return static_cast<int>(g_recSolo.load()); }
+
+void reasixty_setRecRmeEnabled(bool on)
+{
+    g_recRmeEnabled.store(on);
+    SetExtState("rea_sixty", "rec_rme_enabled", on ? "1" : "0", true);
+    g_bankDirty.store(true);   // display zone in REC mode changes
+}
+void reasixty_setRecVpotRotateGain(bool on)
+{
+    g_recVpotRotateGain.store(on);
+    SetExtState("rea_sixty", "rec_vpot_rotate_gain", on ? "1" : "0", true);
+}
+void reasixty_setRecVpotPush(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recVpotPush.store(a);
+    SetExtState("rea_sixty", "rec_vpot_push", recRmeActionStr(a), true);
+}
+void reasixty_setRecCut(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recCut.store(a);
+    SetExtState("rea_sixty", "rec_cut", recRmeActionStr(a), true);
+}
+void reasixty_setRecSolo(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recSolo.store(a);
+    SetExtState("rea_sixty", "rec_solo", recRmeActionStr(a), true);
 }
 
 bool reasixty_stripFollowsFocusedFx()
