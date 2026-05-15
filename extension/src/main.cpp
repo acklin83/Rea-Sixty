@@ -107,6 +107,15 @@ std::atomic<bool> g_mixerToggleRequest{false};
 // SSL Strip Mode is on (so the open GUI follows the active instance).
 std::atomic<bool> g_pluginGuiSyncRequest{false};
 
+// Set by the `show_focused_plugin_gui` builtin (which can fire from the
+// libusb input thread). Drained in onTimer on the main thread because
+// applyShowFocusedPluginGui_() calls TrackFX_Show, which creates an
+// AppKit window — must be main-thread only. Crashed on 2026-05-15
+// from the input thread; see [[feedback-reaper-api-input-thread]].
+std::atomic<bool> g_showFocusedPluginGuiRequest{false};
+std::atomic<bool> g_showFxChainRequest{false};
+std::atomic<bool> g_closeAllFxGuisRequest{false};
+
 // Entry-time snap for UF8 Plugin Mode. Set by uf8_plugin_mode_toggle{,_with_gui}
 // from the libusb input thread when the mode is being switched ON. The
 // main-thread GUI-sync drain consumes it via snapUf8PluginModeToFocusedFx_,
@@ -8665,6 +8674,41 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
+    // Plug-in GUI request flags — all main-thread because TrackFX_Show
+    // creates AppKit windows. Set by the show_focused_plugin_gui /
+    // show_fx_chain / close_all_fx_guis builtins which may fire on the
+    // libusb input thread.
+    if (g_showFocusedPluginGuiRequest.exchange(false)) {
+        applyShowFocusedPluginGui_();
+    }
+    if (g_showFxChainRequest.exchange(false)) {
+        auto t = resolveActiveFx_();
+        if (t.tr) {
+            const int vis = TrackFX_GetChainVisible(t.tr);
+            TrackFX_Show(t.tr, t.fxIdx, vis < 0 ? 1 : 0);
+        }
+    }
+    if (g_closeAllFxGuisRequest.exchange(false)) {
+        const int trackCount = CountTracks(nullptr);
+        for (int ti = -1; ti < trackCount; ++ti) {
+            MediaTrack* tr = (ti < 0) ? GetMasterTrack(nullptr)
+                                      : GetTrack(nullptr, ti);
+            if (!tr) continue;
+            const int n = TrackFX_GetCount(tr);
+            for (int i = 0; i < n; ++i) {
+                TrackFX_Show(tr, i, /*hide floating*/ 2);
+            }
+            TrackFX_Show(tr, 0, /*hide chain*/ 0);
+        }
+        g_focusedGuiShownTr  = nullptr;
+        g_focusedGuiShownFx  = -1;
+        g_uf8GuiShownTr      = nullptr;
+        g_uf8GuiShownFx      = -1;
+        g_instanceGuiShownTr = nullptr;
+        g_instanceGuiShownFx = -1;
+        g_instanceGuiOwnerStrip.store(-1);
+    }
+
     // Plugin Mode transition handling — Sel-Mode park/restore is
     // main-thread-only because parkSel writes ExtState. The toggle
     // builtin sets g_pluginMode from any thread, so we detect the
@@ -11110,7 +11154,10 @@ void registerBindingHandlers()
     registerBuiltin("show_focused_plugin_gui", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            applyShowFocusedPluginGui_();
+            // applyShowFocusedPluginGui_ calls TrackFX_Show — main-thread
+            // only. This handler can fire from the libusb input thread, so
+            // defer via flag drained in onTimer.
+            g_showFocusedPluginGuiRequest.store(true);
         },
         [](int) {
             return g_focusedGuiShownTr != nullptr && g_focusedGuiShownFx >= 0;
@@ -11201,14 +11248,13 @@ void registerBindingHandlers()
     registerBuiltin("show_fx_chain", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto t = resolveActiveFx_();
-            if (!t.tr) return;
-            // GetOpen — REAPER reuses TrackFX_GetChainVisible to
-            // report whether the chain is open. Returns the visible
-            // FX index, or -1 when the chain is closed.
-            const int vis = TrackFX_GetChainVisible(t.tr);
-            TrackFX_Show(t.tr, t.fxIdx, vis < 0 ? 1 : 0);
+            // Defer — handler may fire on the libusb input thread, and
+            // TrackFX_Show / TrackFX_GetChainVisible plus resolveActiveFx_
+            // (which walks track FX) must run main-thread.
+            g_showFxChainRequest.store(true);
         },
+        // State callback runs from the main-thread render path, so the
+        // direct REAPER-API call here is safe.
         [](int) {
             auto t = resolveActiveFx_();
             if (!t.tr) return false;
@@ -11223,29 +11269,10 @@ void registerBindingHandlers()
     registerBuiltin("close_all_fx_guis", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            const int trackCount = CountTracks(nullptr);
-            for (int ti = -1; ti < trackCount; ++ti) {
-                MediaTrack* tr = (ti < 0) ? GetMasterTrack(nullptr)
-                                          : GetTrack(nullptr, ti);
-                if (!tr) continue;
-                const int n = TrackFX_GetCount(tr);
-                for (int i = 0; i < n; ++i) {
-                    TrackFX_Show(tr, i, /*hide floating*/ 2);
-                }
-                // Chain window: a single hide-flag-0 call closes it
-                // regardless of which fxIdx — the flag operates on the
-                // chain itself, not on a specific FX.
-                TrackFX_Show(tr, 0, /*hide chain*/ 0);
-            }
-            // Drop our own tracked-window state so we don't try to
-            // re-hide windows we just nuked.
-            g_focusedGuiShownTr = nullptr;
-            g_focusedGuiShownFx = -1;
-            g_uf8GuiShownTr     = nullptr;
-            g_uf8GuiShownFx     = -1;
-            g_instanceGuiShownTr = nullptr;
-            g_instanceGuiShownFx = -1;
-            g_instanceGuiOwnerStrip.store(-1);
+            // Defer to main thread — walks all tracks' FX and calls
+            // TrackFX_Show, both of which are unsafe from the libusb
+            // input thread.
+            g_closeAllFxGuisRequest.store(true);
         },
         nullptr,
         "Plug-in: close all floating FX windows", false
