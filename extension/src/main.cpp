@@ -5984,6 +5984,34 @@ void pushZonesForVisibleSlots()
         } else {
             csType = map ? std::string(map->displayShort) : std::string{};
         }
+        // REC + RME override: show the track's hardware input name in
+        // the colour-bar zone (e.g. "Mic 1" / "Line 3") instead of the
+        // generic "REAPER" / CS-variant label. Useful when the strip is
+        // driving TotalMix-side input parameters — colour bar then names
+        // the input, mirroring what the V-Pot/Cut/Solo actions target.
+        {
+            const auto curSel = g_selectionMode.load();
+            const bool inRecMode = curSel == SelectionMode::Rec
+                                || curSel == SelectionMode::RecMon;
+            if (inRecMode && g_recRmeEnabled.load()) {
+                const int recInput = static_cast<int>(
+                    GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+                // Same masks TotalReaper uses (PreampActions.cpp:36-39):
+                // MIDI = 4096, Multichannel = 2048, channel mask = 0x3FF.
+                // Hardware inputs only — leave csType as-is for MIDI /
+                // multichannel / "no input" so the user still sees the
+                // surrounding mode's default text.
+                if (recInput >= 0
+                    && !(recInput & 4096)
+                    && !(recInput & 2048))
+                {
+                    const int chan = recInput & 0x3FF;
+                    if (const char* nm = GetInputChannelName(chan); nm && *nm) {
+                        csType = nm;
+                    }
+                }
+            }
+        }
         if (csType.empty()) csType = "REAPER";
         if (csType.size() > 7) csType.resize(7);
         if (csType != g_lastCsType[s]) {
@@ -6469,6 +6497,47 @@ void pushZonesForVisibleSlots()
             }
             valLine = composeValueLine("Auto", modeName);
             selectionModeHandled = true;
+        }
+        // REC + RME override: V-Pot value zone shows TotalMix preamp
+        // state — 48V / Pad / Phase flags on the left, gain dB on the
+        // right. Values come from TotalReaper's P_EXT cache, which it
+        // populates via OSC from TotalMix's /sendall on csurf enable
+        // (alpha-5+), so the readout matches whatever TotalMix has
+        // running rather than starting at 0 dB.
+        {
+            const auto curSel = g_selectionMode.load();
+            const bool inRecMode = curSel == SelectionMode::Rec
+                                || curSel == SelectionMode::RecMon;
+            if (!selectionModeHandled
+                && inRecMode
+                && g_recRmeEnabled.load())
+            {
+                auto readExt = [&](const char* key) -> std::string {
+                    char buf[64] = {0};
+                    GetSetMediaTrackInfo_String(tr,
+                        const_cast<char*>(key), buf, false);
+                    return std::string(buf);
+                };
+                const bool on48v   = readExt("P_EXT:totalreaper_48v")   == "1";
+                const bool onPad   = readExt("P_EXT:totalreaper_pad")   == "1";
+                const bool onPhase = readExt("P_EXT:totalreaper_phase") == "1";
+                std::string flags;
+                flags += on48v   ? "48V" : "   ";
+                flags += ' ';
+                flags += onPad   ? "Pd"  : "  ";
+                flags += ' ';
+                flags += onPhase ? "Ph"  : "  ";
+                std::string gainStr = readExt("P_EXT:totalreaper_gain");
+                char gbuf[16];
+                if (gainStr.empty()) {
+                    std::snprintf(gbuf, sizeof(gbuf), "  --dB");
+                } else {
+                    const double db = std::atof(gainStr.c_str());
+                    std::snprintf(gbuf, sizeof(gbuf), "%+.1fdB", db);
+                }
+                valLine = composeValueLine(flags, gbuf);
+                selectionModeHandled = true;
+            }
         }
         // Instance mode: the active FX name is rendered in the
         // colour-bar Channel-Strip-Type zone (see csType override
