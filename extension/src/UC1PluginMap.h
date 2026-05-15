@@ -76,6 +76,15 @@ struct UC1Bindings {
     double                busCompGrOffsetDb = 0.0;
     int                   channelGrParam   = -1;
     double                channelGrOffsetDb = 0.0;
+    // Per-breakpoint correction tables — point into the owning
+    // UserBindingEntry in g_userCache when a learned user plug-in is
+    // bound; nullptr for built-ins (which apply identity calibration).
+    // Lifetime: stable until the user_plugins generation bumps, which
+    // only happens on the main thread between polls.
+    //   busCompGrBcVuCal: 6 doubles at 0/4/8/12/16/20 dB (BC VU motor)
+    //   channelGrLedsCal: 5 doubles at 3/6/10/14/20 dB (DYN GR LEDs + UF8 GR byte)
+    const double*         busCompGrBcVuCal  = nullptr;
+    const double*         channelGrLedsCal  = nullptr;
 };
 
 // Walk TrackFX_GetCount on a track and return both the Bus Comp and

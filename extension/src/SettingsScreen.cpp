@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Bindings.h"
+#include "GrCalibration.h"
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
@@ -60,6 +61,13 @@ bool reasixty_selFollowsColor();
 void reasixty_setSelFollowsColor(bool follow);
 bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
+int    reasixty_uc1CalCount(int section);
+double reasixty_uc1CalTickDb(int section, int idx);
+double reasixty_uc1CalGet(int section, int idx);
+void   reasixty_uc1CalSet(int section, int idx, double newVal);
+void   reasixty_uc1CalResetSection(int section);
+int    reasixty_uc1CalActiveTest();
+void   reasixty_uc1SetCalActiveTest(int enc);
 bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_stripFollowsFocusedFx();
@@ -324,6 +332,89 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     }
     ImGui_Text(ctx, "  Bundles version + state + recent traces into a .zip");
     ImGui_Text(ctx, "  on your Desktop. Attach this when reporting bugs.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "UC1 GR calibration");
+    ImGui_Separator(ctx);
+    ImGui_TextDisabled(ctx,
+        "Hardware-trim — per-tick offsets that nudge the UC1 to match its");
+    ImGui_TextDisabled(ctx,
+        "printed scale. Same workflow as SSL 360°'s BC VU calibration tool.");
+    ImGui_TextDisabled(ctx,
+        "Click \"Test\" on a row, then ± until the UC1 lines up with the");
+    ImGui_TextDisabled(ctx,
+        "marking. Auto-saved. Stop test to resume normal GR.");
+    ImGui_Spacing(ctx);
+
+    auto drawCalSection = [&](const char* title, int section) {
+        ImGui_Text(ctx, title);
+        const int n = reasixty_uc1CalCount(section);
+        const int testActive = reasixty_uc1CalActiveTest();
+        // Encoding: 0..5 = BC tick, 100..104 = CS tick. Per-section
+        // active range so the radio reads cleanly per section.
+        const int testBase = (section == 0) ? 0 : 100;
+        for (int i = 0; i < n; ++i) {
+            const double tickDb = reasixty_uc1CalTickDb(section, i);
+            const double cur    = reasixty_uc1CalGet(section, i);
+            const bool   active = (testActive == testBase + i);
+
+            char rowLbl[32];
+            std::snprintf(rowLbl, sizeof(rowLbl), "  %4.0f dB", tickDb);
+            ImGui_Text(ctx, rowLbl);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+
+            char testId[64];
+            std::snprintf(testId, sizeof(testId),
+                "%s##cal_test_%d_%d",
+                active ? "Stop" : "Test", section, i);
+            if (ImGui_Button(ctx, testId, nullptr, nullptr)) {
+                reasixty_uc1SetCalActiveTest(active ? -1 : (testBase + i));
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+
+            char inputId[64];
+            std::snprintf(inputId, sizeof(inputId),
+                "dB##cal_in_%d_%d", section, i);
+            double v = cur;
+            double step = 0.1, fast = 1.0;
+            int    flags = 0;
+            double w = 100.0;
+            ImGui_SetNextItemWidth(ctx, w);
+            if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
+                                  "%+.2f", &flags)) {
+                reasixty_uc1CalSet(section, i, v);
+                // Auto-activate the row's test mode on the first edit
+                // so the user sees the change immediately.
+                if (!active) reasixty_uc1SetCalActiveTest(testBase + i);
+            }
+        }
+        ImGui_Spacing(ctx);
+        char resetId[48];
+        std::snprintf(resetId, sizeof(resetId),
+            "Reset all##cal_reset_%d", section);
+        if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
+            reasixty_uc1CalResetSection(section);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        char stopId[48];
+        std::snprintf(stopId, sizeof(stopId),
+            "Stop test##cal_stop_%d", section);
+        const bool sectionTestActive =
+            (section == 0  && testActive >= 0   && testActive < 6) ||
+            (section == 1  && testActive >= 100 && testActive < 105);
+        if (sectionTestActive) {
+            if (ImGui_Button(ctx, stopId, nullptr, nullptr)) {
+                reasixty_uc1SetCalActiveTest(-1);
+            }
+        } else {
+            ImGui_TextDisabled(ctx, "  (no test active)");
+        }
+        ImGui_Spacing(ctx);
+    };
+
+    drawCalSection("BC VU meter (0/4/8/12/16/20 dB)", 0);
+    drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -3993,6 +4084,54 @@ void setGrOffset_(double offsetDb)
     }
 }
 
+// Per-breakpoint GR calibration mutators (v5 schema). `which` selects
+// the table: 0 = BC VU motor (6 points at 0/4/8/12/16/20 dB),
+// 1 = DYN GR LEDs + UF8 GR row (5 points at 3/6/10/14/20 dB).
+// `idx` is the index inside that table. Absolute set (not delta) —
+// ImGui_InputDouble feeds the final value after its own +/-/typing.
+// Clamped to ±20 dB hard cap so a misclick can't dial the meter off
+// scale (full hardware range is 20 dB; ±20 is enough headroom for
+// any practical correction).
+void setGrCal_(int which, int idx, double newValue)
+{
+    if (g_editingMatch.empty()) return;
+    const int n = (which == 0) ? 6 : 5;
+    if (idx < 0 || idx >= n) return;
+    if (newValue >  20.0) newValue =  20.0;
+    if (newValue < -20.0) newValue = -20.0;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        double* arr = (which == 0) ? m.metering.grBcVuCalDb
+                                    : m.metering.grLedsCalDb;
+        if (arr[idx] == newValue) return;
+        arr[idx] = newValue;
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+
+void resetGrCal_(int which)
+{
+    if (g_editingMatch.empty()) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        const int n = (which == 0) ? 6 : 5;
+        double* arr = (which == 0) ? m.metering.grBcVuCalDb
+                                    : m.metering.grLedsCalDb;
+        bool dirty = false;
+        for (int i = 0; i < n; ++i) {
+            if (arr[i] != 0.0) { arr[i] = 0.0; dirty = true; }
+        }
+        if (!dirty) return;
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+
 // Snapshot every VST3 param on `fx` into the user map identified by
 // `match` so subsequent edits can render the param list / V-Pot picker /
 // GR-meter picker even when no live instance is loaded. Overwrites any
@@ -6183,44 +6322,40 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_EndCombo(ctx);
         }
 
-        // Live raw value of the picked param + computed GR-after-offset.
-        // Lets the user sanity-check the pick: hit the plug-in with audio
-        // and watch this value tick. If it doesn't move, it's the wrong
-        // param. If it moves but the on-device meter doesn't, the offset
-        // / sign is wrong.
+        // Compute live calibrated values once so both the inline
+        // readout and the popup live-preview share the same numbers.
+        bool   havePreview = false;
+        double previewRaw = 0.0, previewAbs = 0.0;
+        double previewBc  = 0.0, previewLeds = 0.0;
         if (curParam >= 0 && fx.ok) {
-            ImGui_SameLine(ctx, nullptr, nullptr);
             double mn = 0.0, mx = 0.0;
-            const double raw = TrackFX_GetParam(fx.tr, fx.fxIdx,
-                                                curParam, &mn, &mx);
-            const double offsetDb = editing->metering.grOffsetDb;
-            double shown = raw + offsetDb;
-            if (shown < 0) shown = -shown;
-            char liveBuf[96];
-            std::snprintf(liveBuf, sizeof(liveBuf),
-                "  raw: %+.2f  → GR: %.2f dB", raw, shown);
-            ImGui_TextColored(ctx, 0xFFC080FF, liveBuf);
+            previewRaw = TrackFX_GetParam(fx.tr, fx.fxIdx,
+                                          curParam, &mn, &mx);
+            previewAbs = (previewRaw < 0) ? -previewRaw : previewRaw;
+            previewBc   = uf8::applyGrCalibration(
+                previewAbs, uf8::kBcVuBpDb,  editing->metering.grBcVuCalDb,
+                uf8::kBcVuBpCount);
+            previewLeds = uf8::applyGrCalibration(
+                previewAbs, uf8::kLedsBpDb, editing->metering.grLedsCalDb,
+                uf8::kLedsBpCount);
+            havePreview = true;
         }
 
-        // Offset (dB) — numeric input. Sticky between renders via a
-        // local-static scratch buffer keyed by the editing map's match,
-        // so switching maps doesn't smear another plug-in's offset
-        // over this one.
-        ImGui_Spacing(ctx);
-        static std::string s_offsetScope;
-        static char        s_offsetBuf[32] = {0};
-        if (s_offsetScope != editing->match) {
-            s_offsetScope = editing->match;
-            std::snprintf(s_offsetBuf, sizeof(s_offsetBuf),
-                          "%.2f", editing->metering.grOffsetDb);
-        }
-        ImGui_Text(ctx, "GR Offset (dB):");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_InputTextWithHint(ctx, "##fxl_gr_offset",
-                                    "0.0", s_offsetBuf,
-                                    static_cast<int>(sizeof(s_offsetBuf)),
-                                    nullptr, nullptr)) {
-            setGrOffset_(std::atof(s_offsetBuf));
+        // Inline live readout next to the combo — domain-scoped to the
+        // active renderer (BC: needle dB; CS/UF8: LEDs dB). The actual
+        // calibration table renders inline at the bottom of the editor,
+        // under the mockup (Frank 2026-05-15: popup mode closed on
+        // every live-update tick, unusable while audio plays).
+        if (havePreview) {
+            const bool isBc =
+                (editing->domain == uf8::Domain::BusComp);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char inlineBuf[128];
+            const double shown = isBc ? previewBc : previewLeds;
+            std::snprintf(inlineBuf, sizeof(inlineBuf),
+                "  raw %+.2f → %s %.2f dB", previewRaw,
+                isBc ? "VU" : "GR", shown);
+            ImGui_TextColored(ctx, 0xFFC080FF, inlineBuf);
         }
 
         ImGui_Spacing(ctx);
@@ -6365,6 +6500,119 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         } else if (topo) {
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
         }
+
+        // -------- Per-breakpoint GR calibration (Frank 2026-05-15) ----
+        // Sits directly under the mockup, inside the left pane only.
+        // Domain-scoped: BC plug-ins show the VU motor curve
+        // (0/4/8/12/16/20 dB); CS and UF8-only plug-ins show the GR
+        // LED / UF8 GR row curve (3/6/10/14/20 dB).
+        {
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Spacing(ctx);
+
+            const bool isBc =
+                (editing->domain == uf8::Domain::BusComp);
+            const int     which  = isBc ? 0 : 1;
+            const double* bp     = isBc ? uf8::kBcVuBpDb  : uf8::kLedsBpDb;
+            const int     nCal   = isBc ? uf8::kBcVuBpCount : uf8::kLedsBpCount;
+            const double* curArr = isBc ? editing->metering.grBcVuCalDb
+                                        : editing->metering.grLedsCalDb;
+            const char*   title  = isBc
+                ? "VU Cal — BC mechanical needle ticks"
+                : "GR Cal — DYN LEDs + UF8 GR row segments";
+
+            ImGui_Text(ctx, title);
+            ImGui_TextDisabled(ctx,
+                "Drive a sine into the plug-in; adjust its threshold so its "
+                "INTERNAL meter reads exactly the breakpoint dB. Then type "
+                "or click +/− on the matching column until UC1 aligns. "
+                "Values are correction offsets in dB. Ctrl-click +/− = ±1.0.");
+            ImGui_Spacing(ctx);
+
+            constexpr double kInputW = 90.0;
+            for (int i = 0; i < nCal; ++i) {
+                if (i) ImGui_SameLine(ctx, nullptr, nullptr);
+                ImGui_BeginGroup(ctx);
+                char hdrLbl[32];
+                std::snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plugin", bp[i]);
+                ImGui_Text(ctx, hdrLbl);
+                char inputId[64];
+                std::snprintf(inputId, sizeof(inputId),
+                    "dB##fxl_grcal_bot_%d_in_%d", which, i);
+                double v = curArr[i];
+                double step = 0.1, fast = 1.0;
+                int    flags = 0;
+                double w = kInputW;
+                ImGui_SetNextItemWidth(ctx, w);
+                if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
+                                      "%+.2f", &flags)) {
+                    setGrCal_(which, i, v);
+                }
+                ImGui_EndGroup(ctx);
+            }
+            ImGui_Spacing(ctx);
+
+            char resetId[48];
+            std::snprintf(resetId, sizeof(resetId),
+                "Reset##fxl_grcal_bot_reset_%d", which);
+            if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
+                resetGrCal_(which);
+            }
+            ImGui_Spacing(ctx);
+
+            // Live readout — what we're actually reading from the
+            // plug-in and what gets pushed to the renderer after
+            // |abs| + cal. Always rendered (regardless of grVst3Param
+            // state) so Frank can see if the plug-in is feeding us
+            // something other than dB. Uses the same read path as
+            // UC1Surface::readGr (FormattedParamValue for picker,
+            // GainReduction_dB fallback otherwise) so the displayed
+            // numbers match the on-device meter exactly.
+            if (fx.ok) {
+                double rawDb = 0.0;
+                bool   gotIt = false;
+                if (editing->metering.grVst3Param >= 0) {
+                    char fbuf[64] = {0};
+                    if (TrackFX_GetFormattedParamValue(fx.tr, fx.fxIdx,
+                            editing->metering.grVst3Param,
+                            fbuf, sizeof(fbuf)) && fbuf[0]) {
+                        rawDb = std::atof(fbuf);
+                        gotIt = true;
+                    } else {
+                        double mn = 0.0, mx = 0.0;
+                        rawDb = TrackFX_GetParam(fx.tr, fx.fxIdx,
+                            editing->metering.grVst3Param, &mn, &mx);
+                        gotIt = true;
+                    }
+                } else {
+                    char buf[64] = {0};
+                    if (TrackFX_GetNamedConfigParm(fx.tr, fx.fxIdx,
+                            "GainReduction_dB", buf, sizeof(buf))) {
+                        rawDb = std::atof(buf);
+                        gotIt = true;
+                    }
+                }
+                if (gotIt) {
+                    const double absV = (rawDb < 0) ? -rawDb : rawDb;
+                    const double calV = uf8::applyGrCalibration(
+                        absV, bp, curArr, nCal);
+                    char liveBuf[200];
+                    std::snprintf(liveBuf, sizeof(liveBuf),
+                        "Live:  plug-in %+.2f  →  |abs| %.2f  →  on-device %.2f dB",
+                        rawDb, absV, calV);
+                    ImGui_TextColored(ctx, 0xFFC080FF, liveBuf);
+                } else {
+                    ImGui_TextDisabled(ctx,
+                        "Live: no GR reading (plug-in doesn't expose "
+                        "GainReduction_dB and no GR param picked).");
+                }
+            } else {
+                ImGui_TextDisabled(ctx,
+                    "Live: insert a matching plug-in to see the reading.");
+            }
+        }
+
         ImGui_EndChild(ctx);
     }
 
@@ -6598,18 +6846,41 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Text(ctx, line);
         ImGui_Spacing(ctx);
         ImGui_TextWrapped(ctx,
-            "The SSL-Link slot bindings get cleared — the schematic "
-            "topology between CS, BC and UF8-only isn't interchangeable. "
-            "Your UF8 bank / strip bindings stay intact.");
+            "The SSL-Link slot bindings get swapped to the other domain's "
+            "saved set (CS bindings stash to csSlotCache, BC bindings to "
+            "bcSlotCache). Flip back any time to restore the previous "
+            "bindings. UF8 bank / strip bindings stay intact.");
         ImGui_Spacing(ctx);
 
         if (ImGui_Button(ctx, "Apply##fxl_mode_ok", nullptr, nullptr)) {
             UserPluginMap copy = *editing;
-            copy.domain  = (g_pendingModePrimary == 1) ? uf8::Domain::ChannelStrip
-                         : (g_pendingModePrimary == 2) ? uf8::Domain::BusComp
-                         :                                uf8::Domain::None;
+            const uf8::Domain newDom =
+                (g_pendingModePrimary == 1) ? uf8::Domain::ChannelStrip
+              : (g_pendingModePrimary == 2) ? uf8::Domain::BusComp
+              :                                uf8::Domain::None;
+            // Stash the outgoing slot list into the matching cache so
+            // a future swap restores it (Frank 2026-05-15). Only the
+            // CS↔BC pair benefits — UF8-only has no slots. If a cache
+            // already exists for the outgoing domain it gets replaced
+            // with the latest set rather than merged: the active slots
+            // are always the authoritative version.
+            if (copy.domain == uf8::Domain::ChannelStrip) {
+                copy.csSlotCache = copy.slots;
+            } else if (copy.domain == uf8::Domain::BusComp) {
+                copy.bcSlotCache = copy.slots;
+            }
+            // Restore the incoming domain's previously-stashed slots,
+            // if any. Otherwise we land on an empty slot list as
+            // before — first-time switch behaviour stays identical.
+            if (newDom == uf8::Domain::ChannelStrip) {
+                copy.slots = copy.csSlotCache;
+            } else if (newDom == uf8::Domain::BusComp) {
+                copy.slots = copy.bcSlotCache;
+            } else {
+                copy.slots.clear();
+            }
+            copy.domain  = newDom;
             copy.uf8Mode = copy.domain == uf8::Domain::None ? true : copy.uf8Mode;
-            copy.slots.clear();
             // GR-meter binding refers to a vst3Param index on the learned
             // plug-in — that's still valid across mode switches, so we
             // keep it. (User can clear it manually if they re-learn.)

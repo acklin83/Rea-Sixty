@@ -285,12 +285,62 @@ std::string serialize_(const UserPluginCatalog& c)
                << " }";
         }
         os << "\n      ]";
-        if (m.metering.grVst3Param >= 0) {
+        // Metering block — emit when any field is non-default. Older
+        // versions only emitted when grVst3Param ≥ 0, but offset + cal
+        // tables are independent of which read path is in use, so a
+        // user who calibrates against the GainReduction_dB fallback
+        // (grVst3Param = -1) still needs their numbers persisted.
+        auto anyCalNonZero = [](const double* a, int n) {
+            for (int i = 0; i < n; ++i) if (a[i] != 0.0) return true;
+            return false;
+        };
+        const bool bcCalDirty   = anyCalNonZero(m.metering.grBcVuCalDb, 6);
+        const bool ledsCalDirty = anyCalNonZero(m.metering.grLedsCalDb, 5);
+        const bool meteringDirty =
+            m.metering.grVst3Param >= 0 ||
+            m.metering.grOffsetDb  != 0.0 ||
+            bcCalDirty || ledsCalDirty;
+        if (meteringDirty) {
             os << ",\n      \"metering\": { \"gainReduction\": { "
                << "\"vst3Param\": " << m.metering.grVst3Param
-               << ", \"offsetDb\": " << m.metering.grOffsetDb
-               << " } }";
+               << ", \"offsetDb\": " << m.metering.grOffsetDb;
+            if (bcCalDirty) {
+                os << ", \"bcVuCalDb\": [";
+                for (int i = 0; i < 6; ++i) {
+                    if (i) os << ", ";
+                    os << m.metering.grBcVuCalDb[i];
+                }
+                os << "]";
+            }
+            if (ledsCalDirty) {
+                os << ", \"ledsCalDb\": [";
+                for (int i = 0; i < 5; ++i) {
+                    if (i) os << ", ";
+                    os << m.metering.grLedsCalDb[i];
+                }
+                os << "]";
+            }
+            os << " } }";
         }
+        // Per-domain slot caches — emit only when non-empty. Both
+        // arrays use the same row layout as the active `slots` field.
+        auto emitSlotCache = [&](const char* key,
+                                 const std::vector<UserLinkSlot>& vs) {
+            if (vs.empty()) return;
+            os << ",\n      \"" << key << "\": [";
+            bool first = true;
+            for (const auto& s : vs) {
+                if (!first) os << ",";
+                first = false;
+                os << "\n        { \"linkIdx\": " << s.linkIdx
+                   << ", \"vst3Param\": "         << s.vst3Param
+                   << ", \"inverted\": "          << (s.inverted ? "true" : "false")
+                   << " }";
+            }
+            os << "\n      ]";
+        };
+        emitSlotCache("csSlotCache", m.csSlotCache);
+        emitSlotCache("bcSlotCache", m.bcSlotCache);
         if (uf8MapHasContent_(m.uf8)) {
             os << ",\n      \"uf8\": {\n";
             os << "        \"banks\": [";
@@ -417,9 +467,10 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         if (getIntI_(po, "snapshotTakenAt", snapTs))
             m.snapshotTakenAt = snapTs;
 
-        if (auto* slotsArr = po->get_item_by_name("slots");
-            slotsArr && slotsArr->is_array() && slotsArr->m_array)
-        {
+        auto readSlotArr = [&](const char* key,
+                               std::vector<UserLinkSlot>& dest) {
+            auto* slotsArr = po->get_item_by_name(key);
+            if (!slotsArr || !slotsArr->is_array() || !slotsArr->m_array) return;
             const int sn = slotsArr->m_array->GetSize();
             for (int s = 0; s < sn; ++s) {
                 wdl_json_element* so = slotsArr->enum_item(s);
@@ -429,9 +480,12 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getIntI_(so, "vst3Param", us.vst3Param);
                 getBoolI_(so, "inverted", us.inverted);
                 if (us.linkIdx < 0 || us.vst3Param < 0) continue;
-                m.slots.push_back(us);
+                dest.push_back(us);
             }
-        }
+        };
+        readSlotArr("slots",        m.slots);
+        readSlotArr("csSlotCache",  m.csSlotCache);
+        readSlotArr("bcSlotCache",  m.bcSlotCache);
 
         if (auto* met = po->get_item_by_name("metering");
             met && met->is_object())
@@ -443,6 +497,24 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getIntI_(gr, "vst3Param", gp);
                 m.metering.grVst3Param = gp;
                 getDoubleI_(gr, "offsetDb", m.metering.grOffsetDb);
+                // v5 per-breakpoint correction tables. Missing or
+                // wrong-length arrays silently default to zeros, so
+                // v4 files load identity-calibrated.
+                auto readCalArr = [](wdl_json_element* obj, const char* key,
+                                     double* out, int n) {
+                    auto* arr = obj->get_item_by_name(key);
+                    if (!arr || !arr->is_array() || !arr->m_array) return;
+                    const int len = (std::min)(arr->m_array->GetSize(), n);
+                    for (int i = 0; i < len; ++i) {
+                        wdl_json_element* item = arr->enum_item(i);
+                        if (!item) continue;
+                        if (auto* s = item->get_string_value(true)) {
+                            out[i] = std::atof(s);
+                        }
+                    }
+                };
+                readCalArr(gr, "bcVuCalDb", m.metering.grBcVuCalDb, 6);
+                readCalArr(gr, "ledsCalDb", m.metering.grLedsCalDb, 5);
             }
         }
 

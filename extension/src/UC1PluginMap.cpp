@@ -486,6 +486,11 @@ struct UserBindingEntry {
     // implement the PreSonus GainReduction_dB hook.
     int            grVst3Param = -1;
     double         grOffsetDb  = 0.0;
+    // Per-breakpoint correction tables (v5 schema). UC1Bindings carries
+    // pointers into these arrays; lifetime is the cache entry's lifetime
+    // (rebuilt on user_plugins generation bump, main-thread only).
+    double         bcVuCalDb[6] = {0,0,0,0,0,0};
+    double         ledsCalDb[5] = {0,0,0,0,0};
 };
 
 std::mutex                                       g_userCacheMutex;
@@ -513,6 +518,8 @@ void rebuildUserCache_locked_()
         e->domain         = um.domain;
         e->grVst3Param    = um.metering.grVst3Param;
         e->grOffsetDb     = um.metering.grOffsetDb;
+        for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
+        for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];
         e->bindings.match     = e->matchOwned.c_str();
         e->bindings.shortName = e->shortNameOwned.c_str();
         synthesizeUserBinding_(um, e->bindings);
@@ -658,17 +665,22 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
         const bool isBusComp = isBusCompBinding(b);
 
         // Look up the user-cache entry that owns `b` so we can pull the
-        // metering override (grVst3Param + grOffsetDb) into the result.
-        // Built-in bindings have no entry → grVst3Param stays -1 and the
-        // GR poll falls back to GainReduction_dB.
-        int    grParam = -1;
-        double grOff   = 0.0;
+        // metering override (grVst3Param + grOffsetDb + cal tables) into
+        // the result. Built-in bindings have no entry → grVst3Param stays
+        // -1 and the GR poll falls back to GainReduction_dB; cal pointers
+        // stay nullptr so calibration is identity.
+        int           grParam   = -1;
+        double        grOff     = 0.0;
+        const double* bcVuCal   = nullptr;
+        const double* ledsCal   = nullptr;
         {
             std::lock_guard<std::mutex> lk(g_userCacheMutex);
             for (const auto& e : g_userCache) {
                 if (&e->bindings == b) {
                     grParam = e->grVst3Param;
                     grOff   = e->grOffsetDb;
+                    bcVuCal = e->bcVuCalDb;
+                    ledsCal = e->ledsCalDb;
                     break;
                 }
             }
@@ -681,6 +693,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.busCompFxIdx      = i;
                     result.busCompGrParam    = grParam;
                     result.busCompGrOffsetDb = grOff;
+                    result.busCompGrBcVuCal  = bcVuCal;
                 }
                 ++seenBc;
             }
@@ -691,6 +704,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.channelFxIdx      = i;
                     result.channelGrParam    = grParam;
                     result.channelGrOffsetDb = grOff;
+                    result.channelGrLedsCal  = ledsCal;
                 }
                 ++seenCs;
             }
@@ -714,14 +728,18 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
             if (isBc != bc) continue;
             if (seen == last) {
                 // Look up GR override for this entry.
-                int    grParam = -1;
-                double grOff   = 0.0;
+                int           grParam = -1;
+                double        grOff   = 0.0;
+                const double* bcVuCal = nullptr;
+                const double* ledsCal = nullptr;
                 {
                     std::lock_guard<std::mutex> lk(g_userCacheMutex);
                     for (const auto& e : g_userCache) {
                         if (&e->bindings == bb) {
                             grParam = e->grVst3Param;
                             grOff   = e->grOffsetDb;
+                            bcVuCal = e->bcVuCalDb;
+                            ledsCal = e->ledsCalDb;
                             break;
                         }
                     }
@@ -731,11 +749,13 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.busCompFxIdx      = i;
                     result.busCompGrParam    = grParam;
                     result.busCompGrOffsetDb = grOff;
+                    result.busCompGrBcVuCal  = bcVuCal;
                 } else {
                     result.channelMap        = bb;
                     result.channelFxIdx      = i;
                     result.channelGrParam    = grParam;
                     result.channelGrOffsetDb = grOff;
+                    result.channelGrLedsCal  = ledsCal;
                 }
                 return;
             }

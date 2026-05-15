@@ -12,6 +12,7 @@
 #include "reaper_plugin_functions.h"
 #include "Bindings.h"  // dispatch / dispatchEncoder for Uc1Encoder2
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
+#include "GrCalibration.h" // uf8::applyGrCalibration + kBcVuBpDb / kLedsBpDb
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
 
@@ -21,6 +22,15 @@
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+// Per-tick device calibration (Settings → Device → Calibrate BC/CS).
+// section: 0=BC VU (6 ticks 0/4/8/12/16/20 dB), 1=CS LEDs (5 ticks
+// 3/6/10/14/20 dB). Active test: -1 normal, 0..5 = force BC tick,
+// 100..104 = force CS tick.
+int    reasixty_uc1CalCount(int section);
+double reasixty_uc1CalTickDb(int section, int idx);
+double reasixty_uc1CalGet(int section, int idx);
+double reasixty_uc1CalEffective(int section, int idx);
+int    reasixty_uc1CalActiveTest();
 // View-active-plugin window follower — see definition in main.cpp.
 void reasixty_followFocusedGuiToFx(MediaTrack* tr, int fxIdx);
 // Touched-FX reveal — see definition in main.cpp. `domainInt` matches
@@ -2586,13 +2596,39 @@ void UC1Surface::pollGainReduction_()
     // clamp-positive contract holds; offsetDb shifts the raw reading
     // before abs(), letting the user calibrate against plug-ins whose
     // meter reads e.g. negative-going dB.
+    // `cal` + `bp` + `nBp` describe a per-renderer breakpoint table (BC
+    // VU motor uses 0/4/8/12/16/20 dB ticks; DYN GR LEDs + UF8 GR row
+    // use the SSL plug-in's 3/6/10/14/20 dB segment boundaries). When
+    // `cal` is nullptr the function is identity-calibrated — built-in
+    // plug-ins and the fallback-walk path go through this branch.
+    // Sign is normalised via |abs|; the bottom breakpoint (cal[0])
+    // absorbs any residual baseline drift.
+    //
+    // Read strategy (Frank 2026-05-15, Brainworx SSL 9000J): when the
+    // user designated an explicit GR param via the FX Learn picker we
+    // ask REAPER for the plug-in's FORMATTED value ("3.45 dB"), NOT
+    // the raw param value. The raw param is often in a normalised or
+    // proprietary scale (Brainworx returns 0..1 where 1=20 dB GR);
+    // treating that as dB makes the meter wildly inaccurate. The
+    // formatted string is what the plug-in's own UI displays, so it
+    // matches what the user sees. We atof the leading number and let
+    // anything trailing (" dB", " %", anything else) drop. PreSonus
+    // GainReduction_dB fallback is unchanged — it always returns dB.
     auto readGr = [](MediaTrack* tr, int fxIdx, int grParam,
-                     double offsetDb) -> float {
+                     const double* cal, const double* bp, int nBp) -> float {
         if (!tr || fxIdx < 0) return 0.0f;
         double v = 0.0;
         if (grParam >= 0) {
-            double mn = 0.0, mx = 0.0;
-            v = TrackFX_GetParam(tr, fxIdx, grParam, &mn, &mx);
+            char fbuf[64] = {0};
+            if (TrackFX_GetFormattedParamValue(tr, fxIdx, grParam,
+                                               fbuf, sizeof(fbuf))
+                && fbuf[0])
+            {
+                v = std::atof(fbuf);
+            } else {
+                double mn = 0.0, mx = 0.0;
+                v = TrackFX_GetParam(tr, fxIdx, grParam, &mn, &mx);
+            }
         } else {
             char buf[64] = {0};
             if (!TrackFX_GetNamedConfigParm(tr, fxIdx, "GainReduction_dB",
@@ -2601,8 +2637,8 @@ void UC1Surface::pollGainReduction_()
             }
             v = std::atof(buf);
         }
-        v += offsetDb;
         if (v < 0) v = -v;
+        if (cal) v = uf8::applyGrCalibration(v, bp, cal, nBp);
         return static_cast<float>(v);
     };
 
@@ -2613,8 +2649,8 @@ void UC1Surface::pollGainReduction_()
     if (bcTr) {
         UC1Bindings b = lookupBindingsOnTrack(bcTr);
         if (b.busCompMap) {
-            bcGr = readGr(bcTr, b.busCompFxIdx,
-                          b.busCompGrParam, b.busCompGrOffsetDb);
+            bcGr = readGr(bcTr, b.busCompFxIdx, b.busCompGrParam,
+                          b.busCompGrBcVuCal, uf8::kBcVuBpDb, uf8::kBcVuBpCount);
         }
     }
 
@@ -2635,8 +2671,8 @@ void UC1Surface::pollGainReduction_()
     if (csTr) {
         UC1Bindings b = lookupBindingsOnTrack(csTr);
         if (b.channelMap) {
-            csCompGr = readGr(csTr, b.channelFxIdx,
-                              b.channelGrParam, b.channelGrOffsetDb);
+            csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
+                              b.channelGrLedsCal, uf8::kLedsBpDb, uf8::kLedsBpCount);
         } else if (::reasixty_grAnyFx()) {
             const int fxCount = TrackFX_GetCount(csTr);
             for (int fx = 0; fx < fxCount; ++fx) {
@@ -2660,6 +2696,42 @@ void UC1Surface::pollGainReduction_()
     // value? real-time signal vs Gate-Threshold?), drive at 0 so the
     // strip stays dark — better than mirroring Comp GR onto it.
     float csGateGr = 0.0f;
+
+    // Device-level per-tick calibration (Settings → Device → Calibrate).
+    // Applied AFTER per-plugin FX-Learn cal — this is a hardware-trim,
+    // independent of which plug-in produced the reading. Both renderers
+    // get their own cal table because the BC VU motor and the DYN LED
+    // strip have unrelated physical response curves.
+    //
+    // Calibration test mode override: when the user is in Settings →
+    // Device Calibrate, the live GR feed is bypassed and the matching
+    // tick's calibrated value is sent. -1 (default) = normal poll.
+    const int testTick = ::reasixty_uc1CalActiveTest();
+    if (testTick >= 0 && testTick < 6) {
+        bcGr      = static_cast<float>(::reasixty_uc1CalTickDb(0, testTick)
+                                       + ::reasixty_uc1CalEffective(0, testTick));
+        csCompGr  = 0.0f;
+        csGateGr  = 0.0f;
+    } else if (testTick >= 100 && testTick < 105) {
+        const int idx = testTick - 100;
+        csCompGr  = static_cast<float>(::reasixty_uc1CalTickDb(1, idx)
+                                       + ::reasixty_uc1CalEffective(1, idx));
+        bcGr      = 0.0f;
+        csGateGr  = 0.0f;
+    } else {
+        // Normal path: apply device-level cal piecewise. The BC table
+        // anchors at 0/4/8/12/16/20 dB; the LED table at 3/6/10/14/20.
+        // Effective = factory baseline + user delta — see main.cpp.
+        double bcCal[6], csCal[5];
+        for (int i = 0; i < 6; ++i) bcCal[i] = ::reasixty_uc1CalEffective(0, i);
+        for (int i = 0; i < 5; ++i) csCal[i] = ::reasixty_uc1CalEffective(1, i);
+        bcGr     = static_cast<float>(uf8::applyGrCalibration(
+                       bcGr,     uf8::kBcVuBpDb, bcCal, 6));
+        csCompGr = static_cast<float>(uf8::applyGrCalibration(
+                       csCompGr, uf8::kLedsBpDb, csCal, 5));
+        csGateGr = static_cast<float>(uf8::applyGrCalibration(
+                       csGateGr, uf8::kLedsBpDb, csCal, 5));
+    }
 
     pushGainReduction(bcGr, csCompGr, csGateGr);
 }

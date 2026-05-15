@@ -39,6 +39,7 @@
 #include "Bindings.h"
 #include "ColorSync.h"
 #include "FocusedParam.h"
+#include "GrCalibration.h"
 #include "HidDevice.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
@@ -560,6 +561,37 @@ std::atomic<bool> g_selFollowsColor{true};
 // behaviour). Controlled via Settings → Device.
 std::atomic<bool> g_grAnyFx{true};
 
+// Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
+// (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
+// user nudges each marking until the physical needle / LEDs line up
+// with the printed scale). Applied on the OUTGOING value, AFTER the
+// per-plugin FX-Learn cal: this is a hardware-trim, not a plug-in
+// correction.
+//
+// Two layers:
+//   1. Factory baseline (kUc1*Factory) — measured on Frank's UC1
+//      2026-05-15. Silently applied to every output. New users start
+//      here without needing to calibrate.
+//   2. User delta (g_uc1*Cal atomics, persisted in ExtState) — what
+//      the Settings → Device → Calibrate UI edits. Default 0 = no
+//      extra adjustment beyond the factory baseline. Reset zeroes it.
+//
+// The effective per-tick cal is factory + user; the apply path uses
+// reasixty_uc1CalEffective() to combine them.
+//
+//   BC VU ticks: 0, 4, 8, 12, 16, 20 dB
+//   CS LED ticks: 3, 6, 10, 14, 20 dB
+//
+// One active test-tick at a time across both sections — encoded as
+//   -1     : no test (normal GR poll feeds the device)
+//   0..5   : send BC tick i's calibrated value to the motor + 0 to LEDs
+//   100..104: send CS tick (i-100)'s calibrated value to LEDs + 0 to motor
+static constexpr double kUc1BcVuFactory[6]  = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+static constexpr double kUc1CsLedsFactory[5] = {-0.3, -0.3, -0.4, -0.4, -1.5};
+std::atomic<double> g_uc1BcVuCal[6] = {{0},{0},{0},{0},{0},{0}};
+std::atomic<double> g_uc1CsLedsCal[5] = {{0},{0},{0},{0},{0}};
+std::atomic<int>    g_uc1CalActiveTest{-1};
+
 // When true, a parameter change on a non-selected track auto-selects that
 // track (Frank 2026-05-07 — V-Pot/SC/BC edits route to selection so UC1
 // follows automatically rather than requiring a manual select).
@@ -717,6 +749,48 @@ void loadBrightness()
     const char* grAny = GetExtState("rea_sixty", "gr_any_fx");
     if (grAny && *grAny) {
         g_grAnyFx.store(std::atoi(grAny) != 0);
+    }
+    // Per-tick device calibration. Six keys for BC VU, five for CS
+    // LEDs. Missing keys leave the in-memory zero default (= no user
+    // delta beyond the factory baseline).
+    //
+    // Migration (2026-05-15): the previous version exposed cal[] as
+    // an absolute value, so Frank's measured calibration sits in
+    // ExtState as the factory values (-0.3, -0.3, -0.4, -0.4, -1.5).
+    // The new model treats cal[] as a delta on top of an in-code
+    // factory baseline. If we just read the old ExtState in, the
+    // baseline would be applied TWICE. Detect the un-migrated state
+    // via a sentinel; on first encounter, wipe the cal keys so the
+    // factory baseline alone takes over.
+    const char* calMigV = GetExtState("rea_sixty", "uc1_cal_factory_v");
+    const int   calMig  = (calMigV && *calMigV) ? std::atoi(calMigV) : 0;
+    if (calMig < 1) {
+        for (int i = 0; i < 6; ++i) {
+            char k[40];
+            std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
+            DeleteExtState("rea_sixty", k, true);
+        }
+        for (int i = 0; i < 5; ++i) {
+            char k[40];
+            std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
+            DeleteExtState("rea_sixty", k, true);
+        }
+        SetExtState("rea_sixty", "uc1_cal_factory_v", "1", true);
+    } else {
+        for (int i = 0; i < 6; ++i) {
+            char k[40];
+            std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
+            if (const char* v = GetExtState("rea_sixty", k); v && *v) {
+                g_uc1BcVuCal[i].store(std::atof(v));
+            }
+        }
+        for (int i = 0; i < 5; ++i) {
+            char k[40];
+            std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
+            if (const char* v = GetExtState("rea_sixty", k); v && *v) {
+                g_uc1CsLedsCal[i].store(std::atof(v));
+            }
+        }
     }
     const char* tselFp = GetExtState("rea_sixty", "track_sel_follows_param");
     if (tselFp && *tselFp) {
@@ -8060,14 +8134,27 @@ void onTimer()
                     // should still drive the UF8 strip).
                     bool gotIt = false;
                     double gr = 0.0;
-                    double offsetDb = 0.0;
+                    const double* ledsCal = nullptr;  // per-breakpoint correction
                     if (b.channelMap && b.channelFxIdx >= 0) {
-                        offsetDb = b.channelGrOffsetDb;
+                        ledsCal  = b.channelGrLedsCal;
                         if (b.channelGrParam >= 0) {
-                            double mn = 0.0, mx = 0.0;
-                            gr = TrackFX_GetParam(tr, b.channelFxIdx,
-                                                  b.channelGrParam, &mn, &mx);
-                            gotIt = true;
+                            // Read the plug-in's FORMATTED value
+                            // ("3.45 dB") rather than the raw param —
+                            // see UC1Surface readGr for rationale
+                            // (Brainworx SSL 9000J Frank 2026-05-15).
+                            char fbuf[64] = {0};
+                            if (TrackFX_GetFormattedParamValue(
+                                    tr, b.channelFxIdx, b.channelGrParam,
+                                    fbuf, sizeof(fbuf)) && fbuf[0])
+                            {
+                                gr = std::atof(fbuf);
+                                gotIt = true;
+                            } else {
+                                double mn = 0.0, mx = 0.0;
+                                gr = TrackFX_GetParam(tr, b.channelFxIdx,
+                                                      b.channelGrParam, &mn, &mx);
+                                gotIt = true;
+                            }
                         } else {
                             char buf[64] = {0};
                             if (TrackFX_GetNamedConfigParm(
@@ -8091,8 +8178,42 @@ void onTimer()
                         }
                     }
                     if (gotIt) {
-                        gr += offsetDb;
                         if (gr < 0) gr = -gr;
+                        // Per-plugin breakpoint calibration (v5 schema).
+                        // Same table the UC1 DYN GR LED renderer uses,
+                        // applied here so UF8 and UC1 stay in lock-step.
+                        if (ledsCal) {
+                            gr = uf8::applyGrCalibration(
+                                gr, uf8::kLedsBpDb, ledsCal, uf8::kLedsBpCount);
+                            if (gr < 0) gr = 0;
+                        }
+                        // Device-level per-tick calibration (Settings →
+                        // Device → Calibrate CS LEDs). Hardware trim,
+                        // applied after the per-plug-in cal so UF8 and
+                        // UC1 LED strip stay aligned. Effective =
+                        // factory baseline + user delta.
+                        double devCal[5];
+                        for (int i = 0; i < 5; ++i)
+                            devCal[i] = kUc1CsLedsFactory[i] +
+                                        g_uc1CsLedsCal[i].load();
+                        gr = uf8::applyGrCalibration(
+                            gr, uf8::kLedsBpDb, devCal, 5);
+                        if (gr < 0) gr = 0;
+                        // Test-tick override (Settings → Device →
+                        // Calibrate). When active, force the matching
+                        // tick value so the user sees what the renderer
+                        // would draw at exactly that tick.
+                        const int testT = g_uc1CalActiveTest.load();
+                        if (testT >= 100 && testT < 105) {
+                            const int ti = testT - 100;
+                            gr = uf8::kLedsBpDb[ti]
+                                 + kUc1CsLedsFactory[ti]
+                                 + g_uc1CsLedsCal[ti].load();
+                        } else if (testT >= 0 && testT < 6) {
+                            // BC test active — silence UF8 GR row so
+                            // the user only sees the BC needle moving.
+                            gr = 0.0;
+                        }
                         if (gr > 20.0) gr = 20.0;
                         // Piecewise dB → sub-step matching the SSL
                         // plug-in's GR meter (3/6/10/14/20 dB segments).
@@ -9178,6 +9299,76 @@ void reasixty_setGrAnyFx(bool enabled)
     g_grAnyFx.store(enabled);
     SetExtState("rea_sixty", "gr_any_fx", enabled ? "1" : "0", true);
 }
+
+// Per-tick device calibration accessors (Settings → Device).
+// Section: 0 = BC VU motor (6 ticks 0/4/8/12/16/20 dB),
+//          1 = CS DYN GR LEDs (5 ticks 3/6/10/14/20 dB).
+// Clamped to ±10 dB hard cap on set.
+static constexpr double kBcVuTicks[6] = {0.0, 4.0, 8.0, 12.0, 16.0, 20.0};
+static constexpr double kCsLedsTicks[5] = {3.0, 6.0, 10.0, 14.0, 20.0};
+
+int reasixty_uc1CalCount(int section)
+{
+    return (section == 0) ? 6 : (section == 1) ? 5 : 0;
+}
+
+double reasixty_uc1CalTickDb(int section, int idx)
+{
+    if (section == 0 && idx >= 0 && idx < 6) return kBcVuTicks[idx];
+    if (section == 1 && idx >= 0 && idx < 5) return kCsLedsTicks[idx];
+    return 0.0;
+}
+
+double reasixty_uc1CalGet(int section, int idx)
+{
+    if (section == 0 && idx >= 0 && idx < 6) return g_uc1BcVuCal[idx].load();
+    if (section == 1 && idx >= 0 && idx < 5) return g_uc1CsLedsCal[idx].load();
+    return 0.0;
+}
+
+// Effective per-tick cal = factory baseline + user delta. This is
+// what the apply path (UC1Surface poll + main.cpp UF8 GR byte) feeds
+// into applyGrCalibration. UI-side getter/setter operate on the user
+// delta only.
+double reasixty_uc1CalEffective(int section, int idx)
+{
+    if (section == 0 && idx >= 0 && idx < 6)
+        return kUc1BcVuFactory[idx]  + g_uc1BcVuCal[idx].load();
+    if (section == 1 && idx >= 0 && idx < 5)
+        return kUc1CsLedsFactory[idx] + g_uc1CsLedsCal[idx].load();
+    return 0.0;
+}
+
+void reasixty_uc1CalSet(int section, int idx, double newVal)
+{
+    if (newVal >  10.0) newVal =  10.0;
+    if (newVal < -10.0) newVal = -10.0;
+    char k[40];
+    char vbuf[32];
+    std::snprintf(vbuf, sizeof(vbuf), "%.3f", newVal);
+    if (section == 0 && idx >= 0 && idx < 6) {
+        g_uc1BcVuCal[idx].store(newVal);
+        std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", idx);
+        SetExtState("rea_sixty", k, vbuf, true);
+    } else if (section == 1 && idx >= 0 && idx < 5) {
+        g_uc1CsLedsCal[idx].store(newVal);
+        std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", idx);
+        SetExtState("rea_sixty", k, vbuf, true);
+    }
+}
+
+void reasixty_uc1CalResetSection(int section)
+{
+    const int n = reasixty_uc1CalCount(section);
+    for (int i = 0; i < n; ++i) reasixty_uc1CalSet(section, i, 0.0);
+}
+
+// Active calibration test tick: -1 normal, 0..5 BC tick, 100..104 CS
+// tick. UC1Surface's poll-GR path checks this and substitutes the
+// matching tick value so the user can dial +/− while watching the
+// physical needle / LEDs settle.
+int  reasixty_uc1CalActiveTest()           { return g_uc1CalActiveTest.load(); }
+void reasixty_uc1SetCalActiveTest(int enc) { g_uc1CalActiveTest.store(enc); }
 
 bool reasixty_trackSelFollowsParam()
 {

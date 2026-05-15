@@ -33,7 +33,18 @@ struct UserMetering {
     // Set vst3Param ≥ 0 to enable; -1 means "not learned" (fall back to
     // REAPER's GainReduction_dB named-config-parm).
     int    grVst3Param = -1;
+    // Pre-abs additive shift for plug-ins whose meter reads negative-going
+    // dB or sits at a non-zero floor at rest. Applied before |abs|.
     double grOffsetDb  = 0.0;
+    // Per-breakpoint correction tables — applied AFTER |abs|, piecewise
+    // linear between sample points. Index aligns with the bp constants
+    // declared in GrCalibration.h. Default 0.0 ⇒ identity. The two
+    // tables are independent because the BC VU motor (continuous needle
+    // at 0/4/8/12/16/20 dB ticks) and the DYN GR LED strip (quantised at
+    // 3/6/10/14/20 dB SSL-plugin segment boundaries) have different
+    // native scales.
+    double grBcVuCalDb[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    double grLedsCalDb[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
 };
 
 // V-Pot push behaviour for a UF8 bank slot. User chooses since user plug-in
@@ -143,6 +154,13 @@ struct UserPluginMap {
     UserUf8Map                 uf8;            // optional UF8 strip-mode bindings
     std::vector<UserParamInfo> paramSnapshot;  // last-seen VST3 param list
     int64_t                    snapshotTakenAt = 0;  // unix-sec; 0 = never
+    // Per-domain slot caches (Frank 2026-05-15). When the user toggles
+    // primary mode CS ↔ BC the slot list gets swapped onto the matching
+    // cache rather than wiped, so flipping back and forth preserves
+    // both sets. Empty until the user has built bindings in that
+    // domain at least once.
+    std::vector<UserLinkSlot>  csSlotCache;
+    std::vector<UserLinkSlot>  bcSlotCache;
 };
 
 struct UserPluginCatalog {
@@ -163,7 +181,13 @@ namespace user_plugins {
 // the editor stays usable without a live FX instance). v3 readers seeing a
 // v4 file silently drop the new fields; v3 files load in v4 readers with
 // uf8Mode derived from "is the uf8 block non-empty".
-constexpr int kCurrentFormatVersion = 4;
+// v5 (2026-05-15): added `grBcVuCalDb[6]` and `grLedsCalDb[5]` on
+// UserMetering — per-breakpoint correction tables for the BC VU motor
+// (ticks 0/4/8/12/16/20 dB) and the DYN GR LEDs / UF8 GR row (segment
+// boundaries 3/6/10/14/20 dB). v4 readers seeing v5 files drop the
+// arrays (no calibration); v4 files load in v5 with arrays = all zeros
+// (identity, no behaviour change).
+constexpr int kCurrentFormatVersion = 5;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
