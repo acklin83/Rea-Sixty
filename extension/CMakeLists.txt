@@ -84,6 +84,13 @@ if(APPLE)
     target_sources(reaper_uf8 PRIVATE src/macos_save_dialog.mm)
     set_source_files_properties(src/macos_save_dialog.mm PROPERTIES
         COMPILE_FLAGS "-fno-objc-arc")
+    # AppKit window-positioning helpers for the pin-FX-GUI feature.
+    # Same rationale as the save dialog: SWELL SetWindowPos /
+    # GetWindowRect / GetSystemMetrics aren't reliably reachable on
+    # macOS 15.
+    target_sources(reaper_uf8 PRIVATE src/macos_pin_fx_gui.mm)
+    set_source_files_properties(src/macos_pin_fx_gui.mm PROPERTIES
+        COMPILE_FLAGS "-fno-objc-arc")
 endif()
 
 target_link_libraries(reaper_uf8 PRIVATE PkgConfig::HIDAPI)

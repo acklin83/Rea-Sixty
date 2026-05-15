@@ -64,6 +64,14 @@ bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
+bool reasixty_pluginGuiFollowsInstance();
+void reasixty_setPluginGuiFollowsInstance(bool follow);
+bool reasixty_pluginGuiPinPos();
+void reasixty_setPluginGuiPinPos(bool on);
+void reasixty_getPluginGuiPin(int* x, int* y);
+bool reasixty_capturePluginGuiPin();
+bool reasixty_pluginGuiPinCenter();
+void reasixty_setPluginGuiPinCenter(bool on);
 bool reasixty_folderMode();
 void reasixty_setFolderMode(bool on);
 bool reasixty_showOnlySelected();
@@ -230,6 +238,51 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "SSL Strip Mode follows focused plugin window",
                        &sff)) {
         reasixty_setStripFollowsFocusedFx(sff);
+    }
+
+    // When SSL Strip Mode (with GUI) or UF8 Plugin Mode (with GUI) has
+    // a plug-in window open, Instance Cycle re-points the window at
+    // the cycle's new target. Off → cycle moves the surface but
+    // leaves the floating window pinned to its current FX.
+    bool pgfi = reasixty_pluginGuiFollowsInstance();
+    if (ImGui_Checkbox(ctx, "Plugin GUI follows active Instance", &pgfi)) {
+        reasixty_setPluginGuiFollowsInstance(pgfi);
+    }
+
+    // Pin plug-in GUI position: drag a plug-in window where you want it,
+    // then click "Capture current". From then on, every managed
+    // TrackFX_Show snaps the floating window to that x/y (size left
+    // alone). -1 / -1 = no pin captured yet → checkbox does nothing
+    // until a position is captured.
+    bool pgpp = reasixty_pluginGuiPinPos();
+    if (ImGui_Checkbox(ctx, "Pin plug-in GUI position", &pgpp)) {
+        reasixty_setPluginGuiPinPos(pgpp);
+    }
+    {
+        int px = -1, py = -1;
+        reasixty_getPluginGuiPin(&px, &py);
+        const bool centerMode = reasixty_pluginGuiPinCenter();
+        char hint[96];
+        if (centerMode) {
+            std::snprintf(hint, sizeof(hint), "  Pin: center");
+        } else if (px < 0 || py < 0) {
+            std::snprintf(hint, sizeof(hint),
+                "  Pin: (none captured yet)");
+        } else {
+            std::snprintf(hint, sizeof(hint),
+                "  Pin: %d, %d", px, py);
+        }
+        ImGui_Text(ctx, hint);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Capture current",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_capturePluginGuiPin();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Center on Screen",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_setPluginGuiPinCenter(true);
+        }
     }
 
     // Ballistic dropdown. Combo's `items` arg is a NUL-separated list
@@ -6568,10 +6621,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         if (ImGui_BeginTable(ctx, "fxl_master", kCols, &tblFlags,
                              nullptr, nullptr, nullptr)) {
             int wFlag = ImGui_TableColumnFlags_WidthFixed;
-            double wDefault = 36.0, wShort = 64.0, wMatch = 240.0,
+            double wDefault = 36.0, wShort = 100.0, wMatch = 240.0,
                    wDomain = 72.0, wSlots = 64.0, wActions = 100.0;
-            ImGui_TableSetupColumn(ctx, "Default", &wFlag, &wDefault, nullptr);
-            ImGui_TableSetupColumn(ctx, "Short",   &wFlag, &wShort,   nullptr);
+            ImGui_TableSetupColumn(ctx, "Default",      &wFlag, &wDefault, nullptr);
+            ImGui_TableSetupColumn(ctx, "Short Max. 7", &wFlag, &wShort,   nullptr);
             ImGui_TableSetupColumn(ctx, "Match",   &wFlag, &wMatch,   nullptr);
             ImGui_TableSetupColumn(ctx, "Mode",    &wFlag, &wDomain,  nullptr);
             ImGui_TableSetupColumn(ctx, "Slots",   &wFlag, &wSlots,   nullptr);

@@ -58,6 +58,24 @@
 // also call reasixty_actionPickerStart / Cancel / etc.
 void reasixty_actionPickerPoll();
 
+// rec->GetFunc capture for SWELL/BrowseForSaveFile lookups. Defined at
+// file scope (not inside any anonymous namespace) so the SWELL-API
+// loader helpers further down — which sit in the first anonymous
+// namespace — can read it unqualified. Initialised in REAPER_PLUGIN_ENTRY.
+void* (*g_reaperGetFunc)(const char*) = nullptr;
+
+// Forward declarations for macos_pin_fx_gui.mm. Live at file scope (not
+// inside `namespace { ... }`) so anonymous-namespace code below can
+// reach them as ::uf8::macos* without accidentally shadowing the
+// project's main ::uf8 namespace.
+#ifdef __APPLE__
+namespace uf8 {
+void macosPinWindow(void* hwnd, int x, int y);
+bool macosGetWindowRect(void* hwnd, int* x, int* y, int* w, int* h);
+void macosGetScreenSize(int* w, int* h);
+} // namespace uf8
+#endif
+
 namespace {
 
 std::unique_ptr<uf8::UF8Device>   g_dev;
@@ -115,6 +133,12 @@ int   g_csGuiShownFx = -1;
 std::atomic<bool> g_uf8PluginModeWithGui{false};
 void* g_uf8GuiShownTr = nullptr;
 int   g_uf8GuiShownFx = -1;
+// True when the currently-tracked UF8 GUI window was opened by us
+// (Plugin-Mode-with-GUI). False when it was already open before we
+// started displaying it — in that case the close-path skips
+// TrackFX_Show(...,2) so we don't yank a window the user had open
+// independently (Frank 2026-05-15).
+bool  g_uf8GuiOwnedByUs = false;
 
 // V-POTS → FX Cycle GUI ownership. V-Pot push toggles ownership for a
 // strip; the GUI sync drain opens/closes the floating window based on
@@ -545,6 +569,25 @@ std::atomic<bool> g_trackSelFollowsParam{false};
 // plugin window the user focuses in REAPER (GetFocusedFX2 poll).
 std::atomic<bool> g_stripFollowsFocusedFx{false};
 
+// When true AND a plug-in GUI is currently displayed via SSL Strip Mode
+// (with GUI) or UF8 Plugin Mode (with GUI), Instance Cycle switches the
+// GUI to the new target instance. Default on — Frank 2026-05-15.
+std::atomic<bool> g_pluginGuiFollowsInstance{true};
+
+// Pin plug-in GUI position — when on, every TrackFX_Show(..., 3) we run
+// on a managed path is followed by a SetWindowPos to (pinX, pinY). Size
+// is left alone (SWP_NOSIZE). User captures the position by dragging a
+// plug-in window where they want it, then clicking "Capture current as
+// pin" in Settings. Frank 2026-05-15 FR.
+std::atomic<bool> g_pluginGuiPinPos{false};
+std::atomic<int>  g_pluginGuiPinX{-1};
+std::atomic<int>  g_pluginGuiPinY{-1};
+// When true, pinFxGuiIfEnabled_ ignores pinX/pinY and centres the
+// window on the primary screen each time it's shown. Plug-in sizes
+// differ, so the centre is recomputed per-window using the actual
+// floating-window rect. Mutually exclusive with the captured x/y mode.
+std::atomic<bool> g_pluginGuiPinCenter{false};
+
 // UF8 Plugin Mode (deep edit): all 8 strips drive params on ONE user-
 // mapped plugin instance on the focused track. Separate from SSL Strip
 // Mode (g_pluginFaderMode) which is per-track. Toggled via the
@@ -655,6 +698,19 @@ void loadBrightness()
     if (sff && *sff) {
         g_stripFollowsFocusedFx.store(std::atoi(sff) != 0);
     }
+    const char* pgfi =
+        GetExtState("rea_sixty", "plugin_gui_follows_instance");
+    if (pgfi && *pgfi) {
+        g_pluginGuiFollowsInstance.store(std::atoi(pgfi) != 0);
+    }
+    const char* pgpp = GetExtState("rea_sixty", "plugin_gui_pin_pos");
+    if (pgpp && *pgpp) g_pluginGuiPinPos.store(std::atoi(pgpp) != 0);
+    const char* pgpx = GetExtState("rea_sixty", "plugin_gui_pin_x");
+    if (pgpx && *pgpx) g_pluginGuiPinX.store(std::atoi(pgpx));
+    const char* pgpy = GetExtState("rea_sixty", "plugin_gui_pin_y");
+    if (pgpy && *pgpy) g_pluginGuiPinY.store(std::atoi(pgpy));
+    const char* pgpc = GetExtState("rea_sixty", "plugin_gui_pin_center");
+    if (pgpc && *pgpc) g_pluginGuiPinCenter.store(std::atoi(pgpc) != 0);
     const char* upm = GetExtState("ReaSixty", "uf8PluginMode");
     if (upm && *upm) {
         g_uf8PluginMode.store(std::atoi(upm) != 0);
@@ -1206,6 +1262,135 @@ void applyMouseScroll_(int delta)
     emitMouseScroll(static_cast<int32_t>(delta));
 }
 
+// Window-positioning back-end for the "Pin plug-in GUI position"
+// feature. macOS uses AppKit directly via macos_pin_fx_gui.mm because
+// SWELL's SetWindowPos / GetWindowRect / GetSystemMetrics aren't
+// reachable on macOS 15 (same hardened-runtime symbol scope that breaks
+// BrowseForSaveFile — see macos_save_dialog.mm). Win/Linux still go
+// through SWELL via the standard function-pointer pattern.
+// (Forward declarations of ::uf8::macos* live at file scope above this
+// anonymous namespace so the surrounding code can lookup ::uf8::setFocus
+// unambiguously.)
+#ifdef __APPLE__
+static bool getFloatingRect_(HWND hwnd, int* x, int* y, int* w, int* h)
+{
+    return ::uf8::macosGetWindowRect(hwnd, x, y, w, h);
+}
+static void getScreenSize_(int* w, int* h)
+{
+    ::uf8::macosGetScreenSize(w, h);
+}
+static void setWindowTopLeft_(HWND hwnd, int x, int y)
+{
+    ::uf8::macosPinWindow(hwnd, x, y);
+}
+#else
+using SetWindowPos_t     = void(*)(HWND, HWND, int, int, int, int, int);
+using GetWindowRect_t    = bool(*)(HWND, RECT*);
+using GetSystemMetrics_t = int (*)(int);
+
+static SetWindowPos_t loadSetWindowPos_()
+{
+    static SetWindowPos_t p = nullptr;
+    if (p) return p;
+    if (g_reaperGetFunc) {
+        p = reinterpret_cast<SetWindowPos_t>(
+            g_reaperGetFunc("SetWindowPos"));
+        if (p) return p;
+    }
+    p = reinterpret_cast<SetWindowPos_t>(
+        dlsym(RTLD_DEFAULT, "SetWindowPos"));
+    return p;
+}
+
+static GetWindowRect_t loadGetWindowRect_()
+{
+    static GetWindowRect_t p = nullptr;
+    if (p) return p;
+    if (g_reaperGetFunc) {
+        p = reinterpret_cast<GetWindowRect_t>(
+            g_reaperGetFunc("GetWindowRect"));
+        if (p) return p;
+    }
+    p = reinterpret_cast<GetWindowRect_t>(
+        dlsym(RTLD_DEFAULT, "GetWindowRect"));
+    return p;
+}
+
+static GetSystemMetrics_t loadGetSystemMetrics_()
+{
+    static GetSystemMetrics_t p = nullptr;
+    if (p) return p;
+    if (g_reaperGetFunc) {
+        p = reinterpret_cast<GetSystemMetrics_t>(
+            g_reaperGetFunc("GetSystemMetrics"));
+        if (p) return p;
+    }
+    p = reinterpret_cast<GetSystemMetrics_t>(
+        dlsym(RTLD_DEFAULT, "GetSystemMetrics"));
+    return p;
+}
+
+static bool getFloatingRect_(HWND hwnd, int* x, int* y, int* w, int* h)
+{
+    auto fn = loadGetWindowRect_();
+    if (!fn) return false;
+    RECT r{};
+    if (!fn(hwnd, &r)) return false;
+    if (x) *x = static_cast<int>(r.left);
+    if (y) *y = static_cast<int>(r.top);
+    if (w) *w = static_cast<int>(r.right  - r.left);
+    if (h) *h = static_cast<int>(r.bottom - r.top);
+    return true;
+}
+static void getScreenSize_(int* w, int* h)
+{
+    auto fn = loadGetSystemMetrics_();
+    if (!fn) { if (w) *w = 0; if (h) *h = 0; return; }
+    if (w) *w = fn(SM_CXSCREEN);
+    if (h) *h = fn(SM_CYSCREEN);
+}
+static void setWindowTopLeft_(HWND hwnd, int x, int y)
+{
+    auto fn = loadSetWindowPos_();
+    if (!fn) return;
+    fn(hwnd, nullptr, x, y, 0, 0,
+       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+#endif
+
+// "Pin plug-in GUI position" implementation. Called immediately after
+// every TrackFX_Show(..., 3) on a managed path so the floating window
+// snaps to either the saved (x, y) or the screen centre. Size is left
+// alone in both branches. TrackFX_GetFloatingWindow returns null if the
+// FX is shown in the FX-chain panel rather than as a floating window;
+// the pin feature only acts on real floating windows.
+static void pinFxGuiIfEnabled_(MediaTrack* tr, int fxIdx)
+{
+    if (!g_pluginGuiPinPos.load()) return;
+    if (!tr || fxIdx < 0) return;
+    HWND hwnd = TrackFX_GetFloatingWindow(tr, fxIdx);
+    if (!hwnd) return;
+
+    int x = -1, y = -1;
+    if (g_pluginGuiPinCenter.load()) {
+        // Centre on primary screen, recomputed per show so different
+        // plug-in sizes each land centred.
+        int wx = 0, wy = 0, ww = 0, wh = 0;
+        if (!getFloatingRect_(hwnd, &wx, &wy, &ww, &wh)) return;
+        int sw = 0, sh = 0;
+        getScreenSize_(&sw, &sh);
+        if (sw <= 0 || sh <= 0) return;
+        x = (sw - ww) / 2;
+        y = (sh - wh) / 2;
+    } else {
+        x = g_pluginGuiPinX.load();
+        y = g_pluginGuiPinY.load();
+        if (x < 0 || y < 0) return;
+    }
+    setWindowTopLeft_(hwnd, x, y);
+}
+
 // Cycle the active CS or BC plug-in instance by `step` slots. Shared
 // between the Shift+Channel-Encoder dispatch (drainInputQueue) and the
 // bindable instance_next / instance_prev builtins so the same wraparound
@@ -1300,15 +1485,22 @@ void applyInstanceCycle_(int step)
     // per-strip V-Pot path in StripInstanceDelta still updates this
     // map independently for non-focused strips.
     g_stripInstanceFxIdx[tr] = target.fxIdx;
+    // Trigger a GUI sync drain so any plug-in window currently driven by
+    // SSL Strip Mode (with GUI) or UF8 Plugin Mode (with GUI) re-points
+    // at the cycle's new target instance. Gated by the
+    // pluginGuiFollowsInstance Settings toggle (default on).
+    auto triggerFollowSync = [&]() {
+        if (!g_pluginGuiFollowsInstance.load()) return;
+        const bool sslGui = g_pluginFaderMode.load()
+                         && g_pluginFaderModeWithGui.load();
+        const bool uf8Gui = g_uf8PluginMode.load()
+                         && g_uf8PluginModeWithGui.load();
+        if (sslGui || uf8Gui) g_pluginGuiSyncRequest.store(true);
+    };
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
-        // Only follow with the GUI when the "with GUI" variant of SSL
-        // Strip Mode is active. Plain ssl_strip_mode_toggle leaves the
-        // with-Gui flag false, so the instance cycle stays headless.
-        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
-            g_pluginGuiSyncRequest.store(true);
-        }
+        triggerFollowSync();
     } else if (target.dom == uf8::Domain::BusComp) {
         uf8::setFocus({target.dom, 0});
         uc1::setBcInstanceIndex(tr, target.instIdx);
@@ -1316,12 +1508,11 @@ void applyInstanceCycle_(int step)
         // BC carousel agree with the cycle's selection. Idempotent
         // when tr already == bcAnchor.
         g_uc1_surface->setBcAnchorTrack(tr);
+        triggerFollowSync();
     } else {
         uf8::setFocus({uf8::Domain::None, 0});
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
-        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
-            g_pluginGuiSyncRequest.store(true);
-        }
+        triggerFollowSync();
     }
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
@@ -1341,6 +1532,7 @@ void applyInstanceCycle_(int step)
         {
             TrackFX_Show(tr, g_focusedGuiShownFx, 2);
             TrackFX_Show(tr, target.fxIdx, 3);
+            pinFxGuiIfEnabled_(tr, target.fxIdx);
             g_focusedGuiShownFx = target.fxIdx;
         }
     }
@@ -1393,6 +1585,7 @@ void applyFxCycle_(int step)
     {
         TrackFX_Show(tr, g_focusedGuiShownFx, 2);
         TrackFX_Show(tr, nextIdx, 3);
+        pinFxGuiIfEnabled_(tr, nextIdx);
         g_focusedGuiShownFx = nextIdx;
     }
     if (g_uc1_surface) {
@@ -1451,6 +1644,7 @@ void applyShowFocusedPluginGui_()
                      g_focusedGuiShownFx, 2);
     }
     TrackFX_Show(tr, fxIdx, /*float window*/ 3);
+    pinFxGuiIfEnabled_(tr, fxIdx);
     g_focusedGuiShownTr = tr;
     g_focusedGuiShownFx = fxIdx;
 }
@@ -7942,6 +8136,7 @@ void onTimer()
         if (wantOpen && targetTr && targetFx >= 0) {
             // showflag: 3 = floating GUI shown.
             TrackFX_Show(targetTr, targetFx, 3);
+            pinFxGuiIfEnabled_(targetTr, targetFx);
             g_csGuiShownTr = targetTr;
             g_csGuiShownFx = targetFx;
         }
@@ -7977,15 +8172,37 @@ void onTimer()
                  || g_uf8GuiShownFx != uf8TargetFx
                  || !uf8WantOpen))
             {
-                if (ValidatePtr2(nullptr, g_uf8GuiShownTr, "MediaTrack*")) {
+                // Only close windows WE opened — pre-existing GUIs that
+                // were already up when Plugin Mode latched onto them
+                // belong to the user, not to us. Same rule applies on
+                // Instance Cycle: if the old target was pre-existing,
+                // leave it; if we opened it, drop it.
+                if (g_uf8GuiOwnedByUs
+                    && ValidatePtr2(nullptr, g_uf8GuiShownTr, "MediaTrack*"))
+                {
                     TrackFX_Show(static_cast<MediaTrack*>(g_uf8GuiShownTr),
                                  g_uf8GuiShownFx, 2);
                 }
                 g_uf8GuiShownTr = nullptr;
                 g_uf8GuiShownFx = -1;
+                g_uf8GuiOwnedByUs = false;
             }
             if (uf8WantOpen && uf8TargetTr && uf8TargetFx >= 0) {
+                // Decide ownership on transition only (new target). The
+                // close-branch above cleared g_uf8GuiShownTr in that
+                // case, so the inequality below detects it. Stays
+                // sticky once latched so per-tick TrackFX_Show(...,3)
+                // calls (which re-open a manually-closed window — the
+                // original follow-behaviour) don't keep flipping
+                // ownership back to "we opened it".
+                if (g_uf8GuiShownTr != uf8TargetTr
+                    || g_uf8GuiShownFx != uf8TargetFx)
+                {
+                    g_uf8GuiOwnedByUs =
+                        !TrackFX_GetOpen(uf8TargetTr, uf8TargetFx);
+                }
                 TrackFX_Show(uf8TargetTr, uf8TargetFx, 3);
+                pinFxGuiIfEnabled_(uf8TargetTr, uf8TargetFx);
                 g_uf8GuiShownTr = uf8TargetTr;
                 g_uf8GuiShownFx = uf8TargetFx;
             }
@@ -8037,6 +8254,7 @@ void onTimer()
             }
             if (instWantOpen && instTargetTr && instTargetFx >= 0) {
                 TrackFX_Show(instTargetTr, instTargetFx, 3);
+                pinFxGuiIfEnabled_(instTargetTr, instTargetFx);
                 g_instanceGuiShownTr = instTargetTr;
                 g_instanceGuiShownFx = instTargetFx;
             }
@@ -8859,6 +9077,134 @@ void reasixty_setStripFollowsFocusedFx(bool follow)
     SetExtState("rea_sixty", "strip_follows_focused_fx", follow ? "1" : "0", true);
 }
 
+bool reasixty_pluginGuiFollowsInstance()
+{
+    return g_pluginGuiFollowsInstance.load();
+}
+
+void reasixty_setPluginGuiFollowsInstance(bool follow)
+{
+    g_pluginGuiFollowsInstance.store(follow);
+    SetExtState("rea_sixty", "plugin_gui_follows_instance",
+                follow ? "1" : "0", true);
+}
+
+bool reasixty_pluginGuiPinPos()
+{
+    return g_pluginGuiPinPos.load();
+}
+
+void reasixty_setPluginGuiPinPos(bool on)
+{
+    g_pluginGuiPinPos.store(on);
+    SetExtState("rea_sixty", "plugin_gui_pin_pos", on ? "1" : "0", true);
+}
+
+// Read the current pin (-1 / -1 means "no pin captured yet").
+void reasixty_getPluginGuiPin(int* x, int* y)
+{
+    if (x) *x = g_pluginGuiPinX.load();
+    if (y) *y = g_pluginGuiPinY.load();
+}
+
+bool reasixty_pluginGuiPinCenter()
+{
+    return g_pluginGuiPinCenter.load();
+}
+
+// Switch to "centre on primary screen" mode. Clears any captured x/y
+// in ExtState so the displayed status reads as "Pin: center" instead
+// of an outdated x,y value next launch.
+void reasixty_setPluginGuiPinCenter(bool on)
+{
+    g_pluginGuiPinCenter.store(on);
+    SetExtState("rea_sixty", "plugin_gui_pin_center",
+                on ? "1" : "0", true);
+    if (on) {
+        g_pluginGuiPinX.store(-1);
+        g_pluginGuiPinY.store(-1);
+        SetExtState("rea_sixty", "plugin_gui_pin_x", "-1", true);
+        SetExtState("rea_sixty", "plugin_gui_pin_y", "-1", true);
+    }
+}
+
+// Capture the screen position of whichever managed plug-in GUI is
+// currently visible. Walks our four tracking pairs (CS / UF8 / Instance
+// / focused-push) and uses the first that holds a live HWND. Returns
+// true on success — caller can use the return to drive a status hint.
+bool reasixty_capturePluginGuiPin()
+{
+    auto trySave = [&](HWND hwnd) -> bool {
+        if (!hwnd) return false;
+        int x = 0, y = 0;
+        if (!getFloatingRect_(hwnd, &x, &y, nullptr, nullptr)) return false;
+        g_pluginGuiPinX.store(x);
+        g_pluginGuiPinY.store(y);
+        // Capturing an explicit position flips off centre mode so the
+        // two pin modes don't fight each other on next show.
+        g_pluginGuiPinCenter.store(false);
+        SetExtState("rea_sixty", "plugin_gui_pin_center", "0", true);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%d", x);
+        SetExtState("rea_sixty", "plugin_gui_pin_x", buf, true);
+        std::snprintf(buf, sizeof(buf), "%d", y);
+        SetExtState("rea_sixty", "plugin_gui_pin_y", buf, true);
+        return true;
+    };
+
+    // Pass 1: our four managed tracking pairs — fastest path, no track
+    // walk. Empty unless the user has Plugin Mode / Strip Mode / Encoder-2
+    // push driving a window.
+    struct Pair { void* tr; int fx; };
+    const Pair pairs[] = {
+        { g_uf8GuiShownTr,      g_uf8GuiShownFx },
+        { g_csGuiShownTr,       g_csGuiShownFx },
+        { g_instanceGuiShownTr, g_instanceGuiShownFx },
+        { g_focusedGuiShownTr,  g_focusedGuiShownFx },
+    };
+    for (const Pair& p : pairs) {
+        if (!p.tr || p.fx < 0) continue;
+        if (!ValidatePtr2(nullptr, p.tr, "MediaTrack*")) continue;
+        HWND hwnd = TrackFX_GetFloatingWindow(
+            static_cast<MediaTrack*>(p.tr), p.fx);
+        if (trySave(hwnd)) return true;
+    }
+
+    // Pass 2: REAPER's currently-focused FX. Covers the natural workflow
+    // "open a plug-in manually, drag where I want, click Capture".
+    {
+        int trNum = -1, itemNum = -1, fxNum = -1;
+        const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
+        if ((ret & 1) && trNum >= 0) {
+            MediaTrack* tr = (trNum == 0)
+                ? GetMasterTrack(nullptr)
+                : GetTrack(nullptr, trNum - 1);
+            const int fxIdx = fxNum & 0x00FFFFFF;
+            if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+                HWND hwnd = TrackFX_GetFloatingWindow(tr, fxIdx);
+                if (trySave(hwnd)) return true;
+            }
+        }
+    }
+
+    // Pass 3: walk every track / FX looking for an open floating window.
+    // First hit wins. Covers cases where the focused-FX query returns
+    // nothing (e.g. user clicked back into the arrange view after
+    // positioning the window).
+    const int trackCount = CountTracks(nullptr);
+    for (int t = -1; t < trackCount; ++t) {
+        MediaTrack* tr = (t < 0) ? GetMasterTrack(nullptr)
+                                 : GetTrack(nullptr, t);
+        if (!tr) continue;
+        const int n = TrackFX_GetCount(tr);
+        for (int f = 0; f < n; ++f) {
+            HWND hwnd = TrackFX_GetFloatingWindow(tr, f);
+            if (trySave(hwnd)) return true;
+        }
+    }
+    return false;
+}
+
 // Surface filters. Backing atomics are also driven by the `folder_mode`
 // and `show_only_selected` builtins (so a hardware-bound button stays in
 // sync with the Settings UI). ExtState key matches the builtin handler.
@@ -9053,7 +9399,8 @@ bool reasixty_actionIsToggle(const std::string& action)
 // null because REAPER doesn't export the symbol under the hardened
 // runtime). Win/Linux still try the legacy SWELL path. g_reaperGetFunc
 // is captured at REAPER_PLUGIN_ENTRY for other GetFunc-backed lookups.
-static void* (*g_reaperGetFunc)(const char*) = nullptr;
+// Definition moved to the top of this file (above the anonymous
+// namespace) so the SWELL-API loader helpers can read the same pointer.
 
 #ifdef __APPLE__
 namespace uf8 {
