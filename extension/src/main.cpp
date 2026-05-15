@@ -223,6 +223,17 @@ std::atomic<bool> g_pageDirty{false};
 std::atomic<void*> g_pendingFocusTrack{nullptr};
 std::atomic<bool>  g_pendingFocusGuiSync{false};
 
+// Set while runReaperActionOnTrackN_ is doing its save → SetOnlyTrackSelected
+// → Main_OnCommand → restore dance. Each step fires SetSurfaceSelected, and
+// without this gate the coalescer would latch onto whichever track happened
+// to be re-armed last — typically the highest-indexed previously-selected
+// track — and then onTimer's drain would call followSelectedInMixer() on
+// it, scrolling the UF8 bank to that track's bucket. Bug observed
+// 2026-05-15: turning a V-Pot in REC + RME (gain-rotation on) with a track
+// in a different bank selected snapped the visible bank to that other
+// track. With this gate, the coalescer ignores the swap traffic entirely.
+std::atomic<bool> g_inSelectionSwap{false};
+
 // When the user hits the PAN button, we globally override every strip's
 // V-Pot to act as pan control regardless of whether the track hosts an
 // SSL plug-in. Any V-Pot assignment soft key (0x68–0x6D) returns to
@@ -2195,6 +2206,13 @@ void runReaperActionOnTrackN_(int cmdId, MediaTrack* tr, int times)
     for (int i = 0; i < nSel; ++i) {
         if (auto* s = GetSelectedTrack(nullptr, i)) saved.push_back(s);
     }
+    // Suppress the SetSurfaceSelected coalescer for the duration of the
+    // swap. Without this, the restore step's SetMediaTrackInfo_Value
+    // calls latch the coalescer to whichever saved track is re-armed
+    // last, and the next onTimer tick scrolls the UF8 bank to its
+    // bucket. The user's perceived focus hasn't changed — we just want
+    // selection state back where it was, with zero surface side-effects.
+    g_inSelectionSwap.store(true);
     SetOnlyTrackSelected(tr);
     for (int n = 0; n < times; ++n) Main_OnCommand(cmdId, 0);
     // Restore prior selection. SetOnlyTrackSelected on an empty saved set
@@ -2211,6 +2229,12 @@ void runReaperActionOnTrackN_(int cmdId, MediaTrack* tr, int times)
             SetMediaTrackInfo_Value(t, "I_SELECTED", 1.0);
         }
     }
+    g_inSelectionSwap.store(false);
+    // Defensive: clear any pending the swap-burst may have stored
+    // despite the gate (e.g. nested callback from Main_OnCommand). The
+    // swap is internal — never a focus-change trigger.
+    g_pendingFocusTrack.store(nullptr);
+    g_pendingFocusGuiSync.store(false);
 }
 
 void runReaperActionOnTrack_(int cmdId, MediaTrack* tr)
@@ -4008,7 +4032,12 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
     // follow exactly once per tick. sel=false is ignored on purpose —
     // matches SSL 360° "keep the last focus until something new is
     // selected" behaviour.
-    if (sel) {
+    //
+    // g_inSelectionSwap suppresses the queue while our own selection-
+    // swap (runReaperActionOnTrackN_) is running — that swap restores
+    // selection state but is not a user focus change, so the surface
+    // must not chase the swap traffic.
+    if (sel && !g_inSelectionSwap.load()) {
         g_pendingFocusTrack.store(tr);
         if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
             g_pendingFocusGuiSync.store(true);
