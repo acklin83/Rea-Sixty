@@ -6059,19 +6059,50 @@ void pushZonesForVisibleSlots()
                     const int chan = recInput & 0x3FF;
                     if (const char* nm = GetInputChannelName(chan); nm && *nm) {
                         std::string s2(nm);
-                        // Stereo inputs frequently come back as
-                        // "Madi 5 / 6" / "Madi 5/6" (REAPER joins the
-                        // pair name from the alias config). Frank
-                        // 2026-05-15: "madi 5 / 6 ist madi 5 im
-                        // farbfeld" — show the left-channel half only.
-                        // Cut at the first '/' regardless of spaces,
-                        // then trim trailing whitespace.
-                        if (const auto sp = s2.find('/');
-                            sp != std::string::npos)
-                        {
-                            s2.erase(sp);
+                        const bool stereo = (recInput & 1024) != 0;
+                        if (stereo) {
+                            // Render the pair: "MADI 5" → "MADI 5/6".
+                            // Trailing decimal of the left-channel name
+                            // is the pair's left index; append "/<n+1>".
+                            // If there's no trailing number (user-aliased
+                            // name like "Drums OH"), leave as-is.
+                            size_t numStart = s2.size();
+                            while (numStart > 0
+                                && std::isdigit(static_cast<unsigned char>(
+                                    s2[numStart - 1])))
+                            {
+                                --numStart;
+                            }
+                            if (numStart < s2.size()) {
+                                const int leftNum =
+                                    std::atoi(s2.c_str() + numStart);
+                                char buf[16];
+                                std::snprintf(buf, sizeof(buf), "/%d",
+                                              leftNum + 1);
+                                s2 += buf;
+                            }
                         }
-                        while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+                        // Length-budget: the colour-bar zone fits 7
+                        // characters. Try shortening the common RME-
+                        // device prefixes (MADI / ANALOG / ADAT / SPDIF
+                        // / AES) before falling back to a hard truncate.
+                        if (s2.size() > 7) {
+                            auto shorten =
+                                [&](const char* longP, const char* shortP) {
+                                const auto ll = std::strlen(longP);
+                                if (s2.size() >= ll
+                                    && s2.compare(0, ll, longP) == 0)
+                                {
+                                    s2.replace(0, ll, shortP);
+                                }
+                            };
+                            shorten("MADI ",   "MA ");
+                            shorten("ANALOG ", "AN ");
+                            shorten("Analog ", "An ");
+                            shorten("ADAT ",   "AD ");
+                            shorten("SPDIF ",  "SP ");
+                            shorten("AES ",    "AE ");
+                        }
                         csType = std::move(s2);
                     }
                 }
