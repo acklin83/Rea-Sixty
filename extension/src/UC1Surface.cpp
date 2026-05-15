@@ -945,18 +945,40 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                         || ev.id == knob::kCSHmfGain
                         || ev.id == knob::kCSLmfGain
                         || ev.id == knob::kCSLfGain);
-    double delta = clickToDelta_(ev.delta);
-    if (isEqGain) delta *= 0.5;
-    delta *= (map->inverted[ev.id] ? -1.0 : 1.0);
 
-    // Magnet at 0 dB on the EQ-gain knobs (bipolar, centre at
-    // normalized 0.5). Snaps when the rotation crosses or enters the
-    // zone; once on the notch the next click moves freely so 0.1 dB
-    // nudges off-centre still work. Stateless — no sticky exit.
-    const double next = isEqGain
-        ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
-                                 /*zone*/0.015, 0.0, 1.0)
-        : std::clamp(cur + delta, 0.0, 1.0);
+    // Per-param step sizing. Mirrors the EXT_FUNCS encoder handler
+    // above. Discrete-stepped params (e.g. bx_townhouse Buss Comp
+    // Ratio, 5 steps → norm step = 0.25) need 1 detent = 1 step;
+    // without this the 1/64 click-delta meant ~16 clicks per stop.
+    // Toggles flip on a single detent. Continuous params keep the
+    // existing 1/64 + EQ-gain magnet path.
+    double pStep = 0.0, pSmall = 0.0, pLarge = 0.0;
+    bool   isToggle = false;
+    const bool haveStepInfo = TrackFX_GetParameterStepSizes(
+        tr, fxIdx, vst3Param, &pStep, &pSmall, &pLarge, &isToggle);
+
+    double next;
+    if (haveStepInfo && isToggle) {
+        // Any detent flips the toggle. Sign of delta is irrelevant.
+        next = (cur >= 0.5) ? 0.0 : 1.0;
+    } else if (haveStepInfo && pStep > 0.0) {
+        // Discrete-stepped — advance one step per detent. Use sign
+        // of ev.delta (not ev.delta itself) so a fast hardware scroll
+        // still feels like a single "click forward" — matches SSL
+        // 360°'s feel on stepped knobs.
+        const int sign = (ev.delta > 0) ? 1 : ((ev.delta < 0) ? -1 : 0);
+        const int dir  = sign * (map->inverted[ev.id] ? -1 : 1);
+        next = std::clamp(cur + dir * pStep, 0.0, 1.0);
+    } else {
+        // Continuous — existing path: clickToDelta_ + EQ-gain magnet.
+        double delta = clickToDelta_(ev.delta);
+        if (isEqGain) delta *= 0.5;
+        delta *= (map->inverted[ev.id] ? -1.0 : 1.0);
+        next = isEqGain
+            ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
+                                     /*zone*/0.015, 0.0, 1.0)
+            : std::clamp(cur + delta, 0.0, 1.0);
+    }
     TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
     reasixty_bumpFolderReveal(tr);
     // Touched-FX reveal (3 s) — the strip + UC1 LCD show whatever
