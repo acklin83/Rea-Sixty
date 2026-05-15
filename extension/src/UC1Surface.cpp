@@ -21,6 +21,14 @@
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+// View-active-plugin window follower — see definition in main.cpp.
+void reasixty_followFocusedGuiToFx(MediaTrack* tr, int fxIdx);
+// Touched-FX reveal — see definition in main.cpp. `domainInt` matches
+// the underlying uf8::Domain enum's int representation.
+void reasixty_pushTouchedFxReveal(void* tr, int fxIdx, int domainInt);
+bool reasixty_touchedFxRevealActive();
+void* reasixty_touchedFxRevealTrack();
+const char* reasixty_touchedFxRevealLabel();
 // Folder Mode reveal: when a UC1 knob writes a param on `tr`, the UF8
 // strip displaying that track should briefly show the real value
 // instead of the "Folder" placeholder. No-op outside folder mode.
@@ -941,6 +949,23 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         : std::clamp(cur + delta, 0.0, 1.0);
     TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
     reasixty_bumpFolderReveal(tr);
+    // Touched-FX reveal (3 s) — the strip + UC1 LCD show whatever
+    // plug-in this knob just wrote to, regardless of the active mode
+    // (Instance Selection, SSL Strip Mode, focused-domain default).
+    // Frank 2026-05-15: "Touched-FX gewinnt mit 3 s reveal".
+    reasixty_pushTouchedFxReveal(
+        writeTrackRaw, fxIdx,
+        static_cast<int>(busCompContext
+            ? uf8::Domain::BusComp
+            : uf8::Domain::ChannelStrip));
+    // "View active plugin" follow is intentionally NOT called here
+    // anymore — the inline TrackFX_Show pair was disrupting the
+    // subsequent focus-projection block (UF8 stopped switching its
+    // colour-bar plug-in label on cross-domain touches). The same
+    // intent is now implemented in the timer-tick path via
+    // reasixty_followFocusedGuiToFx + a request flag set below, so
+    // the GUI swap happens after handleKnob_ has finished updating
+    // focus state. Frank 2026-05-15.
 
     // Project the focused-param onto UF8: turning a UC1 knob makes the
     // touched parameter the new focused param across the bank. We look
@@ -967,12 +992,25 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (uf8Match.map) {
         const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
         if (slotIdx >= 0) {
+            // Cross-domain knob touch flips the focused-param domain.
+            // The central LCD's plug-in shortName label is computed off
+            // this domain in refresh(), so a BC↔CS shift on the same
+            // track has to force a refresh — neither setFocusedTrack
+            // nor setBcAnchorTrack will fire here (same track stays
+            // focused / anchored), so the LCD would keep showing the
+            // outgoing domain's plug-in name. Mirrors the pattern from
+            // the CHANNEL encoder handler above (which forces CS focus
+            // + refresh()). Frank 2026-05-15: "EQ am UC1 bewegt, UC1
+            // bleibt auf Townhouse statt 4K E".
+            const bool domainShifted =
+                (uf8::getFocusedParam().domain != uf8Domain);
             uf8::setFocus({uf8Domain, slotIdx});
             // Unified readout: same code path as poll-tick value polling
             // and Page <-/-> external focus changes. Dedup cache inside
             // pushFocusedParamReadout_ ensures we don't double-push when
             // the next poll() tick runs immediately after this.
             pushFocusedParamReadout_();
+            if (domainShifted) refresh();
             focusedParamRendered = true;
         }
     }
@@ -986,6 +1024,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                          zone::kBusCompReadout,
                          labelForKnob(ev.id, busCompContext));
     }
+    // "View active plugin" follow — queue a deferred swap so the
+    // floating FX window switches to the touched FX on the next timer
+    // tick (handled by the drainer in onTimer). Fired AFTER the focus
+    // projection block above so a same-tick swap can't disrupt the
+    // focus state we just set. No-op when no focused-GUI window is
+    // currently open or it's already on this FX.
+    reasixty_followFocusedGuiToFx(tr, fxIdx);
+
     // Pass the visual position (flipped when the pot is inverted) so
     // the LED ring goes CW when the pot goes CW — independent of which
     // way the VST3 param value moves.
@@ -2899,7 +2945,18 @@ void UC1Surface::refresh()
         const char* baseLabel = "MAIN";
         void*       instanceTrack = nullptr;
         bool        useBc        = false;
-        if (wantBc) {
+        // Touched-FX reveal (3 s) wins over the focused-domain default,
+        // mirroring the UF8 csType priority in pushZonesForVisibleSlots.
+        // Only fires when the touched FX is on this UC1's focused
+        // track — same-track-only is the natural scope since UC1 only
+        // renders one plug-in label at a time. Frank 2026-05-15.
+        const bool revealActive = reasixty_touchedFxRevealActive()
+            && reasixty_touchedFxRevealTrack() == focusedTrack_;
+        if (revealActive) {
+            baseLabel    = reasixty_touchedFxRevealLabel();
+            instanceTrack = focusedTrack_;
+            useBc        = false;
+        } else if (wantBc) {
             if (bcBindings_.busCompMap) {
                 baseLabel    = bcBindings_.busCompMap->shortName;
                 instanceTrack = effectiveBcTrack_();

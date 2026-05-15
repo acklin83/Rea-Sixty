@@ -582,6 +582,34 @@ std::atomic<bool> g_pluginGuiFollowsInstance{true};
 std::atomic<bool> g_pluginGuiPinPos{false};
 std::atomic<int>  g_pluginGuiPinX{-1};
 std::atomic<int>  g_pluginGuiPinY{-1};
+// Pending "View active plugin" follow request, set by the UC1 knob
+// handler when a cross-domain touch should swap the focused-FX
+// floating window. Drained from onTimer after focus state has fully
+// settled (chaseLastTouchedFx etc.), so the TrackFX_Show pair doesn't
+// fire mid-handleKnob_ and disrupt the focus projection.
+std::atomic<void*> g_followGuiPendingTr{nullptr};
+std::atomic<int>   g_followGuiPendingFx{-1};
+
+// Touched-FX reveal — when a parameter is manipulated, the UF8 strip
+// csType zone + UC1 central LCD label show the touched plug-in for
+// kTouchedFxRevealMs, regardless of the active mode (Selection Mode
+// Instance, SSL Strip Mode, etc.). Matches the existing Folder /
+// BC-scroll overlay convention (Frank 2026-05-15: "Touched-FX gewinnt
+// mit 3 s reveal"). All access on the main thread (chaseLastTouchedFx
+// + UC1Surface::handleKnob_ + onTimer renderers) so plain non-atomic
+// state is fine.
+constexpr auto kTouchedFxRevealMs = std::chrono::milliseconds(3000);
+struct TouchedFxReveal {
+    void*       tr = nullptr;
+    int         fxIdx = -1;
+    uf8::Domain domain = uf8::Domain::None;
+    // displayShort of the touched plug-in, resolved at set-time so
+    // both UF8 csType and UC1 central LCD read the same canonical
+    // label without each having to re-walk the plug-in maps.
+    std::string label;
+    std::chrono::steady_clock::time_point until{};
+};
+TouchedFxReveal g_touchedFxReveal;
 // When true, pinFxGuiIfEnabled_ ignores pinX/pinY and centres the
 // window on the primary screen each time it's shown. Plug-in sizes
 // differ, so the centre is recomputed per-window using the actual
@@ -1389,6 +1417,44 @@ static void pinFxGuiIfEnabled_(MediaTrack* tr, int fxIdx)
         if (x < 0 || y < 0) return;
     }
     setWindowTopLeft_(hwnd, x, y);
+}
+
+// Touched-FX reveal setter — called from chaseLastTouchedFx and from
+// UC1Surface::handleKnob_ whenever the user actively manipulates a
+// parameter. Sets a 3 s reveal window during which the UF8 csType +
+// UC1 central LCD show the touched plug-in's displayShort instead of
+// the active mode's default label. Returns true if the (tr, fxIdx)
+// changed — caller can use this to trigger an extra UC1 refresh when
+// the revealed plug-in is new (since UC1 LCD updates only on
+// refresh() and dedup-cached otherwise). Frank 2026-05-15.
+bool pushTouchedFxReveal_(void* tr, int fxIdx, uf8::Domain domain)
+{
+    if (!tr || fxIdx < 0) return false;
+    const bool changed = (g_touchedFxReveal.tr != tr
+                       || g_touchedFxReveal.fxIdx != fxIdx);
+    g_touchedFxReveal.tr     = tr;
+    g_touchedFxReveal.fxIdx  = fxIdx;
+    g_touchedFxReveal.domain = domain;
+    if (changed) {
+        // Resolve the displayShort once at set-time.
+        // fxCycleDisplayName_ handles both native PluginMap +
+        // user-mapped UserPluginMap, falling through to a generic
+        // short FX name when nothing matches.
+        g_touchedFxReveal.label =
+            fxCycleDisplayName_(static_cast<MediaTrack*>(tr), fxIdx);
+        if (g_touchedFxReveal.label.size() > 7) {
+            g_touchedFxReveal.label.resize(7);
+        }
+    }
+    g_touchedFxReveal.until =
+        std::chrono::steady_clock::now() + kTouchedFxRevealMs;
+    return changed;
+}
+
+bool touchedFxRevealActive_()
+{
+    if (!g_touchedFxReveal.tr) return false;
+    return std::chrono::steady_clock::now() < g_touchedFxReveal.until;
 }
 
 // Cycle the active CS or BC plug-in instance by `step` slots. Shared
@@ -5265,7 +5331,16 @@ void pushZonesForVisibleSlots()
         //     beim selected channel" AND "v-pots → instance cycle
         //     geht nicht mit nur v-pot wenn track nicht selected").
         std::string csType;
-        if (userStripActive) {
+        // Touched-FX reveal (3 s) wins over every mode. The reveal is
+        // per-(track, fxIdx); only the strip whose track matches the
+        // touched FX swaps its csType label. Other strips render
+        // mode-default. Frank 2026-05-15.
+        if (touchedFxRevealActive_()
+            && g_touchedFxReveal.tr == static_cast<void*>(tr)
+            && !g_touchedFxReveal.label.empty())
+        {
+            csType = g_touchedFxReveal.label;
+        } else if (userStripActive) {
             csType = userS.map->displayShort;
         } else if (g_pluginFaderMode.load()) {
             if (map) csType = map->displayShort;
@@ -6167,6 +6242,7 @@ void chaseLastTouchedFx()
     const bool valueChanged = (curValue != lastValue);
     lastValue = curValue;
 
+    const uf8::Domain prevDomain = uf8::getFocusedParam().domain;
     if (inputChanged || valueChanged) {
         uf8::setFocus({map->domain, linkIdx});
         uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
@@ -6174,6 +6250,30 @@ void chaseLastTouchedFx()
     }
     if (!inputChanged) return;
     lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+
+    // Touched-FX reveal (3 s) — touched plug-in wins over the active
+    // mode's default label on UF8 csType + UC1 central LCD. Returns
+    // true when the (tr, fxIdx) just changed so we know to push an
+    // extra UC1 refresh below (LCD only updates on refresh() ticks,
+    // unlike UF8 which re-renders csType every tick from pushZones).
+    const bool revealChanged =
+        pushTouchedFxReveal_(static_cast<void*>(tr), fxIdx, map->domain);
+
+    // UC1 central label tracks the focused-param domain (CS short-name
+    // when CS focus, BC short-name when BC focus). When the user moves
+    // a CS-domain knob (EQ / Dyn / Channel) on UC1 while UC1's last
+    // focus was BC — or vice versa — the touch flips the focused
+    // domain but neither setFocusedTrack nor setBcAnchorTrack will
+    // fire here (same track stays focused / anchored), so no refresh
+    // is triggered downstream and the LCD keeps showing the old
+    // domain's plug-in name. Force a refresh whenever the focused
+    // domain shifts (or the reveal landed on a new plug-in) so the
+    // central label catches up. Frank 2026-05-15.
+    if (g_uc1_surface
+        && (prevDomain != map->domain || revealChanged))
+    {
+        g_uc1_surface->refresh();
+    }
 
     // Multi-instance follow: a plug-in GUI click on a copy that isn't
     // currently the active instance should snap UC1 to that copy. We
@@ -7765,6 +7865,30 @@ void onTimer()
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
     chaseFocusedFxWindow();
+    // Touched-FX reveal expiry — when the 3 s window closes the UF8
+    // csType naturally falls back to the mode-default label on the
+    // next pushZonesForVisibleSlots tick (dedup detects the change).
+    // UC1 LCD is event-driven (refresh()) so we need an explicit
+    // refresh trigger here when reveal transitions from active to
+    // expired. Frank 2026-05-15.
+    {
+        static bool s_revealWasActive = false;
+        const bool nowActive = touchedFxRevealActive_();
+        if (s_revealWasActive && !nowActive && g_uc1_surface) {
+            g_uc1_surface->refresh();
+        }
+        s_revealWasActive = nowActive;
+    }
+    // "View active plugin" follow drain TEMPORARILY DISABLED — Frank
+    // reported a regression where the inline TrackFX_Show pair (even
+    // deferred to next tick) prevented UF8's colour-bar plug-in name
+    // from switching to the new domain's plug-in on cross-domain
+    // knob touches. Keeping the atomic stores in handleKnob_ as a
+    // no-op so re-enabling here later is a one-block change once the
+    // root cause is understood. The clear-on-exit prevents the
+    // pending state from growing forever.
+    g_followGuiPendingTr.store(nullptr, std::memory_order_relaxed);
+    g_followGuiPendingFx.store(-1, std::memory_order_relaxed);
     uf8::bindings::tickPending();
     drainInputQueue();
     commitDebouncedTouchReleases();
@@ -9087,6 +9211,43 @@ void reasixty_setPluginGuiFollowsInstance(bool follow)
     g_pluginGuiFollowsInstance.store(follow);
     SetExtState("rea_sixty", "plugin_gui_follows_instance",
                 follow ? "1" : "0", true);
+}
+
+// Request a "View active plugin" follow — if the focused-FX floating
+// window (`show_focused_plugin_gui`) is open on the same track but on
+// a DIFFERENT FX, swap it to (tr, fxIdx) on the next timer tick. The
+// actual TrackFX_Show pair runs in drainFollowGuiRequest_ AFTER focus
+// state has settled, because firing it mid-handleKnob_ disrupted the
+// later focus-projection block (Frank 2026-05-15 regression: UF8
+// stopped switching its colour-bar plug-in label on cross-domain
+// touches). Caller doesn't need to know about the deferral.
+void reasixty_followFocusedGuiToFx(MediaTrack* tr, int fxIdx)
+{
+    if (!g_pluginGuiFollowsInstance.load()) return;
+    if (!tr || fxIdx < 0) return;
+    g_followGuiPendingTr.store(static_cast<void*>(tr),
+                               std::memory_order_relaxed);
+    g_followGuiPendingFx.store(fxIdx, std::memory_order_relaxed);
+}
+
+// Wrapper for UC1Surface (different TU). Records a touched-FX reveal
+// and triggers UC1 refresh when the touched plug-in changes — keeps
+// the central LCD in sync with the new label without waiting for
+// chaseLastTouchedFx's next-tick poll.
+void reasixty_pushTouchedFxReveal(void* tr, int fxIdx, int domainInt)
+{
+    const auto dom = static_cast<uf8::Domain>(domainInt);
+    if (pushTouchedFxReveal_(tr, fxIdx, dom)) {
+        if (g_uc1_surface) g_uc1_surface->refresh();
+    }
+}
+
+// Read accessors for UC1Surface (different TU). Main-thread only.
+bool reasixty_touchedFxRevealActive() { return touchedFxRevealActive_(); }
+void* reasixty_touchedFxRevealTrack() { return g_touchedFxReveal.tr; }
+const char* reasixty_touchedFxRevealLabel()
+{
+    return g_touchedFxReveal.label.c_str();
 }
 
 bool reasixty_pluginGuiPinPos()
