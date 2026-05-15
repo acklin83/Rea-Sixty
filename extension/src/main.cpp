@@ -1169,6 +1169,19 @@ struct PendingInput {
                              //   dispatch funnels both Instance + Instance
                              //   Cycle pushes into StripInstanceOpen since
                              //   they share the GUI-ownership channel.
+        TotalReaperDispatch, // REC + RME mode: V-Pot push / Cut / Solo
+                             //   dispatch the user-assigned TotalReaper
+                             //   named action against the strip's track.
+                             //   value = REAPER command_id (resolved at
+                             //   press time via NamedCommandLookup, cast
+                             //   to double for the queue). Drain swaps
+                             //   selection to the strip's track, runs
+                             //   the action, restores the prior selection.
+        TotalReaperGainDelta, // REC + RME mode: V-Pot rotation steps
+                              //   preamp gain by ±1 dB per detent via
+                              //   TotalReaper's GAIN_INC / GAIN_DEC
+                              //   named actions. value = signed detent
+                              //   count (combined within one tick).
     };
     Kind    kind;
     uint8_t strip;
@@ -2122,6 +2135,73 @@ std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx)
     return shortFxName_(tr, fxIdx);
 }
 
+// TotalReaper named-action lookup. Returns the REAPER command_id for the
+// given RecRmeAction, or 0 when TotalReaper isn't loaded / the action
+// isn't registered. NamedCommandLookup wants a leading underscore (the
+// extension registers "TOTALREAPER_TOGGLE_48V"; REAPER prefixes the
+// public lookup key with "_"). 0-return → caller falls back to default
+// REC-mode behaviour silently.
+int totalReaperCmdId_(RecRmeAction a)
+{
+    const char* name = nullptr;
+    switch (a) {
+        case RecRmeAction::Toggle48V:       name = "_TOTALREAPER_TOGGLE_48V";       break;
+        case RecRmeAction::TogglePad:       name = "_TOTALREAPER_TOGGLE_PAD";       break;
+        case RecRmeAction::TogglePhase:     name = "_TOTALREAPER_TOGGLE_PHASE";     break;
+        case RecRmeAction::ToggleAutolevel: name = "_TOTALREAPER_TOGGLE_AUTOLEVEL"; break;
+        case RecRmeAction::None:
+        default:                            return 0;
+    }
+    return NamedCommandLookup(name);
+}
+
+int totalReaperGainCmdId_(int sign)
+{
+    return NamedCommandLookup(sign >= 0 ? "_TOTALREAPER_GAIN_INC"
+                                        : "_TOTALREAPER_GAIN_DEC");
+}
+
+// Run a REAPER named action whose semantics target "selected tracks"
+// (TotalReaper's whole action set) against ONE specific track from a
+// surface strip. Pattern: snapshot the current selection, narrow it to
+// `tr`, fire Main_OnCommand, restore the prior selection. The
+// SetSurfaceSelected coalescer (see g_pendingFocusTrack) collapses the
+// resulting burst into a single onTimer tick, so the user-visible
+// REAPER selection never visibly flickers. Caller must be on the main
+// thread (Main_OnCommand requirement).
+void runReaperActionOnTrackN_(int cmdId, MediaTrack* tr, int times)
+{
+    if (cmdId == 0 || !tr || times <= 0) return;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    std::vector<MediaTrack*> saved;
+    const int nSel = CountSelectedTracks(nullptr);
+    saved.reserve(static_cast<size_t>(nSel));
+    for (int i = 0; i < nSel; ++i) {
+        if (auto* s = GetSelectedTrack(nullptr, i)) saved.push_back(s);
+    }
+    SetOnlyTrackSelected(tr);
+    for (int n = 0; n < times; ++n) Main_OnCommand(cmdId, 0);
+    // Restore prior selection. SetOnlyTrackSelected on an empty saved set
+    // would leave just our tr selected; iterate through tracks and clear
+    // I_SELECTED first, then re-arm the originals.
+    const int trackCount = CountTracks(nullptr);
+    for (int i = 0; i < trackCount; ++i) {
+        if (auto* t = GetTrack(nullptr, i)) {
+            SetMediaTrackInfo_Value(t, "I_SELECTED", 0.0);
+        }
+    }
+    for (auto* t : saved) {
+        if (t && ValidatePtr2(nullptr, t, "MediaTrack*")) {
+            SetMediaTrackInfo_Value(t, "I_SELECTED", 1.0);
+        }
+    }
+}
+
+void runReaperActionOnTrack_(int cmdId, MediaTrack* tr)
+{
+    runReaperActionOnTrackN_(cmdId, tr, 1);
+}
+
 void followSelectedInMixer(MediaTrack* tr)
 {
     if (!kSelectFollowsMixer || !tr) return;
@@ -2590,6 +2670,20 @@ void drainInputQueue()
         MediaTrack* tr = visibleTrackAt(slot);
         if (!tr) continue;
         switch (e.kind) {
+            case PendingInput::TotalReaperDispatch: {
+                const int cmdId = static_cast<int>(e.value);
+                runReaperActionOnTrack_(cmdId, tr);
+                break;
+            }
+            case PendingInput::TotalReaperGainDelta: {
+                const int delta = static_cast<int>(e.value);
+                if (delta == 0) break;
+                const int cmd = totalReaperGainCmdId_(delta);
+                if (cmd == 0) break;
+                runReaperActionOnTrackN_(cmd, tr,
+                                         delta > 0 ? delta : -delta);
+                break;
+            }
             case PendingInput::SoloToggle: {
                 // Routing mode: Solo lights up the SEND/RECEIVE target
                 // track ("listen to this return only"). Same precedence
@@ -4366,7 +4460,23 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     if (pressed) {
                         const uint8_t strip =
                             static_cast<uint8_t>(id - 0x08);
-                        switch (g_selectionMode.load()) {
+                        const auto selMode = g_selectionMode.load();
+                        // REC + RME override: V-Pot push fires the user-
+                        // assigned TotalReaper action. None = fall through
+                        // to the default (pan-center) wiring.
+                        bool handledTr = false;
+                        if (selMode == SelectionMode::Rec
+                            && g_recRmeEnabled.load())
+                        {
+                            const int cmdId = totalReaperCmdId_(g_recVpotPush.load());
+                            if (cmdId != 0) {
+                                queueInput({PendingInput::TotalReaperDispatch,
+                                            strip,
+                                            static_cast<double>(cmdId)});
+                                handledTr = true;
+                            }
+                        }
+                        if (!handledTr) switch (selMode) {
                             case SelectionMode::Auto:
                                 queueInput({PendingInput::AutoModeSet,
                                             strip, 0.0});
@@ -4395,9 +4505,30 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     const int which     = (id - 0x20) % 3;   // 0=SOLO 1=CUT 2=SEL
                     if (pressed) {
                         PendingInput::Kind k = PendingInput::SoloToggle;
-                        if (which == 1) {
+                        double value = 0.0;
+                        // REC + RME override for SOLO / CUT — fire the
+                        // assigned TotalReaper action against the strip's
+                        // track instead of the default solo / mute.
+                        // None / unresolved cmdId falls through to the
+                        // legacy wiring.
+                        bool handledTr = false;
+                        if ((which == 0 || which == 1)
+                            && g_selectionMode.load() == SelectionMode::Rec
+                            && g_recRmeEnabled.load())
+                        {
+                            const auto assigned = (which == 0)
+                                ? g_recSolo.load()
+                                : g_recCut.load();
+                            const int cmdId = totalReaperCmdId_(assigned);
+                            if (cmdId != 0) {
+                                k = PendingInput::TotalReaperDispatch;
+                                value = static_cast<double>(cmdId);
+                                handledTr = true;
+                            }
+                        }
+                        if (!handledTr && which == 1) {
                             k = PendingInput::MuteToggle;
-                        } else if (which == 2) {
+                        } else if (!handledTr && which == 2) {
                             // SEL press is the only per-strip input the
                             // Selection-Mode group hijacks (V-Pots stay
                             // on their Norm wiring for REC / RecMon /
@@ -4429,7 +4560,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                     break;
                             }
                         }
-                        queueInput({k, strip, 0.0});
+                        queueInput({k, strip, value});
                     } else if (which == 2) {
                         // SEL release — clear long-press timer so onTimer
                         // stops checking. spill_fired stays as a record
@@ -4527,8 +4658,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // 128 (1 detent = 0.78% pan); AUTO + Instance need raw
                 // signed6 so their accumulators feel like the channel-
                 // encoder Shift+rotate path. Norm / REC / REC+MON
-                // stay on the legacy pan wiring.
-                switch (g_selectionMode.load()) {
+                // stay on the legacy pan wiring — REC + RME
+                // optionally steps preamp gain ±1 dB instead.
+                const auto selMode = g_selectionMode.load();
+                if (selMode == SelectionMode::Rec
+                    && g_recRmeEnabled.load()
+                    && g_recVpotRotateGain.load())
+                {
+                    queueInput({PendingInput::TotalReaperGainDelta,
+                                strip,
+                                static_cast<double>(signed6)});
+                } else switch (selMode) {
                     case SelectionMode::Auto:
                         queueInput({PendingInput::AutoModeDelta,
                                     strip,
