@@ -226,9 +226,16 @@ full builtin list.
 
 ### 4.7 Selection Mode block — NORM / REC / AUTO
 
-Gates SEL key behaviour. Under stock SSL 360° + REAPER MCU, AUTO is
-Pro-Tools-only and the OFF automation state has no effect. Under
-Rea-Sixty all six REAPER automation modes are reachable directly.
+The NORM, REC and AUTO hardware keys are bindable like any other
+button. Under Rea-Sixty they default to switching the strip-wide
+**Selection Mode**, a mutually-exclusive state that re-targets what
+the SEL row of LEDs shows and what the V-Pots do across all eight
+strips. There are six Selection Modes — see chapter 5.7 for the
+full list and chapter 5.8 for the REC + RME deep dive.
+
+Under stock SSL 360° + REAPER MCU, AUTO is Pro-Tools-only and the
+OFF automation state has no effect. Under Rea-Sixty all six REAPER
+automation modes are reachable directly.
 
 ### 4.8 Transport keys
 
@@ -330,6 +337,160 @@ keys still drive transport and automation as in DAW mode. SSL's
 documentation flags REAPER as "seamless" for Hybrid Mode (no bank
 desync between the two banks). Rea-Sixty preserves this because
 there is only one bank, shared across modes.
+
+### 5.7 Selection Modes
+
+A Selection Mode is a global, surface-wide setting that re-targets
+the SEL row and the V-Pots simultaneously. Only one Selection Mode
+is active at a time. Switch between them by binding the
+`selection_mode_*` builtins to keys — the SSL NORM / REC / AUTO
+block is the natural home, but any key works.
+
+| Mode | SEL row | V-Pot push | V-Pot rotation |
+|---|---|---|---|
+| **Norm** | Track selection (white, or follows track colour) | Track select | Pan (or whatever the layer default is) |
+| **REC** | Record-arm state (dim red / bright red) | Toggle `I_RECARM` | Pan |
+| **REC + MON** | Same as REC | Toggle `I_RECARM` | Pan |
+| **AUTO** | Coloured per automation mode (Read / Write / Trim / Latch / Latch-Preview / Touch) | Cycle automation mode | Step automation mode |
+| **FX Cycle** | Track selection | Toggle the active FX's GUI | Cycle through every FX on the strip's track |
+| **Instance Cycle** | Track selection | Open active Instance's floating GUI | Cycle SSL-mapped Instances only |
+
+The matching builtins are:
+
+- `selection_mode_norm` — return to Norm
+- `selection_mode_rec` — REC
+- `selection_mode_rec_mon` — REC + MON
+- `selection_mode_auto` — AUTO
+- `selection_mode_instance` — FX Cycle (kept under this internal name
+  for backward compatibility with saved binding files; the
+  on-screen label reads "Selection Mode → FX Cycle")
+- `selection_mode_instance_cycle` — Instance Cycle
+
+Notes:
+
+- In REC and REC + MON the selection bit is intentionally invisible
+  on the SEL row — the row is dedicated to record-arm state.
+- In AUTO mode, the SEL key cycles through REAPER automation modes
+  when pressed, and V-Pot rotation steps between modes.
+- FX Cycle walks every FX on the track (Tone Generator, ReaEQ,
+  third-party); Instance Cycle walks only learned Instances. The
+  former is broader; the latter promotes Instance bindings (SSL
+  Strip Mode / UF8 Plugin Mode) when it lands on a recognised
+  Instance.
+
+### 5.8 REC + RME — TotalReaper integration
+
+When the **REC + RME master switch** is on in Settings → Modes,
+the REC and REC + MON Selection Modes pick up an additional layer
+of behaviour aimed at RME interfaces driven via the
+[TotalReaper](https://github.com/maciek134/TotalReaper) bridge.
+The bridge mirrors TotalMix FX state into per-track REAPER ExtState
+keys (`P_EXT:totalreaper_*`); Rea-Sixty reads those keys and writes
+them back through TotalReaper's named REAPER actions.
+
+This section assumes you already have TotalReaper installed and
+configured against your RME device. Without TotalReaper, REC + RME
+falls back to normal REC behaviour — the buttons simply do not
+fire and the scribble strips show the standard REC layout.
+
+#### Master switch and per-button assignment
+
+In Settings → Modes:
+
+- **REC + RME** master toggle — enables the integration globally.
+- **V-Pot Push action** — pick from None / Toggle 48V / Toggle Pad
+  / Toggle Phase / Toggle Autolevel.
+- **CUT action** — same menu.
+- **SOLO action** — same menu.
+- **V-Pot rotates preamp gain** — when on, V-Pot rotation steps
+  preamp gain ±1 dB per detent through TotalReaper.
+- **Shift + V-Pot steps input channel** — when on, holding the
+  Shift modifier and rotating a V-Pot steps the track's hardware
+  `I_RECINPUT` channel by one detent. The MIDI / multichannel /
+  stereo flags are preserved, so a stereo input stays stereo as
+  you walk through inputs.
+
+"None" leaves the strip's default REC behaviour intact for that
+button. Talkback, Routing Mirror and similar global TotalReaper
+actions are not in the per-button menu because they are global,
+not per-track — bind them to a soft-key like any other REAPER
+action through the Bindings tab.
+
+#### Colour-bar zone
+
+In REC or REC + MON with REC + RME enabled, the colour-bar zone
+of the scribble strip switches from the generic "REAPER" / CS-
+variant label to the **track's hardware input name**.
+
+- Mono inputs show as-is (e.g. `Mic 1`, `Line 3`, `MADI 5`).
+- Stereo inputs show as a pair (e.g. `MADI 5/6`). The pair is
+  built by reading the left channel's trailing number and
+  appending `/(n+1)`.
+- If the input name is too long for the 7-character zone, common
+  RME device prefixes are shortened automatically: `MADI ` → `MA `,
+  `ANALOG ` → `AN `, `ADAT ` → `AD `, `SPDIF ` → `SP `, `AES ` →
+  `AE `. Further over-length names are hard-truncated.
+- User-aliased names with no trailing number (e.g. `Drums OH`) are
+  left unchanged — the pair indicator is dropped because there is
+  no obvious "next channel" to append.
+
+Non-hardware inputs (MIDI, multichannel, "no input") leave the
+zone showing the surrounding mode's default text.
+
+#### Value-line zone
+
+The V-Pot value-line zone shows live TotalMix preamp state for the
+strip's track:
+
+```
+   48V  Pd  Ph        12.5dB
+```
+
+- Left half: flag indicators. `48V` for phantom, `Pd` for pad, `Ph`
+  for phase. Inactive flags render as blank space so the position
+  of each indicator does not move when one toggles.
+- Right half: current preamp gain in dB. RME preamp gain is always
+  non-negative (the attenuator is on the pad side, not the mic-pre
+  side); the readout drops the sign and clamps negatives to zero,
+  so it never appears signed.
+- When TotalReaper has not yet populated a gain value for the
+  track, the readout shows `--dB` instead of `0.0dB`.
+
+Gain values come from TotalReaper's `P_EXT:totalreaper_gain` cache,
+which TotalReaper populates via OSC `/sendall` on csurf enable
+(alpha-5 or later). So as soon as you arm REAPER's TotalReaper
+csurf, your scribble strips reflect whatever state TotalMix is
+already in — they do not start at 0 dB.
+
+#### V-Pot rotation, push, CUT, SOLO under REC + RME
+
+When REC + RME is active and a track has a hardware input bound:
+
+- **V-Pot push** fires the user-assigned action against the
+  strip's track (toggles 48V / Pad / Phase / Autolevel via the
+  matching TotalReaper named action).
+- **CUT** and **SOLO** fire their assigned actions in the same
+  way.
+- **V-Pot rotation** (with "V-Pot rotates preamp gain" enabled)
+  steps preamp gain ±1 dB. Without that toggle, V-Pot rotation
+  keeps its normal pan / mode behaviour.
+- **Shift + V-Pot rotation** (with "Shift + V-Pot steps input
+  channel" enabled) steps the hardware input channel. This wins
+  over the plain rotation handler when Shift is held.
+
+#### Surface-update behaviour during input switches
+
+When you step through input channels with Shift + V-Pot, the
+surface coalescer is suppressed briefly during the swap so that
+the new colour-bar text, value-line and SEL state all appear
+together rather than tearing into separate frames.
+
+#### Falling back
+
+To leave REC + RME, switch Selection Mode away from REC / REC + MON
+(press NORM, for example), or toggle the master switch off in
+Settings → Modes. In either case the SEL row and value-line revert
+to their default behaviour for the active Selection Mode.
 
 ---
 
@@ -661,9 +822,19 @@ and large). Three independent brightness levels (LED, LCD, status).
 **REAPER integration.** Surface registration as a `csurf_inst`. Bank
 window of 8 tracks, REAPER-track-list ordered, with explicit Bank
 Left / Bank Right actions. Selection-follow on `SetSurfaceSelected`.
-Folder Mode with parent-only banking. Selection-set recall (action
-wired; storage layer not yet — see chapter 13). 88 built-in
-Rea-Sixty actions plus the full REAPER action list.
+Folder Mode with parent-only banking. Six Selection Modes (Norm,
+REC, REC + MON, AUTO, FX Cycle, Instance Cycle) with re-targetable
+SEL rows and V-Pot behaviours. Selection-set recall (action wired;
+storage layer not yet — see chapter 13). 88 built-in Rea-Sixty
+actions plus the full REAPER action list.
+
+**RME / TotalReaper integration.** In REC and REC + MON Selection
+Modes, an optional TotalReaper-driven layer surfaces hardware input
+names in the colour-bar zone, preamp 48V / Pad / Phase flags and
+gain dB in the value-line zone, V-Pot push / CUT / SOLO actions on
+the assigned TotalMix preamp toggles, V-Pot rotation as preamp gain
+control (±1 dB per detent), and Shift + V-Pot as input-channel
+selection.
 
 **Plug-in integration.** Channel Strip 2, 4K B, 4K E, 4K G, Bus
 Compressor 2, SSL 360° Link (both Channel Strip and Bus Compressor
