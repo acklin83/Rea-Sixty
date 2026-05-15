@@ -4465,7 +4465,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         // assigned TotalReaper action. None = fall through
                         // to the default (pan-center) wiring.
                         bool handledTr = false;
-                        if (selMode == SelectionMode::Rec
+                        if ((selMode == SelectionMode::Rec
+                             || selMode == SelectionMode::RecMon)
                             && g_recRmeEnabled.load())
                         {
                             const int cmdId = totalReaperCmdId_(g_recVpotPush.load());
@@ -4512,8 +4513,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         // None / unresolved cmdId falls through to the
                         // legacy wiring.
                         bool handledTr = false;
+                        const auto curSel = g_selectionMode.load();
                         if ((which == 0 || which == 1)
-                            && g_selectionMode.load() == SelectionMode::Rec
+                            && (curSel == SelectionMode::Rec
+                                || curSel == SelectionMode::RecMon)
                             && g_recRmeEnabled.load())
                         {
                             const auto assigned = (which == 0)
@@ -4661,7 +4664,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // stay on the legacy pan wiring — REC + RME
                 // optionally steps preamp gain ±1 dB instead.
                 const auto selMode = g_selectionMode.load();
-                if (selMode == SelectionMode::Rec
+                if ((selMode == SelectionMode::Rec
+                     || selMode == SelectionMode::RecMon)
                     && g_recRmeEnabled.load()
                     && g_recVpotRotateGain.load())
                 {

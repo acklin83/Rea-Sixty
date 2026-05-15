@@ -7441,6 +7441,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                                void (*setter)(int))
         {
             const int clamped = std::clamp(curIdx, 0, kRecBtnCount - 1);
+            ImGui_PushItemWidth(ctx, 240.0);
             if (ImGui_BeginCombo(ctx, label,
                                  kRecBtnNames[clamped], nullptr))
             {
@@ -7454,6 +7455,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                 }
                 ImGui_EndCombo(ctx);
             }
+            ImGui_PopItemWidth(ctx);
         };
 
         pickerCombo("V-Pot push##rec_rme",
