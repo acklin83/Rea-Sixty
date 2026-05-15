@@ -441,19 +441,18 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::ZoomCenter] = mkBuiltin("zoom_center", Behavior::Momentary, "FIT");
 
     // Mode toggles.
-    L1[ButtonId::Flip]      = mkBuiltin("flip",                Behavior::Toggle,    "FLIP");
-    L1[ButtonId::PluginBtn] = mkBuiltin("plugin_mode_toggle",  Behavior::Toggle,    "PLUGIN");
-    L1[ButtonId::Btn360]    = mkBuiltin("mixer_toggle",        Behavior::Momentary, "360");
-    L1[ButtonId::Pan]       = mkBuiltin("pan_force",           Behavior::Toggle,    "PAN");
+    L1[ButtonId::Flip]      = mkBuiltin("flip",                  Behavior::Toggle,    "FLIP");
+    L1[ButtonId::PluginBtn] = mkBuiltin("ssl_strip_mode_toggle", Behavior::Toggle,    "PLUGIN");
+    L1[ButtonId::Btn360]    = mkBuiltin("mixer_toggle",          Behavior::Momentary, "360");
+    L1[ButtonId::Pan]       = mkBuiltin("pan_force",             Behavior::Toggle,    "PAN");
 
-    // Shift+Plugin: toggle the GUI-open preference. Pairs with the
-    // plain Plugin toggle so the user has both "enter Plugin Mode" and
-    // "should it open the plug-in window" on the same button.
+    // Shift+Plugin: same toggle plus open/close the focused track's
+    // user-mapped plug-in GUI.
     {
         auto& spShift = L1[ButtonId::PluginBtn]
             .shortPress[static_cast<int>(Modifier::Shift)];
         spShift.type   = ActionType::Builtin;
-        spShift.action = "plugin_mode_open_gui";
+        spShift.action = "ssl_strip_mode_toggle_with_gui";
         spShift.param  = 0;
         spShift.label  = "PLUG+UI";
     }
@@ -1371,38 +1370,6 @@ void upgradeEmptyBuiltinSlots_(Layer& L)
     }
 }
 
-// v13 → v14 (2026-05-15): collapse the four legacy Plugin Mode toggle
-// builtins into one. Walks every modifier slot + long-press matrix +
-// extraSteps so a chain step that references the old name also gets
-// rewritten. Returns true if any *_with_gui variant was found — the
-// caller persists that into the new pluginModeOpensGui ExtState so
-// users who had the GUI variant bound preserve their preference.
-bool upgradePluginModeBuiltins_(Layer& L)
-{
-    bool sawWithGui = false;
-    auto fix = [&](ActionStep& sp) {
-        if (sp.type != ActionType::Builtin) return;
-        if (sp.action == "ssl_strip_mode_toggle"
-         || sp.action == "uf8_plugin_mode_toggle") {
-            sp.action = "plugin_mode_toggle";
-        } else if (sp.action == "ssl_strip_mode_toggle_with_gui"
-                || sp.action == "uf8_plugin_mode_toggle_with_gui") {
-            sp.action  = "plugin_mode_toggle";
-            sawWithGui = true;
-        }
-    };
-    for (auto& kv : L.bindings) {
-        Binding& bd = kv.second;
-        for (int m = 0; m < kModifierCount; ++m) {
-            fix(bd.shortPress[m]);
-            for (auto& step : bd.shortPress[m].extraSteps) fix(step);
-            fix(bd.longPress[m]);
-            for (auto& step : bd.longPress[m].extraSteps) fix(step);
-        }
-    }
-    return sawWithGui;
-}
-
 // v4 → v5 reset: wipe ALL Auto-row + Zoom-pad colours to white.
 // Frank 2026-05-07: factory hardware-default colours are not wanted —
 // every LED is user-chosen via Settings → Bindings. Configs created
@@ -1590,16 +1557,7 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // load with an empty list (no migration needed; presets are an
 // additive feature). The Bindings → Sub-Bank cell editor exposes
 // Save/Recall/Rename/Delete.
-// v14 (2026-05-15): Plugin Mode unification — the legacy four toggle
-// builtins (ssl_strip_mode_toggle, ssl_strip_mode_toggle_with_gui,
-// uf8_plugin_mode_toggle, uf8_plugin_mode_toggle_with_gui) collapse
-// into a single plugin_mode_toggle. The "with GUI" variants are
-// folded into a separate plugin_mode_open_gui preference. If ANY of
-// the legacy _with_gui actions is found at load, the preference is
-// set to true; otherwise it stays at its default (also true) unless
-// an ExtState override exists. Migration touches every modifier slot
-// + long-press matrix + extraSteps.
-constexpr int kCurrentBindingsVersion = 14;
+constexpr int kCurrentBindingsVersion = 13;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2048,24 +2006,6 @@ void load()
             }
             if (tmp.version < 11) {
                 upgradeBackfillBankSelectorsAllLayers_(tmp);
-            }
-            // v13 → v14: Plugin Mode unification. Idempotent — once the
-            // legacy names are rewritten they're invisible to the next
-            // pass, so running it on already-migrated configs is safe.
-            if (tmp.version < 14) {
-                bool sawWithGui = false;
-                for (auto& L : tmp.layers) {
-                    if (upgradePluginModeBuiltins_(L)) sawWithGui = true;
-                }
-                // Carry the legacy *_with_gui preference into the new
-                // shared pluginModeOpensGui ExtState. We don't touch the
-                // ExtState if no _with_gui variant was found — that
-                // leaves the default (= true) in place for fresh configs
-                // and respects any explicit user setting from later
-                // sessions.
-                if (sawWithGui) {
-                    SetExtState("ReaSixty", "pluginModeOpensGui", "1", true);
-                }
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

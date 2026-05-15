@@ -135,14 +135,14 @@ struct UserParamInfo {
     bool         wasEnum     = false;
 };
 
-// Plugin "mode" is encoded by (domain, uf8Mode). After the Plugin Mode
-// unification (2026-05-15) a learned plug-in drives EXACTLY one surface:
+// Plugin "mode" is encoded by (domain, uf8Mode) per the new domain
+// structure (2026-05-12):
 //   domain=ChannelStrip, uf8Mode=false → CS only
+//   domain=ChannelStrip, uf8Mode=true  → CS + UF8
 //   domain=BusComp,      uf8Mode=false → BC only
+//   domain=BusComp,      uf8Mode=true  → BC + UF8
 //   domain=None,         uf8Mode=true  → UF8 only
-//   anything else                      → invalid (parser migrates / drops)
-// Legacy CS+UF8 / BC+UF8 entries auto-migrate at load: uf8Mode is forced
-// off, the CS/BC binding wins. See parse_() for the migration trace.
+//   domain=None,         uf8Mode=false → invalid (filtered at load/save)
 struct UserPluginMap {
     std::string                match;          // substring of TrackFX_GetFXName
     Domain                     domain = Domain::None;

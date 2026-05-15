@@ -40,33 +40,12 @@ Frank's symmetry (2026-05-15):
 | **UC1 Encoder 2**      | focused track  | `fx_cycle` (bindable Plain/Shift)       | `instance_cycle` (bindable Plain/Shift)    |
 | Any button             | focused track  | `fx_cycle`                              | `instance_cycle`, `instance_next/_prev`    |
 
-Plus the hardware-mode anchor:
+Plus the hardware-mode anchors:
 
 | Action / display name              | Walks                       | Scope                           |
 | ---                                | ---                         | ---                             |
-| **Plugin Mode** (`plugin_mode_toggle`) | The focused track's Instance — dispatches automatically | See dispatch table below |
-
-### Plugin Mode dispatch (2026-05-15)
-
-Plugin Mode is a single toggle. The actual surface behaviour depends on
-what's on the focused track:
-
-| Focused Instance class | Plugin Mode behaviour                                   |
-| ---                    | ---                                                     |
-| CS (any variant)       | 8 strips → CS Fader Level (the old SSL Strip Mode)      |
-| BC                     | No-op on fader (UC1 BC encoders drive BC; UF8 untouched)|
-| UF8-only user plug-in  | Whole-bank UF8 takeover (the old UF8 Plugin Mode)       |
-| Unmapped / None        | Default to SSL Strip Mode behaviour (fader → CS if any) |
-
-Switching the focused Instance switches the dispatch automatically —
-the user just turns Plugin Mode on/off. Until 2026-05-15 these were
-two separate modes (`ssl_strip_mode_toggle`, `uf8_plugin_mode_toggle`)
-because a learned plug-in could be on BOTH UC1 (CS/BC) AND UF8 strips
-simultaneously. That option went away (FX-Learn now offers CS / BC /
-UF8-only, exactly one surface per plug-in), so the modes merge cleanly.
-
-The companion preference `plugin_mode_open_gui` (default: on) decides
-whether entering Plugin Mode also pops the focused plug-in's GUI.
+| **SSL Strip Mode**                 | The focused track's CS Instance | The fader maps to that Instance's Fader Level param |
+| **UF8 Plugin Mode**                | The focused track's user-mapped Instance (`uf8Mode`) | All 8 strips drive parameters of one Instance |
 
 ## Cycle semantics — what changes when you cycle
 
@@ -75,8 +54,8 @@ through ALL FX on the track. Includes non-Instances (Tone Generator,
 ReaEQ, etc.). If the landing FX happens to be a learned Instance,
 `syncInstanceFromFxIdx_` promotes the move into a full Instance
 selection — i.e. updates `csInstanceIndex` / `bcInstanceIndex` /
-`uf8OnlyInstanceIndex` so hardware bindings (Plugin Mode dispatch,
-UC1 CS/BC encoder sections) react. On a non-Instance
+`uf8OnlyInstanceIndex` so hardware bindings (SSL Strip Mode, UF8
+Plugin Mode, UC1 CS/BC encoder sections) react. On a non-Instance
 landing the Instance indices stay put.
 
 **Instance Cycle**: walks only the learned Instances on the track.
