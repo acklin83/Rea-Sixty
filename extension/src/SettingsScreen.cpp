@@ -7424,32 +7424,44 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 
         // Per-button action assignment. Index order MUST match
         // RecRmeAction enum in main.cpp (None=0, Toggle48V=1, …).
-        // ImGui_Combo wants a mutable buffer for the items list.
-        static char kRecBtnItems[] =
-            "None\0"
-            "Toggle 48V phantom\0"
-            "Toggle pad\0"
-            "Toggle phase invert\0"
-            "Toggle AutoLevel\0";
+        // BeginCombo + Selectable instead of ImGui_Combo: see line 2272 —
+        // ReaImGui's ImGui_Combo silently renders nothing for the
+        // \0-separated-items form here.
+        static const char* kRecBtnNames[] = {
+            "None",
+            "Toggle 48V phantom",
+            "Toggle pad",
+            "Toggle phase invert",
+            "Toggle AutoLevel",
+        };
+        constexpr int kRecBtnCount =
+            static_cast<int>(sizeof(kRecBtnNames) / sizeof(kRecBtnNames[0]));
 
-        int vpotPush = reasixty_recVpotPush();
-        if (ImGui_Combo(ctx, "V-Pot push", &vpotPush,
-                        kRecBtnItems, nullptr))
+        auto pickerCombo = [&](const char* label, int curIdx,
+                               void (*setter)(int))
         {
-            reasixty_setRecVpotPush(vpotPush);
-        }
-        int cut = reasixty_recCut();
-        if (ImGui_Combo(ctx, "Cut button", &cut,
-                        kRecBtnItems, nullptr))
-        {
-            reasixty_setRecCut(cut);
-        }
-        int solo = reasixty_recSolo();
-        if (ImGui_Combo(ctx, "Solo button", &solo,
-                        kRecBtnItems, nullptr))
-        {
-            reasixty_setRecSolo(solo);
-        }
+            const int clamped = std::clamp(curIdx, 0, kRecBtnCount - 1);
+            if (ImGui_BeginCombo(ctx, label,
+                                 kRecBtnNames[clamped], nullptr))
+            {
+                for (int i = 0; i < kRecBtnCount; ++i) {
+                    bool sel = (i == clamped);
+                    if (ImGui_Selectable(ctx, kRecBtnNames[i], &sel,
+                                         nullptr, nullptr, nullptr))
+                    {
+                        setter(i);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        };
+
+        pickerCombo("V-Pot push##rec_rme",
+                    reasixty_recVpotPush(),  reasixty_setRecVpotPush);
+        pickerCombo("Cut button##rec_rme",
+                    reasixty_recCut(),       reasixty_setRecCut);
+        pickerCombo("Solo button##rec_rme",
+                    reasixty_recSolo(),      reasixty_setRecSolo);
     }
 }
 
