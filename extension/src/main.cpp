@@ -6532,8 +6532,13 @@ void pushZonesForVisibleSlots()
                 if (gainStr.empty()) {
                     std::snprintf(gbuf, sizeof(gbuf), "  --dB");
                 } else {
-                    const double db = std::atof(gainStr.c_str());
-                    std::snprintf(gbuf, sizeof(gbuf), "%+.1fdB", db);
+                    // RME preamp gain is always >= 0 dB (no attenuator
+                    // on the mic-pre side; that lives on `pad`). Clamp
+                    // and drop the sign so the readout never reads as
+                    // signed value.
+                    double db = std::atof(gainStr.c_str());
+                    if (db < 0.0) db = 0.0;
+                    std::snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
                 }
                 valLine = composeValueLine(flags, gbuf);
                 selectionModeHandled = true;
