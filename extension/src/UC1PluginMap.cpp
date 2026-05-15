@@ -437,7 +437,8 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
     for (auto& v : out.knobParam)   v = kParamNone;
     for (auto& v : out.buttonParam) v = kParamNone;
     for (auto& v : out.inverted)    v = false;
-    out.bypassParam = kParamNone;
+    out.bypassParam    = kParamNone;
+    out.bypassInverted = false;
 
     const LinkToUc1* table     = nullptr;
     int              tableSize = 0;
@@ -457,8 +458,14 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
         // the bound vst3Param into bypassParam so the IN button toggles
         // the plug-in's own bypass param rather than REAPER's
         // TrackFX_Enabled (matches what built-in BC 2 does).
+        // Carry the slot's inverted flag too: SSL "Bypass" semantic
+        // means 1=off (LED OFF on 1), but plug-ins like bx_townhouse
+        // expose "Comp In" (1=on, LED ON on 1). The FX-Learn UI's
+        // inverted toggle on this slot drives bypassInverted, which
+        // the IN-button + LED render paths consume.
         if (slot.linkIdx == 0) {
-            out.bypassParam = slot.vst3Param;
+            out.bypassParam    = slot.vst3Param;
+            out.bypassInverted = slot.inverted;
         }
         for (int i = 0; i < tableSize; ++i) {
             if (table[i].linkIdx != slot.linkIdx) continue;

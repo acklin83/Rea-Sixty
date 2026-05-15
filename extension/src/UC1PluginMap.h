@@ -51,6 +51,14 @@ struct PluginBindings {
     // -1 = no mapped bypass (plugin bypass via TrackFX_SetEnabled).
     int bypassParam;
 
+    // Semantic of bypassParam. SSL-stock plug-ins expose a "Bypass"
+    // param where value=1 means bypassed → IN LED OFF. Some user
+    // plug-ins (e.g. bx_townhouse Buss Comp) expose a "Comp In"
+    // param with the inverted sense: value=1 means active → IN LED ON.
+    // When inverted=true, the IN LED + readout treat value≥0.5 as
+    // "active". Toggle write itself still flips between 0 and 1.
+    bool bypassInverted = false;
+
     // Sign-flip per knob. For params where physical CW should decrease
     // the VST3 value (rare; most SSL params are CW=up). Indexed by knob
     // ID like knobParam.

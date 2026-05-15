@@ -48,6 +48,20 @@ namespace uc1 {
 
 namespace {
 
+// Read whether the plug-in is effectively bypassed, honouring the
+// per-binding bypassInverted flag. SSL-stock plug-ins expose a "Bypass"
+// param (1 = bypassed); user plug-ins like bx_townhouse expose "Comp In"
+// (1 = active). The IN button + LED render paths used to assume the
+// stock semantic everywhere, which left Townhouse's IN LED inverted and
+// the BC-bypass meter cascade silencing on the wrong edge. Helper here
+// keeps the read consistent across the 7+ sites that need it.
+inline bool readPluginBypass_(MediaTrack* tr, const PluginBindings* m, int fxIdx)
+{
+    if (!tr || !m || m->bypassParam == kParamNone) return false;
+    const double v = TrackFX_GetParamNormalized(tr, fxIdx, m->bypassParam);
+    return m->bypassInverted ? (v < 0.5) : (v > 0.5);
+}
+
 // EXTENDED FUNCTIONS list — params NOT on the main soft-key bank that
 // SSL360 exposes via the BACK button drill-down (manual p.19). Entry
 // labels are tuned to fit the 14-char slot width SSL360 uses (decoded
@@ -962,12 +976,35 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // Any detent flips the toggle. Sign of delta is irrelevant.
         next = (cur >= 0.5) ? 0.0 : 1.0;
     } else if (haveStepInfo && pStep > 0.0) {
-        // Discrete-stepped — advance one step per detent. Use sign
-        // of ev.delta (not ev.delta itself) so a fast hardware scroll
-        // still feels like a single "click forward" — matches SSL
-        // 360°'s feel on stepped knobs.
-        const int sign = (ev.delta > 0) ? 1 : ((ev.delta < 0) ? -1 : 0);
-        const int dir  = sign * (map->inverted[ev.id] ? -1 : 1);
+        // Discrete-stepped — accumulate raw detents into logical steps
+        // so a fast hardware scroll doesn't slam through 8 stops before
+        // the user lifts. ticksPerStep=2 means every 2 raw detents
+        // advance one parameter step; on a slow turn that feels
+        // close to "1 click = 1 step" because the encoder usually
+        // emits ev.delta=1 per physical detent. Per-knob state so
+        // touching another knob doesn't carry over.
+        static int  s_stepAcc[0x20]{};
+        static std::chrono::steady_clock::time_point s_stepLastT[0x20]{};
+        auto& acc   = s_stepAcc[ev.id & 0x1F];
+        auto& lastT = s_stepLastT[ev.id & 0x1F];
+        const auto now = std::chrono::steady_clock::now();
+        if (lastT.time_since_epoch().count() != 0
+            && now - lastT > std::chrono::milliseconds(150)) {
+            acc = 0;
+        }
+        lastT = now;
+        if ((ev.delta > 0 && acc < 0) || (ev.delta < 0 && acc > 0)) acc = 0;
+        acc += ev.delta;
+        constexpr int ticksPerStep = 2;
+        int logical = acc / ticksPerStep;
+        acc -= logical * ticksPerStep;
+        if (logical == 0) {
+            // Sub-threshold detent — leave the param untouched, skip
+            // the write + the broadcast/follow plumbing below.
+            ++stats_.knobEventsHandled;
+            return;
+        }
+        const int dir = logical * (map->inverted[ev.id] ? -1 : 1);
         next = std::clamp(cur + dir * pStep, 0.0, 1.0);
     } else {
         // Continuous — existing path: clickToDelta_ + EQ-gain magnet.
@@ -1439,10 +1476,9 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     //     "Channel In" switch (found by VST3 param name). This mirrors
     //     the plugin's own IN button, not the global bypass.
     //   * No SSL plugin: fall back to bypassing the first track FX.
-    // CS / BC IN buttons toggle the plug-in's own Bypass param (NOT
-    // REAPER's TrackFX_Enabled). Inverted semantic: param=1 means
-    // bypassed → IN is OFF, so LED brightness is the inverse of the
-    // value we just wrote.
+    // The toggle itself flips between 0 and 1; the "active" state shown
+    // on the LED / readout honours bypassInverted (SSL stock: 1=off;
+    // bx_townhouse "Comp In": 1=on).
     auto toggleBypassParam = [&](MediaTrack* targetTr, const PluginBindings* m,
                                  int fxIdx, const char* labelLong, int readoutZone) {
         if (!targetTr || !m || m->bypassParam == kParamNone) return false;
@@ -1450,7 +1486,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         const double next = (cur > 0.5) ? 0.0 : 1.0;
         TrackFX_SetParamNormalized(targetTr, fxIdx, m->bypassParam, next);
         reasixty_bumpFolderReveal(targetTr);
-        const bool inActive = next < 0.5;
+        const bool inActive = m->bypassInverted ? (next >= 0.5) : (next < 0.5);
         pushButtonLed_(ev.id, inActive);
         pushButtonReadout_(ev.id, labelLong,
                            inActive ? "In" : "Out", readoutZone);
@@ -2148,8 +2184,7 @@ UC1Surface::CascadeState UC1Surface::computeCascade_(
     MediaTrack* csTr = static_cast<MediaTrack*>(csRaw);
     MediaTrack* bcTr = static_cast<MediaTrack*>(bcRaw);
     auto readBypass = [](MediaTrack* t, const PluginBindings* m, int fxIdx) -> bool {
-        if (!t || !m || m->bypassParam == kParamNone) return false;
-        return TrackFX_GetParamNormalized(t, fxIdx, m->bypassParam) > 0.5;
+        return readPluginBypass_(t, m, fxIdx);
     };
     s.csBypassed = readBypass(csTr, csBindings.channelMap, csBindings.channelFxIdx);
     s.bcBypassed = readBypass(bcTr, bcBindings.busCompMap, bcBindings.busCompFxIdx);
@@ -2492,9 +2527,8 @@ void UC1Surface::pollButtonLeds_()
                 bool bcOn = false;
                 if (bcBindings.busCompMap && bcTr) {
                     if (bcBindings.busCompMap->bypassParam != kParamNone) {
-                        bcOn = TrackFX_GetParamNormalized(
-                            bcTr, bcBindings.busCompFxIdx,
-                            bcBindings.busCompMap->bypassParam) < 0.5;
+                        bcOn = !readPluginBypass_(bcTr,
+                            bcBindings.busCompMap, bcBindings.busCompFxIdx);
                     } else {
                         bcOn = TrackFX_GetEnabled(bcTr, bcBindings.busCompFxIdx);
                     }
@@ -2507,9 +2541,8 @@ void UC1Surface::pollButtonLeds_()
                     bool cin = false;
                     if (bindings.channelMap && tr) {
                         if (bindings.channelMap->bypassParam != kParamNone) {
-                            cin = TrackFX_GetParamNormalized(
-                                tr, bindings.channelFxIdx,
-                                bindings.channelMap->bypassParam) < 0.5;
+                            cin = !readPluginBypass_(tr,
+                                bindings.channelMap, bindings.channelFxIdx);
                         } else {
                             cin = TrackFX_GetEnabled(tr, bindings.channelFxIdx);
                         }
@@ -2571,8 +2604,7 @@ void UC1Surface::pollBcBypassState_()
         lastBcBypassed_ = -1;
         return;
     }
-    const bool bypassed = TrackFX_GetParamNormalized(
-        tr, b.busCompFxIdx, b.busCompMap->bypassParam) > 0.5;
+    const bool bypassed = readPluginBypass_(tr, b.busCompMap, b.busCompFxIdx);
     const int8_t cur = bypassed ? 1 : 0;
     if (cur == lastBcBypassed_) return;
 
@@ -3184,9 +3216,8 @@ void UC1Surface::refresh()
                 bool bcOn = false;
                 if (bcBindings_.busCompMap && bcTr_) {
                     if (bcBindings_.busCompMap->bypassParam != kParamNone) {
-                        bcOn = TrackFX_GetParamNormalized(
-                            bcTr_, bcBindings_.busCompFxIdx,
-                            bcBindings_.busCompMap->bypassParam) < 0.5;
+                        bcOn = !readPluginBypass_(bcTr_,
+                            bcBindings_.busCompMap, bcBindings_.busCompFxIdx);
                     } else {
                         bcOn = TrackFX_GetEnabled(bcTr_, bcBindings_.busCompFxIdx);
                     }
@@ -3200,9 +3231,8 @@ void UC1Surface::refresh()
                     bool cin = false;
                     if (bindings.channelMap && tr) {
                         if (bindings.channelMap->bypassParam != kParamNone) {
-                            cin = TrackFX_GetParamNormalized(
-                                tr, bindings.channelFxIdx,
-                                bindings.channelMap->bypassParam) < 0.5;
+                            cin = !readPluginBypass_(tr,
+                                bindings.channelMap, bindings.channelFxIdx);
                         } else {
                             cin = TrackFX_GetEnabled(tr, bindings.channelFxIdx);
                         }
@@ -3490,10 +3520,9 @@ void UC1Surface::pushCsVu(float inputL, float inputR,
     if (focusedTrack_) {
         UC1Bindings b = lookupBindingsOnTrack(focusedTrack_);
         if (b.busCompMap && b.busCompMap->bypassParam != kParamNone) {
-            const double bypass = TrackFX_GetParamNormalized(
-                static_cast<MediaTrack*>(focusedTrack_),
-                b.busCompFxIdx, b.busCompMap->bypassParam);
-            if (bypass > 0.5) {
+            if (readPluginBypass_(
+                    static_cast<MediaTrack*>(focusedTrack_),
+                    b.busCompMap, b.busCompFxIdx)) {
                 inputL = inputR = outputL = outputR = -120.f;
             }
         }
