@@ -710,52 +710,40 @@ inline void restoreSelModeAfterUf8PluginMode_()
 // Switch is automatic at every check; the user just turns Plugin Mode
 // ON/OFF. Both helpers return false when g_pluginMode is false. They are
 // mutually exclusive — inUf8PluginMode_() wins, then inSslStripMode_().
-//
-// IMPORTANT: the dispatch helpers are called from BOTH the main thread
-// (timer / render) AND the libusb input thread (UF8/UC1 button handlers).
-// REAPER's track / FX API is main-thread-only — calling TrackFX_GetCount,
-// TrackFX_GetFXName, GetSelectedTrack, etc. from the input thread risks
-// a Cocoa NSException crash when REAPER eventually tries to update UI
-// (lost an evening to this on 2026-05-15). So the per-track question
-// "does the focused track host a UF8-only user plug-in?" gets computed
-// once per tick on the main thread by updatePluginModeDispatchCache_()
-// and cached in g_pluginModeDispatchIsUf8. The helpers themselves are
-// strict atomic reads — safe from any thread.
-std::atomic<bool> g_pluginModeDispatchIsUf8{false};
+
+// Resolve the "focused track" for Plugin Mode dispatch. Prefer the FX
+// chase target (last touched plug-in) so the user can drive Plugin Mode
+// from any track, fall back to UC1's focused track (selection-driven),
+// and finally to whichever track REAPER reports as selected.
+inline MediaTrack* pluginModeFocusedTrack_()
+{
+    void* trv = uf8::g_focusedFxTrack.load(std::memory_order_relaxed);
+    if (!trv && g_uc1_surface) trv = g_uc1_surface->focusedTrack();
+    if (!trv) trv = GetSelectedTrack(nullptr, 0);
+    if (!trv) return nullptr;
+    auto* tr = static_cast<MediaTrack*>(trv);
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return nullptr;
+    return tr;
+}
+
+inline bool pluginModeFocusedTrackHasUf8UserPlugin_()
+{
+    MediaTrack* tr = pluginModeFocusedTrack_();
+    if (!tr) return false;
+    return uc1::uf8OnlyInstanceCount(tr) > 0;
+}
 
 inline bool inUf8PluginMode_()
 {
-    return g_pluginMode.load(std::memory_order_relaxed)
-        && g_pluginModeDispatchIsUf8.load(std::memory_order_relaxed);
+    if (!g_pluginMode.load(std::memory_order_relaxed)) return false;
+    return pluginModeFocusedTrackHasUf8UserPlugin_();
 }
 
 inline bool inSslStripMode_()
 {
     if (!g_pluginMode.load(std::memory_order_relaxed)) return false;
-    if (g_pluginModeDispatchIsUf8.load(std::memory_order_relaxed)) return false;
+    if (pluginModeFocusedTrackHasUf8UserPlugin_()) return false;
     return uf8::getFocusedParam().domain != uf8::Domain::BusComp;
-}
-
-// Main-thread-only — refreshes g_pluginModeDispatchIsUf8 from the
-// focused track's FX list. Called once per onTimer tick. Reads
-// uc1::uf8OnlyInstanceCount which walks TrackFX_GetCount /
-// TrackFX_GetFXName on the focused track; cheap (one track, ~10 FX).
-inline void updatePluginModeDispatchCache_()
-{
-    void* trv = uf8::g_focusedFxTrack.load(std::memory_order_relaxed);
-    if (!trv && g_uc1_surface) trv = g_uc1_surface->focusedTrack();
-    if (!trv) trv = GetSelectedTrack(nullptr, 0);
-    if (!trv) {
-        g_pluginModeDispatchIsUf8.store(false, std::memory_order_relaxed);
-        return;
-    }
-    auto* tr = static_cast<MediaTrack*>(trv);
-    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) {
-        g_pluginModeDispatchIsUf8.store(false, std::memory_order_relaxed);
-        return;
-    }
-    g_pluginModeDispatchIsUf8.store(uc1::uf8OnlyInstanceCount(tr) > 0,
-                                    std::memory_order_relaxed);
 }
 
 // Meter ballistic. Peak = raw peak per Track_GetPeakInfo (no smoothing
@@ -8323,12 +8311,6 @@ void onTimer()
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
     chaseFocusedFxWindow();
-    // Plugin Mode dispatch cache — main-thread refresh so the inSslStripMode_
-    // / inUf8PluginMode_ helpers can be queried lock-free from the libusb
-    // input thread without touching REAPER's track API. Must run after
-    // chaseLastTouchedFx (which may move g_focusedFxTrack) but before any
-    // downstream code reads the helpers this tick.
-    updatePluginModeDispatchCache_();
     // Touched-FX reveal expiry — when the 3 s window closes the UF8
     // csType naturally falls back to the mode-default label on the
     // next pushZonesForVisibleSlots tick (dedup detects the change).
@@ -8707,25 +8689,6 @@ void onTimer()
         g_instanceGuiShownTr = nullptr;
         g_instanceGuiShownFx = -1;
         g_instanceGuiOwnerStrip.store(-1);
-    }
-
-    // Plugin Mode transition handling — Sel-Mode park/restore is
-    // main-thread-only because parkSel writes ExtState. The toggle
-    // builtin sets g_pluginMode from any thread, so we detect the
-    // edge here and run the park/restore. Tied to inUf8PluginMode_'s
-    // current cached value (= "is the focused track dispatching to
-    // UF8 Plugin Mode right now") so the park only fires when the
-    // user actually entered UF8 Plugin Mode dispatch, not on every
-    // bare g_pluginMode flip.
-    {
-        static bool s_wasInUf8 = false;
-        const bool nowInUf8 = inUf8PluginMode_();
-        if (nowInUf8 && !s_wasInUf8) {
-            parkSelModeForUf8PluginMode_();
-        } else if (!nowInUf8 && s_wasInUf8) {
-            restoreSelModeAfterUf8PluginMode_();
-        }
-        s_wasInUf8 = nowInUf8;
     }
 
     // ssl_strip_mode_toggle_with_gui + instance-cycle GUI follow:
@@ -10710,19 +10673,32 @@ void registerBindingHandlers()
     registerBuiltin("plugin_mode_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            // Strict atomic-only — this handler may fire on the libusb
-            // input thread. The main-thread GUI-sync drain handles the
-            // heavy lifting (Sel-Mode park/restore, plug-in window open
-            // /close, snap-on-entry resolution). See
-            // drainFollowGuiRequest_ / drainPluginModeRequest_ for the
-            // consumer.
-            const bool wasOn = g_pluginMode.load();
-            g_pluginMode.store(!wasOn);
+            const bool wasUf8 = inUf8PluginMode_();
+            const bool next   = !g_pluginMode.load();
+            g_pluginMode.store(next);
+            // Sel-Mode park/restore mirrors the legacy UF8 Plugin Mode
+            // path: park on entry so V-Pots can drive plug-in params
+            // instead of routing through the Sel-Mode handler; restore
+            // on exit so FX Cycle / Instance Cycle survives.
+            // Only relevant when the focused track is currently
+            // dispatching to UF8 Plugin Mode — for SSL Strip Mode the
+            // Sel-Mode park is a no-op.
+            if (next && pluginModeFocusedTrackHasUf8UserPlugin_()) {
+                parkSelModeForUf8PluginMode_();
+            } else if (!next && wasUf8) {
+                restoreSelModeAfterUf8PluginMode_();
+            }
+            // Snap-on-entry for UF8 Plugin Mode: if the currently focused
+            // FX is a UF8-mapped plug-in, the next main-thread drain
+            // points the mode at it (track + Instance index).
+            if (next && pluginModeFocusedTrackHasUf8UserPlugin_()) {
+                g_uf8PluginModeSnapRequest.store(true);
+            }
+            // Trigger the GUI sync drain — TrackFX_Show happens main-side.
             g_pluginGuiSyncRequest.store(true);
-            // Snap-on-entry only matters when ENTERING; the drain will
-            // decide what to snap to based on the cached dispatch state.
-            if (!wasOn) g_uf8PluginModeSnapRequest.store(true);
             g_pageDirty.store(true);
+            // Force LED + display re-push so unmapped LEDs blank out
+            // when entering, and re-illuminate from track state on exit.
             g_bankDirty.store(true);
         },
         [](int) { return g_pluginMode.load(); },
