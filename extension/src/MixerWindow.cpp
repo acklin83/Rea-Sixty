@@ -22,6 +22,7 @@ namespace {
 enum Section : int {
     kSecDevice = 0,
     kSecBindings,
+    kSecModes,
     kSecFxLearn,
     kSecSelectionSets,
     kSecAbout,
@@ -38,6 +39,7 @@ struct RailEntry {
 constexpr RailEntry kRail[] = {
     { "Device",         kSecDevice,        false, &SettingsScreen::drawDevice        },
     { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
+    { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
     { "Selection Sets", kSecSelectionSets, false, &SettingsScreen::drawSelectionSets },
     { "About",          kSecAbout,         true,  &SettingsScreen::drawAbout         },

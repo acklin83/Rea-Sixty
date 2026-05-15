@@ -70,6 +70,8 @@ int    reasixty_uc1CalActiveTest();
 void   reasixty_uc1SetCalActiveTest(int enc);
 bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
+bool reasixty_autoHideReadTrim();
+void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -7356,6 +7358,40 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         }
         ImGui_EndPopup(ctx);
     }
+}
+
+// ---- Modes ---------------------------------------------------------------
+// Per-Selection-Mode tweaks. Each section enables behaviour that only
+// applies while that Selection Mode is engaged on the surface. Empty
+// sections stay as headers so users see what's planned.
+void SettingsScreen::drawModes(ImGui_Context* ctx)
+{
+    ImGui_Text(ctx, "Modes");
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    ImGui_Text(ctx, "AUTO");
+    ImGui_Separator(ctx);
+    bool hideRead = reasixty_autoHideReadTrim();
+    if (ImGui_Checkbox(ctx,
+                       "Show only tracks armed for automation writing "
+                       "(hide Trim / Read)",
+                       &hideRead))
+    {
+        reasixty_setAutoHideReadTrim(hideRead);
+    }
+    ImGui_Text(ctx,
+        "  Active only while AUTO Selection Mode is engaged. Touch / "
+        "Write / Latch / Latch-Preview tracks remain visible.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "REC");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, "  TODO: RME TotalReaper integration on/off");
+    ImGui_Text(ctx, "  TODO: V-Pot rotation / push / Cut / Solo "
+                    "→ TotalReaper action assignment");
 }
 
 // ---- Selection Sets -------------------------------------------------------

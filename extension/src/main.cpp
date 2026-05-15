@@ -264,6 +264,15 @@ std::atomic<bool> g_pluginFaderModeWithGui{false};
 std::atomic<bool> g_folderMode{false};
 std::atomic<bool> g_showOnlySelected{false};
 
+// Settings → Modes → AUTO: when active AND SelectionMode == Auto, hide
+// tracks whose automation mode is Trim/Read (0) or Read (1) from the
+// surface track list, so the user only sees tracks armed for automation
+// writing (Touch / Write / Latch / Latch-Preview). Toggled via the
+// Modes tab; persisted in ExtState. Filter applied in
+// rebuildVisibleTrackList() — every onTimer tick picks up the latest
+// per-track automation-mode state.
+std::atomic<bool> g_autoHideReadTrim{false};
+
 // Selection-Mode group. Mutually-exclusive global state that retargets
 // the 8 SEL LEDs and the V-Pot push/rotation. Norm = legacy behaviour
 // (track-select, pan, etc.); Rec = SEL shows rec-arm status & push
@@ -386,6 +395,16 @@ void rebuildVisibleTrackList() {
         // strips immediately.
         if (selOnly && !(GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5))
             continue;
+        // AUTO-mode filter: hide tracks in Trim/Read (0) or Read (1) so
+        // the user only sees tracks armed for automation writing. Only
+        // active while SelectionMode == Auto AND the Settings toggle is
+        // on — otherwise tracks of any automation mode pass through.
+        if (g_autoHideReadTrim.load()
+            && g_selectionMode.load() == SelectionMode::Auto)
+        {
+            const int am = GetTrackAutomationMode(tr);
+            if (am == 0 || am == 1) continue;
+        }
         g_visibleTracks.push_back(tr);
     }
 }
@@ -855,6 +874,10 @@ void loadBrightness()
     const char* tselFp = GetExtState("rea_sixty", "track_sel_follows_param");
     if (tselFp && *tselFp) {
         g_trackSelFollowsParam.store(std::atoi(tselFp) != 0);
+    }
+    const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
+    if (autoHide && *autoHide) {
+        g_autoHideReadTrim.store(std::atoi(autoHide) != 0);
     }
     const char* sff = GetExtState("rea_sixty", "strip_follows_focused_fx");
     if (sff && *sff) {
@@ -9769,6 +9792,18 @@ void reasixty_setTrackSelFollowsParam(bool follow)
 {
     g_trackSelFollowsParam.store(follow);
     SetExtState("rea_sixty", "track_sel_follows_param", follow ? "1" : "0", true);
+}
+
+bool reasixty_autoHideReadTrim()
+{
+    return g_autoHideReadTrim.load();
+}
+
+void reasixty_setAutoHideReadTrim(bool hide)
+{
+    g_autoHideReadTrim.store(hide);
+    SetExtState("rea_sixty", "auto_hide_read_trim", hide ? "1" : "0", true);
+    g_bankDirty.store(true);   // visible list may have shrunk/grown
 }
 
 bool reasixty_stripFollowsFocusedFx()
