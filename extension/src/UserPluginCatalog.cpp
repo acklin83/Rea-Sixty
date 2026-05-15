@@ -649,6 +649,17 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         // UF8 layer active; everything else opts out.
         if (!hadUf8Mode) m.uf8Mode = uf8MapHasContent_(m.uf8);
 
+        // v5 → unified Plugin Mode (2026-05-15): a learned plug-in now
+        // drives EXACTLY one surface. Legacy CS+UF8 / BC+UF8 entries get
+        // their UF8 layer forced off — CS/BC wins. The UF8 bindings stay
+        // in the file (parsed above) so the user can flip the entry to
+        // UF8-only without re-learning, but they don't drive hardware.
+        if (m.domain != Domain::None && m.uf8Mode) {
+            logErr_("migration: '%s' was CS+UF8/BC+UF8 — forcing uf8Mode=false (one surface per plug-in)",
+                    m.match.c_str());
+            m.uf8Mode = false;
+        }
+
         // A map with no domain and no UF8 layer is meaningless — drop it
         // rather than carrying around dead entries.
         if (m.domain == Domain::None && !m.uf8Mode) continue;

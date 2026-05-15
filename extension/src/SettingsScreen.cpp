@@ -1919,8 +1919,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "flip" || n == "pan_force"
                  || n == "mixer_toggle" || n == "home"
                  || n == "folder_mode" || n == "show_only_selected"
-                 || n.rfind("ssl_strip_mode_", 0) == 0
-                 || n.rfind("uf8_plugin_mode_", 0) == 0)
+                 || n == "plugin_mode_toggle"
+                 || n == "plugin_mode_open_gui")
                     return "Hardware Modes";
 
                 // Plug-in family — operates on the currently active
@@ -3857,11 +3857,10 @@ namespace {
 // statics — same pattern as the bindings editor's transient buffers.
 char        g_newMatch[128]      = {};
 char        g_newDisplay[16]     = {};   // up to 7 chars + NUL + slack
-// Mode picker for the "+ New" popup. 1=CS-primary, 2=BC-primary,
-// 3=UF8-only. Default 1 matches the old CS default. The UF8 checkbox is
-// stored separately so toggling mode doesn't lose it.
+// Mode picker for the "+ New" popup. 1=CS, 2=BC, 3=UF8-only. Default 1
+// matches the old CS default. After the Plugin Mode unification
+// (2026-05-15) there is exactly one surface per map, no UF8-layer flag.
 int         g_newPrimaryMode     = 1;
-bool        g_newUf8Mode         = false;
 std::string g_newError;                  // transient inline error text
 std::string g_pendingDeleteMatch;        // populated when the confirm popup is open
 bool        g_pendingDeleteOpen  = false;// set when row's Del was clicked,
@@ -3958,12 +3957,13 @@ const char* domainLabel_(uf8::Domain d)
     }
 }
 
-// Combined mode label for the new domain structure: shows CS / BC / UF8 /
-// CS+UF8 / BC+UF8 depending on which surfaces the map drives.
+// Mode label after Plugin Mode unification (2026-05-15): each map drives
+// exactly one surface — CS, BC, or UF8 (UF8-only). The legacy CS+UF8 /
+// BC+UF8 combos got migrated at load.
 const char* modeLabel_(uf8::Domain d, bool uf8Mode)
 {
-    if (d == uf8::Domain::ChannelStrip) return uf8Mode ? "CS+UF8" : "CS";
-    if (d == uf8::Domain::BusComp)      return uf8Mode ? "BC+UF8" : "BC";
+    if (d == uf8::Domain::ChannelStrip) return "CS";
+    if (d == uf8::Domain::BusComp)      return "BC";
     return uf8Mode ? "UF8" : "—";
 }
 
@@ -6077,11 +6077,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_Text(ctx, hdr);
 
     // ---- Mode-change row -------------------------------------------------
-    // Lets the user re-assign primary mode (CS / BC / UF8-only) and toggle
-    // the UF8 strip layer on an existing map. Slot-destructive switches
-    // (changing CS↔BC, or →UF8-only) defer to a confirm popup so we don't
-    // silently nuke their bindings. Toggling UF8 just flips the flag —
-    // the uf8 block is preserved either way.
+    // Lets the user re-assign the surface (CS / BC / UF8-only). After the
+    // Plugin Mode unification each map drives exactly one surface, so the
+    // separate "UF8 layer" checkbox is gone. CS↔BC swaps slots into the
+    // matching per-domain cache (csSlotCache / bcSlotCache); CS/BC↔UF8-only
+    // is also destructive (slots empty on the UF8 side) — both go through
+    // the confirm popup.
     {
         const int curPrimary =
             (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
@@ -6091,51 +6092,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         auto applyPrimary = [&](int newPrimary) {
             if (newPrimary == curPrimary) return;
-            // Switching CS↔BC or anything→UF8-only invalidates the slot
-            // bindings (the schematic topology is incompatible). Stage
-            // the change and pop the confirm modal; non-destructive
-            // switches (UF8-only → CS/BC, which has no slots) apply
-            // immediately.
-            const bool destructive =
-                (newPrimary != 3) &&
-                ((curPrimary == 1 && newPrimary == 2) ||
-                 (curPrimary == 2 && newPrimary == 1));
-            const bool toUf8Only = (newPrimary == 3);
-            if (destructive || toUf8Only) {
-                g_pendingModePrimary = newPrimary;
-                g_pendingModeMatch   = editing->match;
-                g_pendingModeOpen    = true;
-                return;
-            }
-            UserPluginMap copy = *editing;
-            copy.domain  = (newPrimary == 1) ? uf8::Domain::ChannelStrip
-                         : (newPrimary == 2) ? uf8::Domain::BusComp
-                         :                     uf8::Domain::None;
-            copy.uf8Mode = copy.domain == uf8::Domain::None
-                             ? true : copy.uf8Mode;
-            uf8::user_plugins::upsert(std::move(copy));
-            persistAndReport_();
+            // Every mode switch is now "destructive" in the sense that
+            // the active slot list reorganises — funnel through the
+            // confirm popup so the user sees what swaps where.
+            g_pendingModePrimary = newPrimary;
+            g_pendingModeMatch   = editing->match;
+            g_pendingModeOpen    = true;
         };
         if (ImGui_RadioButton(ctx, "CS##fxl_mode_cs",   curPrimary == 1)) applyPrimary(1);
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "BC##fxl_mode_bc",   curPrimary == 2)) applyPrimary(2);
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "UF8 only##fxl_mode_uf8", curPrimary == 3)) applyPrimary(3);
-
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_TextDisabled(ctx, "   ");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (curPrimary == 3) {
-            ImGui_TextDisabled(ctx, "UF8 layer: on (required)");
-        } else {
-            bool uf8Now = editing->uf8Mode;
-            if (ImGui_Checkbox(ctx, "UF8 layer##fxl_mode_uf8layer", &uf8Now)) {
-                UserPluginMap copy = *editing;
-                copy.uf8Mode = uf8Now;
-                uf8::user_plugins::upsert(std::move(copy));
-                persistAndReport_();
-            }
-        }
     }
 
     // UC1 / UF8 mockup picker. Lifted to ExtState so the choice survives
@@ -6146,10 +6114,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         s_mockup = (v && *v == '1') ? 1 : 0;
     }
 
-    // Coerce mockup to the map's available surfaces:
-    //   UF8-only      → only UF8 mockup
-    //   CS / BC w/o UF8 layer → only UC1 mockup
-    //   CS+UF8 / BC+UF8 → both
+    // After unification a map drives exactly one surface, so the mockup
+    // picker collapses to a single choice (UC1 for CS/BC, UF8 for
+    // UF8-only). Coerce here so a stale ExtState from a legacy combo
+    // map doesn't show the wrong mockup.
     const bool hasUc1 = (editing->domain != uf8::Domain::None);
     const bool hasUf8 = editing->uf8Mode;
     if (!hasUc1 && hasUf8 && s_mockup != 1) {
@@ -6957,7 +6925,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 copy.slots.clear();
             }
             copy.domain  = newDom;
-            copy.uf8Mode = copy.domain == uf8::Domain::None ? true : copy.uf8Mode;
+            // Unified Plugin Mode: exactly one surface per map.
+            copy.uf8Mode = (newDom == uf8::Domain::None);
             // GR-meter binding refers to a vst3Param index on the learned
             // plug-in — that's still valid across mode switches, so we
             // keep it. (User can clear it manually if they re-learn.)
@@ -7003,7 +6972,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         std::memset(g_newMatch,   0, sizeof(g_newMatch));
         std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
         g_newPrimaryMode = 1;
-        g_newUf8Mode     = false;
         g_newError.clear();
         std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
         g_pickerSelectedIdx = -1;
@@ -7247,20 +7215,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "UF8 only##fxl_new_uf8only",
                               g_newPrimaryMode == 3))
-        {
             g_newPrimaryMode = 3;
-            g_newUf8Mode     = true;   // UF8-only requires the UF8 layer
-        }
-
-        // UF8 strip-layer checkbox. Only meaningful when the primary mode
-        // is CS or BC — UF8-only locks it on (handled above).
-        ImGui_Spacing(ctx);
-        if (g_newPrimaryMode == 3) {
-            ImGui_TextDisabled(ctx, "UF8 strip layer: enabled (required for UF8-only)");
-        } else {
-            ImGui_Checkbox(ctx, "Enable UF8 strip layer##fxl_new_uf8",
-                           &g_newUf8Mode);
-        }
 
         if (!g_newError.empty()) {
             ImGui_Spacing(ctx);
@@ -7310,8 +7265,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     m.domain       = (g_newPrimaryMode == 2) ? Domain::BusComp
                                   : (g_newPrimaryMode == 1) ? Domain::ChannelStrip
                                   :                            Domain::None;
-                    m.uf8Mode      = (g_newPrimaryMode == 3) ? true
-                                                              : g_newUf8Mode;
+                    // Unified Plugin Mode (2026-05-15): exactly one surface.
+                    m.uf8Mode      = (g_newPrimaryMode == 3);
                     m.isDefault    = false;
                     user_plugins::upsert(std::move(m));
                     persistAndReport_();
