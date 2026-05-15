@@ -74,11 +74,13 @@ bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
+bool reasixty_recVpotShiftInputCh();
 int  reasixty_recVpotPush();
 int  reasixty_recCut();
 int  reasixty_recSolo();
 void reasixty_setRecRmeEnabled(bool on);
 void reasixty_setRecVpotRotateGain(bool on);
+void reasixty_setRecVpotShiftInputCh(bool on);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -7420,6 +7422,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                            &gainRot))
         {
             reasixty_setRecVpotRotateGain(gainRot);
+        }
+        bool shiftInputCh = reasixty_recVpotShiftInputCh();
+        if (ImGui_Checkbox(ctx,
+                           "V-Pot rotation + Shift → Change input channel",
+                           &shiftInputCh))
+        {
+            reasixty_setRecVpotShiftInputCh(shiftInputCh);
         }
 
         // Per-button action assignment. Index order MUST match

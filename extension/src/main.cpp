@@ -292,6 +292,12 @@ enum class RecRmeAction : uint8_t {
 };
 std::atomic<bool>         g_recRmeEnabled{false};
 std::atomic<bool>         g_recVpotRotateGain{false};
+// REC + RME + Shift held + this flag: V-Pot rotation steps the track's
+// I_RECINPUT hardware channel ±1 per detent (preserving the MIDI /
+// multichannel / stereo flags), so the user can re-route an input from
+// the surface without going to the TCP. Wins over the plain
+// V-Pot rotation handlers when Shift is held.
+std::atomic<bool>         g_recVpotShiftInputCh{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -930,6 +936,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_rotate_gain"); v && *v) {
         g_recVpotRotateGain.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "rec_vpot_shift_inputch"); v && *v) {
+        g_recVpotShiftInputCh.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
     }
@@ -1182,6 +1191,13 @@ struct PendingInput {
                               //   TotalReaper's GAIN_INC / GAIN_DEC
                               //   named actions. value = signed detent
                               //   count (combined within one tick).
+        InputChannelDelta,    // REC + RME + Shift: V-Pot rotation steps
+                              //   the strip's track's I_RECINPUT
+                              //   hardware channel ±1 per detent.
+                              //   Stereo / multichannel / MIDI flags
+                              //   preserved; only the lower-10-bit
+                              //   channel index changes. value =
+                              //   signed detent count.
     };
     Kind    kind;
     uint8_t strip;
@@ -2682,6 +2698,28 @@ void drainInputQueue()
                 if (cmd == 0) break;
                 runReaperActionOnTrackN_(cmd, tr,
                                          delta > 0 ? delta : -delta);
+                break;
+            }
+            case PendingInput::InputChannelDelta: {
+                const int delta = static_cast<int>(e.value);
+                if (delta == 0) break;
+                const int cur = static_cast<int>(
+                    GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+                if (cur < 0) break;
+                // Skip MIDI / multichannel — they don't map to a simple
+                // ±1 hardware channel concept.
+                if (cur & 4096) break;
+                if (cur & 2048) break;
+                const int flags = cur & ~0x3FF;
+                int chan = (cur & 0x3FF) + delta;
+                const int maxIn = GetNumAudioInputs();
+                if (chan < 0) chan = 0;
+                if (maxIn > 0 && chan > maxIn - 1) chan = maxIn - 1;
+                const int next = flags | chan;
+                if (next != cur) {
+                    SetMediaTrackInfo_Value(tr, "I_RECINPUT",
+                                            static_cast<double>(next));
+                }
                 break;
             }
             case PendingInput::SoloToggle: {
@@ -4664,10 +4702,23 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // stay on the legacy pan wiring — REC + RME
                 // optionally steps preamp gain ±1 dB instead.
                 const auto selMode = g_selectionMode.load();
-                if ((selMode == SelectionMode::Rec
-                     || selMode == SelectionMode::RecMon)
-                    && g_recRmeEnabled.load()
-                    && g_recVpotRotateGain.load())
+                const bool inRecMode = selMode == SelectionMode::Rec
+                                    || selMode == SelectionMode::RecMon;
+                const bool rmeOn     = g_recRmeEnabled.load();
+                // Shift takes precedence — if the user holds Shift while
+                // turning a V-Pot in REC+RME mode AND has the
+                // "Shift+rotate → input channel" toggle on, the rotation
+                // re-routes the strip's track input instead of moving
+                // gain / pan. Shift release falls back to the gain/pan
+                // wiring on the next event.
+                if (inRecMode && rmeOn && g_shiftHeld.load()
+                    && g_recVpotShiftInputCh.load())
+                {
+                    queueInput({PendingInput::InputChannelDelta,
+                                strip,
+                                static_cast<double>(signed6)});
+                } else if (inRecMode && rmeOn
+                           && g_recVpotRotateGain.load())
                 {
                     queueInput({PendingInput::TotalReaperGainDelta,
                                 strip,
@@ -6007,7 +6058,21 @@ void pushZonesForVisibleSlots()
                 {
                     const int chan = recInput & 0x3FF;
                     if (const char* nm = GetInputChannelName(chan); nm && *nm) {
-                        csType = nm;
+                        std::string s2(nm);
+                        // Stereo inputs frequently come back as
+                        // "Madi 5 / 6" / "Madi 5/6" (REAPER joins the
+                        // pair name from the alias config). Frank
+                        // 2026-05-15: "madi 5 / 6 ist madi 5 im
+                        // farbfeld" — show the left-channel half only.
+                        // Cut at the first '/' regardless of spaces,
+                        // then trim trailing whitespace.
+                        if (const auto sp = s2.find('/');
+                            sp != std::string::npos)
+                        {
+                            s2.erase(sp);
+                        }
+                        while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+                        csType = std::move(s2);
                     }
                 }
             }
@@ -10086,6 +10151,7 @@ void reasixty_setAutoHideReadTrim(bool hide)
 
 bool reasixty_recRmeEnabled()        { return g_recRmeEnabled.load(); }
 bool reasixty_recVpotRotateGain()    { return g_recVpotRotateGain.load(); }
+bool reasixty_recVpotShiftInputCh()  { return g_recVpotShiftInputCh.load(); }
 int  reasixty_recVpotPush()          { return static_cast<int>(g_recVpotPush.load()); }
 int  reasixty_recCut()               { return static_cast<int>(g_recCut.load()); }
 int  reasixty_recSolo()              { return static_cast<int>(g_recSolo.load()); }
@@ -10100,6 +10166,11 @@ void reasixty_setRecVpotRotateGain(bool on)
 {
     g_recVpotRotateGain.store(on);
     SetExtState("rea_sixty", "rec_vpot_rotate_gain", on ? "1" : "0", true);
+}
+void reasixty_setRecVpotShiftInputCh(bool on)
+{
+    g_recVpotShiftInputCh.store(on);
+    SetExtState("rea_sixty", "rec_vpot_shift_inputch", on ? "1" : "0", true);
 }
 void reasixty_setRecVpotPush(int v)
 {
