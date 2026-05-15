@@ -1,510 +1,784 @@
-# Rea-Sixty — User Manual
+# Rea-Sixty User Manual
 
-A REAPER extension that drives the SSL UF8 and UC1 controllers directly,
-without SSL 360° and without an SSL plug-in on every track.
+Native REAPER ↔ SSL UF8 / UC1 driver. Replaces SSL 360° on the host
+side.
 
-Every behavioural claim in this manual is annotated with a `file:line`
-citation into the repository, so anything that turns out to be wrong can
-be traced and fixed.
+Companion documents in this repository: `architecture-decision.md`
+(why no CSI, no virtual MCU), `interop-rationale.md` (legal basis),
+`uf8-manual-reference.md` (extract from SSL's own UF8 guide that this
+manual mirrors in structure).
 
 ---
 
-## 1. What this extension is
-
-Rea-Sixty is a single REAPER extension (`reaper_uf8.dylib` on macOS,
-`reaper_uf8.dll` on Windows once the port lands). When loaded, it:
-
-- registers itself as a REAPER control surface (`csurf_inst`) — see
-  `main.cpp:12380` and `main.cpp:4173-4176` (`g_csurfReg`);
-- opens the UF8 over libusb (`UF8Device.cpp:22-26`, VID `0x31E9`, PID
-  `0x0021`, EP `0x02` OUT / `0x81` IN);
-- optionally opens the UC1 over libusb (`UC1Device.cpp:107`, PID
-  `0x0023`) — absent UC1 is fine (`main.cpp:4133-4137`), absent UF8 is
-  fine too (`main.cpp:4087-4092`);
-- runs a periodic `onTimer()` on REAPER's timer service
-  (`main.cpp:4139`, registered as `"timer"`);
-- creates two virtual MIDI ports `reaper_uf8 in` / `reaper_uf8 out`
-  (`MidiBridge.cpp:21-43`) — used internally for MCU-style LED feedback
-  and as a legacy compatibility path for CSI users
-  (`main.cpp:4069-4081`). **You do not need to wire these up in REAPER**
-  — the extension uses them itself.
-
-The extension also tries to find the UF8's native MCU MIDI port (search
-string contains `UF8`, `MidiBridge.cpp:88`) and uses it for MCU
-note-on/off LED feedback (`MidiBridge.cpp:106-...`). If no such port
-exists, LED feedback degrades gracefully (`main.cpp:4076-4079`).
-
-## 2. What works today (verified)
-
-This section is exhaustive. If a feature is not listed, it is not yet
-implemented in the code as of `main` at the time of writing.
-
-### 2.1 UF8 — scribble-strip output
-
-Every payload below is built in `Protocol.cpp` and pushed via libusb.
-
-| Zone | Build function | Frame | Citation |
-|---|---|---|---|
-| Track colours (per-strip palette index) | `buildColorCommand` | `FF 66 09 18 <8 indices> CKSUM` | `Protocol.cpp:16-32` |
-| Upper scribble text (track name) | `buildStripTextUpper` | `FF 66 <len> 0B <strip> <≤7 chars>` | `Protocol.cpp:34-54` |
-| Lower scribble text (value line) | `buildStripTextLower` | `FF 66 09 0E <strip> <7 chars>` | `Protocol.cpp:496-512` |
-| 19-char Value Line (PM-mode) | `buildValueLine` | `FF 66 15 0E <strip> <19 chars>` | `Protocol.cpp:183-193` |
-| Channel Strip Type label | `buildChannelStripType` | `FF 66 <len> 17 <strip> <≥4 chars>` | `Protocol.cpp:155-181` |
-| Channel Number Zone | `buildChannelNumber` | `FF 66 <len> 14 <strip> <digits>` | `Protocol.cpp:444-460` |
-| V-Pot readout bar | `buildVPotReadoutBar` | `FF 66 11 0F <8 × 2-byte LE>` | `Protocol.cpp:462-477` |
-| Fader dB readout | `buildFaderDbReadout` | `FF 66 0A 0C <strip> <"-3.4">"dB"` | `Protocol.cpp:479-494` |
-| Selected-strip bitmask | `buildSelectedStripBitmask` | `FF 66 03 06 <lo> <hi>` | `Protocol.cpp:432-442` |
-
-Colour push happens every tick if the bank or a track colour changed
-(`ColorSync.cpp:29`, called from `onTimer` via `g_sync->refresh()`).
-REAPER RGB is quantised to the UF8's 16-entry palette by
-`Palette::quantize` (`Palette.cpp:82-99`); indices `0x00`, `0x05`,
-`0x0D`, `0x0F` are currently unmapped and return `std::nullopt` from
-`paletteEntry` (`Palette.h:32`).
-
-### 2.2 UF8 — fader, motor, V-Pot
-
-| Signal | Direction | Mechanism | Citation |
-|---|---|---|---|
-| Motor position (16-bit) | host→UF8 | `buildFaderPosition` (`FF 1E 03 <s> <lsb> <msb>`) | `Protocol.cpp:56-69` |
-| Motor enable/disable | host→UF8 | `buildMotorEnable` (`FF 1D 02 <s> <0/1>`) | `Protocol.cpp:71-83` |
-| Fader move | UF8→host | parsed in `onUf8Input`, routed via `CSurf_OnVolumeChange` with full 16-bit precision | `main.cpp:4316-4410` |
-| Fader touch | UF8→host | capacitive debounce, answered via `IReaperControlSurface::GetTouchState` | `main.cpp:3801-3830` |
-| V-Pot delta | UF8→host | dispatched through bindings | `main.cpp:4288` + bindings system |
-
-The motor position settles on touch-release via `g_lastTouchPb`
-(`main.cpp:4374-4375`) — i.e. the fader stops fighting your finger.
-
-### 2.3 UF8 — LEDs
-
-Per-strip SOLO / CUT / SEL LEDs use the colour-pair frame family
-discovered in cap31 (`Protocol.cpp:356-388`). Cell formula:
-`cell = 0x17 - 3*strip - led_offset` (`Protocol.cpp:368-369`). Bright /
-dim colour tables for automation modes live in
-`Protocol.cpp:218-239`. Track-colour → SEL-LED mapping is a 10-palette
-Euclidean nearest-match (`Protocol.cpp:333-354`).
-
-Top soft-keys: `buildTopSoftKeyLed` (`Protocol.cpp:390-430`). Global
-buttons (40+, e.g. Layer / Page / Bank / Automation / Transport / Norm
-/ Rec / PAN / Fine / Channel-Encoder push): `buildUf8GlobalLed`
-(`Protocol.cpp:757-804`) with a 51-entry cell+colour table at
-`Protocol.cpp:691-754`.
-
-Master brightness for LEDs: `buildLedBrightness`
-(`Protocol.cpp:532-559`). Scribble-LCD brightness:
-`buildLcdBrightness` (`Protocol.cpp:561-574`).
-
-On open, every strip LED is force-darkened so the firmware power-up
-"everything lit" state doesn't leak into REAPER's idle state
-(`main.cpp:4098-4106`).
-
-### 2.4 UF8 — meters
-
-VU meter pair: `buildVuMeter` (`Protocol.cpp:576-597`). GR row uses a
-single byte per strip, stamped into the 13-byte `FF 66 09 15`
-heartbeat (`UF8Device.cpp:298-359`). The single-byte builder exists
-(`buildGrByte`, `Protocol.cpp:599-618`) but the canonical path is
-heartbeat stamping, not standalone frames.
-
-Per-strip meter format `FF 38 04` exists (`buildMeter`,
-`Protocol.cpp:85-99`) but is marked semantically incomplete in the
-header (`Protocol.h:74`).
-
-### 2.5 UF8 — input
-
-Every UF8 button arrives on EP `0x81` as
-`FF 22 03 <id> 00 <state> CKSUM` (`Protocol.cpp:827-842`). The button
-ID map is in `protocol-notes.md` lines 63–100 and is verified against
-a physical UF8 (cap commit 2026-04-21).
-
-Per-strip buttons (Sel, Cut, Solo, V-Pot push, top soft-key) are
-dispatched in `main.cpp:4419-4448`. Global buttons go through
-`uf8::bindings::dispatch()` (`main.cpp:4411-4450`) — i.e. they are
-**user-bindable**, not hardcoded.
-
-### 2.6 UF8 — init sequence
-
-The UF8 firmware needs a handshake before it renders anything. Stored
-as a captured byte blob in `extension/src/init_sequence.inc` and
-replayed in `UF8Device.cpp:126-240`, with load-bearing inter-phase
-delays. A 371-frame Plugin-Mixer-layer replay
-(`layer_plugin_mixer.inc`, `UF8Device.cpp:208-218`) is fired when
-switching into PM-mode. Heartbeat pattern after init:
-
-- 64-byte pair `FF 66 21 09 / 0A` at ~50 Hz (`UF8Device.cpp:293-294`)
-- 13-byte pair `FF 66 09 15 / 16` at ~50 Hz, PM-mode only — `15` carries
-  live per-strip GR bytes (`UF8Device.cpp:298-299`)
-- `FF 5B 02 00 00 5D` liveness frame at ~50 Hz (`UF8Device.cpp:304`)
-- `FF 1B 01 <0..3>` PM-mode keepalive at 150 ms cadence
-  (`UF8Device.cpp:378-384`)
-
-### 2.7 UC1 — what gets driven
-
-UC1 is registered as a parallel surface (`uc1::UC1Surface`), instantiated
-in `main.cpp:92` and attached to the device in `main.cpp:4126-4132`.
-It follows track selection: knob turns update `focusedTrack_` via
-`setFocusedTrack` (`UC1Surface.h:65`), and on attach it focuses
-REAPER's last-touched track (`main.cpp:4130-4131`).
-
-UC1 reads parameters from the focused track's SSL plug-in and writes
-them back through `TrackFX_SetParamNormalized`. Parameter routing
-tables per plug-in variant live in `UC1PluginMap.cpp`:
-
-- Channel Strip 2 — 12 EQ knobs (LP, HP, four bands × {freq, gain, Q}),
-  7 dynamics knobs, 10 buttons (`UC1PluginMap.cpp:102-151`).
-- Bus Compressor 2 — 7 top V-Pots (Threshold / Makeup / Attack /
-  Release / Ratio / HPF / Mix) + IN (`UC1PluginMap.cpp:42-57`).
-- 4K G / 4K E / 4K B variants — same layout, different VST3 param
-  indices (and without CS2's inversions, `UC1PluginMap.cpp:93-100`).
-- SSL 360° Link wrappers — recognised for both CS and BC domains
-  (`PluginMap.cpp:374-378`, BC variant matched first so the
-  substring "SSL 360 Link" doesn't shadow it).
-
-GR meter pipeline: read `GainReduction_dB` via
-`TrackFX_GetNamedConfigParm` (`main.cpp:8934-8947`,
-`UC1Surface.cpp:2688`). For user-mapped plug-ins, a VST3 param index
-chosen in the FX-Learn tab is used instead (`UC1PluginMap.cpp:83`,
-`UserPluginCatalog.h:32-48`).
-
-UC1 USB protocol: same FF-magic + checksum frame format
-(`UC1Protocol.cpp:9-22`). Distinct commands include:
-
-- `FF 5B 02 <hi> <lo>` — GR meter at 50 Hz, 1/10 dB units, 0..20 dB
-  (`UC1Protocol.cpp:50-61`)
-- `FF 13 04 …` family — LEDs, VU meters, segment digits
-  (`UC1Protocol.cpp:74-205`)
-- `FF 66 …` family — display zones (header, sub-header, value, unit,
-  context blocks for CS / BC, round indicator, preset carousel)
-  (`UC1Protocol.cpp:207-461`)
-- Knob events `FF 24 02 <id> <delta>` with 6-bit signed deltas
-  (`UC1Protocol.cpp:273-295`)
-
-### 2.8 Bank navigation
-
-8 visible strips, offset by `g_bankOffset` (`main.cpp:198`). Bank-left
-and bank-right are registered as builtin actions and wired through the
-bindings system:
-
-- `bank_left` (`main.cpp:11971`)
-- `bank_right` (`main.cpp:11984`)
-
-Selection-follows-track works through the `SetSurfaceSelected` callback
-(`main.cpp:4025-4045`) — clicking a track in REAPER updates UF8/UC1
-state.
-
-### 2.9 Folder Mode
-
-Toggled by the `folder_mode` action (`main.cpp:11288`). State is
-`g_folderMode` (`main.cpp:275`). When on, the bank fills with parent
-tracks only; children expand on demand (`main.cpp:427-440`). Page
-indices update so bank-snap stays sensible (`main.cpp:2253`).
-
-### 2.10 Plug-in Mixer mode
-
-When the focused track has a recognised SSL plug-in, the UF8 enters
-PM-mode and shows colour bars, value lines, channel-strip-type
-labels, V-Pot readout arcs. Plug-in recognition is substring match on
-the FX name (`PluginMap.cpp:368-390`):
-
-```
-"Channel Strip 2"   → CS2          (Domain::ChannelStrip)
-"4K G" / "4K E" / "4K B" → 4K variants
-"Bus Compressor 2"  → BC2          (Domain::BusComp)
-"SSL 360 Link Bus Compressor" → wrapper BC
-"SSL 360 Link"      → wrapper CS   (matched after BC variant)
-```
-
-Multi-instance handling: `lookupPluginOnTrack(track, domain)`
-(`PluginMap.cpp:439-466`) picks the Nth match via the
-`InstanceIdxFn` provider, so cycling between two CS2 instances on a
-single track works.
-
-A/B compare and HQ (CS-only) are exposed through
-`PluginChunkPatch` (`PluginChunkPatch.cpp:78-129`), which edits the
-VST3 state chunk directly because those flags aren't reachable via the
-normal `TrackFX_*` API.
-
-The encoder "virtual notch" snap (faders/V-Pots cling to neutral —
-0 dB on gains, centre on pan) is implemented in `VirtualNotch.h:6-10`.
-
-## 3. Settings window
-
-There is a single dockable ImGui window. Toggle action:
-
-- **`REASIXTY_TOGGLE_SETTINGS`** — display name *"Rea-Sixty: Open /
-  Close Rea-Sixty Settings"* (`main.cpp:9825`).
-
-Six tabs in the left rail (`MixerWindow.cpp:39-46`):
-
-1. **Device** (`drawDevice`, `SettingsScreen.cpp:149`) — UF8/UC1
-   connection status with serial number, Identify button, LED
-   brightness, scribble-LCD brightness, GR-meter-source toggle,
-   track-select-follows-param toggle, plug-in-GUI-follows-instance,
-   plug-in-GUI pin-position capture.
-2. **Bindings** (`drawBindings`, `SettingsScreen.cpp:3737`) — full
-   REAPER action picker, layer export/import via macOS NSSavePanel,
-   custom action mapping.
-3. **Modes** (`drawModes`, `SettingsScreen.cpp:7381`).
-4. **FX Learn** (`drawFxLearn`, `SettingsScreen.cpp:7008`) — plug-in
-   discovery, per-parameter binding to UF8/UC1 controls.
-5. **Selection Sets** (`drawSelectionSets`, `SettingsScreen.cpp:7485`).
-6. **About** (`drawAbout`, `SettingsScreen.cpp:7496`).
-
-Themes follow REAPER's active theme via `ThemeBridge`
-(`ThemeBridge.cpp:25-28`, indexed `GetColorTheme` API), with derived
-Hovered/Active variants (`ThemeBridge.cpp:34-46`) and `pushAll/popAll`
-per frame.
-
-> **There is no on-screen Plug-in Mixer view yet.** `MixerLayout.cpp`
-> is a scaffold with placeholder text only (`MixerLayout.cpp:7-9`).
-> The Settings window is the only ImGui content currently rendered.
-> Phase 2.6 of `ROADMAP.md` is the work to fill that in.
-
-## 4. Bindings system
-
-JSON file location (`Bindings.cpp:8-10`):
-
-- macOS: `~/Library/Application Support/REAPER/rea_sixty/bindings.json`
-- Windows: `%APPDATA%/REAPER/rea_sixty/bindings.json`
-
-Layout (`Bindings.h:289-343`):
-
-- **3 layers**, switched via UF8's left-side Layer buttons (button IDs
-  `0x40 / 0x41 / 0x42`, `protocol-notes.md`).
-- Per layer: **3 Quick slots** (Q1/Q2/Q3) with **6 sub-banks** each
-  (V-POT + Soft 1..5) = 144 user-fillable slots per layer.
-- **Modifier matrix** per binding: Plain / Shift / Cmd / Ctrl, short or
-  long press (`Bindings.h:270-280`).
-- Per-strip / transport / global / soft-keys all bindable.
-
-**Bank Presets** — named binding-snapshots with snapshot / recall /
-rename / delete API (`Bindings.h:335-338, 499-507`).
-
-Persistence: `loadJson` / `saveJson` (`Bindings.h:397-400`),
-import / export (`Bindings.h:407-408`).
-
-### Registered builtins (callable from a binding)
-
-88 builtins are registered through `registerBuiltin`
-(`main.cpp:10923-12290`). The complete list — abridged here for the
-manual; see the source for argument semantics:
-
-- **Modifiers**: `mod_shift`, `mod_cmd`, `mod_ctrl`.
-- **Bank / page / nav**: `bank_left`, `bank_right`, `page_left`,
-  `page_right`, `home`, `zoom_up`, `zoom_down`, `zoom_left`,
-  `zoom_right`, `zoom_center`.
-- **Encoder modes** (UF8 Channel Encoder): `encoder_nav`,
-  `encoder_nudge`, `encoder_focus`, `encoder_instance`,
-  `encoder_fx_cycle`, `encoder_mode_dispatch`.
-- **Selection modes**: `selection_mode_norm`,
-  `selection_clear_all`, `select_relative`.
-- **Tracks / global**: `tracks_arm_all`, `automation_zero_all`,
-  `playhead_nudge`, `mouse_scroll`.
-- **Plug-in cycling**: `instance_cycle`, `instance_next`,
-  `instance_prev`, `fx_cycle`, `bc_track_scroll`.
-- **Strip modes**: `ssl_strip_mode_toggle`,
-  `ssl_strip_mode_toggle_with_gui`, `uf8_plugin_mode_toggle`,
-  `uf8_plugin_mode_toggle_with_gui`.
-- **Plug-in control**: `show_focused_plugin_gui`, `plugin_bypass`,
-  `plugin_offline`, `plugin_preset_next`, `plugin_preset_prev`,
-  `plugin_preset_cycle`, `show_fx_chain`.
-- **Display**: `brightness_leds_up/down`, `brightness_lcds_up/down`,
-  `brightness_both_up/down`.
-- **Surface filters**: `folder_mode`, `show_only_selected`,
-  `selset_recall` (slot 1..8 spinner).
-- **Other**: `mixer_toggle`, `pan_force`, `flip`, `domain_cs`,
-  `domain_bc`, `softkey_bank_select`, `send_all_1..8`, `send_this`,
-  `recv_this`, `ssl_softkey`, `ssl_bank_vpot`.
-- **Automation**: `auto_off / read / write / trim / latch / latch_prv
-  / touch` + matching `*_global` variants (`main.cpp:11919-11968`).
-
-Plus an escape hatch: a binding may invoke any REAPER action by ID via
-the `__reaper_action__` builtin (`main.cpp:10929`).
-
-## 5. FX Learn
-
-Schema in `UserPluginCatalog.h:146-164` (`UserPluginMap`):
-
-- `match` — FX-name substring (**not** a VST3 GUID; lookup is
-  substring-match per call to `TrackFX_GetFXName`,
-  `UserPluginCatalog.cpp:567-589`).
-- `domain` — ChannelStrip / BusComp / None.
-- `uf8Mode` — when true, all 8 UF8 strips drive this plug-in's params.
-- Per-slot VST3 param index + inverted flag.
-- Optional metering overrides: `grVst3Param`, `grOffsetDb`, two
-  calibration tables (`grBcVuCalDb[6]`, `grLedsCalDb[5]`,
-  `UserPluginCatalog.h:32-48`, schema v5).
-- Optional UF8 bank/strip bindings.
-
-Storage: `<REAPER_RESOURCE>/rea_sixty/user_plugins.json`
-(`UserPluginCatalog.cpp:65`), written via atomic `.tmp` + rename
-(`UserPluginCatalog.cpp:100-128`).
-
-> **Caveat re. the README claim "GUID-keyed so FX-slot reorders don't
-> break mappings":** the code does not key on VST3 GUIDs. It keys on
-> FX-name substring match, performed each time. Reorders are safe
-> because the match is name-based; **renames break mappings**, not
-> reorders.
-
-## 6. GR meter pipeline (what actually runs)
-
-Source of truth in three places, all using
-`TrackFX_GetNamedConfigParm(tr, fx, "GainReduction_dB", …)`:
-
-- `main.cpp:8934-8947` — the UF8 GR row poll, stamped into the PM-mode
-  heartbeat.
-- `UC1Surface.cpp:2688` — the UC1 GR meter for the focused BC.
-- `UC1Surface.cpp:2734` — the CS-combined Comp+Gate poll.
-
-Calibration uses piecewise-linear interpolation against the breakpoint
-tables in `GrCalibration.h:14-51` (`kBcVuBpDb` at 0/4/8/12/16/20 dB,
-`kLedsBpDb` at 3/6/10/14/20 dB), applied via `applyGrCalibration`
-(`GrCalibration.h:34-51`).
-
-The JSFX probe `extension/jsfx/rea_sixty_gr_probe.jsfx` exists as a
-fallback for compressors that don't expose `GainReduction_dB`. It is
-**not** auto-inserted by the extension — no reference to it exists in
-`extension/src/`. Manual install if you need it; the in-tree comment
-documents pin routing (lines 9-15 of the JSFX file).
-
-## 7. Diagnostic actions
-
-Registered via `gaccel_register`, all prefixed `REASIXTY_*`
-(`main.cpp:9353-9825`):
-
-| Action ID | Purpose |
-|---|---|
-| `REASIXTY_BRIGHTNESS_UP` / `_DOWN` | LED + scribble brightness (`main.cpp:9353/9356`) |
-| `REASIXTY_PROBE_LED` | Walk global LED cells one at a time (`main.cpp:9428`) |
-| `REASIXTY_PROBE_LEGACY_LED` | Same for legacy monochrome cells (`main.cpp:9477`) |
-| `REASIXTY_FRAME_TRACE` | Log host→UF8 frames to `/tmp` (`main.cpp:9504`) |
-| `REASIXTY_TOGGLE_FADER_CAL` | Toggle the fader-calibration diagnostic (`main.cpp:9519`) |
-| `REASIXTY_TOGGLE_FADER_INPUT_LOG` | Log every fader event (`main.cpp:9574`) |
-| `REASIXTY_UC1_TEST_INDICATOR` | Drive UC1 round indicator (`main.cpp:9611`) |
-| `REASIXTY_PROBE_GATE_GR` | Probe CS Gate GR via candidate named-config-parm strings (`main.cpp:9677`) |
-| `REASIXTY_DUMP_CS_PARAMS` | Dump CS plug-in's param table to log (`main.cpp:9723`) |
-| `REASIXTY_DUMP_CS_CHUNK` | Dump CS plug-in's VST3 state chunk (`main.cpp:9765`) |
-| `REASIXTY_DUMP_ROUTING_FLAGS` | Dump UC1 routing-zone byte (`main.cpp:9815`) |
-| `REASIXTY_TOGGLE_SETTINGS` | Open / close the Settings window (`main.cpp:9825`) |
-
-The MidiBridge writes a list of every CoreMIDI destination it sees to
-`/tmp/reaper_uf8_midi_dests.log` on open (`MidiBridge.cpp:70-91`) —
-useful when the UF8 MCU port isn't being picked up.
-
-Surface bring-up logs to REAPER's Console (View → Console). Look for
-`Rea-Sixty UF8:` / `Rea-Sixty UC1:` prefixes
-(`main.cpp:4090, 4134`).
-
-## 8. Installation
-
-### macOS
-
-Prerequisites (`install-macos.md`, file is stale — first three points
-still apply; the "Tracks 1..8 only" / "palette incomplete" disclaimers
-in that file are out of date):
+## 1. Introduction
+
+### 1.1 What Rea-Sixty is
+
+Rea-Sixty is a REAPER extension that drives the SSL UF8 and UC1
+controllers directly from REAPER. It replaces SSL 360° on the
+host side. You install one extension file; SSL 360° is no longer
+required, the surface is no longer behind a virtual MIDI port, and
+the per-track SSL plug-in that SSL 360° needs for track colours is no
+longer required.
+
+What appears on the wire is the same byte protocol SSL 360° uses,
+re-emitted by REAPER. The legal basis for this is documented in
+`interop-rationale.md`; no SSL binaries, firmware, or trademarks are
+redistributed.
+
+### 1.2 What you need
+
+- A REAPER installation (recent build, macOS).
+- An SSL UF8 plugged in over USB-C. UC1 is supported optionally; a
+  UF8-only or UC1-only rig is fine.
+- `libusb` from Homebrew (`brew install libusb`).
+- The **ReaImGui** extension installed in REAPER via ReaPack. Without
+  ReaImGui, hardware control still works but the on-screen Settings
+  window will not appear.
+- **SSL 360° must not be running.** It claims the UF8 vendor
+  interface exclusively. If it is running when Rea-Sixty starts,
+  REAPER's Console will show an error and the surface will not
+  appear.
+
+### 1.3 What this version does
+
+A full inventory is in chapter 11. Headline features:
+
+- DAW-layer track colours on the scribble strips — every REAPER
+  track shows its assigned colour, with no per-track plug-in.
+- Faders at full 16-bit resolution.
+- Every UF8 button is routable to a REAPER action or a built-in
+  Rea-Sixty behaviour through the Bindings system.
+- UC1 follows the focused REAPER track and drives the SSL Channel
+  Strip 2 / Bus Compressor 2 / 4K series / 360° Link plug-in on
+  that track.
+- A dockable Settings window with six tabs.
+
+Chapter 13 lists what is **not** yet implemented, including a few
+items that the project's README and ROADMAP currently overstate.
+
+---
+
+## 2. Installation (macOS)
+
+The Windows and Linux ports are planned but not currently smoke-tested
+— see `ROADMAP.md` Phase 4.
+
+### 2.1 Prerequisites
 
 1. `brew install libusb`
-2. REAPER (recent build)
-3. UF8 plugged in, **SSL 360° must be quit** — it claims the UF8
-   vendor interface exclusively (no shared open).
-4. **ReaImGui extension installed in REAPER** (via ReaPack) — the
-   Settings window resolves ReaImGui exports lazily through
-   `plugin_getapi`; without ReaImGui the toggle action will not show
-   a window. The extension still drives UF8/UC1 in that case.
+2. REAPER installed
+3. ReaImGui installed via ReaPack
+4. UF8 plugged in
+5. SSL 360° quit (including the `SSL360Core` background daemon)
 
-Build:
+### 2.2 Build
 
-```bash
+```
 cd extension
 cmake -B build -G "Unix Makefiles"
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-Install:
+This produces `build/reaper_uf8.dylib`.
 
-```bash
+### 2.3 Install
+
+Symlink (recommended for development — rebuilds are picked up after a
+REAPER restart):
+
+```
 ln -sf "$PWD/build/reaper_uf8.dylib" \
        ~/Library/Application\ Support/REAPER/UserPlugins/reaper_uf8.dylib
 ```
 
-Restart REAPER. UF8 scribble strips should show REAPER track colours
-within a tick.
+Or copy:
 
-### Windows / Linux
+```
+cp build/reaper_uf8.dylib \
+   ~/Library/Application\ Support/REAPER/UserPlugins/
+```
 
-Build system is generic CMake with `PkgConfig::LIBUSB` and
-`PkgConfig::HIDAPI` (`CMakeLists.txt:96, 113, 140, 149`).
-macOS-specific files (`macos_save_dialog.mm`,
-`macos_pin_fx_gui.mm`, `MidiBridge.cpp` macOS branch) are isolated
-behind `__APPLE__` / `if(APPLE)` guards (`CMakeLists.txt:81-104`,
-`MidiBridge.cpp:7, 162-174`). Untested in current state, see Phase 4
-of `ROADMAP.md`.
+Restart REAPER. On success, the UF8 scribble strips show REAPER track
+colours within one display tick. On failure, REAPER → View → Console
+shows a line beginning with `Rea-Sixty UF8:` or `Rea-Sixty UC1:` —
+see chapter 10.
 
-## 9. Build artefacts
+### 2.4 Uninstall
 
-| Artefact | Source | Purpose |
+Remove the file from `~/Library/Application Support/REAPER/
+UserPlugins/`, restart REAPER.
+
+---
+
+## 3. Quick start
+
+Five minutes from install to working hardware.
+
+1. Open REAPER's Console (View → Console). You should see no
+   messages. If you see `Rea-Sixty UF8: …` or `Rea-Sixty UC1: …`, see
+   chapter 10.
+
+2. Add a few tracks in REAPER and colour them. The first 8 appear on
+   the UF8 scribble strips with their colours rendered to the UF8's
+   16-colour palette.
+
+3. Move a fader. REAPER track volume follows. Release the fader; the
+   motor settles to REAPER's authoritative value.
+
+4. Press SEL on a strip. REAPER selects that track. If UC1 is
+   connected and the track has an SSL plug-in, UC1's controls
+   immediately reflect that plug-in's parameters.
+
+5. Press the **360°** key. The Rea-Sixty Settings window opens.
+   Press 360° again to close it.
+
+6. Press **BANK ▶**. The 8 strips shift by 8 tracks. **BANK ◀**
+   shifts back.
+
+---
+
+## 4. Hardware tour
+
+### 4.1 Per-strip controls
+
+Eight identical strips, left-to-right.
+
+**100 mm motorised touch fader.** Touch-capacitive: REAPER receives a
+touch event when you grip the fader cap, so automation modes that
+distinguish touched from untouched faders behave correctly. Movement
+sends track volume at full 16-bit resolution (not the 14-bit cap MCU
+imposes). When you let go, the motor settles to REAPER's value, even
+if REAPER has moved during your touch.
+
+**V-Pot (push-encoder above the fader).** Rotation produces a signed
+delta routed through the Bindings system. The push action is a
+separate button. What the V-Pot controls depends on the active
+Selection Mode and page; see chapter 5.
+
+**Colour TFT scribble strip.** Multiple zones:
+
+- A coloured top band carrying the REAPER track colour.
+- The track name on the upper text line.
+- A short value line below.
+- In Plug-in Mixer Mode (chapter 5.4), additional zones appear:
+  Channel-Strip-Type label, parameter name + value, fader dB readout,
+  V-Pot readout bar, channel number with folder sigils when Folder
+  Mode is on.
+
+Rea-Sixty maps REAPER's RGB track colour to the UF8's fixed 16-entry
+palette by closest match. A small number of palette indices are not
+yet calibrated, so off-palette REAPER colours snap to the nearest
+calibrated neighbour.
+
+**SOLO / CUT / SEL keys.** Three illuminated keys per strip. LEDs
+follow REAPER's solo / mute / select / arm state, with dim and bright
+variants for automation modes. The SEL key colour optionally follows
+the track colour. On extension start every per-strip LED is force-
+darkened so the firmware power-up "everything lit" state does not
+leak into your idle session.
+
+**Top soft-key (above the scribble).** Per-strip; user-bindable.
+
+### 4.2 Bank navigation
+
+**BANK ◀ / BANK ▶.** Shift the 8-track window in steps of 8. Banking
+is REAPER-track-list ordered.
+
+**PAGE ◀ / PAGE ▶.** Page within bank where applicable.
+
+**HOME.** Return to bank 0.
+
+### 4.3 Channel encoder
+
+The large notched encoder on the right has six bindable modes:
+
+| Mode | Effect |
+|---|---|
+| Standard | Bank ±1 (single-track shift) |
+| NAV | Transport scrub |
+| NUDGE | Playhead nudge |
+| FOCUS | Mouse-wheel emulation |
+| Instance Cycle | Cycle through SSL Instances on the focused track |
+| FX Cycle | Cycle through every FX on the focused track |
+
+See `concepts.md` for the FX vs. Instance distinction.
+
+### 4.4 Layer keys
+
+**LAYER 1 / 2 / 3** on the left edge. Each layer is an independent
+bindings map. Switching layer recalls a different set of soft-key
+assignments, modifier behaviours, and V-Pot defaults. You can also
+copy and recall named Bank Presets within a layer.
+
+### 4.5 Soft-key column
+
+The top row of buttons above the scribble strips and the right-hand
+soft-key cluster are all bindable. Each binding slot supports four
+modifier variants (Plain / Shift / Cmd / Ctrl) and short- or long-
+press behaviour.
+
+### 4.6 SEND / PLUGIN row
+
+Eight keys, default-bindable to per-strip sends 1..8, or to a single
+"Send Layer" view, or to plug-in routing — see chapter 8 for the
+full builtin list.
+
+### 4.7 Selection Mode block — NORM / REC / AUTO
+
+Gates SEL key behaviour. Under stock SSL 360° + REAPER MCU, AUTO is
+Pro-Tools-only and the OFF automation state has no effect. Under
+Rea-Sixty all six REAPER automation modes are reachable directly.
+
+### 4.8 Transport keys
+
+Bound to REAPER's standard transport actions (Play, Stop, Record,
+Rewind, Fast-Forward, Cycle). Rebindable.
+
+### 4.9 Zoom / nav cluster
+
+Five keys mapping to REAPER's zoom-vertical-in/out, zoom-horizontal-
+in/out, and zoom-to-fit-project actions.
+
+### 4.10 360° key
+
+Opens and closes the Rea-Sixty Settings window. Rebindable.
+
+### 4.11 PLUGIN / CHANNEL keys
+
+**PLUGIN** toggles UF8 Plugin Mode (V-Pots drive plug-in parameters)
+and SSL Strip Mode (the focused track's Channel Strip Instance takes
+over the strip layout). Each has a "with GUI" variant that also
+opens the plug-in's own window.
+
+**CHANNEL** flips the focused domain between Channel Strip and Bus
+Compressor.
+
+### 4.12 FLIP / PAN / FINE
+
+- **FLIP** swaps fader and V-Pot assignment.
+- **PAN** forces V-Pots into pan mode.
+- **FINE / SHIFT** doubles as the Shift modifier — any binding with a
+  Shift variant fires while you hold this key.
+
+### 4.13 Foot-switch jacks
+
+Two 1/4" jacks on the back labelled FS1 / FS2. **Foot-switch input
+is not yet decoded in this version.** Plugging in a foot-switch
+produces no action. The jacks themselves still receive the SSL 360°
+factory function ("Play Footswitch" / "Record Footswitch") if you
+load SSL 360°; under Rea-Sixty alone, they are inert.
+
+---
+
+## 5. Modes
+
+### 5.1 DAW Mode
+
+The default. Eight strips map to a contiguous window of REAPER
+tracks. Fader = volume. V-Pot = pan unless reassigned through a
+binding. Scribble shows track colour and name.
+
+### 5.2 Folder Mode
+
+Triggered by binding a key to the Folder Mode action. When on, only
+parent (top-level) tracks fill the bank; children are hidden until
+expanded.
+
+### 5.3 Show Only Selected
+
+A complementary mode that filters the bank to currently-selected
+REAPER tracks.
+
+### 5.4 Plug-in Mixer Mode — Channel Strip
+
+When the focused track hosts a recognised SSL Channel Strip
+Instance — Channel Strip 2, 4K B, 4K E, 4K G, or a 360° Link
+wrapping one of those — the LCD layout switches:
+
+| Position | Field |
+|---|---|
+| Top zone | Soft-key label — which plug-in parameter the V-Pots drive |
+| Below | Channel-Strip-Type label ("CS 2", "4K G", …) |
+| Below | DAW track colour |
+| Below | Track name |
+| Below | O/PdB fader readout |
+| Below | Selected parameter name and value |
+| Bottom | V-Pot readout bar |
+
+Track colour is always shown in Plug-in Mixer Mode under Rea-Sixty;
+SSL 360°'s "Plug-in Mixer UF8/UF1 SEL Keys" toggle is not needed.
+
+The PLUGIN key inside Plug-in Mixer Mode toggles whether the fader
+and pan address the plug-in or the DAW track.
+
+A/B compare and HQ-mode toggles for Channel Strip plug-ins are
+exposed as bindable actions; both are surfaced safely (changing them
+does not cause a state-reload click).
+
+### 5.5 Plug-in Mixer Mode — Bus Compressor
+
+When the focused track hosts Bus Compressor 2 or a 360° Link Bus
+Compressor wrapper, the layout shifts to: track position, name,
+MAKE-UPdB readout, GR meter, selected parameter and value, V-Pot
+readout bar.
+
+### 5.6 Hybrid Mode
+
+When a layer is set to Plug-in Mixer, cursor keys and automation
+keys still drive transport and automation as in DAW mode. SSL's
+documentation flags REAPER as "seamless" for Hybrid Mode (no bank
+desync between the two banks). Rea-Sixty preserves this because
+there is only one bank, shared across modes.
+
+---
+
+## 6. UC1
+
+UC1 is a parallel surface that follows the focused REAPER track. Its
+selection is independent of the UF8 bank — focusing a track in REAPER
+re-targets UC1 immediately.
+
+### 6.1 Plug-in recognition
+
+UC1 recognises the same set of Instances as the UF8 Plug-in Mixer
+Mode:
+
+| FX name | Variant | Domain |
 |---|---|---|
-| `reaper_uf8.dylib` / `.dll` | 27 source files (`CMakeLists.txt:55-78`) | The extension |
-| `test_protocol` | `tests/test_protocol.cpp` | UF8 frame format + checksum + button-event parse — no libusb, no REAPER |
-| `test_uc1_protocol` | `tests/test_uc1_protocol.cpp` | Same for UC1 |
-| `uf8_color_test` | `tools/uf8_color_test.cpp` | Standalone CLI — opens UF8 via libusb, pushes test colours. Useful for "does the hardware respond at all" |
-| `uf8_palette_probe` | `tools/uf8_palette_probe.cpp` | Interactive palette calibration helper |
-| `uf8_hid_probe` | `tools/uf8_hid_probe.cpp` | Dumps raw HID reports from PID `0x0022` (the UF8's HID controller sibling) |
+| Channel Strip 2 | CS 2 | Channel Strip |
+| 4K G / 4K E / 4K B | 4K variants | Channel Strip |
+| Bus Compressor 2 | BC 2 | Bus Compressor |
+| SSL 360 Link Bus Compressor | Wrapper BC | Bus Compressor |
+| SSL 360 Link | Wrapper CS | Channel Strip |
 
-Note: `HidDevice.cpp/h` exists in `extension/src/` and is compiled
-into the extension (`CMakeLists.txt`), but `g_hid` is never
-constructed or opened in `main.cpp` (only declared,
-`main.cpp:85`). The HID device path is **not** currently used at
-runtime — input arrives via the vendor-USB endpoint. The HID class is
-exercised only by the `uf8_hid_probe` standalone tool.
+Multiple Channel Strip instances on the same track are handled via
+the Instance Cycle action.
 
-## 10. Coexistence with SSL 360°
+### 6.2 Knob mapping
 
-The UF8 vendor-USB interface is exclusive. While SSL 360° (or its
-background daemon `SSL360Core`) is running, `libusb_open_device` will
-fail and the extension logs `SSL360Core owns the device` to the REAPER
-Console (`main.cpp:4090`). Quit SSL 360° (including the background
-daemon) and reload the extension. The same applies in reverse: while
-Rea-Sixty is loaded, SSL 360° will not be able to claim the UF8.
+Per Instance, UC1's physical controls map to specific plug-in
+parameters:
 
-The UC1 path has the same exclusivity (`UC1Device.cpp:115-126`
-kernel-driver detach and interface claim).
+- **Channel Strip 2 and 4K variants** — twelve EQ knobs (LP, HP,
+  four bands with frequency / gain / Q), seven dynamics knobs (Comp
+  threshold / ratio / release, Gate threshold / range / release /
+  hold), ten buttons for bell / type / in toggles. Channel Strip 2
+  has polarity inversions on LP, HMF/LMF Q and the Comp/Gate
+  Threshold knobs (intentional, matches SSL's 360° behaviour); the
+  4K variants do not.
+- **Bus Compressor 2** — seven top V-Pots (Threshold, Makeup,
+  Attack, Release, Ratio, HPF, Mix) plus IN.
 
-## 11. What is *not* implemented (don't expect it from main)
+### 6.3 GR meter
 
-The README and ROADMAP describe several features that are not in the
-shipped code at the time of writing. Listed here so the manual is
-honest about scope:
+For built-in SSL plug-ins, gain reduction is read through the
+PreSonus VST3 extension that REAPER exposes as
+`GainReduction_dB` — no JSFX probe, no sidechain tap. The meter
+goes through piecewise-linear calibration tables (six breakpoints
+for the BC VU motor at 0/4/8/12/16/20 dB; five for the LED ladder
+and the UF8 GR row at 3/6/10/14/20 dB).
 
-- **On-screen Plug-in Mixer view.** `MixerLayout.cpp:7-9` is a
-  placeholder. Settings tabs are complete; the Mixer view is not.
-- **Selection-set storage.** `selset_recall` writes
-  `g_selsetActive` but does not yet pull GUID lists from
-  `SetProjExtState` (`main.cpp:11331-11332` is marked `TODO Phase 2.5b`).
-  The action exists, the UI tab exists, the storage step is open.
-- **Auto-insert of the GR JSFX probe.** No call site in
-  `extension/src/`; the probe ships as a separate JSFX file the user
-  installs by hand if needed.
-- **Foot-switch bindings.** UF8 has two foot-switch jacks. No USB
-  event for them is parsed in `Protocol.cpp`.
-- **GUID-keyed FX Learn bindings.** Bindings match plug-ins by FX-name
-  substring, not by VST3 GUID. Rename-safety is therefore weaker than
-  the README implies.
-- **Cross-platform build.** Code compiles to a `.dll`/`.so` in
-  principle; not currently smoke-tested on Windows or Linux.
-- **In-app firmware update for UF8 / UC1.** Out of scope by design —
-  SSL still ships firmware blobs through SSL 360°.
+For user-mapped plug-ins via FX Learn, the meter source can be
+overridden — pick the VST3 parameter that carries gain reduction in
+the FX Learn editor, optionally with an offset and custom calibration
+breakpoints.
 
-## 12. Where to look in the repo
+A small JSFX sidechain envelope-follower probe is shipped in the
+repository (`extension/jsfx/rea_sixty_gr_probe.jsfx`) as a fallback
+for compressors that do not expose `GainReduction_dB`. It is not
+auto-inserted; if you need it, place it manually on the track after
+the compressor and route the compressor's input to its sidechain
+input.
 
-- Protocol decoding notes — `docs/protocol-notes.md`,
-  `docs/protocol-notes-uc1.md`
-- Architecture decision (no CSI / no virtual MCU) —
-  `docs/architecture-decision.md`
-- Legal basis — `docs/interop-rationale.md`
-- Bindings spec — `docs/bindings.md`
-- Concepts (FX vs Instance, V-Pot cycles) — `docs/concepts.md`
-- Settings UI plan — `docs/plan-settings-ui.md`
-- USB capture workflow — `docs/windows-capture-workflow.md`
-- Roadmap and phase plan — `ROADMAP.md`
-- This manual lives at `docs/user-manual.md`.
+### 6.4 LCD zones
+
+UC1 has three 3-digit 7-segment displays plus a colour LCD area
+split into header, sub-header, value, unit, round indicator
+(value-arc), preset carousel, and central-control-panel zones. All
+are driven from the focused-parameter state and the active routing
+or preset mode.
+
+### 6.5 Brightness
+
+Three independent brightness levels — LEDs, scribble LCDs, and the
+GR / status area — all settable from Settings → Device.
+
+---
+
+## 7. Settings window
+
+Open: bind any key to **Rea-Sixty: Open / Close Rea-Sixty Settings**
+(default-bound to the 360° key). The window is dockable and themes
+itself to REAPER's active colour theme. Six tabs in a left rail.
+
+### 7.1 Device
+
+Per-device connection status with serial number. Controls:
+
+- **Identify** — flashes the corresponding device to confirm which
+  unit is which in multi-UF8 setups.
+- **LED brightness** — five levels.
+- **Scribble LCD brightness** — five levels.
+- **GR meter source** — choose between the built-in
+  `GainReduction_dB` path and any FX Learn override.
+- **Track-select-follows-param** — focusing a parameter on the UC1
+  also selects its track.
+- **Plug-in GUI follows Instance** — keep the SSL plug-in window
+  open and re-target it when the focused Instance changes.
+- **Pin position** — capture and remember the FX-window position so
+  it reappears in the same place next session.
+
+### 7.2 Bindings
+
+Full REAPER action picker and per-control binding editor across the
+modifier matrix (Plain / Shift / Cmd / Ctrl × short or long press).
+Export and import per-layer JSON files via the standard macOS save
+dialog.
+
+On-disk persistence path:
+
+- macOS: `~/Library/Application Support/REAPER/rea_sixty/bindings.json`
+- Windows: `%APPDATA%/REAPER/rea_sixty/bindings.json`
+
+Three layers; per layer, three Quick slots with six sub-banks each
+(V-POT and Soft 1..5) for 144 user-fillable soft-key slots, plus
+all global, per-strip, transport, and soft-key positions. Named
+Bank Presets let you snapshot and recall whole layer states.
+
+### 7.3 Modes
+
+Toggles for Folder Mode, Show Only Selected, and per-layer V-Pot
+default behaviours.
+
+### 7.4 FX Learn
+
+See chapter 9.
+
+### 7.5 Selection Sets
+
+Eight slots per project. **The slots are partly wired.** Pressing a
+slot key currently marks the slot as active and lights the LED, but
+the actual store-and-recall of selection lists is not yet
+implemented — see chapter 13. The UI is in place; the storage layer
+behind it is on the roadmap.
+
+### 7.6 About
+
+Version, build hash, REAPER and ReaImGui versions, log-file
+location, and repository links.
+
+---
+
+## 8. Bindings — what you can bind
+
+The Bindings tab lets every UF8 / UC1 button, V-Pot and soft-key
+trigger one of two kinds of action:
+
+1. **Any REAPER action.** Anything in REAPER's action list is
+   reachable, including custom actions and ReaScripts.
+2. **A built-in Rea-Sixty action.** These are surface-specific
+   behaviours that know about banks, focused tracks, Instances and
+   so on.
+
+The full built-in catalogue, grouped:
+
+**Navigation.** Bank Left, Bank Right, Page Left, Page Right, Home,
+Zoom Up / Down / Left / Right / Center.
+
+**Modifiers.** Shift, Cmd, Ctrl — each available as Momentary or
+Toggle.
+
+**Channel-encoder modes.** Nav, Nudge, Focus, Instance Cycle, FX
+Cycle, Mode Dispatch.
+
+**Track operations.** Selection Mode Normal, Selection Clear All,
+Select Relative, Tracks Arm All, Automation Zero All, Playhead
+Nudge, Mouse Scroll.
+
+**Instance and FX.** Instance Cycle, Instance Next, Instance
+Previous, FX Cycle, BC Track Scroll.
+
+**Strip modes.** SSL Strip Mode Toggle (with and without GUI), UF8
+Plugin Mode Toggle (with and without GUI).
+
+**Plug-in control.** Show Focused Plug-in GUI, Plug-in Bypass,
+Plug-in Offline, Plug-in Preset Next / Previous / Cycle, Show FX
+Chain.
+
+**Display.** Brightness LEDs Up / Down, LCDs Up / Down, Both Up /
+Down.
+
+**Surface filters.** Folder Mode, Show Only Selected, Selection-Set
+Recall (slot 1..8).
+
+**Domain / mixer.** Domain CS, Domain BC, Mixer Toggle, Pan Force,
+Flip.
+
+**Soft-key utilities.** Softkey Bank Select, SSL Softkey, SSL Bank
+V-Pot.
+
+**Routing.** Send All 1..8, Send This, Receive This.
+
+**Automation.** Off, Read, Write, Trim, Latch, Latch Preview, Touch
+— per-track and global variants of each.
+
+Plus an escape hatch that lets a binding fire any REAPER command ID
+directly.
+
+Total: 88 built-in actions plus the entire REAPER action namespace.
+
+---
+
+## 9. FX Learn
+
+Located in Settings → FX Learn. FX Learn lets you assign UF8 and UC1
+controls to any plug-in parameter — not just SSL plug-ins. ReaEQ,
+FabFilter, JS effects, anything REAPER can host.
+
+### 9.1 What FX Learn stores per plug-in
+
+- A name match string (substring of the FX name).
+- A domain (Channel Strip, Bus Compressor, or none).
+- A "UF8 mode" flag — when on, all eight UF8 strips drive parameters
+  of this plug-in.
+- Per-slot VST3 parameter indices, with optional polarity inversion.
+- Optional gain-reduction metering: which VST3 parameter carries GR,
+  an offset in dB, and two calibration breakpoint tables (six points
+  for the BC-style VU motor, five for the LED ladder).
+- Optional UF8 bank and strip bindings.
+- A snapshot of parameter names for display on the scribble strip.
+
+### 9.2 How matching works
+
+Each lookup runs the substring match against the FX name as REAPER
+reports it. This means:
+
+- **Reordering** FX on a track is safe — the match runs on each
+  lookup and finds the plug-in wherever it now sits.
+- **Renaming** the FX (in REAPER's FX window) breaks the mapping —
+  the next lookup will not match.
+
+If you want to rename a plug-in for clarity, also update the match
+string in FX Learn so the lookup keeps working.
+
+### 9.3 Where the data lives
+
+The catalogue is stored in a single JSON file at
+`<REAPER_RESOURCE>/rea_sixty/user_plugins.json`. Saves are atomic
+(write to a temporary file, then rename) so a crash during save
+cannot corrupt the file.
+
+---
+
+## 10. Troubleshooting
+
+### 10.1 `Rea-Sixty UF8: SSL360Core owns the device`
+
+SSL 360° is still running. Quit the SSL 360° app and the
+`SSL360Core` background process (you can find it in Activity
+Monitor), then reload the extension or restart REAPER.
+
+### 10.2 No on-screen window when I press the 360° key
+
+ReaImGui is not installed in REAPER. Install it via ReaPack and
+restart REAPER. The hardware-control path works without ReaImGui;
+only the Settings window depends on it.
+
+### 10.3 No LED feedback on solo / mute / select / arm
+
+Rea-Sixty has both a vendor-USB LED path (which always runs) and a
+legacy MCU-MIDI LED fallback (which depends on REAPER's CoreMIDI
+seeing a port whose name contains "UF8"). On extension start the
+extension writes the list of MIDI destinations it saw to
+`/tmp/reaper_uf8_midi_dests.log`. Open that file to see what was
+available. If the vendor-USB LEDs themselves are working, the
+fallback is cosmetic.
+
+### 10.4 Fader behaves erratically
+
+REAPER's action **Rea-Sixty: Toggle fader calibration logging** and
+**Rea-Sixty: Toggle fader input log** turn on diagnostic streams that
+let you see what the fader is actually sending.
+
+### 10.5 An LED is in the wrong colour
+
+REAPER's action **Rea-Sixty: Probe next global LED cell** walks the
+UF8's LED cells one at a time so you can map which physical LED
+corresponds to which protocol cell. There is a parallel action for
+the legacy monochrome LEDs.
+
+### 10.6 GR meter reads wrong on a third-party compressor
+
+Open Settings → FX Learn, find the compressor, set its GR override:
+pick the VST3 parameter that carries GR, set an offset if needed,
+and adjust the calibration breakpoints until the on-screen meter
+matches the plug-in's own meter under known signal levels.
+
+### 10.7 I want to see the raw bytes Rea-Sixty sent
+
+REAPER's action **Rea-Sixty: Frame trace** toggles a frame log to
+`/tmp`. Useful when a colour or LED is wrong and you want to compare
+the bytes to a capture.
+
+### 10.8 Reset everything
+
+Delete `~/Library/Application Support/REAPER/rea_sixty/` and restart
+REAPER. The extension recreates defaults.
+
+---
+
+## 11. What this version supports
+
+Drawn from the live code. If something is missing here, it is not
+yet implemented — see chapter 13.
+
+**UF8 outputs.** Track colours per strip, upper and lower scribble
+text, 19-character value line, Channel-Strip-Type label, channel
+number with folder sigils, V-Pot readout bar, fader dB readout,
+selected-strip bitmask. Per-strip SOLO / CUT / SEL colour LEDs with
+dim and bright automation variants. Top soft-key LEDs. 40+ global
+button LEDs (Layer, Send/Plugin, Page, Bank, Plugin, Channel, Flip,
+Automation, Selection Mode, Transport, Zoom, Nav, Nudge, Focus,
+PAN, Fine, Norm, Rec, Auto, 360°). VU meter pair. GR row stamped
+into Plug-in Mixer heartbeats. Master LED and LCD brightness.
+
+**UF8 inputs.** Every documented button (per-strip and global). Fader
+position at 16-bit precision. Fader touch with debouncing. V-Pot
+deltas.
+
+**UC1 outputs.** GR meter at 50 Hz. VU meter pair per channel strip.
+LED bus for every button. 7-segment digits (ones, tens, hundreds
+partly calibrated). Display zones: header, sub-header, value, unit,
+context blocks for CS and BC, round indicator with value-arc,
+preset carousel (5-slot, 14-char), central control panel mode and
+label, routing indicator, mode dots. Track-name carousels (small
+and large). Three independent brightness levels (LED, LCD, status).
+
+**UC1 inputs.** Every documented button (31 IDs). All 16 V-Pots plus
+3 encoders, with signed 6-bit deltas.
+
+**REAPER integration.** Surface registration as a `csurf_inst`. Bank
+window of 8 tracks, REAPER-track-list ordered, with explicit Bank
+Left / Bank Right actions. Selection-follow on `SetSurfaceSelected`.
+Folder Mode with parent-only banking. Selection-set recall (action
+wired; storage layer not yet — see chapter 13). 88 built-in
+Rea-Sixty actions plus the full REAPER action list.
+
+**Plug-in integration.** Channel Strip 2, 4K B, 4K E, 4K G, Bus
+Compressor 2, SSL 360° Link (both Channel Strip and Bus Compressor
+wrappers). Recognition by FX-name substring. Multi-instance handling
+on a single track. A/B compare and HQ-mode toggles via direct VST3
+state-chunk patching (those flags are not reachable through REAPER's
+parameter API).
+
+**Settings window.** Six tabs (Device, Bindings, Modes, FX Learn,
+Selection Sets, About) themed to REAPER's active theme.
+
+---
+
+## 12. Status messages
+
+Messages printed to REAPER → View → Console by Rea-Sixty:
+
+- `Rea-Sixty UF8: <reason>  (UF8 optional — continuing)` — UF8 could
+  not be opened. The most common reason is SSL 360° holding the
+  device.
+- `Rea-Sixty UC1: <reason>  (UC1 optional — UF8 continues)` — UC1
+  could not be opened. The extension still runs against UF8.
+
+Files written under `/tmp`:
+
+- `reaper_uf8_midi_dests.log` — every CoreMIDI destination visible
+  when the extension opened its MIDI port. Useful when LED feedback
+  via the MCU fallback path is missing.
+- Frame-trace logs created by the Frame-trace action.
+
+Strings the UF8 firmware itself writes to its scribble strips
+before any host has handshaken (Rea-Sixty replaces these on its init
+replay):
+
+- `UF8 Initialisation Complete` + `Awaiting Connection to SSL 360°
+  Software`
+- `Layer Set To None`
+- `SSL 360° Connection Lost. Attempting to Reconnect`
+
+If you see the last of these after Rea-Sixty was working, the
+extension crashed mid-session. Look for a REAPER crash log and
+restart REAPER.
+
+---
+
+## 13. Known limitations
+
+What is **not** in this version, despite being described in
+`README.md` or `ROADMAP.md`:
+
+1. **On-screen Plug-in Mixer view.** The dockable window currently
+   only contains the Settings tabs. The themed mixer view that
+   mirrors SSL 360°'s Plug-in Mixer page is on the roadmap (Phase
+   2.6) but not in this build.
+
+2. **GUID-keyed FX Learn.** The README describes FX Learn as
+   "GUID-keyed". In practice FX Learn matches by FX-name substring.
+   This is more conservative: reorders are safe, renames break the
+   mapping. The behaviour is correct; the documentation is loose.
+
+3. **Selection-set storage.** Pressing a Selection-Set key currently
+   marks the slot as active and lights its LED, but does not yet
+   store or recall a list of selected tracks. The action exists, the
+   UI is in place; the storage layer is on the roadmap (Phase 2.5b).
+
+4. **Auto-insert of the JSFX GR probe.** The probe is shipped in the
+   repository but the extension does not insert it automatically.
+   Place it manually if you need it.
+
+5. **Foot-switch input.** The vendor-USB event for foot-switch
+   press has not yet been decoded. FS1 and FS2 produce no action.
+
+6. **Cross-platform builds.** The build system targets macOS, Windows
+   and Linux in principle. Only macOS is currently smoke-tested.
+
+7. **Long-press SEL → folder expand.** Folder Mode works as a
+   parent-only filter, but the long-press SEL gesture to expand a
+   single parent into its children is not yet wired (Phase 2.5a).
+
+8. **In-app firmware update.** Out of scope. SSL still distributes
+   firmware blobs through SSL 360°; keep SSL 360° installed for the
+   rare occasion of a firmware update, then quit it again.
+
+---
+
+## 14. Quick reference — button names
+
+| Strip-local | Per strip 0..7 |
+|---|---|
+| Fader | Touch-capacitive, motorised |
+| V-Pot | Push-encoder |
+| Top Soft-Key | Above scribble |
+| SOLO / CUT / SEL | Colour-pair LEDs |
+
+| Global | |
+|---|---|
+| LAYER 1 / 2 / 3 | Left edge |
+| 360° | Settings toggle |
+| BANK ◀ / ▶ | Bank by 8 |
+| PAGE ◀ / ▶ | Page within bank |
+| PLUGIN | Plug-in mode toggle |
+| CHANNEL | Domain CS / BC flip |
+| FLIP | Fader / V-Pot swap |
+| PAN | Force V-Pots to pan |
+| FINE / SHIFT | Shift modifier |
+| NORM / CLEAR | Selection mode normal |
+| REC / ALL | Tracks arm all |
+| AUTO / ZERO | Automation zero |
+| Touch | Fader-touch behaviour |
+| READ / WRITE / TRIM / LATCH | Automation modes |
+| SEND / PLUGIN 1..8 | Send and routing |
+| Soft 1..5 + V-POT | Top-right soft cluster |
+| Channel encoder | Nav / Nudge / Focus / Instance / FX Cycle |
+| Zoom cluster | Vertical / horizontal zoom |
+
+---
+
+End of manual.
