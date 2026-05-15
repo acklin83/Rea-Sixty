@@ -1339,6 +1339,15 @@ std::atomic<FollowMode> g_followMode{FollowMode::BucketSnap};
 // each modifier is a single bool.
 std::atomic<bool> g_shiftHeld{false};
 
+// Shift long-press latch. Set when the user holds Shift past
+// kShiftLatchMs and releases — Shift then stays active until the next
+// press, which clears the latch. Lets the user "tip" Shift into Fine
+// mode for a knob sweep without keeping a finger on the button. Plain
+// momentary use (press, twiddle, release short) is unchanged.
+constexpr int64_t kShiftLatchMs = 500;
+std::atomic<bool>    g_shiftLatched{false};
+std::atomic<int64_t> g_shiftPressEpochMs{0};
+
 // Fractional accumulators for the channel encoder. The UF8 emits
 // several events per physical detent (each with speed 1-2), so we
 // divide by the scale and only consume whole integer steps. Separate
@@ -10857,31 +10866,72 @@ void registerBindingHandlers()
     // dispatch() can snapshot the active modifier at press-edge of any
     // other button. g_shiftHeld stays in sync for the legacy in-TU
     // fader/scrub-speed readers — mod_shift shadows both atomics.
-    auto modHandler = [](uf8::bindings::Modifier m, std::atomic<bool>* legacyMirror) {
-        return [m, legacyMirror](bool firing, bool pressed, int param) {
+    //
+    // mod_shift (only) wires in two extra atomics that turn Momentary
+    // into "momentary OR long-press-latch": releasing after kShiftLatchMs
+    // latches Shift on instead of releasing it; the next press clears
+    // the latch and turns Shift off. Cmd/Ctrl stay pure momentary.
+    auto modHandler = [](uf8::bindings::Modifier m,
+                         std::atomic<bool>* legacyMirror,
+                         std::atomic<bool>* latchedFlag,
+                         std::atomic<int64_t>* pressEpochMs) {
+        return [m, legacyMirror, latchedFlag, pressEpochMs]
+               (bool /*firing*/, bool pressed, int param) {
             const bool toggleMode = (param == 1);
-            bool newState;
             if (toggleMode) {
-                if (!firing || !pressed) return;   // press-edge only
-                newState = !uf8::bindings::modifierHeld(m);
-            } else {
-                newState = pressed;
+                if (!pressed) return;   // press-edge only
+                const bool newState = !uf8::bindings::modifierHeld(m);
+                uf8::bindings::setModifierHeld(m, newState);
+                if (legacyMirror) legacyMirror->store(newState);
+                return;
             }
-            uf8::bindings::setModifierHeld(m, newState);
-            if (legacyMirror) legacyMirror->store(newState);
+            // Momentary with optional long-press latch (Shift only).
+            if (latchedFlag && pressEpochMs) {
+                using namespace std::chrono;
+                if (pressed) {
+                    if (latchedFlag->load()) {
+                        // Latched → press clears the latch, modifier off.
+                        latchedFlag->store(false);
+                        pressEpochMs->store(0);
+                        uf8::bindings::setModifierHeld(m, false);
+                        if (legacyMirror) legacyMirror->store(false);
+                        return;
+                    }
+                    pressEpochMs->store(duration_cast<milliseconds>(
+                        steady_clock::now().time_since_epoch()).count());
+                    uf8::bindings::setModifierHeld(m, true);
+                    if (legacyMirror) legacyMirror->store(true);
+                } else {
+                    const int64_t start = pressEpochMs->exchange(0);
+                    if (start <= 0) return;   // stale / already cleared
+                    const int64_t now = duration_cast<milliseconds>(
+                        steady_clock::now().time_since_epoch()).count();
+                    if (now - start >= kShiftLatchMs) {
+                        latchedFlag->store(true);   // keep modifier on
+                    } else {
+                        uf8::bindings::setModifierHeld(m, false);
+                        if (legacyMirror) legacyMirror->store(false);
+                    }
+                }
+                return;
+            }
+            // Plain momentary (Cmd / Ctrl).
+            uf8::bindings::setModifierHeld(m, pressed);
+            if (legacyMirror) legacyMirror->store(pressed);
         };
     };
     registerBuiltin("mod_shift", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Shift, &g_shiftHeld),
+        modHandler(uf8::bindings::Modifier::Shift, &g_shiftHeld,
+                   &g_shiftLatched, &g_shiftPressEpochMs),
         [](int) { return g_shiftHeld.load(); },
-        "Modifier: Shift / Fine", true
+        "Modifier: Shift / Fine (long-press latches)", true
     });
     registerBuiltin("mod_cmd", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Cmd, nullptr),
+        modHandler(uf8::bindings::Modifier::Cmd, nullptr, nullptr, nullptr),
         nullptr, "Modifier: Cmd", true
     });
     registerBuiltin("mod_ctrl", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Ctrl, nullptr),
+        modHandler(uf8::bindings::Modifier::Ctrl, nullptr, nullptr, nullptr),
         nullptr, "Modifier: Ctrl", true
     });
 
