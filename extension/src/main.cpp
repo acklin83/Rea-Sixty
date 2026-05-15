@@ -212,6 +212,17 @@ std::atomic<bool> g_bankDirty{false};
 // also fires it on bank shifts, which don't touch g_focusedParam.
 std::atomic<bool> g_pageDirty{false};
 
+// Selection-burst coalescing. REAPER fires SetSurfaceSelected once per
+// track when an action flips many tracks at once (e.g. "Select all
+// tracks → set heights → restore selection"). Acting on every callback
+// makes the UC1 7-seg "count through" every intermediate track and the
+// UF8 bank scroll wildly. Instead we just remember the LAST sel=true
+// track of the burst here and apply it once on the next onTimer tick.
+// nullptr = no pending change. Set by SetSurfaceSelected, consumed by
+// onTimer.
+std::atomic<void*> g_pendingFocusTrack{nullptr};
+std::atomic<bool>  g_pendingFocusGuiSync{false};
+
 // When the user hits the PAN button, we globally override every strip's
 // V-Pot to act as pan control regardless of whether the track hosts an
 // SSL plug-in. Any V-Pot assignment soft key (0x68–0x6D) returns to
@@ -3766,33 +3777,19 @@ void ReaSixtySurface::SetSurfaceMute(MediaTrack* tr, bool mute)
 void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
 {
     sendLed(LedClass::Sel, tr, sel);
-    // UC1 always follows whichever track just became selected. Ignoring
-    // the sel=false side means we keep the last-focused track driving
-    // UC1 until a new one is picked — matches SSL 360°'s Focus Mode.
-    if (sel && g_uc1_surface) {
-        g_uc1_surface->setFocusedTrack(tr);
-        // When the "with GUI" variant of SSL Strip Mode is active,
-        // follow the track selection so the floating window switches
-        // to the new track's CS plug-in. Plain ssl_strip_mode_toggle
-        // (no GUI) leaves g_pluginFaderModeWithGui false → no GUI
-        // churn (Frank 2026-05-12 "GUI bei select eines anderen
-        // channels auf den neu gewählten wechseln"). Use the
-        // with-Gui flag rather than the g_csGuiShownTr pointer
-        // because the latter clears whenever the drain closes a GUI
-        // (e.g. user selected a track with no CS plug-in) — leaving
-        // the follow logic permanently disarmed for the rest of the
-        // session (Frank 2026-05-14).
+    // Coalesce sel=true bursts so multi-track actions ("Select all → set
+    // heights → restore selection") don't make UC1 count through every
+    // intermediate track or UF8 scroll wildly. We only record the LAST
+    // sel=true track of the tick here; onTimer applies focus + bank
+    // follow exactly once per tick. sel=false is ignored on purpose —
+    // matches SSL 360° "keep the last focus until something new is
+    // selected" behaviour.
+    if (sel) {
+        g_pendingFocusTrack.store(tr);
         if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
-            g_pluginGuiSyncRequest.store(true);
+            g_pendingFocusGuiSync.store(true);
         }
     }
-    // UF8 bank follows REAPER selection. Any selection change — clicks
-    // in the TCP/MCP, ReaScript, another surface — rebanks so the
-    // active track is visible on the UF8. Uses whichever FollowMode is
-    // set globally (BucketSnap by default; LeftmostStrip is the
-    // planned settings toggle). Only the sel=true edge triggers; a
-    // deselect shouldn't move the view.
-    if (sel) followSelectedInMixer(tr);
 }
 void ReaSixtySurface::SetSurfaceRecArm(MediaTrack* tr, bool arm)
 {
@@ -8223,6 +8220,24 @@ void onTimer()
     // an unfiltered REAPER lookup while the renderer expected a filtered
     // mapping (Bug 2 fix: Folder Collapse / Show Only Selected).
     rebuildVisibleTrackList();
+
+    // Drain coalesced SetSurfaceSelected burst. Whoever was the LAST
+    // track flipped to sel=true since the previous tick wins focus —
+    // collapsing a 100-track "Select all → restore" burst into a single
+    // 7-seg / bank update instead of 100. ValidatePtr2 guards against a
+    // pending pointer that's been freed between callback and tick.
+    if (void* pending = g_pendingFocusTrack.exchange(nullptr); pending) {
+        if (ValidatePtr2(nullptr, pending, "MediaTrack*")) {
+            auto* tr = static_cast<MediaTrack*>(pending);
+            if (g_uc1_surface) g_uc1_surface->setFocusedTrack(tr);
+            followSelectedInMixer(tr);
+            if (g_pendingFocusGuiSync.exchange(false)) {
+                g_pluginGuiSyncRequest.store(true);
+            }
+        } else {
+            g_pendingFocusGuiSync.store(false);
+        }
+    }
     if (g_tickCounter == g_uc1RefireAtTick && g_uc1_surface) {
         // Force a full LED re-push once the device + REAPER project
         // are settled. Without this, the first refresh races with
