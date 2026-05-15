@@ -1923,10 +1923,14 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("uf8_plugin_mode_", 0) == 0)
                     return "Hardware Modes";
 
-                // Plug-in family — operates on the currently focused
-                // plug-in (toggle GUI; later bypass, preset prev/next,
-                // offline, …).
-                if (n == "show_focused_plugin_gui")
+                // Plug-in family — operates on the currently active
+                // FX (cursor with focused-Instance fallback): GUI
+                // toggles, bypass / offline, preset navigation, chain
+                // reorder. Toggle-all-windows belongs here too.
+                if (n == "show_focused_plugin_gui"
+                 || n == "show_fx_chain"
+                 || n == "close_all_fx_guis"
+                 || n.rfind("plugin_", 0) == 0)
                     return "Plug-in";
 
                 if (n.rfind("layer_select", 0) == 0)

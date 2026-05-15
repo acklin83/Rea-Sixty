@@ -1872,6 +1872,51 @@ void applyFxCycle_(int step)
 void* g_focusedGuiShownTr = nullptr;
 int   g_focusedGuiShownFx = -1;
 
+// Resolve "the FX the user is currently working on" for plug-in family
+// actions (bypass, offline, preset cycle, move, …). Cursor first
+// (because every cycle action writes it; matches "what was just
+// selected"), focused-domain Instance as fallback (for users who never
+// V-Pot-cycled — gives a sensible default Instead of just FX[0]).
+// Returns {nullptr, -1} when nothing's resolvable. Frank 2026-05-15:
+// "Option A — eine Action-Reihe operiert auf Cursor."
+struct ActiveFxTarget { MediaTrack* tr; int fxIdx; };
+
+ActiveFxTarget resolveActiveFx_()
+{
+    if (!g_uc1_surface) return {nullptr, -1};
+    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return {nullptr, -1};
+
+    // Cursor branch — user has explicitly cycled (V-Pot FX Cycle,
+    // V-Pot Instance Cycle, or Encoder Instance Cycle, all of which
+    // write g_stripInstanceFxIdx).
+    auto it = g_stripInstanceFxIdx.find(tr);
+    if (it != g_stripInstanceFxIdx.end()) {
+        const int idx  = it->second;
+        const int nFx  = TrackFX_GetCount(tr);
+        if (idx >= 0 && idx < nFx) return {tr, idx};
+    }
+
+    // Fallback — focused-domain Instance (the same FX UC1 LCD shows).
+    // BC follows the BC anchor track since that's where the UC1 BC
+    // section is pinned.
+    const auto fp = uf8::getFocusedParam();
+    if (fp.domain != uf8::Domain::None) {
+        void* lookupTrack = (fp.domain == uf8::Domain::BusComp)
+            ? g_uc1_surface->bcAnchorTrackPublic()
+            : static_cast<void*>(tr);
+        if (lookupTrack && ValidatePtr2(nullptr, lookupTrack, "MediaTrack*")) {
+            MediaTrack* ltr = static_cast<MediaTrack*>(lookupTrack);
+            auto match = uf8::lookupPluginOnTrack(ltr, fp.domain);
+            if (match.map && match.fxIndex >= 0) {
+                return {ltr, match.fxIndex};
+            }
+        }
+    }
+    return {nullptr, -1};
+}
+
 void applyShowFocusedPluginGui_()
 {
     if (!g_uc1_surface) return;
@@ -11074,6 +11119,169 @@ void registerBindingHandlers()
         },
         "Plug-in: toggle focused GUI", false
     });
+
+    // ---- Plug-in family (operate on the active FX) ------------------
+    // All resolve their target via resolveActiveFx_: cursor first
+    // (V-Pot FX Cycle / V-Pot Instance Cycle / Encoder Instance Cycle
+    // all write the cursor), focused-domain Instance as fallback.
+    // Frank 2026-05-15: "A — eine Action-Reihe operiert auf Cursor."
+
+    registerBuiltin("plugin_bypass", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            const bool enabled = TrackFX_GetEnabled(t.tr, t.fxIdx);
+            TrackFX_SetEnabled(t.tr, t.fxIdx, !enabled);
+        },
+        [](int) {
+            auto t = resolveActiveFx_();
+            if (!t.tr) return false;
+            // LED on = bypassed. Convention matches the auto-mode and
+            // selection-mode builtins (LED reflects "this state is
+            // currently active").
+            return !TrackFX_GetEnabled(t.tr, t.fxIdx);
+        },
+        "Plug-in: toggle bypass (active FX)", false
+    });
+
+    registerBuiltin("plugin_offline", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            const bool offline = TrackFX_GetOffline(t.tr, t.fxIdx);
+            TrackFX_SetOffline(t.tr, t.fxIdx, !offline);
+        },
+        [](int) {
+            auto t = resolveActiveFx_();
+            if (!t.tr) return false;
+            return TrackFX_GetOffline(t.tr, t.fxIdx);
+        },
+        "Plug-in: toggle offline (active FX)", false
+    });
+
+    registerBuiltin("plugin_preset_next", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            TrackFX_NavigatePresets(t.tr, t.fxIdx, +1);
+        },
+        nullptr, "Plug-in: next preset (active FX)", false
+    });
+
+    registerBuiltin("plugin_preset_prev", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            TrackFX_NavigatePresets(t.tr, t.fxIdx, -1);
+        },
+        nullptr, "Plug-in: previous preset (active FX)", false
+    });
+
+    // Encoder-driven preset scroll — signed delta from
+    // dispatchEncoder. Bind to UC1 Encoder 2 / Channel Encoder shift
+    // slot for "cycle to FX, scroll its presets" workflow.
+    registerBuiltin("plugin_preset_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing || param == 0) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            TrackFX_NavigatePresets(t.tr, t.fxIdx, param);
+        },
+        nullptr, "Plug-in: cycle preset (encoder, active FX)", false
+    });
+
+    // ---- Tier 2 — FX-chain / move ------------------------------------
+
+    // Toggle the focused track's FX chain window. TrackFX_Show flags:
+    // 0 = hide chain, 1 = show chain (the FX list dialog with the
+    // chain header — the same window REAPER opens via "Track: View
+    // FX chain for current track").
+    registerBuiltin("show_fx_chain", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto t = resolveActiveFx_();
+            if (!t.tr) return;
+            // GetOpen — REAPER reuses TrackFX_GetChainVisible to
+            // report whether the chain is open. Returns the visible
+            // FX index, or -1 when the chain is closed.
+            const int vis = TrackFX_GetChainVisible(t.tr);
+            TrackFX_Show(t.tr, t.fxIdx, vis < 0 ? 1 : 0);
+        },
+        [](int) {
+            auto t = resolveActiveFx_();
+            if (!t.tr) return false;
+            return TrackFX_GetChainVisible(t.tr) >= 0;
+        },
+        "Plug-in: toggle FX chain window (focused track)", false
+    });
+
+    // Sweep every track's every FX, hide both the floating window
+    // (flag 2) and the chain (flag 0). Cheap nuclear option after a
+    // long session of GUI-popping.
+    registerBuiltin("close_all_fx_guis", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const int trackCount = CountTracks(nullptr);
+            for (int ti = -1; ti < trackCount; ++ti) {
+                MediaTrack* tr = (ti < 0) ? GetMasterTrack(nullptr)
+                                          : GetTrack(nullptr, ti);
+                if (!tr) continue;
+                const int n = TrackFX_GetCount(tr);
+                for (int i = 0; i < n; ++i) {
+                    TrackFX_Show(tr, i, /*hide floating*/ 2);
+                }
+                // Chain window: a single hide-flag-0 call closes it
+                // regardless of which fxIdx — the flag operates on the
+                // chain itself, not on a specific FX.
+                TrackFX_Show(tr, 0, /*hide chain*/ 0);
+            }
+            // Drop our own tracked-window state so we don't try to
+            // re-hide windows we just nuked.
+            g_focusedGuiShownTr = nullptr;
+            g_focusedGuiShownFx = -1;
+            g_uf8GuiShownTr     = nullptr;
+            g_uf8GuiShownFx     = -1;
+            g_instanceGuiShownTr = nullptr;
+            g_instanceGuiShownFx = -1;
+            g_instanceGuiOwnerStrip.store(-1);
+        },
+        nullptr,
+        "Plug-in: close all floating FX windows", false
+    });
+
+    // Move the active FX up / down in its track's chain. TrackFX_CopyToTrack
+    // with is_move=true reorders within the same track. No-op at chain
+    // ends. Cursor follows the moved FX to its new index so a chained
+    // bypass / preset hit still targets the right plug-in.
+    auto pluginMove = [](int dir) {
+        return DescBuilder{
+            [dir](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                auto t = resolveActiveFx_();
+                if (!t.tr) return;
+                const int n = TrackFX_GetCount(t.tr);
+                const int dest = t.fxIdx + dir;
+                if (dest < 0 || dest >= n) return;   // edge — no wrap
+                TrackFX_CopyToTrack(t.tr, t.fxIdx, t.tr, dest, /*is_move*/ true);
+                g_stripInstanceFxIdx[t.tr] = dest;
+                g_bankDirty.store(true);
+                if (g_uc1_surface) {
+                    g_uc1_surface->invalidateCache();
+                    g_uc1_surface->refresh();
+                }
+            },
+            nullptr,
+            dir > 0 ? "Plug-in: move active FX down in chain"
+                    : "Plug-in: move active FX up in chain",
+            false
+        };
+    };
+    registerBuiltin("plugin_move_up",   pluginMove(-1));
+    registerBuiltin("plugin_move_down", pluginMove(+1));
 
 
     // Layer select — one builtin per layer so the picker shows
