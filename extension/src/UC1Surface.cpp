@@ -1222,20 +1222,26 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         return;
     }
     if (ev.id == button::k360) {
-        if (ev.pressed) {
-            // Repurposed: SSL360 opens/minimises the SSL 360° GUI from
-            // here; we ARE the SSL 360° replacement, so this toggles
-            // our Plugin Mixer / Settings window (Phase 2.6 + 2.7).
-            reasixty_toggleMixerWindow();
-            ++stats_.buttonEventsHandled;
-        }
+        // Dispatch via Bindings on press AND release so Hold-behaviour
+        // bindings get their release edge. Factory default = the
+        // `mixer_toggle` builtin (SSL360's "open GUI" semantically maps
+        // to opening our Mixer/Settings window since we ARE the SSL360
+        // replacement); user can rebind on the UC1 tab.
+        uf8::bindings::dispatch(
+            uf8::bindings::ButtonId::Uc1Btn360, ev.pressed);
+        if (ev.pressed) ++stats_.buttonEventsHandled;
         return;
     }
     if (ev.id == button::kMagnifier) {
-        if (ev.pressed) {
-            // User-definable in Settings (TBD). No-op for now.
-            ++stats_.buttonEventsHandled;
-        }
+        // Dispatch via Bindings on both press AND release so Hold-
+        // behaviour bindings fire their release edge. No factory
+        // default — user binds via Settings → Bindings → UC1.
+        // Hardware LED cell is not yet decoded; LedOverride still
+        // lights the on-screen mockup so the user gets visual
+        // feedback in the editor.
+        uf8::bindings::dispatch(
+            uf8::bindings::ButtonId::Uc1Magnifier, ev.pressed);
+        if (ev.pressed) ++stats_.buttonEventsHandled;
         return;
     }
 

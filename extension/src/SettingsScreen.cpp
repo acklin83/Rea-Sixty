@@ -874,7 +874,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
 //                          relevant).
 //   Domain::BusComp      → EQ + DYNAMICS sections dimmed (we're editing
 //                          a BC user map).
-void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
+void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
 {
     constexpr float W = 860, H = 660;
 
@@ -910,7 +910,13 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
     constexpr uint32_t kAccentCC  = 0x903030FF;  // Central Control accent
 
     // Chassis -------------------------------------------------------------
-    rect_(c, 4, 4, W - 8, H - 8, 0x14181EFF, 0x2A3038FF, /*rounding*/ 8.0);
+    // ccpOnly mode (Bindings tab): no outer chassis — only the UC1
+    // Central Control Panel is the actual UC1 hardware. EQ/BC/DYN
+    // belong to CS / BC physical units, drawn only in FX-Learn's
+    // unified cross-domain schematic (default ccpOnly=false).
+    if (!ccpOnly) {
+        rect_(c, 4, 4, W - 8, H - 8, 0x14181EFF, 0x2A3038FF, /*rounding*/ 8.0);
+    }
 
     constexpr float kSmallToggleW = 28, kSmallToggleH = 14;
     auto smallToggle = [&](float x, float y, const char* label) {
@@ -933,65 +939,70 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
     };
 
     // ---- Left column: Filters + EQ -------------------------------------
-    // 2-column layout: Gain & Q live in column 1 (cx=60), Freq in
-    // column 2 (cx=170). Lo-Pass and Hi-Pass (no IN buttons!) sit at
-    // the top, diagonal to each other. EQ Type + EQ In are two small
-    // toggles stacked in column 2 between HMF and LMF; HF/LF Bell
-    // toggles sit diagonally next to their band's Gain knob.
+    // CS-domain (Channel Strip hardware). Drawn only in FX-Learn's
+    // unified cross-domain schematic, not in the Bindings UC1 mockup.
     constexpr float kColLx = 12, kColLw = 230;
-    rect_(c, kColLx, 12, kColLw, H - 24, 0x1A1E24FF, 0x2A3038FF, 6.0);
+    if (!ccpOnly) {
+        // 2-column layout: Gain & Q live in column 1 (cx=60), Freq in
+        // column 2 (cx=170). Lo-Pass and Hi-Pass (no IN buttons!) sit at
+        // the top, diagonal to each other. EQ Type + EQ In are two small
+        // toggles stacked in column 2 between HMF and LMF; HF/LF Bell
+        // toggles sit diagonally next to their band's Gain knob.
+        rect_(c, kColLx, 12, kColLw, H - 24, 0x1A1E24FF, 0x2A3038FF, 6.0);
 
-    // Filters: Lo-Pass column 1 (top-left), Hi-Pass column 2 diagonal
-    // below it. NO IN buttons — they don't exist on UC1.
-    knob(kColLx + 60,  44, 20, kGreyCap, "LO-PASS");
-    knob(kColLx + 170, 70, 20, kGreyCap, "HI-PASS");
-    sectionLabel(kColLx + 14, 110, "FILTERS");
-    line_(c, kColLx + 70, 122, kColLx + kColLw - 8, 122, 0x383C44FF, 1.0);
+        // Filters: Lo-Pass column 1 (top-left), Hi-Pass column 2 diagonal
+        // below it. NO IN buttons — they don't exist on UC1.
+        knob(kColLx + 60,  44, 20, kGreyCap, "LO-PASS");
+        knob(kColLx + 170, 70, 20, kGreyCap, "HI-PASS");
+        sectionLabel(kColLx + 14, 110, "FILTERS");
+        line_(c, kColLx + 70, 122, kColLx + kColLw - 8, 122, 0x383C44FF, 1.0);
 
-    // HF band — Gain in col 1, Freq in col 2 diagonal, HF Bell toggle
-    // beside the Freq knob. Knob spacing 28 px (was 24) for a calmer
-    // visual rhythm matching the LMF band below.
-    drawText_(c, kColLx + 14, 152, 0xB8BCC4FF, "HF");
-    knob(kColLx + 60,  154, 20, kRedCap, "GAIN");
-    knob(kColLx + 170, 182, 20, kRedCap, "FREQ");
-    smallToggle(kColLx + 192, 146, "BELL");
+        // HF band — Gain in col 1, Freq in col 2 diagonal, HF Bell toggle
+        // beside the Freq knob. Knob spacing 28 px (was 24) for a calmer
+        // visual rhythm matching the LMF band below.
+        drawText_(c, kColLx + 14, 152, 0xB8BCC4FF, "HF");
+        knob(kColLx + 60,  154, 20, kRedCap, "GAIN");
+        knob(kColLx + 170, 182, 20, kRedCap, "FREQ");
+        smallToggle(kColLx + 192, 146, "BELL");
 
-    // HMF band — Gain + Q in col 1, Freq in col 2. Q matches the
-    // band's silk-screen colour (green). Knob spacing GAIN→FREQ 28,
-    // FREQ→Q 38 (slightly more than before so the diagonals breathe).
-    drawText_(c, kColLx + 14, 230, 0xB8BCC4FF, "HMF");
-    knob(kColLx + 60,  232, 20, kGreenCap, "GAIN");
-    knob(kColLx + 170, 260, 20, kGreenCap, "FREQ");
-    knob(kColLx + 60,  300, 20, kGreenCap, "Q");
+        // HMF band — Gain + Q in col 1, Freq in col 2. Q matches the
+        // band's silk-screen colour (green). Knob spacing GAIN→FREQ 28,
+        // FREQ→Q 38 (slightly more than before so the diagonals breathe).
+        drawText_(c, kColLx + 14, 230, 0xB8BCC4FF, "HMF");
+        knob(kColLx + 60,  232, 20, kGreenCap, "GAIN");
+        knob(kColLx + 170, 260, 20, kGreenCap, "FREQ");
+        knob(kColLx + 60,  300, 20, kGreenCap, "Q");
 
-    // EQ Type + EQ In: stacked in column 2 deep in the gap between
-    // HMF and LMF, with 16-20 px breathing above TYPE and below IN.
-    smallToggle(kColLx + 192, 356, "TYPE");
-    smallToggle(kColLx + 192, 376, "IN");
+        // EQ Type + EQ In: stacked in column 2 deep in the gap between
+        // HMF and LMF, with 16-20 px breathing above TYPE and below IN.
+        smallToggle(kColLx + 192, 356, "TYPE");
+        smallToggle(kColLx + 192, 376, "IN");
 
-    // LMF band — Gain + Q in col 1, Freq in col 2. Q in band-blue.
-    // Whole block shifted +32 vs HMF baseline so TYPE/IN get their
-    // breathing room.
-    drawText_(c, kColLx + 14, 428, 0xB8BCC4FF, "LMF");
-    knob(kColLx + 60,  430, 20, kBlueCap, "GAIN");
-    knob(kColLx + 170, 458, 20, kBlueCap, "FREQ");
-    knob(kColLx + 60,  498, 20, kBlueCap, "Q");
+        // LMF band — Gain + Q in col 1, Freq in col 2. Q in band-blue.
+        // Whole block shifted +32 vs HMF baseline so TYPE/IN get their
+        // breathing room.
+        drawText_(c, kColLx + 14, 428, 0xB8BCC4FF, "LMF");
+        knob(kColLx + 60,  430, 20, kBlueCap, "GAIN");
+        knob(kColLx + 170, 458, 20, kBlueCap, "FREQ");
+        knob(kColLx + 60,  498, 20, kBlueCap, "Q");
 
-    // LF band — both controls in black per silk-screen. Layout
-    // mirrors LMF's Q+FREQ diagonal (Freq upper-right, Gain lower-
-    // left), and LF Bell mirrors the HF Bell — HF Bell sits at the
-    // level of HF Gain (above HF Freq); LF Bell sits at the level
-    // of LF Gain (below LF Freq).
-    drawText_(c, kColLx + 14, 556, 0xB8BCC4FF, "LF");
-    knob(kColLx + 170, 558, 20, kBlackCap, "FREQ");
-    knob(kColLx + 60,  598, 20, kBlackCap, "GAIN");
-    smallToggle(kColLx + 192, 591, "BELL");
+        // LF band — both controls in black per silk-screen. Layout
+        // mirrors LMF's Q+FREQ diagonal (Freq upper-right, Gain lower-
+        // left), and LF Bell mirrors the HF Bell — HF Bell sits at the
+        // level of HF Gain (above HF Freq); LF Bell sits at the level
+        // of LF Gain (below LF Freq).
+        drawText_(c, kColLx + 14, 556, 0xB8BCC4FF, "LF");
+        knob(kColLx + 170, 558, 20, kBlackCap, "FREQ");
+        knob(kColLx + 60,  598, 20, kBlackCap, "GAIN");
+        smallToggle(kColLx + 192, 591, "BELL");
+    }
 
     // ---- Centre column: Bus Comp (top) + Central Control (bottom) ------
     // Wider than the side columns so the BC knob block can hold an
     // Input-Gain knob to the left of S/C HPF and an Output-Gain knob
     // to the right of MIX, both at the same y as the bottom BC row.
     constexpr float kColCx = kColLx + kColLw + 8, kColCw = 360;
+    if (!ccpOnly) {
     rect_(c, kColCx, 12, kColCw, 420, 0x1A1E24FF, kAccentBC, 6.0);
     drawTextCentered_(c, kColCx + kColCw / 2.0f, 22,
                       0x9CA0AAFF, "BUS COMPRESSOR");
@@ -1077,6 +1088,7 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         knob(c1x,  ry[3], 20, kAccentBC, "S/C HPF");
         knob(c2x,  ry[3], 20, kAccentBC, "MIX");
     }
+    } // end if (!ccpOnly) — BC top section
     // CS-domain Input / Output Gain — drawn last so they sit on top of
     // any dim overlay applied below (see "Section dim overlay" footer).
     // Coordinates mirror the BC bottom-row y so they visually align with
@@ -1091,31 +1103,60 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
     };
 
     // Central Control Panel
-    rect_(c, kColCx, 440, kColCw, H - 452, 0x1A1E24FF, kAccentCC, 6.0);
+    // CCP top edge: default 440 (sits under the BC top section), or 12
+    // in ccpOnly mode so the CCP isn't floating in 400 px of empty
+    // space when the side columns are gone (Bindings UC1 tab).
+    const float kCcpY = ccpOnly ? 12.0f : 440.0f;
+    constexpr float kCcpH = 208.0f;
+    rect_(c, kColCx, kCcpY, kColCw, kCcpH, 0x1A1E24FF, kAccentCC, 6.0);
     // 7-segment display (top-left)
-    rect_(c, kColCx + 14, 454, 56, 30, 0x1A0408FF, 0x401818FF, 3.0);
-    drawTextCentered_(c, kColCx + 42, 468, 0xFF3030FF, "001");
+    rect_(c, kColCx + 14, kCcpY + 14, 56, 30, 0x1A0408FF, 0x401818FF, 3.0);
+    drawTextCentered_(c, kColCx + 42, kCcpY + 28, 0xFF3030FF, "001");
     // LCD (centre, with mock content). Width grows with the wider
     // BC column; recompute the label-x at the LCD's new horizontal
     // centre instead of the old +138 hardcode.
     {
         const float lcdX = kColCx + 78, lcdW = kColCw - 138;
         const float lcdCx = lcdX + lcdW / 2.0f;
-        rect_(c, lcdX, 452, lcdW, 76, 0x05080CFF, 0x444A55FF, 3.0);
-        drawTextCentered_(c, lcdCx, 466, 0x808088FF, "MAIN");
-        drawTextCentered_(c, lcdCx, 486, 0xE0E0E0FF, "Track Name");
-        drawTextCentered_(c, lcdCx, 506, 0x4488DDFF, "Stereo Bus");
+        rect_(c, lcdX, kCcpY + 12, lcdW, 76, 0x05080CFF, 0x444A55FF, 3.0);
+        drawTextCentered_(c, lcdCx, kCcpY + 26, 0x808088FF, "MAIN");
+        drawTextCentered_(c, lcdCx, kCcpY + 46, 0xE0E0E0FF, "Track Name");
+        drawTextCentered_(c, lcdCx, kCcpY + 66, 0x4488DDFF, "Stereo Bus");
+    }
+
+    // CCP button row — two bindable buttons centred between LCD bottom
+    // and the CS/BC encoders. 360 + MAGNIFY are the only CCP controls
+    // exposed for binding; the SSL face's other CCP buttons
+    // (BACK/CONFIRM/ROUTING/PRESETS) keep their hardcoded mode-switch
+    // behaviour inside UC1Surface and are not represented here.
+    // drawUc1BindingsVector paints click/hover/selected overlay on top.
+    {
+        constexpr float bw = 80, bh = 22, gap = 20;
+        const float total = 2 * bw + gap;
+        const float x0    = kColCx + (kColCw - total) / 2.0f;
+        const float y0    = kCcpY + 100;
+        const char* labels[2] = { "360", "MAGNIFY" };
+        for (int i = 0; i < 2; ++i) {
+            const float bx = x0 + i * (bw + gap);
+            rect_(c, bx, y0, bw, bh, 0x252A33FF, 0x4A5060FF, 3.0);
+            drawTextCentered_(c, bx + bw / 2.0f, y0 + bh / 2.0f,
+                              0xC0C4CCFF, labels[i]);
+        }
     }
 
     // CS encoder + BC encoder — symmetrically centred under the LCD.
+    // y = kCcpY + 145 puts the encoder labels (cy+r+9) at kCcpY+172,
+    // clearing the brand line at kCcpY + kCcpH - 14 = kCcpY+194.
     {
         const float midX = kColCx + kColCw / 2.0f;
-        knob(midX - 40, 590, 24, kGreyCap, "CS Encoder");
-        knob(midX + 40, 590, 24, kGreyCap, "BC Encoder");
+        knob(midX - 40, kCcpY + 145, 18, kGreyCap, "CS Encoder");
+        knob(midX + 40, kCcpY + 145, 18, kGreyCap, "BC Encoder");
     }
 
     // ---- Right column: Dynamics + Channel ------------------------------
+    // CS-domain (Channel Strip hardware). Skipped in ccpOnly mode.
     constexpr float kColRx = kColCx + kColCw + 8, kColRw = 230;
+    if (!ccpOnly) {
     rect_(c, kColRx, 12, kColRw, H - 24, 0x1A1E24FF, 0x2A3038FF, 6.0);
 
     // Compressor section. Fast Attack + Peak in the top-right corner;
@@ -1211,14 +1252,19 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         rect_(c, fineX, largeY, lbw, lh, 0xE0E0E0FF, 0x808088FF, 3.0);
         drawTextCentered_(c, fineX + lbw / 2.0f, largeY + lh / 2.0f, 0x303338FF, "FINE");
     }
+    } // end if (!ccpOnly) — Right column
 
-    // Brand line
-    drawTextCentered_(c, W / 2.0f, H - 14, 0x9CA0AAFF, "Rea-Sixty / UC1");
+    // Brand line — pinned to the bottom of the CCP chassis so it stays
+    // inside the panel whether ccpOnly is shifting the CCP up or not.
+    drawTextCentered_(c, W / 2.0f, kCcpY + kCcpH - 14,
+                      0x9CA0AAFF, "Rea-Sixty / UC1");
 
     // ---- Section dim overlay (FX-Learn off-domain mask) ------------------
     // 50% alpha black rect over the inactive region. Drawn LAST so it
     // dims everything below it. Coordinates mirror the column backplates
-    // above (kColLx/kColLw, kColCx/kColCw, kColRx/kColRw).
+    // above (kColLx/kColLw, kColCx/kColCw, kColRx/kColRw). Skipped in
+    // ccpOnly mode (no off-domain sections to mask).
+    if (!ccpOnly) {
     constexpr uint32_t kDim = 0x000000A0;     // ~63% alpha black
     constexpr float kColLxDim = 12,  kColLwDim = 230;
     constexpr float kColCxDim = 250, kColCwDim = 360;  // = kColLx + kColLw + 8
@@ -1253,6 +1299,7 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain)
         rect_(c, dimX_L, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
         rect_(c, dimX_R, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
     }
+    } // end if (!ccpOnly) — dim overlay + InOutGain
 }
 
 // Thin wrapper around drawUc1Face_ for the passive use-case (Bindings
@@ -1279,8 +1326,11 @@ void drawUc1Vector(ImGui_Context* ctx)
 // future bindable UC1 controls slot into the same strip.
 void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
 {
+    // ccpOnly UC1 face: chassis is 208 px tall starting at y=12, brand
+    // line at y=206. Pad to 232 so the strip below has 16 px breathing
+    // room below the CCP chassis edge.
     constexpr float W       = 860;
-    constexpr float faceH   = 660;
+    constexpr float faceH   = 232;
     constexpr float stripH  = 56;
     constexpr float H       = faceH + stripH;
 
@@ -1301,7 +1351,7 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
     const float mx = static_cast<float>(mxd) - c.ox;
     const float my = static_cast<float>(myd) - c.oy;
 
-    drawUc1Face_(c, uf8::Domain::None);
+    drawUc1Face_(c, uf8::Domain::None, /*ccpOnly*/ true);
 
     auto inside = [&](float x, float y, float w, float h) {
         return canvasHovered
@@ -1324,6 +1374,21 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
         rect_(c, x, y, w, h, fill, border, /*rounding*/ 3.5);
         drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
     };
+
+    // 360 + Magnifier overlay — same geometry as drawUc1Face_'s CCP row,
+    // hover/select/click painted on top so the user drives the binding
+    // from the schematic. Keep numbers in sync with drawUc1Face_'s CCP
+    // block: bw=80, bh=22, gap=20, kColCx=250, kColCw=360, and y0 =
+    // kCcpY + 100. In ccpOnly mode kCcpY=12, so y0 = 112.
+    {
+        constexpr float bw = 80, bh = 22, gap = 20;
+        constexpr float kColCxV = 250, kColCwV = 360;
+        const float total = 2 * bw + gap;
+        const float x0    = kColCxV + (kColCwV - total) / 2.0f;
+        constexpr float y0 = 12 + 100;          // kCcpY + 100 (ccpOnly)
+        drawHwBtn(x0,            y0, bw, bh, ButtonId::Uc1Btn360,    "360");
+        drawHwBtn(x0 + bw + gap, y0, bw, bh, ButtonId::Uc1Magnifier, "MAGNIFY");
+    }
 
     // Bindings strip below the chassis. Reads as continuous with the
     // UC1 face above (same chassis fill + outline colours).

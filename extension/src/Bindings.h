@@ -116,6 +116,21 @@ enum class ButtonId : uint16_t {
     // their built-in confirm semantics inside UC1Surface; bindings only
     // fire when the surface is in MAIN.
     Uc1Encoder2Push,
+
+    // UC1 Magnifier (button 0x13 on the Central Control Panel). No
+    // factory action — user assigns it via Settings → Bindings → UC1.
+    // Hardware LED cell is not yet decoded (CCP buttons are dark on
+    // the physical panel); the LedOverride field on the binding still
+    // lights up the on-screen mockup so the user can preview their
+    // colour choice. Hardware emission can be wired once the LED cell
+    // is captured.
+    Uc1Magnifier,
+
+    // UC1 360 button (CCP). Factory default mirrors UF8's Btn360
+    // (`mixer_toggle`) so out-of-the-box behaviour is unchanged. User
+    // can rebind it on the UC1 tab; UF8's Btn360 stays an independent
+    // ButtonId so the two physical buttons can diverge.
+    Uc1Btn360,
 };
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None

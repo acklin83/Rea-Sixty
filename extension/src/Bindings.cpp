@@ -99,6 +99,8 @@ constexpr NameEntry kNames[] = {
     { ButtonId::ChannelEncoder, "channel_encoder" },
     { ButtonId::Uc1Encoder2,      "uc1_encoder_2"      },
     { ButtonId::Uc1Encoder2Push,  "uc1_encoder_2_push" },
+    { ButtonId::Uc1Magnifier,     "uc1_magnifier"      },
+    { ButtonId::Uc1Btn360,        "uc1_btn_360"        },
 };
 
 } // namespace
@@ -399,6 +401,23 @@ void seedFactoryDefaults_(Config& c)
     // before dispatch ever runs.
     L1[ButtonId::Uc1Encoder2Push] =
         mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "");
+
+    // UC1 Magnifier (CCP 0x13). No factory action — user assigns it via
+    // Settings → Bindings → UC1. Behavior::Momentary so a one-shot
+    // builtin fires on press; user can switch to Toggle in the editor
+    // and the LedOverride visualises the toggle state on the mockup.
+    {
+        auto& mg = L1[ButtonId::Uc1Magnifier];
+        mg.behavior = Behavior::Momentary;
+        mg.label    = "MAGNIFY";
+    }
+
+    // UC1 360 button — factory default mirrors UF8's Btn360
+    // (`mixer_toggle`) so the physical button behaves as it did before
+    // it became bindable. Independent slot from UF8's Btn360: rebinding
+    // one does not affect the other.
+    L1[ButtonId::Uc1Btn360] =
+        mkBuiltin("mixer_toggle", Behavior::Momentary, "360");
 
     // Automation row — one builtin per mode. Factory colours all white;
     // the user sets each LED themselves via Settings → Bindings (Frank
