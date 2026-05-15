@@ -80,14 +80,18 @@ Alle in Settings → Bindings unter der Kategorie "Plug-in" zu finden.
 Nicht zu verwechseln mit Plugin Mode — Selection Modes ändern was der
 SEL-Button macht:
 
-| Action                          | SEL-Button macht                          |
-| ---                             | ---                                       |
-| `selection_mode_norm`           | Track selektieren (Standard)              |
-| `selection_mode_rec`            | Rec-Arm togglen                           |
-| `selection_mode_rec_mon`        | Record Monitor togglen                    |
-| `selection_mode_auto`           | Automation Mode setzen                    |
-| `selection_mode_instance`       | (V-Pot Push) **FX Cycle** auf dem Strip   |
-| `selection_mode_instance_cycle` | (V-Pot Push) **Instance Cycle** auf dem Strip |
+Selection Mode ändert auf welche Aktion der **SEL-Button** UND die
+**V-Pot-Drehung** auf dem Strip mappen. Der V-Pot-Push macht in den
+Cycle-Modi immer dasselbe: GUI der aktuellen Strip-FX auf/zu.
+
+| Action                          | V-Pot dreht            | V-Pot Push        | SEL-Button         |
+| ---                             | ---                    | ---               | ---                |
+| `selection_mode_norm`           | Pan                    | Pan-Center        | Track selektieren  |
+| `selection_mode_rec`            | Pan                    | Pan-Center        | Rec-Arm togglen    |
+| `selection_mode_rec_mon`        | Pan                    | Pan-Center        | Rec-Monitor togglen|
+| `selection_mode_auto`           | Automation-Mode-Delta  | Automation-Mode setzen | Automation-Mode-Step |
+| `selection_mode_instance`       | **FX Cycle** auf dem Strip      | GUI der Strip-FX togglen | Track selektieren  |
+| `selection_mode_instance_cycle` | **Instance Cycle** auf dem Strip| GUI der Strip-Instance togglen | Track selektieren |
 
 In Settings → Bindings unter "Selection Modes". Display-Strings tragen
 "(V-Pot)" / "(SEL Button)" Suffixe damit klar ist welche Hardware.
@@ -109,8 +113,9 @@ Combo. Search-Box oben (auto-fokussiert). Kategorien als TreeNodes:
 | Wunsch                                              | Action                                        |
 | ---                                                 | ---                                           |
 | …die nächste Instance auf dem fokussierten Track    | `instance_cycle` mit param `+1`               |
-| …das nächste FX (auch ReaEQ etc.) auf dem Strip     | V-Pot Push mit `selection_mode_instance`      |
-| …die nächste Instance auf dem Strip (Strip-scoped)  | V-Pot Push mit `selection_mode_instance_cycle`|
+| …das nächste FX (auch ReaEQ etc.) auf dem Strip     | V-Pot **drehen** in `selection_mode_instance`      |
+| …die nächste Instance auf dem Strip (Strip-scoped)  | V-Pot **drehen** in `selection_mode_instance_cycle`|
+| …GUI der aktuellen Strip-FX auf/zu                  | V-Pot **drücken** in Instance / InstanceCycle Mode |
 | …Fader = CS Fader Level der fokussierten CS         | `ssl_strip_mode_toggle`                       |
 | …8 Strips als Param-Editor für mein User-Plug-in    | `uf8_plugin_mode_toggle`                      |
 | …aktive FX bypassen                                 | `plugin_bypass`                               |
