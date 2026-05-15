@@ -1838,131 +1838,204 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         int comboFlags = ImGui_ComboFlags_HeightLargest;
         if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), &comboFlags)) {
             // Capture popup-just-opened on the first frame so we can
-            // request a scroll-to-selected exactly once per open. Reading
-            // it later in the loop returns false (the popup is no longer
-            // "appearing").
+            // request a scroll-to-selected exactly once per open and
+            // reset the search buffer between visits. Reading later in
+            // the loop returns false (popup no longer "appearing").
             const bool popupJustOpened = ImGui_IsWindowAppearing(ctx);
-            // Categorise the builtin catalogue so the dropdown stays
-            // browseable as it grows. Buckets render in kCats order
-            // with a Separator + disabled header between groups.
-            // Exhaustive: every builtin maps to a category (no "Other"
-            // catchall). Internals starting with "__" are hidden.
-            auto categoryFor = [](const std::string& n) -> const char* {
-                if (n.rfind("__", 0) == 0)
-                    return "";  // hidden internals (e.g. __reaper_action__)
 
-                // Layer / Quick / Soft-Key Bank navigation.
+            // ---- Search bar -------------------------------------------
+            // Single shared buffer across all picker popups — only one
+            // combo can be open at a time, so reusing the buffer is safe
+            // and avoids per-binding leak of search state. Resets on
+            // every fresh open so the user starts on a clean slate.
+            static char searchBuf[128] = {0};
+            if (popupJustOpened) {
+                searchBuf[0] = 0;
+                ImGui_SetKeyboardFocusHere(ctx, /*offset*/ nullptr);
+            }
+            char searchId[64];
+            std::snprintf(searchId, sizeof(searchId), "##%s_search", prefix);
+            ImGui_PushItemWidth(ctx, -1.0);
+            ImGui_InputTextWithHint(ctx, searchId, "Search actions…",
+                                    searchBuf, sizeof(searchBuf),
+                                    /*flags*/ nullptr,
+                                    /*callback*/ nullptr);
+            ImGui_PopItemWidth(ctx);
+
+            std::string filter(searchBuf);
+            std::transform(filter.begin(), filter.end(), filter.begin(),
+                           [](unsigned char c) {
+                               return std::tolower(c);
+                           });
+            const bool filtering = !filter.empty();
+
+            auto matches = [&](const std::string& key) -> bool {
+                if (!filtering) return true;
+                auto toLower = [](std::string s) {
+                    for (auto& c : s)
+                        c = std::tolower(static_cast<unsigned char>(c));
+                    return s;
+                };
+                const std::string display = toLower(builtinDisplayName(key));
+                const std::string keyLower = toLower(key);
+                return display.find(filter) != std::string::npos
+                    || keyLower.find(filter) != std::string::npos;
+            };
+
+            // ---- Category buckets -------------------------------------
+            // Buckets are tuned 2026-05-15 to put the most-used cycle and
+            // mode actions at the top; the long tail (Bank / Page,
+            // Automation, Zoom, …) lives further down. Internals starting
+            // with "__" are hidden. New builtins must be added here
+            // explicitly or they will not show in the picker.
+            auto categoryFor = [](const std::string& n) -> const char* {
+                if (n.rfind("__", 0) == 0) return "";
+
+                // Cycle Actions — free-bindable to any button / encoder
+                // for one-shot or continuous cycling. Sits at the top of
+                // the picker because these are the most-asked-for
+                // bindings (Frank 2026-05-15).
+                if (n == "instance_cycle" || n == "fx_cycle"
+                 || n == "instance_next"  || n == "instance_prev"
+                 || n == "bc_track_scroll"
+                 || n == "select_relative"
+                 || n == "playhead_nudge"
+                 || n == "mouse_scroll")
+                    return "Cycle Actions";
+
+                // Selection Modes — what the V-Pot rotation / push
+                // and SEL button do per strip. Each action's display
+                // string carries a "(V-Pot)" / "(SEL Button)" suffix so
+                // the user sees the control surface at a glance.
+                if (n.rfind("selection_mode_", 0) == 0)
+                    return "Selection Modes";
+
+                // Encoder Modes — what the UF8 Channel Encoder rotation
+                // does (Nav / Nudge / Focus / Instance Cycle / FX Cycle).
+                if (n.rfind("encoder_", 0) == 0)
+                    return "Encoder Modes";
+
+                // Hardware Modes — surface-wide toggles.
+                if (n == "flip" || n == "pan_force"
+                 || n == "mixer_toggle" || n == "home"
+                 || n == "folder_mode" || n == "show_only_selected"
+                 || n.rfind("ssl_strip_mode_", 0) == 0
+                 || n.rfind("uf8_plugin_mode_", 0) == 0)
+                    return "Hardware Modes";
+
+                // Plug-in family — operates on the currently focused
+                // plug-in (toggle GUI; later bypass, preset prev/next,
+                // offline, …).
+                if (n == "show_focused_plugin_gui")
+                    return "Plug-in";
+
                 if (n.rfind("layer_select", 0) == 0)
                     return "Layer";
                 if (n.rfind("softkey_bank_", 0) == 0)
                     return "Soft-Key Bank";
 
-                // SSL plug-in standard factory actions: CS/BC focus,
-                // plug-in mixer mode toggles, stock soft-key/V-POT
-                // banks. All consolidated per Frank 2026-05-13.
+                // SSL stock factory mappings (domain focus + bank-aware
+                // soft-key / V-Pot pickers).
                 if (n == "domain_cs" || n == "domain_bc"
-                 || n == "ssl_strip_mode_toggle"
-                 || n == "ssl_strip_mode_toggle_with_gui"
                  || n == "ssl_softkey"
                  || n.rfind("ssl_bank_", 0) == 0)
                     return "SSL";
-
-                if (n == "flip" || n == "pan_force"
-                 || n == "mixer_toggle" || n == "home"
-                 || n == "folder_mode" || n == "show_only_selected"
-                 || n.rfind("uf8_plugin_mode_", 0) == 0
-                 || n.rfind("selection_mode_", 0) == 0)
-                    return "Mode Toggles";
-
-                if (n == "selection_clear_all"
-                 || n == "tracks_arm_all"
-                 || n == "automation_zero_all")
-                    return "Tracks";
 
                 if (n == "bank_left"  || n == "bank_right"
                  || n == "page_left"  || n == "page_right")
                     return "Bank / Page";
 
-                if (n.rfind("encoder_", 0) == 0
-                 || n.rfind("instance_", 0) == 0
-                 || n == "select_relative"
-                 || n == "playhead_nudge"
-                 || n == "mouse_scroll"
-                 || n == "fx_cycle"
-                 || n == "bc_track_scroll")
-                    return "Encoder Modes";
-
-                // Plug-in family — actions that operate on the currently
-                // focused FX on the focused track (toggle GUI, future:
-                // bypass, preset prev/next, offline, etc.).
-                if (n == "show_focused_plugin_gui")
-                    return "Plug-in";
-
-                if (n.rfind("auto_", 0) == 0)
-                    return "Automation";
-
-                if (n.rfind("zoom_", 0) == 0)
-                    return "Zoom";
+                if (n.rfind("auto_", 0) == 0) return "Automation";
+                if (n.rfind("zoom_", 0) == 0) return "Zoom";
 
                 if (n == "send_this" || n == "recv_this"
                  || n.rfind("send_all_", 0) == 0
                  || n.rfind("recv_all_", 0) == 0)
                     return "Sends / Receives";
 
-                if (n.rfind("selset_", 0) == 0)
-                    return "Selection Sets";
+                if (n.rfind("selset_", 0) == 0) return "Selection Sets";
 
-                if (n.rfind("brightness_", 0) == 0)
-                    return "Brightness";
+                if (n == "selection_clear_all"
+                 || n == "tracks_arm_all"
+                 || n == "automation_zero_all")
+                    return "Tracks";
+
+                if (n.rfind("brightness_", 0) == 0) return "Brightness";
 
                 if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
                     return "Modifiers";
 
-                // Anything not categorised: hide. New builtins must be
-                // added to the table above explicitly.
                 return "";
             };
             static const char* kCats[] = {
-                "Layer", "Soft-Key Bank", "SSL",
-                "Mode Toggles", "Bank / Page", "Encoder Modes",
+                "Cycle Actions",
+                "Selection Modes",
+                "Encoder Modes",
+                "Hardware Modes",
                 "Plug-in",
-                "Automation", "Zoom",
-                "Sends / Receives", "Selection Sets",
+                "Layer",
+                "Soft-Key Bank",
+                "SSL",
+                "Bank / Page",
+                "Automation",
+                "Zoom",
+                "Sends / Receives",
+                "Selection Sets",
                 "Tracks",
-                "Brightness", "Modifiers",
+                "Brightness",
+                "Modifiers",
             };
+
             std::unordered_map<std::string, std::vector<std::string>> bucket;
             for (auto& n : builtinNames()) {
                 const char* cat = categoryFor(n);
                 if (!cat || !*cat) continue;
+                if (!matches(n)) continue;
                 bucket[cat].emplace_back(n);
             }
             for (auto& v : bucket) std::sort(v.second.begin(), v.second.end());
 
-            bool firstCat = true;
+            // Default-open: when not filtering, the top three categories
+            // (Cycle Actions / V-Pot Sel-Modes / Encoder Modes) open so
+            // the user lands on the common stuff. Filtering force-opens
+            // every category with matches so hits are visible without
+            // an extra click.
             for (auto* cat : kCats) {
                 auto it = bucket.find(cat);
                 if (it == bucket.end() || it->second.empty()) continue;
-                if (!firstCat) ImGui_Separator(ctx);
-                firstCat = false;
-                int hdrFlags = ImGui_SelectableFlags_Disabled;
-                ImGui_Selectable(ctx, cat, /*p_selected*/ nullptr,
-                                 &hdrFlags, nullptr, nullptr);
-                for (auto& n : it->second) {
-                    std::string lbl = "  " + builtinDisplayName(n);
-                    bool s = (n == *f.action);
-                    if (ImGui_Selectable(ctx, lbl.c_str(), &s,
-                                         nullptr, nullptr, nullptr)) {
-                        *f.action = n;
-                        dirty = true;
+
+                if (filtering) {
+                    int cond = ImGui_Cond_Always;
+                    ImGui_SetNextItemOpen(ctx, true, &cond);
+                }
+
+                int treeFlags = ImGui_TreeNodeFlags_SpanAvailWidth;
+                const bool topThree = (cat == kCats[0]
+                                    || cat == kCats[1]
+                                    || cat == kCats[2]);
+                if (topThree && !filtering) {
+                    treeFlags |= ImGui_TreeNodeFlags_DefaultOpen;
+                }
+                if (ImGui_TreeNode(ctx, cat, &treeFlags)) {
+                    for (auto& n : it->second) {
+                        std::string lbl = builtinDisplayName(n);
+                        bool sel = (n == *f.action);
+                        if (ImGui_Selectable(ctx, lbl.c_str(), &sel,
+                                             nullptr, nullptr, nullptr)) {
+                            *f.action = n;
+                            dirty = true;
+                        }
+                        // Centre the selected row on first open so the
+                        // user sees what's currently bound. Skip when
+                        // filtering because the result list reshuffles
+                        // and the scroll anchor would land on the wrong
+                        // row.
+                        if (sel && popupJustOpened && !filtering) {
+                            double centre = 0.5;
+                            ImGui_SetScrollHereY(ctx, &centre);
+                        }
                     }
-                    // Centre the selected row on first open so the user
-                    // sees what's currently bound instead of always
-                    // staring at "Layer" at the top.
-                    if (s && popupJustOpened) {
-                        double centre = 0.5;
-                        ImGui_SetScrollHereY(ctx, &centre);
-                    }
+                    ImGui_TreePop(ctx);
                 }
             }
             ImGui_EndCombo(ctx);

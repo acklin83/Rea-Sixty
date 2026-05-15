@@ -251,28 +251,30 @@ std::atomic<bool> g_showOnlySelected{false};
 // & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
 // cycles the plug-in instance on the strip's track. Bindable via the
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
-enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance };
+enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 
 inline const char* selectionModeStr(SelectionMode m)
 {
     switch (m) {
-        case SelectionMode::Rec:      return "rec";
-        case SelectionMode::RecMon:   return "rec_mon";
-        case SelectionMode::Auto:     return "auto";
-        case SelectionMode::Instance: return "instance";
+        case SelectionMode::Rec:           return "rec";
+        case SelectionMode::RecMon:        return "rec_mon";
+        case SelectionMode::Auto:          return "auto";
+        case SelectionMode::Instance:      return "instance";
+        case SelectionMode::InstanceCycle: return "instance_cycle";
         case SelectionMode::Norm:
-        default:                      return "norm";
+        default:                           return "norm";
     }
 }
 
 inline SelectionMode parseSelectionMode(const char* s)
 {
     if (!s) return SelectionMode::Norm;
-    if (std::strcmp(s, "rec")      == 0) return SelectionMode::Rec;
-    if (std::strcmp(s, "rec_mon")  == 0) return SelectionMode::RecMon;
-    if (std::strcmp(s, "auto")     == 0) return SelectionMode::Auto;
-    if (std::strcmp(s, "instance") == 0) return SelectionMode::Instance;
+    if (std::strcmp(s, "rec")            == 0) return SelectionMode::Rec;
+    if (std::strcmp(s, "rec_mon")        == 0) return SelectionMode::RecMon;
+    if (std::strcmp(s, "auto")           == 0) return SelectionMode::Auto;
+    if (std::strcmp(s, "instance")       == 0) return SelectionMode::Instance;
+    if (std::strcmp(s, "instance_cycle") == 0) return SelectionMode::InstanceCycle;
     return SelectionMode::Norm;
 }
 
@@ -654,6 +656,44 @@ std::atomic<bool> g_pluginGuiPinCenter{false};
 // uf8_plugin_mode_toggle builtin action; user-bindable, no default button.
 std::atomic<bool> g_uf8PluginMode{false};
 
+// Sel-Mode parked on UF8 Plugin Mode entry, restored on exit. UF8 Plugin
+// Mode needs Sel-Mode → Norm so V-Pots can drive its user-plug-in params
+// (the Sel-Mode dispatcher otherwise routes V-Pot input to REC / AUTO /
+// FX Cycle / Instance Cycle handlers first). Without persistence, the
+// user lost their FX Cycle / Instance Cycle setup every time they popped
+// into UF8 Plugin Mode (Frank 2026-05-15: "soll nach ende des uf8 plugin
+// mode wieder sel mode cycle fx aktiv sein"). Stored as the underlying
+// uint8_t so the atomic stays trivially copyable.
+std::atomic<uint8_t> g_uf8PluginModeSavedSelMode{
+    static_cast<uint8_t>(SelectionMode::Norm)};
+
+// Park-and-restore for Sel-Mode on UF8 Plugin Mode entry/exit. Used by
+// the user-facing toggle builtins AND by SSL Strip Mode's mutex (which
+// implicitly turns UF8 Plugin Mode off when it itself is enabled, and
+// must therefore also restore whatever Sel-Mode the user had parked).
+inline void parkSelModeForUf8PluginMode_()
+{
+    const auto cur = g_selectionMode.load();
+    g_uf8PluginModeSavedSelMode.store(static_cast<uint8_t>(cur));
+    if (cur != SelectionMode::Norm) {
+        g_selectionMode.store(SelectionMode::Norm);
+        g_instanceGuiOwnerStrip.store(-1);
+        SetExtState("ReaSixty", "selectionMode", "norm", true);
+    }
+}
+inline void restoreSelModeAfterUf8PluginMode_()
+{
+    const auto saved = static_cast<SelectionMode>(
+        g_uf8PluginModeSavedSelMode.load());
+    if (saved != SelectionMode::Norm) {
+        g_selectionMode.store(saved);
+        SetExtState("ReaSixty", "selectionMode",
+                    selectionModeStr(saved), true);
+    }
+    g_uf8PluginModeSavedSelMode.store(
+        static_cast<uint8_t>(SelectionMode::Norm));
+}
+
 // Meter ballistic. Peak = raw peak per Track_GetPeakInfo (no smoothing
 // here; REAPER's own ballistics already apply); VU = exp-smoothed dB
 // with τ=300 ms; RMS = exp-smoothed linear power with τ=600 ms then
@@ -1013,10 +1053,19 @@ struct PendingInput {
         AutoModeStep,        // AUTO: SEL push cycles auto-mode 0..5 wraparound
         AutoModeSet,         // AUTO: V-Pot push sets strip auto-mode = value
         AutoModeDelta,       // AUTO: V-Pot rotation steps strip auto-mode
-        StripInstanceDelta,  // Instance: V-Pot rotation cycles strip's
-                             //           track's FX list per-strip
-        StripInstanceOpen,   // Instance: V-Pot push opens / closes strip's
-                             //           track's active FX window
+        StripInstanceDelta,  // FX Cycle Sel-Mode: V-Pot rotation cycles
+                             //   strip's track's FX list per-strip
+                             //   (walks ALL FX on the track)
+        StripInstanceOpen,   // FX Cycle Sel-Mode: V-Pot push opens / closes
+                             //   strip's track's active FX window
+        StripInstanceCycleDelta, // Instance Cycle Sel-Mode: V-Pot rotation
+                             //   cycles strip's track's Instances (CS / BC
+                             //   / UF8-Mode-learned only). No-op when the
+                             //   track has fewer than 2 Instances. Push is
+                             //   not a separate event — the V-Pot push
+                             //   dispatch funnels both Instance + Instance
+                             //   Cycle pushes into StripInstanceOpen since
+                             //   they share the GUI-ownership channel.
     };
     Kind    kind;
     uint8_t strip;
@@ -1026,11 +1075,12 @@ struct PendingInput {
 // Encoder-mode state. Default = Nav (= track select) matching the UF8's
 // out-of-box feel. Toggled by the NAV (0x73), NUDGE (0x74), FOCUS (0x75)
 // buttons and pushed back to Nav by the channel-encoder push (0x76).
-// Instance mode is bindable via the `encoder_instance` builtin — no
-// dedicated UF8 cell, the user picks any button. Plain rotation in
-// Instance mode cycles the focused-domain plug-in instance (same logic
-// as the Shift+Channel-Encoder shortcut, just without the modifier).
-enum class EncoderMode : uint8_t { Nav, Nudge, Focus, Instance };
+// Instance + FxCycle modes are bindable via `encoder_instance` /
+// `encoder_fx_cycle` — no dedicated UF8 cell, the user picks any button.
+// Plain rotation routes through encoder_mode_dispatch's switch:
+//   Instance → applyInstanceCycle_ (focused-track Instances only)
+//   FxCycle  → applyFxCycle_       (focused-track, ALL FX on the track)
+enum class EncoderMode : uint8_t { Nav, Nudge, Focus, Instance, FxCycle };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::Nav};
 
 // Send/Receive-routing modes for the V-Pots and faders. Four
@@ -1693,11 +1743,85 @@ void applyInstanceCycle_(int step)
         hitLabel(nextK - 1), hitLabel(nextK), hitLabel(nextK + 1), header);
 }
 
+// When the FX-Cursor lands on an FX that happens to be a learned Instance
+// (CS / BC / UF8-Mode-learned), promote the cursor move into a full
+// Instance "selection": update the matching per-track Instance index so
+// hardware bindings (SSL Strip Mode, UF8 Plugin Mode, UC1 CS/BC encoder
+// sections) react. Frank 2026-05-15: "FX-Cycle auf Instance soll auch
+// die Bindung aktivieren."
+//
+// `setFocusedDomain` is true for focused-track-scope callers (FX Cycle on
+// the focused track, Channel-Encoder FxCycle EncoderMode); false for
+// per-strip rotations on strips that don't belong to the focused track
+// (those mustn't hijack UC1 / SSL Strip Mode focus globally).
+//
+// `setBcAnchor` defaults to true so a BC landing pins the UC1 BC encoder
+// section to this track — same convention as applyInstanceCycle_.
+bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
+                            bool setFocusedDomain, bool setBcAnchor = true)
+{
+    if (!tr || fxIdx < 0) return false;
+    char fxName[256];
+    if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return false;
+
+    // First check known SSL Instances. Counting the rank within the
+    // domain on this track gives the new Instance index.
+    const auto* pm = uf8::lookupPluginMapByName(fxName);
+    if (pm && (pm->domain == uf8::Domain::ChannelStrip
+            || pm->domain == uf8::Domain::BusComp))
+    {
+        const int total = TrackFX_GetCount(tr);
+        int rank = 0;
+        char other[256];
+        for (int i = 0; i < fxIdx; ++i) {
+            if (!TrackFX_GetFXName(tr, i, other, sizeof(other))) continue;
+            const auto* om = uf8::lookupPluginMapByName(other);
+            if (om && om->domain == pm->domain) ++rank;
+        }
+        (void)total;
+        if (pm->domain == uf8::Domain::ChannelStrip) {
+            uc1::setCsInstanceIndex(tr, rank);
+        } else {
+            uc1::setBcInstanceIndex(tr, rank);
+            if (setBcAnchor && g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
+        }
+        if (setFocusedDomain) uf8::setFocus({pm->domain, 0});
+        return true;
+    }
+
+    // UF8-Mode-learned user plug-in.
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+        int rank = 0;
+        char other[256];
+        for (int i = 0; i < fxIdx; ++i) {
+            if (!TrackFX_GetFXName(tr, i, other, sizeof(other))) continue;
+            const auto* ou = uf8::user_plugins::lookupOwnedByName(other);
+            if (ou && ou->domain == uf8::Domain::None && ou->uf8Mode) ++rank;
+        }
+        uc1::setUf8OnlyInstanceIndex(tr, rank);
+        if (setFocusedDomain) uf8::setFocus({uf8::Domain::None, 0});
+        return true;
+    }
+
+    // Cursor landed on a non-Instance FX (Tone Generator, ReaEQ, …) —
+    // leave the Instance indices alone so hardware bindings keep
+    // pointing at whatever Instance was last active.
+    return false;
+}
+
 // Walk ALL FX on the focused track. Unlike applyInstanceCycle_ which
 // filters to SSL-mapped CS/BC/UF8 plug-ins, fx_cycle walks every plug-in
-// the user has on the track. Frank 2026-05-14: "show plugin gui" — pairs
-// with `show_focused_plugin_gui` on the Encoder 2 push so the floating
-// window follows whichever FX the cycle landed on.
+// the user has on the track. Updates the FX-Cursor (g_stripInstanceFxIdx)
+// only — does NOT move any open Encoder-2-Push window. The UC1 push window
+// tracks the focused-domain Instance now (Frank 2026-05-15 per-surface
+// consistency rule), not the cursor. The UF8 V-Pot push owns its own
+// window via g_instanceGuiOwnerStrip / g_instanceGuiShownTr — that path
+// follows the cursor for the strip-rotation pairing, unaffected here.
+//
+// When the cursor lands on a learned Instance, syncInstanceFromFxIdx_
+// promotes the move into an Instance selection so SSL Strip Mode / UF8
+// Plugin Mode follow the cycle.
 void applyFxCycle_(int step)
 {
     if (step == 0) return;
@@ -1712,22 +1836,8 @@ void applyFxCycle_(int step)
     const int cur  = stripInstanceActiveFx_(tr);
     int nextIdx = ((cur + step) % n + n) % n;
     g_stripInstanceFxIdx[tr] = nextIdx;
+    syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true);
     g_bankDirty.store(true);
-    // Follow with the floating GUI when show_focused_plugin_gui has the
-    // window open. Re-point directly (we're on the main thread already;
-    // dispatchEncoder runs from drainInputQueue). Stack-clean by closing
-    // the old window before opening the new one.
-    extern void* g_focusedGuiShownTr;
-    extern int   g_focusedGuiShownFx;
-    if (g_focusedGuiShownTr == tr
-        && g_focusedGuiShownFx >= 0
-        && g_focusedGuiShownFx != nextIdx)
-    {
-        TrackFX_Show(tr, g_focusedGuiShownFx, 2);
-        TrackFX_Show(tr, nextIdx, 3);
-        pinFxGuiIfEnabled_(tr, nextIdx);
-        g_focusedGuiShownFx = nextIdx;
-    }
     if (g_uc1_surface) {
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
@@ -1747,25 +1857,38 @@ void applyFxCycle_(int step)
         fxLabel(prevIdx), fxLabel(nextIdx), fxLabel(nIdxN), header);
 }
 
-// Toggle floating GUI of the currently-focused plug-in instance on the
-// UC1's focused track. Pairs with Encoder 2 rotation: instance_cycle /
-// fx_cycle moves `g_stripInstanceFxIdx[tr]`, this builtin opens or
-// closes the window on whichever FX is currently active. While the
-// window is open, subsequent cycle rotations re-point it (via
-// g_pluginGuiSyncRequest) so the GUI follows the cycle. Independent of
-// SSL Strip Mode's CS-GUI ownership.
+// Toggle floating GUI of the focused-domain Instance — the same plug-in
+// that the UC1 LCD central label is currently displaying. Per-surface
+// consistency: UC1 Encoder 2 Push opens what UC1 shows (the Instance,
+// resolved by focused.domain + focused-track or BC-anchor-track). The
+// FX-Cursor (g_stripInstanceFxIdx) is intentionally NOT consulted here
+// — that cursor pairs with UF8 V-Pot push, not UC1's. Frank 2026-05-15:
+// "Was angezeigt wird auf der Surface = was beim Push aufgeht."
+//
+// Track resolution mirrors UC1Surface::pushFocusedParamReadout_:
+//   * BusComp domain → effective BC anchor track (UC1's BC encoder
+//     section follows the anchor, not focusedTrack_, so push must too).
+//   * Otherwise     → UC1 focusedTrack_.
 void* g_focusedGuiShownTr = nullptr;
 int   g_focusedGuiShownFx = -1;
 
 void applyShowFocusedPluginGui_()
 {
-    MediaTrack* tr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-        : nullptr;
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
-    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
-    const int fxIdx = stripInstanceActiveFx_(tr);
-    if (fxIdx < 0) return;
+    if (!g_uc1_surface) return;
+    const auto focused = uf8::getFocusedParam();
+    if (focused.domain == uf8::Domain::None) return;
+
+    void* lookupTrack = (focused.domain == uf8::Domain::BusComp)
+        ? g_uc1_surface->bcAnchorTrackPublic()
+        : g_uc1_surface->focusedTrack();
+    if (!lookupTrack || !ValidatePtr2(nullptr, lookupTrack, "MediaTrack*")) {
+        return;
+    }
+
+    MediaTrack* tr = static_cast<MediaTrack*>(lookupTrack);
+    auto match = uf8::lookupPluginOnTrack(tr, focused.domain);
+    if (!match.map || match.fxIndex < 0) return;
+    const int fxIdx = match.fxIndex;
 
     const bool alreadyShown =
         g_focusedGuiShownTr == tr && g_focusedGuiShownFx == fxIdx;
@@ -3031,7 +3154,36 @@ void drainInputQueue()
                         const int cur = stripInstanceActiveFx_(tr);
                         int next = ((cur + step) % n + n) % n;
                         g_stripInstanceFxIdx[tr] = next;
+                        // Promote Instance landings into Instance state
+                        // sync — only shift focused.domain when the
+                        // strip's track IS the focused track, so non-
+                        // focused-strip rotations don't hijack UC1 /
+                        // SSL Strip Mode focus globally.
+                        MediaTrack* focusedTr = g_uc1_surface
+                            ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                            : nullptr;
+                        const bool isFocusedStrip = (focusedTr == tr);
+                        const bool synced = syncInstanceFromFxIdx_(
+                            tr, next,
+                            /*setFocusedDomain*/ isFocusedStrip);
                         g_bankDirty.store(true);   // refresh scribble strip
+                        // When the cycle lands on a learned Instance on
+                        // the focused strip's track, force a UC1 repaint
+                        // — `setBcInstanceIndex` / `setCsInstanceIndex`
+                        // only flip the per-track state; the UC1 doesn't
+                        // observe the change until the next refresh, so
+                        // cycling between two CS or two BC Instances on
+                        // the same track left UC1 painted on the old one
+                        // until the user touched another control (Frank
+                        // 2026-05-15 "townhouse → BC2 per FX Cycle, UC1
+                        // bleibt auf townhouse"). setBcAnchorTrack already
+                        // early-returns when the anchor doesn't actually
+                        // change, so it can't be relied on to drive the
+                        // refresh in that case.
+                        if (synced && isFocusedStrip && g_uc1_surface) {
+                            g_uc1_surface->invalidateCache();
+                            g_uc1_surface->refresh();
+                        }
                         // If this strip owns the open FX-Cycle GUI,
                         // re-point the window to the new active FX so
                         // the user sees the cycle in the floating
@@ -3060,6 +3212,102 @@ void drainInputQueue()
                     g_instanceGuiOwnerStrip.store(s);    // claim
                 }
                 g_pluginGuiSyncRequest.store(true);
+                break;
+            }
+            case PendingInput::StripInstanceCycleDelta: {
+                if (e.strip < 8)
+                    g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
+                // Instance Cycle mode V-Pot rotation: cycle ONLY through
+                // Instances (CS / BC / UF8-Mode-learned) on the strip's
+                // track. No-op when the strip's track has fewer than 2
+                // Instances (1 wraps to itself; 0 means there's nothing
+                // hardware-mappable to scroll through). Shares the
+                // per-strip accumulator with FX Cycle since the two modes
+                // are mutually exclusive.
+                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                g_stripInstanceAccum[s] += e.value / kChannelEncoderScale;
+                int step = 0;
+                if (g_stripInstanceAccum[s] >=  1.0) {
+                    step = static_cast<int>(g_stripInstanceAccum[s]);
+                    g_stripInstanceAccum[s] -= step;
+                }
+                if (g_stripInstanceAccum[s] <= -1.0) {
+                    step = static_cast<int>(g_stripInstanceAccum[s]);
+                    g_stripInstanceAccum[s] -= step;
+                }
+                if (step == 0) break;
+
+                // Build the Instance ring on `tr` — mirrors applyInstanceCycle_'s
+                // hit-collection but per-strip instead of focused-track.
+                struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
+                std::vector<Hit> hits;
+                int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
+                const int nFx = TrackFX_GetCount(tr);
+                char fxName[256];
+                for (int i = 0; i < nFx; ++i) {
+                    if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName)))
+                        continue;
+                    const auto* pm = uf8::lookupPluginMapByName(fxName);
+                    if (pm && pm->domain == uf8::Domain::ChannelStrip) {
+                        hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
+                        continue;
+                    }
+                    if (pm && pm->domain == uf8::Domain::BusComp) {
+                        hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+                        continue;
+                    }
+                    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+                    if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+                        hits.push_back({i, uf8::Domain::None, uf8OnlyCount++});
+                    }
+                }
+                if (hits.size() < 2) break;   // Frank 2026-05-15: no-op
+
+                // Anchor position on the current cursor FX index. If the
+                // cursor isn't on an Instance (e.g. user just switched in
+                // from FX Cycle on a non-Instance FX), start at hits[0].
+                const int curFx = stripInstanceActiveFx_(tr);
+                int curK = 0;
+                for (size_t k = 0; k < hits.size(); ++k) {
+                    if (hits[k].fxIdx == curFx) { curK = static_cast<int>(k); break; }
+                }
+                int nextK = (curK + step) % static_cast<int>(hits.size());
+                if (nextK < 0) nextK += static_cast<int>(hits.size());
+                const Hit& target = hits[nextK];
+
+                // Commit: cursor moves, the matching Instance index for
+                // `tr` advances, and the BC anchor pins to this track
+                // when the landing is on BC (so the UC1 BC encoder
+                // section pairs with the cycle). focused.domain shifts
+                // only when the strip belongs to the currently focused
+                // track — otherwise a non-focused-strip rotation would
+                // silently hijack UC1 / SSL Strip Mode focus.
+                g_stripInstanceFxIdx[tr] = target.fxIdx;
+                if (target.dom == uf8::Domain::ChannelStrip) {
+                    uc1::setCsInstanceIndex(tr, target.instIdx);
+                } else if (target.dom == uf8::Domain::BusComp) {
+                    uc1::setBcInstanceIndex(tr, target.instIdx);
+                    if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
+                } else {
+                    uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
+                }
+                MediaTrack* focusedTr = g_uc1_surface
+                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                    : nullptr;
+                if (focusedTr == tr) {
+                    uf8::setFocus({target.dom, 0});
+                }
+
+                g_bankDirty.store(true);
+                if (g_uc1_surface) {
+                    g_uc1_surface->invalidateCache();
+                    g_uc1_surface->refresh();
+                }
+                // If this strip owns the open cycle-GUI, re-point the
+                // window to the new Instance.
+                if (g_instanceGuiOwnerStrip.load() == s) {
+                    g_pluginGuiSyncRequest.store(true);
+                }
                 break;
             }
         }
@@ -3308,6 +3556,7 @@ uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
                     GetTrackAutomationMode(tr));
             case SelectionMode::Norm:
             case SelectionMode::Instance:
+            case SelectionMode::InstanceCycle:
             default:
                 break;
         }
@@ -3980,6 +4229,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                             strip, 0.0});
                                 break;
                             case SelectionMode::Instance:
+                            case SelectionMode::InstanceCycle:
+                                // Push semantics are identical for both
+                                // cycle modes — toggle the cursor's GUI
+                                // via the shared g_instanceGuiOwnerStrip
+                                // ownership channel.
                                 queueInput({PendingInput::StripInstanceOpen,
                                             strip, 0.0});
                                 break;
@@ -4017,14 +4271,15 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                     break;
                                 case SelectionMode::Norm:
                                 case SelectionMode::Instance:
+                                case SelectionMode::InstanceCycle:
                                 default:
                                     k = g_shiftHeld.load()
                                         ? PendingInput::SelectToggle
                                         : PendingInput::SelectExclusive;
                                     // Arm long-press detection — only
                                     // relevant when SEL is doing track-
-                                    // selection (Norm / Instance). The
-                                    // mode-specific cases short-circuit
+                                    // selection (Norm / Instance / InstanceCycle).
+                                    // The mode-specific cases short-circuit
                                     // before the spill timer touches.
                                     g_selPressMs[strip].store(nowMs_());
                                     g_selSpillFired[strip].store(false);
@@ -4138,6 +4393,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         break;
                     case SelectionMode::Instance:
                         queueInput({PendingInput::StripInstanceDelta,
+                                    strip,
+                                    static_cast<double>(signed6)});
+                        break;
+                    case SelectionMode::InstanceCycle:
+                        queueInput({PendingInput::StripInstanceCycleDelta,
                                     strip,
                                     static_cast<double>(signed6)});
                         break;
@@ -5391,19 +5651,22 @@ void pushZonesForVisibleSlots()
         // override the default CS/BC variant label:
         //   - SSL Strip Mode (g_pluginFaderMode): the CS variant name
         //     must show while the mode is active, even with no UC1
-        //     focus, and even if Instance Selection Mode is also
+        //     focus, and even if FX Cycle Selection Mode is also
         //     active — SSL Strip wins because the fader is literally
         //     routed to the CS instance's Fader Level param, so the
         //     colour bar must reflect that target.
-        //   - Instance Selection Mode: each strip's colour bar shows
-        //     that strip's active FX (rotates with the strip's own
-        //     V-Pot). Encoder Instance Cycle only updates the focused
-        //     track's g_stripInstanceFxIdx (see applyInstanceCycle_),
-        //     so it visibly moves only the selected strip — other
-        //     strips stay parked on whatever their V-Pots have dialed
-        //     in (Frank 2026-05-14 "Encoder Instance Cycle soll nur
-        //     beim selected channel" AND "v-pots → instance cycle
-        //     geht nicht mit nur v-pot wenn track nicht selected").
+        //   - FX Cycle Selection Mode (SelectionMode::Instance): each
+        //     strip's colour bar shows that strip's active FX
+        //     (rotates with the strip's own V-Pot). The cursor lives
+        //     only while the mode is active; exiting the mode reverts
+        //     the colour-bar to the focused-domain Instance label so
+        //     each surface again shows what its push action opens.
+        //     Per-surface display = per-surface push action: UF8
+        //     V-Pot push opens cursor only inside FX Cycle (matches
+        //     what UF8 shows), UC1 Encoder 2 push opens the focused
+        //     Instance (matches what UC1 LCD shows) — see the
+        //     show_focused_plugin_gui builtin. Frank 2026-05-15:
+        //     "Was angezeigt wird = was beim Push aufgeht."
         std::string csType;
         // Touched-FX reveal (3 s) wins over every mode. The reveal is
         // per-(track, fxIdx); only the strip whose track matches the
@@ -5418,7 +5681,13 @@ void pushZonesForVisibleSlots()
             csType = userS.map->displayShort;
         } else if (g_pluginFaderMode.load()) {
             if (map) csType = map->displayShort;
-        } else if (g_selectionMode.load() == SelectionMode::Instance) {
+        } else if (g_selectionMode.load() == SelectionMode::Instance
+                || g_selectionMode.load() == SelectionMode::InstanceCycle) {
+            // Both cycle modes display whichever FX the cursor currently
+            // points at. FX Cycle moves the cursor through all FX; Instance
+            // Cycle moves it only through learned Instances. The colour-bar
+            // is the cursor display regardless of which filter the V-Pot
+            // was using to advance it.
             const int instFxIdx = stripInstanceActiveFx_(tr);
             if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
             if (csType.empty()) csType = "-";
@@ -7931,6 +8200,7 @@ void onTimer()
         // project open. Reading from ExtState is the source of truth.
         if (const char* m = GetExtState("ReaSixty", "encoderMode"); m && *m) {
             if      (std::strcmp(m, "Instance") == 0) g_encoderMode.store(EncoderMode::Instance);
+            else if (std::strcmp(m, "FxCycle")  == 0) g_encoderMode.store(EncoderMode::FxCycle);
             else if (std::strcmp(m, "Nudge")    == 0) g_encoderMode.store(EncoderMode::Nudge);
             else if (std::strcmp(m, "Focus")    == 0) g_encoderMode.store(EncoderMode::Focus);
             else                                      g_encoderMode.store(EncoderMode::Nav);
@@ -8453,16 +8723,23 @@ void onTimer()
             }
         }
 
-        // ---- Selection-Mode Instance (push toggle, with-GUI follow) -
+        // ---- FX / Instance Cycle Sel-Mode (push toggle, with-GUI
+        //      follow) ----------------------------------------------------
         // Owner-strip drives which strip's active FX is shown. -1 =
         // no GUI requested. Used in BOTH plain and with-GUI variants —
         // plain only toggles on push (rotation does nothing); with-GUI
         // also re-fires this drain on rotation so the window follows.
+        // Active under both SelectionMode::Instance (FX Cycle) AND
+        // SelectionMode::InstanceCycle: both rotate the same per-strip
+        // cursor (`g_stripInstanceFxIdx`), just with different ring
+        // filters. The push semantic is identical.
         {
             const int ownerStrip = g_instanceGuiOwnerStrip.load();
+            const auto curSel    = g_selectionMode.load();
+            const bool inCycleMode = curSel == SelectionMode::Instance
+                                  || curSel == SelectionMode::InstanceCycle;
             const bool instWantOpen =
-                g_selectionMode.load() == SelectionMode::Instance
-                && ownerStrip >= 0 && ownerStrip < 8;
+                inCycleMode && ownerStrip >= 0 && ownerStrip < 8;
             MediaTrack* instTargetTr = nullptr;
             int         instTargetFx = -1;
             if (instWantOpen) {
@@ -10101,10 +10378,18 @@ void registerBindingHandlers()
                     const auto next = (cur == mode) ? SelectionMode::Norm
                                                     : mode;
                     g_selectionMode.store(next);
-                    // Leaving Instance → drop any GUI ownership and
-                    // ask the sync drain to close an open window.
-                    if (cur == SelectionMode::Instance
-                        && next != SelectionMode::Instance) {
+                    // Leaving FX Cycle or Instance Cycle → drop any
+                    // V-Pot-owned GUI ownership and ask the sync drain
+                    // to close an open window. Both modes use the same
+                    // g_instanceGuiOwnerStrip channel for their V-Pot
+                    // push so a single guard covers both exits.
+                    const bool wasCycleMode =
+                        cur == SelectionMode::Instance
+                     || cur == SelectionMode::InstanceCycle;
+                    const bool nextIsCycleMode =
+                        next == SelectionMode::Instance
+                     || next == SelectionMode::InstanceCycle;
+                    if (wasCycleMode && !nextIsCycleMode) {
                         g_instanceGuiOwnerStrip.store(-1);
                         g_pluginGuiSyncRequest.store(true);
                     }
@@ -10125,21 +10410,37 @@ void registerBindingHandlers()
         };
     registerSelectionModeToggle("selection_mode_rec",
                                 SelectionMode::Rec,
-                                "Selection Mode → REC");
+                                "Selection Mode → REC (SEL Button)");
     registerSelectionModeToggle("selection_mode_rec_mon",
                                 SelectionMode::RecMon,
-                                "Selection Mode → REC + MON");
+                                "Selection Mode → REC + MON (SEL Button)");
     registerSelectionModeToggle("selection_mode_auto",
                                 SelectionMode::Auto,
-                                "Selection Mode → AUTO");
-    // Instance Mode — per-strip V-Pot rotation walks ALL FX on the strip's
+                                "Selection Mode → AUTO (V-Pot)");
+    // FX Cycle Mode — per-strip V-Pot rotation walks ALL FX on the strip's
     // track (not limited to learned CS/BC/UF8 plug-ins, which is what
     // Encoder Instance Cycle does). V-Pot push toggles the GUI of the
     // active FX on the rotating strip; rotation while the GUI is open
-    // auto-follows the cycle to the new FX.
+    // auto-follows the cycle to the new FX. Internal name kept as
+    // `selection_mode_instance` for backward-compat with saved bindings
+    // files; display string says FX Cycle because that's what it does
+    // (it walks every FX, not just Instances — Frank 2026-05-15).
     registerSelectionModeToggle("selection_mode_instance",
                                 SelectionMode::Instance,
-                                "Selection Mode → Instance");
+                                "Selection Mode → FX Cycle (V-Pot)");
+
+    // Instance Cycle Mode — per-strip V-Pot rotation walks ONLY the
+    // SSL-mapped / UF8-Mode-learned Instances on the strip's track.
+    // Updates the appropriate Instance index (csInstanceIndex /
+    // bcInstanceIndex / uf8OnlyInstanceIndex) so the hardware bindings
+    // react: SSL Strip Mode and UF8 Plugin Mode follow the cycle. V-Pot
+    // push opens the active Instance's floating GUI. No-op when the
+    // strip's track has fewer than 2 Instances (1 Instance would just
+    // wrap to itself; 0 means there is no Instance to drive). New mode
+    // 2026-05-15 alongside FX Cycle — symmetry per Frank's request.
+    registerSelectionModeToggle("selection_mode_instance_cycle",
+                                SelectionMode::InstanceCycle,
+                                "Selection Mode → Instance Cycle (V-Pot)");
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
@@ -10153,7 +10454,7 @@ void registerBindingHandlers()
             g_bankDirty.store(true);
         },
         [](int) { return g_selectionMode.load() == SelectionMode::Norm; },
-        "Selection Mode → Norm", false
+        "Selection Mode → NORM (SEL Button)", false
     });
 
     // ---- One-shot "all tracks" actions -------------------------------
@@ -10230,9 +10531,12 @@ void registerBindingHandlers()
             // Mutually exclusive with UF8 Plugin Mode — turning SSL Strip
             // on shadows the other anyway (the UF8 path is checked first
             // in every fader/V-Pot branch), so leaving both true just
-            // confuses the LED and the user's mental model.
+            // confuses the LED and the user's mental model. Restore the
+            // parked Sel-Mode at the same time so the user's FX Cycle /
+            // Instance Cycle survives the implicit mutex exit too.
             if (next && g_uf8PluginMode.load()) {
                 g_uf8PluginMode.store(false);
+                restoreSelModeAfterUf8PluginMode_();
                 SetExtState("ReaSixty", "uf8PluginMode", "0", true);
             }
             g_pageDirty.store(true);
@@ -10268,6 +10572,7 @@ void registerBindingHandlers()
             // See ssl_strip_mode_toggle for the mutex rationale.
             if (next && g_uf8PluginMode.load()) {
                 g_uf8PluginMode.store(false);
+                restoreSelModeAfterUf8PluginMode_();
                 SetExtState("ReaSixty", "uf8PluginMode", "0", true);
             }
             g_pageDirty.store(true);
@@ -10285,7 +10590,9 @@ void registerBindingHandlers()
     });
 
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [](bool firing,
+           bool /*pressed*/,
+           int /*param*/) {
             if (!firing) return;
             const bool next = !g_uf8PluginMode.load();
             g_uf8PluginMode.store(next);
@@ -10301,19 +10608,12 @@ void registerBindingHandlers()
                 g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
             }
-            // Mutex with Selection Mode — the V-Pot rotation/push
-            // dispatcher (3507, 3351) routes through SelectionMode
-            // first, so an active Instance/Auto/REC mode preempts
-            // UF8 Plugin Mode's user-param V-Pot routing. Kicking
-            // Selection Mode back to Norm on entry lets the deep-edit
-            // controls actually reach the strip (Frank 2026-05-14
-            // "instance mit v-pots ausgewählt, UF8 Plugin Mode öffnet
-            // nur GUI aber nicht die controls auf UF8").
-            if (next && g_selectionMode.load() != SelectionMode::Norm) {
-                g_selectionMode.store(SelectionMode::Norm);
-                g_instanceGuiOwnerStrip.store(-1);
-                SetExtState("ReaSixty", "selectionMode", "norm", true);
-            }
+            // Park Sel-Mode on entry (so V-Pots can drive plug-in
+            // params instead of routing through the Sel-Mode handler),
+            // restore on exit (so FX Cycle / Instance Cycle survives a
+            // detour into UF8 Plugin Mode).
+            if (next) parkSelModeForUf8PluginMode_();
+            else      restoreSelModeAfterUf8PluginMode_();
             // Snap-on-entry: if the currently focused FX in REAPER is a
             // UF8-mapped plug-in, the next main-thread drain points the
             // mode at it (track + Instance index) so UF8 starts driving
@@ -10333,7 +10633,9 @@ void registerBindingHandlers()
     // GUI variant: same as uf8_plugin_mode_toggle but pops the user
     // plug-in window on entry and closes it on exit. Frank 2026-05-14.
     registerBuiltin("uf8_plugin_mode_toggle_with_gui", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [](bool firing,
+           bool /*pressed*/,
+           int /*param*/) {
             if (!firing) return;
             const bool next = !g_uf8PluginMode.load();
             g_uf8PluginMode.store(next);
@@ -10343,12 +10645,10 @@ void registerBindingHandlers()
                 g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
             }
-            // Mutex with Selection Mode — see uf8_plugin_mode_toggle.
-            if (next && g_selectionMode.load() != SelectionMode::Norm) {
-                g_selectionMode.store(SelectionMode::Norm);
-                g_instanceGuiOwnerStrip.store(-1);
-                SetExtState("ReaSixty", "selectionMode", "norm", true);
-            }
+            // Park Sel-Mode on entry, restore on exit — see plain
+            // variant above for the rationale.
+            if (next) parkSelModeForUf8PluginMode_();
+            else      restoreSelModeAfterUf8PluginMode_();
             // Snap-on-entry: see uf8_plugin_mode_toggle.
             if (next) g_uf8PluginModeSnapRequest.store(true);
             g_pageDirty.store(true);
@@ -10517,6 +10817,19 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::Instance; },
         "Encoder Mode → Instance Cycle", false
     });
+    // FX Cycle counterpart — Channel-Encoder rotation cycles every FX
+    // on the focused track (no Instance filter). Pairs with the V-Pot
+    // FX Cycle Sel-Mode on the symmetry plane: focused-track scope here,
+    // per-strip scope there. Frank 2026-05-15: full 6-binding symmetry.
+    registerBuiltin("encoder_fx_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_encoderMode.store(EncoderMode::FxCycle);
+            SetExtState("ReaSixty", "encoderMode", "FxCycle", true);
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::FxCycle; },
+        "Encoder Mode → FX Cycle", false
+    });
 
     // ---- Channel-encoder rotation builtins ------------------------------
     // Bindable to ChannelEncoder.shortPress[modifier]. dispatchEncoder
@@ -10531,10 +10844,11 @@ void registerBindingHandlers()
                 case EncoderMode::Nudge:    applyPlayheadNudge_(step);  break;
                 case EncoderMode::Focus:    applyMouseScroll_(step);    break;
                 case EncoderMode::Instance: applyInstanceCycle_(step);  break;
+                case EncoderMode::FxCycle:  applyFxCycle_(step);        break;
             }
         },
         nullptr,
-        "Encoder: dispatch by current mode (Nav/Nudge/Focus/Instance)",
+        "Encoder: dispatch by current mode (Nav / Nudge / Focus / Instance Cycle / FX Cycle)",
         false
     });
     registerBuiltin("instance_cycle", DescBuilder{
@@ -11254,6 +11568,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         if (std::strcmp(m, "Nudge") == 0)         g_encoderMode.store(EncoderMode::Nudge);
         else if (std::strcmp(m, "Focus") == 0)    g_encoderMode.store(EncoderMode::Focus);
         else if (std::strcmp(m, "Instance") == 0) g_encoderMode.store(EncoderMode::Instance);
+        else if (std::strcmp(m, "FxCycle") == 0)  g_encoderMode.store(EncoderMode::FxCycle);
         else                                      g_encoderMode.store(EncoderMode::Nav);
     }
     // softKeyBank intentionally NOT restored from ExtState — every

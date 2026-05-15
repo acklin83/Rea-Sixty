@@ -30,39 +30,77 @@ Every Instance is an FX. Most FX are not Instances.
 
 ## Where the distinction shows up
 
+Three surface points × two cycle kinds = six bindable cycle actions.
+Frank's symmetry (2026-05-15):
+
+| Surface point          | Scope          | FX Cycle (all FX)                       | Instance Cycle (Instances only)            |
+| ---                    | ---            | ---                                     | ---                                        |
+| **V-Pot Sel-Mode**     | per-strip      | `selection_mode_instance` (display: "FX Cycle") | `selection_mode_instance_cycle` (NEW)   |
+| **UF8 Channel Encoder**| focused track  | `encoder_fx_cycle` (NEW)                | `encoder_instance` ("Instance Cycle" mode) |
+| **UC1 Encoder 2**      | focused track  | `fx_cycle` (bindable Plain/Shift)       | `instance_cycle` (bindable Plain/Shift)    |
+| Any button             | focused track  | `fx_cycle`                              | `instance_cycle`, `instance_next/_prev`    |
+
+Plus the hardware-mode anchors:
+
 | Action / display name              | Walks                       | Scope                           |
 | ---                                | ---                         | ---                             |
-| **Toggle V-POTS → FX Cycle**       | *All FX on the strip's track* | Per-strip; V-Pot rotates this strip's track's FX list, wraps |
-| **Encoder → Instance Cycle**       | *Instances on the focused track* | Channel-encoder action; cycles only learned CS/BC/UF8 hits and refocuses UC1 onto them |
 | **SSL Strip Mode**                 | The focused track's CS Instance | The fader maps to that Instance's Fader Level param |
 | **UF8 Plugin Mode**                | The focused track's user-mapped Instance (`uf8Mode`) | All 8 strips drive parameters of one Instance |
-| **Selection Mode**                 | Per-strip override of the V-Pot's role (Norm/Rec/REC+MON/Auto/FX-Cycle) | Global selection-mode state |
 
-## Why the rename
+## Cycle semantics — what changes when you cycle
+
+**FX Cycle**: moves the per-track cursor `g_stripInstanceFxIdx[tr]`
+through ALL FX on the track. Includes non-Instances (Tone Generator,
+ReaEQ, etc.). If the landing FX happens to be a learned Instance,
+`syncInstanceFromFxIdx_` promotes the move into a full Instance
+selection — i.e. updates `csInstanceIndex` / `bcInstanceIndex` /
+`uf8OnlyInstanceIndex` so hardware bindings (SSL Strip Mode, UF8
+Plugin Mode, UC1 CS/BC encoder sections) react. On a non-Instance
+landing the Instance indices stay put.
+
+**Instance Cycle**: walks only the learned Instances on the track.
+Always updates the matching Instance index and (for focused-track
+callers, or focused-strip callers) shifts `focused.domain` to the
+landed Instance's domain. The cursor also moves to the landed
+Instance's FX index, so a follow-up FX Cycle picks up from there.
+
+## Why the renames
 
 Until 2026-05-14, the V-Pot per-strip cycle action was called
 "V-POTS → Instance". That was misleading: it actually walks *every*
-FX on the strip's track, not just learned Instances. The action was
-renamed to **V-POTS → FX Cycle** to match what it actually does.
-
-The internal builtin name (`selection_mode_instance`) and the enum
+FX on the strip's track, not just learned Instances. The action's
+display string is now **"Selection Mode → FX Cycle"** to match what
+it does. Internal builtin name (`selection_mode_instance`) and enum
 value (`SelectionMode::Instance`) are unchanged for binding-file
-compatibility; only the user-visible display string moved.
+compatibility.
 
-The Channel-Encoder cycle (`encoder_instance` / `applyInstanceCycle_`)
-*does* walk only Instances, so its display name remains "Encoder →
-Instance Cycle".
+The 2026-05-15 symmetry pass added the real Instance-only V-Pot
+cycle as `selection_mode_instance_cycle` (display: "Selection Mode →
+Instance Cycle", enum `SelectionMode::InstanceCycle`), and an FX
+counterpart for the UF8 Channel Encoder as `encoder_fx_cycle`
+(display: "Encoder Mode → FX Cycle", enum `EncoderMode::FxCycle`).
 
 ## Reading code with these terms in mind
 
 - `stripInstanceActiveFx_(tr)` and `g_stripInstanceFxIdx[tr]` — despite
-  the name, this is the **FX index** for the V-Pot FX-Cycle. Naming is
-  historical; treat it as "the strip's active FX in FX-Cycle mode".
-- `applyInstanceCycle_` — true to its name: walks only Instances on the
-  focused track. Updates `csInstanceIndex` / `bcInstanceIndex` /
-  `uf8OnlyInstanceIndex` and **also** `g_stripInstanceFxIdx[focusedTrack]`
-  so the focused strip's colour-bar FX-Cycle readout follows the
-  encoder.
+  the name, this is the **FX-Cursor** (per-track FX index) that both
+  cycle modes write to. Naming is historical; treat it as "the strip's
+  current FX, whatever cycle put it there".
+- `applyFxCycle_` — focused-track FX Cycle. Walks every FX on the
+  focused track, updates the cursor, and calls `syncInstanceFromFxIdx_`
+  to promote Instance landings.
+- `applyInstanceCycle_` — focused-track Instance Cycle. Walks only
+  Instances. Updates `csInstanceIndex` / `bcInstanceIndex` /
+  `uf8OnlyInstanceIndex` and the cursor.
+- `syncInstanceFromFxIdx_(tr, fxIdx, setFocusedDomain)` — shared
+  helper. If `fxIdx` is a learned Instance on `tr`, syncs the matching
+  Instance index. Used by FX Cycle (focused + per-strip) so cycling
+  onto an Instance "activates" it.
+- The V-Pot per-strip cycle dispatch lives in
+  `PendingInput::StripInstanceDelta` (FX Cycle) and
+  `PendingInput::StripInstanceCycleDelta` (Instance Cycle) inside
+  `drainInputQueue`. Pushes share `StripInstanceOpen` — both modes
+  toggle the same `g_instanceGuiOwnerStrip` ownership.
 - `lookupPluginOnTrack(tr, domain)` — returns an Instance map (or
   null). Used to decide what variant label ("CS 2", "BC 1", "4K G",
   "Link") goes into the colour-bar Channel-Strip-Type zone.
