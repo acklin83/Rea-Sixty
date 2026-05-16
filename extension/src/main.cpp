@@ -1653,7 +1653,7 @@ struct PendingInput {
 // Plain rotation routes through encoder_mode_dispatch's switch:
 //   Instance → applyInstanceCycle_ (focused-track Instances only)
 //   FxCycle  → applyFxCycle_       (focused-track, ALL FX on the track)
-enum class EncoderMode : uint8_t { Nav, Nudge, Focus, Instance, FxCycle };
+enum class EncoderMode : uint8_t { Nav, Nudge, Focus, Instance, FxCycle, SelsetCycle };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::Nav};
 
 // Send/Receive-routing modes for the V-Pots and faders. Four
@@ -2493,6 +2493,43 @@ void applyFxCycle_(int step)
     std::string header = trkName[0] ? std::string(trkName) : std::string{};
     g_uc1_surface->showInstanceCarousel(
         fxLabel(prevIdx), fxLabel(nextIdx), fxLabel(nIdxN), header);
+}
+
+// Walk through populated Selection-Set slots (skipping empty ones),
+// with an "off" state between cycles. State sequence (step +1):
+//   off → first populated → next populated → … → last populated → off
+// Step -1 reverses. step==0 no-op. Used by the Channel-Encoder
+// "Selset Cycle" mode AND by the bindable selset_cycle builtin so
+// any encoder can drive it. Toggles via the same queue path as
+// selset_recall so persistence + LED feedback all go through one place.
+void applySelsetCycle_(int step)
+{
+    if (step == 0) return;
+    // Build the cycle list: [0=off] + each populated slot (1..8).
+    // Definition of populated mirrors selsetWriteToProject_'s isEmpty
+    // check so a freshly-cleared slot doesn't show up in the cycle.
+    int populated[8];
+    int popCount = 0;
+    for (int i = 1; i <= 8; ++i) {
+        const SelSet& s = g_selsets[i - 1];
+        const bool isEmpty = s.name.empty() && s.guids.empty()
+                          && s.type == SelSetType::Snapshot;
+        if (!isEmpty) populated[popCount++] = i;
+    }
+    if (popCount == 0) return;     // nothing to cycle to
+    const int total = popCount + 1;       // +1 for "off"
+    const int cur = g_selsetActive.load();
+    // Locate current index in the cycle list. off=0 maps to index 0;
+    // active populated slot maps to its position+1. Unknown current
+    // (active slot was cleared mid-cycle) → start from off.
+    int idx = 0;
+    for (int i = 0; i < popCount; ++i) {
+        if (populated[i] == cur) { idx = i + 1; break; }
+    }
+    int next = idx + step;
+    next = ((next % total) + total) % total;   // proper mod for negatives
+    const int target = (next == 0) ? 0 : populated[next - 1];
+    g_selsetActivateRequest.store(target == 0 ? -1 : target);
 }
 
 // Toggle floating GUI of the focused-domain Instance — the same plug-in
@@ -9361,11 +9398,12 @@ void onTimer()
         // forcing the user to manually re-toggle the mode after each
         // project open. Reading from ExtState is the source of truth.
         if (const char* m = GetExtState("ReaSixty", "encoderMode"); m && *m) {
-            if      (std::strcmp(m, "Instance") == 0) g_encoderMode.store(EncoderMode::Instance);
-            else if (std::strcmp(m, "FxCycle")  == 0) g_encoderMode.store(EncoderMode::FxCycle);
-            else if (std::strcmp(m, "Nudge")    == 0) g_encoderMode.store(EncoderMode::Nudge);
-            else if (std::strcmp(m, "Focus")    == 0) g_encoderMode.store(EncoderMode::Focus);
-            else                                      g_encoderMode.store(EncoderMode::Nav);
+            if      (std::strcmp(m, "Instance")    == 0) g_encoderMode.store(EncoderMode::Instance);
+            else if (std::strcmp(m, "FxCycle")     == 0) g_encoderMode.store(EncoderMode::FxCycle);
+            else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
+            else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
+            else if (std::strcmp(m, "Focus")       == 0) g_encoderMode.store(EncoderMode::Focus);
+            else                                         g_encoderMode.store(EncoderMode::Nav);
         }
     }
     g_lastTrackCountForReinit = currentTrackCount;
@@ -12287,6 +12325,19 @@ void registerBindingHandlers()
         nullptr, "Save current REAPER selection to slot", true
     });
 
+    // Encoder-driven Selection-Set cycle. Signed `param` = encoder step
+    // (from dispatchEncoder). Bind to any encoder slot — Channel
+    // Encoder, UC1 Encoder 1/2, or a modifier slot — to walk through
+    // populated slots without occupying the Channel Encoder Mode.
+    registerBuiltin("selset_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing || param == 0) return;
+            applySelsetCycle_(param);
+        },
+        nullptr, "Encoder: cycle Selection Set (off → 1 → 2 → … → off)",
+        false
+    });
+
     // FX Learn lebt als Settings-Tab im Mixer-Window, nicht als Builtin —
     // Mapping ist eine Sit-Down-Aktivität (drag-and-drop, click-and-turn),
     // nicht etwas das man auf einen Hardware-Knopf legt.
@@ -12429,6 +12480,20 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::FxCycle; },
         "Encoder Mode → FX Cycle", false
     });
+    // Selection-Set cycle mode — Channel-Encoder rotation steps through
+    // populated Selection-Set slots (off → 1 → 2 → … → last → off).
+    // Pairs with the bindable selset_cycle builtin further down so the
+    // same logic is available on any encoder, not just the Channel
+    // Encoder. Frank 2026-05-16.
+    registerBuiltin("encoder_selset_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_encoderMode.store(EncoderMode::SelsetCycle);
+            SetExtState("ReaSixty", "encoderMode", "SelsetCycle", true);
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::SelsetCycle; },
+        "Encoder Mode → Selection Set Cycle", false
+    });
 
     // ---- Channel-encoder rotation builtins ------------------------------
     // Bindable to ChannelEncoder.shortPress[modifier]. dispatchEncoder
@@ -12439,15 +12504,16 @@ void registerBindingHandlers()
             if (!firing) return;
             const int step = param;
             switch (g_encoderMode.load()) {
-                case EncoderMode::Nav:      applySelectRelative_(step); break;
-                case EncoderMode::Nudge:    applyPlayheadNudge_(step);  break;
-                case EncoderMode::Focus:    applyMouseScroll_(step);    break;
-                case EncoderMode::Instance: applyInstanceCycle_(step);  break;
-                case EncoderMode::FxCycle:  applyFxCycle_(step);        break;
+                case EncoderMode::Nav:         applySelectRelative_(step); break;
+                case EncoderMode::Nudge:       applyPlayheadNudge_(step);  break;
+                case EncoderMode::Focus:       applyMouseScroll_(step);    break;
+                case EncoderMode::Instance:    applyInstanceCycle_(step);  break;
+                case EncoderMode::FxCycle:     applyFxCycle_(step);        break;
+                case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
             }
         },
         nullptr,
-        "Encoder: dispatch by current mode (Nav / Nudge / Focus / Instance Cycle / FX Cycle)",
+        "Encoder: dispatch by current mode (Nav / Nudge / Focus / Instance Cycle / FX Cycle / Selset Cycle)",
         false
     });
     registerBuiltin("instance_cycle", DescBuilder{
