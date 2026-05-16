@@ -2359,11 +2359,11 @@ void applyInstanceCycle_(int step)
     g_pageDirty.store(true);
     g_bankDirty.store(true);
 
-    // Follow show_focused_plugin_gui's floating window across the cycle
-    // (same trick as applyFxCycle_). Independent of SSL Strip Mode's
-    // with-GUI flag — the user opens this window explicitly via Encoder 2
-    // push and expects it to track whatever the cycle just landed on.
-    {
+    // Follow show_focused_plugin_gui's floating window across the cycle.
+    // Gated by Settings → "Plugin GUI follows active Instance" so a user
+    // who wants the window pinned to whatever they opened it on can turn
+    // following off entirely (Frank 2026-05-16).
+    if (g_pluginGuiFollowsInstance.load()) {
         extern void* g_focusedGuiShownTr;
         extern int   g_focusedGuiShownFx;
         if (g_focusedGuiShownTr == tr
@@ -2491,6 +2491,23 @@ void applyFxCycle_(int step)
     if (g_uc1_surface) {
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
+    }
+
+    // Follow show_focused_plugin_gui's floating window across the
+    // cycle (mirror of the applyInstanceCycle_ path). Gated by Settings
+    // → "Plugin GUI follows active Instance".
+    if (g_pluginGuiFollowsInstance.load()) {
+        extern void* g_focusedGuiShownTr;
+        extern int   g_focusedGuiShownFx;
+        if (g_focusedGuiShownTr == tr
+            && g_focusedGuiShownFx >= 0
+            && g_focusedGuiShownFx != nextIdx)
+        {
+            TrackFX_Show(tr, g_focusedGuiShownFx, 2);
+            TrackFX_Show(tr, nextIdx, 3);
+            pinFxGuiIfEnabled_(tr, nextIdx);
+            g_focusedGuiShownFx = nextIdx;
+        }
     }
 
     // Feed the carousel with prev/curr/next FX display names.
@@ -2697,6 +2714,65 @@ void applyShowFocusedPluginGui_()
     TrackFX_Show(tr, fxIdx, /*float window*/ 3);
     pinFxGuiIfEnabled_(tr, fxIdx);
     g_focusedGuiShownTr = tr;
+    g_focusedGuiShownFx = fxIdx;
+}
+
+// Settings → "Plugin GUI follows active Instance" follow-up for the
+// show_focused_plugin_gui window. Called when the user selects a
+// different track (the floating window should re-target to the new
+// track's focused FX) and from the per-track FX-cycle drains (window
+// re-targets to the cycle's new index on the SAME track). Main-thread
+// only; closes the old window and opens the new one. No-op when the
+// setting is off or no window is currently owned by the focused-GUI
+// path.
+void refocusFocusedPluginGuiToCurrentSelection_()
+{
+    if (!g_pluginGuiFollowsInstance.load()) return;
+    if (!g_focusedGuiShownTr) return;     // nothing open → nothing to follow
+
+    MediaTrack* newTr = GetSelectedTrack(nullptr, 0);
+    if (!newTr) return;
+    if (newTr == g_focusedGuiShownTr) return;   // same track, handled by cycle path
+
+    int fxIdx = -1;
+    // Prefer REAPER's focused FX on the new track so we follow whatever
+    // the user (or REAPER's own focus tracking) considers active there.
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
+        MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+        const int candFx = fxNum & 0x00FFFFFF;
+        if (cand == newTr && candFx >= 0
+            && candFx < TrackFX_GetCount(newTr))
+        {
+            fxIdx = candFx;
+        }
+    }
+    // Fallback: the per-track FX cursor (last-cycled FX) — what
+    // resolveActiveFx_ would have returned for THIS new track. Default
+    // to FX 0 if no cursor recorded yet.
+    if (fxIdx < 0) {
+        auto it = g_stripInstanceFxIdx.find(newTr);
+        if (it != g_stripInstanceFxIdx.end()) fxIdx = it->second;
+        const int n = TrackFX_GetCount(newTr);
+        if (fxIdx < 0 || fxIdx >= n) fxIdx = (n > 0) ? 0 : -1;
+    }
+
+    // Close the old window first so we don't stack floating GUIs.
+    if (g_focusedGuiShownTr
+        && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+    {
+        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                     g_focusedGuiShownFx, 2);
+    }
+    if (fxIdx < 0) {
+        // No FX on the new track — leave the window closed.
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
+    TrackFX_Show(newTr, fxIdx, /*float window*/ 3);
+    pinFxGuiIfEnabled_(newTr, fxIdx);
+    g_focusedGuiShownTr = newTr;
     g_focusedGuiShownFx = fxIdx;
 }
 
@@ -9408,6 +9484,12 @@ void onTimer()
             auto* tr = static_cast<MediaTrack*>(pending);
             if (g_uc1_surface) g_uc1_surface->setFocusedTrack(tr);
             followSelectedInMixer(tr);
+            // Plugin GUI follows active Instance — re-target the
+            // show_focused_plugin_gui window to the newly-selected
+            // track's focused FX (no-op when the setting is off or
+            // no window is currently owned by that path). Settings
+            // toggle gate lives inside the helper.
+            refocusFocusedPluginGuiToCurrentSelection_();
             if (g_pendingFocusGuiSync.exchange(false)) {
                 g_pluginGuiSyncRequest.store(true);
             }
