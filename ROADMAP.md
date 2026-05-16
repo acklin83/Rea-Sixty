@@ -7,7 +7,7 @@ The project started 2026-04-19 as a "just the colors" REAPER extension. After de
 - SSL 360° claims the vendor-USB interface exclusively — can't coexist
 - Therefore the only technically honest solution is to re-implement SSL 360°'s host-side responsibilities
 
-## Phase 1 — UF8 standalone, full replacement
+## Phase 1 — UF8 standalone, full replacement — **SHIPPED**
 
 **Goal:** The user can quit SSL 360° for UF8 and lose no functionality. Bonus: DAW-layer scribble-strip colors, which SSL 360° doesn't offer at all.
 
@@ -27,9 +27,9 @@ Deliverables:
 
 Next capture/decode work: LED command formats (solo/mute/select/arm), meter command format.
 
-**Milestone complete when:** User starts macOS, SSL 360° is never launched, no MCU control-surface plug-in is configured in REAPER, UF8 drives REAPER fully via the native extension, scribble strips show REAPER track colors.
+**Milestone complete when:** User starts macOS, SSL 360° is never launched, no MCU control-surface plug-in is configured in REAPER, UF8 drives REAPER fully via the native extension, scribble strips show REAPER track colors. **Reached.**
 
-## Phase 2 — UC1 integration
+## Phase 2 — UC1 integration — **SHIPPED**
 
 **Goal:** SSL 360° becomes fully redundant. UC1 behaves as a native Rea-Sixty device driving whatever SSL Bus Compressor (or other supported plugin) sits on the currently-focused REAPER track — including its dedicated GR display.
 
@@ -57,15 +57,15 @@ UC1 was originally parked in a late phase on the assumption that UF8 could ship 
 - Tick the probe's value into the UC1 GR bar-graph frame at ~30 Hz (same timer path as parameter mirror)
 - A/B validation: record the UC1 GR readout driven by (A) SSL 360° + stock plugin vs (B) Rea-Sixty + JSFX probe under identical audio. Ballistic mismatch tolerance ≤2 dB on transients is acceptable; anything larger triggers a followup decision on whether to escalate to a Thrift-MITM path (documented but not preferred — see `docs/plugin-ipc-notes.md`)
 
-**Milestone complete when:** SSL 360° is never launched, both UF8 and UC1 drive REAPER fully via Rea-Sixty, SSL plugins respond to UC1 controls, and UC1's GR display tracks audio-driven gain reduction on the focused track.
+**Milestone complete when:** SSL 360° is never launched, both UF8 and UC1 drive REAPER fully via Rea-Sixty, SSL plugins respond to UC1 controls, and UC1's GR display tracks audio-driven gain reduction on the focused track. **Reached.** Note: 2c shipped via the host-side `TrackFX_GetNamedConfigParm("GainReduction_dB", …)` PreSonus VST3 extension — no JSFX probe, no auto-insert, no Thrift-MITM. The `rea_sixty_gr_probe.jsfx` is retained in the repo as a manual-insert fallback for compressors that don't expose the standard.
 
-## Phase 2.5 — Session navigation & generic FX mapping
+## Phase 2.5 — Session navigation & generic FX mapping — **PARTIALLY SHIPPED**
 
 **Goal:** Features that SSL 360° does not offer at all — large-session ergonomics, and user-programmable control over *any* VST/JS/AU plugin, not just SSL's.
 
 No new captures required; everything here is REAPER-API work on top of the finished Phase 1/2 foundation.
 
-### 2.5a — Folder Mode
+### 2.5a — Folder Mode — **shipped** (long-press SEL expand-single-parent gesture still queued)
 
 - Bank resolver filters to folder parents only; child tracks hidden by default
 - `SEL` long-press (~500 ms, detected on press-edge + release-edge we already parse) toggles expanded state for that parent
@@ -73,7 +73,7 @@ No new captures required; everything here is REAPER-API work on top of the finis
 - Default one level per expand; `Shift`-modifier (or equivalent) expands all nested levels
 - Bank-position stable across expand/collapse — user never gets surprise-scrolled
 
-### 2.5b — Show Only Selected + 8 selection slots
+### 2.5b — Show Only Selected + 8 selection slots — **UI only, storage pending**
 
 - Bank resolver switches from "`GetTrack(i)` 0..N" to a project-local selection list
 - 8 slots persisted via `SetProjExtState("rea_sixty", "selset_N", …)`; store Track-**GUIDs** not indices so reorders/deletes don't corrupt sets
@@ -81,14 +81,16 @@ No new captures required; everything here is REAPER-API work on top of the finis
 - Recall prunes missing tracks gracefully and surfaces count in the Value Line zone
 - Inherits GUID-store infrastructure from 2.5a
 
-### 2.5c — Show Sends / Show Receives
+### 2.5c — Show Sends / Show Receives — **shipped**
 
 - Focus-variant (SSL 360° Send-Layer equivalent): on the focused track, strips 0..7 represent the first 8 sends; fader = send level, CUT = send mute, scribble = destination name, Channel Number Zone = send index, Page L/R pages through >8
 - Receives via the same UI, toggled with a dedicated layer button
 - Data: `GetTrackNumSends(tr, 0)` / `GetTrackSendInfo_Value` / `GetTrackSendName`
 - Deferred optional variant: a routing-map overlay that highlights send destinations across banks with SEL-LED blink. Decide after (a) ships.
 
-### 2.5d — Generic FX-parameter mapping (user-programmable Plug-in Mixer)
+### 2.5d — Generic FX-parameter mapping (user-programmable Plug-in Mixer) — **shipped**
+
+Implementation note: matching is FX-**name-substring** keyed, not GUID-keyed as originally planned. Conservative trade-off — FX-slot reorders are safe (the original goal), but renames break the mapping. See `docs/user-manual.md` §13.2.
 
 - Learn-mode: modifier + move any UF8 V-Pot or touch any soft-button → binding captured from `GetTouchedOrFocusedFX()` + `GetLastTouchedFX()`
 - Binding schema in project extState: `slot.<strip>.<page>.<control> → {fxGuid, paramIdx, displayFormat}`. Guid-keyed so FX-slot reorders don't break mappings
@@ -98,7 +100,9 @@ No new captures required; everything here is REAPER-API work on top of the finis
 
 **Milestone complete when:** A user can (a) navigate a 200-track folder session on UF8 without leaving the surface, (b) save/recall 8 selection sets per project, (c) mix sends from UF8, and (d) bind any third-party plugin parameter to any V-Pot or soft-button with learn-mode and see the plugin's formatted value on the scribble strip.
 
-## Phase 2.6 — Plugin Mixer Window
+## Phase 2.6 — Plugin Mixer Window — **PENDING**
+
+Status: the docked SWELL+ImGui window has shipped as part of Phase 2.7 (Settings tabs only). The mixer view inside that window is not yet implemented. 2.6a (skeleton + theme bridge) is effectively done — the window opens, docks, and theme-tracks. 2.6b–d still queued.
 
 **Goal:** On-screen mixer view that mirrors SSL 360°'s Plugin Mixer — all SSL Channel Strip and Bus Compressor instances visible in a single docked window, fully interactive, themed to the user's REAPER theme. Closes the last gap where users still glance at SSL 360° instead of Rea-Sixty.
 
@@ -136,7 +140,9 @@ Reuses the existing `PluginMap` slot tables (CS2, 4K B/E/G, Bus Comp 2), `lookup
 
 **Milestone complete when:** A user with a 4K-G + CS2 + Bus Comp 2 mix can leave SSL 360° closed, drive every plugin parameter from the Rea-Sixty mixer window, see correct GR + audio meters, and the window auto-themes to whatever REAPER theme they have active (Reapertips by default in our setup, but no theme is bundled).
 
-## Phase 2.7 — Settings Screen
+## Phase 2.7 — Settings Screen — **SHIPPED**
+
+All six tabs are in (Device, Bindings, Soft-Key Banks, Modes, Selection Sets, About). The Modes tab grew a REC sub-section that surfaces the [TotalReaper](https://github.com/acklin83/TotalReaper) RME preamp mirror (gain / phantom / pad / phase + Shift+V-Pot input-channel switch) when TotalReaper is detected on the track. Foot-switch bindings still ship as a "not yet detected" placeholder pending capture work.
 
 **Goal:** All Rea-Sixty configuration editable without touching code, surfaced from the same docked window as Phase 2.6's Plugin Mixer. A top-level TabBar inside that window switches between **Mixer** and **Settings**; no separate window, no extra action.
 
@@ -159,14 +165,16 @@ Settings tabs:
 | Selection Sets | ROADMAP 2.5b | 8 GUID-keyed track-selection slots per project |
 | About | — | Version, build hash, REAPER + ReaImGui versions, repo / ReaPack links, log-file location |
 
-### 2.7a — Spec consolidation + Device + About
+### 2.7a — Spec consolidation + Device + About — **shipped**
 
 - Merge plan-settings-ui.md and bindings.md into a single `docs/settings-spec.md` (incorporating the gap analysis from ssl-360-settings-inventory.md). Resolve disagreements (multi-tab vs flat scroll → multi-tab wins, that's the implementation).
 - Implement Device tab: brightness sliders, meter ballistic selector, SEL-follows-color toggle, connected-units list with Identify (LCD-flash via existing UF8/UC1 frame protocol) and Drag-to-Reorder.
 - Implement Export Diagnostic Report — single button → `~/Desktop/rea_sixty_diag_<date>.zip` with build hash, REAPER version, recent extension log, USB device tree.
 - Implement About tab — cheap.
 
-### 2.7b — Bindings tab + JSON persistence
+### 2.7b — Bindings tab + JSON persistence — **shipped**
+
+Added beyond the original plan: right-click Copy / Paste binding, modifier-Native combos, long-press latch for Toggle/Hold, per-binding colour overrides, Shift double-click latch.
 
 - Per-strip / transport / global-button / soft-key editor matching bindings.md §"Config UI Sketch".
 - 3 Quick Keys section (defaulted to layer switches; user-rebindable).
@@ -174,18 +182,22 @@ Settings tabs:
 - JSON read/write to `~/.../REAPER/rea_sixty/bindings.json` with mtime watch + reload.
 - Learn-mode arming via ExtState handshake.
 
-### 2.7c — Soft-Key Banks tab
+### 2.7c — Soft-Key Banks tab — **shipped**
 
 - CS 6-bank + BC 2-bank grids reading authoritative tables from `softkey::` namespace.
 - kNoSlot wiring picker: raw VST3 param browser (uses `TrackFX_GetParamName`) + REAPER action picker (uses `kbd_getTextFromCmd`).
 - Per-position label + colour override.
 
-### 2.7d — Modes + Selection Sets tabs
+### 2.7d — Modes + Selection Sets tabs — **shipped** (Selection-Set storage layer still queued — see 2.5b)
+
+The Modes tab also hosts the REC sub-section: TotalReaper assignment UI for the RME preamp mirror (gain / phantom / pad / phase + stereo input-name resolution + Shift+V-Pot input-channel switch).
 
 - Lands alongside the matching Phase 2.5 feature code, not before — these tabs configure features that don't exist yet.
 - V-Pot Behaviour subsection (always-on, doesn't depend on Phase 2.5): Always Fine Pan, Always Fine Sends, Show Auto State on scribble (reads `GetTrackAutomationMode()`).
 
-### 2.7e — Polish
+### 2.7e — Polish — **partially shipped**
+
+Shipped: per-binding colour picker, live preview to UF8 / UC1 (touched control highlights), compact brightness sliders, two-column GR calibration. Pending: import/export JSON for config sharing, reset-to-defaults.
 
 - Color-picker widget for button colours.
 - Import / export JSON for sharing configs between users.
@@ -203,6 +215,10 @@ These exist in SSL's settings but don't apply to Rea-Sixty's architecture:
 - **DAW Profile XML compatibility** — we ship JSON; one-time SSL XML import only, already a Non-Goal
 - **In-app firmware update** — SSL still ships firmware blobs; users keep SSL 360° installed for that one task. Tracked in Phase 4
 - **LCD/Software Messages catalogue page** — we log to file, not modal popups; About tab links to log location instead
+
+## Phase 3 — Submix Views — **DESIGN**
+
+**Goal:** A surface-level way to mix groups (busses, stems, headphone mixes) without leaving the current bank context. Phase A scoped 2026-05-15; four design questions deferred. Picks up the "fast-glance, no bank-switching" gap that Folder Mode + Show-Only-Selected only partially close for users who think in busses, not folders.
 
 ## Phase 4+ — Community
 
