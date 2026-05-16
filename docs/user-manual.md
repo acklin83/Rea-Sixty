@@ -383,7 +383,7 @@ Notes:
 When the **REC + RME master switch** is on in Settings → Modes,
 the REC and REC + MON Selection Modes pick up an additional layer
 of behaviour aimed at RME interfaces driven via the
-[TotalReaper](https://github.com/maciek134/TotalReaper) bridge.
+[TotalReaper](https://github.com/acklin83/totalreaper) bridge.
 The bridge mirrors TotalMix FX state into per-track REAPER ExtState
 keys (`P_EXT:totalreaper_*`); Rea-Sixty reads those keys and writes
 them back through TotalReaper's named REAPER actions.
