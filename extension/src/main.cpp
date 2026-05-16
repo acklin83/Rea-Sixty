@@ -1495,14 +1495,15 @@ std::atomic<FollowMode> g_followMode{FollowMode::BucketSnap};
 // each modifier is a single bool.
 std::atomic<bool> g_shiftHeld{false};
 
-// Shift long-press latch. Set when the user holds Shift past
-// kShiftLatchMs and releases — Shift then stays active until the next
-// press, which clears the latch. Lets the user "tip" Shift into Fine
-// mode for a knob sweep without keeping a finger on the button. Plain
-// momentary use (press, twiddle, release short) is unchanged.
-constexpr int64_t kShiftLatchMs = 500;
+// Shift double-click latch. A second press within kShiftDoubleClickMs of
+// the previous release latches Shift on — it then stays active until the
+// next press, which clears the latch. Single press+release is plain
+// momentary (Shift held only while finger's on the button), so the user
+// can either "hold for a sec" or "double-click to keep on".
+constexpr int64_t kShiftDoubleClickMs = 400;
 std::atomic<bool>    g_shiftLatched{false};
-std::atomic<int64_t> g_shiftPressEpochMs{0};
+std::atomic<int64_t> g_shiftLastReleaseMs{0};
+std::atomic<bool>    g_shiftDoubleClickArmed{false};
 
 // Fractional accumulators for the channel encoder. The UF8 emits
 // several events per physical detent (each with speed 1-2), so we
@@ -11398,15 +11399,14 @@ void registerBindingHandlers()
     // other button. g_shiftHeld stays in sync for the legacy in-TU
     // fader/scrub-speed readers — mod_shift shadows both atomics.
     //
-    // mod_shift (only) wires in two extra atomics that turn Momentary
-    // into "momentary OR long-press-latch": releasing after kShiftLatchMs
-    // latches Shift on instead of releasing it; the next press clears
-    // the latch and turns Shift off. Cmd/Ctrl stay pure momentary.
+    // mod_shift (only) wires in extra atomics that turn Momentary into
+    // "momentary OR double-click-latch": a 2nd press within
+    // kShiftDoubleClickMs of the previous release latches Shift on
+    // instead of releasing it; the next press clears the latch and
+    // turns Shift off. Cmd/Ctrl stay pure momentary.
     auto modHandler = [](uf8::bindings::Modifier m,
-                         std::atomic<bool>* legacyMirror,
-                         std::atomic<bool>* latchedFlag,
-                         std::atomic<int64_t>* pressEpochMs) {
-        return [m, legacyMirror, latchedFlag, pressEpochMs]
+                         std::atomic<bool>* legacyMirror) {
+        return [m, legacyMirror]
                (bool /*firing*/, bool pressed, int param) {
             const bool toggleMode = (param == 1);
             if (toggleMode) {
@@ -11416,53 +11416,67 @@ void registerBindingHandlers()
                 if (legacyMirror) legacyMirror->store(newState);
                 return;
             }
-            // Momentary with optional long-press latch (Shift only).
-            if (latchedFlag && pressEpochMs) {
-                using namespace std::chrono;
-                if (pressed) {
-                    if (latchedFlag->load()) {
-                        // Latched → press clears the latch, modifier off.
-                        latchedFlag->store(false);
-                        pressEpochMs->store(0);
-                        uf8::bindings::setModifierHeld(m, false);
-                        if (legacyMirror) legacyMirror->store(false);
-                        return;
-                    }
-                    pressEpochMs->store(duration_cast<milliseconds>(
-                        steady_clock::now().time_since_epoch()).count());
-                    uf8::bindings::setModifierHeld(m, true);
-                    if (legacyMirror) legacyMirror->store(true);
-                } else {
-                    const int64_t start = pressEpochMs->exchange(0);
-                    if (start <= 0) return;   // stale / already cleared
-                    const int64_t now = duration_cast<milliseconds>(
-                        steady_clock::now().time_since_epoch()).count();
-                    if (now - start >= kShiftLatchMs) {
-                        latchedFlag->store(true);   // keep modifier on
-                    } else {
-                        uf8::bindings::setModifierHeld(m, false);
-                        if (legacyMirror) legacyMirror->store(false);
-                    }
-                }
-                return;
-            }
             // Plain momentary (Cmd / Ctrl).
             uf8::bindings::setModifierHeld(m, pressed);
             if (legacyMirror) legacyMirror->store(pressed);
         };
     };
+    auto shiftHandler = [](bool /*firing*/, bool pressed, int param) {
+        using namespace std::chrono;
+        using M = uf8::bindings::Modifier;
+        const bool toggleMode = (param == 1);
+        if (toggleMode) {
+            if (!pressed) return;
+            const bool newState = !uf8::bindings::modifierHeld(M::Shift);
+            uf8::bindings::setModifierHeld(M::Shift, newState);
+            g_shiftHeld.store(newState);
+            return;
+        }
+        const int64_t now = duration_cast<milliseconds>(
+            steady_clock::now().time_since_epoch()).count();
+        if (pressed) {
+            if (g_shiftLatched.load()) {
+                // Press while latched → clear latch + modifier off.
+                // Reset the double-click window so the clearing press
+                // doesn't accidentally start a fresh double-click.
+                g_shiftLatched.store(false);
+                g_shiftDoubleClickArmed.store(false);
+                g_shiftLastReleaseMs.store(0);
+                uf8::bindings::setModifierHeld(M::Shift, false);
+                g_shiftHeld.store(false);
+                return;
+            }
+            // Detect 2nd press of a double-click sequence.
+            const int64_t lastRel = g_shiftLastReleaseMs.exchange(0);
+            const bool isDoubleClick =
+                lastRel > 0 && (now - lastRel) <= kShiftDoubleClickMs;
+            g_shiftDoubleClickArmed.store(isDoubleClick);
+            uf8::bindings::setModifierHeld(M::Shift, true);
+            g_shiftHeld.store(true);
+            return;
+        }
+        // Release.
+        if (g_shiftDoubleClickArmed.exchange(false)) {
+            // Release of the 2nd press → latch on, modifier stays held.
+            g_shiftLatched.store(true);
+            g_shiftLastReleaseMs.store(0);
+            return;
+        }
+        uf8::bindings::setModifierHeld(M::Shift, false);
+        g_shiftHeld.store(false);
+        g_shiftLastReleaseMs.store(now);
+    };
     registerBuiltin("mod_shift", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Shift, &g_shiftHeld,
-                   &g_shiftLatched, &g_shiftPressEpochMs),
+        shiftHandler,
         [](int) { return g_shiftHeld.load(); },
-        "Modifier: Shift / Fine (long-press latches)", true
+        "Modifier: Shift / Fine (double-click latches)", true
     });
     registerBuiltin("mod_cmd", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Cmd, nullptr, nullptr, nullptr),
+        modHandler(uf8::bindings::Modifier::Cmd, nullptr),
         nullptr, "Modifier: Cmd", true
     });
     registerBuiltin("mod_ctrl", DescBuilder{
-        modHandler(uf8::bindings::Modifier::Ctrl, nullptr, nullptr, nullptr),
+        modHandler(uf8::bindings::Modifier::Ctrl, nullptr),
         nullptr, "Modifier: Ctrl", true
     });
 
