@@ -3087,11 +3087,14 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     // pointing at the same instance — cycling to 4K E now also moves
     // the fader and label off the default bx_ssl (Frank 2026-05-14).
     //
-    // Skip CS maps without a fader on UF8 (csPluginHasFader_ false) so
-    // a user-CS that has no FaderLevel slot doesn't claim the strip and
-    // hide REAPER's track-volume fallback (Frank 2026-05-16). The
-    // instance-cycle counter steps over the same filtered list, which
-    // keeps the cycle visually consistent with what strip mode shows.
+    // Cycle index counts ALL CS plug-ins so Instance Cycle visits every
+    // CS map regardless of fader presence (Frank 2026-05-16 "Instance
+    // Cycle soll jedes plugin mit CS oder BC cyceln"). If the cycle
+    // lands on a CS plug-in without a UF8 fader mapping, strip mode is
+    // simply silent for this strip — empty pick → Type zone clears and
+    // the fader falls through to REAPER track volume. That keeps SSL
+    // Strip Mode honest ("CS Plugins mit Fader") without breaking the
+    // independent Instance-Cycle UX.
     const int wantIdx = uc1::csInstanceIndex(tr);
     int csSeen = 0;
     for (int fx = 0; fx < n; ++fx) {
@@ -3100,8 +3103,8 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
         if (buf[0] == 0) continue;
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
-        if (!csPluginHasFader_(*m)) continue;
         if (csSeen == wantIdx) {
+            if (!csPluginHasFader_(*m)) return out;   // no-fader → silent
             const uf8::UserPluginMap* owned =
                 uf8::user_plugins::lookupOwnedByName(buf);
             return { fx, m, owned != nullptr };
@@ -3112,6 +3115,8 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     // Instance index out of bounds (csInstanceIndex stale after FX
     // removed, or just never set) → fall back to the isDefault tiebreak
     // so a fresh project with no cycle history still resolves cleanly.
+    // Keep the fader filter here so the default-pick prefers a CS
+    // plug-in that's actually usable as a strip.
     int fxBuiltin = -1, fxUser = -1;
     const uf8::PluginMap* mapBuiltin = nullptr;
     const uf8::PluginMap* mapUser    = nullptr;
