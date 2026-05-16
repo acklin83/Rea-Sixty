@@ -740,7 +740,7 @@ constexpr Uf8GlobalLedDef kUf8GlobalLedTable[] = {
     /* Fine         */ {0x58, kColourWhite},
     /* Norm         */ {0x57, kColourWhite},
     /* Rec          */ {0x56, kColourRed},
-    /* Auto         */ {0x55, kColourWhite},
+    /* Auto         */ {0x55, kColourWhite, true},  // colour-pair alone leaves cell dark (Frank 2026-05-16), needs legacy frame like Plugin (0x2F)
     /* Nav          */ {0x54, kColourWhite},
     /* Nudge        */ {0x53, kColourWhite},
     /* Focus        */ {0x52, kColourWhite},
