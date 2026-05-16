@@ -199,30 +199,27 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     static const char* kLevelNames[5] = {
         "Dark", "Dim", "Half", "Bright", "Full"
     };
-    auto fmtLevel = [&](int level) {
-        if (level >= 0 && level <= 4) {
-            std::snprintf(line, sizeof(line), "  %s", kLevelNames[level]);
-            ImGui_Text(ctx, line);
-        }
-    };
-
     int led = reasixty_brightnessLevel();
     ImGui_Text(ctx, "  LEDs");
+    ImGui_SetNextItemWidth(ctx, 200.0);
     if (ImGui_SliderInt(ctx, "##led_brightness", &led,
                         /*v_min*/ 0, /*v_max*/ 4,
                         /*format*/ nullptr, /*flags*/ nullptr)) {
         reasixty_setBrightnessLevel(led);
     }
-    fmtLevel(led);
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Text(ctx, kLevelNames[led]);
 
     int scr = reasixty_scribbleBrightnessLevel();
-    ImGui_Text(ctx, "  Scribble strips / LCDs");
+    ImGui_Text(ctx, "  LCDs");
+    ImGui_SetNextItemWidth(ctx, 200.0);
     if (ImGui_SliderInt(ctx, "##scribble_brightness", &scr,
                         /*v_min*/ 0, /*v_max*/ 4,
                         /*format*/ nullptr, /*flags*/ nullptr)) {
         reasixty_setScribbleBrightnessLevel(scr);
     }
-    fmtLevel(scr);
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Text(ctx, kLevelNames[scr]);
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -323,34 +320,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Surface filters");
-    ImGui_Separator(ctx);
-
-    // Mirror the `folder_mode` / `show_only_selected` builtins. Same
-    // atomics, same ExtState — toggling here stays in sync with any
-    // hardware button bound to the matching builtin.
-    bool folderMode = reasixty_folderMode();
-    if (ImGui_Checkbox(ctx, "Folder Mode (parents only)", &folderMode)) {
-        reasixty_setFolderMode(folderMode);
-    }
-    bool selOnly = reasixty_showOnlySelected();
-    if (ImGui_Checkbox(ctx, "Show Only Selected tracks", &selOnly)) {
-        reasixty_setShowOnlySelected(selOnly);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Diagnostic");
-    ImGui_Separator(ctx);
-    if (ImGui_Button(ctx, "Export diagnostic report",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        reasixty_exportDiagnostic();
-    }
-    ImGui_Text(ctx, "  Bundles version + state + recent traces into a .zip");
-    ImGui_Text(ctx, "  on your Desktop. Attach this when reporting bugs.");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
     ImGui_Text(ctx, "UC1 GR calibration");
     ImGui_Separator(ctx);
     ImGui_TextDisabled(ctx,
@@ -429,8 +398,15 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
     };
 
-    drawCalSection("BC VU meter (0/4/8/12/16/20 dB)", 0);
-    drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
+    if (ImGui_BeginTable(ctx, "##gr_cal_cols", 2,
+                         /*flags*/ nullptr, /*outer_size_w*/ nullptr,
+                         /*outer_size_h*/ nullptr, /*inner_width*/ nullptr)) {
+        ImGui_TableNextColumn(ctx);
+        drawCalSection("BC VU meter (0/4/8/12/16/20 dB)", 0);
+        ImGui_TableNextColumn(ctx);
+        drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
+        ImGui_EndTable(ctx);
+    }
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
