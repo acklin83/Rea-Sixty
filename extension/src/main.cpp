@@ -284,6 +284,13 @@ std::atomic<bool> g_showOnlySelected{false};
 // per-track automation-mode state.
 std::atomic<bool> g_autoHideReadTrim{false};
 
+// Settings → Modes → AUTO: when active AND SelectionMode == Auto AND
+// fewer visible tracks than hardware strips (8), right-align the
+// strips so the first visible track lands on strip N-vis, the last on
+// strip 7. Project order preserved; padded slots on the left render
+// empty and ignore input. Default false (legacy fill-from-left).
+std::atomic<bool> g_autoFillFromRight{false};
+
 // Settings → Modes → REC: RME TotalReaper integration. When the master
 // switch is on AND SelectionMode == Rec, the strip's V-Pot push / Cut /
 // Solo buttons dispatch the assigned TotalReaper named action against
@@ -421,6 +428,28 @@ inline int visibleTrackCount() {
 inline MediaTrack* visibleTrackAt(int idx) {
     if (idx < 0 || idx >= static_cast<int>(g_visibleTracks.size())) return nullptr;
     return g_visibleTracks[idx];
+}
+
+// Translates a hardware strip index (0..7) plus the current bankOffset
+// into a visible-track-list slot. Normally just `strip + bankOffset`;
+// when AUTO-mode fill-from-right is active AND fewer visible tracks
+// than strips, returns a right-aligned slot (negative on the left
+// padded strips). bankOffset is ignored in that case because a list
+// shorter than the surface has no scrolling to do — and a stale
+// bankOffset from the pre-shrink state would otherwise push the visible
+// window off the right edge. visibleTrackAt() returns nullptr for
+// negative slots, so existing null-check callers stay correct without
+// extra guards.
+inline int stripToVisibleSlot(int strip, int bankOffset) {
+    if (g_autoFillFromRight.load()
+        && g_selectionMode.load() == SelectionMode::Auto)
+    {
+        const int vis = static_cast<int>(g_visibleTracks.size());
+        constexpr int kSurfaceStrips = 8;
+        const int pad = kSurfaceStrips - vis;
+        if (pad > 0) return strip - pad;
+    }
+    return strip + bankOffset;
 }
 
 void rebuildVisibleTrackList() {
@@ -941,6 +970,9 @@ void loadBrightness()
     if (autoHide && *autoHide) {
         g_autoHideReadTrim.store(std::atoi(autoHide) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "auto_fill_from_right"); v && *v) {
+        g_autoFillFromRight.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
     }
@@ -1314,11 +1346,12 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
 {
     StripRoute r;
     if (allIdx >= 0) {
-        const int rs = strip + bankOffset;
+        const int rs = stripToVisibleSlot(strip, bankOffset);
         // Surface-aware lookup: in folder_mode / show_only_selected the
         // strip→track mapping is filtered, so a literal GetTrack(nullptr,
         // rs) would point at the wrong track. visibleTrackAt does the
-        // bounds check internally and returns null past the end.
+        // bounds check internally and returns null past the end (and on
+        // negative slots — used by AUTO fill-from-right padding).
         r.track        = visibleTrackAt(rs);
         r.sendCategory = category;
         r.sendIndex    = allIdx;
@@ -2705,8 +2738,8 @@ void drainInputQueue()
             continue;
         }
 
-        const int slot = e.strip + bankOffset;
-        if (slot >= surfaceCount) continue;
+        const int slot = stripToVisibleSlot(e.strip, bankOffset);
+        if (slot < 0 || slot >= surfaceCount) continue;
         MediaTrack* tr = visibleTrackAt(slot);
         if (!tr) continue;
         switch (e.kind) {
@@ -4902,7 +4935,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
 {
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
-    const int realSlot   = slot + bankOffset;
+    const int realSlot   = stripToVisibleSlot(slot, bankOffset);
 
     // FX Learn UF8 user-strip mode: the focused track has a user-mapped
     // plug-in and the 8 strips drive its params. The colour bar on each
@@ -4960,7 +4993,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
         }
     }
 
-    if (realSlot >= trackCount) return 0;
+    if (realSlot < 0 || realSlot >= trackCount) return 0;
     MediaTrack* tr = visibleTrackAt(realSlot);
     if (!tr) return 0;
     // REAPER returns native color as int. Bit 0x1000000 is "color set";
@@ -5013,7 +5046,13 @@ std::string sslPluginShortName(MediaTrack* tr)
 std::string slotLabelForVisibleSlot(int slot)
 {
     const int trackCount = visibleTrackCount();
-    const int realSlot   = slot + g_bankOffset.load();
+    const int realSlot   = stripToVisibleSlot(slot, g_bankOffset.load());
+    if (realSlot < 0) {
+        // AUTO fill-from-right padding on the left edge — strip shows
+        // no track; return empty so the LCD stays blank rather than
+        // painting "CH 0" etc. on a slot that means nothing.
+        return "";
+    }
     if (realSlot >= trackCount) {
         char fallback[8];
         std::snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
@@ -5360,7 +5399,7 @@ void pushZonesForVisibleSlots()
         if (g_sync) g_sync->invalidate();
 
         for (int s = 0; s < 8; ++s) {
-            const int rs = s + bankOffset;
+            const int rs = stripToVisibleSlot(s, bankOffset);
             MediaTrack* t = visibleTrackAt(rs);
             const bool solo = t && GetMediaTrackInfo_Value(t, "I_SOLO")     > 0.5;
             const bool mute = t && GetMediaTrackInfo_Value(t, "B_MUTE")     > 0.5;
@@ -5386,7 +5425,7 @@ void pushZonesForVisibleSlots()
         if (g_dev) {
             uint16_t mask = 0;
             for (int s = 0; s < 8; ++s) {
-                const int rs = s + bankOffset;
+                const int rs = stripToVisibleSlot(s, bankOffset);
                 MediaTrack* t = visibleTrackAt(rs);
                 if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
                     mask |= static_cast<uint16_t>(1u << s);
@@ -5397,7 +5436,7 @@ void pushZonesForVisibleSlots()
     }
 
     for (int s = 0; s < 8; ++s) {
-        const int realSlot = s + bankOffset;
+        const int realSlot = stripToVisibleSlot(s, bankOffset);
         MediaTrack* tr = visibleTrackAt(realSlot);
 
         // Keep the slot→track mapping fresh so GetTouchState can map
@@ -6898,8 +6937,8 @@ void pushZonesForVisibleSlots()
         const auto focused = uf8::getFocusedParam();
         const int bankOffset = g_bankOffset.load();
         for (uint8_t s = 0; s < 8; ++s) {
-            const int realSlot = static_cast<int>(s) + bankOffset;
-            if (realSlot >= trackCount) {
+            const int realSlot = stripToVisibleSlot(static_cast<int>(s), bankOffset);
+            if (realSlot < 0 || realSlot >= trackCount) {
                 vpotMode[s] = 0x03;
                 continue;
             }
@@ -7647,9 +7686,9 @@ void pushVuMeter()
     g_meterEnvLast_ = tNow;
 
     for (int s = 0; s < 8; ++s) {
-        const int idx = s + bankOffset;
+        const int idx = stripToVisibleSlot(s, bankOffset);
         uint8_t rawL = 0, rawR = 0;
-        if (!pluginModeBlank && idx < trackCount) {
+        if (!pluginModeBlank && idx >= 0 && idx < trackCount) {
             if (MediaTrack* tr = visibleTrackAt(idx)) {
                 // Left = channel 0, right = channel 1. REAPER's peak is
                 // the channel's post-fader tap; pre-fader VU isn't
@@ -7709,8 +7748,8 @@ void pushSelColourBar()
     // currently-selected strip (T1=0x02, T2=0x04, …, T8=0x0100).
     uint16_t mask = 0;
     for (int s = 0; s < 8; ++s) {
-        const int idx = s + bankOffset;
-        MediaTrack* tr = (idx < trackCount) ? visibleTrackAt(idx) : nullptr;
+        const int idx = stripToVisibleSlot(s, bankOffset);
+        MediaTrack* tr = (idx >= 0 && idx < trackCount) ? visibleTrackAt(idx) : nullptr;
         const bool sel = tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
         const uint8_t target = sel ? 0xFF : 0x00;
         if (sel) mask |= static_cast<uint16_t>(1 << s);
@@ -9284,7 +9323,7 @@ void onTimer()
             if (instWantOpen) {
                 const int bankOffset   = g_bankOffset.load();
                 const int surfaceCount = visibleTrackCount();
-                const int slot = ownerStrip + bankOffset;
+                const int slot = stripToVisibleSlot(ownerStrip, bankOffset);
                 if (slot >= 0 && slot < surfaceCount) {
                     MediaTrack* stripTr = visibleTrackAt(slot);
                     if (stripTr
@@ -10209,6 +10248,18 @@ void reasixty_setAutoHideReadTrim(bool hide)
     g_bankDirty.store(true);   // visible list may have shrunk/grown
 }
 
+bool reasixty_autoFillFromRight()
+{
+    return g_autoFillFromRight.load();
+}
+
+void reasixty_setAutoFillFromRight(bool fromRight)
+{
+    g_autoFillFromRight.store(fromRight);
+    SetExtState("rea_sixty", "auto_fill_from_right", fromRight ? "1" : "0", true);
+    g_bankDirty.store(true);   // strip→track mapping shifted
+}
+
 bool reasixty_recRmeEnabled()        { return g_recRmeEnabled.load(); }
 bool reasixty_recVpotRotateGain()    { return g_recVpotRotateGain.load(); }
 bool reasixty_recVpotShiftInputCh()  { return g_recVpotShiftInputCh.load(); }
@@ -10467,8 +10518,8 @@ void reasixty_bumpFolderReveal(MediaTrack* tr)
     const int bankOffset = g_bankOffset.load();
     const int64_t until = nowMs_() + kFolderRevealMs;
     for (int s = 0; s < 8; ++s) {
-        const int realSlot = s + bankOffset;
-        if (realSlot >= n) break;
+        const int realSlot = stripToVisibleSlot(s, bankOffset);
+        if (realSlot < 0 || realSlot >= n) continue;
         if (visibleTrackAt(realSlot) == tr) {
             g_folderRevealUntilMs[s] = until;
         }

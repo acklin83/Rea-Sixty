@@ -72,6 +72,8 @@ bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
+bool reasixty_autoFillFromRight();
+void reasixty_setAutoFillFromRight(bool fromRight);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -7396,6 +7398,20 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  Active only while AUTO Selection Mode is engaged. Touch / "
         "Write / Latch / Latch-Preview tracks remain visible.");
+
+    ImGui_Spacing(ctx);
+    bool fillRight = reasixty_autoFillFromRight();
+    if (ImGui_RadioButton(ctx, "Fill from left##auto_fill_left", !fillRight)) {
+        reasixty_setAutoFillFromRight(false);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Fill from right##auto_fill_right", fillRight)) {
+        reasixty_setAutoFillFromRight(true);
+    }
+    ImGui_Text(ctx,
+        "  When fewer visible tracks than the 8 hardware strips, choose "
+        "which side they collect on. Project order is preserved either "
+        "way. Active only while AUTO Selection Mode is engaged.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
