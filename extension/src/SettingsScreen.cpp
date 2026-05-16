@@ -5785,9 +5785,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // override (LED falls back to class default).
             if (ctrl.kind == Uf8Control::SoloBtn ||
                 ctrl.kind == Uf8Control::CutBtn  ||
-                ctrl.kind == Uf8Control::SelBtn  ||
-                ctrl.kind == Uf8Control::BankLeftBtn ||
-                ctrl.kind == Uf8Control::BankRightBtn)
+                ctrl.kind == Uf8Control::SelBtn)
             {
                 const uint32_t curRgb = getUf8Colour_(ctrl.kind, ctrl.strip, bank);
                 ImGui_Text(ctx, "Colour");
@@ -6907,19 +6905,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                              bs && bs->name ? bs->name : "(slot)");
                 }
             }
-            for (int b = 0; b < 6; ++b) {
-                const char* bankName =
-                    (b == 0) ? "V-POT" :
-                    (b == 1) ? "SOFT 1" :
-                    (b == 2) ? "SOFT 2" :
-                    (b == 3) ? "SOFT 3" :
-                    (b == 4) ? "SOFT 4" : "SOFT 5";
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
                 for (int s = 0; s < 8; ++s) {
                     const auto& bs = editing->uf8.banks.banks[b][s];
                     if (bs.vst3Param < 0) continue;
-                    char buf[40];
+                    char buf[48];
                     std::snprintf(buf, sizeof(buf),
-                                  "UF8 %s str %d", bankName, s + 1);
+                                  "UF8 V-Pot bk %d str %d", b + 1, s + 1);
                     noteUse_(bs.vst3Param, buf);
                 }
             }
