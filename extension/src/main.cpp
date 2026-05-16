@@ -3054,6 +3054,24 @@ struct CsStripPick {
     const uf8::PluginMap* map;
     bool               isUser;
 };
+// True when this CS PluginMap has a usable FaderLevel mapping for
+// SSL Strip Mode. Built-in CS variants always do (the fader vst3Param
+// is hardcoded in csFaderForTrack — CS 2=38, 4K G=12, 4K E/B=6).
+// SSL 360 Link CS and user-CS maps go through findSlotByLinkIdx for
+// linkIdx 1 (FaderLevel); an unmapped slot means the plug-in has no
+// fader on UF8 and should be skipped from strip-mode resolution
+// (Frank 2026-05-16). Keep in sync with csFaderForTrack below.
+bool csPluginHasFader_(const uf8::PluginMap& m)
+{
+    const char* sn = m.displayShort;
+    if (std::strcmp(sn, "CS 2") == 0
+     || std::strcmp(sn, "4K G") == 0
+     || std::strcmp(sn, "4K E") == 0
+     || std::strcmp(sn, "4K B") == 0) return true;
+    const auto* sl = uf8::findSlotByLinkIdx(m, 1 /*FaderLevel*/);
+    return sl && sl->vst3Param >= 0;
+}
+
 CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
 {
     CsStripPick out{ -1, nullptr, false };
@@ -3068,6 +3086,12 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     // so making fader / pan / Type label do the same keeps all three
     // pointing at the same instance — cycling to 4K E now also moves
     // the fader and label off the default bx_ssl (Frank 2026-05-14).
+    //
+    // Skip CS maps without a fader on UF8 (csPluginHasFader_ false) so
+    // a user-CS that has no FaderLevel slot doesn't claim the strip and
+    // hide REAPER's track-volume fallback (Frank 2026-05-16). The
+    // instance-cycle counter steps over the same filtered list, which
+    // keeps the cycle visually consistent with what strip mode shows.
     const int wantIdx = uc1::csInstanceIndex(tr);
     int csSeen = 0;
     for (int fx = 0; fx < n; ++fx) {
@@ -3076,6 +3100,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
         if (buf[0] == 0) continue;
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
+        if (!csPluginHasFader_(*m)) continue;
         if (csSeen == wantIdx) {
             const uf8::UserPluginMap* owned =
                 uf8::user_plugins::lookupOwnedByName(buf);
@@ -3096,6 +3121,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
         if (buf[0] == 0) continue;
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
+        if (!csPluginHasFader_(*m)) continue;
 
         const uf8::UserPluginMap* owned = uf8::user_plugins::lookupOwnedByName(buf);
         if (owned) {
