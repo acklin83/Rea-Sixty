@@ -512,6 +512,16 @@ std::atomic<int>  g_selsetActive{0};
 enum class SelSetType : uint8_t { Snapshot = 0, Group = 1 };
 struct SelSet {
     SelSetType type     = SelSetType::Snapshot;
+    // global = false: content stored in ProjExtState (per-project, only
+    //   persisted to disk when the project is saved).
+    // global = true:  content stored in ExtState (workspace-global,
+    //   written to reaper-extstate.ini immediately, survives REAPER
+    //   restarts and project switches). Mainly useful for Group slots —
+    //   "tracks in REAPER group N" is a per-project concept, so the
+    //   surface follows whichever project you're in.
+    // The flag itself ALWAYS persists in ExtState so we know which key
+    // to read from on next load.
+    bool global         = false;
     std::string name;                 // "" = empty slot
     std::vector<std::string> guids;   // Snapshot only
     int groupIdx        = 1;          // Group only, 1..64
@@ -694,36 +704,69 @@ void selsetDeserialize_(const char* raw, SelSet& out) {
     }
 }
 
+// Storage routing helpers. Flag key is ALWAYS in ExtState so we know
+// which content key to read from on load. Content lives in either
+// ExtState (global) or ProjExtState (per-project) based on the flag.
+inline void selsetKeyFlag_(int slot, char* out, size_t n) {
+    std::snprintf(out, n, "selset_%d_scope", slot);
+}
+inline void selsetKeyDataGlobal_(int slot, char* out, size_t n) {
+    std::snprintf(out, n, "selset_%d_data", slot);
+}
+inline void selsetKeyDataProject_(int slot, char* out, size_t n) {
+    std::snprintf(out, n, "selset_%d", slot);
+}
+
 void selsetWriteToProject_(int slot1to8) {
     if (slot1to8 < 1 || slot1to8 > 8) return;
     const SelSet& s = g_selsets[slot1to8 - 1];
-    char key[32];
-    std::snprintf(key, sizeof(key), "selset_%d", slot1to8);
-    if (s.name.empty() && s.guids.empty()
-        && s.type == SelSetType::Snapshot)
-    {
-        // Empty slot — clear the project key so it doesn't bloat the
-        // .rpp. SetProjExtState with empty value removes the entry.
-        SetProjExtState(nullptr, "rea_sixty", key, "");
-        return;
+    // Persist the scope flag so the next load reads from the right key.
+    char flagKey[32];
+    selsetKeyFlag_(slot1to8, flagKey, sizeof(flagKey));
+    SetExtState("rea_sixty", flagKey, s.global ? "global" : "project", true);
+
+    const bool isEmpty = s.name.empty() && s.guids.empty()
+                      && s.type == SelSetType::Snapshot;
+    const std::string serialized = isEmpty ? "" : selsetSerialize_(s);
+
+    char globalKey[32], projKey[32];
+    selsetKeyDataGlobal_ (slot1to8, globalKey, sizeof(globalKey));
+    selsetKeyDataProject_(slot1to8, projKey,   sizeof(projKey));
+    if (s.global) {
+        // Global write + clear the project-scoped key so the slot's
+        // content lives in exactly one place. Avoids stale duplicates
+        // if the user toggles back and forth.
+        SetExtState("rea_sixty", globalKey, serialized.c_str(), true);
+        SetProjExtState(nullptr, "rea_sixty", projKey, "");
+    } else {
+        SetProjExtState(nullptr, "rea_sixty", projKey, serialized.c_str());
+        SetExtState("rea_sixty", globalKey, "", true);
     }
-    SetProjExtState(nullptr, "rea_sixty", key,
-                    selsetSerialize_(s).c_str());
 }
 
 void loadSelsetsFromProject_() {
     ReaProject* proj = EnumProjects(-1, nullptr, 0);
     for (int i = 1; i <= 8; ++i) {
-        char key[32];
-        std::snprintf(key, sizeof(key), "selset_%d", i);
+        char flagKey[32], globalKey[32], projKey[32];
+        selsetKeyFlag_(i,        flagKey,   sizeof(flagKey));
+        selsetKeyDataGlobal_(i,  globalKey, sizeof(globalKey));
+        selsetKeyDataProject_(i, projKey,   sizeof(projKey));
+        const char* flagStr = GetExtState("rea_sixty", flagKey);
+        const bool isGlobal = flagStr && *flagStr
+                            && std::strcmp(flagStr, "global") == 0;
         char val[8192] = {0};
-        const int r = GetProjExtState(proj, "rea_sixty", key,
-                                      val, sizeof(val));
-        if (r > 0 && val[0]) {
+        if (isGlobal) {
+            const char* d = GetExtState("rea_sixty", globalKey);
+            if (d && *d) std::strncpy(val, d, sizeof(val) - 1);
+        } else {
+            GetProjExtState(proj, "rea_sixty", projKey, val, sizeof(val));
+        }
+        if (val[0]) {
             selsetDeserialize_(val, g_selsets[i - 1]);
         } else {
             g_selsets[i - 1] = SelSet{};
         }
+        g_selsets[i - 1].global = isGlobal;
     }
     g_selsetsLoadedFor = proj;
     g_selsetsDirty.store(false);
@@ -10892,6 +10935,21 @@ void reasixty_setAutoFillFromRight(bool fromRight)
 // (g_bankDirty) if the change is visible. Slot index N is 1..8.
 
 int  reasixty_selsetActive() { return g_selsetActive.load(); }
+
+bool reasixty_selsetGlobal(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return false;
+    return g_selsets[slot1to8 - 1].global;
+}
+void reasixty_setSelsetGlobal(int slot1to8, bool global)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    if (g_selsets[slot1to8 - 1].global == global) return;
+    g_selsets[slot1to8 - 1].global = global;
+    // selsetWriteToProject_ already migrates content to the new key
+    // and clears the old one — single-source-of-truth guarantee.
+    selsetWriteToProject_(slot1to8);
+}
 
 int  reasixty_selsetType(int slot1to8)
 {

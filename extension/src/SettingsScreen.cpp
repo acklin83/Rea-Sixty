@@ -82,6 +82,8 @@ int  reasixty_cycleControlMask();
 void reasixty_setCycleControlMask(int mask);
 // Selection-Set exports — Phase 2.5b. All slot args are 1..8.
 int         reasixty_selsetActive();
+bool        reasixty_selsetGlobal(int slot);
+void        reasixty_setSelsetGlobal(int slot, bool global);
 int         reasixty_selsetType(int slot);                 // 0=Snapshot, 1=Group
 void        reasixty_setSelsetType(int slot, int type);
 const char* reasixty_selsetName(int slot);
@@ -7615,9 +7617,12 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "Eight project-scoped slots. Recall toggles — press the active "
-        "slot's button again to deactivate. Slot filter ANDs with Folder "
-        "Mode / Show-Only-Selected / AUTO-mode filters.");
+        "Eight slots. Recall toggles — press the active slot's button "
+        "again to deactivate. Filter ANDs with Folder Mode / "
+        "Show-Only-Selected / AUTO-mode filters.");
+    ImGui_Text(ctx,
+        "  Global = workspace-wide, persists immediately. "
+        "Unchecked = project-scoped, persists with project save.");
     ImGui_Spacing(ctx);
 
     const int active = reasixty_selsetActive();
@@ -7632,6 +7637,17 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         std::snprintf(header, sizeof(header), "%s Slot %d",
                       (active == slot) ? "•" : " ", slot);
         ImGui_Text(ctx, header);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Global checkbox — when on, the slot's content lives in
+        // ExtState (workspace-global, persisted immediately). When off,
+        // ProjExtState (per-project, only written to disk on project
+        // save). Group slots benefit most from Global since "group N"
+        // is a stable concept across projects.
+        bool isGlobal = reasixty_selsetGlobal(slot);
+        if (ImGui_Checkbox(ctx, "Global##gl", &isGlobal)) {
+            reasixty_setSelsetGlobal(slot, isGlobal);
+        }
         ImGui_SameLine(ctx, nullptr, nullptr);
 
         // Type picker — Snapshot or Group. Default Snapshot.
