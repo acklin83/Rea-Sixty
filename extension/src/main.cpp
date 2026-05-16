@@ -601,6 +601,13 @@ void rebuildVisibleTrackList() {
 // param names for GetSetTrackGroupMembership / *High.
 inline const char* const* selsetGroupCategories_(int* outCount) {
     static const char* kCats[] = {
+        // Media / razor-edit grouping (Frank 2026-05-16). Most projects
+        // assign tracks to a group via the TCP context menu's "Track
+        // Grouping Parameters" → Media/Razor Edits checkbox, NOT via
+        // the per-parameter Lead/Follow rows. Without these two
+        // categories the live track count stays 0 even when REAPER
+        // shows the tracks as group members.
+        "MEDIA_EDIT_LEAD",  "MEDIA_EDIT_FOLLOW",
         "VOLUME_LEAD",      "VOLUME_FOLLOW",
         "VOLUME_VCA_LEAD",  "VOLUME_VCA_FOLLOW",
         "PAN_LEAD",         "PAN_FOLLOW",
