@@ -59,6 +59,12 @@
 // also call reasixty_actionPickerStart / Cancel / etc.
 void reasixty_actionPickerPoll();
 
+// Forward-declared so the encoder-rotation drain (further up) and
+// UC1Surface.cpp can both route physical-control deltas through the same
+// focused-track helper. Defined further down with the other reasixty_*
+// helpers.
+bool reasixty_dispatchSelModeCycle(int step);
+
 // rec->GetFunc capture for SWELL/BrowseForSaveFile lookups. Defined at
 // file scope (not inside any anonymous namespace) so the SWELL-API
 // loader helpers further down — which sit in the first anonymous
@@ -169,6 +175,25 @@ int   g_instanceGuiShownOpenMode = -1;   // -1=closed, 0=floating, 1=chain
 //                              return to Cycle.
 std::atomic<int>  g_cycleOpenMode{0};
 std::atomic<bool> g_cycleEngagesUf8{false};
+
+// Settings → Modes → "FX / Instance Cycle" → control surface routing.
+// Bitmask of which physical controls drive the cycle while SelectionMode
+// is Instance or InstanceCycle. Multi-select — any subset can be active.
+// Default 0x01 (V-POTS only) preserves the pre-2026-05-16 behaviour.
+//   bit 0 (0x01) = UF8 V-POTS (per-strip cycle on each track)
+//   bit 1 (0x02) = UF8 Channel Encoder (focused-track scope)
+//   bit 2 (0x04) = UC1 Encoder 1 / CHANNEL  (focused-track scope)
+//   bit 3 (0x08) = UC1 Encoder 2 / BC       (focused-track scope)
+// When a bit is OFF, that control keeps its normal-state behaviour even
+// while SEL Mode is engaged (V-POTS fall through to Pan; UC1 Enc1 keeps
+// track-select; UF8/UC1 Enc2 keep their bindings dispatch). When ON,
+// rotation in SEL Mode overrides those defaults and drives the cycle.
+constexpr uint8_t kCycleCtrlVpots    = 0x01;
+constexpr uint8_t kCycleCtrlUf8Enc   = 0x02;
+constexpr uint8_t kCycleCtrlUc1Enc1  = 0x04;
+constexpr uint8_t kCycleCtrlUc1Enc2  = 0x08;
+constexpr uint8_t kCycleCtrlMaskAll  = 0x0F;
+std::atomic<uint8_t> g_cycleControlMask{kCycleCtrlVpots};
 
 // IReaperControlSurface subclass registered as a full control surface
 // class ("Rea-Sixty") so users see and add it like any other surface.
@@ -1072,6 +1097,10 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("ReaSixty", "cycleEngagesUf8"); v && *v) {
         g_cycleEngagesUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("ReaSixty", "cycleControlMask"); v && *v) {
+        const int m = std::atoi(v) & kCycleCtrlMaskAll;
+        g_cycleControlMask.store(static_cast<uint8_t>(m));
     }
     const char* selm = GetExtState("ReaSixty", "selectionMode");
     if (selm && *selm) {
@@ -2220,6 +2249,24 @@ ActiveFxTarget resolveActiveFx_()
 
 void applyShowFocusedPluginGui_()
 {
+    // Toggle-off path for UF8 Plugin Mode. When the button is bound to
+    // this builtin and UF8 Plugin Mode is currently engaged, the press
+    // disengages it (mirrors uf8_plugin_mode_toggle_with_gui's exit
+    // branch). Without this, a button that auto-engaged UF8 Plugin Mode
+    // via the cycleEngagesUf8 path on the previous press is stuck —
+    // the second press would just toggle the floating window without
+    // leaving UF8 Plugin Mode. Frank 2026-05-16.
+    if (g_uf8PluginMode.load()) {
+        g_uf8PluginMode.store(false);
+        g_uf8PluginModeWithGui.store(false);
+        restoreSelModeAfterUf8PluginMode_();
+        g_pageDirty.store(true);
+        g_bankDirty.store(true);
+        SetExtState("ReaSixty", "uf8PluginMode", "0", true);
+        g_pluginGuiSyncRequest.store(true);
+        return;
+    }
+
     // Target resolution:
     //   1) REAPER's currently-focused FX window (GetFocusedFX2) — works
     //      for ANY FX type, not just SSL Instances. Frank 2026-05-16:
@@ -2267,6 +2314,28 @@ void applyShowFocusedPluginGui_()
     {
         TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
                      g_focusedGuiShownFx, 2);
+    }
+    // Auto-engage UF8 Plugin Mode — same trigger as the V-Pot cycle
+    // path (Settings → Modes → "Auto-engage UF8 Plugin Mode for
+    // UF8-mapped plug-ins"). Without this, the toggle was inconsistent:
+    // cycle-via-V-Pot honoured it but UC1 Encoder 2 push (and any other
+    // binding to show_focused_plugin_gui) ignored it. Open the FX first
+    // so engageUf8PluginMode_'s GetFocusedFX2 pivot lands on the right
+    // Instance, then hand ownership over. The user exits UF8 Plugin Mode
+    // explicitly to return to the prior state — same as the cycle path.
+    if (g_cycleEngagesUf8.load() && !g_uf8PluginMode.load()) {
+        char fxName[512] = {0};
+        if (TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) {
+            const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+            if (um && um->uf8Mode) {
+                TrackFX_Show(tr, fxIdx, /*float window*/ 3);
+                pinFxGuiIfEnabled_(tr, fxIdx);
+                engageUf8PluginMode_(/*withGui*/ true);
+                g_focusedGuiShownTr = tr;
+                g_focusedGuiShownFx = fxIdx;
+                return;
+            }
+        }
     }
     TrackFX_Show(tr, fxIdx, /*float window*/ 3);
     pinFxGuiIfEnabled_(tr, fxIdx);
@@ -2837,8 +2906,22 @@ void drainInputQueue()
             if (g_encoderAccum >=  1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (g_encoderAccum <= -1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (step != 0) {
-                uf8::bindings::dispatchEncoder(
-                    uf8::bindings::ButtonId::ChannelEncoder, step);
+                // SEL Mode override: when Settings → Modes → FX/Instance
+                // Cycle has the UF8 Channel Encoder bit ticked, an
+                // Instance / InstanceCycle SelectionMode hijacks the
+                // encoder away from its bindings (encoder_mode_dispatch
+                // / etc.) and drives the cycle on the focused track.
+                // Bindings dispatch resumes the moment SEL Mode leaves.
+                const bool encCycle =
+                    (g_cycleControlMask.load() & kCycleCtrlUf8Enc) != 0;
+                bool routed = false;
+                if (encCycle) {
+                    routed = reasixty_dispatchSelModeCycle(step);
+                }
+                if (!routed) {
+                    uf8::bindings::dispatchEncoder(
+                        uf8::bindings::ButtonId::ChannelEncoder, step);
+                }
             }
             continue;
         }
@@ -4771,27 +4854,38 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                 handledTr = true;
                             }
                         }
-                        if (!handledTr) switch (selMode) {
-                            case SelectionMode::Auto:
-                                queueInput({PendingInput::AutoModeSet,
-                                            strip, 0.0});
-                                break;
-                            case SelectionMode::Instance:
-                            case SelectionMode::InstanceCycle:
-                                // Push semantics are identical for both
-                                // cycle modes — toggle the cursor's GUI
-                                // via the shared g_instanceGuiOwnerStrip
-                                // ownership channel.
-                                queueInput({PendingInput::StripInstanceOpen,
-                                            strip, 0.0});
-                                break;
-                            case SelectionMode::Norm:
-                            case SelectionMode::Rec:
-                            case SelectionMode::RecMon:
-                            default:
-                                queueInput({PendingInput::PanCenter,
-                                            strip, 0.0});
-                                break;
+                        if (!handledTr) {
+                            const bool vpotsCycle =
+                                (g_cycleControlMask.load() & kCycleCtrlVpots) != 0;
+                            switch (selMode) {
+                                case SelectionMode::Auto:
+                                    queueInput({PendingInput::AutoModeSet,
+                                                strip, 0.0});
+                                    break;
+                                case SelectionMode::Instance:
+                                case SelectionMode::InstanceCycle:
+                                    // Push semantics are identical for both
+                                    // cycle modes — toggle the cursor's GUI
+                                    // via the shared g_instanceGuiOwnerStrip
+                                    // ownership channel. Gated on V-POTS bit
+                                    // so unticking V-POTS in Settings disables
+                                    // BOTH rotation and push for consistency.
+                                    if (vpotsCycle) {
+                                        queueInput({PendingInput::StripInstanceOpen,
+                                                    strip, 0.0});
+                                    } else {
+                                        queueInput({PendingInput::PanCenter,
+                                                    strip, 0.0});
+                                    }
+                                    break;
+                                case SelectionMode::Norm:
+                                case SelectionMode::Rec:
+                                case SelectionMode::RecMon:
+                                default:
+                                    queueInput({PendingInput::PanCenter,
+                                                strip, 0.0});
+                                    break;
+                            }
                         }
                     }
                     handledNatively = true;
@@ -4979,29 +5073,43 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     queueInput({PendingInput::TotalReaperGainDelta,
                                 strip,
                                 static_cast<double>(signed6)});
-                } else switch (selMode) {
-                    case SelectionMode::Auto:
-                        queueInput({PendingInput::AutoModeDelta,
-                                    strip,
-                                    static_cast<double>(signed6)});
-                        break;
-                    case SelectionMode::Instance:
-                        queueInput({PendingInput::StripInstanceDelta,
-                                    strip,
-                                    static_cast<double>(signed6)});
-                        break;
-                    case SelectionMode::InstanceCycle:
-                        queueInput({PendingInput::StripInstanceCycleDelta,
-                                    strip,
-                                    static_cast<double>(signed6)});
-                        break;
-                    case SelectionMode::Norm:
-                    case SelectionMode::Rec:
-                    case SelectionMode::RecMon:
-                    default:
-                        queueInput({PendingInput::PanDelta, strip,
-                                    static_cast<double>(signed6) / 128.0});
-                        break;
+                } else {
+                    const bool vpotsCycle =
+                        (g_cycleControlMask.load() & kCycleCtrlVpots) != 0;
+                    switch (selMode) {
+                        case SelectionMode::Auto:
+                            queueInput({PendingInput::AutoModeDelta,
+                                        strip,
+                                        static_cast<double>(signed6)});
+                            break;
+                        case SelectionMode::Instance:
+                            if (vpotsCycle) {
+                                queueInput({PendingInput::StripInstanceDelta,
+                                            strip,
+                                            static_cast<double>(signed6)});
+                            } else {
+                                queueInput({PendingInput::PanDelta, strip,
+                                            static_cast<double>(signed6) / 128.0});
+                            }
+                            break;
+                        case SelectionMode::InstanceCycle:
+                            if (vpotsCycle) {
+                                queueInput({PendingInput::StripInstanceCycleDelta,
+                                            strip,
+                                            static_cast<double>(signed6)});
+                            } else {
+                                queueInput({PendingInput::PanDelta, strip,
+                                            static_cast<double>(signed6) / 128.0});
+                            }
+                            break;
+                        case SelectionMode::Norm:
+                        case SelectionMode::Rec:
+                        case SelectionMode::RecMon:
+                        default:
+                            queueInput({PendingInput::PanDelta, strip,
+                                        static_cast<double>(signed6) / 128.0});
+                            break;
+                    }
                 }
             } else if (strip == 0x08) {
                 // Channel encoder — dispatched through the bindings
@@ -10522,6 +10630,37 @@ void reasixty_setCycleEngagesUf8(bool on)
 {
     g_cycleEngagesUf8.store(on);
     SetExtState("ReaSixty", "cycleEngagesUf8", on ? "1" : "0", true);
+}
+
+int  reasixty_cycleControlMask() { return static_cast<int>(g_cycleControlMask.load()); }
+void reasixty_setCycleControlMask(int mask)
+{
+    const uint8_t m = static_cast<uint8_t>(mask & kCycleCtrlMaskAll);
+    g_cycleControlMask.store(m);
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(m));
+    SetExtState("ReaSixty", "cycleControlMask", buf, true);
+}
+
+// Dispatch a signed-step cycle for SEL Mode → Instance / InstanceCycle.
+// Used by callers (UC1Surface) that want to route their physical control
+// through the same focused-track helper UF8 Channel Encoder uses. Returns
+// true iff SelectionMode was Instance or InstanceCycle (i.e. the step was
+// consumed). Bit-mask gating is the caller's job — this helper only knows
+// about the SelectionMode.
+bool reasixty_dispatchSelModeCycle(int step)
+{
+    if (step == 0) return true;   // accept but no-op so caller still suppresses default
+    const auto mode = g_selectionMode.load();
+    if (mode == SelectionMode::Instance) {
+        applyInstanceCycle_(step);
+        return true;
+    }
+    if (mode == SelectionMode::InstanceCycle) {
+        applyFxCycle_(step);
+        return true;
+    }
+    return false;
 }
 
 bool reasixty_recRmeEnabled()        { return g_recRmeEnabled.load(); }

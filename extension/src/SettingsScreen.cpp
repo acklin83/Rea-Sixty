@@ -78,6 +78,8 @@ int  reasixty_cycleOpenMode();
 void reasixty_setCycleOpenMode(int mode);
 bool reasixty_cycleEngagesUf8();
 void reasixty_setCycleEngagesUf8(bool on);
+int  reasixty_cycleControlMask();
+void reasixty_setCycleControlMask(int mask);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -7440,10 +7442,39 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx, "FX / INSTANCE CYCLE");
     ImGui_Separator(ctx);
     ImGui_Text(ctx,
-        "Applies to both Sel-Mode FX Cycle and Instance Cycle. V-Pot push "
-        "opens the cycle's active FX in the chosen view.");
+        "Active only while SEL Mode is on FX Cycle or Instance Cycle. "
+        "Pick which physical controls drive the cycle; the active FX "
+        "opens in the chosen view (V-Pot push only).");
     ImGui_Spacing(ctx);
 
+    // Controls — multi-select. Bit 0 = V-POTS, 1 = UF8 Channel Encoder,
+    // 2 = UC1 Encoder 1, 3 = UC1 Encoder 2. Unticked controls keep their
+    // normal-state behaviour even while SEL Mode is engaged.
+    constexpr int kBitVpots   = 0x01;
+    constexpr int kBitUf8Enc  = 0x02;
+    constexpr int kBitUc1Enc1 = 0x04;
+    constexpr int kBitUc1Enc2 = 0x08;
+    int ctlMask = reasixty_cycleControlMask();
+    ImGui_Text(ctx, "Controls (multi-select):");
+    auto bitToggle = [&](const char* label, int bit) {
+        bool on = (ctlMask & bit) != 0;
+        if (ImGui_Checkbox(ctx, label, &on)) {
+            if (on) ctlMask |=  bit;
+            else    ctlMask &= ~bit;
+            reasixty_setCycleControlMask(ctlMask);
+        }
+    };
+    bitToggle("UF8 V-Pots (per-strip cycle)##cycle_ctl_vpots", kBitVpots);
+    bitToggle("UF8 Channel Encoder##cycle_ctl_uf8enc",         kBitUf8Enc);
+    bitToggle("UC1 Encoder 1 (CHANNEL)##cycle_ctl_uc1enc1",    kBitUc1Enc1);
+    bitToggle("UC1 Encoder 2 (BC)##cycle_ctl_uc1enc2",         kBitUc1Enc2);
+    ImGui_Text(ctx,
+        "  V-Pots cycle per-strip (each strip's own track). The three "
+        "single encoders cycle the focused track and override their "
+        "normal function while SEL Mode is engaged.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "V-Pot push opens active FX as:");
     int openMode = reasixty_cycleOpenMode();
     if (ImGui_RadioButton(ctx, "Floating window##cycle_open_float",
                           openMode == 0))
@@ -7458,6 +7489,12 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
 
     ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "PLUG-IN GUI");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "Not tied to a Selection Mode — applies whenever the rule fires.");
+    ImGui_Spacing(ctx);
     bool engageUf8 = reasixty_cycleEngagesUf8();
     if (ImGui_Checkbox(ctx,
         "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
@@ -7466,11 +7503,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         reasixty_setCycleEngagesUf8(engageUf8);
     }
     ImGui_Text(ctx,
-        "  When the cycle's V-Pot push lands on a UF8-mapped plug-in, "
-        "also engage UF8");
+        "  When the SEL-Mode cycle V-Pot push OR any \"Toggle focused "
+        "plug-in GUI\"");
     ImGui_Text(ctx,
-        "  Plugin Mode (with GUI). Exit UF8 Plugin Mode to return "
-        "to Cycle.");
+        "  binding (UC1 Encoder 2 push, etc.) lands on a UF8-mapped "
+        "plug-in, also");
+    ImGui_Text(ctx,
+        "  engage UF8 Plugin Mode (with GUI). Press the same button "
+        "again to exit.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

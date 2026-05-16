@@ -22,6 +22,16 @@
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+// Settings → Modes → FX/Instance Cycle — controls-routing bitmask. Bit 2
+// = UC1 Encoder 1 (CHANNEL), bit 3 = UC1 Encoder 2 (BC). When set AND
+// SelectionMode is Instance / InstanceCycle, the encoder rotation drives
+// applyInstanceCycle_ / applyFxCycle_ on the focused track instead of
+// its normal behaviour (track-scroll for Enc1, bindings dispatch for
+// Enc2). Mirror of the bit constants in main.cpp.
+int  reasixty_cycleControlMask();
+bool reasixty_dispatchSelModeCycle(int step);
+constexpr int kCycleCtrlUc1Enc1 = 0x04;
+constexpr int kCycleCtrlUc1Enc2 = 0x08;
 // Per-tick device calibration (Settings → Device → Calibrate BC/CS).
 // section: 0=BC VU (6 ticks 0/4/8/12/16/20 dB), 1=CS LEDs (5 ticks
 // 3/6/10/14/20 dB). Active test: -1 normal, 0..5 = force BC tick,
@@ -511,6 +521,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point lastT{};
         int step = stepFromAccumulator(acc, lastT, 4);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
+        // SEL Mode override — when bit 2 (UC1 Encoder 1) is ticked in
+        // Settings → Modes → FX/Instance Cycle AND SelectionMode is
+        // Instance / InstanceCycle, hijack the encoder away from track
+        // scroll and drive the cycle on the focused track. Skip every
+        // track-scroll side effect (overlay flags, redraw signals,
+        // setFocusedTrack) — applyFxCycle_ / applyInstanceCycle_ handle
+        // their own invalidation.
+        if ((reasixty_cycleControlMask() & kCycleCtrlUc1Enc1) != 0
+            && reasixty_dispatchSelModeCycle(step))
+        {
+            ++stats_.knobEventsHandled;
+            return;
+        }
         // Per uc1_47 capture every Encoder 1 detent ends with FF 66 01 0F
         // (zone 0x0F invalidate). Without it the CS-carousel small-
         // triple scroll doesn't visually animate on the UC1 LCD —
@@ -836,6 +859,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point lastT{};
         int step = stepFromAccumulator(acc, lastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
+        // SEL Mode override — when bit 3 (UC1 Encoder 2) is ticked in
+        // Settings → Modes → FX/Instance Cycle AND SelectionMode is
+        // Instance / InstanceCycle, hijack the encoder away from its
+        // bindings (fx_cycle / bc_track_scroll / etc.) and drive the
+        // cycle on the focused track. Bindings dispatch resumes the
+        // moment SEL Mode leaves.
+        if ((reasixty_cycleControlMask() & kCycleCtrlUc1Enc2) != 0
+            && reasixty_dispatchSelModeCycle(step))
+        {
+            ++stats_.knobEventsHandled;
+            return;
+        }
         // Bindings-routed dispatch (Uc1Encoder2). Falls back to the
         // legacy BC-track-scroll when no binding exists (older
         // bindings.json files saved before this surface became
