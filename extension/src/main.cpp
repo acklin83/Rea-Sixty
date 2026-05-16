@@ -599,6 +599,20 @@ void rebuildVisibleTrackList() {
         }
         g_visibleTracks.push_back(tr);
     }
+
+    // Clamp bankOffset when a filter (selset / show-only-selected /
+    // folder mode) shrinks the list past the current offset, so the
+    // surface doesn't end up with every strip empty. Only fires when
+    // ALL strips would be empty (curOff >= vc) — partial-fill banks
+    // (e.g. vc=10 + off=8 showing 2 tracks on strips 0-1) are valid
+    // user-intended positions and stay untouched. Frank 2026-05-16.
+    const int vc     = static_cast<int>(g_visibleTracks.size());
+    const int curOff = g_bankOffset.load();
+    const int maxOff = (vc > 8) ? vc - 8 : 0;
+    if (curOff >= vc && curOff > maxOff) {
+        g_bankOffset.store(maxOff);
+        g_bankDirty.store(true);
+    }
 }
 
 // ---- Selection-Set helpers ------------------------------------------------
