@@ -659,21 +659,28 @@ std::string trackGuidStr_(MediaTrack* tr) {
     return std::string(buf);
 }
 
+// Serialize a slot as TAB-separated fields. We initially used '\n' as
+// the delimiter, but global slots ride ExtState (reaper-extstate.ini),
+// which is line-oriented and silently truncates / corrupts multi-line
+// values. Tab is safe in both ExtState (.ini) and ProjExtState
+// (rpp-embedded). Field 0 = type ("group"|"snapshot"), field 1 = name,
+// field 2..N = groupIdx (Group) or one GUID per field (Snapshot).
+inline constexpr char kSelsetDelim = '\t';
 std::string selsetSerialize_(const SelSet& s) {
     std::string out;
     out.reserve(64 + s.guids.size() * 40);
-    out += (s.type == SelSetType::Group) ? "group\n" : "snapshot\n";
+    out += (s.type == SelSetType::Group) ? "group" : "snapshot";
+    out += kSelsetDelim;
     out += s.name;
-    out += '\n';
+    out += kSelsetDelim;
     if (s.type == SelSetType::Group) {
         char num[16];
         std::snprintf(num, sizeof(num), "%d", s.groupIdx);
         out += num;
-        out += '\n';
     } else {
-        for (const auto& g : s.guids) {
-            out += g;
-            out += '\n';
+        for (size_t i = 0; i < s.guids.size(); ++i) {
+            if (i > 0) out += kSelsetDelim;
+            out += s.guids[i];
         }
     }
     return out;
@@ -683,22 +690,25 @@ void selsetDeserialize_(const char* raw, SelSet& out) {
     out = SelSet{};
     if (!raw || !*raw) return;
     std::string s(raw);
-    auto popLine = [&]() -> std::string {
-        auto p = s.find('\n');
-        std::string line = (p == std::string::npos) ? s : s.substr(0, p);
+    // Back-compat: pre-2026-05-16 format used '\n' as delimiter. If we
+    // see one, convert in-place so old ProjExtState payloads still load.
+    for (auto& c : s) if (c == '\n') c = kSelsetDelim;
+    auto popField = [&]() -> std::string {
+        auto p = s.find(kSelsetDelim);
+        std::string field = (p == std::string::npos) ? s : s.substr(0, p);
         s.erase(0, (p == std::string::npos) ? s.size() : p + 1);
-        return line;
+        return field;
     };
-    const std::string typeStr = popLine();
+    const std::string typeStr = popField();
     out.type = (typeStr == "group") ? SelSetType::Group : SelSetType::Snapshot;
-    out.name = popLine();
+    out.name = popField();
     if (out.type == SelSetType::Group) {
-        const std::string n = popLine();
+        const std::string n = popField();
         out.groupIdx = std::atoi(n.c_str());
         if (out.groupIdx < 1 || out.groupIdx > 64) out.groupIdx = 1;
     } else {
         while (!s.empty()) {
-            std::string g = popLine();
+            std::string g = popField();
             if (!g.empty()) out.guids.push_back(std::move(g));
         }
     }
@@ -829,10 +839,12 @@ void drainSelsets_() {
         g_selsetActive.store(0);
         g_selsetActiveGuids.clear();
         g_bankDirty.store(true);
+        g_pageDirty.store(true);   // re-paint global LEDs (selset_recall stateOf flipped)
     } else if (actReq >= 1 && actReq <= 8) {
         g_selsetActive.store(actReq);
         refreshActiveSelsetGuids_();
         g_bankDirty.store(true);
+        g_pageDirty.store(true);
     }
     // Group slots: re-resolve every tick so adding/removing tracks
     // from the group in REAPER shows on the surface without a recall.
