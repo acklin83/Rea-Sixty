@@ -74,6 +74,10 @@ bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_autoFillFromRight();
 void reasixty_setAutoFillFromRight(bool fromRight);
+int  reasixty_cycleOpenMode();
+void reasixty_setCycleOpenMode(int mode);
+bool reasixty_cycleEngagesUf8();
+void reasixty_setCycleEngagesUf8(bool on);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -96,6 +100,12 @@ void reasixty_getPluginGuiPin(int* x, int* y);
 bool reasixty_capturePluginGuiPin();
 bool reasixty_pluginGuiPinCenter();
 void reasixty_setPluginGuiPinCenter(bool on);
+bool reasixty_fxChainPinPos();
+void reasixty_setFxChainPinPos(bool on);
+void reasixty_getFxChainPin(int* x, int* y);
+bool reasixty_captureFxChainPin();
+bool reasixty_fxChainPinCenter();
+void reasixty_setFxChainPinCenter(bool on);
 bool reasixty_folderMode();
 void reasixty_setFolderMode(bool on);
 bool reasixty_showOnlySelected();
@@ -303,6 +313,42 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (ImGui_Button(ctx, "Center on Screen",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
             reasixty_setPluginGuiPinCenter(true);
+        }
+    }
+
+    // Pin FX-chain window position — parallel to the floating-window
+    // pin above. Separate atomics because chain windows are typically
+    // larger and live at a different captured position. Implementation
+    // finds the chain HWND via NSApp.windows title-match (REAPER's chain
+    // titles start with "FX:" on macOS).
+    bool fxcp = reasixty_fxChainPinPos();
+    if (ImGui_Checkbox(ctx, "Pin FX-chain GUI position", &fxcp)) {
+        reasixty_setFxChainPinPos(fxcp);
+    }
+    {
+        int cx = -1, cy = -1;
+        reasixty_getFxChainPin(&cx, &cy);
+        const bool chainCenter = reasixty_fxChainPinCenter();
+        char hint[96];
+        if (chainCenter) {
+            std::snprintf(hint, sizeof(hint), "  Pin: center");
+        } else if (cx < 0 || cy < 0) {
+            std::snprintf(hint, sizeof(hint),
+                "  Pin: (none captured yet)");
+        } else {
+            std::snprintf(hint, sizeof(hint),
+                "  Pin: %d, %d", cx, cy);
+        }
+        ImGui_Text(ctx, hint);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Capture current##fx_chain_pin",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_captureFxChainPin();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Center on Screen##fx_chain_pin",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_setFxChainPinCenter(true);
         }
     }
 
@@ -7388,6 +7434,43 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  When fewer visible tracks than the 8 hardware strips, choose "
         "which side they collect on. Project order is preserved either "
         "way. Active only while AUTO Selection Mode is engaged.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "FX / INSTANCE CYCLE");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "Applies to both Sel-Mode FX Cycle and Instance Cycle. V-Pot push "
+        "opens the cycle's active FX in the chosen view.");
+    ImGui_Spacing(ctx);
+
+    int openMode = reasixty_cycleOpenMode();
+    if (ImGui_RadioButton(ctx, "Floating window##cycle_open_float",
+                          openMode == 0))
+    {
+        reasixty_setCycleOpenMode(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "FX chain##cycle_open_chain",
+                          openMode == 1))
+    {
+        reasixty_setCycleOpenMode(1);
+    }
+
+    ImGui_Spacing(ctx);
+    bool engageUf8 = reasixty_cycleEngagesUf8();
+    if (ImGui_Checkbox(ctx,
+        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
+        &engageUf8))
+    {
+        reasixty_setCycleEngagesUf8(engageUf8);
+    }
+    ImGui_Text(ctx,
+        "  When the cycle's V-Pot push lands on a UF8-mapped plug-in, "
+        "also engage UF8");
+    ImGui_Text(ctx,
+        "  Plugin Mode (with GUI). Exit UF8 Plugin Mode to return "
+        "to Cycle.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

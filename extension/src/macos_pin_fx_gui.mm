@@ -100,4 +100,32 @@ void macosGetScreenSize(int* w, int* h)
     }
 }
 
+// Find a REAPER FX-chain window by track name. REAPER titles its
+// chain windows "FX: <track-name>" on macOS. When trackName is non-empty
+// we require the title to contain it (handles multiple open chains);
+// otherwise the front-most "FX: …" window wins (covers the just-opened
+// case after TrackFX_Show(.., 1) where the chain has just gained
+// focus). Returns nil when nothing visible matches.
+void* macosFindFxChainWindow(const char* trackName)
+{
+    @autoreleasepool {
+        NSString* filter = nil;
+        if (trackName && *trackName) {
+            filter = [NSString stringWithUTF8String:trackName];
+        }
+        for (NSWindow* w in [NSApp orderedWindows]) {
+            if (![w isVisible]) continue;
+            NSString* title = [w title];
+            if (!title || ![title hasPrefix:@"FX: "]) continue;
+            if (filter && filter.length > 0
+                && [title rangeOfString:filter].location == NSNotFound)
+            {
+                continue;
+            }
+            return (__bridge void*)w;
+        }
+        return nullptr;
+    }
+}
+
 } // namespace uf8

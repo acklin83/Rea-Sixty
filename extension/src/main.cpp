@@ -74,6 +74,7 @@ namespace uf8 {
 void macosPinWindow(void* hwnd, int x, int y);
 bool macosGetWindowRect(void* hwnd, int* x, int* y, int* w, int* h);
 void macosGetScreenSize(int* w, int* h);
+void* macosFindFxChainWindow(const char* trackName);
 } // namespace uf8
 #endif
 
@@ -143,12 +144,6 @@ int   g_csGuiShownFx = -1;
 std::atomic<bool> g_uf8PluginModeWithGui{false};
 void* g_uf8GuiShownTr = nullptr;
 int   g_uf8GuiShownFx = -1;
-// True when the currently-tracked UF8 GUI window was opened by us
-// (Plugin-Mode-with-GUI). False when it was already open before we
-// started displaying it — in that case the close-path skips
-// TrackFX_Show(...,2) so we don't yank a window the user had open
-// independently (Frank 2026-05-15).
-bool  g_uf8GuiOwnedByUs = false;
 
 // V-POTS → FX Cycle GUI ownership. V-Pot push toggles ownership for a
 // strip; the GUI sync drain opens/closes the floating window based on
@@ -159,6 +154,21 @@ bool  g_uf8GuiOwnedByUs = false;
 std::atomic<int>  g_instanceGuiOwnerStrip{-1};
 void* g_instanceGuiShownTr = nullptr;
 int   g_instanceGuiShownFx = -1;
+// Remembers HOW the cycle drain opened the current window, so the close
+// branch undoes the same view (mode 2 = hide floating, mode 0 = hide
+// chain). Main-thread only.
+int   g_instanceGuiShownOpenMode = -1;   // -1=closed, 0=floating, 1=chain
+
+// Settings → Modes → "FX / Instance Cycle":
+//   g_cycleOpenMode = 0 → V-Pot push opens floating window (default)
+//                     1 → V-Pot push opens FX chain with this FX selected
+//   g_cycleEngagesUf8 = true → when the pushed FX is in the UF8 user-plugin
+//                              catalog (uf8Mode), also engage UF8 Plugin
+//                              Mode (with GUI). The auto-engage parks
+//                              SelMode; user exits UF8 Plugin Mode to
+//                              return to Cycle.
+std::atomic<int>  g_cycleOpenMode{0};
+std::atomic<bool> g_cycleEngagesUf8{false};
 
 // IReaperControlSurface subclass registered as a full control surface
 // class ("Rea-Sixty") so users see and add it like any other surface.
@@ -780,6 +790,18 @@ TouchedFxReveal g_touchedFxReveal;
 // floating-window rect. Mutually exclusive with the captured x/y mode.
 std::atomic<bool> g_pluginGuiPinCenter{false};
 
+// Pin FX-chain GUI position — same idea as the floating-window pin
+// above, but for the per-track FX-chain windows (TrackFX_Show(.., 1)).
+// REAPER exposes no direct HWND for chains, so the implementation
+// enumerates NSApp.windows by title prefix "FX:" + track-name match.
+// Separate atomics from the floating set so users can pin both views
+// independently — captured chain coordinates are typically different
+// (wider/taller window).
+std::atomic<bool> g_fxChainPinPos{false};
+std::atomic<int>  g_fxChainPinX{-1};
+std::atomic<int>  g_fxChainPinY{-1};
+std::atomic<bool> g_fxChainPinCenter{false};
+
 // UF8 Plugin Mode (deep edit): all 8 strips drive params on ONE user-
 // mapped plugin instance on the focused track. Separate from SSL Strip
 // Mode (g_pluginFaderMode) which is per-track. Toggled via the
@@ -822,6 +844,31 @@ inline void restoreSelModeAfterUf8PluginMode_()
     }
     g_uf8PluginModeSavedSelMode.store(
         static_cast<uint8_t>(SelectionMode::Norm));
+}
+
+// Programmatic UF8 Plugin Mode engage — same effect as the user firing
+// `uf8_plugin_mode_toggle{,_with_gui}` from a button, no-op if already
+// on. Used by the SEL MODE Cycle V-Pot push handler (Settings → Modes →
+// Cycle → "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins").
+// Mutex-with-SSL-Strip-Mode + Sel-Mode parking + snap request match the
+// toggle builtins so the runtime state ends up identical regardless of
+// how the mode was entered.
+inline void engageUf8PluginMode_(bool withGui)
+{
+    if (g_uf8PluginMode.load()) return;
+    g_uf8PluginMode.store(true);
+    g_uf8PluginModeWithGui.store(withGui);
+    if (g_pluginFaderMode.load()) {
+        g_pluginFaderMode.store(false);
+        g_pluginFaderModeWithGui.store(false);
+        SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+    }
+    parkSelModeForUf8PluginMode_();
+    g_uf8PluginModeSnapRequest.store(true);
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    SetExtState("ReaSixty", "uf8PluginMode", "1", true);
+    if (withGui) g_pluginGuiSyncRequest.store(true);
 }
 
 // Meter ballistic. Peak = raw peak per Track_GetPeakInfo (no smoothing
@@ -1008,9 +1055,23 @@ void loadBrightness()
     if (pgpy && *pgpy) g_pluginGuiPinY.store(std::atoi(pgpy));
     const char* pgpc = GetExtState("rea_sixty", "plugin_gui_pin_center");
     if (pgpc && *pgpc) g_pluginGuiPinCenter.store(std::atoi(pgpc) != 0);
+    if (const char* v = GetExtState("rea_sixty", "fx_chain_pin_pos"); v && *v)
+        g_fxChainPinPos.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "fx_chain_pin_x"); v && *v)
+        g_fxChainPinX.store(std::atoi(v));
+    if (const char* v = GetExtState("rea_sixty", "fx_chain_pin_y"); v && *v)
+        g_fxChainPinY.store(std::atoi(v));
+    if (const char* v = GetExtState("rea_sixty", "fx_chain_pin_center"); v && *v)
+        g_fxChainPinCenter.store(std::atoi(v) != 0);
     const char* upm = GetExtState("ReaSixty", "uf8PluginMode");
     if (upm && *upm) {
         g_uf8PluginMode.store(std::atoi(upm) != 0);
+    }
+    if (const char* v = GetExtState("ReaSixty", "cycleOpenMode"); v && *v) {
+        g_cycleOpenMode.store(std::atoi(v) != 0 ? 1 : 0);
+    }
+    if (const char* v = GetExtState("ReaSixty", "cycleEngagesUf8"); v && *v) {
+        g_cycleEngagesUf8.store(std::atoi(v) != 0);
     }
     const char* selm = GetExtState("ReaSixty", "selectionMode");
     if (selm && *selm) {
@@ -1729,6 +1790,60 @@ static void pinFxGuiIfEnabled_(MediaTrack* tr, int fxIdx)
     setWindowTopLeft_(hwnd, x, y);
 }
 
+// Fill `out` with the track's display name (P_NAME) or "Track N" when
+// unnamed. Used for matching the REAPER FX-chain window title pattern
+// "FX: <track>" via macosFindFxChainWindow.
+static void trackDisplayName_(MediaTrack* tr, char* out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    out[0] = 0;
+    if (!tr) return;
+    char buf[256] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", buf, false);
+    if (buf[0]) {
+        std::snprintf(out, cap, "%s", buf);
+        return;
+    }
+    // Unnamed → fall back to the index-based label REAPER uses.
+    const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    if (idx > 0) {
+        std::snprintf(out, cap, "Track %d", idx);
+    }
+}
+
+#ifdef __APPLE__
+// Look up the FX-chain HWND for `tr` and pin its position when the
+// chain-pin setting is on. Called immediately after TrackFX_Show(.., 1)
+// while the just-shown chain is still front-most so the title-matched
+// enumeration in macosFindFxChainWindow picks the right window.
+static void pinFxChainIfEnabled_(MediaTrack* tr)
+{
+    if (!g_fxChainPinPos.load()) return;
+    if (!tr) return;
+    char nameBuf[256] = {0};
+    trackDisplayName_(tr, nameBuf, sizeof(nameBuf));
+    HWND hwnd = static_cast<HWND>(::uf8::macosFindFxChainWindow(nameBuf));
+    if (!hwnd) return;
+    int x = -1, y = -1;
+    if (g_fxChainPinCenter.load()) {
+        int wx = 0, wy = 0, ww = 0, wh = 0;
+        if (!getFloatingRect_(hwnd, &wx, &wy, &ww, &wh)) return;
+        int sw = 0, sh = 0;
+        getScreenSize_(&sw, &sh);
+        if (sw <= 0 || sh <= 0) return;
+        x = (sw - ww) / 2;
+        y = (sh - wh) / 2;
+    } else {
+        x = g_fxChainPinX.load();
+        y = g_fxChainPinY.load();
+        if (x < 0 || y < 0) return;
+    }
+    setWindowTopLeft_(hwnd, x, y);
+}
+#else
+static void pinFxChainIfEnabled_(MediaTrack*) {}
+#endif
+
 // Touched-FX reveal setter — called from chaseLastTouchedFx and from
 // UC1Surface::handleKnob_ whenever the user actively manipulates a
 // parameter. Sets a 3 s reveal window during which the UF8 csType +
@@ -2105,21 +2220,37 @@ ActiveFxTarget resolveActiveFx_()
 
 void applyShowFocusedPluginGui_()
 {
-    if (!g_uc1_surface) return;
-    const auto focused = uf8::getFocusedParam();
-    if (focused.domain == uf8::Domain::None) return;
-
-    void* lookupTrack = (focused.domain == uf8::Domain::BusComp)
-        ? g_uc1_surface->bcAnchorTrackPublic()
-        : g_uc1_surface->focusedTrack();
-    if (!lookupTrack || !ValidatePtr2(nullptr, lookupTrack, "MediaTrack*")) {
-        return;
+    // Target resolution:
+    //   1) REAPER's currently-focused FX window (GetFocusedFX2) — works
+    //      for ANY FX type, not just SSL Instances. Frank 2026-05-16:
+    //      "müsste doch für alle FX gehen, für die instances haben wir
+    //      doch SSL Strip Mode" — Instance-specific GUI follow is
+    //      covered by SSL Strip Mode / UF8 Plugin Mode's instance cycle.
+    //   2) Fallback: resolveActiveFx_ (V-Pot cycle cursor, then focused
+    //      Instance) — opens something sensible when no FX window
+    //      currently holds REAPER focus.
+    MediaTrack* tr = nullptr;
+    int fxIdx = -1;
+    {
+        int trNum = -1, itemNum = -1, fxNum = -1;
+        const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
+        if ((ret & 1) && trNum > 0) {
+            MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+            const int candFx = fxNum & 0x00FFFFFF;
+            if (cand && ValidatePtr2(nullptr, cand, "MediaTrack*")
+                && candFx >= 0 && candFx < TrackFX_GetCount(cand))
+            {
+                tr    = cand;
+                fxIdx = candFx;
+            }
+        }
     }
-
-    MediaTrack* tr = static_cast<MediaTrack*>(lookupTrack);
-    auto match = uf8::lookupPluginOnTrack(tr, focused.domain);
-    if (!match.map || match.fxIndex < 0) return;
-    const int fxIdx = match.fxIndex;
+    if (!tr) {
+        auto t = resolveActiveFx_();
+        tr    = t.tr;
+        fxIdx = t.fxIdx;
+    }
+    if (!tr || fxIdx < 0) return;
 
     const bool alreadyShown =
         g_focusedGuiShownTr == tr && g_focusedGuiShownFx == fxIdx;
@@ -2750,16 +2881,53 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::TotalReaperGainDelta: {
-                const int delta = static_cast<int>(e.value);
-                if (delta == 0) break;
-                const int cmd = totalReaperGainCmdId_(delta);
+                // V-Pot emits multiple events per physical detent; raw
+                // signed6 (~1..3 per event) was wired straight through
+                // so 1 detent stepped gain 1..3 dB. Accumulate so each
+                // physical detent is one ±1 dB step — Frank 2026-05-16
+                // "REC V-Pot rotate zu schnell, doppelt so langsam".
+                static double s_recGainAccum[8] = {0,0,0,0,0,0,0,0};
+                constexpr double kRecGainScale = 2.0;
+                const int s = (e.strip < 8) ? e.strip : 0;
+                s_recGainAccum[s] += e.value / kRecGainScale;
+                int step = 0;
+                if (s_recGainAccum[s] >=  1.0) {
+                    step = static_cast<int>(s_recGainAccum[s]);
+                    s_recGainAccum[s] -= step;
+                }
+                if (s_recGainAccum[s] <= -1.0) {
+                    step = static_cast<int>(s_recGainAccum[s]);
+                    s_recGainAccum[s] -= step;
+                }
+                if (step == 0) break;
+                const int cmd = totalReaperGainCmdId_(step);
                 if (cmd == 0) break;
                 runReaperActionOnTrackN_(cmd, tr,
-                                         delta > 0 ? delta : -delta);
+                                         step > 0 ? step : -step);
                 break;
             }
             case PendingInput::InputChannelDelta: {
-                const int delta = static_cast<int>(e.value);
+                // Per-strip accumulator: raw signed6 (1..3 per V-Pot
+                // event) was wired straight through, so a single physical
+                // detent — or worse, a V-Pot push that incidentally
+                // emits a small rotation delta — kicked the input
+                // channel one slot. Scale 4.0 means ~4 raw events per
+                // hardware-channel step + naturally absorbs push-
+                // induced jitter (Frank 2026-05-16: "input cycle zu
+                // schnell, verstell den kanal oft versehentlich bei push").
+                static double s_inChanAccum[8] = {0,0,0,0,0,0,0,0};
+                constexpr double kInputChanScale = 4.0;
+                const int s = (e.strip < 8) ? e.strip : 0;
+                s_inChanAccum[s] += e.value / kInputChanScale;
+                int delta = 0;
+                if (s_inChanAccum[s] >=  1.0) {
+                    delta = static_cast<int>(s_inChanAccum[s]);
+                    s_inChanAccum[s] -= delta;
+                }
+                if (s_inChanAccum[s] <= -1.0) {
+                    delta = static_cast<int>(s_inChanAccum[s]);
+                    s_inChanAccum[s] -= delta;
+                }
                 if (delta == 0) break;
                 const int cur = static_cast<int>(
                     GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
@@ -2781,23 +2949,48 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::SoloToggle: {
-                // Routing mode: Solo lights up the SEND/RECEIVE target
-                // track ("listen to this return only"). Same precedence
-                // as the CUT/MuteToggle handler — fader-routing wins
-                // over V-Pot routing if both are active. Hardware-output
-                // sends have no target track; eat the press silently
-                // there. Without this, a user in 8-sends mode pressing
-                // Solo on a return-strip soloed the source bank track,
-                // not the return — Frank 2026-05-08.
+                // Routing mode: Solo means "solo this send/receive" =
+                // exclusive un-mute on the source track. Toggle:
+                //   if this slot is the only un-muted send/receive →
+                //     un-mute all (clear)
+                //   else → mute every send/receive except this one
+                // Drops the user's pre-existing mute pattern, same as
+                // every solo button on every console (Frank 2026-05-16:
+                // "soll nicht destination tracks soloen, sondern den
+                // Send bzw. Receive (alle anderen send/receives muten)").
+                // Fader-route wins over V-Pot-route if both are active.
                 StripRoute sr = resolveFaderRoute_(e.strip, bankOffset, surfaceCount);
                 if (!sr.active())
                     sr = resolveVpotRoute_(e.strip, bankOffset, surfaceCount);
                 if (sr.active()) {
-                    if (auto* target = routeTargetTrack_(sr)) {
-                        CSurf_OnSoloChange(target, -1);
+                    if (sr.valid && sr.track) {
+                        const int n = GetTrackNumSends(sr.track,
+                                                       sr.sendCategory);
+                        const bool thisOpen =
+                            GetTrackSendInfo_Value(sr.track,
+                                sr.sendCategory, sr.sendIndex,
+                                "B_MUTE") < 0.5;
+                        bool othersMuted = true;
+                        for (int i = 0; i < n; ++i) {
+                            if (i == sr.sendIndex) continue;
+                            if (GetTrackSendInfo_Value(sr.track,
+                                    sr.sendCategory, i, "B_MUTE") < 0.5)
+                            {
+                                othersMuted = false;
+                                break;
+                            }
+                        }
+                        const bool soloActive = thisOpen && othersMuted;
+                        for (int i = 0; i < n; ++i) {
+                            const double tgt = soloActive
+                                ? 0.0
+                                : (i == sr.sendIndex ? 0.0 : 1.0);
+                            SetTrackSendInfo_Value(sr.track,
+                                sr.sendCategory, i, "B_MUTE", tgt);
+                        }
                     }
-                    // active-but-no-target (hardware-output send / invalid
-                    // route) → eat the press, do NOT fall through.
+                    // active-but-invalid (empty strip / hardware-output
+                    // send slot) → eat the press, do NOT fall through.
                     break;
                 }
                 // FX Learn UF8: user-strip Solo toggles a bound vst3
@@ -8431,12 +8624,17 @@ void pushUf8GlobalLeds()
     // active — covers Plain → ssl_strip_mode_toggle (g_pluginFaderMode)
     // AND Shift → uf8_plugin_mode_toggle (g_uf8PluginMode) together, so
     // toggling either modifier-slot binding keeps the LED lit after the
-    // modifier key is released. Falls back to g_pluginFaderMode when no
-    // bound builtin reports state (e.g. user wiped the binding).
+    // modifier key is released. Falls back to the legacy hardcoded
+    // mode-OR only when the button has NO binding at all — otherwise
+    // the unconditional fallback overrode the binding's stateOf, e.g.
+    // PluginBtn bound to ssl_strip_mode_toggle still lit on UF8 Plugin
+    // Mode entry because of the OR (Frank 2026-05-16: "LED Plugin
+    // leuchtet bei UF8 Plugin Mode obwohl auf SSL Strip Mode gemappt").
     const bool pluginActive =
-        boundActionIsActive_(uf8::bindings::ButtonId::PluginBtn)
-        || g_pluginFaderMode.load()
-        || g_uf8PluginMode.load();
+        uf8::bindings::hasBinding(activeLayer,
+                                  uf8::bindings::ButtonId::PluginBtn)
+            ? boundActionIsActive_(uf8::bindings::ButtonId::PluginBtn)
+            : (g_pluginFaderMode.load() || g_uf8PluginMode.load());
     const int pluginLit = pluginActive ? 1 : 0;
 
     // Bindings generation — bumped on any setBinding/clearBinding/load/
@@ -9109,7 +9307,9 @@ void onTimer()
         auto t = resolveActiveFx_();
         if (t.tr) {
             const int vis = TrackFX_GetChainVisible(t.tr);
-            TrackFX_Show(t.tr, t.fxIdx, vis < 0 ? 1 : 0);
+            const int showFlag = vis < 0 ? 1 : 0;
+            TrackFX_Show(t.tr, t.fxIdx, showFlag);
+            if (showFlag == 1) pinFxChainIfEnabled_(t.tr);
         }
     }
     if (g_closeAllFxGuisRequest.exchange(false)) {
@@ -9266,39 +9466,38 @@ void onTimer()
                  || g_uf8GuiShownFx != uf8TargetFx
                  || !uf8WantOpen))
             {
-                // Only close windows WE opened — pre-existing GUIs that
-                // were already up when Plugin Mode latched onto them
-                // belong to the user, not to us. Same rule applies on
-                // Instance Cycle: if the old target was pre-existing,
-                // leave it; if we opened it, drop it.
-                if (g_uf8GuiOwnedByUs
-                    && ValidatePtr2(nullptr, g_uf8GuiShownTr, "MediaTrack*"))
+                // Always close the floating window we were tracking.
+                // "with GUI" means UF8 Plugin Mode manages the floating
+                // for the duration of the session — entering opens it,
+                // exiting closes it. Pre-existing floating gets closed
+                // too (Frank 2026-05-16: "geht nicht wieder weg wenn
+                // UF8 mode exitet"). FX-chain views are preserved
+                // because the open-branch's chainPre check skipped Show
+                // and never set g_uf8GuiShownTr — so this close branch
+                // is a no-op for the chain-was-open scenario.
+                if (ValidatePtr2(nullptr, g_uf8GuiShownTr, "MediaTrack*"))
                 {
                     TrackFX_Show(static_cast<MediaTrack*>(g_uf8GuiShownTr),
                                  g_uf8GuiShownFx, 2);
                 }
                 g_uf8GuiShownTr = nullptr;
                 g_uf8GuiShownFx = -1;
-                g_uf8GuiOwnedByUs = false;
             }
             if (uf8WantOpen && uf8TargetTr && uf8TargetFx >= 0) {
-                // Decide ownership on transition only (new target). The
-                // close-branch above cleared g_uf8GuiShownTr in that
-                // case, so the inequality below detects it. Stays
-                // sticky once latched so per-tick TrackFX_Show(...,3)
-                // calls (which re-open a manually-closed window — the
-                // original follow-behaviour) don't keep flipping
-                // ownership back to "we opened it".
-                if (g_uf8GuiShownTr != uf8TargetTr
-                    || g_uf8GuiShownFx != uf8TargetFx)
-                {
-                    g_uf8GuiOwnedByUs =
-                        !TrackFX_GetOpen(uf8TargetTr, uf8TargetFx);
+                // Don't pop a floating window when the FX is already
+                // visible in the chain — the user explicitly chose the
+                // chain view and a second window for the same FX is
+                // surprising. Skipping the Show ALSO skips setting
+                // g_uf8GuiShownTr, so the close branch above won't try
+                // to close a floating we never opened (chain stays).
+                const bool chainPre =
+                    TrackFX_GetChainVisible(uf8TargetTr) == uf8TargetFx;
+                if (!chainPre) {
+                    TrackFX_Show(uf8TargetTr, uf8TargetFx, 3);
+                    pinFxGuiIfEnabled_(uf8TargetTr, uf8TargetFx);
+                    g_uf8GuiShownTr = uf8TargetTr;
+                    g_uf8GuiShownFx = uf8TargetFx;
                 }
-                TrackFX_Show(uf8TargetTr, uf8TargetFx, 3);
-                pinFxGuiIfEnabled_(uf8TargetTr, uf8TargetFx);
-                g_uf8GuiShownTr = uf8TargetTr;
-                g_uf8GuiShownFx = uf8TargetFx;
             }
         }
 
@@ -9346,18 +9545,67 @@ void onTimer()
                 if (ValidatePtr2(nullptr, g_instanceGuiShownTr,
                                  "MediaTrack*"))
                 {
+                    // Hide whichever view we opened last time: 0 closes
+                    // the FX chain, 2 closes the floating window. Calling
+                    // the wrong one would either leave our view up
+                    // (chain stuck) or close a chain the user opened
+                    // themselves (mode 0 hides the per-track chain
+                    // regardless of fxIdx).
+                    const int hideFlag =
+                        (g_instanceGuiShownOpenMode == 1) ? 0 : 2;
                     TrackFX_Show(
                         static_cast<MediaTrack*>(g_instanceGuiShownTr),
-                        g_instanceGuiShownFx, 2);
+                        g_instanceGuiShownFx, hideFlag);
                 }
-                g_instanceGuiShownTr = nullptr;
-                g_instanceGuiShownFx = -1;
+                g_instanceGuiShownTr       = nullptr;
+                g_instanceGuiShownFx       = -1;
+                g_instanceGuiShownOpenMode = -1;
             }
             if (instWantOpen && instTargetTr && instTargetFx >= 0) {
-                TrackFX_Show(instTargetTr, instTargetFx, 3);
-                pinFxGuiIfEnabled_(instTargetTr, instTargetFx);
-                g_instanceGuiShownTr = instTargetTr;
-                g_instanceGuiShownFx = instTargetFx;
+                // Auto-engage UF8 Plugin Mode (Settings → Modes → Cycle).
+                // When ON + the cycle's active FX is in the UF8 user-
+                // plugin catalog: open the FX window first so REAPER
+                // focuses on it (snapUf8PluginModeToFocusedFx_ uses
+                // GetFocusedFX2 to pivot Instance index), then hand
+                // ownership to UF8 Plugin Mode and engage. Sel-Mode
+                // park is restored on UF8 Plugin Mode exit so cycle
+                // context survives the detour.
+                bool autoEngaged = false;
+                if (g_cycleEngagesUf8.load() && !g_uf8PluginMode.load()) {
+                    char fxName[512] = {0};
+                    if (TrackFX_GetFXName(instTargetTr, instTargetFx,
+                                          fxName, sizeof(fxName)))
+                    {
+                        const auto* um =
+                            uf8::user_plugins::lookupOwnedByName(fxName);
+                        if (um && um->uf8Mode) {
+                            TrackFX_Show(instTargetTr, instTargetFx, 3);
+                            pinFxGuiIfEnabled_(instTargetTr, instTargetFx);
+                            // Release cycle ownership before engaging —
+                            // engageUf8PluginMode_ parks SelMode which
+                            // drops inCycleMode, and a stale ownership
+                            // would make the next drain tick close the
+                            // just-opened window.
+                            g_instanceGuiOwnerStrip.store(-1);
+                            engageUf8PluginMode_(/*withGui*/ true);
+                            autoEngaged = true;
+                        }
+                    }
+                }
+                if (!autoEngaged) {
+                    const int openMode = g_cycleOpenMode.load();
+                    if (openMode == 1) {
+                        // Show track FX chain with this FX selected.
+                        TrackFX_Show(instTargetTr, instTargetFx, 1);
+                        pinFxChainIfEnabled_(instTargetTr);
+                    } else {
+                        TrackFX_Show(instTargetTr, instTargetFx, 3);
+                        pinFxGuiIfEnabled_(instTargetTr, instTargetFx);
+                    }
+                    g_instanceGuiShownTr       = instTargetTr;
+                    g_instanceGuiShownFx       = instTargetFx;
+                    g_instanceGuiShownOpenMode = openMode;
+                }
             }
         }
     }
@@ -10261,6 +10509,21 @@ void reasixty_setAutoFillFromRight(bool fromRight)
     g_bankDirty.store(true);   // strip→track mapping shifted
 }
 
+int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
+void reasixty_setCycleOpenMode(int mode)
+{
+    const int v = (mode == 1) ? 1 : 0;
+    g_cycleOpenMode.store(v);
+    SetExtState("ReaSixty", "cycleOpenMode", v ? "1" : "0", true);
+}
+
+bool reasixty_cycleEngagesUf8() { return g_cycleEngagesUf8.load(); }
+void reasixty_setCycleEngagesUf8(bool on)
+{
+    g_cycleEngagesUf8.store(on);
+    SetExtState("ReaSixty", "cycleEngagesUf8", on ? "1" : "0", true);
+}
+
 bool reasixty_recRmeEnabled()        { return g_recRmeEnabled.load(); }
 bool reasixty_recVpotRotateGain()    { return g_recVpotRotateGain.load(); }
 bool reasixty_recVpotShiftInputCh()  { return g_recVpotShiftInputCh.load(); }
@@ -10476,6 +10739,71 @@ bool reasixty_capturePluginGuiPin()
             if (trySave(hwnd)) return true;
         }
     }
+    return false;
+}
+
+// ---- FX Chain pin --------------------------------------------------------
+bool reasixty_fxChainPinPos()           { return g_fxChainPinPos.load(); }
+void reasixty_setFxChainPinPos(bool on)
+{
+    g_fxChainPinPos.store(on);
+    SetExtState("rea_sixty", "fx_chain_pin_pos", on ? "1" : "0", true);
+}
+
+void reasixty_getFxChainPin(int* x, int* y)
+{
+    if (x) *x = g_fxChainPinX.load();
+    if (y) *y = g_fxChainPinY.load();
+}
+
+bool reasixty_fxChainPinCenter()        { return g_fxChainPinCenter.load(); }
+void reasixty_setFxChainPinCenter(bool on)
+{
+    g_fxChainPinCenter.store(on);
+    SetExtState("rea_sixty", "fx_chain_pin_center", on ? "1" : "0", true);
+    if (on) {
+        g_fxChainPinX.store(-1);
+        g_fxChainPinY.store(-1);
+        SetExtState("rea_sixty", "fx_chain_pin_x", "-1", true);
+        SetExtState("rea_sixty", "fx_chain_pin_y", "-1", true);
+    }
+}
+
+// Capture the position of whichever FX-chain window is currently
+// visible. Walks visible chains via TrackFX_GetChainVisible and asks
+// macosFindFxChainWindow for the matching HWND. Returns true on success.
+bool reasixty_captureFxChainPin()
+{
+#ifdef __APPLE__
+    auto trySave = [&](HWND hwnd) -> bool {
+        if (!hwnd) return false;
+        int x = 0, y = 0;
+        if (!getFloatingRect_(hwnd, &x, &y, nullptr, nullptr)) return false;
+        g_fxChainPinX.store(x);
+        g_fxChainPinY.store(y);
+        g_fxChainPinCenter.store(false);
+        SetExtState("rea_sixty", "fx_chain_pin_center", "0", true);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%d", x);
+        SetExtState("rea_sixty", "fx_chain_pin_x", buf, true);
+        std::snprintf(buf, sizeof(buf), "%d", y);
+        SetExtState("rea_sixty", "fx_chain_pin_y", buf, true);
+        return true;
+    };
+
+    const int trackCount = CountTracks(nullptr);
+    for (int t = -1; t < trackCount; ++t) {
+        MediaTrack* tr = (t < 0) ? GetMasterTrack(nullptr)
+                                 : GetTrack(nullptr, t);
+        if (!tr) continue;
+        if (TrackFX_GetChainVisible(tr) < 0) continue;  // chain hidden
+        char nameBuf[256] = {0};
+        trackDisplayName_(tr, nameBuf, sizeof(nameBuf));
+        HWND hwnd = static_cast<HWND>(
+            ::uf8::macosFindFxChainWindow(nameBuf));
+        if (trySave(hwnd)) return true;
+    }
+#endif
     return false;
 }
 
