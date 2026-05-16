@@ -8,18 +8,20 @@ Rea-Sixty drives the SSL **UF8** and **UC1** controllers directly from a REAPER 
 
 ## Status
 
-Working extension, near feature-complete on macOS. Phase 1 (UF8 standalone replacement) and Phase 2 (UC1 integration with parameter mirror + GR pipeline) are in. Phase 2.5 (folder mode, selection sets, send/receive layers, generic FX learn), 2.6 (on-screen Plugin Mixer window) and 2.7 (in-app Settings screen) are landing — see [`ROADMAP.md`](ROADMAP.md).
+Working extension, daily-driver on macOS. Phase 1 (UF8 standalone) and Phase 2 (UC1 integration with parameter mirror + GR pipeline) are complete. Phase 2.5 (Folder Mode, Send/Receive layers, generic FX Learn) is shipped except for Selection-Set storage. Phase 2.7 (in-app Settings) is shipped — Device, Bindings, Soft-Key Banks, Modes incl. REC + RME (TotalReaper), Selection Sets UI, About. Phase 2.6 (on-screen Plug-in Mixer view) is still pending; the docked window currently hosts the Settings tabs only. Roadmap details in [`ROADMAP.md`](ROADMAP.md); full feature reference in [`docs/user-manual.md`](docs/user-manual.md).
 
 ## What it does today
 
 - **Direct REAPER ↔ UF8 / UC1** via `csurf_inst` and libusb. No CSI, no virtual MIDI, no MCU.
 - **DAW-layer track colors** on the UF8 scribble strips, polled from `GetTrackColor()` and pushed on bank shifts.
-- **Full vendor-USB host responsibility**: init-sequence replay on open, scribble text + value zones, color bars, button/V-Pot/fader/fader-touch routing, LED feedback (solo / mute / select / arm / transport), meter bands, layer management, heartbeat.
+- **Full vendor-USB host responsibility**: init-sequence replay on open, scribble text + value zones, color bars, button/V-Pot/fader/fader-touch routing, LED feedback (solo / mute / select / arm / transport / automation), meter bands, layer management, heartbeat.
 - **UC1 parameter mirror** — physical knobs follow the focused track's SSL Bus Compressor / Channel Strip in real time, with values mirrored back to the UC1 displays.
 - **UC1 GR display driven by the SSL plugin itself** via `TrackFX_GetNamedConfigParm("GainReduction_dB", …)` — the PreSonus VST3 GR extension that REAPER exposes for the SSL Bus Compressor / Channel Strip Comp + Gate. No JSFX probe, no sidechain tap.
-- **Bindings system** — per-strip, transport, global, soft-keys per layer; modifier combos; 12 user-defined Soft-Key Banks (8 buttons each) plus the 6 SSL stock banks; Learn mode.
-- **Generic FX learn** for any VST/JS/AU plugin parameter, GUID-keyed so FX-slot reorders don't break mappings.
-- **Themed on-screen Plugin Mixer + Settings window** (vendored Dear ImGui inside a dockable SWELL window) that picks up the user's REAPER theme.
+- **Selection Modes** — DAW, Send, Pan, Plug-in Mixer, Folder Mode, Show-Only-Selected; switched from the surface or from the Settings window.
+- **Bindings system** — per-strip, transport, global, soft-keys per layer; modifier combos (incl. double-click latch on Shift); 12 user-defined Soft-Key Banks (8 buttons each) plus the 6 SSL stock banks; Learn mode and right-click Copy / Paste in the Bindings editor.
+- **Generic FX Learn** for any VST/JS/AU plugin parameter, name-substring matched so FX-slot reorders don't break mappings.
+- **REC + RME (TotalReaper) integration** — per-strip preamp mirror (gain / phantom / pad / phase) plus Shift+V-Pot input-channel switch when a [TotalReaper](https://github.com/acklin83/TotalReaper) instance is detected.
+- **Themed Settings window** (vendored Dear ImGui inside a dockable SWELL window) that picks up the user's REAPER theme. A Plug-in Mixer view alongside the Settings tabs is on the roadmap (Phase 2.6) but not yet in this build.
 
 ## Why this exists
 
@@ -59,7 +61,7 @@ Outputs:
 - `build/test_protocol`, `build/test_uc1_protocol`, `build/test_csi_import` — unit-test runners
 - `build/uf8_color_test`, `build/uf8_hid_probe`, `build/uf8_palette_probe` — standalone CLI probes
 
-Full install instructions: [`docs/install-macos.md`](docs/install-macos.md). Windows and Linux ports are tracked in [`ROADMAP.md`](ROADMAP.md) (Phase 4).
+Full install instructions: [`docs/install-macos.md`](docs/install-macos.md). User-facing reference (Selection Modes, Bindings, Plug-in Mixer Mode, REC + RME, all surface controls): [`docs/user-manual.md`](docs/user-manual.md). Windows and Linux ports are tracked in [`ROADMAP.md`](ROADMAP.md) (Phase 4).
 
 ## Contributing
 
