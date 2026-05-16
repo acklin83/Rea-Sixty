@@ -9276,13 +9276,15 @@ void pushUf8GlobalLeds()
         }
     }
 
-    // Send/Plugin 1..8 LEDs — bright when the matching send/recv index
-    // is the active routing target on EITHER physical output (V-Pot or
-    // Fader). Same row drives both sends and receives by binding
-    // convention (Plain = sends, Shift+ = receives), so the LED can't
-    // distinguish the two — it just shows "this index is currently the
-    // routing target".
-    if (routingKey != g_lastRoutingKey || !g_globalLedsInit) {
+    // Send/Plugin 1..8 LEDs — bright when EITHER the legacy routing
+    // hardcoded logic flags the cell active (Send/Recv indexing) OR a
+    // user-bound stateful builtin (selset_recall, etc.) reports the
+    // cell as active. Pushed every tick (per-cell dedup in
+    // sendUf8GlobalLed catches no-change) so a stateOf change on the
+    // bound builtin paints immediately — outer routingKey gate
+    // previously suppressed re-paint when only the binding state
+    // flipped (Frank 2026-05-16 selset_recall on send/plugin row).
+    {
         constexpr uf8::Uf8GlobalLed kSpLeds[8] = {
             uf8::Uf8GlobalLed::SendPlugin1, uf8::Uf8GlobalLed::SendPlugin2,
             uf8::Uf8GlobalLed::SendPlugin3, uf8::Uf8GlobalLed::SendPlugin4,
@@ -9292,8 +9294,10 @@ void pushUf8GlobalLeds()
         for (int i = 0; i < 8; ++i) {
             const bool sendHit = (sendVAll == i || sendFAll == i);
             const bool recvHit = (recvVAll == i || recvFAll == i);
-            const bool active  = sendHit || recvHit;
-            sendUf8GlobalLed(kSpLeds[i], active);
+            const bool routingActive = sendHit || recvHit;
+            const auto bid = buttonIdForGlobalLed(kSpLeds[i]);
+            const bool boundActive = boundActionIsActive_(bid);
+            sendUf8GlobalLed(kSpLeds[i], routingActive || boundActive);
         }
     }
     g_lastRoutingKey = routingKey;
