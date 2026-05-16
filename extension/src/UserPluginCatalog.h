@@ -99,7 +99,10 @@ struct UserUf8BankSet {
 // can share a single source of truth.
 constexpr int kUserUf8BankCount = 8;
 
-// Bank-independent per-strip bindings (Fader / Solo / Cut / Sel). 8 strips.
+// Per-bank, per-strip bindings (Fader / Solo / Cut / Sel). Frank 2026-05-16:
+// the soft-key bank now switches the FULL strip context, not just V-POT —
+// so fader/solo/cut/sel are also bank-aware (was a single array shared
+// across all 8 banks pre-v6).
 struct UserUf8StripBinding {
     int  faderVst3Param = -1;                 // -1 = fall through to track vol
     bool faderInverted  = false;
@@ -107,8 +110,7 @@ struct UserUf8StripBinding {
     int  cutVst3Param   = -1;                 // -1 = track mute
     int  selVst3Param   = -1;                 // -1 = track select
     // Per-LED colour overrides (0xRRGGBB; 0 = class default — yellow Solo,
-    // red Cut, white Sel / track colour). Bank-independent because Solo /
-    // Cut / Sel bindings are themselves bank-independent.
+    // red Cut, white Sel / track colour).
     uint32_t soloColour = 0;
     uint32_t cutColour  = 0;
     uint32_t selColour  = 0;
@@ -116,7 +118,10 @@ struct UserUf8StripBinding {
 
 struct UserUf8Map {
     UserUf8BankSet       banks;
-    UserUf8StripBinding  strips[8] = {};
+    // 8 banks × 8 strips. Older v5 catalogs serialised a flat strips[8];
+    // load migration copies that single row into all 8 banks so existing
+    // user maps behave identically on first reload after the v6 bump.
+    UserUf8StripBinding  strips[kUserUf8BankCount][8] = {};
     // Per-bank TopSoftKey LED appearance (Plugin Mode). Index = bank
     // index 0..7; matches TopSoftKey position 1..8 on the hardware.
     UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8BankCount] = {};
@@ -187,7 +192,12 @@ namespace user_plugins {
 // boundaries 3/6/10/14/20 dB). v4 readers seeing v5 files drop the
 // arrays (no calibration); v4 files load in v5 with arrays = all zeros
 // (identity, no behaviour change).
-constexpr int kCurrentFormatVersion = 5;
+// v6 (2026-05-16): strips[8] became strips[8][8] (per-bank × per-strip).
+// On disk the new field is `stripsByBank` (2D array, 8 banks × 8 strips).
+// v5 readers seeing v6 files drop the new field (revert to track default
+// for fader/solo/cut/sel); v5 files load in v6 readers by replicating
+// the single `strips` row into all 8 banks (behaviour preserved).
+constexpr int kCurrentFormatVersion = 6;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

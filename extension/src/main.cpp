@@ -3041,7 +3041,7 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
 // focused track when SSL Strip Mode is on AND the focused track has a
 // user-mapped plug-in. Returns {nullptr,-1,nullptr} otherwise. All eight
 // UF8 strips drive params on this ONE plug-in instance per strip-N
-// binding in `map->uf8.strips[N]` / `map->uf8.banks.banks[bank][N]`.
+// binding in `map->uf8.strips[bank][N]` / `map->uf8.banks.banks[bank][N]`.
 //
 // Cache invalidation on:
 //   - g_pluginFaderMode change
@@ -3246,9 +3246,10 @@ CsFaderHandle csFaderForTrack(MediaTrack* tr)
 }
 
 // Per-track user-plugin fader lookup. Returns the fader binding from
-// uf8.strips[0] of the first user-mapped plugin on this track in the
-// given domain. Used by SSL Strip Mode (per-track) so each UF8 strip
-// drives its own track's user-plugin fader param.
+// uf8.strips[bank][0] of the first user-mapped plugin on this track in the
+// given domain — bank = current soft-key bank, so SSL Strip Mode follows
+// the same per-bank context as UF8 Plugin Mode. Strip 0 is the canonical
+// "this is THE fader binding" slot for the active plug-in.
 struct UserFaderHandle { int fxIndex; int vst3Param; bool inverted; };
 UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
 {
@@ -3259,9 +3260,11 @@ UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
     TrackFX_GetFXName(tr, match.fxIndex, fxName, sizeof(fxName));
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
     if (!um || !um->uf8Mode) return {-1, -1, false};
-    const int fp = um->uf8.strips[0].faderVst3Param;
+    const int bank = std::clamp(g_softKeyBank.load(),
+                                0, uf8::kUserUf8BankCount - 1);
+    const int fp = um->uf8.strips[bank][0].faderVst3Param;
     if (fp < 0) return {-1, -1, false};
-    return {match.fxIndex, fp, um->uf8.strips[0].faderInverted};
+    return {match.fxIndex, fp, um->uf8.strips[bank][0].faderInverted};
 }
 
 // CS plug-in's Pan param (linkIdx 3 across all CS variants). In SSL
@@ -3548,7 +3551,9 @@ void drainInputQueue()
                 // and surprising (Frank 2026-05-09).
                 if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        const auto& sb = uctx.map->uf8.strips[
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctx.map->uf8.strips[bank][
                             static_cast<int>(e.strip)];
                         if (sb.soloVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -3582,7 +3587,9 @@ void drainInputQueue()
                 if (mr.active()) break;     // routed but slot empty — eat the press
                 if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        const auto& sb = uctx.map->uf8.strips[
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctx.map->uf8.strips[bank][
                             static_cast<int>(e.strip)];
                         if (sb.cutVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -3599,7 +3606,9 @@ void drainInputQueue()
             case PendingInput::SelectToggle: {
                 if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        const auto& sb = uctx.map->uf8.strips[
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctx.map->uf8.strips[bank][
                             static_cast<int>(e.strip)];
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -3617,7 +3626,9 @@ void drainInputQueue()
             case PendingInput::SelectExclusive:
                 if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        const auto& sb = uctx.map->uf8.strips[
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctx.map->uf8.strips[bank][
                             static_cast<int>(e.strip)];
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -3718,7 +3729,9 @@ void drainInputQueue()
                 if (g_uf8PluginMode.load()) {
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int s = static_cast<int>(e.strip);
-                        const auto& sb = uctx.map->uf8.strips[s];
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctx.map->uf8.strips[bank][s];
                         if (sb.faderVst3Param >= 0) {
                             const uint16_t pbU = linearVolumeToPb(e.value);
                             double n = static_cast<double>(pbU) /
@@ -5713,7 +5726,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
         if (auto u = userStripCtxFocused_(); u.map) {
             const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
             const auto& bs   = u.map->uf8.banks.banks[bank][slot];
-            const auto& strp = u.map->uf8.strips[slot];
+            const auto& strp = u.map->uf8.strips[bank][slot];
             if (bs.stripColour != 0) {
                 return bs.stripColour & 0x00FFFFFFu;
             }
@@ -6237,7 +6250,8 @@ void pushZonesForVisibleSlots()
             userS = userStripCtxFocused_();
             if (userS.map) {
                 userStripActive = true;
-                const auto& sb = userS.map->uf8.strips[s];
+                const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
+                const auto& sb = userS.map->uf8.strips[bank][s];
                 userBoundFader = sb.faderVst3Param;
                 userBoundSolo  = sb.soloVst3Param;
                 userBoundCut   = sb.cutVst3Param;
@@ -6245,7 +6259,6 @@ void pushZonesForVisibleSlots()
                 userColourSolo = sb.soloColour;
                 userColourCut  = sb.cutColour;
                 userColourSel  = sb.selColour;
-                const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                 userBoundVpot  = userS.map->uf8.banks.banks[bank][s].vst3Param;
             }
         }
@@ -6998,7 +7011,9 @@ void pushZonesForVisibleSlots()
         UserFaderHandle userF{nullptr, -1, -1, false};
         if (g_uf8PluginMode.load() && !flipActive) {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                const auto& sb = uctx.map->uf8.strips[s];
+                const int bank = std::clamp(g_softKeyBank.load(),
+                    0, uf8::kUserUf8BankCount - 1);
+                const auto& sb = uctx.map->uf8.strips[bank][s];
                 if (sb.faderVst3Param >= 0) {
                     userF = { uctx.tr, uctx.fxIdx,
                               sb.faderVst3Param, sb.faderInverted };
@@ -8253,7 +8268,9 @@ void commitDebouncedTouchReleases()
                     SetMediaTrackInfo_Value(tr, "D_PAN", pan);
                 } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
-                        const auto& sb = uctxT.map->uf8.strips[
+                        const int bank = std::clamp(g_softKeyBank.load(),
+                            0, uf8::kUserUf8BankCount - 1);
+                        const auto& sb = uctxT.map->uf8.strips[bank][
                             static_cast<int>(s)];
                         if (sb.faderVst3Param >= 0) {
                             double n = static_cast<double>(touchPb) /
@@ -8302,7 +8319,9 @@ void commitDebouncedTouchReleases()
             uint16_t pb = linearVolumeToPb(uiVolLinear(tr));
             if (g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const auto& sb = uctx.map->uf8.strips[s];
+                    const int bank = std::clamp(g_softKeyBank.load(),
+                        0, uf8::kUserUf8BankCount - 1);
+                    const auto& sb = uctx.map->uf8.strips[bank][s];
                     if (sb.faderVst3Param >= 0) {
                         double norm = TrackFX_GetParamNormalized(
                             uctx.tr, uctx.fxIdx, sb.faderVst3Param);

@@ -177,13 +177,11 @@ VPotMode vpotModeFromName_(const char* s)
 
 bool uf8MapHasContent_(const UserUf8Map& u)
 {
-    for (int s = 0; s < 8; ++s) {
-        const auto& sb = u.strips[s];
-        if (sb.faderVst3Param >= 0 || sb.soloVst3Param >= 0
-         || sb.cutVst3Param   >= 0 || sb.selVst3Param  >= 0) return true;
-    }
     for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
         for (int s = 0; s < 8; ++s) {
+            const auto& sb = u.strips[b][s];
+            if (sb.faderVst3Param >= 0 || sb.soloVst3Param >= 0
+             || sb.cutVst3Param   >= 0 || sb.selVst3Param  >= 0) return true;
             if (u.banks.banks[b][s].vst3Param >= 0) return true;
             if (!u.banks.banks[b][s].label.empty()) return true;
         }
@@ -364,24 +362,33 @@ std::string serialize_(const UserPluginCatalog& c)
                 os << "\n          ]";
             }
             os << "\n        ],\n";
-            os << "        \"strips\": [";
-            for (int s = 0; s < 8; ++s) {
-                if (s) os << ",";
-                const auto& sb = m.uf8.strips[s];
-                os << "\n          { "
-                   << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
-                   << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
-                   << " }, "
-                   << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param
-                   << ", \"colour\": " << static_cast<unsigned>(sb.soloColour)
-                   << " }, "
-                   << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param
-                   << ", \"colour\": " << static_cast<unsigned>(sb.cutColour)
-                   << " }, "
-                   << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
-                   << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
-                   << " }"
-                   << " }";
+            // stripsByBank: 8 banks × 8 strips (v6). Pre-v6 readers see no
+            // `strips` key and revert to track-default behaviour; v5 files
+            // load in v6 by replicating their flat strips[] into all banks
+            // (see parse_).
+            os << "        \"stripsByBank\": [";
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
+                if (b) os << ",";
+                os << "\n          [";
+                for (int s = 0; s < 8; ++s) {
+                    if (s) os << ",";
+                    const auto& sb = m.uf8.strips[b][s];
+                    os << "\n            { "
+                       << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
+                       << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
+                       << " }, "
+                       << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param
+                       << ", \"colour\": " << static_cast<unsigned>(sb.soloColour)
+                       << " }, "
+                       << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param
+                       << ", \"colour\": " << static_cast<unsigned>(sb.cutColour)
+                       << " }, "
+                       << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
+                       << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
+                       << " }"
+                       << " }";
+                }
+                os << "\n          ]";
             }
             os << "\n        ],\n";
             // Per-bank TopSoftKey LED appearance.
@@ -555,45 +562,73 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     }
                 }
             }
-            if (auto* stripsArr = uo->get_item_by_name("strips");
-                stripsArr && stripsArr->is_array() && stripsArr->m_array)
+            // Per-strip bindings. v6 emits `stripsByBank` (2D: bank × strip);
+            // v5 emitted `strips` (1D: strip only). Parse whichever is
+            // present; for v5 we replicate the flat row into all 8 banks
+            // so existing maps behave identically.
+            auto parseStripObj = [&](wdl_json_element* so,
+                                     UserUf8StripBinding& sb) {
+                if (auto* fo = so->get_item_by_name("fader");
+                    fo && fo->is_object())
+                {
+                    getIntI_(fo, "vst3Param", sb.faderVst3Param);
+                    getBoolI_(fo, "inverted", sb.faderInverted);
+                }
+                int colTmp = 0;
+                if (auto* so2 = so->get_item_by_name("solo");
+                    so2 && so2->is_object())
+                {
+                    getIntI_(so2, "vst3Param", sb.soloVst3Param);
+                    colTmp = 0;
+                    if (getIntI_(so2, "colour", colTmp))
+                        sb.soloColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                }
+                if (auto* co = so->get_item_by_name("cut");
+                    co && co->is_object())
+                {
+                    getIntI_(co, "vst3Param", sb.cutVst3Param);
+                    colTmp = 0;
+                    if (getIntI_(co, "colour", colTmp))
+                        sb.cutColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                }
+                if (auto* selo = so->get_item_by_name("sel");
+                    selo && selo->is_object())
+                {
+                    getIntI_(selo, "vst3Param", sb.selVst3Param);
+                    colTmp = 0;
+                    if (getIntI_(selo, "colour", colTmp))
+                        sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                }
+            };
+            if (auto* sbbArr = uo->get_item_by_name("stripsByBank");
+                sbbArr && sbbArr->is_array() && sbbArr->m_array)
             {
+                const int bn = (std::min)(sbbArr->m_array->GetSize(),
+                                          uf8::kUserUf8BankCount);
+                for (int b = 0; b < bn; ++b) {
+                    wdl_json_element* row = sbbArr->enum_item(b);
+                    if (!row || !row->is_array() || !row->m_array) continue;
+                    const int sn = (std::min)(row->m_array->GetSize(), 8);
+                    for (int s = 0; s < sn; ++s) {
+                        wdl_json_element* so = row->enum_item(s);
+                        if (!so || !so->is_object()) continue;
+                        parseStripObj(so, m.uf8.strips[b][s]);
+                    }
+                }
+            }
+            else if (auto* stripsArr = uo->get_item_by_name("strips");
+                     stripsArr && stripsArr->is_array() && stripsArr->m_array)
+            {
+                // v5 (or earlier) flat strips[8] — replicate into all
+                // banks so behaviour is preserved on first reload.
                 const int sn = (std::min)(stripsArr->m_array->GetSize(), 8);
                 for (int s = 0; s < sn; ++s) {
                     wdl_json_element* so = stripsArr->enum_item(s);
                     if (!so || !so->is_object()) continue;
-                    auto& sb = m.uf8.strips[s];
-                    if (auto* fo = so->get_item_by_name("fader");
-                        fo && fo->is_object())
-                    {
-                        getIntI_(fo, "vst3Param", sb.faderVst3Param);
-                        getBoolI_(fo, "inverted", sb.faderInverted);
-                    }
-                    int colTmp = 0;
-                    if (auto* so2 = so->get_item_by_name("solo");
-                        so2 && so2->is_object())
-                    {
-                        getIntI_(so2, "vst3Param", sb.soloVst3Param);
-                        colTmp = 0;
-                        if (getIntI_(so2, "colour", colTmp))
-                            sb.soloColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                    }
-                    if (auto* co = so->get_item_by_name("cut");
-                        co && co->is_object())
-                    {
-                        getIntI_(co, "vst3Param", sb.cutVst3Param);
-                        colTmp = 0;
-                        if (getIntI_(co, "colour", colTmp))
-                            sb.cutColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                    }
-                    if (auto* selo = so->get_item_by_name("sel");
-                        selo && selo->is_object())
-                    {
-                        getIntI_(selo, "vst3Param", sb.selVst3Param);
-                        colTmp = 0;
-                        if (getIntI_(selo, "colour", colTmp))
-                            sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                    }
+                    UserUf8StripBinding tmp{};
+                    parseStripObj(so, tmp);
+                    for (int b = 0; b < uf8::kUserUf8BankCount; ++b)
+                        m.uf8.strips[b][s] = tmp;
                 }
             }
             // Per-bank TopSoftKey LED state. New shape (single colour

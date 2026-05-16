@@ -4400,7 +4400,8 @@ struct Uf8Control;
 struct Uf8ListenSlot {
     int kind  = -1;     // -1 = none; otherwise Uf8Control::Kind
     int strip = 0;
-    int bank  = 0;      // VPot/TopSoftKey only — others ignore
+    int bank  = 0;      // bank index 0..7 — all kinds now bank-aware
+                        // (Frank 2026-05-16, was VPot/TopSoftKey only).
     bool active() const { return kind >= 0; }
     void clear() { kind = -1; strip = 0; bank = 0; }
     bool matches(int k, int s, int b) const {
@@ -4440,10 +4441,10 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
         switch (kind) {
-            case 0 /*Fader*/:      return u.strips[strip].faderVst3Param;
-            case 3 /*SoloBtn*/:    return u.strips[strip].soloVst3Param;
-            case 4 /*CutBtn*/:     return u.strips[strip].cutVst3Param;
-            case 5 /*SelBtn*/:     return u.strips[strip].selVst3Param;
+            case 0 /*Fader*/:      return u.strips[bank][strip].faderVst3Param;
+            case 3 /*SoloBtn*/:    return u.strips[bank][strip].soloVst3Param;
+            case 4 /*CutBtn*/:     return u.strips[bank][strip].cutVst3Param;
+            case 5 /*SelBtn*/:     return u.strips[bank][strip].selVst3Param;
             case 1 /*VPot*/:
             case 2 /*TopSoftKey*/: return u.banks.banks[bank][strip].vst3Param;
             default: return -1;
@@ -4457,10 +4458,10 @@ void bindUf8_(int kind, int strip, int bank, int vst3Param)
     if (vst3Param < 0) return;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 0: u.strips[strip].faderVst3Param = vst3Param; break;
-            case 3: u.strips[strip].soloVst3Param  = vst3Param; break;
-            case 4: u.strips[strip].cutVst3Param   = vst3Param; break;
-            case 5: u.strips[strip].selVst3Param   = vst3Param; break;
+            case 0: u.strips[bank][strip].faderVst3Param = vst3Param; break;
+            case 3: u.strips[bank][strip].soloVst3Param  = vst3Param; break;
+            case 4: u.strips[bank][strip].cutVst3Param   = vst3Param; break;
+            case 5: u.strips[bank][strip].selVst3Param   = vst3Param; break;
             case 1:
             case 2:
                 u.banks.banks[bank][strip].vst3Param = vst3Param;
@@ -4473,11 +4474,11 @@ void unbindUf8_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 0: u.strips[strip].faderVst3Param = -1;
-                    u.strips[strip].faderInverted  = false; break;
-            case 3: u.strips[strip].soloVst3Param  = -1; break;
-            case 4: u.strips[strip].cutVst3Param   = -1; break;
-            case 5: u.strips[strip].selVst3Param   = -1; break;
+            case 0: u.strips[bank][strip].faderVst3Param = -1;
+                    u.strips[bank][strip].faderInverted  = false; break;
+            case 3: u.strips[bank][strip].soloVst3Param  = -1; break;
+            case 4: u.strips[bank][strip].cutVst3Param   = -1; break;
+            case 5: u.strips[bank][strip].selVst3Param   = -1; break;
             case 1:
             case 2: u.banks.banks[bank][strip] = uf8::UserUf8BankSlot{}; break;
         }
@@ -4544,10 +4545,10 @@ int fillSequentialUf8_(int kind, int strip, int bank,
 
         auto& u = editing->uf8;
         switch (kind) {
-            case 0: u.strips[s].faderVst3Param = found; break;
-            case 3: u.strips[s].soloVst3Param  = found; break;
-            case 4: u.strips[s].cutVst3Param   = found; break;
-            case 5: u.strips[s].selVst3Param   = found; break;
+            case 0: u.strips[bank][s].faderVst3Param = found; break;
+            case 3: u.strips[bank][s].soloVst3Param  = found; break;
+            case 4: u.strips[bank][s].cutVst3Param   = found; break;
+            case 5: u.strips[bank][s].selVst3Param   = found; break;
             case 1:
             case 2: u.banks.banks[bank][s].vst3Param = found; break;
             default: continue;
@@ -4567,7 +4568,7 @@ bool uf8Inverted_(int kind, int strip, int bank)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
-        if (kind == 0) return u.strips[strip].faderInverted;
+        if (kind == 0) return u.strips[bank][strip].faderInverted;
         if (kind == 1 || kind == 2)
             return u.banks.banks[bank][strip].inverted;
         return false;
@@ -4579,7 +4580,7 @@ void toggleUf8Inverted_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
         if (kind == 0)
-            u.strips[strip].faderInverted = !u.strips[strip].faderInverted;
+            u.strips[bank][strip].faderInverted = !u.strips[bank][strip].faderInverted;
         else if (kind == 1 || kind == 2) {
             auto& bs = u.banks.banks[bank][strip];
             bs.inverted = !bs.inverted;
@@ -4614,8 +4615,9 @@ void setUf8Label_(int strip, int bank, const std::string& label)
 // Per-binding colour read / write. V-Pot no longer carries a colour
 // (Frank 2026-05-13: "V-Pot Farbe raus, bringt nichts.") — the LCD
 // strip-colour-bar uses stripColour read via getUf8StripColour_ below.
-// Solo / Cut / Sel colours remain bank-independent. 0 = no override
-// (LED uses class default).
+// Frank 2026-05-16: Solo/Cut/Sel become bank-aware along with the rest
+// of the strip controls, so colours are now per (bank, strip) too.
+// 0 = no override (LED uses class default).
 uint32_t getUf8Colour_(int kind, int strip, int bank)
 {
     if (g_editingMatch.empty()) return 0;
@@ -4623,13 +4625,12 @@ uint32_t getUf8Colour_(int kind, int strip, int bank)
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
         switch (kind) {
-            case 3 /*SoloBtn*/: return u.strips[strip].soloColour;
-            case 4 /*CutBtn*/:  return u.strips[strip].cutColour;
-            case 5 /*SelBtn*/:  return u.strips[strip].selColour;
+            case 3 /*SoloBtn*/: return u.strips[bank][strip].soloColour;
+            case 4 /*CutBtn*/:  return u.strips[bank][strip].cutColour;
+            case 5 /*SelBtn*/:  return u.strips[bank][strip].selColour;
             default: return 0;
         }
     }
-    (void)bank;
     return 0;
 }
 
@@ -4638,12 +4639,11 @@ void setUf8Colour_(int kind, int strip, int bank, uint32_t rgb)
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 3: u.strips[strip].soloColour        = rgb; break;
-            case 4: u.strips[strip].cutColour         = rgb; break;
-            case 5: u.strips[strip].selColour         = rgb; break;
+            case 3: u.strips[bank][strip].soloColour = rgb; break;
+            case 4: u.strips[bank][strip].cutColour  = rgb; break;
+            case 5: u.strips[bank][strip].selColour  = rgb; break;
         }
     });
-    (void)bank;
 }
 
 // Strip colour bar — per (bank, strip). Drives the LCD's coloured
@@ -5216,10 +5216,10 @@ void drawUf8Face_(VCanvas& c)
 
 struct Uf8Control {
     enum Kind : uint8_t {
-        Fader,           // strip 0..7 → uf8.strips[s].faderVst3Param
+        Fader,           // strip 0..7 → uf8.strips[bank][s].faderVst3Param
         VPot,            // strip 0..7 → uf8.banks.banks[bank][s]
         TopSoftKey,      // strip 0..7 → uf8.banks.banks[bank][s] (label)
-        SoloBtn,         // strip 0..7 → uf8.strips[s].soloVst3Param
+        SoloBtn,         // strip 0..7 → uf8.strips[bank][s].soloVst3Param
         CutBtn,
         SelBtn,
     };
@@ -6854,17 +6854,23 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     noteUse_(bs.vst3Param, buf);
                 }
             }
-            for (int s = 0; s < 8; ++s) {
-                const auto& sb = editing->uf8.strips[s];
-                char buf[40];
-                std::snprintf(buf, sizeof(buf), "UF8 Fader str %d", s + 1);
-                noteUse_(sb.faderVst3Param, buf);
-                std::snprintf(buf, sizeof(buf), "UF8 Solo str %d", s + 1);
-                noteUse_(sb.soloVst3Param, buf);
-                std::snprintf(buf, sizeof(buf), "UF8 Cut str %d",  s + 1);
-                noteUse_(sb.cutVst3Param,  buf);
-                std::snprintf(buf, sizeof(buf), "UF8 Sel str %d",  s + 1);
-                noteUse_(sb.selVst3Param,  buf);
+            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
+                for (int s = 0; s < 8; ++s) {
+                    const auto& sb = editing->uf8.strips[b][s];
+                    char buf[48];
+                    std::snprintf(buf, sizeof(buf),
+                                  "UF8 Fader bk %d str %d", b + 1, s + 1);
+                    noteUse_(sb.faderVst3Param, buf);
+                    std::snprintf(buf, sizeof(buf),
+                                  "UF8 Solo bk %d str %d",  b + 1, s + 1);
+                    noteUse_(sb.soloVst3Param, buf);
+                    std::snprintf(buf, sizeof(buf),
+                                  "UF8 Cut bk %d str %d",   b + 1, s + 1);
+                    noteUse_(sb.cutVst3Param,  buf);
+                    std::snprintf(buf, sizeof(buf),
+                                  "UF8 Sel bk %d str %d",   b + 1, s + 1);
+                    noteUse_(sb.selVst3Param,  buf);
+                }
             }
 
             const int paramCount = paramCountFor_(*editing, fx);
