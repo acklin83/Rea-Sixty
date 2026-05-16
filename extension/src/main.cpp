@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #include <algorithm>
@@ -487,6 +488,50 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
     return strip + bankOffset;
 }
 
+// Active Selection-Set slot (1..8); 0 = none. selset_recall toggles
+// this through the main-thread drain; LED feedback reads it so the
+// bound button lights up for the live slot.
+std::atomic<int>  g_selsetActive{0};
+
+// Selection-Set storage (Phase 2.5b). Eight slots, project-scoped
+// (ProjExtState key `selset_<N>`). Two slot types:
+//   Snapshot — fixed list of REAPER track GUIDs (frozen at save time).
+//   Group    — bound to a REAPER track group (1..64). Membership
+//              recomputed live each onTimer tick from
+//              GetSetTrackGroupMembership across all Lead/Follow
+//              categories — track is in the set if ANY group-N flag
+//              is set in ANY category.
+// Both types share `g_selsetActive` + `g_selsetActiveGuids` (the
+// active slot's resolved GUID set; Snapshot slots populate it once on
+// activation, Group slots re-resolve each visible-list rebuild). Slot
+// is stored as plain text in ProjExtState:
+//   line 1: "snapshot" | "group"
+//   line 2: <name>
+//   line 3..: <guid> per line  (Snapshot)
+//        OR  <groupIdx 1..64>  (Group)
+enum class SelSetType : uint8_t { Snapshot = 0, Group = 1 };
+struct SelSet {
+    SelSetType type     = SelSetType::Snapshot;
+    std::string name;                 // "" = empty slot
+    std::vector<std::string> guids;   // Snapshot only
+    int groupIdx        = 1;          // Group only, 1..64
+};
+std::array<SelSet, 8> g_selsets;
+std::unordered_set<std::string> g_selsetActiveGuids;  // membership cache
+// Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
+// on plugin entry + every time the foreground REAPER project changes
+// so the next onTimer drain re-reads from the new project.
+std::atomic<bool> g_selsetsDirty{true};
+ReaProject* g_selsetsLoadedFor = nullptr;
+// Main-thread drain flags. Lambdas registered as builtins can fire
+// from the libusb input thread; ProjExtState + track-API calls must
+// run on the main thread. Drained in onTimer before
+// rebuildVisibleTrackList so the rebuilt list reflects the new state.
+//   activate: 1..8 = recall slot, -1 = clear
+//   save:     1..8 = snapshot current REAPER selection into slot
+std::atomic<int>  g_selsetActivateRequest{0};
+std::atomic<int>  g_selsetSaveRequest{0};
+
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
     const bool selOnly    = g_showOnlySelected.load();
@@ -521,6 +566,17 @@ void rebuildVisibleTrackList() {
         // strips immediately.
         if (selOnly && !(GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5))
             continue;
+        // Active Selection-Set filter — independent of, and ANDed with,
+        // the other gates above (Frank 2026-05-16). Empty set =
+        // pass-through so an active-but-empty slot doesn't hide
+        // everything. Snapshot slots populate the set once on activation;
+        // Group slots refresh it each tick before rebuild fires (both
+        // paths live in the onTimer drain).
+        if (g_selsetActive.load() > 0 && !g_selsetActiveGuids.empty()) {
+            char guidBuf[64] = {0};
+            GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
+            if (!g_selsetActiveGuids.count(guidBuf)) continue;
+        }
         // AUTO-mode filter: hide tracks in Trim/Read (0) or Read (1) so
         // the user only sees tracks armed for automation writing. Only
         // active while SelectionMode == Auto AND the Settings toggle is
@@ -532,6 +588,209 @@ void rebuildVisibleTrackList() {
             if (am == 0 || am == 1) continue;
         }
         g_visibleTracks.push_back(tr);
+    }
+}
+
+// ---- Selection-Set helpers ------------------------------------------------
+// All called from the main thread (onTimer drain) — REAPER's ProjExtState +
+// track-API calls aren't safe from the libusb input thread.
+
+// REAPER track-group categories. Each has its own 32-bit (low) and
+// 32-bit (high) bitmask. "ANY group flag" semantics OR across all of
+// these (Frank 2026-05-16). Keep in sync with REAPER's documented
+// param names for GetSetTrackGroupMembership / *High.
+inline const char* const* selsetGroupCategories_(int* outCount) {
+    static const char* kCats[] = {
+        "VOLUME_LEAD",      "VOLUME_FOLLOW",
+        "VOLUME_VCA_LEAD",  "VOLUME_VCA_FOLLOW",
+        "PAN_LEAD",         "PAN_FOLLOW",
+        "WIDTH_LEAD",       "WIDTH_FOLLOW",
+        "MUTE_LEAD",        "MUTE_FOLLOW",
+        "SOLO_LEAD",        "SOLO_FOLLOW",
+        "RECARM_LEAD",      "RECARM_FOLLOW",
+        "POLARITY_LEAD",    "POLARITY_FOLLOW",
+        "AUTOMODE_LEAD",    "AUTOMODE_FOLLOW",
+    };
+    *outCount = static_cast<int>(sizeof(kCats) / sizeof(kCats[0]));
+    return kCats;
+}
+
+bool trackInGroup_(MediaTrack* tr, int groupIdx) {
+    if (!tr || groupIdx < 1 || groupIdx > 64) return false;
+    int count = 0;
+    const char* const* cats = selsetGroupCategories_(&count);
+    if (groupIdx <= 32) {
+        const unsigned bit = 1u << (groupIdx - 1);
+        for (int i = 0; i < count; ++i) {
+            unsigned m = GetSetTrackGroupMembership(tr, cats[i], 0, 0);
+            if (m & bit) return true;
+        }
+    } else {
+        const unsigned bit = 1u << (groupIdx - 33);
+        for (int i = 0; i < count; ++i) {
+            unsigned m = GetSetTrackGroupMembershipHigh(tr, cats[i], 0, 0);
+            if (m & bit) return true;
+        }
+    }
+    return false;
+}
+
+std::string trackGuidStr_(MediaTrack* tr) {
+    if (!tr) return std::string{};
+    char buf[64] = {0};
+    GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+    return std::string(buf);
+}
+
+std::string selsetSerialize_(const SelSet& s) {
+    std::string out;
+    out.reserve(64 + s.guids.size() * 40);
+    out += (s.type == SelSetType::Group) ? "group\n" : "snapshot\n";
+    out += s.name;
+    out += '\n';
+    if (s.type == SelSetType::Group) {
+        char num[16];
+        std::snprintf(num, sizeof(num), "%d", s.groupIdx);
+        out += num;
+        out += '\n';
+    } else {
+        for (const auto& g : s.guids) {
+            out += g;
+            out += '\n';
+        }
+    }
+    return out;
+}
+
+void selsetDeserialize_(const char* raw, SelSet& out) {
+    out = SelSet{};
+    if (!raw || !*raw) return;
+    std::string s(raw);
+    auto popLine = [&]() -> std::string {
+        auto p = s.find('\n');
+        std::string line = (p == std::string::npos) ? s : s.substr(0, p);
+        s.erase(0, (p == std::string::npos) ? s.size() : p + 1);
+        return line;
+    };
+    const std::string typeStr = popLine();
+    out.type = (typeStr == "group") ? SelSetType::Group : SelSetType::Snapshot;
+    out.name = popLine();
+    if (out.type == SelSetType::Group) {
+        const std::string n = popLine();
+        out.groupIdx = std::atoi(n.c_str());
+        if (out.groupIdx < 1 || out.groupIdx > 64) out.groupIdx = 1;
+    } else {
+        while (!s.empty()) {
+            std::string g = popLine();
+            if (!g.empty()) out.guids.push_back(std::move(g));
+        }
+    }
+}
+
+void selsetWriteToProject_(int slot1to8) {
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    const SelSet& s = g_selsets[slot1to8 - 1];
+    char key[32];
+    std::snprintf(key, sizeof(key), "selset_%d", slot1to8);
+    if (s.name.empty() && s.guids.empty()
+        && s.type == SelSetType::Snapshot)
+    {
+        // Empty slot — clear the project key so it doesn't bloat the
+        // .rpp. SetProjExtState with empty value removes the entry.
+        SetProjExtState(nullptr, "rea_sixty", key, "");
+        return;
+    }
+    SetProjExtState(nullptr, "rea_sixty", key,
+                    selsetSerialize_(s).c_str());
+}
+
+void loadSelsetsFromProject_() {
+    ReaProject* proj = EnumProjects(-1, nullptr, 0);
+    for (int i = 1; i <= 8; ++i) {
+        char key[32];
+        std::snprintf(key, sizeof(key), "selset_%d", i);
+        char val[8192] = {0};
+        const int r = GetProjExtState(proj, "rea_sixty", key,
+                                      val, sizeof(val));
+        if (r > 0 && val[0]) {
+            selsetDeserialize_(val, g_selsets[i - 1]);
+        } else {
+            g_selsets[i - 1] = SelSet{};
+        }
+    }
+    g_selsetsLoadedFor = proj;
+    g_selsetsDirty.store(false);
+}
+
+void refreshActiveSelsetGuids_() {
+    g_selsetActiveGuids.clear();
+    const int slot = g_selsetActive.load();
+    if (slot < 1 || slot > 8) return;
+    const SelSet& s = g_selsets[slot - 1];
+    if (s.type == SelSetType::Snapshot) {
+        for (const auto& g : s.guids) g_selsetActiveGuids.insert(g);
+    } else {
+        const int n = CountTracks(nullptr);
+        for (int i = 0; i < n; ++i) {
+            MediaTrack* tr = GetTrack(nullptr, i);
+            if (!tr) continue;
+            if (trackInGroup_(tr, s.groupIdx)) {
+                g_selsetActiveGuids.insert(trackGuidStr_(tr));
+            }
+        }
+    }
+}
+
+void saveCurrentSelectionToSlot_(int slot1to8) {
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    SelSet& s = g_selsets[slot1to8 - 1];
+    // Save always produces a Snapshot slot. If the slot was previously
+    // bound to a Group, this overwrites the binding — user choice.
+    s.type = SelSetType::Snapshot;
+    s.guids.clear();
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        if (GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) {
+            s.guids.push_back(trackGuidStr_(tr));
+        }
+    }
+    selsetWriteToProject_(slot1to8);
+    if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
+    g_bankDirty.store(true);
+}
+
+// onTimer drain. Detect project switch, then process queued recall /
+// save requests, then refresh the active GUID set for Group slots so
+// the next rebuildVisibleTrackList tick sees up-to-date membership.
+void drainSelsets_() {
+    ReaProject* curProj = EnumProjects(-1, nullptr, 0);
+    if (curProj != g_selsetsLoadedFor) g_selsetsDirty.store(true);
+    if (g_selsetsDirty.load()) {
+        loadSelsetsFromProject_();
+        if (g_selsetActive.load() > 0) refreshActiveSelsetGuids_();
+        g_bankDirty.store(true);
+    }
+    const int saveReq = g_selsetSaveRequest.exchange(0);
+    if (saveReq >= 1 && saveReq <= 8) saveCurrentSelectionToSlot_(saveReq);
+    const int actReq = g_selsetActivateRequest.exchange(0);
+    if (actReq == -1) {
+        g_selsetActive.store(0);
+        g_selsetActiveGuids.clear();
+        g_bankDirty.store(true);
+    } else if (actReq >= 1 && actReq <= 8) {
+        g_selsetActive.store(actReq);
+        refreshActiveSelsetGuids_();
+        g_bankDirty.store(true);
+    }
+    // Group slots: re-resolve every tick so adding/removing tracks
+    // from the group in REAPER shows on the surface without a recall.
+    const int slot = g_selsetActive.load();
+    if (slot >= 1 && slot <= 8
+        && g_selsets[slot - 1].type == SelSetType::Group)
+    {
+        refreshActiveSelsetGuids_();
     }
 }
 
@@ -560,9 +819,8 @@ void checkSelLongPressSpill() {
     }
 }
 
-// Active Selection-Set slot (1..8); 0 = none. selset_recall sets this,
-// LED feedback uses it so the bound button lights for the live slot.
-std::atomic<int>  g_selsetActive{0};
+// (Selection-Set state moved up to be visible to rebuildVisibleTrackList —
+//  declared near line 490 area.)
 
 // V-Pot has dedicated Pan UX (Plugin button → plug-in Pan; PAN button →
 // REAPER track pan; default → REAPER track pan). Clicking the Pan knob
@@ -8995,6 +9253,10 @@ void onTimer()
     // list, so a just-fired spill flips the list this tick rather than
     // next.
     checkSelLongPressSpill();
+    // Drain Selection-Set requests + project-switch reload + Group-slot
+    // membership refresh BEFORE the rebuild so the filter sees a
+    // settled `g_selsetActiveGuids` for this tick.
+    drainSelsets_();
     // Rebuild the filtered surface track list FIRST so drainInputQueue
     // and every render helper sees a consistent snapshot for this tick.
     // Without this, the input queue could resolve a strip's track via
@@ -10617,6 +10879,100 @@ void reasixty_setAutoFillFromRight(bool fromRight)
     g_bankDirty.store(true);   // strip→track mapping shifted
 }
 
+// ---- Selection-Set settings exports --------------------------------------
+// All readers honour the live g_selsets cache; writers update both the
+// cache and the project ExtState immediately, then nudge the surface
+// (g_bankDirty) if the change is visible. Slot index N is 1..8.
+
+int  reasixty_selsetActive() { return g_selsetActive.load(); }
+
+int  reasixty_selsetType(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return 0;
+    return static_cast<int>(g_selsets[slot1to8 - 1].type);
+}
+void reasixty_setSelsetType(int slot1to8, int type)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    g_selsets[slot1to8 - 1].type =
+        (type == 1) ? SelSetType::Group : SelSetType::Snapshot;
+    selsetWriteToProject_(slot1to8);
+    if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
+    g_bankDirty.store(true);
+}
+
+const char* reasixty_selsetName(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return "";
+    return g_selsets[slot1to8 - 1].name.c_str();
+}
+void reasixty_setSelsetName(int slot1to8, const char* name)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    g_selsets[slot1to8 - 1].name = name ? name : "";
+    selsetWriteToProject_(slot1to8);
+}
+
+int  reasixty_selsetGroupIdx(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return 1;
+    return g_selsets[slot1to8 - 1].groupIdx;
+}
+void reasixty_setSelsetGroupIdx(int slot1to8, int groupIdx)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    if (groupIdx < 1) groupIdx = 1;
+    if (groupIdx > 64) groupIdx = 64;
+    g_selsets[slot1to8 - 1].groupIdx = groupIdx;
+    selsetWriteToProject_(slot1to8);
+    if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
+    g_bankDirty.store(true);
+}
+
+int  reasixty_selsetTrackCount(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return 0;
+    const SelSet& s = g_selsets[slot1to8 - 1];
+    if (s.type == SelSetType::Snapshot) {
+        return static_cast<int>(s.guids.size());
+    }
+    // Group: report live count so the user can see the binding's reach.
+    int hit = 0;
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (tr && trackInGroup_(tr, s.groupIdx)) ++hit;
+    }
+    return hit;
+}
+
+void reasixty_selsetSaveCurrent(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    // Settings click runs main-thread already, but route through the
+    // queue anyway so onTimer drains it next tick — keeps the single
+    // call path the source of truth.
+    g_selsetSaveRequest.store(slot1to8);
+}
+
+void reasixty_selsetRecallToggle(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    const int cur = g_selsetActive.load();
+    g_selsetActivateRequest.store(cur == slot1to8 ? -1 : slot1to8);
+}
+
+void reasixty_selsetClear(int slot1to8)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    g_selsets[slot1to8 - 1] = SelSet{};
+    selsetWriteToProject_(slot1to8);
+    if (g_selsetActive.load() == slot1to8) {
+        g_selsetActivateRequest.store(-1);
+    }
+    g_bankDirty.store(true);
+}
+
 int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
 void reasixty_setCycleOpenMode(int mode)
 {
@@ -11838,20 +12194,32 @@ void registerBindingHandlers()
         "Toggle Show Only Selected", false
     });
 
-    // Selection-Set recall — single param-driven builtin. param = slot 1..8.
-    // Tap recalls; long-press = save (wired by the Long-Press dispatcher
-    // when the Selection-Sets editor in Settings is built out).
+    // Selection-Set recall — toggle. param = slot 1..8. Pressing the
+    // already-active slot deactivates the filter (Frank 2026-05-16).
+    // Lambda runs from the libusb input thread; the actual ProjExtState
+    // + GUID-set work runs on the main thread via drainSelsets_().
     registerBuiltin("selset_recall", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
             if (param < 1 || param > 8) return;
-            g_selsetActive.store(param);
+            const int curActive = g_selsetActive.load();
+            g_selsetActivateRequest.store(curActive == param ? -1 : param);
             g_pageDirty.store(true);
-            // TODO Phase 2.5b: pull GUID list from project ExtState
-            // (key "selset_<param>") and apply as surface filter.
         },
         [](int param) { return g_selsetActive.load() == param; },
-        "Recall Selection Slot", true   // usesParam → Slot spinner in UI
+        "Recall Selection Slot (toggle)", true
+    });
+
+    // Selection-Set save — snapshot current REAPER selection into slot.
+    // param = slot 1..8. Always produces a Snapshot-type slot (Group
+    // bindings are configured via Settings, not via a button press).
+    registerBuiltin("selset_save", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            if (param < 1 || param > 8) return;
+            g_selsetSaveRequest.store(param);
+        },
+        nullptr, "Save current REAPER selection to slot", true
     });
 
     // FX Learn lebt als Settings-Tab im Mixer-Window, nicht als Builtin —

@@ -80,6 +80,18 @@ bool reasixty_cycleEngagesUf8();
 void reasixty_setCycleEngagesUf8(bool on);
 int  reasixty_cycleControlMask();
 void reasixty_setCycleControlMask(int mask);
+// Selection-Set exports — Phase 2.5b. All slot args are 1..8.
+int         reasixty_selsetActive();
+int         reasixty_selsetType(int slot);                 // 0=Snapshot, 1=Group
+void        reasixty_setSelsetType(int slot, int type);
+const char* reasixty_selsetName(int slot);
+void        reasixty_setSelsetName(int slot, const char* name);
+int         reasixty_selsetGroupIdx(int slot);
+void        reasixty_setSelsetGroupIdx(int slot, int groupIdx);
+int         reasixty_selsetTrackCount(int slot);
+void        reasixty_selsetSaveCurrent(int slot);
+void        reasixty_selsetRecallToggle(int slot);
+void        reasixty_selsetClear(int slot);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -7592,16 +7604,120 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 }
 
 // ---- Selection Sets -------------------------------------------------------
-// Per ROADMAP.md §"2.5b" + plan-settings-ui.md §"Tab: Selection Sets":
-// 8 slots each holding a list of Track GUIDs. Project-scoped via
-// SetProjExtState("rea_sixty", "selset_N", …).
+// Phase 2.5b — eight project-scoped slots, each either a snapshot of
+// REAPER track GUIDs or a live binding to a REAPER track group (1..64,
+// ANY-category membership). Recall is toggle. Group bindings update
+// live each tick — no manual refresh needed.
 void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
 {
     ImGui_Text(ctx, "Selection Sets");
-    ImGui_Text(ctx, "  TODO: 8-slot grid (Slot 1..8)");
-    ImGui_Text(ctx, "  TODO: per-slot name + Track-GUID list editor");
-    ImGui_Text(ctx, "  TODO: 'save current selection' / 'recall' buttons");
-    ImGui_Text(ctx, "  TODO: missing-track pruning UI");
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "Eight project-scoped slots. Recall toggles — press the active "
+        "slot's button again to deactivate. Slot filter ANDs with Folder "
+        "Mode / Show-Only-Selected / AUTO-mode filters.");
+    ImGui_Spacing(ctx);
+
+    const int active = reasixty_selsetActive();
+    for (int slot = 1; slot <= 8; ++slot) {
+        char idtag[32];
+        std::snprintf(idtag, sizeof(idtag), "selset_row_%d", slot);
+        ImGui_PushID(ctx, idtag);
+
+        // Slot label + active-row marker. Active row prefixes with a dot
+        // since ReaImGui v0.10 has no reliable cell-background paint.
+        char header[24];
+        std::snprintf(header, sizeof(header), "%s Slot %d",
+                      (active == slot) ? "•" : " ", slot);
+        ImGui_Text(ctx, header);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Type picker — Snapshot or Group. Default Snapshot.
+        const int typeInt = reasixty_selsetType(slot);
+        const char* preview = (typeInt == 1) ? "Group" : "Snapshot";
+        ImGui_SetNextItemWidth(ctx, 90);
+        if (ImGui_BeginCombo(ctx, "##type", preview, nullptr)) {
+            bool isSnap = (typeInt == 0);
+            bool isGrp  = (typeInt == 1);
+            if (ImGui_Selectable(ctx, "Snapshot", &isSnap,
+                                 nullptr, nullptr, nullptr))
+            {
+                reasixty_setSelsetType(slot, 0);
+            }
+            if (ImGui_Selectable(ctx, "Group", &isGrp,
+                                 nullptr, nullptr, nullptr))
+            {
+                reasixty_setSelsetType(slot, 1);
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Name field.
+        char nameBuf[64] = {0};
+        std::strncpy(nameBuf, reasixty_selsetName(slot), sizeof(nameBuf) - 1);
+        ImGui_SetNextItemWidth(ctx, 180);
+        if (ImGui_InputTextWithHint(ctx, "##name",
+                                    "Slot name",
+                                    nameBuf, sizeof(nameBuf),
+                                    nullptr, nullptr))
+        {
+            reasixty_setSelsetName(slot, nameBuf);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Group spinner only for Group slots.
+        if (typeInt == 1) {
+            int g = reasixty_selsetGroupIdx(slot);
+            ImGui_SetNextItemWidth(ctx, 80);
+            if (ImGui_InputInt(ctx, "Grp##gi", &g,
+                               nullptr, nullptr, nullptr))
+            {
+                reasixty_setSelsetGroupIdx(slot, g);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+        }
+
+        // Live track count.
+        char info[32];
+        std::snprintf(info, sizeof(info), "(%d tracks)",
+                      reasixty_selsetTrackCount(slot));
+        ImGui_Text(ctx, info);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Action buttons. Save only makes sense for Snapshot (it
+        // overwrites the slot's GUID list with the current REAPER
+        // selection — and converts a Group slot to Snapshot if
+        // pressed). Recall toggles the active slot regardless of type.
+        if (ImGui_Button(ctx, "Save##sv", 0, 0)) {
+            reasixty_selsetSaveCurrent(slot);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* recallLabel = (active == slot)
+            ? "Deactivate##rc" : "Recall##rc";
+        if (ImGui_Button(ctx, recallLabel, 0, 0)) {
+            reasixty_selsetRecallToggle(slot);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Clear##cl", 0, 0)) {
+            reasixty_selsetClear(slot);
+        }
+
+        ImGui_PopID(ctx);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "Hardware: bind buttons to selset_recall (param 1..8, toggle) "
+        "and / or");
+    ImGui_Text(ctx,
+        "selset_save (param 1..8, snapshot current REAPER selection).");
+    ImGui_Text(ctx,
+        "Group slots refresh live from REAPER track-group membership "
+        "(ANY category).");
 }
 
 // ---- About ----------------------------------------------------------------
