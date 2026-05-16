@@ -13147,10 +13147,28 @@ void registerBindingHandlers()
     registerBuiltin("auto_touch_global",
                     autoModeGlobal(2, "Automation: Touch (Global)"));
 
+    // bank_left / bank_right have a FX-Learn override: in UF8 Plugin Mode
+    // with a focused user-mapped plug-in, the buttons can be re-learned
+    // to toggle a VST3 param on that plug-in (Frank 2026-05-16). The
+    // ±8-strip scroll is the fallback when no override is bound.
+    auto fireUserBankNav = [](bool isLeft) -> bool {
+        if (!g_uf8PluginMode.load()) return false;
+        auto uctx = userStripCtxFocused_();
+        if (!uctx.map) return false;
+        const auto& nb = isLeft ? uctx.map->uf8.bankLeft
+                                : uctx.map->uf8.bankRight;
+        if (nb.vst3Param < 0) return false;
+        const double cur = TrackFX_GetParamNormalized(
+            uctx.tr, uctx.fxIdx, nb.vst3Param);
+        TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
+            nb.vst3Param, cur < 0.5 ? 1.0 : 0.0);
+        return true;
+    };
     registerBuiltin("bank_left", DescBuilder{
-        [](bool firing, bool pressed, int /*param*/) {
+        [fireUserBankNav](bool firing, bool pressed, int /*param*/) {
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft, pressed);
             if (!firing) return;
+            if (fireUserBankNav(true)) return;   // FX-Learn override fired
             const int trackCount = visibleTrackCount();
             const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
             int next = g_bankOffset.load() - 8;
@@ -13158,12 +13176,13 @@ void registerBindingHandlers()
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank ← (8-strip scroll left)", false
+        nullptr, "Bank ← (8-strip scroll left; FX-Learn override possible)", false
     });
     registerBuiltin("bank_right", DescBuilder{
-        [](bool firing, bool pressed, int /*param*/) {
+        [fireUserBankNav](bool firing, bool pressed, int /*param*/) {
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, pressed);
             if (!firing) return;
+            if (fireUserBankNav(false)) return;
             const int trackCount = visibleTrackCount();
             const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
             int next = g_bankOffset.load() + 8;
@@ -13171,7 +13190,7 @@ void registerBindingHandlers()
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank → (8-strip scroll right)", false
+        nullptr, "Bank → (8-strip scroll right; FX-Learn override possible)", false
     });
 
     // ---- Send / Receive routing builtins -------------------------------

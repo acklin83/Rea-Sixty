@@ -186,6 +186,8 @@ bool uf8MapHasContent_(const UserUf8Map& u)
             if (!u.banks.banks[b][s].label.empty()) return true;
         }
     }
+    if (u.bankLeft.vst3Param  >= 0) return true;
+    if (u.bankRight.vst3Param >= 0) return true;
     return false;
 }
 
@@ -403,7 +405,20 @@ std::string serialize_(const UserPluginCatalog& c)
                 appendEscaped_(os, l.label);
                 os << " }";
             }
-            os << "\n        ]\n      }";
+            os << "\n        ],\n";
+            // Bank Left / Right (v6). Single global binding each — the
+            // press toggles a VST3 param on the focused user-plug-in
+            // when vst3Param ≥ 0; otherwise the hardware button keeps
+            // its default ±8-strip scroll. Frank 2026-05-16.
+            os << "        \"bankLeft\":  { \"vst3Param\": "
+               << m.uf8.bankLeft.vst3Param
+               << ", \"colour\": "
+               << static_cast<unsigned>(m.uf8.bankLeft.colour) << " },\n";
+            os << "        \"bankRight\": { \"vst3Param\": "
+               << m.uf8.bankRight.vst3Param
+               << ", \"colour\": "
+               << static_cast<unsigned>(m.uf8.bankRight.colour) << " }\n";
+            os << "      }";
         }
         if (!m.paramSnapshot.empty()) {
             os << ",\n      \"paramSnapshot\": [";
@@ -631,6 +646,21 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         m.uf8.strips[b][s] = tmp;
                 }
             }
+            // Bank Left / Right bindings (v6 — Frank 2026-05-16). Older
+            // files (v5 or earlier) lack the keys; defaults stay at
+            // vst3Param=-1 so the hardware buttons keep their built-in
+            // ±8-strip scroll behaviour.
+            auto readNav = [&](const char* key, UserUf8NavBinding& nb) {
+                auto* no = uo->get_item_by_name(key);
+                if (!no || !no->is_object()) return;
+                getIntI_(no, "vst3Param", nb.vst3Param);
+                int colTmp = 0;
+                if (getIntI_(no, "colour", colTmp))
+                    nb.colour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+            };
+            readNav("bankLeft",  m.uf8.bankLeft);
+            readNav("bankRight", m.uf8.bankRight);
+
             // Per-bank TopSoftKey LED state. New shape (single colour
             // + label); legacy entries with activeColour/inactiveColour
             // get their activeColour migrated into colour, brightness

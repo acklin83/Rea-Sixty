@@ -4447,6 +4447,8 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
             case 5 /*SelBtn*/:     return u.strips[bank][strip].selVst3Param;
             case 1 /*VPot*/:
             case 2 /*TopSoftKey*/: return u.banks.banks[bank][strip].vst3Param;
+            case 6 /*BankLeft*/:   return u.bankLeft.vst3Param;
+            case 7 /*BankRight*/:  return u.bankRight.vst3Param;
             default: return -1;
         }
     }
@@ -4466,6 +4468,8 @@ void bindUf8_(int kind, int strip, int bank, int vst3Param)
             case 2:
                 u.banks.banks[bank][strip].vst3Param = vst3Param;
                 break;
+            case 6: u.bankLeft.vst3Param  = vst3Param; break;
+            case 7: u.bankRight.vst3Param = vst3Param; break;
         }
     });
 }
@@ -4481,6 +4485,8 @@ void unbindUf8_(int kind, int strip, int bank)
             case 5: u.strips[bank][strip].selVst3Param   = -1; break;
             case 1:
             case 2: u.banks.banks[bank][strip] = uf8::UserUf8BankSlot{}; break;
+            case 6: u.bankLeft  = uf8::UserUf8NavBinding{}; break;
+            case 7: u.bankRight = uf8::UserUf8NavBinding{}; break;
         }
     });
 }
@@ -4628,6 +4634,8 @@ uint32_t getUf8Colour_(int kind, int strip, int bank)
             case 3 /*SoloBtn*/: return u.strips[bank][strip].soloColour;
             case 4 /*CutBtn*/:  return u.strips[bank][strip].cutColour;
             case 5 /*SelBtn*/:  return u.strips[bank][strip].selColour;
+            case 6 /*BankLeft*/:  return u.bankLeft.colour;
+            case 7 /*BankRight*/: return u.bankRight.colour;
             default: return 0;
         }
     }
@@ -4642,6 +4650,8 @@ void setUf8Colour_(int kind, int strip, int bank, uint32_t rgb)
             case 3: u.strips[bank][strip].soloColour = rgb; break;
             case 4: u.strips[bank][strip].cutColour  = rgb; break;
             case 5: u.strips[bank][strip].selColour  = rgb; break;
+            case 6: u.bankLeft.colour  = rgb; break;
+            case 7: u.bankRight.colour = rgb; break;
         }
     });
 }
@@ -5126,10 +5136,22 @@ constexpr float kUf8FaderRailY  = 216;
 constexpr float kUf8FaderRailH  = 240;
 constexpr float kUf8FaderRailW  = 22;
 
+// Bank L/R buttons (FX-Learn mockup only — no native position on the
+// UF8 hardware face). Placed below the strip area, centred.
+constexpr float kUf8BankBtnY    = 466;
+constexpr float kUf8BankBtnH    = 18;
+constexpr float kUf8BankBtnW    = 60;
+
 inline float uf8StripCx_(int strip)
 {
     return kUf8StripsOx + strip * (kUf8StripW + kUf8StripGap)
          + kUf8StripW / 2.0f;
+}
+
+// Centred between strip 4 and 5 so the pair sits visually centred.
+inline float uf8BankBtnX_(bool right) {
+    const float cx = (uf8StripCx_(3) + uf8StripCx_(4)) / 2.0f;
+    return right ? cx + 4 : cx - 4 - kUf8BankBtnW;
 }
 
 } // namespace
@@ -5205,6 +5227,18 @@ void drawUf8Face_(VCanvas& c)
         drawTextCentered_(c, cx, kUf8FaderRailY + kUf8FaderRailH + 4,
                           0x707680FF, snum);
     }
+
+    // Bank L / Bank R — global controls, painted below the strip area.
+    for (int i = 0; i < 2; ++i) {
+        const bool right = (i == 1);
+        const float bx = uf8BankBtnX_(right);
+        rect_(c, bx, kUf8BankBtnY, kUf8BankBtnW, kUf8BankBtnH,
+              kBtnFill, kBtnEdge, 3.0);
+        drawTextCentered_(c, bx + kUf8BankBtnW / 2.0f,
+                          kUf8BankBtnY + kUf8BankBtnH / 2.0f,
+                          kSilkText, right ? "BANK \xE2\x96\xB8"
+                                           : "BANK \xE2\x97\x82");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5222,19 +5256,21 @@ struct Uf8Control {
         SoloBtn,         // strip 0..7 → uf8.strips[bank][s].soloVst3Param
         CutBtn,
         SelBtn,
+        BankLeftBtn,     // global (strip ignored) → uf8.bankLeft
+        BankRightBtn,    // global (strip ignored) → uf8.bankRight
     };
     Kind  kind;
-    int   strip;     // 0..7
+    int   strip;     // 0..7 (ignored for BankLeftBtn / BankRightBtn)
     float cx, cy;    // top-left of bbox
     float w, h;
 };
 
 // Build the table programmatically — UF8 strips are uniform unlike the UC1
 // face. Lives in a function-local static so initialisation order is sane.
-// 6 control kinds × 8 strips = 48 entries.
+// 6 strip-kinds × 8 strips + 2 global Bank L/R = 50 entries.
 const Uf8Control* uf8Controls_(int* outCount)
 {
-    static Uf8Control tbl[48];
+    static Uf8Control tbl[50];
     static int count = 0;
     if (count == 0) {
         int n = 0;
@@ -5266,6 +5302,13 @@ const Uf8Control* uf8Controls_(int* outCount)
                          cx - kUf8FaderRailW / 2.0f, kUf8FaderRailY,
                          kUf8FaderRailW, kUf8FaderRailH };
         }
+        // Bank L / Bank R — single global controls (strip ignored).
+        tbl[n++] = { Uf8Control::BankLeftBtn,  0,
+                     uf8BankBtnX_(false), kUf8BankBtnY,
+                     kUf8BankBtnW, kUf8BankBtnH };
+        tbl[n++] = { Uf8Control::BankRightBtn, 0,
+                     uf8BankBtnX_(true),  kUf8BankBtnY,
+                     kUf8BankBtnW, kUf8BankBtnH };
         count = n;
     }
     if (outCount) *outCount = count;
@@ -5568,13 +5611,17 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     if (ImGui_IsItemHovered(ctx, nullptr)) {
         const char* kindLabel = "?";
         switch (ctrl.kind) {
-            case Uf8Control::Fader:   kindLabel = "Fader";   break;
-            case Uf8Control::VPot:    kindLabel = "V-Pot";   break;
-            case Uf8Control::SoloBtn: kindLabel = "Solo";    break;
-            case Uf8Control::CutBtn:  kindLabel = "Cut";     break;
-            case Uf8Control::SelBtn:  kindLabel = "Sel";     break;
+            case Uf8Control::Fader:        kindLabel = "Fader";    break;
+            case Uf8Control::VPot:         kindLabel = "V-Pot";    break;
+            case Uf8Control::SoloBtn:      kindLabel = "Solo";     break;
+            case Uf8Control::CutBtn:       kindLabel = "Cut";      break;
+            case Uf8Control::SelBtn:       kindLabel = "Sel";      break;
+            case Uf8Control::BankLeftBtn:  kindLabel = "Bank \xE2\x97\x82"; break;
+            case Uf8Control::BankRightBtn: kindLabel = "Bank \xE2\x96\xB8"; break;
             default: break;
         }
+        const bool isNav = (ctrl.kind == Uf8Control::BankLeftBtn ||
+                            ctrl.kind == Uf8Control::BankRightBtn);
         char tip[256];
         if (isMapped) {
             char pname[128] = {};
@@ -5594,20 +5641,29 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     break;
                 }
             }
-            // Bank name follows the new 8-bank TopSoftKey scheme
-            // (Frank 2026-05-13: V-POT/SOFT 1-5 labels retired in
-            // favour of "Soft-Key N"). Only V-Pots are bank-scoped;
-            // Solo/Cut/Sel/Fader stay bank-independent so the bank
-            // suffix is V-Pot-only.
+            // Bank suffix — every strip control is bank-scoped now
+            // (Frank 2026-05-16). Nav buttons are global → no suffix.
             char bankSuffix[32] = {0};
-            if (ctrl.kind == Uf8Control::VPot) {
+            if (!isNav) {
                 std::snprintf(bankSuffix, sizeof(bankSuffix),
                               "  Soft-Key %d", bank + 1);
             }
+            if (isNav) {
+                std::snprintf(tip, sizeof(tip),
+                    "%s%s\n  -> param %d  '%s'",
+                    kindLabel, bankSuffix, mapped, pname);
+            } else {
+                std::snprintf(tip, sizeof(tip),
+                    "%s strip %d%s\n  -> param %d  '%s'",
+                    kindLabel, ctrl.strip + 1, bankSuffix,
+                    mapped, pname);
+            }
+        } else if (isNav) {
             std::snprintf(tip, sizeof(tip),
-                "%s strip %d%s\n  -> param %d  '%s'",
-                kindLabel, ctrl.strip + 1, bankSuffix,
-                mapped, pname);
+                "%s (global)\n  default: bank %s8 — "
+                "drag a param here to override",
+                kindLabel,
+                ctrl.kind == Uf8Control::BankLeftBtn ? "-" : "+");
         } else {
             std::snprintf(tip, sizeof(tip),
                 "%s strip %d\n  unmapped — drag a param here or click to listen",
@@ -5632,13 +5688,23 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
 
     if (isMapped) {
+        const bool isNav = (ctrl.kind == Uf8Control::BankLeftBtn ||
+                            ctrl.kind == Uf8Control::BankRightBtn);
         char popId[48];
         std::snprintf(popId, sizeof(popId), "fxl_uf8_ctx_%d_%d",
                       int(ctrl.kind), ctrl.strip);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
             char title[160];
-            std::snprintf(title, sizeof(title),
-                "strip %d -> param %d", ctrl.strip + 1, mapped);
+            if (isNav) {
+                std::snprintf(title, sizeof(title),
+                    "Bank %s -> param %d",
+                    ctrl.kind == Uf8Control::BankLeftBtn
+                        ? "\xE2\x97\x82" : "\xE2\x96\xB8",
+                    mapped);
+            } else {
+                std::snprintf(title, sizeof(title),
+                    "strip %d -> param %d", ctrl.strip + 1, mapped);
+            }
             ImGui_TextDisabled(ctx, title);
             ImGui_Separator(ctx);
 
@@ -5719,7 +5785,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // override (LED falls back to class default).
             if (ctrl.kind == Uf8Control::SoloBtn ||
                 ctrl.kind == Uf8Control::CutBtn  ||
-                ctrl.kind == Uf8Control::SelBtn)
+                ctrl.kind == Uf8Control::SelBtn  ||
+                ctrl.kind == Uf8Control::BankLeftBtn ||
+                ctrl.kind == Uf8Control::BankRightBtn)
             {
                 const uint32_t curRgb = getUf8Colour_(ctrl.kind, ctrl.strip, bank);
                 ImGui_Text(ctx, "Colour");
@@ -5795,7 +5863,8 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // derived from the current mapping's name (e.g. "CH1 Volume"
             // → "CH2 Volume"..."CH8 Volume"). Only shown when the mapped
             // param has a digit run and this isn't already the last strip.
-            if (ctrl.strip < 7) {
+            // Nav buttons (Bank L/R) are global — no per-strip fill.
+            if (!isNav && ctrl.strip < 7) {
                 const UserPluginMap* editing = nullptr;
                 for (const auto& m : uf8::user_plugins::get().maps) {
                     if (m.match == g_editingMatch) { editing = &m; break; }
@@ -6872,6 +6941,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     noteUse_(sb.selVst3Param,  buf);
                 }
             }
+            noteUse_(editing->uf8.bankLeft.vst3Param,  "UF8 Bank \xE2\x97\x82");
+            noteUse_(editing->uf8.bankRight.vst3Param, "UF8 Bank \xE2\x96\xB8");
 
             const int paramCount = paramCountFor_(*editing, fx);
             // Cap iteration so a 5000-param plugin doesn't tank the

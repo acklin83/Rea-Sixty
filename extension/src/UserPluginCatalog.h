@@ -116,6 +116,18 @@ struct UserUf8StripBinding {
     uint32_t selColour  = 0;
 };
 
+// Bank Left / Bank Right buttons in FX Learn (Frank 2026-05-16:
+// "Bank buttons ins Mockup rein, default action 'Bank +/- 8',
+// aber frei auf plugin params belegbar"). Single global binding (NOT
+// per-bank — Bank L/R navigate banks; making them per-bank would loop).
+// vst3Param == -1 → button keeps its default behaviour (bank_left /
+// bank_right builtin = ±8-strip scroll). Otherwise the press toggles
+// the bound VST3 param on the focused user-plug-in instance.
+struct UserUf8NavBinding {
+    int      vst3Param = -1;
+    uint32_t colour    = 0;  // 0 = class default (white)
+};
+
 struct UserUf8Map {
     UserUf8BankSet       banks;
     // 8 banks × 8 strips. Older v5 catalogs serialised a flat strips[8];
@@ -125,6 +137,8 @@ struct UserUf8Map {
     // Per-bank TopSoftKey LED appearance (Plugin Mode). Index = bank
     // index 0..7; matches TopSoftKey position 1..8 on the hardware.
     UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8BankCount] = {};
+    UserUf8NavBinding    bankLeft;
+    UserUf8NavBinding    bankRight;
 };
 
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an
