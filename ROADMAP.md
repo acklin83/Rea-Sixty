@@ -220,6 +220,52 @@ These exist in SSL's settings but don't apply to Rea-Sixty's architecture:
 
 **Goal:** A surface-level way to mix groups (busses, stems, headphone mixes) without leaving the current bank context. Phase A scoped 2026-05-15; four design questions deferred. Picks up the "fast-glance, no bank-switching" gap that Folder Mode + Show-Only-Selected only partially close for users who think in busses, not folders.
 
+## Phase 3.5 — UC1 ↔ TotalMix EQ / Dynamics — **DESIGN**
+
+**Goal:** UC1 drives TotalMix FX channel EQ and Dynamics on the focused track's bound hardware input, with live GR estimate on the Comp LED strip. Unlocked by TotalMix FX 2.1 Alpha 5's Global OSC additions (`/input/<n>/lowcut|eq|dynamics|autolevel/...` paths, documented 2026-05-04 in `globalosc_protocol_alpha5`). Alpha 4 did not expose these.
+
+Reverses the TotalReaper scope decision of 2026-05-05 (commit `0083366`) — channel EQ + Dynamics come back into scope on the TotalReaper side because Alpha 5 makes them OSC-addressable.
+
+Architecture: UC1 → REAPER track → JSFX (parameter surface) → TotalReaper extension → TotalMix OSC. JSFX is just the parameter store UC1 reads/writes; TotalReaper owns OSC traffic and GR math. UC1 sees the JSFX as a learned plug-in via the existing FX-Learn pathway — no new dispatch mode in reaper-uf8.
+
+### 3.5a — TotalReaper: JSFX + bidirectional mirror
+
+- `tr_tmfx_channel.jsfx` sliders covering Alpha 5's per-channel surface:
+  - LowCut: `enable / freq / slope`
+  - EQ: `enable`, band 1/2/3 `gain / freq / q`, `band1type / band3type`
+  - Dynamics: `enable / compthres / compratio / attack / release / expthres / expratio`
+  - Read-only output sliders `gr_comp_dB`, `gr_exp_dB` (filled by extension, not from audio)
+- AutoLevel deferred — knobless on UC1 anyway
+- Extension subscribes to the matching `/input/<n>/...` paths and mirrors values into the JSFX via `TrackFX_SetParamNormalized`. Reverse direction (JSFX edit → OSC) reuses the existing slider-write → OSC path
+- Per-track config: which TotalMix channel a REAPER track binds to. Reuses the P_EXT-key scheme from the preamp mirror
+
+### 3.5b — GR math model
+
+- Subscribe `/level/in/<n>` (already wired for routing-mirror), tick at 50 Hz
+- Client-side log-domain comp envelope:
+  ```
+  overshoot = max(0, level_dB − compthres_dB)
+  static_GR = overshoot × (1 − 1/compratio)
+  env_GR    = onepole_smooth(static_GR, attack, release)
+  ```
+- Mirror form for the expander (level below `expthres`, gating direction). Write both to JSFX `gr_comp_dB` / `gr_exp_dB`
+- Ballistic-mismatch tolerance ≤2 dB per Phase 2c precedent. UC1's 5-LED resolution (3/6/10/14/20 dB) hides finer error
+
+### 3.5c — reaper-uf8: UC1PluginMap entry
+
+- New `PluginBindings` entry, FX-name substring `tr_tmfx_channel`
+- Knob mapping mirrors CS 2: HPF→`lowcut/freq`, HF/HMF/LMF/LF gain/freq/q → EQ band 3/2/1, Comp Threshold/Ratio/Release → `compthres/compratio/release`, Gate Threshold → `expthres`, Gate Range → `expratio`
+- Unmapped knobs (Gate Hold, Fast Att Comp, Peak, Fast Att Gate) stay dark — TotalMix doesn't expose them
+- `channelGrParam` points at the JSFX `gr_comp_dB` slider so the CS Comp LED strip reads it via the existing user-plug-in GR path; BC mechanical needle stays at 0 (no BC equivalent in TotalMix)
+
+### 3.5d — Calibration + polish
+
+- A/B against ReaComp with identical settings on 30 s programme material; build a per-ratio correction LUT if the estimate runs more than one LED off on sustained material
+- Settings tab entry: per-track TotalMix-channel binding picker, surfaced in the existing Modes → REC sub-section that already hosts TotalReaper's preamp UI
+- Expander GR for the Gate LED strip (math from 3.5b, wiring only)
+
+**Milestone complete when:** A UFX+ input bound to a REAPER track exposes its TotalMix LowCut + EQ + Comp + Expander to UC1's dedicated knobs and buttons, parameter changes round-trip via OSC, and the CS Comp LED strip tracks audio-driven GR within ≤2 dB of a REAPER-side reference compressor.
+
 ## Phase 4+ — Community
 
 **Goal:** Project graduates from "Frank's studio tool" to "the open-source alternative for SSL controllers".

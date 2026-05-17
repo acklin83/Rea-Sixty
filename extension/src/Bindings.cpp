@@ -637,14 +637,40 @@ int modifierFromKey_(const char* s)
     return -1;
 }
 
-bool slotIsEmpty_(const ActionSlot& s)
+// A step counts as empty when it would fire nothing on dispatch:
+// Reaper/Builtin/Keyboard with no action string are inert (the picker
+// shows "Pick one" until the user selects something), Noop is always
+// inert, MIDI carries its payload in numeric fields so it's never
+// considered empty just from action being unset.
+bool stepIsEmpty_(const ActionStep& st)
 {
-    if (s.type != ActionType::Noop || !s.action.empty()) return false;
-    for (const auto& st : s.extraSteps) {
-        if (st.type != ActionType::Noop || !st.action.empty()) return false;
+    switch (st.type) {
+        case ActionType::Noop:     return true;
+        case ActionType::Reaper:
+        case ActionType::Builtin:
+        case ActionType::Keyboard: return st.action.empty();
+        case ActionType::Midi:     return false;
     }
     return true;
 }
+
+bool slotIsEmpty_(const ActionSlot& s)
+{
+    if (!stepIsEmpty_(s)) return false;
+    for (const auto& st : s.extraSteps) {
+        if (!stepIsEmpty_(st)) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool slotIsEmpty(const ActionSlot& s)
+{
+    return slotIsEmpty_(s);
+}
+
+namespace {
 
 // Emit a single step's flat fields inline (no surrounding braces) —
 // caller owns the wrapping object. Used by both the legacy single-step

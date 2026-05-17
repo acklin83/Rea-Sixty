@@ -103,6 +103,8 @@ int  reasixty_recSolo();
 void reasixty_setRecRmeEnabled(bool on);
 void reasixty_setRecVpotRotateGain(bool on);
 void reasixty_setRecVpotShiftInputCh(bool on);
+bool reasixty_altDragSnapBack();
+void reasixty_setAltDragSnapBack(bool on);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -3938,6 +3940,11 @@ int         g_pendingModePrimary = 0;    // 1=CS, 2=BC, 3=UF8-only
 bool        g_pendingModeOpen    = false;
 std::string g_lastSaveError;             // last persistence error, sticky until next save
 
+// Master-view filter + sort state. Filter is a case-insensitive
+// substring matched against either the map's `match` (FX name) or
+// the auto-derived developer column.
+char g_fxlMasterFilter[64] = {};
+
 // Cached list of installed FX populated lazily on first "+ New" open.
 // REAPER's EnumInstalledFX walks the entire plugin catalog (can be
 // 5000+ entries with FabFilter / Waves bundles), so we cache it for
@@ -3949,6 +3956,26 @@ struct InstalledFx {
 std::vector<InstalledFx> g_installedFx;
 char g_pickerFilter[64] = {};
 int  g_pickerSelectedIdx = -1;   // index into g_installedFx (filtered or full)
+
+// Best-effort developer/vendor lookup for the FX-Learn master list.
+// Returns the vendor parsed from the first installed FX whose name
+// contains the map's match substring. Empty when the catalog hasn't
+// been loaded yet or no installed FX matches. The vendor portion
+// follows REAPER's "Name (Vendor)" convention at the tail of the FX
+// name string.
+std::string fxlMasterDeveloperFor_(const std::string& match)
+{
+    if (match.empty() || g_installedFx.empty()) return {};
+    for (const auto& fx : g_installedFx) {
+        if (fx.name.find(match) == std::string::npos) continue;
+        const auto paren = fx.name.rfind(" (");
+        if (paren == std::string::npos) return {};
+        const auto end = fx.name.rfind(')');
+        if (end == std::string::npos || end <= paren + 2) return {};
+        return fx.name.substr(paren + 2, end - paren - 2);
+    }
+    return {};
+}
 
 void loadInstalledFx_()
 {
@@ -7191,6 +7218,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
+    // Lazy-load the installed-FX catalog so the Developer column has
+    // something to look up. Cached for the session — same store the
+    // "+ New" picker uses.
+    if (g_installedFx.empty()) loadInstalledFx_();
+
     const auto& cat = user_plugins::get();
 
     if (cat.maps.empty()) {
@@ -7198,8 +7230,68 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             "No user plugin maps yet. Click '+ New' to teach a third-party "
             "plug-in.");
     } else {
-        const int kCols = 6;
-        int tblFlags = 0;  // default: borders=outer, no row-bg
+        // Search field — matches case-insensitively against either the
+        // map's `match` (FX name) or its derived developer string.
+        double sw = 320;
+        ImGui_PushItemWidth(ctx, sw);
+        ImGui_InputTextWithHint(ctx, "##fxl_master_filter",
+            "search name or developer",
+            g_fxlMasterFilter,
+            static_cast<int>(sizeof(g_fxlMasterFilter)),
+            nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+
+        std::string flt = g_fxlMasterFilter;
+        for (auto& c : flt) c = static_cast<char>(std::tolower(c));
+        auto lc = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(c));
+            return s;
+        };
+
+        // Resolve developer per row up front so the sort comparator
+        // doesn't keep re-scanning g_installedFx (O(N*M) → O(N)).
+        struct Row { size_t idx; std::string dev; };
+        std::vector<Row> rows;
+        rows.reserve(cat.maps.size());
+        for (size_t i = 0; i < cat.maps.size(); ++i) {
+            Row r{ i, fxlMasterDeveloperFor_(cat.maps[i].match) };
+            if (!flt.empty()) {
+                const std::string nameLc = lc(cat.maps[i].match);
+                const std::string devLc  = lc(r.dev);
+                if (nameLc.find(flt) == std::string::npos
+                    && devLc.find(flt)  == std::string::npos) {
+                    continue;
+                }
+            }
+            rows.push_back(std::move(r));
+        }
+
+        // Sort state — manual instead of ImGui_TableFlags_Sortable
+        // because ReaImGui's TableGetColumnSortSpecs hand-off always
+        // returned colIdx=0/dir=0 here regardless of which header
+        // was clicked (verified on macOS arm64 reaimgui 0.10,
+        // 2026-05-17). Sortable columns render as buttons in the
+        // header row.
+        enum class FxlSort : uint8_t { Name, Developer };
+        static FxlSort s_sortCol = FxlSort::Name;
+        static bool    s_sortAsc = true;
+
+        {
+            const bool asc = s_sortAsc;
+            const auto col = s_sortCol;
+            std::sort(rows.begin(), rows.end(),
+                [&](const Row& a, const Row& b) {
+                    const std::string aKey = (col == FxlSort::Name)
+                        ? lc(cat.maps[a.idx].match) : lc(a.dev);
+                    const std::string bKey = (col == FxlSort::Name)
+                        ? lc(cat.maps[b.idx].match) : lc(b.dev);
+                    return asc ? (aKey < bKey) : (aKey > bKey);
+                });
+        }
+
+        const int kCols = 7;
+        int tblFlags = 0;
         // CRITICAL: each TableSetupColumn that passes a non-null init_width
         // MUST also pass WidthFixed in flags — otherwise ImGui interprets
         // the value as a stretch *weight*, which with values like 36..240
@@ -7210,19 +7302,46 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                              nullptr, nullptr, nullptr)) {
             int wFlag = ImGui_TableColumnFlags_WidthFixed;
             double wDefault = 36.0, wShort = 100.0, wMatch = 240.0,
-                   wDomain = 72.0, wSlots = 64.0, wActions = 100.0;
+                   wDev = 140.0, wDomain = 72.0, wSlots = 64.0,
+                   wActions = 100.0;
             ImGui_TableSetupColumn(ctx, "Default",      &wFlag, &wDefault, nullptr);
             ImGui_TableSetupColumn(ctx, "Short Max. 7", &wFlag, &wShort,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Match",   &wFlag, &wMatch,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Mode",    &wFlag, &wDomain,  nullptr);
-            ImGui_TableSetupColumn(ctx, "Slots",   &wFlag, &wSlots,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Actions", &wFlag, &wActions, nullptr);
-            ImGui_TableHeadersRow(ctx);
+            ImGui_TableSetupColumn(ctx, "Name",         &wFlag, &wMatch,   nullptr);
+            ImGui_TableSetupColumn(ctx, "Developer",    &wFlag, &wDev,     nullptr);
+            ImGui_TableSetupColumn(ctx, "Mode",         &wFlag, &wDomain,  nullptr);
+            ImGui_TableSetupColumn(ctx, "Slots",        &wFlag, &wSlots,   nullptr);
+            ImGui_TableSetupColumn(ctx, "Actions",      &wFlag, &wActions, nullptr);
+
+            // Manual header row — TableHeadersRow + ImGui sort flags
+            // were no-ops on the current reaimgui build (see memory:
+            // reaimgui-table-sort-broken). Static labels for non-
+            // sortable columns; Name + Developer are buttons that
+            // toggle direction (^ desc / v asc) or claim the sort.
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+            auto sortHeader = [&](const char* labelBase, FxlSort col) {
+                const bool active = (s_sortCol == col);
+                char btn[64];
+                const char* arrow = active ? (s_sortAsc ? " v" : " ^") : "";
+                std::snprintf(btn, sizeof(btn), "%s%s##fxl_sort_%d",
+                    labelBase, arrow, static_cast<int>(col));
+                if (ImGui_Button(ctx, btn, nullptr, nullptr)) {
+                    if (active) s_sortAsc = !s_sortAsc;
+                    else { s_sortCol = col; s_sortAsc = true; }
+                }
+            };
+            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Default");
+            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Short Max. 7");
+            ImGui_TableNextColumn(ctx); sortHeader("Name",      FxlSort::Name);
+            ImGui_TableNextColumn(ctx); sortHeader("Developer", FxlSort::Developer);
+            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Mode");
+            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Slots");
+            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Actions");
 
             // Index loop so per-row IDs are stable. A drop while iterating
             // would invalidate references; defer destructive actions to
             // post-loop via the popup.
-            for (size_t i = 0; i < cat.maps.size(); ++i) {
+            for (const auto& row : rows) {
+                const size_t i = row.idx;
                 const UserPluginMap& m = cat.maps[i];
 
                 ImGui_TableNextRow(ctx, nullptr, nullptr);
@@ -7268,6 +7387,12 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
                 ImGui_TableNextColumn(ctx);
                 ImGui_Text(ctx, m.match.c_str());
+
+                // Developer — parsed from the matching installed FX's
+                // trailing "(Vendor)". Dimmed dash when no match.
+                ImGui_TableNextColumn(ctx);
+                if (row.dev.empty()) ImGui_TextDisabled(ctx, "—");
+                else                 ImGui_Text(ctx, row.dev.c_str());
 
                 ImGui_TableNextColumn(ctx);
                 ImGui_Text(ctx, modeLabel_(m.domain, m.uf8Mode));
@@ -7639,6 +7764,24 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  engage UF8 Plugin Mode (with GUI). Press the same button "
         "again to exit.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "FADERS");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "Not tied to a Selection Mode — applies whenever the rule fires.");
+    ImGui_Spacing(ctx);
+    bool altSnap = reasixty_altDragSnapBack();
+    if (ImGui_Checkbox(ctx,
+        "Alt/Option + fader drag → snap back to original on release",
+        &altSnap))
+    {
+        reasixty_setAltDragSnapBack(altSnap);
+    }
+    ImGui_Text(ctx,
+        "  Release while Alt/Option is still held → value snaps back to "
+        "touch-on position.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

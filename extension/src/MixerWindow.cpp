@@ -3,6 +3,9 @@
 #include "ThemeBridge.h"
 
 #include <cstdio>
+#include <cstdlib>
+
+#include "reaper_plugin_functions.h"
 
 // One translation unit must define REAIMGUIAPI_IMPLEMENT before including the
 // header — this materialises the storage for the lazy-resolved ReaImGuiFunc
@@ -49,6 +52,35 @@ constexpr double kRailWidthPx = 160.0;
 
 } // namespace
 
+// Persisted window pose. Stored in REAPER's ExtState so the user
+// sees the Settings window at the size + position they last left it
+// across REAPER restarts. NoSavedSettings is intentionally kept on
+// the ImGui window itself (it persists collapsed / closed pose too,
+// which broke the window in the past — see comments inside Begin
+// below); we mirror only pos + size by hand.
+namespace pose {
+constexpr const char* kSection = "rea_sixty";
+constexpr const char* kKeyX    = "settings_pos_x";
+constexpr const char* kKeyY    = "settings_pos_y";
+constexpr const char* kKeyW    = "settings_size_w";
+constexpr const char* kKeyH    = "settings_size_h";
+
+bool loadDouble(const char* key, double& out) {
+    const char* v = GetExtState(kSection, key);
+    if (!v || !*v) return false;
+    char* endp = nullptr;
+    const double d = std::strtod(v, &endp);
+    if (endp == v) return false;
+    out = d;
+    return true;
+}
+void saveDouble(const char* key, double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%g", v);
+    SetExtState(kSection, key, buf, /*persist*/ true);
+}
+} // namespace pose
+
 struct MixerWindow::Impl {
     // v0.10+ owns context lifetime itself: ImGui_CreateContext returns a
     // context that auto-destroys when the calling extension unloads. There
@@ -67,6 +99,30 @@ struct MixerWindow::Impl {
     // id and refuses to re-show after a single open/close cycle. New
     // id = no carried-over state.
     int            sessionGen = 0;
+    // Persisted pose. Loaded lazily from ExtState on first ensureCtx,
+    // then mirrored back whenever the user resizes or moves the
+    // window. Mirroring NoSavedSettings (kept on) — ImGui's own
+    // persistence saves collapsed/closed pose too, which previously
+    // bricked the window.
+    double         saveX = 60.0, saveY = 60.0;
+    double         saveW = 1500.0, saveH = 1080.0;
+    bool           poseLoaded = false;
+
+    void loadPose()
+    {
+        if (poseLoaded) return;
+        pose::loadDouble(pose::kKeyX, saveX);
+        pose::loadDouble(pose::kKeyY, saveY);
+        pose::loadDouble(pose::kKeyW, saveW);
+        pose::loadDouble(pose::kKeyH, saveH);
+        // Sanity clamp — a stored 0×0 or off-screen pose from a
+        // previous bug would make the window unreachable.
+        if (saveW < 200) saveW = 1500;
+        if (saveH < 200) saveH = 1080;
+        if (saveX < -8000 || saveX > 16000) saveX = 60;
+        if (saveY < -8000 || saveY > 16000) saveY = 60;
+        poseLoaded = true;
+    }
 
     void ensureCtx()
     {
@@ -136,10 +192,14 @@ void MixerWindow::onRunTick()
     // mockups display fully without the schematic-pane scrollbar.
     // CreateContext host stays at 1280×720 / "Rea-Sixty v2" — see
     // memory/reaimgui-host-size-bisect.md for why host size is sacred.
+    impl_->loadPose();
+    // Each session uses a fresh window-id (see sessionGen) so
+    // FirstUseEver applies our saved pose every open instead of
+    // ImGui's stale internal default.
     int condFirst = ImGui_Cond_FirstUseEver;
-    ImGui_SetNextWindowSize(impl_->ctx, /*w*/ 1500, /*h*/ 1080,
+    ImGui_SetNextWindowSize(impl_->ctx, impl_->saveW, impl_->saveH,
                             &condFirst);
-    ImGui_SetNextWindowPos(impl_->ctx, /*x*/ 60, /*y*/ 60,
+    ImGui_SetNextWindowPos(impl_->ctx, impl_->saveX, impl_->saveY,
                            &condFirst, /*pivot_x*/ nullptr,
                            /*pivot_y*/ nullptr);
 
@@ -219,6 +279,31 @@ void MixerWindow::onRunTick()
                 }
             }
             ImGui_EndChild(impl_->ctx);
+
+            // Mirror the user's current pose back to ExtState. Only
+            // write when the value actually changed so we don't churn
+            // the config file on every render frame.
+            double curX = 0, curY = 0, curW = 0, curH = 0;
+            ImGui_GetWindowPos (impl_->ctx, &curX, &curY);
+            ImGui_GetWindowSize(impl_->ctx, &curW, &curH);
+            if (curW > 50 && curH > 50) {
+                if (curX != impl_->saveX) {
+                    impl_->saveX = curX;
+                    pose::saveDouble(pose::kKeyX, curX);
+                }
+                if (curY != impl_->saveY) {
+                    impl_->saveY = curY;
+                    pose::saveDouble(pose::kKeyY, curY);
+                }
+                if (curW != impl_->saveW) {
+                    impl_->saveW = curW;
+                    pose::saveDouble(pose::kKeyW, curW);
+                }
+                if (curH != impl_->saveH) {
+                    impl_->saveH = curH;
+                    pose::saveDouble(pose::kKeyH, curH);
+                }
+            }
         }
         ImGui_End(impl_->ctx);
         // Mirror ImGui's title-bar X click back to our flag so the

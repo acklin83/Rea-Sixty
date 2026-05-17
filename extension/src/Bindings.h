@@ -548,6 +548,12 @@ void effectiveLedActive(const Binding& bd, const ActionSlot& slot,
 void effectiveLedInactive(const Binding& bd, const ActionSlot& slot,
                           uint8_t (&rgb)[3], Brightness& bri);
 
+// True when the slot carries no effective action across any of its
+// steps (type==Noop AND no action string). Empty slots fire nothing
+// on dispatch — main.cpp uses this to gate modifier-held LED preview
+// and ignore stray LedOverrides on slots the user never assigned.
+bool slotIsEmpty(const ActionSlot& s);
+
 // Drain pending multi-action chains. Called from main.cpp's onTimer at
 // ~30 Hz — fires any chain step whose `fireAt` has elapsed. Single-step
 // chains never sit in the queue (they run synchronously in dispatch).

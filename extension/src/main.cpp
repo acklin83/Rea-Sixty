@@ -14,6 +14,19 @@
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 
+// Host-OS modifier-key polling for Alt-drag snap-back. REAPER's SDK
+// doesn't expose any modifier-state hook, so we go to the OS directly:
+//   macOS  → CGEventSourceFlagsState (ApplicationServices is already
+//            linked, see CMakeLists.txt).
+//   Win    → GetAsyncKeyState(VK_MENU).
+//   Linux  → TBD (X11 XQueryKeymap / GDK gdk_device_modifier_state);
+//            currently returns false so the feature no-ops cleanly.
+#if defined(__APPLE__)
+#  include <CoreGraphics/CoreGraphics.h>
+#elif defined(_WIN32)
+#  include <windows.h>
+#endif
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -352,6 +365,12 @@ std::atomic<bool>         g_recVpotRotateGain{false};
 // the surface without going to the TCP. Wins over the plain
 // V-Pot rotation handlers when Shift is held.
 std::atomic<bool>         g_recVpotShiftInputCh{false};
+// Alt/Option + fader drag: hold the host-OS Alt (= macOS Option) key
+// while moving a UF8 fader, then release the fader while Alt is still
+// held → REAPER (or whatever target the fader is driving) snaps back
+// to the value it had at touch-on. Mirrors REAPER's mouse Alt-drag
+// behaviour on the TCP/MCP fader.
+std::atomic<bool>         g_altDragSnapBack{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -1435,6 +1454,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_shift_inputch"); v && *v) {
         g_recVpotShiftInputCh.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "alt_drag_snap_back"); v && *v) {
+        g_altDragSnapBack.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
     }
@@ -1705,6 +1727,12 @@ struct PendingInput {
                               //   TotalReaper's GAIN_INC / GAIN_DEC
                               //   named actions. value = signed detent
                               //   count (combined within one tick).
+        TouchOriginSnapshot,  // Fader touch-on: capture the pb14 the fader
+                              //   was tracking before the user grabbed it,
+                              //   so Alt-drag snap-back can restore it on
+                              //   release. Must run on main thread because
+                              //   it queries TrackFX_* / GetTrackSendInfo_*.
+                              //   value unused.
         InputChannelDelta,    // REC + RME + Shift: V-Pot rotation steps
                               //   the strip's track's I_RECINPUT
                               //   hardware channel ±1 per detent.
@@ -3307,11 +3335,14 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     // Cycle index counts ALL CS plug-ins so Instance Cycle visits every
     // CS map regardless of fader presence (Frank 2026-05-16 "Instance
     // Cycle soll jedes plugin mit CS oder BC cyceln"). If the cycle
-    // lands on a CS plug-in without a UF8 fader mapping, strip mode is
-    // simply silent for this strip — empty pick → Type zone clears and
-    // the fader falls through to REAPER track volume. That keeps SSL
-    // Strip Mode honest ("CS Plugins mit Fader") without breaking the
-    // independent Instance-Cycle UX.
+    // lands on a CS plug-in WITHOUT a UF8 fader mapping (e.g. FG-Dyn
+    // without Output-Gain), SSL Strip Mode falls through to the default-
+    // CS tiebreak below instead of going silent — fader, Pan, Type label
+    // and (via the GUI-sync block reusing this resolver) the master
+    // floating GUI all retarget the user's isDefault CS (Frank 2026-05-17:
+    // "sollte auf default CS fallen und dessen GUI anzeigen"). Instance
+    // Cycle still counts the no-fader plug-in so V-Pot bindings + UC1
+    // LCD readouts keep visiting it.
     const int wantIdx = uc1::csInstanceIndex(tr);
     int csSeen = 0;
     for (int fx = 0; fx < n; ++fx) {
@@ -3321,7 +3352,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
         if (csSeen == wantIdx) {
-            if (!csPluginHasFader_(*m)) return out;   // no-fader → silent
+            if (!csPluginHasFader_(*m)) break;   // no-fader → default fallback
             const uf8::UserPluginMap* owned =
                 uf8::user_plugins::lookupOwnedByName(buf);
             return { fx, m, owned != nullptr };
@@ -3421,6 +3452,92 @@ CsPanHandle csPanForTrack(MediaTrack* tr)
     const auto* sl = uf8::findSlotByLinkIdx(*pick.map, 3);
     if (!sl) return { -1, -1 };
     return { pick.fxIndex, sl->vst3Param };
+}
+
+// Captured at touch-on, computed on the main thread via the
+// TouchOriginSnapshot drain case. Mirrors the value the fader was
+// tracking immediately before the user grabbed it. Used by the
+// Alt-drag snap-back feature in commitDebouncedTouchReleases: if Alt
+// is still held on release, this is written back instead of the
+// touch-end position.
+std::array<std::atomic<uint16_t>, 8> g_touchOriginPb{};
+std::array<std::atomic<bool>, 8>     g_touchOriginPbValid{};
+
+// Capture the pb14 the fader's currently-active target is tracking.
+// Mirrors the writeback precedence in PendingInput::VolumeAbs +
+// commitDebouncedTouchReleases (routing → FLIP+slot → FLIP track-pan →
+// uf8-plug-in → plug-in-fader → track vol) so the snapshot is the
+// exact inverse of what a same-pb writeback would produce — feeding
+// this back through the writeback path round-trips to the original
+// target value. Main-thread only. Returns 0 if `tr` is null.
+uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
+                                int bankOffset, int trackCount)
+{
+    if (!tr) return 0;
+    auto normToPb = [](double n) -> uint16_t {
+        if (n < 0.0) n = 0.0;
+        if (n > 1.0) n = 1.0;
+        int p14 = static_cast<int>(std::round(
+            n * static_cast<double>(kUf8FaderPbMax)));
+        if (p14 < 0) p14 = 0;
+        if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
+        return static_cast<uint16_t>(p14);
+    };
+    auto panToPb = [&](double pan) -> uint16_t {
+        if (pan < -1.0) pan = -1.0;
+        if (pan >  1.0) pan =  1.0;
+        return normToPb((pan + 1.0) * 0.5);
+    };
+
+    const StripRoute fr = resolveFaderRoute_(
+        static_cast<int>(s), bankOffset, trackCount);
+    if (fr.active()) {
+        if (!fr.valid) return linearVolumeToPb(uiVolLinear(tr));
+        if (g_flip.load()) {
+            const double pan = GetTrackSendInfo_Value(
+                fr.track, fr.sendCategory, fr.sendIndex, "D_PAN");
+            return panToPb(pan);
+        }
+        const double vol = GetTrackSendInfo_Value(
+            fr.track, fr.sendCategory, fr.sendIndex, "D_VOL");
+        return linearVolumeToPb(vol);
+    }
+
+    const auto focusedT = uf8::getFocusedParam();
+    auto mmT = uf8::lookupPluginOnTrack(tr, focusedT.domain);
+    const uf8::LinkSlot* slT = (!g_forcePan.load() && mmT.map)
+        ? uf8::findSlotByLinkIdx(*mmT.map, focusedT.slotIdx)
+        : nullptr;
+    if (isVPotPanFocus(focusedT)) slT = nullptr;
+
+    if (g_flip.load() && slT) {
+        double n = TrackFX_GetParamNormalized(tr, mmT.fxIndex, slT->vst3Param);
+        if (slT->inverted) n = 1.0 - n;
+        return normToPb(n);
+    }
+    if (g_flip.load() && !g_pluginFaderMode.load() && !g_uf8PluginMode.load()) {
+        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        return panToPb(pan);
+    }
+    if (g_uf8PluginMode.load()) {
+        if (auto uctx = userStripCtxFocused_(); uctx.map) {
+            const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+            if (sb.faderVst3Param >= 0) {
+                double n = TrackFX_GetParamNormalized(
+                    uctx.tr, uctx.fxIdx, sb.faderVst3Param);
+                if (sb.faderInverted) n = 1.0 - n;
+                return normToPb(n);
+            }
+        }
+    } else if (g_pluginFaderMode.load()) {
+        const auto cs = csFaderForTrack(tr);
+        if (cs.vst3Param >= 0) {
+            const double n = TrackFX_GetParamNormalized(
+                tr, cs.fxIndex, cs.vst3Param);
+            return normToPb(n);
+        }
+    }
+    return linearVolumeToPb(uiVolLinear(tr));
 }
 
 void queueInput(PendingInput e)
@@ -3565,6 +3682,13 @@ void drainInputQueue()
         if (slot < 0 || slot >= surfaceCount) continue;
         MediaTrack* tr = visibleTrackAt(slot);
         if (!tr) continue;
+        if (e.kind == PendingInput::TouchOriginSnapshot) {
+            const uint16_t pb = computeStripCurrentPb_(
+                e.strip, tr, bankOffset, surfaceCount);
+            g_touchOriginPb[e.strip].store(pb);
+            g_touchOriginPbValid[e.strip].store(true);
+            continue;
+        }
         switch (e.kind) {
             case PendingInput::TotalReaperDispatch: {
                 const int cmdId = static_cast<int>(e.value);
@@ -3806,8 +3930,7 @@ void drainInputQueue()
                             g_panOverlayText[e.strip]    =
                                 composeValueLine("Pan", formatPanReadout(pan));
                         } else {
-                            SetTrackSendInfo_Value(fr.track, fr.sendCategory,
-                                                   fr.sendIndex, "D_VOL", e.value);
+                            writeRouteVolumeLinear_(fr, e.value);
                         }
                         break;
                     }
@@ -3957,8 +4080,7 @@ void drainInputQueue()
                         if (newPb > 16383) newPb = 16383;
                         const double newLin = pbToLinearVolume(
                             static_cast<uint16_t>(newPb));
-                        SetTrackSendInfo_Value(r.track, r.sendCategory,
-                                               r.sendIndex, "D_VOL", newLin);
+                        writeRouteVolumeLinear_(r, newLin);
                     };
                     if (fr.active()) {
                         if (fr.valid) {
@@ -4156,8 +4278,7 @@ void drainInputQueue()
                             if (g_flip.load() && g_forcePan.load()) {
                                 SetMediaTrackInfo_Value(tr, "D_PAN", 0.0);
                             } else if (g_flip.load()) {
-                                SetTrackSendInfo_Value(fr.track, fr.sendCategory,
-                                                       fr.sendIndex, "D_VOL", 1.0);
+                                writeRouteVolumeLinear_(fr, 1.0);
                             } else {
                                 SetTrackSendInfo_Value(fr.track, fr.sendCategory,
                                                        fr.sendIndex, "D_PAN", 0.0);
@@ -4174,8 +4295,7 @@ void drainInputQueue()
                                 SetTrackSendInfo_Value(vr.track, vr.sendCategory,
                                                        vr.sendIndex, "D_PAN", 0.0);
                             } else {
-                                SetTrackSendInfo_Value(vr.track, vr.sendCategory,
-                                                       vr.sendIndex, "D_VOL", 1.0);
+                                writeRouteVolumeLinear_(vr, 1.0);
                             }
                         }
                         break;
@@ -5718,6 +5838,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
                     g_touchReported[strip].store(true);
+                    // Alt-drag snap-back: capture the pre-touch pb14 on
+                    // the main thread. Done via the queue (not inline
+                    // here) because REAPER track/FX API calls would
+                    // crash from the libusb input thread — see
+                    // feedback-reaper-api-input-thread.md.
+                    // queueInput guarantees ordering: any VolumeAbs
+                    // events from FF 21 03 frames that follow this
+                    // touch-on can only arrive AFTER us (touchReported
+                    // gates them), so the snapshot drains before any
+                    // drag value is written.
+                    g_touchOriginPbValid[strip].store(false);
+                    if (g_altDragSnapBack.load()) {
+                        queueInput({PendingInput::TouchOriginSnapshot,
+                                    strip, 0.0});
+                    }
                     // Send LIMP unconditionally on every touch-ON edge —
                     // a previously-lost OFF event would otherwise pin
                     // touchReported true and skip the LIMP. Re-sending
@@ -8432,6 +8567,21 @@ void chaseFocusedFxWindow()
     g_bankDirty.store(true);
 }
 
+// Host-keyboard Alt/Option held? Single call-site shape across the three
+// target platforms — see the #include block at the top of this file.
+bool hostAltHeld_()
+{
+#if defined(__APPLE__)
+    const CGEventFlags f = CGEventSourceFlagsState(
+        kCGEventSourceStateCombinedSessionState);
+    return (f & kCGEventFlagMaskAlternate) != 0;
+#elif defined(_WIN32)
+    return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+#else
+    return false;
+#endif
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -8456,9 +8606,26 @@ void commitDebouncedTouchReleases()
         //   - SSL CS Fader           in Plugin-Fader mode,
         //   - track volume           otherwise.
         const bool userMoved = g_lastTouchPbValid[s].load();
+        // Alt-drag snap-back: if the user is still holding Alt/Option on
+        // release AND the origin snapshot landed before they started
+        // dragging, override the writeback target with the origin pb
+        // so the value (and motor) return to where they were at
+        // touch-on. Without a valid origin (e.g. snapshot drain was
+        // outraced by a brush-fast touch), fall through to normal
+        // commit — better than dropping the user's drag.
+        const bool snapBack = userMoved
+            && g_altDragSnapBack.load()
+            && g_touchOriginPbValid[s].load()
+            && hostAltHeld_();
+        // Picked at outer scope because the motor re-engage block
+        // below ALSO consumes it on the snap-back path.
+        const uint16_t touchPb = userMoved
+            ? (snapBack ? g_touchOriginPb[s].load()
+                        : g_lastTouchPb[s].load())
+            : 0;
         if (userMoved) {
-            const uint16_t touchPb = g_lastTouchPb[s].load();
             g_lastTouchPbValid[s].store(false);
+            g_touchOriginPbValid[s].store(false);
 
             // Routing wins: the touch-release writeback must follow the
             // same precedence as the live fader handler (drainInputQueue
@@ -8487,9 +8654,7 @@ void commitDebouncedTouchReleases()
                         SetTrackSendInfo_Value(fr.track, fr.sendCategory,
                                                fr.sendIndex, "D_PAN", pan);
                     } else {
-                        SetTrackSendInfo_Value(fr.track, fr.sendCategory,
-                                               fr.sendIndex, "D_VOL",
-                                               pbToLinearVolume(touchPb));
+                        writeRouteVolumeLinear_(fr, pbToLinearVolume(touchPb));
                     }
                 }
                 // active-but-invalid: eat the writeback, do NOT fall
@@ -8570,8 +8735,17 @@ void commitDebouncedTouchReleases()
         // user's final touch position thanks to the bit-7-set echoes,
         // so the re-enable lands at the correct target with no jerk.
         if (userMoved) {
-            uint16_t pb = linearVolumeToPb(uiVolLinear(tr));
-            if (g_uf8PluginMode.load()) {
+            // Snap-back path: the writeback above just put the target
+            // back to its origin value, so the motor lands there too.
+            // Bypass the per-mode read-current-target derivation — it
+            // doesn't cover all writeback paths (send pan / send vol
+            // / FLIP track pan) and would otherwise drift away from
+            // touchPb. Using touchPb directly is correct because, on
+            // this branch, touchPb IS the origin snapshot.
+            uint16_t pb = snapBack
+                ? touchPb
+                : linearVolumeToPb(uiVolLinear(tr));
+            if (!snapBack && g_uf8PluginMode.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(),
                         0, uf8::kUserUf8BankCount - 1);
@@ -8587,7 +8761,7 @@ void commitDebouncedTouchReleases()
                         pb = static_cast<uint16_t>(p14);
                     }
                 }
-            } else if (g_pluginFaderMode.load()) {
+            } else if (!snapBack && g_pluginFaderMode.load()) {
                 const auto cs = csFaderForTrack(tr);
                 if (cs.vst3Param >= 0) {
                     const double norm = TrackFX_GetParamNormalized(
@@ -8600,6 +8774,19 @@ void commitDebouncedTouchReleases()
                 }
             }
             g_dev->send(uf8::buildMotorEnable(s, true));
+            // Snap-back: firmware's target buffer is still pointing at
+            // the user's drag-end position (last bit-7 echo). Re-enable
+            // alone leaves the motor parked there. Push an explicit
+            // position frame so the firmware walks the motor back to
+            // origin. The non-snap-back path skips this because the
+            // bit-7 echoes during drag already left the firmware target
+            // at the right place. Setting g_lastFaderPb AFTER the send
+            // so the timer's dedup doesn't suppress this update.
+            if (snapBack) {
+                const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
+                const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                g_dev->send(uf8::buildFaderPosition(s, lsb, msb));
+            }
             g_lastFaderPb[s] = pb;
         }
     }
@@ -9106,8 +9293,15 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
     // resolver fell through to effectiveLedInactive (= bd.inactiveColor
     // @ Dim default), and a freshly-customised button looked dark on
     // hardware regardless of what the user picked.
+    //
+    // Gated to the Plain slot — empty modifier slots never force-show
+    // their LedOverride (Frank 2026-05-17: holding Shift on a button
+    // with no Shift action shouldn't repaint the LED).
     bool useActive = active;
-    if (!useActive && slot.type == uf8::bindings::ActionType::Noop) {
+    if (!useActive
+        && mod == uf8::bindings::Modifier::Plain
+        && uf8::bindings::slotIsEmpty(slot))
+    {
         useActive = true;
     }
 
@@ -9186,7 +9380,11 @@ bool modifierSlotArmed_(uf8::Uf8GlobalLed cell, uf8::bindings::Modifier mod)
     const auto bd = uf8::bindings::getBinding(
         uf8::bindings::getActiveLayer(), bid);
     const auto& slot = bd.shortPress[static_cast<int>(mod)];
-    return slot.type != uf8::bindings::ActionType::Noop;
+    // slotIsEmpty (vs type != Noop) so a half-edited slot (e.g. type
+    // = Reaper but action = "") doesn't preview an LED for an action
+    // that wouldn't actually fire. Matches dispatch's effective-empty
+    // semantics.
+    return !uf8::bindings::slotIsEmpty(slot);
 }
 
 // Wrapper around sendLedFrames(buildUf8GlobalLed(...)) that folds in
@@ -10249,23 +10447,20 @@ void onTimer()
         MediaTrack* targetTr = nullptr;
         int         targetFx = -1;
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
-            const int wantInst = uc1::csInstanceIndex(tr);
+            // Route through csForStripModeOnTrack_ so the master floating
+            // GUI lands on the SAME plug-in the motor fader + Type label
+            // are bound to. That resolver applies the no-fader filter +
+            // isDefault tiebreak: when the cycle target is a no-fader CS
+            // (e.g. FG-Dyn without Output-Gain), it returns the user's
+            // default CS instead of going silent. Pre-2026-05-17 this
+            // block walked the cycle manually with no fader filter, so
+            // FG-Dyn's GUI popped while the fader silently fell to REAPER
+            // and the colour bar dropped to BC — three desynced targets
+            // (Frank 2026-05-17).
+            const auto pick = csForStripModeOnTrack_(tr);
+            if (pick.fxIndex >= 0) targetFx = pick.fxIndex;
             const int n = TrackFX_GetCount(tr);
             char nameBuf[256];
-            int seen = 0;
-            int lastCsFx = -1;
-            for (int fx = 0; fx < n; ++fx) {
-                nameBuf[0] = 0;
-                TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
-                if (!nameBuf[0]) continue;
-                const auto* pm = uf8::lookupPluginMapByName(nameBuf);
-                if (!pm) continue;
-                if (pm->domain != uf8::Domain::ChannelStrip) continue;
-                lastCsFx = fx;
-                if (seen == wantInst) { targetFx = fx; break; }
-                ++seen;
-            }
-            if (targetFx < 0) targetFx = lastCsFx;
             // No CS instance found — fall back to a UF8-only mapped
             // plug-in's GUI when the cycle landed on one. Same active-
             // instance plumbing, just keyed by uf8OnlyInstanceIndex.
@@ -11582,6 +11777,12 @@ void reasixty_setRecVpotShiftInputCh(bool on)
 {
     g_recVpotShiftInputCh.store(on);
     SetExtState("rea_sixty", "rec_vpot_shift_inputch", on ? "1" : "0", true);
+}
+bool reasixty_altDragSnapBack()       { return g_altDragSnapBack.load(); }
+void reasixty_setAltDragSnapBack(bool on)
+{
+    g_altDragSnapBack.store(on);
+    SetExtState("rea_sixty", "alt_drag_snap_back", on ? "1" : "0", true);
 }
 void reasixty_setRecVpotPush(int v)
 {
