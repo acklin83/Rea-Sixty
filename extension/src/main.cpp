@@ -2409,8 +2409,11 @@ void applyInstanceCycle_(int step)
     char trkName[128] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
     std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    const int sz    = static_cast<int>(hits.size());
+    const int prevK = (nextK - 1 + sz) % sz;
+    const int nxtK  = (nextK + 1) % sz;
     g_uc1_surface->showInstanceCarousel(
-        hitLabel(nextK - 1), hitLabel(nextK), hitLabel(nextK + 1), header);
+        hitLabel(prevK), hitLabel(nextK), hitLabel(nxtK), header);
 }
 
 // When the FX-Cursor lands on an FX that happens to be a learned Instance
