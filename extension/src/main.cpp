@@ -2262,6 +2262,24 @@ bool touchedFxRevealActive_()
 // even displaying — confusing, no visible feedback.
 //
 // CS has no anchor concept, so it always targets the focused track.
+// Plugin-mode "follow active Instance" GUI sync trigger. Used by every
+// cycle path so SSL Strip Mode (with GUI) and UF8 Plugin Mode (with GUI)
+// re-point their floating windows at the cycle's new target Instance.
+// Gated by the pluginGuiFollowsInstance Settings toggle (default on)
+// and by the corresponding plugin-mode-with-GUI mode actually being
+// engaged. Per-channel callers must additionally gate on
+// "rotated channel == focused track" so rotations on non-focused strips
+// don't hijack the plugin-mode GUI.
+void triggerPluginModeFollowSync_()
+{
+    if (!g_pluginGuiFollowsInstance.load()) return;
+    const bool sslGui = g_pluginFaderMode.load()
+                     && g_pluginFaderModeWithGui.load();
+    const bool uf8Gui = g_uf8PluginMode.load()
+                     && g_uf8PluginModeWithGui.load();
+    if (sslGui || uf8Gui) g_pluginGuiSyncRequest.store(true);
+}
+
 void applyInstanceCycle_(int step)
 {
     if (step == 0) return;
@@ -2339,22 +2357,10 @@ void applyInstanceCycle_(int step)
     // per-strip V-Pot path in StripInstanceDelta still updates this
     // map independently for non-focused strips.
     g_stripInstanceFxIdx[tr] = target.fxIdx;
-    // Trigger a GUI sync drain so any plug-in window currently driven by
-    // SSL Strip Mode (with GUI) or UF8 Plugin Mode (with GUI) re-points
-    // at the cycle's new target instance. Gated by the
-    // pluginGuiFollowsInstance Settings toggle (default on).
-    auto triggerFollowSync = [&]() {
-        if (!g_pluginGuiFollowsInstance.load()) return;
-        const bool sslGui = g_pluginFaderMode.load()
-                         && g_pluginFaderModeWithGui.load();
-        const bool uf8Gui = g_uf8PluginMode.load()
-                         && g_uf8PluginModeWithGui.load();
-        if (sslGui || uf8Gui) g_pluginGuiSyncRequest.store(true);
-    };
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
-        triggerFollowSync();
+        triggerPluginModeFollowSync_();
     } else if (target.dom == uf8::Domain::BusComp) {
         uf8::setFocus({target.dom, 0});
         uc1::setBcInstanceIndex(tr, target.instIdx);
@@ -2362,11 +2368,11 @@ void applyInstanceCycle_(int step)
         // BC carousel agree with the cycle's selection. Idempotent
         // when tr already == bcAnchor.
         g_uc1_surface->setBcAnchorTrack(tr);
-        triggerFollowSync();
+        triggerPluginModeFollowSync_();
     } else {
         uf8::setFocus({uf8::Domain::None, 0});
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
-        triggerFollowSync();
+        triggerPluginModeFollowSync_();
     }
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
@@ -4306,6 +4312,12 @@ void drainInputQueue()
                         if (g_instanceGuiOwnerStrip.load() == s) {
                             g_pluginGuiSyncRequest.store(true);
                         }
+                        // Plugin-mode GUI follow — only when the rotated
+                        // strip is the focused track. Mirrors the
+                        // applyInstanceCycle_ path so SSL Strip Mode /
+                        // UF8 Plugin Mode windows track the cycle on
+                        // the focused channel.
+                        if (isFocusedStrip) triggerPluginModeFollowSync_();
                     }
                 }
                 break;
@@ -4408,7 +4420,8 @@ void drainInputQueue()
                 MediaTrack* focusedTr = g_uc1_surface
                     ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
                     : nullptr;
-                if (focusedTr == tr) {
+                const bool isFocusedStrip = (focusedTr == tr);
+                if (isFocusedStrip) {
                     uf8::setFocus({target.dom, 0});
                 }
 
@@ -4422,6 +4435,9 @@ void drainInputQueue()
                 if (g_instanceGuiOwnerStrip.load() == s) {
                     g_pluginGuiSyncRequest.store(true);
                 }
+                // Plugin-mode GUI follow — focused-strip only, same
+                // gate as applyInstanceCycle_.
+                if (isFocusedStrip) triggerPluginModeFollowSync_();
                 break;
             }
         }
