@@ -94,6 +94,8 @@ int         reasixty_selsetTrackCount(int slot);
 void        reasixty_selsetSaveCurrent(int slot);
 void        reasixty_selsetRecallToggle(int slot);
 void        reasixty_selsetClear(int slot);
+int         reasixty_selsetAutoMode();                          // global: -1 = off, 0..5 = REAPER mode
+void        reasixty_setSelsetAutoMode(int mode);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -7691,6 +7693,38 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "way. Active only while AUTO Selection Mode is engaged.");
 
     ImGui_Spacing(ctx);
+    // Selection-Set Auto-Mode binding. One global setting: whenever
+    // any Selection Set is recalled, its tracks switch to this mode;
+    // when the set is deactivated, they revert to Trim/Read (mode 0).
+    // "None" disables the feature so selset recall leaves automation
+    // modes untouched.
+    const int amCur = reasixty_selsetAutoMode();
+    const char* amLabels[7] = {
+        "None", "Trim/Off", "Read", "Touch",
+        "Write", "Latch", "Latch Preview"
+    };
+    const char* amPreview = (amCur < 0 || amCur > 5)
+        ? amLabels[0] : amLabels[amCur + 1];
+    ImGui_Text(ctx, "Selection-Set Auto-Mode:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_SetNextItemWidth(ctx, 160);
+    if (ImGui_BeginCombo(ctx, "##selset_auto_mode", amPreview, nullptr)) {
+        for (int opt = -1; opt <= 5; ++opt) {
+            bool sel = (opt == amCur);
+            if (ImGui_Selectable(ctx, amLabels[opt + 1], &sel,
+                                 nullptr, nullptr, nullptr))
+            {
+                reasixty_setSelsetAutoMode(opt);
+            }
+        }
+        ImGui_EndCombo(ctx);
+    }
+    ImGui_Text(ctx,
+        "  When a Selection Set is recalled, its member tracks are "
+        "forced into this REAPER automation mode. Deactivating the set "
+        "reverts those tracks to Trim/Read (mode 0). None = disabled.");
+
+    ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "FX / INSTANCE CYCLE");
     ImGui_Separator(ctx);
@@ -7991,6 +8025,8 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "Group slots refresh live from REAPER track-group membership "
         "(ANY category).");
+    ImGui_Text(ctx,
+        "Selection-Set Auto-Mode is configured globally in Modes \xe2\x86\x92 Auto.");
 }
 
 // ---- About ----------------------------------------------------------------

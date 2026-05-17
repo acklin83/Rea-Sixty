@@ -340,6 +340,17 @@ std::atomic<bool> g_autoHideReadTrim{false};
 // empty and ignore input. Default false (legacy fill-from-left).
 std::atomic<bool> g_autoFillFromRight{false};
 
+// Settings → Modes → AUTO: global Selection-Set Auto-Mode binding
+// (Frank 2026-05-17). When a Selection Set is recalled, every track
+// in the set is forced into this REAPER automation mode. When the
+// set is deactivated, those tracks revert to Trim/Read (mode 0).
+// -1 = disabled (recall does not touch automation modes); 0..5 =
+// REAPER modes (0=Trim/Off, 1=Read, 2=Touch, 3=Write, 4=Latch,
+// 5=Latch Preview). One setting for ALL selsets, not per-slot — the
+// active set names the affected tracks, this knob names the target
+// mode. Persisted in ExtState.
+std::atomic<int>  g_selsetAutoMode{-1};
+
 // Settings → Modes → REC: RME TotalReaper integration. When the master
 // switch is on AND SelectionMode == Rec, the strip's V-Pot push / Cut /
 // Solo buttons dispatch the assigned TotalReaper named action against
@@ -854,6 +865,46 @@ void loadSelsetsFromProject_() {
     g_selsetsDirty.store(false);
 }
 
+// Walk a slot's resolved tracks (Snapshot: stored guids; Group: live
+// group membership) and force REAPER auto-mode on each. Main-thread
+// only — SetTrackAutomationMode is not thread-safe. `mode` = REAPER
+// mode 0..5; out-of-range silently skips. No-op for an empty slot
+// or slot index out of [1..8]. Powers the Settings → Modes → Auto
+// "Selection-Set Auto-Mode" feature: caller picks the slot (the
+// active one on recall / the outgoing one on deactivate) and the
+// target mode (g_selsetAutoMode on apply / 0 on revert).
+void selsetApplyAutoModeToSlot_(int slot1to8, int mode)
+{
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    if (mode < 0 || mode > 5) return;
+    const SelSet& s = g_selsets[slot1to8 - 1];
+    auto applyOne = [&](MediaTrack* tr) {
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+        if (GetTrackAutomationMode(tr) == mode) return;   // idempotent
+        SetTrackAutomationMode(tr, mode);
+    };
+    if (s.type == SelSetType::Snapshot) {
+        // Resolve each stored GUID against the current project's tracks.
+        const int n = CountTracks(nullptr);
+        std::unordered_set<std::string> wanted(s.guids.begin(), s.guids.end());
+        for (int i = 0; i < n; ++i) {
+            MediaTrack* tr = GetTrack(nullptr, i);
+            if (!tr) continue;
+            char gb[64] = {0};
+            GetSetMediaTrackInfo_String(tr, "GUID", gb, false);
+            if (wanted.count(gb)) applyOne(tr);
+        }
+    } else {
+        // Group: live membership lookup, same as refreshActiveSelsetGuids_.
+        const int n = CountTracks(nullptr);
+        for (int i = 0; i < n; ++i) {
+            MediaTrack* tr = GetTrack(nullptr, i);
+            if (!tr) continue;
+            if (trackInGroup_(tr, s.groupIdx)) applyOne(tr);
+        }
+    }
+}
+
 void refreshActiveSelsetGuids_() {
     g_selsetActiveGuids.clear();
     const int slot = g_selsetActive.load();
@@ -907,14 +958,39 @@ void drainSelsets_() {
     const int saveReq = g_selsetSaveRequest.exchange(0);
     if (saveReq >= 1 && saveReq <= 8) saveCurrentSelectionToSlot_(saveReq);
     const int actReq = g_selsetActivateRequest.exchange(0);
+    // Capture the previously-active slot BEFORE mutating g_selsetActive
+    // so the auto-mode revert can walk its tracks (Frank 2026-05-17:
+    // deactivating a selset returns its tracks to Trim/Read = REAPER
+    // mode 0). Same global g_selsetAutoMode drives every slot —
+    // there's only one "what mode do recalled tracks land in?" knob
+    // (Settings → Modes → Auto), not one per slot. selsetClear handles
+    // its own inline revert because the membership data is gone by
+    // the time the next drain runs.
+    const int prevActive   = g_selsetActive.load();
+    const int autoModeWant = g_selsetAutoMode.load();
     if (actReq == -1) {
+        if (prevActive >= 1 && prevActive <= 8 && autoModeWant >= 0) {
+            selsetApplyAutoModeToSlot_(prevActive, 0);
+        }
         g_selsetActive.store(0);
         g_selsetActiveGuids.clear();
         g_bankDirty.store(true);
         g_pageDirty.store(true);   // re-paint global LEDs (selset_recall stateOf flipped)
     } else if (actReq >= 1 && actReq <= 8) {
+        // Switching slots: revert the outgoing slot's auto-mode first
+        // (only if a different slot was active and the global binding
+        // is enabled).
+        if (prevActive >= 1 && prevActive <= 8 && prevActive != actReq
+            && autoModeWant >= 0)
+        {
+            selsetApplyAutoModeToSlot_(prevActive, 0);
+        }
         g_selsetActive.store(actReq);
         refreshActiveSelsetGuids_();
+        // Apply the global auto-mode to the incoming slot's tracks.
+        if (autoModeWant >= 0) {
+            selsetApplyAutoModeToSlot_(actReq, autoModeWant);
+        }
         g_bankDirty.store(true);
         g_pageDirty.store(true);
     }
@@ -1441,6 +1517,10 @@ void loadBrightness()
     const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
     if (autoHide && *autoHide) {
         g_autoHideReadTrim.store(std::atoi(autoHide) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "selset_auto_mode"); v && *v) {
+        const int m = std::atoi(v);
+        if (m >= -1 && m <= 5) g_selsetAutoMode.store(m);
     }
     if (const char* v = GetExtState("rea_sixty", "auto_fill_from_right"); v && *v) {
         g_autoFillFromRight.store(std::atoi(v) != 0);
@@ -11701,12 +11781,44 @@ void reasixty_selsetRecallToggle(int slot1to8)
 void reasixty_selsetClear(int slot1to8)
 {
     if (slot1to8 < 1 || slot1to8 > 8) return;
+    // If this slot is active AND the global auto-mode binding is on,
+    // revert tracks inline BEFORE wiping membership data — the drain's
+    // revert path walks `g_selsets[slot]` which is about to be empty.
+    if (g_selsetActive.load() == slot1to8
+        && g_selsetAutoMode.load() >= 0)
+    {
+        selsetApplyAutoModeToSlot_(slot1to8, 0);
+    }
     g_selsets[slot1to8 - 1] = SelSet{};
     selsetWriteToProject_(slot1to8);
     if (g_selsetActive.load() == slot1to8) {
         g_selsetActivateRequest.store(-1);
     }
     g_bankDirty.store(true);
+}
+
+// Global Selection-Set Auto-Mode binding (Settings → Modes → Auto).
+// One knob for all selsets: -1 = disabled, 0..5 = REAPER auto mode.
+// Changing the value while a selset is active applies (or reverts) on
+// the current set's tracks immediately so the dropdown has live effect.
+int  reasixty_selsetAutoMode() { return g_selsetAutoMode.load(); }
+void reasixty_setSelsetAutoMode(int mode)
+{
+    if (mode < -1 || mode > 5) return;
+    const int prev = g_selsetAutoMode.exchange(mode);
+    if (prev == mode) return;
+    SetExtState("rea_sixty", "selset_auto_mode",
+                std::to_string(mode).c_str(), true);
+    const int active = g_selsetActive.load();
+    if (active < 1 || active > 8) return;
+    if (mode >= 0) {
+        selsetApplyAutoModeToSlot_(active, mode);
+    } else if (prev >= 0) {
+        // Switching the binding off while a set is active: revert that
+        // set's tracks to Trim/Read so the surface state matches what
+        // "disabled" implies (no selset-driven automation overrides).
+        selsetApplyAutoModeToSlot_(active, 0);
+    }
 }
 
 int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
