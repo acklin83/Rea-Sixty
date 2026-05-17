@@ -2425,10 +2425,15 @@ void applyInstanceCycle_(int step)
 // per-strip rotations on strips that don't belong to the focused track
 // (those mustn't hijack UC1 / SSL Strip Mode focus globally).
 //
-// `setBcAnchor` defaults to true so a BC landing pins the UC1 BC encoder
-// section to this track — same convention as applyInstanceCycle_.
+// `setBcAnchor` follows the same rule: only pin the UC1 BC encoder
+// section to this track when the caller is the focused track (or
+// otherwise authoritative). Per-strip rotations on non-focused strips
+// must pass false here — otherwise a V-Pot rotation on a non-focused
+// channel that happens to land on a BC plug-in silently moves the UC1
+// BC encoder section onto that channel, which contradicts the focus
+// model documented in StripInstanceCycleDelta.
 bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
-                            bool setFocusedDomain, bool setBcAnchor = true)
+                            bool setFocusedDomain, bool setBcAnchor)
 {
     if (!tr || fxIdx < 0) return false;
     char fxName[256];
@@ -2506,7 +2511,8 @@ void applyFxCycle_(int step)
     const int cur  = stripInstanceActiveFx_(tr);
     int nextIdx = ((cur + step) % n + n) % n;
     g_stripInstanceFxIdx[tr] = nextIdx;
-    syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true);
+    syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
+                                       /*setBcAnchor*/ true);
     g_bankDirty.store(true);
     if (g_uc1_surface) {
         g_uc1_surface->invalidateCache();
@@ -4285,7 +4291,8 @@ void drainInputQueue()
                         const bool isFocusedStrip = (focusedTr == tr);
                         const bool synced = syncInstanceFromFxIdx_(
                             tr, next,
-                            /*setFocusedDomain*/ isFocusedStrip);
+                            /*setFocusedDomain*/ isFocusedStrip,
+                            /*setBcAnchor*/    isFocusedStrip);
                         g_bankDirty.store(true);   // refresh scribble strip
                         // When the cycle lands on a learned Instance on
                         // the focused strip's track, force a UC1 repaint
@@ -4408,19 +4415,24 @@ void drainInputQueue()
                 // only when the strip belongs to the currently focused
                 // track — otherwise a non-focused-strip rotation would
                 // silently hijack UC1 / SSL Strip Mode focus.
+                MediaTrack* focusedTr = g_uc1_surface
+                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                    : nullptr;
+                const bool isFocusedStrip = (focusedTr == tr);
                 g_stripInstanceFxIdx[tr] = target.fxIdx;
                 if (target.dom == uf8::Domain::ChannelStrip) {
                     uc1::setCsInstanceIndex(tr, target.instIdx);
                 } else if (target.dom == uf8::Domain::BusComp) {
                     uc1::setBcInstanceIndex(tr, target.instIdx);
-                    if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
+                    // Pin the UC1 BC anchor only when the rotated strip
+                    // is the focused track — otherwise a non-focused-
+                    // strip rotation that lands on BC would silently
+                    // hijack the BC encoder section.
+                    if (isFocusedStrip && g_uc1_surface)
+                        g_uc1_surface->setBcAnchorTrack(tr);
                 } else {
                     uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
                 }
-                MediaTrack* focusedTr = g_uc1_surface
-                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-                    : nullptr;
-                const bool isFocusedStrip = (focusedTr == tr);
                 if (isFocusedStrip) {
                     uf8::setFocus({target.dom, 0});
                 }
