@@ -86,23 +86,40 @@ struct UserUf8TopSoftKeyLed {
                                         // don't rewrite the row.
 };
 
-// 8 banks × 8 slots. Frank 2026-05-13: UF8 Plugin Mode now uses the
-// 8 TopSoftKey cells as bank selectors (was the 6 V-POT/Soft 1-5
-// Sub-Bank cells, which become no-op in Plugin Mode). Bank index
-// 0..7 = TopSoftKey 1..8. The FX-Learn editor's bank combo follows.
-// Older configs (6-bank serialised) load with banks 6+7 empty.
+// Bank count constants. Two orthogonal bank dimensions:
+//   * V-Pot bank (8) — selected by Top-Soft-Keys 1..8 in UF8 Plugin
+//     Mode. Switches which Layer of V-Pot params (Pan / EQ / Comp …)
+//     the 8 physical V-Pots drive. State: g_softKeyBank.
+//   * Fader bank (2) — selected by Bank ←/→ buttons in UF8 Plugin
+//     Mode. Switches WHICH 8 of up-to-16 logical strips the 8
+//     physical strips represent. Lets the user map plug-ins with 16
+//     channels (e.g. SSL Sigma remote) onto a single UF8. State:
+//     g_uf8FaderBank (Frank 2026-05-17).
+constexpr int kUserUf8VpotBankCount  = 8;
+constexpr int kUserUf8FaderBankCount = 2;
+// Back-compat alias for callers that still refer to the old name. New
+// code should use kUserUf8VpotBankCount.
+constexpr int kUserUf8BankCount      = kUserUf8VpotBankCount;
+
+// V-Pot params: 2 fader-banks × 8 V-Pot-banks × 8 strips. The Top-
+// Soft-Key chooses the V-Pot layer (vpotBank), Bank ←/→ chooses which
+// 8 of the 16 logical strips are surfaced. Older configs (v6 with
+// banks[8][8]) migrate into faderBank=0; v5's flat strips[8] migrates
+// into all (faderBank, vpotBank) pairs.
 struct UserUf8BankSet {
-    UserUf8BankSlot banks[8][8] = {};
+    UserUf8BankSlot banks[kUserUf8FaderBankCount]
+                         [kUserUf8VpotBankCount]
+                         [8] = {};
 };
 
-// Bank count constant — surfaces in header so editor + dispatch
-// can share a single source of truth.
-constexpr int kUserUf8BankCount = 8;
-
-// Per-bank, per-strip bindings (Fader / Solo / Cut / Sel). Frank 2026-05-16:
-// the soft-key bank now switches the FULL strip context, not just V-POT —
-// so fader/solo/cut/sel are also bank-aware (was a single array shared
-// across all 8 banks pre-v6).
+// Per-fader-bank, per-strip bindings (Fader / Solo / Cut / Sel). Frank
+// 2026-05-17: fader/solo/cut/sel do NOT vary with the Top-Soft-Key
+// V-Pot layer — Top-Soft-Key only changes what the V-Pots drive, not
+// which physical fader you're touching. They DO vary with the
+// fader-bank so 16-channel plug-ins (e.g. SSL Sigma remote) can map
+// each channel's fader independently. (v6 had strips[topSoftKey][slot]
+// — that per-top-soft-key dimension is dropped, migration takes
+// strips[0][slot] only.)
 struct UserUf8StripBinding {
     int  faderVst3Param = -1;                 // -1 = fall through to track vol
     bool faderInverted  = false;
@@ -116,29 +133,24 @@ struct UserUf8StripBinding {
     uint32_t selColour  = 0;
 };
 
-// Bank Left / Bank Right buttons in FX Learn (Frank 2026-05-16:
-// "Bank buttons ins Mockup rein, default action 'Bank +/- 8',
-// aber frei auf plugin params belegbar"). Single global binding (NOT
-// per-bank — Bank L/R navigate banks; making them per-bank would loop).
-// vst3Param == -1 → button keeps its default behaviour (bank_left /
-// bank_right builtin = ±8-strip scroll). Otherwise the press toggles
-// the bound VST3 param on the focused user-plug-in instance.
-struct UserUf8NavBinding {
-    int      vst3Param = -1;
-    uint32_t colour    = 0;  // 0 = class default (white)
-};
+// Bank Left / Bank Right buttons are reserved for fader-bank switching
+// inside UF8 Plugin Mode (Frank 2026-05-17 reversal of the 2026-05-16
+// "buttons frei auf plugin params belegbar" — that VST3-param override
+// is dropped). Outside UF8 Plugin Mode the buttons remain bindable
+// through the regular Bindings system (default = ±8-strip scroll).
 
 struct UserUf8Map {
     UserUf8BankSet       banks;
-    // 8 banks × 8 strips. Older v5 catalogs serialised a flat strips[8];
-    // load migration copies that single row into all 8 banks so existing
-    // user maps behave identically on first reload after the v6 bump.
-    UserUf8StripBinding  strips[kUserUf8BankCount][8] = {};
-    // Per-bank TopSoftKey LED appearance (Plugin Mode). Index = bank
-    // index 0..7; matches TopSoftKey position 1..8 on the hardware.
-    UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8BankCount] = {};
-    UserUf8NavBinding    bankLeft;
-    UserUf8NavBinding    bankRight;
+    // 2 fader-banks × 8 strips. v6 had strips[8 topSoftKey][8 slots]
+    // — that dimension is dropped (see UserUf8StripBinding comment).
+    // Older v5 catalogs serialised a flat strips[8]; migration copies
+    // that single row into faderBank=0.
+    UserUf8StripBinding  strips[kUserUf8FaderBankCount][8] = {};
+    // Per-bank TopSoftKey LED appearance (Plugin Mode). Index = V-Pot
+    // bank 0..7; matches TopSoftKey position 1..8 on the hardware.
+    // Not faderBank-scoped — the Top-Soft-Key row layout is the same
+    // regardless of which 8-of-16 logical strips are surfaced.
+    UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8VpotBankCount] = {};
 };
 
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an

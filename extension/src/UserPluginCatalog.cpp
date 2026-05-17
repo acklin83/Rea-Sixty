@@ -177,17 +177,19 @@ VPotMode vpotModeFromName_(const char* s)
 
 bool uf8MapHasContent_(const UserUf8Map& u)
 {
-    for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
+    for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
         for (int s = 0; s < 8; ++s) {
-            const auto& sb = u.strips[b][s];
+            const auto& sb = u.strips[fb][s];
             if (sb.faderVst3Param >= 0 || sb.soloVst3Param >= 0
              || sb.cutVst3Param   >= 0 || sb.selVst3Param  >= 0) return true;
-            if (u.banks.banks[b][s].vst3Param >= 0) return true;
-            if (!u.banks.banks[b][s].label.empty()) return true;
+        }
+        for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb) {
+            for (int s = 0; s < 8; ++s) {
+                if (u.banks.banks[fb][vb][s].vst3Param >= 0) return true;
+                if (!u.banks.banks[fb][vb][s].label.empty()) return true;
+            }
         }
     }
-    if (u.bankLeft.vst3Param  >= 0) return true;
-    if (u.bankRight.vst3Param >= 0) return true;
     return false;
 }
 
@@ -343,38 +345,48 @@ std::string serialize_(const UserPluginCatalog& c)
         emitSlotCache("bcSlotCache", m.bcSlotCache);
         if (uf8MapHasContent_(m.uf8)) {
             os << ",\n      \"uf8\": {\n";
-            os << "        \"banks\": [";
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
-                if (b) os << ",";
+            // banksByFaderBank: 2 fader-banks × 8 V-Pot-banks × 8 strips
+            // (v7, Frank 2026-05-17). Pre-v7 readers see the older
+            // `banks` 2D array; their parser path runs through the v6
+            // migration below.
+            os << "        \"banksByFaderBank\": [";
+            for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
+                if (fb) os << ",";
                 os << "\n          [";
-                for (int s = 0; s < 8; ++s) {
-                    if (s) os << ",";
-                    const auto& bs = m.uf8.banks.banks[b][s];
-                    os << "\n            { \"vst3Param\": " << bs.vst3Param
-                       << ", \"label\": ";
-                    appendEscaped_(os, bs.label);
-                    os << ", \"vpotMode\": ";
-                    appendEscaped_(os, vpotModeName_(bs.vpotMode));
-                    os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
-                       << ", \"defaultNorm\": " << bs.defaultNorm
-                       << ", \"stripColour\": "
-                       << static_cast<unsigned>(bs.stripColour)
-                       << " }";
+                for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb) {
+                    if (vb) os << ",";
+                    os << "\n            [";
+                    for (int s = 0; s < 8; ++s) {
+                        if (s) os << ",";
+                        const auto& bs = m.uf8.banks.banks[fb][vb][s];
+                        os << "\n              { \"vst3Param\": " << bs.vst3Param
+                           << ", \"label\": ";
+                        appendEscaped_(os, bs.label);
+                        os << ", \"vpotMode\": ";
+                        appendEscaped_(os, vpotModeName_(bs.vpotMode));
+                        os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
+                           << ", \"defaultNorm\": " << bs.defaultNorm
+                           << ", \"stripColour\": "
+                           << static_cast<unsigned>(bs.stripColour)
+                           << " }";
+                    }
+                    os << "\n            ]";
                 }
                 os << "\n          ]";
             }
             os << "\n        ],\n";
-            // stripsByBank: 8 banks × 8 strips (v6). Pre-v6 readers see no
-            // `strips` key and revert to track-default behaviour; v5 files
-            // load in v6 by replicating their flat strips[] into all banks
-            // (see parse_).
-            os << "        \"stripsByBank\": [";
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
-                if (b) os << ",";
+            // stripsByFaderBank: 2 fader-banks × 8 strips (v7).
+            // v6 had stripsByBank as topSoftKey×slot; that dimension was
+            // dropped — fader/solo/cut/sel don't vary with the Top-Soft-
+            // Key V-Pot layer. Migration in parse_ takes strips[0][slot]
+            // from v6 into faderBank=0; fader-bank 1 starts empty.
+            os << "        \"stripsByFaderBank\": [";
+            for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
+                if (fb) os << ",";
                 os << "\n          [";
                 for (int s = 0; s < 8; ++s) {
                     if (s) os << ",";
-                    const auto& sb = m.uf8.strips[b][s];
+                    const auto& sb = m.uf8.strips[fb][s];
                     os << "\n            { "
                        << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
                        << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
@@ -395,9 +407,9 @@ std::string serialize_(const UserPluginCatalog& c)
             os << "\n        ],\n";
             // Per-bank TopSoftKey LED appearance.
             os << "        \"topSoftKeyLeds\": [";
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
-                if (b) os << ",";
-                const auto& l = m.uf8.topSoftKeyLeds[b];
+            for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb) {
+                if (vb) os << ",";
+                const auto& l = m.uf8.topSoftKeyLeds[vb];
                 os << "\n          { "
                    << "\"colour\": "
                    << static_cast<unsigned>(l.colour)
@@ -405,19 +417,7 @@ std::string serialize_(const UserPluginCatalog& c)
                 appendEscaped_(os, l.label);
                 os << " }";
             }
-            os << "\n        ],\n";
-            // Bank Left / Right (v6). Single global binding each — the
-            // press toggles a VST3 param on the focused user-plug-in
-            // when vst3Param ≥ 0; otherwise the hardware button keeps
-            // its default ±8-strip scroll. Frank 2026-05-16.
-            os << "        \"bankLeft\":  { \"vst3Param\": "
-               << m.uf8.bankLeft.vst3Param
-               << ", \"colour\": "
-               << static_cast<unsigned>(m.uf8.bankLeft.colour) << " },\n";
-            os << "        \"bankRight\": { \"vst3Param\": "
-               << m.uf8.bankRight.vst3Param
-               << ", \"colour\": "
-               << static_cast<unsigned>(m.uf8.bankRight.colour) << " }\n";
+            os << "\n        ]\n";
             os << "      }";
         }
         if (!m.paramSnapshot.empty()) {
@@ -543,11 +543,54 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         if (auto* uo = po->get_item_by_name("uf8");
             uo && uo->is_object())
         {
-            if (auto* banksArr = uo->get_item_by_name("banks");
-                banksArr && banksArr->is_array() && banksArr->m_array)
+            // Helper for parsing one bank slot object (V-Pot binding).
+            auto parseBankSlot = [&](wdl_json_element* so,
+                                     UserUf8BankSlot& bs) {
+                getIntI_(so, "vst3Param", bs.vst3Param);
+                getStrI_(so, "label", bs.label);
+                std::string mode;
+                if (getStrI_(so, "vpotMode", mode))
+                    bs.vpotMode = vpotModeFromName_(mode.c_str());
+                getBoolI_(so, "inverted", bs.inverted);
+                getDoubleI_(so, "defaultNorm", bs.defaultNorm);
+                int colTmp = 0;
+                if (getIntI_(so, "stripColour", colTmp)) {
+                    bs.stripColour =
+                        static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                } else if (getIntI_(so, "colour", colTmp)) {
+                    bs.stripColour =
+                        static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                }
+            };
+            // v7: banksByFaderBank [fb][vpotBank][slot]. v6 had a flat
+            // `banks` [vpotBank][slot] — migrate into faderBank=0.
+            if (auto* bfbArr = uo->get_item_by_name("banksByFaderBank");
+                bfbArr && bfbArr->is_array() && bfbArr->m_array)
+            {
+                const int fbn = (std::min)(bfbArr->m_array->GetSize(),
+                                           uf8::kUserUf8FaderBankCount);
+                for (int fb = 0; fb < fbn; ++fb) {
+                    wdl_json_element* fbRow = bfbArr->enum_item(fb);
+                    if (!fbRow || !fbRow->is_array() || !fbRow->m_array) continue;
+                    const int bn = (std::min)(fbRow->m_array->GetSize(),
+                                              uf8::kUserUf8VpotBankCount);
+                    for (int b = 0; b < bn; ++b) {
+                        wdl_json_element* row = fbRow->enum_item(b);
+                        if (!row || !row->is_array() || !row->m_array) continue;
+                        const int sn = (std::min)(row->m_array->GetSize(), 8);
+                        for (int s = 0; s < sn; ++s) {
+                            wdl_json_element* so = row->enum_item(s);
+                            if (!so || !so->is_object()) continue;
+                            parseBankSlot(so, m.uf8.banks.banks[fb][b][s]);
+                        }
+                    }
+                }
+            }
+            else if (auto* banksArr = uo->get_item_by_name("banks");
+                     banksArr && banksArr->is_array() && banksArr->m_array)
             {
                 const int bn = (std::min)(banksArr->m_array->GetSize(),
-                                          uf8::kUserUf8BankCount);
+                                          uf8::kUserUf8VpotBankCount);
                 for (int b = 0; b < bn; ++b) {
                     wdl_json_element* row = banksArr->enum_item(b);
                     if (!row || !row->is_array() || !row->m_array) continue;
@@ -555,32 +598,15 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     for (int s = 0; s < sn; ++s) {
                         wdl_json_element* so = row->enum_item(s);
                         if (!so || !so->is_object()) continue;
-                        auto& bs = m.uf8.banks.banks[b][s];
-                        getIntI_(so, "vst3Param", bs.vst3Param);
-                        getStrI_(so, "label", bs.label);
-                        std::string mode;
-                        if (getStrI_(so, "vpotMode", mode))
-                            bs.vpotMode = vpotModeFromName_(mode.c_str());
-                        getBoolI_(so, "inverted", bs.inverted);
-                        getDoubleI_(so, "defaultNorm", bs.defaultNorm);
-                        int colTmp = 0;
-                        // Migrate legacy "colour" → "stripColour"
-                        // (Frank 2026-05-13 split V-Pot / TopSoftKey /
-                        // strip-bar colour into independent registers).
-                        if (getIntI_(so, "stripColour", colTmp)) {
-                            bs.stripColour =
-                                static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                        } else if (getIntI_(so, "colour", colTmp)) {
-                            bs.stripColour =
-                                static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-                        }
+                        parseBankSlot(so, m.uf8.banks.banks[0][b][s]);
                     }
                 }
             }
-            // Per-strip bindings. v6 emits `stripsByBank` (2D: bank × strip);
-            // v5 emitted `strips` (1D: strip only). Parse whichever is
-            // present; for v5 we replicate the flat row into all 8 banks
-            // so existing maps behave identically.
+            // Per-strip bindings. v7 emits `stripsByFaderBank` (2D:
+            // faderBank × slot). v6 had `stripsByBank` (2D: topSoftKey ×
+            // slot) — the top-soft-key dimension is dropped; we take
+            // strips[0][slot] from v6 into faderBank=0. v5 had a flat
+            // `strips` (1D: slot) — replicate into faderBank=0.
             auto parseStripObj = [&](wdl_json_element* so,
                                      UserUf8StripBinding& sb) {
                 if (auto* fo = so->get_item_by_name("fader");
@@ -615,51 +641,56 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                 }
             };
-            if (auto* sbbArr = uo->get_item_by_name("stripsByBank");
-                sbbArr && sbbArr->is_array() && sbbArr->m_array)
+            // v7 path: stripsByFaderBank [faderBank][slot].
+            if (auto* sfbArr = uo->get_item_by_name("stripsByFaderBank");
+                sfbArr && sfbArr->is_array() && sfbArr->m_array)
             {
-                const int bn = (std::min)(sbbArr->m_array->GetSize(),
-                                          uf8::kUserUf8BankCount);
-                for (int b = 0; b < bn; ++b) {
-                    wdl_json_element* row = sbbArr->enum_item(b);
+                const int fbn = (std::min)(sfbArr->m_array->GetSize(),
+                                           uf8::kUserUf8FaderBankCount);
+                for (int fb = 0; fb < fbn; ++fb) {
+                    wdl_json_element* row = sfbArr->enum_item(fb);
                     if (!row || !row->is_array() || !row->m_array) continue;
                     const int sn = (std::min)(row->m_array->GetSize(), 8);
                     for (int s = 0; s < sn; ++s) {
                         wdl_json_element* so = row->enum_item(s);
                         if (!so || !so->is_object()) continue;
-                        parseStripObj(so, m.uf8.strips[b][s]);
+                        parseStripObj(so, m.uf8.strips[fb][s]);
                     }
                 }
             }
+            // v6 path: stripsByBank [topSoftKey][slot] — take row 0
+            // (topSoftKey 0) into faderBank=0. v6's per-top-soft-key
+            // fader specialisation is dropped (see header).
+            else if (auto* sbbArr = uo->get_item_by_name("stripsByBank");
+                     sbbArr && sbbArr->is_array() && sbbArr->m_array)
+            {
+                if (sbbArr->m_array->GetSize() > 0) {
+                    wdl_json_element* row = sbbArr->enum_item(0);
+                    if (row && row->is_array() && row->m_array) {
+                        const int sn = (std::min)(row->m_array->GetSize(), 8);
+                        for (int s = 0; s < sn; ++s) {
+                            wdl_json_element* so = row->enum_item(s);
+                            if (!so || !so->is_object()) continue;
+                            parseStripObj(so, m.uf8.strips[0][s]);
+                        }
+                    }
+                }
+            }
+            // v5 path: flat strips[8] → faderBank=0.
             else if (auto* stripsArr = uo->get_item_by_name("strips");
                      stripsArr && stripsArr->is_array() && stripsArr->m_array)
             {
-                // v5 (or earlier) flat strips[8] — replicate into all
-                // banks so behaviour is preserved on first reload.
                 const int sn = (std::min)(stripsArr->m_array->GetSize(), 8);
                 for (int s = 0; s < sn; ++s) {
                     wdl_json_element* so = stripsArr->enum_item(s);
                     if (!so || !so->is_object()) continue;
-                    UserUf8StripBinding tmp{};
-                    parseStripObj(so, tmp);
-                    for (int b = 0; b < uf8::kUserUf8BankCount; ++b)
-                        m.uf8.strips[b][s] = tmp;
+                    parseStripObj(so, m.uf8.strips[0][s]);
                 }
             }
-            // Bank Left / Right bindings (v6 — Frank 2026-05-16). Older
-            // files (v5 or earlier) lack the keys; defaults stay at
-            // vst3Param=-1 so the hardware buttons keep their built-in
-            // ±8-strip scroll behaviour.
-            auto readNav = [&](const char* key, UserUf8NavBinding& nb) {
-                auto* no = uo->get_item_by_name(key);
-                if (!no || !no->is_object()) return;
-                getIntI_(no, "vst3Param", nb.vst3Param);
-                int colTmp = 0;
-                if (getIntI_(no, "colour", colTmp))
-                    nb.colour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
-            };
-            readNav("bankLeft",  m.uf8.bankLeft);
-            readNav("bankRight", m.uf8.bankRight);
+            // Legacy v6 bankLeft / bankRight blocks are skipped. The
+            // Bank ←/→ buttons no longer carry per-plug-in VST3-param
+            // overrides (Frank 2026-05-17 — they're reserved for
+            // fader-bank toggling inside UF8 Plugin Mode).
 
             // Per-bank TopSoftKey LED state. New shape (single colour
             // + label); legacy entries with activeColour/inactiveColour
@@ -670,7 +701,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 tslArr && tslArr->is_array() && tslArr->m_array)
             {
                 const int ln = (std::min)(tslArr->m_array->GetSize(),
-                                          uf8::kUserUf8BankCount);
+                                          uf8::kUserUf8VpotBankCount);
                 for (int b = 0; b < ln; ++b) {
                     wdl_json_element* lo = tslArr->enum_item(b);
                     if (!lo || !lo->is_object()) continue;

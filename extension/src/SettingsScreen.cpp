@@ -4411,8 +4411,15 @@ struct Uf8ListenSlot {
 Uf8ListenSlot g_listeningUf8;
 
 // Bank index currently shown on the UF8 mockup — drives which
-// banks.banks[bank][s] entries are visible/editable.
+// banks.banks[fb][bank][s] entries are visible/editable.
 int g_uf8EditingBank = 0;
+
+// Fader bank currently shown on the UF8 mockup (Frank 2026-05-17).
+// 0 → strips 1-8 of the logical 16-strip plug-in; 1 → strips 9-16.
+// Drives which (faderBank, vpotBank, slot) the editor mutates, AND
+// which strips[faderBank][slot] entries the Fader/Solo/Cut/Sel row
+// references. Bidirectional sync with hardware g_uf8FaderBank.
+int g_uf8EditingFaderBank = 0;
 
 // Mutator helpers. Each takes a copy of the catalog, mutates the editing
 // map's uf8 field, and pushes back via upsert. Callers should already
@@ -4441,14 +4448,14 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
         switch (kind) {
-            case 0 /*Fader*/:      return u.strips[bank][strip].faderVst3Param;
-            case 3 /*SoloBtn*/:    return u.strips[bank][strip].soloVst3Param;
-            case 4 /*CutBtn*/:     return u.strips[bank][strip].cutVst3Param;
-            case 5 /*SelBtn*/:     return u.strips[bank][strip].selVst3Param;
+            case 0 /*Fader*/:      return u.strips[g_uf8EditingFaderBank][strip].faderVst3Param;
+            case 3 /*SoloBtn*/:    return u.strips[g_uf8EditingFaderBank][strip].soloVst3Param;
+            case 4 /*CutBtn*/:     return u.strips[g_uf8EditingFaderBank][strip].cutVst3Param;
+            case 5 /*SelBtn*/:     return u.strips[g_uf8EditingFaderBank][strip].selVst3Param;
             case 1 /*VPot*/:
-            case 2 /*TopSoftKey*/: return u.banks.banks[bank][strip].vst3Param;
-            case 6 /*BankLeft*/:   return u.bankLeft.vst3Param;
-            case 7 /*BankRight*/:  return u.bankRight.vst3Param;
+            case 2 /*TopSoftKey*/: return u.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param;
+            // Cases 6/7 (BankLeft/BankRight) removed 2026-05-17 — Bank
+            // ←/→ buttons no longer carry per-plug-in overrides.
             default: return -1;
         }
     }
@@ -4460,16 +4467,14 @@ void bindUf8_(int kind, int strip, int bank, int vst3Param)
     if (vst3Param < 0) return;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 0: u.strips[bank][strip].faderVst3Param = vst3Param; break;
-            case 3: u.strips[bank][strip].soloVst3Param  = vst3Param; break;
-            case 4: u.strips[bank][strip].cutVst3Param   = vst3Param; break;
-            case 5: u.strips[bank][strip].selVst3Param   = vst3Param; break;
+            case 0: u.strips[g_uf8EditingFaderBank][strip].faderVst3Param = vst3Param; break;
+            case 3: u.strips[g_uf8EditingFaderBank][strip].soloVst3Param  = vst3Param; break;
+            case 4: u.strips[g_uf8EditingFaderBank][strip].cutVst3Param   = vst3Param; break;
+            case 5: u.strips[g_uf8EditingFaderBank][strip].selVst3Param   = vst3Param; break;
             case 1:
             case 2:
-                u.banks.banks[bank][strip].vst3Param = vst3Param;
+                u.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param = vst3Param;
                 break;
-            case 6: u.bankLeft.vst3Param  = vst3Param; break;
-            case 7: u.bankRight.vst3Param = vst3Param; break;
         }
     });
 }
@@ -4478,15 +4483,13 @@ void unbindUf8_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 0: u.strips[bank][strip].faderVst3Param = -1;
-                    u.strips[bank][strip].faderInverted  = false; break;
-            case 3: u.strips[bank][strip].soloVst3Param  = -1; break;
-            case 4: u.strips[bank][strip].cutVst3Param   = -1; break;
-            case 5: u.strips[bank][strip].selVst3Param   = -1; break;
+            case 0: u.strips[g_uf8EditingFaderBank][strip].faderVst3Param = -1;
+                    u.strips[g_uf8EditingFaderBank][strip].faderInverted  = false; break;
+            case 3: u.strips[g_uf8EditingFaderBank][strip].soloVst3Param  = -1; break;
+            case 4: u.strips[g_uf8EditingFaderBank][strip].cutVst3Param   = -1; break;
+            case 5: u.strips[g_uf8EditingFaderBank][strip].selVst3Param   = -1; break;
             case 1:
-            case 2: u.banks.banks[bank][strip] = uf8::UserUf8BankSlot{}; break;
-            case 6: u.bankLeft  = uf8::UserUf8NavBinding{}; break;
-            case 7: u.bankRight = uf8::UserUf8NavBinding{}; break;
+            case 2: u.banks.banks[g_uf8EditingFaderBank][bank][strip] = uf8::UserUf8BankSlot{}; break;
         }
     });
 }
@@ -4551,12 +4554,12 @@ int fillSequentialUf8_(int kind, int strip, int bank,
 
         auto& u = editing->uf8;
         switch (kind) {
-            case 0: u.strips[bank][s].faderVst3Param = found; break;
-            case 3: u.strips[bank][s].soloVst3Param  = found; break;
-            case 4: u.strips[bank][s].cutVst3Param   = found; break;
-            case 5: u.strips[bank][s].selVst3Param   = found; break;
+            case 0: u.strips[g_uf8EditingFaderBank][s].faderVst3Param = found; break;
+            case 3: u.strips[g_uf8EditingFaderBank][s].soloVst3Param  = found; break;
+            case 4: u.strips[g_uf8EditingFaderBank][s].cutVst3Param   = found; break;
+            case 5: u.strips[g_uf8EditingFaderBank][s].selVst3Param   = found; break;
             case 1:
-            case 2: u.banks.banks[bank][s].vst3Param = found; break;
+            case 2: u.banks.banks[g_uf8EditingFaderBank][bank][s].vst3Param = found; break;
             default: continue;
         }
         ++filled;
@@ -4574,9 +4577,9 @@ bool uf8Inverted_(int kind, int strip, int bank)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
-        if (kind == 0) return u.strips[bank][strip].faderInverted;
+        if (kind == 0) return u.strips[g_uf8EditingFaderBank][strip].faderInverted;
         if (kind == 1 || kind == 2)
-            return u.banks.banks[bank][strip].inverted;
+            return u.banks.banks[g_uf8EditingFaderBank][bank][strip].inverted;
         return false;
     }
     return false;
@@ -4586,9 +4589,9 @@ void toggleUf8Inverted_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
         if (kind == 0)
-            u.strips[bank][strip].faderInverted = !u.strips[bank][strip].faderInverted;
+            u.strips[g_uf8EditingFaderBank][strip].faderInverted = !u.strips[g_uf8EditingFaderBank][strip].faderInverted;
         else if (kind == 1 || kind == 2) {
-            auto& bs = u.banks.banks[bank][strip];
+            auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
             bs.inverted = !bs.inverted;
         }
     });
@@ -4597,7 +4600,7 @@ void toggleUf8Inverted_(int kind, int strip, int bank)
 void setUf8VPotMode_(int strip, int bank, uf8::VPotMode mode)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[bank][strip].vpotMode = mode;
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].vpotMode = mode;
     });
 }
 
@@ -4605,7 +4608,7 @@ void setUf8DefaultNorm_(int strip, int bank, double norm)
 {
     if (norm < 0.0) norm = 0.0; if (norm > 1.0) norm = 1.0;
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[bank][strip].defaultNorm = norm;
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].defaultNorm = norm;
     });
 }
 
@@ -4614,7 +4617,7 @@ void setUf8Label_(int strip, int bank, const std::string& label)
     std::string trimmed = label;
     if (trimmed.size() > 7) trimmed.resize(7);
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[bank][strip].label = trimmed;
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].label = trimmed;
     });
 }
 
@@ -4631,11 +4634,10 @@ uint32_t getUf8Colour_(int kind, int strip, int bank)
         if (m.match != g_editingMatch) continue;
         const auto& u = m.uf8;
         switch (kind) {
-            case 3 /*SoloBtn*/: return u.strips[bank][strip].soloColour;
-            case 4 /*CutBtn*/:  return u.strips[bank][strip].cutColour;
-            case 5 /*SelBtn*/:  return u.strips[bank][strip].selColour;
-            case 6 /*BankLeft*/:  return u.bankLeft.colour;
-            case 7 /*BankRight*/: return u.bankRight.colour;
+            case 3 /*SoloBtn*/: return u.strips[g_uf8EditingFaderBank][strip].soloColour;
+            case 4 /*CutBtn*/:  return u.strips[g_uf8EditingFaderBank][strip].cutColour;
+            case 5 /*SelBtn*/:  return u.strips[g_uf8EditingFaderBank][strip].selColour;
+            // Cases 6/7 (BankLeft/BankRight) removed 2026-05-17.
             default: return 0;
         }
     }
@@ -4647,11 +4649,9 @@ void setUf8Colour_(int kind, int strip, int bank, uint32_t rgb)
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         switch (kind) {
-            case 3: u.strips[bank][strip].soloColour = rgb; break;
-            case 4: u.strips[bank][strip].cutColour  = rgb; break;
-            case 5: u.strips[bank][strip].selColour  = rgb; break;
-            case 6: u.bankLeft.colour  = rgb; break;
-            case 7: u.bankRight.colour = rgb; break;
+            case 3: u.strips[g_uf8EditingFaderBank][strip].soloColour = rgb; break;
+            case 4: u.strips[g_uf8EditingFaderBank][strip].cutColour  = rgb; break;
+            case 5: u.strips[g_uf8EditingFaderBank][strip].selColour  = rgb; break;
         }
     });
 }
@@ -4664,7 +4664,7 @@ uint32_t getUf8StripColour_(int strip, int bank)
     if (g_editingMatch.empty()) return 0;
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
-        return m.uf8.banks.banks[bank][strip].stripColour & 0x00FFFFFFu;
+        return m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].stripColour & 0x00FFFFFFu;
     }
     return 0;
 }
@@ -4672,7 +4672,7 @@ void setUf8StripColour_(int strip, int bank, uint32_t rgb)
 {
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[bank][strip].stripColour = rgb;
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].stripColour = rgb;
     });
 }
 
@@ -4723,7 +4723,7 @@ bool bankHasVPotBindings_(int bank)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         for (int s = 0; s < 8; ++s) {
-            if (m.uf8.banks.banks[bank][s].vst3Param >= 0) return true;
+            if (m.uf8.banks.banks[g_uf8EditingFaderBank][bank][s].vst3Param >= 0) return true;
         }
         return false;
     }
@@ -4737,7 +4737,7 @@ void fillAllStripColours_(int bank, uint32_t rgb)
     rgb &= 0x00FFFFFFu;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         for (int s = 0; s < 8; ++s) {
-            u.banks.banks[bank][s].stripColour = rgb;
+            u.banks.banks[g_uf8EditingFaderBank][bank][s].stripColour = rgb;
         }
     });
 }
@@ -5727,7 +5727,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 double        curDeflt = 0.5;
                 for (const auto& m : uf8::user_plugins::get().maps) {
                     if (m.match != g_editingMatch) continue;
-                    const auto& bs = m.uf8.banks.banks[bank][ctrl.strip];
+                    const auto& bs = m.uf8.banks.banks[g_uf8EditingFaderBank][bank][ctrl.strip];
                     curMode  = bs.vpotMode;
                     curLabel = bs.label;
                     curDeflt = bs.defaultNorm;
@@ -6905,36 +6905,38 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                              bs && bs->name ? bs->name : "(slot)");
                 }
             }
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
-                for (int s = 0; s < 8; ++s) {
-                    const auto& bs = editing->uf8.banks.banks[b][s];
-                    if (bs.vst3Param < 0) continue;
-                    char buf[48];
-                    std::snprintf(buf, sizeof(buf),
-                                  "UF8 V-Pot bk %d str %d", b + 1, s + 1);
-                    noteUse_(bs.vst3Param, buf);
+            for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
+                for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb) {
+                    for (int s = 0; s < 8; ++s) {
+                        const auto& bs =
+                            editing->uf8.banks.banks[fb][vb][s];
+                        if (bs.vst3Param < 0) continue;
+                        char buf[64];
+                        std::snprintf(buf, sizeof(buf),
+                                      "UF8 V-Pot fb %d bk %d str %d",
+                                      fb + 1, vb + 1, s + 1);
+                        noteUse_(bs.vst3Param, buf);
+                    }
                 }
             }
-            for (int b = 0; b < uf8::kUserUf8BankCount; ++b) {
+            for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
                 for (int s = 0; s < 8; ++s) {
-                    const auto& sb = editing->uf8.strips[b][s];
-                    char buf[48];
+                    const auto& sb = editing->uf8.strips[fb][s];
+                    char buf[64];
                     std::snprintf(buf, sizeof(buf),
-                                  "UF8 Fader bk %d str %d", b + 1, s + 1);
+                                  "UF8 Fader fb %d str %d", fb + 1, s + 1);
                     noteUse_(sb.faderVst3Param, buf);
                     std::snprintf(buf, sizeof(buf),
-                                  "UF8 Solo bk %d str %d",  b + 1, s + 1);
+                                  "UF8 Solo fb %d str %d",  fb + 1, s + 1);
                     noteUse_(sb.soloVst3Param, buf);
                     std::snprintf(buf, sizeof(buf),
-                                  "UF8 Cut bk %d str %d",   b + 1, s + 1);
+                                  "UF8 Cut fb %d str %d",   fb + 1, s + 1);
                     noteUse_(sb.cutVst3Param,  buf);
                     std::snprintf(buf, sizeof(buf),
-                                  "UF8 Sel bk %d str %d",   b + 1, s + 1);
+                                  "UF8 Sel fb %d str %d",   fb + 1, s + 1);
                     noteUse_(sb.selVst3Param,  buf);
                 }
             }
-            noteUse_(editing->uf8.bankLeft.vst3Param,  "UF8 Bank \xE2\x97\x82");
-            noteUse_(editing->uf8.bankRight.vst3Param, "UF8 Bank \xE2\x96\xB8");
 
             const int paramCount = paramCountFor_(*editing, fx);
             // Cap iteration so a 5000-param plugin doesn't tank the
