@@ -1957,10 +1957,33 @@ constexpr double kAutoModeRotateScale = 6.0;
 double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 // Per-track active-FX index for Selection-Mode Instance. Survives
-// bank scrolls so the user's last-cycled FX on each track stays
-// remembered. Keyed by MediaTrack* — entries for deleted tracks
-// linger harmlessly until plug-in reload.
-std::unordered_map<MediaTrack*, int> g_stripInstanceFxIdx;
+// bank scrolls AND project save/load — keyed by project-stable GUID
+// (uc1::trackGuid) just like the Domain Instance cursors so a reload
+// doesn't reset the cycle position. Was MediaTrack*-keyed until
+// 2026-05-17; pointers became stale across reload and could even be
+// recycled to a different track by REAPER.
+std::unordered_map<std::string, int> g_stripInstanceFxIdx;
+
+void setStripInstanceFx_(MediaTrack* tr, int idx)
+{
+    if (!tr) return;
+    const std::string g = uc1::trackGuid(tr);
+    if (g.empty()) return;
+    g_stripInstanceFxIdx[g] = idx;
+}
+
+// Look up the raw stored cursor for `tr` (no clamping). Returns -1
+// when no cursor has been written for the track yet. Most callers
+// want stripInstanceActiveFx_ instead, which clamps to the current
+// FX count.
+int stripInstanceFxRaw_(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const std::string g = uc1::trackGuid(tr);
+    if (g.empty()) return -1;
+    auto it = g_stripInstanceFxIdx.find(g);
+    return (it == g_stripInstanceFxIdx.end()) ? -1 : it->second;
+}
 
 // Returns the current Instance-mode active FX index for `tr`,
 // defaulting to 0 when the user hasn't cycled this track yet (or 0
@@ -1970,8 +1993,8 @@ int stripInstanceActiveFx_(MediaTrack* tr)
     if (!tr) return -1;
     const int n = TrackFX_GetCount(tr);
     if (n <= 0) return -1;
-    auto it = g_stripInstanceFxIdx.find(tr);
-    int idx = (it == g_stripInstanceFxIdx.end()) ? 0 : it->second;
+    const int raw = stripInstanceFxRaw_(tr);
+    int idx = (raw < 0) ? 0 : raw;
     if (idx < 0)  idx = 0;
     if (idx >= n) idx = n - 1;
     return idx;
@@ -2381,7 +2404,7 @@ void applyInstanceCycle_(int step)
     // 2026-05-14 "soll nur beim selected channel wie vorher"). The
     // per-strip V-Pot path in StripInstanceDelta still updates this
     // map independently for non-focused strips.
-    g_stripInstanceFxIdx[tr] = target.fxIdx;
+    setStripInstanceFx_(tr, target.fxIdx);
     if (target.dom == uf8::Domain::ChannelStrip) {
         uf8::setFocus({target.dom, 0});
         uc1::setCsInstanceIndex(tr, target.instIdx);
@@ -2530,7 +2553,7 @@ void applyFxCycle_(int step)
 
     const int cur  = stripInstanceActiveFx_(tr);
     int nextIdx = ((cur + step) % n + n) % n;
-    g_stripInstanceFxIdx[tr] = nextIdx;
+    setStripInstanceFx_(tr, nextIdx);
     syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
                                        /*setBcAnchor*/ true);
     g_bankDirty.store(true);
@@ -2636,11 +2659,10 @@ ActiveFxTarget resolveActiveFx_()
     // Cursor branch — user has explicitly cycled (V-Pot FX Cycle,
     // V-Pot Instance Cycle, or Encoder Instance Cycle, all of which
     // write g_stripInstanceFxIdx).
-    auto it = g_stripInstanceFxIdx.find(tr);
-    if (it != g_stripInstanceFxIdx.end()) {
-        const int idx  = it->second;
-        const int nFx  = TrackFX_GetCount(tr);
-        if (idx >= 0 && idx < nFx) return {tr, idx};
+    const int raw = stripInstanceFxRaw_(tr);
+    if (raw >= 0) {
+        const int nFx = TrackFX_GetCount(tr);
+        if (raw < nFx) return {tr, raw};
     }
 
     // Fallback — focused-domain Instance (the same FX UC1 LCD shows).
@@ -2792,8 +2814,8 @@ void refocusFocusedPluginGuiToCurrentSelection_()
     // resolveActiveFx_ would have returned for THIS new track. Default
     // to FX 0 if no cursor recorded yet.
     if (fxIdx < 0) {
-        auto it = g_stripInstanceFxIdx.find(newTr);
-        if (it != g_stripInstanceFxIdx.end()) fxIdx = it->second;
+        const int raw = stripInstanceFxRaw_(newTr);
+        if (raw >= 0) fxIdx = raw;
         const int n = TrackFX_GetCount(newTr);
         if (fxIdx < 0 || fxIdx >= n) fxIdx = (n > 0) ? 0 : -1;
     }
@@ -4294,7 +4316,7 @@ void drainInputQueue()
                     if (n > 0) {
                         const int cur = stripInstanceActiveFx_(tr);
                         int next = ((cur + step) % n + n) % n;
-                        g_stripInstanceFxIdx[tr] = next;
+                        setStripInstanceFx_(tr, next);
                         // Promote Instance landings into Instance state
                         // sync — only shift focused.domain when the
                         // strip's track IS the focused track, so non-
@@ -4421,13 +4443,39 @@ void drainInputQueue()
                 }
                 if (hits.size() < 2) break;   // Frank 2026-05-15: no-op
 
-                // Anchor position on the current cursor FX index. If the
-                // cursor isn't on an Instance (e.g. user just switched in
-                // from FX Cycle on a non-Instance FX), start at hits[0].
-                const int curFx = stripInstanceActiveFx_(tr);
+                // Anchor on the FX-cursor first — that's the per-strip
+                // equivalent of "what was last landed on". Falls back
+                // to per-domain (dom, instIdx) lookup when the cursor
+                // is stale (a REAPER FX re-order moved the FX away from
+                // its recorded index but the Domain cursors stayed
+                // valid because they're stable against re-ordering).
+                // Mirrors applyInstanceCycle_'s anchor on the focused-
+                // scope path.
                 int curK = 0;
-                for (size_t k = 0; k < hits.size(); ++k) {
-                    if (hits[k].fxIdx == curFx) { curK = static_cast<int>(k); break; }
+                bool foundAnchor = false;
+                {
+                    const int curFx = stripInstanceActiveFx_(tr);
+                    for (size_t k = 0; k < hits.size(); ++k) {
+                        if (hits[k].fxIdx == curFx) {
+                            curK = static_cast<int>(k);
+                            foundAnchor = true;
+                            break;
+                        }
+                    }
+                }
+                if (!foundAnchor) {
+                    const int curCs  = uc1::csInstanceIndex(tr);
+                    const int curBc  = uc1::bcInstanceIndex(tr);
+                    const int curUf8 = uc1::uf8OnlyInstanceIndex(tr);
+                    for (size_t k = 0; k < hits.size(); ++k) {
+                        const int want = (hits[k].dom == uf8::Domain::ChannelStrip) ? curCs
+                                       : (hits[k].dom == uf8::Domain::BusComp)      ? curBc
+                                       :                                              curUf8;
+                        if (hits[k].instIdx == want) {
+                            curK = static_cast<int>(k);
+                            break;
+                        }
+                    }
                 }
                 int nextK = (curK + step) % static_cast<int>(hits.size());
                 if (nextK < 0) nextK += static_cast<int>(hits.size());
@@ -4444,7 +4492,7 @@ void drainInputQueue()
                     ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
                     : nullptr;
                 const bool isFocusedStrip = (focusedTr == tr);
-                g_stripInstanceFxIdx[tr] = target.fxIdx;
+                setStripInstanceFx_(tr, target.fxIdx);
                 if (target.dom == uf8::Domain::ChannelStrip) {
                     uc1::setCsInstanceIndex(tr, target.instIdx);
                 } else if (target.dom == uf8::Domain::BusComp) {
@@ -13095,7 +13143,7 @@ void registerBindingHandlers()
                 const int dest = t.fxIdx + dir;
                 if (dest < 0 || dest >= n) return;   // edge — no wrap
                 TrackFX_CopyToTrack(t.tr, t.fxIdx, t.tr, dest, /*is_move*/ true);
-                g_stripInstanceFxIdx[t.tr] = dest;
+                setStripInstanceFx_(t.tr, dest);
                 g_bankDirty.store(true);
                 if (g_uc1_surface) {
                     g_uc1_surface->invalidateCache();

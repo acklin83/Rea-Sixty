@@ -21,6 +21,7 @@
 //
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "UC1Protocol.h"
@@ -143,6 +144,10 @@ int  uf8OnlyInstanceCount(void* track);
 // Step the active instance by `delta`, wrapping around the count.
 // no-op when count <= 1.
 void cycleInstance(void* track, ControlDomain dom, int delta);
+// Resolve a MediaTrack* to its project-stable GUID string. Empty string
+// on invalid/dangling pointer. Used as the key for any per-track state
+// that needs to survive project save/load — pointers do not, GUIDs do.
+std::string trackGuid(void* track);
 // Map an FX index on a track back to its instance position within the
 // domain. Returns -1 when the FX isn't a recognised CS/BC binding.
 // Used by chaseLastTouchedFx so a click in REAPER's plug-in GUI

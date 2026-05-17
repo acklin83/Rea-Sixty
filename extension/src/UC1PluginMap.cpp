@@ -628,6 +628,8 @@ std::string trackGuid_(void* trackRaw)
     return std::string{buf};
 }
 
+std::string trackGuid(void* track) { return trackGuid_(track); }
+
 UC1Bindings lookupBindingsOnTrack(void* trackRaw)
 {
     UC1Bindings result;
