@@ -157,6 +157,13 @@ const char* reasixty_reaperVersion();
 void reasixty_openUrl(const char* url);
 void reasixty_revealInFinder(const char* path);
 
+// UF8 Plugin Mode fader-bank bridge (defined in main.cpp).
+// reasixty_uf8FaderBank() returns the clamped live hardware value;
+// reasixty_setUf8FaderBank(fb) writes it (clamped). FX-Learn editor's
+// Fader Bank 1/2 tab uses both for bidirectional sync.
+int  reasixty_uf8FaderBank();
+void reasixty_setUf8FaderBank(int fb);
+
 namespace uf8 {
 
 // ---- Device ---------------------------------------------------------------
@@ -6088,6 +6095,42 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
 void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
+    // Fader-bank tab row (Frank 2026-05-17). Bidirectional sync with
+    // hardware Bank ←/→: a click here writes g_uf8FaderBank so the
+    // hardware switches with the UI; a hardware press updates the
+    // global atomic which we read fresh each frame, so the UI mirrors
+    // the hardware. Skinny row — sits above the UF8 face mockup so
+    // the V-Pot / fader / solo / cut / sel slots below redraw against
+    // whichever fader-bank the user is editing.
+    {
+        const int hwBank = ::reasixty_uf8FaderBank();
+        g_uf8EditingFaderBank = hwBank;
+        for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
+            if (fb) ImGui_SameLine(ctx, nullptr, nullptr);
+            const bool active = (fb == hwBank);
+            char lbl[32];
+            std::snprintf(lbl, sizeof(lbl), "Fader Bank %d", fb + 1);
+            // ImGui doesn't have a segmented control; emulate by tinting
+            // the active button. Push the green ring colour the bank
+            // selectors use everywhere else.
+            if (active) {
+                ImGui_PushStyleColor(ctx, ImGui_Col_Button,    0x60C060FF);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x70D070FF);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x80E080FF);
+            }
+            double bw = 100.0, bh = 22.0;
+            if (ImGui_Button(ctx, lbl, &bw, &bh)) {
+                ::reasixty_setUf8FaderBank(fb);
+                g_uf8EditingFaderBank = fb;
+            }
+            if (active) {
+                int popN = 3;
+                ImGui_PopStyleColor(ctx, &popN);
+            }
+        }
+        ImGui_Spacing(ctx);
+    }
+
     double oxd = 0, oyd = 0;
     ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
     const float ox = float(oxd), oy = float(oyd);

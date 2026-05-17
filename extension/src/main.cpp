@@ -3349,10 +3349,10 @@ CsFaderHandle csFaderForTrack(MediaTrack* tr)
 }
 
 // Per-track user-plugin fader lookup. Returns the fader binding from
-// uf8.strips[uf8FaderBankClamped_()][0] of the first user-mapped plugin on this track in the
-// given domain — bank = current soft-key bank, so SSL Strip Mode follows
-// the same per-bank context as UF8 Plugin Mode. Strip 0 is the canonical
-// "this is THE fader binding" slot for the active plug-in.
+// uf8.strips[faderBank][0] of the first user-mapped plugin on this
+// track in the given domain (faderBank read live from g_uf8FaderBank
+// via uf8FaderBankClamped_()). Strip 0 is the canonical "THE fader
+// binding" slot for the active plug-in.
 struct UserFaderHandle { int fxIndex; int vst3Param; bool inverted; };
 UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
 {
@@ -9552,7 +9552,6 @@ void pushUf8GlobalLeds()
         constexpr uf8::Uf8GlobalLed kStateless[] = {
             uf8::Uf8GlobalLed::Btn360,
             uf8::Uf8GlobalLed::Channel,
-            uf8::Uf8GlobalLed::BankLeft, uf8::Uf8GlobalLed::BankRight,
             uf8::Uf8GlobalLed::ZoomUp, uf8::Uf8GlobalLed::ZoomDown,
             uf8::Uf8GlobalLed::ZoomLeft, uf8::Uf8GlobalLed::ZoomRight,
             uf8::Uf8GlobalLed::ZoomCenter,
@@ -9564,6 +9563,25 @@ void pushUf8GlobalLeds()
             const auto bid = buttonIdForGlobalLed(led);
             const bool active = boundActionIsActive_(bid);
             sendUf8GlobalLed(led, active);
+        }
+
+        // Bank ←/→ LEDs follow the active fader-bank inside UF8 Plugin
+        // Mode (Frank 2026-05-17): the LED of the active bank is on,
+        // the inactive one off. Outside UF8 Plugin Mode they revert to
+        // the regular stateless press-flash so a user-bound momentary
+        // (default ±8-strip scroll) shows momentarily on press.
+        if (g_uf8PluginMode.load()) {
+            const int fb = std::clamp(g_uf8FaderBank.load(),
+                                      0, uf8::kUserUf8FaderBankCount - 1);
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,  fb == 0);
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, fb == 1);
+        } else {
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,
+                boundActionIsActive_(buttonIdForGlobalLed(
+                    uf8::Uf8GlobalLed::BankLeft)));
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight,
+                boundActionIsActive_(buttonIdForGlobalLed(
+                    uf8::Uf8GlobalLed::BankRight)));
         }
     }
 
@@ -11058,6 +11076,24 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
 int reasixty_softKeyBankRaw()
 {
     return std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
+}
+
+// UF8 Plugin Mode fader-bank accessors — same anonymous-namespace
+// bridging pattern as reasixty_softKeyBankRaw. FX-Learn editor reads
+// the live hardware fader-bank and writes back on tab click.
+int reasixty_uf8FaderBank()
+{
+    return std::clamp(g_uf8FaderBank.load(),
+                      0, uf8::kUserUf8FaderBankCount - 1);
+}
+void reasixty_setUf8FaderBank(int fb)
+{
+    const int clamped = std::clamp(fb,
+                                   0, uf8::kUserUf8FaderBankCount - 1);
+    if (g_uf8FaderBank.exchange(clamped) != clamped) {
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+    }
 }
 
 // FX-Learn editor's mockup TopSoftKey click → bank switch (Frank
