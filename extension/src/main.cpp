@@ -2318,6 +2318,36 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
         label(prevK), label(curK), label(nxtK), header);
 }
 
+// Follow the show_focused_plugin_gui floating window across an
+// Instance / FX cycle. Closes the old fxIdx's window, opens the new
+// one, pins it via the macOS-level NSWindow helper. Gated by the
+// Settings → "Plugin GUI follows active Instance" toggle.
+//
+// This is the FLOATING-WINDOW follow (one window per surface), NOT the
+// Plugin-Mode-master-GUI follow (that's triggerPluginModeFollowSync_).
+// Both can be in play at once: SSL Strip Mode opens one master window,
+// show_focused_plugin_gui opens a separate float; the cycle has to
+// move both.
+//
+// Per-channel callers must additionally gate on isFocusedStrip so a
+// V-Pot rotation on a non-focused strip can't grab the focused-track
+// follow window.
+void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
+{
+    if (!g_pluginGuiFollowsInstance.load()) return;
+    extern void* g_focusedGuiShownTr;
+    extern int   g_focusedGuiShownFx;
+    if (g_focusedGuiShownTr == tr
+        && g_focusedGuiShownFx >= 0
+        && g_focusedGuiShownFx != targetFxIdx)
+    {
+        TrackFX_Show(tr, g_focusedGuiShownFx, 2);
+        TrackFX_Show(tr, targetFxIdx, 3);
+        pinFxGuiIfEnabled_(tr, targetFxIdx);
+        g_focusedGuiShownFx = targetFxIdx;
+    }
+}
+
 // Plugin-mode "follow active Instance" GUI sync trigger. Used by every
 // cycle path so SSL Strip Mode (with GUI) and UF8 Plugin Mode (with GUI)
 // re-point their floating windows at the cycle's new target Instance.
@@ -2441,23 +2471,7 @@ void applyInstanceCycle_(int step)
     g_pageDirty.store(true);
     g_bankDirty.store(true);
 
-    // Follow show_focused_plugin_gui's floating window across the cycle.
-    // Gated by Settings → "Plugin GUI follows active Instance" so a user
-    // who wants the window pinned to whatever they opened it on can turn
-    // following off entirely (Frank 2026-05-16).
-    if (g_pluginGuiFollowsInstance.load()) {
-        extern void* g_focusedGuiShownTr;
-        extern int   g_focusedGuiShownFx;
-        if (g_focusedGuiShownTr == tr
-            && g_focusedGuiShownFx >= 0
-            && g_focusedGuiShownFx != target.fxIdx)
-        {
-            TrackFX_Show(tr, g_focusedGuiShownFx, 2);
-            TrackFX_Show(tr, target.fxIdx, 3);
-            pinFxGuiIfEnabled_(tr, target.fxIdx);
-            g_focusedGuiShownFx = target.fxIdx;
-        }
-    }
+    followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
 
     // Instance carousel — feed the UC1 central LCD with the prev/curr/next
     // displayShort labels of the cycle's neighbours, plus the track name
@@ -2576,22 +2590,7 @@ void applyFxCycle_(int step)
         g_uc1_surface->refresh();
     }
 
-    // Follow show_focused_plugin_gui's floating window across the
-    // cycle (mirror of the applyInstanceCycle_ path). Gated by Settings
-    // → "Plugin GUI follows active Instance".
-    if (g_pluginGuiFollowsInstance.load()) {
-        extern void* g_focusedGuiShownTr;
-        extern int   g_focusedGuiShownFx;
-        if (g_focusedGuiShownTr == tr
-            && g_focusedGuiShownFx >= 0
-            && g_focusedGuiShownFx != nextIdx)
-        {
-            TrackFX_Show(tr, g_focusedGuiShownFx, 2);
-            TrackFX_Show(tr, nextIdx, 3);
-            pinFxGuiIfEnabled_(tr, nextIdx);
-            g_focusedGuiShownFx = nextIdx;
-        }
-    }
+    followFocusedPluginGuiAcrossCycle_(tr, nextIdx);
 
     // Feed the carousel with prev/curr/next FX display names. The "ring"
     // here is just every FX index 0..n-1, since fx_cycle walks all FX
@@ -4401,7 +4400,14 @@ void drainInputQueue()
                         // applyInstanceCycle_ path so SSL Strip Mode /
                         // UF8 Plugin Mode windows track the cycle on
                         // the focused channel.
-                        if (isFocusedStrip) triggerPluginModeFollowSync_();
+                        if (isFocusedStrip) {
+                            triggerPluginModeFollowSync_();
+                            // show_focused_plugin_gui floating-window
+                            // follow — separate from Plugin-Mode-master
+                            // GUI above; this is the single float that
+                            // show_focused_plugin_gui opens.
+                            followFocusedPluginGuiAcrossCycle_(tr, next);
+                        }
 
                         // Carousel — focused-strip only (mirror of
                         // applyFxCycle_'s output; the ring is every FX
@@ -4562,7 +4568,11 @@ void drainInputQueue()
                 }
                 // Plugin-mode GUI follow — focused-strip only, same
                 // gate as applyInstanceCycle_.
-                if (isFocusedStrip) triggerPluginModeFollowSync_();
+                if (isFocusedStrip) {
+                    triggerPluginModeFollowSync_();
+                    // show_focused_plugin_gui float-window follow.
+                    followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
+                }
 
                 // Carousel — focused-strip only (UC1 LCD shows the
                 // focused track's state; a non-focused rotation must
@@ -6959,9 +6969,18 @@ void pushZonesForVisibleSlots()
             // Type zone should reflect what the fader actually drives,
             // so force CS lookup regardless of UC1 focus domain when
             // pluginFaderMode is on. Outside SSL Strip Mode the zone
-            // follows focused.domain as before (Frank 2026-05-12 "auf
-            // UF8 color-bars die instanz anzeigen, die kontrolliert
-            // wird").
+            // resolves per-strip-track with a stable CS-first / BC-
+            // fallback priority, *ignoring* the global focused.domain.
+            //
+            // The earlier behaviour ("colour-bar follows focused.domain"
+            // — Frank 2026-05-12) was confusing in normal mixer mode
+            // because Channel-Encoder Instance Cycle flips focused.
+            // domain on each cycle target; that made every strip's
+            // label spring CS↔BC whenever the cycle crossed a domain
+            // boundary, even though the strips themselves hadn't moved.
+            // Frank 2026-05-17 reversed it: strips show their own
+            // track's variant, the cycle drives UC1 LCD + V-Pot
+            // bindings only, not the colour-bar labels.
             //
             // In SSL Strip Mode, csForStripModeOnTrack_ applies the
             // isDefault tiebreak so the Type zone tracks the same
@@ -6977,14 +6996,12 @@ void pushZonesForVisibleSlots()
                     map = mm2.map;
                 }
             } else {
-                const auto typeDom = focused.domain;
-                auto mm = uf8::lookupPluginOnTrack(tr, typeDom);
+                auto mm = uf8::lookupPluginOnTrack(tr,
+                                                   uf8::Domain::ChannelStrip);
                 map = mm.map;
                 if (!map) {
-                    const auto otherDom = (typeDom == uf8::Domain::BusComp)
-                        ? uf8::Domain::ChannelStrip
-                        : uf8::Domain::BusComp;
-                    auto mm2 = uf8::lookupPluginOnTrack(tr, otherDom);
+                    auto mm2 = uf8::lookupPluginOnTrack(tr,
+                                                        uf8::Domain::BusComp);
                     map = mm2.map;
                 }
             }
