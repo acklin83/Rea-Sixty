@@ -2262,6 +2262,31 @@ bool touchedFxRevealActive_()
 // even displaying — confusing, no visible feedback.
 //
 // CS has no anchor concept, so it always targets the focused track.
+// Push the prev/curr/next labels for a cycle landing into the UC1
+// central LCD's Instance Carousel. `ringFxIdx` is the cycle's FX-index
+// ring (in cycle order); `curK` is the post-step position into that
+// ring. Used by all four cycle paths so the carousel stays consistent
+// whether the rotation came from the Channel-Encoder, UC1 Encoder 2,
+// or a per-strip V-Pot.
+void showCycleCarousel_(MediaTrack* tr, int curK,
+                        const std::vector<int>& ringFxIdx)
+{
+    if (!g_uc1_surface || !tr) return;
+    const int sz = static_cast<int>(ringFxIdx.size());
+    if (sz <= 0 || curK < 0 || curK >= sz) return;
+    auto label = [&](int k) -> std::string {
+        if (k < 0 || k >= sz) return {};
+        return fxCycleDisplayName_(tr, ringFxIdx[k]);
+    };
+    const int prevK = (curK - 1 + sz) % sz;
+    const int nxtK  = (curK + 1) % sz;
+    char trkName[128] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
+    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    g_uc1_surface->showInstanceCarousel(
+        label(prevK), label(curK), label(nxtK), header);
+}
+
 // Plugin-mode "follow active Instance" GUI sync trigger. Used by every
 // cycle path so SSL Strip Mode (with GUI) and UF8 Plugin Mode (with GUI)
 // re-point their floating windows at the cycle's new target Instance.
@@ -2402,18 +2427,10 @@ void applyInstanceCycle_(int step)
     // as the header (parallel to BC-scroll's "BUS COMP 2" banner). The
     // overlay is mutually exclusive with bcScrollOverlay; showInstanceCarousel
     // clears that flag so the headers don't fight.
-    auto hitLabel = [&](int idx) -> std::string {
-        if (idx < 0 || idx >= static_cast<int>(hits.size())) return {};
-        return fxCycleDisplayName_(tr, hits[idx].fxIdx);
-    };
-    char trkName[128] = {0};
-    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
-    std::string header = trkName[0] ? std::string(trkName) : std::string{};
-    const int sz    = static_cast<int>(hits.size());
-    const int prevK = (nextK - 1 + sz) % sz;
-    const int nxtK  = (nextK + 1) % sz;
-    g_uc1_surface->showInstanceCarousel(
-        hitLabel(prevK), hitLabel(nextK), hitLabel(nxtK), header);
+    std::vector<int> ring;
+    ring.reserve(hits.size());
+    for (const auto& h : hits) ring.push_back(h.fxIdx);
+    showCycleCarousel_(tr, nextK, ring);
 }
 
 // When the FX-Cursor lands on an FX that happens to be a learned Instance
@@ -2539,18 +2556,13 @@ void applyFxCycle_(int step)
         }
     }
 
-    // Feed the carousel with prev/curr/next FX display names.
-    auto fxLabel = [&](int idx) -> std::string {
-        if (idx < 0 || idx >= n) return {};
-        return fxCycleDisplayName_(tr, idx);
-    };
-    const int prevIdx = (nextIdx - 1 + n) % n;
-    const int nIdxN   = (nextIdx + 1) % n;
-    char trkName[128] = {0};
-    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
-    std::string header = trkName[0] ? std::string(trkName) : std::string{};
-    g_uc1_surface->showInstanceCarousel(
-        fxLabel(prevIdx), fxLabel(nextIdx), fxLabel(nIdxN), header);
+    // Feed the carousel with prev/curr/next FX display names. The "ring"
+    // here is just every FX index 0..n-1, since fx_cycle walks all FX
+    // not just learned Instances.
+    std::vector<int> ring;
+    ring.reserve(n);
+    for (int i = 0; i < n; ++i) ring.push_back(i);
+    showCycleCarousel_(tr, nextIdx, ring);
 }
 
 // Walk through populated Selection-Set slots (skipping empty ones),
@@ -4328,6 +4340,16 @@ void drainInputQueue()
                         // UF8 Plugin Mode windows track the cycle on
                         // the focused channel.
                         if (isFocusedStrip) triggerPluginModeFollowSync_();
+
+                        // Carousel — focused-strip only (mirror of
+                        // applyFxCycle_'s output; the ring is every FX
+                        // index since FX Cycle walks all FX).
+                        if (isFocusedStrip) {
+                            std::vector<int> ring;
+                            ring.reserve(n);
+                            for (int i = 0; i < n; ++i) ring.push_back(i);
+                            showCycleCarousel_(tr, next, ring);
+                        }
                     }
                 }
                 break;
@@ -4453,6 +4475,16 @@ void drainInputQueue()
                 // Plugin-mode GUI follow — focused-strip only, same
                 // gate as applyInstanceCycle_.
                 if (isFocusedStrip) triggerPluginModeFollowSync_();
+
+                // Carousel — focused-strip only (UC1 LCD shows the
+                // focused track's state; a non-focused rotation must
+                // not paint over it). Frank 2026-05-16.
+                if (isFocusedStrip) {
+                    std::vector<int> ring;
+                    ring.reserve(hits.size());
+                    for (const auto& h : hits) ring.push_back(h.fxIdx);
+                    showCycleCarousel_(tr, nextK, ring);
+                }
                 break;
             }
         }
