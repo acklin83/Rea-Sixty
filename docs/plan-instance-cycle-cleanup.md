@@ -2,7 +2,7 @@
 
 Status: design draft, Code-Review 2026-05-16. Nichts gebaut. Ergebnis aus
 einem manuellen Walk-through von `applyInstanceCycle_` /
-`applyFxCycle_` / `syncInstanceFromFxIdx_` und den per-strip
+`applyFxCycle_` / `syncInstanceFromFxIdx_` und den per-channel
 Cycle-Handlern (`StripInstanceDelta` / `StripInstanceCycleDelta`) in
 [main.cpp](../extension/src/main.cpp).
 
@@ -10,9 +10,46 @@ Querverweis: [docs/concepts.md](concepts.md) und
 [docs/instances-fx-handbuch.md](instances-fx-handbuch.md) für die
 User-facing Definitionen von FX vs. Instance.
 
+## Terminologie (gilt für dieses Doc)
+
+Das Wort "Strip" ist im Code dreifach belegt. In diesem Plan sauber
+getrennt:
+
+- **UF8-Kanal** (oder **Hardware-Kanal**, **Kanal N**, N ∈ [0,8)) — die
+  physische Spalte am UF8 mit Fader + V-Pot + SEL/CUT/SOLO + Scribble
+  Strip. Im Code als `strip` (uint8_t), `s`, `g_stripInstanceAccum[s]`,
+  `PendingInput::strip` Field. Existiert immer; gehört zur Hardware.
+
+- **Kanal-Track** — der `MediaTrack*` der gerade auf Kanal N angezeigt
+  wird (resolviert via `g_bankOffset + visibleTrackAt(slot)`). Wechselt
+  bei Bank-Scroll. `g_stripInstanceFxIdx[tr]` ist auf diesen Track
+  gekeyt — der Name "strip" suggeriert irreführend etwas Kanal-Lokales,
+  obwohl es per-Track ist.
+
+- **Strip** (gross, SSL-Sinn) — eine CS-Instance, deren *Fader Level*
+  Param auf den UF8-Fader von Kanal N gemappt ist. Existiert nur wenn:
+  1. SSL Strip Mode (`g_pluginFaderMode`) aktiv ist, UND
+  2. Der Kanal-Track eine CS-Instance trägt, UND
+  3. Die CS-Instance einen Fader-Level-Slot exponiert (CS 2 / 4K B / E
+     / G / Link / User-CS).
+
+  Wenn nur (1) und (2) zutreffen ohne (3), ist der UF8-Fader auf
+  REAPER-Track-Volume gemappt — kein Strip. Wenn (1) nicht zutrifft, ist
+  der Kanal eine reine REAPER-Mixerspalte — kein Strip.
+
+  Analog gibt's einen **UF8-Plugin-Mode-Strip**: alle 8 UF8-V-Pots
+  zusammen treiben Params einer User-Instance mit `uf8Mode==true`. Das
+  ist ein Strip-Konzept über alle 8 Kanäle hinweg, kein per-Kanal-Strip.
+
+Faustregel im Code-Review:
+- Wenn der Code `strip` schreibt und meint Index 0–7 → **UF8-Kanal**.
+- Wenn der Code "the strip's track" sagt → **Kanal-Track**.
+- Wenn die Doku oder UI von SSL Strip Mode redet → **Strip** im
+  strikten Sinn.
+
 ## Wie das System heute zusammenhängt (Kurzfassung)
 
-Drei Cursor pro Track, drei Cycle-Pfade, drei GUI-Owner-Slots.
+Drei Cursor pro Kanal-Track, drei Cycle-Pfade, drei GUI-Owner-Slots.
 
 **Cursor:**
 - `g_stripInstanceFxIdx[MediaTrack*]` — der **FX-Cursor**, Index in
@@ -24,10 +61,12 @@ Drei Cursor pro Track, drei Cycle-Pfade, drei GUI-Owner-Slots.
   [UC1PluginMap.cpp:617-619](../extension/src/UC1PluginMap.cpp:617)
 
 **Cycle-Pfade:**
-- Focused track: `applyInstanceCycle_`
+- Focused-Track-Scope (via UF8 Channel Encoder, UC1 Encoder 2,
+  Builtin-Aktionen): `applyInstanceCycle_`
   ([main.cpp:1753](../extension/src/main.cpp:1753)),
   `applyFxCycle_` ([main.cpp:1977](../extension/src/main.cpp:1977)).
-- Per-Strip: `PendingInput::StripInstanceDelta`
+- Per-Kanal-Scope (V-Pot-Rotation auf Kanal N):
+  `PendingInput::StripInstanceDelta`
   ([main.cpp:3445](../extension/src/main.cpp:3445)),
   `PendingInput::StripInstanceCycleDelta`
   ([main.cpp:3530](../extension/src/main.cpp:3530)),
@@ -63,38 +102,47 @@ Alle vier werden zentral im Drain bei
 [main.cpp:3530-3625](../extension/src/main.cpp:3530)
 (`StripInstanceCycleDelta`).
 
-**Symptom:** SSL Strip Mode (with GUI) ist an, Townhouse CS-Fenster ist
-offen. User dreht V-Pot auf dem fokussierten Strip in
-`selection_mode_instance_cycle`. → `csInstanceIndex` springt korrekt
-auf 4K G, aber das Floating-Fenster bleibt auf Townhouse. Gleiches
+**Symptom:** SSL Strip Mode (with GUI) ist an — d.h. der fokussierte
+Kanal trägt einen **Strip** im strikten Sinn (CS-Instance + Fader Level
+auf UF8-Fader). Townhouse CS-Fenster ist offen. User dreht V-Pot auf
+demselben Kanal in `selection_mode_instance_cycle`. → `csInstanceIndex`
+springt korrekt auf 4K G, der Strip-Verbund (Fader, V-Pot-Labels)
+wandert mit, aber das Floating-Fenster bleibt auf Townhouse. Gleiches
 Verhalten in UF8 Plugin Mode (with GUI).
 
 **Vergleich:** `applyInstanceCycle_` hat das `triggerFollowSync`-Lambda
 ([main.cpp:1834-1841](../extension/src/main.cpp:1834)), das
 `g_pluginGuiSyncRequest` setzt, wenn `g_pluginFaderMode +
 g_pluginFaderModeWithGui` oder `g_uf8PluginMode +
-g_uf8PluginModeWithGui` aktiv ist. Die per-strip Pfade setzen das Flag
+g_uf8PluginModeWithGui` aktiv ist. Die per-Kanal-Pfade setzen das Flag
 nur wenn `g_instanceGuiOwnerStrip == s`
 ([main.cpp:3505](../extension/src/main.cpp:3505),
 [3621](../extension/src/main.cpp:3621)) — das deckt nur den V-Pot-Push-
-GUI-Owner ab, nicht die Plugin-Mode-Master-GUIs.
+GUI-Owner ab, nicht die Plugin-Mode-Master-GUIs (= die Fenster die zum
+Strip selbst gehören).
 
 **Fix:** `triggerFollowSync`-Lambda aus
 `applyInstanceCycle_` extrahieren (eigene Funktion oder File-Local
-Lambda) und in beiden per-strip Handlern aufrufen — nur wenn die
-Strip-Aktion den Cursor des fokussierten Tracks bewegt hat. Outside-of-
-focused-strip-Rotationen sollen Plugin-Mode-GUI nicht mitziehen
-(sonst kapert ein non-focused Strip die globale Anzeige).
+Lambda) und in beiden per-Kanal-Handlern aufrufen — aber nur wenn
+**der gedrehte Kanal aktuell einen Strip im strikten Sinn trägt**, d.h.
+`tr == focusedTrack` (das ist die einzige Stelle wo Plugin-Mode-GUIs
+gemerkt werden). Rotationen auf non-focused Kanälen dürfen die globale
+Plugin-Mode-GUI nicht kapern.
 
 Pseudo:
 ```cpp
-const bool isFocusedStrip = (focusedTr == tr);
-if (isFocusedStrip) triggerPluginModeFollowSync_();
+const bool isFocusedChannel = (focusedTr == tr);
+if (isFocusedChannel) triggerPluginModeFollowSync_();
 ```
 
+Implizit deckt die Gate-Logik in `triggerFollowSync` (mit-GUI-Flag muss
+gesetzt sein) den Strip-Bedingung-Teil mit ab: ohne SSL Strip Mode + with
+GUI gibt's keinen CS-GUI-Owner, also nichts zu syncen. Deshalb ist die
+einzige zusätzlich nötige Bedingung "Kanal == focused".
+
 **Repro:** SSL Strip Mode with GUI an, Track mit zwei CS-Instanzen
-(z.B. Townhouse + 4K G). V-Pot drehen → Fenster sollte mit auf 4K G
-wechseln. Heute bleibt es auf Townhouse.
+(z.B. Townhouse + 4K G). V-Pot auf dem fokussierten Kanal drehen →
+Fenster sollte mit auf 4K G wechseln. Heute bleibt es auf Townhouse.
 
 **Risiko:** niedrig. Die Sync-Routine bei
 [main.cpp:9118](../extension/src/main.cpp:9118) ist idempotent.
@@ -112,9 +160,9 @@ und direkt in `StripInstanceCycleDelta`
 ([main.cpp:3601-3603](../extension/src/main.cpp:3601)).
 
 **Symptom:** V-Pot FX Cycle oder Instance Cycle auf einem
-**nicht-fokussierten** Strip (z.B. Strip 5), der zufällig auf einem
-BC-Plug-in landet, zieht den UC1 BC-Anchor auf den Track von Strip 5.
-Das BC-Encoder-Section auf UC1 zeigt jetzt einen Track, den der User
+**nicht-fokussierten** UF8-Kanal (z.B. Kanal 5), der zufällig auf einem
+BC-Plug-in landet, zieht den UC1 BC-Anchor auf den Track von Kanal 5.
+Die BC-Encoder-Section auf UC1 zeigt jetzt einen Track, den der User
 gar nicht im Fokus hatte.
 
 **Widerspruch:** Der Kommentar bei
@@ -130,17 +178,18 @@ bricht sie still.
    beide Schalter parallel führen, statt `setBcAnchor` als default
    anzunehmen.
 2. Caller in `StripInstanceDelta` ([3479](../extension/src/main.cpp:3479)):
-   `syncInstanceFromFxIdx_(tr, next, isFocusedStrip, isFocusedStrip)`.
+   `syncInstanceFromFxIdx_(tr, next, isFocusedChannel, isFocusedChannel)`.
 3. Caller in `StripInstanceCycleDelta`
    ([3601-3603](../extension/src/main.cpp:3601)): die explizite
-   `setBcAnchorTrack(tr)` ebenfalls hinter `if (isFocusedStrip)` gaten.
-4. Focused-track Pfad in `applyInstanceCycle_`
+   `setBcAnchorTrack(tr)` ebenfalls hinter `if (isFocusedChannel)`
+   gaten.
+4. Focused-Scope-Pfad in `applyInstanceCycle_`
    ([main.cpp:1848-1852](../extension/src/main.cpp:1848)) bleibt
    unverändert — der ist per Definition focused.
 
-**Repro:** Zwei Tracks T_A (CS) und T_B (BC) sichtbar auf Strips 0 und
+**Repro:** Zwei Tracks T_A (CS) und T_B (BC) sichtbar auf Kanälen 0 und
 3. T_A ist fokussiert. UC1 BC-Anchor sitzt auf T_B. User dreht V-Pot
-auf Strip 0 (T_A) in FX Cycle → erwartetes Verhalten: BC-Anchor bleibt
+auf Kanal 0 (T_A) in FX Cycle → erwartetes Verhalten: BC-Anchor bleibt
 T_B. Heute: wenn der FX-Cycle auf einer (hypothetischen) BC-Instance
 auf T_A landet, springt der BC-Anchor auf T_A. Schwieriger zu
 reproduzieren als #1 weil es einen BC auf dem CS-Track braucht.
@@ -179,23 +228,25 @@ g_uc1_surface->showInstanceCarousel(
 
 ---
 
-#### 4. Per-Strip Cycle-Handler haben keine Carousel-Anzeige
+#### 4. Per-Kanal Cycle-Handler haben keine Carousel-Anzeige
 
 **Wo:** `StripInstanceDelta`
 ([3445-3511](../extension/src/main.cpp:3445)) und
 `StripInstanceCycleDelta`
-([3530-3625](../extension/src/main.cpp:3530)) rufen `showInstanceCarousel`
-nicht auf.
+([3530-3625](../extension/src/main.cpp:3530)) rufen
+`showInstanceCarousel` nicht auf.
 
 **Symptom:** Die identische Aktion (FX bzw. Instance Cycle) zeigt auf
-dem UC1 LCD prev/curr/next wenn via Channel-Encoder oder UC1 Encoder 2
-ausgelöst, ist aber stumm wenn via V-Pot auf einem Strip gedreht.
+dem UC1 LCD prev/curr/next wenn via UF8 Channel-Encoder oder UC1
+Encoder 2 ausgelöst, ist aber stumm wenn via V-Pot auf einem UF8-Kanal
+gedreht.
 
-**Frage an Frank vor dem Fix:** Soll die Carousel-Anzeige nur dann
-feuern, wenn die V-Pot-Rotation auf dem fokussierten Strip stattfindet
-(Konsistenz zum Plugin-Mode-Sync aus #1)? Oder immer? Ein
-non-focused-Strip-Cycle löst sonst eine "globale" UC1-Anzeige aus, die
-nicht zu dem Track gehört den der User auf UC1 sieht.
+**Entscheidung (Frank 2026-05-16):** Carousel nur dann feuern wenn der
+gedrehte Kanal aktuell ein **Strip** im strikten Sinn ist —
+d.h. `tr == focusedTrack` (das ist die einzige Stelle wo UC1 LCD-State
+gemerkt wird). Sonst würde eine V-Pot-Rotation auf Kanal 5 das UC1
+Display zu Kanal-5-Inhalt umschalten, während der User UC1 auf den
+fokussierten Track erwartet. Konsistent mit dem Gate aus #1.
 
 **Fix:** Carousel-Build aus `applyInstanceCycle_` /
 `applyFxCycle_` in eine kleine Helper-Funktion auslagern:
@@ -203,10 +254,12 @@ nicht zu dem Track gehört den der User auf UC1 sieht.
 void showCycleCarousel_(MediaTrack* tr, int curIdx,
                        const std::vector<int>& ringFxIdx);
 ```
-und aus allen vier Cycle-Pfaden aufrufen, gated auf `isFocusedStrip`.
+und aus allen vier Cycle-Pfaden aufrufen, in den per-Kanal-Pfaden
+gegated auf `isFocusedChannel`.
 
-**Risiko:** niedrig wenn gegated. Mittel wenn ungated — Race mit
-anderen UC1-Overlay-Konsumenten (BC-Track-Scroll-Banner u.ä.).
+**Risiko:** niedrig wenn gegated. Achtung Race mit anderen UC1-Overlay-
+Konsumenten (BC-Track-Scroll-Banner u.ä.) — wird durch das focused-
+only-Gate aber praktisch entschärft.
 
 ---
 
@@ -359,8 +412,8 @@ keine Aufrufstelle.
    mit Frank checken ob das aktuelle Verhalten irgendwo bewusst
    ausgenutzt wird, bevor wir's gaten.
 3. **#3** (Carousel-Wrap). Trivial, mit #1 zusammen pushen.
-4. **#4** (Carousel auf per-strip). Braucht Frank-Entscheidung
-   focused-only vs always.
+4. **#4** (Carousel auf per-Kanal, focused-only gegated — Frank
+   2026-05-16 entschieden).
 5. **#5** (Anker-Mismatch) + **#6** (FX-Cursor → GUID) zusammen — beide
    touchen `g_stripInstanceFxIdx`-Storage und können in einem
    Refactor-Commit kombiniert werden.
@@ -385,9 +438,9 @@ Pro Fix die relevanten Cycle-Pfade durchklicken:
 - UC1 Encoder 2 (Plain = `fx_cycle`, Shift = `instance_cycle`)
 - UF8 Channel Encoder (Plain = `encoder_mode_dispatch` mit Instance-
   Mode aktiv, Shift = `instance_cycle`)
-- V-Pot auf fokussiertem Strip (SelectionMode `instance` und
+- V-Pot auf fokussiertem Kanal (SelectionMode `instance` und
   `instance_cycle`)
-- V-Pot auf non-fokussiertem Strip (dito)
+- V-Pot auf non-fokussiertem Kanal (dito)
 - V-Pot-Push aus Cycle-Modi (öffnet/schliesst GUI)
 
 Was beobachten: Domain-Cursor (`csInstanceIndex` etc.), FX-Cursor
