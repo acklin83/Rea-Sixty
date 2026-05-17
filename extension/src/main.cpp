@@ -378,6 +378,33 @@ inline RecRmeAction parseRecRmeAction(const char* s)
     return RecRmeAction::None;
 }
 
+// P_EXT key TotalReaper mirrors the action's state into. Autolevel has no
+// mirror (TotalReaper doesn't echo /input/<n>/autolevel as of v0.1.10), so
+// returns null — caller renders the LED as off in that case.
+inline const char* recRmePExtKey(RecRmeAction a)
+{
+    switch (a) {
+        case RecRmeAction::Toggle48V:   return "P_EXT:totalreaper_48v";
+        case RecRmeAction::TogglePad:   return "P_EXT:totalreaper_pad";
+        case RecRmeAction::TogglePhase: return "P_EXT:totalreaper_phase";
+        case RecRmeAction::ToggleAutolevel:
+        case RecRmeAction::None:
+        default:                        return nullptr;
+    }
+}
+
+// Read a P_EXT string off a track without allocating. Empty string when
+// the key isn't set or the track is null.
+inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
+{
+    if (!tr || !key) return {};
+    char buf[64] = {0};
+    GetSetMediaTrackInfo_String(tr, const_cast<char*>(key), buf, false);
+    return std::string(buf);
+}
+// recRmeButtonActive is defined after SelectionMode below (it depends on
+// SelectionMode::Rec / RecMon, which haven't been declared yet here).
+
 // Selection-Mode group. Mutually-exclusive global state that retargets
 // the 8 SEL LEDs and the V-Pot push/rotation. Norm = legacy behaviour
 // (track-select, pan, etc.); Rec = SEL shows rec-arm status & push
@@ -410,6 +437,18 @@ inline SelectionMode parseSelectionMode(const char* s)
     if (std::strcmp(s, "instance")       == 0) return SelectionMode::Instance;
     if (std::strcmp(s, "instance_cycle") == 0) return SelectionMode::InstanceCycle;
     return SelectionMode::Norm;
+}
+
+// True when REC + RME is engaged AND the given button assignment fires a
+// TotalReaper toggle action — i.e. the LED should mirror P_EXT state, not
+// the track's underlying B_MUTE / I_SOLO. Lives here because it depends on
+// SelectionMode declared above.
+inline bool recRmeButtonActive(RecRmeAction a)
+{
+    if (!g_recRmeEnabled.load()) return false;
+    const auto sm = g_selectionMode.load();
+    if (sm != SelectionMode::Rec && sm != SelectionMode::RecMon) return false;
+    return a != RecRmeAction::None;
 }
 
 // Forward decl — defined further down with the other clock helpers.
@@ -4952,6 +4991,12 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     {
         if (auto u = userStripCtxFocused_(); u.map) return;
     }
+    // REC + RME: when SOLO / CUT is bound to a TotalReaper toggle, the
+    // per-tick poll in pushZonesForVisibleSlots owns the LED — block the
+    // event-driven push from REAPER's mute/solo callbacks so it doesn't
+    // briefly flip the LED to the wrong state.
+    if (cls == LedClass::Mute && recRmeButtonActive(g_recCut.load())) return;
+    if (cls == LedClass::Solo && recRmeButtonActive(g_recSolo.load())) return;
     for (int s = 0; s < 8; ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
@@ -6442,7 +6487,10 @@ void pushZonesForVisibleSlots()
         // changes don't fire SetSurfaceMute, so we poll once per tick
         // and dedup against g_lastCutLed[s]. Empty strips (no track or
         // routed-but-invalid) render off. User-strip mode overrides
-        // with the bound param's state.
+        // with the bound param's state. REC + RME overrides with the
+        // TotalReaper-mirrored P_EXT state (48V / Pad / Phase).
+        const RecRmeAction cutRme = g_recCut.load();
+        const bool cutRmeActive   = recRmeButtonActive(cutRme);
         {
             bool effMute = false;
             if (userStripActive) {
@@ -6451,6 +6499,12 @@ void pushZonesForVisibleSlots()
                         userS.tr, userS.fxIdx, userBoundCut) >= 0.5;
                 }
                 // userBoundCut < 0 → effMute stays false → LED off.
+            } else if (cutRmeActive && tr) {
+                // CUT button is bound to a TotalReaper toggle — LED shows
+                // the action's mirrored state, not the track's B_MUTE.
+                if (const char* key = recRmePExtKey(cutRme)) {
+                    effMute = readTrackPExt_(tr, key) == "1";
+                }
             } else if (tr) {
                 if (routedFader && faderRoute.valid) {
                     effMute = GetTrackSendInfo_Value(
@@ -6488,12 +6542,14 @@ void pushZonesForVisibleSlots()
             }
         }
 
-        // SOLO + SEL LEDs — only pushed per-tick in user-strip mode.
-        // Outside user-strip mode, REAPER's SetSurfaceSolo / Selected
-        // callbacks (event-driven via sendLed) handle these. We push
-        // here when entering / cycling / clearing user-strip mode so
+        // SOLO + SEL LEDs — only pushed per-tick in user-strip mode and
+        // REC + RME mode. Outside those, REAPER's SetSurfaceSolo /
+        // Selected callbacks (event-driven via sendLed) handle them.
+        // We push here when entering / cycling / clearing the mode so
         // empty bindings go off. Cache resets to -1 on bank-shift to
-        // force a re-push when leaving user-strip mode.
+        // force a re-push when leaving the per-tick-owning mode.
+        const RecRmeAction soloRme = g_recSolo.load();
+        const bool soloRmeActive   = recRmeButtonActive(soloRme);
         if (userStripActive) {
             const bool soloOn = (userBoundSolo >= 0)
                 && TrackFX_GetParamNormalized(
@@ -6522,9 +6578,25 @@ void pushZonesForVisibleSlots()
                     static_cast<uint8_t>(s), uf8::LedClass::Sel, selOn,
                     selCol));
             }
+        } else if (soloRmeActive && tr) {
+            // REC + RME: SOLO LED reflects the bound TotalReaper toggle's
+            // mirrored state. SEL stays event-driven (selection swap
+            // fires SetSurfaceSelected, which we don't want to suppress).
+            bool soloOn = false;
+            if (const char* key = recRmePExtKey(soloRme)) {
+                soloOn = readTrackPExt_(tr, key) == "1";
+            }
+            const int8_t soloKey = soloOn ? 1 : 0;
+            if (soloKey != g_lastSoloLed[s]) {
+                g_lastSoloLed[s] = soloKey;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                    ledColourFor(LedClass::Solo, tr)));
+            }
+            g_lastSelLed[s] = -1;
         } else {
-            // Reset cache so the next entry into user-strip mode (or a
-            // bank shift) re-pushes against fresh data.
+            // Reset cache so the next entry into a per-tick-owning mode
+            // (or a bank shift) re-pushes against fresh data.
             g_lastSoloLed[s] = -1;
             g_lastSelLed[s]  = -1;
         }
