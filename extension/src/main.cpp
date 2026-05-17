@@ -2361,11 +2361,10 @@ void applyInstanceCycle_(int step)
             hits.push_back({i, uf8::Domain::BusComp, bcCount++});
             continue;
         }
-        // UF8-only user maps don't surface via lookupPluginMapByName
-        // (their synthesised PluginMap carries Domain::None and no
-        // slots) but they still represent instances the user might
-        // want to focus the UF8 strips on. Pull the owned record so
-        // we can include them in the cycle (Frank 2026-05-12).
+        // UF8-only user maps DO surface via lookupPluginMapByName, but
+        // with Domain::None — which the CS / BC checks above already
+        // rejected. We still want to include them in the cycle, so
+        // pull the owned record for the uf8Mode flag (Frank 2026-05-12).
         const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
         if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
             hits.push_back({i, uf8::Domain::None, uf8OnlyCount++});
@@ -2375,13 +2374,20 @@ void applyInstanceCycle_(int step)
 
     const auto fp = uf8::getFocusedParam();
     uf8::Domain curDom = fp.domain;
-    // No CS/BC focus → start from whichever instance class actually
-    // anchors the active surface. UF8-only is the default fallback
-    // when neither CS nor BC currently drives UC1.
-    if (curDom == uf8::Domain::None && uf8OnlyCount == 0) {
-        curDom = (csCount > 0) ? uf8::Domain::ChannelStrip
-              : (bcCount > 0) ? uf8::Domain::BusComp
-              :                  uf8::Domain::None;
+    // When the focused-param domain has no hit on this track (e.g.
+    // focus on a CS param but track only has BC + UF8-only Instances),
+    // fall back to whichever domain is actually present so the cycle
+    // doesn't silently lose a detent at hits[0]. Preference order
+    // CS → BC → None mirrors the surface defaults.
+    auto hasDom = [&](uf8::Domain d) {
+        for (const auto& h : hits) if (h.dom == d) return true;
+        return false;
+    };
+    if (!hasDom(curDom)) {
+        curDom = (csCount      > 0) ? uf8::Domain::ChannelStrip
+              : (bcCount      > 0) ? uf8::Domain::BusComp
+              : (uf8OnlyCount > 0) ? uf8::Domain::None
+              :                       curDom;
     }
     const int curInstIdx =
         (curDom == uf8::Domain::BusComp)      ? uc1::bcInstanceIndex(tr)
@@ -12959,8 +12965,9 @@ void registerBindingHandlers()
 
     // Multi-instance picker — bindable equivalents of Shift+Channel-Encoder.
     // Domain follows the focused-param domain (Quick1 → CS, Quick2 → BC),
-    // same convention as the encoder cycle. cycleInstance wraps modulo
-    // count, so repeated presses walk the ring without stopping at the end.
+    // same convention as the encoder cycle. applyInstanceCycle_ wraps
+    // modulo count, so repeated presses walk the ring without stopping
+    // at the end.
     registerBuiltin("instance_next", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;

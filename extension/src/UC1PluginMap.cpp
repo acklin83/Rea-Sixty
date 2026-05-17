@@ -876,18 +876,6 @@ int uf8OnlyInstanceCount(void* trackRaw)
     return count;
 }
 
-void cycleInstance(void* trackRaw, ControlDomain dom, int delta)
-{
-    const bool bc = (dom == ControlDomain::BusComp);
-    const int total = bc ? bcInstanceCount(trackRaw) : csInstanceCount(trackRaw);
-    if (total <= 1) return;   // nothing to cycle
-    int cur = bc ? bcInstanceIndex(trackRaw) : csInstanceIndex(trackRaw);
-    // Modular wraparound — works for any signed delta.
-    int next = ((cur + delta) % total + total) % total;
-    if (bc) setBcInstanceIndex(trackRaw, next);
-    else    setCsInstanceIndex(trackRaw, next);
-}
-
 int instanceIndexForFx(void* trackRaw, int fxIdx)
 {
     MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);

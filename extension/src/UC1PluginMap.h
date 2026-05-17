@@ -141,9 +141,6 @@ int  csInstanceCount(void* track);
 int  uf8OnlyInstanceIndex(void* track);
 void setUf8OnlyInstanceIndex(void* track, int idx);
 int  uf8OnlyInstanceCount(void* track);
-// Step the active instance by `delta`, wrapping around the count.
-// no-op when count <= 1.
-void cycleInstance(void* track, ControlDomain dom, int delta);
 // Resolve a MediaTrack* to its project-stable GUID string. Empty string
 // on invalid/dangling pointer. Used as the key for any per-track state
 // that needs to survive project save/load — pointers do not, GUIDs do.
