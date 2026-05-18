@@ -403,6 +403,68 @@ Open questions (resolve when Phase 2.9 is actually scheduled):
 - Razor-edit / copy-to-comp as a single-press gesture vs separate REC press?
 - Multi-track-lane overview as a Phase-2.9b variant (each strip = one track's currently-active lane) — interesting but loses the per-strip lane controls.
 
+**Multi-select hook**: when multiple tracks are selected in REAPER (Shift+SEL or long-press SEL range-select), per-strip Lane actions fan out across the whole selection — "set Lane 3 to playing on all 4 vocal mics" = one button press. Lives in the shared `MultiSelect` helper (see Phase 2.10).
+
+## Phase 2.10 — Group Mode (Track Groups) — **IDEA**
+
+**Sketch only**, same status as Lanes Mode. Surface-mode peer to Nav + Lanes; mutex with both.
+
+Drives REAPER's native Track Groups (1-64, `GetSetTrackGroupMembership` + `…High` for groups 33-64). Filters the surface through one **Active Group** at a time; the 8 strips show the normal track bank but with group-aware controls overlaid.
+
+Per-strip when in Group Mode:
+
+| Hardware | Action |
+|---|---|
+| **Color bar** | Bright = track is member of Active Group (in group's colour); Dim = not a member |
+| **V-Pot rotate** | Cycle Active Group through 1..64 (global state — any strip's V-Pot moves it) |
+| **V-Pot push** | Toggle this track in/out of Active Group |
+| **Top-soft-key** | Tri-state for Active Flag Class on this track: **Off → Slave → Master → Off**. Dim / Mid / Bright LED. |
+| **Scribble upper** | Track name |
+| **Scribble lower** | `G03 VPMS` — Group + active flag letters |
+
+**Soft-Key-Bank S1..S5** selects the **Active Flag Class** the top-soft-keys operate on: S1=Volume, S2=Pan, S3=Mute, S4=Solo, S5=More (sub-menu: Rec / Auto / Width / Send1..8 / VCA / VCA-PreFX). Reuses the existing soft-key-bank infrastructure from Phase 1 unchanged.
+
+**UC1 Encoder 2** carousel (reuses Nav Mode's 3-up display engine): `[Group 2: Drums | Group 3: Vox | Group 4: Bass]` with member-count and master/slave indicators. Push = make Active. Shift+Push = clear focused track's membership. Long-press = open REAPER Group Manager.
+
+**Group colour** — REAPER has no native group colour. Three options to be settled in the LANES/GROUP Settings sub-tab:
+- **A**: hash `groupId → SSL palette` (deterministic, recycles after 12).
+- **B**: inherit from first member track's colour.
+- **C**: user-defined colour map in `bindings.json` (override).
+
+Default A, override C via Settings.
+
+**Sub-mode twists**:
+- *Visualize all groups* (Quick1) — each strip's bar shows its track's primary group colour, no Active-Group filter. Overview view.
+- *VCA-only filter* (Quick2) — hide non-VCA flags; top-soft-keys collapse to VCA master/slave only. Mix-engineer mode.
+- *Cross-bank member-glance* — BankLeft/Right LEDs blink in group colour when Active Group has members outside the current 8-bank.
+- *Hold-to-audition* — top-soft-key held → temp-solo all members of Active Group; release reverts.
+
+### Multi-select (cross-cutting capability)
+
+Multi-track operations are the difference between "neat demo" and "actually useful". Lives as a shared helper (`extension/src/MultiSelect.{h,cpp}`) consulted by every surface mode that benefits.
+
+**Trigger** — reuses REAPER's native multi-track selection:
+- `SEL` → exclusive select.
+- `Shift+SEL` → additive (toggle in selection).
+- Long-press `SEL` (~500 ms, same detector Folder Mode uses) → range select from last focused track.
+- Selection is project-wide; survives bank switches and mode changes.
+
+**Visual feedback**:
+- SEL LED bright = selected.
+- BankLeft/Right LED blinks coloured when selected tracks exist outside the visible 8-bank.
+- Channel Number Zone gets a dot `•3` on strips that are part of an N-track selection (`•3` = strip's track is one of 3 selected).
+
+**Fan-out per mode**:
+- **Group Mode** — V-Pot push: XOR semantics across selection (if all are members → remove all; else → add the missing). Top-soft-key (flag tri-state): if all share state → cycle together; if mixed → unify to a canonical state first (Off → Slave → Master).
+- **Lanes Mode** — SEL/MUTE/SOLO/REC on Strip N (= Lane N) fan out to Lane N across every selected track. Multi-mic comping in one press.
+- **Nav Mode** — no fan-out (markers are project-global, not track-scoped); selection persists but is ignored.
+
+**Mixed-state LED** — when selection members disagree on a flag, the top-soft-key LED **breathes** (slow pulse) instead of fixed bright/dim. "Press to unify."
+
+**Optional Multi-Select-Arm** (Quick3 toggle): when armed, every SEL is additive without holding Shift. Visualised via Quick3 LED in a distinct colour (cyan?). Power-user shortcut, deferrable.
+
+Settings → Modes → LANES and GROUP sub-tabs each get a "Apply per-strip actions to all selected tracks" checkbox (default ON) plus a live "Active selection: N tracks" status line.
+
 ## Phase 3 — Submix Views — **DESIGN**
 
 **Goal:** A surface-level way to mix groups (busses, stems, headphone mixes) without leaving the current bank context. Phase A scoped 2026-05-15; four design questions deferred. Picks up the "fast-glance, no bank-switching" gap that Folder Mode + Show-Only-Selected only partially close for users who think in busses, not folders.
