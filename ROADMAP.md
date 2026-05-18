@@ -216,9 +216,11 @@ These exist in SSL's settings but don't apply to Rea-Sixty's architecture:
 - **In-app firmware update** — SSL still ships firmware blobs; users keep SSL 360° installed for that one task. Tracked in Phase 4
 - **LCD/Software Messages catalogue page** — we log to file, not modal popups; About tab links to log location instead
 
-## Phase 2.8 — Nav Overlay (Markers & Regions) — **DESIGN**
+## Phase 2.8 — Nav Mode (Markers & Regions) — **DESIGN**
 
 **Goal:** Turn the 8 UF8 scribble strips into a live marker/region jump panel. SSL 360° offers nothing in this space; REAPER's own Marker/Region Manager lives behind a separate window. With a single button press the surface becomes the navigation panel — pick songs (regions) and sections (markers within them) without taking eyes off the desk.
+
+Sits in the same conceptual family as the existing `EncoderMode` values (`Nav`, `Nudge`, `Focus`, `Instance`, `FxCycle`, `SelsetCycle` — `main.cpp:1846`): a named surface mode the user enters and exits with a button. Difference: Nav Mode is broader — it takes over the strip display, the top-soft-keys, and the encoder simultaneously, not just one input. Treated as a peer of those modes throughout (Settings, Bindings, factory defaults).
 
 Lands after Phase 2.7 so it can reuse the bindings JSON / Learn-mode wiring; sits before Phase 3 because it shares no code with Submix Views.
 
@@ -287,17 +289,41 @@ REAPER API surface:
 - `GoToRegion(proj, regionIdx, useTimeline=true)`
 - `GetPlayPosition()` for auto-follow
 
-### Phase 2.8b — Polish & extra actions (deferred)
+### Phase 2.8b — Settings → Modes refactored into sub-tabs
+
+`SettingsScreen::drawModes` (`SettingsScreen.cpp:7666`) has grown into one long scroll with five inline section headers (AUTO, FX / INSTANCE CYCLE, PLUG-IN GUI, FADERS, REC). Phase 2.8 adds a sixth (NAV), which is a good moment to break it into a `BeginTabBar` like the top-level Settings window already does.
+
+Sub-tabs inside Modes (each section moves verbatim into its own tab — pure layout change, no semantic edits):
+
+| Sub-tab | Contents | Today's line range |
+|---|---|---|
+| **AUTO** | Show-only-Write/Touch/Latch toggle, Fill-left/right, Selection-Set Auto-Mode | `SettingsScreen.cpp:7673-7732` |
+| **FX / Instance Cycle** | Control-mask checkboxes, V-Pot push opens as Floating / FX-chain | `7735-7783` |
+| **Plug-in GUI** | Auto-engage UF8 Plugin Mode toggle | `7786-7806` |
+| **Faders** | Alt-drag snap-back | `7810-7824` |
+| **REC** | TotalReaper / RME assignments | `7828-7902` |
+| **NAV** (new) | Marker/Region overlay configuration — see below | — |
+
+NAV sub-tab content (v1):
+- Default view on enter: Regions / Markers (all) — radio.
+- Auto-Follow default state — checkbox.
+- Lower-row format: Index (`M07`) / Timecode (`MM:SS`) — radio. (Hooks the Phase 2.8c lower-row toggle; ships dimmed until 2.8c lands.)
+- Trigger-button readout: shows which button is currently bound to `marker_overlay_toggle`. Click → jumps to Bindings tab pre-filtered to that button.
+- Color-bar source: Use REAPER marker colour / Force palette grey (for users who don't colour their markers).
+
+Implementation: replace the linear `ImGui_Text(ctx, "AUTO"); ImGui_Separator(ctx);` pattern with `ImGui_BeginTabBar(ctx, "modes_tabbar", flags)` + one `ImGui_BeginTabItem` per section. Each section's inner code is unchanged. Persist last-active sub-tab in ExtState so the user returns to where they left off.
+
+### Phase 2.8c — Polish & extra actions (deferred)
 
 - V-Pot rotation → fine-move selected marker (seconds / frames).
 - V-Pot push (hold) → delete marker with LED-blink confirmation.
 - SEL on strip → reposition marker to current playhead.
 - Empty slot press → `AddProjectMarker` at playhead.
 - Long-press top-soft-key on a region → set loop + play.
-- Lower-row toggle: index ↔ timecode.
-- Settings tab: dedicated overlay configuration (default mode on enter, page-size, color overrides).
+- Lower-row toggle: index ↔ timecode (wires the NAV sub-tab's radio).
+- Color overrides per view (e.g. Regions always gold, Markers always white).
 
-**Milestone complete when:** User presses PAN, the 8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, and the whole thing exits cleanly with the strips returning to their normal track-based display.
+**Milestone complete when:** User presses PAN, the 8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, the whole thing exits cleanly with the strips returning to their normal track-based display, and the Modes tab in Settings is split into clean sub-tabs (AUTO / FX-Cycle / Plug-in GUI / Faders / REC / NAV).
 
 ## Phase 3 — Submix Views — **DESIGN**
 
