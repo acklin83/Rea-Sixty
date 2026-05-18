@@ -4151,6 +4151,7 @@ void drainInputQueue()
                 // on each tick so it always reflects whatever REAPER
                 // actually has (including envelope playback).
                 CSurf_OnVolumeChange(tr, e.value, false);
+                uf8::param_groups::broadcastTrackVolumeLinear(tr, e.value);
                 break;
             }
             case PendingInput::PanDelta: {
@@ -4313,6 +4314,7 @@ void drainInputQueue()
                     const double newLin = pbToLinearVolume(
                         static_cast<uint16_t>(newPb));
                     CSurf_OnVolumeChange(tr, newLin, false);
+                    uf8::param_groups::broadcastTrackVolumeLinear(tr, newLin);
                     break;
                 }
                 // FLIP+PAN no-slot swap: V-Pot writes track volume.
@@ -4327,8 +4329,10 @@ void drainInputQueue()
                         static_cast<double>(curPb) + dPb));
                     if (newPb < 0) newPb = 0;
                     if (newPb > 16383) newPb = 16383;
-                    CSurf_OnVolumeChange(tr,
-                        pbToLinearVolume(static_cast<uint16_t>(newPb)), false);
+                    const double newLin = pbToLinearVolume(
+                        static_cast<uint16_t>(newPb));
+                    CSurf_OnVolumeChange(tr, newLin, false);
+                    uf8::param_groups::broadcastTrackVolumeLinear(tr, newLin);
                     break;
                 }
                 if (slPtr) {
@@ -4496,6 +4500,7 @@ void drainInputQueue()
                 if (isVPotPanFocus(focused)) slPtr = nullptr;
                 if (g_flip.load() && slPtr) {
                     CSurf_OnVolumeChange(tr, 1.0, false);
+                    uf8::param_groups::broadcastTrackVolumeLinear(tr, 1.0);
                     break;
                 }
                 if (slPtr) {
@@ -8929,8 +8934,9 @@ void commitDebouncedTouchReleases()
                                 uctxT.tr, uctxT.map, sb.faderVst3Param, n);
                         }
                     } else {
-                        CSurf_OnVolumeChange(tr,
-                            pbToLinearVolume(touchPb), false);
+                        const double tLin = pbToLinearVolume(touchPb);
+                        CSurf_OnVolumeChange(tr, tLin, false);
+                        uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                     }
                 } else if (g_pluginFaderMode.load()) {
                     if (csT.vst3Param >= 0) {
@@ -8947,11 +8953,14 @@ void commitDebouncedTouchReleases()
                                     mcs.vst3Param, n);
                         }
                     } else {
-                        CSurf_OnVolumeChange(tr,
-                            pbToLinearVolume(touchPb), false);
+                        const double tLin = pbToLinearVolume(touchPb);
+                        CSurf_OnVolumeChange(tr, tLin, false);
+                        uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                     }
                 } else {
-                    CSurf_OnVolumeChange(tr, pbToLinearVolume(touchPb), false);
+                    const double tLin = pbToLinearVolume(touchPb);
+                    CSurf_OnVolumeChange(tr, tLin, false);
+                    uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                 }
             }
         }
