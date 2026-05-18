@@ -289,11 +289,35 @@ REAPER API surface:
 - `GoToRegion(proj, regionIdx, useTimeline=true)`
 - `GetPlayPosition()` for auto-follow
 
-### Phase 2.8b — Settings → Modes refactored into sub-tabs
+### Phase 2.8b — UC1 Encoder 2 carousel
+
+UC1 already renders a 3-up `[prev | current | next]` carousel on its central LCD as part of `bc_track_scroll` (the factory default for `Uc1Encoder2` rotation, `Bindings.cpp:392`). When Nav Mode is active we hijack the same display zones and feed them marker/region names instead of track names — zero new protocol work, the wire format is identical.
+
+Behaviour:
+- **Encoder 2 rotation** → cursor moves one item at a time (item granularity, finer than UF8's PageLeft/Right which moves 8). Carousel display updates per tick.
+- **Encoder 2 push** → jump to the current (centre) item. Same semantics as a UF8 top-soft-key press on that item; reuses `MarkerOverlay::consumeJump(int absoluteIdx)`.
+- **Shift + push** → in Regions view: drill into that region (= what would happen if you'd jumped via UF8). Lets the user stay on UC1 for the whole drill.
+- **Long-press push** → "back" (return from Markers-in-Region to Regions). Equivalent to Encoder 1 push from the UF8 path.
+
+Sync model: **UF8 follows UC1, never the other way around**. The carousel's centre item is the cursor. When the cursor crosses a page boundary, UF8's 8-window slides so the cursor stays visible AND the top-soft-key LED on that strip lights bright (siblings stay Dim). User can browse purely on UC1, glance at UF8 for the 8-item neighbourhood. Conversely a UF8 top-soft-key press also moves the UC1 cursor to that item — single shared `cursorIdx` field in `MarkerOverlay`.
+
+Bindings model:
+- `Uc1Encoder2` factory default for rotation stays `bc_track_scroll` (no behaviour change when Nav Mode is off). Same intercept pattern as UF8 PageLeft/Right: `MarkerOverlay::active()` short-circuits before `bc_track_scroll` dispatches.
+- `Uc1Encoder2Push` factory default stays `show_focused_plugin_gui`. Intercept order: if Nav Mode active and the binding hasn't been user-overridden, push routes to the overlay; user-overridden push still wins (the binding's their decision).
+- Settings → Modes → NAV sub-tab gets a "UC1 Encoder 2: take over while Nav Mode active" checkbox (default ON) so power-users who've remapped Encoder 2 to something they value more can opt out.
+
+UC1 LCD layout (reuses the existing `bc_track_scroll` zones in `UC1Surface`):
+- **Prev slot** — previous marker/region name (truncated to slot width; greyed-style via the existing dim-ASCII trick).
+- **Current slot** — centred, full intensity, name + index `R03·Verse 1` if it fits.
+- **Next slot** — next item name (dim).
+- **Channel-strip context line** (zone 0x02, 37 B) — repurposed to show the page indicator `‹2/4› Markers in Verse 1` so the user always knows where they are in the hierarchy.
+- **Colour bar at top of LCD** — already mirrors track colour in regular mode; switches to the current item's marker/region colour while Nav Mode is active.
+
+### Phase 2.8c — Settings → Modes refactored into sub-tabs
 
 `SettingsScreen::drawModes` (`SettingsScreen.cpp:7666`) has grown into one long scroll with five inline section headers (AUTO, FX / INSTANCE CYCLE, PLUG-IN GUI, FADERS, REC). Phase 2.8 adds a sixth (NAV), which is a good moment to break it into a `BeginTabBar` like the top-level Settings window already does.
 
-Sub-tabs inside Modes (each section moves verbatim into its own tab — pure layout change, no semantic edits):
+Sub-tabs inside Modes (each existing section moves verbatim into its own tab — pure layout change, no semantic edits; only NAV is new):
 
 | Sub-tab | Contents | Today's line range |
 |---|---|---|
@@ -307,13 +331,14 @@ Sub-tabs inside Modes (each section moves verbatim into its own tab — pure lay
 NAV sub-tab content (v1):
 - Default view on enter: Regions / Markers (all) — radio.
 - Auto-Follow default state — checkbox.
-- Lower-row format: Index (`M07`) / Timecode (`MM:SS`) — radio. (Hooks the Phase 2.8c lower-row toggle; ships dimmed until 2.8c lands.)
+- Lower-row format: Index (`M07`) / Timecode (`MM:SS`) — radio. (Hooks the Phase 2.8d lower-row toggle; ships dimmed until 2.8d lands.)
 - Trigger-button readout: shows which button is currently bound to `marker_overlay_toggle`. Click → jumps to Bindings tab pre-filtered to that button.
 - Color-bar source: Use REAPER marker colour / Force palette grey (for users who don't colour their markers).
+- UC1 Encoder 2 take-over: checkbox (default ON). When off, Nav Mode leaves Encoder 2 alone so a user who rebound it to something they care about more keeps that mapping.
 
 Implementation: replace the linear `ImGui_Text(ctx, "AUTO"); ImGui_Separator(ctx);` pattern with `ImGui_BeginTabBar(ctx, "modes_tabbar", flags)` + one `ImGui_BeginTabItem` per section. Each section's inner code is unchanged. Persist last-active sub-tab in ExtState so the user returns to where they left off.
 
-### Phase 2.8c — Polish & extra actions (deferred)
+### Phase 2.8d — Polish & extra actions (deferred)
 
 - V-Pot rotation → fine-move selected marker (seconds / frames).
 - V-Pot push (hold) → delete marker with LED-blink confirmation.
@@ -323,7 +348,7 @@ Implementation: replace the linear `ImGui_Text(ctx, "AUTO"); ImGui_Separator(ctx
 - Lower-row toggle: index ↔ timecode (wires the NAV sub-tab's radio).
 - Color overrides per view (e.g. Regions always gold, Markers always white).
 
-**Milestone complete when:** User presses PAN, the 8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, the whole thing exits cleanly with the strips returning to their normal track-based display, and the Modes tab in Settings is split into clean sub-tabs (AUTO / FX-Cycle / Plug-in GUI / Faders / REC / NAV).
+**Milestone complete when:** User presses PAN, the 8 UF8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, the UC1 Encoder 2 carousel mirrors the cursor in `[prev | current | next]` form with UF8's bright LED following along, push on UC1 also jumps, the whole thing exits cleanly with both surfaces returning to their normal display, and the Modes tab in Settings is split into clean sub-tabs (AUTO / FX-Cycle / Plug-in GUI / Faders / REC / NAV).
 
 ## Phase 3 — Submix Views — **DESIGN**
 
