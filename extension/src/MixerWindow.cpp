@@ -28,6 +28,7 @@ enum Section : int {
     kSecModes,
     kSecFxLearn,
     kSecSelectionSets,
+    kSecParameterGroups,
     kSecAbout,
     kSecCount,
 };
@@ -44,8 +45,9 @@ constexpr RailEntry kRail[] = {
     { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
     { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
-    { "Selection Sets", kSecSelectionSets, false, &SettingsScreen::drawSelectionSets },
-    { "About",          kSecAbout,         true,  &SettingsScreen::drawAbout         },
+    { "Selection Sets",  kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets },
+    { "Parameter Groups",kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
+    { "About",           kSecAbout,          true,  &SettingsScreen::drawAbout         },
 };
 
 constexpr double kRailWidthPx = 160.0;

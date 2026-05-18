@@ -14,6 +14,7 @@
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
 #include "GrCalibration.h" // uf8::applyGrCalibration + kBcVuBpDb / kLedsBpDb
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
+#include "ParameterGroups.h"  // multi-track param sync on UC1-originated writes
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
 
 // Defined in main.cpp — scroll REAPER's MCP so the just-selected track
@@ -666,6 +667,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             TrackFX_SetParamNormalized(
                 static_cast<MediaTrack*>(focusedTrack_),
                 match.fxIndex, s.vst3Param, next);
+            uf8::param_groups::broadcastBuiltinSlot(
+                static_cast<MediaTrack*>(focusedTrack_),
+                uf8::Domain::ChannelStrip, s.linkIdx, next);
             reasixty_bumpFolderReveal(
                 static_cast<MediaTrack*>(focusedTrack_));
             break;
@@ -771,9 +775,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         auto setFlag = [&](const char* slotId, int v) {
             for (const auto& s : match.map->slots) {
                 if (s.id && std::strcmp(s.id, slotId) == 0 && s.vst3Param >= 0) {
+                    const double nv = v ? 1.0 : 0.0;
                     TrackFX_SetParamNormalized(
                         static_cast<MediaTrack*>(focusedTrack_),
-                        match.fxIndex, s.vst3Param, v ? 1.0 : 0.0);
+                        match.fxIndex, s.vst3Param, nv);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        static_cast<MediaTrack*>(focusedTrack_),
+                        uf8::Domain::ChannelStrip, s.linkIdx, nv);
                     return;
                 }
             }
@@ -1096,6 +1104,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (uf8Match.map) {
         const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
         if (slotIdx >= 0) {
+            uf8::param_groups::broadcastBuiltinSlot(
+                static_cast<MediaTrack*>(writeTrackRaw),
+                uf8Domain, slotIdx, next);
             // Cross-domain knob touch flips the focused-param domain.
             // The central LCD's plug-in shortName label is computed off
             // this domain in refresh(), so a BC↔CS shift on the same
@@ -1498,7 +1509,9 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // regardless (refresh() picks it up on track changes).
     if (ev.id == button::kPolarity) {
         const bool cur = GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5;
-        SetMediaTrackInfo_Value(tr, "B_PHASE", cur ? 0.0 : 1.0);
+        const double phaseNext = cur ? 0.0 : 1.0;
+        SetMediaTrackInfo_Value(tr, "B_PHASE", phaseNext);
+        uf8::param_groups::broadcastTrackBool(tr, "B_PHASE", phaseNext);
         pushButtonLed_(ev.id, !cur);
         pushButtonReadout_(ev.id, "Polarity", !cur ? "In" : "Out",
                            zone::kChannelStripReadout);
@@ -1515,11 +1528,24 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // on the LED / readout honours bypassInverted (SSL stock: 1=off;
     // bx_townhouse "Comp In": 1=on).
     auto toggleBypassParam = [&](MediaTrack* targetTr, const PluginBindings* m,
-                                 int fxIdx, const char* labelLong, int readoutZone) {
+                                 int fxIdx, uf8::Domain domain,
+                                 const char* labelLong, int readoutZone) {
         if (!targetTr || !m || m->bypassParam == kParamNone) return false;
         const double cur = TrackFX_GetParamNormalized(targetTr, fxIdx, m->bypassParam);
         const double next = (cur > 0.5) ? 0.0 : 1.0;
         TrackFX_SetParamNormalized(targetTr, fxIdx, m->bypassParam, next);
+        // Multi-track sync: translate vst3Param → UF8 link-slot idx and
+        // broadcast via the SSL CS/BC PluginMap on each member.
+        if (auto uf8Match = uf8::lookupPluginOnTrack(targetTr, domain);
+            uf8Match.map)
+        {
+            const int slotIdx = uf8::slotIdxForVst3Param(
+                *uf8Match.map, m->bypassParam);
+            if (slotIdx >= 0) {
+                uf8::param_groups::broadcastBuiltinSlot(
+                    targetTr, domain, slotIdx, next);
+            }
+        }
         reasixty_bumpFolderReveal(targetTr);
         const bool inActive = m->bypassInverted ? (next >= 0.5) : (next < 0.5);
         pushButtonLed_(ev.id, inActive);
@@ -1535,6 +1561,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         // that). The Channel-IN button only acts on a recognised CS
         // plug-in's own Bypass param.
         toggleBypassParam(tr, bindings.channelMap, bindings.channelFxIdx,
+                          uf8::Domain::ChannelStrip,
                           "Channel Strip", zone::kChannelStripReadout);
         ++stats_.buttonEventsHandled;
         return;
@@ -1542,6 +1569,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     if (ev.id == button::kBusCompIn) {
         // BC IN targets the BC anchor track, not the CS-focused track.
         toggleBypassParam(bcTr, bcBindings.busCompMap, bcBindings.busCompFxIdx,
+                          uf8::Domain::BusComp,
                           "Bus Comp", zone::kBusCompReadout);
         ++stats_.buttonEventsHandled;
         return;
@@ -1590,6 +1618,9 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     if (uf8Match.map) {
         const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
         if (slotIdx >= 0) {
+            uf8::param_groups::broadcastBuiltinSlot(
+                static_cast<MediaTrack*>(focusedTrack_),
+                uf8::Domain::ChannelStrip, slotIdx, next);
             uf8::setFocus({uf8::Domain::ChannelStrip, slotIdx});
             pushFocusedParamReadout_();
         }

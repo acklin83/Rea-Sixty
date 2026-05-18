@@ -57,6 +57,7 @@
 #include "HidDevice.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
+#include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
 #include "PluginMap.h"
 #include "Protocol.h"
@@ -3903,8 +3904,11 @@ void drainInputQueue()
                         if (sb.soloVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.soloVst3Param);
+                            const double next = cur < 0.5 ? 1.0 : 0.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
-                                sb.soloVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                                sb.soloVst3Param, next);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sb.soloVst3Param, next);
                         }
                         break;
                     }
@@ -3939,8 +3943,11 @@ void drainInputQueue()
                         if (sb.cutVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.cutVst3Param);
+                            const double next = cur < 0.5 ? 1.0 : 0.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
-                                sb.cutVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                                sb.cutVst3Param, next);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sb.cutVst3Param, next);
                         }
                         break;
                     }
@@ -3958,8 +3965,11 @@ void drainInputQueue()
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
+                            const double next = cur < 0.5 ? 1.0 : 0.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
-                                sb.selVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                                sb.selVst3Param, next);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sb.selVst3Param, next);
                         }
                         // Empty binding: eat the event (see Solo above).
                         break;
@@ -3978,8 +3988,11 @@ void drainInputQueue()
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
+                            const double next = cur < 0.5 ? 1.0 : 0.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
-                                sb.selVst3Param, cur < 0.5 ? 1.0 : 0.0);
+                                sb.selVst3Param, next);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sb.selVst3Param, next);
                         }
                         break;
                     }
@@ -4044,6 +4057,8 @@ void drainInputQueue()
                     if (normF > 1.0) normF = 1.0;
                     TrackFX_SetParamNormalized(tr, mmF.fxIndex,
                         slF->vst3Param, normF);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        tr, focusedF.domain, focusedF.slotIdx, normF);
                     break;
                 }
                 // FLIP without slot, route, or Plugin-Fader mode: fader
@@ -4085,6 +4100,8 @@ void drainInputQueue()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sb.faderVst3Param, n);
                         }
                         break;
                     }
@@ -4099,6 +4116,16 @@ void drainInputQueue()
                         if (n > 1.0) n = 1.0;
                         TrackFX_SetParamNormalized(tr, cs.fxIndex,
                             cs.vst3Param, n);
+                        // CS FaderLevel isn't a Link slot for built-in
+                        // variants — broadcast by re-resolving per member
+                        // via csFaderForTrack so the right vst3 idx is hit
+                        // on each variant.
+                        for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
+                            const auto mcs = csFaderForTrack(m);
+                            if (mcs.vst3Param >= 0)
+                                TrackFX_SetParamNormalized(m, mcs.fxIndex,
+                                    mcs.vst3Param, n);
+                        }
                         break;
                     }
                 }
@@ -4223,6 +4250,8 @@ void drainInputQueue()
                             if (next > 1.0) next = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, next);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, bs.vst3Param, next);
                             break;
                         }
                         break;
@@ -4301,6 +4330,8 @@ void drainInputQueue()
                     if (next < 0.0) next = 0.0;
                     if (next > 1.0) next = 1.0;
                     TrackFX_SetParamNormalized(tr, mm.fxIndex, sl.vst3Param, next);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        tr, focused.domain, focused.slotIdx, next);
                 } else if (g_pluginFaderMode.load() && !forcePan) {
                     // Plugin mode + no focused slot → V-Pot drives the
                     // SSL strip's own Pan param (linkIdx 3) instead of
@@ -4317,6 +4348,9 @@ void drainInputQueue()
                             0.0, 1.0);
                         TrackFX_SetParamNormalized(tr, pn.fxIndex,
                             pn.vst3Param, next);
+                        // CS Pan = linkIdx 3 across all CS variants.
+                        uf8::param_groups::broadcastBuiltinSlot(
+                            tr, uf8::Domain::ChannelStrip, 3, next);
                         break;
                     }
                     // Fall through to REAPER pan if no CS plug-in.
@@ -4395,20 +4429,21 @@ void drainInputQueue()
                         const auto& bs =
                             uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
                         if (bs.vst3Param >= 0) {
+                            double pushNext;
                             if (bs.vpotMode == uf8::VPotMode::Toggle) {
                                 const double cur =
                                     TrackFX_GetParamNormalized(uctx.tr,
                                         uctx.fxIdx, bs.vst3Param);
-                                TrackFX_SetParamNormalized(uctx.tr,
-                                    uctx.fxIdx, bs.vst3Param,
-                                    cur < 0.5 ? 1.0 : 0.0);
+                                pushNext = cur < 0.5 ? 1.0 : 0.0;
                             } else {
-                                double dn = bs.defaultNorm;
-                                if (dn < 0.0) dn = 0.0;
-                                if (dn > 1.0) dn = 1.0;
-                                TrackFX_SetParamNormalized(uctx.tr,
-                                    uctx.fxIdx, bs.vst3Param, dn);
+                                pushNext = bs.defaultNorm;
+                                if (pushNext < 0.0) pushNext = 0.0;
+                                if (pushNext > 1.0) pushNext = 1.0;
                             }
+                            TrackFX_SetParamNormalized(uctx.tr,
+                                uctx.fxIdx, bs.vst3Param, pushNext);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, bs.vst3Param, pushNext);
                         }
                         break;
                     }
@@ -4420,7 +4455,10 @@ void drainInputQueue()
                 if (focused.domain == uf8::Domain::ChannelStrip) {
                     if (focused.slotIdx == uf8::ext::TrackPhase) {
                         const double cur = GetMediaTrackInfo_Value(tr, "B_PHASE");
-                        SetMediaTrackInfo_Value(tr, "B_PHASE", cur > 0.5 ? 0.0 : 1.0);
+                        const double phaseNext = cur > 0.5 ? 0.0 : 1.0;
+                        SetMediaTrackInfo_Value(tr, "B_PHASE", phaseNext);
+                        uf8::param_groups::broadcastTrackBool(
+                            tr, "B_PHASE", phaseNext);
                         break;
                     }
                     if (focused.slotIdx == uf8::ext::PluginAB) {
@@ -4445,6 +4483,7 @@ void drainInputQueue()
                     break;
                 }
                 if (slPtr) {
+                    double pushNext;
                     if (isBinarySlot(*slPtr)) {
                         // V-Pot push cycles to next discrete step. For a
                         // 2-state toggle (EQ In, Dyn In, S/C Listen) this
@@ -4460,21 +4499,20 @@ void drainInputQueue()
                             &step, &smallstep, &largestep, &istoggle);
                         const double cur = TrackFX_GetParamNormalized(
                             tr, mm.fxIndex, slPtr->vst3Param);
-                        double next;
                         if (!haveSteps || istoggle || step <= 0.0 || step >= 1.0) {
-                            next = (cur < 0.5) ? 1.0 : 0.0;
+                            pushNext = (cur < 0.5) ? 1.0 : 0.0;
                         } else {
-                            next = cur + step;
-                            if (next > 1.0 + step * 0.5) next = 0.0;
-                            if (next > 1.0) next = 1.0;
+                            pushNext = cur + step;
+                            if (pushNext > 1.0 + step * 0.5) pushNext = 0.0;
+                            if (pushNext > 1.0) pushNext = 1.0;
                         }
-                        TrackFX_SetParamNormalized(tr, mm.fxIndex,
-                            slPtr->vst3Param, next);
                     } else {
-                        const double resetVal = slPtr->deflt.value_or(0.5);
-                        TrackFX_SetParamNormalized(tr, mm.fxIndex,
-                            slPtr->vst3Param, resetVal);
+                        pushNext = slPtr->deflt.value_or(0.5);
                     }
+                    TrackFX_SetParamNormalized(tr, mm.fxIndex,
+                        slPtr->vst3Param, pushNext);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        tr, focused.domain, focused.slotIdx, pushNext);
                 } else if (g_pluginFaderMode.load() && !forcePan) {
                     // Plugin mode → reset SSL strip's own Pan to centre
                     // (norm 0.5 = C). forcePan overrides this so PAN
@@ -4483,6 +4521,8 @@ void drainInputQueue()
                     if (pn.vst3Param >= 0) {
                         TrackFX_SetParamNormalized(tr, pn.fxIndex,
                             pn.vst3Param, 0.5);
+                        uf8::param_groups::broadcastBuiltinSlot(
+                            tr, uf8::Domain::ChannelStrip, 3, 0.5);
                     } else {
                         SetMediaTrackInfo_Value(tr, "D_PAN", 0.0);
                     }
@@ -8755,6 +8795,8 @@ void commitDebouncedTouchReleases()
                     if (normT > 1.0) normT = 1.0;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        tr, focusedT.domain, focusedT.slotIdx, normT);
                 } else if (g_flip.load() && !g_pluginFaderMode.load()
                            && !g_uf8PluginMode.load()) {
                     double n = static_cast<double>(touchPb) /
@@ -8779,6 +8821,8 @@ void commitDebouncedTouchReleases()
                             if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctxT.tr,
                                 uctxT.fxIdx, sb.faderVst3Param, n);
+                            uf8::param_groups::broadcastUserParam(
+                                uctxT.tr, uctxT.map, sb.faderVst3Param, n);
                         }
                     } else {
                         CSurf_OnVolumeChange(tr,
@@ -8792,6 +8836,12 @@ void commitDebouncedTouchReleases()
                         if (n > 1.0) n = 1.0;
                         TrackFX_SetParamNormalized(tr, csT.fxIndex,
                             csT.vst3Param, n);
+                        for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
+                            const auto mcs = csFaderForTrack(m);
+                            if (mcs.vst3Param >= 0)
+                                TrackFX_SetParamNormalized(m, mcs.fxIndex,
+                                    mcs.vst3Param, n);
+                        }
                     } else {
                         CSurf_OnVolumeChange(tr,
                             pbToLinearVolume(touchPb), false);
@@ -14090,6 +14140,62 @@ void registerBindingHandlers()
     registerBuiltin("zoom_left",   zoomBuiltin(uf8::Uf8GlobalLed::ZoomLeft,   1011,  "Zoom out horizontally"));
     registerBuiltin("zoom_right",  zoomBuiltin(uf8::Uf8GlobalLed::ZoomRight,  1012,  "Zoom in horizontally"));
     registerBuiltin("zoom_center", zoomBuiltin(uf8::Uf8GlobalLed::ZoomCenter, 40295, "Zoom to fit project"));
+
+    // ---- Parameter Groups ---------------------------------------------------
+    // Multi-track parameter sync (8 persistent slots + temp group from
+    // selection). State + persistence in ParameterGroups.{h,cpp}.
+    //   add_N       : add every currently-selected track to group N
+    //   clear_N     : strip every project track of group N membership
+    //   toggle_N    : flip active flag; LED bright when active
+    //   remove_all  : drop selection from all groups
+    //   temp_toggle : flip "Multi-Select acts as Temp Group" setting
+    for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
+        char nm[48], disp[64];
+        std::snprintf(nm,   sizeof(nm),   "param_group_add_%d",    slot + 1);
+        std::snprintf(disp, sizeof(disp), "Param Group %d → Add Selected Tracks", slot + 1);
+        registerBuiltin(nm, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                uf8::param_groups::addSelectedToGroup(slot);
+            },
+            nullptr, disp, false
+        });
+        std::snprintf(nm,   sizeof(nm),   "param_group_clear_%d",  slot + 1);
+        std::snprintf(disp, sizeof(disp), "Param Group %d → Clear Members", slot + 1);
+        registerBuiltin(nm, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                uf8::param_groups::clearGroupMembership(slot);
+            },
+            nullptr, disp, false
+        });
+        std::snprintf(nm,   sizeof(nm),   "param_group_toggle_%d", slot + 1);
+        std::snprintf(disp, sizeof(disp), "Param Group %d → Toggle Active", slot + 1);
+        registerBuiltin(nm, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                uf8::param_groups::toggleGroupActive(slot);
+            },
+            [slot](int) { return uf8::param_groups::isGroupActive(slot); },
+            disp, false
+        });
+    }
+    registerBuiltin("param_group_remove_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            uf8::param_groups::removeSelectedFromAllGroups();
+        },
+        nullptr, "Param Groups → Remove Selected from All", false
+    });
+    registerBuiltin("multi_select_as_temp_group_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            uf8::param_groups::setMultiSelectAsTempGroup(
+                !uf8::param_groups::multiSelectAsTempGroup());
+        },
+        [](int) { return uf8::param_groups::multiSelectAsTempGroup(); },
+        "Param Groups → Multi-Select acts as Temp Group", false
+    });
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
@@ -14174,6 +14280,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // always ready). Two-stage lookup in lookupPluginMapByName falls
     // through to this catalogue.
     uf8::user_plugins::load();
+
+    // Parameter-group sidecar (8 named slots + multi-select toggle).
+    uf8::param_groups::load();
 
     // Register as a full control-surface class. The user adds a
     // "Rea-Sixty" entry in Preferences → Control/OSC/Web; REAPER then

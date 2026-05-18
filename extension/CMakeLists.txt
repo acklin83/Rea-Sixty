@@ -76,6 +76,8 @@ add_library(reaper_uf8 MODULE
     src/Bindings.cpp
     # Virtual notch / detent for relative-encoder writes
     src/VirtualNotch.cpp
+    # Multi-track parameter sync (8 persistent groups + temp-from-selection)
+    src/ParameterGroups.cpp
 )
 
 if(APPLE)

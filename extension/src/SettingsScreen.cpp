@@ -12,6 +12,7 @@
 
 #include "Bindings.h"
 #include "GrCalibration.h"
+#include "ParameterGroups.h"
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
@@ -2024,6 +2025,10 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
 
                 if (n.rfind("selset_", 0) == 0) return "Selection Sets";
 
+                if (n.rfind("param_group_", 0) == 0
+                 || n == "multi_select_as_temp_group_toggle")
+                    return "Parameter Groups";
+
                 if (n == "selection_clear_all"
                  || n == "tracks_arm_all"
                  || n == "automation_zero_all")
@@ -2050,6 +2055,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 "Zoom",
                 "Sends / Receives",
                 "Selection Sets",
+                "Parameter Groups",
                 "Tracks",
                 "Brightness",
                 "Modifiers",
@@ -8027,6 +8033,121 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         "(ANY category).");
     ImGui_Text(ctx,
         "Selection-Set Auto-Mode is configured globally in Modes \xe2\x86\x92 Auto.");
+}
+
+// ---- Parameter Groups -----------------------------------------------------
+// Eight slots. Each slot persists name + active flag in
+// parameter_groups.json. Track membership is stored per-track in
+// REAPER's P_EXT:reasixty:pg_mask. When at least one slot is active,
+// any hardware-originated parameter write (UF8 V-Pots, UF8 Soft-Keys,
+// UC1 CS/BC encoders + buttons) fans out from the leader (focused
+// track) onto every member of every active slot.
+void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
+{
+    ImGui_Text(ctx, "Parameter Groups");
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "Eight slots. Members are tracks added via the "
+        "\"Param Group N \xe2\x86\x92 Add Selected Tracks\" action. "
+        "Active slots fan out hardware-originated parameter writes from "
+        "the focused track to every member (silent skip when the member "
+        "track lacks a matching mapped plug-in).");
+    ImGui_Spacing(ctx);
+
+    bool temp = uf8::param_groups::multiSelectAsTempGroup();
+    if (ImGui_Checkbox(ctx,
+            "Multi-Select acts as temporary Parameter Group",
+            &temp))
+    {
+        uf8::param_groups::setMultiSelectAsTempGroup(temp);
+    }
+    ImGui_Text(ctx,
+        "  When no slot is active and you have two or more tracks "
+        "selected, the selection itself behaves as an ad-hoc group.");
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // Count members per slot by walking all tracks once.
+    int memberCount[uf8::param_groups::kSlotCount] = {0};
+    const int nTracks = CountTracks(nullptr);
+    for (int i = 0; i < nTracks; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (!t) continue;
+        const uint8_t m = uf8::param_groups::getMaskForTrack(t);
+        for (int s = 0; s < uf8::param_groups::kSlotCount; ++s) {
+            if (m & (1u << s)) memberCount[s]++;
+        }
+    }
+
+    auto& st = uf8::param_groups::state();
+    for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
+        char idtag[32];
+        std::snprintf(idtag, sizeof(idtag), "param_group_row_%d", slot);
+        ImGui_PushID(ctx, idtag);
+
+        // Active dot prefix mirrors the Selection Sets pattern.
+        char header[24];
+        std::snprintf(header, sizeof(header), "%s Slot %d",
+                      st.slots[slot].active ? "\xe2\x80\xa2" : " ",
+                      slot + 1);
+        ImGui_Text(ctx, header);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        bool active = st.slots[slot].active;
+        if (ImGui_Checkbox(ctx, "Active##act", &active)) {
+            uf8::param_groups::toggleGroupActive(slot);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        char nameBuf[64] = {0};
+        std::strncpy(nameBuf, st.slots[slot].name.c_str(),
+                     sizeof(nameBuf) - 1);
+        ImGui_SetNextItemWidth(ctx, 220);
+        if (ImGui_InputTextWithHint(ctx, "##name",
+                                    "Slot name (e.g. Drums)",
+                                    nameBuf, sizeof(nameBuf),
+                                    nullptr, nullptr))
+        {
+            st.slots[slot].name = nameBuf;
+            uf8::param_groups::save();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        char info[40];
+        std::snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);
+        ImGui_Text(ctx, info);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        if (ImGui_Button(ctx, "Add Selected##add", nullptr, nullptr)) {
+            uf8::param_groups::addSelectedToGroup(slot);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Clear##clr", nullptr, nullptr)) {
+            uf8::param_groups::clearGroupMembership(slot);
+        }
+
+        ImGui_PopID(ctx);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    if (ImGui_Button(ctx,
+            "Remove Selected Tracks from All Groups",
+            nullptr, nullptr))
+    {
+        uf8::param_groups::removeSelectedFromAllGroups();
+    }
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "Bind \"Param Group N \xe2\x86\x92 Add Selected Tracks\", "
+        "\"\xe2\x86\x92 Toggle Active\", \"\xe2\x86\x92 Clear Members\" "
+        "and \"Multi-Select acts as Temp Group\" in the Bindings tab to "
+        "drive these from the hardware. Toggle-Active LEDs go bright when "
+        "the slot is on.");
 }
 
 // ---- About ----------------------------------------------------------------
