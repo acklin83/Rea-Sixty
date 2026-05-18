@@ -328,13 +328,35 @@ Sub-tabs inside Modes (each existing section moves verbatim into its own tab —
 | **REC** | TotalReaper / RME assignments | `7828-7902` |
 | **NAV** (new) | Marker/Region overlay configuration — see below | — |
 
-NAV sub-tab content (v1):
-- Default view on enter: Regions / Markers (all) — radio.
-- Auto-Follow default state — checkbox.
-- Lower-row format: Index (`M07`) / Timecode (`MM:SS`) — radio. (Hooks the Phase 2.8d lower-row toggle; ships dimmed until 2.8d lands.)
-- Trigger-button readout: shows which button is currently bound to `marker_overlay_toggle`. Click → jumps to Bindings tab pre-filtered to that button.
-- Color-bar source: Use REAPER marker colour / Force palette grey (for users who don't colour their markers).
-- UC1 Encoder 2 take-over: checkbox (default ON). When off, Nav Mode leaves Encoder 2 alone so a user who rebound it to something they care about more keeps that mapping.
+NAV sub-tab content (v1) — grouped into four sub-sections:
+
+**Activation**
+- Trigger-button readout — shows which button is currently bound to `marker_overlay_toggle`. Click → jumps to Bindings tab pre-filtered to that button. The binding itself lives in Bindings; this is just a convenience read-only mirror.
+
+**View & drill-down behaviour** ← *the "markers in regions" knob lives here*
+- **Default view on enter**: Regions / Markers (in current region) / Markers (all) / Last used — radio. Picks what's on the strips the moment Nav Mode is entered.
+- **Region-press behaviour** (only relevant when in Regions view): radio with three options —
+  - *Jump + drill* (default): playhead jumps to region start, view auto-switches to Markers-in-Region for that region. The killer-feature flow.
+  - *Jump only*: playhead jumps, view stays on Regions. For users who use Nav purely as a region-jumper.
+  - *Drill only*: view switches to Markers-in-Region without moving the playhead. For pre-loading the next song while the current one still plays.
+- **Marker-in-region filter rule**: dropdown — *Position geometry* (default: `pos ∈ [region.start, region.end]`) / *Name prefix* (future, dimmed for v1 — "markers named with the region's prefix" e.g. `VerseA-` filter for region `VerseA`).
+- **Auto-Follow default**: checkbox.
+
+**UF8 strip display**
+- **Lower-row format**: Index (`M07`) / Timecode (`MM:SS`) — radio. (Hooks Phase 2.8d toggle; ships dimmed until then.)
+- **Color-bar source**: Use REAPER marker colour / Force palette grey (for users who don't colour their markers).
+- **Pagination indicator**: On / Off — defaults On. Off hides the `‹2/4` / `M17+›` hints in strip 1/8's lower row.
+
+**UC1 Encoder 2** ← *the "markers/regions auf enc2" knob lives here*
+- **Take-over while Nav Mode is active**: checkbox (default ON). When off, Encoder 2 keeps whatever the user bound it to (factory: `bc_track_scroll`).
+- **Carousel scope** — radio with four options:
+  - *Mirror UF8 view* (default): UC1 always shows the same item class UF8 is showing. Single conceptual cursor across both surfaces.
+  - *Always Regions*: Encoder 2 cycles regions regardless of what UF8 shows. Useful when UF8 is parked in Markers-in-Region — Encoder 2 stays a song-picker.
+  - *Always Markers (all)*: opposite — Encoder 2 is a global marker tape, UF8 is the region context.
+  - *Always Markers in current UF8 region*: Encoder 2 cycles only inside the region UF8 has drilled into. Combined with "Always Regions" on UF8 this gives a "left hand picks song, right hand picks section" workflow.
+- **Push action**: Jump / Jump + Drill / Drill only — radio. Mirrors the "Region-press behaviour" above so UC1 and UF8 can disagree if the user wants (e.g. UF8 = Jump+Drill, UC1 push = Jump only for live performance).
+- **Shift + Push action**: Drill / Back / Toggle View — radio. Default Drill.
+- **Long-press Push action**: Back / Add marker at playhead / Disabled — radio. Default Back.
 
 Implementation: replace the linear `ImGui_Text(ctx, "AUTO"); ImGui_Separator(ctx);` pattern with `ImGui_BeginTabBar(ctx, "modes_tabbar", flags)` + one `ImGui_BeginTabItem` per section. Each section's inner code is unchanged. Persist last-active sub-tab in ExtState so the user returns to where they left off.
 
