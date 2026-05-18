@@ -7386,9 +7386,26 @@ void pushZonesForVisibleSlots()
                     map = mm2.map;
                 }
             } else {
-                auto mm = uf8::lookupPluginOnTrack(tr,
-                                                   uf8::Domain::ChannelStrip);
-                map = mm.map;
+                // Partial reversal of the 2026-05-17 "strips never spring"
+                // rule: the *focused* strip follows the encoder cycle's
+                // focused.domain so its colour-bar label switches CS↔BC
+                // when the cycle crosses a domain on the selected track.
+                // Other strips keep their own track's primary variant
+                // (CS-first / BC-fallback). Frank 2026-05-18.
+                const bool isFocusedStrip =
+                    (g_uc1_surface
+                     && tr == g_uc1_surface->focusedTrack());
+                if (isFocusedStrip
+                    && focused.domain != uf8::Domain::None)
+                {
+                    auto mmF = uf8::lookupPluginOnTrack(tr, focused.domain);
+                    map = mmF.map;
+                }
+                if (!map) {
+                    auto mm = uf8::lookupPluginOnTrack(tr,
+                                                       uf8::Domain::ChannelStrip);
+                    map = mm.map;
+                }
                 if (!map) {
                     auto mm2 = uf8::lookupPluginOnTrack(tr,
                                                         uf8::Domain::BusComp);
