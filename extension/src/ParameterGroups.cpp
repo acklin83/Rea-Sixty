@@ -307,6 +307,20 @@ void broadcastBuiltinSlot(MediaTrack* leader,
         if (!sl || sl->vst3Param < 0) continue;
         TrackFX_SetParamNormalized(t, match.fxIndex, sl->vst3Param, normValue);
     }
+    // Cement leader as last-touched-FX so chaseLastTouchedFx doesn't
+    // chase the last member we just wrote and jump focus around. The
+    // re-write is idempotent (same value) and Extended skips it because
+    // we're still inside ScopedSuppress.
+    if (auto leaderMatch = lookupPluginOnTrack(leader, domain);
+        leaderMatch.map)
+    {
+        const LinkSlot* sl =
+            findSlotByLinkIdx(*leaderMatch.map, slotLinkIdx);
+        if (sl && sl->vst3Param >= 0) {
+            TrackFX_SetParamNormalized(
+                leader, leaderMatch.fxIndex, sl->vst3Param, normValue);
+        }
+    }
 }
 
 void broadcastUserParam(MediaTrack* leader,
@@ -327,6 +341,15 @@ void broadcastUserParam(MediaTrack* leader,
             TrackFX_SetParamNormalized(t, i, vst3Param, normValue);
             break;
         }
+    }
+    // Cement leader as last-touched (see broadcastBuiltinSlot above).
+    const int nfx = TrackFX_GetCount(leader);
+    char fxName[256];
+    for (int i = 0; i < nfx; ++i) {
+        if (!TrackFX_GetFXName(leader, i, fxName, sizeof(fxName))) continue;
+        if (std::strstr(fxName, leaderMap->match.c_str()) == nullptr) continue;
+        TrackFX_SetParamNormalized(leader, i, vst3Param, normValue);
+        break;
     }
 }
 
