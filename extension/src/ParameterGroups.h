@@ -105,6 +105,12 @@ void broadcastTrackBool(MediaTrack* leader,
                         const char* attrName,
                         double value);
 
+// True when the broadcast helpers are currently executing (member
+// writes in flight). The REAPER CSURF_EXT_SETFXPARAM hook checks this
+// to avoid re-broadcasting our own writes when they round-trip back
+// through REAPER's param-change callback.
+bool inBroadcast();
+
 // Persistence (JSON sidecar). Safe to call multiple times.
 void load();
 void save();

@@ -233,6 +233,14 @@ public:
     void SetSurfaceMute(MediaTrack* tr, bool mute)        override;
     void SetSurfaceSelected(MediaTrack* tr, bool sel)     override;
     void SetSurfaceRecArm(MediaTrack* tr, bool arm)       override;
+
+    // CSURF_EXT_SETFXPARAM mouse-broadcast hook. REAPER fires this for
+    // every FX-param change regardless of source (mouse on the GUI,
+    // automation playback, our own hardware writes that round-trip). We
+    // skip when ParameterGroups is mid-broadcast (so member writes
+    // don't recurse), and otherwise translate (track, fxIdx, vst3Param,
+    // value) to a builtin-slot or user-FX-Learn broadcast.
+    int Extended(int call, void* parm1, void* parm2, void* parm3) override;
 };
 
 // Per-slot MediaTrack cache so GetTouchState can map REAPER's track
@@ -5299,6 +5307,61 @@ void ReaSixtySurface::SetSurfaceRecArm(MediaTrack* tr, bool arm)
     // colour switches even if I_SELECTED didn't change.
     sendLed(LedClass::Sel, tr, GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5);
     (void)arm;
+}
+
+// REAPER fires CSURF_EXT_SETFXPARAM for every TrackFX parameter change
+// regardless of source: mouse on the plug-in GUI, REAPER actions,
+// automation playback, AND our own SetParamNormalized writes that
+// round-trip. The Parameter Groups feature uses this hook to broadcast
+// mouse-originated changes to group members. Hardware-originated writes
+// already broadcast inline; ParameterGroups::inBroadcast() lets us skip
+// the round-trip from our own member writes (otherwise: infinite fan-out
+// where each member's Extended triggers another N-1 writes).
+//
+// Known: automation playback fires here per tick. Group members get
+// written along for the ride. Acceptable for v1; filter via
+// GetTrackAutomationMode if it becomes annoying.
+int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
+{
+    if (call != CSURF_EXT_SETFXPARAM) return 0;
+    if (uf8::param_groups::inBroadcast()) return 1;
+    if (!parm1 || !parm2 || !parm3) return 0;
+
+    MediaTrack* tr = static_cast<MediaTrack*>(parm1);
+    const int packed   = *static_cast<const int*>(parm2);
+    const int fxIdx    = (packed >> 16) & 0xFFFF;
+    const int vst3Param = packed & 0xFFFF;
+    const double value = *static_cast<const double*>(parm3);
+
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    if (fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return 0;
+
+    char fxName[256];
+    if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return 0;
+
+    // User-FX-Learn maps first — members matched by FX-name substring,
+    // vst3Param transferred 1:1 (same plug-in identity guarantees same
+    // VST3 param layout).
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+        um && um->uf8Mode)
+    {
+        uf8::param_groups::broadcastUserParam(tr, um, vst3Param, value);
+    }
+
+    // SSL CS / BC built-in (or user view-cached as PluginMap). Translates
+    // vst3Param → linkIdx so cross-variant member writes hit the right
+    // VST3 param on each track (CS 2 vs. 4K E etc.).
+    if (auto* pm = uf8::lookupPluginMapByName(fxName);
+        pm && (pm->domain == uf8::Domain::ChannelStrip
+            || pm->domain == uf8::Domain::BusComp))
+    {
+        const int slotIdx = uf8::slotIdxForVst3Param(*pm, vst3Param);
+        if (slotIdx >= 0)
+            uf8::param_groups::broadcastBuiltinSlot(
+                tr, pm->domain, slotIdx, value);
+    }
+
+    return 0;
 }
 
 // Device lifecycle: the surface instance owns the UF8 connection and the

@@ -9,6 +9,7 @@
 #include "ParameterGroups.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +37,19 @@ std::mutex g_mutex;
 State      g_state;
 
 constexpr const char* kPExtKey = "P_EXT:reasixty:pg_mask";
+
+// Bumped while the broadcast helpers fan out member writes. The REAPER
+// CSURF_EXT_SETFXPARAM hook reads this via inBroadcast() and skips
+// re-entry — our own member writes round-trip through Extended and
+// would otherwise trigger another broadcast layer per write.
+std::atomic<int> g_broadcastDepth{0};
+
+struct ScopedSuppress {
+    ScopedSuppress()  { g_broadcastDepth.fetch_add(1, std::memory_order_acq_rel); }
+    ~ScopedSuppress() { g_broadcastDepth.fetch_sub(1, std::memory_order_acq_rel); }
+    ScopedSuppress(const ScopedSuppress&)            = delete;
+    ScopedSuppress& operator=(const ScopedSuppress&) = delete;
+};
 
 // ---- P_EXT helpers --------------------------------------------------------
 
@@ -284,6 +298,8 @@ void broadcastBuiltinSlot(MediaTrack* leader,
 {
     if (domain == Domain::None) return;
     auto targets = resolveBroadcastTargets(leader);
+    if (targets.empty()) return;
+    ScopedSuppress guard;
     for (auto* t : targets) {
         auto match = lookupPluginOnTrack(t, domain);
         if (!match.map) continue;
@@ -300,6 +316,8 @@ void broadcastUserParam(MediaTrack* leader,
 {
     if (!leaderMap || vst3Param < 0 || leaderMap->match.empty()) return;
     auto targets = resolveBroadcastTargets(leader);
+    if (targets.empty()) return;
+    ScopedSuppress guard;
     for (auto* t : targets) {
         const int nfx = TrackFX_GetCount(t);
         char fxName[256];
@@ -317,9 +335,16 @@ void broadcastTrackBool(MediaTrack* leader,
 {
     if (!attrName) return;
     auto targets = resolveBroadcastTargets(leader);
+    if (targets.empty()) return;
+    ScopedSuppress guard;
     for (auto* t : targets) {
         SetMediaTrackInfo_Value(t, const_cast<char*>(attrName), value);
     }
+}
+
+bool inBroadcast()
+{
+    return g_broadcastDepth.load(std::memory_order_acquire) > 0;
 }
 
 // ---- Persistence ----------------------------------------------------------
