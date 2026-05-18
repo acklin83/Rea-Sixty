@@ -381,6 +381,17 @@ void broadcastTrackBool(MediaTrack* leader,
     }
 }
 
+void broadcastSoloMute(MediaTrack* leader, bool isSolo, int absoluteValue)
+{
+    auto targets = resolveBroadcastTargets(leader);
+    if (targets.empty()) return;
+    ScopedSuppress guard;
+    for (auto* t : targets) {
+        if (isSolo) CSurf_OnSoloChange(t, absoluteValue);
+        else        CSurf_OnMuteChange(t, absoluteValue);
+    }
+}
+
 bool inBroadcast()
 {
     return g_broadcastDepth.load(std::memory_order_acquire) > 0;

@@ -3922,6 +3922,10 @@ void drainInputQueue()
                     }
                 }
                 CSurf_OnSoloChange(tr, -1);
+                {
+                    const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+                    uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
+                }
                 break;
             }
             case PendingInput::MuteToggle: {
@@ -3961,6 +3965,10 @@ void drainInputQueue()
                     }
                 }
                 CSurf_OnMuteChange(tr, -1);
+                {
+                    const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+                    uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
+                }
                 break;
             }
             case PendingInput::SelectToggle: {

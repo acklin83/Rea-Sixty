@@ -1425,6 +1425,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
             CSurf_OnSoloChange(tr, -1);
             const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+            uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
             pushButtonLed_(button::kSolo, on);
             pushButtonLed_(button::kSoloClear, anySolo());
             pushButtonReadout_(button::kSolo, "Solo", on ? "On" : "Off",
@@ -1444,6 +1445,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
             CSurf_OnMuteChange(tr, -1);
             const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+            uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
             pushButtonLed_(button::kCut, on);
             pushButtonReadout_(button::kCut, "Cut", on ? "On" : "Off",
                                zone::kChannelStripReadout);

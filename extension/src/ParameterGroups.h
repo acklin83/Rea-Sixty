@@ -105,6 +105,13 @@ void broadcastTrackBool(MediaTrack* leader,
                         const char* attrName,
                         double value);
 
+// Solo / Mute fan-out. Targets get the leader's *absolute* new state via
+// CSurf_OnSoloChange / CSurf_OnMuteChange (not -1 toggle) so a mixed
+// selection lands at a uniform state. Call after the leader's own
+// CSurf_OnSoloChange(-1) / CSurf_OnMuteChange(-1) has settled and the
+// new state has been read back.
+void broadcastSoloMute(MediaTrack* leader, bool isSolo, int absoluteValue);
+
 // True when the broadcast helpers are currently executing (member
 // writes in flight). The REAPER CSURF_EXT_SETFXPARAM hook checks this
 // to avoid re-broadcasting our own writes when they round-trip back
