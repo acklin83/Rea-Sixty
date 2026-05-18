@@ -216,6 +216,79 @@ These exist in SSL's settings but don't apply to Rea-Sixty's architecture:
 - **In-app firmware update** — SSL still ships firmware blobs; users keep SSL 360° installed for that one task. Tracked in Phase 4
 - **LCD/Software Messages catalogue page** — we log to file, not modal popups; About tab links to log location instead
 
+## Phase 2.8 — Nav Overlay (Markers & Regions) — **DESIGN**
+
+**Goal:** Turn the 8 UF8 scribble strips into a live marker/region jump panel. SSL 360° offers nothing in this space; REAPER's own Marker/Region Manager lives behind a separate window. With a single button press the surface becomes the navigation panel — pick songs (regions) and sections (markers within them) without taking eyes off the desk.
+
+Lands after Phase 2.7 so it can reuse the bindings JSON / Learn-mode wiring; sits before Phase 3 because it shares no code with Submix Views.
+
+### Activation
+- New builtin `marker_overlay_toggle` (plus `marker_overlay_on` / `marker_overlay_off`) bindable to any button via Settings → Bindings. Factory default: **PAN**.
+- LED of the assigned button reflects overlay state (Off / Bright when active).
+- Re-press exits; state survives within a REAPER session but not across restarts (in-memory only for v1).
+
+### View modes — Region-drill-down is the killer feature
+
+The overlay walks a 2-level hierarchy. User workflow assumption: songs are encoded as REAPER regions, section labels (verse / chorus / bridge / drop) as markers inside those regions.
+
+| Mode | What the 8 strips show | Entry |
+|---|---|---|
+| **Regions** | 8 regions in the current page window | Default on overlay enter |
+| **Markers (in Region)** | Markers whose position falls inside the currently-selected region | Auto-entered when a region is jumped to |
+| **Markers (all)** | All markers in timeline order | Quick3 escape from region filter |
+
+Filter relation derived geometrically (`marker.pos ∈ [region.start, region.end]`); REAPER has no native marker-in-region link. Both boundary cases count as "in".
+
+### Display per strip
+- **Color bar** — REAPER marker/region color, mapped through `selPaletteRgb` nearest-match (`Protocol.h:172-186`, reused as-is).
+- **Upper row** (7 chars) — name truncated.
+- **Lower row** (7 chars) — `R03` / `M07` index or `MM:SS` timecode (mode toggle deferred to Phase 2.8b).
+- **Top-soft-key LED** — same color as the bar for unambiguous strip↔item visual mapping.
+- **Channel Number zone** — marker/region index.
+
+### Interaction
+- **Top-soft-key press** → jump (`GoToRegion` / `SetEditCurPos`). Only press-action in v1.
+- **Channel encoder** → page through 8-windows; push = "back" from Markers-in-Region to Regions view.
+- **Quick1** → Back / Regions view.
+- **Quick2** → Auto-Follow on/off toggle.
+- **Quick3** → Markers-all view (escape region filter).
+
+### Auto-Follow
+When on: during transport the visible 8-window slides so the marker/region under the playhead stays in view and renders its top-soft-key LED at full brightness; siblings dim. In Markers-in-Region mode the window auto-rolls into the next region when the current one ends. Off by default — toggled via Quick2.
+
+### Phase 2.8a — v1 (this design)
+
+Scope: activation builtin, three view modes, drill-down, page navigation, jump-on-press, auto-follow toggle.
+
+New files:
+- `extension/src/MarkerOverlay.{h,cpp}` — owns `View / filterRegionIdx / pageOffset / autoFollow / active`; methods `enter()`, `exit()`, `toggle()`, `onFrame(UF8Device&)`, `bool consumeTopSoftKey(int strip)`, `onChannelEncoder(int step)`.
+
+Hooks into existing code:
+- `main.cpp` builtin registry: register `marker_overlay_toggle / _back / _follow_toggle / _view_all`.
+- `Bindings.cpp` factory defaults: PAN → `marker_overlay_toggle`; Quick1/2/3 default actions overrideable from Settings.
+- `MixerLayout.cpp` strip-update pipeline: early-return when `MarkerOverlay::active()` so the overlay drives those strips instead of track-based content.
+- `Bindings.cpp` top-soft-key dispatch: route press through `MarkerOverlay::consumeTopSoftKey` before normal binding resolution.
+- Global LED refresh path (`main.cpp:10159 ff.`): include the bound-trigger button's lit state.
+
+REAPER API surface:
+- `EnumProjectMarkers3(proj, i, &isrgn, &pos, &rgnend, &name, &idx, &color)`
+- `CountProjectMarkers(proj, &nmarkers, &nregions)`
+- `SetEditCurPos(pos, want_seek=true, want_play=false)`
+- `GoToRegion(proj, regionIdx, useTimeline=true)`
+- `GetPlayPosition()` for auto-follow
+
+### Phase 2.8b — Polish & extra actions (deferred)
+
+- V-Pot rotation → fine-move selected marker (seconds / frames).
+- V-Pot push (hold) → delete marker with LED-blink confirmation.
+- SEL on strip → reposition marker to current playhead.
+- Empty slot press → `AddProjectMarker` at playhead.
+- Long-press top-soft-key on a region → set loop + play.
+- Lower-row toggle: index ↔ timecode.
+- Settings tab: dedicated overlay configuration (default mode on enter, page-size, color overrides).
+
+**Milestone complete when:** User presses PAN, the 8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, and the whole thing exits cleanly with the strips returning to their normal track-based display.
+
 ## Phase 3 — Submix Views — **DESIGN**
 
 **Goal:** A surface-level way to mix groups (busses, stems, headphone mixes) without leaving the current bank context. Phase A scoped 2026-05-15; four design questions deferred. Picks up the "fast-glance, no bank-switching" gap that Folder Mode + Show-Only-Selected only partially close for users who think in busses, not folders.
