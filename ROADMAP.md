@@ -372,6 +372,37 @@ Implementation: replace the linear `ImGui_Text(ctx, "AUTO"); ImGui_Separator(ctx
 
 **Milestone complete when:** User presses PAN, the 8 UF8 strips become a live region list colored to match REAPER's region colors, picking a region jumps the playhead AND drills into that region's markers, picking a marker jumps to its position, Quick1 navigates back, the UC1 Encoder 2 carousel mirrors the cursor in `[prev | current | next]` form with UF8's bright LED following along, push on UC1 also jumps, the whole thing exits cleanly with both surfaces returning to their normal display, and the Modes tab in Settings is split into clean sub-tabs (AUTO / FX-Cycle / Plug-in GUI / Faders / REC / NAV).
 
+## Phase 2.9 — Lanes Mode (Fixed Item Lanes) — **IDEA**
+
+**Sketch only — fleshed out alongside the Phase 2.8 build.** Captures the concept so we don't lose it; full spec lands after Nav Mode ships.
+
+Same surface-mode pattern as Nav Mode: a builtin (`lanes_mode_toggle`) takes over the 8 UF8 strips with the **8 fixed lanes of the focused track** (REAPER 7's Fixed Item Lanes feature — `I_NUMFIXEDLANES`, `C_LANEPLAYS:N`, `P_LANENAME:N`, `P_LANECOLOR:N`). Mutex with Nav Mode.
+
+Per-strip mapping mirrors REAPER's lane semantics directly:
+
+| Hardware | Action | REAPER hook |
+|---|---|---|
+| SEL | Lane plays exclusively | `C_LANEPLAYS:N = 1`, others `= 0` |
+| SOLO | Lane solo (overlay) | `C_LANEPLAYS:N = 2` |
+| MUTE | Lane off | `C_LANEPLAYS:N = 0` |
+| REC | Copy lane to comp lane | Action `Track lanes: Copy active comp lane to lane N` |
+| Top-soft-key | Hold-to-audition (release reverts) | Temporary solo pattern |
+| V-Pot rotate | Scroll items within lane | `GetTrackMediaItem` + filter `I_FIXEDLANE` |
+| V-Pot push | Zoom to lane's first item | `Main_OnCommand` zoom |
+
+Display per strip — lane name on upper row, item count + duration on lower (`3 itm 0:42`), REAPER lane colour on the bar, top-soft-key LED blinks during hold-audition. Strip 1 is fixed to the **comp lane** (always-visible "the keeper"); source lanes 1..N occupy strips 2..8 with PageLeft/Right for >7 source lanes.
+
+UC1 Encoder 2 carousel reuses the same 3-up display path as Nav Mode (`[prev lane | current | next]`); push = make playing, Shift+push = solo, long-press = copy-to-comp.
+
+Edge case: focused track with no fixed lanes shows "Enable Lanes →" on strip 1; pressing sets `I_NUMFIXEDLANES = 2` (one comp + one source).
+
+Settings → Modes gets a **LANES** sub-tab parallel to NAV (drops into the same 2.8c tabbar refactor). Default trigger button: TBD on build day (Layer3 is a likely candidate; PAN is taken by Nav).
+
+Open questions (resolve when Phase 2.9 is actually scheduled):
+- Should the fader drive lane-level item volume, or stay on track-volume?
+- Razor-edit / copy-to-comp as a single-press gesture vs separate REC press?
+- Multi-track-lane overview as a Phase-2.9b variant (each strip = one track's currently-active lane) — interesting but loses the per-strip lane controls.
+
 ## Phase 3 — Submix Views — **DESIGN**
 
 **Goal:** A surface-level way to mix groups (busses, stems, headphone mixes) without leaving the current bank context. Phase A scoped 2026-05-15; four design questions deferred. Picks up the "fast-glance, no bank-switching" gap that Folder Mode + Show-Only-Selected only partially close for users who think in busses, not folders.
