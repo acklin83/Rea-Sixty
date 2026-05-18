@@ -8544,6 +8544,17 @@ void chaseLastTouchedFx()
     // last landed) would otherwise leave UC1 painting the wrong track's
     // BC values. CS still gates on the opt-in setting because CS edits
     // already drive REAPER selection through SetOnlyTrackSelected.
+    // Parameter Groups: when a broadcast just fanned a write to N member
+    // tracks, REAPER's GetLastTouchedFX may transiently report one of
+    // those members instead of the leader. Without this gate, chase
+    // would yank UC1's BC anchor / focused track between leader and
+    // members on every detent the user turns. The cooldown holds UC1
+    // focus still while broadcast member writes drain through REAPER's
+    // last-touched tracking. 250 ms covers continuous V-Pot rotation
+    // (timer fires ~30 ms) and a typical mouse-drag session — focus
+    // resumes following last-touched once the user stops editing.
+    if (uf8::param_groups::millisSinceLastBroadcast() < 250) return;
+
     const bool isSelected = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
     if (map->domain == uf8::Domain::BusComp) {
         if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);

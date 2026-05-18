@@ -111,6 +111,12 @@ void broadcastTrackBool(MediaTrack* leader,
 // through REAPER's param-change callback.
 bool inBroadcast();
 
+// Wall-clock milliseconds since a broadcast finished writing members.
+// chaseLastTouchedFx uses this to suppress UC1 focus jumps while
+// broadcast member writes are still propagating through REAPER's
+// last-touched tracking. Returns INT64_MAX when no broadcast has run.
+int64_t millisSinceLastBroadcast();
+
 // Persistence (JSON sidecar). Safe to call multiple times.
 void load();
 void save();

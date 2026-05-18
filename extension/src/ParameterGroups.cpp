@@ -10,9 +10,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <sys/stat.h>
@@ -42,11 +44,25 @@ constexpr const char* kPExtKey = "P_EXT:reasixty:pg_mask";
 // CSURF_EXT_SETFXPARAM hook reads this via inBroadcast() and skips
 // re-entry — our own member writes round-trip through Extended and
 // would otherwise trigger another broadcast layer per write.
-std::atomic<int> g_broadcastDepth{0};
+std::atomic<int>     g_broadcastDepth{0};
+// Wall-clock ms of the most recent broadcast end. chaseLastTouchedFx
+// uses this to suppress UC1 focus jumps while member writes are still
+// updating REAPER's GetLastTouchedFX state. INT64_MIN = "never ran".
+std::atomic<int64_t> g_lastBroadcastEndMs{(std::numeric_limits<int64_t>::min)()};
+
+int64_t nowMs_()
+{
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        clock::now().time_since_epoch()).count();
+}
 
 struct ScopedSuppress {
     ScopedSuppress()  { g_broadcastDepth.fetch_add(1, std::memory_order_acq_rel); }
-    ~ScopedSuppress() { g_broadcastDepth.fetch_sub(1, std::memory_order_acq_rel); }
+    ~ScopedSuppress() {
+        g_broadcastDepth.fetch_sub(1, std::memory_order_acq_rel);
+        g_lastBroadcastEndMs.store(nowMs_(), std::memory_order_release);
+    }
     ScopedSuppress(const ScopedSuppress&)            = delete;
     ScopedSuppress& operator=(const ScopedSuppress&) = delete;
 };
@@ -368,6 +384,16 @@ void broadcastTrackBool(MediaTrack* leader,
 bool inBroadcast()
 {
     return g_broadcastDepth.load(std::memory_order_acquire) > 0;
+}
+
+int64_t millisSinceLastBroadcast()
+{
+    const int64_t end = g_lastBroadcastEndMs.load(std::memory_order_acquire);
+    if (end == (std::numeric_limits<int64_t>::min)()) {
+        return (std::numeric_limits<int64_t>::max)();
+    }
+    const int64_t dt = nowMs_() - end;
+    return dt < 0 ? 0 : dt;
 }
 
 // ---- Persistence ----------------------------------------------------------
