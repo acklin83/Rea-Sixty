@@ -248,10 +248,20 @@ Filter relation derived geometrically (`marker.pos ∈ [region.start, region.end
 
 ### Interaction
 - **Top-soft-key press** → jump (`GoToRegion` / `SetEditCurPos`). Only press-action in v1.
-- **Channel encoder** → page through 8-windows; push = "back" from Markers-in-Region to Regions view.
+- **PageLeft / PageRight** (hardware) → page through 8-windows when item count >8. Native semantics — those buttons already mean "page" on the UF8.
+- **Channel encoder** rotate → same paging, redundant input path; push = "back" from Markers-in-Region to Regions view.
 - **Quick1** → Back / Regions view.
 - **Quick2** → Auto-Follow on/off toggle.
 - **Quick3** → Markers-all view (escape region filter).
+
+### Pagination indicator (no slot loss)
+
+When the current view has more than 8 items the lower row of strip 1 and strip 8 surfaces page context — the 7-char lower row is wide enough and the actual marker name on the upper row is unaffected:
+
+- **Strip 1 lower row** → `‹2/4` (page 2 of 4, ‹ glyph hints at prior page).
+- **Strip 8 lower row** → `M17+›` (next page starts at marker 17, › glyph hints at next).
+- When `pageOffset == 0`: drop the ‹ on strip 1. When on last page: drop the › on strip 8. So the affordance only renders when the direction is actually available.
+- All 8 strips keep their content marker — no slot is consumed for navigation chrome.
 
 ### Auto-Follow
 When on: during transport the visible 8-window slides so the marker/region under the playhead stays in view and renders its top-soft-key LED at full brightness; siblings dim. In Markers-in-Region mode the window auto-rolls into the next region when the current one ends. Off by default — toggled via Quick2.
@@ -264,8 +274,8 @@ New files:
 - `extension/src/MarkerOverlay.{h,cpp}` — owns `View / filterRegionIdx / pageOffset / autoFollow / active`; methods `enter()`, `exit()`, `toggle()`, `onFrame(UF8Device&)`, `bool consumeTopSoftKey(int strip)`, `onChannelEncoder(int step)`.
 
 Hooks into existing code:
-- `main.cpp` builtin registry: register `marker_overlay_toggle / _back / _follow_toggle / _view_all`.
-- `Bindings.cpp` factory defaults: PAN → `marker_overlay_toggle`; Quick1/2/3 default actions overrideable from Settings.
+- `main.cpp` builtin registry: register `marker_overlay_toggle / _back / _follow_toggle / _view_all / _page_prev / _page_next`.
+- `Bindings.cpp` factory defaults: PAN → `marker_overlay_toggle`; PageLeft/PageRight → page builtins while overlay is active (overlay's binding-layer intercepts before the normal track-bank handler); Quick1/2/3 default actions overrideable from Settings.
 - `MixerLayout.cpp` strip-update pipeline: early-return when `MarkerOverlay::active()` so the overlay drives those strips instead of track-based content.
 - `Bindings.cpp` top-soft-key dispatch: route press through `MarkerOverlay::consumeTopSoftKey` before normal binding resolution.
 - Global LED refresh path (`main.cpp:10159 ff.`): include the bound-trigger button's lit state.
