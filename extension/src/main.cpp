@@ -3728,6 +3728,12 @@ void drainInputQueue()
             if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
             const auto& it = items[idx];
             if (it.isRegion) {
+                // GoToRegion + GoToMarker are REAPER's marker-nav
+                // primitives — they honour the project's smooth-seek
+                // setting (Preferences → Audio → Smooth seek), so
+                // jumps during playback align to the end of the
+                // current bar / beat / loop instead of cutting the
+                // playhead mid-phrase. SetEditCurPos would bypass that.
                 GoToRegion(nullptr, it.idx, true);
                 // Drill is gated by the view lock: RegionsOnly users
                 // want region jumps to be terminal (no transition to
@@ -3737,7 +3743,7 @@ void drainInputQueue()
                     ov.drillIntoRegion(idx);
                 }
             } else {
-                SetEditCurPos(it.pos, true, false);
+                GoToMarker(nullptr, it.idx, true);
             }
             g_navOverlayDirty.store(true);
             if (g_sync) g_sync->invalidate();
@@ -5922,7 +5928,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             //   ChannelPush (0x76) → "back" — leave MarkersInRegion for
             //     Regions; also acts as escape from Markers-all view.
             //   Quick1 (0x43)    → same as ChannelPush: Back
-            //   Quick3 (0x45)    → switch to MarkersAll view
+            //   Quick2 (0x44)    → switch to MarkersAll view (escape
+            //     region filter while in drill mode — no-op under
+            //     either view lock)
             //
             // Auto-Follow is a persistent Settings toggle (Frank 2026-05-19),
             // not a Quick key — it survives across REAPER sessions and
@@ -5963,7 +5971,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
-                } else if (id == 0x45) {
+                } else if (id == 0x44) {
                     // MarkersAll escape is also lock-gated: under
                     // RegionsOnly the lock forbids it; under MarkersOnly
                     // we're already there.
