@@ -21,6 +21,13 @@
 // change originating on the UC1 side (Phase 2.8b).
 extern "C" void reasixty_markNavOverlayDirty();
 
+// Diag (Frank 2026-05-19): mirror of main.cpp's diagSetParamLog_ so
+// UC1 V-Pot writes get the same four-outcome log line as UF8 SSL
+// Strip Mode fader writes.
+extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
+                             int param, double n, bool setRet,
+                             double after);
+
 // Phase 2.8c — user prefs read from this TU on the input thread. All
 // return atomic-loaded values; C-linkage to keep the symbols stable.
 extern "C" int  reasixty_navUc1Takeover();
@@ -1206,7 +1213,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                                      /*zone*/0.015, 0.0, 1.0)
             : std::clamp(cur + delta, 0.0, 1.0);
     }
-    TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
+    const bool uc1SetOk = TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
+    const double uc1After = TrackFX_GetParamNormalized(tr, fxIdx, vst3Param);
+    diagSetParamLog_("uc1/knob", tr, fxIdx, vst3Param, next, uc1SetOk, uc1After);
     reasixty_bumpFolderReveal(tr);
     // Touched-FX reveal (3 s) — the strip + UC1 LCD show whatever
     // plug-in this knob just wrote to, regardless of the active mode

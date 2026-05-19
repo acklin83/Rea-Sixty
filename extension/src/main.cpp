@@ -108,6 +108,16 @@ void* macosFindFxChainWindow(const char* trackName);
 } // namespace uf8
 #endif
 
+// Forward decls of the diag helpers defined after the anonymous
+// namespace closes. Declared at namespace scope so the call sites
+// inside the anon namespace below can find them. External linkage
+// is intentional -- UC1Surface (separate TU) also calls these.
+void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
+                        bool flip, int csFx, int csParam,
+                        MediaTrack* tr);
+void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
+                      int param, double n, bool setRet, double after);
+
 namespace {
 
 std::unique_ptr<uf8::UF8Device>   g_dev;
@@ -3882,40 +3892,9 @@ void queueInput(PendingInput e)
     g_inQueue.push_back(e);
 }
 
-// Diagnostic helper writing to %TEMP%\rea_sixty_setparam.log -- mirror
-// of crumb_/initLog's tmpdir resolution.
-FILE* openDiagLog_()
-{
-#ifdef _WIN32
-    char tmp[260] = {0};
-    char path[260] = {0};
-    if (GetTempPathA(260, tmp)) {
-        snprintf(path, sizeof(path), "%srea_sixty_setparam.log", tmp);
-    } else {
-        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
-    }
-    return std::fopen(path, "a");
-#else
-    return std::fopen("/tmp/rea_sixty_setparam.log", "a");
-#endif
-}
-
-// Unconditional snapshot of the flags that decide which fader-write
-// branch fires. Fires before any branch logic so we can see WHY the
-// SSL Strip Mode write didn't happen when Frank thinks it should.
-void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
-                        bool flip, int csFx, int csParam,
-                        MediaTrack* tr)
-{
-    FILE* f = openDiagLog_();
-    if (!f) return;
-    std::fprintf(f,
-        "FADER state strip=%d  stripMode=%d  pluginMode=%d  flip=%d  "
-        "csFx=%d  csParam=%d  tr=%p\n",
-        strip, stripMode ? 1 : 0, pluginMode ? 1 : 0, flip ? 1 : 0,
-        csFx, csParam, static_cast<void*>(tr));
-    std::fclose(f);
-}
+// Forward decls: diag helpers live OUTSIDE this anonymous namespace
+// (after the closing `} // anonymous`) so UC1Surface.cpp can call
+// them via extern. Defined just below the namespace close.
 
 // Diagnostic: log every TrackFX_SetParamNormalized we call from the
 // hot fader / V-Pot / UC1 writeback paths to %TEMP%\rea_sixty_setparam.log
@@ -3925,17 +3904,7 @@ void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
 // matrix at the call site discriminates between (a) bad (fx, param)
 // tuple, (b) plugin stalling the write, (c) stale plugin GUI on
 // Frank's side.
-void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
-                      int param, double n, bool setRet, double after)
-{
-    FILE* f = openDiagLog_();
-    if (!f) return;
-    std::fprintf(f,
-        "%s  tr=%p  fx=%d  param=%d  n=%.4f  setRet=%d  getAfter=%.4f  diff=%+.4f\n",
-        site, static_cast<void*>(tr), fx, param, n,
-        setRet ? 1 : 0, after, after - n);
-    std::fclose(f);
-}
+// (diagSetParamLog_ defined below, outside this anonymous namespace.)
 
 void drainInputQueue()
 {
@@ -4558,6 +4527,17 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::PanDelta: {
+                // Diag (Frank 2026-05-19): V-Pot state snapshot, same
+                // pattern as the FADER state line above.
+                {
+                    const auto cs0 = csFaderForTrack(tr);
+                    diagFaderStateLog_(static_cast<int>(e.strip) | 0x100,
+                        g_pluginFaderMode.load(),
+                        g_uf8PluginMode.load(),
+                        g_flip.load(),
+                        cs0.fxIndex, cs0.vst3Param,
+                        tr);
+                }
                 // Folder Mode reveal: any V-Pot rotation on a parent strip
                 // briefly shows the real value before snapping back to
                 // "Folder". Set unconditionally — the value-line resolver
@@ -4752,7 +4732,12 @@ void drainInputQueue()
                     double next = cur + delta;
                     if (next < 0.0) next = 0.0;
                     if (next > 1.0) next = 1.0;
-                    TrackFX_SetParamNormalized(tr, mm.fxIndex, sl.vst3Param, next);
+                    const bool slOk = TrackFX_SetParamNormalized(
+                        tr, mm.fxIndex, sl.vst3Param, next);
+                    const double slAfter = TrackFX_GetParamNormalized(
+                        tr, mm.fxIndex, sl.vst3Param);
+                    diagSetParamLog_("uf8/vpot/cs_slot",
+                        tr, mm.fxIndex, sl.vst3Param, next, slOk, slAfter);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focused.domain, focused.slotIdx, next);
                 } else if (g_pluginFaderMode.load() && !forcePan) {
@@ -12405,6 +12390,52 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
 }
 
 } // anonymous
+
+// --- Diagnostic helpers with external linkage so UC1Surface (separate
+//     TU) can log into the same %TEMP%\rea_sixty_setparam.log as the
+//     UF8 hot paths. Frank 2026-05-19 fader/V-Pot regression hunt.
+
+FILE* openDiagLog_()
+{
+#ifdef _WIN32
+    char tmp[260] = {0};
+    char path[260] = {0};
+    if (GetTempPathA(260, tmp)) {
+        snprintf(path, sizeof(path), "%srea_sixty_setparam.log", tmp);
+    } else {
+        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
+    }
+    return std::fopen(path, "a");
+#else
+    return std::fopen("/tmp/rea_sixty_setparam.log", "a");
+#endif
+}
+
+void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
+                        bool flip, int csFx, int csParam,
+                        MediaTrack* tr)
+{
+    FILE* f = openDiagLog_();
+    if (!f) return;
+    std::fprintf(f,
+        "FADER state strip=%d  stripMode=%d  pluginMode=%d  flip=%d  "
+        "csFx=%d  csParam=%d  tr=%p\n",
+        strip, stripMode ? 1 : 0, pluginMode ? 1 : 0, flip ? 1 : 0,
+        csFx, csParam, static_cast<void*>(tr));
+    std::fclose(f);
+}
+
+void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
+                      int param, double n, bool setRet, double after)
+{
+    FILE* f = openDiagLog_();
+    if (!f) return;
+    std::fprintf(f,
+        "%s  tr=%p  fx=%d  param=%d  n=%.4f  setRet=%d  getAfter=%.4f  diff=%+.4f\n",
+        site, static_cast<void*>(tr), fx, param, n,
+        setRet ? 1 : 0, after, after - n);
+    std::fclose(f);
+}
 
 // External hook so UC1Surface (different TU) can trigger the same
 // MCP-scroll + UF8-rebank behaviour that the UF8 select/encoder paths
