@@ -28,6 +28,12 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
                              int param, double n, bool setRet,
                              double after);
 
+// Platform-normalised track-colour reader (defined in main.cpp).
+// GetTrackColor returns 0xBBGGRR on Windows, 0xRRGGBB on macOS/Linux.
+// This helper swaps R<->B on Windows so callers see a uniform
+// 0xRRGGBB encoding.
+extern uint32_t trackColorRgb(MediaTrack* tr);
+
 // Phase 2.8c — user prefs read from this TU on the input thread. All
 // return atomic-loaded values; C-linkage to keep the symbols stable.
 extern "C" int  reasixty_navUc1Takeover();
@@ -3535,7 +3541,7 @@ void UC1Surface::refresh()
         uint8_t palette = 0x00;
         if (focusedTrack_) {
             MediaTrack* t = static_cast<MediaTrack*>(focusedTrack_);
-            const uint32_t rgb = static_cast<uint32_t>(GetTrackColor(t)) & 0x00FFFFFFu;
+            const uint32_t rgb = trackColorRgb(t);
             palette = (rgb == 0) ? 0x00 : uf8::quantize(rgb);
         }
         device_->send(buildFocusedColour(palette));

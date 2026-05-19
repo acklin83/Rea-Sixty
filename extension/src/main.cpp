@@ -118,6 +118,11 @@ void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
 void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
                       int param, double n, bool setRet, double after);
 
+// Defined after the anonymous namespace closes. Early call sites
+// (line ~5532) need this forward decl visible.
+uint32_t trackColorRgb(MediaTrack* tr);
+
+
 namespace {
 
 std::unique_ptr<uf8::UF8Device>   g_dev;
@@ -5529,8 +5534,7 @@ uf8::LedColour ledColourFor(LedClass cls, MediaTrack* tr)
         if (!g_selFollowsColor.load()) {
             return uf8::ledColourWhite();
         }
-        const uint32_t rgb = static_cast<uint32_t>(GetTrackColor(tr)) & 0x00FFFFFFu;
-        return uf8::ledColourForTrackRgb(rgb);
+        return uf8::ledColourForTrackRgb(trackColorRgb(tr));
     }
     switch (cls) {
         case LedClass::Solo: return uf8::ledColourYellow();
@@ -6801,8 +6805,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
             MediaTrack* other = static_cast<MediaTrack*>(GetSetTrackSendInfo(
                 r.track, r.sendCategory, r.sendIndex, tag, nullptr));
             if (other && ValidatePtr2(nullptr, other, "MediaTrack*")) {
-                const int oc = GetTrackColor(other);
-                return static_cast<uint32_t>(oc) & 0x00FFFFFFu;
+                return trackColorRgb(other);
             }
             // Hardware-output sends (no destination track): fall through to
             // bank-track colour so the strip stays coloured rather than
@@ -6813,12 +6816,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
     if (realSlot < 0 || realSlot >= trackCount) return 0;
     MediaTrack* tr = visibleTrackAt(realSlot);
     if (!tr) return 0;
-    // REAPER returns native color as int. Bit 0x1000000 is "color set";
-    // low 24 bits are 0xBBGGRR on Windows, 0xRRGGBB on mac/Linux via the
-    // "native" encoding. GetTrackColor wraps that — low 24 bits are what
-    // we want, matching quantize()'s 0xRRGGBB expectation.
-    const int c = GetTrackColor(tr);
-    return static_cast<uint32_t>(c) & 0x00FFFFFFu;
+    return trackColorRgb(tr);
 }
 
 // If the track hosts an SSL 360°-enabled plug-in, return the short label
@@ -12393,6 +12391,26 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
 }
 
 } // anonymous
+
+// Normalised track-colour reader (external linkage so UC1Surface can
+// use it too). REAPER's GetTrackColor returns the platform-native
+// COLORREF: 0x00BBGGRR on Windows (raw GDI macro), 0x00RRGGBB on
+// macOS / Linux (SWELL's RGB ordering). We use the 0xRRGGBB form
+// throughout the codebase (palette quantisation, LED emission,
+// hardware bytes are R, G, B in protocol order). Centralise the swap
+// here so every caller sees the same encoding regardless of platform.
+uint32_t trackColorRgb(MediaTrack* tr)
+{
+    if (!tr) return 0;
+    const uint32_t c = static_cast<uint32_t>(GetTrackColor(tr)) & 0x00FFFFFFu;
+#ifdef _WIN32
+    return ((c & 0x0000FFu) << 16)
+         | ( c & 0x00FF00u)
+         | ((c & 0xFF0000u) >> 16);
+#else
+    return c;
+#endif
+}
 
 // --- Diagnostic helpers with external linkage so UC1Surface (separate
 //     TU) can log into the same %TEMP%\rea_sixty_setparam.log as the
