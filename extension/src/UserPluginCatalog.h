@@ -260,6 +260,9 @@ bool exportToFile(const std::string& path, std::string* errOut);
 // non-null) carries a short reason.
 bool importFromFile(const std::string& path, std::string* errOut);
 
+// Absolute path where user_plugins.json is persisted.
+std::string configPath();
+
 // Read-only access to the in-memory catalog. Pointers are stable until
 // the next mutating call.
 const UserPluginCatalog& get();

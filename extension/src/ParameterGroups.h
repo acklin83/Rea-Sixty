@@ -136,5 +136,9 @@ int64_t millisSinceLastBroadcast();
 void load();
 void save();
 
+// Absolute path where parameter_groups.json is persisted. Exposed
+// for the setup-bundle module's direct file I/O.
+std::string configPath();
+
 } // namespace param_groups
 } // namespace uf8

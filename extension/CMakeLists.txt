@@ -98,6 +98,8 @@ add_library(reaper_uf8 MODULE
     src/ParameterGroups.cpp
     # Phase 2.8 — Nav Mode (Markers & Regions) overlay
     src/MarkerOverlay.cpp
+    # Setup bundle (save/restore of the whole configuration)
+    src/SetupBundle.cpp
 )
 
 if(APPLE)

@@ -180,6 +180,8 @@ void               reasixty_setSoftKeyBank(int bank);
 bool reasixty_exportLayerViaDialog(int layer);
 std::string reasixty_fxLearnExportViaDialog(std::string* errOut);
 bool reasixty_fxLearnImportViaDialog(std::string* errOut);
+std::string reasixty_setupExportViaDialog(std::string* errOut);
+bool reasixty_setupImportViaDialog(std::string* errOut);
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
@@ -8581,6 +8583,48 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     if (ImGui_Button(ctx, "Open repository in browser",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {
         reasixty_openUrl(kRepoUrl);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Setup");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "  Export bundles bindings, plug-in maps, parameter-group");
+    ImGui_Text(ctx,
+        "  slot names and every Settings preference into one file.");
+    ImGui_Text(ctx,
+        "  Selection Sets + Parameter Group track membership stay");
+    ImGui_Text(ctx,
+        "  per-project and travel with the .RPP.");
+    ImGui_Spacing(ctx);
+    static std::string s_setupMsg;
+    if (ImGui_Button(ctx, "Export setup…##setup_export",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr))
+    {
+        std::string err;
+        const std::string chosen = reasixty_setupExportViaDialog(&err);
+        if (chosen.empty()) {
+            s_setupMsg = err.empty() ? "" : "Export failed: " + err;
+        } else {
+            s_setupMsg = "Exported to " + chosen;
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Import setup…##setup_import",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr))
+    {
+        std::string err;
+        if (reasixty_setupImportViaDialog(&err)) {
+            s_setupMsg = err.empty()
+                ? "Setup imported."
+                : ("Setup imported (warning: " + err + ")");
+        } else if (!err.empty()) {
+            s_setupMsg = "Import failed: " + err;
+        }
+    }
+    if (!s_setupMsg.empty()) {
+        ImGui_Text(ctx, s_setupMsg.c_str());
     }
 
     ImGui_Spacing(ctx);

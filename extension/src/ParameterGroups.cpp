@@ -419,6 +419,8 @@ int64_t millisSinceLastBroadcast()
 
 // ---- Persistence ----------------------------------------------------------
 
+std::string configPath() { return configPath_(); }
+
 void load()
 {
     std::lock_guard<std::mutex> lk(g_mutex);

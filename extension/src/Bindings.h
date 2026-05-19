@@ -415,6 +415,11 @@ void save();
 bool exportTo(const std::string& path);
 bool importFrom(const std::string& path);
 
+// Absolute path where bindings.json is persisted (<REAPER>/rea_sixty/...).
+// Exposed so the setup-bundle module can read/write the file directly
+// without needing its own copy of the configDir_ helper.
+std::string configPath();
+
 // Modifier state — set by main.cpp's mod_shift / mod_cmd / mod_ctrl
 // builtin handlers when their button is pressed/released. Read by
 // dispatch() at press-edge to snapshot the current modifier into the

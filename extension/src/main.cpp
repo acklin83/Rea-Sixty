@@ -63,6 +63,7 @@
 #include "PluginChunkPatch.h"
 #include "PluginMap.h"
 #include "Protocol.h"
+#include "SetupBundle.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
 #include "UC1Surface.h"
@@ -12674,6 +12675,21 @@ extern "C" void reasixty_markNavOverlayDirty()
     if (g_sync) g_sync->invalidate();
 }
 
+// Re-read every Settings ExtState key into the runtime atomics +
+// re-push device brightness. Internal helper exposed so the setup-
+// bundle import path can apply persisted preferences without a full
+// REAPER restart. Defined as 'C' so the symbol resolves cleanly from
+// SetupBundle.cpp without dragging in a header for the anonymous
+// namespace loadBrightness() helper.
+extern "C" void reasixty_reloadGlobalExtState()
+{
+    loadBrightness();
+    applyBrightness();
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+
 // Phase 2.8c — Nav default-view + region-press settings accessors.
 int  reasixty_navDefaultView()         { return g_navDefaultView.load(); }
 void reasixty_setNavDefaultView(int v)
@@ -13498,6 +13514,53 @@ bool reasixty_exportLayerViaDialog(int layer)
     const bool ok = uf8::bindings::exportLayerTo(layer, chosen);
     if (lg) { std::fprintf(lg, "[exportLayer] exportLayerTo => %s\n", ok ? "true" : "false"); std::fclose(lg); }
     return ok;
+}
+
+// Whole-setup bundle — Save dialog wrapper. Returns the chosen path
+// on success, "" on cancel / error.
+std::string reasixty_setupExportViaDialog(std::string* errOut)
+{
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosSaveDialog("Export Rea-Sixty Setup",
+                                  "rea-sixty-setup.rea60config",
+                                  "rea60config");
+#else
+    auto* browse = loadBrowseForSaveFile_();
+    if (!browse) {
+        if (errOut) *errOut = "save dialog unavailable";
+        return "";
+    }
+    char fn[4096] = {0};
+    if (!browse("Export Rea-Sixty Setup", nullptr,
+                "rea-sixty-setup.rea60config",
+                "Rea-Sixty setup (*.rea60config)\0*.rea60config\0\0",
+                fn, sizeof(fn))) {
+        return "";
+    }
+    chosen = fn;
+#endif
+    if (chosen.empty()) return "";
+    if (!uf8::setup_bundle::exportToFile(chosen, errOut)) return "";
+    return chosen;
+}
+
+bool reasixty_setupImportViaDialog(std::string* errOut)
+{
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosOpenDialog("Import Rea-Sixty Setup", "rea60config");
+#else
+    char buf[4096] = {0};
+    if (!GetUserFileNameForRead(buf, "Import Rea-Sixty Setup",
+                                "rea60config"))
+    {
+        return false;
+    }
+    chosen = buf;
+#endif
+    if (chosen.empty()) return false;
+    return uf8::setup_bundle::importFromFile(chosen, errOut);
 }
 
 // FX Learn user_plugins.json — export to user-chosen path. Returns

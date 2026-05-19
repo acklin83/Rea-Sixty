@@ -870,6 +870,8 @@ bool collidesWithBuiltin_(std::string_view match)
     return false;
 }
 
+std::string configPath() { return configPath_(); }
+
 bool exportToFile(const std::string& path, std::string* errOut)
 {
     std::lock_guard<std::mutex> lk(g_mutex);

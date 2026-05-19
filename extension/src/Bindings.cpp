@@ -2137,6 +2137,8 @@ bool exportTo(const std::string& path)
     return writeFile_(path, serialize(g_cfg));
 }
 
+std::string configPath() { return configPath_(); }
+
 bool importFrom(const std::string& path)
 {
     std::string contents;
