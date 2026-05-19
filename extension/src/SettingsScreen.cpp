@@ -108,6 +108,8 @@ void reasixty_setRecVpotRotateGain(bool on);
 void reasixty_setRecVpotShiftInputCh(bool on);
 bool reasixty_altDragSnapBack();
 void reasixty_setAltDragSnapBack(bool on);
+bool reasixty_navAutoFollow();
+void reasixty_setNavAutoFollow(bool follow);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -7901,6 +7903,26 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         pickerCombo("Solo button##rec_rme",
                     reasixty_recSolo(),      reasixty_setRecSolo);
     }
+
+    // Phase 2.8 Nav Mode — minimal v1 settings. Phase 2.8c lifts this
+    // into a dedicated NAV sub-tab with view defaults, region-press
+    // behaviour, and UC1 Encoder 2 carousel scope.
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "NAV (Markers & Regions)");
+    ImGui_Separator(ctx);
+    bool autoFollow = reasixty_navAutoFollow();
+    if (ImGui_Checkbox(ctx,
+                       "Auto-Follow playhead / edit cursor",
+                       &autoFollow))
+    {
+        reasixty_setNavAutoFollow(autoFollow);
+    }
+    ImGui_Text(ctx,
+        "  While Nav Mode is active, the cursor strip tracks whichever "
+        "marker / region the playhead is on (or the edit cursor when "
+        "stopped). In Markers-in-Region view, the overlay auto-rolls "
+        "into the next region when the playhead crosses out.");
 }
 
 // ---- Selection Sets -------------------------------------------------------

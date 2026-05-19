@@ -1542,6 +1542,13 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "auto_fill_from_right"); v && *v) {
         g_autoFillFromRight.store(std::atoi(v) != 0);
     }
+    // Phase 2.8 Nav Mode — default ON. Frank wants the cursor to
+    // follow the playhead / edit cursor without explicit opt-in.
+    {
+        const char* v = GetExtState("rea_sixty", "nav_auto_follow");
+        const bool follow = (v && *v) ? (std::atoi(v) != 0) : true;
+        uf8::nav::Overlay::instance().setAutoFollow(follow);
+    }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
     }
@@ -5909,9 +5916,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             //   ChannelPush (0x76) → "back" — leave MarkersInRegion for
             //     Regions; also acts as escape from Markers-all view.
             //   Quick1 (0x43)    → same as ChannelPush: Back
-            //   Quick2 (0x44)    → autoFollow toggle (visible effect
-            //     lands in Phase 2.8a step 6)
             //   Quick3 (0x45)    → switch to MarkersAll view
+            //
+            // Auto-Follow is a persistent Settings toggle (Frank 2026-05-19),
+            // not a Quick key — it survives across REAPER sessions and
+            // lives in Settings → Modes. Quick2 stays at its normal
+            // binding while overlay active.
             //
             // Releases are swallowed so the underlying bindings (e.g.
             // factory page_left LED feedback) don't fire mid-overlay.
@@ -5941,12 +5951,6 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             g_navOverlayDirty.store(true);
                             if (g_sync) g_sync->invalidate();
                         }
-                    }
-                    handledOv = true;
-                } else if (id == 0x44) {
-                    if (pressed) {
-                        ov.setAutoFollow(!ov.autoFollow());
-                        g_navOverlayDirty.store(true);
                     }
                     handledOv = true;
                 } else if (id == 0x45) {
@@ -6777,23 +6781,43 @@ uint32_t navColorForStrip(int slot)
     return raw & 0x00FFFFFFu;
 }
 
-void pushNavOverlayZones()
+// Phase 2.8 Nav Mode — overlay decorations. When the overlay is active,
+// it leaves track-derived zones (track name on the upper row, V-Pot
+// param value on the lower row, fader / fader-db readout, SOLO / CUT /
+// SEL LEDs) UNCHANGED so the user can still glance at the strip and
+// see what the underlying track is doing. The overlay only injects
+// marker/region info into three zones:
+//
+//   - Slot label (per-strip ~12 char zone above the strip) — marker
+//     or region name. This is the "Soft-Key label" Frank pointed at.
+//   - Channel Number zone (top-left digit on the colour bar) — marker
+//     or region index.
+//   - Top-soft-key LED — coloured to match the colour bar.
+//
+// The colour-bar itself is hijacked via the navColorForStrip callback
+// passed to ColorSync (see onTimer).
+//
+// pushZonesForVisibleSlots SKIPs its own writes to those three zones
+// while overlay-active so the dedup caches don't ping-pong between the
+// track value and the overlay value.
+void pushNavOverlayDecorations()
 {
     if (!g_dev || !g_dev->isOpen()) return;
 
     auto& ov = uf8::nav::Overlay::instance();
     // Refresh marker list every tick — REAPER markers can be edited
     // (renamed, recoloured, repositioned) while overlay is active and
-    // we want those edits to reflect immediately. Enumeration is cheap
-    // (single linear pass) and bounded by project marker count.
+    // we want those edits to reflect immediately.
     ov.enumerate();
 
-    // Auto-Follow: slide cursor + page with the playhead. May trigger
-    // a region auto-roll (MarkersInRegion → next region's MarkersInRegion)
-    // when the playhead crosses out of the current region. Returns true
-    // on any state change so the surface picks the update up this tick.
+    // Auto-Follow: cursor + page slide with the playhead (or edit
+    // cursor when stopped — REAPER's GetPlayPosition stays put while
+    // transport is idle, so the user's click-in-timeline wouldn't
+    // otherwise move the overlay cursor).
     if (ov.autoFollow()) {
-        if (ov.tickAutoFollow(GetPlayPosition())) {
+        const int ps = GetPlayState();
+        const double pos = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
+        if (ov.tickAutoFollow(pos)) {
             g_navOverlayDirty.store(true);
             if (g_sync) g_sync->invalidate();
         }
@@ -6801,89 +6825,36 @@ void pushNavOverlayZones()
 
     const bool dirty = g_navOverlayDirty.exchange(false);
     if (dirty) {
-        // Force-repaint by invalidating the per-strip dedup caches.
-        g_lastTrackName.fill({});
-        g_lastChanNum.fill({});
-        g_lastValueLine.fill({});
+        // Invalidate the three caches the overlay owns so a forced
+        // re-push goes through this tick.
         g_lastSlotLabel.fill({});
-        g_lastCsType.fill({});
-        g_lastFaderDb.fill({});
+        g_lastChanNum.fill({});
         g_lastTopSoftKey.fill(-1);
-        g_lastCutLed.fill(-1);
-        g_lastSoloLed.fill(-1);
-        g_lastSelLed.fill(-1);
     }
 
     uf8::nav::Item const* win[8] = {};
     int n = 0;
     ov.window(win, n);
 
-    const int items     = static_cast<int>(ov.items().size());
-    const int pageCount = ov.pageCount();
-    const int pageNow   = ov.pageOffset() + 1;
-    const bool hasPrev  = ov.pageOffset() > 0;
-    const bool hasNext  = ov.pageOffset() + 1 < pageCount;
-    const bool paginate = items > 8;
-
     for (int s = 0; s < 8; ++s) {
         const uf8::nav::Item* it = win[s];
 
-        // Upper row — name truncated to 7 chars. Empty slot blanks the
-        // zone (firmware retains last text, so we space-pad to overwrite).
-        std::string upper;
+        // Slot label — marker / region name. Empty slot blanks the zone
+        // (space-pad so the firmware-retained previous text gets
+        // overwritten).
+        std::string label;
         if (it) {
-            upper = it->name;
-            if (upper.size() > 7) upper.resize(7);
+            label = it->name;
+            if (label.size() > 12) label.resize(12);
         } else {
-            upper = "       ";
+            label = "            ";   // 12 spaces
         }
-        if (upper != g_lastTrackName[s]) {
-            g_lastTrackName[s] = upper;
-            g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), upper));
-        }
-
-        // Lower row — either pagination hint (strip 0 / 7 when paginating)
-        // or per-item index `R03` / `M07`. Lower row is fixed 7 chars.
-        std::string lower(7, ' ');
-        if (paginate && s == 0 && hasPrev) {
-            // "‹P/N   " — single-byte glyph for '‹', then page numbers.
-            // ASCII '<' substitutes for the SSL palette '‹' since the
-            // LCD's character ROM is ASCII-only.
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "<%d/%-3d", pageNow, pageCount);
-            lower = buf;
-            if (lower.size() < 7) lower.append(7 - lower.size(), ' ');
-            if (lower.size() > 7) lower.resize(7);
-        } else if (paginate && s == 7 && hasNext) {
-            // "M17+>" — first item index of NEXT page + glyph.
-            const int nextFirst = (ov.pageOffset() + 1) * 8;
-            if (nextFirst < items) {
-                const auto& nx = ov.items()[nextFirst];
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "%c%-2d+>",
-                    nx.isRegion ? 'R' : 'M', nx.idx);
-                lower = buf;
-                if (lower.size() < 7) lower.append(7 - lower.size(), ' ');
-                if (lower.size() > 7) lower.resize(7);
-            }
-        } else if (it) {
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), "%c%-2d    ",
-                it->isRegion ? 'R' : 'M', it->idx);
-            lower = buf;
-            lower.resize(7);
-        }
-        if (lower != g_lastValueLine[s].substr(0, std::min<size_t>(7, g_lastValueLine[s].size()))) {
-            // Reuse the lower-row text path (StripTextLower) rather than
-            // the value-line zone — Nav overlay doesn't need the wider
-            // value-line, and the lower-row glyphs render larger.
-            g_dev->send(uf8::buildStripTextLower(static_cast<uint8_t>(s), lower));
-            // Cache via g_lastValueLine since g_lastFaderDb already
-            // covers the readout zone and we don't want to fight it.
-            g_lastValueLine[s] = lower;
+        if (label != g_lastSlotLabel[s]) {
+            g_lastSlotLabel[s] = label;
+            g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
         }
 
-        // Channel Number zone — marker/region index. Empty when no item.
+        // Channel Number zone — marker / region index. Empty otherwise.
         std::string chan;
         if (it) {
             char buf[8];
@@ -6900,8 +6871,7 @@ void pushNavOverlayZones()
         // Top-soft-key LED — bright on the cursor strip, dim on other
         // populated strips while auto-follow is on, off on empty slots.
         // Without auto-follow every populated strip stays bright (the
-        // user-paced browsing case). Hash key folds state + colour so
-        // colour changes re-emit even when on/off state is steady.
+        // user-paced browsing case).
         const uint32_t rgb = it ? navColorForStrip(s) : 0;
         const int cursorStrip = ov.cursorIdx() - ov.pageOffset() * 8;
         const bool isCursor   = (s == cursorStrip);
@@ -6924,24 +6894,6 @@ void pushNavOverlayZones()
             sendLedFrames(uf8::buildTopSoftKeyLed(
                 static_cast<uint8_t>(s), tssk, ledClr));
         }
-
-        // SOLO / CUT / SEL — off while overlay drives the strip. These
-        // would otherwise show stale track state from before the toggle.
-        if (g_lastSoloLed[s] != 0) {
-            g_lastSoloLed[s] = 0;
-            sendLedFrames(uf8::buildLedColourPair(
-                static_cast<uint8_t>(s), uf8::LedClass::Solo, false));
-        }
-        if (g_lastCutLed[s] != 0) {
-            g_lastCutLed[s] = 0;
-            sendLedFrames(uf8::buildLedColourPair(
-                static_cast<uint8_t>(s), uf8::LedClass::Cut, false));
-        }
-        if (g_lastSelLed[s] != 0) {
-            g_lastSelLed[s] = 0;
-            sendLedFrames(uf8::buildLedColourPair(
-                static_cast<uint8_t>(s), uf8::LedClass::Sel, false));
-        }
     }
 }
 
@@ -6949,15 +6901,12 @@ void pushZonesForVisibleSlots()
 {
     if (!g_dev || !g_dev->isOpen()) return;
 
-    // Phase 2.8 Nav Mode — when the marker/region overlay is active it
-    // owns all 8 strip displays. The rest of this function (which renders
-    // track-derived content: names, fader readouts, V-Pot bars, plug-in
-    // labels, per-strip SOLO/CUT/SEL LEDs from track state) is bypassed
-    // so the overlay's content isn't immediately overwritten.
-    if (uf8::nav::Overlay::instance().active()) {
-        pushNavOverlayZones();
-        return;
-    }
+    // Phase 2.8 Nav Mode — overlay-active gates the three zones the
+    // overlay owns (slot label, channel number, top-soft-key LED). All
+    // other track-derived content (track name, V-Pot value, fader db,
+    // SOLO/CUT/SEL) still renders normally so the user keeps live
+    // track feedback while navigating markers.
+    const bool overlayActive = uf8::nav::Overlay::instance().active();
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
@@ -7599,12 +7548,15 @@ void pushZonesForVisibleSlots()
             // composites short-circuit, distinct composites push.
             const int8_t shortKey =
                 static_cast<int8_t>(((composite >> 16) ^ composite) & 0x7F);
-            if (shortKey != g_lastTopSoftKey[s]) {
+            // Nav overlay owns the top-soft-key LED + slot label
+            // zones while active; skip the track-derived writes so the
+            // dedup caches don't ping-pong against pushNavOverlayDecorations.
+            if (!overlayActive && shortKey != g_lastTopSoftKey[s]) {
                 g_lastTopSoftKey[s] = shortKey;
                 sendLedFrames(uf8::buildTopSoftKeyLed(
                     static_cast<uint8_t>(s), tssk, ledClr));
             }
-            if (label != g_lastSlotLabel[s]) {
+            if (!overlayActive && label != g_lastSlotLabel[s]) {
                 g_lastSlotLabel[s] = label;
                 g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
             }
@@ -7647,7 +7599,7 @@ void pushZonesForVisibleSlots()
                 g_lastCsType[s] = blankCs;
                 g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), blankCs));
             }
-            if (bankChanged || g_lastChanNum[s] != blankCh) {
+            if (!overlayActive && (bankChanged || g_lastChanNum[s] != blankCh)) {
                 g_lastChanNum[s] = blankCh;
                 g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), blankCh));
             }
@@ -7920,7 +7872,7 @@ void pushZonesForVisibleSlots()
                 std::snprintf(buf, sizeof(buf), "%d", realSlot + 1);
                 chan = buf;
             }
-            if (chan != g_lastChanNum[s]) {
+            if (!overlayActive && chan != g_lastChanNum[s]) {
                 g_lastChanNum[s] = chan;
                 g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
             }
@@ -10642,6 +10594,16 @@ void onTimer()
         }
     }
     pushZonesForVisibleSlots();
+    // Phase 2.8 Nav Mode — decorate three zones (slot label, channel
+    // number, top-soft-key LED) when overlay active; runs after the
+    // track-render pass so its writes win against any stale dedup
+    // baselines. Cache state for those three zones is owned by the
+    // overlay path while it's running; the next overlay-toggle exit
+    // sets g_navOverlayDirty so the track-render path re-pushes its
+    // own content on the next tick.
+    if (uf8::nav::Overlay::instance().active()) {
+        pushNavOverlayDecorations();
+    }
     pushUf8GlobalLeds();
     // pushSelColourBar() removed: it was a per-tick fallback that wrote
     // SEL LEDs in white-only mode (buildSelWhite). With track-colour SEL
@@ -12200,6 +12162,23 @@ void reasixty_setAutoFillFromRight(bool fromRight)
     g_bankDirty.store(true);   // strip→track mapping shifted
 }
 
+// Phase 2.8 Nav Mode — persistent Auto-Follow toggle. Wraps the
+// Overlay singleton's flag with ExtState persistence so the setting
+// survives REAPER restarts (Frank 2026-05-19: "Auto-Follow als
+// Setting machen, nicht Quick2 anders binden").
+bool reasixty_navAutoFollow()
+{
+    return uf8::nav::Overlay::instance().autoFollow();
+}
+
+void reasixty_setNavAutoFollow(bool follow)
+{
+    uf8::nav::Overlay::instance().setAutoFollow(follow);
+    SetExtState("rea_sixty", "nav_auto_follow", follow ? "1" : "0", true);
+    g_navOverlayDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+
 // ---- Selection-Set settings exports --------------------------------------
 // All readers honour the live g_selsets cache; writers update both the
 // cache and the project ExtState immediately, then nudge the surface
@@ -13447,38 +13426,6 @@ void registerBindingHandlers()
         },
         [](int) { return uf8::nav::Overlay::instance().active(); },
         "Nav Mode (Markers & Regions): toggle", false
-    });
-
-    registerBuiltin("marker_overlay_on", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            auto& ov = uf8::nav::Overlay::instance();
-            if (!ov.active()) {
-                ov.setActive(true);
-                g_pageDirty.store(true);
-                g_bankDirty.store(true);
-                g_navOverlayDirty.store(true);
-                if (g_sync) g_sync->invalidate();
-            }
-        },
-        [](int) { return uf8::nav::Overlay::instance().active(); },
-        "Nav Mode: enter", false
-    });
-
-    registerBuiltin("marker_overlay_off", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            auto& ov = uf8::nav::Overlay::instance();
-            if (ov.active()) {
-                ov.setActive(false);
-                g_pageDirty.store(true);
-                g_bankDirty.store(true);
-                g_navOverlayDirty.store(true);
-                if (g_sync) g_sync->invalidate();
-            }
-        },
-        [](int) { return !uf8::nav::Overlay::instance().active(); },
-        "Nav Mode: exit", false
     });
 
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
