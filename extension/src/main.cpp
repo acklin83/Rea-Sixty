@@ -5734,6 +5734,9 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
     const int vst3Param = packed & 0xFFFF;
     const double value = *static_cast<const double*>(parm3);
 
+    diagSetParamLog_("Extended/SETFXPARAM",
+        tr, fxIdx, vst3Param, value, false, value);
+
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
     if (fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return 0;
 
