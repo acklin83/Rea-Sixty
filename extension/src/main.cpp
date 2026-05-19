@@ -13626,6 +13626,15 @@ std::string reasixty_setupExportViaDialog(std::string* errOut)
     return chosen;
 }
 
+// Wipe every Rea-Sixty preference / mode / module config and replace
+// with the baked-in factory bundle. Destructive — caller must confirm
+// before invoking. Returns false only if the embedded JSON failed to
+// parse (release-build invariant — should never happen).
+bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
+{
+    return uf8::setup_bundle::restoreFactoryDefaults(errOut);
+}
+
 bool reasixty_setupImportViaDialog(std::string* errOut)
 {
     std::string chosen;

@@ -184,6 +184,7 @@ std::string reasixty_fxLearnExportViaDialog(std::string* errOut);
 bool reasixty_fxLearnImportViaDialog(std::string* errOut);
 std::string reasixty_setupExportViaDialog(std::string* errOut);
 bool reasixty_setupImportViaDialog(std::string* errOut);
+bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
@@ -8639,6 +8640,55 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
         } else if (!err.empty()) {
             s_setupMsg = "Import failed: " + err;
         }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    static bool s_factoryConfirmOpen = false;
+    if (ImGui_Button(ctx, "Reset to factory defaults##setup_factory",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr))
+    {
+        s_factoryConfirmOpen = true;
+    }
+    if (s_factoryConfirmOpen) {
+        ImGui_OpenPopup(ctx,
+            "Reset to factory defaults?###setup_factory_popup", nullptr);
+        s_factoryConfirmOpen = false;
+    }
+    {
+        int condAlways = ImGui_Cond_Always;
+        ImGui_SetNextWindowSize(ctx, 520.0, 0.0, &condAlways);
+    }
+    if (ImGui_BeginPopupModal(ctx,
+            "Reset to factory defaults?###setup_factory_popup",
+            nullptr, nullptr))
+    {
+        ImGui_TextWrapped(ctx,
+            "Replaces bindings, learned FX, parameter-group slot meta "
+            "and every Settings preference with the baked-in factory "
+            "configuration. Per-project Selection Sets and Parameter "
+            "Group track memberships are not touched.");
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Reset##setup_factory_ok",
+                         nullptr, nullptr))
+        {
+            std::string err;
+            if (reasixty_setupRestoreFactoryDefaults(&err)) {
+                s_setupMsg = err.empty()
+                    ? "Factory defaults restored."
+                    : ("Factory restore warning: " + err);
+            } else {
+                s_setupMsg = err.empty()
+                    ? "Factory restore failed."
+                    : ("Factory restore failed: " + err);
+            }
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##setup_factory_cancel",
+                         nullptr, nullptr))
+        {
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
     }
     if (!s_setupMsg.empty()) {
         ImGui_Text(ctx, s_setupMsg.c_str());

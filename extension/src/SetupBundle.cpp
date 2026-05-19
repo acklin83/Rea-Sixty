@@ -12,6 +12,7 @@
 #include "ParameterGroups.h"
 #include "UserPluginCatalog.h"
 
+#include "factory_bundle.h"
 #include "reaper_plugin_functions.h"
 
 // Implemented in main.cpp — re-reads every rea_sixty / ReaSixty key
@@ -218,14 +219,8 @@ bool exportToFile(const std::string& path, std::string* errOut)
     return true;
 }
 
-bool importFromFile(const std::string& path, std::string* errOut)
+bool importFromJson(const std::string& contents, std::string* errOut)
 {
-    std::string contents;
-    if (!readFile_(path, contents)) {
-        if (errOut) *errOut = "could not read " + path;
-        return false;
-    }
-
     wdl_json_parser p;
     wdl_json_element* root = p.parse(
         contents.c_str(), static_cast<int>(contents.size()));
@@ -295,6 +290,23 @@ bool importFromFile(const std::string& path, std::string* errOut)
     // re-push device brightness so the new settings take effect now.
     reasixty_reloadGlobalExtState();
     return true;
+}
+
+bool importFromFile(const std::string& path, std::string* errOut)
+{
+    std::string contents;
+    if (!readFile_(path, contents)) {
+        if (errOut) *errOut = "could not read " + path;
+        return false;
+    }
+    return importFromJson(contents, errOut);
+}
+
+bool restoreFactoryDefaults(std::string* errOut)
+{
+    // kFactoryBundle is the embedded factory.rea60config payload baked
+    // in at build time via cmake/embed_factory_bundle.cmake.
+    return importFromJson(std::string(kFactoryBundle), errOut);
 }
 
 } // namespace setup_bundle

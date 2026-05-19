@@ -69,6 +69,28 @@ add_custom_command(
 add_custom_target(reasixty_commit_count_gen ALL
     DEPENDS ${REASIXTY_COMMIT_HEADER})
 
+# Bake extension/resources/factory.rea60config into a header so a
+# user-triggered "Reset to factory defaults" works on a fresh REAPER
+# install without needing the file on disk.
+set(REASIXTY_FACTORY_BUNDLE_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/factory.rea60config")
+set(REASIXTY_FACTORY_BUNDLE_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/factory_bundle.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_FACTORY_BUNDLE_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRCFILE=${REASIXTY_FACTORY_BUNDLE_SRC}
+        -DOUTFILE=${REASIXTY_FACTORY_BUNDLE_HEADER}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    DEPENDS
+        ${REASIXTY_FACTORY_BUNDLE_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    COMMENT "Embedding factory.rea60config"
+    VERBATIM
+)
+add_custom_target(reasixty_factory_bundle_gen ALL
+    DEPENDS ${REASIXTY_FACTORY_BUNDLE_HEADER})
+
 add_library(reaper_uf8 MODULE
     src/main.cpp
     src/Protocol.cpp
@@ -132,6 +154,7 @@ if(APPLE)
 endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
+add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
 target_include_directories(reaper_uf8 PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     src

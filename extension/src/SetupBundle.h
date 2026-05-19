@@ -41,5 +41,15 @@ bool exportToFile(const std::string& path, std::string* errOut);
 // warning via *errOut.
 bool importFromFile(const std::string& path, std::string* errOut);
 
+// Apply a bundle whose JSON is already in memory (same semantics as
+// importFromFile minus the file read). Used by the embedded
+// factory-defaults restore.
+bool importFromJson(const std::string& json, std::string* errOut);
+
+// Apply the factory bundle baked into the binary (extension/resources/
+// factory.rea60config). Returns false only if the embedded JSON fails
+// to parse — should never happen in a release build.
+bool restoreFactoryDefaults(std::string* errOut);
+
 } // namespace setup_bundle
 } // namespace uf8
