@@ -51,6 +51,24 @@ if(PkgConfig_FOUND)
 endif()
 
 # ----- the plugin -------------------------------------------------------------
+# Generated header holding the current HEAD commit count. Touched on
+# every build so the About box stays current without a CMake reconfig.
+# The Phony target guarantees the command runs each build; SettingsScreen
+# includes the file and depends on it via OBJECT_DEPENDS below.
+set(REASIXTY_COMMIT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/commit_count.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_COMMIT_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTFILE=${REASIXTY_COMMIT_HEADER}
+        -DGIT_ROOT=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_commit_count.cmake
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_commit_count.cmake
+    COMMENT "Updating commit count for About"
+    VERBATIM
+)
+add_custom_target(reasixty_commit_count_gen ALL
+    DEPENDS ${REASIXTY_COMMIT_HEADER})
+
 add_library(reaper_uf8 MODULE
     src/main.cpp
     src/Protocol.cpp
@@ -107,7 +125,9 @@ if(APPLE)
         "-framework AppKit")
 endif()
 
+add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 target_include_directories(reaper_uf8 PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
     src
     "${REAPER_SDK_DIR}/sdk"
     "${VENDOR_DIR}/reaimgui"

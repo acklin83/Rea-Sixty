@@ -1,5 +1,7 @@
 #include "SettingsScreen.h"
 
+#include "commit_count.h"   // generated; defines REASIXTY_COMMIT_COUNT
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -8504,12 +8506,26 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Text(ctx, "Open-source SSL 360 replacement for UF8 / UC1");
     ImGui_Spacing(ctx);
     static const char* kAuthorUrl = "https://stoersender-studio.ch";
+    static const char* kBeerUrl   = "https://paypal.me/FrankAcklin";
     ImGui_Text(ctx,
         "Made by Frank Acklin @ Stoersender Studio, Switzerland");
     if (ImGui_Button(ctx, "stoersender-studio.ch",
                      /*size_w*/ nullptr, /*size_h*/ nullptr))
     {
         reasixty_openUrl(kAuthorUrl);
+    }
+    {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+            "This project took %d commits so far.", REASIXTY_COMMIT_COUNT);
+        ImGui_Text(ctx, buf);
+    }
+    ImGui_Text(ctx, "You can buy me a beer:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "paypal.me/FrankAcklin",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr))
+    {
+        reasixty_openUrl(kBeerUrl);
     }
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
