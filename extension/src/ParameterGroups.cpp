@@ -31,6 +31,12 @@
 #include "UserPluginCatalog.h"
 #include "WDL/jsonparse.h"
 
+// Defined in main.cpp -- diagnostic write to %TEMP%\rea_sixty_setparam.log
+// on Windows, no-op stub on macOS / Linux.
+extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
+                             int param, double n, bool setRet,
+                             double after);
+
 namespace uf8::param_groups {
 
 namespace {
@@ -314,14 +320,30 @@ void broadcastBuiltinSlot(MediaTrack* leader,
 {
     if (domain == Domain::None) return;
     auto targets = resolveBroadcastTargets(leader);
+    diagSetParamLog_("BROADCAST/enter", leader, -1, slotLinkIdx,
+                     normValue, !targets.empty(),
+                     static_cast<double>(targets.size()));
     if (targets.empty()) return;
     ScopedSuppress guard;
     for (auto* t : targets) {
         auto match = lookupPluginOnTrack(t, domain);
-        if (!match.map) continue;
+        if (!match.map) {
+            diagSetParamLog_("BROADCAST/skip_no_map", t, -1, slotLinkIdx,
+                             normValue, false, 0);
+            continue;
+        }
         const LinkSlot* sl = findSlotByLinkIdx(*match.map, slotLinkIdx);
-        if (!sl || sl->vst3Param < 0) continue;
-        TrackFX_SetParamNormalized(t, match.fxIndex, sl->vst3Param, normValue);
+        if (!sl || sl->vst3Param < 0) {
+            diagSetParamLog_("BROADCAST/skip_no_slot", t, match.fxIndex,
+                             slotLinkIdx, normValue, false, 0);
+            continue;
+        }
+        const bool tOk = TrackFX_SetParamNormalized(
+            t, match.fxIndex, sl->vst3Param, normValue);
+        const double tAfter = TrackFX_GetParamNormalized(
+            t, match.fxIndex, sl->vst3Param);
+        diagSetParamLog_("BROADCAST/target", t, match.fxIndex,
+                         sl->vst3Param, normValue, tOk, tAfter);
     }
     // Cement leader as last-touched-FX so chaseLastTouchedFx doesn't
     // chase the last member we just wrote and jump focus around. The
@@ -333,8 +355,13 @@ void broadcastBuiltinSlot(MediaTrack* leader,
         const LinkSlot* sl =
             findSlotByLinkIdx(*leaderMatch.map, slotLinkIdx);
         if (sl && sl->vst3Param >= 0) {
-            TrackFX_SetParamNormalized(
+            const bool lOk = TrackFX_SetParamNormalized(
                 leader, leaderMatch.fxIndex, sl->vst3Param, normValue);
+            const double lAfter = TrackFX_GetParamNormalized(
+                leader, leaderMatch.fxIndex, sl->vst3Param);
+            diagSetParamLog_("BROADCAST/cement_leader", leader,
+                             leaderMatch.fxIndex, sl->vst3Param,
+                             normValue, lOk, lAfter);
         }
     }
 }

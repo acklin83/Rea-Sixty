@@ -12412,13 +12412,16 @@ uint32_t trackColorRgb(MediaTrack* tr)
 #endif
 }
 
-// --- Diagnostic helpers with external linkage so UC1Surface (separate
-//     TU) can log into the same %TEMP%\rea_sixty_setparam.log as the
-//     UF8 hot paths. Frank 2026-05-19 fader/V-Pot regression hunt.
+// --- Diagnostic helpers used during Frank 2026-05-19 Windows
+//     fader/V-Pot regression hunt. Active on Windows only -- on
+//     macOS these are no-ops so the hot fader path doesn't write to
+//     /tmp ~100x/sec during normal use. Once the Windows path is
+//     fully stable these helpers (and their call sites) can come
+//     out, but they're cheap on the platform they target.
 
+#ifdef _WIN32
 FILE* openDiagLog_()
 {
-#ifdef _WIN32
     char tmp[260] = {0};
     char path[260] = {0};
     if (GetTempPathA(260, tmp)) {
@@ -12427,9 +12430,6 @@ FILE* openDiagLog_()
         std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
     }
     return std::fopen(path, "a");
-#else
-    return std::fopen("/tmp/rea_sixty_setparam.log", "a");
-#endif
 }
 
 void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
@@ -12457,6 +12457,13 @@ void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
         setRet ? 1 : 0, after, after - n);
     std::fclose(f);
 }
+#else
+// macOS / Linux: no-op stubs. Compiler inlines the empty body so call
+// sites pay nothing at runtime.
+void diagFaderStateLog_(int, bool, bool, bool, int, int, MediaTrack*) {}
+void diagSetParamLog_(const char*, MediaTrack*, int, int, double,
+                      bool, double) {}
+#endif
 
 // External hook so UC1Surface (different TU) can trigger the same
 // MCP-scroll + UF8-rebank behaviour that the UF8 select/encoder paths
