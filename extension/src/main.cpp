@@ -3767,6 +3767,20 @@ void drainInputQueue()
             if (g_encoderAccum >=  1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (g_encoderAccum <= -1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (step != 0) {
+                // Phase 2.8 Nav Mode — encoder rotation pages the
+                // overlay while active. Redundant with PageLeft/Right
+                // by design (per ROADMAP "Channel encoder rotate → same
+                // paging, redundant input path"); the UC1 Encoder 2
+                // carousel in Phase 2.8b will instead drive an
+                // item-granularity cursor.
+                if (uf8::nav::Overlay::instance().active()) {
+                    auto& ov = uf8::nav::Overlay::instance();
+                    for (int i = 0; i <  step; ++i) ov.pageNext();
+                    for (int i = 0; i > step;  --i) ov.pagePrev();
+                    g_navOverlayDirty.store(true);
+                    if (g_sync) g_sync->invalidate();
+                    continue;
+                }
                 // SEL Mode override: when Settings → Modes → FX/Instance
                 // Cycle has the UF8 Channel Encoder bit ticked, an
                 // Instance / InstanceCycle SelectionMode hijacks the
@@ -5883,6 +5897,69 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                 static_cast<uint8_t>(id - 0x18), 0.0});
                 }
                 handledNatively = true;
+            }
+
+            // Phase 2.8 Nav Mode — additional surface-wide intercepts
+            // while overlay active. All run on the libusb input thread
+            // so each handler is a pure atomic state mutation; the
+            // main-thread render tick picks up the change.
+            //
+            //   PageLeft (0x52)  → ov.pagePrev()
+            //   PageRight (0x53) → ov.pageNext()
+            //   ChannelPush (0x76) → "back" — leave MarkersInRegion for
+            //     Regions; also acts as escape from Markers-all view.
+            //   Quick1 (0x43)    → same as ChannelPush: Back
+            //   Quick2 (0x44)    → autoFollow toggle (visible effect
+            //     lands in Phase 2.8a step 6)
+            //   Quick3 (0x45)    → switch to MarkersAll view
+            //
+            // Releases are swallowed so the underlying bindings (e.g.
+            // factory page_left LED feedback) don't fire mid-overlay.
+            if (!handledNatively
+                && uf8::nav::Overlay::instance().active())
+            {
+                auto& ov = uf8::nav::Overlay::instance();
+                bool handledOv = false;
+                if (id == 0x52) {
+                    if (pressed) {
+                        ov.pagePrev();
+                        g_navOverlayDirty.store(true);
+                        if (g_sync) g_sync->invalidate();
+                    }
+                    handledOv = true;
+                } else if (id == 0x53) {
+                    if (pressed) {
+                        ov.pageNext();
+                        g_navOverlayDirty.store(true);
+                        if (g_sync) g_sync->invalidate();
+                    }
+                    handledOv = true;
+                } else if (id == 0x76 || id == 0x43) {
+                    if (pressed) {
+                        if (ov.view() != uf8::nav::View::Regions) {
+                            ov.backToRegions();
+                            g_navOverlayDirty.store(true);
+                            if (g_sync) g_sync->invalidate();
+                        }
+                    }
+                    handledOv = true;
+                } else if (id == 0x44) {
+                    if (pressed) {
+                        ov.setAutoFollow(!ov.autoFollow());
+                        g_navOverlayDirty.store(true);
+                    }
+                    handledOv = true;
+                } else if (id == 0x45) {
+                    if (pressed) {
+                        if (ov.view() != uf8::nav::View::MarkersAll) {
+                            ov.setView(uf8::nav::View::MarkersAll);
+                            g_navOverlayDirty.store(true);
+                            if (g_sync) g_sync->invalidate();
+                        }
+                    }
+                    handledOv = true;
+                }
+                if (handledOv) handledNatively = true;
             }
 
             // Bindings layer — globals previously hardcoded inline. Now
