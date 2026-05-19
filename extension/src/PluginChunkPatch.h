@@ -30,7 +30,9 @@
 //     or CS + BC) would only get the first one toggled, which the user
 //     called out as the obvious surprise.
 
-struct MediaTrack;
+// Must match reaper_plugin.h's `class MediaTrack;` so MSVC's name
+// mangling of function-pointer signatures matches the SDK's.
+class MediaTrack;
 
 namespace uf8 {
 

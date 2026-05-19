@@ -24,7 +24,11 @@
 
 #include "FocusedParam.h"           // uf8::Domain
 
-struct MediaTrack;
+// Must match reaper_plugin.h's `class MediaTrack;` forward declaration
+// or MSVC name-mangles function pointers with this type differently
+// from the SDK's, producing LNK2019 with `class MediaTrack *` vs
+// `struct MediaTrack *` mismatches.
+class MediaTrack;
 
 namespace uf8 {
 
