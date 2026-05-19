@@ -7718,7 +7718,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
-        if (s_savedTab < 0 || s_savedTab > 5) s_savedTab = 0;
+        if (s_savedTab < 0 || s_savedTab > 4) s_savedTab = 0;
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
@@ -7867,13 +7867,15 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         ImGui_EndTabItem(ctx);
     }
 
-    // --- Plug-in GUI ------------------------------------------------
-    int flagsGui = tabFlagsFor(2);
-    if (ImGui_BeginTabItem(ctx, "Plug-in GUI", nullptr, &flagsGui)) {
+    // --- Device -----------------------------------------------------
+    // Plug-in GUI auto-engage + fader drag-snap aren't really 'Modes' —
+    // they fire whenever their rule matches. Collected here as 'Device'
+    // since they configure how the hardware behaves at all times.
+    int flagsDev = tabFlagsFor(2);
+    if (ImGui_BeginTabItem(ctx, "Device", nullptr, &flagsDev)) {
         persistActive(2);
-    ImGui_Text(ctx,
-        "Not tied to a Selection Mode — applies whenever the rule fires.");
-    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Plug-in GUI");
+    ImGui_Separator(ctx);
     bool engageUf8 = reasixty_cycleEngagesUf8();
     if (ImGui_Checkbox(ctx,
         "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
@@ -7891,16 +7893,10 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  engage UF8 Plugin Mode (with GUI). Press the same button "
         "again to exit.");
 
-        ImGui_EndTabItem(ctx);
-    }
-
-    // --- Faders -----------------------------------------------------
-    int flagsFad = tabFlagsFor(3);
-    if (ImGui_BeginTabItem(ctx, "Faders", nullptr, &flagsFad)) {
-        persistActive(3);
-    ImGui_Text(ctx,
-        "Not tied to a Selection Mode — applies whenever the rule fires.");
     ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Faders");
+    ImGui_Separator(ctx);
     bool altSnap = reasixty_altDragSnapBack();
     if (ImGui_Checkbox(ctx,
         "Alt/Option + fader drag → snap back to original on release",
@@ -7916,9 +7912,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
 
     // --- REC --------------------------------------------------------
-    int flagsRec = tabFlagsFor(4);
+    int flagsRec = tabFlagsFor(3);
     if (ImGui_BeginTabItem(ctx, "REC", nullptr, &flagsRec)) {
-        persistActive(4);
+        persistActive(3);
     bool rmeOn = reasixty_recRmeEnabled();
     if (ImGui_Checkbox(ctx,
                        "Enable RME / TotalReaper integration",
@@ -7997,9 +7993,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
 
     // --- NAV --------------------------------------------------------
-    int flagsNav = tabFlagsFor(5);
+    int flagsNav = tabFlagsFor(4);
     if (ImGui_BeginTabItem(ctx, "NAV", nullptr, &flagsNav)) {
-        persistActive(5);
+        persistActive(4);
 
     // Activation — read-only mirror of the three bindable Nav toggles.
     // Shows which physical button currently fires each. The bind UI
