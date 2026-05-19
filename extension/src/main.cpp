@@ -3734,7 +3734,18 @@ void drainInputQueue()
                 // jumps during playback align to the end of the
                 // current bar / beat / loop instead of cutting the
                 // playhead mid-phrase. SetEditCurPos would bypass that.
-                GoToRegion(nullptr, it.idx, true);
+                //
+                // use_timeline_order=FALSE means the index argument is
+                // REAPER's user-editable region number (the value
+                // EnumProjectMarkers3 returned in `markrgnindexnumber`,
+                // which we store in it.idx). Passing true here would
+                // interpret it.idx as a 1-based timeline-order
+                // position — wrong when REAPER's numbering has gaps
+                // or starts above 1 (Frank 2026-05-19: "push 2 → 3,
+                // push 3 → 4 ..." and RegionsOnly UF8 push did nothing
+                // because a single high-numbered region became
+                // out-of-bounds in timeline order).
+                GoToRegion(nullptr, it.idx, false);
                 // Drill is gated by the view lock: RegionsOnly users
                 // want region jumps to be terminal (no transition to
                 // the region's marker list). MarkersOnly can't reach
@@ -3743,7 +3754,7 @@ void drainInputQueue()
                     ov.drillIntoRegion(idx);
                 }
             } else {
-                GoToMarker(nullptr, it.idx, true);
+                GoToMarker(nullptr, it.idx, false);
             }
             g_navOverlayDirty.store(true);
             if (g_sync) g_sync->invalidate();
