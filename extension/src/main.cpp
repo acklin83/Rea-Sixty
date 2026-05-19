@@ -6632,9 +6632,188 @@ uint16_t vpotPosFromNormalized(double v) { return vpotPosFromUnipolar(v); }
 
 uint16_t vpotPosFromPan(double pan) { return vpotPosFromBipolar(pan); }
 
+// Phase 2.8 Nav Mode — strip-render takeover. Set by every overlay
+// state mutation (toggle, view change, drill, page). pushNavOverlayZones
+// drains the flag and forces a full 8-strip re-push so the surface
+// catches up with the new window.
+std::atomic<bool> g_navOverlayDirty{false};
+
+// Phase 2.8 Nav Mode — colour-bar callback used by ColorSync when the
+// overlay is active. Returns the strip item's REAPER colour (low 24
+// bits) or a neutral fallback when the user hasn't set a colour
+// override on that marker/region. Empty slots return 0 → OFF.
+uint32_t navColorForStrip(int slot)
+{
+    auto& ov = uf8::nav::Overlay::instance();
+    const auto& items = ov.items();
+    const int idx = ov.pageOffset() * 8 + slot;
+    if (idx < 0 || idx >= static_cast<int>(items.size())) return 0;
+    const uint32_t raw = static_cast<uint32_t>(items[idx].color);
+    if (raw == 0) return 0xCCCCCCu;   // neutral fallback for "no override"
+    return raw & 0x00FFFFFFu;
+}
+
+void pushNavOverlayZones()
+{
+    if (!g_dev || !g_dev->isOpen()) return;
+
+    auto& ov = uf8::nav::Overlay::instance();
+    // Refresh marker list every tick — REAPER markers can be edited
+    // (renamed, recoloured, repositioned) while overlay is active and
+    // we want those edits to reflect immediately. Enumeration is cheap
+    // (single linear pass) and bounded by project marker count.
+    ov.enumerate();
+
+    const bool dirty = g_navOverlayDirty.exchange(false);
+    if (dirty) {
+        // Force-repaint by invalidating the per-strip dedup caches.
+        g_lastTrackName.fill({});
+        g_lastChanNum.fill({});
+        g_lastValueLine.fill({});
+        g_lastSlotLabel.fill({});
+        g_lastCsType.fill({});
+        g_lastFaderDb.fill({});
+        g_lastTopSoftKey.fill(-1);
+        g_lastCutLed.fill(-1);
+        g_lastSoloLed.fill(-1);
+        g_lastSelLed.fill(-1);
+    }
+
+    uf8::nav::Item const* win[8] = {};
+    int n = 0;
+    ov.window(win, n);
+
+    const int items     = static_cast<int>(ov.items().size());
+    const int pageCount = ov.pageCount();
+    const int pageNow   = ov.pageOffset() + 1;
+    const bool hasPrev  = ov.pageOffset() > 0;
+    const bool hasNext  = ov.pageOffset() + 1 < pageCount;
+    const bool paginate = items > 8;
+
+    for (int s = 0; s < 8; ++s) {
+        const uf8::nav::Item* it = win[s];
+
+        // Upper row — name truncated to 7 chars. Empty slot blanks the
+        // zone (firmware retains last text, so we space-pad to overwrite).
+        std::string upper;
+        if (it) {
+            upper = it->name;
+            if (upper.size() > 7) upper.resize(7);
+        } else {
+            upper = "       ";
+        }
+        if (upper != g_lastTrackName[s]) {
+            g_lastTrackName[s] = upper;
+            g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), upper));
+        }
+
+        // Lower row — either pagination hint (strip 0 / 7 when paginating)
+        // or per-item index `R03` / `M07`. Lower row is fixed 7 chars.
+        std::string lower(7, ' ');
+        if (paginate && s == 0 && hasPrev) {
+            // "‹P/N   " — single-byte glyph for '‹', then page numbers.
+            // ASCII '<' substitutes for the SSL palette '‹' since the
+            // LCD's character ROM is ASCII-only.
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "<%d/%-3d", pageNow, pageCount);
+            lower = buf;
+            if (lower.size() < 7) lower.append(7 - lower.size(), ' ');
+            if (lower.size() > 7) lower.resize(7);
+        } else if (paginate && s == 7 && hasNext) {
+            // "M17+>" — first item index of NEXT page + glyph.
+            const int nextFirst = (ov.pageOffset() + 1) * 8;
+            if (nextFirst < items) {
+                const auto& nx = ov.items()[nextFirst];
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%c%-2d+>",
+                    nx.isRegion ? 'R' : 'M', nx.idx);
+                lower = buf;
+                if (lower.size() < 7) lower.append(7 - lower.size(), ' ');
+                if (lower.size() > 7) lower.resize(7);
+            }
+        } else if (it) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%c%-2d    ",
+                it->isRegion ? 'R' : 'M', it->idx);
+            lower = buf;
+            lower.resize(7);
+        }
+        if (lower != g_lastValueLine[s].substr(0, std::min<size_t>(7, g_lastValueLine[s].size()))) {
+            // Reuse the lower-row text path (StripTextLower) rather than
+            // the value-line zone — Nav overlay doesn't need the wider
+            // value-line, and the lower-row glyphs render larger.
+            g_dev->send(uf8::buildStripTextLower(static_cast<uint8_t>(s), lower));
+            // Cache via g_lastValueLine since g_lastFaderDb already
+            // covers the readout zone and we don't want to fight it.
+            g_lastValueLine[s] = lower;
+        }
+
+        // Channel Number zone — marker/region index. Empty when no item.
+        std::string chan;
+        if (it) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%d", it->idx);
+            chan = buf;
+        } else {
+            chan = "  ";
+        }
+        if (chan != g_lastChanNum[s]) {
+            g_lastChanNum[s] = chan;
+            g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+        }
+
+        // Top-soft-key LED — bright in the item's colour, OFF on empty
+        // slots. Hash key folds state + colour so colour changes re-emit
+        // even when on/off state is steady.
+        const uint32_t rgb = it ? navColorForStrip(s) : 0;
+        uf8::TopSoftKeyState tssk = it
+            ? uf8::TopSoftKeyState::On
+            : uf8::TopSoftKeyState::Off;
+        uf8::LedColour ledClr = uf8::ledColourForTrackRgb(rgb);
+        const int32_t composite =
+            (int32_t(static_cast<int>(tssk)) << 28)
+          ^ static_cast<int32_t>(rgb & 0x00FFFFFFu);
+        const int8_t shortKey =
+            static_cast<int8_t>(((composite >> 16) ^ composite) & 0x7F);
+        if (shortKey != g_lastTopSoftKey[s]) {
+            g_lastTopSoftKey[s] = shortKey;
+            sendLedFrames(uf8::buildTopSoftKeyLed(
+                static_cast<uint8_t>(s), tssk, ledClr));
+        }
+
+        // SOLO / CUT / SEL — off while overlay drives the strip. These
+        // would otherwise show stale track state from before the toggle.
+        if (g_lastSoloLed[s] != 0) {
+            g_lastSoloLed[s] = 0;
+            sendLedFrames(uf8::buildLedColourPair(
+                static_cast<uint8_t>(s), uf8::LedClass::Solo, false));
+        }
+        if (g_lastCutLed[s] != 0) {
+            g_lastCutLed[s] = 0;
+            sendLedFrames(uf8::buildLedColourPair(
+                static_cast<uint8_t>(s), uf8::LedClass::Cut, false));
+        }
+        if (g_lastSelLed[s] != 0) {
+            g_lastSelLed[s] = 0;
+            sendLedFrames(uf8::buildLedColourPair(
+                static_cast<uint8_t>(s), uf8::LedClass::Sel, false));
+        }
+    }
+}
+
 void pushZonesForVisibleSlots()
 {
     if (!g_dev || !g_dev->isOpen()) return;
+
+    // Phase 2.8 Nav Mode — when the marker/region overlay is active it
+    // owns all 8 strip displays. The rest of this function (which renders
+    // track-derived content: names, fader readouts, V-Pot bars, plug-in
+    // labels, per-strip SOLO/CUT/SEL LEDs from track state) is bypassed
+    // so the overlay's content isn't immediately overwritten.
+    if (uf8::nav::Overlay::instance().active()) {
+        pushNavOverlayZones();
+        return;
+    }
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
@@ -10309,7 +10488,15 @@ void onTimer()
     uf8::bindings::tickPending();
     drainInputQueue();
     commitDebouncedTouchReleases();
-    if (g_sync) g_sync->refresh(reaperColorForVisibleSlot);
+    if (g_sync) {
+        // Phase 2.8 Nav Mode hijacks the colour-bar: marker/region colour
+        // (or neutral fallback when no override) replaces track colour.
+        if (uf8::nav::Overlay::instance().active()) {
+            g_sync->refresh(navColorForStrip);
+        } else {
+            g_sync->refresh(reaperColorForVisibleSlot);
+        }
+    }
     pushZonesForVisibleSlots();
     pushUf8GlobalLeds();
     // pushSelColourBar() removed: it was a per-tick fallback that wrote
@@ -13111,6 +13298,8 @@ void registerBindingHandlers()
             ov.setActive(!ov.active());
             g_pageDirty.store(true);
             g_bankDirty.store(true);
+            g_navOverlayDirty.store(true);
+            if (g_sync) g_sync->invalidate();
         },
         [](int) { return uf8::nav::Overlay::instance().active(); },
         "Nav Mode (Markers & Regions): toggle", false
@@ -13124,6 +13313,8 @@ void registerBindingHandlers()
                 ov.setActive(true);
                 g_pageDirty.store(true);
                 g_bankDirty.store(true);
+                g_navOverlayDirty.store(true);
+                if (g_sync) g_sync->invalidate();
             }
         },
         [](int) { return uf8::nav::Overlay::instance().active(); },
@@ -13138,6 +13329,8 @@ void registerBindingHandlers()
                 ov.setActive(false);
                 g_pageDirty.store(true);
                 g_bankDirty.store(true);
+                g_navOverlayDirty.store(true);
+                if (g_sync) g_sync->invalidate();
             }
         },
         [](int) { return !uf8::nav::Overlay::instance().active(); },
