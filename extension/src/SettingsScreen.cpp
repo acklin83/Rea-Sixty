@@ -3907,19 +3907,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // ---- Per-layer admin row (auto-mixer / reset / save / load) ---------
-    if (s_editLayer >= 1) {
-        bool autoMixer = get().layers[s_editLayer].autoWhenMixerVisible;
-        if (ImGui_Checkbox(ctx,
-                "Auto-switch to this layer when Plugin Mixer is open",
-                &autoMixer)) {
-            setLayerAutoMixer(s_editLayer, autoMixer);
-        }
-    } else {
-        ImGui_TextDisabled(ctx,
-            "(Layer 1 — mixer auto-switch lives on Layer 2 / 3.)");
-    }
-
+    // ---- Per-layer admin row (reset / save / load) -----------------
     if (ImGui_Button(ctx, "Reset this layer to factory defaults",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {
         resetLayerToDefaults(s_editLayer);
