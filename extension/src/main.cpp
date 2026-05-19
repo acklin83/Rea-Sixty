@@ -1033,8 +1033,14 @@ void drainSelsets_() {
     // the time the next drain runs.
     const int prevActive   = g_selsetActive.load();
     const int autoModeWant = g_selsetAutoMode.load();
+    // Auto-mode apply/revert is gated on SelectionMode::Auto (Frank
+    // 2026-05-19): outside Sel Mode Auto, selset recall is a pure
+    // selection swap and must not touch REAPER automation modes.
+    const bool autoModeGate =
+        (g_selectionMode.load() == SelectionMode::Auto)
+        && (autoModeWant >= 0);
     if (actReq == -1) {
-        if (prevActive >= 1 && prevActive <= 8 && autoModeWant >= 0) {
+        if (prevActive >= 1 && prevActive <= 8 && autoModeGate) {
             selsetApplyAutoModeToSlot_(prevActive, 0);
         }
         g_selsetActive.store(0);
@@ -1044,16 +1050,16 @@ void drainSelsets_() {
     } else if (actReq >= 1 && actReq <= 8) {
         // Switching slots: revert the outgoing slot's auto-mode first
         // (only if a different slot was active and the global binding
-        // is enabled).
+        // is enabled, AND we're in Sel Mode Auto).
         if (prevActive >= 1 && prevActive <= 8 && prevActive != actReq
-            && autoModeWant >= 0)
+            && autoModeGate)
         {
             selsetApplyAutoModeToSlot_(prevActive, 0);
         }
         g_selsetActive.store(actReq);
         refreshActiveSelsetGuids_();
         // Apply the global auto-mode to the incoming slot's tracks.
-        if (autoModeWant >= 0) {
+        if (autoModeGate) {
             selsetApplyAutoModeToSlot_(actReq, autoModeWant);
         }
         g_bankDirty.store(true);
@@ -1304,6 +1310,11 @@ std::atomic<int>    g_uc1CalActiveTest{-1};
 // track (Frank 2026-05-07 — V-Pot/SC/BC edits route to selection so UC1
 // follows automatically rather than requiring a manual select).
 std::atomic<bool> g_trackSelFollowsParam{false};
+
+// When true, a UF8 fader touch-ON auto-selects the touched strip's track
+// (Frank 2026-05-19). Useful for tactile bank navigation: grab a fader,
+// the channel selects so UC1 follows.
+std::atomic<bool> g_touchSelectsChannel{false};
 
 // When true AND SSL Strip Mode is active, the strips follow whichever
 // plugin window the user focuses in REAPER (GetFocusedFX2 poll).
@@ -1578,6 +1589,9 @@ void loadBrightness()
     const char* tselFp = GetExtState("rea_sixty", "track_sel_follows_param");
     if (tselFp && *tselFp) {
         g_trackSelFollowsParam.store(std::atoi(tselFp) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "touch_selects_channel"); v && *v) {
+        g_touchSelectsChannel.store(std::atoi(v) != 0);
     }
     const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
     if (autoHide && *autoHide) {
@@ -1865,6 +1879,10 @@ struct PendingInput {
         MuteToggle,
         SelectToggle,    // additive (Shift held) — toggles selection on this track
         SelectExclusive, // no modifier — selects only this track
+        TouchSelectExclusive, // fader touch-ON exclusive select. Always
+                              //   selects the touched strip's track; does
+                              //   NOT honor the UF8-Plugin-Mode SEL-button
+                              //   hijack to selVst3Param (touch ≠ SEL).
         VolumeAbs,       // value = linear volume (1.0 == 0 dB)
         PanDelta,        // value = signed pan delta (−1..+1 is full sweep)
         PanCenter,       // reset pan to 0 (center)
@@ -4298,6 +4316,14 @@ void drainInputQueue()
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
+            case PendingInput::TouchSelectExclusive:
+                // Plain track select on fader-touch; no UF8 Plugin Mode
+                // hijack (cf. SelectExclusive above).
+                if (GetMediaTrackInfo_Value(tr, "I_SELECTED") < 0.5) {
+                    SetOnlyTrackSelected(tr);
+                    followSelectedInMixer(tr);
+                }
+                break;
             case PendingInput::VolumeAbs: {
                 // Send/Receive routing wins over every other fader-input
                 // path: when the user explicitly turned on a routing
@@ -6425,6 +6451,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // on every ON is cheap (one 6-byte frame) and
                     // idempotent.
                     if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                    // Settings → Device → "Touch selects channel": queue
+                    // an exclusive selection for this strip's track. Runs
+                    // through the main-thread drain (SetOnlyTrackSelected
+                    // is not safe from the libusb input thread).
+                    if (g_touchSelectsChannel.load()) {
+                        queueInput({PendingInput::TouchSelectExclusive,
+                                    strip, 0.0});
+                    }
                 } else {
                     g_touchReleasePending[strip].store(true);
                 }
@@ -12623,6 +12657,17 @@ void reasixty_setTrackSelFollowsParam(bool follow)
     SetExtState("rea_sixty", "track_sel_follows_param", follow ? "1" : "0", true);
 }
 
+bool reasixty_touchSelectsChannel()
+{
+    return g_touchSelectsChannel.load();
+}
+
+void reasixty_setTouchSelectsChannel(bool on)
+{
+    g_touchSelectsChannel.store(on);
+    SetExtState("rea_sixty", "touch_selects_channel", on ? "1" : "0", true);
+}
+
 bool reasixty_autoHideReadTrim()
 {
     return g_autoHideReadTrim.load();
@@ -12864,11 +12909,15 @@ void reasixty_selsetRecallToggle(int slot1to8)
 void reasixty_selsetClear(int slot1to8)
 {
     if (slot1to8 < 1 || slot1to8 > 8) return;
-    // If this slot is active AND the global auto-mode binding is on,
-    // revert tracks inline BEFORE wiping membership data — the drain's
-    // revert path walks `g_selsets[slot]` which is about to be empty.
+    // If this slot is active AND the global auto-mode binding is on
+    // AND we're currently in Sel Mode Auto, revert tracks inline BEFORE
+    // wiping membership data — the drain's revert path walks
+    // `g_selsets[slot]` which is about to be empty. Outside Sel Mode
+    // Auto the recall path never touched automation, so there's nothing
+    // to revert (Frank 2026-05-19).
     if (g_selsetActive.load() == slot1to8
-        && g_selsetAutoMode.load() >= 0)
+        && g_selsetAutoMode.load() >= 0
+        && g_selectionMode.load() == SelectionMode::Auto)
     {
         selsetApplyAutoModeToSlot_(slot1to8, 0);
     }
@@ -12894,6 +12943,11 @@ void reasixty_setSelsetAutoMode(int mode)
                 std::to_string(mode).c_str(), true);
     const int active = g_selsetActive.load();
     if (active < 1 || active > 8) return;
+    // Frank 2026-05-19: auto-mode application is Sel Mode Auto only.
+    // Changing the dropdown while not in Sel Mode Auto stores the new
+    // value but doesn't apply or revert anything on the active set's
+    // tracks — recall in Auto sel mode is the only trigger.
+    if (g_selectionMode.load() != SelectionMode::Auto) return;
     if (mode >= 0) {
         selsetApplyAutoModeToSlot_(active, mode);
     } else if (prev >= 0) {

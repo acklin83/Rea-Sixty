@@ -73,6 +73,8 @@ int    reasixty_uc1CalActiveTest();
 void   reasixty_uc1SetCalActiveTest(int enc);
 bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
+bool reasixty_touchSelectsChannel();
+void reasixty_setTouchSelectsChannel(bool on);
 bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_autoFillFromRight();
@@ -317,6 +319,15 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Track selection follows parameter change",
                        &tsfp)) {
         reasixty_setTrackSelFollowsParam(tsfp);
+    }
+
+    // Touch a UF8 fader → that strip's track becomes the only selected
+    // track. Cheap tactile bank navigation: grab the fader and UC1
+    // follows. Plain select; not subject to UF8 Plugin Mode's SEL-button
+    // selVst3Param hijack (Frank 2026-05-19).
+    bool tsc = reasixty_touchSelectsChannel();
+    if (ImGui_Checkbox(ctx, "Touch selects channel", &tsc)) {
+        reasixty_setTouchSelectsChannel(tsc);
     }
 
     bool sff = reasixty_stripFollowsFocusedFx();
