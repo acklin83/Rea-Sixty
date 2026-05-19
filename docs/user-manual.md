@@ -83,43 +83,49 @@ endpoints to user-space libusb.
 
 ### 2.2 macOS
 
-#### 2.2.1 Library deps
+The shipped distribution is a self-contained trio:
+
+```
+reaper_rea-sixty.dylib
+libusb-1.0.0.dylib
+libhidapi.0.dylib
+```
+
+All three live alongside each other in your REAPER UserPlugins folder
+— the main dylib's install names point at `@loader_path` so the two
+deps are found relative to it. **You do not need Homebrew.**
+
+#### 2.2.1 Install
+
+Copy all three files into:
+
+```
+~/Library/Application Support/REAPER/UserPlugins/
+```
+
+Quit SSL 360° **and the `SSL360Core` background daemon** (Activity
+Monitor → search "SSL360Core" → kill), then start REAPER.
+
+#### 2.2.2 Building from source (developers only)
+
+Skip this section if you only want to use the binary.
 
 ```
 brew install libusb hidapi
-```
-
-#### 2.2.2 Build
-
-```
 cd extension
 cmake -B build -G "Unix Makefiles"
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-This produces `build/reaper_rea-sixty.dylib`.
+CMake's post-build step copies libusb / hidapi alongside
+`reaper_rea-sixty.dylib` and rewrites the install names via
+`install_name_tool`, so the build output is already self-contained.
+Drop the three files from `build/` into UserPlugins as above.
 
-#### 2.2.3 Install
-
-Symlink (recommended for development — rebuilds are picked up after a
-REAPER restart):
-
-```
-ln -sf "$PWD/build/reaper_rea-sixty.dylib" \
-       ~/Library/Application\ Support/REAPER/UserPlugins/reaper_rea-sixty.dylib
-```
-
-Or copy:
-
-```
-cp build/reaper_rea-sixty.dylib \
-   ~/Library/Application\ Support/REAPER/UserPlugins/
-```
-
-Quit SSL 360° + the `SSL360Core` daemon, then restart REAPER. On
-success, the UF8 scribble strips show REAPER track colours within
-one display tick. On failure, REAPER → View → Console shows a line
-beginning with `Rea-Sixty UF8:` or `Rea-Sixty UC1:` — see chapter 10.
+On success, run REAPER → Action List (`?`) → search "Rea-Sixty" →
+**"Rea-Sixty: Open / Close Rea-Sixty Settings"** should appear. On
+failure, REAPER → View → Console shows a line beginning with
+`Rea-Sixty UF8:` or `Rea-Sixty UC1:` — see chapter 10.
 
 ### 2.3 Windows
 

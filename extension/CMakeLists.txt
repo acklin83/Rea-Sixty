@@ -247,6 +247,38 @@ elseif(WIN32)
     set_target_properties(reaper_uf8 PROPERTIES SUFFIX ".dll")
 endif()
 
+# ----- macOS dylib bundling ---------------------------------------------------
+# brew's libusb / hidapi land in /opt/homebrew/opt/... with absolute
+# install names. End users don't have brew, so we copy those dylibs
+# next to ours and rewrite the install names to @loader_path so REAPER
+# finds them in UserPlugins/. With this, the shipped dylib triple is
+# self-contained.
+if(APPLE)
+    foreach(LIB libusb-1.0.0 libhidapi.0)
+        if(LIB STREQUAL "libusb-1.0.0")
+            set(SRC_PATH "/opt/homebrew/opt/libusb/lib/${LIB}.dylib")
+            set(OLD_NAME "/opt/homebrew/opt/libusb/lib/${LIB}.dylib")
+        else()
+            set(SRC_PATH "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
+            set(OLD_NAME "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
+        endif()
+        add_custom_command(TARGET reaper_uf8 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SRC_PATH}"
+                "$<TARGET_FILE_DIR:reaper_uf8>/${LIB}.dylib"
+            COMMAND install_name_tool -change
+                "${OLD_NAME}"
+                "@loader_path/${LIB}.dylib"
+                "$<TARGET_FILE:reaper_uf8>"
+            COMMAND install_name_tool -id
+                "@loader_path/${LIB}.dylib"
+                "$<TARGET_FILE_DIR:reaper_uf8>/${LIB}.dylib"
+            COMMENT "Bundling ${LIB}.dylib"
+            VERBATIM
+        )
+    endforeach()
+endif()
+
 # ----- tests + CLI helpers (skipped on Windows for the initial port) ----------
 # Tests use POSIX-ish patterns; tools link directly against libusb / hidapi.
 # Gated off on Windows so a fresh checkout produces the DLL without forcing
