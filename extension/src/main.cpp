@@ -58,6 +58,7 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
+#include "Palette.h"
 #include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
 #include "PluginMap.h"
@@ -268,6 +269,15 @@ std::atomic<bool> g_bankDirty{false};
 // new window. Declared up here so drainInputQueue's NavJumpStrip
 // handler can mark it on jump.
 std::atomic<bool> g_navOverlayDirty{false};
+
+// Phase 2.8b — UC1 LCD takeover. While Nav Mode is active AND this
+// flag is set, the main tick pushes a persistent 3-up marker/region
+// carousel into UC1's central LCD. Set true on Nav Mode entry (when
+// the user has the "UC1 take-over" preference on); cleared when the
+// user enters a UC1 menu mode (Routing/Presets/etc.) so the menu
+// owns the LCD. Defaults to true so Phase 2.8b's hard-coded behaviour
+// works before the 2.8c setting lands.
+std::atomic<bool> g_uc1NavLcdActive{true};
 
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
@@ -6934,6 +6944,96 @@ void pushNavOverlayDecorations()
     }
 }
 
+// Phase 2.8b — UC1 LCD takeover: while Nav Mode is active and
+// g_uc1NavLcdActive is true, push a 3-up [prev | curr | next] marker
+// or region carousel onto UC1's central LCD (LARGE triple zone).
+//
+// `prev`/`curr`/`next` are the 14-char-trimmed names of the items at
+// cursorIdx-1, cursorIdx, cursorIdx+1. Header is the view-context
+// line ("MARKERS", "REGIONS", "REGION: <name>" in MarkersInRegion).
+// Palette is the cursor item's quantised colour; 0x00 leaves the
+// colour bar dark.
+//
+// Called every onTimer tick. UC1Surface::showNavCarousel dedups by
+// cached strings so identical args are a no-op (cheap idle cost).
+void pushUc1NavCarousel()
+{
+    if (!g_uc1_surface) return;
+
+    auto& ov = uf8::nav::Overlay::instance();
+    const bool overlayOn  = ov.active();
+    const bool takeoverOn = g_uc1NavLcdActive.load();
+
+    if (!overlayOn || !takeoverOn) {
+        if (g_uc1_surface->navCarouselActive()) {
+            g_uc1_surface->hideNavCarousel();
+        }
+        return;
+    }
+
+    const auto& items = ov.items();
+    const int n  = static_cast<int>(items.size());
+    const int ci = ov.cursorIdx();
+
+    auto nameOf = [&](int idx) -> std::string {
+        if (idx < 0 || idx >= n) return std::string();
+        std::string s = items[idx].name;
+        if (s.size() > 14) s.resize(14);
+        return s;
+    };
+    const std::string prev = nameOf(ci - 1);
+    const std::string curr = nameOf(ci);
+    const std::string next = nameOf(ci + 1);
+
+    std::string header;
+    switch (ov.view()) {
+    case uf8::nav::View::Regions:
+        header = "REGIONS";
+        break;
+    case uf8::nav::View::MarkersInRegion: {
+        // Look up the filter region's name so the header tells the
+        // user which region they're drilled into.
+        const int filterIdx = ov.filterRegionIdx();
+        std::string rgnName;
+        if (filterIdx >= 0) {
+            int nmarkers = 0, nregions = 0;
+            CountProjectMarkers(nullptr, &nmarkers, &nregions);
+            const int total = nmarkers + nregions;
+            for (int i = 0; i < total; ++i) {
+                bool isrgn = false;
+                double pos = 0.0, rgnend = 0.0;
+                const char* nm = nullptr;
+                int rid = 0, color = 0;
+                if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                         &nm, &rid, &color)) continue;
+                if (isrgn && rid == filterIdx) {
+                    if (nm) rgnName = nm;
+                    break;
+                }
+            }
+        }
+        if (rgnName.empty()) {
+            header = "MARKERS";
+        } else {
+            header = "M: " + rgnName;
+            if (header.size() > 14) header.resize(14);
+        }
+        break;
+    }
+    case uf8::nav::View::MarkersAll:
+        header = "MARKERS";
+        break;
+    }
+
+    uint8_t palette = 0x00;
+    if (ci >= 0 && ci < n) {
+        const uint32_t rgb = static_cast<uint32_t>(items[ci].color) & 0x00FFFFFFu;
+        if (rgb != 0) palette = uf8::quantize(rgb);
+    }
+
+    g_uc1_surface->showNavCarousel(prev, curr, next, header, palette);
+}
+
 void pushZonesForVisibleSlots()
 {
     if (!g_dev || !g_dev->isOpen()) return;
@@ -10923,6 +11023,12 @@ void onTimer()
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
+
+    // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
+    // the carousel push happens on the current tick's state (overlay
+    // changes, cursor moves, etc. all settled). Internal dedup means
+    // the steady-state cost is a string compare per tick.
+    pushUc1NavCarousel();
 
     // Once-per-second UC1 wire stats — disabled. Earlier dev diagnostic
     // that called ShowConsoleMsg from onTimer; a crash log captured a
