@@ -39,3 +39,9 @@ extension/vendor/
 
 # Cross-platform build artifacts
 dist-windows/
+
+# Release artifacts (zips + staging dirs, regenerated per release)
+dist/stage-*/
+dist/rea-sixty-mac-*.zip
+dist/rea-sixty-win-*.zip
+dist/rea-sixty-linux-*.zip
