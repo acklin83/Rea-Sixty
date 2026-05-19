@@ -15655,7 +15655,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 #endif
         if (f) { std::fprintf(f, "%s\n", msg); std::fclose(f); }
     };
-    initLog("--- ReaperPluginEntry start");
+    initLog("--- ReaperPluginEntry start [build " __DATE__ " " __TIME__ "]");
 
     // REAPERAPI_LoadAPI returns the count of unresolved function
     // pointers. Default behaviour (bail on any miss) silently killed

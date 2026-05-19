@@ -2039,6 +2039,26 @@ void upgradeSslSoftkeyLabels_(Layer& L)
 
 void load()
 {
+    // Diagnostic: write a raw breadcrumb that bypasses crumb_() entirely,
+    // so we can tell whether the crash is in the call to crumb_ (e.g.
+    // inline-in-anon-namespace weirdness from e2d4866) or in entering
+    // load() at all. If LOAD_ENTERED_RAW appears but no other crumbs do,
+    // crumb_ itself is the failure point at this call site.
+    {
+#ifdef _WIN32
+        char tmp[260] = {0};
+        char path[260] = {0};
+        if (GetTempPathA(260, tmp)) {
+            snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
+        } else {
+            std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
+        }
+        FILE* f = std::fopen(path, "a");
+#else
+        FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+#endif
+        if (f) { std::fprintf(f, "  bindings:LOAD_ENTERED_RAW\n"); std::fclose(f); }
+    }
     crumb_("load enter");
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     crumb_("got mutex");
