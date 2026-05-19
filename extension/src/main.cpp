@@ -14335,11 +14335,22 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::ChSelect; },
         "Encoder Mode → Channel Select", false
     });
+    // Tapping a mode-switch builtin while its mode is already active
+    // returns to ChSelect (the default) — SSL 360° behaviour (Frank
+    // 2026-05-19 "push auf nav wenn aktiv schaltet ihn nicht aus").
+    // Re-tap toggles off; the next physical encoder rotation lands on
+    // Channel-Select again.
+    auto setOrToggleMode = [](EncoderMode target, const char* extKey) {
+        const bool already = (g_encoderMode.load() == target);
+        const EncoderMode next = already ? EncoderMode::ChSelect : target;
+        g_encoderMode.store(next);
+        SetExtState("ReaSixty", "encoderMode",
+                    already ? "ChSelect" : extKey, true);
+    };
     registerBuiltin("encoder_nudge", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Nudge);
-            SetExtState("ReaSixty", "encoderMode", "Nudge", true);
+            setOrToggleMode(EncoderMode::Nudge, "Nudge");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Nudge; },
         "Encoder Mode → Nudge", false
@@ -14348,46 +14359,41 @@ void registerBindingHandlers()
     // 'Mousewheel' to match what the mode actually does (cursor wheel
     // emulation). ExtState serialises as 'Mousewheel'.
     registerBuiltin("encoder_focus", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Mousewheel);
-            SetExtState("ReaSixty", "encoderMode", "Mousewheel", true);
+            setOrToggleMode(EncoderMode::Mousewheel, "Mousewheel");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Mousewheel; },
         "Encoder Mode → Mousewheel", false
     });
     registerBuiltin("encoder_markers", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Markers);
-            SetExtState("ReaSixty", "encoderMode", "Markers", true);
+            setOrToggleMode(EncoderMode::Markers, "Markers");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Markers; },
         "Encoder Mode → Markers (prev / next)", false
     });
     registerBuiltin("encoder_bank_by_1", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::BankBy1);
-            SetExtState("ReaSixty", "encoderMode", "BankBy1", true);
+            setOrToggleMode(EncoderMode::BankBy1, "BankBy1");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::BankBy1; },
         "Encoder Mode → Bank by 1 channel", false
     });
     registerBuiltin("encoder_last_param", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::LastParam);
-            SetExtState("ReaSixty", "encoderMode", "LastParam", true);
+            setOrToggleMode(EncoderMode::LastParam, "LastParam");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::LastParam; },
         "Encoder Mode → Last Touched Param", false
     });
     registerBuiltin("encoder_instance", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Instance);
-            SetExtState("ReaSixty", "encoderMode", "Instance", true);
+            setOrToggleMode(EncoderMode::Instance, "Instance");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::Instance; },
         "Encoder Mode → Instance Cycle", false
@@ -14397,10 +14403,9 @@ void registerBindingHandlers()
     // FX Cycle Sel-Mode on the symmetry plane: focused-track scope here,
     // per-strip scope there. Frank 2026-05-15: full 6-binding symmetry.
     registerBuiltin("encoder_fx_cycle", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::FxCycle);
-            SetExtState("ReaSixty", "encoderMode", "FxCycle", true);
+            setOrToggleMode(EncoderMode::FxCycle, "FxCycle");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::FxCycle; },
         "Encoder Mode → FX Cycle", false
@@ -14411,10 +14416,9 @@ void registerBindingHandlers()
     // same logic is available on any encoder, not just the Channel
     // Encoder. Frank 2026-05-16.
     registerBuiltin("encoder_selset_cycle", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::SelsetCycle);
-            SetExtState("ReaSixty", "encoderMode", "SelsetCycle", true);
+            setOrToggleMode(EncoderMode::SelsetCycle, "SelsetCycle");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::SelsetCycle; },
         "Encoder Mode → Selection Set Cycle", false
