@@ -12730,6 +12730,11 @@ extern "C" void reasixty_reloadGlobalExtState()
 {
     loadBrightness();
     applyBrightness();
+    // Imported Settings bundle may have rewritten the global selset
+    // scope/data keys — flag the in-memory cache stale so the next
+    // drain re-reads them. Project-scoped slots come back from
+    // GetProjExtState on the same path, so the reload covers both.
+    g_selsetsDirty.store(true);
     g_bankDirty.store(true);
     g_pageDirty.store(true);
     if (g_sync) g_sync->invalidate();
@@ -12838,8 +12843,13 @@ int  reasixty_selsetType(int slot1to8)
 void reasixty_setSelsetType(int slot1to8, int type)
 {
     if (slot1to8 < 1 || slot1to8 > 8) return;
-    g_selsets[slot1to8 - 1].type =
-        (type == 1) ? SelSetType::Group : SelSetType::Snapshot;
+    auto& s = g_selsets[slot1to8 - 1];
+    s.type = (type == 1) ? SelSetType::Group : SelSetType::Snapshot;
+    // Frank 2026-05-19: Group-type slots default to global scope so the
+    // "slot N = REAPER group K" binding survives project switches and
+    // is included in the Settings export. User can still flip the slot
+    // back to project scope from the UI if they want per-project groups.
+    if (s.type == SelSetType::Group) s.global = true;
     selsetWriteToProject_(slot1to8);
     if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
     g_bankDirty.store(true);

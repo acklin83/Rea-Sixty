@@ -151,6 +151,20 @@ std::vector<ExtKey> allExtKeys_()
         std::snprintf(csKeys[i], sizeof(csKeys[i]), "uc1_cs_leds_cal_%d", i);
         v.push_back({"rea_sixty", csKeys[i]});
     }
+    // Selection-Set global-scope keys. Each slot has a scope flag
+    // ("global" / "project") plus the content for global-scoped slots.
+    // Project-scoped slots store their content in ProjExtState — that
+    // travels with the .rpp and is out of scope for this bundle. Only
+    // global slots round-trip through the Settings export (Frank
+    // 2026-05-19: "Group-Selsets sollen global erhalten bleiben").
+    static char selsetScopeKeys[8][24];
+    static char selsetDataKeys[8][24];
+    for (int s = 1; s <= 8; ++s) {
+        std::snprintf(selsetScopeKeys[s - 1], 24, "selset_%d_scope", s);
+        std::snprintf(selsetDataKeys[s - 1],  24, "selset_%d_data",  s);
+        v.push_back({"rea_sixty", selsetScopeKeys[s - 1]});
+        v.push_back({"rea_sixty", selsetDataKeys[s - 1]});
+    }
     return v;
 }
 
