@@ -3882,6 +3882,37 @@ void queueInput(PendingInput e)
     g_inQueue.push_back(e);
 }
 
+// Diagnostic: log every TrackFX_SetParamNormalized we call from the
+// hot fader / V-Pot / UC1 writeback paths to %TEMP%\rea_sixty_setparam.log
+// so we can see whether REAPER accepts the write. Frank 2026-05-19:
+// SSL Strip Mode fader -> CS doesn't move REAPER on Windows even
+// though Track-Vol fader (CSurf_OnVolumeChange) does. Four-outcome
+// matrix at the call site discriminates between (a) bad (fx, param)
+// tuple, (b) plugin stalling the write, (c) stale plugin GUI on
+// Frank's side.
+void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
+                      int param, double n, bool setRet, double after)
+{
+#ifdef _WIN32
+    char tmp[260] = {0};
+    char path[260] = {0};
+    if (GetTempPathA(260, tmp)) {
+        snprintf(path, sizeof(path), "%srea_sixty_setparam.log", tmp);
+    } else {
+        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
+    }
+    FILE* f = std::fopen(path, "a");
+#else
+    FILE* f = std::fopen("/tmp/rea_sixty_setparam.log", "a");
+#endif
+    if (!f) return;
+    std::fprintf(f,
+        "%s  tr=%p  fx=%d  param=%d  n=%.4f  setRet=%d  getAfter=%.4f  diff=%+.4f\n",
+        site, static_cast<void*>(tr), fx, param, n,
+        setRet ? 1 : 0, after, after - n);
+    std::fclose(f);
+}
+
 void drainInputQueue()
 {
     std::vector<PendingInput> local;
@@ -4450,8 +4481,24 @@ void drainInputQueue()
                                    static_cast<double>(kUf8FaderPbMax);
                         if (n < 0.0) n = 0.0;
                         if (n > 1.0) n = 1.0;
-                        TrackFX_SetParamNormalized(tr, cs.fxIndex,
-                            cs.vst3Param, n);
+                        const bool setOk = TrackFX_SetParamNormalized(
+                            tr, cs.fxIndex, cs.vst3Param, n);
+                        const double after = TrackFX_GetParamNormalized(
+                            tr, cs.fxIndex, cs.vst3Param);
+                        // Diag: Frank 2026-05-19 reports SSL Strip Mode
+                        // fader -> CS doesn't write to REAPER on Windows
+                        // (hardware LCDs change, plugin GUI doesn't).
+                        // Four-outcome matrix:
+                        //   setOk=false                 -> bad fx/param
+                        //                                  tuple (identity
+                        //                                  match issue)
+                        //   setOk=true, after != n      -> plugin stalled
+                        //                                  the write
+                        //   setOk=true, after == n,
+                        //     GUI unchanged             -> stale plugin
+                        //                                  window
+                        diagSetParamLog_("strip_mode/fader",
+                            tr, cs.fxIndex, cs.vst3Param, n, setOk, after);
                         // CS FaderLevel isn't a Link slot for built-in
                         // variants — broadcast by re-resolving per member
                         // via csFaderForTrack so the right vst3 idx is hit
