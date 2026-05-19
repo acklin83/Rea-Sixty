@@ -26,15 +26,11 @@ Overlay& Overlay::instance()
 
 void Overlay::setActive(bool on)
 {
-    if (active_.load() == on) return;
+    // Input-thread safe: only flips the atomic flag. The main-thread
+    // strip-render tick calls enumerate() lazily when active() so the
+    // first post-toggle frame still gets a fresh marker list. Callers
+    // on the main thread can also invoke enumerate() directly.
     active_.store(on);
-    if (on) {
-        // Refresh on enter so the first frame after toggle shows the
-        // current marker layout, not stale state from a previous
-        // session. Cursor/page reset happens inside enumerate() when
-        // project identity has changed.
-        enumerate();
-    }
 }
 
 void Overlay::toggle()

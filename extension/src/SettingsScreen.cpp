@@ -1986,7 +1986,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "mixer_toggle" || n == "home"
                  || n == "folder_mode" || n == "show_only_selected"
                  || n.rfind("ssl_strip_mode_", 0) == 0
-                 || n.rfind("uf8_plugin_mode_", 0) == 0)
+                 || n.rfind("uf8_plugin_mode_", 0) == 0
+                 || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
                 // Plug-in family — operates on the currently active

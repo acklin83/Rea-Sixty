@@ -13100,6 +13100,50 @@ void registerBindingHandlers()
         "Toggle SSL Strip Mode (with GUI)", false
     });
 
+    // Phase 2.8 Nav Mode — Marker/Region overlay activation. The lambda
+    // runs on the libusb input thread, so it only flips the atomic
+    // active-flag. The main-thread strip render tick picks up the
+    // change on the next pass and drives the surface accordingly.
+    registerBuiltin("marker_overlay_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto& ov = uf8::nav::Overlay::instance();
+            ov.setActive(!ov.active());
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+        },
+        [](int) { return uf8::nav::Overlay::instance().active(); },
+        "Nav Mode (Markers & Regions): toggle", false
+    });
+
+    registerBuiltin("marker_overlay_on", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto& ov = uf8::nav::Overlay::instance();
+            if (!ov.active()) {
+                ov.setActive(true);
+                g_pageDirty.store(true);
+                g_bankDirty.store(true);
+            }
+        },
+        [](int) { return uf8::nav::Overlay::instance().active(); },
+        "Nav Mode: enter", false
+    });
+
+    registerBuiltin("marker_overlay_off", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            auto& ov = uf8::nav::Overlay::instance();
+            if (ov.active()) {
+                ov.setActive(false);
+                g_pageDirty.store(true);
+                g_bankDirty.store(true);
+            }
+        },
+        [](int) { return !uf8::nav::Overlay::instance().active(); },
+        "Nav Mode: exit", false
+    });
+
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
         [](bool firing,
            bool /*pressed*/,
