@@ -13653,12 +13653,31 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
 #include "winusb_inf.h"
 #include <shellapi.h>
 
-// Drop the embedded WinUSB INF to %TEMP% and ask pnputil to install
-// it under UAC elevation. Binds WinUSB to SSL UF8 (VID_31E9 PID_0021)
-// and SSL UC1 (VID_31E9 PID_0023) so libusb can open them without
-// Zadig. One-time setup; reversible only by reinstalling SSL 360°.
-// Returns true if pnputil was launched (final result determined by
-// the user clicking through the UAC + driver-publisher prompts).
+// Drop the embedded WinUSB INF + a PowerShell helper to %TEMP% and run
+// the helper elevated under one UAC prompt. The helper:
+//   1. Mints (or reuses) a self-signed CodeSigningCert in LocalMachine\My
+//      named "Rea-Sixty Driver Signer".
+//   2. Installs the cert into LocalMachine\Root + TrustedPublisher so
+//      pnputil trusts CAT files signed by it.
+//   3. Builds a Windows file catalog (New-FileCatalog) over the package
+//      directory and Authenticode-signs it with the cert.
+//   4. Drops any pre-existing oem*.inf belonging to SSL's sslbus.inf
+//      bus driver (project goal: replace SSL 360°). Necessary because
+//      SSL's WHQL-signed driver outranks ours and pnputil's /install
+//      respects ranking; with SSL's INF gone, our WinUSB INF is the
+//      sole match for VID_31E9 PID_0021/0023 and PnP binds it.
+//   5. pnputil /add-driver /install — adds to store + binds onto both
+//      UF8 and UC1 in one shot.
+//
+// The plain "pnputil /add-driver" path used previously failed on
+// Windows because the INF lacked a CAT signature (third-party-INF
+// rejection) and, even after we shipped a CAT, SSL's bus driver
+// outranked ours and PnP refused to swap. This wraps the full
+// Zadig-equivalent flow into a single UAC prompt; reversible only by
+// re-installing SSL 360°.
+//
+// Returns true if PowerShell was launched (final result is visible
+// only via the device state after the user clicks through UAC).
 bool reasixty_installWinUsbDriver(std::string* errOut)
 {
     namespace sb = uf8::setup_bundle;
@@ -13668,9 +13687,15 @@ bool reasixty_installWinUsbDriver(std::string* errOut)
         if (errOut) *errOut = "GetTempPathA failed";
         return false;
     }
+
+    // Working dir: %TEMP%\rea_sixty_winusb\. Both INF and CAT live in
+    // there because New-FileCatalog hashes everything in the dir.
+    char workDir[MAX_PATH];
+    snprintf(workDir, sizeof(workDir), "%srea_sixty_winusb", tmpDir);
+    CreateDirectoryA(workDir, nullptr);  // OK if it already exists
+
     char infPath[MAX_PATH];
-    snprintf(infPath, sizeof(infPath),
-             "%srea_sixty_winusb.inf", tmpDir);
+    snprintf(infPath, sizeof(infPath), "%s\\rea_sixty_winusb.inf", workDir);
 
     if (FILE* f = std::fopen(infPath, "wb")) {
         std::fwrite(sb::kWinUsbInfBytesBytes, 1,
@@ -13681,17 +13706,73 @@ bool reasixty_installWinUsbDriver(std::string* errOut)
         return false;
     }
 
-    // pnputil /add-driver <inf> /install — needs admin. ShellExecute
-    // with "runas" verb triggers UAC. SW_HIDE because pnputil prints
-    // to a console we don't want to flash up.
-    char args[MAX_PATH + 64];
+    char psPath[MAX_PATH];
+    snprintf(psPath, sizeof(psPath),
+             "%srea_sixty_winusb_install.ps1", tmpDir);
+
+    // PowerShell helper. ASCII-safe (no UTF8/BOM concerns when written
+    // via fopen "wb"). Keep newlines as \n; PowerShell accepts them.
+    static const char* kPsScript = R"PS($ErrorActionPreference = 'Stop'
+
+$wd = Join-Path $env:TEMP 'rea_sixty_winusb'
+$inf = Join-Path $wd 'rea_sixty_winusb.inf'
+if (-not (Test-Path -LiteralPath $inf)) { throw "INF missing at $inf" }
+
+# Step 1+2: reuse or mint cert, then trust it.
+$subject = 'CN=Rea-Sixty Driver Signer'
+$cert = Get-ChildItem Cert:\LocalMachine\My |
+        Where-Object { $_.Subject -eq $subject } |
+        Select-Object -First 1
+if (-not $cert) {
+    $cert = New-SelfSignedCertificate `
+        -Type CodeSigningCert -Subject $subject `
+        -KeyUsage DigitalSignature `
+        -CertStoreLocation 'Cert:\LocalMachine\My' `
+        -KeyExportPolicy Exportable -NotAfter ((Get-Date).AddYears(5))
+    $certPath = Join-Path $env:TEMP 'rea_sixty_signer.cer'
+    Export-Certificate -Cert $cert -FilePath $certPath -Force | Out-Null
+    Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+}
+
+# Step 3: catalog + signature.
+$cat = Join-Path $wd 'rea_sixty_winusb.cat'
+New-FileCatalog -Path $wd -CatalogFilePath $cat -CatalogVersion 2 | Out-Null
+$sig = Set-AuthenticodeSignature -FilePath $cat -Certificate $cert -HashAlgorithm SHA256
+if ($sig.Status -ne 'Valid') { throw "CAT signature failed: $($sig.Status)" }
+
+# Step 4: drop SSL's sslbus.inf if present. Walk pnputil's listing for
+# an entry whose Original Name matches sslbus.inf and delete it.
+$drivers = pnputil /enum-drivers | Out-String
+$sslMatch = [regex]::Match($drivers,
+    'Published Name:\s+(oem\d+\.inf)[\s\S]*?Original Name:\s+sslbus\.inf')
+if ($sslMatch.Success) {
+    $sslOem = $sslMatch.Groups[1].Value
+    pnputil /delete-driver $sslOem /uninstall 2>&1 | Out-Null
+}
+
+# Step 5: install (rebind happens automatically with no competing INF).
+pnputil /add-driver $inf /install
+)PS";
+
+    if (FILE* f = std::fopen(psPath, "wb")) {
+        std::fwrite(kPsScript, 1, std::strlen(kPsScript), f);
+        std::fclose(f);
+    } else {
+        if (errOut) *errOut = std::string("could not write ") + psPath;
+        return false;
+    }
+
+    // ShellExecute powershell.exe with "runas" so we get exactly one
+    // UAC prompt covering cert-store writes + pnputil. -NoProfile
+    // skips $PROFILE so a user-customised profile can't break us.
+    char args[MAX_PATH + 128];
     snprintf(args, sizeof(args),
-             "/add-driver \"%s\" /install", infPath);
-    HINSTANCE rc = ShellExecuteA(nullptr, "runas",
-                                 "pnputil.exe", args, nullptr,
-                                 SW_HIDE);
+             "-NoProfile -ExecutionPolicy Bypass -File \"%s\"", psPath);
+    HINSTANCE rc = ShellExecuteA(nullptr, "runas", "powershell.exe",
+                                 args, nullptr, SW_HIDE);
     if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-        if (errOut) *errOut = "pnputil launch failed (user cancelled UAC?)";
+        if (errOut) *errOut = "powershell launch failed (user cancelled UAC?)";
         return false;
     }
     return true;

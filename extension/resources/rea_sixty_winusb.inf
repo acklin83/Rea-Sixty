@@ -4,7 +4,11 @@
 ; vendor-USB interfaces to Microsoft's signed WinUSB driver so libusb
 ; can claim them directly. Replaces SSL 360°'s own kernel driver
 ; binding — SSL 360° will stop seeing the devices after install.
-
+;
+; Section decoration uses explicit NTamd64 rather than NT$ARCH$ —
+; UpdateDriverForPlugAndPlayDevices on Win10/11 sometimes fails to
+; resolve the $ARCH$ token at match time and rejects the INF with
+; ERROR_NO_MORE_ITEMS (verified on Frank's Win11 2026-05-19).
 [Version]
 Signature   = "$Windows NT$"
 Class       = USBDevice
@@ -14,9 +18,9 @@ CatalogFile = rea_sixty_winusb.cat
 DriverVer   = 05/19/2026,1.0.0.0
 
 [Manufacturer]
-%ProviderName% = Standard,NT$ARCH$
+%ProviderName% = Standard,NTamd64
 
-[Standard.NT$ARCH$]
+[Standard.NTamd64]
 %UF8.DeviceDesc% = USB_Install, USB\VID_31E9&PID_0021
 %UC1.DeviceDesc% = USB_Install, USB\VID_31E9&PID_0023
 
@@ -35,11 +39,23 @@ StartType     = 3
 ErrorControl  = 1
 ServiceBinary = %12%\WinUSB.sys
 
+[USB_Install.Wdf]
+KmdfService = WINUSB, WinUsb_Install
+
+[WinUsb_Install]
+KmdfLibraryVersion = 1.11
+
 [USB_Install.HW]
 AddReg = Dev_AddReg
 
 [Dev_AddReg]
-HKR,,DeviceInterfaceGUIDs,0x10000,"{6C696263-7573-622D-3173-736C2D757F8}"
+HKR,,DeviceInterfaceGUIDs,0x10000,"{6c696263-7573-622d-3173-736c2d757f8c}"
+
+[USB_Install.CoInstallers]
+AddReg = CoInstallers_AddReg
+
+[CoInstallers_AddReg]
+HKR,,CoInstallers32,0x00010000,"WdfCoInstaller01011.dll,WdfCoInstaller"
 
 [Strings]
 ProviderName   = "Rea-Sixty"
