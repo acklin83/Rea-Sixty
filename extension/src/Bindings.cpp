@@ -2708,6 +2708,45 @@ Binding getBinding(int layer, ButtonId id)
     return it->second;
 }
 
+bool findFirstBoundTo(const std::string& builtinName,
+                      int* layerOut, ButtonId* idOut, Modifier* modOut,
+                      bool* longPressOut)
+{
+    if (builtinName.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    auto matchStep = [&](const ActionStep& s) {
+        return s.type == ActionType::Builtin && s.action == builtinName;
+    };
+    auto matchSlot = [&](const ActionSlot& slot) {
+        if (matchStep(static_cast<const ActionStep&>(slot))) return true;
+        for (const auto& extra : slot.extraSteps) {
+            if (matchStep(extra)) return true;
+        }
+        return false;
+    };
+    for (int layer = 0; layer < 3; ++layer) {
+        for (const auto& [id, bd] : g_cfg.layers[layer].bindings) {
+            for (int m = 0; m < kModifierCount; ++m) {
+                if (matchSlot(bd.shortPress[m])) {
+                    if (layerOut)      *layerOut      = layer;
+                    if (idOut)         *idOut         = id;
+                    if (modOut)        *modOut        = static_cast<Modifier>(m);
+                    if (longPressOut)  *longPressOut  = false;
+                    return true;
+                }
+                if (bd.hasLongPress && matchSlot(bd.longPress[m])) {
+                    if (layerOut)      *layerOut      = layer;
+                    if (idOut)         *idOut         = id;
+                    if (modOut)        *modOut        = static_cast<Modifier>(m);
+                    if (longPressOut)  *longPressOut  = true;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool hasBinding(int layer, ButtonId id)
 {
     std::lock_guard<std::mutex> lk(g_cfgMutex);

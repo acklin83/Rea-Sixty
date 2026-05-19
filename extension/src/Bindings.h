@@ -462,6 +462,16 @@ void onMixerVisibilityChanged(bool visible);
 // each frame). Returns a default-constructed Binding if no entry exists.
 Binding getBinding(int layer, ButtonId id);
 
+// Phase 2.8c — reverse lookup for the NAV Settings page. Walks all
+// 3 layers and every bound ButtonId looking for a slot that fires
+// the named builtin. Returns the first match (no preference order
+// beyond unordered_map iteration). Output params are optional.
+bool findFirstBoundTo(const std::string& builtinName,
+                      int* layerOut    = nullptr,
+                      ButtonId* idOut  = nullptr,
+                      Modifier* modOut = nullptr,
+                      bool* longPressOut = nullptr);
+
 // Whether the layer has an entry for this id at all. Distinguishes
 // "user has touched this binding" (entry exists, even if all fields
 // are at defaults) from "untouched" (no entry, getBinding would

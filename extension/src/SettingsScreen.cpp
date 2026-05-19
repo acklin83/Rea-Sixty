@@ -7972,6 +7972,61 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     int flagsNav = tabFlagsFor(5);
     if (ImGui_BeginTabItem(ctx, "NAV", nullptr, &flagsNav)) {
         persistActive(5);
+
+    // Activation — read-only mirror of the three bindable Nav toggles.
+    // Shows which physical button currently fires each. The bind UI
+    // lives in Settings → Bindings; we just point the user there.
+    ImGui_Text(ctx, "Activation");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "Nav Mode is toggled via three bindable builtins. Assign any "
+        "of these to a hardware button in Settings → Bindings:");
+    ImGui_Spacing(ctx);
+
+    auto modShort = [](uf8::bindings::Modifier m) -> const char* {
+        switch (m) {
+            case uf8::bindings::Modifier::Plain: return "";
+            case uf8::bindings::Modifier::Shift: return " + Shift";
+            case uf8::bindings::Modifier::Cmd:   return " + Cmd";
+            case uf8::bindings::Modifier::Ctrl:  return " + Ctrl";
+        }
+        return "";
+    };
+    auto navMirror = [&](const char* builtinName,
+                         const char* friendly)
+    {
+        int layer = 0;
+        uf8::bindings::ButtonId id = uf8::bindings::ButtonId::None;
+        uf8::bindings::Modifier m  = uf8::bindings::Modifier::Plain;
+        bool longPress = false;
+        const bool found = uf8::bindings::findFirstBoundTo(
+            builtinName, &layer, &id, &m, &longPress);
+        char line[256];
+        if (found) {
+            const char* name = uf8::bindings::toName(id);
+            const char* lp   = longPress ? " (long press)" : "";
+            std::snprintf(line, sizeof(line), "%s — L%d %s%s%s",
+                          friendly,
+                          layer + 1,
+                          name ? name : "?",
+                          modShort(m),
+                          lp);
+        } else {
+            std::snprintf(line, sizeof(line), "%s — (unbound)", friendly);
+        }
+        ImGui_BulletText(ctx, line);
+    };
+    navMirror("marker_overlay_toggle",
+              "Nav Mode (Markers & Regions): toggle");
+    navMirror("marker_overlay_markers_only_toggle",
+              "Nav Mode: Markers only (no drill)");
+    navMirror("marker_overlay_regions_only_toggle",
+              "Nav Mode: Regions only (no drill)");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Auto-Follow");
+    ImGui_Separator(ctx);
     bool autoFollow = reasixty_navAutoFollow();
     if (ImGui_Checkbox(ctx,
                        "Auto-Follow playhead / edit cursor",
