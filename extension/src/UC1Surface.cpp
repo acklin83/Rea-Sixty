@@ -13,7 +13,13 @@
 #include "Bindings.h"  // dispatch / dispatchEncoder for Uc1Encoder2
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
 #include "GrCalibration.h" // uf8::applyGrCalibration + kBcVuBpDb / kLedsBpDb
+#include "MarkerOverlay.h"  // Phase 2.8b: Encoder 2 intercept for Nav Mode cursor
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
+
+// Defined in main.cpp — marks the UF8 Nav overlay decoration cache
+// dirty so the next tick re-pushes after a cursor move or view
+// change originating on the UC1 side (Phase 2.8b).
+extern "C" void reasixty_markNavOverlayDirty();
 #include "ParameterGroups.h"  // multi-track param sync on UC1-originated writes
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
 
@@ -944,6 +950,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point lastT{};
         int step = stepFromAccumulator(acc, lastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
+        // Phase 2.8b — Nav Mode cursor scroll. When the overlay is
+        // active, Encoder 2 walks one marker/region per detent regardless
+        // of SEL Mode or bindings dispatch. moveCursor sets the cursor
+        // pin so auto-follow won't fight back. g_navOverlayDirty triggers
+        // a UF8 re-paint on the next tick; the UC1 carousel is repushed
+        // every tick via pushUc1NavCarousel so no explicit signal needed.
+        if (uf8::nav::Overlay::instance().active()) {
+            uf8::nav::Overlay::instance().moveCursor(step);
+            reasixty_markNavOverlayDirty();
+            ++stats_.knobEventsHandled;
+            return;
+        }
         // SEL Mode override — when bit 3 (UC1 Encoder 2) is ticked in
         // Settings → Modes → FX/Instance Cycle AND SelectionMode is
         // Instance / InstanceCycle, hijack the encoder away from its

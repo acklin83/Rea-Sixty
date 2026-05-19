@@ -12322,6 +12322,17 @@ void reasixty_setNavAutoFollow(bool follow)
     if (g_sync) g_sync->invalidate();
 }
 
+// Public C-linkage marker — anonymous-namespace globals can't be
+// referenced from other TUs, so this thin shim is how UC1Surface
+// signals "the Nav overlay needs a re-paint" after an Encoder 2
+// rotation (Phase 2.8b). Kept C-linkage so the symbol is stable and
+// the call site doesn't need to know about main.cpp's internal types.
+extern "C" void reasixty_markNavOverlayDirty()
+{
+    g_navOverlayDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+
 // ---- Selection-Set settings exports --------------------------------------
 // All readers honour the live g_selsets cache; writers update both the
 // cache and the project ExtState immediately, then nudge the surface
