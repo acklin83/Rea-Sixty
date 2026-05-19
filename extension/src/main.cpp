@@ -15635,16 +15635,45 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
 
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
-    // Bail on partial API load — calling a null function pointer in
-    // any of the init code below crashes REAPER. The names of missing
-    // functions get written to rea_sixty_missing_api.log by the
-    // patched LoadAPI in the vendored SDK; review that to decide
-    // which symbols need REAPERAPI_WANT_xxx / a soft fallback.
-    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
 
+    // Diagnostic init log: write a step marker before each substantial
+    // init action so a REAPER crash leaves us a breadcrumb trail.
+    // Lambda has to live in the function scope; uses C IO so it works
+    // before any later module is in scope.
+    auto initLog = [](const char* msg) {
+#ifdef _WIN32
+        char tmp[MAX_PATH] = {0};
+        char path[MAX_PATH] = {0};
+        if (GetTempPathA(MAX_PATH, tmp)) {
+            snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
+        } else {
+            std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
+        }
+        FILE* f = std::fopen(path, "a");
+#else
+        FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+#endif
+        if (f) { std::fprintf(f, "%s\n", msg); std::fclose(f); }
+    };
+    initLog("--- ReaperPluginEntry start");
+
+    // REAPERAPI_LoadAPI returns the count of unresolved function
+    // pointers. Default behaviour (bail on any miss) silently killed
+    // our DLL on REAPER 7.66 even though the missing symbols
+    // (TakeFX_GetParamSectionName / TrackFX_GetParamSectionName as of
+    // 2026-05-19) are ones we never call. Proceed regardless.
+    {
+        const int missing = REAPERAPI_LoadAPI(rec->GetFunc);
+        char m[64];
+        snprintf(m, sizeof(m), "LoadAPI: %d missing (proceeding)", missing);
+        initLog(m);
+    }
+
+    initLog("step: capture g_reaperGetFunc");
     // Capture rec->GetFunc for SWELL APIs not in the plug-in SDK
     // (e.g. BrowseForSaveFile — see reasixty_exportLayerViaDialog).
     g_reaperGetFunc = rec->GetFunc;
+    initLog("step: setInstanceIdxProvider");
 
     // Multi-instance picker glue: wire the active-instance lookup so
     // uf8::lookupPluginOnTrack(tr, domain) returns the Nth matching FX
@@ -15714,11 +15743,13 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // built-in PluginMap registry is initialised (it's static so it's
     // always ready). Two-stage lookup in lookupPluginMapByName falls
     // through to this catalogue.
+    initLog("step: user_plugins::load");
     uf8::user_plugins::load();
 
-    // Parameter-group sidecar (8 named slots + multi-select toggle).
+    initLog("step: param_groups::load");
     uf8::param_groups::load();
 
+    initLog("step: plugin_register csurf");
     // Register as a full control-surface class. The user adds a
     // "Rea-Sixty" entry in Preferences → Control/OSC/Web; REAPER then
     // calls createReaSixty() to instantiate ReaSixtySurface, which
@@ -15743,5 +15774,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdNavDump        = plugin_register("custom_action", &g_actionNavDump);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
 
+    initLog("step: REAPER_PLUGIN_ENTRY returning 1");
     return 1;
 }
