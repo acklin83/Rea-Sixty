@@ -99,6 +99,17 @@ public:
     void drillIntoRegion(int enumPos);   // switch to MarkersInRegion for items_[enumPos]
     void backToRegions();
 
+    // Manual cursor movement (UC1 Encoder 2 rotation). Sets the
+    // cursor-pin latch so auto-follow stops writing the cursor until
+    // the playhead catches up to the pinned item, or the user commits
+    // (push), exits Nav Mode, drills, or changes view.
+    void moveCursor(int delta);
+
+    // Clear the pin without moving — used by commit (push) and by
+    // mode/view transitions that already reset cursor state.
+    void clearCursorPin() { cursorPinned_ = false; }
+    bool cursorPinned()   const { return cursorPinned_; }
+
     // Auto-Follow tick — main thread. Given current playhead time,
     // sets cursorIdx to the item the playhead is currently on or past,
     // slides pageOffset so the cursor stays in the visible 8-window,
@@ -137,6 +148,17 @@ private:
     // region the playhead hasn't reached yet (manual targeting during
     // playback, smooth-seek delay).
     bool              wasInFilter_  = false;
+
+    // Cursor pin (Phase 2.8b). Set by moveCursor(); gates the cursor
+    // scan in tickAutoFollow. Auto-clears when the playhead reaches
+    // the pinned item's position. See plan-nav-uc1-and-settings.md
+    // section "Cursor model" for the rationale.
+    bool              cursorPinned_ = false;
+
+    // Slide pageOffset_ so cursorIdx_ is on the visible 8-window.
+    // Helper factored out of tickAutoFollow so moveCursor() can share
+    // the logic.
+    void              slidePageToCursor_();
 
     // Project-change detection. If either changes between enumerate()
     // calls, cursor/page reset and view falls back to Regions.

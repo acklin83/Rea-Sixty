@@ -31,6 +31,11 @@ void Overlay::setActive(bool on)
     // first post-toggle frame still gets a fresh marker list. Callers
     // on the main thread can also invoke enumerate() directly.
     active_.store(on);
+    // Exiting Nav Mode releases the cursor pin so the next entry
+    // starts from a clean auto-follow state. cursorPinned_ is plain
+    // bool (main-thread only readers gate on it); writing it from
+    // either thread is fine because nothing races on a single bool.
+    if (!on) cursorPinned_ = false;
 }
 
 void Overlay::toggle()
@@ -45,6 +50,7 @@ void Overlay::setView(View v)
     // Switching views invalidates the cursor — different items_ list.
     cursorIdx_ = 0;
     pageOffset_ = 0;
+    cursorPinned_ = false;
     enumerate();
 }
 
@@ -111,6 +117,7 @@ void Overlay::enumerate()
         cursorIdx_       = 0;
         pageOffset_      = 0;
         filterRegionIdx_ = -1;
+        cursorPinned_    = false;
         if (view_ == View::MarkersInRegion) {
             view_ = View::Regions;
         }
@@ -239,6 +246,7 @@ void Overlay::drillIntoRegion(int enumPos)
     // arrives in this region. Without this the next tick would
     // observe playhead-still-in-previous-region and roll us back.
     wasInFilter_ = false;
+    cursorPinned_ = false;
     enumerate();
 }
 
@@ -249,7 +257,29 @@ void Overlay::backToRegions()
     cursorIdx_  = 0;
     pageOffset_ = 0;
     wasInFilter_ = false;
+    cursorPinned_ = false;
     enumerate();
+}
+
+void Overlay::moveCursor(int delta)
+{
+    if (items_.empty() || delta == 0) return;
+    const int last = static_cast<int>(items_.size()) - 1;
+    int next = cursorIdx_ + delta;
+    if (next < 0)    next = 0;
+    if (next > last) next = last;
+    if (next == cursorIdx_) return;
+    cursorIdx_ = next;
+    cursorPinned_ = true;
+    slidePageToCursor_();
+}
+
+void Overlay::slidePageToCursor_()
+{
+    const int cursorPage = cursorIdx_ / kPageSize;
+    if (cursorPage != pageOffset_) {
+        pageOffset_ = cursorPage;
+    }
 }
 
 bool Overlay::tickAutoFollow(double playPos)
@@ -315,6 +345,19 @@ bool Overlay::tickAutoFollow(double playPos)
             break;
         }
     }
+    // Cursor pin (Phase 2.8b): the user is browsing manually via UC1
+    // Encoder 2. Don't overwrite their cursor with playhead position.
+    // Clear the pin the moment the playhead catches up to (or passes)
+    // the pinned item — auto-follow then resumes naturally on the next
+    // tick. Forward and reverse pins both clear: pin can stay across
+    // any number of ticks but releases as soon as the playhead reaches
+    // the same scan result the user is parked on.
+    if (cursorPinned_) {
+        if (newCursor == cursorIdx_) {
+            cursorPinned_ = false;
+        }
+        return changed;
+    }
     if (newCursor != cursorIdx_) {
         // Cursor moved — bring its page into view. The page-slide is
         // intentionally GATED on cursor change: when the user manually
@@ -324,10 +367,7 @@ bool Overlay::tickAutoFollow(double playPos)
         // the cursor's page every tick and made manual paging look
         // broken (Frank 2026-05-19).
         cursorIdx_ = newCursor;
-        const int cursorPage = cursorIdx_ / 8;
-        if (cursorPage != pageOffset_) {
-            pageOffset_ = cursorPage;
-        }
+        slidePageToCursor_();
         changed = true;
     }
 
@@ -343,10 +383,11 @@ void Overlay::dumpWindow() const
                                        : "MarkersAll";
     std::snprintf(hdr, sizeof(hdr),
         "[Nav] view=%s items=%zu page=%d/%d cursor=%d filterRgn=%d "
-        "active=%d autoFollow=%d\n",
+        "active=%d autoFollow=%d pin=%d\n",
         viewName, items_.size(), pageOffset_ + 1, pageCount(),
         cursorIdx_, filterRegionIdx_,
-        active_.load() ? 1 : 0, autoFollow_ ? 1 : 0);
+        active_.load() ? 1 : 0, autoFollow_ ? 1 : 0,
+        cursorPinned_ ? 1 : 0);
     ShowConsoleMsg(hdr);
 
     Item const* win[kPageSize] = {};
