@@ -212,21 +212,21 @@ void Overlay::backToRegions()
 bool Overlay::tickAutoFollow(double playPos)
 {
     if (!autoFollow_) return false;
-    if (items_.empty()) return false;
 
     bool changed = false;
 
-    // MarkersInRegion auto-roll: when the playhead crosses out of the
-    // current region's [start, end] window, find the next region by
-    // timeline order and drill into it. Done before cursor-finding so
-    // the post-roll items_ is what we search.
-    if (view_ == View::MarkersInRegion && filterRegionIdx_ >= 0) {
+    // MarkersInRegion: switch the drilled region whenever the playhead
+    // sits inside a DIFFERENT region than the one currently filtered.
+    // Symmetric — handles forward roll (song A → B), backwards jumps
+    // (user clicks back into an earlier region), and non-adjacent
+    // jumps. Does NOT switch when the playhead is in a gap between
+    // regions; the current drill stays so the user keeps the marker
+    // list they were working with.
+    if (view_ == View::MarkersInRegion) {
         int nmarkers = 0, nregions = 0;
         CountProjectMarkers(nullptr, &nmarkers, &nregions);
         const int total = nmarkers + nregions;
-        double curStart = 0.0, curEnd = 0.0;
-        int    nextRgnEnumPos = -1;
-        int    nextRgnIdx     = -1;
+        int playingRgnIdx = -1;
         for (int i = 0; i < total; ++i) {
             bool isrgn = false;
             double pos = 0.0, rgnend = 0.0;
@@ -235,41 +235,21 @@ bool Overlay::tickAutoFollow(double playPos)
             if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
                                      &name, &idx, &color)) continue;
             if (!isrgn) continue;
-            if (idx == filterRegionIdx_) {
-                curStart = pos;
-                curEnd   = rgnend;
-            } else if (pos > curEnd && nextRgnEnumPos < 0
-                       && pos <= playPos + 1e-6) {
-                // First region that starts after our current one AND
-                // the playhead has reached. Could be tightened further
-                // (find region containing playhead) but this honours
-                // timeline order for the typical "song ended, next
-                // song starts" flow.
-                nextRgnEnumPos = i;
-                nextRgnIdx     = idx;
+            if (playPos + 1e-6 >= pos && playPos <= rgnend + 1e-6) {
+                playingRgnIdx = idx;
+                break;
             }
         }
-        if (playPos > curEnd && nextRgnIdx >= 0) {
-            // Switch view to Regions transiently so drillIntoRegion's
-            // enumPos lookup hits a Region row. Cheaper than rewriting
-            // drillIntoRegion to take a region-idx directly.
-            const View saved = view_;
-            view_ = View::Regions;
+        if (playingRgnIdx >= 0 && playingRgnIdx != filterRegionIdx_) {
+            filterRegionIdx_ = playingRgnIdx;
+            cursorIdx_  = 0;
+            pageOffset_ = 0;
             enumerate();
-            for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-                if (items_[i].isRegion && items_[i].idx == nextRgnIdx) {
-                    drillIntoRegion(i);
-                    changed = true;
-                    break;
-                }
-            }
-            if (!changed) {
-                view_ = saved;
-                enumerate();
-            }
-            (void)curStart;
+            changed = true;
         }
     }
+
+    if (items_.empty()) return changed;
 
     // Cursor: scan items in display order, last item whose pos <= play.
     int newCursor = 0;
@@ -281,14 +261,18 @@ bool Overlay::tickAutoFollow(double playPos)
         }
     }
     if (newCursor != cursorIdx_) {
+        // Cursor moved — bring its page into view. The page-slide is
+        // intentionally GATED on cursor change: when the user manually
+        // pages (PageLeft/Right, encoder rotation) while playhead is
+        // parked, the cursor stays put and the page stays where the
+        // user put it. Without this gate auto-follow snapped back to
+        // the cursor's page every tick and made manual paging look
+        // broken (Frank 2026-05-19).
         cursorIdx_ = newCursor;
-        changed = true;
-    }
-
-    // Slide pageOffset so cursor stays visible.
-    const int targetPage = cursorIdx_ / 8;
-    if (targetPage != pageOffset_) {
-        pageOffset_ = targetPage;
+        const int cursorPage = cursorIdx_ / 8;
+        if (cursorPage != pageOffset_) {
+            pageOffset_ = cursorPage;
+        }
         changed = true;
     }
 
