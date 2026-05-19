@@ -218,6 +218,12 @@ if(APPLE)
         COMPILE_FLAGS "-fno-objc-arc")
 endif()
 
+# SWELL's swell-types.h #defines min/max as 2-arg macros, which collide
+# with libstdc++'s 3-arg min/max overloads on Linux (and would on Windows
+# too without NOMINMAX). The codebase already uses std::min/std::max
+# everywhere, so opt out of SWELL's macros project-wide.
+target_compile_definitions(reaper_uf8 PRIVATE WDL_NO_DEFINE_MINMAX)
+
 target_link_libraries(reaper_uf8 PRIVATE reasixty_hidapi)
 
 if(APPLE)
