@@ -1405,6 +1405,104 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         return;
     }
     if (ev.id == button::kSecEncPush) {
+        // Phase 2.8b — Nav Mode push gesture. While overlay-active in
+        // MAIN, this button commits a cursor jump (or back/drill via
+        // shift / long-press). Intercepted BEFORE the bindings
+        // dispatch below so the user's Uc1Encoder2Push binding
+        // (default show_focused_plugin_gui) doesn't double-fire.
+        if (mode_ == Uc1Mode::Main
+            && uf8::nav::Overlay::instance().active())
+        {
+            using namespace std::chrono;
+            if (ev.pressed) {
+                navEnc2PressTime_ = steady_clock::now();
+                navEnc2Pressed_   = true;
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+            // Release — decide action based on held duration + shift state.
+            if (!navEnc2Pressed_) {
+                // Stray release (press was swallowed somewhere else).
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+            navEnc2Pressed_ = false;
+            const auto held = duration_cast<milliseconds>(
+                steady_clock::now() - navEnc2PressTime_).count();
+            const bool isLong  = held > 500;
+            const bool isShift = (uf8::bindings::currentModifierSnapshot()
+                                  == uf8::bindings::Modifier::Shift);
+
+            auto& ov = uf8::nav::Overlay::instance();
+            const auto& items = ov.items();
+            const int ci = ov.cursorIdx();
+            if (ci < 0 || ci >= static_cast<int>(items.size())) {
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+            const auto& it    = items[ci];
+            const auto  lock  = ov.viewLock();
+            auto markDirty = []{
+                reasixty_markNavOverlayDirty();
+            };
+
+            if (lock == uf8::nav::ViewLock::MarkersOnly) {
+                if (!isLong && !isShift) {
+                    SetEditCurPos(it.pos, true, true);
+                    ov.clearCursorPin();
+                    markDirty();
+                }
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+            if (lock == uf8::nav::ViewLock::RegionsOnly) {
+                if (!isLong && !isShift) {
+                    GoToRegion(nullptr, it.idx, false);
+                    ov.clearCursorPin();
+                    markDirty();
+                }
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+
+            // ViewLock::None — full gesture table.
+            if (isLong) {
+                if (ov.view() != uf8::nav::View::Regions) {
+                    ov.backToRegions();
+                    markDirty();
+                }
+                ++stats_.buttonEventsHandled;
+                return;
+            }
+
+            switch (ov.view()) {
+            case uf8::nav::View::Regions:
+                GoToRegion(nullptr, it.idx, false);
+                if (!isShift) {
+                    ov.drillIntoRegion(ci);
+                }
+                ov.clearCursorPin();
+                markDirty();
+                break;
+            case uf8::nav::View::MarkersInRegion:
+                if (isShift) {
+                    ov.backToRegions();
+                }
+                SetEditCurPos(it.pos, true, true);
+                ov.clearCursorPin();
+                markDirty();
+                break;
+            case uf8::nav::View::MarkersAll:
+                if (!isShift) {
+                    SetEditCurPos(it.pos, true, true);
+                    ov.clearCursorPin();
+                    markDirty();
+                }
+                break;
+            }
+            ++stats_.buttonEventsHandled;
+            return;
+        }
         // MAIN mode: dispatch via Bindings. Default Plain binding is
         // `show_focused_plugin_gui` (Frank 2026-05-14 "das könnte
         // show plugin gui werden"), but the user can swap in any

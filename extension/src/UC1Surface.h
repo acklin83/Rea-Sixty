@@ -333,6 +333,11 @@ private:
     std::string                           navCarouselHeader_;
     uint8_t                               navCarouselPalette_ = 0xFF;  // 0xFF = "never sent"
 
+    // Nav Mode push gesture (Phase 2.8b). Press timestamp lets us
+    // distinguish short / long press on release. ~500 ms threshold.
+    std::chrono::steady_clock::time_point navEnc2PressTime_{};
+    bool                                  navEnc2Pressed_   = false;
+
     std::mutex               queueMu_;
     std::deque<ButtonEvent>  buttonQueue_;
     std::deque<KnobEvent>    knobQueue_;
