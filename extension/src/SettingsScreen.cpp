@@ -122,6 +122,12 @@ void reasixty_setNavUc1Takeover(bool on);
 void reasixty_setNavUc1Push(int v);
 void reasixty_setNavUc1PushShift(int v);
 void reasixty_setNavUc1LongPress(int v);
+int  reasixty_navLowerRow();
+bool reasixty_navPaginate();
+int  reasixty_navColorBar();
+void reasixty_setNavLowerRow(int v);
+void reasixty_setNavPaginate(bool on);
+void reasixty_setNavColorBar(int v);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -8082,6 +8088,61 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  What a tap on a region's top-soft-key does. Jump = move "
         "transport to the region start; Drill = enter the region's "
         "marker list. RegionsOnly view-lock always suppresses Drill.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "UF8 strip display");
+    ImGui_Separator(ctx);
+
+    ImGui_Text(ctx, "Lower-row format:");
+    int lr = reasixty_navLowerRow();
+    if (ImGui_RadioButton(ctx, "Off (V-Pot value)##nav_lr_off", lr == 0)) {
+        reasixty_setNavLowerRow(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Index (R03 / M07)##nav_lr_idx", lr == 1)) {
+        reasixty_setNavLowerRow(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Timecode (MM:SS)##nav_lr_tc", lr == 2)) {
+        reasixty_setNavLowerRow(2);
+    }
+    ImGui_Text(ctx,
+        "  Off keeps the V-Pot value visible. Index / Timecode "
+        "overlay marker metadata on the lower row (Phase 2.8a left "
+        "the V-Pot field untouched by default).");
+
+    ImGui_Spacing(ctx);
+    bool pag = reasixty_navPaginate();
+    if (ImGui_Checkbox(ctx,
+            "Pagination hints (<<, >>) on strip 0 / 7 lower row",
+            &pag))
+    {
+        reasixty_setNavPaginate(pag);
+    }
+    ImGui_Text(ctx,
+        "  Only meaningful when Lower-row format is Index or "
+        "Timecode. Hints replace the strip's lower-row text when a "
+        "prev / next page exists.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Color-bar source:");
+    int cb = reasixty_navColorBar();
+    if (ImGui_RadioButton(ctx,
+            "REAPER marker colour##nav_cb_reaper", cb == 0))
+    {
+        reasixty_setNavColorBar(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx,
+            "Force palette grey##nav_cb_grey", cb == 1))
+    {
+        reasixty_setNavColorBar(1);
+    }
+    ImGui_Text(ctx,
+        "  REAPER honours the colour override set on each marker / "
+        "region. Force grey suppresses it so the cursor's "
+        "top-soft-key ring is the only colour cue.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

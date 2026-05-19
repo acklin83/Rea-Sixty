@@ -307,6 +307,15 @@ std::atomic<int>  g_navUc1Push{0};
 std::atomic<int>  g_navUc1PushShift{0};
 std::atomic<int>  g_navUc1LongPress{0};
 
+// Phase 2.8c — UF8 strip display preferences.
+//   nav_lower_row     0=Off (V-Pot value), 1=Index (R03/M07), 2=Timecode
+//   nav_paginate      bool, show << / >> hints on strips 0/7 when pages
+//                     exist beyond the visible 8-window
+//   nav_color_bar     0=REAPER marker colour, 1=Force palette grey
+std::atomic<int>  g_navLowerRow{0};
+std::atomic<bool> g_navPaginate{false};
+std::atomic<int>  g_navColorBar{0};
+
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
 // (uf8::g_focusedParam, uf8::g_focusedDirty). This flag is the existing
@@ -1615,6 +1624,19 @@ void loadBrightness()
         int n = std::atoi(v);
         if (n < 0 || n > 2) n = 0;
         g_navUc1LongPress.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_lower_row"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navLowerRow.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_paginate"); v && *v) {
+        g_navPaginate.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 1) n = 0;
+        g_navColorBar.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
@@ -6891,6 +6913,10 @@ uint32_t navColorForStrip(int slot)
     const auto& items = ov.items();
     const int idx = ov.pageOffset() * 8 + slot;
     if (idx < 0 || idx >= static_cast<int>(items.size())) return 0;
+    // Phase 2.8c: 'Force palette grey' suppresses per-marker colour
+    // and renders every strip on the neutral fallback so the cursor
+    // ring is the only colour cue.
+    if (g_navColorBar.load() == 1) return 0xCCCCCCu;
     const uint32_t raw = static_cast<uint32_t>(items[idx].color);
     if (raw == 0) return 0xCCCCCCu;   // neutral fallback for "no override"
     return raw & 0x00FFFFFFu;
@@ -6981,11 +7007,15 @@ void pushNavOverlayDecorations()
 
     const bool dirty = g_navOverlayDirty.exchange(false);
     if (dirty) {
-        // Invalidate the three caches the overlay owns so a forced
-        // re-push goes through this tick.
+        // Invalidate the caches the overlay owns so a forced re-push
+        // goes through this tick. ValueLine joins the list when the
+        // Phase 2.8c lower-row write is active.
         g_lastSlotLabel.fill({});
         g_lastChanNum.fill({});
         g_lastTopSoftKey.fill(-1);
+        if (g_navLowerRow.load() != 0) {
+            g_lastValueLine.fill({});
+        }
     }
 
     uf8::nav::Item const* win[8] = {};
@@ -7022,6 +7052,53 @@ void pushNavOverlayDecorations()
         if (chan != g_lastChanNum[s]) {
             g_lastChanNum[s] = chan;
             g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+        }
+
+        // Phase 2.8c — optional lower-row write. Off (=0) leaves the
+        // V-Pot value untouched per the 2.8a revision; Index / Timecode
+        // formats overwrite it with marker/region metadata. Pagination
+        // hints take precedence on strips 0/7 when there's a page in
+        // that direction.
+        const int   lowerFmt   = g_navLowerRow.load();
+        const bool  paginate   = g_navPaginate.load();
+        const int   pageCount  = ov.pageCount();
+        const int   pageIdx    = ov.pageOffset();
+        const bool  hasPrev    = (pageIdx > 0);
+        const bool  hasNext    = (pageIdx + 1 < pageCount);
+        if (lowerFmt != 0) {
+            std::string lower;
+            if (paginate && s == 0 && hasPrev) {
+                lower = "<<     ";
+            } else if (paginate && s == 7 && hasNext) {
+                lower = "     >>";
+            } else if (it) {
+                char buf[16];
+                if (lowerFmt == 1) {
+                    // Index: 'R03' for regions, 'M03' for markers.
+                    std::snprintf(buf, sizeof(buf), "%c%03d",
+                                  it->isRegion ? 'R' : 'M', it->idx);
+                } else {
+                    // Timecode: M:SS or MM:SS (7 char field). Negative
+                    // positions are clamped to 0.
+                    double pos = it->pos < 0 ? 0.0 : it->pos;
+                    int totalSec = static_cast<int>(pos + 0.5);
+                    int mm = totalSec / 60;
+                    int ss = totalSec % 60;
+                    if (mm > 99) mm = 99;
+                    std::snprintf(buf, sizeof(buf), "%2d:%02d", mm, ss);
+                }
+                lower = buf;
+            } else {
+                lower = "       ";
+            }
+            // Pad / truncate to 7 chars to match the firmware slot width.
+            if (lower.size() < 7) lower.append(7 - lower.size(), ' ');
+            if (lower.size() > 7) lower.resize(7);
+            if (lower != g_lastValueLine[s]) {
+                g_lastValueLine[s] = lower;
+                g_dev->send(uf8::buildStripTextLower(
+                    static_cast<uint8_t>(s), lower));
+            }
         }
 
         // Top-soft-key LED — bright on the cursor strip, dim on other
@@ -12541,6 +12618,31 @@ void reasixty_setNavUc1PushShift(int v)
     { writeNavSetting_("nav_uc1_push_shift", g_navUc1PushShift, v, 2); }
 void reasixty_setNavUc1LongPress(int v)
     { writeNavSetting_("nav_uc1_long_press", g_navUc1LongPress, v, 2); }
+
+int  reasixty_navLowerRow()    { return g_navLowerRow.load(); }
+bool reasixty_navPaginate()    { return g_navPaginate.load(); }
+int  reasixty_navColorBar()    { return g_navColorBar.load(); }
+
+void reasixty_setNavLowerRow(int v)
+{
+    writeNavSetting_("nav_lower_row", g_navLowerRow, v, 2);
+    // Switching between Off and any other format leaves stale
+    // V-Pot / Index text on the strip; force a re-push so the
+    // overlay reclaims (or releases) the lower row.
+    g_navOverlayDirty.store(true);
+    g_lastValueLine.fill({});
+}
+void reasixty_setNavPaginate(bool on)
+{
+    g_navPaginate.store(on);
+    SetExtState("rea_sixty", "nav_paginate", on ? "1" : "0", true);
+    g_navOverlayDirty.store(true);
+}
+void reasixty_setNavColorBar(int v)
+{
+    writeNavSetting_("nav_color_bar", g_navColorBar, v, 1);
+    if (g_sync) g_sync->invalidate();
+}
 
 // ---- Selection-Set settings exports --------------------------------------
 // All readers honour the live g_selsets cache; writers update both the
