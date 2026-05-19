@@ -7526,7 +7526,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     // Hoist the deferred OpenPopup for Delete out of the table-cell scope
     // (see g_pendingDeleteOpen comment).
     if (g_pendingDeleteOpen) {
-        ImGui_OpenPopup(ctx, "fxl_del_popup", nullptr);
+        ImGui_OpenPopup(ctx, "Delete learned FX###fxl_del_popup", nullptr);
         g_pendingDeleteOpen = false;
     }
 
@@ -7712,12 +7712,18 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     }
 
     // ---- Delete confirm popup --------------------------------------------
-    if (ImGui_BeginPopupModal(ctx, "fxl_del_popup", nullptr, nullptr)) {
-        ImGui_Text(ctx, "Delete user plugin map?");
-        ImGui_Spacing(ctx);
+    // Wider / shorter shape so the wrapped "fall back to no mapping" line
+    // fits on one row and the match string isn't truncated (Frank
+    // 2026-05-19). Cond_Always so resizing isn't sticky between opens.
+    {
+        int condAlways = ImGui_Cond_Always;
+        ImGui_SetNextWindowSize(ctx, 520.0, 0.0, &condAlways);
+    }
+    if (ImGui_BeginPopupModal(ctx, "Delete learned FX###fxl_del_popup",
+                              nullptr, nullptr)) {
         char line[256];
         std::snprintf(line, sizeof(line),
-            "  match: %s", g_pendingDeleteMatch.c_str());
+            "match: %s", g_pendingDeleteMatch.c_str());
         ImGui_Text(ctx, line);
         ImGui_Spacing(ctx);
         ImGui_TextWrapped(ctx,
