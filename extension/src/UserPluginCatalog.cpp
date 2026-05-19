@@ -870,6 +870,43 @@ bool collidesWithBuiltin_(std::string_view match)
     return false;
 }
 
+bool exportToFile(const std::string& path, std::string* errOut)
+{
+    std::lock_guard<std::mutex> lk(g_mutex);
+    const std::string json = serialize_(g_catalog);
+    if (!writeFileAtomic_(path, json)) {
+        if (errOut) *errOut = "could not write " + path;
+        return false;
+    }
+    return true;
+}
+
+bool importFromFile(const std::string& path, std::string* errOut)
+{
+    std::string contents;
+    if (!readFile_(path, contents)) {
+        if (errOut) *errOut = "could not read " + path;
+        return false;
+    }
+    UserPluginCatalog tmp;
+    tmp.formatVersion = kCurrentFormatVersion;
+    if (!parse_(contents, tmp)) {
+        if (errOut) *errOut = "parse error (file not a valid user_plugins.json?)";
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_catalog = std::move(tmp);
+    ensureConfigDir_();
+    if (!writeFileAtomic_(configPath_(), serialize_(g_catalog))) {
+        if (errOut) *errOut = "imported, but could not persist to user_plugins.json";
+        // Don't return false — in-memory state is good. UI will see
+        // it; persistence error is informational.
+    }
+    rebuildViewCache_();
+    g_generation.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 SaveResult save()
 {
     std::lock_guard<std::mutex> lk(g_mutex);

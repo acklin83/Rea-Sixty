@@ -13425,6 +13425,8 @@ namespace uf8 {
 std::string macosSaveDialog(const char* title,
                             const char* defaultName,
                             const char* extension);
+std::string macosOpenDialog(const char* title,
+                            const char* extension);
 }
 #else
 using BrowseForSaveFile_t = bool(*)(const char* text, const char* initialdir,
@@ -13496,6 +13498,51 @@ bool reasixty_exportLayerViaDialog(int layer)
     const bool ok = uf8::bindings::exportLayerTo(layer, chosen);
     if (lg) { std::fprintf(lg, "[exportLayer] exportLayerTo => %s\n", ok ? "true" : "false"); std::fclose(lg); }
     return ok;
+}
+
+// FX Learn user_plugins.json — export to user-chosen path. Returns
+// the chosen path on success, "" on cancel/error.
+std::string reasixty_fxLearnExportViaDialog(std::string* errOut)
+{
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosSaveDialog("Export User Plug-in Maps",
+                                  "user_plugins.json", "json");
+#else
+    auto* browse = loadBrowseForSaveFile_();
+    if (!browse) {
+        if (errOut) *errOut = "save dialog unavailable";
+        return "";
+    }
+    char fn[4096] = {0};
+    if (!browse("Export User Plug-in Maps", nullptr, "user_plugins.json",
+                "JSON files (*.json)\0*.json\0\0", fn, sizeof(fn))) {
+        return "";
+    }
+    chosen = fn;
+#endif
+    if (chosen.empty()) return "";
+    if (!uf8::user_plugins::exportToFile(chosen, errOut)) return "";
+    return chosen;
+}
+
+// FX Learn user_plugins.json — import from user-chosen path. On
+// success the in-memory catalog AND the on-disk user_plugins.json
+// are replaced. Returns true / false; errOut filled on failure.
+bool reasixty_fxLearnImportViaDialog(std::string* errOut)
+{
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosOpenDialog("Import User Plug-in Maps", "json");
+#else
+    char buf[4096] = {0};
+    if (!GetUserFileNameForRead(buf, "Import User Plug-in Maps", "json")) {
+        return false;
+    }
+    chosen = buf;
+#endif
+    if (chosen.empty()) return false;
+    return uf8::user_plugins::importFromFile(chosen, errOut);
 }
 
 // Per-layer import — Open dialog → parse + replace named layer. Returns

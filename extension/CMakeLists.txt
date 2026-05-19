@@ -103,9 +103,13 @@ add_library(reaper_uf8 MODULE
 if(APPLE)
     # NSSavePanel-backed save dialog for layer export. See
     # macos_save_dialog.mm for why we bypass SWELL/plugin_getapi.
-    target_sources(reaper_uf8 PRIVATE src/macos_save_dialog.mm)
-    set_source_files_properties(src/macos_save_dialog.mm PROPERTIES
-        COMPILE_FLAGS "-fno-objc-arc")
+    target_sources(reaper_uf8 PRIVATE
+        src/macos_save_dialog.mm
+        src/macos_open_dialog.mm)
+    set_source_files_properties(
+        src/macos_save_dialog.mm
+        src/macos_open_dialog.mm
+        PROPERTIES COMPILE_FLAGS "-fno-objc-arc")
     # AppKit window-positioning helpers for the pin-FX-GUI feature.
     # Same rationale as the save dialog: SWELL SetWindowPos /
     # GetWindowRect / GetSystemMetrics aren't reliably reachable on

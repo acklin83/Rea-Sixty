@@ -178,6 +178,8 @@ void               reasixty_setSoftKeyBank(int bank);
 // for the layer index passed in. Returns true on success, false on
 // cancel or I/O error.
 bool reasixty_exportLayerViaDialog(int layer);
+std::string reasixty_fxLearnExportViaDialog(std::string* errOut);
+bool reasixty_fxLearnImportViaDialog(std::string* errOut);
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
@@ -7262,7 +7264,25 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_TextDisabled(ctx, "Import / Export — TODO");
+    if (ImGui_Button(ctx, "Export…##fxl_export", nullptr, nullptr)) {
+        std::string err;
+        const std::string chosen = reasixty_fxLearnExportViaDialog(&err);
+        if (chosen.empty()) {
+            if (!err.empty()) g_lastSaveError = "Export failed: " + err;
+        } else {
+            g_lastSaveError = "Exported to " + chosen;
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Import…##fxl_import", nullptr, nullptr)) {
+        std::string err;
+        if (reasixty_fxLearnImportViaDialog(&err)) {
+            g_lastSaveError.clear();
+            if (!err.empty()) g_lastSaveError = err;  // partial: in-memory ok
+        } else if (!err.empty()) {
+            g_lastSaveError = "Import failed: " + err;
+        }
+    }
 
     if (!g_lastSaveError.empty()) {
         ImGui_Spacing(ctx);

@@ -246,6 +246,20 @@ void load();
 // would resolve to a built-in PluginMap.
 SaveResult save();
 
+// Export the current in-memory catalog to an arbitrary path (file
+// dialog target). Same on-disk format as user_plugins.json. Returns
+// true on success; on failure fills `*errOut` (if non-null) with a
+// short message. Skipped catalogs go out as `{}` so re-import yields
+// an empty list.
+bool exportToFile(const std::string& path, std::string* errOut);
+
+// Import a user_plugins.json from an arbitrary path. Parses first,
+// then atomically REPLACES the in-memory catalog AND the on-disk
+// copy at configPath_(). Returns false if parse fails or write
+// fails — the old state stays intact in that case. `*errOut` (if
+// non-null) carries a short reason.
+bool importFromFile(const std::string& path, std::string* errOut);
+
 // Read-only access to the in-memory catalog. Pointers are stable until
 // the next mutating call.
 const UserPluginCatalog& get();
