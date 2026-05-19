@@ -610,14 +610,19 @@ ControlDomain classifyButton(uint8_t buttonId)
     return ControlDomain::ChannelStrip;
 }
 
-// Track-GUID → active instance index. In-memory only, no persistence.
-// Default missing-key = 0 = first match. Cleared lazily as we resolve
-// (clamping to current count on each lookup so deletions don't pin
-// the index past the end).
+// Track-GUID → active FX-GUID string. In-memory only, no persistence.
+// Stores the FX's own GUID (TrackFX_GetFXGUID + guidToString) so an
+// intra-domain reorder of the FX chain doesn't drag the cursor onto a
+// different plug-in. The public API still speaks ordinals — set/get
+// translate at the API boundary, the storage is GUID-only. Default
+// missing-key = 0 = first match (lazily; deletions also clamp to 0).
+// History: was MediaTrack*-keyed, then trackGuid + ordinal int. The
+// ordinal-int form silently moved the cursor when the user reordered
+// FX — fixed 2026-05-19 (plan-fx-identity.md). [[uf8-focused-strip-follow-cycle]]
 std::mutex                                  g_instanceMutex;
-std::unordered_map<std::string, int>        g_bcInstanceMap;
-std::unordered_map<std::string, int>        g_csInstanceMap;
-std::unordered_map<std::string, int>        g_uf8OnlyInstanceMap;
+std::unordered_map<std::string, std::string> g_bcInstanceFxGuid;
+std::unordered_map<std::string, std::string> g_csInstanceFxGuid;
+std::unordered_map<std::string, std::string> g_uf8OnlyInstanceFxGuid;
 
 std::string trackGuid_(void* trackRaw)
 {
@@ -644,19 +649,12 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
     // TrackFX_GetCount.
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return result;
 
-    // Active instance index per domain. Defaults to 0 if unset; clamped
-    // below to the actual match count. The encoder cycle (Shift+Channel
-    // encoder) bumps these.
-    const std::string g = trackGuid_(tr);
-    int wantBc = 0;
-    int wantCs = 0;
-    if (!g.empty()) {
-        std::lock_guard<std::mutex> lk(g_instanceMutex);
-        if (auto it = g_bcInstanceMap.find(g); it != g_bcInstanceMap.end())
-            wantBc = it->second;
-        if (auto it = g_csInstanceMap.find(g); it != g_csInstanceMap.end())
-            wantCs = it->second;
-    }
+    // Active instance ordinal per domain. Derived from the stored
+    // fxGuid on each call (see bcInstanceIndex / csInstanceIndex), so
+    // a reorder of the FX chain moves the ordinal but not the cursor's
+    // identity. Defaults to 0 if unset.
+    const int wantBc = bcInstanceIndex(tr);
+    const int wantCs = csInstanceIndex(tr);
     int seenBc = 0;
     int seenCs = 0;
 
@@ -805,56 +803,165 @@ int csInstanceCount(void* trackRaw)
     return instanceCountFor_(static_cast<MediaTrack*>(trackRaw), false);
 }
 
+namespace {
+
+// Predicates over a single FX slot, used by the walk helpers below.
+// Returning true means "this FX qualifies for this domain's instance
+// count". Built-in CS/BC use the UC1 binding cache; UF8-only uses the
+// user-plugin catalogue directly because those entries never appear
+// in the binding cache.
+bool isBcFx_(MediaTrack* tr, int fxIdx, char* nameBuf, int nameBufSz)
+{
+    if (!uf8::fxIdentityName(tr, fxIdx, nameBuf, nameBufSz)) return false;
+    const PluginBindings* b = lookupBindingsByName(std::string_view{nameBuf});
+    return b && isBusCompBinding(b);
+}
+bool isCsFx_(MediaTrack* tr, int fxIdx, char* nameBuf, int nameBufSz)
+{
+    if (!uf8::fxIdentityName(tr, fxIdx, nameBuf, nameBufSz)) return false;
+    const PluginBindings* b = lookupBindingsByName(std::string_view{nameBuf});
+    return b && !isBusCompBinding(b);
+}
+bool isUf8OnlyFx_(MediaTrack* tr, int fxIdx, char* nameBuf, int nameBufSz)
+{
+    if (!uf8::fxIdentityName(tr, fxIdx, nameBuf, nameBufSz)) return false;
+    const auto* um = uf8::user_plugins::lookupOwnedByName(nameBuf);
+    return um && um->domain == uf8::Domain::None && um->uf8Mode;
+}
+
+// Walk `tr` and return the ordinal of the FX whose fxGuid matches
+// `wantFxGuid` among the slots passing `predicate`. Returns -1 when
+// not found (FX deleted / chunk-replaced / never present). 0 = first
+// match, 1 = second, etc.
+template <typename Pred>
+int findOrdinalOfFxGuid_(MediaTrack* tr, const std::string& wantFxGuid, Pred pred)
+{
+    if (!tr || wantFxGuid.empty()) return -1;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return -1;
+    const int n = TrackFX_GetCount(tr);
+    int seen = 0;
+    char buf[256];
+    for (int i = 0; i < n; ++i) {
+        if (!pred(tr, i, buf, sizeof(buf))) continue;
+        if (uf8::fxGuidString(tr, i) == wantFxGuid) return seen;
+        ++seen;
+    }
+    return -1;
+}
+
+// Walk `tr` and return the fxGuid of the FX at ordinal `ord` among
+// slots passing `predicate`. Empty string when ordinal is out of
+// range or `tr` has no matches. Used by setBcInstanceIndex etc. to
+// translate from "I want the N-th BC" into the FX-GUID we'll store.
+template <typename Pred>
+std::string findFxGuidAtOrdinal_(MediaTrack* tr, int ord, Pred pred)
+{
+    if (!tr || ord < 0) return {};
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return {};
+    const int n = TrackFX_GetCount(tr);
+    int seen = 0;
+    char buf[256];
+    for (int i = 0; i < n; ++i) {
+        if (!pred(tr, i, buf, sizeof(buf))) continue;
+        if (seen == ord) return uf8::fxGuidString(tr, i);
+        ++seen;
+    }
+    return {};
+}
+
+int readInstanceOrdinal_(
+    void* trackRaw,
+    std::unordered_map<std::string, std::string>& storage,
+    bool isBc)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr) return 0;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    const std::string g = trackGuid_(tr);
+    if (g.empty()) return 0;
+    std::string wantFxGuid;
+    {
+        std::lock_guard<std::mutex> lk(g_instanceMutex);
+        auto it = storage.find(g);
+        if (it == storage.end()) return 0;
+        wantFxGuid = it->second;
+    }
+    if (wantFxGuid.empty()) return 0;
+    const int ord = isBc
+        ? findOrdinalOfFxGuid_(tr, wantFxGuid, isBcFx_)
+        : findOrdinalOfFxGuid_(tr, wantFxGuid, isCsFx_);
+    return ord < 0 ? 0 : ord;
+}
+
+void writeInstanceOrdinal_(
+    void* trackRaw,
+    int idx,
+    std::unordered_map<std::string, std::string>& storage,
+    bool isBc)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr) return;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const std::string g = trackGuid_(tr);
+    if (g.empty()) return;
+    if (idx < 0) idx = 0;
+    const std::string fxg = isBc
+        ? findFxGuidAtOrdinal_(tr, idx, isBcFx_)
+        : findFxGuidAtOrdinal_(tr, idx, isCsFx_);
+    std::lock_guard<std::mutex> lk(g_instanceMutex);
+    if (fxg.empty()) storage.erase(g);
+    else             storage[g] = fxg;
+}
+
+} // namespace
+
 int bcInstanceIndex(void* trackRaw)
 {
-    const std::string g = trackGuid_(trackRaw);
-    if (g.empty()) return 0;
-    std::lock_guard<std::mutex> lk(g_instanceMutex);
-    auto it = g_bcInstanceMap.find(g);
-    return it == g_bcInstanceMap.end() ? 0 : it->second;
+    return readInstanceOrdinal_(trackRaw, g_bcInstanceFxGuid, /*isBc*/ true);
 }
 int csInstanceIndex(void* trackRaw)
 {
-    const std::string g = trackGuid_(trackRaw);
-    if (g.empty()) return 0;
-    std::lock_guard<std::mutex> lk(g_instanceMutex);
-    auto it = g_csInstanceMap.find(g);
-    return it == g_csInstanceMap.end() ? 0 : it->second;
+    return readInstanceOrdinal_(trackRaw, g_csInstanceFxGuid, /*isBc*/ false);
 }
 
 void setBcInstanceIndex(void* trackRaw, int idx)
 {
-    const std::string g = trackGuid_(trackRaw);
-    if (g.empty()) return;
-    if (idx < 0) idx = 0;
-    std::lock_guard<std::mutex> lk(g_instanceMutex);
-    g_bcInstanceMap[g] = idx;
+    writeInstanceOrdinal_(trackRaw, idx, g_bcInstanceFxGuid, /*isBc*/ true);
 }
 void setCsInstanceIndex(void* trackRaw, int idx)
 {
-    const std::string g = trackGuid_(trackRaw);
-    if (g.empty()) return;
-    if (idx < 0) idx = 0;
-    std::lock_guard<std::mutex> lk(g_instanceMutex);
-    g_csInstanceMap[g] = idx;
+    writeInstanceOrdinal_(trackRaw, idx, g_csInstanceFxGuid, /*isBc*/ false);
 }
 
 int uf8OnlyInstanceIndex(void* trackRaw)
 {
-    const std::string g = trackGuid_(trackRaw);
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    const std::string g = trackGuid_(tr);
     if (g.empty()) return 0;
-    std::lock_guard<std::mutex> lk(g_instanceMutex);
-    auto it = g_uf8OnlyInstanceMap.find(g);
-    return it == g_uf8OnlyInstanceMap.end() ? 0 : it->second;
+    std::string wantFxGuid;
+    {
+        std::lock_guard<std::mutex> lk(g_instanceMutex);
+        auto it = g_uf8OnlyInstanceFxGuid.find(g);
+        if (it == g_uf8OnlyInstanceFxGuid.end()) return 0;
+        wantFxGuid = it->second;
+    }
+    if (wantFxGuid.empty()) return 0;
+    const int ord = findOrdinalOfFxGuid_(tr, wantFxGuid, isUf8OnlyFx_);
+    return ord < 0 ? 0 : ord;
 }
 
 void setUf8OnlyInstanceIndex(void* trackRaw, int idx)
 {
-    const std::string g = trackGuid_(trackRaw);
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const std::string g = trackGuid_(tr);
     if (g.empty()) return;
     if (idx < 0) idx = 0;
+    const std::string fxg = findFxGuidAtOrdinal_(tr, idx, isUf8OnlyFx_);
     std::lock_guard<std::mutex> lk(g_instanceMutex);
-    g_uf8OnlyInstanceMap[g] = idx;
+    if (fxg.empty()) g_uf8OnlyInstanceFxGuid.erase(g);
+    else             g_uf8OnlyInstanceFxGuid[g] = fxg;
 }
 
 // Count UF8-only mapped plug-ins (domain==None, uf8Mode==true) on the
