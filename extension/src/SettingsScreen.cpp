@@ -8374,10 +8374,10 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "Hardware: bind buttons to selset_recall (param 1..8, toggle) "
-        "and / or");
+        "Hardware: bind buttons to \"Recall Selection Slot (toggle)\" "
+        "(param 1..8) and / or");
     ImGui_Text(ctx,
-        "selset_save (param 1..8, snapshot current REAPER selection).");
+        "\"Save current REAPER selection to slot\" (param 1..8).");
     ImGui_Text(ctx,
         "Group slots refresh live from REAPER track-group membership "
         "(ANY category).");
