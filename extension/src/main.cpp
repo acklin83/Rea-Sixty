@@ -15691,6 +15691,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         return 0;
     });
 
+    initLog("step: ExtState restore start");
     // Restore persisted UI mode flags (Pan override, encoder mode) so
     // they survive REAPER restarts. ExtState is global per-extension —
     // persistAcrossSessions=true writes through to reaper-extstate.ini.
@@ -15737,7 +15738,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // active-layer config must be loaded by then. Order: register
     // handlers, then load (which may seed factories on first run and
     // write bindings.json under the REAPER resource path), then csurf.
+    initLog("step: registerBindingHandlers");
     registerBindingHandlers();
+    initLog("step: bindings::load");
     uf8::bindings::load();
     // Phase 2.5d-A — user-learned plugin catalogue. Load after the
     // built-in PluginMap registry is initialised (it's static so it's
