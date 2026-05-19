@@ -3728,23 +3728,13 @@ void drainInputQueue()
             if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
             const auto& it = items[idx];
             if (it.isRegion) {
-                // GoToRegion + GoToMarker are REAPER's marker-nav
-                // primitives — they honour the project's smooth-seek
-                // setting (Preferences → Audio → Smooth seek), so
-                // jumps during playback align to the end of the
-                // current bar / beat / loop instead of cutting the
-                // playhead mid-phrase. SetEditCurPos would bypass that.
-                //
-                // use_timeline_order=FALSE means the index argument is
-                // REAPER's user-editable region number (the value
-                // EnumProjectMarkers3 returned in `markrgnindexnumber`,
-                // which we store in it.idx). Passing true here would
-                // interpret it.idx as a 1-based timeline-order
-                // position — wrong when REAPER's numbering has gaps
-                // or starts above 1 (Frank 2026-05-19: "push 2 → 3,
-                // push 3 → 4 ..." and RegionsOnly UF8 push did nothing
-                // because a single high-numbered region became
-                // out-of-bounds in timeline order).
+                // GoToRegion smooth-seeks: REAPER queues "at end of
+                // current region, seek to target". use_timeline_order
+                // = false → it.idx is REAPER's user-editable region
+                // number (what EnumProjectMarkers3 returns in
+                // markrgnindexnumber). Passing true would interpret
+                // it.idx as a 1-based timeline-order position, which
+                // breaks on sparse / non-1-based numbering.
                 GoToRegion(nullptr, it.idx, false);
                 // Drill is gated by the view lock: RegionsOnly users
                 // want region jumps to be terminal (no transition to
@@ -3754,7 +3744,21 @@ void drainInputQueue()
                     ov.drillIntoRegion(idx);
                 }
             } else {
-                GoToMarker(nullptr, it.idx, false);
+                // SetEditCurPos(pos, moveview=true, seekplay=true)
+                // instead of GoToMarker. GoToMarker conflicts with
+                // pending GoToRegion smooth-seek requests — Frank
+                // 2026-05-19: "smart seek geht nur innerhalb derselben
+                // region; region wechseln und Marker tappen — hüpft
+                // nicht". REAPER's seek queue seems to drop the
+                // marker request when a region seek is still pending.
+                //
+                // SetEditCurPos(...seekplay=true) goes through a
+                // different code path that still respects the
+                // project's smooth-seek preference (Audio → Seeking)
+                // for the transport jump, but doesn't fight the
+                // GoToRegion queue. Within-region marker jumps still
+                // smooth-seek; cross-region marker jumps now work too.
+                SetEditCurPos(it.pos, true, true);
             }
             g_navOverlayDirty.store(true);
             if (g_sync) g_sync->invalidate();
