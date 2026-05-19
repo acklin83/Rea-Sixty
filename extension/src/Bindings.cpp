@@ -2020,7 +2020,7 @@ static void crumb_(const char* msg)
     char tmp[260] = {0};
     char path[260] = {0};
     if (GetTempPathA(260, tmp)) {
-        std::snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
+        snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
     } else {
         std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
     }
