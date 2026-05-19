@@ -83,7 +83,17 @@ if(WIN32)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
-    pkg_check_modules(HIDAPI REQUIRED IMPORTED_TARGET hidapi)
+    # macOS exposes the hidapi module as plain "hidapi" (Homebrew). Linux
+    # splits it into hidapi-hidraw (kernel-backed) and hidapi-libusb
+    # (libusb-backed). Prefer hidraw on Linux so UC1's HID access doesn't
+    # contend with libusb's UF8 claim on the same root hub.
+    pkg_check_modules(HIDAPI IMPORTED_TARGET hidapi)
+    if(NOT HIDAPI_FOUND)
+        pkg_check_modules(HIDAPI IMPORTED_TARGET hidapi-hidraw)
+    endif()
+    if(NOT HIDAPI_FOUND)
+        pkg_check_modules(HIDAPI REQUIRED IMPORTED_TARGET hidapi-libusb)
+    endif()
     add_library(reasixty_libusb INTERFACE)
     target_link_libraries(reasixty_libusb INTERFACE PkgConfig::LIBUSB)
     add_library(reasixty_hidapi INTERFACE)
