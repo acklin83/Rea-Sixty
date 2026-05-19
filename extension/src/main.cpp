@@ -262,6 +262,13 @@ std::atomic<int> g_bankOffset{0};
 // by the timer.
 std::atomic<bool> g_bankDirty{false};
 
+// Phase 2.8 Nav Mode — set by every overlay state mutation (toggle,
+// view change, drill, page). pushNavOverlayZones drains the flag and
+// forces a full 8-strip re-push so the surface catches up with the
+// new window. Declared up here so drainInputQueue's NavJumpStrip
+// handler can mark it on jump.
+std::atomic<bool> g_navOverlayDirty{false};
+
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
 // (uf8::g_focusedParam, uf8::g_focusedDirty). This flag is the existing
@@ -1830,6 +1837,11 @@ struct PendingInput {
                               //   preserved; only the lower-10-bit
                               //   channel index changes. value =
                               //   signed detent count.
+        NavJumpStrip,         // Phase 2.8 Nav Mode: top-soft-key press on
+                              //   the overlay maps strip → window item;
+                              //   region items jump + drill, marker
+                              //   items just jump the edit cursor. strip
+                              //   = 0..7, value unused.
     };
     Kind    kind;
     uint8_t strip;
@@ -3693,6 +3705,29 @@ void drainInputQueue()
             if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
                 followSelectedInMixer(tr);
             }
+            continue;
+        }
+        if (e.kind == PendingInput::NavJumpStrip) {
+            // Phase 2.8: top-soft-key press on the marker/region overlay.
+            // Map strip → window item. Regions jump the playhead AND
+            // drill into the region's markers (Phase 2.8a default
+            // "Jump + Drill" behaviour; user-configurable in Phase 2.8c
+            // Settings → Modes → NAV). Markers jump the edit cursor.
+            auto& ov = uf8::nav::Overlay::instance();
+            if (!ov.active()) continue;
+            const int s = (e.strip < 8) ? e.strip : 0;
+            const int idx = ov.pageOffset() * 8 + s;
+            const auto& items = ov.items();
+            if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
+            const auto& it = items[idx];
+            if (it.isRegion) {
+                GoToRegion(nullptr, it.idx, true);
+                ov.drillIntoRegion(idx);
+            } else {
+                SetEditCurPos(it.pos, true, false);
+            }
+            g_navOverlayDirty.store(true);
+            if (g_sync) g_sync->invalidate();
             continue;
         }
         if (e.kind == PendingInput::PlayheadNudge) {
@@ -5832,6 +5867,24 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 }
             }
 
+            // Phase 2.8 Nav Mode — when the marker/region overlay is
+            // active, top-soft-key presses jump to the strip's mapped
+            // marker/region instead of firing whatever ssl_softkey /
+            // user binding lives on that key. Intercepts before the
+            // generic bindings layer so the overlay always wins while
+            // active. Release is swallowed too (no per-key action on
+            // release in v1).
+            if (!handledNatively
+                && id >= 0x18 && id <= 0x1F
+                && uf8::nav::Overlay::instance().active())
+            {
+                if (pressed) {
+                    queueInput({PendingInput::NavJumpStrip,
+                                static_cast<uint8_t>(id - 0x18), 0.0});
+                }
+                handledNatively = true;
+            }
+
             // Bindings layer — globals previously hardcoded inline. Now
             // also covers top-soft-keys (TopSoftKey1..8) which carry an
             // ssl_softkey factory binding by default — same semantics as
@@ -6631,12 +6684,6 @@ uint16_t vpotPosFromUnipolar(double v)
 uint16_t vpotPosFromNormalized(double v) { return vpotPosFromUnipolar(v); }
 
 uint16_t vpotPosFromPan(double pan) { return vpotPosFromBipolar(pan); }
-
-// Phase 2.8 Nav Mode — strip-render takeover. Set by every overlay
-// state mutation (toggle, view change, drill, page). pushNavOverlayZones
-// drains the flag and forces a full 8-strip re-push so the surface
-// catches up with the new window.
-std::atomic<bool> g_navOverlayDirty{false};
 
 // Phase 2.8 Nav Mode — colour-bar callback used by ColorSync when the
 // overlay is active. Returns the strip item's REAPER colour (low 24
