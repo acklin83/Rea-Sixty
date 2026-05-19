@@ -569,6 +569,13 @@ extern std::array<std::string, 8> g_panOverlayText;
 constexpr int64_t kFolderRevealMs = 3000;
 extern std::array<int64_t, 8>     g_folderRevealUntilMs;
 
+// Forward declarations for followFocusedPluginGuiAcrossCycle_ — the
+// definitions live ~500 lines below in the same anonymous namespace.
+// Hoisted here because MSVC won't resolve an in-function `extern` to a
+// same-TU anonymous-namespace definition (Clang/GCC are fine with it).
+extern void* g_focusedGuiShownTr;
+extern int   g_focusedGuiShownFx;
+
 // Surface-visible track list — REAPER's full track set filtered by
 // g_folderMode (parents-only: only top-level / depth-0 tracks pass,
 // plus the children of g_spilledParent when one is held expanded) and
@@ -2727,8 +2734,6 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
 void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
 {
     if (!g_pluginGuiFollowsInstance.load()) return;
-    extern void* g_focusedGuiShownTr;
-    extern int   g_focusedGuiShownFx;
     if (g_focusedGuiShownTr == tr
         && g_focusedGuiShownFx >= 0
         && g_focusedGuiShownFx != targetFxIdx)
