@@ -2014,12 +2014,34 @@ void upgradeSslSoftkeyLabels_(Layer& L)
     }
 }
 
+static void crumb_(const char* msg)
+{
+#ifdef _WIN32
+    char tmp[260] = {0};
+    char path[260] = {0};
+    if (GetTempPathA(260, tmp)) {
+        std::snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
+    } else {
+        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
+    }
+    FILE* f = std::fopen(path, "a");
+#else
+    FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+#endif
+    if (f) { std::fprintf(f, "  bindings:%s\n", msg); std::fclose(f); }
+}
+
 void load()
 {
+    crumb_("load enter");
     std::lock_guard<std::mutex> lk(g_cfgMutex);
+    crumb_("got mutex");
 
     std::string contents;
-    if (readFile_(configPath_(), contents) && !contents.empty()) {
+    const std::string cp = configPath_();
+    crumb_(cp.c_str());
+    if (readFile_(cp, contents) && !contents.empty()) {
+        crumb_("file read OK, entering parse/upgrade");
         Config tmp;
         seedFactoryDefaults_(tmp);     // start from factories so missing fields fall back
         if (tryParse_(contents, tmp)) {
@@ -2125,9 +2147,13 @@ void load()
     }
 
     // First run, missing file, or parse error: seed factories + persist.
+    crumb_("first-run path: seedFactoryDefaults_");
     seedFactoryDefaults_(g_cfg);
+    crumb_("first-run path: ensureConfigDir_");
     ensureConfigDir_();
+    crumb_("first-run path: writeFile_");
     writeFile_(configPath_(), serialize(g_cfg));
+    crumb_("first-run path: done");
     g_bindingsGen.fetch_add(1, std::memory_order_relaxed);
 }
 
