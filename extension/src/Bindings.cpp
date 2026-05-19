@@ -100,6 +100,8 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uc1Encoder2,      "uc1_encoder_2"      },
     { ButtonId::Uc1Encoder2Push,  "uc1_encoder_2_push" },
     { ButtonId::Uc1Magnifier,     "uc1_magnifier"      },
+    { ButtonId::Foot1,            "foot_1"             },
+    { ButtonId::Foot2,            "foot_2"             },
     { ButtonId::Uc1Btn360,        "uc1_btn_360"        },
 };
 
@@ -121,6 +123,8 @@ ButtonId fromName(const char* name)
 ButtonId fromUf8DeviceId(uint8_t id)
 {
     switch (id) {
+        case 0x00: return ButtonId::Foot1;
+        case 0x01: return ButtonId::Foot2;
         case 0x6F: return ButtonId::Fine;
         case 0x73: return ButtonId::Nav;
         case 0x74: return ButtonId::Nudge;

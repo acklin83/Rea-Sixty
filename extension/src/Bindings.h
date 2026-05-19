@@ -126,6 +126,14 @@ enum class ButtonId : uint16_t {
     // is captured.
     Uc1Magnifier,
 
+    // UF8 1/4" footswitch jacks on the back panel. Decoded from
+    // captures/foot_02_foot1_tap.pcapng + foot_03_foot2_tap.pcapng
+    // (2026-05-19): same FF 22 03 <id> 00 <state> CKSUM frame as the
+    // other UF8 buttons, with id=0x00 for Foot 1 and id=0x01 for Foot 2.
+    // No factory binding — user assigns via Settings → Bindings.
+    Foot1,
+    Foot2,
+
     // UC1 360 button (CCP). Factory default mirrors UF8's Btn360
     // (`mixer_toggle`) so out-of-the-box behaviour is unchanged. User
     // can rebind it on the UC1 tab; UF8's Btn360 stays an independent

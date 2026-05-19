@@ -524,7 +524,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 //   - Transport               (Play / Stop / Rec / RW / FF — REAPER actions)
 //   - Global buttons          (Bank L/R, Channel L/R, Flip, Layer cycle)
 //   - 3 Quick Keys            (UF8 left-side QUICK row)
-//   - 2 Foot-switches         (UF8 jacks; placeholder until USB event decode)
+//   - 2 Foot-switches         (UF8 back-panel TRS jacks, ids 0x00 / 0x01)
 //   - Layer-scoped soft-keys  (per active layer)
 //   - Learn button (top right)
 namespace {
@@ -589,6 +589,8 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::SoftKey3Bank: return "BANK 3";
         case ButtonId::SoftKey4Bank: return "BANK 4";
         case ButtonId::SoftKey5Bank: return "BANK 5";
+        case ButtonId::Foot1:       return "FOOT 1";
+        case ButtonId::Foot2:       return "FOOT 2";
         case ButtonId::SelectionNorm: return "NORM";
         case ButtonId::SelectionRec:  return "REC";
         case ButtonId::SelectionAuto: return "AUTO";
@@ -1004,6 +1006,13 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(13,  396, 33, 22, ButtonId::AutoTrim,  "TRIM");
     drawHwBtn(48,  396, 33, 22, ButtonId::AutoLatch, "LATCH");
     drawHwBtn(83,  396, 33, 22, ButtonId::AutoTouch, "TOUCH");
+
+    // Foot-switch jacks (back-panel TRS) decoded 2026-05-19. Rendered
+    // below AUTOMATION since the schematic has space there and the
+    // jacks have no fixed face position to anchor to anyway.
+    drawGroupLabel(34, 424, "FOOT SWITCHES");
+    drawHwBtn(13, 442, 50, 22, ButtonId::Foot1, "FOOT 1");
+    drawHwBtn(67, 442, 50, 22, ButtonId::Foot2, "FOOT 2");
 
     // ---- Right panel ----
     // SSL soft-key bank selectors — 2×3 grid. Each switches the active
