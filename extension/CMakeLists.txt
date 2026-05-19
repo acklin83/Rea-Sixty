@@ -131,6 +131,31 @@ add_custom_command(
 add_custom_target(reasixty_factory_bundle_gen ALL
     DEPENDS ${REASIXTY_FACTORY_BUNDLE_HEADER})
 
+# Same embedding pattern for the Windows WinUSB INF. The Settings UI
+# (Win-only branch) writes this to %TEMP% and feeds it to pnputil so
+# the user can bind WinUSB to UF8 + UC1 with a single elevated click.
+if(WIN32)
+    set(REASIXTY_WINUSB_INF_SRC
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/rea_sixty_winusb.inf")
+    set(REASIXTY_WINUSB_INF_HEADER
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/winusb_inf.h")
+    add_custom_command(
+        OUTPUT ${REASIXTY_WINUSB_INF_HEADER}
+        COMMAND ${CMAKE_COMMAND}
+            -DSRCFILE=${REASIXTY_WINUSB_INF_SRC}
+            -DOUTFILE=${REASIXTY_WINUSB_INF_HEADER}
+            -DSYMBOL=kWinUsbInfBytes
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+        DEPENDS
+            ${REASIXTY_WINUSB_INF_SRC}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+        COMMENT "Embedding rea_sixty_winusb.inf"
+        VERBATIM
+    )
+    add_custom_target(reasixty_winusb_inf_gen ALL
+        DEPENDS ${REASIXTY_WINUSB_INF_HEADER})
+endif()
+
 add_library(reaper_uf8 MODULE
     src/main.cpp
     src/Protocol.cpp
@@ -195,6 +220,9 @@ endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
+if(WIN32)
+    add_dependencies(reaper_uf8 reasixty_winusb_inf_gen)
+endif()
 target_include_directories(reaper_uf8 PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     src

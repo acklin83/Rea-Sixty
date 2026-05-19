@@ -40,16 +40,22 @@ while(IDX LESS HEX_LEN)
     math(EXPR IDX "${IDX} + 2")
 endwhile()
 
+# Symbol name override for reuse (Windows WinUSB INF uses the same
+# helper). Defaults to the factory bundle's name when not overridden.
+if(NOT SYMBOL)
+    set(SYMBOL "kFactoryBundle")
+endif()
+
 set(NEW_CONTENT
 "#pragma once
-// Auto-generated from extension/resources/factory.rea60config — do not edit.
+// Auto-generated from ${SRCFILE} — do not edit.
 #include <cstddef>
 namespace uf8 {
 namespace setup_bundle {
-inline constexpr unsigned char kFactoryBundleBytes[] = {
+inline constexpr unsigned char ${SYMBOL}Bytes[] = {
     ${BYTES}
 };
-inline constexpr size_t kFactoryBundleSize = ${BYTE_COUNT};
+inline constexpr size_t ${SYMBOL}Size = ${BYTE_COUNT};
 }
 }
 ")

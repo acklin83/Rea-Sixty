@@ -13649,6 +13649,55 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
     return uf8::setup_bundle::restoreFactoryDefaults(errOut);
 }
 
+#ifdef _WIN32
+#include "winusb_inf.h"
+#include <shellapi.h>
+
+// Drop the embedded WinUSB INF to %TEMP% and ask pnputil to install
+// it under UAC elevation. Binds WinUSB to SSL UF8 (VID_31E9 PID_0021)
+// and SSL UC1 (VID_31E9 PID_0023) so libusb can open them without
+// Zadig. One-time setup; reversible only by reinstalling SSL 360°.
+// Returns true if pnputil was launched (final result determined by
+// the user clicking through the UAC + driver-publisher prompts).
+bool reasixty_installWinUsbDriver(std::string* errOut)
+{
+    namespace sb = uf8::setup_bundle;
+
+    char tmpDir[MAX_PATH] = {0};
+    if (!GetTempPathA(MAX_PATH, tmpDir)) {
+        if (errOut) *errOut = "GetTempPathA failed";
+        return false;
+    }
+    char infPath[MAX_PATH];
+    snprintf(infPath, sizeof(infPath),
+             "%srea_sixty_winusb.inf", tmpDir);
+
+    if (FILE* f = std::fopen(infPath, "wb")) {
+        std::fwrite(sb::kWinUsbInfBytesBytes, 1,
+                    sb::kWinUsbInfBytesSize, f);
+        std::fclose(f);
+    } else {
+        if (errOut) *errOut = std::string("could not write ") + infPath;
+        return false;
+    }
+
+    // pnputil /add-driver <inf> /install — needs admin. ShellExecute
+    // with "runas" verb triggers UAC. SW_HIDE because pnputil prints
+    // to a console we don't want to flash up.
+    char args[MAX_PATH + 64];
+    snprintf(args, sizeof(args),
+             "/add-driver \"%s\" /install", infPath);
+    HINSTANCE rc = ShellExecuteA(nullptr, "runas",
+                                 "pnputil.exe", args, nullptr,
+                                 SW_HIDE);
+    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
+        if (errOut) *errOut = "pnputil launch failed (user cancelled UAC?)";
+        return false;
+    }
+    return true;
+}
+#endif
+
 bool reasixty_setupImportViaDialog(std::string* errOut)
 {
     std::string chosen;

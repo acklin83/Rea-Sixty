@@ -185,6 +185,9 @@ bool reasixty_fxLearnImportViaDialog(std::string* errOut);
 std::string reasixty_setupExportViaDialog(std::string* errOut);
 bool reasixty_setupImportViaDialog(std::string* errOut);
 bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
+#ifdef _WIN32
+bool reasixty_installWinUsbDriver(std::string* errOut);
+#endif
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
@@ -8693,6 +8696,39 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     if (!s_setupMsg.empty()) {
         ImGui_Text(ctx, s_setupMsg.c_str());
     }
+
+#ifdef _WIN32
+    // Windows-only: bind UF8 + UC1 to WinUSB so libusb can claim them
+    // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
+    // (SSL 360° will stop seeing the devices afterwards).
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Windows USB driver");
+    ImGui_Separator(ctx);
+    ImGui_TextWrapped(ctx,
+        "  Binds UF8 + UC1 to WinUSB. One-time setup, requires admin. "
+        "SSL 360° stops seeing the devices after install — reinstall "
+        "SSL 360° to revert.");
+    ImGui_Spacing(ctx);
+    static std::string s_winusbMsg;
+    if (ImGui_Button(ctx, "Install UF8/UC1 WinUSB driver##winusb_install",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_installWinUsbDriver(&err)) {
+            s_winusbMsg = "Driver install started — follow the UAC + "
+                          "publisher prompts, then unplug + replug "
+                          "the devices.";
+        } else {
+            s_winusbMsg = err.empty()
+                ? "Driver install failed."
+                : ("Driver install failed: " + err);
+        }
+    }
+    if (!s_winusbMsg.empty()) {
+        ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
+    }
+#endif
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
