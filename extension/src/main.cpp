@@ -15635,7 +15635,43 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
 
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
-    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+
+    // REAPERAPI_LoadAPI returns the count of functions it couldn't
+    // resolve. Default behaviour (bail on any miss) made our DLL
+    // silently fail to register on REAPER 7.66 even though every API
+    // function we ACTUALLY call resolves fine — the SDK header asks
+    // for every published function unless REAPERAPI_MINIMAL is set,
+    // and some of those (newer or platform-specific) are absent.
+    // Proceed regardless; missing functions stay null-pointer and any
+    // attempted call would crash, but we don't call the ones that
+    // tend to go missing. Write the miss count to a diagnostic log
+    // so we can audit later (Frank 2026-05-19).
+    {
+        const int missing = REAPERAPI_LoadAPI(rec->GetFunc);
+        if (missing != 0) {
+#ifdef _WIN32
+            char log[MAX_PATH];
+            char tmp[MAX_PATH] = {0};
+            if (GetTempPathA(MAX_PATH, tmp)) {
+                snprintf(log, sizeof(log),
+                         "%srea_sixty_load.log", tmp);
+                if (FILE* f = std::fopen(log, "a")) {
+                    std::fprintf(f,
+                        "REAPERAPI_LoadAPI: %d functions missing "
+                        "(non-fatal, proceeding)\n", missing);
+                    std::fclose(f);
+                }
+            }
+#else
+            if (FILE* f = std::fopen("/tmp/rea_sixty_load.log", "a")) {
+                std::fprintf(f,
+                    "REAPERAPI_LoadAPI: %d functions missing "
+                    "(non-fatal, proceeding)\n", missing);
+                std::fclose(f);
+            }
+#endif
+        }
+    }
 
     // Capture rec->GetFunc for SWELL APIs not in the plug-in SDK
     // (e.g. BrowseForSaveFile — see reasixty_exportLayerViaDialog).
