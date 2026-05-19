@@ -82,6 +82,15 @@ public:
     void drillIntoRegion(int enumPos);   // switch to MarkersInRegion for items_[enumPos]
     void backToRegions();
 
+    // Auto-Follow tick — main thread. Given current playhead time,
+    // sets cursorIdx to the item the playhead is currently on or past,
+    // slides pageOffset so the cursor stays in the visible 8-window,
+    // and in MarkersInRegion view auto-rolls into the next region when
+    // the current one ends. No-op when autoFollow is off or items is
+    // empty. Returns true if any state changed (used by the caller to
+    // mark the overlay dirty for a re-push).
+    bool tickAutoFollow(double playPos);
+
     // Diagnostic — prints current 8-window to REAPER console.
     void dumpWindow() const;
 

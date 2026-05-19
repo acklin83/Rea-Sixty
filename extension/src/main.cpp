@@ -6788,6 +6788,17 @@ void pushNavOverlayZones()
     // (single linear pass) and bounded by project marker count.
     ov.enumerate();
 
+    // Auto-Follow: slide cursor + page with the playhead. May trigger
+    // a region auto-roll (MarkersInRegion → next region's MarkersInRegion)
+    // when the playhead crosses out of the current region. Returns true
+    // on any state change so the surface picks the update up this tick.
+    if (ov.autoFollow()) {
+        if (ov.tickAutoFollow(GetPlayPosition())) {
+            g_navOverlayDirty.store(true);
+            if (g_sync) g_sync->invalidate();
+        }
+    }
+
     const bool dirty = g_navOverlayDirty.exchange(false);
     if (dirty) {
         // Force-repaint by invalidating the per-strip dedup caches.
@@ -6886,13 +6897,22 @@ void pushNavOverlayZones()
             g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
         }
 
-        // Top-soft-key LED — bright in the item's colour, OFF on empty
-        // slots. Hash key folds state + colour so colour changes re-emit
-        // even when on/off state is steady.
+        // Top-soft-key LED — bright on the cursor strip, dim on other
+        // populated strips while auto-follow is on, off on empty slots.
+        // Without auto-follow every populated strip stays bright (the
+        // user-paced browsing case). Hash key folds state + colour so
+        // colour changes re-emit even when on/off state is steady.
         const uint32_t rgb = it ? navColorForStrip(s) : 0;
-        uf8::TopSoftKeyState tssk = it
-            ? uf8::TopSoftKeyState::On
-            : uf8::TopSoftKeyState::Off;
+        const int cursorStrip = ov.cursorIdx() - ov.pageOffset() * 8;
+        const bool isCursor   = (s == cursorStrip);
+        uf8::TopSoftKeyState tssk;
+        if (!it) {
+            tssk = uf8::TopSoftKeyState::Off;
+        } else if (ov.autoFollow() && !isCursor) {
+            tssk = uf8::TopSoftKeyState::Dim;
+        } else {
+            tssk = uf8::TopSoftKeyState::On;
+        }
         uf8::LedColour ledClr = uf8::ledColourForTrackRgb(rgb);
         const int32_t composite =
             (int32_t(static_cast<int>(tssk)) << 28)

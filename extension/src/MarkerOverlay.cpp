@@ -209,6 +209,92 @@ void Overlay::backToRegions()
     enumerate();
 }
 
+bool Overlay::tickAutoFollow(double playPos)
+{
+    if (!autoFollow_) return false;
+    if (items_.empty()) return false;
+
+    bool changed = false;
+
+    // MarkersInRegion auto-roll: when the playhead crosses out of the
+    // current region's [start, end] window, find the next region by
+    // timeline order and drill into it. Done before cursor-finding so
+    // the post-roll items_ is what we search.
+    if (view_ == View::MarkersInRegion && filterRegionIdx_ >= 0) {
+        int nmarkers = 0, nregions = 0;
+        CountProjectMarkers(nullptr, &nmarkers, &nregions);
+        const int total = nmarkers + nregions;
+        double curStart = 0.0, curEnd = 0.0;
+        int    nextRgnEnumPos = -1;
+        int    nextRgnIdx     = -1;
+        for (int i = 0; i < total; ++i) {
+            bool isrgn = false;
+            double pos = 0.0, rgnend = 0.0;
+            const char* name = nullptr;
+            int idx = 0, color = 0;
+            if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                     &name, &idx, &color)) continue;
+            if (!isrgn) continue;
+            if (idx == filterRegionIdx_) {
+                curStart = pos;
+                curEnd   = rgnend;
+            } else if (pos > curEnd && nextRgnEnumPos < 0
+                       && pos <= playPos + 1e-6) {
+                // First region that starts after our current one AND
+                // the playhead has reached. Could be tightened further
+                // (find region containing playhead) but this honours
+                // timeline order for the typical "song ended, next
+                // song starts" flow.
+                nextRgnEnumPos = i;
+                nextRgnIdx     = idx;
+            }
+        }
+        if (playPos > curEnd && nextRgnIdx >= 0) {
+            // Switch view to Regions transiently so drillIntoRegion's
+            // enumPos lookup hits a Region row. Cheaper than rewriting
+            // drillIntoRegion to take a region-idx directly.
+            const View saved = view_;
+            view_ = View::Regions;
+            enumerate();
+            for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+                if (items_[i].isRegion && items_[i].idx == nextRgnIdx) {
+                    drillIntoRegion(i);
+                    changed = true;
+                    break;
+                }
+            }
+            if (!changed) {
+                view_ = saved;
+                enumerate();
+            }
+            (void)curStart;
+        }
+    }
+
+    // Cursor: scan items in display order, last item whose pos <= play.
+    int newCursor = 0;
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        if (items_[i].pos <= playPos + 1e-6) {
+            newCursor = i;
+        } else {
+            break;
+        }
+    }
+    if (newCursor != cursorIdx_) {
+        cursorIdx_ = newCursor;
+        changed = true;
+    }
+
+    // Slide pageOffset so cursor stays visible.
+    const int targetPage = cursorIdx_ / 8;
+    if (targetPage != pageOffset_) {
+        pageOffset_ = targetPage;
+        changed = true;
+    }
+
+    return changed;
+}
+
 void Overlay::dumpWindow() const
 {
     char hdr[160];
