@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
