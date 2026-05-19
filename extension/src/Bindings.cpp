@@ -2154,7 +2154,14 @@ void load()
 
     // First run, missing file, or parse error: seed factories + persist.
     crumb_("first-run path: seedFactoryDefaults_");
+#ifdef _WIN32
+    // Diag: skip the factory seed on Windows. If REAPER then survives,
+    // the seed function is what's crashing and we know where to look.
+    g_cfg = Config{};
+    crumb_("first-run path: seedFactoryDefaults_ SKIPPED for diag");
+#else
     seedFactoryDefaults_(g_cfg);
+#endif
     crumb_("first-run path: ensureConfigDir_");
     ensureConfigDir_();
     crumb_("first-run path: writeFile_");
