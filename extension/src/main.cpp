@@ -15821,6 +15821,28 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // write bindings.json under the REAPER resource path), then csurf.
     initLog("step: registerBindingHandlers");
     registerBindingHandlers();
+
+    // First-run detection: no bindings.json on disk means this is the
+    // very first time the extension loads in this REAPER profile.
+    // Seed from the embedded factory.rea60config bundle (bindings +
+    // user_plugins + parameter_groups + ext_state) BEFORE the
+    // per-module load() calls, so all three modules pick up the same
+    // curated factory state instead of the C++ hard-coded
+    // seedFactoryDefaults_ skeleton. Frank 2026-05-19: "factory
+    // mappings sollten bei install auch reinkommen".
+    {
+        struct stat st{};
+        const std::string bindingsPath = uf8::bindings::configPath();
+        const bool firstRun = (stat(bindingsPath.c_str(), &st) != 0);
+        if (firstRun) {
+            initLog("step: first-run -> restoreFactoryDefaults");
+            std::string err;
+            if (!uf8::setup_bundle::restoreFactoryDefaults(&err)) {
+                initLog((std::string("  factory restore failed: ") + err).c_str());
+            }
+        }
+    }
+
     initLog("step: bindings::load");
     uf8::bindings::load();
     initLog("step: bindings::load done");
