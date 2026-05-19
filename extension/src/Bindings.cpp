@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -2068,7 +2069,14 @@ void load()
     crumb_(cp.c_str());
     if (readFile_(cp, contents) && !contents.empty()) {
         crumb_("file read OK, entering parse/upgrade");
-        Config tmp;
+        // Heap-allocate: sizeof(Config) ≈ 600 KB (3 layers × 3 quicks ×
+        // 6 sub-banks × 8 bindings × ~1.4 KB each). A stack local blows
+        // past Windows's 1 MB main-thread stack in the function
+        // prologue before any code runs — manifested as silent
+        // STATUS_STACK_OVERFLOW on Windows only (macOS thread stack is
+        // larger).
+        auto tmpPtr = std::make_unique<Config>();
+        Config& tmp = *tmpPtr;
         seedFactoryDefaults_(tmp);     // start from factories so missing fields fall back
         if (tryParse_(contents, tmp)) {
             // One-shot upgrades for configs from older versions. Each
@@ -2174,14 +2182,7 @@ void load()
 
     // First run, missing file, or parse error: seed factories + persist.
     crumb_("first-run path: seedFactoryDefaults_");
-#ifdef _WIN32
-    // Diag: skip the factory seed on Windows. If REAPER then survives,
-    // the seed function is what's crashing and we know where to look.
-    g_cfg = Config{};
-    crumb_("first-run path: seedFactoryDefaults_ SKIPPED for diag");
-#else
     seedFactoryDefaults_(g_cfg);
-#endif
     crumb_("first-run path: ensureConfigDir_");
     ensureConfigDir_();
     crumb_("first-run path: writeFile_");
@@ -2210,7 +2211,9 @@ bool importFrom(const std::string& path)
     std::string contents;
     if (!readFile_(path, contents) || contents.empty()) return false;
 
-    Config tmp;
+    // Heap-allocate — see load() for sizeof(Config) rationale.
+    auto tmpPtr = std::make_unique<Config>();
+    Config& tmp = *tmpPtr;
     seedFactoryDefaults_(tmp);
     if (!tryParse_(contents, tmp)) return false;
 
@@ -3135,7 +3138,9 @@ void resetLayerToDefaults(int layer)
 {
     if (layer < 0 || layer > 2) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    Config tmp;
+    // Heap-allocate — see load() for sizeof(Config) rationale.
+    auto tmpPtr = std::make_unique<Config>();
+    Config& tmp = *tmpPtr;
     seedFactoryDefaults_(tmp);
     g_cfg.layers[layer] = std::move(tmp.layers[layer]);
     persistLocked_();
