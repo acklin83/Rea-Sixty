@@ -34,10 +34,27 @@
 
 namespace uf8::bindings {
 
-// Forward — defined inside the anonymous namespace below.
-namespace { void crumb_(const char* msg); }
-
 namespace {
+
+// Crash-isolation breadcrumb appended to %TEMP%\rea_sixty_init.log
+// (Win) or /tmp/rea_sixty_init.log (POSIX). Defined here so every
+// helper in the file can poke at it; kept short on purpose.
+inline void crumb_(const char* msg)
+{
+#ifdef _WIN32
+    char tmp[260] = {0};
+    char path[260] = {0};
+    if (GetTempPathA(260, tmp)) {
+        snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
+    } else {
+        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
+    }
+    FILE* f = std::fopen(path, "a");
+#else
+    FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+#endif
+    if (f) { std::fprintf(f, "  bindings:%s\n", msg); std::fclose(f); }
+}
 
 // ---- ButtonId <-> snake_case name -----------------------------------------
 
@@ -2018,23 +2035,6 @@ void upgradeSslSoftkeyLabels_(Layer& L)
             sp.label.clear();
         }
     }
-}
-
-void crumb_(const char* msg)
-{
-#ifdef _WIN32
-    char tmp[260] = {0};
-    char path[260] = {0};
-    if (GetTempPathA(260, tmp)) {
-        snprintf(path, sizeof(path), "%srea_sixty_init.log", tmp);
-    } else {
-        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_init.log");
-    }
-    FILE* f = std::fopen(path, "a");
-#else
-    FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
-#endif
-    if (f) { std::fprintf(f, "  bindings:%s\n", msg); std::fclose(f); }
 }
 
 void load()
