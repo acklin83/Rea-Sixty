@@ -1952,8 +1952,15 @@ struct PendingInput {
 // Plain rotation routes through encoder_mode_dispatch's switch:
 //   Instance → applyInstanceCycle_ (focused-track Instances only)
 //   FxCycle  → applyFxCycle_       (focused-track, ALL FX on the track)
-enum class EncoderMode : uint8_t { Nav, Nudge, Focus, Instance, FxCycle, SelsetCycle };
-std::atomic<EncoderMode> g_encoderMode{EncoderMode::Nav};
+// ChSelect = factory default (SSL 360°-style: no LED button is lit but
+// the encoder still selects the previous/next track). Mousewheel was
+// 'Focus' before 2026-05-19 — the new name matches what the mode
+// actually does. Markers / BankBy1 / LastParam shipped 2026-05-19.
+enum class EncoderMode : uint8_t {
+    ChSelect, Nudge, Mousewheel, Instance, FxCycle, SelsetCycle,
+    Markers, BankBy1, LastParam,
+};
+std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
 // Send/Receive-routing modes for the V-Pots and faders. Four
 // independent state pairs (V-Pot vs Fader × Send vs Receive); each
@@ -2333,6 +2340,85 @@ void applyMouseScroll_(int delta)
 {
     if (delta == 0) return;
     emitMouseScroll(static_cast<int32_t>(delta));
+}
+
+// Channel-encoder rotation -> step playhead/edit cursor to the
+// previous (step<0) or next (step>0) marker. Regions are ignored;
+// only true markers count. One marker per detent, |step| > 1 chained.
+void applyMarkerStep_(int step)
+{
+    if (step == 0) return;
+    int nmarkers = 0, nregions = 0;
+    CountProjectMarkers(nullptr, &nmarkers, &nregions);
+    const int total = nmarkers + nregions;
+    if (total == 0) return;
+    std::vector<double> positions;
+    positions.reserve(static_cast<size_t>(nmarkers));
+    for (int i = 0; i < total; ++i) {
+        bool isrgn = false;
+        double pos = 0.0, rgnend = 0.0;
+        const char* name = nullptr;
+        int idx = 0, color = 0;
+        if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                 &name, &idx, &color)) continue;
+        if (!isrgn) positions.push_back(pos);
+    }
+    if (positions.empty()) return;
+    std::sort(positions.begin(), positions.end());
+    const int ps  = GetPlayState();
+    double cur = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
+    int remaining = (step > 0) ? step : -step;
+    while (remaining-- > 0) {
+        double target = cur;
+        bool   found  = false;
+        if (step > 0) {
+            for (double p : positions) {
+                if (p > cur + 1e-6) { target = p; found = true; break; }
+            }
+        } else {
+            for (auto it = positions.rbegin(); it != positions.rend(); ++it) {
+                if (*it < cur - 1e-6) { target = *it; found = true; break; }
+            }
+        }
+        if (!found) break;
+        cur = target;
+    }
+    SetEditCurPos(cur, true, true);
+}
+
+// Shift the visible-track window by one strip (sign of step).
+void applyBankByOne_(int step)
+{
+    if (step == 0) return;
+    const int trackCount = visibleTrackCount();
+    const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
+    int next = g_bankOffset.load() + step;
+    if (next < 0)        next = 0;
+    if (next > maxStart) next = maxStart;
+    if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
+}
+
+// Adjust the value of REAPER's last-touched FX parameter by `step *
+// kLastParamDelta`. Read GetLastTouchedFX for the (track, fx, param)
+// tuple; silently skips when nothing has been touched yet.
+void applyLastParamStep_(int step)
+{
+    if (step == 0) return;
+    int trWord = 0, fxWord = 0, paramIdx = 0;
+    if (!GetLastTouchedFX(&trWord, &fxWord, &paramIdx)) return;
+    const int trackIdx = trWord & 0xFFFF;
+    MediaTrack* tr = (trackIdx == 0)
+        ? GetMasterTrack(nullptr)
+        : GetTrack(nullptr, trackIdx - 1);
+    if (!tr) return;
+    const int fxIdx = fxWord & 0xFFFFFF;
+    constexpr double kLastParamDelta = 0.005;   // 200 detents = full sweep
+    const double cur    = TrackFX_GetParamNormalized(tr, fxIdx, paramIdx);
+    double       newVal = cur + step * kLastParamDelta;
+    if (newVal < 0.0) newVal = 0.0;
+    if (newVal > 1.0) newVal = 1.0;
+    if (newVal == cur) return;
+    TrackFX_SetParamNormalized(tr, fxIdx, paramIdx, newVal);
 }
 
 // Window-positioning back-end for the "Pin plug-in GUI position"
@@ -9930,7 +10016,7 @@ bool g_lastForcePan = false;
 bool g_lastFlip = false;
 int  g_lastSoftKeyBank = -1;
 bool g_lastShiftHeld = false;
-EncoderMode g_lastEncoderMode = EncoderMode::Nav;
+EncoderMode g_lastEncoderMode = EncoderMode::ChSelect;
 int  g_lastPageLeftLit  = -1;     // -1 = unknown / 0 = off / 1 = on
 int  g_lastPageRightLit = -1;
 int  g_lastPluginLit    = -1;     // -1 = unknown / 0 = dim / 1 = bright (mode)
@@ -10934,8 +11020,16 @@ void onTimer()
             else if (std::strcmp(m, "FxCycle")     == 0) g_encoderMode.store(EncoderMode::FxCycle);
             else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
             else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
-            else if (std::strcmp(m, "Focus")       == 0) g_encoderMode.store(EncoderMode::Focus);
-            else                                         g_encoderMode.store(EncoderMode::Nav);
+            // 'Focus' (legacy) and 'Mousewheel' (post-2026-05-19 rename)
+            // map to the same mode for back-compat with old ExtState dumps.
+            else if (std::strcmp(m, "Focus")       == 0
+                  || std::strcmp(m, "Mousewheel")  == 0) g_encoderMode.store(EncoderMode::Mousewheel);
+            else if (std::strcmp(m, "Markers")     == 0) g_encoderMode.store(EncoderMode::Markers);
+            else if (std::strcmp(m, "BankBy1")     == 0) g_encoderMode.store(EncoderMode::BankBy1);
+            else if (std::strcmp(m, "LastParam")   == 0) g_encoderMode.store(EncoderMode::LastParam);
+            // 'Nav' (legacy) and 'ChSelect' (post-2026-05-19 rename) both
+            // resolve to the channel-select default mode.
+            else                                         g_encoderMode.store(EncoderMode::ChSelect);
         }
     }
     g_lastTrackCountForReinit = currentTrackCount;
@@ -14227,14 +14321,19 @@ void registerBindingHandlers()
         nullptr, "Modifier: Ctrl", true
     });
 
+    // 'encoder_nav' kept as the canonical name for the channel-select
+    // mode so existing bindings.json files still resolve. Display label
+    // updated to 'Channel Select' (Frank 2026-05-19) and ExtState now
+    // serialises as 'ChSelect'. The load path accepts both 'Nav' and
+    // 'ChSelect' so round-tripping older dumps still works.
     registerBuiltin("encoder_nav", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Nav);
-            SetExtState("ReaSixty", "encoderMode", "Nav", true);
+            g_encoderMode.store(EncoderMode::ChSelect);
+            SetExtState("ReaSixty", "encoderMode", "ChSelect", true);
         },
-        [](int) { return g_encoderMode.load() == EncoderMode::Nav; },
-        "Encoder Mode → Nav", false
+        [](int) { return g_encoderMode.load() == EncoderMode::ChSelect; },
+        "Encoder Mode → Channel Select", false
     });
     registerBuiltin("encoder_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -14245,14 +14344,44 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::Nudge; },
         "Encoder Mode → Nudge", false
     });
+    // 'encoder_focus' kept as the canonical name. Display label is now
+    // 'Mousewheel' to match what the mode actually does (cursor wheel
+    // emulation). ExtState serialises as 'Mousewheel'.
     registerBuiltin("encoder_focus", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::Focus);
-            SetExtState("ReaSixty", "encoderMode", "Focus", true);
+            g_encoderMode.store(EncoderMode::Mousewheel);
+            SetExtState("ReaSixty", "encoderMode", "Mousewheel", true);
         },
-        [](int) { return g_encoderMode.load() == EncoderMode::Focus; },
-        "Encoder Mode → Focus", false
+        [](int) { return g_encoderMode.load() == EncoderMode::Mousewheel; },
+        "Encoder Mode → Mousewheel", false
+    });
+    registerBuiltin("encoder_markers", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_encoderMode.store(EncoderMode::Markers);
+            SetExtState("ReaSixty", "encoderMode", "Markers", true);
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::Markers; },
+        "Encoder Mode → Markers (prev / next)", false
+    });
+    registerBuiltin("encoder_bank_by_1", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_encoderMode.store(EncoderMode::BankBy1);
+            SetExtState("ReaSixty", "encoderMode", "BankBy1", true);
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::BankBy1; },
+        "Encoder Mode → Bank by 1 channel", false
+    });
+    registerBuiltin("encoder_last_param", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_encoderMode.store(EncoderMode::LastParam);
+            SetExtState("ReaSixty", "encoderMode", "LastParam", true);
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::LastParam; },
+        "Encoder Mode → Last Touched Param", false
     });
     registerBuiltin("encoder_instance", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -14300,16 +14429,19 @@ void registerBindingHandlers()
             if (!firing) return;
             const int step = param;
             switch (g_encoderMode.load()) {
-                case EncoderMode::Nav:         applySelectRelative_(step); break;
+                case EncoderMode::ChSelect:    applySelectRelative_(step); break;
                 case EncoderMode::Nudge:       applyPlayheadNudge_(step);  break;
-                case EncoderMode::Focus:       applyMouseScroll_(step);    break;
+                case EncoderMode::Mousewheel:  applyMouseScroll_(step);    break;
                 case EncoderMode::Instance:    applyInstanceCycle_(step);  break;
                 case EncoderMode::FxCycle:     applyFxCycle_(step);        break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
+                case EncoderMode::Markers:     applyMarkerStep_(step);     break;
+                case EncoderMode::BankBy1:     applyBankByOne_(step);      break;
+                case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
             }
         },
         nullptr,
-        "Encoder: dispatch by current mode (Nav / Nudge / Focus / Instance Cycle / FX Cycle / Selset Cycle)",
+        "Encoder: dispatch by current mode (Channel Select / Nudge / Mousewheel / Instance / FX / Selset / Markers / Bank by 1ch / Last Touched Param)",
         false
     });
     registerBuiltin("instance_cycle", DescBuilder{
@@ -14841,6 +14973,23 @@ void registerBindingHandlers()
         },
         nullptr, "Bank → (UF8 Plugin Mode: fader-bank; else ±8-strip scroll)", false
     });
+    // Bank-by-1 single-strip nudges — paired with the encoder_bank_by_1
+    // mode, also bindable to any button so users can wire e.g. PAGE
+    // ← / → to a per-strip nudge instead of the ±8 jump.
+    registerBuiltin("bank_by_1_left", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            applyBankByOne_(-1);
+        },
+        nullptr, "Bank by 1ch ← (one strip)", false
+    });
+    registerBuiltin("bank_by_1_right", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            applyBankByOne_(+1);
+        },
+        nullptr, "Bank by 1ch → (one strip)", false
+    });
 
     // ---- Send / Receive routing builtins -------------------------------
     // 8 + 1 per category (sends, receives) = 18 builtins. Each one
@@ -15248,11 +15397,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // paths are fully de-risked.
     SetExtState("ReaSixty", "flip", "0", true);
     if (const char* m = GetExtState("ReaSixty", "encoderMode"); m && *m) {
-        if (std::strcmp(m, "Nudge") == 0)         g_encoderMode.store(EncoderMode::Nudge);
-        else if (std::strcmp(m, "Focus") == 0)    g_encoderMode.store(EncoderMode::Focus);
-        else if (std::strcmp(m, "Instance") == 0) g_encoderMode.store(EncoderMode::Instance);
-        else if (std::strcmp(m, "FxCycle") == 0)  g_encoderMode.store(EncoderMode::FxCycle);
-        else                                      g_encoderMode.store(EncoderMode::Nav);
+        if (std::strcmp(m, "Nudge") == 0)              g_encoderMode.store(EncoderMode::Nudge);
+        else if (std::strcmp(m, "Focus") == 0
+              || std::strcmp(m, "Mousewheel") == 0)    g_encoderMode.store(EncoderMode::Mousewheel);
+        else if (std::strcmp(m, "Instance") == 0)      g_encoderMode.store(EncoderMode::Instance);
+        else if (std::strcmp(m, "FxCycle") == 0)       g_encoderMode.store(EncoderMode::FxCycle);
+        else if (std::strcmp(m, "SelsetCycle") == 0)   g_encoderMode.store(EncoderMode::SelsetCycle);
+        else if (std::strcmp(m, "Markers") == 0)       g_encoderMode.store(EncoderMode::Markers);
+        else if (std::strcmp(m, "BankBy1") == 0)       g_encoderMode.store(EncoderMode::BankBy1);
+        else if (std::strcmp(m, "LastParam") == 0)     g_encoderMode.store(EncoderMode::LastParam);
+        // 'Nav' (legacy) + anything else = ChSelect (factory default).
+        else                                           g_encoderMode.store(EncoderMode::ChSelect);
     }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what

@@ -363,10 +363,12 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Fine] = mkBuiltin("fine_modifier", Behavior::Hold, "FINE");
 
     // Encoder modes (momentary press = enter mode).
-    L1[ButtonId::Nav]         = mkBuiltin("encoder_nav",   Behavior::Momentary, "NAV");
-    L1[ButtonId::Nudge]       = mkBuiltin("encoder_nudge", Behavior::Momentary, "NUDGE");
-    L1[ButtonId::EncFocus]    = mkBuiltin("encoder_focus", Behavior::Momentary, "FOCUS");
-    L1[ButtonId::ChannelPush] = mkBuiltin("encoder_nav",   Behavior::Momentary, "");
+    // Nav / Nudge / EncFocus / ChannelPush ship UNBOUND post-2026-05-19
+    // so the factory layout matches SSL 360°: no encoder-mode LED lit by
+    // default, the channel encoder behaves as Channel-Select (prev / next
+    // strip) which is the default EncoderMode. Users can rebind these
+    // buttons in Settings → Bindings to any of the new modes (Markers /
+    // Bank by 1ch / Last Param / Mousewheel / etc.).
 
     // Channel encoder rotation. Plain = mode-dispatch (preserves the
     // legacy Nav/Nudge/Focus/Instance mode system). Shift = direct

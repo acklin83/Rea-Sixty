@@ -2059,7 +2059,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     return "SSL";
 
                 if (n == "bank_left"  || n == "bank_right"
-                 || n == "page_left"  || n == "page_right")
+                 || n == "page_left"  || n == "page_right"
+                 || n == "bank_by_1_left" || n == "bank_by_1_right")
                     return "Bank / Page";
 
                 if (n.rfind("auto_", 0) == 0) return "Automation";
