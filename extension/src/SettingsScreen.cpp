@@ -8503,6 +8503,15 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Text(ctx, "Rea-Sixty");
     ImGui_Text(ctx, "Open-source SSL 360 replacement for UF8 / UC1");
     ImGui_Spacing(ctx);
+    static const char* kAuthorUrl = "https://stoersender-studio.ch";
+    ImGui_Text(ctx,
+        "Made by Frank Acklin @ Stoersender Studio, Switzerland");
+    if (ImGui_Button(ctx, "stoersender-studio.ch",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr))
+    {
+        reasixty_openUrl(kAuthorUrl);
+    }
+    ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
 
     ImGui_Text(ctx, "Versions");
