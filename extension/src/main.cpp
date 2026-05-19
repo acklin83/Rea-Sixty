@@ -8959,7 +8959,16 @@ void pushZonesForVisibleSlots()
         {
             valLine = composeValueLine("Folder", "");
         }
-        if (valLine != g_lastValueLine[s]) {
+        // Phase 2.8c: when Nav Mode owns the strip's lower row (the
+        // 'Index' or 'Timecode' setting), suppress the V-Pot value
+        // write so the two don't fight each tick over g_lastValueLine
+        // and the same firmware zone. The Nav-decoration pass writes
+        // its own content afterwards. nav_lower_row=Off keeps the
+        // pre-2.8c behaviour where V-Pot value stays visible.
+        const bool navOwnsLower =
+            uf8::nav::Overlay::instance().active()
+         && g_navLowerRow.load() != 0;
+        if (!navOwnsLower && valLine != g_lastValueLine[s]) {
             g_lastValueLine[s] = valLine;
             g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), valLine));
         }

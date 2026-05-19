@@ -7705,11 +7705,16 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 
     // Phase 2.8c — split the long flat section list into 6 sub-tabs.
     // ExtState "modes_subtab" remembers the last-active tab across
-    // Settings opens. Restore is one-shot: after the first frame
-    // SetSelected is dropped so user clicks own the active tab.
+    // Settings opens. Restore is one-shot per Modes-pane entry: after
+    // the first frame SetSelected is dropped so user clicks own the
+    // active tab. drawModes only runs while the parent's Modes pane
+    // is visible — detect the gap between calls (frame counter jumps
+    // by >1) to re-arm the restore each time the user navigates
+    // away and back.
     static int  s_savedTab      = -1;
     static bool s_savedConsumed = false;
     static int  s_lastWritten   = -1;
+    static int  s_lastFrameSeen = -1;
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
@@ -7717,6 +7722,11 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
+    const int frame = ImGui_GetFrameCount(ctx);
+    if (s_lastFrameSeen >= 0 && frame > s_lastFrameSeen + 1) {
+        s_savedConsumed = false;   // re-arm restore on pane re-entry
+    }
+    s_lastFrameSeen = frame;
 
     auto persistActive = [&](int idx) {
         if (idx == s_lastWritten) return;

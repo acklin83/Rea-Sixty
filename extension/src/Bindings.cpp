@@ -2724,19 +2724,25 @@ bool findFirstBoundTo(const std::string& builtinName,
         }
         return false;
     };
+    // Iterate kNames (stable declaration order) instead of the
+    // bindings map (unordered) so the UI displays the same button
+    // every time when more than one binding fires the same builtin.
     for (int layer = 0; layer < 3; ++layer) {
-        for (const auto& [id, bd] : g_cfg.layers[layer].bindings) {
+        for (const auto& e : kNames) {
+            auto it = g_cfg.layers[layer].bindings.find(e.id);
+            if (it == g_cfg.layers[layer].bindings.end()) continue;
+            const Binding& bd = it->second;
             for (int m = 0; m < kModifierCount; ++m) {
                 if (matchSlot(bd.shortPress[m])) {
                     if (layerOut)      *layerOut      = layer;
-                    if (idOut)         *idOut         = id;
+                    if (idOut)         *idOut         = e.id;
                     if (modOut)        *modOut        = static_cast<Modifier>(m);
                     if (longPressOut)  *longPressOut  = false;
                     return true;
                 }
                 if (bd.hasLongPress && matchSlot(bd.longPress[m])) {
                     if (layerOut)      *layerOut      = layer;
-                    if (idOut)         *idOut         = id;
+                    if (idOut)         *idOut         = e.id;
                     if (modOut)        *modOut        = static_cast<Modifier>(m);
                     if (longPressOut)  *longPressOut  = true;
                     return true;

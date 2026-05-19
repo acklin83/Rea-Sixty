@@ -1462,10 +1462,9 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             // MarkersInRegion branch below calls backToRegions(), which
             // re-runs enumerate() and reuses items_'s storage — a
             // captured reference would dangle. Cheap to copy.
-            const int    jumpIdx     = items[ci].idx;
-            const double jumpPos     = items[ci].pos;
-            const bool   isRegionHit = items[ci].isRegion;
-            const auto   lock        = ov.viewLock();
+            const int    jumpIdx = items[ci].idx;
+            const double jumpPos = items[ci].pos;
+            const auto   lock    = ov.viewLock();
             auto markDirty = []{
                 reasixty_markNavOverlayDirty();
             };
