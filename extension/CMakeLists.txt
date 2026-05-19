@@ -233,10 +233,12 @@ target_include_directories(reaper_uf8 PRIVATE
 
 target_link_libraries(reaper_uf8 PRIVATE reasixty_libusb)
 
-# REAPER loads libraries named "reaper_*.dylib" on macOS
+# REAPER loads libraries matching "reaper_*.dylib" / "reaper_*.dll". The
+# CMake target name stays `reaper_uf8` for historical / build-script
+# stability; the output filename reflects the product brand "Rea-Sixty".
 set_target_properties(reaper_uf8 PROPERTIES
     PREFIX ""
-    OUTPUT_NAME "reaper_uf8"
+    OUTPUT_NAME "reaper_rea-sixty"
 )
 
 if(APPLE)
