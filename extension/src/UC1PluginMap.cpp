@@ -548,6 +548,8 @@ void refreshUserCache_()
     rebuildUserCache_locked_();
 }
 
+} // namespace
+
 // True when this binding's plug-in is a Bus Compressor variant. The
 // older code identified BC by `shortName == "BC 2"`, which broke as
 // soon as the SSL 360 Link wrapper came in with its own shortName.
@@ -562,8 +564,6 @@ bool isBusCompBinding(const PluginBindings* b)
     }
     return false;
 }
-
-} // namespace
 
 const PluginBindings* lookupBindingsByName(std::string_view fxName)
 {

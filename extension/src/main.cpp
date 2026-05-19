@@ -9539,21 +9539,38 @@ void chaseFocusedFxWindow()
     char fxName[512] = {0};
     uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName));
 
+    // Resolve the domain. User-mapped plug-ins go through the catalog
+    // (covers Channel Strip / Bus Comp / UF8-only). Built-in SSL CS/BC
+    // (CS 2, 4K E, 4K B, 4K G, 360° Link) aren't in user_plugins, so
+    // fall back to the UC1 binding tables. Frank 2026-05-19: focusing
+    // 4K B on a track that also has 4K E should flip the instance
+    // cursor to 4K B — previously the early-return on `!um` killed the
+    // chase for built-ins entirely.
+    uf8::Domain domain = uf8::Domain::None;
+    bool isUf8OnlyOwned = false;
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-    if (!um) return;
+    if (um) {
+        domain = um->domain;
+        isUf8OnlyOwned = (um->domain == uf8::Domain::None && um->uf8Mode);
+    } else {
+        const auto* b = uc1::lookupBindingsByName(std::string_view{fxName});
+        if (!b) return;   // unmapped plug-in, nothing to chase
+        domain = uc1::isBusCompBinding(b) ? uf8::Domain::BusComp
+                                          : uf8::Domain::ChannelStrip;
+    }
 
     const int instIdx = uc1::instanceIndexForFx(tr, fxIdx);
     if (instIdx >= 0) {
-        if (um->domain == uf8::Domain::BusComp)
+        if (domain == uf8::Domain::BusComp)
             uc1::setBcInstanceIndex(tr, instIdx);
-        else if (um->domain == uf8::Domain::ChannelStrip)
+        else if (domain == uf8::Domain::ChannelStrip)
             uc1::setCsInstanceIndex(tr, instIdx);
     }
     // UF8-only maps don't show up in instanceIndexForFx (lookupBindings
     // ByName ignores them). Walk the track ourselves to find this FX's
     // position among UF8-only mapped plug-ins, so the cycle's index
     // snaps to whichever UF8-only window the user just clicked.
-    if (um->domain == uf8::Domain::None && um->uf8Mode) {
+    if (isUf8OnlyOwned) {
         int seen = 0;
         char buf[256];
         const int nFx = TrackFX_GetCount(tr);
@@ -9571,8 +9588,8 @@ void chaseFocusedFxWindow()
 
     // UF8-only maps (domain==None) shouldn't clobber the CS/BC focus
     // when the user touches them — they have no UC1 representation.
-    if (um->domain != uf8::Domain::None) {
-        uf8::setFocus({um->domain, 0});
+    if (domain != uf8::Domain::None) {
+        uf8::setFocus({domain, 0});
     }
     uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                 std::memory_order_relaxed);

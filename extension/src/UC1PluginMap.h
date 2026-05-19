@@ -106,6 +106,11 @@ UC1Bindings lookupBindingsOnTrack(void* track /*MediaTrack**/);
 // Lookup by raw FX name (substring). Exposed for tests.
 const PluginBindings* lookupBindingsByName(std::string_view fxName);
 
+// True when this binding belongs to the Bus Comp domain (BC 2 / 4K B /
+// user-mapped BC). False covers Channel Strip and unrelated bindings;
+// callers should null-check the input first.
+bool isBusCompBinding(const PluginBindings* b);
+
 // Kind of a control — helps the surface decide which plugin slot to
 // route a knob to when both Bus Comp and Channel Strip are on the track.
 enum class ControlDomain {
