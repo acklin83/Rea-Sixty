@@ -205,9 +205,21 @@ bool UC1Device::open()
     // the handshake but stays on the splash.
     for (size_t i = 0; i < kUc1InitFrameCount; ++i) {
         int t = 0;
-        const int rc = libusb_bulk_transfer(handle_, kEpOut,
+        int rc = libusb_bulk_transfer(handle_, kEpOut,
             const_cast<uint8_t*>(kUc1InitSequence[i].bytes),
             static_cast<int>(kUc1InitSequence[i].size), &t, 500);
+        // UC1 firmware occasionally NAKs / STALLs a single frame mid-
+        // flood — observed by Frank 2026-05-19 at frame 516. Clear the
+        // halt and retry once with a 1 ms breather. A single transient
+        // PIPE doesn't mean the device is broken; the rest of the flood
+        // usually flows fine afterwards.
+        if (rc == LIBUSB_ERROR_PIPE) {
+            libusb_clear_halt(handle_, kEpOut);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            rc = libusb_bulk_transfer(handle_, kEpOut,
+                const_cast<uint8_t*>(kUc1InitSequence[i].bytes),
+                static_cast<int>(kUc1InitSequence[i].size), &t, 500);
+        }
         if (rc < 0) {
             lastError_ = std::string("init flood OUT failed at frame ")
                        + std::to_string(i) + ": " + libusb_error_name(rc);
