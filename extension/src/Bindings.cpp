@@ -34,6 +34,9 @@
 
 namespace uf8::bindings {
 
+// Forward — defined inside the anonymous namespace below.
+namespace { void crumb_(const char* msg); }
+
 namespace {
 
 // ---- ButtonId <-> snake_case name -----------------------------------------
@@ -345,12 +348,15 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
 
 void seedFactoryDefaults_(Config& c)
 {
+    crumb_("seed: enter");
     c = Config{};
+    crumb_("seed: Config{} done");
     c.version     = 2;
     c.activeLayer = 0;
     c.layers[0].name = "Layer 1";
     c.layers[1].name = "Layer 2";
     c.layers[2].name = "Layer 3";
+    crumb_("seed: layer names set");
 
     // Layer-select bindings live on ALL three layers so the user can
     // always navigate back even on the otherwise-empty Layer 2/3
@@ -2014,7 +2020,7 @@ void upgradeSslSoftkeyLabels_(Layer& L)
     }
 }
 
-static void crumb_(const char* msg)
+void crumb_(const char* msg)
 {
 #ifdef _WIN32
     char tmp[260] = {0};
