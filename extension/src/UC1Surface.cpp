@@ -1446,16 +1446,23 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 ++stats_.buttonEventsHandled;
                 return;
             }
-            const auto& it    = items[ci];
-            const auto  lock  = ov.viewLock();
+            // Snapshot the cursor item's fields by value. The shift +
+            // MarkersInRegion branch below calls backToRegions(), which
+            // re-runs enumerate() and reuses items_'s storage — a
+            // captured reference would dangle. Cheap to copy.
+            const int    jumpIdx     = items[ci].idx;
+            const double jumpPos     = items[ci].pos;
+            const bool   isRegionHit = items[ci].isRegion;
+            const auto   lock        = ov.viewLock();
             auto markDirty = []{
                 reasixty_markNavOverlayDirty();
             };
 
+            (void)isRegionHit;  // reserved for view-agnostic future paths
+
             if (lock == uf8::nav::ViewLock::MarkersOnly) {
                 if (!isLong && !isShift) {
-                    SetEditCurPos(it.pos, true, true);
-                    ov.clearCursorPin();
+                    SetEditCurPos(jumpPos, true, true);
                     markDirty();
                 }
                 ++stats_.buttonEventsHandled;
@@ -1463,8 +1470,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             }
             if (lock == uf8::nav::ViewLock::RegionsOnly) {
                 if (!isLong && !isShift) {
-                    GoToRegion(nullptr, it.idx, false);
-                    ov.clearCursorPin();
+                    GoToRegion(nullptr, jumpIdx, false);
                     markDirty();
                 }
                 ++stats_.buttonEventsHandled;
@@ -1483,24 +1489,29 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
 
             switch (ov.view()) {
             case uf8::nav::View::Regions:
-                GoToRegion(nullptr, it.idx, false);
+                GoToRegion(nullptr, jumpIdx, false);
                 if (!isShift) {
+                    // drillIntoRegion enumerates() — clears the pin
+                    // internally, so we don't need clearCursorPin().
                     ov.drillIntoRegion(ci);
+                } else {
+                    ov.clearCursorPin();
                 }
-                ov.clearCursorPin();
                 markDirty();
                 break;
             case uf8::nav::View::MarkersInRegion:
                 if (isShift) {
+                    // backToRegions enumerates() and reuses items_ —
+                    // jumpPos was snapshotted above so this is safe.
                     ov.backToRegions();
                 }
-                SetEditCurPos(it.pos, true, true);
+                SetEditCurPos(jumpPos, true, true);
                 ov.clearCursorPin();
                 markDirty();
                 break;
             case uf8::nav::View::MarkersAll:
                 if (!isShift) {
-                    SetEditCurPos(it.pos, true, true);
+                    SetEditCurPos(jumpPos, true, true);
                     ov.clearCursorPin();
                     markDirty();
                 }
