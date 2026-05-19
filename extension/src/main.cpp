@@ -279,6 +279,19 @@ std::atomic<bool> g_navOverlayDirty{false};
 // works before the 2.8c setting lands.
 std::atomic<bool> g_uc1NavLcdActive{true};
 
+// Phase 2.8c — Nav default-view-on-toggle-enter.
+//   0 = Regions (factory default)
+//   1 = Markers in current region
+//   2 = Markers (all)
+//   3 = Last used (no view change on entry)
+// Consumed by navToggle()'s activation branch.
+std::atomic<int>  g_navDefaultView{0};
+
+// Phase 2.8c — Region-press behaviour for the UF8 top-soft-key tap
+// in Nav Mode (NavJumpStrip drain). 0 = Jump + Drill, 1 = Jump only,
+// 2 = Drill only.
+std::atomic<int>  g_navRegionPress{0};
+
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
 // (uf8::g_focusedParam, uf8::g_focusedDirty). This flag is the existing
@@ -1558,6 +1571,16 @@ void loadBrightness()
         const char* v = GetExtState("rea_sixty", "nav_auto_follow");
         const bool follow = (v && *v) ? (std::atoi(v) != 0) : true;
         uf8::nav::Overlay::instance().setAutoFollow(follow);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_default_view"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 3) n = 0;
+        g_navDefaultView.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_region_press"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navRegionPress.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
@@ -3745,12 +3768,23 @@ void drainInputQueue()
                 // markrgnindexnumber). Passing true would interpret
                 // it.idx as a 1-based timeline-order position, which
                 // breaks on sparse / non-1-based numbering.
-                GoToRegion(nullptr, it.idx, false);
-                // Drill is gated by the view lock: RegionsOnly users
-                // want region jumps to be terminal (no transition to
-                // the region's marker list). MarkersOnly can't reach
-                // this branch — its items are markers, not regions.
-                if (ov.viewLock() == uf8::nav::ViewLock::None) {
+                //
+                // Phase 2.8c region-press behaviour (g_navRegionPress):
+                //   0 = Jump + Drill (factory default)
+                //   1 = Jump only — useful when the user wants to scrub
+                //       regions without committing to the marker view
+                //   2 = Drill only — pre-cue the marker list without
+                //       moving the transport
+                // RegionsOnly view-lock always suppresses the drill
+                // (its items are regions; drill would invalidate them).
+                const int  press     = g_navRegionPress.load();
+                const bool doJump    = (press != 2);
+                const bool doDrill   = (press != 1)
+                    && (ov.viewLock() == uf8::nav::ViewLock::None);
+                if (doJump) {
+                    GoToRegion(nullptr, it.idx, false);
+                }
+                if (doDrill) {
                     ov.drillIntoRegion(idx);
                 }
             } else {
@@ -6852,6 +6886,47 @@ void pushNavOverlayDecorations()
     if (!g_dev || !g_dev->isOpen()) return;
 
     auto& ov = uf8::nav::Overlay::instance();
+
+    // Phase 2.8c — default-view-on-toggle-enter. Detect activation
+    // edge on the main thread (REAPER marker enumeration isn't safe
+    // from the input-thread navToggle lambda). Only fires for the
+    // plain marker_overlay_toggle (lock=None); the locked variants
+    // already enforce their view via drainPendingLock_.
+    static bool s_wasActiveForView = false;
+    const bool nowActive = ov.active();
+    if (nowActive && !s_wasActiveForView
+        && ov.viewLock() == uf8::nav::ViewLock::None)
+    {
+        const int dv = g_navDefaultView.load();
+        if (dv == 0) {
+            ov.setView(uf8::nav::View::Regions);
+        } else if (dv == 1) {
+            // Markers in current region: snap to whichever region
+            // contains the playhead (or edit cursor when stopped).
+            // Falls back to Regions view if the playhead is in a gap.
+            ov.setView(uf8::nav::View::Regions);
+            const int ps  = GetPlayState();
+            const double pos = (ps & 1)
+                ? GetPlayPosition() : GetCursorPosition();
+            int hit = -1;
+            const auto& its = ov.items();
+            for (int i = 0; i < static_cast<int>(its.size()); ++i) {
+                if (its[i].isRegion
+                    && pos + 1e-6 >= its[i].pos
+                    && pos <= its[i].rgnEnd + 1e-6)
+                {
+                    hit = i;
+                    break;
+                }
+            }
+            if (hit >= 0) ov.drillIntoRegion(hit);
+        } else if (dv == 2) {
+            ov.setView(uf8::nav::View::MarkersAll);
+        }
+        // dv == 3 (Last used) — leave the prior view intact.
+    }
+    s_wasActiveForView = nowActive;
+
     // Refresh marker list every tick — REAPER markers can be edited
     // (renamed, recoloured, repositioned) while overlay is active and
     // we want those edits to reflect immediately.
@@ -12366,6 +12441,27 @@ extern "C" void reasixty_markNavOverlayDirty()
 {
     g_navOverlayDirty.store(true);
     if (g_sync) g_sync->invalidate();
+}
+
+// Phase 2.8c — Nav default-view + region-press settings accessors.
+int  reasixty_navDefaultView()         { return g_navDefaultView.load(); }
+void reasixty_setNavDefaultView(int v)
+{
+    if (v < 0 || v > 3) v = 0;
+    g_navDefaultView.store(v);
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%d", v);
+    SetExtState("rea_sixty", "nav_default_view", buf, true);
+}
+
+int  reasixty_navRegionPress()         { return g_navRegionPress.load(); }
+void reasixty_setNavRegionPress(int v)
+{
+    if (v < 0 || v > 2) v = 0;
+    g_navRegionPress.store(v);
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%d", v);
+    SetExtState("rea_sixty", "nav_region_press", buf, true);
 }
 
 // ---- Selection-Set settings exports --------------------------------------

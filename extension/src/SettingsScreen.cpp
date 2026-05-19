@@ -110,6 +110,10 @@ bool reasixty_altDragSnapBack();
 void reasixty_setAltDragSnapBack(bool on);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
+int  reasixty_navDefaultView();
+void reasixty_setNavDefaultView(int v);
+int  reasixty_navRegionPress();
+void reasixty_setNavRegionPress(int v);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -8022,6 +8026,54 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
               "Nav Mode: Markers only (no drill)");
     navMirror("marker_overlay_regions_only_toggle",
               "Nav Mode: Regions only (no drill)");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "View defaults");
+    ImGui_Separator(ctx);
+
+    ImGui_Text(ctx, "Default view on Nav Mode entry:");
+    int dv = reasixty_navDefaultView();
+    if (ImGui_RadioButton(ctx, "Regions##nav_dv_regions", dv == 0)) {
+        reasixty_setNavDefaultView(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx,
+            "Markers in current region##nav_dv_mir", dv == 1))
+    {
+        reasixty_setNavDefaultView(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Markers (all)##nav_dv_all", dv == 2)) {
+        reasixty_setNavDefaultView(2);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Last used##nav_dv_last", dv == 3)) {
+        reasixty_setNavDefaultView(3);
+    }
+    ImGui_Text(ctx,
+        "  Applied only by the plain marker_overlay_toggle. "
+        "'Markers in current region' snaps to the region under the "
+        "playhead; falls back to Regions if the playhead is in a gap.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Region-press behaviour (UF8 top-soft-key):");
+    int rp = reasixty_navRegionPress();
+    if (ImGui_RadioButton(ctx, "Jump + Drill##nav_rp_both", rp == 0)) {
+        reasixty_setNavRegionPress(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Jump only##nav_rp_jump", rp == 1)) {
+        reasixty_setNavRegionPress(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Drill only##nav_rp_drill", rp == 2)) {
+        reasixty_setNavRegionPress(2);
+    }
+    ImGui_Text(ctx,
+        "  What a tap on a region's top-soft-key does. Jump = move "
+        "transport to the region start; Drill = enter the region's "
+        "marker list. RegionsOnly view-lock always suppresses Drill.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
