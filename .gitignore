@@ -36,3 +36,6 @@ extension/vendor/
 
 # Claude Code session-local state
 .claude/
+
+# Cross-platform build artifacts
+dist-windows/
