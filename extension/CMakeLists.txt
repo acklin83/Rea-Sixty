@@ -36,18 +36,58 @@ if(NOT EXISTS "${WDL_DIR}/WDL/swell/swell.h")
 endif()
 
 # reaper_plugin.h does `#include "../WDL/swell/swell.h"` — expects WDL to
-# live as a sibling of the sdk/ directory. Make that true with a symlink.
+# live as a sibling of the sdk/ directory. POSIX uses a symlink; Windows
+# falls back to a copy because symbolic links there need admin / dev mode.
 if(NOT EXISTS "${REAPER_SDK_DIR}/WDL")
-    file(CREATE_LINK "${WDL_DIR}/WDL" "${REAPER_SDK_DIR}/WDL" SYMBOLIC)
+    if(WIN32)
+        file(CREATE_LINK "${WDL_DIR}/WDL" "${REAPER_SDK_DIR}/WDL"
+             COPY_ON_ERROR SYMBOLIC)
+    else()
+        file(CREATE_LINK "${WDL_DIR}/WDL" "${REAPER_SDK_DIR}/WDL" SYMBOLIC)
+    endif()
 endif()
 
-# ----- libusb -----------------------------------------------------------------
-# On macOS: brew install libusb. On Linux: apt install libusb-1.0-0-dev.
-# On Windows: vcpkg install libusb or FetchContent the prebuilt MSVC build.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
+# ----- libusb + hidapi --------------------------------------------------------
+# macOS: brew install libusb hidapi  → discovered via pkg-config.
+# Linux: apt install libusb-1.0-0-dev libhidapi-dev → same path.
+# Windows: pkg-config isn't usually present. Either let CMake find a
+# vcpkg-installed copy via find_package, or point us at a prebuilt drop
+# with -DLIBUSB_ROOT=<path> / -DHIDAPI_ROOT=<path>. The Root variants
+# match libusb's MSVC release layout (include/, MS64/dll/) and hidapi's
+# Windows release layout (include/, x64/).
+if(WIN32)
+    if(NOT LIBUSB_ROOT)
+        message(FATAL_ERROR
+            "Set -DLIBUSB_ROOT=<path>. Expected layout: include/libusb-1.0/libusb.h, MS64/dll/libusb-1.0.lib (libusb MSVC release).")
+    endif()
+    if(NOT HIDAPI_ROOT)
+        message(FATAL_ERROR
+            "Set -DHIDAPI_ROOT=<path>. Expected layout: include/hidapi.h, x64/hidapi.lib (hidapi Windows release).")
+    endif()
+    add_library(reasixty_libusb INTERFACE)
+    target_include_directories(reasixty_libusb INTERFACE
+        "${LIBUSB_ROOT}/include")
+    # Pick the per-MSVC subtree from the libusb release zip. Default to
+    # VS2022; override with -DLIBUSB_MSVC=VS2019 etc. if a different
+    # toolset is in use.
+    if(NOT LIBUSB_MSVC)
+        set(LIBUSB_MSVC "VS2022")
+    endif()
+    target_link_libraries(reasixty_libusb INTERFACE
+        "${LIBUSB_ROOT}/${LIBUSB_MSVC}/MS64/dll/libusb-1.0.lib")
+    add_library(reasixty_hidapi INTERFACE)
+    target_include_directories(reasixty_hidapi INTERFACE
+        "${HIDAPI_ROOT}/include")
+    target_link_libraries(reasixty_hidapi INTERFACE
+        "${HIDAPI_ROOT}/x64/hidapi.lib")
+else()
+    find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
     pkg_check_modules(HIDAPI REQUIRED IMPORTED_TARGET hidapi)
+    add_library(reasixty_libusb INTERFACE)
+    target_link_libraries(reasixty_libusb INTERFACE PkgConfig::LIBUSB)
+    add_library(reasixty_hidapi INTERFACE)
+    target_link_libraries(reasixty_hidapi INTERFACE PkgConfig::HIDAPI)
 endif()
 
 # ----- the plugin -------------------------------------------------------------
@@ -143,7 +183,7 @@ if(APPLE)
         COMPILE_FLAGS "-fno-objc-arc")
 endif()
 
-target_link_libraries(reaper_uf8 PRIVATE PkgConfig::HIDAPI)
+target_link_libraries(reaper_uf8 PRIVATE reasixty_hidapi)
 
 if(APPLE)
     target_link_libraries(reaper_uf8 PRIVATE
@@ -163,7 +203,7 @@ target_include_directories(reaper_uf8 PRIVATE
     "${WDL_DIR}"
 )
 
-target_link_libraries(reaper_uf8 PRIVATE PkgConfig::LIBUSB)
+target_link_libraries(reaper_uf8 PRIVATE reasixty_libusb)
 
 # REAPER loads libraries named "reaper_*.dylib" on macOS
 set_target_properties(reaper_uf8 PROPERTIES
@@ -177,26 +217,28 @@ elseif(WIN32)
     set_target_properties(reaper_uf8 PROPERTIES SUFFIX ".dll")
 endif()
 
-# ----- tests (protocol-only, no libusb/REAPER) --------------------------------
-add_executable(test_protocol tests/test_protocol.cpp src/Protocol.cpp src/Palette.cpp)
-target_include_directories(test_protocol PRIVATE src)
-enable_testing()
-add_test(NAME protocol COMMAND test_protocol)
+# ----- tests + CLI helpers (skipped on Windows for the initial port) ----------
+# Tests use POSIX-ish patterns; tools link directly against libusb / hidapi.
+# Gated off on Windows so a fresh checkout produces the DLL without forcing
+# all the smoke-test wiring to be ported at the same time.
+if(NOT WIN32)
+    add_executable(test_protocol tests/test_protocol.cpp src/Protocol.cpp src/Palette.cpp)
+    target_include_directories(test_protocol PRIVATE src)
+    enable_testing()
+    add_test(NAME protocol COMMAND test_protocol)
 
-add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
-target_include_directories(test_uc1_protocol PRIVATE src)
-add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
+    add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
+    target_include_directories(test_uc1_protocol PRIVATE src)
+    add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
 
-# ----- CLI smoke-test (libusb only, no REAPER) --------------------------------
-add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
-target_include_directories(uf8_color_test PRIVATE src)
-target_link_libraries(uf8_color_test PRIVATE PkgConfig::LIBUSB)
+    add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
+    target_include_directories(uf8_color_test PRIVATE src)
+    target_link_libraries(uf8_color_test PRIVATE reasixty_libusb)
 
-# ----- Palette probe (interactive) --------------------------------------------
-add_executable(uf8_palette_probe tools/uf8_palette_probe.cpp src/Protocol.cpp)
-target_include_directories(uf8_palette_probe PRIVATE src)
-target_link_libraries(uf8_palette_probe PRIVATE PkgConfig::LIBUSB)
+    add_executable(uf8_palette_probe tools/uf8_palette_probe.cpp src/Protocol.cpp)
+    target_include_directories(uf8_palette_probe PRIVATE src)
+    target_link_libraries(uf8_palette_probe PRIVATE reasixty_libusb)
 
-# ----- HID probe tool ---------------------------------------------------------
-add_executable(uf8_hid_probe tools/uf8_hid_probe.cpp)
-target_link_libraries(uf8_hid_probe PRIVATE PkgConfig::HIDAPI)
+    add_executable(uf8_hid_probe tools/uf8_hid_probe.cpp)
+    target_link_libraries(uf8_hid_probe PRIVATE reasixty_hidapi)
+endif()
