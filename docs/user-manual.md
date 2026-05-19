@@ -59,20 +59,37 @@ items that the project's README and ROADMAP currently overstate.
 
 ---
 
-## 2. Installation (macOS)
+## 2. Installation
 
-The Windows and Linux ports are planned but not currently smoke-tested
-— see `ROADMAP.md` Phase 4.
+Rea-Sixty ships as a REAPER extension binary plus two runtime
+dependencies (libusb and hidapi). The binary is the same C++ on both
+platforms; what differs is how each OS exposes the UF8/UC1 USB
+endpoints to user-space libusb.
 
-### 2.1 Prerequisites
+### 2.1 Prerequisites (both platforms)
 
-1. `brew install libusb`
-2. REAPER installed
-3. ReaImGui installed via ReaPack
-4. UF8 plugged in
-5. SSL 360° quit (including the `SSL360Core` background daemon)
+1. **REAPER** installed (recent build).
+2. **ReaImGui** installed via ReaPack — Extensions → ReaPack → Browse
+   packages → ReaImGui → Install. Without ReaImGui the Surface still
+   registers and hardware bindings work, but the on-screen Settings
+   window stays empty.
+3. **UF8 and/or UC1** connected over USB-C. A UF8-only or UC1-only
+   rig is fine.
+4. **SSL 360° not running.** It owns the device's vendor-USB
+   interface exclusively; Rea-Sixty can't open it while 360° is up.
+   On macOS this means quit the `SSL360Core` background daemon too.
+   On Windows it means SSL 360°'s kernel driver has to be replaced
+   (Section 2.3.3).
 
-### 2.2 Build
+### 2.2 macOS
+
+#### 2.2.1 Library deps
+
+```
+brew install libusb hidapi
+```
+
+#### 2.2.2 Build
 
 ```
 cd extension
@@ -80,34 +97,101 @@ cmake -B build -G "Unix Makefiles"
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-This produces `build/reaper_uf8.dylib`.
+This produces `build/reaper_rea-sixty.dylib`.
 
-### 2.3 Install
+#### 2.2.3 Install
 
 Symlink (recommended for development — rebuilds are picked up after a
 REAPER restart):
 
 ```
-ln -sf "$PWD/build/reaper_uf8.dylib" \
-       ~/Library/Application\ Support/REAPER/UserPlugins/reaper_uf8.dylib
+ln -sf "$PWD/build/reaper_rea-sixty.dylib" \
+       ~/Library/Application\ Support/REAPER/UserPlugins/reaper_rea-sixty.dylib
 ```
 
 Or copy:
 
 ```
-cp build/reaper_uf8.dylib \
+cp build/reaper_rea-sixty.dylib \
    ~/Library/Application\ Support/REAPER/UserPlugins/
 ```
 
-Restart REAPER. On success, the UF8 scribble strips show REAPER track
-colours within one display tick. On failure, REAPER → View → Console
-shows a line beginning with `Rea-Sixty UF8:` or `Rea-Sixty UC1:` —
-see chapter 10.
+Quit SSL 360° + the `SSL360Core` daemon, then restart REAPER. On
+success, the UF8 scribble strips show REAPER track colours within
+one display tick. On failure, REAPER → View → Console shows a line
+beginning with `Rea-Sixty UF8:` or `Rea-Sixty UC1:` — see chapter 10.
+
+### 2.3 Windows
+
+Windows binds a kernel driver to the UF8/UC1 vendor interface; libusb
+can only claim the device when that driver is **WinUSB** (or
+libusbk / libusb-win32). SSL 360° ships its own driver (`SSLBUS`),
+which is mutually exclusive. Rea-Sixty includes an in-product driver
+swap so users don't need Zadig — see 2.3.3.
+
+#### 2.3.1 Library deps
+
+Drop `libusb-1.0.dll` and `hidapi.dll` next to **`reaper.exe`** (e.g.
+`C:\Program Files\REAPER (x64)\`). REAPER's DLL search path doesn't
+include `UserPlugins\`, so the deps have to live alongside REAPER
+itself. Sources:
+
+- `libusb-1.0.dll` — libusb [GitHub release](https://github.com/libusb/libusb/releases),
+  `VS2022/MS64/dll/libusb-1.0.dll` from the libusb-1.0.x.7z archive.
+- `hidapi.dll` — hidapi [GitHub release](https://github.com/libusb/hidapi/releases),
+  `x64/hidapi.dll` from `hidapi-win.zip`.
+
+A signed Microsoft Visual C++ Runtime 2015-2022 must be present (it
+usually is on Win10/11; if `vcruntime140.dll` is missing, install the
+[VC++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)).
+
+#### 2.3.2 Install the DLL
+
+Drop `reaper_rea-sixty.dll` into your REAPER user profile:
+
+```
+%APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll
+```
+
+(Typically `C:\Users\<your-user>\AppData\Roaming\REAPER\UserPlugins\`.)
+
+Restart REAPER. Open Action List (`?`) → search **"Rea-Sixty"** →
+**"Rea-Sixty: Open / Close Rea-Sixty Settings"** should appear. If it
+doesn't, the DLL didn't load — most often `libusb-1.0.dll` or
+`hidapi.dll` aren't next to `reaper.exe`, or VC++ Runtime is missing.
+
+#### 2.3.3 WinUSB driver swap (one-time)
+
+The first time you launch REAPER with Rea-Sixty, the UF8/UC1 still
+belong to SSL 360°'s kernel driver and libusb can't open them. To
+hand them over:
+
+1. In REAPER, run the action **"Rea-Sixty: Open / Close Rea-Sixty
+   Settings"**.
+2. Settings → **About** tab → scroll to **"Windows USB driver"**.
+3. Click **"Install UF8/UC1 WinUSB driver"**.
+4. A UAC prompt opens — accept.
+5. Windows shows a **"Publisher unknown"** warning (the INF is
+   unsigned; this is the same friction as Zadig). Click **"Install
+   anyway"**.
+6. Unplug + replug both UF8 and UC1 so Windows re-enumerates them
+   onto the new WinUSB driver.
+7. Restart REAPER. The surface should come up.
+
+**Reverting:** SSL 360° will no longer see the devices after the
+swap. Re-running SSL 360°'s installer reinstalls its driver and
+takes the devices back; Rea-Sixty then can't see them until you
+re-run the WinUSB install. The two are mutually exclusive at the
+driver level — that's a Windows USB-stack constraint, not a Rea-Sixty
+design choice.
 
 ### 2.4 Uninstall
 
-Remove the file from `~/Library/Application Support/REAPER/
-UserPlugins/`, restart REAPER.
+- macOS: delete `~/Library/Application Support/REAPER/UserPlugins/reaper_rea-sixty.dylib`,
+  restart REAPER.
+- Windows: delete `%APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll`,
+  restart REAPER. The WinUSB driver entry persists — re-run SSL 360°'s
+  installer to fully revert the device binding.
 
 ---
 
