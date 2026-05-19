@@ -129,6 +129,15 @@ private:
 
     std::vector<Item> items_;
 
+    // Auto-roll latch: true once the playhead has been observed inside
+    // the currently-filtered region. tickAutoFollow only rolls into a
+    // different region when the latch is set — i.e. when the playhead
+    // was in our filter region and then left. Suppresses the "snap
+    // back" that would otherwise happen when the user drills to a
+    // region the playhead hasn't reached yet (manual targeting during
+    // playback, smooth-seek delay).
+    bool              wasInFilter_  = false;
+
     // Project-change detection. If either changes between enumerate()
     // calls, cursor/page reset and view falls back to Regions.
     void*             lastProj_     = nullptr;

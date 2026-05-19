@@ -79,6 +79,7 @@ void Overlay::drainPendingLock_()
     }
     cursorIdx_  = 0;
     pageOffset_ = 0;
+    wasInFilter_ = false;
 }
 
 void Overlay::enumerate()
@@ -234,6 +235,10 @@ void Overlay::drillIntoRegion(int enumPos)
     view_ = View::MarkersInRegion;
     cursorIdx_  = 0;
     pageOffset_ = 0;
+    // User-driven drill: disarm auto-roll until the playhead actually
+    // arrives in this region. Without this the next tick would
+    // observe playhead-still-in-previous-region and roll us back.
+    wasInFilter_ = false;
     enumerate();
 }
 
@@ -243,6 +248,7 @@ void Overlay::backToRegions()
     filterRegionIdx_ = -1;
     cursorIdx_  = 0;
     pageOffset_ = 0;
+    wasInFilter_ = false;
     enumerate();
 }
 
@@ -252,13 +258,17 @@ bool Overlay::tickAutoFollow(double playPos)
 
     bool changed = false;
 
-    // MarkersInRegion: switch the drilled region whenever the playhead
-    // sits inside a DIFFERENT region than the one currently filtered.
-    // Symmetric — handles forward roll (song A → B), backwards jumps
-    // (user clicks back into an earlier region), and non-adjacent
-    // jumps. Does NOT switch when the playhead is in a gap between
-    // regions; the current drill stays so the user keeps the marker
-    // list they were working with.
+    // MarkersInRegion: roll the drilled region when the playhead
+    // crosses OUT of the currently-filtered region. Gated on
+    // wasInFilter_ — the playhead must have actually been inside the
+    // filter region at some point; otherwise we'd snap a fresh user
+    // drill (e.g. manual top-soft-key tap during playback) back to
+    // whatever region the playhead is still drifting through.
+    //
+    // Symmetric on direction: forward roll (song A → B in timeline
+    // order) and backwards jumps both work, as long as the playhead
+    // crosses INTO a different region from inside the filtered one.
+    // Playhead in a gap between regions leaves the drill alone.
     if (view_ == View::MarkersInRegion) {
         int nmarkers = 0, nregions = 0;
         CountProjectMarkers(nullptr, &nmarkers, &nregions);
@@ -277,13 +287,21 @@ bool Overlay::tickAutoFollow(double playPos)
                 break;
             }
         }
-        if (playingRgnIdx >= 0 && playingRgnIdx != filterRegionIdx_) {
+        const bool inFilter = (playingRgnIdx == filterRegionIdx_);
+        if (inFilter) {
+            wasInFilter_ = true;
+        } else if (wasInFilter_ && playingRgnIdx >= 0) {
+            // Real transition — playhead WAS in our filter, now is
+            // in a different region. Roll.
             filterRegionIdx_ = playingRgnIdx;
             cursorIdx_  = 0;
             pageOffset_ = 0;
+            wasInFilter_ = true;     // we just entered the new filter
             enumerate();
             changed = true;
         }
+        // playhead outside any region while wasInFilter_: stay put,
+        // don't reset the latch — a brief gap shouldn't disarm us.
     }
 
     if (items_.empty()) return changed;
