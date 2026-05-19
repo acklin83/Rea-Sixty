@@ -387,6 +387,83 @@ void UC1Surface::showInstanceCarousel(const std::string& prev,
     device_->send(buildDisplayInvalidate(0x0F));
 }
 
+void UC1Surface::showNavCarousel(const std::string& prev,
+                                 const std::string& curr,
+                                 const std::string& next,
+                                 const std::string& header,
+                                 uint8_t paletteIdx)
+{
+    if (!device_) return;
+
+    // First entry: claim the LCD layout slot and clear any competing
+    // overlays. Subsequent calls only send the deltas (header / triple
+    // / palette) when the cached args change.
+    const bool firstEntry = !navCarouselActive_;
+    if (firstEntry) {
+        bcScrollOverlayActive_   = false;
+        instanceCarouselActive_  = false;
+        // CS-scroll only suppresses zone 0x03 — leave it to expire on
+        // its own timer; the Nav carousel doesn't care about zone 0x03.
+        if (!lastZone03Text_.empty()) {
+            lastZone03Text_.clear();
+            device_->send(buildDisplayInvalidate(zone::kChannelStripReadout));
+        }
+        if (!lastZone05Text_.empty()) {
+            lastZone05Text_.clear();
+            device_->send(buildDisplayInvalidate(zone::kBusCompReadout));
+        }
+        device_->send(buildCentralMode(CentralMode::Main, 0x02));
+        navCarouselActive_  = true;
+        // Force the cached strings to mismatch so we send everything
+        // on this first tick regardless of prior content.
+        navCarouselHeader_.clear();
+        navCarouselPrev_.clear();
+        navCarouselCurr_.clear();
+        navCarouselNext_.clear();
+        navCarouselPalette_ = 0xFF;
+    }
+
+    if (header != navCarouselHeader_) {
+        navCarouselHeader_ = header;
+        device_->send(buildLcdHeader(header));
+    }
+
+    if (prev != navCarouselPrev_
+        || curr != navCarouselCurr_
+        || next != navCarouselNext_)
+    {
+        navCarouselPrev_ = prev;
+        navCarouselCurr_ = curr;
+        navCarouselNext_ = next;
+        auto frame = buildTrackNameTripleLarge(prev, curr, next);
+        device_->send(std::vector<uint8_t>(frame));
+        lastLargeTripleFrame_ = std::move(frame);
+        device_->send(buildDisplayInvalidate(0x0F));
+    }
+
+    if (paletteIdx != navCarouselPalette_) {
+        navCarouselPalette_ = paletteIdx;
+        device_->send(buildFocusedColour(paletteIdx));
+    }
+}
+
+void UC1Surface::hideNavCarousel()
+{
+    if (!navCarouselActive_) return;
+    navCarouselActive_ = false;
+    navCarouselPrev_.clear();
+    navCarouselCurr_.clear();
+    navCarouselNext_.clear();
+    navCarouselHeader_.clear();
+    navCarouselPalette_ = 0xFF;
+    if (!device_ || mode_ != Uc1Mode::Main) return;
+    // Match the instance-carousel revert: reset sub=0x00 then refresh()
+    // so the central-label branch picks the regular MAIN/CS 2/BC 2
+    // path and the LARGE triple repopulates from BC carousel data.
+    device_->send(buildCentralMode(CentralMode::Main, 0x00));
+    refresh();
+}
+
 void UC1Surface::invalidateCache()
 {
     ringCellCache_.clear();
@@ -1854,9 +1931,10 @@ void UC1Surface::pushFocusedParamReadout_()
     // (Frank 2026-05-12 "CS parameter ist immer noch dort").
     if (zoneByte == zone::kChannelStripReadout
         && (csScrollOverlayActive_ || bcScrollOverlayActive_
-            || instanceCarouselActive_)) return;
+            || instanceCarouselActive_ || navCarouselActive_)) return;
     if (zoneByte == zone::kBusCompReadout
-        && (bcScrollOverlayActive_ || instanceCarouselActive_)) return;
+        && (bcScrollOverlayActive_ || instanceCarouselActive_
+            || navCarouselActive_)) return;
     std::string& cache = (zoneByte == zone::kBusCompReadout)
                        ? lastZone05Text_ : lastZone03Text_;
     if (readout == cache) return;

@@ -106,6 +106,22 @@ public:
                               const std::string& next,
                               const std::string& header);
 
+    // Nav Mode carousel (Phase 2.8b). Same 3-slot triple as the
+    // instance carousel but PERSISTENT — no auto-fade timer. Holds
+    // the LCD until hideNavCarousel(). Strings + palette are cached;
+    // re-calling with identical args is a no-op (lets callers push on
+    // every poll without flooding USB). Pass paletteIdx=0 to leave
+    // the colour bar dark.
+    void showNavCarousel(const std::string& prev,
+                         const std::string& curr,
+                         const std::string& next,
+                         const std::string& header,
+                         uint8_t paletteIdx);
+
+    // Tear down the Nav carousel and repaint the regular MAIN layout.
+    void hideNavCarousel();
+    bool navCarouselActive() const { return navCarouselActive_; }
+
     // Drain queued hardware events. Call from REAPER's main thread on a
     // timer (Run() or a deferred action). Returns the number of events
     // handled this tick.
@@ -306,6 +322,16 @@ private:
     std::chrono::steady_clock::time_point instanceCarouselUntil_{};
     std::string                           instanceCarouselHeader_;
     std::vector<uint8_t>                  instanceCarouselTripleFrame_;
+
+    // Nav Mode carousel (Phase 2.8b). Persistent — no timeout. Cached
+    // strings + palette so showNavCarousel can be called every poll
+    // tick without flooding USB; only the changed frames go out.
+    bool                                  navCarouselActive_ = false;
+    std::string                           navCarouselPrev_;
+    std::string                           navCarouselCurr_;
+    std::string                           navCarouselNext_;
+    std::string                           navCarouselHeader_;
+    uint8_t                               navCarouselPalette_ = 0xFF;  // 0xFF = "never sent"
 
     std::mutex               queueMu_;
     std::deque<ButtonEvent>  buttonQueue_;
