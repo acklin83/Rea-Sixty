@@ -2120,33 +2120,48 @@ constexpr double kAutoModeRotateScale = 6.0;
 // des v-pots verändern").
 double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
-// Per-track active-FX index for Selection-Mode Instance. Survives
-// bank scrolls AND project save/load — keyed by project-stable GUID
-// (uc1::trackGuid) just like the Domain Instance cursors so a reload
-// doesn't reset the cycle position. Was MediaTrack*-keyed until
-// 2026-05-17; pointers became stale across reload and could even be
-// recycled to a different track by REAPER.
-std::unordered_map<std::string, int> g_stripInstanceFxIdx;
+// Per-track active-FX cursor for Selection-Mode Instance. Survives
+// bank scrolls, project save/load, AND FX-chain reorder. Keyed by
+// track-GUID; the stored value is the FX-GUID string so a reorder of
+// the FX chain doesn't move the cursor onto a different plug-in.
+// History: was MediaTrack*-keyed (broke on reload), then track-GUID +
+// raw int index (broke on FX reorder — plan-fx-identity.md), now
+// track-GUID + fx-GUID string.
+std::unordered_map<std::string, std::string> g_stripInstanceFxGuid;
 
 void setStripInstanceFx_(MediaTrack* tr, int idx)
 {
     if (!tr) return;
     const std::string g = uc1::trackGuid(tr);
     if (g.empty()) return;
-    g_stripInstanceFxIdx[g] = idx;
+    if (idx < 0) {
+        g_stripInstanceFxGuid.erase(g);
+        return;
+    }
+    const std::string fxg = uf8::fxGuidString(tr, idx);
+    if (fxg.empty()) {
+        // FX has no GUID (e.g. record-FX bit) — fall back to clearing
+        // the cursor so callers see "no recorded position" rather than
+        // a stale one. Rare path.
+        g_stripInstanceFxGuid.erase(g);
+        return;
+    }
+    g_stripInstanceFxGuid[g] = fxg;
 }
 
 // Look up the raw stored cursor for `tr` (no clamping). Returns -1
-// when no cursor has been written for the track yet. Most callers
-// want stripInstanceActiveFx_ instead, which clamps to the current
-// FX count.
+// when no cursor has been written for the track yet OR the stored
+// FX-GUID is no longer present (FX was deleted / chunk-replaced).
+// Most callers want stripInstanceActiveFx_ instead, which clamps to
+// the current FX count.
 int stripInstanceFxRaw_(MediaTrack* tr)
 {
     if (!tr) return -1;
     const std::string g = uc1::trackGuid(tr);
     if (g.empty()) return -1;
-    auto it = g_stripInstanceFxIdx.find(g);
-    return (it == g_stripInstanceFxIdx.end()) ? -1 : it->second;
+    auto it = g_stripInstanceFxGuid.find(g);
+    if (it == g_stripInstanceFxGuid.end()) return -1;
+    return uf8::findFxIndexByGuid(tr, it->second);
 }
 
 // Returns the current Instance-mode active FX index for `tr`,
@@ -2599,7 +2614,7 @@ void applyInstanceCycle_(int step)
     // Sync the per-strip Instance index on the focused track so the
     // Selection-Mode Instance colour-bar readout (stripInstanceActiveFx_)
     // moves with the Encoder cycle on the focused/selected strip. Other
-    // strips keep their own per-strip g_stripInstanceFxIdx, so the
+    // strips keep their own per-strip g_stripInstanceFxGuid, so the
     // Encoder Cycle only visibly affects the selected channel (Frank
     // 2026-05-14 "soll nur beim selected channel wie vorher"). The
     // per-strip V-Pot path in StripInstanceDelta still updates this
@@ -2714,7 +2729,7 @@ bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
 
 // Walk ALL FX on the focused track. Unlike applyInstanceCycle_ which
 // filters to SSL-mapped CS/BC/UF8 plug-ins, fx_cycle walks every plug-in
-// the user has on the track. Updates the FX-Cursor (g_stripInstanceFxIdx)
+// the user has on the track. Updates the FX-Cursor (g_stripInstanceFxGuid)
 // only — does NOT move any open Encoder-2-Push window. The UC1 push window
 // tracks the focused-domain Instance now (Frank 2026-05-15 per-surface
 // consistency rule), not the cursor. The UF8 V-Pot push owns its own
@@ -2798,7 +2813,7 @@ void applySelsetCycle_(int step)
 // that the UC1 LCD central label is currently displaying. Per-surface
 // consistency: UC1 Encoder 2 Push opens what UC1 shows (the Instance,
 // resolved by focused.domain + focused-track or BC-anchor-track). The
-// FX-Cursor (g_stripInstanceFxIdx) is intentionally NOT consulted here
+// FX-Cursor (g_stripInstanceFxGuid) is intentionally NOT consulted here
 // — that cursor pairs with UF8 V-Pot push, not UC1's. Frank 2026-05-15:
 // "Was angezeigt wird auf der Surface = was beim Push aufgeht."
 //
@@ -2827,7 +2842,7 @@ ActiveFxTarget resolveActiveFx_()
 
     // Cursor branch — user has explicitly cycled (V-Pot FX Cycle,
     // V-Pot Instance Cycle, or Encoder Instance Cycle, all of which
-    // write g_stripInstanceFxIdx).
+    // write g_stripInstanceFxGuid).
     const int raw = stripInstanceFxRaw_(tr);
     if (raw >= 0) {
         const int nFx = TrackFX_GetCount(tr);
@@ -10820,7 +10835,7 @@ void onTimer()
         // also re-fires this drain on rotation so the window follows.
         // Active under both SelectionMode::Instance (FX Cycle) AND
         // SelectionMode::InstanceCycle: both rotate the same per-strip
-        // cursor (`g_stripInstanceFxIdx`), just with different ring
+        // cursor (`g_stripInstanceFxGuid`), just with different ring
         // filters. The push semantic is identical.
         {
             const int ownerStrip = g_instanceGuiOwnerStrip.load();

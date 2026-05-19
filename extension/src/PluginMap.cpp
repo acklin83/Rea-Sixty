@@ -436,6 +436,33 @@ bool fxIdentityName(void* trackOpaque, int fx, char* buf, int bufSize)
     return false;
 }
 
+std::string fxGuidString(void* trackOpaque, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return {};
+    const GUID* g = TrackFX_GetFXGUID(tr, fx);
+    if (!g) return {};
+    char buf[64] = {0};
+    guidToString(g, buf);
+    return std::string{buf};
+}
+
+int findFxIndexByGuid(void* trackOpaque, const std::string& guidStr)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || guidStr.empty()) return -1;
+    const int n = TrackFX_GetCount(tr);
+    char buf[64];
+    for (int fx = 0; fx < n; ++fx) {
+        const GUID* g = TrackFX_GetFXGUID(tr, fx);
+        if (!g) continue;
+        buf[0] = 0;
+        guidToString(g, buf);
+        if (guidStr == buf) return fx;
+    }
+    return -1;
+}
+
 PluginMatch lookupPluginOnTrack(void* trackOpaque)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);

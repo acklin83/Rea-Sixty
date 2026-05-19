@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "FocusedParam.h"
@@ -118,6 +119,19 @@ struct PluginMatch {
 // `tr` is null. Use this everywhere FX *identity* matters; keep
 // TrackFX_GetFXName for *display* (it honours user rename).
 bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize);
+
+// FX-GUID stringification — wraps TrackFX_GetFXGUID + guidToString.
+// Stable identity for an FX slot across reorder. Empty string when
+// the FX is gone or REAPER returns no GUID (e.g. record-FX bit set
+// in the index). Use this to remember "which FX is the cursor on"
+// across FX-chain rearrangement.
+std::string fxGuidString(void* track /*MediaTrack**/, int fx);
+
+// Walk the chain on `track` and return the first FX whose GUID string
+// matches `guidStr`. Returns -1 when the GUID is no longer present
+// (FX deleted or chunk-replaced). O(TrackFX_GetCount); fine for the
+// per-touch / per-encoder-tick call rate.
+int findFxIndexByGuid(void* track /*MediaTrack**/, const std::string& guidStr);
 
 PluginMatch lookupPluginOnTrack(void* track /*MediaTrack**/);
 
