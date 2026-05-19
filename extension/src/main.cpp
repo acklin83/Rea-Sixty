@@ -3882,6 +3882,41 @@ void queueInput(PendingInput e)
     g_inQueue.push_back(e);
 }
 
+// Diagnostic helper writing to %TEMP%\rea_sixty_setparam.log -- mirror
+// of crumb_/initLog's tmpdir resolution.
+FILE* openDiagLog_()
+{
+#ifdef _WIN32
+    char tmp[260] = {0};
+    char path[260] = {0};
+    if (GetTempPathA(260, tmp)) {
+        snprintf(path, sizeof(path), "%srea_sixty_setparam.log", tmp);
+    } else {
+        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
+    }
+    return std::fopen(path, "a");
+#else
+    return std::fopen("/tmp/rea_sixty_setparam.log", "a");
+#endif
+}
+
+// Unconditional snapshot of the flags that decide which fader-write
+// branch fires. Fires before any branch logic so we can see WHY the
+// SSL Strip Mode write didn't happen when Frank thinks it should.
+void diagFaderStateLog_(int strip, bool stripMode, bool pluginMode,
+                        bool flip, int csFx, int csParam,
+                        MediaTrack* tr)
+{
+    FILE* f = openDiagLog_();
+    if (!f) return;
+    std::fprintf(f,
+        "FADER state strip=%d  stripMode=%d  pluginMode=%d  flip=%d  "
+        "csFx=%d  csParam=%d  tr=%p\n",
+        strip, stripMode ? 1 : 0, pluginMode ? 1 : 0, flip ? 1 : 0,
+        csFx, csParam, static_cast<void*>(tr));
+    std::fclose(f);
+}
+
 // Diagnostic: log every TrackFX_SetParamNormalized we call from the
 // hot fader / V-Pot / UC1 writeback paths to %TEMP%\rea_sixty_setparam.log
 // so we can see whether REAPER accepts the write. Frank 2026-05-19:
@@ -3893,18 +3928,7 @@ void queueInput(PendingInput e)
 void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
                       int param, double n, bool setRet, double after)
 {
-#ifdef _WIN32
-    char tmp[260] = {0};
-    char path[260] = {0};
-    if (GetTempPathA(260, tmp)) {
-        snprintf(path, sizeof(path), "%srea_sixty_setparam.log", tmp);
-    } else {
-        std::strcpy(path, "C:\\Windows\\Temp\\rea_sixty_setparam.log");
-    }
-    FILE* f = std::fopen(path, "a");
-#else
-    FILE* f = std::fopen("/tmp/rea_sixty_setparam.log", "a");
-#endif
+    FILE* f = openDiagLog_();
     if (!f) return;
     std::fprintf(f,
         "%s  tr=%p  fx=%d  param=%d  n=%.4f  setRet=%d  getAfter=%.4f  diff=%+.4f\n",
@@ -4368,6 +4392,18 @@ void drainInputQueue()
                 }
                 break;
             case PendingInput::VolumeAbs: {
+                // Diag (Frank 2026-05-19): unconditional snapshot of the
+                // state that decides which fader-write branch fires, so
+                // when the SetParam log doesn't get hit we can see WHY.
+                {
+                    const auto cs0 = csFaderForTrack(tr);
+                    diagFaderStateLog_(static_cast<int>(e.strip),
+                        g_pluginFaderMode.load(),
+                        g_uf8PluginMode.load(),
+                        g_flip.load(),
+                        cs0.fxIndex, cs0.vst3Param,
+                        tr);
+                }
                 // Send/Receive routing wins over every other fader-input
                 // path: when the user explicitly turned on a routing
                 // mode, the fader writes the routed level (no plugin-fader,
