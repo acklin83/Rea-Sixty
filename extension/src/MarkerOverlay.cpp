@@ -381,7 +381,7 @@ void Overlay::dumpWindow() const
         view_ == View::Regions          ? "Regions"
       : view_ == View::MarkersInRegion ? "MarkersInRegion"
                                        : "MarkersAll";
-    std::snprintf(hdr, sizeof(hdr),
+    snprintf(hdr, sizeof(hdr),
         "[Nav] view=%s items=%zu page=%d/%d cursor=%d filterRgn=%d "
         "active=%d autoFollow=%d pin=%d\n",
         viewName, items_.size(), pageOffset_ + 1, pageCount(),
@@ -396,15 +396,15 @@ void Overlay::dumpWindow() const
     for (int s = 0; s < kPageSize; ++s) {
         char line[256];
         if (!win[s]) {
-            std::snprintf(line, sizeof(line), "  strip %d: --\n", s);
+            snprintf(line, sizeof(line), "  strip %d: --\n", s);
         } else if (win[s]->isRegion) {
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "  strip %d: R%d %-20.20s pos=%8.3f..%8.3f color=0x%06X\n",
                 s, win[s]->idx, win[s]->name.c_str(),
                 win[s]->pos, win[s]->rgnEnd,
                 win[s]->color & 0xFFFFFF);
         } else {
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "  strip %d: M%d %-20.20s pos=%8.3f          color=0x%06X\n",
                 s, win[s]->idx, win[s]->name.c_str(),
                 win[s]->pos,

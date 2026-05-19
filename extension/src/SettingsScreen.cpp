@@ -226,10 +226,10 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     auto deviceLine = [&](const char* name, bool on, const char* serial) {
         if (on && serial && *serial) {
-            std::snprintf(line, sizeof(line), "  %s   [connected]   SN %s",
+            snprintf(line, sizeof(line), "  %s   [connected]   SN %s",
                           name, serial);
         } else {
-            std::snprintf(line, sizeof(line), "  %s   %s", name,
+            snprintf(line, sizeof(line), "  %s   %s", name,
                           on ? "[connected]" : "[not connected]");
         }
         ImGui_Text(ctx, line);
@@ -361,12 +361,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         const bool centerMode = reasixty_pluginGuiPinCenter();
         char hint[96];
         if (centerMode) {
-            std::snprintf(hint, sizeof(hint), "  Pin: center");
+            snprintf(hint, sizeof(hint), "  Pin: center");
         } else if (px < 0 || py < 0) {
-            std::snprintf(hint, sizeof(hint),
+            snprintf(hint, sizeof(hint),
                 "  Pin: (none captured yet)");
         } else {
-            std::snprintf(hint, sizeof(hint),
+            snprintf(hint, sizeof(hint),
                 "  Pin: %d, %d", px, py);
         }
         ImGui_Text(ctx, hint);
@@ -397,12 +397,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         const bool chainCenter = reasixty_fxChainPinCenter();
         char hint[96];
         if (chainCenter) {
-            std::snprintf(hint, sizeof(hint), "  Pin: center");
+            snprintf(hint, sizeof(hint), "  Pin: center");
         } else if (cx < 0 || cy < 0) {
-            std::snprintf(hint, sizeof(hint),
+            snprintf(hint, sizeof(hint),
                 "  Pin: (none captured yet)");
         } else {
-            std::snprintf(hint, sizeof(hint),
+            snprintf(hint, sizeof(hint),
                 "  Pin: %d, %d", cx, cy);
         }
         ImGui_Text(ctx, hint);
@@ -457,12 +457,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             const bool   active = (testActive == testBase + i);
 
             char rowLbl[32];
-            std::snprintf(rowLbl, sizeof(rowLbl), "  %4.0f dB", tickDb);
+            snprintf(rowLbl, sizeof(rowLbl), "  %4.0f dB", tickDb);
             ImGui_Text(ctx, rowLbl);
             ImGui_SameLine(ctx, nullptr, nullptr);
 
             char testId[64];
-            std::snprintf(testId, sizeof(testId),
+            snprintf(testId, sizeof(testId),
                 "%s##cal_test_%d_%d",
                 active ? "Stop" : "Test", section, i);
             if (ImGui_Button(ctx, testId, nullptr, nullptr)) {
@@ -471,7 +471,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
 
             char inputId[64];
-            std::snprintf(inputId, sizeof(inputId),
+            snprintf(inputId, sizeof(inputId),
                 "dB##cal_in_%d_%d", section, i);
             double v = cur;
             double step = 0.1, fast = 1.0;
@@ -488,14 +488,14 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         }
         ImGui_Spacing(ctx);
         char resetId[48];
-        std::snprintf(resetId, sizeof(resetId),
+        snprintf(resetId, sizeof(resetId),
             "Reset all##cal_reset_%d", section);
         if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
             reasixty_uc1CalResetSection(section);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         char stopId[48];
-        std::snprintf(stopId, sizeof(stopId),
+        snprintf(stopId, sizeof(stopId),
             "Stop test##cal_stop_%d", section);
         const bool sectionTestActive =
             (section == 0  && testActive >= 0   && testActive < 6) ||
@@ -846,7 +846,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         // Top soft-key — clickable so the user can edit the per-strip
         // binding directly from the schematic.
         char tlbl[4];
-        std::snprintf(tlbl, sizeof(tlbl), "%d", i + 1);
+        snprintf(tlbl, sizeof(tlbl), "%d", i + 1);
         drawHwBtn(sx + 6, 12, kStripW - 12, 22, kStripTsk[i], tlbl);
         // Scribble LCD — show the live top-soft-key label. Resolution
         // mirrors the runtime render path:
@@ -994,7 +994,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         for (int row = 0; row < 4; ++row) {
             for (int col = 0; col < 2; ++col) {
                 const int idx = row * 2 + col;
-                std::snprintf(buf, sizeof(buf), "%d", idx + 1);
+                snprintf(buf, sizeof(buf), "%d", idx + 1);
                 drawHwBtn(13 + col * 42, 152 + row * 26, 38, 22,
                           kSp[idx], buf);
             }
@@ -1801,7 +1801,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
 
     auto sectionRadio = [&](const char* tag, const char* label, ActionType t) {
         const bool on = (*f.type == t);
-        std::snprintf(idbuf, sizeof(idbuf), "%s##%s_%s", label, prefix, tag);
+        snprintf(idbuf, sizeof(idbuf), "%s##%s_%s", label, prefix, tag);
         if (ImGui_RadioButton(ctx, idbuf, on)) {
             // Switching action type — clear payload that doesn't transfer
             // across types. A REAPER action ID is meaningless as a Native
@@ -1829,7 +1829,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
     if (f.label) {
         char lblBuf[64] = {0};
         std::strncpy(lblBuf, f.label->c_str(), sizeof(lblBuf) - 1);
-        std::snprintf(idbuf, sizeof(idbuf),
+        snprintf(idbuf, sizeof(idbuf),
                       "Display label##%s_lbl", prefix);
         double lw = 220;
         ImGui_PushItemWidth(ctx, lw);
@@ -1850,7 +1850,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         ImGui_Indent(ctx, /*indent_w*/ nullptr);
         char buf[128] = {0};
         std::strncpy(buf, f.action->c_str(), sizeof(buf) - 1);
-        std::snprintf(idbuf, sizeof(idbuf), "Action ID##%s_actid", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Action ID##%s_actid", prefix);
         double w = 260;
         ImGui_PushItemWidth(ctx, w);
         if (ImGui_InputTextWithHint(ctx, idbuf,
@@ -1874,7 +1874,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx)
             : reasixty_actionPickerActiveFor(
                 layer, id, isLongPress, modIdx, stepIdx);
-        std::snprintf(idbuf, sizeof(idbuf), "%s##%s_browse",
+        snprintf(idbuf, sizeof(idbuf), "%s##%s_browse",
                       pickerOpen ? "Cancel Action Pick" : "Browse Action...",
                       prefix);
         if (ImGui_Button(ctx, idbuf,
@@ -1891,7 +1891,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             }
         }
         sameLine(ctx);
-        std::snprintf(idbuf, sizeof(idbuf), "Load ReaScript...##%s_load",
+        snprintf(idbuf, sizeof(idbuf), "Load ReaScript...##%s_load",
                       prefix);
         if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) {
             std::string picked = reasixty_loadReaScript();
@@ -1907,7 +1907,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         std::string nameStr = reasixty_resolveActionName(*f.action);
         if (!nameStr.empty()) {
             char line[256];
-            std::snprintf(line, sizeof(line), "  %s", nameStr.c_str());
+            snprintf(line, sizeof(line), "  %s", nameStr.c_str());
             ImGui_TextDisabled(ctx, line);
         }
 
@@ -1925,7 +1925,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     "  Toggle action — set Behavior to Hold for "
                     "ON-while-held");
             }
-            std::snprintf(idbuf, sizeof(idbuf),
+            snprintf(idbuf, sizeof(idbuf),
                           "Fire again on inactive##%s_foi", prefix);
             if (ImGui_Checkbox(ctx, idbuf, f.fireOnInactive)) {
                 dirty = true;
@@ -1941,7 +1941,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         const std::string preview = f.action->empty()
             ? std::string("<pick one>")
             : builtinDisplayName(*f.action);
-        std::snprintf(idbuf, sizeof(idbuf), "Built-in##%s_native", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Built-in##%s_native", prefix);
         double w = 280;
         ImGui_PushItemWidth(ctx, w);
 
@@ -1982,7 +1982,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 ImGui_SetKeyboardFocusHere(ctx, /*offset*/ nullptr);
             }
             char searchId[64];
-            std::snprintf(searchId, sizeof(searchId), "##%s_search", prefix);
+            snprintf(searchId, sizeof(searchId), "##%s_search", prefix);
             ImGui_PushItemWidth(ctx, -1.0);
             ImGui_InputTextWithHint(ctx, searchId, "Search actions…",
                                     searchBuf, sizeof(searchBuf),
@@ -2220,7 +2220,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 static char kModeItems[] =
                     "Momentary (held = active)\0"
                     "Toggle (press flips state)\0";
-                std::snprintf(idbuf, sizeof(idbuf), "Mode##%s_modemod", prefix);
+                snprintf(idbuf, sizeof(idbuf), "Mode##%s_modemod", prefix);
                 int m = (*f.param == 1) ? 1 : 0;
                 double pw = 200;
                 ImGui_PushItemWidth(ctx, pw);
@@ -2230,7 +2230,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 }
                 ImGui_PopItemWidth(ctx);
             } else if (isRouting) {
-                std::snprintf(idbuf, sizeof(idbuf),
+                snprintf(idbuf, sizeof(idbuf),
                               "Flip onto V-Pots (default: Faders)##%s_routeflip",
                               prefix);
                 bool flipped = (*f.param == 1);
@@ -2273,7 +2273,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     }
                 }
                 comboItems[pos] = '\0';
-                std::snprintf(idbuf, sizeof(idbuf),
+                snprintf(idbuf, sizeof(idbuf),
                               "SSL function##%s_sslslot", prefix);
                 int slot = std::clamp(*f.param, 0, 7);
                 double pw = 240;
@@ -2305,7 +2305,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 }
                 ImGui_PopItemWidth(ctx);
             } else {
-                std::snprintf(idbuf, sizeof(idbuf), "Param##%s_bparam", prefix);
+                snprintf(idbuf, sizeof(idbuf), "Param##%s_bparam", prefix);
                 double pw = 90;
                 ImGui_PushItemWidth(ctx, pw);
                 int p = *f.param;
@@ -2333,13 +2333,13 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         const std::string preview = f.midiDevice->empty()
             ? std::string("(all enabled outputs)")
             : *f.midiDevice;
-        std::snprintf(idbuf, sizeof(idbuf), "Device##%s_dev", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Device##%s_dev", prefix);
         double w = 280;
         ImGui_PushItemWidth(ctx, w);
         if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), nullptr)) {
             bool selAny = f.midiDevice->empty();
             char anyId[64];
-            std::snprintf(anyId, sizeof(anyId),
+            snprintf(anyId, sizeof(anyId),
                           "(all enabled outputs)##%s_devany", prefix);
             if (ImGui_Selectable(ctx, anyId, &selAny, nullptr,
                                  nullptr, nullptr)) {
@@ -2355,7 +2355,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 bool sel = (*f.midiDevice == nm);
                 if (sel) sawCurrent = true;
                 char rowId[320];
-                std::snprintf(rowId, sizeof(rowId),
+                snprintf(rowId, sizeof(rowId),
                               "%s##%s_devo%d", nm, prefix, i);
                 if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
                                      nullptr, nullptr)) {
@@ -2366,7 +2366,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             if (!sawCurrent) {
                 bool sel = true;
                 char rowId[320];
-                std::snprintf(rowId, sizeof(rowId),
+                snprintf(rowId, sizeof(rowId),
                               "%s (offline)##%s_devstale",
                               f.midiDevice->c_str(), prefix);
                 // Selecting an offline entry is a no-op — it just
@@ -2380,7 +2380,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         ImGui_PopItemWidth(ctx);
 
         // Channel 1..16
-        std::snprintf(idbuf, sizeof(idbuf), "Channel##%s_ch", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Channel##%s_ch", prefix);
         double cw = 90;
         ImGui_PushItemWidth(ctx, cw);
         int ch = *f.midiChannel;
@@ -2404,7 +2404,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         };
         constexpr int kMidiMsgCount =
             sizeof(kMidiMsgNames) / sizeof(kMidiMsgNames[0]);
-        std::snprintf(idbuf, sizeof(idbuf), "Message##%s_msg", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Message##%s_msg", prefix);
         const int curMsg = std::clamp(*f.midiMsgType, 0, kMidiMsgCount - 1);
         double mw = 200;
         ImGui_PushItemWidth(ctx, mw);
@@ -2423,7 +2423,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         ImGui_PopItemWidth(ctx);
 
         // Data bytes
-        std::snprintf(idbuf, sizeof(idbuf), "Note / CC ###%s_d1", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Note / CC ###%s_d1", prefix);
         double dw = 90;
         ImGui_PushItemWidth(ctx, dw);
         int d1 = *f.midiData1;
@@ -2435,7 +2435,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         }
         ImGui_PopItemWidth(ctx);
 
-        std::snprintf(idbuf, sizeof(idbuf), "Velocity / Value##%s_d2", prefix);
+        snprintf(idbuf, sizeof(idbuf), "Velocity / Value##%s_d2", prefix);
         ImGui_PushItemWidth(ctx, dw);
         int d2 = *f.midiData2;
         if (ImGui_InputInt(ctx, idbuf, &d2, nullptr, nullptr, nullptr)) {
@@ -2485,22 +2485,22 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         ActionStep& st = stepAt(s, i);
         if (n > 1) {
             char header[80];
-            std::snprintf(header, sizeof(header), "Step %d", i + 1);
+            snprintf(header, sizeof(header), "Step %d", i + 1);
             ImGui_Text(ctx, header);
             ImGui_SameLine(ctx, nullptr, nullptr);
-            std::snprintf(idbuf, sizeof(idbuf), "Remove##%s_rm_%d", prefix, i);
+            snprintf(idbuf, sizeof(idbuf), "Remove##%s_rm_%d", prefix, i);
             if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) {
                 removeIdx = i;
             }
         }
         char stepPrefix[80];
-        std::snprintf(stepPrefix, sizeof(stepPrefix), "%s_st%d", prefix, i);
+        snprintf(stepPrefix, sizeof(stepPrefix), "%s_st%d", prefix, i);
         if (drawStepPicker_(ctx, stepPrefix, layer, id, st, isLongPress,
                             modIdx, /*stepIdx*/ i)) {
             dirty = true;
         }
         if (i < n - 1) {
-            std::snprintf(idbuf, sizeof(idbuf),
+            snprintf(idbuf, sizeof(idbuf),
                           "Wait ms after##%s_wait_%d", prefix, i);
             double ww = 110;
             ImGui_PushItemWidth(ctx, ww);
@@ -2530,7 +2530,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         }
         dirty = true;
     }
-    std::snprintf(idbuf, sizeof(idbuf), "+ Add step##%s_add", prefix);
+    snprintf(idbuf, sizeof(idbuf), "+ Add step##%s_add", prefix);
     if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) {
         s.extraSteps.emplace_back();
         dirty = true;
@@ -2540,7 +2540,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
     // are independently opt-in; checkbox toggles the override and the
     // colour swatch / brightness radios mutate the slot's LedOverride.
     char ledHdr[80];
-    std::snprintf(ledHdr, sizeof(ledHdr), "LED override##%s_ledhdr", prefix);
+    snprintf(ledHdr, sizeof(ledHdr), "LED override##%s_ledhdr", prefix);
     if (ImGui_CollapsingHeader(ctx, ledHdr, nullptr, nullptr)) {
         ImGui_Indent(ctx, nullptr);
         auto drawOverrideRow = [&](const char* rowLabel,
@@ -2549,7 +2549,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                                    Brightness& bri,
                                    const char* idTag) {
             char cbId[64];
-            std::snprintf(cbId, sizeof(cbId),
+            snprintf(cbId, sizeof(cbId),
                           "Override %s##%s_ov_%s", rowLabel, prefix, idTag);
             bool en = has;
             if (ImGui_Checkbox(ctx, cbId, &en)) {
@@ -2563,19 +2563,19 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                 (int(rgb[1]) << 16) |
                 (int(rgb[2]) <<  8) | 0xFF;
             char btnId[64];
-            std::snprintf(btnId, sizeof(btnId),
+            snprintf(btnId, sizeof(btnId),
                           "##cur_%s_%s", prefix, idTag);
             int btnFlags = 0;
             double bw = 56.0, bh = 22.0;
             if (ImGui_ColorButton(ctx, btnId, curRgba,
                                   &btnFlags, &bw, &bh)) {
                 char popId[64];
-                std::snprintf(popId, sizeof(popId),
+                snprintf(popId, sizeof(popId),
                               "palette_%s_%s", prefix, idTag);
                 ImGui_OpenPopup(ctx, popId, nullptr);
             }
             char popId[64];
-            std::snprintf(popId, sizeof(popId),
+            snprintf(popId, sizeof(popId),
                           "palette_%s_%s", prefix, idTag);
             if (ImGui_BeginPopup(ctx, popId, nullptr)) {
                 int paletteCount = 0;
@@ -2590,7 +2590,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                         (int(p.g) << 16) |
                         (int(p.b) <<  8) | 0xFF;
                     char swId[64];
-                    std::snprintf(swId, sizeof(swId),
+                    snprintf(swId, sizeof(swId),
                                   "##pp_%s_%s_%d", prefix, idTag, j);
                     int swFlags = 0;
                     double w = sw, h = sw;
@@ -2615,7 +2615,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
             const char* names[] = {"Off", "Dim", "Bright"};
             for (int j = 0; j < 3; ++j) {
                 char rId[64];
-                std::snprintf(rId, sizeof(rId),
+                snprintf(rId, sizeof(rId),
                               "%s##b_%s_%s_%d",
                               names[j], prefix, idTag, j);
                 if (ImGui_RadioButton(ctx, rId,
@@ -2632,7 +2632,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         drawOverrideRow("Inactive", s.led.hasInactive,
                         s.led.inactiveColor, s.led.inactiveBrightness, "ina");
         char resetId[64];
-        std::snprintf(resetId, sizeof(resetId),
+        snprintf(resetId, sizeof(resetId),
                       "Reset to binding default##%s_ledreset", prefix);
         if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
             s.led = LedOverride{};
@@ -2670,20 +2670,20 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
       : (id == ButtonId::Quick3) ? 3 : 0;
 
     if (idIsLayer) {
-        std::snprintf(header, sizeof(header),
+        snprintf(header, sizeof(header),
                       "Editing: Layer %d", layer + 1);
     } else if (idIsQuick) {
-        std::snprintf(header, sizeof(header),
+        snprintf(header, sizeof(header),
                       "Editing: Layer %d, Quick %d", layer + 1, quickNum);
     } else {
         // Generic button: layer + (engaged Quick) breadcrumb, then face.
         const int liveQ = reasixty_activeQuickFor(layer);
         if (liveQ >= 0) {
-            std::snprintf(header, sizeof(header),
+            snprintf(header, sizeof(header),
                           "Editing: Layer %d, Quick %d, %s",
                           layer + 1, liveQ + 1, hwFaceLabel(id));
         } else {
-            std::snprintf(header, sizeof(header),
+            snprintf(header, sizeof(header),
                           "Editing: Layer %d, %s",
                           layer + 1, hwFaceLabel(id));
         }
@@ -2733,7 +2733,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         double w = colW, h = colH;
         int childFlags = ImGui_ChildFlags_Borders;
         char childId[32];
-        std::snprintf(childId, sizeof(childId), "%s_col", tag);
+        snprintf(childId, sizeof(childId), "%s_col", tag);
         if (ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr)) {
             ImGui_Text(ctx, title);
             ImGui_Separator(ctx);
@@ -2806,7 +2806,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             // Plain row — always drawn first; never collapsed.
             ImGui_Text(ctx, kModNames[0]);
             char slotPrefix[32];
-            std::snprintf(slotPrefix, sizeof(slotPrefix), "%s_pl", tag);
+            snprintf(slotPrefix, sizeof(slotPrefix), "%s_pl", tag);
             if (drawSlotPicker(ctx, slotPrefix, layer, id, slots[0], isLongCol,
                                /*modIdx*/ 0))
                 dirty = true;
@@ -2835,10 +2835,10 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                             (slots[m].type == ActionType::Builtin)
                             ? builtinDisplayName(slots[m].action)
                             : slots[m].action;
-                        std::snprintf(hdr, sizeof(hdr), "%s   →  %s",
+                        snprintf(hdr, sizeof(hdr), "%s   →  %s",
                                       kModNames[m], disp.c_str());
                     } else {
-                        std::snprintf(hdr, sizeof(hdr), "%s   (empty)",
+                        snprintf(hdr, sizeof(hdr), "%s   (empty)",
                                       kModNames[m]);
                     }
                     // `###` (not `##`) so only the slug after the ###
@@ -2847,11 +2847,11 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     // changes the hashed ID, which collapses the header
                     // on the next frame.
                     char hdrId[80];
-                    std::snprintf(hdrId, sizeof(hdrId), "%s###%s_h_%s",
+                    snprintf(hdrId, sizeof(hdrId), "%s###%s_h_%s",
                                   hdr, tag, kModSlugs[m]);
                     if (ImGui_CollapsingHeader(ctx, hdrId, nullptr, nullptr)) {
                         char modPrefix[32];
-                        std::snprintf(modPrefix, sizeof(modPrefix), "%s_%s",
+                        snprintf(modPrefix, sizeof(modPrefix), "%s_%s",
                                       tag, kModSlugs[m]);
                         if (drawSlotPicker(ctx, modPrefix, layer, id,
                                            slots[m], isLongCol,
@@ -2921,19 +2921,19 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             (int(rgb[1]) << 16) |
             (int(rgb[2]) <<  8) | 0xFF;
         char btnId[32];
-        std::snprintf(btnId, sizeof(btnId), "##cur_%s", idTag);
+        snprintf(btnId, sizeof(btnId), "##cur_%s", idTag);
         int btnFlags = 0;
         double bw = 56.0, bh = 22.0;
         if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
             char popId[32];
-            std::snprintf(popId, sizeof(popId), "palette_%s", idTag);
+            snprintf(popId, sizeof(popId), "palette_%s", idTag);
             ImGui_OpenPopup(ctx, popId, nullptr);
         }
 
         // Palette popup — 10 swatches in a 5x2 grid. Clicking a swatch
         // commits the colour and closes the popup.
         char popId[32];
-        std::snprintf(popId, sizeof(popId), "palette_%s", idTag);
+        snprintf(popId, sizeof(popId), "palette_%s", idTag);
         if (ImGui_BeginPopup(ctx, popId, nullptr)) {
             int paletteCount = 0;
             const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
@@ -2946,7 +2946,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     (int(p.g) << 16) |
                     (int(p.b) <<  8) | 0xFF;
                 char swId[32];
-                std::snprintf(swId, sizeof(swId), "##pp_%s_%d", idTag, i);
+                snprintf(swId, sizeof(swId), "##pp_%s_%d", idTag, i);
                 int swFlags = 0;
                 double w = sw, h = sw;
                 if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
@@ -2969,7 +2969,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         const char* names[] = {"Off", "Dim", "Bright"};
         for (int i = 0; i < 3; ++i) {
             char idbuf[32];
-            std::snprintf(idbuf, sizeof(idbuf), "%s##b_%s_%d",
+            snprintf(idbuf, sizeof(idbuf), "%s##b_%s_%d",
                           names[i], idTag, i);
             if (ImGui_RadioButton(ctx, idbuf,
                                   static_cast<int>(bri) == i)) {
@@ -3060,7 +3060,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
                             && engagedForDisplay <= 1);
     if (isSslCsBc) {
         char hdr[160];
-        std::snprintf(hdr, sizeof(hdr),
+        snprintf(hdr, sizeof(hdr),
                       "Top Soft-Key %d   (Layer 1, %s)",
                       slotIdx + 1,
                       engagedForDisplay == 0 ? "Q1 = SSL CS"
@@ -3094,7 +3094,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
     // Full breadcrumb. Frank 2026-05-13: "selbstverständlich" that the
     // header carries every coordinate that defines what this slot is.
     char hdr[200];
-    std::snprintf(hdr, sizeof(hdr),
+    snprintf(hdr, sizeof(hdr),
                   "Editing: Top Soft-Key %d — %s   (Layer %d, %s)",
                   slotIdx + 1, sbName, editLayer + 1, qName);
     ImGui_Text(ctx, hdr);
@@ -3103,7 +3103,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
 
     ImGui_PushID(ctx, "uqslot_inline");
     char idtag[48];
-    std::snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_s%d",
+    snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_s%d",
                   editLayer, qIdx, sbIdx, slotIdx);
     ImGui_PushID(ctx, idtag);
 
@@ -3164,16 +3164,16 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
             (int(rgb[0]) << 24) | (int(rgb[1]) << 16)
           | (int(rgb[2]) <<  8) | 0xFF;
         char btnId[48];
-        std::snprintf(btnId, sizeof(btnId), "##uqled_cur_%s", idTag);
+        snprintf(btnId, sizeof(btnId), "##uqled_cur_%s", idTag);
         int btnFlags = 0;
         double bw = 56.0, bh = 22.0;
         if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
             char popId[48];
-            std::snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
+            snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
             ImGui_OpenPopup(ctx, popId, nullptr);
         }
         char popId[48];
-        std::snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
+        snprintf(popId, sizeof(popId), "uqled_palette_%s", idTag);
         if (ImGui_BeginPopup(ctx, popId, nullptr)) {
             int paletteCount = 0;
             const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
@@ -3185,7 +3185,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
                     (int(p.r) << 24) | (int(p.g) << 16)
                   | (int(p.b) <<  8) | 0xFF;
                 char swId[48];
-                std::snprintf(swId, sizeof(swId), "##uqled_pp_%s_%d",
+                snprintf(swId, sizeof(swId), "##uqled_pp_%s_%d",
                               idTag, i);
                 int swFlags = 0;
                 double w = sw, h = sw;
@@ -3205,7 +3205,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
         const char* names[] = {"Off", "Dim", "Bright"};
         for (int i = 0; i < 3; ++i) {
             char idbuf[48];
-            std::snprintf(idbuf, sizeof(idbuf), "%s##uqled_b_%s_%d",
+            snprintf(idbuf, sizeof(idbuf), "%s##uqled_b_%s_%d",
                           names[i], idTag, i);
             if (ImGui_RadioButton(ctx, idbuf,
                                   static_cast<int>(bri) == i)) {
@@ -3216,8 +3216,8 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
         }
     };
     char tagA[24], tagI[24];
-    std::snprintf(tagA, sizeof(tagA), "act_%s",  idtag);
-    std::snprintf(tagI, sizeof(tagI), "inact_%s", idtag);
+    snprintf(tagA, sizeof(tagA), "act_%s",  idtag);
+    snprintf(tagI, sizeof(tagI), "inact_%s", idtag);
     drawSlotLedRow("Active",   bd.color,         bd.brightness,         tagA);
     drawSlotLedRow("Inactive", bd.inactiveColor, bd.inactiveBrightness, tagI);
 
@@ -3261,7 +3261,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
 
     // Header + live badge -----------------------------------------------
     char hdr[160];
-    std::snprintf(hdr, sizeof(hdr),
+    snprintf(hdr, sizeof(hdr),
                   "User-Quick slots — Layer %d", editLayer + 1);
     ImGui_Text(ctx, hdr);
 
@@ -3272,7 +3272,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
             : (liveQuick == 0 ? "Q1" : liveQuick == 1 ? "Q2" : "Q3");
         const char* sbLive = sbLabels[
             (liveSubBank < 0 || liveSubBank > 5) ? 0 : liveSubBank];
-        std::snprintf(liveBadge, sizeof(liveBadge),
+        snprintf(liveBadge, sizeof(liveBadge),
                       "Live on Layer %d hardware:   Quick = %s   |   "
                       "Sub-bank = %s",
                       editLayer + 1, qLive, sbLive);
@@ -3300,13 +3300,13 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
             const bool locked = (editLayer == 0 && qi <= 1);
             if (locked) {
                 char tag[16];
-                std::snprintf(tag, sizeof(tag), "[%s]", qLabels[qi]);
+                snprintf(tag, sizeof(tag), "[%s]", qLabels[qi]);
                 ImGui_TextDisabled(ctx, tag);
                 continue;
             }
             const bool isLive = (liveQuick == qi);
             char tag[32];
-            std::snprintf(tag, sizeof(tag), "%s%s##quick_pick_%d",
+            snprintf(tag, sizeof(tag), "%s%s##quick_pick_%d",
                           qLabels[qi], isLive ? "  \xE2\x97\x8F" : "", qi);
             if (ImGui_RadioButton(ctx, tag, s_editQuick == qi)) {
                 s_editQuick = qi;
@@ -3340,7 +3340,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
             const bool isLive = (liveSubBank == bi
                                   && liveQuick == s_editQuick);
             char tag[40];
-            std::snprintf(tag, sizeof(tag), "%s%s##subbank_pick_%d",
+            snprintf(tag, sizeof(tag), "%s%s##subbank_pick_%d",
                           sbLabels[bi],
                           isLive ? "  \xE2\x97\x8F" : "", bi);
             if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi)) {
@@ -3360,7 +3360,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
         Binding bd = getUserQuickSlot(editLayer, s_editQuick,
                                       s_editSubBank, si);
         char idtag[40];
-        std::snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_slot%d",
+        snprintf(idtag, sizeof(idtag), "uq%d_%d_%d_slot%d",
                       editLayer, s_editQuick, s_editSubBank, si);
         ImGui_PushID(ctx, idtag);
 
@@ -3373,7 +3373,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
         const char* visText = act.empty()
             ? "(empty)"
             : (bd.label.empty() ? act.c_str() : bd.label.c_str());
-        std::snprintf(header, sizeof(header),
+        snprintf(header, sizeof(header),
                       "Slot %d  —  %s (Layer %d, %s):   %s###uqslot%d",
                       si + 1, sbName, editLayer + 1, qName,
                       visText, si);
@@ -3384,7 +3384,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
             // context they're editing — the per-slot breadcrumb is
             // load-bearing (Frank: "selbstverständlich", 2026-05-13).
             char editingLine[200];
-            std::snprintf(editingLine, sizeof(editingLine),
+            snprintf(editingLine, sizeof(editingLine),
                           "Editing: %s slot %d   (Layer %d, %s)",
                           sbName, si + 1, editLayer + 1, qName);
             ImGui_Text(ctx, editingLine);
@@ -3411,7 +3411,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
                 &sp.fireOnInactive,
             };
             char prefix[48];
-            std::snprintf(prefix, sizeof(prefix), "uq%d_%d_%d_s%d",
+            snprintf(prefix, sizeof(prefix), "uq%d_%d_%d_s%d",
                           editLayer, s_editQuick, s_editSubBank, si);
             if (drawActionPicker(ctx, prefix, ref,
                                  /*layer*/ -1, ButtonId::None,
@@ -3468,11 +3468,11 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Header + navigation hint -------------------------------------
     char hdr[160];
     if (engagedQ >= 0) {
-        std::snprintf(hdr, sizeof(hdr),
+        snprintf(hdr, sizeof(hdr),
                       "Editing: %s   (Layer %d, Quick %d)",
                       sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     } else {
-        std::snprintf(hdr, sizeof(hdr),
+        snprintf(hdr, sizeof(hdr),
                       "Editing: %s   (Layer %d — no Quick engaged)",
                       sbLabels[sbIdx], editLayer + 1);
     }
@@ -3490,7 +3490,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     }
 
     char nav[160];
-    std::snprintf(nav, sizeof(nav),
+    snprintf(nav, sizeof(nav),
                   "Click any of the 8 Top-Soft-Keys above to configure "
                   "this Sub-Bank's slots (Layer %d, Quick %d, %s).",
                   editLayer + 1, engagedQ + 1, sbLabels[sbIdx]);
@@ -3506,7 +3506,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // engaged-Quick context, not the bank's identity.
     {
         char presetHdr[160];
-        std::snprintf(presetHdr, sizeof(presetHdr),
+        snprintf(presetHdr, sizeof(presetHdr),
                       "Preset for %s   (Layer %d, Quick %d)",
                       sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
         ImGui_Text(ctx, presetHdr);
@@ -3543,7 +3543,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             for (int i = 0; i < nPresets; ++i) {
                 SoftKeyBankPreset p = bankPresetAt(i);
                 char rowId[160];
-                std::snprintf(rowId, sizeof(rowId), "%s##bp_row_%d",
+                snprintf(rowId, sizeof(rowId), "%s##bp_row_%d",
                               p.name.c_str(), i);
                 bool sel = (i == selRef);
                 if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
@@ -3633,7 +3633,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "Overwrite the 8 slots of %s on (Layer %d, Quick %d) "
                 "with preset '%s'?",
                 sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
@@ -3749,7 +3749,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "Delete preset '%s'? This cannot be undone.",
                 p.name.c_str());
             ImGui_TextWrapped(ctx, line);
@@ -3774,7 +3774,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
-    std::snprintf(ledHdr, sizeof(ledHdr),
+    snprintf(ledHdr, sizeof(ledHdr),
                   "LED colours for %s on (Layer %d, Quick %d)",
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, ledHdr);
@@ -3795,16 +3795,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             (int(rgb[0]) << 24) | (int(rgb[1]) << 16)
           | (int(rgb[2]) <<  8) | 0xFF;
         char btnId[40];
-        std::snprintf(btnId, sizeof(btnId), "##sbov_cur_%s", idTag);
+        snprintf(btnId, sizeof(btnId), "##sbov_cur_%s", idTag);
         int btnFlags = 0;
         double bw = 56.0, bh = 22.0;
         if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
             char popId[40];
-            std::snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
+            snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
             ImGui_OpenPopup(ctx, popId, nullptr);
         }
         char popId[40];
-        std::snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
+        snprintf(popId, sizeof(popId), "sbov_palette_%s", idTag);
         if (ImGui_BeginPopup(ctx, popId, nullptr)) {
             int paletteCount = 0;
             const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
@@ -3816,7 +3816,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                     (int(p.r) << 24) | (int(p.g) << 16)
                   | (int(p.b) <<  8) | 0xFF;
                 char swId[40];
-                std::snprintf(swId, sizeof(swId), "##sbov_pp_%s_%d",
+                snprintf(swId, sizeof(swId), "##sbov_pp_%s_%d",
                               idTag, i);
                 int swFlags = 0;
                 double w = sw, h = sw;
@@ -3836,7 +3836,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         const char* names[] = {"Off", "Dim", "Bright"};
         for (int i = 0; i < 3; ++i) {
             char idbuf[40];
-            std::snprintf(idbuf, sizeof(idbuf), "%s##sbov_b_%s_%d",
+            snprintf(idbuf, sizeof(idbuf), "%s##sbov_b_%s_%d",
                           names[i], idTag, i);
             if (ImGui_RadioButton(ctx, idbuf,
                                   static_cast<int>(bri) == i)) {
@@ -3847,9 +3847,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
     };
     char tagA[16], tagI[16];
-    std::snprintf(tagA, sizeof(tagA), "act_L%d_Q%d_S%d",
+    snprintf(tagA, sizeof(tagA), "act_L%d_Q%d_S%d",
                   editLayer, engagedQ, sbIdx);
-    std::snprintf(tagI, sizeof(tagI), "inact_L%d_Q%d_S%d",
+    snprintf(tagI, sizeof(tagI), "inact_L%d_Q%d_S%d",
                   editLayer, engagedQ, sbIdx);
     drawRow("Active",   app.color,         app.brightness,         tagA);
     drawRow("Inactive", app.inactiveColor, app.inactiveBrightness, tagI);
@@ -3958,9 +3958,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
 
     static std::string s_portMsg;
     char btnSave[40], btnLoad[40];
-    std::snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
+    snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
                   s_editLayer + 1);
-    std::snprintf(btnLoad, sizeof(btnLoad), "Load layer %d from file…",
+    snprintf(btnLoad, sizeof(btnLoad), "Load layer %d from file…",
                   s_editLayer + 1);
     sameLine(ctx);
     if (ImGui_Button(ctx, btnSave, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
@@ -4195,19 +4195,19 @@ std::vector<EditingFxInstance> findEditingFxAll_(const std::string& match)
             }
             char lbl[700];
             if (trIdx < 0) {
-                std::snprintf(lbl, sizeof(lbl),
+                snprintf(lbl, sizeof(lbl),
                     "Master / FX %d  '%s'", i + 1, buf);
             } else if (trName[0]) {
-                std::snprintf(lbl, sizeof(lbl),
+                snprintf(lbl, sizeof(lbl),
                     "Track %d '%s' / FX %d  '%s'",
                     trIdx + 1, trName, i + 1, buf);
             } else {
-                std::snprintf(lbl, sizeof(lbl),
+                snprintf(lbl, sizeof(lbl),
                     "Track %d / FX %d  '%s'",
                     trIdx + 1, i + 1, buf);
             }
             char keybuf[32];
-            std::snprintf(keybuf, sizeof(keybuf), "%d:%d", trIdx, i);
+            snprintf(keybuf, sizeof(keybuf), "%d:%d", trIdx, i);
             out.push_back({ tr, trIdx, i, std::string(lbl), std::string(keybuf) });
         }
     };
@@ -4647,7 +4647,7 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     for (int s = strip + 1; s < 8; ++s) {
         const int targetNum = curNum + (s - strip);
         char numBuf[16];
-        std::snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
+        snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
         const std::string target = prefix + numBuf + suffix;
 
         int found = -1;
@@ -5110,7 +5110,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     // linkIdx (e.g. Channel-IN button + Input-Gain knob, both → CS Input
     // Trim) don't collide in ImGui's widget table.
     char btnId[64];
-    std::snprintf(btnId, sizeof(btnId), "##fxl_pad_%d_%d_%d",
+    snprintf(btnId, sizeof(btnId), "##fxl_pad_%d_%d_%d",
                   ctrl.linkIdx,
                   static_cast<int>(ctrl.cx),
                   static_cast<int>(ctrl.cy));
@@ -5145,11 +5145,11 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     break;
                 }
             }
-            std::snprintf(tip, sizeof(tip),
+            snprintf(tip, sizeof(tip),
                 "%s\n  -> param %d  '%s'",
                 slot->name ? slot->name : "(slot)", mapped, pname);
         } else {
-            std::snprintf(tip, sizeof(tip),
+            snprintf(tip, sizeof(tip),
                 "%s\n  unmapped — drag a param here or click to listen",
                 slot->name ? slot->name : "(slot)");
         }
@@ -5174,10 +5174,10 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
     if (exists && isMapped) {
         char popId[40];
-        std::snprintf(popId, sizeof(popId), "fxl_ctx_%d", ctrl.linkIdx);
+        snprintf(popId, sizeof(popId), "fxl_ctx_%d", ctrl.linkIdx);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
             char title[160];
-            std::snprintf(title, sizeof(title),
+            snprintf(title, sizeof(title),
                 "%s  -> param %d",
                 slot->name ? slot->name : "(slot)", mapped);
             ImGui_TextDisabled(ctx, title);
@@ -5194,7 +5194,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 break;
             }
             char invLbl[40];
-            std::snprintf(invLbl, sizeof(invLbl),
+            snprintf(invLbl, sizeof(invLbl),
                 inverted ? "Inverted [on]" : "Inverted [off]");
             if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                 toggleInverted_(ctrl.linkIdx);
@@ -5329,7 +5329,7 @@ void drawUf8Face_(VCanvas& c)
 
         // Strip number under the fader rail
         char snum[8];
-        std::snprintf(snum, sizeof(snum), "%d", s + 1);
+        snprintf(snum, sizeof(snum), "%d", s + 1);
         drawTextCentered_(c, cx, kUf8FaderRailY + kUf8FaderRailH + 4,
                           0x707680FF, snum);
     }
@@ -5512,7 +5512,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // den v-pots"). The hardware-side skip stays — empty banks
         // are still no-function on the device itself.
         char btnId[48];
-        std::snprintf(btnId, sizeof(btnId),
+        snprintf(btnId, sizeof(btnId),
                       "##fxl_uf8_tsk_%d", ctrl.strip);
         ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
         int ibFlags = 0;
@@ -5532,12 +5532,12 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // bright, inactive immer dimm"). Right-click works whether
         // the V-Pot slot is bound or not.
         char popId[48];
-        std::snprintf(popId, sizeof(popId),
+        snprintf(popId, sizeof(popId),
                       "fxl_uf8_tsk_ctx_%d", ctrl.strip);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
             const int softKeyBank = ctrl.strip;  // TopSoftKey N → bank N
             char title[160];
-            std::snprintf(title, sizeof(title),
+            snprintf(title, sizeof(title),
                 "TopSoftKey %d — Bank %d",
                 ctrl.strip + 1, softKeyBank + 1);
             ImGui_TextDisabled(ctx, title);
@@ -5550,7 +5550,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // die anderen soft-keys verändern").
             std::string curLabel = getUf8TopSoftKeyLabel_(softKeyBank);
             static char s_tskLblBuf[16];
-            std::snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
+            snprintf(s_tskLblBuf, sizeof(s_tskLblBuf), "%s",
                           curLabel.c_str());
             if (ImGui_InputTextWithHint(ctx,
                     "Label##fxl_uf8_tsk_lbl",
@@ -5575,7 +5575,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                  | ((curRgb & 0x0000FFu) << 8) | 0xFF)
                 : 0x40404080;
             char swBtnId[48];
-            std::snprintf(swBtnId, sizeof(swBtnId),
+            snprintf(swBtnId, sizeof(swBtnId),
                           "##fxl_uf8_tskcol_%d", ctrl.strip);
             int swBtnFlags = 0;
             double swW = 56.0, swH = 18.0;
@@ -5583,19 +5583,19 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                   &swBtnFlags, &swW, &swH))
             {
                 char popPalId[64];
-                std::snprintf(popPalId, sizeof(popPalId),
+                snprintf(popPalId, sizeof(popPalId),
                               "fxl_uf8_tskpal_%d", ctrl.strip);
                 ImGui_OpenPopup(ctx, popPalId, nullptr);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
             char clrBtnId[48];
-            std::snprintf(clrBtnId, sizeof(clrBtnId),
+            snprintf(clrBtnId, sizeof(clrBtnId),
                           "Default##fxl_uf8_tskclr_%d", ctrl.strip);
             if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
                 setUf8TopSoftKeyColour_(softKeyBank, 0xFFFFFFu);
             }
             char popPalId[64];
-            std::snprintf(popPalId, sizeof(popPalId),
+            snprintf(popPalId, sizeof(popPalId),
                           "fxl_uf8_tskpal_%d", ctrl.strip);
             if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
                 int paletteCount = 0;
@@ -5610,7 +5610,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                         (int(p.g) << 16) |
                         (int(p.b) <<  8) | 0xFF;
                     char swId[40];
-                    std::snprintf(swId, sizeof(swId),
+                    snprintf(swId, sizeof(swId),
                                   "##fxl_uf8_tskpp_%d_%d",
                                   ctrl.strip, i);
                     int swFlags = 0;
@@ -5696,7 +5696,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
     // Hit area — accepts click + drag-drop + popup.
     char btnId[48];
-    std::snprintf(btnId, sizeof(btnId), "##fxl_uf8_%d_%d",
+    snprintf(btnId, sizeof(btnId), "##fxl_uf8_%d_%d",
                   int(ctrl.kind), ctrl.strip);
     ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
     int ibFlags = 0;
@@ -5751,27 +5751,27 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // (Frank 2026-05-16). Nav buttons are global → no suffix.
             char bankSuffix[32] = {0};
             if (!isNav) {
-                std::snprintf(bankSuffix, sizeof(bankSuffix),
+                snprintf(bankSuffix, sizeof(bankSuffix),
                               "  Soft-Key %d", bank + 1);
             }
             if (isNav) {
-                std::snprintf(tip, sizeof(tip),
+                snprintf(tip, sizeof(tip),
                     "%s%s\n  -> param %d  '%s'",
                     kindLabel, bankSuffix, mapped, pname);
             } else {
-                std::snprintf(tip, sizeof(tip),
+                snprintf(tip, sizeof(tip),
                     "%s strip %d%s\n  -> param %d  '%s'",
                     kindLabel, ctrl.strip + 1, bankSuffix,
                     mapped, pname);
             }
         } else if (isNav) {
-            std::snprintf(tip, sizeof(tip),
+            snprintf(tip, sizeof(tip),
                 "%s (global)\n  default: bank %s8 — "
                 "drag a param here to override",
                 kindLabel,
                 ctrl.kind == Uf8Control::BankLeftBtn ? "-" : "+");
         } else {
-            std::snprintf(tip, sizeof(tip),
+            snprintf(tip, sizeof(tip),
                 "%s strip %d\n  unmapped — drag a param here or click to listen",
                 kindLabel, ctrl.strip + 1);
         }
@@ -5797,18 +5797,18 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         const bool isNav = (ctrl.kind == Uf8Control::BankLeftBtn ||
                             ctrl.kind == Uf8Control::BankRightBtn);
         char popId[48];
-        std::snprintf(popId, sizeof(popId), "fxl_uf8_ctx_%d_%d",
+        snprintf(popId, sizeof(popId), "fxl_uf8_ctx_%d_%d",
                       int(ctrl.kind), ctrl.strip);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
             char title[160];
             if (isNav) {
-                std::snprintf(title, sizeof(title),
+                snprintf(title, sizeof(title),
                     "Bank %s -> param %d",
                     ctrl.kind == Uf8Control::BankLeftBtn
                         ? "\xE2\x97\x82" : "\xE2\x96\xB8",
                     mapped);
             } else {
-                std::snprintf(title, sizeof(title),
+                snprintf(title, sizeof(title),
                     "strip %d -> param %d", ctrl.strip + 1, mapped);
             }
             ImGui_TextDisabled(ctx, title);
@@ -5819,7 +5819,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             {
                 bool inv = uf8Inverted_(ctrl.kind, ctrl.strip, bank);
                 char invLbl[40];
-                std::snprintf(invLbl, sizeof(invLbl),
+                snprintf(invLbl, sizeof(invLbl),
                     inv ? "Inverted [on]" : "Inverted [off]");
                 if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                     toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
@@ -5852,7 +5852,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 ImGui_Separator(ctx);
 
                 static char s_lblBuf[16];
-                std::snprintf(s_lblBuf, sizeof(s_lblBuf), "%s",
+                snprintf(s_lblBuf, sizeof(s_lblBuf), "%s",
                               curLabel.c_str());
                 if (ImGui_InputTextWithHint(ctx,
                         "Label##fxl_uf8_lbl",
@@ -5902,7 +5902,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                      | ((curRgb & 0x0000FFu) << 8) | 0xFF)
                     : 0x40404080;   // dim grey when no override
                 char swBtnId[48];
-                std::snprintf(swBtnId, sizeof(swBtnId),
+                snprintf(swBtnId, sizeof(swBtnId),
                               "##fxl_uf8_col_%d_%d", int(ctrl.kind), ctrl.strip);
                 int swBtnFlags = 0;
                 double swW = 56.0, swH = 18.0;
@@ -5910,13 +5910,13 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                       &swBtnFlags, &swW, &swH))
                 {
                     char popPalId[48];
-                    std::snprintf(popPalId, sizeof(popPalId),
+                    snprintf(popPalId, sizeof(popPalId),
                                   "fxl_uf8_pal_%d_%d", int(ctrl.kind), ctrl.strip);
                     ImGui_OpenPopup(ctx, popPalId, nullptr);
                 }
                 ImGui_SameLine(ctx, nullptr, nullptr);
                 char clrBtnId[48];
-                std::snprintf(clrBtnId, sizeof(clrBtnId),
+                snprintf(clrBtnId, sizeof(clrBtnId),
                               "Default##fxl_uf8_colclr_%d_%d",
                               int(ctrl.kind), ctrl.strip);
                 if (ImGui_Button(ctx, clrBtnId, nullptr, nullptr)) {
@@ -5924,7 +5924,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 }
 
                 char popPalId[48];
-                std::snprintf(popPalId, sizeof(popPalId),
+                snprintf(popPalId, sizeof(popPalId),
                               "fxl_uf8_pal_%d_%d", int(ctrl.kind), ctrl.strip);
                 if (ImGui_BeginPopup(ctx, popPalId, nullptr)) {
                     int paletteCount = 0;
@@ -5939,7 +5939,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             (int(p.g) << 16) |
                             (int(p.b) <<  8) | 0xFF;
                         char swId[32];
-                        std::snprintf(swId, sizeof(swId), "##fxl_uf8_pp_%d", i);
+                        snprintf(swId, sizeof(swId), "##fxl_uf8_pp_%d", i);
                         int swFlags = 0;
                         double w = sw, h = sw;
                         if (ImGui_ColorButton(ctx, swId, packed,
@@ -6049,7 +6049,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // farbe)") which opens a separate palette popup that writes
         // to all 8 strips of the active bank in one shot.
         char btnId[48];
-        std::snprintf(btnId, sizeof(btnId),
+        snprintf(btnId, sizeof(btnId),
                       "##fxl_uf8_stripbar_%d", s);
         ImGui_SetCursorScreenPos(ctx, ox + bx, oy + by);
         int ibFlags = 0;
@@ -6057,13 +6057,13 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         int lbtn = 0;
         if (ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
             char popId[48];
-            std::snprintf(popId, sizeof(popId),
+            snprintf(popId, sizeof(popId),
                           "fxl_uf8_stripbar_pal_%d", s);
             ImGui_OpenPopup(ctx, popId, nullptr);
         }
         if (ImGui_IsItemHovered(ctx, nullptr)) {
             char tip[128];
-            std::snprintf(tip, sizeof(tip),
+            snprintf(tip, sizeof(tip),
                 "Strip %d colour bar (bank %d)\n"
                 "  left-click: pick this strip\n"
                 "  right-click: fill all 8 strips",
@@ -6078,7 +6078,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // EndPopup at the outer scope.
         static int s_pendingFillAllStrip = -1;
         char ctxId[48];
-        std::snprintf(ctxId, sizeof(ctxId),
+        snprintf(ctxId, sizeof(ctxId),
                       "fxl_uf8_stripbar_ctx_%d", s);
         if (ImGui_BeginPopupContextItem(ctx, ctxId, nullptr)) {
             if (ImGui_MenuItem(ctx, "Fill all (pick colour)...",
@@ -6096,18 +6096,18 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         if (s_pendingFillAllStrip == s) {
             s_pendingFillAllStrip = -1;
             char fillId[48];
-            std::snprintf(fillId, sizeof(fillId),
+            snprintf(fillId, sizeof(fillId),
                           "fxl_uf8_stripbar_fillpal_%d", s);
             ImGui_OpenPopup(ctx, fillId, nullptr);
         }
 
         // Per-strip palette popup (left-click destination).
         char popId[48];
-        std::snprintf(popId, sizeof(popId),
+        snprintf(popId, sizeof(popId),
                       "fxl_uf8_stripbar_pal_%d", s);
         if (ImGui_BeginPopup(ctx, popId, nullptr)) {
             char clrId[40];
-            std::snprintf(clrId, sizeof(clrId),
+            snprintf(clrId, sizeof(clrId),
                           "Default##stripbarclr_%d", s);
             if (ImGui_Button(ctx, clrId, nullptr, nullptr)) {
                 setUf8StripColour_(s, bank, 0);
@@ -6125,7 +6125,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     (int(p.g) << 16) |
                     (int(p.b) <<  8) | 0xFF;
                 char swId[40];
-                std::snprintf(swId, sizeof(swId),
+                snprintf(swId, sizeof(swId),
                               "##stripbarpp_%d_%d", s, i);
                 int swFlags = 0;
                 double w = sw, h = sw;
@@ -6152,7 +6152,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         // palette swatch grid, but selecting a colour writes to all
         // 8 strips in the active bank.
         char fillId[48];
-        std::snprintf(fillId, sizeof(fillId),
+        snprintf(fillId, sizeof(fillId),
                       "fxl_uf8_stripbar_fillpal_%d", s);
         if (ImGui_BeginPopup(ctx, fillId, nullptr)) {
             int paletteCount = 0;
@@ -6167,7 +6167,7 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     (int(p.g) << 16) |
                     (int(p.b) <<  8) | 0xFF;
                 char swId[40];
-                std::snprintf(swId, sizeof(swId),
+                snprintf(swId, sizeof(swId),
                               "##stripbarfillpp_%d_%d", s, i);
                 int swFlags = 0;
                 double w = sw, h = sw;
@@ -6208,7 +6208,7 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             if (fb) ImGui_SameLine(ctx, nullptr, nullptr);
             const bool active = (fb == hwBank);
             char lbl[32];
-            std::snprintf(lbl, sizeof(lbl), "Fader Bank %d", fb + 1);
+            snprintf(lbl, sizeof(lbl), "Fader Bank %d", fb + 1);
             // ImGui doesn't have a segmented control; emulate by tinting
             // the active button. Push the green ring colour the bank
             // selectors use everywhere else.
@@ -6334,7 +6334,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     char hdr[256];
-    std::snprintf(hdr, sizeof(hdr), "  Editing: %s  [%s]",
+    snprintf(hdr, sizeof(hdr), "  Editing: %s  [%s]",
                   editing->match.c_str(),
                   modeLabel_(editing->domain, editing->uf8Mode));
     ImGui_Text(ctx, hdr);
@@ -6487,14 +6487,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (editing->snapshotTakenAt > 0) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             char info[64];
-            std::snprintf(info, sizeof(info), "(%zu params stored)",
+            snprintf(info, sizeof(info), "(%zu params stored)",
                           editing->paramSnapshot.size());
             ImGui_TextDisabled(ctx, info);
         }
     } else if (!editing->paramSnapshot.empty()) {
         ImGui_Spacing(ctx);
         char banner[160];
-        std::snprintf(banner, sizeof(banner),
+        snprintf(banner, sizeof(banner),
             "No live FX — editing from stored snapshot (%zu params). "
             "Listen / wiggle requires inserting the plug-in.",
             editing->paramSnapshot.size());
@@ -6534,7 +6534,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
 
         char insLabel[160];
-        std::snprintf(insLabel, sizeof(insLabel),
+        snprintf(insLabel, sizeof(insLabel),
             "Insert '%s' on %s##fxl_ins",
             editing->match.c_str(), targetLabel);
         if (target && ImGui_Button(ctx, insLabel, nullptr, nullptr)) {
@@ -6580,7 +6580,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 bool sel = (e.key == g_fxSelectorKey);
                 int  sf  = 0;
                 char rowId[700];
-                std::snprintf(rowId, sizeof(rowId), "%s##fxl_inst_%s",
+                snprintf(rowId, sizeof(rowId), "%s##fxl_inst_%s",
                               e.label.c_str(), e.key.c_str());
                 if (ImGui_Selectable(ctx, rowId, &sel, &sf, nullptr, nullptr)) {
                     g_fxSelectorKey = e.key;
@@ -6613,18 +6613,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
         char preview[160];
         if (curParam < 0) {
-            std::snprintf(preview, sizeof(preview),
+            snprintf(preview, sizeof(preview),
                 "(none — fall back to GainReduction_dB)");
         } else {
             char pname[128] = {0};
             const bool gotName = paramNameFor_(*editing, fx, curParam,
                                                pname, sizeof(pname));
             if (gotName) {
-                std::snprintf(preview, sizeof(preview),
+                snprintf(preview, sizeof(preview),
                     "[%d] %s%s", curParam, pname,
                     fx.ok ? "" : "  (from snapshot)");
             } else {
-                std::snprintf(preview, sizeof(preview),
+                snprintf(preview, sizeof(preview),
                     "[%d] (no name available)", curParam);
             }
         }
@@ -6650,7 +6650,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 char pname[128] = {0};
                 paramNameFor_(*editing, fx, p, pname, sizeof(pname));
                 char rowLbl[200];
-                std::snprintf(rowLbl, sizeof(rowLbl),
+                snprintf(rowLbl, sizeof(rowLbl),
                     "[%4d] %s##fxl_gr_p_%d", p, pname, p);
                 bool sel = (p == curParam);
                 int  sf  = 0;
@@ -6692,7 +6692,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
             char inlineBuf[128];
             const double shown = isBc ? previewBc : previewLeds;
-            std::snprintf(inlineBuf, sizeof(inlineBuf),
+            snprintf(inlineBuf, sizeof(inlineBuf),
                 "  raw %+.2f → %s %.2f dB", previewRaw,
                 isBc ? "VU" : "GR", shown);
             ImGui_TextColored(ctx, 0xFFC080FF, inlineBuf);
@@ -6875,10 +6875,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (i) ImGui_SameLine(ctx, nullptr, nullptr);
                 ImGui_BeginGroup(ctx);
                 char hdrLbl[32];
-                std::snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plugin", bp[i]);
+                snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plugin", bp[i]);
                 ImGui_Text(ctx, hdrLbl);
                 char inputId[64];
-                std::snprintf(inputId, sizeof(inputId),
+                snprintf(inputId, sizeof(inputId),
                     "dB##fxl_grcal_bot_%d_in_%d", which, i);
                 double v = curArr[i];
                 double step = 0.1, fast = 1.0;
@@ -6894,7 +6894,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_Spacing(ctx);
 
             char resetId[48];
-            std::snprintf(resetId, sizeof(resetId),
+            snprintf(resetId, sizeof(resetId),
                 "Reset##fxl_grcal_bot_reset_%d", which);
             if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
                 resetGrCal_(which);
@@ -6938,7 +6938,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     const double calV = uf8::applyGrCalibration(
                         absV, bp, curArr, nCal);
                     char liveBuf[200];
-                    std::snprintf(liveBuf, sizeof(liveBuf),
+                    snprintf(liveBuf, sizeof(liveBuf),
                         "Live:  plug-in %+.2f  →  |abs| %.2f  →  on-device %.2f dB",
                         rawDb, absV, calV);
                     ImGui_TextColored(ctx, 0xFFC080FF, liveBuf);
@@ -6976,7 +6976,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             if (g_listeningLinkIdx >= 0 && topo) {
                 const LinkSlot* listenSlot =
                     findSlotByLinkIdx(*topo, g_listeningLinkIdx);
-                std::snprintf(hint, sizeof(hint),
+                snprintf(hint, sizeof(hint),
                     "Listening for: %s\n"
                     "  - click a parameter below, OR\n"
                     "  - wiggle the control in the plug-in window",
@@ -6992,7 +6992,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     case 5 /*SelBtn*/:     kindLbl = "Sel";        break;
                     default: break;
                 }
-                std::snprintf(hint, sizeof(hint),
+                snprintf(hint, sizeof(hint),
                     "Listening for UF8 %s strip %d\n"
                     "  - click a parameter below, OR\n"
                     "  - wiggle the control in the plug-in window",
@@ -7054,7 +7054,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             editing->uf8.banks.banks[fb][vb][s];
                         if (bs.vst3Param < 0) continue;
                         char buf[64];
-                        std::snprintf(buf, sizeof(buf),
+                        snprintf(buf, sizeof(buf),
                                       "UF8 V-Pot fb %d bk %d str %d",
                                       fb + 1, vb + 1, s + 1);
                         noteUse_(bs.vst3Param, buf);
@@ -7065,16 +7065,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 for (int s = 0; s < 8; ++s) {
                     const auto& sb = editing->uf8.strips[fb][s];
                     char buf[64];
-                    std::snprintf(buf, sizeof(buf),
+                    snprintf(buf, sizeof(buf),
                                   "UF8 Fader fb %d str %d", fb + 1, s + 1);
                     noteUse_(sb.faderVst3Param, buf);
-                    std::snprintf(buf, sizeof(buf),
+                    snprintf(buf, sizeof(buf),
                                   "UF8 Solo fb %d str %d",  fb + 1, s + 1);
                     noteUse_(sb.soloVst3Param, buf);
-                    std::snprintf(buf, sizeof(buf),
+                    snprintf(buf, sizeof(buf),
                                   "UF8 Cut fb %d str %d",   fb + 1, s + 1);
                     noteUse_(sb.cutVst3Param,  buf);
-                    std::snprintf(buf, sizeof(buf),
+                    snprintf(buf, sizeof(buf),
                                   "UF8 Sel fb %d str %d",   fb + 1, s + 1);
                     noteUse_(sb.selVst3Param,  buf);
                 }
@@ -7107,11 +7107,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 // click menu first).
                 char rowLbl[256];
                 if (isBound) {
-                    std::snprintf(rowLbl, sizeof(rowLbl),
+                    snprintf(rowLbl, sizeof(rowLbl),
                         "  [%4d] %-32s  -> %s##fxl_param_%d",
                         p, pname, it->second.c_str(), p);
                 } else {
-                    std::snprintf(rowLbl, sizeof(rowLbl),
+                    snprintf(rowLbl, sizeof(rowLbl),
                         "  [%4d] %-32s##fxl_param_%d",
                         p, pname, p);
                 }
@@ -7140,11 +7140,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     int dndFlags = 0;
                     if (ImGui_BeginDragDropSource(ctx, &dndFlags)) {
                         char payload[16];
-                        std::snprintf(payload, sizeof(payload), "%d", p);
+                        snprintf(payload, sizeof(payload), "%d", p);
                         ImGui_SetDragDropPayload(ctx, "FXL_PARAM", payload,
                                                  nullptr);
                         char preview[160];
-                        std::snprintf(preview, sizeof(preview),
+                        snprintf(preview, sizeof(preview),
                             "param %d  %s", p, pname);
                         ImGui_Text(ctx, preview);
                         ImGui_EndDragDropSource(ctx);
@@ -7155,7 +7155,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             if (paramCount > kMaxParams) {
                 ImGui_Spacing(ctx);
                 char overflow[96];
-                std::snprintf(overflow, sizeof(overflow),
+                snprintf(overflow, sizeof(overflow),
                     "(showing first %d of %d params — use filter)",
                     kMaxParams, paramCount);
                 ImGui_TextDisabled(ctx, overflow);
@@ -7184,7 +7184,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Text(ctx, "Change primary mode?");
         ImGui_Spacing(ctx);
         char line[256];
-        std::snprintf(line, sizeof(line),
+        snprintf(line, sizeof(line),
             "  %s  →  %s",
             modeLabel_(editing->domain, editing->uf8Mode), targetLabel);
         ImGui_Text(ctx, line);
@@ -7412,7 +7412,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 const bool active = (s_sortCol == col);
                 char btn[64];
                 const char* arrow = active ? (s_sortAsc ? " v" : " ^") : "";
-                std::snprintf(btn, sizeof(btn), "%s%s##fxl_sort_%d",
+                snprintf(btn, sizeof(btn), "%s%s##fxl_sort_%d",
                     labelBase, arrow, static_cast<int>(col));
                 if (ImGui_Button(ctx, btn, nullptr, nullptr)) {
                     if (active) s_sortAsc = !s_sortAsc;
@@ -7440,7 +7440,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 ImGui_TableNextColumn(ctx);
                 {
                     char btnId[64];
-                    std::snprintf(btnId, sizeof(btnId),
+                    snprintf(btnId, sizeof(btnId),
                         "%s##fxl_def_%zu", m.isDefault ? "*" : "-", i);
                     if (ImGui_Button(ctx, btnId, nullptr, nullptr)) {
                         UserPluginMap copy = m;
@@ -7461,7 +7461,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     std::strncpy(shortBuf, m.displayShort.c_str(),
                                  sizeof(shortBuf) - 1);
                     char shortId[64];
-                    std::snprintf(shortId, sizeof(shortId),
+                    snprintf(shortId, sizeof(shortId),
                                   "##fxl_short_%zu", i);
                     if (ImGui_InputTextWithHint(ctx, shortId, "USR",
                             shortBuf, 8, nullptr, nullptr))
@@ -7490,14 +7490,14 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 ImGui_TableNextColumn(ctx);
                 {
                     char buf[32];
-                    std::snprintf(buf, sizeof(buf), "%zu", m.slots.size());
+                    snprintf(buf, sizeof(buf), "%zu", m.slots.size());
                     ImGui_Text(ctx, buf);
                 }
 
                 ImGui_TableNextColumn(ctx);
                 {
                     char editId[64];
-                    std::snprintf(editId, sizeof(editId),
+                    snprintf(editId, sizeof(editId),
                                   "Edit##fxl_edit_%zu", i);
                     if (ImGui_Button(ctx, editId, nullptr, nullptr)) {
                         g_editingMatch     = m.match;
@@ -7507,7 +7507,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
                     ImGui_SameLine(ctx, nullptr, nullptr);
                     char delId[64];
-                    std::snprintf(delId, sizeof(delId),
+                    snprintf(delId, sizeof(delId),
                                   "Del##fxl_del_%zu", i);
                     if (ImGui_Button(ctx, delId, nullptr, nullptr)) {
                         // Defer the OpenPopup to the outer scope so the
@@ -7540,7 +7540,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_Text(ctx, "Pick a plug-in:");
         ImGui_SameLine(ctx, nullptr, nullptr);
         char counter[64];
-        std::snprintf(counter, sizeof(counter), "(%zu installed)",
+        snprintf(counter, sizeof(counter), "(%zu installed)",
                       g_installedFx.size());
         ImGui_TextDisabled(ctx, counter);
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -7574,7 +7574,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 bool selected = (int(i) == g_pickerSelectedIdx);
                 int  selFlags = 0;
                 char rowId[640];
-                std::snprintf(rowId, sizeof(rowId), "%s##fxl_pick_%zu",
+                snprintf(rowId, sizeof(rowId), "%s##fxl_pick_%zu",
                               g_installedFx[i].name.c_str(), i);
                 if (ImGui_Selectable(ctx, rowId, &selected, &selFlags,
                                      nullptr, nullptr)) {
@@ -7723,7 +7723,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     if (ImGui_BeginPopupModal(ctx, "Delete learned FX###fxl_del_popup",
                               nullptr, nullptr)) {
         char line[256];
-        std::snprintf(line, sizeof(line),
+        snprintf(line, sizeof(line),
             "match: %s", g_pendingDeleteMatch.c_str());
         ImGui_Text(ctx, line);
         ImGui_Spacing(ctx);
@@ -7787,7 +7787,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         if (idx == s_lastWritten) return;
         s_lastWritten = idx;
         char buf[8];
-        std::snprintf(buf, sizeof(buf), "%d", idx);
+        snprintf(buf, sizeof(buf), "%d", idx);
         SetExtState("rea_sixty", "modes_subtab", buf, true);
     };
 
@@ -8084,14 +8084,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         if (found) {
             const char* name = uf8::bindings::toName(id);
             const char* lp   = longPress ? " (long press)" : "";
-            std::snprintf(line, sizeof(line), "%s — L%d %s%s%s",
+            snprintf(line, sizeof(line), "%s — L%d %s%s%s",
                           friendly,
                           layer + 1,
                           name ? name : "?",
                           modShort(m),
                           lp);
         } else {
-            std::snprintf(line, sizeof(line), "%s — (unbound)", friendly);
+            snprintf(line, sizeof(line), "%s — (unbound)", friendly);
         }
         ImGui_BulletText(ctx, line);
     };
@@ -8327,13 +8327,13 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
     const int active = reasixty_selsetActive();
     for (int slot = 1; slot <= 8; ++slot) {
         char idtag[32];
-        std::snprintf(idtag, sizeof(idtag), "selset_row_%d", slot);
+        snprintf(idtag, sizeof(idtag), "selset_row_%d", slot);
         ImGui_PushID(ctx, idtag);
 
         // Slot label + active-row marker. Active row prefixes with a dot
         // since ReaImGui v0.10 has no reliable cell-background paint.
         char header[24];
-        std::snprintf(header, sizeof(header), "%s Slot %d",
+        snprintf(header, sizeof(header), "%s Slot %d",
                       (active == slot) ? "•" : " ", slot);
         ImGui_Text(ctx, header);
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -8397,7 +8397,7 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
 
         // Live track count.
         char info[32];
-        std::snprintf(info, sizeof(info), "(%d tracks)",
+        snprintf(info, sizeof(info), "(%d tracks)",
                       reasixty_selsetTrackCount(slot));
         ImGui_Text(ctx, info);
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -8484,12 +8484,12 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
     auto& st = uf8::param_groups::state();
     for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
         char idtag[32];
-        std::snprintf(idtag, sizeof(idtag), "param_group_row_%d", slot);
+        snprintf(idtag, sizeof(idtag), "param_group_row_%d", slot);
         ImGui_PushID(ctx, idtag);
 
         // Active dot prefix mirrors the Selection Sets pattern.
         char header[24];
-        std::snprintf(header, sizeof(header), "%s Slot %d",
+        snprintf(header, sizeof(header), "%s Slot %d",
                       st.slots[slot].active ? "\xe2\x80\xa2" : " ",
                       slot + 1);
         ImGui_Text(ctx, header);
@@ -8516,7 +8516,7 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
 
         char info[40];
-        std::snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);
+        snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);
         ImGui_Text(ctx, info);
         ImGui_SameLine(ctx, nullptr, nullptr);
 
@@ -8566,7 +8566,7 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     }
     {
         char buf[96];
-        std::snprintf(buf, sizeof(buf),
+        snprintf(buf, sizeof(buf),
             "This project took %d commits so far.", REASIXTY_COMMIT_COUNT);
         ImGui_Text(ctx, buf);
     }
@@ -8583,10 +8583,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Text(ctx, "Versions");
     ImGui_Separator(ctx);
     char line[256];
-    std::snprintf(line, sizeof(line), "  Build:    %s %s",
+    snprintf(line, sizeof(line), "  Build:    %s %s",
                   __DATE__, __TIME__);
     ImGui_Text(ctx, line);
-    std::snprintf(line, sizeof(line), "  REAPER:   %s",
+    snprintf(line, sizeof(line), "  REAPER:   %s",
                   reasixty_reaperVersion());
     ImGui_Text(ctx, line);
     ImGui_Text(ctx, "  ReaImGui: bundled v0.10 ABI");
@@ -8596,7 +8596,7 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Text(ctx, "Project");
     ImGui_Separator(ctx);
     static const char* kRepoUrl = "https://github.com/acklin83/reaper-uf8";
-    std::snprintf(line, sizeof(line), "  Repository:  %s", kRepoUrl);
+    snprintf(line, sizeof(line), "  Repository:  %s", kRepoUrl);
     ImGui_Text(ctx, line);
     if (ImGui_Button(ctx, "Open repository in browser",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {

@@ -78,7 +78,7 @@ bool loadDouble(const char* key, double& out) {
 }
 void saveDouble(const char* key, double v) {
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%g", v);
+    snprintf(buf, sizeof(buf), "%g", v);
     SetExtState(kSection, key, buf, /*persist*/ true);
 }
 } // namespace pose
@@ -223,7 +223,7 @@ void MixerWindow::onRunTick()
     int winFlags = ImGui_WindowFlags_NoSavedSettings
                  | ImGui_WindowFlags_NoCollapse;
     char winId[64];
-    std::snprintf(winId, sizeof(winId),
+    snprintf(winId, sizeof(winId),
                   "Rea-Sixty##session_%d", impl_->sessionGen);
     bool open = impl_->visible;
     if (impl_->visible) {

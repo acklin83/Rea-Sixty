@@ -24,6 +24,10 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
 #include "reaper_plugin_functions.h"
 
 #include "WDL/jsonparse.h"
@@ -308,7 +312,10 @@ std::atomic<uint64_t> g_bindingsGen{0};
 // after release, instead of falling back to Plain. Sized to 256 to
 // cover any future ButtonId additions without resizing.
 constexpr size_t kLastFiredModSize = 256;
-std::array<std::atomic<uint8_t>, kLastFiredModSize> g_lastFiredMod{};
+// MSVC can't instantiate std::array<std::atomic<T>, N> (deleted copy
+// ctor on std::atomic propagates through std::array's aggregate init);
+// the raw C array works on all compilers.
+std::atomic<uint8_t> g_lastFiredMod[kLastFiredModSize] = {};
 
 uint32_t pressKey(int layer, ButtonId id)
 {
@@ -497,9 +504,9 @@ void seedFactoryDefaults_(Config& c)
     };
     for (int i = 0; i < 8; ++i) {
         char nameSend[20], nameRecv[20], label[8];
-        std::snprintf(nameSend, sizeof(nameSend), "send_all_%d", i + 1);
-        std::snprintf(nameRecv, sizeof(nameRecv), "recv_all_%d", i + 1);
-        std::snprintf(label,    sizeof(label),    "S/P %d",    i + 1);
+        snprintf(nameSend, sizeof(nameSend), "send_all_%d", i + 1);
+        snprintf(nameRecv, sizeof(nameRecv), "recv_all_%d", i + 1);
+        snprintf(label,    sizeof(label),    "S/P %d",    i + 1);
         Binding bd;
         bd.behavior = Behavior::Momentary;
         bd.label    = label;
@@ -532,7 +539,7 @@ void seedFactoryDefaults_(Config& c)
     };
     for (int i = 0; i < 8; ++i) {
         char label[12];
-        std::snprintf(label, sizeof(label), "Soft-Key %d", i + 1);
+        snprintf(label, sizeof(label), "Soft-Key %d", i + 1);
         L1[kTopSoftKeyIds[i]] = mkBuiltin("ssl_softkey",
                                           Behavior::Momentary, label,
                                           255, 255, 255, /*param*/ i);
@@ -585,9 +592,9 @@ void seedFactoryDefaults_(Config& c)
     for (int li = 1; li <= 2; ++li) {
         auto& L = c.layers[li].bindings;
         char nA[24], nB[24], nC[24];
-        std::snprintf(nA, sizeof(nA), "softkey_bank_%d", li * 3 + 1);
-        std::snprintf(nB, sizeof(nB), "softkey_bank_%d", li * 3 + 2);
-        std::snprintf(nC, sizeof(nC), "softkey_bank_%d", li * 3 + 3);
+        snprintf(nA, sizeof(nA), "softkey_bank_%d", li * 3 + 1);
+        snprintf(nB, sizeof(nB), "softkey_bank_%d", li * 3 + 2);
+        snprintf(nC, sizeof(nC), "softkey_bank_%d", li * 3 + 3);
         L[ButtonId::Quick1] = mkBuiltin(nA, Behavior::Momentary, "Q1");
         L[ButtonId::Quick2] = mkBuiltin(nB, Behavior::Momentary, "Q2");
         L[ButtonId::Quick3] = mkBuiltin(nC, Behavior::Momentary, "Q3");
@@ -609,7 +616,7 @@ void appendEscaped(std::ostringstream& os, const std::string& s)
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
                     os << buf;
                 } else {
                     os << c;
@@ -1748,7 +1755,7 @@ void upgradeRetireQuickSelect_(Config& c)
         int qN = -1;
         if (isQuickFamily(qN)) {
             char buf[24];
-            std::snprintf(buf, sizeof(buf), "softkey_bank_%d",
+            snprintf(buf, sizeof(buf), "softkey_bank_%d",
                           layer * 3 + qN + 1);
             s.action = buf;
             return;
@@ -1765,7 +1772,7 @@ void upgradeRetireQuickSelect_(Config& c)
             const int p = s.param;
             if (p >= 0 && p <= 2) {
                 char buf[24];
-                std::snprintf(buf, sizeof(buf), "layer_select_%d", p + 1);
+                snprintf(buf, sizeof(buf), "layer_select_%d", p + 1);
                 s.action = buf;
                 s.param  = 0;
             } else {
@@ -1908,7 +1915,7 @@ void upgradeSanitizeBankAndQuickActions_(Config& c)
                 canonLabel = "BC";
             } else {
                 char buf[24];
-                std::snprintf(buf, sizeof(buf),
+                snprintf(buf, sizeof(buf),
                               "softkey_bank_%d", li * 3 + qN + 1);
                 canonical    = buf;
                 canonIsJump  = true;
@@ -2574,7 +2581,7 @@ bool dispatch(ButtonId id, bool pressed)
                     // ignore the user's per-long-press colour choice.
                     if (bd.longPress[m].type != ActionType::Noop) {
                         const auto idx = static_cast<size_t>(id);
-                        if (idx < g_lastFiredMod.size()) {
+                        if (idx < kLastFiredModSize) {
                             g_lastFiredMod[idx].store(
                                 static_cast<uint8_t>(m | 0x80),
                                 std::memory_order_relaxed);
@@ -2585,7 +2592,7 @@ bool dispatch(ButtonId id, bool pressed)
                                /*firing*/ true, /*pressed*/ false);
                     if (bd.shortPress[m].type != ActionType::Noop) {
                         const auto idx = static_cast<size_t>(id);
-                        if (idx < g_lastFiredMod.size()) {
+                        if (idx < kLastFiredModSize) {
                             g_lastFiredMod[idx].store(
                                 static_cast<uint8_t>(m),
                                 std::memory_order_relaxed);
@@ -2646,7 +2653,7 @@ bool dispatch(ButtonId id, bool pressed)
         // a Shift+press fired the Shift slot's action but the LED kept
         // showing the Plain slot's active colour after release.
         const auto idx = static_cast<size_t>(id);
-        if (idx < g_lastFiredMod.size()) {
+        if (idx < kLastFiredModSize) {
             g_lastFiredMod[idx].store(static_cast<uint8_t>(slotIdx),
                                        std::memory_order_relaxed);
         }
@@ -2675,7 +2682,7 @@ bool dispatch(ButtonId id, bool pressed)
                     // Tag lastFired with the long-press marker so the LED
                     // resolver picks up the long-press slot's LedOverride.
                     const auto idx = static_cast<size_t>(id);
-                    if (idx < g_lastFiredMod.size()) {
+                    if (idx < kLastFiredModSize) {
                         g_lastFiredMod[idx].store(
                             static_cast<uint8_t>(m | 0x80),
                             std::memory_order_relaxed);
@@ -3160,7 +3167,7 @@ uint64_t generation()
 Modifier lastFiredModifier(ButtonId id)
 {
     const auto idx = static_cast<size_t>(id);
-    if (idx >= g_lastFiredMod.size()) return Modifier::Plain;
+    if (idx >= kLastFiredModSize) return Modifier::Plain;
     const auto v = g_lastFiredMod[idx].load(std::memory_order_relaxed);
     const uint8_t mod = v & 0x7F;  // strip long-press bit
     if (mod >= kModifierCount) return Modifier::Plain;
@@ -3170,7 +3177,7 @@ Modifier lastFiredModifier(ButtonId id)
 bool lastFiredWasLongPress(ButtonId id)
 {
     const auto idx = static_cast<size_t>(id);
-    if (idx >= g_lastFiredMod.size()) return false;
+    if (idx >= kLastFiredModSize) return false;
     return (g_lastFiredMod[idx].load(std::memory_order_relaxed) & 0x80) != 0;
 }
 

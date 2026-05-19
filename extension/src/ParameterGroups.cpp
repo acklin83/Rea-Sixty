@@ -84,7 +84,7 @@ void writeMask_(MediaTrack* tr, uint8_t mask)
 {
     if (!tr) return;
     char buf[16];
-    std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(mask));
+    snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(mask));
     GetSetMediaTrackInfo_String(tr, const_cast<char*>(kPExtKey), buf, true);
 }
 
@@ -172,7 +172,7 @@ void appendEscaped_(std::ostringstream& os, const std::string& s)
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x",
+                    snprintf(buf, sizeof(buf), "\\u%04x",
                                   static_cast<unsigned>(c));
                     os << buf;
                 } else {

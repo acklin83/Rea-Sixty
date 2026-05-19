@@ -206,7 +206,7 @@ void appendEscaped_(std::ostringstream& os, const std::string& s)
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
                     os << buf;
                 } else {
                     os << c;

@@ -121,7 +121,7 @@ void appendEscaped_(std::ostringstream& os, const std::string& s)
         default:
             if (static_cast<unsigned char>(c) < 0x20) {
                 char buf[8];
-                std::snprintf(buf, sizeof(buf), "\\u%04x",
+                snprintf(buf, sizeof(buf), "\\u%04x",
                               static_cast<unsigned>(c));
                 os << buf;
             } else {
@@ -145,11 +145,11 @@ std::vector<ExtKey> allExtKeys_()
     static char bcKeys[6][24];
     static char csKeys[5][24];
     for (int i = 0; i < 6; ++i) {
-        std::snprintf(bcKeys[i], sizeof(bcKeys[i]), "uc1_bc_vu_cal_%d", i);
+        snprintf(bcKeys[i], sizeof(bcKeys[i]), "uc1_bc_vu_cal_%d", i);
         v.push_back({"rea_sixty", bcKeys[i]});
     }
     for (int i = 0; i < 5; ++i) {
-        std::snprintf(csKeys[i], sizeof(csKeys[i]), "uc1_cs_leds_cal_%d", i);
+        snprintf(csKeys[i], sizeof(csKeys[i]), "uc1_cs_leds_cal_%d", i);
         v.push_back({"rea_sixty", csKeys[i]});
     }
     // Selection-Set global-scope keys. Each slot has a scope flag
@@ -161,8 +161,8 @@ std::vector<ExtKey> allExtKeys_()
     static char selsetScopeKeys[8][24];
     static char selsetDataKeys[8][24];
     for (int s = 1; s <= 8; ++s) {
-        std::snprintf(selsetScopeKeys[s - 1], 24, "selset_%d_scope", s);
-        std::snprintf(selsetDataKeys[s - 1],  24, "selset_%d_data",  s);
+        snprintf(selsetScopeKeys[s - 1], 24, "selset_%d_scope", s);
+        snprintf(selsetDataKeys[s - 1],  24, "selset_%d_data",  s);
         v.push_back({"rea_sixty", selsetScopeKeys[s - 1]});
         v.push_back({"rea_sixty", selsetDataKeys[s - 1]});
     }
@@ -304,9 +304,14 @@ bool importFromFile(const std::string& path, std::string* errOut)
 
 bool restoreFactoryDefaults(std::string* errOut)
 {
-    // kFactoryBundle is the embedded factory.rea60config payload baked
-    // in at build time via cmake/embed_factory_bundle.cmake.
-    return importFromJson(std::string(kFactoryBundle), errOut);
+    // kFactoryBundleBytes / Size are the embedded factory.rea60config
+    // payload baked in at build time via cmake/embed_factory_bundle.cmake.
+    // Stored as a byte array (not a raw-string literal) so MSVC's 16380-
+    // char string-literal limit doesn't truncate the bundle.
+    return importFromJson(
+        std::string(reinterpret_cast<const char*>(kFactoryBundleBytes),
+                    kFactoryBundleSize),
+        errOut);
 }
 
 } // namespace setup_bundle

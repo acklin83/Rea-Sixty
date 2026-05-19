@@ -1,5 +1,6 @@
 #include "Protocol.h"
 
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <numeric>

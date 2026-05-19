@@ -724,7 +724,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
         if (logThis) {
             char line[96];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "UC1 CHANNEL delta=%d step=%d → track %d of %d\n",
                 (int)ev.delta, step, next + 1, n);
         }
@@ -1041,7 +1041,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (!focusedTrack_) {
         if (logThis) {
             char line[96];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "UC1 knob 0x%02x delta=%d  (no focused track)\n",
                 ev.id, (int)ev.delta);
         }
@@ -1060,7 +1060,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (!bcBindings.busCompMap && !csBindings.channelMap) {
         if (logThis) {
             char line[96];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "UC1 knob 0x%02x delta=%d  (no BC anchor + no CS on focus)\n",
                 ev.id, (int)ev.delta);
         }
@@ -1094,7 +1094,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (!map) {
         if (logThis) {
             char line[96];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "UC1 knob 0x%02x delta=%d  (no matching domain binding)\n",
                 ev.id, (int)ev.delta);
         }
@@ -1105,7 +1105,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (vst3Param == kParamNone) {
         if (logThis) {
             char line[128];
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "UC1 knob 0x%02x delta=%d  unmapped in %s  (add to UC1PluginMap)\n",
                 ev.id, (int)ev.delta, map->shortName);
         }
@@ -1309,7 +1309,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         char pname[64] = {0};
         TrackFX_GetParamName(tr, fxIdx, vst3Param, pname, sizeof(pname));
         char line[192];
-        std::snprintf(line, sizeof(line),
+        snprintf(line, sizeof(line),
             "UC1 knob 0x%02x '%s' plug=%s inv=%d delta=%d → param %d '%s' val=%.3f\n",
             ev.id, labelForKnob(ev.id, busCompContext),
             map->shortName, map->inverted[ev.id] ? 1 : 0,
@@ -1403,7 +1403,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                                 static_cast<MediaTrack*>(focusedTrack_),
                                 match.fxIndex, name, sizeof(name));
                             char line[160];
-                            std::snprintf(line, sizeof(line),
+                            snprintf(line, sizeof(line),
                                 "UC1 Preset confirmed: %s\n",
                                 name[0] ? name : "<no name>");
                         }
@@ -1698,7 +1698,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             if (kDiagSoloCut > 0) {
                 --kDiagSoloCut;
                 char line[80];
-                std::snprintf(line, sizeof(line),
+                snprintf(line, sizeof(line),
                     "UC1 Solo press → solo=%d anySolo=%d\n", on, anySolo());
             }
             ++stats_.buttonEventsHandled;
@@ -1717,7 +1717,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             if (kDiagSoloCut > 0) {
                 --kDiagSoloCut;
                 char line[80];
-                std::snprintf(line, sizeof(line),
+                snprintf(line, sizeof(line),
                     "UC1 Cut press → mute=%d\n", on);
             }
             ++stats_.buttonEventsHandled;
@@ -1743,7 +1743,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             if (kDiagSoloCut > 0) {
                 --kDiagSoloCut;
                 char line[80];
-                std::snprintf(line, sizeof(line),
+                snprintf(line, sizeof(line),
                     "UC1 SoloClear press → anySolo=%d\n", anySolo());
             }
             ++stats_.buttonEventsHandled;
@@ -2332,7 +2332,7 @@ void UC1Surface::pushKnobReadout_(uint8_t knobId, void* trackRaw, int fxIdx,
         std::string vis = readout;
         for (auto& c : vis) if (c == ' ') c = '.';
         char line[64];
-        std::snprintf(line, sizeof(line),
+        snprintf(line, sizeof(line),
             "UC1 push zone=0x%02x raw='%s' → '%s'\n",
             zone, formatted, vis.c_str());
     }
@@ -3227,7 +3227,7 @@ void UC1Surface::refresh()
         }
         int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
         char fallback[32];
-        std::snprintf(fallback, sizeof(fallback), "Track %d", idx);
+        snprintf(fallback, sizeof(fallback), "Track %d", idx);
         return fallback;
     };
 
@@ -3256,7 +3256,7 @@ void UC1Surface::refresh()
         } else {
             int idx = static_cast<int>(GetMediaTrackInfo_Value(bcTr, "IP_TRACKNUMBER"));
             char fallback[32];
-            std::snprintf(fallback, sizeof(fallback), "Track %d", idx);
+            snprintf(fallback, sizeof(fallback), "Track %d", idx);
             bcName = fallback;
         }
     }
@@ -3288,7 +3288,7 @@ void UC1Surface::refresh()
         char buf[128] = {0};
         if (GetSetMediaTrackInfo_String(t, "P_NAME", buf, false) && buf[0]) return buf;
         char fallback[16];
-        std::snprintf(fallback, sizeof(fallback), "Trk %d", idx + 1);
+        snprintf(fallback, sizeof(fallback), "Trk %d", idx + 1);
         return fallback;
     };
     // BC carousel: 3-slot [prev, curr, next] across BC-bearing tracks

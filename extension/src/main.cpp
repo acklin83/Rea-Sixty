@@ -44,7 +44,13 @@
 #include <string>
 
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #ifdef __APPLE__
 #include <ApplicationServices/ApplicationServices.h>
@@ -823,7 +829,7 @@ std::string selsetSerialize_(const SelSet& s) {
     out += kSelsetDelim;
     if (s.type == SelSetType::Group) {
         char num[16];
-        std::snprintf(num, sizeof(num), "%d", s.groupIdx);
+        snprintf(num, sizeof(num), "%d", s.groupIdx);
         out += num;
     } else {
         for (size_t i = 0; i < s.guids.size(); ++i) {
@@ -866,13 +872,13 @@ void selsetDeserialize_(const char* raw, SelSet& out) {
 // which content key to read from on load. Content lives in either
 // ExtState (global) or ProjExtState (per-project) based on the flag.
 inline void selsetKeyFlag_(int slot, char* out, size_t n) {
-    std::snprintf(out, n, "selset_%d_scope", slot);
+    snprintf(out, n, "selset_%d_scope", slot);
 }
 inline void selsetKeyDataGlobal_(int slot, char* out, size_t n) {
-    std::snprintf(out, n, "selset_%d_data", slot);
+    snprintf(out, n, "selset_%d_data", slot);
 }
 inline void selsetKeyDataProject_(int slot, char* out, size_t n) {
-    std::snprintf(out, n, "selset_%d", slot);
+    snprintf(out, n, "selset_%d", slot);
 }
 
 void selsetWriteToProject_(int slot1to8) {
@@ -1516,9 +1522,9 @@ void applyBrightness()
     const int scr = g_scribbleBrightness.load();
     pushBrightness(led, scr);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", led);
+    snprintf(buf, sizeof(buf), "%d", led);
     SetExtState("rea_sixty", "brightness", buf, true);
-    std::snprintf(buf, sizeof(buf), "%d", scr);
+    snprintf(buf, sizeof(buf), "%d", scr);
     SetExtState("rea_sixty", "scribble_brightness", buf, true);
 }
 
@@ -1561,26 +1567,26 @@ void loadBrightness()
     if (calMig < 1) {
         for (int i = 0; i < 6; ++i) {
             char k[40];
-            std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
+            snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
             DeleteExtState("rea_sixty", k, true);
         }
         for (int i = 0; i < 5; ++i) {
             char k[40];
-            std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
+            snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
             DeleteExtState("rea_sixty", k, true);
         }
         SetExtState("rea_sixty", "uc1_cal_factory_v", "1", true);
     } else {
         for (int i = 0; i < 6; ++i) {
             char k[40];
-            std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
+            snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", i);
             if (const char* v = GetExtState("rea_sixty", k); v && *v) {
                 g_uc1BcVuCal[i].store(std::atof(v));
             }
         }
         for (int i = 0; i < 5; ++i) {
             char k[40];
-            std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
+            snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", i);
             if (const char* v = GetExtState("rea_sixty", k); v && *v) {
                 g_uc1CsLedsCal[i].store(std::atof(v));
             }
@@ -2467,45 +2473,46 @@ using SetWindowPos_t     = void(*)(HWND, HWND, int, int, int, int, int);
 using GetWindowRect_t    = bool(*)(HWND, RECT*);
 using GetSystemMetrics_t = int (*)(int);
 
+// Resolve a SWELL / Win32 entry point. On macOS REAPER ships SWELL
+// inside its own process, so dlsym(RTLD_DEFAULT, ...) hits the SWELL
+// re-impl; on Windows the symbol lives in user32.dll and dlsym is not
+// available — go through GetModuleHandle + GetProcAddress instead.
+template <typename Fn>
+static Fn loadSwellOrWin32_(const char* name)
+{
+    if (g_reaperGetFunc) {
+        if (auto* p = reinterpret_cast<Fn>(g_reaperGetFunc(name))) {
+            return p;
+        }
+    }
+#ifdef _WIN32
+    if (HMODULE u32 = GetModuleHandleA("user32.dll")) {
+        return reinterpret_cast<Fn>(GetProcAddress(u32, name));
+    }
+    return nullptr;
+#else
+    return reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, name));
+#endif
+}
+
 static SetWindowPos_t loadSetWindowPos_()
 {
     static SetWindowPos_t p = nullptr;
-    if (p) return p;
-    if (g_reaperGetFunc) {
-        p = reinterpret_cast<SetWindowPos_t>(
-            g_reaperGetFunc("SetWindowPos"));
-        if (p) return p;
-    }
-    p = reinterpret_cast<SetWindowPos_t>(
-        dlsym(RTLD_DEFAULT, "SetWindowPos"));
+    if (!p) p = loadSwellOrWin32_<SetWindowPos_t>("SetWindowPos");
     return p;
 }
 
 static GetWindowRect_t loadGetWindowRect_()
 {
     static GetWindowRect_t p = nullptr;
-    if (p) return p;
-    if (g_reaperGetFunc) {
-        p = reinterpret_cast<GetWindowRect_t>(
-            g_reaperGetFunc("GetWindowRect"));
-        if (p) return p;
-    }
-    p = reinterpret_cast<GetWindowRect_t>(
-        dlsym(RTLD_DEFAULT, "GetWindowRect"));
+    if (!p) p = loadSwellOrWin32_<GetWindowRect_t>("GetWindowRect");
     return p;
 }
 
 static GetSystemMetrics_t loadGetSystemMetrics_()
 {
     static GetSystemMetrics_t p = nullptr;
-    if (p) return p;
-    if (g_reaperGetFunc) {
-        p = reinterpret_cast<GetSystemMetrics_t>(
-            g_reaperGetFunc("GetSystemMetrics"));
-        if (p) return p;
-    }
-    p = reinterpret_cast<GetSystemMetrics_t>(
-        dlsym(RTLD_DEFAULT, "GetSystemMetrics"));
+    if (!p) p = loadSwellOrWin32_<GetSystemMetrics_t>("GetSystemMetrics");
     return p;
 }
 
@@ -2580,13 +2587,13 @@ static void trackDisplayName_(MediaTrack* tr, char* out, size_t cap)
     char buf[256] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", buf, false);
     if (buf[0]) {
-        std::snprintf(out, cap, "%s", buf);
+        snprintf(out, cap, "%s", buf);
         return;
     }
     // Unnamed → fall back to the index-based label REAPER uses.
     const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
     if (idx > 0) {
-        std::snprintf(out, cap, "Track %d", idx);
+        snprintf(out, cap, "Track %d", idx);
     }
 }
 
@@ -6095,7 +6102,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         g_softKeyDirty.store(true);
                         g_bankDirty.store(true);
                         char buf[8];
-                        std::snprintf(buf, sizeof(buf), "%d", target);
+                        snprintf(buf, sizeof(buf), "%d", target);
                         SetExtState("ReaSixty", "softKeyBank", buf, true);
                     }
                 }
@@ -6789,7 +6796,7 @@ std::string slotLabelForVisibleSlot(int slot)
     }
     if (realSlot >= trackCount) {
         char fallback[8];
-        std::snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
+        snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
         return fallback;
     }
     MediaTrack* tr = visibleTrackAt(realSlot);
@@ -6805,7 +6812,7 @@ std::string slotLabelForVisibleSlot(int slot)
         return s;
     }
     char fallback[8];
-    std::snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
+    snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
     return fallback;
 }
 
@@ -6822,10 +6829,10 @@ std::string formatDbReadout(double linearAmp)
     if (linearAmp < 1e-5) return "-inf";
     const double dB = 20.0 * std::log10(linearAmp);
     char buf[16];
-    std::snprintf(buf, sizeof(buf), "%.1f", dB);
+    snprintf(buf, sizeof(buf), "%.1f", dB);
     std::string s(buf);
     if (s.size() > 6) {
-        std::snprintf(buf, sizeof(buf), "%.0f", dB);
+        snprintf(buf, sizeof(buf), "%.0f", dB);
         s.assign(buf);
         if (s.size() > 6) s.resize(6);
     }
@@ -6883,7 +6890,7 @@ std::string formatPanReadout(double pan)
     int pct = static_cast<int>(std::round(std::abs(pan) * 100.0));
     if (pct > 100) pct = 100;
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%c%d", pan < 0 ? 'L' : 'R', pct);
+    snprintf(buf, sizeof(buf), "%c%d", pan < 0 ? 'L' : 'R', pct);
     return buf;
 }
 
@@ -7165,7 +7172,7 @@ void pushNavOverlayDecorations()
         std::string chan;
         if (it) {
             char buf[8];
-            std::snprintf(buf, sizeof(buf), "%d", it->idx);
+            snprintf(buf, sizeof(buf), "%d", it->idx);
             chan = buf;
         } else {
             chan = "  ";
@@ -7196,7 +7203,7 @@ void pushNavOverlayDecorations()
                 char buf[16];
                 if (lowerFmt == 1) {
                     // Index: 'R03' for regions, 'M03' for markers.
-                    std::snprintf(buf, sizeof(buf), "%c%03d",
+                    snprintf(buf, sizeof(buf), "%c%03d",
                                   it->isRegion ? 'R' : 'M', it->idx);
                 } else {
                     // Timecode: M:SS or MM:SS (7 char field). Negative
@@ -7206,7 +7213,7 @@ void pushNavOverlayDecorations()
                     int mm = totalSec / 60;
                     int ss = totalSec % 60;
                     if (mm > 99) mm = 99;
-                    std::snprintf(buf, sizeof(buf), "%2d:%02d", mm, ss);
+                    snprintf(buf, sizeof(buf), "%2d:%02d", mm, ss);
                 }
                 lower = buf;
             } else {
@@ -7443,7 +7450,7 @@ void pushZonesForVisibleSlots()
         if (b >= 0 && g_softKeyBank.exchange(b) != b) {
             g_softKeyDirty.store(true);
             char buf[8];
-            std::snprintf(buf, sizeof(buf), "%d", b);
+            snprintf(buf, sizeof(buf), "%d", b);
             SetExtState("ReaSixty", "softKeyBank", buf, true);
         }
     }
@@ -7752,7 +7759,7 @@ void pushZonesForVisibleSlots()
                         std::string lbl =
                             uctx.map->uf8.topSoftKeyLeds[i].label;
                         if (lbl.size() > 11) lbl.resize(11);
-                        std::snprintf(s_userBankLabelBuf[i],
+                        snprintf(s_userBankLabelBuf[i],
                             sizeof(s_userBankLabelBuf[i]),
                             "%s", lbl.c_str());
                         s_userBankLabelPtr[i] = s_userBankLabelBuf[i];
@@ -8309,7 +8316,7 @@ void pushZonesForVisibleSlots()
                                 const int leftNum =
                                     std::atoi(s2.c_str() + numStart);
                                 char buf[16];
-                                std::snprintf(buf, sizeof(buf), "/%d",
+                                snprintf(buf, sizeof(buf), "/%d",
                                               leftNum + 1);
                                 s2 += buf;
                             }
@@ -8365,7 +8372,7 @@ void pushZonesForVisibleSlots()
                 chan = "  ";
             } else {
                 char buf[8];
-                std::snprintf(buf, sizeof(buf), "%d", realSlot + 1);
+                snprintf(buf, sizeof(buf), "%d", realSlot + 1);
                 chan = buf;
             }
             if (!overlayActive && chan != g_lastChanNum[s]) {
@@ -8586,7 +8593,7 @@ void pushZonesForVisibleSlots()
             }
             if (n.empty() && !blankInUserStripMode) {
                 char fallback[8];
-                std::snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
+                snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
                 n = fallback;
             }
             if (blankInUserStripMode) {
@@ -8860,7 +8867,7 @@ void pushZonesForVisibleSlots()
                 std::string gainStr = readExt("P_EXT:totalreaper_gain");
                 char gbuf[16];
                 if (gainStr.empty()) {
-                    std::snprintf(gbuf, sizeof(gbuf), "  --dB");
+                    snprintf(gbuf, sizeof(gbuf), "  --dB");
                 } else {
                     // RME preamp gain is always >= 0 dB (no attenuator
                     // on the mic-pre side; that lives on `pad`). Clamp
@@ -8868,7 +8875,7 @@ void pushZonesForVisibleSlots()
                     // signed value.
                     double db = std::atof(gainStr.c_str());
                     if (db < 0.0) db = 0.0;
-                    std::snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
+                    snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
                 }
                 valLine = composeValueLine(flags, gbuf);
                 selectionModeHandled = true;
@@ -11862,7 +11869,7 @@ void probeNextLedCell()
     sendProbeFrame(0x38, cell, 0xFF, 0xFF);
     sendProbeFrame(0x39, cell, 0x00, 0xF0);
     char line[80];
-    std::snprintf(line, sizeof(line),
+    snprintf(line, sizeof(line),
         "Rea-Sixty probe: cell 0x%02X bright (idx %d/%zu)\n",
         static_cast<unsigned>(cell), g_probeCellIndex + 1, kProbeCellCount);
     ShowConsoleMsg(line);
@@ -11910,7 +11917,7 @@ void probeNextLegacyLedCell()
     const uint8_t cell = kLegacyProbeCells[g_legacyProbeCellIndex];
     g_dev->send(uf8::buildLedCommand(cell, true));
     char line[80];
-    std::snprintf(line, sizeof(line),
+    snprintf(line, sizeof(line),
         "Rea-Sixty legacy probe: id 0x%02X on (idx %d/%zu)\n",
         static_cast<unsigned>(cell), g_legacyProbeCellIndex + 1,
         kLegacyProbeCellCount);
@@ -12096,7 +12103,7 @@ void probeGateGrSources()
         "GateRangeApplied_dB",
     };
     char header[128];
-    std::snprintf(header, sizeof(header),
+    snprintf(header, sizeof(header),
         "Gate-GR probe — track=%s fx=%d\n",
         match.map->displayShort, match.fxIndex);
     ShowConsoleMsg(header);
@@ -12107,10 +12114,10 @@ void probeGateGrSources()
             tr, match.fxIndex, name, buf, sizeof(buf));
         char line[256];
         if (ok) {
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "  [%s] = %s\n", name, buf);
         } else {
-            std::snprintf(line, sizeof(line),
+            snprintf(line, sizeof(line),
                 "  [%s] not exposed\n", name);
         }
         ShowConsoleMsg(line);
@@ -12143,7 +12150,7 @@ void dumpCsPluginParams()
     }
     const int n = TrackFX_GetNumParams(tr, match.fxIndex);
     char header[128];
-    std::snprintf(header, sizeof(header),
+    snprintf(header, sizeof(header),
         "Param-dump %s — %d params\n", match.map->displayShort, n);
     ShowConsoleMsg(header);
     for (int p = 0; p < n; ++p) {
@@ -12156,7 +12163,7 @@ void dumpCsPluginParams()
         TrackFX_FormatParamValueNormalized(tr, match.fxIndex, p, v,
                                            fmt, sizeof(fmt));
         char line[512];
-        std::snprintf(line, sizeof(line),
+        snprintf(line, sizeof(line),
             "  [%3d] %-32s ident=%-40s norm=%.4f val=%s\n",
             p, name, ident, v, fmt);
         ShowConsoleMsg(line);
@@ -12198,7 +12205,7 @@ void dumpCsChunk()
     std::fwrite(body.data(), 1, body.size(), f);
     std::fclose(f);
     char line[256];
-    std::snprintf(line, sizeof(line),
+    snprintf(line, sizeof(line),
         "Chunk-dump: %zu bytes → %s\n", body.size(), path);
     ShowConsoleMsg(line);
     chunkSize = static_cast<int>(body.size());
@@ -12241,7 +12248,7 @@ void dumpRoutingFlags()
         return -1;  // not in this plug-in's map
     };
     char line[256];
-    std::snprintf(line, sizeof(line),
+    snprintf(line, sizeof(line),
         "Routing %s: ExtSC=%d FiltIn=%d FiltSC=%d EqSC=%d DynPreEq=%d  |  Filt=%d Eq=%d Dyn=%d\n",
         match.map->displayShort,
         val("ExternalSC"),
@@ -12491,7 +12498,7 @@ void reasixty_setSoftKeyBank(int b)
         g_softKeyDirty.store(true);
         g_bankDirty.store(true);
         char buf[8];
-        std::snprintf(buf, sizeof(buf), "%d", b);
+        snprintf(buf, sizeof(buf), "%d", b);
         SetExtState("ReaSixty", "softKeyBank", buf, true);
     }
 }
@@ -12638,14 +12645,14 @@ void reasixty_uc1CalSet(int section, int idx, double newVal)
     if (newVal < -10.0) newVal = -10.0;
     char k[40];
     char vbuf[32];
-    std::snprintf(vbuf, sizeof(vbuf), "%.3f", newVal);
+    snprintf(vbuf, sizeof(vbuf), "%.3f", newVal);
     if (section == 0 && idx >= 0 && idx < 6) {
         g_uc1BcVuCal[idx].store(newVal);
-        std::snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", idx);
+        snprintf(k, sizeof(k), "uc1_bc_vu_cal_%d", idx);
         SetExtState("rea_sixty", k, vbuf, true);
     } else if (section == 1 && idx >= 0 && idx < 5) {
         g_uc1CsLedsCal[idx].store(newVal);
-        std::snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", idx);
+        snprintf(k, sizeof(k), "uc1_cs_leds_cal_%d", idx);
         SetExtState("rea_sixty", k, vbuf, true);
     }
 }
@@ -12764,7 +12771,7 @@ void reasixty_setNavDefaultView(int v)
     if (v < 0 || v > 3) v = 0;
     g_navDefaultView.store(v);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", v);
+    snprintf(buf, sizeof(buf), "%d", v);
     SetExtState("rea_sixty", "nav_default_view", buf, true);
 }
 
@@ -12774,7 +12781,7 @@ void reasixty_setNavRegionPress(int v)
     if (v < 0 || v > 2) v = 0;
     g_navRegionPress.store(v);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", v);
+    snprintf(buf, sizeof(buf), "%d", v);
     SetExtState("rea_sixty", "nav_region_press", buf, true);
 }
 
@@ -12795,7 +12802,7 @@ static void writeNavSetting_(const char* key, std::atomic<int>& slot,
     if (v < 0 || v > hi) v = 0;
     slot.store(v);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", v);
+    snprintf(buf, sizeof(buf), "%d", v);
     SetExtState("rea_sixty", key, buf, true);
 }
 void reasixty_setNavUc1Push(int v)
@@ -13006,7 +13013,7 @@ void reasixty_setCycleControlMask(int mask)
     const uint8_t m = static_cast<uint8_t>(mask & kCycleCtrlMaskAll);
     g_cycleControlMask.store(m);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(m));
+    snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(m));
     SetExtState("ReaSixty", "cycleControlMask", buf, true);
 }
 
@@ -13195,9 +13202,9 @@ bool reasixty_capturePluginGuiPin()
         g_pluginGuiPinCenter.store(false);
         SetExtState("rea_sixty", "plugin_gui_pin_center", "0", true);
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%d", x);
+        snprintf(buf, sizeof(buf), "%d", x);
         SetExtState("rea_sixty", "plugin_gui_pin_x", buf, true);
-        std::snprintf(buf, sizeof(buf), "%d", y);
+        snprintf(buf, sizeof(buf), "%d", y);
         SetExtState("rea_sixty", "plugin_gui_pin_y", buf, true);
         return true;
     };
@@ -13297,9 +13304,9 @@ bool reasixty_captureFxChainPin()
         g_fxChainPinCenter.store(false);
         SetExtState("rea_sixty", "fx_chain_pin_center", "0", true);
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%d", x);
+        snprintf(buf, sizeof(buf), "%d", x);
         SetExtState("rea_sixty", "fx_chain_pin_x", buf, true);
-        std::snprintf(buf, sizeof(buf), "%d", y);
+        snprintf(buf, sizeof(buf), "%d", y);
         SetExtState("rea_sixty", "fx_chain_pin_y", buf, true);
         return true;
     };
@@ -13538,8 +13545,10 @@ static BrowseForSaveFile_t loadBrowseForSaveFile_()
             g_reaperGetFunc("BrowseForSaveFile"));
         if (p) return p;
     }
+#ifndef _WIN32
     p = reinterpret_cast<BrowseForSaveFile_t>(
         dlsym(RTLD_DEFAULT, "BrowseForSaveFile"));
+#endif
     return p;
 }
 #endif
@@ -13563,10 +13572,10 @@ bool reasixty_exportLayerViaDialog(int layer)
     if (lg) std::fprintf(lg, "[exportLayer] enter layer=%d\n", layer);
 
     char defName[64];
-    std::snprintf(defName, sizeof(defName),
+    snprintf(defName, sizeof(defName),
                   "rea-sixty-layer-%d.json", layer + 1);
     char title[64];
-    std::snprintf(title, sizeof(title),
+    snprintf(title, sizeof(title),
                   "Export Rea-Sixty layer %d", layer + 1);
 
     std::string chosen;
@@ -13704,7 +13713,7 @@ bool reasixty_importLayerViaDialog(int layer)
 {
     char buf[4096] = {0};
     char title[64];
-    std::snprintf(title, sizeof(title),
+    snprintf(title, sizeof(title),
                   "Import into Rea-Sixty layer %d", layer + 1);
     if (!GetUserFileNameForRead(buf, title, "json")) {
         return false;
@@ -13783,7 +13792,7 @@ void reasixty_openUrl(const char* url)
 {
     if (!url || !*url) return;
     char cmd[1024];
-    std::snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", url);
+    snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", url);
     std::system(cmd);
 }
 
@@ -13791,7 +13800,7 @@ void reasixty_revealInFinder(const char* path)
 {
     if (!path || !*path) return;
     char cmd[1024];
-    std::snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", path);
+    snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", path);
     std::system(cmd);
 }
 
@@ -13812,17 +13821,30 @@ void reasixty_exportDiagnostic()
     std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &local);
 
     char tmpDir[256];
-    std::snprintf(tmpDir, sizeof(tmpDir), "/tmp/rea_sixty_diag_%s", ts);
+#ifdef _WIN32
+    {
+        const char* tmpRoot = std::getenv("TEMP");
+        if (!tmpRoot || !*tmpRoot) tmpRoot = "C:\\Windows\\Temp";
+        snprintf(tmpDir, sizeof(tmpDir), "%s\\rea_sixty_diag_%s",
+                 tmpRoot, ts);
+    }
+#else
+    snprintf(tmpDir, sizeof(tmpDir), "/tmp/rea_sixty_diag_%s", ts);
+#endif
+#ifdef _WIN32
+    if (_mkdir(tmpDir) != 0 && errno != EEXIST) {
+#else
     if (mkdir(tmpDir, 0755) != 0 && errno != EEXIST) {
+#endif
         char emsg[256];
-        std::snprintf(emsg, sizeof(emsg),
+        snprintf(emsg, sizeof(emsg),
                       "Could not create temp dir:\n%s", tmpDir);
         ShowMessageBox(emsg, "Rea-Sixty diagnostic", 0);
         return;
     }
 
     char infoPath[512];
-    std::snprintf(infoPath, sizeof(infoPath), "%s/info.txt", tmpDir);
+    snprintf(infoPath, sizeof(infoPath), "%s/info.txt", tmpDir);
     if (FILE* f = std::fopen(infoPath, "w")) {
         std::fprintf(f, "Rea-Sixty diagnostic report\n");
         std::fprintf(f, "Generated: %s\n", ts);
@@ -13850,7 +13872,7 @@ void reasixty_exportDiagnostic()
     // Pull in our existing trace logs if they exist. Best-effort; missing
     // files don't fail the report.
     char cmd[1024];
-    std::snprintf(cmd, sizeof(cmd),
+    snprintf(cmd, sizeof(cmd),
         "cp /tmp/reaper_uf8_frames.log %s/ 2>/dev/null; "
         "cp /tmp/reaper_uf8_colors.log %s/ 2>/dev/null",
         tmpDir, tmpDir);
@@ -13858,24 +13880,24 @@ void reasixty_exportDiagnostic()
 
     const char* home = std::getenv("HOME");
     if (!home || !*home) home = "/tmp";
-    std::snprintf(resultPath, sizeof(resultPath),
+    snprintf(resultPath, sizeof(resultPath),
                   "%s/Desktop/rea_sixty_diag_%s.zip", home, ts);
 
-    std::snprintf(cmd, sizeof(cmd),
+    snprintf(cmd, sizeof(cmd),
         "cd /tmp && /usr/bin/zip -r '%s' 'rea_sixty_diag_%s' >/dev/null 2>&1",
         resultPath, ts);
     const int zipRc = std::system(cmd);
 
     // Always clean tmp dir, success or not.
-    std::snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpDir);
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpDir);
     std::system(cmd);
 
     char msg[1024];
     if (zipRc == 0) {
-        std::snprintf(msg, sizeof(msg),
+        snprintf(msg, sizeof(msg),
                       "Diagnostic report written:\n\n%s", resultPath);
     } else {
-        std::snprintf(msg, sizeof(msg),
+        snprintf(msg, sizeof(msg),
                       "Diagnostic report failed (zip rc=%d).", zipRc);
     }
     ShowMessageBox(msg, "Rea-Sixty diagnostic", 0);
@@ -13892,7 +13914,7 @@ void reasixty_setBallisticMode(int mode)
     if (mode > BM_RMS)  mode = BM_RMS;
     g_ballisticMode.store(mode);
     char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", mode);
+    snprintf(buf, sizeof(buf), "%d", mode);
     SetExtState("rea_sixty", "ballistic_mode", buf, true);
     // Reset envelopes so the new mode starts cleanly from silence rather
     // than carrying old smoothed values that don't match the new τ.
@@ -14810,8 +14832,8 @@ void registerBindingHandlers()
     };
     for (int n = 1; n <= 9; ++n) {
         auto d = softKeyBank(n);
-        char name[32]; std::snprintf(name, sizeof(name), "softkey_bank_%d", n);
-        char dn[40];   std::snprintf(dn,   sizeof(dn),   "Soft-Key Bank %d", n);
+        char name[32]; snprintf(name, sizeof(name), "softkey_bank_%d", n);
+        char dn[40];   snprintf(dn,   sizeof(dn),   "Soft-Key Bank %d", n);
         d.displayName = dn;
         registerBuiltin(name, d);
     }
@@ -15240,14 +15262,14 @@ void registerBindingHandlers()
     for (int n = 0; n < 8; ++n) {
         char nameBuf[24], descBuf[64];
 
-        std::snprintf(nameBuf, sizeof(nameBuf), "send_all_%d", n + 1);
-        std::snprintf(descBuf, sizeof(descBuf),
+        snprintf(nameBuf, sizeof(nameBuf), "send_all_%d", n + 1);
+        snprintf(descBuf, sizeof(descBuf),
                       "Send %d ↦ all tracks", n + 1);
         auto s = sendAll(n); s.displayName = descBuf;
         registerBuiltin(nameBuf, s);
 
-        std::snprintf(nameBuf, sizeof(nameBuf), "recv_all_%d", n + 1);
-        std::snprintf(descBuf, sizeof(descBuf),
+        snprintf(nameBuf, sizeof(nameBuf), "recv_all_%d", n + 1);
+        snprintf(descBuf, sizeof(descBuf),
                       "Receive %d ↦ all tracks", n + 1);
         auto r = recvAll(n); r.displayName = descBuf;
         registerBuiltin(nameBuf, r);
@@ -15332,7 +15354,7 @@ void registerBindingHandlers()
             if (g_softKeyBank.exchange(target) != target) {
                 g_softKeyDirty.store(true);
                 char buf[8];
-                std::snprintf(buf, sizeof(buf), "%d", target);
+                snprintf(buf, sizeof(buf), "%d", target);
                 SetExtState("ReaSixty", "softKeyBank", buf, true);
             }
             if (g_forcePan.load()) {
@@ -15410,8 +15432,8 @@ void registerBindingHandlers()
     }
     for (int b = 1; b <= 5; ++b) {
         char name[24], desc[40];
-        std::snprintf(name, sizeof(name), "ssl_bank_%d", b);
-        std::snprintf(desc, sizeof(desc), "SSL Standard Bank %d", b);
+        snprintf(name, sizeof(name), "ssl_bank_%d", b);
+        snprintf(desc, sizeof(desc), "SSL Standard Bank %d", b);
         auto d = sslBankHandler(b);
         d.displayName = desc;
         registerBuiltin(name, d);
@@ -15449,7 +15471,7 @@ void registerBindingHandlers()
         if (g_softKeyBank.exchange(next) != next) {
             g_softKeyDirty.store(true);
             char buf[8];
-            std::snprintf(buf, sizeof(buf), "%d", next);
+            snprintf(buf, sizeof(buf), "%d", next);
             SetExtState("ReaSixty", "softKeyBank", buf, true);
         }
     };
@@ -15499,8 +15521,8 @@ void registerBindingHandlers()
     //   temp_toggle : flip "Multi-Select acts as Temp Group" setting
     for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
         char nm[48], disp[64];
-        std::snprintf(nm,   sizeof(nm),   "param_group_add_%d",    slot + 1);
-        std::snprintf(disp, sizeof(disp), "Param Group %d → Add Selected Tracks", slot + 1);
+        snprintf(nm,   sizeof(nm),   "param_group_add_%d",    slot + 1);
+        snprintf(disp, sizeof(disp), "Param Group %d → Add Selected Tracks", slot + 1);
         registerBuiltin(nm, DescBuilder{
             [slot](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
@@ -15508,8 +15530,8 @@ void registerBindingHandlers()
             },
             nullptr, disp, false
         });
-        std::snprintf(nm,   sizeof(nm),   "param_group_clear_%d",  slot + 1);
-        std::snprintf(disp, sizeof(disp), "Param Group %d → Clear Members", slot + 1);
+        snprintf(nm,   sizeof(nm),   "param_group_clear_%d",  slot + 1);
+        snprintf(disp, sizeof(disp), "Param Group %d → Clear Members", slot + 1);
         registerBuiltin(nm, DescBuilder{
             [slot](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
@@ -15517,8 +15539,8 @@ void registerBindingHandlers()
             },
             nullptr, disp, false
         });
-        std::snprintf(nm,   sizeof(nm),   "param_group_toggle_%d", slot + 1);
-        std::snprintf(disp, sizeof(disp), "Param Group %d → Toggle Active", slot + 1);
+        snprintf(nm,   sizeof(nm),   "param_group_toggle_%d", slot + 1);
+        snprintf(disp, sizeof(disp), "Param Group %d → Toggle Active", slot + 1);
         registerBuiltin(nm, DescBuilder{
             [slot](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
