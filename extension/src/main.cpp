@@ -15742,6 +15742,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     registerBindingHandlers();
     initLog("step: bindings::load");
     uf8::bindings::load();
+    initLog("step: bindings::load done");
     // Phase 2.5d-A — user-learned plugin catalogue. Load after the
     // built-in PluginMap registry is initialised (it's static so it's
     // always ready). Two-stage lookup in lookupPluginMapByName falls
