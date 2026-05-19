@@ -262,6 +262,12 @@ if(APPLE)
             set(SRC_PATH "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
             set(OLD_NAME "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
         endif()
+        # install_name_tool invalidates the Homebrew lib's code signature.
+        # On macOS 15+ REAPER's dlopen path SIGKILLs on the first invalid
+        # signature page (Frank 2026-05-19: REAPER crash report
+        # CODESIGNING / "Invalid Page" during Plugins_Load). Ad-hoc
+        # re-sign each bundled lib after the install_name_tool pass so
+        # the on-disk signature matches the rewritten bytes.
         add_custom_command(TARGET reaper_uf8 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${SRC_PATH}"
@@ -273,10 +279,21 @@ if(APPLE)
             COMMAND install_name_tool -id
                 "@loader_path/${LIB}.dylib"
                 "$<TARGET_FILE_DIR:reaper_uf8>/${LIB}.dylib"
+            COMMAND codesign --force --sign -
+                "$<TARGET_FILE_DIR:reaper_uf8>/${LIB}.dylib"
             COMMENT "Bundling ${LIB}.dylib"
             VERBATIM
         )
     endforeach()
+
+    # Our own dylib's signature is invalidated by the install_name_tool
+    # -change above. Re-sign it last so the signature reflects the final
+    # bytes (including the rewritten @loader_path entries).
+    add_custom_command(TARGET reaper_uf8 POST_BUILD
+        COMMAND codesign --force --sign - "$<TARGET_FILE:reaper_uf8>"
+        COMMENT "Ad-hoc signing reaper_rea-sixty.dylib"
+        VERBATIM
+    )
 endif()
 
 # ----- tests + CLI helpers (skipped on Windows for the initial port) ----------
