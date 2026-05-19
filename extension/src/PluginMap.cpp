@@ -413,6 +413,29 @@ const LinkSlot* findSlotByLinkIdx(const PluginMap& map, int linkIdx)
     return nullptr;
 }
 
+bool fxIdentityName(void* trackOpaque, int fx, char* buf, int bufSize)
+{
+    if (!buf || bufSize <= 0) return false;
+    buf[0] = 0;
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return false;
+    // Prefer the factory name — survives REAPER's "Rename FX". Returns
+    // false when the FX doesn't expose original_name (older REAPER, or
+    // some non-VST plug-ins); fall through to GetFXName so identity
+    // matching at least keeps working with today's renamed-name
+    // semantics.
+    if (TrackFX_GetNamedConfigParm(tr, fx, "original_name", buf, bufSize)
+            && buf[0] != 0) {
+        return true;
+    }
+    buf[0] = 0;
+    if (TrackFX_GetFXName(tr, fx, buf, bufSize) && buf[0] != 0) {
+        return true;
+    }
+    buf[0] = 0;
+    return false;
+}
+
 PluginMatch lookupPluginOnTrack(void* trackOpaque)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
@@ -420,9 +443,7 @@ PluginMatch lookupPluginOnTrack(void* trackOpaque)
     const int n = TrackFX_GetCount(tr);
     char buf[512];
     for (int fx = 0; fx < n; ++fx) {
-        buf[0] = 0;
-        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
-        if (buf[0] == 0) continue;
+        if (!fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         if (const PluginMap* m = lookupPluginMapByName(buf)) {
             return { m, fx };
         }
@@ -453,9 +474,7 @@ PluginMatch lookupPluginOnTrack(void* trackOpaque, Domain domain)
     PluginMatch lastSeen{nullptr, -1};
     char buf[512];
     for (int fx = 0; fx < n; ++fx) {
-        buf[0] = 0;
-        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
-        if (buf[0] == 0) continue;
+        if (!fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         const PluginMap* m = lookupPluginMapByName(buf);
         if (!m || m->domain != domain) continue;
         if (seen == wantIdx) return { m, fx };

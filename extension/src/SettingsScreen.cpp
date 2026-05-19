@@ -4122,7 +4122,7 @@ std::vector<EditingFxInstance> findEditingFxAll_(const std::string& match)
         if (!tr) return;
         const int n = TrackFX_GetCount(tr);
         for (int i = 0; i < n; ++i) {
-            if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+            if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
             if (std::strstr(buf, match.c_str()) == nullptr) continue;
             // Track name (best-effort; empty for unnamed tracks).
             char trName[128] = {};
@@ -6678,7 +6678,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 else if (t > 0)  tr = GetTrack(nullptr, t - 1);
                 if (tr) {
                     char fxName[256] = {};
-                    if (TrackFX_GetFXName(tr, f, fxName, sizeof(fxName)) &&
+                    if (uf8::fxIdentityName(tr, f, fxName, sizeof(fxName)) &&
                         std::string(fxName).find(editing->match) != std::string::npos)
                     {
                         bindSlot_(g_listeningLinkIdx, p);
@@ -6722,7 +6722,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 else if (t > 0)  tr = GetTrack(nullptr, t - 1);
                 if (tr) {
                     char fxName[256] = {};
-                    if (TrackFX_GetFXName(tr, f, fxName, sizeof(fxName)) &&
+                    if (uf8::fxIdentityName(tr, f, fxName, sizeof(fxName)) &&
                         std::string(fxName).find(editing->match) != std::string::npos)
                     {
                         bindUf8_(g_listeningUf8.kind,

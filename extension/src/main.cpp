@@ -2545,7 +2545,7 @@ void applyInstanceCycle_(int step)
     const int n = TrackFX_GetCount(tr);
     char fxName[256];
     for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+        if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName))) continue;
         const auto* pm = uf8::lookupPluginMapByName(fxName);
         if (pm && pm->domain == uf8::Domain::ChannelStrip) {
             hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
@@ -2664,7 +2664,7 @@ bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
 {
     if (!tr || fxIdx < 0) return false;
     char fxName[256];
-    if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return false;
+    if (!uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName))) return false;
 
     // First check known SSL Instances. Counting the rank within the
     // domain on this track gives the new Instance index.
@@ -2676,7 +2676,7 @@ bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
         int rank = 0;
         char other[256];
         for (int i = 0; i < fxIdx; ++i) {
-            if (!TrackFX_GetFXName(tr, i, other, sizeof(other))) continue;
+            if (!uf8::fxIdentityName(tr, i, other, sizeof(other))) continue;
             const auto* om = uf8::lookupPluginMapByName(other);
             if (om && om->domain == pm->domain) ++rank;
         }
@@ -2697,7 +2697,7 @@ bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
         int rank = 0;
         char other[256];
         for (int i = 0; i < fxIdx; ++i) {
-            if (!TrackFX_GetFXName(tr, i, other, sizeof(other))) continue;
+            if (!uf8::fxIdentityName(tr, i, other, sizeof(other))) continue;
             const auto* ou = uf8::user_plugins::lookupOwnedByName(other);
             if (ou && ou->domain == uf8::Domain::None && ou->uf8Mode) ++rank;
         }
@@ -2931,7 +2931,7 @@ void applyShowFocusedPluginGui_()
     // explicitly to return to the prior state — same as the cycle path.
     if (g_cycleEngagesUf8.load() && !g_uf8PluginMode.load()) {
         char fxName[512] = {0};
-        if (TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) {
+        if (uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName))) {
             const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
             if (um && um->uf8Mode) {
                 TrackFX_Show(tr, fxIdx, /*float window*/ 3);
@@ -3238,7 +3238,7 @@ UserPluginCtx findUserPluginOnTrack_(MediaTrack* tr, uf8::Domain wantDomain)
         const int n = TrackFX_GetCount(tr);
         char fxName[256];
         for (int i = 0; i < n; ++i) {
-            if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName))) continue;
+            if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName))) continue;
             const auto* pm = uf8::lookupPluginMapByName(fxName);
             if (!pm || pm->domain != dom) continue;
             if (seen == wantIdx) {
@@ -3435,9 +3435,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     const int wantIdx = uc1::csInstanceIndex(tr);
     int csSeen = 0;
     for (int fx = 0; fx < n; ++fx) {
-        buf[0] = 0;
-        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
-        if (buf[0] == 0) continue;
+        if (!uf8::fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
         if (csSeen == wantIdx) {
@@ -3458,9 +3456,7 @@ CsStripPick csForStripModeOnTrack_(MediaTrack* tr)
     const uf8::PluginMap* mapBuiltin = nullptr;
     const uf8::PluginMap* mapUser    = nullptr;
     for (int fx = 0; fx < n; ++fx) {
-        buf[0] = 0;
-        TrackFX_GetFXName(tr, fx, buf, sizeof(buf));
-        if (buf[0] == 0) continue;
+        if (!uf8::fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         const uf8::PluginMap* m = uf8::lookupPluginMapByName(buf);
         if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
         if (!csPluginHasFader_(*m)) continue;
@@ -3518,7 +3514,7 @@ UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
     auto match = uf8::lookupPluginOnTrack(tr, domain);
     if (!match.map) return {-1, -1, false};
     char fxName[512];
-    TrackFX_GetFXName(tr, match.fxIndex, fxName, sizeof(fxName));
+    uf8::fxIdentityName(tr, match.fxIndex, fxName, sizeof(fxName));
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
     if (!um || !um->uf8Mode) return {-1, -1, false};
     const int bank = std::clamp(g_softKeyBank.load(),
@@ -4771,7 +4767,7 @@ void drainInputQueue()
                 const int nFx = TrackFX_GetCount(tr);
                 char fxName[256];
                 for (int i = 0; i < nFx; ++i) {
-                    if (!TrackFX_GetFXName(tr, i, fxName, sizeof(fxName)))
+                    if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName)))
                         continue;
                     const auto* pm = uf8::lookupPluginMapByName(fxName);
                     if (pm && pm->domain == uf8::Domain::ChannelStrip) {
@@ -5350,7 +5346,7 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
     if (fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return 0;
 
     char fxName[256];
-    if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return 0;
+    if (!uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName))) return 0;
 
     // User-FX-Learn maps first — members matched by FX-name substring,
     // vst3Param transferred 1:1 (same plug-in identity guarantees same
@@ -6351,9 +6347,9 @@ std::string sslPluginShortName(MediaTrack* tr)
     const int fxCount = TrackFX_GetCount(tr);
     char buf[256];
     for (int fx = 0; fx < fxCount; ++fx) {
-        if (!TrackFX_GetFXName(tr, fx, buf, sizeof(buf))) continue;
+        if (!uf8::fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         std::string n(buf);
-        // TrackFX_GetFXName returns e.g. "VST3: SSL Native Channel Strip 2 (SSL)"
+        // Identity name — survives Rename FX. Stays "VST3: SSL Native ..."
         if (n.find("Channel Strip 2") != std::string::npos) return "CS 2";
         if (n.find("Channel Strip")   != std::string::npos) return "CS";
         if (n.find("4K B")            != std::string::npos) return "4K B";
@@ -8468,7 +8464,7 @@ void chaseLastTouchedFx()
     const int fxIdx = fxWord & 0x00FFFFFF;
 
     char fxName[512] = {0};
-    TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName));
+    uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName));
     const uf8::PluginMap* map = uf8::lookupPluginMapByName(fxName);
     if (!map) return;
 
@@ -8638,7 +8634,7 @@ bool snapUf8PluginModeToFocusedFx_()
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
         if (fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return false;
         char fxName[512] = {0};
-        if (!TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName))) return false;
+        if (!uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName))) return false;
         const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
         if (!um || !um->uf8Mode) return false;
         targetTr  = tr;
@@ -8677,7 +8673,7 @@ bool snapUf8PluginModeToFocusedFx_()
         char buf[256];
         const int n = TrackFX_GetCount(targetTr);
         for (int i = 0; i < n; ++i) {
-            if (!TrackFX_GetFXName(targetTr, i, buf, sizeof(buf))) continue;
+            if (!uf8::fxIdentityName(targetTr, i, buf, sizeof(buf))) continue;
             const auto* u = uf8::user_plugins::lookupOwnedByName(buf);
             if (!u || u->domain != uf8::Domain::None || !u->uf8Mode)
                 continue;
@@ -8745,7 +8741,7 @@ void chaseFocusedFxWindow()
     s_lastTr = tr; s_lastFx = fxIdx;
 
     char fxName[512] = {0};
-    TrackFX_GetFXName(tr, fxIdx, fxName, sizeof(fxName));
+    uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName));
 
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
     if (!um) return;
@@ -8766,7 +8762,7 @@ void chaseFocusedFxWindow()
         char buf[256];
         const int nFx = TrackFX_GetCount(tr);
         for (int i = 0; i < nFx; ++i) {
-            if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+            if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
             const auto* u = uf8::user_plugins::lookupOwnedByName(buf);
             if (!u || u->domain != uf8::Domain::None || !u->uf8Mode) continue;
             if (i == fxIdx) {
@@ -10711,9 +10707,8 @@ void onTimer()
                 const int wantUf8 = uc1::uf8OnlyInstanceIndex(tr);
                 int seenU = 0, lastUf8Fx = -1;
                 for (int fx = 0; fx < n; ++fx) {
-                    nameBuf[0] = 0;
-                    TrackFX_GetFXName(tr, fx, nameBuf, sizeof(nameBuf));
-                    if (!nameBuf[0]) continue;
+                    if (!uf8::fxIdentityName(tr, fx, nameBuf, sizeof(nameBuf)))
+                        continue;
                     const auto* um = uf8::user_plugins::lookupOwnedByName(nameBuf);
                     if (!um || um->domain != uf8::Domain::None || !um->uf8Mode)
                         continue;
@@ -10889,8 +10884,8 @@ void onTimer()
                 bool autoEngaged = false;
                 if (g_cycleEngagesUf8.load() && !g_uf8PluginMode.load()) {
                     char fxName[512] = {0};
-                    if (TrackFX_GetFXName(instTargetTr, instTargetFx,
-                                          fxName, sizeof(fxName)))
+                    if (uf8::fxIdentityName(instTargetTr, instTargetFx,
+                                            fxName, sizeof(fxName)))
                     {
                         const auto* um =
                             uf8::user_plugins::lookupOwnedByName(fxName);

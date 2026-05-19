@@ -12,6 +12,7 @@
 #include "reaper_plugin_functions.h"
 
 #include "FocusedParam.h"        // uf8::Domain
+#include "PluginMap.h"           // uf8::fxIdentityName
 #include "UserPluginCatalog.h"   // uf8::user_plugins
 
 namespace uc1 {
@@ -662,7 +663,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
     const int n = TrackFX_GetCount(tr);
     char buf[256];
     for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+        if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
         std::string_view name{buf};
         const PluginBindings* b = lookupBindingsByName(name);
         if (!b) continue;
@@ -730,7 +731,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
         const int last = total - 1;
         int seen = 0;
         for (int i = 0; i < n; ++i) {
-            if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+            if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
             const PluginBindings* bb = lookupBindingsByName(std::string_view{buf});
             if (!bb) continue;
             const bool isBc = isBusCompBinding(bb);
@@ -786,7 +787,7 @@ int instanceCountFor_(MediaTrack* tr, bool bc)
     char buf[256];
     int count = 0;
     for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+        if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
         const PluginBindings* b = lookupBindingsByName(std::string_view{buf});
         if (!b) continue;
         if (isBusCompBinding(b) == bc) ++count;
@@ -868,7 +869,7 @@ int uf8OnlyInstanceCount(void* trackRaw)
     char buf[256];
     int count = 0;
     for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+        if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
         const auto* um = uf8::user_plugins::lookupOwnedByName(buf);
         if (!um) continue;
         if (um->domain == uf8::Domain::None && um->uf8Mode) ++count;
@@ -885,7 +886,7 @@ int instanceIndexForFx(void* trackRaw, int fxIdx)
     if (fxIdx >= n) return -1;
 
     char nameTarget[256] = {0};
-    if (!TrackFX_GetFXName(tr, fxIdx, nameTarget, sizeof(nameTarget))) return -1;
+    if (!uf8::fxIdentityName(tr, fxIdx, nameTarget, sizeof(nameTarget))) return -1;
     const PluginBindings* bTarget = lookupBindingsByName(std::string_view{nameTarget});
     if (!bTarget) return -1;
     const bool isBc = isBusCompBinding(bTarget);
@@ -893,7 +894,7 @@ int instanceIndexForFx(void* trackRaw, int fxIdx)
     int seen = 0;
     char buf[256];
     for (int i = 0; i < n; ++i) {
-        if (!TrackFX_GetFXName(tr, i, buf, sizeof(buf))) continue;
+        if (!uf8::fxIdentityName(tr, i, buf, sizeof(buf))) continue;
         const PluginBindings* b = lookupBindingsByName(std::string_view{buf});
         if (!b) continue;
         if (isBusCompBinding(b) != isBc) continue;

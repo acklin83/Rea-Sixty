@@ -110,6 +110,15 @@ struct PluginMatch {
     int              fxIndex;
 };
 
+// Identity-name lookup — returns the FX's *original* (factory) name via
+// TrackFX_GetNamedConfigParm("original_name"). Survives "Rename FX" in
+// the REAPER FX chain. Falls back to TrackFX_GetFXName when the named
+// config isn't available (older REAPER) so the call is always defined.
+// Returns true on success, false (and empty buf) when both APIs fail or
+// `tr` is null. Use this everywhere FX *identity* matters; keep
+// TrackFX_GetFXName for *display* (it honours user rename).
+bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize);
+
 PluginMatch lookupPluginOnTrack(void* track /*MediaTrack**/);
 
 // Domain-aware lookup. Walks the track's FX chain and returns the first

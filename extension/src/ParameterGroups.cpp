@@ -352,7 +352,7 @@ void broadcastUserParam(MediaTrack* leader,
         const int nfx = TrackFX_GetCount(t);
         char fxName[256];
         for (int i = 0; i < nfx; ++i) {
-            if (!TrackFX_GetFXName(t, i, fxName, sizeof(fxName))) continue;
+            if (!uf8::fxIdentityName(t, i, fxName, sizeof(fxName))) continue;
             if (std::strstr(fxName, leaderMap->match.c_str()) == nullptr) continue;
             TrackFX_SetParamNormalized(t, i, vst3Param, normValue);
             break;
@@ -362,7 +362,7 @@ void broadcastUserParam(MediaTrack* leader,
     const int nfx = TrackFX_GetCount(leader);
     char fxName[256];
     for (int i = 0; i < nfx; ++i) {
-        if (!TrackFX_GetFXName(leader, i, fxName, sizeof(fxName))) continue;
+        if (!uf8::fxIdentityName(leader, i, fxName, sizeof(fxName))) continue;
         if (std::strstr(fxName, leaderMap->match.c_str()) == nullptr) continue;
         TrackFX_SetParamNormalized(leader, i, vst3Param, normValue);
         break;
