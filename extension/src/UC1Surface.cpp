@@ -2096,6 +2096,16 @@ void UC1Surface::pushFocusedParamReadout_()
     if (!slotPtr) return;
 
     const auto& slot = *slotPtr;
+    // Suppress the readout when focus has landed on the plug-in's
+    // Bypass slot. By convention every PluginMap has Bypass at
+    // linkIdx 0; the "default focus after an Instance Cycle / cursor
+    // focus / show_focused_plugin_gui" paths in main.cpp use
+    // setFocus({domain, 0}) which resolves here as Bypass and made
+    // the LCD show "Bypass OFF" whenever the user hadn't yet touched
+    // a knob since opening / cycling the plug-in (Frank 2026-05-19).
+    // Bypass state is already visible on the CS IN / BC IN button LED;
+    // dropping the LCD line removes the false-positive idle display.
+    if (slot.linkIdx == 0) return;
     MediaTrack* tr = static_cast<MediaTrack*>(lookupTrack);
     char formatted[64] = {};
     const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex,
