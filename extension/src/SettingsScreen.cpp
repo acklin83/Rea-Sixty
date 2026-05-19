@@ -1917,6 +1917,21 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         std::snprintf(idbuf, sizeof(idbuf), "Built-in##%s_native", prefix);
         double w = 280;
         ImGui_PushItemWidth(ctx, w);
+
+        // Constrain the popup width up front. Without this ImGui auto-
+        // fits to the longest content row on the first frame (very wide
+        // because TreeNodes contribute their full label + indent),
+        // then re-evaluates on subsequent frames as the layout
+        // stabilises — Frank 2026-05-19 sees this as the popup being
+        // "too wide on first open and slowly narrowing". Pinning both
+        // min and max to the same value makes the popup snap to width
+        // immediately. 360 px = wide enough for the longest builtin
+        // display name ("Toggle focused plug-in GUI") plus tree
+        // indent + scrollbar.
+        constexpr double kPopupW = 360.0;
+        ImGui_SetNextWindowSizeConstraints(
+            ctx, kPopupW, 0.0, kPopupW, 999999.0);
+
         // HeightLargest = ~20 rows visible — short popup forced two
         // page-scrolls to find anything past the first category. We
         // also auto-scroll the popup so the currently-selected entry
