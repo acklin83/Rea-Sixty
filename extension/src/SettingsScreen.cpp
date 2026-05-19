@@ -8399,11 +8399,8 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "Eight slots. Members are tracks added via the "
-        "\"Param Group N \xe2\x86\x92 Add Selected Tracks\" action. "
-        "Active slots fan out hardware-originated parameter writes from "
-        "the focused track to every member (silent skip when the member "
-        "track lacks a matching mapped plug-in).");
+        "Eight slots. While a slot is active, plug-in tweaks on the "
+        "focused track copy to every member track.");
     ImGui_Spacing(ctx);
 
     bool temp = uf8::param_groups::multiSelectAsTempGroup();
@@ -8414,8 +8411,8 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
         uf8::param_groups::setMultiSelectAsTempGroup(temp);
     }
     ImGui_Text(ctx,
-        "  When no slot is active and you have two or more tracks "
-        "selected, the selection itself behaves as an ad-hoc group.");
+        "  No slot active + multiple tracks selected = those tracks "
+        "are the group.");
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
@@ -8493,11 +8490,8 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
     }
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "Bind \"Param Group N \xe2\x86\x92 Add Selected Tracks\", "
-        "\"\xe2\x86\x92 Toggle Active\", \"\xe2\x86\x92 Clear Members\" "
-        "and \"Multi-Select acts as Temp Group\" in the Bindings tab to "
-        "drive these from the hardware. Toggle-Active LEDs go bright when "
-        "the slot is on.");
+        "Drive slots from hardware via the Param Group actions in "
+        "Settings \xe2\x86\x92 Bindings.");
 }
 
 // ---- About ----------------------------------------------------------------
