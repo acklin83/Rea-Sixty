@@ -55,6 +55,7 @@
 #include "FocusedParam.h"
 #include "GrCalibration.h"
 #include "HidDevice.h"
+#include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
 #include "ParameterGroups.h"
@@ -11440,6 +11441,15 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
+// Phase 2.8 Nav Mode — diagnostic action. Prints the current 8-window
+// of the marker/region overlay to the REAPER console so the data layer
+// can be exercised before any surface code lands.
+custom_action_register_t g_actionNavDump{
+    0, "REASIXTY_NAV_DUMP",
+    "Rea-Sixty: Dump Nav Mode 8-window (Phase 2.8 diagnostic)", nullptr,
+};
+int g_cmdNavDump = 0;
+
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
 // triggered via menu/keyboard, not custom_action registered entries.
@@ -11461,6 +11471,12 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdDumpChunk)      { dumpCsChunk();            return true; }
     if (command == g_cmdDumpRouting)    { dumpRoutingFlags();       return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
+    if (command == g_cmdNavDump) {
+        auto& nav = uf8::nav::Overlay::instance();
+        nav.enumerate();
+        nav.dumpWindow();
+        return true;
+    }
     return false;
 }
 
@@ -14428,6 +14444,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdDumpChunk      = plugin_register("custom_action", &g_actionDumpChunk);
     g_cmdDumpRouting    = plugin_register("custom_action", &g_actionDumpRouting);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
+    g_cmdNavDump        = plugin_register("custom_action", &g_actionNavDump);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
 
     return 1;

@@ -78,6 +78,8 @@ add_library(reaper_uf8 MODULE
     src/VirtualNotch.cpp
     # Multi-track parameter sync (8 persistent groups + temp-from-selection)
     src/ParameterGroups.cpp
+    # Phase 2.8 — Nav Mode (Markers & Regions) overlay
+    src/MarkerOverlay.cpp
 )
 
 if(APPLE)
