@@ -7685,8 +7685,45 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    ImGui_Text(ctx, "AUTO");
-    ImGui_Separator(ctx);
+    // Phase 2.8c — split the long flat section list into 6 sub-tabs.
+    // ExtState "modes_subtab" remembers the last-active tab across
+    // Settings opens. Restore is one-shot: after the first frame
+    // SetSelected is dropped so user clicks own the active tab.
+    static int  s_savedTab      = -1;
+    static bool s_savedConsumed = false;
+    static int  s_lastWritten   = -1;
+    if (s_savedTab < 0) {
+        const char* saved = GetExtState("rea_sixty", "modes_subtab");
+        s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
+        if (s_savedTab < 0 || s_savedTab > 5) s_savedTab = 0;
+        s_lastWritten   = s_savedTab;
+        s_savedConsumed = false;
+    }
+
+    auto persistActive = [&](int idx) {
+        if (idx == s_lastWritten) return;
+        s_lastWritten = idx;
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%d", idx);
+        SetExtState("rea_sixty", "modes_subtab", buf, true);
+    };
+
+    auto tabFlagsFor = [&](int idx) -> int {
+        if (!s_savedConsumed && idx == s_savedTab) {
+            return ImGui_TabItemFlags_SetSelected;
+        }
+        return 0;
+    };
+
+    int tabBarFlags = 0;
+    if (!ImGui_BeginTabBar(ctx, "modes_subtabs", &tabBarFlags)) {
+        return;
+    }
+
+    // --- AUTO -------------------------------------------------------
+    int flagsAuto = tabFlagsFor(0);
+    if (ImGui_BeginTabItem(ctx, "AUTO", nullptr, &flagsAuto)) {
+        persistActive(0);
     bool hideRead = reasixty_autoHideReadTrim();
     if (ImGui_Checkbox(ctx,
                        "Show only tracks armed for automation writing "
@@ -7745,10 +7782,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "forced into this REAPER automation mode. Deactivating the set "
         "reverts those tracks to Trim/Read (mode 0). None = disabled.");
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "FX / INSTANCE CYCLE");
-    ImGui_Separator(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- FX / Cycle -------------------------------------------------
+    int flagsFx = tabFlagsFor(1);
+    if (ImGui_BeginTabItem(ctx, "FX / Cycle", nullptr, &flagsFx)) {
+        persistActive(1);
     ImGui_Text(ctx,
         "Active only while SEL Mode is on FX Cycle or Instance Cycle. "
         "Pick which physical controls drive the cycle; the active FX "
@@ -7796,10 +7836,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         reasixty_setCycleOpenMode(1);
     }
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "PLUG-IN GUI");
-    ImGui_Separator(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- Plug-in GUI ------------------------------------------------
+    int flagsGui = tabFlagsFor(2);
+    if (ImGui_BeginTabItem(ctx, "Plug-in GUI", nullptr, &flagsGui)) {
+        persistActive(2);
     ImGui_Text(ctx,
         "Not tied to a Selection Mode — applies whenever the rule fires.");
     ImGui_Spacing(ctx);
@@ -7820,10 +7863,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  engage UF8 Plugin Mode (with GUI). Press the same button "
         "again to exit.");
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "FADERS");
-    ImGui_Separator(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- Faders -----------------------------------------------------
+    int flagsFad = tabFlagsFor(3);
+    if (ImGui_BeginTabItem(ctx, "Faders", nullptr, &flagsFad)) {
+        persistActive(3);
     ImGui_Text(ctx,
         "Not tied to a Selection Mode — applies whenever the rule fires.");
     ImGui_Spacing(ctx);
@@ -7838,10 +7884,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  Release while Alt/Option is still held → value snaps back to "
         "touch-on position.");
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "REC");
-    ImGui_Separator(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- REC --------------------------------------------------------
+    int flagsRec = tabFlagsFor(4);
+    if (ImGui_BeginTabItem(ctx, "REC", nullptr, &flagsRec)) {
+        persistActive(4);
     bool rmeOn = reasixty_recRmeEnabled();
     if (ImGui_Checkbox(ctx,
                        "Enable RME / TotalReaper integration",
@@ -7916,13 +7965,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                     reasixty_recSolo(),      reasixty_setRecSolo);
     }
 
-    // Phase 2.8 Nav Mode — minimal v1 settings. Phase 2.8c lifts this
-    // into a dedicated NAV sub-tab with view defaults, region-press
-    // behaviour, and UC1 Encoder 2 carousel scope.
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "NAV (Markers & Regions)");
-    ImGui_Separator(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- NAV --------------------------------------------------------
+    int flagsNav = tabFlagsFor(5);
+    if (ImGui_BeginTabItem(ctx, "NAV", nullptr, &flagsNav)) {
+        persistActive(5);
     bool autoFollow = reasixty_navAutoFollow();
     if (ImGui_Checkbox(ctx,
                        "Auto-Follow playhead / edit cursor",
@@ -7935,6 +7984,12 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "marker / region the playhead is on (or the edit cursor when "
         "stopped). In Markers-in-Region view, the overlay auto-rolls "
         "into the next region when the playhead crosses out.");
+        ImGui_EndTabItem(ctx);
+    }
+
+    ImGui_EndTabBar(ctx);
+
+    s_savedConsumed = true;
 }
 
 // ---- Selection Sets -------------------------------------------------------
