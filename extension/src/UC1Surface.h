@@ -122,6 +122,18 @@ public:
     void hideNavCarousel();
     bool navCarouselActive() const { return navCarouselActive_; }
 
+    // Current Central Control Panel mode (Phase 2.8b — needed so the
+    // Nav-mode arbitration loop can edge-detect entry/exit and save
+    // the prior mode for restore on Nav exit).
+    Uc1Mode mode() const { return mode_; }
+
+    // Programmatically switch the Central Control Panel mode. Must be
+    // called on the main thread — internally runs the same LCD-banner /
+    // dot-LED / refresh sequence the menu buttons trigger. Used by
+    // the Nav arbitration loop: force Main on Nav entry, restore prior
+    // on Nav exit.
+    void setMode(Uc1Mode m);
+
     // Drain queued hardware events. Call from REAPER's main thread on a
     // timer (Run() or a deferred action). Returns the number of events
     // handled this tick.

@@ -6962,6 +6962,41 @@ void pushUc1NavCarousel()
 
     auto& ov = uf8::nav::Overlay::instance();
     const bool overlayOn  = ov.active();
+
+    // Mode arbitration (Phase 2.8b plan section 3). On Nav-activation
+    // edge, remember the prior UC1 mode and force Main so the LCD
+    // takeover has somewhere to render. On the deactivation edge,
+    // restore the prior mode IF the takeover wasn't already abandoned
+    // by the user pressing a menu button (Routing / Presets / etc.).
+    //
+    // While Nav is active and the user enters any non-Main mode, treat
+    // that as "user wants the menu, not the carousel": clear the
+    // takeover flag so the menu owns the LCD. Re-toggling Nav brings
+    // the carousel back.
+    static bool         s_wasOverlayActive = false;
+    static uc1::Uc1Mode s_priorMode        = uc1::Uc1Mode::Main;
+
+    const uc1::Uc1Mode curMode = g_uc1_surface->mode();
+    if (overlayOn && !s_wasOverlayActive) {
+        s_priorMode = curMode;
+        if (curMode != uc1::Uc1Mode::Main) {
+            g_uc1_surface->setMode(uc1::Uc1Mode::Main);
+        }
+        g_uc1NavLcdActive.store(true);
+    } else if (!overlayOn && s_wasOverlayActive) {
+        if (g_uc1NavLcdActive.load()
+            && g_uc1_surface->mode() == uc1::Uc1Mode::Main
+            && s_priorMode != uc1::Uc1Mode::Main)
+        {
+            g_uc1_surface->setMode(s_priorMode);
+        }
+        g_uc1NavLcdActive.store(true);   // reset for the next session
+    } else if (overlayOn && curMode != uc1::Uc1Mode::Main) {
+        // User entered a UC1 menu while Nav is active — yield the LCD.
+        g_uc1NavLcdActive.store(false);
+    }
+    s_wasOverlayActive = overlayOn;
+
     const bool takeoverOn = g_uc1NavLcdActive.load();
 
     if (!overlayOn || !takeoverOn) {

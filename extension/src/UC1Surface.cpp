@@ -453,6 +453,49 @@ void UC1Surface::showNavCarousel(const std::string& prev,
     }
 }
 
+void UC1Surface::setMode(Uc1Mode m)
+{
+    if (mode_ == m) return;
+    mode_ = m;
+    // Reset PRESETS sub-mode whenever we enter (or leave) Presets so
+    // the user always lands on the CS/BC selector first.
+    if (m == Uc1Mode::Presets) {
+        presetsSub_ = PresetsSubMode::Selector;
+    }
+    if (!device_) return;
+    // LCD top-banner — all six bytes confirmed against uc1_37+38.
+    const CentralMode banner =
+        m == Uc1Mode::Main      ? CentralMode::Main
+      : m == Uc1Mode::ExtFuncs  ? CentralMode::ExtFuncs
+      : m == Uc1Mode::Routing   ? CentralMode::Routing
+      : m == Uc1Mode::Presets   ? CentralMode::Presets
+                                : CentralMode::Transport;
+    device_->send(buildCentralMode(banner));
+    // BC mode dot: lit only in MAIN. Single bank=0x02 frame.
+    device_->send(buildBcModeDot(m == Uc1Mode::Main));
+    // Routing + Presets dots: dual-bank (brightness + selection).
+    for (auto& f : buildMenuDot(kCellRoutingDot, m == Uc1Mode::Routing)) {
+        device_->send(f);
+    }
+    for (auto& f : buildMenuDot(kCellPresetsDot, m == Uc1Mode::Presets)) {
+        device_->send(f);
+    }
+    // Render menu-mode subscreen content immediately on entry so the
+    // user sees something rather than a blank LCD waiting for their
+    // first encoder click.
+    if (m == Uc1Mode::Presets) renderPresetsSubscreen_();
+    if (m == Uc1Mode::ExtFuncs) {
+        extFuncsIdx_ = 0;
+        extFuncsActive_ = false;  // always start in list mode
+        renderExtFuncsSubscreen_();
+    }
+    // Returning to MAIN re-runs refresh() so the carousel + central
+    // label repaint over the menu-mode LCD layout. refresh() is gated
+    // to MAIN-only (added when EXT_FUNCS leaked BC carousel), so we
+    // must call it explicitly here on the upward transition.
+    if (m == Uc1Mode::Main) refresh();
+}
+
 void UC1Surface::hideNavCarousel()
 {
     if (!navCarouselActive_) return;
@@ -1294,47 +1337,10 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // Phase A1: state machine + mode toggling only. ROUTING/PRESETS/
     // TRANSPORT bodies (chunk patch / preset nav / transport actions)
     // and the LCD top-label rendering land in subsequent commits.
-    auto setMode = [&](Uc1Mode m) {
-        if (mode_ == m) return;
-        mode_ = m;
-        // Reset PRESETS sub-mode whenever we enter (or leave) Presets
-        // so the user always lands on the CS/BC selector first.
-        if (m == Uc1Mode::Presets) {
-            presetsSub_ = PresetsSubMode::Selector;
-        }
-        if (!device_) return;
-        // LCD top-banner — all six bytes confirmed against uc1_37+38.
-        const CentralMode banner =
-            m == Uc1Mode::Main      ? CentralMode::Main
-          : m == Uc1Mode::ExtFuncs  ? CentralMode::ExtFuncs
-          : m == Uc1Mode::Routing   ? CentralMode::Routing
-          : m == Uc1Mode::Presets   ? CentralMode::Presets
-                                    : CentralMode::Transport;
-        device_->send(buildCentralMode(banner));
-        // BC mode dot: lit only in MAIN. Single bank=0x02 frame.
-        device_->send(buildBcModeDot(m == Uc1Mode::Main));
-        // Routing + Presets dots: dual-bank (brightness + selection).
-        for (auto& f : buildMenuDot(kCellRoutingDot, m == Uc1Mode::Routing)) {
-            device_->send(f);
-        }
-        for (auto& f : buildMenuDot(kCellPresetsDot, m == Uc1Mode::Presets)) {
-            device_->send(f);
-        }
-        // Render menu-mode subscreen content immediately on entry so
-        // the user sees something rather than a blank LCD waiting for
-        // their first encoder click.
-        if (m == Uc1Mode::Presets) renderPresetsSubscreen_();
-        if (m == Uc1Mode::ExtFuncs) {
-            extFuncsIdx_ = 0;
-            extFuncsActive_ = false;  // always start in list mode
-            renderExtFuncsSubscreen_();
-        }
-        // Returning to MAIN re-runs refresh() so the carousel + central
-        // label repaint over the menu-mode LCD layout. refresh() is
-        // gated to MAIN-only (added when EXT_FUNCS leaked BC carousel),
-        // so we must call it explicitly here on the upward transition.
-        if (m == Uc1Mode::Main) refresh();
-    };
+    // setMode() is a member function (UC1Surface::setMode) — the local
+    // lambda used to live here; hoisted as part of Phase 2.8b so the
+    // Nav arbitration loop can force Main on overlay entry. All call
+    // sites below now invoke the member directly.
     if (ev.id == button::kBack) {
         if (ev.pressed) {
             switch (mode_) {
