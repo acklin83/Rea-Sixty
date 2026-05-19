@@ -317,17 +317,17 @@ void Overlay::dumpWindow() const
         char line[256];
         if (!win[s]) {
             std::snprintf(line, sizeof(line), "  strip %d: --\n", s);
+        } else if (win[s]->isRegion) {
+            std::snprintf(line, sizeof(line),
+                "  strip %d: R%d %-20.20s pos=%8.3f..%8.3f color=0x%06X\n",
+                s, win[s]->idx, win[s]->name.c_str(),
+                win[s]->pos, win[s]->rgnEnd,
+                win[s]->color & 0xFFFFFF);
         } else {
             std::snprintf(line, sizeof(line),
-                "  strip %d: %s%d %-20.20s pos=%8.3f%s color=0x%06X\n",
-                s,
-                win[s]->isRegion ? "R" : "M",
-                win[s]->idx,
-                win[s]->name.c_str(),
+                "  strip %d: M%d %-20.20s pos=%8.3f          color=0x%06X\n",
+                s, win[s]->idx, win[s]->name.c_str(),
                 win[s]->pos,
-                win[s]->isRegion
-                    ? (std::snprintf(nullptr, 0, "..%8.3f", win[s]->rgnEnd), "")
-                    : "",
                 win[s]->color & 0xFFFFFF);
         }
         ShowConsoleMsg(line);
