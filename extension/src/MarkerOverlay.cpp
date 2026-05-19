@@ -48,8 +48,45 @@ void Overlay::setView(View v)
     enumerate();
 }
 
+void Overlay::setViewLock(ViewLock l)
+{
+    // Input-thread safe: only flips atomics. The actual view/filter
+    // mutation happens on the main thread inside drainPendingLock_().
+    const int prev = lock_.exchange(static_cast<int>(l));
+    if (prev != static_cast<int>(l)) {
+        lockDirty_.store(true);
+    }
+}
+
+void Overlay::drainPendingLock_()
+{
+    if (!lockDirty_.exchange(false)) return;
+    const ViewLock lk = static_cast<ViewLock>(lock_.load());
+    switch (lk) {
+    case ViewLock::None:
+        // No structural change — user can drill / back / switch views
+        // freely again. Keep the current view so a lock→unlock toggle
+        // doesn't surprise the user with a view jump.
+        break;
+    case ViewLock::MarkersOnly:
+        view_            = View::MarkersAll;
+        filterRegionIdx_ = -1;
+        break;
+    case ViewLock::RegionsOnly:
+        view_            = View::Regions;
+        filterRegionIdx_ = -1;
+        break;
+    }
+    cursorIdx_  = 0;
+    pageOffset_ = 0;
+}
+
 void Overlay::enumerate()
 {
+    // Apply any pending input-thread lock change before reading view_
+    // / filterRegionIdx_ for the filter pass.
+    drainPendingLock_();
+
     items_.clear();
 
     // Project-change detection. EnumProjectMarkers3(nullptr, ...) uses

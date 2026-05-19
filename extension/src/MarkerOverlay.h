@@ -31,6 +31,16 @@ enum class View : uint8_t {
     MarkersAll = 2,
 };
 
+// View-lock: when set, the overlay is pinned to one view and no
+// input intercept (back / drill / view-switch) can transition out.
+// Lets users bind dedicated "browse markers only" / "browse regions
+// only" toggles that don't accidentally drill on a region press.
+enum class ViewLock : uint8_t {
+    None        = 0,   // default — drill flow per ROADMAP 2.8a
+    MarkersOnly = 1,   // view forced to MarkersAll, no region drill
+    RegionsOnly = 2,   // view forced to Regions, no drill on press
+};
+
 // One row in the current view's flat list. `idx` is the REAPER
 // EnumProjectMarkers3 index (stable per enum pass). `isRegion` distinguishes
 // the API call needed at jump time (GoToRegion vs SetEditCurPos).
@@ -53,8 +63,15 @@ public:
     void setActive(bool on);
     void toggle();
 
-    View view() const { return view_; }
-    void setView(View v);
+    View     view()     const { return view_; }
+    void     setView(View v);
+
+    ViewLock viewLock() const { return static_cast<ViewLock>(lock_.load()); }
+    // Sets the lock and queues a main-thread refresh (view + drill state
+    // reset to match the new lock). Safe to call from the libusb input
+    // thread — actual view/filter mutation happens on the next render
+    // tick when drainPending() runs.
+    void setViewLock(ViewLock l);
 
     int  filterRegionIdx() const { return filterRegionIdx_; }
     int  pageOffset()      const { return pageOffset_;      }
@@ -98,11 +115,17 @@ private:
     Overlay() = default;
 
     std::atomic<bool> active_{false};
+    std::atomic<int>  lock_{0};                // ViewLock as int — input-thread writable
+    std::atomic<bool> lockDirty_{false};       // set by setViewLock; drained main-thread
     View              view_         = View::Regions;
     int               filterRegionIdx_ = -1;   // REAPER region idx (not enumPos)
     int               pageOffset_   = 0;
     int               cursorIdx_    = 0;       // within items_
     bool              autoFollow_   = false;
+
+    // Main-thread: apply any pending lock change to view_ / filterRegionIdx_.
+    // Called from enumerate() so every render tick honours the latest lock.
+    void drainPendingLock_();
 
     std::vector<Item> items_;
 

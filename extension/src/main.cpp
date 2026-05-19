@@ -3729,7 +3729,13 @@ void drainInputQueue()
             const auto& it = items[idx];
             if (it.isRegion) {
                 GoToRegion(nullptr, it.idx, true);
-                ov.drillIntoRegion(idx);
+                // Drill is gated by the view lock: RegionsOnly users
+                // want region jumps to be terminal (no transition to
+                // the region's marker list). MarkersOnly can't reach
+                // this branch — its items are markers, not regions.
+                if (ov.viewLock() == uf8::nav::ViewLock::None) {
+                    ov.drillIntoRegion(idx);
+                }
             } else {
                 SetEditCurPos(it.pos, true, false);
             }
@@ -5945,21 +5951,29 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     }
                     handledOv = true;
                 } else if (id == 0x76 || id == 0x43) {
-                    if (pressed) {
-                        if (ov.view() != uf8::nav::View::Regions) {
-                            ov.backToRegions();
-                            g_navOverlayDirty.store(true);
-                            if (g_sync) g_sync->invalidate();
-                        }
+                    // Back is a no-op under any view lock — the locked
+                    // view is supposed to stay locked. Without a lock,
+                    // back exits MarkersInRegion / MarkersAll → Regions.
+                    if (pressed
+                        && ov.viewLock() == uf8::nav::ViewLock::None
+                        && ov.view() != uf8::nav::View::Regions)
+                    {
+                        ov.backToRegions();
+                        g_navOverlayDirty.store(true);
+                        if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
                 } else if (id == 0x45) {
-                    if (pressed) {
-                        if (ov.view() != uf8::nav::View::MarkersAll) {
-                            ov.setView(uf8::nav::View::MarkersAll);
-                            g_navOverlayDirty.store(true);
-                            if (g_sync) g_sync->invalidate();
-                        }
+                    // MarkersAll escape is also lock-gated: under
+                    // RegionsOnly the lock forbids it; under MarkersOnly
+                    // we're already there.
+                    if (pressed
+                        && ov.viewLock() == uf8::nav::ViewLock::None
+                        && ov.view() != uf8::nav::View::MarkersAll)
+                    {
+                        ov.setView(uf8::nav::View::MarkersAll);
+                        g_navOverlayDirty.store(true);
+                        if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
                 }
@@ -13410,22 +13424,76 @@ void registerBindingHandlers()
         "Toggle SSL Strip Mode (with GUI)", false
     });
 
-    // Phase 2.8 Nav Mode — Marker/Region overlay activation. The lambda
-    // runs on the libusb input thread, so it only flips the atomic
-    // active-flag. The main-thread strip render tick picks up the
-    // change on the next pass and drives the surface accordingly.
+    // Phase 2.8 Nav Mode — three Marker/Region overlay toggles, all
+    // sharing the same overlay-active state in a radio-like mutex:
+    //
+    //   marker_overlay_toggle              → drill mode (default, no lock)
+    //   marker_overlay_markers_only_toggle → MarkersOnly lock, no drill
+    //   marker_overlay_regions_only_toggle → RegionsOnly lock, no drill
+    //
+    // Press a toggle when overlay is OFF → overlay ON with that lock.
+    // Press the same toggle when its lock is active → overlay OFF.
+    // Press a different toggle while overlay is ON → switch the lock,
+    // overlay stays on. The lambda runs on the libusb input thread so
+    // each operation is a set of atomic state mutations; the main-thread
+    // render path picks up view + filter changes via drainPendingLock_.
+    auto navToggle = [](uf8::nav::ViewLock target) {
+        auto& ov = uf8::nav::Overlay::instance();
+        const bool active = ov.active();
+        const auto cur    = ov.viewLock();
+        if (active && cur == target) {
+            // Same toggle pressed twice → exit. Reset lock so the next
+            // entry via marker_overlay_toggle (no-lock) doesn't inherit
+            // a stale state.
+            ov.setActive(false);
+            ov.setViewLock(uf8::nav::ViewLock::None);
+        } else {
+            ov.setViewLock(target);
+            ov.setActive(true);
+        }
+        g_pageDirty.store(true);
+        g_bankDirty.store(true);
+        g_navOverlayDirty.store(true);
+        if (g_sync) g_sync->invalidate();
+    };
+
     registerBuiltin("marker_overlay_toggle", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [navToggle](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto& ov = uf8::nav::Overlay::instance();
-            ov.setActive(!ov.active());
-            g_pageDirty.store(true);
-            g_bankDirty.store(true);
-            g_navOverlayDirty.store(true);
-            if (g_sync) g_sync->invalidate();
+            navToggle(uf8::nav::ViewLock::None);
         },
-        [](int) { return uf8::nav::Overlay::instance().active(); },
+        [](int) {
+            auto& ov = uf8::nav::Overlay::instance();
+            return ov.active()
+                && ov.viewLock() == uf8::nav::ViewLock::None;
+        },
         "Nav Mode (Markers & Regions): toggle", false
+    });
+
+    registerBuiltin("marker_overlay_markers_only_toggle", DescBuilder{
+        [navToggle](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            navToggle(uf8::nav::ViewLock::MarkersOnly);
+        },
+        [](int) {
+            auto& ov = uf8::nav::Overlay::instance();
+            return ov.active()
+                && ov.viewLock() == uf8::nav::ViewLock::MarkersOnly;
+        },
+        "Nav Mode: Markers only (no drill)", false
+    });
+
+    registerBuiltin("marker_overlay_regions_only_toggle", DescBuilder{
+        [navToggle](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            navToggle(uf8::nav::ViewLock::RegionsOnly);
+        },
+        [](int) {
+            auto& ov = uf8::nav::Overlay::instance();
+            return ov.active()
+                && ov.viewLock() == uf8::nav::ViewLock::RegionsOnly;
+        },
+        "Nav Mode: Regions only (no drill)", false
     });
 
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
