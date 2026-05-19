@@ -114,6 +114,14 @@ int  reasixty_navDefaultView();
 void reasixty_setNavDefaultView(int v);
 int  reasixty_navRegionPress();
 void reasixty_setNavRegionPress(int v);
+extern "C" int  reasixty_navUc1Takeover();
+extern "C" int  reasixty_navUc1Push();
+extern "C" int  reasixty_navUc1PushShift();
+extern "C" int  reasixty_navUc1LongPress();
+void reasixty_setNavUc1Takeover(bool on);
+void reasixty_setNavUc1Push(int v);
+void reasixty_setNavUc1PushShift(int v);
+void reasixty_setNavUc1LongPress(int v);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -8074,6 +8082,81 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  What a tap on a region's top-soft-key does. Jump = move "
         "transport to the region start; Drill = enter the region's "
         "marker list. RegionsOnly view-lock always suppresses Drill.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "UC1 Encoder 2");
+    ImGui_Separator(ctx);
+
+    bool takeover = reasixty_navUc1Takeover() != 0;
+    if (ImGui_Checkbox(ctx,
+            "Take over UC1 Encoder 2 while Nav Mode is active",
+            &takeover))
+    {
+        reasixty_setNavUc1Takeover(takeover);
+    }
+    ImGui_Text(ctx,
+        "  When off, Encoder 2 rotation stays bound to its normal "
+        "action (bc_track_scroll by default) and the UC1 LCD does not "
+        "switch to the marker carousel — only UF8 reflects Nav Mode.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Carousel scope:");
+    ImGui_RadioButton(ctx, "Mirror UF8 view##nav_uc1_scope_mirror", true);
+    ImGui_Text(ctx,
+        "  Other scopes (Always Regions / Always Markers / Always "
+        "Markers-in-UF8-region) arrive in Phase 2.8d.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Plain push action:");
+    int up = reasixty_navUc1Push();
+    if (ImGui_RadioButton(ctx, "Jump + Drill##nav_uc1_push_both", up == 0)) {
+        reasixty_setNavUc1Push(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Jump only##nav_uc1_push_jump", up == 1)) {
+        reasixty_setNavUc1Push(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Drill only##nav_uc1_push_drill", up == 2)) {
+        reasixty_setNavUc1Push(2);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Shift + push action:");
+    int us = reasixty_navUc1PushShift();
+    if (ImGui_RadioButton(ctx, "Drill##nav_uc1_pshift_drill", us == 0)) {
+        reasixty_setNavUc1PushShift(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Back##nav_uc1_pshift_back", us == 1)) {
+        reasixty_setNavUc1PushShift(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Toggle View##nav_uc1_pshift_toggle", us == 2)) {
+        reasixty_setNavUc1PushShift(2);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Long-press action:");
+    int ul = reasixty_navUc1LongPress();
+    if (ImGui_RadioButton(ctx, "Back##nav_uc1_long_back", ul == 0)) {
+        reasixty_setNavUc1LongPress(0);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Add marker at playhead##nav_uc1_long_addmark",
+                          ul == 1))
+    {
+        reasixty_setNavUc1LongPress(1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Disabled##nav_uc1_long_off", ul == 2)) {
+        reasixty_setNavUc1LongPress(2);
+    }
+    ImGui_Text(ctx,
+        "  Long-press threshold is ~500 ms. While a view-lock toggle "
+        "(Markers-only / Regions-only) is engaged, shift and long-press "
+        "are suppressed — only plain push fires.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

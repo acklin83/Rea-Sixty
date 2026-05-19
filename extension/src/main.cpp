@@ -292,6 +292,21 @@ std::atomic<int>  g_navDefaultView{0};
 // 2 = Drill only.
 std::atomic<int>  g_navRegionPress{0};
 
+// Phase 2.8c — UC1 Encoder 2 take-over preference. When false, the
+// UC1 Encoder 2 stays bound to its normal action (bc_track_scroll or
+// whatever the user has assigned) and the LCD shows MAIN content
+// even while Nav Mode is active on UF8.
+std::atomic<bool> g_navUc1Takeover{true};
+
+// Phase 2.8c — UC1 push gesture actions. The table is parsed by the
+// gesture-dispatch path in UC1Surface::handleButton_.
+//   nav_uc1_push          0=Jump+Drill (factory) 1=Jump only 2=Drill only
+//   nav_uc1_push_shift    0=Drill 1=Back 2=Toggle View
+//   nav_uc1_long_press    0=Back 1=Add marker @ playhead 2=Disabled
+std::atomic<int>  g_navUc1Push{0};
+std::atomic<int>  g_navUc1PushShift{0};
+std::atomic<int>  g_navUc1LongPress{0};
+
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
 // (uf8::g_focusedParam, uf8::g_focusedDirty). This flag is the existing
@@ -1581,6 +1596,25 @@ void loadBrightness()
         int n = std::atoi(v);
         if (n < 0 || n > 2) n = 0;
         g_navRegionPress.store(n);
+    }
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uc1_takeover");
+        g_navUc1Takeover.store((v && *v) ? (std::atoi(v) != 0) : true);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_push"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navUc1Push.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_push_shift"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navUc1PushShift.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_long_press"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navUc1LongPress.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
@@ -7049,24 +7083,41 @@ void pushUc1NavCarousel()
     // takeover flag so the menu owns the LCD. Re-toggling Nav brings
     // the carousel back.
     static bool         s_wasOverlayActive = false;
+    static bool         s_armedForTakeover = false;
     static uc1::Uc1Mode s_priorMode        = uc1::Uc1Mode::Main;
 
-    const uc1::Uc1Mode curMode = g_uc1_surface->mode();
+    const uc1::Uc1Mode curMode    = g_uc1_surface->mode();
+    const bool         takeoverPref = g_navUc1Takeover.load();
+
     if (overlayOn && !s_wasOverlayActive) {
-        s_priorMode = curMode;
-        if (curMode != uc1::Uc1Mode::Main) {
-            g_uc1_surface->setMode(uc1::Uc1Mode::Main);
+        // Activation edge. Only force Main + flag LCD takeover when
+        // the user's takeover preference is on. Otherwise leave UC1
+        // alone — only UF8 reflects Nav Mode (Phase 2.8c).
+        if (takeoverPref) {
+            s_priorMode = curMode;
+            if (curMode != uc1::Uc1Mode::Main) {
+                g_uc1_surface->setMode(uc1::Uc1Mode::Main);
+            }
+            g_uc1NavLcdActive.store(true);
+            s_armedForTakeover = true;
+        } else {
+            s_armedForTakeover = false;
+            g_uc1NavLcdActive.store(false);
         }
-        g_uc1NavLcdActive.store(true);
     } else if (!overlayOn && s_wasOverlayActive) {
-        if (g_uc1NavLcdActive.load()
+        // Deactivation edge. Restore prior mode only if we ever armed
+        // takeover this session (so non-takeover entries don't move
+        // the user's UC1 mode).
+        if (s_armedForTakeover
+            && g_uc1NavLcdActive.load()
             && g_uc1_surface->mode() == uc1::Uc1Mode::Main
             && s_priorMode != uc1::Uc1Mode::Main)
         {
             g_uc1_surface->setMode(s_priorMode);
         }
+        s_armedForTakeover = false;
         g_uc1NavLcdActive.store(true);   // reset for the next session
-    } else if (overlayOn && curMode != uc1::Uc1Mode::Main) {
+    } else if (overlayOn && takeoverPref && curMode != uc1::Uc1Mode::Main) {
         // User entered a UC1 menu while Nav is active — yield the LCD.
         g_uc1NavLcdActive.store(false);
     }
@@ -12463,6 +12514,33 @@ void reasixty_setNavRegionPress(int v)
     std::snprintf(buf, sizeof(buf), "%d", v);
     SetExtState("rea_sixty", "nav_region_press", buf, true);
 }
+
+extern "C" int  reasixty_navUc1Takeover()  { return g_navUc1Takeover.load() ? 1 : 0; }
+extern "C" int  reasixty_navUc1Push()      { return g_navUc1Push.load(); }
+extern "C" int  reasixty_navUc1PushShift() { return g_navUc1PushShift.load(); }
+extern "C" int  reasixty_navUc1LongPress() { return g_navUc1LongPress.load(); }
+
+void reasixty_setNavUc1Takeover(bool on)
+{
+    g_navUc1Takeover.store(on);
+    SetExtState("rea_sixty", "nav_uc1_takeover", on ? "1" : "0", true);
+}
+
+static void writeNavSetting_(const char* key, std::atomic<int>& slot,
+                             int v, int hi)
+{
+    if (v < 0 || v > hi) v = 0;
+    slot.store(v);
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%d", v);
+    SetExtState("rea_sixty", key, buf, true);
+}
+void reasixty_setNavUc1Push(int v)
+    { writeNavSetting_("nav_uc1_push", g_navUc1Push, v, 2); }
+void reasixty_setNavUc1PushShift(int v)
+    { writeNavSetting_("nav_uc1_push_shift", g_navUc1PushShift, v, 2); }
+void reasixty_setNavUc1LongPress(int v)
+    { writeNavSetting_("nav_uc1_long_press", g_navUc1LongPress, v, 2); }
 
 // ---- Selection-Set settings exports --------------------------------------
 // All readers honour the live g_selsets cache; writers update both the
