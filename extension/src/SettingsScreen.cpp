@@ -2760,10 +2760,22 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 for (int m = 1; m < kModifierCount; ++m) {
                     ImGui_Spacing(ctx);
                     ImGui_Separator(ctx);
-                    char hdr[64];
+                    char hdr[96];
                     if (slots[m].type != ActionType::Noop && !slots[m].action.empty()) {
+                        // Resolve to the user-facing label so builtins
+                        // appear under their friendly name (e.g.
+                        // "Nav Mode: Regions only (no drill)" instead
+                        // of "marker_overlay_regions_only_toggle"
+                        // Frank 2026-05-19). Non-builtins fall through
+                        // to the raw action string (REAPER actions
+                        // already use their `_` id, MIDI commands
+                        // ditto).
+                        const std::string disp =
+                            (slots[m].type == ActionType::Builtin)
+                            ? builtinDisplayName(slots[m].action)
+                            : slots[m].action;
                         std::snprintf(hdr, sizeof(hdr), "%s   →  %s",
-                                      kModNames[m], slots[m].action.c_str());
+                                      kModNames[m], disp.c_str());
                     } else {
                         std::snprintf(hdr, sizeof(hdr), "%s   (empty)",
                                       kModNames[m]);
