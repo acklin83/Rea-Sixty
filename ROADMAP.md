@@ -526,7 +526,7 @@ Architecture: UC1 → REAPER track → JSFX (parameter surface) → TotalReaper 
 Done:
 - **Windows port** (x64, MSVC, libusb-1.0 + hidapi) — shipped in v0.1.0 (2026-05-20). Bundles a one-click WinUSB driver installer in Settings → About so users don't need Zadig.
 - **Linux port** (x86_64, libusb + hidapi-hidraw) — shipped in v0.1.0 (2026-05-20). Settings → About has a one-click udev rule installer (pkexec). Known constraint: plug UF8 and UC1 into **separate** PC USB ports — Linux 6.17 / xhci_hcd cycles the port when both run through the same root-hub branch.
-- **ReaPack distribution** — added in v0.1.1 (Windows DLL delay-load + `AddDllDirectory` so libusb / hidapi can live in UserPlugins/, Linux udev installer button in Settings). ReaPack URL: `https://raw.githubusercontent.com/acklin83/Rea-Sixty/main/index.xml`.
+- **ReaPack distribution** — added in v0.1.1 (Windows DLL delay-load + `AddDllDirectory` so libusb / hidapi can live in UserPlugins/, Linux udev installer button in Settings). Rea-Sixty rides in [Frank's existing reaper-scripts ReaPack feed](https://github.com/acklin83/reaper-scripts); ReaPack URL: `https://github.com/acklin83/reaper-scripts/raw/main/index.xml`.
 
 Candidate work:
 - DAW support beyond REAPER: anything MCU-compatible (Cubase, Studio One, Pro Tools via HUI, Logic, Bitwig)
