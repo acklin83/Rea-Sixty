@@ -469,6 +469,11 @@ std::atomic<bool>         g_recVpotShiftInputCh{false};
 // to the value it had at touch-on. Mirrors REAPER's mouse Alt-drag
 // behaviour on the TCP/MCP fader.
 std::atomic<bool>         g_altDragSnapBack{false};
+// Hide offline FX from cycle rings + per-strip cursor lookups. Default
+// off (offline FX still appear so the user can see them). When on,
+// applyFxCycle_ / applyInstanceCycle_ / StripInstance* skip TrackFX
+// slots whose TrackFX_GetOffline() returns true. Frank 2026-05-20.
+std::atomic<bool>         g_hideOfflineFx{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -1694,6 +1699,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "alt_drag_snap_back"); v && *v) {
         g_altDragSnapBack.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "hide_offline_fx"); v && *v) {
+        g_hideOfflineFx.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
     }
@@ -2800,16 +2808,25 @@ void applyInstanceCycle_(int step)
     std::vector<Hit> hits;
     int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
     const int n = TrackFX_GetCount(tr);
+    // Hide-offline filter: skip the hit but still advance the per-domain
+    // rank counter so the rank we assign to online Instances matches the
+    // existing "Nth CS / BC on this track" semantics used by downstream
+    // lookups. Otherwise hiding would shift Instance indices and route
+    // knobs to the wrong plug-in. Frank 2026-05-20.
+    const bool hideOffline = g_hideOfflineFx.load();
     char fxName[256];
     for (int i = 0; i < n; ++i) {
         if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName))) continue;
         const auto* pm = uf8::lookupPluginMapByName(fxName);
+        const bool skip = hideOffline && TrackFX_GetOffline(tr, i);
         if (pm && pm->domain == uf8::Domain::ChannelStrip) {
-            hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
+            if (!skip) hits.push_back({i, uf8::Domain::ChannelStrip, csCount});
+            ++csCount;
             continue;
         }
         if (pm && pm->domain == uf8::Domain::BusComp) {
-            hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+            if (!skip) hits.push_back({i, uf8::Domain::BusComp, bcCount});
+            ++bcCount;
             continue;
         }
         // UF8-only user maps DO surface via lookupPluginMapByName, but
@@ -2818,7 +2835,8 @@ void applyInstanceCycle_(int step)
         // pull the owned record for the uf8Mode flag (Frank 2026-05-12).
         const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
         if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
-            hits.push_back({i, uf8::Domain::None, uf8OnlyCount++});
+            if (!skip) hits.push_back({i, uf8::Domain::None, uf8OnlyCount});
+            ++uf8OnlyCount;
         }
     }
     if (hits.size() < 2) return;   // nothing meaningful to cycle through
@@ -2992,8 +3010,25 @@ void applyFxCycle_(int step)
     const int n = TrackFX_GetCount(tr);
     if (n < 2) return;  // nothing meaningful to cycle through
 
-    const int cur  = stripInstanceActiveFx_(tr);
-    int nextIdx = ((cur + step) % n + n) % n;
+    // Build the ring — every FX index, optionally filtering offline FX.
+    // Frank 2026-05-20 "Don't show offline FX" Device setting.
+    const bool hideOffline = g_hideOfflineFx.load();
+    std::vector<int> ring;
+    ring.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        if (hideOffline && TrackFX_GetOffline(tr, i)) continue;
+        ring.push_back(i);
+    }
+    if (ring.size() < 2) return;
+
+    const int cur = stripInstanceActiveFx_(tr);
+    int curK = 0;
+    for (size_t k = 0; k < ring.size(); ++k) {
+        if (ring[k] == cur) { curK = static_cast<int>(k); break; }
+    }
+    const int sz = static_cast<int>(ring.size());
+    const int nextK = ((curK + step) % sz + sz) % sz;
+    const int nextIdx = ring[nextK];
     setStripInstanceFx_(tr, nextIdx);
     syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
                                        /*setBcAnchor*/ true);
@@ -3005,13 +3040,7 @@ void applyFxCycle_(int step)
 
     followFocusedPluginGuiAcrossCycle_(tr, nextIdx);
 
-    // Feed the carousel with prev/curr/next FX display names. The "ring"
-    // here is just every FX index 0..n-1, since fx_cycle walks all FX
-    // not just learned Instances.
-    std::vector<int> ring;
-    ring.reserve(n);
-    for (int i = 0; i < n; ++i) ring.push_back(i);
-    showCycleCarousel_(tr, nextIdx, ring);
+    showCycleCarousel_(tr, nextK, ring);
 }
 
 // Walk through populated Selection-Set slots (skipping empty ones),
@@ -5083,9 +5112,26 @@ void drainInputQueue()
                 }
                 if (step != 0) {
                     const int n = TrackFX_GetCount(tr);
-                    if (n > 0) {
+                    // Build ring with hide-offline filter (Frank 2026-05-20).
+                    const bool hideOffline = g_hideOfflineFx.load();
+                    std::vector<int> ring;
+                    ring.reserve(n);
+                    for (int i = 0; i < n; ++i) {
+                        if (hideOffline && TrackFX_GetOffline(tr, i)) continue;
+                        ring.push_back(i);
+                    }
+                    if (!ring.empty()) {
                         const int cur = stripInstanceActiveFx_(tr);
-                        int next = ((cur + step) % n + n) % n;
+                        int curK = 0;
+                        for (size_t k = 0; k < ring.size(); ++k) {
+                            if (ring[k] == cur) {
+                                curK = static_cast<int>(k);
+                                break;
+                            }
+                        }
+                        const int sz = static_cast<int>(ring.size());
+                        const int nextK = ((curK + step) % sz + sz) % sz;
+                        const int next = ring[nextK];
                         setStripInstanceFx_(tr, next);
                         // Promote Instance landings into Instance state
                         // sync — only shift focused.domain when the
@@ -5141,13 +5187,10 @@ void drainInputQueue()
                         }
 
                         // Carousel — focused-strip only (mirror of
-                        // applyFxCycle_'s output; the ring is every FX
-                        // index since FX Cycle walks all FX).
+                        // applyFxCycle_'s output; the ring matches the
+                        // step ring above so hide-offline is reflected).
                         if (isFocusedStrip) {
-                            std::vector<int> ring;
-                            ring.reserve(n);
-                            for (int i = 0; i < n; ++i) ring.push_back(i);
-                            showCycleCarousel_(tr, next, ring);
+                            showCycleCarousel_(tr, nextK, ring);
                         }
                     }
                 }
@@ -5196,6 +5239,10 @@ void drainInputQueue()
 
                 // Build the Instance ring on `tr` — mirrors applyInstanceCycle_'s
                 // hit-collection but per-strip instead of focused-track.
+                // Hide-offline filter advances the rank counter so online
+                // ranks keep matching the "Nth CS / BC on track" semantics
+                // used by downstream lookups. Frank 2026-05-20.
+                const bool hideOfflineStrip = g_hideOfflineFx.load();
                 struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
                 std::vector<Hit> hits;
                 int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
@@ -5205,17 +5252,22 @@ void drainInputQueue()
                     if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName)))
                         continue;
                     const auto* pm = uf8::lookupPluginMapByName(fxName);
+                    const bool skip = hideOfflineStrip
+                                   && TrackFX_GetOffline(tr, i);
                     if (pm && pm->domain == uf8::Domain::ChannelStrip) {
-                        hits.push_back({i, uf8::Domain::ChannelStrip, csCount++});
+                        if (!skip) hits.push_back({i, uf8::Domain::ChannelStrip, csCount});
+                        ++csCount;
                         continue;
                     }
                     if (pm && pm->domain == uf8::Domain::BusComp) {
-                        hits.push_back({i, uf8::Domain::BusComp, bcCount++});
+                        if (!skip) hits.push_back({i, uf8::Domain::BusComp, bcCount});
+                        ++bcCount;
                         continue;
                     }
                     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
                     if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
-                        hits.push_back({i, uf8::Domain::None, uf8OnlyCount++});
+                        if (!skip) hits.push_back({i, uf8::Domain::None, uf8OnlyCount});
+                        ++uf8OnlyCount;
                     }
                 }
                 if (hits.size() < 2) break;   // Frank 2026-05-15: no-op
@@ -12939,6 +12991,17 @@ void reasixty_setAltDragSnapBack(bool on)
 {
     g_altDragSnapBack.store(on);
     SetExtState("rea_sixty", "alt_drag_snap_back", on ? "1" : "0", true);
+}
+bool reasixty_hideOfflineFx()         { return g_hideOfflineFx.load(); }
+void reasixty_setHideOfflineFx(bool on)
+{
+    g_hideOfflineFx.store(on);
+    SetExtState("rea_sixty", "hide_offline_fx", on ? "1" : "0", true);
+    g_bankDirty.store(true);
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
 }
 void reasixty_setRecVpotPush(int v)
 {

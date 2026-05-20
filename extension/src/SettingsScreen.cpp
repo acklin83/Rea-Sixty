@@ -112,6 +112,8 @@ void reasixty_setRecVpotRotateGain(bool on);
 void reasixty_setRecVpotShiftInputCh(bool on);
 bool reasixty_altDragSnapBack();
 void reasixty_setAltDragSnapBack(bool on);
+bool reasixty_hideOfflineFx();
+void reasixty_setHideOfflineFx(bool on);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
 int  reasixty_navDefaultView();
@@ -7968,6 +7970,27 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  Release while Alt/Option is still held → value snaps back to "
         "touch-on position.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Plug-ins");
+    ImGui_Separator(ctx);
+    bool hideOffline = reasixty_hideOfflineFx();
+    if (ImGui_Checkbox(ctx,
+        "Don't show offline FX",
+        &hideOffline))
+    {
+        reasixty_setHideOfflineFx(hideOffline);
+    }
+    ImGui_Text(ctx,
+        "  Offline FX are skipped by the Channel-Encoder FX/Instance "
+        "Cycle, by the");
+    ImGui_Text(ctx,
+        "  per-strip V-Pot Sel-Mode FX/Instance Cycle, and by the "
+        "UF8 colour-bar");
+    ImGui_Text(ctx,
+        "  Instance lookup. Bring an FX back online in REAPER's FX "
+        "chain to restore it.");
 
         ImGui_EndTabItem(ctx);
     }
