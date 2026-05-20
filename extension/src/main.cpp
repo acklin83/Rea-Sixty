@@ -12995,12 +12995,18 @@ bool reasixty_dispatchSelModeCycle(int step)
 {
     if (step == 0) return true;   // accept but no-op so caller still suppresses default
     const auto mode = g_selectionMode.load();
+    // SelectionMode::Instance is the V-Pot Sel-Mode labelled "FX Cycle"
+    // (legacy enum name — walks ALL FX). SelectionMode::InstanceCycle is
+    // the V-Pot Sel-Mode labelled "Instance Cycle" (walks Instances only).
+    // The two dispatches were swapped before 2026-05-20 — Frank reported
+    // V-Pot Sel-Mode "Instance Cycle" + UF8 Ch. Encoder cycle-control bit
+    // ON cycled through every FX instead of only Instances.
     if (mode == SelectionMode::Instance) {
-        applyInstanceCycle_(step);
+        applyFxCycle_(step);
         return true;
     }
     if (mode == SelectionMode::InstanceCycle) {
-        applyFxCycle_(step);
+        applyInstanceCycle_(step);
         return true;
     }
     return false;
