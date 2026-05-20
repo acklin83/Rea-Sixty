@@ -116,6 +116,10 @@ bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
+bool reasixty_showTracksHiddenInTcp();
+void reasixty_setShowTracksHiddenInTcp(bool on);
+bool reasixty_showTracksHiddenInMcp();
+void reasixty_setShowTracksHiddenInMcp(bool on);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
 int  reasixty_navDefaultView();
@@ -7990,6 +7994,28 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  track panel (TCP) so the new selection is visible. MCP "
         "always follows.");
+
+    ImGui_Spacing(ctx);
+    bool showTcpHidden = reasixty_showTracksHiddenInTcp();
+    if (ImGui_Checkbox(ctx,
+        "Show tracks hidden in TCP",
+        &showTcpHidden))
+    {
+        reasixty_setShowTracksHiddenInTcp(showTcpHidden);
+    }
+    bool showMcpHidden = reasixty_showTracksHiddenInMcp();
+    if (ImGui_Checkbox(ctx,
+        "Show tracks hidden in MCP",
+        &showMcpHidden))
+    {
+        reasixty_setShowTracksHiddenInMcp(showMcpHidden);
+    }
+    ImGui_Text(ctx,
+        "  Default both OFF — UF8 mirrors REAPER's track panel "
+        "visibility. Flip a");
+    ImGui_Text(ctx,
+        "  toggle on to keep tracks on the surface even when they're "
+        "hidden in that view.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

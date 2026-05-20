@@ -479,6 +479,12 @@ std::atomic<bool>         g_hideOfflineFx{false};
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
 // Frank 2026-05-20.
 std::atomic<bool>         g_tcpFollowsSelection{false};
+// Show tracks hidden in REAPER's TCP / MCP on the UF8. Default BOTH
+// off — a track hidden in either view is dropped from g_visibleTracks
+// so the UF8 mirrors what's actually visible in REAPER. Flip a toggle
+// on to ignore that view's hidden flag. Frank 2026-05-20.
+std::atomic<bool>         g_showTracksHiddenInTcp{false};
+std::atomic<bool>         g_showTracksHiddenInMcp{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -769,6 +775,20 @@ void rebuildVisibleTrackList() {
         {
             const int am = GetTrackAutomationMode(tr);
             if (am == 0 || am == 1) continue;
+        }
+        // TCP / MCP hidden filter: by default the UF8 mirrors what's
+        // visible in REAPER's track panels, so tracks hidden in TCP or
+        // MCP drop off the surface too. Either toggle bypasses the
+        // corresponding view's filter. Frank 2026-05-20.
+        if (!g_showTracksHiddenInTcp.load()
+            && !(GetMediaTrackInfo_Value(tr, "B_SHOWINTCP") > 0.5))
+        {
+            continue;
+        }
+        if (!g_showTracksHiddenInMcp.load()
+            && !(GetMediaTrackInfo_Value(tr, "B_SHOWINMIXER") > 0.5))
+        {
+            continue;
         }
         g_visibleTracks.push_back(tr);
     }
@@ -1709,6 +1729,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "show_tracks_hidden_in_tcp"); v && *v) {
+        g_showTracksHiddenInTcp.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "show_tracks_hidden_in_mcp"); v && *v) {
+        g_showTracksHiddenInMcp.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
@@ -13025,6 +13051,30 @@ void reasixty_setTcpFollowsSelection(bool on)
 {
     g_tcpFollowsSelection.store(on);
     SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
+}
+bool reasixty_showTracksHiddenInTcp() { return g_showTracksHiddenInTcp.load(); }
+void reasixty_setShowTracksHiddenInTcp(bool on)
+{
+    g_showTracksHiddenInTcp.store(on);
+    SetExtState("rea_sixty", "show_tracks_hidden_in_tcp", on ? "1" : "0", true);
+    g_bankDirty.store(true);
+    rebuildVisibleTrackList();
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+}
+bool reasixty_showTracksHiddenInMcp() { return g_showTracksHiddenInMcp.load(); }
+void reasixty_setShowTracksHiddenInMcp(bool on)
+{
+    g_showTracksHiddenInMcp.store(on);
+    SetExtState("rea_sixty", "show_tracks_hidden_in_mcp", on ? "1" : "0", true);
+    g_bankDirty.store(true);
+    rebuildVisibleTrackList();
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
 }
 void reasixty_setRecVpotPush(int v)
 {
