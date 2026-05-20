@@ -76,6 +76,8 @@ void reasixty_pushTouchedFxReveal(void* tr, int fxIdx, int domainInt);
 bool reasixty_touchedFxRevealActive();
 void* reasixty_touchedFxRevealTrack();
 const char* reasixty_touchedFxRevealLabel();
+// Per-FX user-rename — empty string if the user hasn't renamed.
+std::string reasixty_fxUserRename(void* tr, int fxIdx);
 // Folder Mode reveal: when a UC1 knob writes a param on `tr`, the UF8
 // strip displaying that track should briefly show the real value
 // instead of the "Folder" placeholder. No-op outside folder mode.
@@ -3427,7 +3429,10 @@ void UC1Surface::refresh()
         const auto fp = uf8::getFocusedParam();
         const bool wantBc = (fp.domain == uf8::Domain::BusComp);
 
-        const char* baseLabel = "MAIN";
+        // baseLabel-as-string lets us swap in a user-rename (variable-
+        // length) over the const-char* PluginBindings shortName. Empty
+        // string falls back to "MAIN" at the strncpy below.
+        std::string baseLabel;
         void*       instanceTrack = nullptr;
         bool        useBc        = false;
         // Touched-FX reveal (3 s) wins over the focused-domain default,
@@ -3443,20 +3448,38 @@ void UC1Surface::refresh()
             useBc        = false;
         } else if (wantBc) {
             if (bcBindings_.busCompMap) {
-                baseLabel    = bcBindings_.busCompMap->shortName;
+                // User-rename of the BC instance wins over the shortName
+                // fallback. Frank 2026-05-20: SSL 360 Link instances
+                // should surface their user-given name, not the family-
+                // level "L-BC" abbreviation.
+                if (bcTr_) {
+                    baseLabel = reasixty_fxUserRename(
+                        bcTr_, bcBindings_.busCompFxIdx);
+                }
+                if (baseLabel.empty()) {
+                    baseLabel = bcBindings_.busCompMap->shortName;
+                }
                 instanceTrack = effectiveBcTrack_();
                 useBc        = true;
             }
             // else: "MAIN" — no BC on anchor, don't fall back to CS.
         } else {
             if (bindings.channelMap) {
-                baseLabel    = bindings.channelMap->shortName;
+                // Same rename-precedence rule as the BC branch above.
+                if (focusedTrack_) {
+                    baseLabel = reasixty_fxUserRename(
+                        focusedTrack_, bindings.channelFxIdx);
+                }
+                if (baseLabel.empty()) {
+                    baseLabel = bindings.channelMap->shortName;
+                }
                 instanceTrack = focusedTrack_;
                 useBc        = false;
             }
             // else: "MAIN" — no CS on focused track, don't fall back
             // to BC anchor.
         }
+        if (baseLabel.empty()) baseLabel = "MAIN";
 
         // Central label width — buildCentralLabel accepts up to 8 chars
         // (Frank 2026-05-09 widening probe). The A/B/C multi-instance
@@ -3466,7 +3489,7 @@ void UC1Surface::refresh()
         // not the LCD label).
         constexpr int kCentralLabelW = 7;
         char labelBuf[kCentralLabelW + 1] = {0};
-        std::strncpy(labelBuf, baseLabel, kCentralLabelW);
+        std::strncpy(labelBuf, baseLabel.c_str(), kCentralLabelW);
         const int total = !instanceTrack ? 0
             : useBc ? bcInstanceCount(instanceTrack)
                     : csInstanceCount(instanceTrack);
@@ -3499,10 +3522,16 @@ void UC1Surface::refresh()
                 ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
             auto pm = uf8::lookupPluginOnTrack(longTrack, domain);
             if (pm.map) {
-                if (pm.map->displayLong && *pm.map->displayLong) {
-                    longName = pm.map->displayLong;
-                } else if (pm.map->match && *pm.map->match) {
-                    longName = pm.map->match;
+                // User-rename precedence — see Frank 2026-05-20. If the
+                // user has explicitly renamed the FX instance, that wins
+                // over both displayLong and match.
+                longName = reasixty_fxUserRename(longTrack, pm.fxIndex);
+                if (longName.empty()) {
+                    if (pm.map->displayLong && *pm.map->displayLong) {
+                        longName = pm.map->displayLong;
+                    } else if (pm.map->match && *pm.map->match) {
+                        longName = pm.map->match;
+                    }
                 }
                 // No multi-instance letter suffix on the LCD header
                 // either — same rule as the central label (Frank
