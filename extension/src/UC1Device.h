@@ -75,6 +75,15 @@ public:
     // for the same accessor.
     const std::string& serial() const { return serial_; }
 
+    // True when the worker has seen >= ~1 s of consecutive
+    // LIBUSB_ERROR_NO_DEVICE / NOT_FOUND on bulk OUT — implies the
+    // underlying USB instance was re-enumerated under us (sleep/wake,
+    // hub power-cycle, etc.) and the handle is now stale. The main
+    // thread polls this and reopens the device when set. Cleared on
+    // close() and on any subsequent successful transfer. Frank
+    // 2026-05-20: UC1 falling silent on Mac after host-side USB churn.
+    bool needsReopen() const { return needsReopen_.load(); }
+
 private:
     void workerLoop_();
     void startBulkRead_();
@@ -94,6 +103,14 @@ private:
     std::unique_ptr<PendingSend> pending_;
 
     std::atomic<float> grDb_{0.0f};
+
+    // Stale-handle detector. consecutiveErrors_ counts bulk OUT
+    // failures with errno NO_DEVICE / NOT_FOUND / IO; resets to 0 on
+    // any success. When it crosses kStaleThreshold (~1 s of pure
+    // failure at 50 Hz GR-stream) we set needsReopen_, the main
+    // thread sees it on its onTimer pass and recreates the device.
+    std::atomic<int>   consecutiveErrors_{0};
+    std::atomic<bool>  needsReopen_{false};
 };
 
 } // namespace uc1

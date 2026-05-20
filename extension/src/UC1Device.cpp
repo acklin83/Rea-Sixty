@@ -152,8 +152,26 @@ bool UC1Device::open()
         }
     }
 
-    libusb_clear_halt(handle_, kEpOut);
-    libusb_clear_halt(handle_, kEpIn);
+    const int chOut = libusb_clear_halt(handle_, kEpOut);
+    const int chIn  = libusb_clear_halt(handle_, kEpIn);
+    // Unconditional one-line-per-open record so we can correlate the
+    // pre-handshake endpoint state with the subsequent PIPE-on-handshake
+    // failure mode. Three outcomes (Frank 2026-05-20 + advisor):
+    //   chOut/chIn == 0 + handshake PIPE → device in a state CLEAR_HALT
+    //     can't fix; needs reset_device or full re-enumeration.
+    //   chOut/chIn < 0  → halt-clear itself failed (wrong endpoint,
+    //     lost claim) — fix the precondition instead.
+    if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+        const auto t = std::chrono::system_clock::now().time_since_epoch();
+        const auto ms = std::chrono::duration_cast<
+            std::chrono::milliseconds>(t).count();
+        std::fprintf(f, "[%lld] UC1 open() clear_halt: out=%d (%s) "
+                        "in=%d (%s)\n",
+                     static_cast<long long>(ms),
+                     chOut, libusb_error_name(chOut),
+                     chIn,  libusb_error_name(chIn));
+        std::fclose(f);
+    }
 
     // Handshake. Captured from uc1_23 (SSL 360° cold-start with UC1
     // already plugged in) — these 5 empty-data commands transition UC1
@@ -174,24 +192,66 @@ bool UC1Device::open()
         { {0xFF, 0x4B, 0x00, 0x4B}, 70  },
         { {0xFF, 0x4E, 0x00, 0x4E}, 17  },
     };
-    for (const auto& step : kHandshake) {
-        if (step.delayMsBefore > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(step.delayMsBefore));
+    // Handshake runner — returns rc of the first failed transfer (or 0
+    // on full success). Pulled into a lambda so we can retry it after
+    // libusb_reset_device on PIPE.
+    auto runHandshake = [&]() -> int {
+        for (const auto& step : kHandshake) {
+            if (step.delayMsBefore > 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(step.delayMsBefore));
+            }
+            int t = 0;
+            const int rc = libusb_bulk_transfer(handle_, kEpOut,
+                                                const_cast<uint8_t*>(step.bytes),
+                                                4, &t, 500);
+            if (rc < 0) return rc;
+            frameLogWrite_(step.bytes, 4);
         }
-        int t = 0;
-        const int rc = libusb_bulk_transfer(handle_, kEpOut,
-                                            const_cast<uint8_t*>(step.bytes),
-                                            4, &t, 500);
-        if (rc < 0) {
-            lastError_ = std::string("handshake OUT failed: ") + libusb_error_name(rc);
-            libusb_release_interface(handle_, kInterface);
-            libusb_close(handle_);
-            libusb_exit(ctx_);
-            handle_ = nullptr;
-            ctx_    = nullptr;
-            return false;
+        return 0;
+    };
+    int hsRc = runHandshake();
+    // On PIPE the device is in a state CLEAR_FEATURE(ENDPOINT_HALT)
+    // can't fix (we already ran clear_halt above with rc=0). Retry
+    // once after a full libusb_reset_device — USB-level reset clears
+    // every endpoint state. Frank 2026-05-20: confirmed via stale.log
+    // that chOut/chIn returned 0 even when the handshake STALLed.
+    if (hsRc == LIBUSB_ERROR_PIPE) {
+        if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+            const auto t = std::chrono::system_clock::now().time_since_epoch();
+            const auto ms = std::chrono::duration_cast<
+                std::chrono::milliseconds>(t).count();
+            std::fprintf(f, "[%lld] UC1 handshake PIPE -> resetting "
+                            "device + retrying\n",
+                         static_cast<long long>(ms));
+            std::fclose(f);
         }
-        frameLogWrite_(step.bytes, 4);
+        const int rrc = libusb_reset_device(handle_);
+        if (rrc == 0) {
+            // Reset may have invalidated the kernel-driver state;
+            // re-detach + re-claim before the retry.
+            if (libusb_kernel_driver_active(handle_, kInterface) == 1) {
+                libusb_detach_kernel_driver(handle_, kInterface);
+            }
+            libusb_claim_interface(handle_, kInterface);
+            libusb_clear_halt(handle_, kEpOut);
+            libusb_clear_halt(handle_, kEpIn);
+            hsRc = runHandshake();
+        } else {
+            // reset_device failed (typically NO_DEVICE - the reset
+            // actually re-enumerated the device under us). The next
+            // open() attempt will see a fresh device. Surface the
+            // original PIPE as the failure reason.
+        }
+    }
+    if (hsRc < 0) {
+        lastError_ = std::string("handshake OUT failed: ") + libusb_error_name(hsRc);
+        libusb_release_interface(handle_, kInterface);
+        libusb_close(handle_);
+        libusb_exit(ctx_);
+        handle_ = nullptr;
+        ctx_    = nullptr;
+        return false;
     }
     // Short settle before the init flood — captured reference waits
     // ~12 ms after FF 4E.
@@ -281,6 +341,11 @@ void UC1Device::close()
 
     libusb_exit(ctx_);
     ctx_ = nullptr;
+
+    // Clear stale-handle telemetry so a follow-up open() starts fresh.
+    consecutiveErrors_.store(0);
+    needsReopen_.store(false);
+    shuttingDown_.store(false);
 }
 
 void UC1Device::send(std::vector<uint8_t> frame)
@@ -345,6 +410,57 @@ void UC1Device::workerLoop_()
 
         const auto now = std::chrono::steady_clock::now();
 
+        // Bulk-OUT error classifier shared by the three transfer sites
+        // below. On the FIRST failure after a run of successes, dump the
+        // precipitating error code + surrounding state to
+        // /tmp/rea_sixty_uc1_stale.log — the steady-state ENODEV at the
+        // time the user looks tells us nothing about what actually
+        // broke. NO_DEVICE / NOT_FOUND / IO / PIPE each implies a
+        // different root cause (real disconnect vs claim loss vs
+        // endpoint stall); we want to see which one fires first. Frank
+        // 2026-05-20: UC1 silently falling out on Mac.
+        constexpr int kStaleThreshold = 50;  // ~1 s @ 50 Hz GR stream
+        static bool   sLoggedFirstErr = false;  // process-scope: log once
+        auto recordResult = [this](int rc, std::size_t nbytes) {
+            if (rc < 0) {
+                g_stats.outErrors.fetch_add(1);
+                lastError_ = libusb_error_name(rc);
+                if (!sLoggedFirstErr && consecutiveErrors_.load() == 0) {
+                    sLoggedFirstErr = true;
+                    if (FILE* f = std::fopen(
+                            "/tmp/rea_sixty_uc1_stale.log", "a"))
+                    {
+                        const auto t = std::chrono::system_clock::now()
+                            .time_since_epoch();
+                        const auto ms = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(t).count();
+                        std::fprintf(f,
+                            "[%lld] UC1 first OUT error: rc=%d (%s) "
+                            "after %llu successful frames\n",
+                            static_cast<long long>(ms),
+                            rc, libusb_error_name(rc),
+                            (unsigned long long)
+                                g_stats.outFramesSent.load());
+                        std::fclose(f);
+                    }
+                }
+                if (rc == LIBUSB_ERROR_NO_DEVICE
+                    || rc == LIBUSB_ERROR_NOT_FOUND
+                    || rc == LIBUSB_ERROR_IO)
+                {
+                    if (consecutiveErrors_.fetch_add(1) + 1
+                            >= kStaleThreshold) {
+                        needsReopen_.store(true);
+                    }
+                }
+            } else {
+                consecutiveErrors_.store(0);
+                sLoggedFirstErr = false;  // re-arm after recovery
+                g_stats.outFramesSent.fetch_add(1);
+                g_stats.outBytesSent.fetch_add(nbytes);
+            }
+        };
+
         // GR stream — the primary 50 Hz liveness heartbeat. Always send
         // SOMETHING every ~20 ms or UC1's firmware watchdog drops the
         // connection.
@@ -353,8 +469,7 @@ void UC1Device::workerLoop_()
             int t = 0;
             const int rc = libusb_bulk_transfer(handle_, kEpOut, gr.data(),
                                                 static_cast<int>(gr.size()), &t, 100);
-            if (rc < 0) { g_stats.outErrors.fetch_add(1); lastError_ = libusb_error_name(rc); }
-            else         { g_stats.outFramesSent.fetch_add(1); g_stats.outBytesSent.fetch_add(gr.size()); }
+            recordResult(rc, gr.size());
             frameLogWrite_(gr.data(), gr.size());
             lastGr = now;
         }
@@ -365,8 +480,7 @@ void UC1Device::workerLoop_()
             int t = 0;
             const int rc = libusb_bulk_transfer(handle_, kEpOut, ka.data(),
                                                 static_cast<int>(ka.size()), &t, 100);
-            if (rc < 0) { g_stats.outErrors.fetch_add(1); lastError_ = libusb_error_name(rc); }
-            else         { g_stats.outFramesSent.fetch_add(1); g_stats.outBytesSent.fetch_add(ka.size()); }
+            recordResult(rc, ka.size());
             frameLogWrite_(ka.data(), ka.size());
             keepaliveCounter = (keepaliveCounter + 1) & 0x03;
             lastKeepalive    = now;
@@ -379,13 +493,7 @@ void UC1Device::workerLoop_()
                                                 frame.data(),
                                                 static_cast<int>(frame.size()),
                                                 &transferred, 500);
-            if (rc < 0) {
-                g_stats.outErrors.fetch_add(1);
-                lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
-            } else {
-                g_stats.outFramesSent.fetch_add(1);
-                g_stats.outBytesSent.fetch_add(frame.size());
-            }
+            recordResult(rc, frame.size());
             frameLogWrite_(frame.data(), frame.size());
         }
 
@@ -430,6 +538,32 @@ void UC1Device::readCallback_(libusb_transfer* xfer)
             self->buttonHandler_(*ev);
         } else if (auto kn = parseKnobEvent(data); kn && self->knobHandler_) {
             self->knobHandler_(*kn);
+        }
+    } else if (xfer->status != LIBUSB_TRANSFER_COMPLETED
+               && xfer->status != LIBUSB_TRANSFER_CANCELLED
+               && !self->shuttingDown_)
+    {
+        // Mirror the OUT-side first-error log: capture the precipitating
+        // IN-endpoint failure so we can distinguish device-gone (status
+        // NO_DEVICE) from endpoint-halted (STALL) from we-cancelled-it
+        // (CANCELLED, skipped here). One-shot per process — re-armed on
+        // OUT recovery. Frank 2026-05-20.
+        static bool sLoggedFirstIn = false;
+        if (!sLoggedFirstIn) {
+            sLoggedFirstIn = true;
+            if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+                const auto t = std::chrono::system_clock::now()
+                    .time_since_epoch();
+                const auto ms = std::chrono::duration_cast<
+                    std::chrono::milliseconds>(t).count();
+                std::fprintf(f,
+                    "[%lld] UC1 first IN error: status=%d "
+                    "(actual_length=%d) after %llu IN callbacks\n",
+                    static_cast<long long>(ms),
+                    xfer->status, xfer->actual_length,
+                    (unsigned long long)g_stats.inCallbacks.load());
+                std::fclose(f);
+            }
         }
     }
 

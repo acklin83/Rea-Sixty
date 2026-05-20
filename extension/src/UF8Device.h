@@ -86,6 +86,14 @@ public:
         return frameTrace_.load(std::memory_order_relaxed);
     }
 
+    // True when the heartbeat worker has seen ~1 s of consecutive
+    // LIBUSB_ERROR_NO_DEVICE / NOT_FOUND / IO on bulk OUT. Implies the
+    // USB instance was re-enumerated under us — typical on macOS after
+    // sleep/wake or hub power glitches. Main thread polls this and
+    // recreates the device. See UC1Device::needsReopen() for the same
+    // pattern. Frank 2026-05-20.
+    bool needsReopen() const { return needsReopen_.load(); }
+
 private:
     void workerLoop_();
     void runInit_();
@@ -120,6 +128,13 @@ private:
     // ~human interaction rates a mutex is fine.
     struct PendingSend;
     std::unique_ptr<PendingSend> pending_;
+
+    // Stale-handle detector. See UC1Device.h for the same field doc.
+    // Counters get bumped from the heartbeat block in workerLoop_();
+    // crossing kStaleThreshold flips needsReopen_ and the main thread
+    // recreates the device on its next onTimer pass.
+    std::atomic<int>   consecutiveErrors_{0};
+    std::atomic<bool>  needsReopen_{false};
 };
 
 } // namespace uf8

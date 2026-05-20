@@ -256,6 +256,11 @@ void UF8Device::close()
 
     libusb_exit(ctx_);
     ctx_ = nullptr;
+
+    // Clear stale-handle telemetry so a follow-up open() starts fresh.
+    consecutiveErrors_.store(0);
+    needsReopen_.store(false);
+    shuttingDown_.store(false);
 }
 
 void UF8Device::send(std::vector<uint8_t> frame)
@@ -316,6 +321,48 @@ void UF8Device::workerLoop_()
     auto lastPmKeepalive = std::chrono::steady_clock::now();
     uint8_t pmCounter = 0;
 
+    // Stale-handle telemetry — heartbeats run at 50 Hz, so 50 consecutive
+    // NO_DEVICE / NOT_FOUND / IO errors means roughly 1 s of pure failure.
+    // Crossing that threshold flips needsReopen_ for any future
+    // main-thread recovery hook. The FIRST failure also dumps its
+    // precipitating error code to /tmp/rea_sixty_uf8_stale.log so we can
+    // tell NO_DEVICE / NOT_FOUND / IO / PIPE apart for root-cause work
+    // — the steady-state ENODEV at user-look time tells us nothing.
+    // Frank 2026-05-20.
+    constexpr int kStaleThreshold = 50;
+    static bool sLoggedFirstErr = false;
+    auto recordHeartbeatRc = [this](int rc) {
+        if (rc < 0) {
+            if (!sLoggedFirstErr && consecutiveErrors_.load() == 0) {
+                sLoggedFirstErr = true;
+                if (FILE* f = std::fopen(
+                        "/tmp/rea_sixty_uf8_stale.log", "a"))
+                {
+                    const auto t = std::chrono::system_clock::now()
+                        .time_since_epoch();
+                    const auto ms = std::chrono::duration_cast<
+                        std::chrono::milliseconds>(t).count();
+                    std::fprintf(f,
+                        "[%lld] UF8 first OUT error: rc=%d (%s)\n",
+                        static_cast<long long>(ms),
+                        rc, libusb_error_name(rc));
+                    std::fclose(f);
+                }
+            }
+            if (rc == LIBUSB_ERROR_NO_DEVICE
+                || rc == LIBUSB_ERROR_NOT_FOUND
+                || rc == LIBUSB_ERROR_IO)
+            {
+                if (consecutiveErrors_.fetch_add(1) + 1 >= kStaleThreshold) {
+                    needsReopen_.store(true);
+                }
+            }
+        } else {
+            consecutiveErrors_.store(0);
+            sLoggedFirstErr = false;  // re-arm after recovery
+        }
+    };
+
     while (!shuttingDown_) {
         // Drain pending sends — pull up to N frames per iteration so a
         // burst of state pushes (VU, SEL colour, zones) doesn't stall
@@ -347,8 +394,10 @@ void UF8Device::workerLoop_()
         if (now - lastHeartbeat >= std::chrono::milliseconds(20)) {
             int t = 0;
             int rc = libusb_bulk_transfer(handle_, kEpOut, hb1, sizeof(hb1), &t, 100);
+            recordHeartbeatRc(rc);
             traceFrame_('O', hb1, sizeof(hb1), rc);
             rc = libusb_bulk_transfer(handle_, kEpOut, hb2, sizeof(hb2), &t, 100);
+            recordHeartbeatRc(rc);
             traceFrame_('O', hb2, sizeof(hb2), rc);
             // Stamp live per-strip GR bytes into hb3 + recompute checksum.
             const uint64_t packed = grBytes_.load(std::memory_order_relaxed);
@@ -358,8 +407,10 @@ void UF8Device::workerLoop_()
             for (int k = 1; k < 12; ++k) sum += hb3[k];
             hb3[12] = static_cast<uint8_t>(sum & 0xFF);
             rc = libusb_bulk_transfer(handle_, kEpOut, hb3, sizeof(hb3), &t, 100);
+            recordHeartbeatRc(rc);
             traceFrame_('O', hb3, sizeof(hb3), rc);
             rc = libusb_bulk_transfer(handle_, kEpOut, hb4, sizeof(hb4), &t, 100);
+            recordHeartbeatRc(rc);
             traceFrame_('O', hb4, sizeof(hb4), rc);
             lastHeartbeat = now;
         }
@@ -369,6 +420,7 @@ void UF8Device::workerLoop_()
         if (now - lastHb5 >= std::chrono::milliseconds(20)) {
             int t = 0;
             int rc = libusb_bulk_transfer(handle_, kEpOut, hb5, sizeof(hb5), &t, 100);
+            recordHeartbeatRc(rc);
             traceFrame_('O', hb5, sizeof(hb5), rc);
             lastHb5 = now;
         }
@@ -468,6 +520,30 @@ void UF8Device::readCallback_(libusb_transfer* xfer)
 
         if (auto ev = parseButtonEvent(data); ev && self->buttonHandler_) {
             self->buttonHandler_(*ev);
+        }
+    } else if (xfer->status != LIBUSB_TRANSFER_COMPLETED
+               && xfer->status != LIBUSB_TRANSFER_CANCELLED
+               && !self->shuttingDown_)
+    {
+        // Same first-error log as the OUT-side: capture the precipitating
+        // IN-endpoint failure status (NO_DEVICE / STALL / etc.) so we
+        // know what actually happened, not just the steady-state ENODEV.
+        // Frank 2026-05-20.
+        static bool sLoggedFirstIn = false;
+        if (!sLoggedFirstIn) {
+            sLoggedFirstIn = true;
+            if (FILE* f = std::fopen("/tmp/rea_sixty_uf8_stale.log", "a")) {
+                const auto t = std::chrono::system_clock::now()
+                    .time_since_epoch();
+                const auto ms = std::chrono::duration_cast<
+                    std::chrono::milliseconds>(t).count();
+                std::fprintf(f,
+                    "[%lld] UF8 first IN error: status=%d "
+                    "(actual_length=%d)\n",
+                    static_cast<long long>(ms),
+                    xfer->status, xfer->actual_length);
+                std::fclose(f);
+            }
         }
     }
 

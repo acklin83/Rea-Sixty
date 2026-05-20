@@ -3298,15 +3298,42 @@ std::string shortFxName_(MediaTrack* tr, int fxIdx)
     return s;
 }
 
+// User-given rename of a specific FX instance, or empty if none. Reads
+// REAPER's "renamed_name" named-config parm. Empty string when the user
+// hasn't renamed the FX (i.e. it still shows its factory name in the
+// FX chain). Used to let user-renames bubble up to the colour-bar so
+// e.g. an SSL 360 Link instance the user labelled "Townhouse Comp"
+// shows that name instead of the generic "Link" abbreviation. Frank
+// 2026-05-20.
+std::string fxUserRename_(MediaTrack* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return std::string{};
+    char buf[128] = {0};
+    if (TrackFX_GetNamedConfigParm(tr, fxIdx, "renamed_name",
+                                   buf, sizeof(buf))
+        && buf[0] != 0)
+    {
+        return std::string(buf);
+    }
+    return std::string{};
+}
+
 // Display name for the FX-Cycle colour-bar — when the FX is an
 // Instance (built-in PluginMap or user-mapped via FX Learn), use the
 // same `displayShort` that Encoder → Instance Cycle uses ("Townhou",
 // not "bx_town"). Falls back to the prefix-stripped REAPER name for
 // non-Instance FX. Frank 2026-05-14: "Für FX Cycle bitte dieselben
 // Namen für Instances verwenden, wie bei Instance Cycle".
+//
+// User-rename override (Frank 2026-05-20): if the user has explicitly
+// renamed the FX instance in REAPER's FX chain, that rename wins over
+// the hardcoded `displayShort` — primarily for SSL 360 Link, where
+// the family-level "Link" / "L-BC" abbreviation hides what the wrapped
+// plug-in actually is.
 std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx)
 {
     if (!tr || fxIdx < 0) return std::string{};
+    if (auto rn = fxUserRename_(tr, fxIdx); !rn.empty()) return rn;
     char buf[256] = {0};
     if (!TrackFX_GetFXName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
     if (const auto* pm = uf8::lookupPluginMapByName(buf)) {
@@ -3316,6 +3343,16 @@ std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx)
         return um->displayShort;
     }
     return shortFxName_(tr, fxIdx);
+}
+
+// Resolve the colour-bar label for an Instance: user-rename when set,
+// else the supplied fallback (typically the PluginMap's `displayShort`).
+// Same precedence rule as fxCycleDisplayName_ — keeps every "what is
+// this strip running" display path consistent.
+std::string instanceLabel_(MediaTrack* tr, int fxIdx, const char* fallback)
+{
+    if (auto rn = fxUserRename_(tr, fxIdx); !rn.empty()) return rn;
+    return std::string(fallback ? fallback : "");
 }
 
 // TotalReaper named-action lookup. Returns the REAPER command_id for the
@@ -5806,8 +5843,21 @@ ReaSixtySurface::ReaSixtySurface()
     g_dev = std::make_unique<uf8::UF8Device>();
     const bool uf8Opened = g_dev->open();
     if (!uf8Opened) {
-        ShowConsoleMsg(("Rea-Sixty UF8: " + g_dev->lastError()
+        const std::string err = g_dev->lastError();
+        ShowConsoleMsg(("Rea-Sixty UF8: " + err
                         + "  (UF8 optional — continuing)\n").c_str());
+        // Mirror to the stale.log too — Frank-2026-05-20 missed a Console
+        // line for a startup-failure case where UC1 just didn't connect.
+        // The log file accumulates across sessions.
+        if (FILE* f = std::fopen("/tmp/rea_sixty_uf8_stale.log", "a")) {
+            const auto t = std::chrono::system_clock::now()
+                .time_since_epoch();
+            const auto ms = std::chrono::duration_cast<
+                std::chrono::milliseconds>(t).count();
+            std::fprintf(f, "[%lld] UF8 open() failed: %s\n",
+                         static_cast<long long>(ms), err.c_str());
+            std::fclose(f);
+        }
         g_dev.reset();
     } else {
         g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
@@ -5850,8 +5900,18 @@ ReaSixtySurface::ReaSixtySurface()
             g_uc1_surface->setFocusedTrack(tr);
         }
     } else {
-        ShowConsoleMsg(("Rea-Sixty UC1: " + g_uc1_dev->lastError()
+        const std::string err = g_uc1_dev->lastError();
+        ShowConsoleMsg(("Rea-Sixty UC1: " + err
                         + "  (UC1 optional — UF8 continues)\n").c_str());
+        if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+            const auto t = std::chrono::system_clock::now()
+                .time_since_epoch();
+            const auto ms = std::chrono::duration_cast<
+                std::chrono::milliseconds>(t).count();
+            std::fprintf(f, "[%lld] UC1 open() failed: %s\n",
+                         static_cast<long long>(ms), err.c_str());
+            std::fclose(f);
+        }
         g_uc1_dev.reset();
     }
 
@@ -8231,6 +8291,11 @@ void pushZonesForVisibleSlots()
         // every strip reads "RPR" until the user toggles Q1→Q2→Q1 to
         // bump slotIdx to 0.
         const uf8::PluginMap* map = nullptr;
+        int                   mapFxIdx = -1;  // tracked alongside `map` so
+                                              // csType can prefer a user
+                                              // rename of the resolved FX
+                                              // over the hardcoded
+                                              // displayShort.
         {
             // SSL Strip Mode (Plugin button) routes the fader to the CS
             // instance's Fader Level param. The colour-bar Channel Strip
@@ -8259,9 +8324,11 @@ void pushZonesForVisibleSlots()
             if (g_pluginFaderMode.load()) {
                 const auto pick = csForStripModeOnTrack_(tr);
                 map = pick.map;
+                mapFxIdx = pick.fxIndex;
                 if (!map) {
                     auto mm2 = uf8::lookupPluginOnTrack(tr, uf8::Domain::BusComp);
                     map = mm2.map;
+                    mapFxIdx = mm2.fxIndex;
                 }
             } else {
                 // Partial reversal of the 2026-05-17 "strips never spring"
@@ -8278,16 +8345,19 @@ void pushZonesForVisibleSlots()
                 {
                     auto mmF = uf8::lookupPluginOnTrack(tr, focused.domain);
                     map = mmF.map;
+                    mapFxIdx = mmF.fxIndex;
                 }
                 if (!map) {
                     auto mm = uf8::lookupPluginOnTrack(tr,
                                                        uf8::Domain::ChannelStrip);
                     map = mm.map;
+                    mapFxIdx = mm.fxIndex;
                 }
                 if (!map) {
                     auto mm2 = uf8::lookupPluginOnTrack(tr,
                                                         uf8::Domain::BusComp);
                     map = mm2.map;
+                    mapFxIdx = mm2.fxIndex;
                 }
             }
         }
@@ -8330,9 +8400,10 @@ void pushZonesForVisibleSlots()
         {
             csType = g_touchedFxReveal.label;
         } else if (userStripActive) {
-            csType = userS.map->displayShort;
+            csType = instanceLabel_(userS.tr, userS.fxIdx,
+                                    userS.map->displayShort.c_str());
         } else if (g_pluginFaderMode.load()) {
-            if (map) csType = map->displayShort;
+            if (map) csType = instanceLabel_(tr, mapFxIdx, map->displayShort);
         } else if (g_selectionMode.load() == SelectionMode::Instance
                 || g_selectionMode.load() == SelectionMode::InstanceCycle) {
             // Both cycle modes display whichever FX the cursor currently
@@ -8345,9 +8416,13 @@ void pushZonesForVisibleSlots()
             if (csType.empty()) csType = "-";
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
-            if (uf8Ctx.map) csType = uf8Ctx.map->displayShort;
+            if (uf8Ctx.map) {
+                csType = instanceLabel_(uf8Ctx.tr, uf8Ctx.fxIdx,
+                                        uf8Ctx.map->displayShort.c_str());
+            }
         } else {
-            csType = map ? std::string(map->displayShort) : std::string{};
+            csType = map ? instanceLabel_(tr, mapFxIdx, map->displayShort)
+                         : std::string{};
         }
         // REC + RME override: show the track's hardware input name in
         // the colour-bar zone (e.g. "Mic 1" / "Line 3") instead of the
@@ -11082,6 +11157,94 @@ int g_tickCounter = 0;
 void onTimer()
 {
     ++g_tickCounter;
+
+    // Mid-session stale-handle recovery. Triggered when a device's
+    // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
+    // NOT_FOUND / IO on bulk OUT. Data from 2026-05-20:
+    // /tmp/rea_sixty_{uc1,uf8}_stale.log shows BOTH devices dropping
+    // within 3 ms of each other, UC1 OUT=LIBUSB_ERROR_IO and UF8
+    // OUT=LIBUSB_TIMEOUT (transient host-side USB event — macOS sleep/
+    // wake, bus reset, or similar — that survives the device firmware
+    // but invalidates our handle). Both devices still visible in
+    // system_profiler when this happens, so the right recovery is a
+    // fresh open(), not a hardware fix. Rate-limited to one attempt
+    // every 5 s so a real outage doesn't loop us at 30 Hz.
+    {
+        static auto sLastReopen = std::chrono::steady_clock::now()
+            - std::chrono::seconds(60);
+        const auto nowR = std::chrono::steady_clock::now();
+        const bool ucStale = g_uc1_dev && g_uc1_dev->needsReopen();
+        const bool ufStale = g_dev     && g_dev->needsReopen();
+        if ((ucStale || ufStale)
+            && nowR - sLastReopen >= std::chrono::seconds(5))
+        {
+            sLastReopen = nowR;
+            if (ucStale) {
+                if (FILE* f = std::fopen(
+                        "/tmp/rea_sixty_uc1_stale.log", "a"))
+                {
+                    const auto t = std::chrono::system_clock::now()
+                        .time_since_epoch();
+                    const auto ms = std::chrono::duration_cast<
+                        std::chrono::milliseconds>(t).count();
+                    std::fprintf(f,
+                        "[%lld] UC1 stale handle - reopening...\n",
+                        static_cast<long long>(ms));
+                    std::fclose(f);
+                }
+                g_uc1_surface.reset();
+                g_uc1_dev->close();
+                g_uc1_dev.reset();
+                g_uc1_dev = std::make_unique<uc1::UC1Device>();
+                if (g_uc1_dev->open()) {
+                    g_uc1_surface = std::make_unique<uc1::UC1Surface>();
+                    g_uc1_surface->attach(*g_uc1_dev);
+                    if (auto* tr = GetLastTouchedTrack()) {
+                        g_uc1_surface->setFocusedTrack(tr);
+                    }
+                    applyBrightness();
+                } else {
+                    g_uc1_dev.reset();
+                }
+            }
+            if (ufStale) {
+                if (FILE* f = std::fopen(
+                        "/tmp/rea_sixty_uf8_stale.log", "a"))
+                {
+                    const auto t = std::chrono::system_clock::now()
+                        .time_since_epoch();
+                    const auto ms = std::chrono::duration_cast<
+                        std::chrono::milliseconds>(t).count();
+                    std::fprintf(f,
+                        "[%lld] UF8 stale handle - reopening...\n",
+                        static_cast<long long>(ms));
+                    std::fclose(f);
+                }
+                g_sync.reset();
+                g_dev->close();
+                g_dev.reset();
+                g_dev = std::make_unique<uf8::UF8Device>();
+                if (g_dev->open()) {
+                    g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
+                    g_sync->invalidate();
+                    g_dev->setRawInputHandler(onUf8Input);
+                    for (uint8_t s = 0; s < 8; ++s) {
+                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Solo, false));
+                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
+                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
+                    }
+                    g_bankDirty.store(true);
+                    applyBrightness();
+                } else {
+                    g_dev.reset();
+                }
+            }
+            // Skip the rest of this tick — pointers may have shifted
+            // under code that already cached them above this block.
+            return;
+        }
+    }
+
     // Long-press SEL → folder-spill toggle BEFORE rebuilding the visible
     // list, so a just-fired spill flips the list this tick rather than
     // next.
@@ -12839,6 +13002,15 @@ void* reasixty_touchedFxRevealTrack() { return g_touchedFxReveal.tr; }
 const char* reasixty_touchedFxRevealLabel()
 {
     return g_touchedFxReveal.label.c_str();
+}
+
+// Per-FX user-rename accessor for UC1Surface. Returns the value of
+// REAPER's "renamed_name" named-config parm, or empty string when the
+// user hasn't renamed the FX. Lives in main.cpp so UC1's CS / BC
+// labels and UF8's csType zone share one rename-precedence rule.
+std::string reasixty_fxUserRename(void* tr, int fxIdx)
+{
+    return fxUserRename_(static_cast<MediaTrack*>(tr), fxIdx);
 }
 
 bool reasixty_pluginGuiPinPos()
