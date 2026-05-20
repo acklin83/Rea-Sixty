@@ -188,6 +188,9 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
 #ifdef _WIN32
 bool reasixty_installWinUsbDriver(std::string* errOut);
 #endif
+#ifdef __linux__
+bool reasixty_installLinuxUdevRule(std::string* errOut);
+#endif
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
@@ -8727,6 +8730,39 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     }
     if (!s_winusbMsg.empty()) {
         ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
+    }
+#endif
+
+#ifdef __linux__
+    // Linux equivalent — install udev rule so libusb can claim UF8 +
+    // UC1 without root. Single pkexec prompt, mirrors the Windows
+    // WinUSB-installer UX. Required for ReaPack-installed packages
+    // (ReaPack can drop the .so but can't sudo).
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Linux udev rule");
+    ImGui_Separator(ctx);
+    ImGui_TextWrapped(ctx,
+        "  Grants non-root USB access to UF8 + UC1 by installing "
+        "/etc/udev/rules.d/99-rea-sixty.rules. One-time setup, "
+        "requires sudo (graphical password prompt).");
+    ImGui_Spacing(ctx);
+    static std::string s_udevMsg;
+    if (ImGui_Button(ctx, "Install Linux udev rule##udev_install",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_installLinuxUdevRule(&err)) {
+            s_udevMsg = "udev rule installed. Unplug + replug UF8 + UC1, "
+                        "then restart REAPER.";
+        } else {
+            s_udevMsg = err.empty()
+                ? "udev install failed."
+                : ("udev install failed: " + err);
+        }
+    }
+    if (!s_udevMsg.empty()) {
+        ImGui_TextWrapped(ctx, s_udevMsg.c_str());
     }
 #endif
 

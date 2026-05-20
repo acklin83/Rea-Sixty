@@ -13469,6 +13469,45 @@ pnputil /add-driver $inf /install
 }
 #endif
 
+#ifdef __linux__
+// Linux equivalent of the WinUSB installer: writes the udev rule that
+// makes UF8/UC1 accessible to libusb as a non-root user, then runs
+// pkexec to copy it into /etc/udev/rules.d/ and reload udev. Single
+// graphical password prompt — same UX shape as the Windows UAC flow.
+bool reasixty_installLinuxUdevRule(std::string* errOut)
+{
+    static const char* kRuleContent =
+        "# Solid State Logic UF8 / UC1 - libusb + hidraw access for Rea-Sixty\n"
+        "SUBSYSTEM==\"usb\",    ATTRS{idVendor}==\"31e9\", MODE=\"0666\", TAG+=\"uaccess\"\n"
+        "SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"31e9\", MODE=\"0666\", TAG+=\"uaccess\"\n";
+
+    const char* rulePath = "/tmp/rea_sixty_udev.rules";
+    if (FILE* f = std::fopen(rulePath, "wb")) {
+        std::fwrite(kRuleContent, 1, std::strlen(kRuleContent), f);
+        std::fclose(f);
+    } else {
+        if (errOut) *errOut = std::string("could not write ") + rulePath;
+        return false;
+    }
+
+    // pkexec opens its own polkit auth dialog; system() blocks until
+    // the user dismisses it (cancel = non-zero exit). Chained shell
+    // command keeps it to one auth prompt for all three steps.
+    const char* cmd =
+        "pkexec sh -c '"
+        "cp /tmp/rea_sixty_udev.rules /etc/udev/rules.d/99-rea-sixty.rules && "
+        "udevadm control --reload-rules && "
+        "udevadm trigger"
+        "'";
+    int rc = std::system(cmd);
+    if (rc != 0) {
+        if (errOut) *errOut = "pkexec failed or was cancelled (rc=" + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
+}
+#endif
+
 bool reasixty_setupImportViaDialog(std::string* errOut)
 {
     std::string chosen;
