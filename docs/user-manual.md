@@ -28,10 +28,10 @@ redistributed.
 
 ### 1.2 What you need
 
-- A REAPER installation (recent build, macOS).
+- A REAPER installation (recent build) on macOS (Apple Silicon),
+  Windows (x64), or Linux (x86_64).
 - An SSL UF8 plugged in over USB-C. UC1 is supported optionally; a
   UF8-only or UC1-only rig is fine.
-- `libusb` from Homebrew (`brew install libusb`).
 - The **ReaImGui** extension installed in REAPER via ReaPack. Without
   ReaImGui, hardware control still works but the on-screen Settings
   window will not appear.
@@ -39,6 +39,11 @@ redistributed.
   interface exclusively. If it is running when Rea-Sixty starts,
   REAPER's Console will show an error and the surface will not
   appear.
+
+Runtime dependencies (`libusb`, `hidapi`) ship inside the platform
+archives — no separate install needed for end users. Developers
+building from source do need them locally (see §2.2.2 and the
+README's build section).
 
 ### 1.3 What this version does
 
@@ -52,7 +57,7 @@ A full inventory is in chapter 11. Headline features:
 - UC1 follows the focused REAPER track and drives the SSL Channel
   Strip 2 / Bus Compressor 2 / 4K series / 360° Link plug-in on
   that track.
-- A dockable Settings window with six tabs.
+- A dockable Settings window with seven tabs.
 
 Chapter 13 lists what is **not** yet implemented, including a few
 items that the project's README and ROADMAP currently overstate.
@@ -62,9 +67,13 @@ items that the project's README and ROADMAP currently overstate.
 ## 2. Installation
 
 Rea-Sixty ships as a REAPER extension binary plus two runtime
-dependencies (libusb and hidapi). The binary is the same C++ on both
-platforms; what differs is how each OS exposes the UF8/UC1 USB
-endpoints to user-space libusb.
+dependencies (libusb and hidapi). The binary is the same C++ on all
+three supported platforms (macOS, Windows, Linux); what differs is how
+each OS exposes the UF8/UC1 USB endpoints to user-space libusb.
+
+The recommended install path on all platforms is **ReaPack** — see
+the URL in the README. The manual-install steps below remain
+supported for users who'd rather skip ReaPack.
 
 ### 2.1 Prerequisites (both platforms)
 
@@ -79,7 +88,7 @@ endpoints to user-space libusb.
    interface exclusively; Rea-Sixty can't open it while 360° is up.
    On macOS this means quit the `SSL360Core` background daemon too.
    On Windows it means SSL 360°'s kernel driver has to be replaced
-   (Section 2.3.3).
+   (Section 2.3.2).
 
 ### 2.2 macOS
 
@@ -135,12 +144,25 @@ libusbk / libusb-win32). SSL 360° ships its own driver (`SSLBUS`),
 which is mutually exclusive. Rea-Sixty includes an in-product driver
 swap so users don't need Zadig — see 2.3.3.
 
-#### 2.3.1 Library deps
+#### 2.3.1 Drop all three DLLs into UserPlugins
 
-Drop `libusb-1.0.dll` and `hidapi.dll` next to **`reaper.exe`** (e.g.
-`C:\Program Files\REAPER (x64)\`). REAPER's DLL search path doesn't
-include `UserPlugins\`, so the deps have to live alongside REAPER
-itself. Sources:
+From v0.1.1 on, all three DLLs live in REAPER's UserPlugins folder
+together — the main DLL extends REAPER's DLL search path at load time
+(`SetDefaultDllDirectories` + `AddDllDirectory`) and delay-loads
+`libusb-1.0.dll` / `hidapi.dll`, so no manual placement next to
+`reaper.exe` is needed:
+
+```
+%APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll
+%APPDATA%\REAPER\UserPlugins\libusb-1.0.dll
+%APPDATA%\REAPER\UserPlugins\hidapi.dll
+```
+
+(Typically `C:\Users\<your-user>\AppData\Roaming\REAPER\UserPlugins\`.)
+
+Installing via ReaPack puts them there automatically (see the README
+for the ReaPack repo URL). Manual sources for the runtime DLLs if you'd
+rather grab them separately:
 
 - `libusb-1.0.dll` — libusb [GitHub release](https://github.com/libusb/libusb/releases),
   `VS2022/MS64/dll/libusb-1.0.dll` from the libusb-1.0.x.7z archive.
@@ -151,22 +173,12 @@ A signed Microsoft Visual C++ Runtime 2015-2022 must be present (it
 usually is on Win10/11; if `vcruntime140.dll` is missing, install the
 [VC++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)).
 
-#### 2.3.2 Install the DLL
-
-Drop `reaper_rea-sixty.dll` into your REAPER user profile:
-
-```
-%APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll
-```
-
-(Typically `C:\Users\<your-user>\AppData\Roaming\REAPER\UserPlugins\`.)
-
 Restart REAPER. Open Action List (`?`) → search **"Rea-Sixty"** →
 **"Rea-Sixty: Open / Close Rea-Sixty Settings"** should appear. If it
 doesn't, the DLL didn't load — most often `libusb-1.0.dll` or
-`hidapi.dll` aren't next to `reaper.exe`, or VC++ Runtime is missing.
+`hidapi.dll` are missing from UserPlugins, or VC++ Runtime is missing.
 
-#### 2.3.3 WinUSB driver swap (one-time)
+#### 2.3.2 WinUSB driver swap (one-time)
 
 The first time you launch REAPER with Rea-Sixty, the UF8/UC1 still
 belong to SSL 360°'s kernel driver and libusb can't open them. To
@@ -193,11 +205,19 @@ design choice.
 
 ### 2.4 Uninstall
 
-- macOS: delete `~/Library/Application Support/REAPER/UserPlugins/reaper_rea-sixty.dylib`,
-  restart REAPER.
-- Windows: delete `%APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll`,
-  restart REAPER. The WinUSB driver entry persists — re-run SSL 360°'s
-  installer to fully revert the device binding.
+- macOS: delete the three dylibs from
+  `~/Library/Application Support/REAPER/UserPlugins/` (the main one
+  plus `libusb-1.0.0.dylib` and `libhidapi.0.dylib`), restart REAPER.
+- Windows: delete `reaper_rea-sixty.dll` plus `libusb-1.0.dll` and
+  `hidapi.dll` from `%APPDATA%\REAPER\UserPlugins\`, restart REAPER.
+  The WinUSB driver entry persists — re-run SSL 360°'s installer to
+  fully revert the device binding.
+- Linux: delete `~/.config/REAPER/UserPlugins/reaper_rea-sixty.so`,
+  restart REAPER. The udev rule at
+  `/etc/udev/rules.d/99-rea-sixty.rules` is harmless to leave in
+  place; `sudo rm` it if you want it gone.
+- ReaPack users: Extensions → ReaPack → Browse packages → right-click
+  Rea-Sixty → Uninstall. Restart REAPER.
 
 ---
 
@@ -933,8 +953,9 @@ on a single track. A/B compare and HQ-mode toggles via direct VST3
 state-chunk patching (those flags are not reachable through REAPER's
 parameter API).
 
-**Settings window.** Six tabs (Device, Bindings, Modes, FX Learn,
-Selection Sets, About) themed to REAPER's active theme.
+**Settings window.** Seven tabs (Device, Bindings, Modes, FX Learn,
+Selection Sets, Parameter Groups, About) themed to REAPER's active
+theme.
 
 ---
 
@@ -980,10 +1001,11 @@ What is **not** in this version, despite being described in
    mirrors SSL 360°'s Plug-in Mixer page is on the roadmap (Phase
    2.6) but not in this build.
 
-2. **GUID-keyed FX Learn.** The README describes FX Learn as
-   "GUID-keyed". In practice FX Learn matches by FX-name substring.
-   This is more conservative: reorders are safe, renames break the
-   mapping. The behaviour is correct; the documentation is loose.
+2. **FX Learn matching strategy.** FX Learn matches by FX-name
+   substring (more conservative than a GUID match): FX-slot reorders
+   are safe, but a host-side rename breaks the binding. The README
+   wording was tightened in v0.1.1; older copies may still say
+   "GUID-keyed".
 
 3. **Selection-set storage.** Pressing a Selection-Set key currently
    marks the slot as active and lights its LED, but does not yet
@@ -997,8 +1019,11 @@ What is **not** in this version, despite being described in
 5. **Foot-switch input.** The vendor-USB event for foot-switch
    press has not yet been decoded. FS1 and FS2 produce no action.
 
-6. **Cross-platform builds.** The build system targets macOS, Windows
-   and Linux in principle. Only macOS is currently smoke-tested.
+6. **Linux USB topology constraint.** Plug UF8 and UC1 into separate
+   PC USB ports. Daisy-chaining UC1 through UF8's downstream port
+   triggers `usb usb1-port5: disabled by hub (EMI?), re-enabling...`
+   cycling under Linux 6.17 / `xhci_hcd`. Same hardware works fine on
+   Windows and macOS.
 
 7. **Long-press SEL → folder expand.** Folder Mode works as a
    parent-only filter, but the long-press SEL gesture to expand a

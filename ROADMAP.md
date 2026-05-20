@@ -182,11 +182,15 @@ Added beyond the original plan: right-click Copy / Paste binding, modifier-Nativ
 - JSON read/write to `~/.../REAPER/rea_sixty/bindings.json` with mtime watch + reload.
 - Learn-mode arming via ExtState handshake.
 
-### 2.7c — Soft-Key Banks tab — **shipped**
+### 2.7c — Soft-Key Banks — **shipped** (rolled into Bindings / FX Learn)
 
-- CS 6-bank + BC 2-bank grids reading authoritative tables from `softkey::` namespace.
-- kNoSlot wiring picker: raw VST3 param browser (uses `TrackFX_GetParamName`) + REAPER action picker (uses `kbd_getTextFromCmd`).
-- Per-position label + colour override.
+Original plan was a dedicated "Soft-Key Banks" tab; in practice the
+authoritative `softkey::` tables and the per-position label / colour /
+action wiring live inside the Bindings tab (for the stock SSL bank
+selectors) and inside FX Learn (for plug-in-bank strips, v7 data
+model with `banks[2][8][8]`). No separate top-level tab — the
+top-level rail is Device, Bindings, Modes, FX Learn, Selection Sets,
+Parameter Groups, About.
 
 ### 2.7d — Modes + Selection Sets tabs — **shipped** (Selection-Set storage layer still queued — see 2.5b)
 
