@@ -15,7 +15,7 @@
 # Output: dist\rea-sixty-win-v<VERSION>.zip with all three DLLs at
 # the top level. install-windows.md documents the install paths.
 #
-# No code signing — Windows users get a "Publisher unknown" SmartScreen
+# No code signing - Windows users get a "Publisher unknown" SmartScreen
 # warning on the WinUSB installer step regardless of how we sign the
 # DLL itself (the warning is about the .CAT that the in-product
 # installer mints, not our DLL). Signing the DLL would only suppress
@@ -54,7 +54,7 @@ $Sources = @(
 
 foreach ($s in $Sources) {
     if (-not (Test-Path $s.Src)) {
-        Write-Error "Missing: $($s.Src) — pass -DllPath / -LibusbDll / -HidapiDll override."
+        Write-Error "Missing: $($s.Src) - pass -DllPath / -LibusbDll / -HidapiDll override."
         exit 1
     }
     Copy-Item -Force $s.Src (Join-Path $Stage $s.Name)
