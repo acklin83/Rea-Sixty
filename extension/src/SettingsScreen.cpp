@@ -518,6 +518,17 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Pending");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, "  Drag-to-reorder for multi-UF8 setups: deferred");
+    ImGui_Text(ctx, "  (codebase has no multi-UF8 support yet — single-device assumption");
+    ImGui_Text(ctx, "  in the bank-shift / colour-sync / VU-meter paths).");
+
+    // UC1 GR calibration sits at the very bottom of the Device pane per
+    // Frank 2026-05-20 — it's a niche hardware-trim workflow that doesn't
+    // need to be above the common settings.
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
     ImGui_Text(ctx, "UC1 GR calibration");
     ImGui_Separator(ctx);
     ImGui_TextDisabled(ctx,
@@ -605,14 +616,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
         ImGui_EndTable(ctx);
     }
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Pending");
-    ImGui_Separator(ctx);
-    ImGui_Text(ctx, "  Drag-to-reorder for multi-UF8 setups: deferred");
-    ImGui_Text(ctx, "  (codebase has no multi-UF8 support yet — single-device assumption");
-    ImGui_Text(ctx, "  in the bank-shift / colour-sync / VU-meter paths).");
 }
 
 // ---- Bindings -------------------------------------------------------------
