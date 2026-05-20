@@ -8414,6 +8414,21 @@ void pushZonesForVisibleSlots()
             const int instFxIdx = stripInstanceActiveFx_(tr);
             if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
             if (csType.empty()) csType = "-";
+        } else if ((g_encoderMode.load() == EncoderMode::FxCycle
+                 || g_encoderMode.load() == EncoderMode::Instance)
+                && g_uc1_surface
+                && tr == g_uc1_surface->focusedTrack()) {
+            // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
+            // branch above. Scope is focused-track only: applyFxCycle_ /
+            // applyInstanceCycle_ move the cursor on the focused track,
+            // so only that strip's colour-bar follows. Without this branch
+            // UF8 stays pinned to the focused-domain Instance label while
+            // UC1's carousel walks every FX, so non-Instance landings on
+            // FX Cycle look like UF8 "shows only Instances". Frank
+            // 2026-05-20.
+            const int instFxIdx = stripInstanceActiveFx_(tr);
+            if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
+            if (csType.empty()) csType = "-";
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
             if (uf8Ctx.map) {
