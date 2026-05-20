@@ -106,7 +106,7 @@ Status: the docked SWELL+ImGui window has shipped as part of Phase 2.7 (Settings
 
 **Goal:** On-screen mixer view that mirrors SSL 360°'s Plugin Mixer — all SSL Channel Strip and Bus Compressor instances visible in a single docked window, fully interactive, themed to the user's REAPER theme. Closes the last gap where users still glance at SSL 360° instead of Rea-Sixty.
 
-Plan: see `~/.claude/plans/splendid-snuggling-hejlsberg.md` (verdict: native REAPER extension with vendored Dear ImGui inside a dockable SWELL window — same in-process model as the rest of the extension; rejected standalone-app variant).
+Plan: see `~/.claude/plans/splendid-snuggling-hejlsberg.md` (verdict: native REAPER extension rendering through ReaImGui in a dockable host context — same in-process model as the rest of the extension; rejected standalone-app variant. The original plan referenced a vendored Dear ImGui drop, later swapped for ReaImGui to avoid bundling our own copy.)
 
 Reuses the existing `PluginMap` slot tables (CS2, 4K B/E/G, Bus Comp 2), `lookupPluginOnTrack`, and the Surface `Run()` tick. New code is purely UI + theme bridge.
 
