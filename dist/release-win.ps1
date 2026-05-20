@@ -33,8 +33,11 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DistDir  = Join-Path $RepoRoot "dist"
 
-# Version from git tag (preferred) or short SHA fallback.
-$Version  = (& git -C $RepoRoot describe --tags --abbrev=0 2>$null)
+# Version from git tag (preferred) or short SHA fallback. Wrapped in
+# try/catch so that the no-tags-yet case (`git describe` emits its
+# error on stderr) doesn't trip $ErrorActionPreference = "Stop".
+$Version = ""
+try { $Version = (& git -C $RepoRoot describe --tags --abbrev=0 2>$null) } catch {}
 if (-not $Version) {
     $Version = (& git -C $RepoRoot rev-parse --short HEAD)
 }
