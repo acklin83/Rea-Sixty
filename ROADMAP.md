@@ -519,12 +519,16 @@ Architecture: UC1 → REAPER track → JSFX (parameter surface) → TotalReaper 
 
 **Goal:** Project graduates from "Frank's studio tool" to "the open-source alternative for SSL controllers".
 
+Done:
+- **Windows port** (x64, MSVC, libusb-1.0 + hidapi) — shipped in v0.1.0 (2026-05-20). Bundles a one-click WinUSB driver installer in Settings → About so users don't need Zadig.
+- **Linux port** (x86_64, libusb + hidapi-hidraw) — shipped in v0.1.0 (2026-05-20). Settings → About has a one-click udev rule installer (pkexec). Known constraint: plug UF8 and UC1 into **separate** PC USB ports — Linux 6.17 / xhci_hcd cycles the port when both run through the same root-hub branch.
+- **ReaPack distribution** — added in v0.1.1 (Windows DLL delay-load + `AddDllDirectory` so libusb / hidapi can live in UserPlugins/, Linux udev installer button in Settings). ReaPack URL: `https://raw.githubusercontent.com/acklin83/Rea-Sixty/main/index.xml`.
+
 Candidate work:
-- Windows port (libusb there, but USB backend differs in edge cases)
-- Linux port (hidraw + libusb)
 - DAW support beyond REAPER: anything MCU-compatible (Cubase, Studio One, Pro Tools via HUI, Logic, Bitwig)
-- Firmware update path (since SSL will still ship firmware blobs; we may need to let SSL 360° do firmware updates, our tool handles everything else)
+- Firmware update path (SSL still ships firmware blobs; we'll likely let SSL 360° do firmware updates, our tool handles everything else)
 - Support for more SSL controllers (Big SiX, BiG SiX, SiX, other Nucleus variants)
+- GitHub Actions matrix-build automation so a tag push produces all three platform artifacts + index.xml diff in one workflow run
 
 ## Non-goals (at least for now)
 

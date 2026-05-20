@@ -93,18 +93,18 @@ cmake -B build -G "Unix Makefiles"
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-Ergebnis: `build/reaper_uf8.dylib`. Dann symlinken (empfohlen für
+Ergebnis: `build/reaper_rea-sixty.dylib`. Dann symlinken (empfohlen für
 Entwicklung — Rebuilds werden nach REAPER-Neustart eingelesen):
 
 ```
-ln -sf "$PWD/build/reaper_uf8.dylib" \
-       ~/Library/Application\ Support/REAPER/UserPlugins/reaper_uf8.dylib
+ln -sf "$PWD/build/reaper_rea-sixty.dylib" \
+       ~/Library/Application\ Support/REAPER/UserPlugins/reaper_rea-sixty.dylib
 ```
 
 Oder kopieren:
 
 ```
-cp build/reaper_uf8.dylib \
+cp build/reaper_rea-sixty.dylib \
    ~/Library/Application\ Support/REAPER/UserPlugins/
 ```
 

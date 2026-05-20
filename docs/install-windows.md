@@ -12,36 +12,30 @@ lives in `user-manual.md` chapter 2.3.
 - **Visual C++ Runtime 2015-2022** (usually present on Win10/11). If
   not: [install vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)
 - SSL 360° **not running** — and its kernel driver will be replaced
-  during install (see step 3 below)
+  during install (see step 2 below)
 
-## 1. Drop libusb + hidapi next to reaper.exe
+## 1. Drop all three DLLs into UserPlugins
 
-REAPER's DLL search path doesn't include `UserPlugins\`, so the two
-runtime DLLs have to live alongside `reaper.exe`:
-
-```
-C:\Program Files\REAPER (x64)\libusb-1.0.dll
-C:\Program Files\REAPER (x64)\hidapi.dll
-```
-
-Sources:
-- **libusb-1.0.dll** — [libusb releases](https://github.com/libusb/libusb/releases),
-  extract `VS2022/MS64/dll/libusb-1.0.dll` from `libusb-1.0.x.7z`.
-- **hidapi.dll** — [hidapi releases](https://github.com/libusb/hidapi/releases),
-  extract `x64/hidapi.dll` from `hidapi-win.zip`.
-
-## 2. Drop the Rea-Sixty DLL
+From v0.1.1 on, the Rea-Sixty DLL extends REAPER's DLL search path
+to its own directory at load time (`SetDefaultDllDirectories` +
+`AddDllDirectory`) and delay-loads `libusb-1.0.dll` / `hidapi.dll`,
+so all three live in UserPlugins together:
 
 ```
 %APPDATA%\REAPER\UserPlugins\reaper_rea-sixty.dll
+%APPDATA%\REAPER\UserPlugins\libusb-1.0.dll
+%APPDATA%\REAPER\UserPlugins\hidapi.dll
 ```
 
 Typically `C:\Users\<your-user>\AppData\Roaming\REAPER\UserPlugins\`.
 
+(Installing via ReaPack puts them there automatically — see the
+README for the ReaPack repo URL.)
+
 Restart REAPER. Open Action List (`?`) → "Rea-Sixty". You should see
 **"Rea-Sixty: Open / Close Rea-Sixty Settings"** in the list.
 
-## 3. WinUSB driver swap (one-time, admin)
+## 2. WinUSB driver swap (one-time, admin)
 
 1. Action List → **"Rea-Sixty: Open / Close Rea-Sixty Settings"**.
 2. Settings → **About** tab → **"Windows USB driver"** section.
@@ -65,8 +59,8 @@ SSL 360°'s installer — it reinstalls SSLBUS and takes the devices back.
 ## Failure modes
 
 - **"Rea-Sixty" action doesn't appear in REAPER** — the DLL didn't
-  load. Most common: `libusb-1.0.dll` or `hidapi.dll` not in
-  `C:\Program Files\REAPER (x64)\`, or VC++ Runtime missing.
+  load. Most common: `libusb-1.0.dll` or `hidapi.dll` missing from
+  `%APPDATA%\REAPER\UserPlugins\`, or VC++ Runtime missing.
 - **Settings window opens blank** — ReaImGui isn't installed. Install
   via ReaPack.
 - **Hardware doesn't respond after driver swap** — UF8/UC1 weren't

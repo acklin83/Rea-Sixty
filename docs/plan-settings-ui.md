@@ -1,5 +1,7 @@
 # Plan — Settings UI
 
+> **Historical planning doc.** Settings UI is shipped (see ROADMAP Phase 2.7); the framework choice below was superseded — we use ReaImGui (cfillion's REAPER ImGui binding) via REAPER's GetFunc, not a vendored Dear ImGui drop. Everything else in this doc is the still-current spec for the tab structure and bindings model.
+
 Status: draft, 2026-04-24.
 Prereqs: Phase 1 shipped (Phase 2 in progress, Phase 2.5 in design).
 Goal: a configuration UI that (a) visually mirrors SSL 360°'s mapping
