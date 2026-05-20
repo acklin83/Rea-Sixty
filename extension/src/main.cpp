@@ -474,6 +474,11 @@ std::atomic<bool>         g_altDragSnapBack{false};
 // applyFxCycle_ / applyInstanceCycle_ / StripInstance* skip TrackFX
 // slots whose TrackFX_GetOffline() returns true. Frank 2026-05-20.
 std::atomic<bool>         g_hideOfflineFx{false};
+// REAPER TCP (arrange-view track panel) scrolls into view whenever a
+// UF8 selection change fires. Independent of the MCP follow because
+// the TCP and MCP are separate scroll surfaces in REAPER. Default off.
+// Frank 2026-05-20.
+std::atomic<bool>         g_tcpFollowsSelection{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -1701,6 +1706,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "hide_offline_fx"); v && *v) {
         g_hideOfflineFx.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
+        g_tcpFollowsSelection.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
@@ -3471,6 +3479,15 @@ void followSelectedInMixer(MediaTrack* tr)
     // REAPER MCP: scroll so the selected track becomes leftmost (or
     // stays within the visible range if REAPER decides to keep context).
     SetMixerScroll(tr);
+
+    // REAPER TCP: optional, gated on the Device setting "TCP follows UF8
+    // selection". Action 40913 = "Track: Vertical scroll selected tracks
+    // into view". Fires on the same selection events as the MCP scroll
+    // above so the arrange-view track panel keeps pace with the mixer.
+    // Frank 2026-05-20.
+    if (g_tcpFollowsSelection.load()) {
+        Main_OnCommand(40913, 0);
+    }
 
     // Bank-snap operates in surface-visible space — under folder_mode /
     // show_only_selected the bank coordinates are filtered indices, not
@@ -13002,6 +13019,12 @@ void reasixty_setHideOfflineFx(bool on)
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
     }
+}
+bool reasixty_tcpFollowsSelection()   { return g_tcpFollowsSelection.load(); }
+void reasixty_setTcpFollowsSelection(bool on)
+{
+    g_tcpFollowsSelection.store(on);
+    SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
 }
 void reasixty_setRecVpotPush(int v)
 {

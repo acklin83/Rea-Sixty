@@ -114,6 +114,8 @@ bool reasixty_altDragSnapBack();
 void reasixty_setAltDragSnapBack(bool on);
 bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
+bool reasixty_tcpFollowsSelection();
+void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
 int  reasixty_navDefaultView();
@@ -7970,6 +7972,24 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  Release while Alt/Option is still held → value snaps back to "
         "touch-on position.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Track follow");
+    ImGui_Separator(ctx);
+    bool tcpFollow = reasixty_tcpFollowsSelection();
+    if (ImGui_Checkbox(ctx,
+        "TCP follows UF8 selection",
+        &tcpFollow))
+    {
+        reasixty_setTcpFollowsSelection(tcpFollow);
+    }
+    ImGui_Text(ctx,
+        "  When the UF8 changes the selected track, REAPER scrolls the "
+        "arrange-view");
+    ImGui_Text(ctx,
+        "  track panel (TCP) so the new selection is visible. MCP "
+        "always follows.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
