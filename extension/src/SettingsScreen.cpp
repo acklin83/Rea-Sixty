@@ -446,6 +446,78 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Tracks");
+    ImGui_Separator(ctx);
+
+    // TCP scrolls to keep the UF8-selected track visible. Independent of
+    // the always-on MCP follow (those are separate REAPER scroll surfaces).
+    // Frank 2026-05-20.
+    bool tcpFollow = reasixty_tcpFollowsSelection();
+    if (ImGui_Checkbox(ctx, "TCP follows UF8 selection", &tcpFollow)) {
+        reasixty_setTcpFollowsSelection(tcpFollow);
+    }
+
+    // Show tracks REAPER has hidden in TCP / MCP. Default both OFF — the
+    // UF8 mirrors REAPER's track-panel visibility. Either toggle ON keeps
+    // tracks on the surface even when that view hides them. Frank 2026-05-20.
+    bool showTcpHidden = reasixty_showTracksHiddenInTcp();
+    if (ImGui_Checkbox(ctx, "Show tracks hidden in TCP", &showTcpHidden)) {
+        reasixty_setShowTracksHiddenInTcp(showTcpHidden);
+    }
+    bool showMcpHidden = reasixty_showTracksHiddenInMcp();
+    if (ImGui_Checkbox(ctx, "Show tracks hidden in MCP", &showMcpHidden)) {
+        reasixty_setShowTracksHiddenInMcp(showMcpHidden);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Plug-ins");
+    ImGui_Separator(ctx);
+
+    // Offline FX are skipped by all four cycle paths (Channel-Encoder
+    // FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle). Frank 2026-05-20.
+    bool hideOffline = reasixty_hideOfflineFx();
+    if (ImGui_Checkbox(ctx, "Don't show offline FX", &hideOffline)) {
+        reasixty_setHideOfflineFx(hideOffline);
+    }
+
+    // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
+    bool engageUf8 = reasixty_cycleEngagesUf8();
+    if (ImGui_Checkbox(ctx,
+        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
+        &engageUf8))
+    {
+        reasixty_setCycleEngagesUf8(engageUf8);
+    }
+    ImGui_Text(ctx,
+        "  When the SEL-Mode cycle V-Pot push OR any \"Toggle focused "
+        "plug-in GUI\"");
+    ImGui_Text(ctx,
+        "  binding (UC1 Encoder 2 push, etc.) lands on a UF8-mapped "
+        "plug-in, also");
+    ImGui_Text(ctx,
+        "  engage UF8 Plugin Mode (with GUI). Press the same button "
+        "again to exit.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Faders");
+    ImGui_Separator(ctx);
+
+    // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
+    bool altSnap = reasixty_altDragSnapBack();
+    if (ImGui_Checkbox(ctx,
+        "Alt/Option + fader drag → snap back to original on release",
+        &altSnap))
+    {
+        reasixty_setAltDragSnapBack(altSnap);
+    }
+    ImGui_Text(ctx,
+        "  Release while Alt/Option is still held → value snaps back to "
+        "touch-on position.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
     ImGui_Text(ctx, "UC1 GR calibration");
     ImGui_Separator(ctx);
     ImGui_TextDisabled(ctx,
@@ -7936,115 +8008,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         ImGui_EndTabItem(ctx);
     }
 
-    // --- Device -----------------------------------------------------
-    // Plug-in GUI auto-engage + fader drag-snap aren't really 'Modes' —
-    // they fire whenever their rule matches. Collected here as 'Device'
-    // since they configure how the hardware behaves at all times.
-    int flagsDev = tabFlagsFor(2);
-    if (ImGui_BeginTabItem(ctx, "Device", nullptr, &flagsDev)) {
-        persistActive(2);
-    ImGui_Text(ctx, "Plug-in GUI");
-    ImGui_Separator(ctx);
-    bool engageUf8 = reasixty_cycleEngagesUf8();
-    if (ImGui_Checkbox(ctx,
-        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
-        &engageUf8))
-    {
-        reasixty_setCycleEngagesUf8(engageUf8);
-    }
-    ImGui_Text(ctx,
-        "  When the SEL-Mode cycle V-Pot push OR any \"Toggle focused "
-        "plug-in GUI\"");
-    ImGui_Text(ctx,
-        "  binding (UC1 Encoder 2 push, etc.) lands on a UF8-mapped "
-        "plug-in, also");
-    ImGui_Text(ctx,
-        "  engage UF8 Plugin Mode (with GUI). Press the same button "
-        "again to exit.");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Faders");
-    ImGui_Separator(ctx);
-    bool altSnap = reasixty_altDragSnapBack();
-    if (ImGui_Checkbox(ctx,
-        "Alt/Option + fader drag → snap back to original on release",
-        &altSnap))
-    {
-        reasixty_setAltDragSnapBack(altSnap);
-    }
-    ImGui_Text(ctx,
-        "  Release while Alt/Option is still held → value snaps back to "
-        "touch-on position.");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Track follow");
-    ImGui_Separator(ctx);
-    bool tcpFollow = reasixty_tcpFollowsSelection();
-    if (ImGui_Checkbox(ctx,
-        "TCP follows UF8 selection",
-        &tcpFollow))
-    {
-        reasixty_setTcpFollowsSelection(tcpFollow);
-    }
-    ImGui_Text(ctx,
-        "  When the UF8 changes the selected track, REAPER scrolls the "
-        "arrange-view");
-    ImGui_Text(ctx,
-        "  track panel (TCP) so the new selection is visible. MCP "
-        "always follows.");
-
-    ImGui_Spacing(ctx);
-    bool showTcpHidden = reasixty_showTracksHiddenInTcp();
-    if (ImGui_Checkbox(ctx,
-        "Show tracks hidden in TCP",
-        &showTcpHidden))
-    {
-        reasixty_setShowTracksHiddenInTcp(showTcpHidden);
-    }
-    bool showMcpHidden = reasixty_showTracksHiddenInMcp();
-    if (ImGui_Checkbox(ctx,
-        "Show tracks hidden in MCP",
-        &showMcpHidden))
-    {
-        reasixty_setShowTracksHiddenInMcp(showMcpHidden);
-    }
-    ImGui_Text(ctx,
-        "  Default both OFF — UF8 mirrors REAPER's track panel "
-        "visibility. Flip a");
-    ImGui_Text(ctx,
-        "  toggle on to keep tracks on the surface even when they're "
-        "hidden in that view.");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Plug-ins");
-    ImGui_Separator(ctx);
-    bool hideOffline = reasixty_hideOfflineFx();
-    if (ImGui_Checkbox(ctx,
-        "Don't show offline FX",
-        &hideOffline))
-    {
-        reasixty_setHideOfflineFx(hideOffline);
-    }
-    ImGui_Text(ctx,
-        "  Offline FX are skipped by the Channel-Encoder FX/Instance "
-        "Cycle, by the");
-    ImGui_Text(ctx,
-        "  per-strip V-Pot Sel-Mode FX/Instance Cycle, and by the "
-        "UF8 colour-bar");
-    ImGui_Text(ctx,
-        "  Instance lookup. Bring an FX back online in REAPER's FX "
-        "chain to restore it.");
-
-        ImGui_EndTabItem(ctx);
-    }
-
     // --- REC --------------------------------------------------------
-    int flagsRec = tabFlagsFor(3);
+    // (The former Modes → "Device" sub-tab was removed 2026-05-20 —
+    // Plug-in GUI auto-engage + Alt-drag snap-back moved into the main
+    // Device sidebar pane. There's no SEL Mode called "Device", so the
+    // sub-tab didn't belong here.)
+    int flagsRec = tabFlagsFor(2);
     if (ImGui_BeginTabItem(ctx, "REC", nullptr, &flagsRec)) {
-        persistActive(3);
+        persistActive(2);
     bool rmeOn = reasixty_recRmeEnabled();
     if (ImGui_Checkbox(ctx,
                        "Enable RME / TotalReaper integration",
@@ -8123,9 +8094,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
 
     // --- NAV --------------------------------------------------------
-    int flagsNav = tabFlagsFor(4);
+    int flagsNav = tabFlagsFor(3);
     if (ImGui_BeginTabItem(ctx, "NAV", nullptr, &flagsNav)) {
-        persistActive(4);
+        persistActive(3);
 
     // Activation — read-only mirror of the three bindable Nav toggles.
     // Shows which physical button currently fires each. The bind UI
