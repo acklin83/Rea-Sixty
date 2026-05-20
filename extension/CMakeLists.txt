@@ -234,6 +234,20 @@ if(APPLE)
         "-framework AppKit")
 endif()
 
+if(WIN32)
+    # ReaPack-friendly DLL discovery on Windows. With /DELAYLOAD the
+    # actual LoadLibrary for libusb-1.0.dll / hidapi.dll happens lazily
+    # on first call instead of at REAPER startup. REAPER_PLUGIN_ENTRY
+    # extends the DLL search path to include our own DLL's directory
+    # (= UserPlugins) before any libusb / hidapi function is touched,
+    # so users can drop all three DLLs into UserPlugins without
+    # touching the REAPER program-files directory.
+    target_link_options(reaper_uf8 PRIVATE
+        "/DELAYLOAD:libusb-1.0.dll"
+        "/DELAYLOAD:hidapi.dll")
+    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib)
+endif()
+
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
 if(WIN32)

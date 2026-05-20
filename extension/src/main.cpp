@@ -15407,6 +15407,37 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
 
+#ifdef _WIN32
+    // ReaPack-friendly DLL search on Windows. Without this, libusb-1.0.dll
+    // and hidapi.dll have to live next to reaper.exe — REAPER's resource
+    // directory isn't in the default DLL search path, and a ReaPack-
+    // installed package can't reach the program-files directory.
+    //
+    // With /DELAYLOAD:libusb-1.0.dll /DELAYLOAD:hidapi.dll on the linker
+    // line, the actual LoadLibrary call for each dependency is deferred
+    // to first use. We extend the search path here to include our own
+    // DLL's directory (= UserPlugins) BEFORE any libusb / hidapi
+    // function is touched, so the delay-load stub finds them alongside.
+    {
+        HMODULE self = nullptr;
+        GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&REAPER_PLUGIN_ENTRYPOINT),
+            &self);
+        char path[MAX_PATH] = {0};
+        if (self && GetModuleFileNameA(self, path, sizeof(path))) {
+            if (char* slash = std::strrchr(path, '\\')) *slash = 0;
+            wchar_t wpath[MAX_PATH] = {0};
+            MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
+            SetDefaultDllDirectories(
+                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+                | LOAD_LIBRARY_SEARCH_USER_DIRS);
+            AddDllDirectory(wpath);
+        }
+    }
+#endif
+
     // Diagnostic init log: write a step marker before each substantial
     // init action so a REAPER crash leaves us a breadcrumb trail.
     // Lambda has to live in the function scope; uses C IO so it works
