@@ -2,7 +2,7 @@
 
 *REAPER × SSL UF8 / UC1 — a native, open-source replacement for SSL 360° on REAPER.*
 
-> Repository name is `reaper-uf8` for historical reasons; the project's public name is **Rea-Sixty** (REAPER + 360).
+> Released 2026-05-20 — see [v0.1.0 first public beta](https://github.com/acklin83/Rea-Sixty/releases/tag/v0.1.0).
 
 Rea-Sixty drives the SSL **UF8** and **UC1** controllers directly from a REAPER extension over their vendor-USB protocols — no SSL 360° required, no plugin-on-every-track restriction, no CSI, no virtual MCU MIDI. Track colors land on the UF8 scribble strips in the DAW layer (something SSL 360° does not offer at all), faders run at full 16-bit precision, and the SSL Bus Compressor's GR meter on the UC1 follows audio-driven gain reduction on the focused REAPER track.
 

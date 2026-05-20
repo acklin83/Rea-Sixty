@@ -1,6 +1,6 @@
-# CLAUDE.md — reaper-uf8
+# CLAUDE.md — Rea-Sixty
 
-> Public / product name: **Rea-Sixty** (REAPER + 360). Repo stays `reaper-uf8` for historical reasons. See `README.md`.
+> Product name: **Rea-Sixty** (REAPER + 360). Repo is at `acklin83/Rea-Sixty` (renamed from `reaper-uf8` on 2026-05-20). Local working-copy directory is still `reaper-uf8` — kept to preserve Claude's memory anchor (`~/.claude/projects/-Users-stoersender-Documents-dev-reaper-uf8/`) and shell history.
 
 ## What This Is
 A REAPER extension that sends REAPER track colors natively to the SSL UF8 Scribble Strips — without requiring an SSL plugin on every track.

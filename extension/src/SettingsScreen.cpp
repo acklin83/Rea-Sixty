@@ -8598,7 +8598,7 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Project");
     ImGui_Separator(ctx);
-    static const char* kRepoUrl = "https://github.com/acklin83/reaper-uf8";
+    static const char* kRepoUrl = "https://github.com/acklin83/Rea-Sixty";
     snprintf(line, sizeof(line), "  Repository:  %s", kRepoUrl);
     ImGui_Text(ctx, line);
     if (ImGui_Button(ctx, "Open repository in browser",
