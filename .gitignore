@@ -45,3 +45,7 @@ dist/stage-*/
 dist/rea-sixty-mac-*.zip
 dist/rea-sixty-win-*.zip
 dist/rea-sixty-linux-*.zip
+
+# Forum drafts — not for public history
+dist/forum-post*.txt
+dist/forum-post*.md
