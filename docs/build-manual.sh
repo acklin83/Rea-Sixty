@@ -44,8 +44,8 @@ pandoc "$SRC" -o "$OUT" \
     --toc \
     --toc-depth=3 \
     $ENGINE \
-    -V mainfont="Helvetica" \
-    -V sansfont="Helvetica" \
+    -V mainfont="Lato" \
+    -V sansfont="Lato" \
     -V monofont="Menlo" \
     -V linkcolor="blue" \
     -V urlcolor="blue" \
