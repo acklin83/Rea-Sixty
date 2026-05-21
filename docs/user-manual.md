@@ -192,6 +192,77 @@ The encoder also drives **SEL-Mode cycle** when **Settings → Modes → FX / Cy
 
 \newpage
 
+# Nav Mode (Markers + Regions)
+
+Nav Mode is a surface overlay — separate from the Selection Modes — that turns the UF8 strips into a live marker / region jump panel. It can be active alongside any Selection Mode; toggling it does not change `g_selectionMode`.
+
+## Engaging Nav Mode
+
+Three bindable builtins:
+
+- `marker_overlay_toggle` — toggle on / off, opens the default view (set in Settings → Modes → NAV).
+- `marker_overlay_markers_only_toggle` — toggle on / off, locks the view to **MarkersAll** (no drill into regions).
+- `marker_overlay_regions_only_toggle` — toggle on / off, locks the view to **Regions** (region presses jump only, no drill).
+
+Bind any of these to a UF8 / UC1 button in Settings → Bindings. The same button toggles Nav Mode off again.
+
+## Three views
+
+- **Regions** — each strip is one REAPER region. Top-soft-key press jumps the transport to that region's start (and, by default, drills into its markers).
+- **MarkersInRegion** — markers inside the region the playhead is in. Auto-rolls into the next region when the playhead crosses out.
+- **MarkersAll** — flat list of every marker in the project.
+
+The default view on Nav-Mode entry is configurable (Settings → Modes → NAV → *Default view*): Regions / MarkersInRegion / MarkersAll / Last used.
+
+## What the UF8 strips show
+
+Per strip while Nav Mode is active:
+
+- **Top-soft-key** — press = jump (and, in Regions view, optionally drill). LED colour = the region / marker's REAPER colour (or grey if *Color-bar source: Force palette grey* is set).
+- **Scribble strip upper row** — the marker / region name.
+- **Scribble strip lower row** — configurable: Off (V-Pot value preserved) / Index (`R03`, `M07`) / Timecode (`MM:SS`).
+- **Strip 0 / strip 7 lower row** — optional `<<` / `>>` pagination hints when there are more items than fit (only meaningful when the lower row is Index or Timecode).
+- **Colour bar** — the marker / region's colour (or palette grey, per setting).
+
+## Paging
+
+When the project has more items than 8 strips, the overlay pages 8 at a time. Pagination via:
+
+- **CHANNEL encoder rotation** while Nav Mode is active — pages forward / backward.
+- The pagination hints on strip 0 / 7 lower row mirror REAPER's prev / next state.
+
+## UC1 Encoder 2 takeover
+
+Off by default. When Settings → Modes → NAV → *Take over UC1 Encoder 2* is on:
+
+- **Rotation** moves the cursor through items (sets a cursor pin that suppresses auto-follow until the playhead catches up or you push).
+- **Plain push** — Jump + Drill / Jump only / Drill only (configurable).
+- **Shift + push** — Drill / Back / Toggle View (configurable).
+- **Long-press** (~500 ms) — Back / Add marker at playhead / Disabled (configurable).
+- The UC1 central LCD switches to a marker carousel showing prev / curr / next items.
+
+While a view-lock toggle (Markers-only / Regions-only) is engaged, shift and long-press are suppressed — only plain push fires.
+
+## Auto-Follow
+
+Settings → Modes → NAV → *Auto-Follow playhead / edit cursor* (checkbox).
+
+When on, the cursor strip tracks whichever marker / region the playhead is on. In MarkersInRegion view, the overlay auto-rolls into the next region when the playhead crosses out (only after the playhead was first observed inside the current filter region — suppresses the snap-back when you drill manually during playback).
+
+Manual cursor movement (UC1 Encoder 2 rotation) pins the cursor and pauses auto-follow until the playhead catches up, or you commit (push), exit Nav Mode, drill, or change view.
+
+## Region-press behaviour
+
+Settings → Modes → NAV → *Region-press behaviour*:
+
+- **Jump + Drill** (default) — press a region's top-soft-key → transport jumps to region start AND the overlay drills into that region's markers.
+- **Jump only** — transport jumps; overlay stays on the Regions view.
+- **Drill only** — overlay drills; transport stays put.
+
+RegionsOnly view-lock always suppresses Drill regardless of this setting.
+
+\newpage
+
 # UF8 hardware
 
 The UF8 has **no transport keys, no Layer LED on Layer 3 on some units, no jog wheel**. The layout below mirrors SSL's published reference (User Guide Rev 11, p.14-17).
