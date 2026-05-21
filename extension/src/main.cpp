@@ -1133,6 +1133,13 @@ void drainSelsets_() {
         }
         g_selsetActive.store(actReq);
         refreshActiveSelsetGuids_();
+        // Snap the bank to the first channel of the selset so the surface
+        // starts at strip 0 of the filtered list. Only on a real activation
+        // (prevActive != actReq) — re-pressing the same selset key keeps
+        // the user's banked position. Frank 2026-05-21.
+        if (prevActive != actReq) {
+            g_bankOffset.store(0);
+        }
         // Apply the global auto-mode to the incoming slot's tracks.
         if (autoModeGate) {
             selsetApplyAutoModeToSlot_(actReq, autoModeWant);
@@ -2389,6 +2396,14 @@ int stripInstanceFxRaw_(MediaTrack* tr)
 // Returns the current Instance-mode active FX index for `tr`,
 // defaulting to 0 when the user hasn't cycled this track yet (or 0
 // when the index drifted out of bounds because the user removed FX).
+//
+// When the "Don't show offline FX" Device setting is on and the resolved
+// cursor lands on an offline FX, scan forward (with wrap) for the first
+// online FX. This catches the default-to-0 case where TrackFX[0] happens
+// to be offline — without the scan, the UF8 colour-bar would render the
+// offline FX's name even though the cycle ring skips it. Returns -1 when
+// every FX on the track is offline (caller renders a fallback). Frank
+// 2026-05-21.
 int stripInstanceActiveFx_(MediaTrack* tr)
 {
     if (!tr) return -1;
@@ -2398,6 +2413,13 @@ int stripInstanceActiveFx_(MediaTrack* tr)
     int idx = (raw < 0) ? 0 : raw;
     if (idx < 0)  idx = 0;
     if (idx >= n) idx = n - 1;
+    if (g_hideOfflineFx.load() && TrackFX_GetOffline(tr, idx)) {
+        for (int off = 1; off < n; ++off) {
+            const int cand = (idx + off) % n;
+            if (!TrackFX_GetOffline(tr, cand)) return cand;
+        }
+        return -1;
+    }
     return idx;
 }
 
@@ -2889,7 +2911,10 @@ void applyInstanceCycle_(int step)
             ++uf8OnlyCount;
         }
     }
-    if (hits.size() < 2) return;   // nothing meaningful to cycle through
+    // hits.size() == 1 keeps the cycle step a no-op but still feeds
+    // showCycleCarousel_ below so the UC1 displays the lone Instance's
+    // name. Frank 2026-05-21.
+    if (hits.empty()) return;
 
     const auto fp = uf8::getFocusedParam();
     uf8::Domain curDom = fp.domain;
@@ -3058,7 +3083,7 @@ void applyFxCycle_(int step)
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
     const int n = TrackFX_GetCount(tr);
-    if (n < 2) return;  // nothing meaningful to cycle through
+    if (n < 1) return;
 
     // Build the ring — every FX index, optionally filtering offline FX.
     // Frank 2026-05-20 "Don't show offline FX" Device setting.
@@ -3069,7 +3094,10 @@ void applyFxCycle_(int step)
         if (hideOffline && TrackFX_GetOffline(tr, i)) continue;
         ring.push_back(i);
     }
-    if (ring.size() < 2) return;
+    // ring.size() == 1 keeps the cycle step a no-op (modular math on
+    // size 1 returns the same index) but still fires showCycleCarousel_
+    // below so the UC1 displays the lone plugin's name. Frank 2026-05-21.
+    if (ring.empty()) return;
 
     const int cur = stripInstanceActiveFx_(tr);
     int curK = 0;
@@ -5329,7 +5357,12 @@ void drainInputQueue()
                         ++uf8OnlyCount;
                     }
                 }
-                if (hits.size() < 2) break;   // Frank 2026-05-15: no-op
+                // hits.size() == 1 keeps the rotation a no-op (modular
+                // math on size 1 → same hit) but still calls
+                // showCycleCarousel_ further down so the UC1 displays the
+                // lone Instance's name. Frank 2026-05-21 (relaxes the
+                // 2026-05-15 < 2 no-op rule for the carousel-display side).
+                if (hits.empty()) break;
 
                 // Anchor on the FX-cursor first — that's the per-strip
                 // equivalent of "what was last landed on". Falls back
