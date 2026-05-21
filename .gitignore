@@ -49,3 +49,9 @@ dist/rea-sixty-linux-*.zip
 # Forum drafts — not for public history
 dist/forum-post*.txt
 dist/forum-post*.md
+
+# Local agent / planning artefacts — stay out of the public repo
+CLAUDE.md
+docs/plan-*.md
+docs/handoff-*.md
+docs/youre-finally-free.md
