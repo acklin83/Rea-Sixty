@@ -278,20 +278,41 @@ elseif(WIN32)
 endif()
 
 # ----- macOS dylib bundling ---------------------------------------------------
-# brew's libusb / hidapi land in /opt/homebrew/opt/... with absolute
-# install names. End users don't have brew, so we copy those dylibs
-# next to ours and rewrite the install names to @loader_path so REAPER
-# finds them in UserPlugins/. With this, the shipped dylib triple is
-# self-contained.
+# brew's libusb / hidapi land under its prefix with absolute install
+# names. End users don't have brew, so we copy those dylibs next to
+# ours and rewrite the install names to @loader_path so REAPER finds
+# them in UserPlugins/. With this, the shipped dylib triple is
+# self-contained. The brew prefix differs by CPU (Apple Silicon:
+# /opt/homebrew, Intel: /usr/local), so ask brew at configure time
+# rather than hard-coding either path.
 if(APPLE)
+    find_program(BREW_EXECUTABLE brew)
+    if(NOT BREW_EXECUTABLE)
+        message(FATAL_ERROR
+            "Homebrew (brew) not found. Install from https://brew.sh, "
+            "then: brew install libusb hidapi")
+    endif()
+    execute_process(COMMAND ${BREW_EXECUTABLE} --prefix libusb
+        OUTPUT_VARIABLE LIBUSB_BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _libusb_brew_rc)
+    execute_process(COMMAND ${BREW_EXECUTABLE} --prefix hidapi
+        OUTPUT_VARIABLE HIDAPI_BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _hidapi_brew_rc)
+    if(NOT _libusb_brew_rc EQUAL 0 OR NOT _hidapi_brew_rc EQUAL 0)
+        message(FATAL_ERROR
+            "Could not query brew for libusb/hidapi prefix. "
+            "Run: brew install libusb hidapi")
+    endif()
+
     foreach(LIB libusb-1.0.0 libhidapi.0)
         if(LIB STREQUAL "libusb-1.0.0")
-            set(SRC_PATH "/opt/homebrew/opt/libusb/lib/${LIB}.dylib")
-            set(OLD_NAME "/opt/homebrew/opt/libusb/lib/${LIB}.dylib")
+            set(SRC_PATH "${LIBUSB_BREW_PREFIX}/lib/${LIB}.dylib")
         else()
-            set(SRC_PATH "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
-            set(OLD_NAME "/opt/homebrew/opt/hidapi/lib/${LIB}.dylib")
+            set(SRC_PATH "${HIDAPI_BREW_PREFIX}/lib/${LIB}.dylib")
         endif()
+        set(OLD_NAME "${SRC_PATH}")
         # install_name_tool invalidates the Homebrew lib's code signature.
         # On macOS 15+ REAPER's dlopen path SIGKILLs on the first invalid
         # signature page (Frank 2026-05-19: REAPER crash report
