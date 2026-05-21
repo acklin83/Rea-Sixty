@@ -712,6 +712,14 @@ std::unordered_set<std::string> g_selsetActiveGuids;  // membership cache
 // so the next onTimer drain re-reads from the new project.
 std::atomic<bool> g_selsetsDirty{true};
 ReaProject* g_selsetsLoadedFor = nullptr;
+// Deferred "scroll to selected track" hook — set anywhere on the main
+// thread, consumed in onTimer AFTER rebuildVisibleTrackList so the
+// follow uses the post-rebuild visible list (which may have widened or
+// narrowed since the trigger). Used by:
+//   - Auto SEL mode exit (registerSelectionModeToggle / selection_mode_norm)
+//   - Selset deactivation (drainSelsets_ on actReq == -1)
+// Frank 2026-05-21.
+std::atomic<bool> g_pendingFollowSelectedAfterRebuild{false};
 // Main-thread drain flags. Lambdas registered as builtins can fire
 // from the libusb input thread; ProjExtState + track-API calls must
 // run on the main thread. Drained in onTimer before
@@ -1106,6 +1114,14 @@ void drainSelsets_() {
         g_selsetActiveGuids.clear();
         g_bankDirty.store(true);
         g_pageDirty.store(true);   // re-paint global LEDs (selset_recall stateOf flipped)
+        // Deactivating a selset typically widens the visible-tracks list
+        // (the filter is gone), so the previously-selected track may sit
+        // off-bank. Defer the follow via g_pendingFollowSelectedAfterRebuild
+        // — onTimer consumes it after the next rebuildVisibleTrackList so
+        // followSelectedInMixer sees the post-deactivate list. Frank 2026-05-21.
+        if (prevActive >= 1 && prevActive <= 8) {
+            g_pendingFollowSelectedAfterRebuild.store(true);
+        }
     } else if (actReq >= 1 && actReq <= 8) {
         // Switching slots: revert the outgoing slot's auto-mode first
         // (only if a different slot was active and the global binding
@@ -11370,6 +11386,16 @@ void onTimer()
     // mapping (Bug 2 fix: Folder Collapse / Show Only Selected).
     rebuildVisibleTrackList();
 
+    // Deferred follow-selected after rebuild — consumed here so the
+    // scroll target is computed against the just-rebuilt visible list
+    // (which may have widened after Auto-exit / selset-deactivate).
+    // Frank 2026-05-21.
+    if (g_pendingFollowSelectedAfterRebuild.exchange(false)) {
+        if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
+            followSelectedInMixer(tr);
+        }
+    }
+
     // Drain coalesced SetSurfaceSelected burst. Whoever was the LAST
     // track flipped to sel=true since the previous tick wins focus —
     // collapsing a 100-track "Select all → restore" burst into a single
@@ -14181,6 +14207,24 @@ void registerBindingHandlers()
                     const auto cur  = g_selectionMode.load();
                     const auto next = (cur == mode) ? SelectionMode::Norm
                                                     : mode;
+                    // Leaving Auto SEL mode → revert any selset-armed
+                    // tracks back to Trim/Read AND scroll the surface
+                    // back to the selected track. The selset auto-mode
+                    // setting (g_selsetAutoMode) drives the apply on
+                    // entry; we mirror it on exit so the user doesn't
+                    // have to manually clear the dropdown or recall the
+                    // set to undo the arming. Frank 2026-05-21.
+                    if (cur == SelectionMode::Auto
+                        && next != SelectionMode::Auto)
+                    {
+                        const int active = g_selsetActive.load();
+                        if (active >= 1 && active <= 8
+                            && g_selsetAutoMode.load() >= 0)
+                        {
+                            selsetApplyAutoModeToSlot_(active, 0);
+                        }
+                        g_pendingFollowSelectedAfterRebuild.store(true);
+                    }
                     g_selectionMode.store(next);
                     // Leaving FX Cycle or Instance Cycle → drop any
                     // V-Pot-owned GUI ownership and ask the sync drain
@@ -14252,6 +14296,19 @@ void registerBindingHandlers()
     registerBuiltin("selection_mode_norm", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
+            const auto cur = g_selectionMode.load();
+            // Leaving Auto → revert selset-armed tracks + scroll selected
+            // track back into view (parallel to registerSelectionModeToggle's
+            // Auto-exit branch). Frank 2026-05-21.
+            if (cur == SelectionMode::Auto) {
+                const int active = g_selsetActive.load();
+                if (active >= 1 && active <= 8
+                    && g_selsetAutoMode.load() >= 0)
+                {
+                    selsetApplyAutoModeToSlot_(active, 0);
+                }
+                g_pendingFollowSelectedAfterRebuild.store(true);
+            }
             g_selectionMode.store(SelectionMode::Norm);
             SetExtState("ReaSixty", "selectionMode", "norm", true);
             g_pageDirty.store(true);
