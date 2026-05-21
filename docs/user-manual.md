@@ -1,7 +1,10 @@
 ---
 title: Rea-Sixty User Manual
 subtitle: Native REAPER ↔ SSL UF8 / UC1 driver
-author: Frank Acklin
+author: |
+  Frank Acklin
+  \
+  [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
 date: v0.1.2
 documentclass: article
 geometry: margin=2.5cm
@@ -280,49 +283,101 @@ For clarity (Rev 11 reference, p.14-17):
 
 # UC1 hardware
 
-The UC1 mirrors the SSL Channel Strip 2 + Bus Compressor 2 + 4K EQ + 4K Dynamics + Filters surface controls on a dedicated unit. When UC1 is plugged in alongside UF8, it auto-engages on the focused REAPER track and follows the focused Instance.
+The UC1 mirrors the SSL Channel Strip 2 + Bus Compressor 2 controls on a dedicated unit, plus a central control panel for navigation. When UC1 is plugged in alongside UF8, it auto-engages on the focused REAPER track and follows the focused Instance.
 
-The UC1 has no hardware mode-switch — Channel Strip and Bus Compressor sections are always live.
+The UC1 has no hardware mode-switch — the Channel Strip and Bus Compressor sections are always live, each driving whichever CS or BC Instance is currently in focus on the focused track.
 
-## Channel Strip section
+## Channel Strip section — left side (EQ + Filters, 12 knobs)
 
-24 knobs across EQ (HF / HMF / LMF / LF + freq + Q) + Dynamics (Compressor + Gate / Expander) + Filters (HPF / LPF) + Input / Output stages + the Channel Fader Level.
+Top to bottom on the left half:
 
-Each knob writes the corresponding parameter of whichever CS Instance is currently in focus on the focused track. For tracks with multiple CS Instances, Encoder 2 push or the Instance Cycle action selects which one is the active CS Instance.
+- **LPF / HPF** — two filter knobs (low-pass + high-pass frequency).
+- **HF** — Gain + Freq (2 knobs).
+- **HMF** — Gain + Freq + Q (3 knobs).
+- **LMF** — Gain + Freq + Q (3 knobs).
+- **LF** — Gain + Freq (2 knobs).
 
-Bypass-domain buttons (HF Bell, EQ In, LF Bell, Dyn-Out, Gate-In, SC) drive boolean params on the CS plug-in. Solo / Cut / Polarity / ChannelIn / Solo-Clear are surface-state buttons routed to REAPER's track ops.
+Plus the EQ-section buttons: **HF Bell** (HF shape), **EQ Type** (E vs G EQ curve), **EQ In** (EQ section bypass), **LF Bell** (LF shape).
 
-## Bus Compressor section
+## Channel Strip section — right side (Dynamics + Channel, 7 knobs + 7 buttons)
 
-8 dedicated BC knobs (Threshold / Ratio / Attack / Release / Make-Up + Mix + In + Side-Chain). They drive the BC Instance on the **BC anchor track** — the track UC1 has currently pinned for BC display. Encoder 2 push pins the BC anchor to the focused track.
+- **Compressor:** Threshold + Ratio + Release (3 knobs).
+- **Gate / Expander:** Threshold + Range + Hold + Release (4 knobs).
 
-The mechanical BC VU meter is driven from REAPER via the PreSonus standard `GainReduction_dB` host-side hook. The needle rest position is the bottom-of-scale; the meter swings up through GR magnitude.
+Buttons:
 
-## Encoder 1 (CHANNEL)
+- **Fast Att Comp** — fast attack on the compressor.
+- **Peak** — peak detection.
+- **Dyn In** — Dynamics section bypass.
+- **Expand** — switch the gate into expander mode.
+- **Fast Att Gate** — fast attack on the gate.
 
-Tracks the focused track. Rotation = step focused-track selection ±. The encoder's surrounding 7-segment digit shows the absolute REAPER track number of the focused track.
+Channel section (lowest row of buttons):
 
-When **Settings → Modes → FX / Cycle → "UC1 Encoder 1"** is ticked, this encoder drives `reasixty_dispatchSelModeCycle` while a cycle-kind Selection Mode is active — same override mechanism as the UF8 Channel Encoder.
+- **Polarity** (phase invert)
+- **SC Listen** (side-chain monitor)
+- **Solo Clear**
+- **Solo** / **Cut** (track operations — routed to REAPER's track ops)
+- **Channel In** (channel input enable)
+- **Fine** (FINE / Shift modifier on UC1)
 
-## Encoder 2 (BC)
+## Channel Strip top row (2 knobs)
 
-Tracks the BC anchor. Rotation = scroll the BC anchor track ±. Push = pin BC anchor to currently focused track AND fire the active FX cursor's GUI ("show focused plug-in GUI"). When Cycle Control mask includes UC1 Encoder 2, this encoder drives the SEL-Mode cycle override.
+- **Input Trim** (CS input gain)
+- **Channel Fader Level** (CS fader stage)
 
-## Central LCD
+When SSL Strip Mode is engaged on the UF8, the **Channel Fader Level** parameter is what the UF8 motorised faders drive.
 
-Three zones, mode-dependent:
+## Bus Compressor section (7 knobs + 1 button)
 
-- **CS readout (zone 0x03)** — last-touched CS parameter name + value, fades after a few seconds.
-- **BC readout (zone 0x05)** — last-touched BC parameter name + value.
-- **Central main (zone 0x0F)** — header (track name + focused-domain Instance), then prev / curr / next Instance carousel (when an Instance / FX cycle has just fired), then the BC compressor mode / status. Multiple overlays compete here (Nav-mode markers/regions carousel, Instance-cycle carousel, BC-scroll carousel) — only one shows at a time, with the most recent winning.
+- **Threshold** / **Ratio** / **Attack** / **Release** / **Make-Up** / **Mix** / **SC HPF** — 7 knobs across the top centre.
+- **Bus Comp In** — single button enabling the BC section.
+
+The BC controls drive the BC Instance on the **BC anchor track** — the track UC1 has currently pinned for Bus-Comp display. Encoder 2 (the *Secondary encoder* right of the central screen) scrolls the anchor between BC-bearing tracks.
+
+The mechanical BC VU meter is driven from REAPER via the PreSonus standard `GainReduction_dB` host-side hook. Rest position = bottom of scale; the needle swings up through GR magnitude.
+
+## Central control panel (between CS and BC)
+
+A column of buttons + the central LCD + the two encoders:
+
+- **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.).
+- **Routing** — opens the Routing menu on the LCD.
+- **Presets** — opens the Presets menu.
+- **360°** — default `mixer_toggle` (open / close Rea-Sixty Settings; bindable on its own UC1 entry so it can diverge from the UF8 360° key).
+- **Magnifier** — no factory action; bindable.
+
+## CHANNEL encoder (left of the central LCD)
+
+The large rotary on the central control panel.
+
+- **Rotation** — Channel Select (move REAPER track selection ±). The surrounding 7-segment digit shows the absolute REAPER track number of the focused track.
+- **Push** — push event arrives as button 0x0D; default binding empty.
+- When **Settings → Modes → FX / Cycle → "UC1 Encoder 1 (CHANNEL)"** is ticked AND a cycle-kind Selection Mode is engaged, rotation drives `reasixty_dispatchSelModeCycle` instead.
+
+## Secondary encoder (right of the central LCD)
+
+ButtonId `Uc1Encoder2` in the bindings system; SSL calls it the "Secondary" or "BC" encoder.
+
+- **Rotation** — `bc_track_scroll` by default (scroll the BC anchor between BC-bearing tracks). Rebindable, including to `instance_cycle` or `fx_cycle`.
+- **Push** — `show_focused_plugin_gui` by default (toggle floating window of the cursor instance from the most recent cycle). Rebindable.
+- Cycle-Control mask includes "UC1 Encoder 2 (BC)" — same SEL-Mode override mechanism as above when ticked + a cycle-kind Selection Mode active.
+
+## Central LCD zones
+
+Three addressable zones:
+
+- **Channel-Strip readout (zone 0x03)** — last-touched CS parameter name + value, e.g. "HF Gain  +3.0 dB". Fades after a few seconds.
+- **Bus-Comp readout (zone 0x05)** — last-touched BC parameter name + value.
+- **Central main (zone 0x0F)** — multi-overlay area. Shows: track-name header + focused Instance variant (default), or the prev / curr / next Instance-carousel triple (after an Instance / FX Cycle just fired), or the BC compressor mode / status, or the Nav-Mode markers/regions carousel. Overlays are mutually exclusive; the most recent claim wins.
 
 ## Brightness
 
-Independent slider per device (UC1 LEDs / UC1 LCDs / UF8 LEDs / UF8 LCDs) in **Settings → Device → Brightness**, plus three pairs of `brightness_*_up` / `brightness_*_down` builtins for direct bind on a button.
+Set independently per channel (UC1 LEDs / UC1 LCDs / UF8 LEDs / UF8 LCDs) under Settings → Device → Brightness. Six `brightness_*_up` / `brightness_*_down` builtins drive these from a hardware button (LEDs / LCDs / Both, up / down).
 
 ## UC1 GR Calibration
 
-If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their printed scale, a per-tick offset table at the bottom of **Settings → Device** corrects each printed dB tick individually. The workflow mirrors SSL 360°'s own BC VU calibration tool — click `Test` next to a tick, then `+` / `-` until the UC1 lines up. Auto-saved per-tick.
+If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their printed scale, a per-tick offset table at the very bottom of **Settings → Device** corrects each printed dB tick individually. The workflow mirrors SSL 360°'s own BC VU calibration tool — click `Test` next to a tick, then `+` / `-` until the UC1 lines up with the printed marking. Auto-saved per-tick. `Stop test` resumes normal GR.
 
 \newpage
 
@@ -394,28 +449,42 @@ Per-tick offset editor for the mechanical BC VU meter and the CS Dynamics GR LED
 
 ## Bindings pane
 
-Renders the UF8 hardware (top half) + UC1 hardware (bottom half) as schematics. Click any button or knob to edit its binding.
+Top of the pane: a tab bar with **UF8** and **UC1**, each rendering its hardware as a vector schematic. Click any button, knob, encoder, or fader to select it; the per-button editor opens below the schematic.
 
-Three binding types:
+The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
-- **Native** — pick from the catalogue of built-in actions (see chapter Native actions).
-- **REAPER Action** — pick any action from REAPER's Action List, via a dedicated picker. Includes ReaScript browsing (Load ReaScript dropdown).
-- **MIDI Command** — emit a raw MIDI message (Note On/Off, CC, PC, NRPN, etc.). Useful for sending messages to non-REAPER targets.
+Three click-to-edit special cases:
 
-### Per-binding fields
+- **Top-soft-keys** (the 8 buttons above the V-Pots) open the **user-Quick slot editor** for the live (Layer, Quick, Sub-Bank) coordinate instead of the regular per-button editor — top-soft-keys are slot pickers, not direct actions.
+- **Sub-bank selectors** (V-POT + 1..5) open the **sub-bank cell editor** with a Per-Quick LED override so the user can distinguish (Layer, Quick) contexts visually.
+- Everything else uses the regular per-button binding editor.
 
-- **Modifier** — `None` / `Shift` / `Cmd` / `Ctrl` and combinations. One physical button can have up to 8 different bindings (none / S / C / Ct / SC / SCt / CCt / SCCt).
-- **Trigger** — `Press` (default) / `Hold` / `Long-press`. Hold keeps firing while pressed; long-press fires once when the threshold elapses.
-- **LED appearance** — colour + brightness override.
-- **MIDI Channel / Note / Value** (MIDI Command bindings only).
+### Per-binding editor
 
-### Bank L / R override
+For a regular button, the editor exposes:
 
-By default `Bank ←` / `Bank →` invoke `bank_left` / `bank_right` builtins. They can be rebound like any other button — useful e.g. to point them at a FX Learn parameter.
+- **Action type** — Native / REAPER Action / Keyboard / MIDI Command / Noop.
+- **Action name** — text picker (auto-complete) for Native + REAPER Action.
+- **Modifier slot** — Plain / Shift / Cmd / Ctrl. Each modifier slot is bound separately, so one physical button can carry up to 4 different bindings per layer.
+- **Behavior** — Momentary / Toggle / Hold.
+- **Long-press action** — separate action that fires after the long-press threshold (~500 ms) instead of the short-press action on release.
+- **LED appearance** — colour + brightness override that replaces the action's default state-of mapping.
+- For **MIDI Command** bindings: channel / note number / velocity / CC value as appropriate.
+- For **REAPER Action** bindings: a search dialog that browses REAPER's Action List by name or command ID (also exposes ReaScript loading).
 
-### Sorting + Export / Import
+### Right-click context menu
 
-Sort dropdown above the bindings table: Name / Developer / Group / Last used. Export saves the current bindings to JSON; Import overwrites. Stored at `~/Library/Application Support/REAPER/rea_sixty/bindings.json` (macOS), `%APPDATA%\REAPER\rea_sixty\bindings.json` (Windows), `~/.config/REAPER/rea_sixty/bindings.json` (Linux).
+Right-clicking a button in the schematic opens Copy / Paste / Clear options for that binding.
+
+### Export / Import / Reset
+
+Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names). Per-binding-file export does not exist as a Bindings-pane action.
+
+Bindings storage paths:
+
+- macOS: `~/Library/Application Support/REAPER/rea_sixty/bindings.json`
+- Windows: `%APPDATA%\REAPER\rea_sixty\bindings.json`
+- Linux: `~/.config/REAPER/rea_sixty/bindings.json`
 
 \newpage
 
@@ -429,140 +498,238 @@ Four sub-tabs: AUTO · FX / Cycle · REC · NAV.
 
 | Setting | Effect |
 |---|---|
-| Hide Trim/Read tracks while in AUTO mode | While AUTO selection mode is active, tracks set to Trim or Read are hidden from the surface. |
-| Auto-fill from right when fewer tracks than strips | When fewer than 8 tracks are visible, lay them right-aligned (strip 0 padded blank) instead of left-aligned. |
-| Selection-Set auto-mode (dropdown) | `None` / `Off / Trim` / `Read` / `Touch` / `Write` / `Latch`. When set, recalling a selset in AUTO mode auto-arms its tracks to this automation mode. Leaving AUTO reverts them to Trim/Read. |
+| Show only tracks armed for automation writing (hide Trim / Read) | While AUTO Selection Mode is engaged, tracks in mode 0 (Trim) or 1 (Read) are hidden from the surface. Touch / Write / Latch / Latch-Preview tracks remain visible. |
+| Fill from left / Fill from right (radio pair) | When fewer visible tracks than the 8 hardware strips, choose which side they collect on. Project order is preserved either way. Active only while AUTO Selection Mode is engaged. |
+| Selection-Set Auto-Mode (combo) | `None` / `Trim/Off` / `Read` / `Touch` / `Write` / `Latch` / `Latch Preview`. When set, recalling a Selection Set in AUTO mode forces its member tracks into this REAPER automation mode. Deactivating the set (or leaving AUTO mode) reverts those tracks to Trim/Read (mode 0). |
 
 ### FX / Cycle
 
-Mask of "which encoder(s) drive Sel-Mode cycle":
+> Active only while a cycle-kind Selection Mode (FX Cycle or Instance Cycle) is on the V-Pot row. Picks which physical controls drive the cycle; the active FX opens in the chosen view (V-Pot push only).
+
+**Controls (multi-select checkboxes):**
 
 - UF8 V-Pots (per-strip cycle) — default ON
 - UF8 Channel Encoder
 - UC1 Encoder 1 (CHANNEL)
 - UC1 Encoder 2 (BC)
 
-When ticked, that encoder bypasses its normal mode and drives `reasixty_dispatchSelModeCycle` while a cycle-kind Selection Mode is active.
+V-Pots cycle per-strip (each strip's own track). The three single encoders cycle the focused track and override their normal function while SEL Mode is engaged.
 
-**V-Pot push opens active FX as:** Floating window / FX chain — when the active cycle target is opened from a V-Pot push.
+**V-Pot push opens active FX as (radio pair):** Floating window / FX chain.
 
 ### REC
 
 | Setting | Effect |
 |---|---|
-| Enable RME / TotalReaper integration | Master switch for the REC + RME behaviour. Requires the TotalReaper extension. |
-| V-Pot rotation → Preamp gain ±1 dB | When on, V-Pot rotation in REC mode steps preamp gain instead of pan. |
-| V-Pot rotation + Shift → Change input channel | When on, Shift+rotation re-routes the strip's track input. |
-| V-Pot push / Cut button / Solo button / Polarity (dropdowns) | Per-button TotalReaper-action assignment (`None`, `Toggle 48V`, `Toggle pad`, `Toggle phase invert`, `Toggle AutoLevel`). |
+| Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below dispatch TotalReaper actions against the strip's track. |
+| V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain instead of pan. |
+| V-Pot rotation + Shift → Change input channel | Re-routes the strip's track input on rotation. |
+| V-Pot push (combo) | TotalReaper action assignment. Choices: `None`, `Toggle 48V phantom`, `Toggle pad`, `Toggle phase invert`, `Toggle AutoLevel`. |
+| Cut button (combo) | Same action list. |
+| Solo button (combo) | Same action list. |
+
+(Polarity is not a separately assignable REC button — only V-Pot push / Cut / Solo.)
 
 ### NAV
 
-| Setting | Effect |
-|---|---|
-| Activation (read-only) | Mirrors the three Nav-mode toggle builtin bindings (`marker_overlay_toggle`, `…_markers_only`, `…_regions_only`). Edit them in the Bindings tab. |
-| Default view | Markers + Regions / Markers only / Regions only. |
-| Auto-follow playhead | Sticky toggle; when on the Nav overlay re-pages itself to keep the playhead's region/marker visible. |
-| Pagination granularity | Page (8 items) / Item (one at a time). |
-| Region press behaviour | Jump only / Jump + Drill (default — entering a region pages to its markers). |
-| Colour bar follows overlay item | When on, the UF8 colour bar takes the colour of the marker/region currently under the cursor. |
-| Lower row | What appears in the lower scribble zone during Nav: item name / item number / nothing. |
+The NAV sub-tab is divided into five sections.
+
+**Activation** — read-only list of which physical button currently fires each of the three Nav-mode toggle builtins:
+
+- `marker_overlay_toggle` (Markers + Regions)
+- `marker_overlay_markers_only_toggle`
+- `marker_overlay_regions_only_toggle`
+
+Each line shows the bound layer + button + modifier + long-press flag, or "(unbound)". Edit via Settings → Bindings.
+
+**View defaults**
+
+- **Default view on Nav Mode entry** (radio): `Regions` / `Markers in current region` / `Markers (all)` / `Last used`. Applied by `marker_overlay_toggle` only. *Markers in current region* snaps to the region under the playhead; falls back to Regions if the playhead is in a gap.
+- **Region-press behaviour** (radio): `Jump + Drill` / `Jump only` / `Drill only`. Jump = move transport to region start; Drill = enter the region's marker list. RegionsOnly view-lock always suppresses Drill.
+
+**UF8 strip display**
+
+- **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible.
+- **Pagination hints `<<`, `>>` on strip 0 / 7 lower row** (checkbox): only meaningful when Lower-row format is Index or Timecode.
+- **Color-bar source** (radio): `REAPER marker colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
+
+**UC1 Encoder 2**
+
+- **Take over UC1 Encoder 2 while Nav Mode is active** (checkbox). When off, Encoder 2 rotation stays bound to its normal action.
+- **Carousel scope** — currently single option *Mirror UF8 view*. Other scopes deferred.
+- **Plain push action** (radio): `Jump + Drill` / `Jump only` / `Drill only`.
+- **Shift + push action** (radio): `Drill` / `Back` / `Toggle View`.
+- **Long-press action** (radio): `Back` / `Add marker at playhead` / `Disabled`. Long-press threshold ~500 ms.
+
+**Auto-Follow**
+
+- **Auto-Follow playhead / edit cursor** (checkbox). While Nav Mode is active, the cursor strip tracks whichever marker / region the playhead is on (or the edit cursor when stopped). In Markers-in-Region view, the overlay auto-rolls into the next region when the playhead crosses out.
 
 \newpage
 
 ## FX Learn pane
 
-The FX Learn editor lets you map any third-party plug-in's parameters onto UF8 strips so the surface controls them like an SSL Instance.
+The FX Learn pane teaches third-party plug-ins to behave as virtual Channel-Strip or Bus-Comp Instances. Built-in maps (SSL CS 2 / 4K B/E/G / BC 2 / 360 Link) always win — user maps can't shadow them.
 
-### Top bar
+The pane has two views:
 
-- **UF8 / UC1** schematic toggle (top tab pair) — choose which surface you're laying out for.
-- **Domain** — `Channel Strip`, `Bus Comp`, `None` (UF8-only). UF8-only mode lets you map an FX into the per-strip view without claiming a CS/BC slot.
+### Master view (default)
+
+Toolbar:
+
+- **+ New** — opens the "new map" picker (browses your installed-FX catalog by name, lets you choose primary mode + UF8-Mode flag).
+- **Export…** — write the full user-plug-in catalog to a JSON file.
+- **Import…** — read a catalog JSON back in.
+
+Below the toolbar:
+
+- Search field (case-insensitive match against FX name or derived developer string).
+- Table of user maps. Per row: display short, FX-name match, developer, domain, variant count, mapped-param count, last-edit date, **Edit** button, **Delete** button.
+
+### Editor view (entered via Edit)
+
+Top bar:
+
+- **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
 - **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode dispatch.
-- **Mode picker** (three radio buttons) — selects which UI variant the editor shows for placement.
+- **Primary mode** picker (CS variant family) and other domain-specific options.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
+- Breadcrumb **`← All maps`** to leave the editor.
 
-### Layout
+Editor body — depends on the domain:
 
-- Left pane: searchable plug-in list. Each entry shows display short / full name / domain / variant count / # of mapped params / last edit date.
-- Right pane (when a plug-in is selected): the per-strip schematic. Drag a UF8 strip slot onto a plug-in parameter to learn it.
+- **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
+- **None (UF8-only):** the UF8 strip-bar schematic. Drag a strip slot (V-Pot, top soft-key, etc.) onto a plug-in parameter.
 
 ### Multi-instance picker
 
-When the focused track has multiple FX matching the same plug-in name, the editor surfaces a combo to choose which Instance the editor's live readouts come from.
+When the focused track has multiple FX matching the map's name, the editor surfaces a combo to choose which Instance's live readouts feed the editor. Picked index is per plug-in.
 
 ### GR meter combo
 
-Per learnable plug-in, a combo: `None` / `(parameter)` / `Use PreSonus standard`. When set to PreSonus standard, the UF8 strip's GR meter is driven via REAPER's `TrackFX_GetNamedConfigParm(... "GainReduction_dB" ...)` query — works for any plug-in implementing the PreSonus VST3 host extension.
+Per learnable plug-in, a combo: `None` / `(named parameter)` / `Use PreSonus standard`. When set to PreSonus standard, the UF8 strip's GR meter (and the UC1 Comp meter when *GR meter source: Show any GR Data* is on) is driven via REAPER's `TrackFX_GetNamedConfigParm(... "GainReduction_dB" ...)` query — works for any plug-in implementing the PreSonus VST3 host extension.
 
 ### Param snapshot
 
-When the catalog entry was created with the FX live, parameter names / value formatters are snapshotted into the catalog so the editor stays usable even if the FX isn't currently loaded.
+When a catalog entry is created with the FX live on a track, parameter names + value formatters are snapshotted into the catalog so the editor stays usable even if no instance of the plug-in is currently loaded.
 
 ### Storage
 
-Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v7). Import / Export via the toolbar.
+Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v7). Old v5 / v6 files auto-migrate on first load.
 
 \newpage
 
 ## Selection Sets pane
 
-Eight slots (1..8). Each slot is either:
+Eight slots (1..8). Recall toggles — press the active slot's button again to deactivate. Filter ANDs with Folder Mode / Show-Only-Selected / AUTO-mode filters.
+
+Each slot is either:
 
 - **Snapshot** — fixed list of REAPER track GUIDs frozen at save time.
 - **Group** — bound to a REAPER track group (1..64). Membership refreshes every onTimer tick from `GetSetTrackGroupMembership` across all Lead/Follow categories.
 
-Per-slot controls:
+Per-slot row, left to right:
 
-- **Save** — capture the current REAPER selection into the slot.
-- **Recall** — make the slot active. Filters the surface to only the slot's tracks.
-- **Cycle** — step through populated slots (off → 1 → 2 → ... → off).
-- **Name** — editable.
-- **Type dropdown** — Snapshot / Group.
-- **Group index** (Group type only) — 1..64.
-- **Global checkbox** — Group slots only. When OFF, the slot's membership is stored in the project's ProjExtState. When ON, the slot follows whichever project is open.
+- **• / blank** active-row marker dot.
+- **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (ProjExtState, persists with the project save). Group slots benefit most from Global since "group N" is a stable concept across projects.
+- **Type** combo: `Snapshot` / `Group`.
+- **Name** text field.
+- **Grp** spinner (Group type only) — REAPER track group index 1..64.
+- Track count display: `(N tracks)`.
+- **Save** button — overwrite the slot's GUID list with the current REAPER selection (also converts a Group slot to Snapshot).
+- **Recall** / **Deactivate** button — toggle the active slot.
+- **Clear** button — empty the slot.
 
 ### Auto-mode binding
 
-A single global "Selection-Set auto-mode" dropdown (Settings → Modes → AUTO) applies to every slot. When a slot is active in AUTO selection mode + the dropdown is set to a value other than `None`, recalling that slot arms its tracks to the selected automation mode. Leaving the slot (or switching out of AUTO) reverts them to Trim/Read.
+A single global "Selection-Set Auto-Mode" combo (Settings → Modes → AUTO) applies to every slot. When a slot is active in AUTO Selection Mode + the combo is set to a value other than `None`, recalling that slot arms its tracks to the selected automation mode. Leaving the slot (or switching out of AUTO) reverts them to Trim/Read.
 
 ### Slot bank-snap
 
 Recalling a slot snaps the surface to strip 0 = first channel of the set, so larger sets always start at the beginning. Re-pressing the same slot key keeps your current bank position.
 
+### Driving from hardware
+
+Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save current REAPER selection to slot** with param 1..8, via Settings → Bindings.
+
 \newpage
 
 ## Parameter Groups pane
 
-Maps the parallel-control feature: when you adjust a param on one track, the same param adjusts on every other track in the active group.
+Parallel parameter control across multiple tracks: while a slot is active, plug-in tweaks on the focused track copy to every member track of the slot.
 
-Eight persistent slots, each with a list of REAPER tracks. The active group is one of those 8, OR a **temporary group derived from the current multi-track selection** when **Multi-Select acts as Temp Group** is on.
+Top of the pane:
 
-UF8 V-Pot edits + SC / BC encoder edits + UC1 knob edits all fan out to the active group's tracks.
+- **Multi-Select acts as temporary Parameter Group** (checkbox). When on AND no persistent slot is active AND multiple tracks are selected, those tracks become the live group.
 
-Per-slot UI:
+Per-slot row (8 slots):
 
-- **Active** button — set this slot as the active group.
-- **Name** field.
-- **Members** — list of tracks, with Add Selection / Remove / Clear.
-- **Save current selection to this slot** — convenience button.
+- **• / blank** active-row marker.
+- **Active** checkbox — toggle this slot's active state.
+- **Name** text field.
+- Member count display: `(N members)`.
+- **Add Selected** button — add currently-selected REAPER tracks to this slot's membership.
+- **Clear** button — empty the slot's membership.
 
-Native actions:
+Bottom of the pane:
 
-- `param_group_remove_all` — strip the current REAPER selection from every group.
-- `multi_select_as_temp_group_toggle` — switch the temp-group behaviour on/off.
+- **Remove Selected Tracks from All Groups** button — pull every currently-selected track out of every slot.
+- Hint text pointing at the Param Group native actions in Settings → Bindings.
 
-Unmapped FX deferred. Storage: `P_EXT` bitmask per track + JSON sidecar (`param_groups.json`) for slot metadata.
+### Storage
+
+Per-track slot membership lives in `P_EXT:rea_sixty:param_groups` as an 8-bit bitmask (one bit per slot). Slot metadata (names, active flag) lives in a project-scoped JSON sidecar (`param_groups.json`).
 
 \newpage
 
 ## About pane
 
-- Version banner + commit hash
-- **Install UF8/UC1 WinUSB driver** button (Windows only — UAC prompt, runs the in-product WinUSB installer)
-- **Install Linux udev rule** button (Linux only — pkexec, copies the rule into `/etc/udev/rules.d/`, reloads udev)
-- Links: GitHub repo, issue tracker, release page
+The pane stacks several sections from top to bottom.
 
-The driver / udev installers are idempotent — clicking with the rule already installed is a no-op.
+### Header
+
+- Title + tagline ("Open-source SSL 360 replacement for UF8 / UC1").
+- Author byline: "Made by Frank Acklin @ Stoersender Studio, Switzerland".
+- Button **stoersender-studio.ch** — opens the studio website in the system browser.
+- Commit-count blurb ("This project took N commits so far").
+- "You can buy me a beer:" + **paypal.me/FrankAcklin** button.
+
+### Versions
+
+- **Build** — date + time of the compiled extension.
+- **REAPER** — the host REAPER version string.
+- **ReaImGui** — the bundled-ABI banner (currently v0.10).
+
+### Project
+
+- Repository URL display + **Open repository in browser** button.
+
+### Setup (Export / Import / Reset)
+
+A single bundled file format covering: bindings, learned plug-in maps, Parameter Group slot names, and every Settings preference. *Selection Sets + Parameter Group track memberships stay per-project and travel with the .RPP*.
+
+- **Export setup…** — save the bundle to a chosen JSON file.
+- **Import setup…** — load a bundle (replaces in-memory state immediately; warnings reported inline).
+- **Reset to factory defaults** — confirmation popup. Replaces bindings + learned FX + parameter-group slot meta + every Settings preference with the baked-in factory configuration. Per-project Selection Sets and Parameter Group memberships are untouched.
+
+### Windows USB driver (Windows only)
+
+Section appears only when the build is Windows.
+
+- Text: binds UF8 + UC1 to WinUSB so libusb can claim them without Zadig. One-time setup, requires admin. SSL 360° stops seeing the devices after install — reinstall SSL 360° to revert.
+- **Install UF8/UC1 WinUSB driver** button — kicks off the in-product installer with a UAC + publisher prompt. After acceptance, unplug + replug devices.
+
+### Linux udev rule (Linux only)
+
+Section appears only when the build is Linux.
+
+- Text: grants non-root USB access by installing `/etc/udev/rules.d/99-rea-sixty.rules`. One-time setup, requires sudo (graphical password prompt).
+- **Install Linux udev rule** button — runs pkexec, writes the rule, reloads udev. After install, unplug + replug UF8 + UC1, then restart REAPER.
+
+### Logs
+
+- Lists the diagnostic log paths (`/tmp/reaper_uf8_frames.log`, `/tmp/reaper_uf8_colors.log`, etc.).
+- **Reveal /tmp in Finder** button (macOS only — equivalent on other platforms TBD).
 
 \newpage
 

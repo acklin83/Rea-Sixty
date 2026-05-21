@@ -16,7 +16,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$REPO_ROOT/docs/user-manual.md"
-OUT="$REPO_ROOT/docs/user-manual.pdf"
+
+# Version comes from git tag (`v0.1.2`) or HEAD short-sha as fallback.
+# Drops into the output filename so each release ships an identifiable PDF.
+VERSION="$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null \
+            || git -C "$REPO_ROOT" rev-parse --short HEAD)"
+
+OUT="$REPO_ROOT/docs/Rea-Sixty-Manual-$VERSION.pdf"
 
 if ! command -v pandoc >/dev/null 2>&1; then
     echo "ERROR: pandoc not found in PATH."
