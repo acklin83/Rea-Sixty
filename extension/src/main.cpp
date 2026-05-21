@@ -1542,6 +1542,141 @@ enum BallisticMode : int {
 };
 std::atomic<int> g_ballisticMode{BM_Peak};
 
+// Track-name abbreviation strategy used everywhere a track name has to
+// fit a fixed-width scribble slot (currently UF8's 7-char upper row).
+// Truncate keeps the legacy first-N-chars behaviour; SmartAbbrev runs a
+// vowel-drop + space-strip reduction that's a closer fit to how console
+// mixers shorten labels.
+enum TrackNameMode : int {
+    TNM_Truncate    = 0,
+    TNM_SmartAbbrev = 1,
+};
+std::atomic<int> g_trackNameMode{TNM_Truncate};
+
+// Shorten `src` to at most `maxLen` chars. In Truncate mode this is a
+// straight resize. SmartAbbrev tries to keep every word visible:
+//   1) split on space / dash / underscore / slash;
+//   2) per token: keep first char, drop later vowels;
+//   3) collapse runs of repeated consonants per token;
+//   4) if combined length still exceeds maxLen, distribute the budget
+//      proportionally to each token's shortened length, guaranteeing at
+//      least one char per token so "Background Vocals" lands as
+//      "BckgrV" or similar instead of "Bckgrnd" (which loses the V).
+// All-uppercase short tokens (DI, FX, EQ, …) survive untouched.
+std::string abbreviateTrackName_(const std::string& src, int maxLen)
+{
+    if (maxLen <= 0) return src;
+    if (static_cast<int>(src.size()) <= maxLen) return src;
+    if (g_trackNameMode.load() != TNM_SmartAbbrev) {
+        std::string out = src;
+        out.resize(maxLen);
+        return out;
+    }
+    auto isSep = [](char c) {
+        return c == ' ' || c == '\t' || c == '-' || c == '_' || c == '/';
+    };
+    std::vector<std::string> tokens;
+    {
+        std::string cur;
+        for (char c : src) {
+            if (isSep(c)) {
+                if (!cur.empty()) { tokens.push_back(cur); cur.clear(); }
+            } else {
+                cur.push_back(c);
+            }
+        }
+        if (!cur.empty()) tokens.push_back(cur);
+    }
+    if (tokens.empty()) {
+        std::string out = src;
+        out.resize(maxLen);
+        return out;
+    }
+    // Pass 1: just strip separators. Often enough on its own.
+    {
+        std::string joined;
+        for (auto& t : tokens) joined += t;
+        if (static_cast<int>(joined.size()) <= maxLen) return joined;
+    }
+
+    auto isVowel = [](char c) {
+        const char l = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c)));
+        return l == 'a' || l == 'e' || l == 'i' || l == 'o' || l == 'u';
+    };
+    auto isAcronymToken = [](const std::string& t) {
+        if (t.size() < 2 || t.size() > 4) return false;
+        for (char c : t) {
+            if (!std::isupper(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    };
+    // Pass 2: per-token vowel drop (keep first char + every consonant).
+    std::vector<std::string> abbr;
+    abbr.reserve(tokens.size());
+    for (auto& t : tokens) {
+        if (isAcronymToken(t)) { abbr.push_back(t); continue; }
+        std::string a;
+        for (size_t i = 0; i < t.size(); ++i) {
+            if (i == 0 || !isVowel(t[i])) a.push_back(t[i]);
+        }
+        if (a.empty()) a.push_back(t[0]);
+        abbr.push_back(std::move(a));
+    }
+    {
+        std::string joined;
+        for (auto& a : abbr) joined += a;
+        if (static_cast<int>(joined.size()) <= maxLen) return joined;
+    }
+    // Pass 3: collapse repeated consonants inside each token.
+    int totalSize = 0;
+    for (auto& a : abbr) {
+        std::string c;
+        for (char ch : a) {
+            if (!c.empty() && c.back() == ch && !isVowel(ch)) continue;
+            c.push_back(ch);
+        }
+        a = std::move(c);
+        totalSize += static_cast<int>(a.size());
+    }
+    if (totalSize <= maxLen) {
+        std::string joined;
+        for (auto& a : abbr) joined += a;
+        return joined;
+    }
+    // Pass 4: distribute the char budget across tokens proportionally to
+    // their shortened length, but reserve at least 1 char per remaining
+    // token so the last word doesn't get dropped entirely.
+    const int n = static_cast<int>(abbr.size());
+    std::string out;
+    int remaining = maxLen;
+    for (int i = 0; i < n; ++i) {
+        const int reserveForRest = n - 1 - i;
+        const int maxThis = remaining - reserveForRest;
+        int take;
+        if (i == n - 1) {
+            take = remaining;
+        } else {
+            const double share =
+                static_cast<double>(maxLen) *
+                static_cast<double>(abbr[i].size()) /
+                static_cast<double>(totalSize);
+            take = static_cast<int>(share + 0.5);
+            if (take < 1) take = 1;
+        }
+        if (take > maxThis) take = maxThis;
+        if (take > static_cast<int>(abbr[i].size())) {
+            take = static_cast<int>(abbr[i].size());
+        }
+        if (take < 1) take = 1;
+        out.append(abbr[i], 0, static_cast<size_t>(take));
+        remaining -= take;
+        if (remaining <= 0) break;
+    }
+    if (static_cast<int>(out.size()) > maxLen) out.resize(maxLen);
+    return out;
+}
+
 struct BrightnessBytes {
     uint8_t uf8_led; uint8_t uf8_lcd;
     uint8_t uc1_led; uint8_t uc1_lcd; uint8_t uc1_status;
@@ -1815,6 +1950,11 @@ void loadBrightness()
     if (bm && *bm) {
         const int v = std::atoi(bm);
         if (v >= BM_Peak && v <= BM_RMS) g_ballisticMode.store(v);
+    }
+    const char* tnm = GetExtState("ReaSixty", "trackNameMode");
+    if (tnm && *tnm) {
+        const int v = std::atoi(tnm);
+        if (v >= TNM_Truncate && v <= TNM_SmartAbbrev) g_trackNameMode.store(v);
     }
 }
 
@@ -3968,7 +4108,6 @@ std::array<std::atomic<bool>, 8>     g_touchOriginPbValid{};
 uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
                                 int bankOffset, int trackCount)
 {
-    if (!tr) return 0;
     auto normToPb = [](double n) -> uint16_t {
         if (n < 0.0) n = 0.0;
         if (n > 1.0) n = 1.0;
@@ -3984,10 +4123,14 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
         return normToPb((pan + 1.0) * 0.5);
     };
 
+    // PM and routing both source the fader value from somewhere other
+    // than `tr` (focused FX / route target), so check them BEFORE the
+    // bank-track null bail — otherwise PM/sends strips past the last
+    // visible track read as -inf even though the user has valid bindings.
     const StripRoute fr = resolveFaderRoute_(
         static_cast<int>(s), bankOffset, trackCount);
     if (fr.active()) {
-        if (!fr.valid) return linearVolumeToPb(uiVolLinear(tr));
+        if (!fr.valid) return tr ? linearVolumeToPb(uiVolLinear(tr)) : 0;
         if (g_flip.load()) {
             const double pan = GetTrackSendInfo_Value(
                 fr.track, fr.sendCategory, fr.sendIndex, "D_PAN");
@@ -3998,21 +4141,26 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
         return linearVolumeToPb(vol);
     }
 
+    // FLIP + focused SSL slot — preferred over PM by the input writer, so
+    // mirror that here. Needs `tr` to resolve the plug-in lookup; skipped
+    // when the bank track is past the visible end.
     const auto focusedT = uf8::getFocusedParam();
-    auto mmT = uf8::lookupPluginOnTrack(tr, focusedT.domain);
-    const uf8::LinkSlot* slT = (!g_forcePan.load() && mmT.map)
-        ? uf8::findSlotByLinkIdx(*mmT.map, focusedT.slotIdx)
-        : nullptr;
-    if (isVPotPanFocus(focusedT)) slT = nullptr;
+    if (tr) {
+        auto mmT = uf8::lookupPluginOnTrack(tr, focusedT.domain);
+        const uf8::LinkSlot* slT = (!g_forcePan.load() && mmT.map)
+            ? uf8::findSlotByLinkIdx(*mmT.map, focusedT.slotIdx)
+            : nullptr;
+        if (isVPotPanFocus(focusedT)) slT = nullptr;
 
-    if (g_flip.load() && slT) {
-        double n = TrackFX_GetParamNormalized(tr, mmT.fxIndex, slT->vst3Param);
-        if (slT->inverted) n = 1.0 - n;
-        return normToPb(n);
-    }
-    if (g_flip.load() && !g_pluginFaderMode.load() && !g_uf8PluginMode.load()) {
-        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-        return panToPb(pan);
+        if (g_flip.load() && slT) {
+            double n = TrackFX_GetParamNormalized(tr, mmT.fxIndex, slT->vst3Param);
+            if (slT->inverted) n = 1.0 - n;
+            return normToPb(n);
+        }
+        if (g_flip.load() && !g_pluginFaderMode.load() && !g_uf8PluginMode.load()) {
+            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+            return panToPb(pan);
+        }
     }
     if (g_uf8PluginMode.load()) {
         if (auto uctx = userStripCtxFocused_(); uctx.map) {
@@ -4024,7 +4172,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
                 return normToPb(n);
             }
         }
-    } else if (g_pluginFaderMode.load()) {
+    } else if (tr && g_pluginFaderMode.load()) {
         const auto cs = csFaderForTrack(tr);
         if (cs.vst3Param >= 0) {
             const double n = TrackFX_GetParamNormalized(
@@ -4032,7 +4180,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
             return normToPb(n);
         }
     }
-    return linearVolumeToPb(uiVolLinear(tr));
+    return tr ? linearVolumeToPb(uiVolLinear(tr)) : 0;
 }
 
 void queueInput(PendingInput e)
@@ -4263,9 +4411,43 @@ void drainInputQueue()
         }
 
         const int slot = stripToVisibleSlot(e.strip, bankOffset);
-        if (slot < 0 || slot >= surfaceCount) continue;
-        MediaTrack* tr = visibleTrackAt(slot);
-        if (!tr) continue;
+        MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
+        // PM and routing modes keep all 8 strips addressable even past
+        // the last visible track. Only a curated subset of events have
+        // PM/routing branches that source from focused FX or route
+        // target instead of `tr` — those events are allowed through with
+        // tr=null. Everything else (TotalReaper, RecArm, AutoMode, cycle
+        // controls, etc.) needs the bank track and gets dropped.
+        // Frank 2026-05-21.
+        if (!tr) {
+            auto kindAllowsNullTrack = [](PendingInput::Kind k) {
+                switch (k) {
+                    case PendingInput::SoloToggle:
+                    case PendingInput::MuteToggle:
+                    case PendingInput::SelectToggle:
+                    case PendingInput::SelectExclusive:
+                    case PendingInput::TouchSelectExclusive:
+                    case PendingInput::VolumeAbs:
+                    case PendingInput::PanDelta:
+                    case PendingInput::PanCenter:
+                    case PendingInput::TouchOriginSnapshot:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+            if (!kindAllowsNullTrack(e.kind)) continue;
+            const bool pmActive = g_uf8PluginMode.load();
+            const bool faderRouted = g_sendFaderAllIdx.load() >= 0
+                || g_sendFaderThisTrack.load()
+                || g_recvFaderAllIdx.load() >= 0
+                || g_recvFaderThisTrack.load();
+            const bool vpotRouted  = g_sendVpotAllIdx.load() >= 0
+                || g_sendVpotThisTrack.load()
+                || g_recvVpotAllIdx.load() >= 0
+                || g_recvVpotThisTrack.load();
+            if (!pmActive && !faderRouted && !vpotRouted) continue;
+        }
         if (e.kind == PendingInput::TouchOriginSnapshot) {
             const uint16_t pb = computeStripCurrentPb_(
                 e.strip, tr, bankOffset, surfaceCount);
@@ -4416,6 +4598,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;  // PM/routing didn't claim; no track to solo.
                 CSurf_OnSoloChange(tr, -1);
                 {
                     const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
@@ -4459,6 +4642,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;  // PM/routing didn't claim; no track to mute.
                 CSurf_OnMuteChange(tr, -1);
                 {
                     const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
@@ -4486,6 +4670,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;
                 CSurf_OnSelectedChange(tr, -1);
                 break;
             }
@@ -4508,12 +4693,14 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
             case PendingInput::TouchSelectExclusive:
                 // Plain track select on fader-touch; no UF8 Plugin Mode
                 // hijack (cf. SelectExclusive above).
+                if (!tr) break;
                 if (GetMediaTrackInfo_Value(tr, "I_SELECTED") < 0.5) {
                     SetOnlyTrackSelected(tr);
                     followSelectedInMixer(tr);
@@ -4637,6 +4824,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;  // PM/routing didn't claim — no track to write.
                 if (g_pluginFaderMode.load()) {
                     const auto cs = csFaderForTrack(tr);
                     if (cs.vst3Param >= 0) {
@@ -4752,7 +4940,7 @@ void drainInputQueue()
                         if (fr.valid) {
                             double delta = e.value;
                             if (g_shiftHeld.load()) delta *= 0.25;
-                            if (g_flip.load() && g_forcePan.load()) {
+                            if (g_flip.load() && g_forcePan.load() && tr) {
                                 // FLIP+PAN held → V-Pot drives the strip
                                 // track's own pan (P_PAN), not the send.
                                 const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
@@ -4824,6 +5012,7 @@ void drainInputQueue()
                 // FLIP exception: with a slot present, the V-Pot drives
                 // track volume in pb14 space instead of the param (the
                 // fader has taken over the param).
+                if (!tr) break;  // PM/routing didn't claim — no track to read.
                 const auto focused = uf8::getFocusedParam();
                 // Synthetic toggles ignore rotation — push-only per user
                 // instruction (no continuous value to scrub).
@@ -4956,7 +5145,7 @@ void drainInputQueue()
                         e.strip, bankOffset, trackCount);
                     if (fr.active()) {
                         if (fr.valid) {
-                            if (g_flip.load() && g_forcePan.load()) {
+                            if (g_flip.load() && g_forcePan.load() && tr) {
                                 SetMediaTrackInfo_Value(tr, "D_PAN", 0.0);
                             } else if (g_flip.load()) {
                                 writeRouteVolumeLinear_(fr, 1.0);
@@ -5015,6 +5204,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                if (!tr) break;  // PM/routing didn't claim — no track to push.
                 const auto focused = uf8::getFocusedParam();
                 // Synthetic toggles (Phase / A/B / HQ) are not VST3 params
                 // — handled directly here on the strip's track. Push
@@ -7863,6 +8053,9 @@ void pushZonesForVisibleSlots()
         uint32_t userColourSolo = 0;
         uint32_t userColourCut  = 0;
         uint32_t userColourSel  = 0;
+        bool userInvertSolo = false;
+        bool userInvertCut  = false;
+        bool userInvertSel  = false;
         if (g_uf8PluginMode.load()) {
             userS = userStripCtxFocused_();
             if (userS.map) {
@@ -7876,6 +8069,9 @@ void pushZonesForVisibleSlots()
                 userColourSolo = sb.soloColour;
                 userColourCut  = sb.cutColour;
                 userColourSel  = sb.selColour;
+                userInvertSolo = sb.soloInvert;
+                userInvertCut  = sb.cutInvert;
+                userInvertSel  = sb.selInvert;
                 userBoundVpot  = userS.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s].vst3Param;
             }
         }
@@ -7894,6 +8090,7 @@ void pushZonesForVisibleSlots()
                 if (userBoundCut >= 0) {
                     effMute = TrackFX_GetParamNormalized(
                         userS.tr, userS.fxIdx, userBoundCut) >= 0.5;
+                    if (userInvertCut) effMute = !effMute;
                 }
                 // userBoundCut < 0 → effMute stays false → LED off.
             } else if (cutRmeActive && tr) {
@@ -7948,9 +8145,10 @@ void pushZonesForVisibleSlots()
         const RecRmeAction soloRme = g_recSolo.load();
         const bool soloRmeActive   = recRmeButtonActive(soloRme);
         if (userStripActive) {
-            const bool soloOn = (userBoundSolo >= 0)
+            bool soloOn = (userBoundSolo >= 0)
                 && TrackFX_GetParamNormalized(
                        userS.tr, userS.fxIdx, userBoundSolo) >= 0.5;
+            if (userBoundSolo >= 0 && userInvertSolo) soloOn = !soloOn;
             const int8_t soloKey = soloOn ? 1 : 0;
             if (soloKey != g_lastSoloLed[s]) {
                 g_lastSoloLed[s] = soloKey;
@@ -7962,9 +8160,10 @@ void pushZonesForVisibleSlots()
                     soloCol));
             }
 
-            const bool selOn = (userBoundSel >= 0)
+            bool selOn = (userBoundSel >= 0)
                 && TrackFX_GetParamNormalized(
                        userS.tr, userS.fxIdx, userBoundSel) >= 0.5;
+            if (userBoundSel >= 0 && userInvertSel) selOn = !selOn;
             const int8_t selKey = selOn ? 1 : 0;
             if (selKey != g_lastSelLed[s]) {
                 g_lastSelLed[s] = selKey;
@@ -8366,6 +8565,23 @@ void pushZonesForVisibleSlots()
         const bool routedButInvalid =
             (routedFader && !faderRoute.valid)
          || (routedVpot  && !vpotRoute.valid);
+        // UF8 Plugin Mode + "This Track" routing keep every strip active
+        // even when the bank window is past the last REAPER track. The
+        // strip content lives in the focused FX (PM) or the route source
+        // (This-Track routing); the bank track is incidental. Substitute
+        // the relevant track as a fallback for `tr` so the existing
+        // render pipeline (csType / scribble / fader-db / etc.) renders
+        // those strips instead of bailing into the empty-strip blank.
+        // Without this, a session with only 4 tracks silently disables
+        // strips 5..8 in PM despite 8 learned plug-in mappings, and in
+        // Sends mode despite the focused track having ≥5 sends.
+        // Frank 2026-05-21.
+        if (!tr && userStripActive) {
+            tr = userS.tr;
+        } else if (!tr && (routedFader || routedVpot)) {
+            const auto& r = routedFader ? faderRoute : vpotRoute;
+            if (r.track) tr = r.track;
+        }
         if (!tr || routedButInvalid) {
             const std::string blankCs   = "";   // empty → NUL-padded to width
             const std::string blankDb   = "    ";
@@ -8908,7 +9124,7 @@ void pushZonesForVisibleSlots()
             if (blankInUserStripMode) {
                 n = "       ";   // 7 spaces, matches blank-strip path
             }
-            if (n.size() > 7) n.resize(7);
+            n = abbreviateTrackName_(n, 7);
             if (n != g_lastTrackName[s]) {
                 g_lastTrackName[s] = n;
                 g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), n));
@@ -14171,6 +14387,24 @@ void reasixty_setBallisticMode(int mode)
     // Reset envelopes so the new mode starts cleanly from silence rather
     // than carrying old smoothed values that don't match the new τ.
     for (int i = 0; i < 16; ++i) { g_vuEnvDb_[i] = -120.0; g_rmsEnvPow_[i] = 0.0; }
+}
+
+int reasixty_trackNameMode()
+{
+    return g_trackNameMode.load();
+}
+
+void reasixty_setTrackNameMode(int mode)
+{
+    if (mode < TNM_Truncate)    mode = TNM_Truncate;
+    if (mode > TNM_SmartAbbrev) mode = TNM_SmartAbbrev;
+    g_trackNameMode.store(mode);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", mode);
+    SetExtState("ReaSixty", "trackNameMode", buf, true);
+    // Force the strip-name cache to invalidate so the next UF8 push
+    // re-emits all 8 labels under the new abbreviation rule.
+    g_lastTrackName.fill({});
 }
 
 // Phase 2.7 Bindings — Phase A. Registers the builtin handlers that

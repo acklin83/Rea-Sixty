@@ -131,6 +131,14 @@ struct UserUf8StripBinding {
     uint32_t soloColour = 0;
     uint32_t cutColour  = 0;
     uint32_t selColour  = 0;
+    // Per-LED "Reverse" toggle. When true, the LED on/off state is XORed
+    // before rendering so a plug-in whose Cut param reads 1 = inactive
+    // (and 0 = active) still produces the conventional bright-when-active
+    // behaviour. No effect for buttons falling through to track-state
+    // (Vst3Param == -1).
+    bool soloInvert = false;
+    bool cutInvert  = false;
+    bool selInvert  = false;
 };
 
 // Bank Left / Bank Right buttons are reserved for fader-bank switching

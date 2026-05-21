@@ -165,6 +165,8 @@ bool reasixty_showOnlySelected();
 void reasixty_setShowOnlySelected(bool on);
 int  reasixty_ballisticMode();
 void reasixty_setBallisticMode(int mode);
+int  reasixty_trackNameMode();
+void reasixty_setTrackNameMode(int mode);
 void reasixty_exportDiagnostic();  // shows confirmation dialog itself
 // Stock SSL plug-in soft-key labels for the read-only tabs.
 // domain: 0 = ChannelStrip, 1 = BusComp.
@@ -467,6 +469,33 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool showMcpHidden = reasixty_showTracksHiddenInMcp();
     if (ImGui_Checkbox(ctx, "Show tracks hidden in MCP", &showMcpHidden)) {
         reasixty_setShowTracksHiddenInMcp(showMcpHidden);
+    }
+
+    // Track names longer than the 7-char scribble-strip slot need shortening.
+    // Truncate keeps the legacy first-7-chars behaviour. Smart Abbreviate
+    // strips spaces / vowels-after-first-letter / repeated consonants so
+    // "Background Vocals" lands as "BckgrV" instead of "Backgro".
+    // BeginCombo + Selectable instead of ImGui_Combo with \0 items —
+    // the Combo overload silently renders empty in ReaImGui v0.10.
+    {
+        const char* kNameModeLabels[2] = { "Truncate", "Smart abbreviate" };
+        int curMode = reasixty_trackNameMode();
+        if (curMode < 0 || curMode > 1) curMode = 0;
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, "Long track-name handling",
+                             kNameModeLabels[curMode],
+                             /*flags*/ nullptr)) {
+            for (int i = 0; i < 2; ++i) {
+                bool sel = (curMode == i);
+                if (ImGui_Selectable(ctx, kNameModeLabels[i], &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr,
+                                     /*size_h*/ nullptr)) {
+                    reasixty_setTrackNameMode(i);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
     }
 
     ImGui_Spacing(ctx);
@@ -4732,6 +4761,38 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     const int total = paramCountFor_(*editing, fx);
     if (total <= 0) return 0;
 
+    // Snapshot the source strip's modifier attributes — LED colour and
+    // inverted/reverse-LED flags propagate to every filled strip, so a
+    // CS-channel row stays visually + behaviourally consistent without
+    // the user having to touch every strip after a Fill (Frank 2026-05-21).
+    bool         srcFaderInverted = false;
+    bool         srcVpotInverted  = false;
+    uf8::VPotMode srcVpotMode     = uf8::VPotMode::Value;
+    double       srcVpotDefault   = 0.5;
+    uint32_t     srcStripColour   = 0;
+    uint32_t     srcSoloColour    = 0;
+    uint32_t     srcCutColour     = 0;
+    uint32_t     srcSelColour     = 0;
+    bool         srcSoloInvert    = false;
+    bool         srcCutInvert     = false;
+    bool         srcSelInvert     = false;
+    {
+        const auto& srcU  = editing->uf8;
+        const auto& srcS  = srcU.strips[g_uf8EditingFaderBank][strip];
+        const auto& srcVB = srcU.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        srcFaderInverted = srcS.faderInverted;
+        srcVpotInverted  = srcVB.inverted;
+        srcVpotMode      = srcVB.vpotMode;
+        srcVpotDefault   = srcVB.defaultNorm;
+        srcStripColour   = srcVB.stripColour;
+        srcSoloColour    = srcS.soloColour;
+        srcCutColour     = srcS.cutColour;
+        srcSelColour     = srcS.selColour;
+        srcSoloInvert    = srcS.soloInvert;
+        srcCutInvert     = srcS.cutInvert;
+        srcSelInvert     = srcS.selInvert;
+    }
+
     int filled = 0;
     for (int s = strip + 1; s < 8; ++s) {
         const int targetNum = curNum + (s - strip);
@@ -4749,12 +4810,35 @@ int fillSequentialUf8_(int kind, int strip, int bank,
 
         auto& u = editing->uf8;
         switch (kind) {
-            case 0: u.strips[g_uf8EditingFaderBank][s].faderVst3Param = found; break;
-            case 3: u.strips[g_uf8EditingFaderBank][s].soloVst3Param  = found; break;
-            case 4: u.strips[g_uf8EditingFaderBank][s].cutVst3Param   = found; break;
-            case 5: u.strips[g_uf8EditingFaderBank][s].selVst3Param   = found; break;
+            case 0:
+                u.strips[g_uf8EditingFaderBank][s].faderVst3Param = found;
+                u.strips[g_uf8EditingFaderBank][s].faderInverted  = srcFaderInverted;
+                break;
+            case 3:
+                u.strips[g_uf8EditingFaderBank][s].soloVst3Param  = found;
+                u.strips[g_uf8EditingFaderBank][s].soloColour     = srcSoloColour;
+                u.strips[g_uf8EditingFaderBank][s].soloInvert     = srcSoloInvert;
+                break;
+            case 4:
+                u.strips[g_uf8EditingFaderBank][s].cutVst3Param   = found;
+                u.strips[g_uf8EditingFaderBank][s].cutColour      = srcCutColour;
+                u.strips[g_uf8EditingFaderBank][s].cutInvert      = srcCutInvert;
+                break;
+            case 5:
+                u.strips[g_uf8EditingFaderBank][s].selVst3Param   = found;
+                u.strips[g_uf8EditingFaderBank][s].selColour      = srcSelColour;
+                u.strips[g_uf8EditingFaderBank][s].selInvert      = srcSelInvert;
+                break;
             case 1:
-            case 2: u.banks.banks[g_uf8EditingFaderBank][bank][s].vst3Param = found; break;
+            case 2: {
+                auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][s];
+                bs.vst3Param   = found;
+                bs.inverted    = srcVpotInverted;
+                bs.vpotMode    = srcVpotMode;
+                bs.defaultNorm = srcVpotDefault;
+                bs.stripColour = srcStripColour;
+                break;
+            }
             default: continue;
         }
         ++filled;
@@ -4775,6 +4859,11 @@ bool uf8Inverted_(int kind, int strip, int bank)
         if (kind == 0) return u.strips[g_uf8EditingFaderBank][strip].faderInverted;
         if (kind == 1 || kind == 2)
             return u.banks.banks[g_uf8EditingFaderBank][bank][strip].inverted;
+        // Solo / Cut / Sel — "Reverse LED" toggle (bank-independent: the
+        // strip-button record is faderBank-scoped only).
+        if (kind == 3 /*SoloBtn*/) return u.strips[g_uf8EditingFaderBank][strip].soloInvert;
+        if (kind == 4 /*CutBtn*/)  return u.strips[g_uf8EditingFaderBank][strip].cutInvert;
+        if (kind == 5 /*SelBtn*/)  return u.strips[g_uf8EditingFaderBank][strip].selInvert;
         return false;
     }
     return false;
@@ -4788,6 +4877,18 @@ void toggleUf8Inverted_(int kind, int strip, int bank)
         else if (kind == 1 || kind == 2) {
             auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
             bs.inverted = !bs.inverted;
+        }
+        else if (kind == 3) {
+            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
+            sb.soloInvert = !sb.soloInvert;
+        }
+        else if (kind == 4) {
+            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
+            sb.cutInvert = !sb.cutInvert;
+        }
+        else if (kind == 5) {
+            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
+            sb.selInvert = !sb.selInvert;
         }
     });
 }
@@ -5911,6 +6012,23 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 snprintf(invLbl, sizeof(invLbl),
                     inv ? "Inverted [on]" : "Inverted [off]");
                 if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
+                    toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
+                }
+            }
+
+            // Reverse LED — Solo / Cut / Sel only. For plug-ins whose
+            // bound param reports 1 = inactive (so the LED stays bright
+            // while the function is off). When on, the LED on/off bit
+            // is XORed before rendering.
+            if (ctrl.kind == Uf8Control::SoloBtn ||
+                ctrl.kind == Uf8Control::CutBtn  ||
+                ctrl.kind == Uf8Control::SelBtn)
+            {
+                bool rev = uf8Inverted_(ctrl.kind, ctrl.strip, bank);
+                char revLbl[40];
+                snprintf(revLbl, sizeof(revLbl),
+                    rev ? "Reverse LED [on]" : "Reverse LED [off]");
+                if (ImGui_MenuItem(ctx, revLbl, nullptr, nullptr, nullptr)) {
                     toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
                 }
             }

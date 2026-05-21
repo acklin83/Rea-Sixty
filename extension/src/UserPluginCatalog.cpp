@@ -393,12 +393,15 @@ std::string serialize_(const UserPluginCatalog& c)
                        << " }, "
                        << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param
                        << ", \"colour\": " << static_cast<unsigned>(sb.soloColour)
+                       << ", \"invert\": " << (sb.soloInvert ? "true" : "false")
                        << " }, "
                        << "\"cut\": { \"vst3Param\": "  << sb.cutVst3Param
                        << ", \"colour\": " << static_cast<unsigned>(sb.cutColour)
+                       << ", \"invert\": " << (sb.cutInvert ? "true" : "false")
                        << " }, "
                        << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
                        << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
+                       << ", \"invert\": " << (sb.selInvert ? "true" : "false")
                        << " }"
                        << " }";
                 }
@@ -623,6 +626,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     colTmp = 0;
                     if (getIntI_(so2, "colour", colTmp))
                         sb.soloColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    getBoolI_(so2, "invert", sb.soloInvert);
                 }
                 if (auto* co = so->get_item_by_name("cut");
                     co && co->is_object())
@@ -631,6 +635,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     colTmp = 0;
                     if (getIntI_(co, "colour", colTmp))
                         sb.cutColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    getBoolI_(co, "invert", sb.cutInvert);
                 }
                 if (auto* selo = so->get_item_by_name("sel");
                     selo && selo->is_object())
@@ -639,6 +644,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     colTmp = 0;
                     if (getIntI_(selo, "colour", colTmp))
                         sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
+                    getBoolI_(selo, "invert", sb.selInvert);
                 }
             };
             // v7 path: stripsByFaderBank [faderBank][slot].
