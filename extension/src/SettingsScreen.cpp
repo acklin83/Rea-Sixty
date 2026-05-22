@@ -118,6 +118,10 @@ bool reasixty_wrapPluginCycle();
 void reasixty_setWrapPluginCycle(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
+bool reasixty_keyboardCmdModifier();
+void reasixty_setKeyboardCmdModifier(bool on);
+bool reasixty_keyboardCtrlModifier();
+void reasixty_setKeyboardCtrlModifier(bool on);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_showTracksHiddenInTcp();
@@ -558,8 +562,8 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         "  Release while Alt/Option is still held → value snaps back to "
         "touch-on position.");
 
-    // Host-OS keyboard Shift engages the Shift modifier slot (in addition
-    // to any HW `mod_shift` binding). Frank 2026-05-22.
+    // Host-OS keyboard modifier keys engage the matching slot (in addition
+    // to any HW `mod_*` binding). Frank 2026-05-22.
     bool kbShift = reasixty_keyboardShiftModifier();
     if (ImGui_Checkbox(ctx,
         "Keyboard Shift acts as Shift modifier",
@@ -567,11 +571,29 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     {
         reasixty_setKeyboardShiftModifier(kbShift);
     }
+    bool kbCmd = reasixty_keyboardCmdModifier();
+    if (ImGui_Checkbox(ctx,
+        "Keyboard Cmd (⌘) acts as Cmd modifier",
+        &kbCmd))
+    {
+        reasixty_setKeyboardCmdModifier(kbCmd);
+    }
+    bool kbCtrl = reasixty_keyboardCtrlModifier();
+    if (ImGui_Checkbox(ctx,
+        "Keyboard Ctrl acts as Ctrl modifier",
+        &kbCtrl))
+    {
+        reasixty_setKeyboardCtrlModifier(kbCtrl);
+    }
     ImGui_Text(ctx,
-        "  Holding the keyboard Shift key engages the Shift slot the same "
+        "  Holding a keyboard modifier engages the matching slot the same "
         "as a HW");
     ImGui_Text(ctx,
-        "  mod_shift binding would. Both sources work in parallel.");
+        "  mod_shift / mod_cmd / mod_ctrl binding would. Both sources work "
+        "in parallel.");
+    ImGui_Text(ctx,
+        "  Note: Cmd has no Windows keyboard source (Windows key is "
+        "OS-reserved).");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

@@ -480,10 +480,14 @@ std::atomic<bool>         g_hideOfflineFx{false};
 // hard-stop — "Next" at the last FX is a no-op, "Previous" at the first
 // FX is a no-op. Frank 2026-05-22.
 std::atomic<bool>         g_wrapPluginCycle{true};
-// Host-OS keyboard Shift key engages the Shift modifier slot. Polled
-// in onTimer and OR'd with the HW `mod_shift` flag. Default on. Frank
-// 2026-05-22.
+// Host-OS keyboard modifier keys engage the matching modifier slots.
+// Polled in onTimer and OR'd with the HW `mod_*` flags. Default on.
+// Cmd has no Windows keyboard source — the toggle is still respected
+// but the platform poll returns false on Windows (the HW slot path
+// stays open via mod_cmd bindings). Frank 2026-05-22.
 std::atomic<bool>         g_keyboardShiftModifier{true};
+std::atomic<bool>         g_keyboardCmdModifier  {true};
+std::atomic<bool>         g_keyboardCtrlModifier {true};
 // REAPER TCP (arrange-view track panel) scrolls into view whenever a
 // UF8 selection change fires. Independent of the MCP follow because
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
@@ -1900,6 +1904,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
         g_keyboardShiftModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "kb_cmd_modifier"); v && *v) {
+        g_keyboardCmdModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "kb_ctrl_modifier"); v && *v) {
+        g_keyboardCtrlModifier.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
@@ -10208,8 +10218,9 @@ bool hostAltHeld_()
 #endif
 }
 
-// Host-keyboard Shift held? Polled in onTimer and forwarded to the
-// bindings modifier framework via setKeyboardShiftHeld. Frank 2026-05-22.
+// Host-keyboard Shift / Cmd / Ctrl held? Polled in onTimer and forwarded
+// to the bindings modifier framework. On Windows the "Cmd" slot has no
+// keyboard source (Windows key is OS-reserved). Frank 2026-05-22.
 bool hostShiftHeld_()
 {
 #if defined(__APPLE__)
@@ -10218,6 +10229,28 @@ bool hostShiftHeld_()
     return (f & kCGEventFlagMaskShift) != 0;
 #elif defined(_WIN32)
     return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+#else
+    return false;
+#endif
+}
+bool hostCmdHeld_()
+{
+#if defined(__APPLE__)
+    const CGEventFlags f = CGEventSourceFlagsState(
+        kCGEventSourceStateCombinedSessionState);
+    return (f & kCGEventFlagMaskCommand) != 0;
+#else
+    return false;   // no keyboard Cmd source on Windows / Linux
+#endif
+}
+bool hostCtrlHeld_()
+{
+#if defined(__APPLE__)
+    const CGEventFlags f = CGEventSourceFlagsState(
+        kCGEventSourceStateCombinedSessionState);
+    return (f & kCGEventFlagMaskControl) != 0;
+#elif defined(_WIN32)
+    return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 #else
     return false;
 #endif
@@ -11604,13 +11637,17 @@ void onTimer()
 {
     ++g_tickCounter;
 
-    // Keyboard-Shift modifier mirror. Polled here so the host-OS Shift
-    // key engages the bindings Shift slot the same as a HW `mod_shift`
-    // press would. OR'd inside the bindings layer (see Bindings.cpp
-    // `g_modShiftKbHeld`). Gated by Settings → Device → Keyboard
-    // Options. Frank 2026-05-22.
+    // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
+    // Ctrl keys engage the matching slots the same as a HW `mod_*` press
+    // would. OR'd inside the bindings layer (see Bindings.cpp
+    // `g_mod*KbHeld`). Gated by Settings → Device → Keyboard Options.
+    // Frank 2026-05-22.
     uf8::bindings::setKeyboardShiftHeld(
         g_keyboardShiftModifier.load() && hostShiftHeld_());
+    uf8::bindings::setKeyboardCmdHeld(
+        g_keyboardCmdModifier.load()   && hostCmdHeld_());
+    uf8::bindings::setKeyboardCtrlHeld(
+        g_keyboardCtrlModifier.load()  && hostCtrlHeld_());
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
@@ -13417,9 +13454,23 @@ void reasixty_setKeyboardShiftModifier(bool on)
 {
     g_keyboardShiftModifier.store(on);
     SetExtState("rea_sixty", "kb_shift_modifier", on ? "1" : "0", true);
-    // Clear any latched keyboard-Shift state on disable so a frozen
+    // Clear any latched keyboard-modifier state on disable so a frozen
     // press doesn't outlive the toggle flip.
     if (!on) uf8::bindings::setKeyboardShiftHeld(false);
+}
+bool reasixty_keyboardCmdModifier()   { return g_keyboardCmdModifier.load(); }
+void reasixty_setKeyboardCmdModifier(bool on)
+{
+    g_keyboardCmdModifier.store(on);
+    SetExtState("rea_sixty", "kb_cmd_modifier", on ? "1" : "0", true);
+    if (!on) uf8::bindings::setKeyboardCmdHeld(false);
+}
+bool reasixty_keyboardCtrlModifier()  { return g_keyboardCtrlModifier.load(); }
+void reasixty_setKeyboardCtrlModifier(bool on)
+{
+    g_keyboardCtrlModifier.store(on);
+    SetExtState("rea_sixty", "kb_ctrl_modifier", on ? "1" : "0", true);
+    if (!on) uf8::bindings::setKeyboardCtrlHeld(false);
 }
 bool reasixty_tcpFollowsSelection()   { return g_tcpFollowsSelection.load(); }
 void reasixty_setTcpFollowsSelection(bool on)

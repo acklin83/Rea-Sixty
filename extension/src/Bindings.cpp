@@ -318,12 +318,16 @@ std::unordered_map<uint32_t, PressRecord> g_longPressStart;
 std::atomic<bool> g_modShiftHeld{false};
 std::atomic<bool> g_modCmdHeld  {false};
 std::atomic<bool> g_modCtrlHeld {false};
-// Keyboard-Shift mirror — fed from main.cpp's onTimer host-OS poll
-// (CGEventSourceFlagsState on macOS, GetAsyncKeyState(VK_SHIFT) on
-// Windows, no-op on Linux). OR'd with `g_modShiftHeld` at the read
-// sites below, so a `mod_shift` HW binding AND the keyboard Shift
-// key can each independently engage the Shift slot. Frank 2026-05-22.
+// Keyboard-modifier mirrors — fed from main.cpp's onTimer host-OS poll
+// (CGEventSourceFlagsState on macOS, GetAsyncKeyState on Windows,
+// no-op on Linux). OR'd with the matching HW flag at the read sites
+// below, so a `mod_*` HW binding AND the keyboard key can each
+// independently engage the corresponding slot. Cmd has no Windows
+// keyboard source (the Windows key is OS-reserved and not claimed).
+// Frank 2026-05-22.
 std::atomic<bool> g_modShiftKbHeld{false};
+std::atomic<bool> g_modCmdKbHeld  {false};
+std::atomic<bool> g_modCtrlKbHeld {false};
 
 // Monotonic counter bumped on every mutation of g_cfg (setBinding,
 // clearBinding, layer setters, load, importFrom). main.cpp reads this
@@ -2551,18 +2555,19 @@ void setModifierHeld(Modifier m, bool held)
     }
 }
 
-void setKeyboardShiftHeld(bool held)
-{
-    g_modShiftKbHeld.store(held);
-}
+void setKeyboardShiftHeld(bool held) { g_modShiftKbHeld.store(held); }
+void setKeyboardCmdHeld  (bool held) { g_modCmdKbHeld  .store(held); }
+void setKeyboardCtrlHeld (bool held) { g_modCtrlKbHeld .store(held); }
 
 bool modifierHeld(Modifier m)
 {
     switch (m) {
         case Modifier::Shift: return g_modShiftHeld.load()
                                   || g_modShiftKbHeld.load();
-        case Modifier::Cmd:   return g_modCmdHeld.load();
-        case Modifier::Ctrl:  return g_modCtrlHeld.load();
+        case Modifier::Cmd:   return g_modCmdHeld.load()
+                                  || g_modCmdKbHeld.load();
+        case Modifier::Ctrl:  return g_modCtrlHeld.load()
+                                  || g_modCtrlKbHeld.load();
         case Modifier::Plain: return false;
     }
     return false;
@@ -2573,8 +2578,8 @@ Modifier currentModifierSnapshot()
     // Precedence Ctrl > Cmd > Shift > Plain. Most-specific-modifier-wins
     // matches typical keyboard-shortcut conventions; the editor will let
     // the user route Ctrl+Shift+button via the Ctrl slot only.
-    if (g_modCtrlHeld.load())  return Modifier::Ctrl;
-    if (g_modCmdHeld.load())   return Modifier::Cmd;
+    if (g_modCtrlHeld.load()  || g_modCtrlKbHeld.load())  return Modifier::Ctrl;
+    if (g_modCmdHeld.load()   || g_modCmdKbHeld.load())   return Modifier::Cmd;
     if (g_modShiftHeld.load() || g_modShiftKbHeld.load()) return Modifier::Shift;
     return Modifier::Plain;
 }
