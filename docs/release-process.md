@@ -1,234 +1,318 @@
-# Rea-Sixty Release Process
+# Rea-Sixty Release Runbook
 
-Manual runbook for shipping a tagged version with notarised macOS, Windows, and Linux binaries plus ReaPack metadata. No GitHub Actions; everything runs from the Mac dev box, with the Windows DLL + Linux .so built remotely via SSH.
+End-to-end runbook for shipping a new tagged version to ReaPack across macOS / Windows / Linux. **Optimised so Frank only needs to say "deploy auf reapack als neuer tag"** — every other detail (IPs, paths, scripts, gotchas) lives here.
 
-Three repos involved:
-- **`acklin83/Rea-Sixty`** — source + GitHub Release artefacts (this repo)
-- **`acklin83/reaper-scripts`** — holds the metapackage `Rea-Sixty/Rea-Sixty.ext` that ReaPack scans. Its `.github/workflows/reapack.yml` regenerates `index.xml` on every push.
-- (No third repo. `reapack-index` runs in the scripts repo's GH-Action.)
+## What to ask Frank up front
 
-ReaPack URL users paste: `https://github.com/acklin83/reaper-scripts/raw/main/index.xml`
+Default: bump the patch version (last tag + 0.0.1). Ask Frank ONLY if:
+- The diff since last tag looks like substantive new functionality (then offer minor bump).
+- He's already told you the version to use.
+
+Don't ask about IPs, paths, or platform availability — they're below.
+
+## Repos
+
+| Repo | Path | Purpose |
+| --- | --- | --- |
+| `acklin83/Rea-Sixty` | `~/Documents/dev/reaper-uf8` | Source + GitHub Release artefacts |
+| `acklin83/reaper-scripts` | `~/Documents/dev/reaper-scripts` | ReaPack metapackage `Rea-Sixty/Rea-Sixty.ext`; GH-Action regens `index.xml` |
+
+User-facing ReaPack URL: `https://github.com/acklin83/reaper-scripts/raw/main/index.xml`
+
+## Hosts
+
+| Host | IP | User | Auth | Repo path | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Mac (local) | — | stoersender | — | `~/Documents/dev/reaper-uf8` | dev box |
+| Windows | `192.168.177.197` | `claude` | password `claudepass` | `C:\Users\claude\reaper-uf8` | dual-boot box |
+| Linux | `192.168.177.197` | `frank` | ssh key | `~/reaper-uf8` | same physical box, separate OS |
+
+**Dual-boot gotcha:** Win and Linux share the IP. Booting between them flips the SSH host key → next connection bombs with `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED`. Standard recovery before every SSH (Frank already authorized this pattern):
+
+```bash
+ssh-keygen -R 192.168.177.197
+ssh -o StrictHostKeyChecking=accept-new <user>@192.168.177.197 ...
+```
+
+Before SSHing to Linux, confirm the box has been booted into Linux. If `ssh frank@...` errors with `Connection refused` or lands on cmd.exe, Frank still needs to reboot. Ask him then.
 
 ---
 
-## Pre-flight
+## Step-by-step
+
+Pick a version and put it in a shell variable up front:
 
 ```bash
-# Confirm working tree clean + on main
-git status
-git log --oneline origin/main..HEAD   # empty = pushed
+NEW_TAG=v0.1.5          # bump from last `git describe --tags --abbrev=0`
+VERSION="${NEW_TAG#v}"  # 0.1.5
 ```
 
-Decide version (semver patch by default — minor only for substantive new modes). Inspect commits since last tag to draft the release notes:
+### 1. Pre-flight
 
 ```bash
-git log $(git describe --tags --abbrev=0)..HEAD --oneline
+cd ~/Documents/dev/reaper-uf8
+git status                                           # working tree clean? (uncommitted change → commit first)
+git log $(git describe --tags --abbrev=0)..HEAD --oneline   # what's new since last tag
 ```
 
----
+If there are uncommitted changes, commit them with a normal `feat:` / `fix:` / `refactor:` message and the Co-Authored-By trailer (CLAUDE.md convention). Push to main.
 
-## Step 1 — Tag
+### 2. Write release notes
+
+`dist/RELEASE-NOTES-${NEW_TAG}.md`. Follow the v0.1.4 / v0.1.5 template:
+
+- One-paragraph release theme summary at top
+- `## Install via ReaPack` block (copy verbatim from prior release)
+- `## What's new` grouped by area (Device pane, SEL-Mode, Bug fixes, etc.) — each bullet calls out user-visible change + reason
+- `## Known issues`
+- `## Manual install` block (copy from prior release with version updated)
+
+Commit + push:
 
 ```bash
-NEW_TAG=v0.1.2
+git add dist/RELEASE-NOTES-${NEW_TAG}.md
+git commit -m "release: ${NEW_TAG} notes"
+git push origin main
+```
+
+### 3. Tag
+
+**Convention:** tag points at the release-notes commit (i.e., HEAD after step 2). v0.1.4 followed this; v0.1.5 deviated — go back to this convention.
+
+```bash
 git tag -a "$NEW_TAG" -m "Rea-Sixty $NEW_TAG"
 git push origin "$NEW_TAG"
 ```
 
-Tag pushed first so the remote build boxes can `git fetch --tags && git checkout <tag>` (or just pull main if the tag points at HEAD). Both `release-mac.sh` and `release-win.ps1` read `git describe --tags --abbrev=0` for the version that ends up in artefact filenames.
+### 4. Build all three platforms
 
----
+These three can run in parallel from the Mac.
 
-## Step 2 — Build all three platforms
-
-These three can run in parallel. The Mac build is local; Windows + Linux go through SSH.
-
-### Mac (local)
+#### Mac (local)
 
 ```bash
 cmake --build extension/build
-ls -la extension/build/*.dylib   # reaper_rea-sixty / libusb-1.0.0 / libhidapi.0
 ```
 
-### Windows (SSH `claude@192.168.177.197`, password `claudepass`)
-
-The repo lives at `C:\Users\claude\reaper-uf8`. `build_rea.bat` in the user's home calls `vcvars64.bat` + `cmake --build ... --config Release`. The DLL dependencies were copied into `dist\stage-win-v0.1.1\` during the v0.1.1 release; reuse those paths or override on the command line.
+#### Windows
 
 ```bash
-ssh claude@192.168.177.197 "cd C:\Users\claude\reaper-uf8 && git fetch --tags && git pull --ff-only"
-ssh claude@192.168.177.197 "cd C:\Users\claude && build_rea.bat"
+ssh-keygen -R 192.168.177.197
+ssh -o StrictHostKeyChecking=accept-new claude@192.168.177.197 \
+  "cd C:\Users\claude\reaper-uf8 && git fetch --tags && git checkout $NEW_TAG && git pull --ff-only 2>&1 | tail -3"
+ssh claude@192.168.177.197 "cd C:\Users\claude && build_rea.bat" 2>&1 | tail -10
 ```
 
-### Linux (SSH `frank@<linux-box>` — dual-boot on Frank's Win box, ask before assuming online)
+Always rebuild even if Frank says "Windows läuft schon" — his pre-release build may be stale (predates fixes Claude pushed during the session).
+
+#### Linux
 
 ```bash
-ssh frank@<linux-ip> "cd ~/Rea-Sixty && git fetch --tags && git pull --ff-only && cmake --build extension/build"
+ssh-keygen -R 192.168.177.197       # only if not already done in this session
+ssh -o StrictHostKeyChecking=accept-new frank@192.168.177.197 \
+  "cd ~/reaper-uf8 && git fetch --tags && git checkout $NEW_TAG && cmake --build extension/build 2>&1 | tail -5"
 ```
 
-`reaper_rea-sixty.so` lands in `extension/build/`.
+**Repo lives at `~/reaper-uf8` on Linux, NOT `~/Rea-Sixty`.** Past doc lied; the dir name on Linux matches Mac's working dir (memory-anchor convention).
 
----
-
-## Step 3 — Package + sign + notarize Mac
-
-`dist/release-mac.sh` reads the tag, copies the three dylibs into `dist/stage-<tag>/`, re-signs them with `Developer ID Application: Frank Acklin (234VF7874N)` + hardened runtime + timestamp, zips them, submits to Apple's notary cloud via the `rea-sixty-notarize` keychain profile, and verifies acceptance via `spctl`.
+### 5. Package Mac (sign + notarize)
 
 ```bash
 ./dist/release-mac.sh
 ```
 
-Takes 1–10 min. Output: `dist/rea-sixty-mac-<tag>.zip`. The same `dist/stage-<tag>/` directory holds the three notarised dylibs as individual files for the per-binary ReaPack upload.
+Reads `$NEW_TAG` from `git describe --tags --abbrev=0`, signs the three dylibs with Developer ID, submits to Apple notary cloud, verifies. Output: `dist/rea-sixty-mac-${NEW_TAG}.zip` + `dist/stage-${NEW_TAG}/` with three notarised dylibs. 1–10 minutes.
 
-Notarisation tickets can't be stapled to loose dylibs (Apple only supports stapling on `.app/.dmg/.pkg`). The notarisation registers each dylib hash with Apple's cloud; Gatekeeper online-checks first-load. No action needed beyond running the script.
-
----
-
-## Step 4 — Package Windows
-
-On the Win box, `release-win.ps1` packs the three DLLs into `dist\rea-sixty-win-<tag>.zip`. Default paths look for `libusb-1.0.dll` + `hidapi.dll` under `LIBUSB_ROOT` / `HIDAPI_ROOT` env vars — those aren't set on Frank's box, so pass overrides pointing at a previous release's stage dir:
+### 6. Package Windows
 
 ```bash
-ssh claude@192.168.177.197 'cd C:\Users\claude\reaper-uf8 && powershell -ExecutionPolicy Bypass -File dist\release-win.ps1 -LibusbDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\libusb-1.0.dll" -HidapiDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\hidapi.dll"'
+ssh claude@192.168.177.197 'cd C:\Users\claude\reaper-uf8 && powershell -ExecutionPolicy Bypass -File dist\release-win.ps1 -LibusbDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\libusb-1.0.dll" -HidapiDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\hidapi.dll"' 2>&1 | tail -8
+
+mkdir -p dist/stage-win-${NEW_TAG}
+scp claude@192.168.177.197:"C:/Users/claude/reaper-uf8/dist/rea-sixty-win-${NEW_TAG}.zip" dist/
+scp claude@192.168.177.197:"C:/Users/claude/reaper-uf8/dist/stage-win-${NEW_TAG}/*.dll" dist/stage-win-${NEW_TAG}/
 ```
 
-Then pull the zip + the staged DLLs back:
+The `stage-win-v0.1.1` paths are fallbacks — Frank's Win box has no `LIBUSB_ROOT` / `HIDAPI_ROOT` env vars set. Reuse the v0.1.1 DLLs forever (libusb / hidapi don't churn release-to-release).
+
+### 7. Package Linux
 
 ```bash
-scp claude@192.168.177.197:'C:/Users/claude/reaper-uf8/dist/rea-sixty-win-v0.1.2.zip' dist/
-mkdir -p dist/stage-win-v0.1.2
-scp claude@192.168.177.197:'C:/Users/claude/reaper-uf8/dist/stage-win-v0.1.2/*.dll' dist/stage-win-v0.1.2/
+ssh frank@192.168.177.197 "cd ~/reaper-uf8 && ./dist/release-linux.sh 2>&1 | tail -5"
+scp frank@192.168.177.197:"~/reaper-uf8/dist/rea-sixty-linux-${NEW_TAG}.tar.gz" dist/
+scp frank@192.168.177.197:"~/reaper-uf8/extension/build/reaper_rea-sixty.so" "dist/stage-linux-${NEW_TAG}.so"
 ```
 
-Use `pwsh` only if installed — Frank's box ships stock `powershell.exe`. Forward slashes in the scp source path are required (bash glob expansion happens locally).
-
-No code signing — Windows users get a "Publisher unknown" SmartScreen warning on the WinUSB installer regardless of how we sign the DLL itself (the warning is about the .CAT minted by the installer, not our DLL). A code-signing cert wouldn't suppress it. Signing the DLL would only suppress the irrelevant Mark-of-the-Web warning; not worth the cert cost.
-
----
-
-## Step 5 — Package Linux
-
-`release-linux.sh` runs on the Linux box. It copies `reaper_rea-sixty.so`, writes a `99-rea-sixty.rules` udev rule + `INSTALL.txt`, and tars them.
+### 8. Create GitHub Release
 
 ```bash
-ssh frank@<linux-ip> "cd ~/Rea-Sixty && ./dist/release-linux.sh"
-scp frank@<linux-ip>:~/Rea-Sixty/dist/rea-sixty-linux-v0.1.2.tar.gz dist/
-scp frank@<linux-ip>:~/Rea-Sixty/extension/build/reaper_rea-sixty.so dist/stage-linux-v0.1.2.so
+# CRITICAL: rename the .so locally before upload (see "Pitfall: gh #rename
+# does NOT rename" below). Use /tmp so it doesn't pollute dist/.
+cp "dist/stage-linux-${NEW_TAG}.so" /tmp/reaper_rea-sixty.so
+
+gh release create "$NEW_TAG" \
+    --title "Rea-Sixty $NEW_TAG" \
+    --notes-file "dist/RELEASE-NOTES-${NEW_TAG}.md" \
+    "dist/rea-sixty-mac-${NEW_TAG}.zip" \
+    "dist/rea-sixty-win-${NEW_TAG}.zip" \
+    "dist/rea-sixty-linux-${NEW_TAG}.tar.gz" \
+    "dist/stage-${NEW_TAG}/reaper_rea-sixty.dylib" \
+    "dist/stage-${NEW_TAG}/libusb-1.0.0.dylib" \
+    "dist/stage-${NEW_TAG}/libhidapi.0.dylib" \
+    "dist/stage-win-${NEW_TAG}/reaper_rea-sixty.dll" \
+    "dist/stage-win-${NEW_TAG}/libusb-1.0.dll" \
+    "dist/stage-win-${NEW_TAG}/hidapi.dll" \
+    /tmp/reaper_rea-sixty.so
+
+rm /tmp/reaper_rea-sixty.so
+
+# Verify all 10 ReaPack assets present with exact expected names
+gh release view "$NEW_TAG" --json assets --jq '.assets[].name' | sort
 ```
 
-The `.so` is also uploaded individually for ReaPack — see Step 7.
+Expected output (the three bundle zips/tarballs + the 7 individual binaries ReaPack downloads):
 
-No libusb/hidapi bundling. Linux users install those from their distro's package manager (`sudo apt install libusb-1.0-0 libhidapi-hidraw0`).
-
----
-
-## Step 6 — Write release notes
-
-`dist/RELEASE-NOTES-v<tag>.md`. Follow the v0.1.1 / v0.1.2 template:
-- One-line summary of the release theme
-- Install via ReaPack instructions
-- Per-section "What's new" grouped by area (Device pane, SEL-Mode, Bug fixes, etc.) — each bullet calls out user-visible change and reason
-- Known issues block
-- Manual install fallback links
-
-Commit the file to the repo so it ships alongside the tag.
-
-```bash
-git add dist/RELEASE-NOTES-v0.1.2.md
-git commit -m "release: v0.1.2 notes"
-git push origin main
+```
+hidapi.dll
+libhidapi.0.dylib
+libusb-1.0.0.dylib
+libusb-1.0.dll
+rea-sixty-linux-v0.1.5.tar.gz
+rea-sixty-mac-v0.1.5.zip
+rea-sixty-win-v0.1.5.zip
+reaper_rea-sixty.dll
+reaper_rea-sixty.dylib
+reaper_rea-sixty.so
 ```
 
----
+#### Pitfall: `gh` `#rename` does NOT rename
 
-## Step 7 — Create GitHub Release
+`gh release create FILE#DISPLAYLABEL` sets the *display label* in the UI, not the uploaded filename. The basename of the local path is the server filename. ReaPack downloads by filename, so a wrong basename = 404 at install. This burnt v0.1.5's first upload pass.
 
-```bash
-gh release create v0.1.2 \
-    --title "Rea-Sixty v0.1.2" \
-    --notes-file dist/RELEASE-NOTES-v0.1.2.md \
-    dist/rea-sixty-mac-v0.1.2.zip \
-    dist/rea-sixty-win-v0.1.2.zip \
-    dist/rea-sixty-linux-v0.1.2.tar.gz \
-    dist/stage-v0.1.2/reaper_rea-sixty.dylib \
-    dist/stage-v0.1.2/libusb-1.0.0.dylib \
-    dist/stage-v0.1.2/libhidapi.0.dylib \
-    dist/stage-win-v0.1.2/reaper_rea-sixty.dll \
-    dist/stage-win-v0.1.2/libusb-1.0.dll \
-    dist/stage-win-v0.1.2/hidapi.dll \
-    dist/stage-linux-v0.1.2.so#reaper_rea-sixty.so
-```
+**Always rename the file on disk before passing it to gh.** Don't trust `#`.
 
-The 3 bundles are for manual download. The 7 individual binaries (3 Mac dylibs + 3 Win DLLs + 1 Linux .so) are what ReaPack downloads per platform.
-
-**Critical:** the Linux `.so` filename on the server MUST be exactly `reaper_rea-sixty.so` (not `stage-linux-v0.1.2.so`). Use `gh release upload`'s rename syntax `<local-path>#<server-name>` shown above. ReaPack derives the install filename from the URL.
-
----
-
-## Step 8 — Update ReaPack metapackage
-
-The metapackage lives at `acklin83/reaper-scripts/Rea-Sixty/Rea-Sixty.ext`. ReaPack scans this file; `reapack-index` regenerates `index.xml` from it on every push (GH-Action `.github/workflows/reapack.yml`).
+### 9. Update ReaPack metapackage
 
 ```bash
 cd ~/Documents/dev/reaper-scripts
-mkdir -p Rea-Sixty   # only if first release
 ```
 
-Hand-edit `Rea-Sixty/Rea-Sixty.ext`:
+Edit `Rea-Sixty/Rea-Sixty.ext`:
 
-```
-@description Rea-Sixty
-@author Frank Acklin
-@version 0.1.2
-@changelog
-  (multi-line bullet list — same content as the release notes' "What's
-   new" section, indented two spaces per ReaPack convention)
-@provides
-  [darwin-arm64] reaper_rea-sixty.dylib https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [darwin-arm64] libusb-1.0.0.dylib     https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [darwin-arm64] libhidapi.0.dylib      https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [win64] reaper_rea-sixty.dll https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [win64] libusb-1.0.dll       https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [win64] hidapi.dll           https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-  [linux64] reaper_rea-sixty.so https://github.com/acklin83/Rea-Sixty/releases/download/v$version/$path
-@link
-  GitHub https://github.com/acklin83/Rea-Sixty
-  Issue tracker https://github.com/acklin83/Rea-Sixty/issues
-@about
-  # Rea-Sixty
-  REAPER extension that drives the SSL UF8 + UC1 surfaces natively...
-  (full marketing-pitch markdown — keep the structure aligned with TotalReaper.ext)
-```
+- Update `@version` to the new version (without the `v` prefix — ReaPack adds the `v` itself via `v$version` in the URLs).
+- Replace the `@changelog` block with bullets matching the release-notes "What's new" content. Keep two-space indent, blank line between bullets. Don't include the install/manual-install boilerplate — just the changes.
+
+The `@provides` block doesn't change between releases (URLs use `v$version` and `$path` substitutions). Leave it alone.
 
 Commit + push:
 
 ```bash
-cd ~/Documents/dev/reaper-scripts
+git pull --rebase             # someone else may have pushed (rare but cheap)
 git add Rea-Sixty/Rea-Sixty.ext
-git commit -m "Rea-Sixty v0.1.2"
+git commit -m "Rea-Sixty $NEW_TAG"
 git push
 ```
 
-The push triggers `.github/workflows/reapack.yml`, which:
-1. Installs `pandoc` + `reapack-index` gem
-2. Runs `reapack-index --rebuild --commit` regenerating `index.xml`
-3. Commits + pushes the index update from `GitHub Actions`
+### 10. Wait for the ReaPack GH-Action + verify
 
-User REAPER clients pick up the new version on next ReaPack repository refresh.
+The push triggers `.github/workflows/reapack.yml` which regenerates `index.xml`. Poll until it finishes:
+
+```bash
+until [ "$(gh -R acklin83/reaper-scripts run list --limit 1 --json status --jq '.[0].status')" = "completed" ]; do sleep 5; done
+gh -R acklin83/reaper-scripts run list --limit 1 --json conclusion --jq '.[0].conclusion'   # → "success"
+
+# Verify the new version landed
+curl -sL https://github.com/acklin83/reaper-scripts/raw/main/index.xml | grep -B1 -A2 "name=\"${VERSION}\"" | head -10
+```
+
+`gh run list` is faster than `curl`-polling `index.xml` because the action takes ~80–90 seconds and the index doesn't update until the post-action commit hits main.
+
+### 11. Final verify
+
+- `gh release view "$NEW_TAG" --web` — visually confirm all 10 assets attached + release notes rendered.
+- (Optional) In REAPER on Mac: Extensions → ReaPack → Refresh repositories → Browse packages → look for the new version.
 
 ---
 
-## Step 9 — Verify
+## Cheat sheet — single block
 
-- `gh release view v0.1.2 --web` — confirm all 10 assets attached
-- `curl -sL https://github.com/acklin83/reaper-scripts/raw/main/index.xml | grep -A1 "Rea-Sixty"` — wait 1–2 min after the metapackage push for the workflow to finish, then confirm the new version landed in `index.xml`
-- (Optional) In REAPER: Extensions → ReaPack → Refresh repositories, then look for the new version in Browse packages
+When Frank says "deploy auf reapack als neuer tag" and the working tree is already committed + pushed, the entire flow is:
+
+```bash
+# Set once
+NEW_TAG=v0.1.6
+VERSION="${NEW_TAG#v}"
+
+# 1. Notes
+$EDITOR "dist/RELEASE-NOTES-${NEW_TAG}.md"
+git add "dist/RELEASE-NOTES-${NEW_TAG}.md"
+git commit -m "release: ${NEW_TAG} notes"
+git push origin main
+
+# 2. Tag
+git tag -a "$NEW_TAG" -m "Rea-Sixty $NEW_TAG"
+git push origin "$NEW_TAG"
+
+# 3. Build all three (parallel-safe; runs sequentially below for clarity)
+cmake --build extension/build
+ssh-keygen -R 192.168.177.197
+ssh -o StrictHostKeyChecking=accept-new claude@192.168.177.197 \
+  "cd C:\Users\claude\reaper-uf8 && git fetch --tags && git checkout $NEW_TAG"
+ssh claude@192.168.177.197 "cd C:\Users\claude && build_rea.bat"
+ssh-keygen -R 192.168.177.197
+ssh -o StrictHostKeyChecking=accept-new frank@192.168.177.197 \
+  "cd ~/reaper-uf8 && git fetch --tags && git checkout $NEW_TAG && cmake --build extension/build"
+
+# 4. Package
+./dist/release-mac.sh
+ssh claude@192.168.177.197 'cd C:\Users\claude\reaper-uf8 && powershell -ExecutionPolicy Bypass -File dist\release-win.ps1 -LibusbDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\libusb-1.0.dll" -HidapiDll "C:\Users\claude\reaper-uf8\dist\stage-win-v0.1.1\hidapi.dll"'
+mkdir -p "dist/stage-win-${NEW_TAG}"
+scp claude@192.168.177.197:"C:/Users/claude/reaper-uf8/dist/rea-sixty-win-${NEW_TAG}.zip" dist/
+scp claude@192.168.177.197:"C:/Users/claude/reaper-uf8/dist/stage-win-${NEW_TAG}/*.dll" "dist/stage-win-${NEW_TAG}/"
+ssh frank@192.168.177.197 "cd ~/reaper-uf8 && ./dist/release-linux.sh"
+scp frank@192.168.177.197:"~/reaper-uf8/dist/rea-sixty-linux-${NEW_TAG}.tar.gz" dist/
+scp frank@192.168.177.197:"~/reaper-uf8/extension/build/reaper_rea-sixty.so" "dist/stage-linux-${NEW_TAG}.so"
+
+# 5. GH Release
+cp "dist/stage-linux-${NEW_TAG}.so" /tmp/reaper_rea-sixty.so
+gh release create "$NEW_TAG" \
+    --title "Rea-Sixty $NEW_TAG" \
+    --notes-file "dist/RELEASE-NOTES-${NEW_TAG}.md" \
+    "dist/rea-sixty-mac-${NEW_TAG}.zip" \
+    "dist/rea-sixty-win-${NEW_TAG}.zip" \
+    "dist/rea-sixty-linux-${NEW_TAG}.tar.gz" \
+    "dist/stage-${NEW_TAG}/reaper_rea-sixty.dylib" \
+    "dist/stage-${NEW_TAG}/libusb-1.0.0.dylib" \
+    "dist/stage-${NEW_TAG}/libhidapi.0.dylib" \
+    "dist/stage-win-${NEW_TAG}/reaper_rea-sixty.dll" \
+    "dist/stage-win-${NEW_TAG}/libusb-1.0.dll" \
+    "dist/stage-win-${NEW_TAG}/hidapi.dll" \
+    /tmp/reaper_rea-sixty.so
+rm /tmp/reaper_rea-sixty.so
+
+# 6. Metapackage
+cd ~/Documents/dev/reaper-scripts
+$EDITOR Rea-Sixty/Rea-Sixty.ext     # bump @version + replace @changelog
+git pull --rebase
+git add Rea-Sixty/Rea-Sixty.ext
+git commit -m "Rea-Sixty ${NEW_TAG}"
+git push
+
+# 7. Wait + verify
+until [ "$(gh -R acklin83/reaper-scripts run list --limit 1 --json status --jq '.[0].status')" = "completed" ]; do sleep 5; done
+curl -sL https://github.com/acklin83/reaper-scripts/raw/main/index.xml | grep "name=\"${VERSION}\"" | head -2
+```
 
 ---
 
-## Known sharp edges
+## Pitfalls captured from prior releases
 
-- **No GH-Actions for builds-on-tag.** The matrix-build write-up sits in [handoff-2026-05-19-reapack-prep](.claude/memory/handoff-2026-05-19-reapack-prep.md) item 4 and stays queued. Until then it's the manual three-box dance documented here.
-- **`pwsh` vs `powershell` on the Win box.** Frank's box only has stock `powershell.exe`; the runbook uses that. PowerShell 7 (`pwsh`) is not installed.
-- **Linux IP varies.** Frank's Linux is dual-boot on the same physical box as Windows. Confirm Linux is the booted OS before SSHing; otherwise SSH lands on cmd.exe and the build silently fails.
-- **dist/ artefacts.** The `dist/` directory holds release tarballs / zips / stage dirs from prior releases. `.gitignore` covers `*.zip` only; the `.tar.gz`, `.rules`, and `.md` files have been untracked for several releases. Don't commit them unless explicitly asked — they're release artefacts hosted on GitHub, not source.
-- **Notarization keychain profile.** `xcrun notarytool store-credentials rea-sixty-notarize` was set up once; the secret lives in macOS Keychain. If the cert rolls over or Frank moves machines, re-run that command and update the SIGN_IDENTITY in `release-mac.sh`.
+- **`gh release create FILE#RENAME` does NOT rename the uploaded file.** Sets display label only. Rename on disk first. (Burnt v0.1.5 first pass — Linux `.so` uploaded as `stage-linux-v0.1.5.so`; ReaPack 404s on every Linux user's install.) The original release-process.md said `<local>#<server>` works — it doesn't. Trust the new doc.
+- **Dual-boot host-key flip.** Win and Linux share the IP, different SSH host keys. Every OS switch needs `ssh-keygen -R 192.168.177.197` first. Frank pre-authorized this — don't ask again.
+- **Linux repo path is `~/reaper-uf8`, not `~/Rea-Sixty`.** Past doc was wrong.
+- **Always rebuild Windows even if Frank says "läuft schon".** Frank's pre-release builds usually predate Claude's session-end fixes by 30–60 minutes.
+- **The Windows release script needs explicit DLL paths.** Frank's Win box has no `LIBUSB_ROOT` / `HIDAPI_ROOT` set. Use the v0.1.1 stage paths as a permanent fallback.
+- **`pwsh` vs `powershell` on Win.** Frank's box only ships `powershell.exe`.
+- **Notarisation keychain profile.** `xcrun notarytool store-credentials rea-sixty-notarize` was set up once; the secret lives in macOS Keychain. If the cert rolls over or Frank moves machines, re-run that command and update `SIGN_IDENTITY` in `release-mac.sh`.
+- **`dist/` artefacts.** The `dist/` directory accumulates per-release tarballs / zips / stage dirs. `.gitignore` covers `*.zip` only; `.tar.gz` / `.rules` / `.so` / `.md` files have been untracked for several releases. **Only commit `dist/RELEASE-NOTES-*.md`** — everything else is a release artefact hosted on GitHub, not source.
+- **No GH-Actions for builds-on-tag.** The matrix-build write-up sits in `.claude/memory/handoff-2026-05-19-reapack-prep.md` item 4 and stays queued. Until then it's the manual three-box dance documented here.
