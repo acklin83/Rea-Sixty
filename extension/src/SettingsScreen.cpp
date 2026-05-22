@@ -719,7 +719,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             double v = cur;
             double step = 0.1, fast = 1.0;
             int    flags = 0;
-            double w = scaleW_(ctx, 100.0);
+            // ImGui_InputDouble with step > 0 renders +/- spinner buttons
+            // inside the widget; the SetNextItemWidth budget covers the
+            // text input AND the buttons. 140 px is the minimum for
+            // "+0.00" to stay visible at the Appearance Normal preset
+            // (14 px font). Frank 2026-05-22.
+            double w = scaleW_(ctx, 140.0);
             ImGui_SetNextItemWidth(ctx, w);
             if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
                                   "%+.2f", &flags)) {
@@ -7224,7 +7229,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 "Values are correction offsets in dB. Ctrl-click +/− = ±1.0.");
             ImGui_Spacing(ctx);
 
-            const double kInputW = scaleW_(ctx, 90.0);
+            // Same +/- spinner caveat as the UC1 GR calibration field
+            // — 140 base so "+0.00" stays visible at Normal Font Size.
+            const double kInputW = scaleW_(ctx, 140.0);
             for (int i = 0; i < nCal; ++i) {
                 if (i) ImGui_SameLine(ctx, nullptr, nullptr);
                 ImGui_BeginGroup(ctx);
