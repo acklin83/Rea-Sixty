@@ -7464,20 +7464,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 auto it = usedBy.find(p);
                 const bool isBound = (it != usedBy.end());
 
-                // Already-mapped rows: append the binding label and
-                // render disabled so the user can't accidentally re-bind
-                // (clear the existing binding via the schematic's right-
-                // click menu first).
+                // Already-mapped rows: render disabled so the user can't
+                // accidentally re-bind (clear the existing binding via
+                // the schematic's right-click menu first). The Selectable
+                // carries only the index + param name; the "-> binding"
+                // label is rendered via SameLine at a fixed x-offset so
+                // arrows line up vertically across rows regardless of
+                // the proportional font width of param names. Frank
+                // 2026-05-22.
                 char rowLbl[256];
-                if (isBound) {
-                    snprintf(rowLbl, sizeof(rowLbl),
-                        "  [%4d] %-32s  -> %s##fxl_param_%d",
-                        p, pname, it->second.c_str(), p);
-                } else {
-                    snprintf(rowLbl, sizeof(rowLbl),
-                        "  [%4d] %-32s##fxl_param_%d",
-                        p, pname, p);
-                }
+                snprintf(rowLbl, sizeof(rowLbl),
+                    "  [%4d] %s##fxl_param_%d",
+                    p, pname, p);
 
                 bool selected = false;
                 int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
@@ -7493,6 +7491,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                                  g_listeningUf8.bank, p);
                         g_listeningUf8.clear();
                     }
+                }
+
+                // Aligned binding column for already-bound rows.
+                if (isBound) {
+                    double arrowX = scaleW_(ctx, 240.0);
+                    ImGui_SameLine(ctx, &arrowX, nullptr);
+                    char bindBuf[160];
+                    snprintf(bindBuf, sizeof(bindBuf),
+                        "-> %s", it->second.c_str());
+                    ImGui_TextDisabled(ctx, bindBuf);
                 }
 
                 // Drag source — payload is the vst3 param index encoded
