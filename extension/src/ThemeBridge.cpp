@@ -30,10 +30,10 @@ const ThemePalette kVanillaPalette {
     /*plotLines*/     0x40C040FF,
 };
 
-// kMixnote — port of the RAPID project's MixnoteStyle theme. Neutral
+// kDark — port of the RAPID project's MixnoteStyle theme. Neutral
 // 4-level dark background (body → card → input → border) with an Indigo
 // accent family. Original values: RAPID.lua lines 144–164.
-const ThemePalette kMixnotePalette {
+const ThemePalette kDarkPalette {
     /*windowBg*/      0x0F0F0FFF,   // bg_body
     /*childBg*/       0x1A1A1AFF,   // bg_card
     /*popupBg*/       0x1A1A1AFF,   // bg_card
@@ -54,10 +54,35 @@ const ThemePalette kMixnotePalette {
     /*plotLines*/     0x4ADE80FF,   // green
 };
 
+// kLight — high-contrast light mode mirroring Dark's structure (same
+// Indigo accent family, inverted neutrals). 4-level background hierarchy
+// runs near-white → white → light-gray → mid-gray for separators / borders.
+const ThemePalette kLightPalette {
+    /*windowBg*/      0xF5F5F5FF,   // body
+    /*childBg*/       0xFFFFFFFF,   // card
+    /*popupBg*/       0xFFFFFFFF,   // card
+    /*border*/        0xCCCCCCFF,   // border
+    /*frameBg*/       0xEAEAEAFF,   // input
+    /*frameBgHovered*/0xDADADAFF,
+    /*frameBgActive*/ 0xCACACAFF,
+    /*button*/        0x4F46E5FF,   // accent (indigo)
+    /*buttonHovered*/ 0x4338CAFF,
+    /*buttonActive*/  0x3730A3FF,
+    /*header*/        0x4F46E540,   // accent_dim (alpha 25%)
+    /*headerHovered*/ 0x4338CAFF,
+    /*headerActive*/  0x4F46E5FF,
+    /*checkMark*/     0x4F46E5FF,
+    /*separator*/     0xCCCCCCFF,
+    /*text*/          0x111111FF,
+    /*textDisabled*/  0x808080FF,
+    /*plotLines*/     0x059669FF,   // forest green (better on white)
+};
+
 const ThemePalette& paletteFor(Theme t)
 {
     switch (t) {
-        case Theme::Mixnote: return kMixnotePalette;
+        case Theme::Dark:    return kDarkPalette;
+        case Theme::Light:   return kLightPalette;
         case Theme::Vanilla:
         default:             return kVanillaPalette;
     }

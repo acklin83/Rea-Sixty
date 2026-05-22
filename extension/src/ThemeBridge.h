@@ -1,9 +1,10 @@
 #pragma once
 //
 // ThemeBridge — pushes a curated palette as ReaImGui style colors at frame
-// entry. Two palettes currently shipped: `kVanilla` (the original dark-blue
-// scheme that ships with Rea-Sixty) and `kMixnote` (Indigo accent on neutral
-// dark, ported from the RAPID project). User selection lives in main.cpp
+// entry. Three palettes currently shipped: `kVanilla` (the original dark-blue
+// scheme that ships with Rea-Sixty), `kDark` (Indigo accent on neutral dark,
+// ported from the RAPID project's MixnoteStyle) and `kLight` (high-contrast
+// light mode for daylit studios). User selection lives in main.cpp
 // (g_themeSelection, ExtState "theme"); ThemeBridge stays agnostic — call
 // pushAll(ctx, palette) with whichever palette the caller wants.
 //
@@ -42,14 +43,18 @@ struct ThemePalette {
 };
 
 // Theme identifiers — kept stable in ExtState (numeric value persists).
+// Numeric 1 was named "Mixnote" in the first shipped version; renamed to
+// Dark on 2026-05-22 with the same value so existing user prefs survive.
 enum class Theme : int {
     Vanilla = 0,
-    Mixnote = 1,
+    Dark    = 1,
+    Light   = 2,
 };
 
 // Built-in palettes.
 extern const ThemePalette kVanillaPalette;
-extern const ThemePalette kMixnotePalette;
+extern const ThemePalette kDarkPalette;
+extern const ThemePalette kLightPalette;
 
 // Resolve the active palette from a Theme enum. Falls back to Vanilla
 // for unknown values so a corrupted ExtState can't render a blank window.

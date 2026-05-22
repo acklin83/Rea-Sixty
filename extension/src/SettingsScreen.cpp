@@ -250,18 +250,23 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     ImGui_Separator(ctx);
 
     int theme = reasixty_theme();
-    if (ImGui_RadioButtonEx(ctx, "Vanilla",     &theme, 0)) {
+    if (ImGui_RadioButtonEx(ctx, "Vanilla", &theme, 0)) {
         reasixty_setTheme(theme);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButtonEx(ctx, "MixnoteStyle", &theme, 1)) {
+    if (ImGui_RadioButtonEx(ctx, "Dark",    &theme, 1)) {
+        reasixty_setTheme(theme);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "Light",   &theme, 2)) {
         reasixty_setTheme(theme);
     }
     ImGui_Text(ctx,
-        "  Vanilla = the original Rea-Sixty dark blue. MixnoteStyle = "
-        "Indigo accent");
+        "  Vanilla = the original Rea-Sixty dark blue. Dark = Indigo "
+        "accent on");
     ImGui_Text(ctx,
-        "  on neutral dark, ported from the RAPID project.");
+        "  neutral dark (formerly MixnoteStyle). Light = high-contrast "
+        "light mode.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
