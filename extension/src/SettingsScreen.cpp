@@ -228,6 +228,19 @@ void reasixty_setUf8FaderBank(int fb);
 
 namespace uf8 {
 
+// Scale a design-time pixel width by the active font-size ratio so
+// fixed-width input fields, combos, and table columns still fit their
+// text at the user's chosen Font Size (Appearance tab). Reference size
+// is the "Normal" preset (14 px) that all hardcoded widths were tuned
+// for. Frank 2026-05-22.
+static inline double scaleW_(ImGui_Context* ctx, double designWidth)
+{
+    constexpr double kRefSize = 14.0;
+    const double fs = ImGui_GetFontSize(ctx);
+    if (fs <= 0) return designWidth;
+    return designWidth * (fs / kRefSize);
+}
+
 // ---- Device ---------------------------------------------------------------
 // Per docs/plan-settings-ui.md §"Tab: Device" + SSL HOME equivalent (see
 // docs/ssl-360-settings-inventory.md):
@@ -706,7 +719,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             double v = cur;
             double step = 0.1, fast = 1.0;
             int    flags = 0;
-            double w = 100.0;
+            double w = scaleW_(ctx, 100.0);
             ImGui_SetNextItemWidth(ctx, w);
             if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
                                   "%+.2f", &flags)) {
@@ -7211,7 +7224,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 "Values are correction offsets in dB. Ctrl-click +/− = ±1.0.");
             ImGui_Spacing(ctx);
 
-            constexpr double kInputW = 90.0;
+            const double kInputW = scaleW_(ctx, 90.0);
             for (int i = 0; i < nCal; ++i) {
                 if (i) ImGui_SameLine(ctx, nullptr, nullptr);
                 ImGui_BeginGroup(ctx);
@@ -7732,9 +7745,15 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         if (ImGui_BeginTable(ctx, "fxl_master", kCols, &tblFlags,
                              nullptr, nullptr, nullptr)) {
             int wFlag = ImGui_TableColumnFlags_WidthFixed;
-            double wDefault = 36.0, wShort = 100.0, wMatch = 240.0,
-                   wDev = 140.0, wDomain = 72.0, wSlots = 64.0,
-                   wActions = 100.0;
+            // Scale every column with font size so the Short field +
+            // Mode / Slots / Actions buttons all fit at Large.
+            double wDefault = scaleW_(ctx, 36.0),
+                   wShort   = scaleW_(ctx, 100.0),
+                   wMatch   = scaleW_(ctx, 240.0),
+                   wDev     = scaleW_(ctx, 140.0),
+                   wDomain  = scaleW_(ctx, 72.0),
+                   wSlots   = scaleW_(ctx, 64.0),
+                   wActions = scaleW_(ctx, 100.0);
             ImGui_TableSetupColumn(ctx, "Default",      &wFlag, &wDefault, nullptr);
             ImGui_TableSetupColumn(ctx, "Short Max. 7", &wFlag, &wShort,   nullptr);
             ImGui_TableSetupColumn(ctx, "Name",         &wFlag, &wMatch,   nullptr);
@@ -8653,7 +8672,7 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         // Type picker — Snapshot or Group. Default Snapshot.
         const int typeInt = reasixty_selsetType(slot);
         const char* preview = (typeInt == 1) ? "Group" : "Snapshot";
-        ImGui_SetNextItemWidth(ctx, 90);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 90.0));
         if (ImGui_BeginCombo(ctx, "##type", preview, nullptr)) {
             bool isSnap = (typeInt == 0);
             bool isGrp  = (typeInt == 1);
@@ -8674,7 +8693,7 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         // Name field.
         char nameBuf[64] = {0};
         std::strncpy(nameBuf, reasixty_selsetName(slot), sizeof(nameBuf) - 1);
-        ImGui_SetNextItemWidth(ctx, 180);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 180.0));
         if (ImGui_InputTextWithHint(ctx, "##name",
                                     "Slot name",
                                     nameBuf, sizeof(nameBuf),
@@ -8687,7 +8706,7 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         // Group spinner only for Group slots.
         if (typeInt == 1) {
             int g = reasixty_selsetGroupIdx(slot);
-            ImGui_SetNextItemWidth(ctx, 80);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 80.0));
             if (ImGui_InputInt(ctx, "Grp##gi", &g,
                                nullptr, nullptr, nullptr))
             {
@@ -8805,7 +8824,7 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
         char nameBuf[64] = {0};
         std::strncpy(nameBuf, st.slots[slot].name.c_str(),
                      sizeof(nameBuf) - 1);
-        ImGui_SetNextItemWidth(ctx, 220);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
         if (ImGui_InputTextWithHint(ctx, "##name",
                                     "Slot name (e.g. Drums)",
                                     nameBuf, sizeof(nameBuf),
