@@ -307,12 +307,17 @@ void MixerWindow::onRunTick()
                                  /*size_h*/ nullptr, /*border*/ nullptr,
                                  /*flags*/ nullptr);
             if (contentVisible) {
+                // 10 px left padding across all Settings tabs so labels +
+                // separators don't crowd the rail divider. Frank 2026-05-22.
+                double padX = 10.0;
+                ImGui_Indent(impl_->ctx, &padX);
                 for (const RailEntry& e : kRail) {
                     if (e.section == impl_->selected) {
                         e.draw(impl_->ctx);
                         break;
                     }
                 }
+                ImGui_Unindent(impl_->ctx, &padX);
             }
             ImGui_EndChild(impl_->ctx);
 

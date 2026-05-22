@@ -274,12 +274,6 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     if (ImGui_RadioButtonEx(ctx, "Light",   &theme, 2)) {
         reasixty_setTheme(theme);
     }
-    ImGui_Text(ctx,
-        "  Vanilla = the original Rea-Sixty dark blue. Dark = Indigo "
-        "accent on");
-    ImGui_Text(ctx,
-        "  neutral dark (formerly MixnoteStyle). Light = high-contrast "
-        "light mode.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -298,12 +292,6 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     if (ImGui_RadioButtonEx(ctx, "Large",  &scale, 2)) {
         reasixty_setFontScale(scale);
     }
-    ImGui_Text(ctx,
-        "  Changes apply on the next frame. If a long form looks cramped at "
-        "Large,");
-    ImGui_Text(ctx,
-        "  resize the window — ReaImGui doesn't reflow widget rects until the "
-        "next layout pass.");
 }
 
 void SettingsScreen::drawDevice(ImGui_Context* ctx)
@@ -602,15 +590,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     {
         reasixty_setCycleEngagesUf8(engageUf8);
     }
-    ImGui_Text(ctx,
-        "  When the SEL-Mode cycle V-Pot push OR any \"Toggle focused "
-        "plug-in GUI\"");
-    ImGui_Text(ctx,
-        "  binding (UC1 Encoder 2 push, etc.) lands on a UF8-mapped "
-        "plug-in, also");
-    ImGui_Text(ctx,
-        "  engage UF8 Plugin Mode (with GUI). Press the same button "
-        "again to exit.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -625,9 +604,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     {
         reasixty_setAltDragSnapBack(altSnap);
     }
-    ImGui_Text(ctx,
-        "  Release while Alt/Option is still held → value snaps back to "
-        "touch-on position.");
 
     // Host-OS keyboard modifier keys engage the matching slot (in addition
     // to any HW `mod_*` binding). Frank 2026-05-22.
@@ -652,23 +628,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     {
         reasixty_setKeyboardCtrlModifier(kbCtrl);
     }
-    ImGui_Text(ctx,
-        "  Holding a keyboard modifier engages the matching slot the same "
-        "as a HW");
-    ImGui_Text(ctx,
-        "  mod_shift / mod_cmd / mod_ctrl binding would. Both sources work "
-        "in parallel.");
-    ImGui_Text(ctx,
-        "  Note: Cmd has no Windows keyboard source (Windows key is "
-        "OS-reserved).");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Pending");
-    ImGui_Separator(ctx);
-    ImGui_Text(ctx, "  Drag-to-reorder for multi-UF8 setups: deferred");
-    ImGui_Text(ctx, "  (codebase has no multi-UF8 support yet — single-device assumption");
-    ImGui_Text(ctx, "  in the bank-shift / colour-sync / VU-meter paths).");
 
     // UC1 GR calibration sits at the very bottom of the Device pane per
     // Frank 2026-05-20 — it's a niche hardware-trim workflow that doesn't
@@ -694,44 +653,61 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         // Encoding: 0..5 = BC tick, 100..104 = CS tick. Per-section
         // active range so the radio reads cleanly per section.
         const int testBase = (section == 0) ? 0 : 100;
-        for (int i = 0; i < n; ++i) {
-            const double tickDb = reasixty_uc1CalTickDb(section, i);
-            const double cur    = reasixty_uc1CalGet(section, i);
-            const bool   active = (testActive == testBase + i);
 
-            char rowLbl[32];
-            snprintf(rowLbl, sizeof(rowLbl), "  %4.0f dB", tickDb);
-            ImGui_Text(ctx, rowLbl);
-            ImGui_SameLine(ctx, nullptr, nullptr);
+        // Inner table — fixed-width columns so every row aligns:
+        // dB label | Test button | dB input | dB suffix. Frank 2026-05-22.
+        char tblId[32];
+        snprintf(tblId, sizeof(tblId), "##gr_cal_tbl_%d", section);
+        int tblFlags = 0;
+        if (ImGui_BeginTable(ctx, tblId, 4, &tblFlags,
+                             nullptr, nullptr, nullptr)) {
+            int   wFlag      = ImGui_TableColumnFlags_WidthFixed;
+            double wTick     = scaleW_(ctx, 50.0);
+            double wTest     = scaleW_(ctx, 60.0);
+            double wInput    = scaleW_(ctx, 130.0);
+            double wSuffix   = scaleW_(ctx, 30.0);
+            ImGui_TableSetupColumn(ctx, "tick",  &wFlag, &wTick,   nullptr);
+            ImGui_TableSetupColumn(ctx, "test",  &wFlag, &wTest,   nullptr);
+            ImGui_TableSetupColumn(ctx, "input", &wFlag, &wInput,  nullptr);
+            ImGui_TableSetupColumn(ctx, "suffix",&wFlag, &wSuffix, nullptr);
 
-            char testId[64];
-            snprintf(testId, sizeof(testId),
-                "%s##cal_test_%d_%d",
-                active ? "Stop" : "Test", section, i);
-            if (ImGui_Button(ctx, testId, nullptr, nullptr)) {
-                reasixty_uc1SetCalActiveTest(active ? -1 : (testBase + i));
+            for (int i = 0; i < n; ++i) {
+                const double tickDb = reasixty_uc1CalTickDb(section, i);
+                const double cur    = reasixty_uc1CalGet(section, i);
+                const bool   active = (testActive == testBase + i);
+
+                ImGui_TableNextColumn(ctx);
+                char rowLbl[32];
+                snprintf(rowLbl, sizeof(rowLbl), "%g dB", tickDb);
+                ImGui_Text(ctx, rowLbl);
+
+                ImGui_TableNextColumn(ctx);
+                char testId[64];
+                snprintf(testId, sizeof(testId),
+                    "%s##cal_test_%d_%d",
+                    active ? "Stop" : "Test", section, i);
+                if (ImGui_Button(ctx, testId, nullptr, nullptr)) {
+                    reasixty_uc1SetCalActiveTest(active ? -1 : (testBase + i));
+                }
+
+                ImGui_TableNextColumn(ctx);
+                char inputId[64];
+                snprintf(inputId, sizeof(inputId),
+                    "##cal_in_%d_%d", section, i);
+                double v = cur;
+                double step = 0.1, fast = 1.0;
+                int    flags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
+                                      "%+.2f", &flags)) {
+                    reasixty_uc1CalSet(section, i, v);
+                    if (!active) reasixty_uc1SetCalActiveTest(testBase + i);
+                }
+
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, "dB");
             }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-
-            char inputId[64];
-            snprintf(inputId, sizeof(inputId),
-                "dB##cal_in_%d_%d", section, i);
-            double v = cur;
-            double step = 0.1, fast = 1.0;
-            int    flags = 0;
-            // 110 base — wide enough for "+0.00" plus modest padding at
-            // the Appearance Normal preset (14 px). The +/- spinner
-            // buttons sit outside the SetNextItemWidth budget, so this
-            // only sizes the text-input portion. Frank 2026-05-22.
-            double w = scaleW_(ctx, 110.0);
-            ImGui_SetNextItemWidth(ctx, w);
-            if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
-                                  "%+.2f", &flags)) {
-                reasixty_uc1CalSet(section, i, v);
-                // Auto-activate the row's test mode on the first edit
-                // so the user sees the change immediately.
-                if (!active) reasixty_uc1SetCalActiveTest(testBase + i);
-            }
+            ImGui_EndTable(ctx);
         }
         ImGui_Spacing(ctx);
         char resetId[48];
@@ -740,32 +716,26 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (ImGui_Button(ctx, resetId, nullptr, nullptr)) {
             reasixty_uc1CalResetSection(section);
         }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        char stopId[48];
-        snprintf(stopId, sizeof(stopId),
-            "Stop test##cal_stop_%d", section);
         const bool sectionTestActive =
             (section == 0  && testActive >= 0   && testActive < 6) ||
             (section == 1  && testActive >= 100 && testActive < 105);
         if (sectionTestActive) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char stopId[48];
+            snprintf(stopId, sizeof(stopId),
+                "Stop test##cal_stop_%d", section);
             if (ImGui_Button(ctx, stopId, nullptr, nullptr)) {
                 reasixty_uc1SetCalActiveTest(-1);
             }
-        } else {
-            ImGui_TextDisabled(ctx, "  (no test active)");
         }
         ImGui_Spacing(ctx);
     };
 
-    if (ImGui_BeginTable(ctx, "##gr_cal_cols", 2,
-                         /*flags*/ nullptr, /*outer_size_w*/ nullptr,
-                         /*outer_size_h*/ nullptr, /*inner_width*/ nullptr)) {
-        ImGui_TableNextColumn(ctx);
-        drawCalSection("BC VU meter (0/4/8/12/16/20 dB)", 0);
-        ImGui_TableNextColumn(ctx);
-        drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
-        ImGui_EndTable(ctx);
-    }
+    // Both sections stacked vertically + left-aligned. Frank 2026-05-22:
+    // the prior 2-column outer table pushed CS DYN GR way to the right.
+    drawCalSection("BC VU meter (0/4/8/12/16/20 dB)", 0);
+    ImGui_Spacing(ctx);
+    drawCalSection("CS DYN GR LEDs (3/6/10/14/20 dB)", 1);
 }
 
 // ---- Bindings -------------------------------------------------------------
