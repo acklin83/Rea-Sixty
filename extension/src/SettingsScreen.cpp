@@ -116,6 +116,8 @@ bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
 bool reasixty_wrapPluginCycle();
 void reasixty_setWrapPluginCycle(bool on);
+bool reasixty_keyboardShiftModifier();
+void reasixty_setKeyboardShiftModifier(bool on);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_showTracksHiddenInTcp();
@@ -541,7 +543,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Faders");
+    ImGui_Text(ctx, "Keyboard Options");
     ImGui_Separator(ctx);
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
@@ -555,6 +557,21 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  Release while Alt/Option is still held → value snaps back to "
         "touch-on position.");
+
+    // Host-OS keyboard Shift engages the Shift modifier slot (in addition
+    // to any HW `mod_shift` binding). Frank 2026-05-22.
+    bool kbShift = reasixty_keyboardShiftModifier();
+    if (ImGui_Checkbox(ctx,
+        "Keyboard Shift acts as Shift modifier",
+        &kbShift))
+    {
+        reasixty_setKeyboardShiftModifier(kbShift);
+    }
+    ImGui_Text(ctx,
+        "  Holding the keyboard Shift key engages the Shift slot the same "
+        "as a HW");
+    ImGui_Text(ctx,
+        "  mod_shift binding would. Both sources work in parallel.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

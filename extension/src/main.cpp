@@ -480,6 +480,10 @@ std::atomic<bool>         g_hideOfflineFx{false};
 // hard-stop — "Next" at the last FX is a no-op, "Previous" at the first
 // FX is a no-op. Frank 2026-05-22.
 std::atomic<bool>         g_wrapPluginCycle{true};
+// Host-OS keyboard Shift key engages the Shift modifier slot. Polled
+// in onTimer and OR'd with the HW `mod_shift` flag. Default on. Frank
+// 2026-05-22.
+std::atomic<bool>         g_keyboardShiftModifier{true};
 // REAPER TCP (arrange-view track panel) scrolls into view whenever a
 // UF8 selection change fires. Independent of the MCP follow because
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
@@ -1893,6 +1897,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "wrap_plugin_cycle"); v && *v) {
         g_wrapPluginCycle.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
+        g_keyboardShiftModifier.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
@@ -11600,8 +11607,10 @@ void onTimer()
     // Keyboard-Shift modifier mirror. Polled here so the host-OS Shift
     // key engages the bindings Shift slot the same as a HW `mod_shift`
     // press would. OR'd inside the bindings layer (see Bindings.cpp
-    // `g_modShiftKbHeld`). Frank 2026-05-22.
-    uf8::bindings::setKeyboardShiftHeld(hostShiftHeld_());
+    // `g_modShiftKbHeld`). Gated by Settings → Device → Keyboard
+    // Options. Frank 2026-05-22.
+    uf8::bindings::setKeyboardShiftHeld(
+        g_keyboardShiftModifier.load() && hostShiftHeld_());
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
@@ -13402,6 +13411,15 @@ void reasixty_setWrapPluginCycle(bool on)
 {
     g_wrapPluginCycle.store(on);
     SetExtState("rea_sixty", "wrap_plugin_cycle", on ? "1" : "0", true);
+}
+bool reasixty_keyboardShiftModifier() { return g_keyboardShiftModifier.load(); }
+void reasixty_setKeyboardShiftModifier(bool on)
+{
+    g_keyboardShiftModifier.store(on);
+    SetExtState("rea_sixty", "kb_shift_modifier", on ? "1" : "0", true);
+    // Clear any latched keyboard-Shift state on disable so a frozen
+    // press doesn't outlive the toggle flip.
+    if (!on) uf8::bindings::setKeyboardShiftHeld(false);
 }
 bool reasixty_tcpFollowsSelection()   { return g_tcpFollowsSelection.load(); }
 void reasixty_setTcpFollowsSelection(bool on)
