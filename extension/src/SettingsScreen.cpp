@@ -5223,49 +5223,53 @@ constexpr uint32_t kCapBC    = 0x2A4870FF;  // Bus-Comp section
 // c2x=490; cInL=310, cInR=550.
 constexpr Uc1Control kUc1Controls[] = {
     // ---- LEFT COLUMN — CS Filters + EQ ----------------------------------
+    // 2026-05-22: EQ knobs shifted inward (col1 60→70 / col2 170→162) and
+    // BELL/TYPE/IN toggles enlarged (28×14 → 34×18); coordinates here
+    // mirror drawUc1Face_'s new layout so the green overlay rings line
+    // up with the painted controls.
     // Filters
     { Uc1Control::Knob,    6, uf8::Domain::ChannelStrip,
-      72, 44,  20, 0, 0, kCapGrey,  "LPF" },
+      82, 44,  20, 0, 0, kCapGrey,  "LPF" },
     { Uc1Control::Knob,    7, uf8::Domain::ChannelStrip,
-      182, 70, 20, 0, 0, kCapGrey,  "HPF" },
+      174, 70, 20, 0, 0, kCapGrey,  "HPF" },
 
     // HF band (red caps)
     { Uc1Control::Toggle,  8, uf8::Domain::ChannelStrip,
-      204, 146, 0, 28, 14, 0, "HFBL" },
+      204, 146, 0, 34, 18, 0, "HFBL" },
     { Uc1Control::Knob,    9, uf8::Domain::ChannelStrip,
-      72,  154, 20, 0, 0, kCapRed,  "HFGN" },
+      82,  154, 20, 0, 0, kCapRed,  "HFGN" },
     { Uc1Control::Knob,   10, uf8::Domain::ChannelStrip,
-      182, 182, 20, 0, 0, kCapRed,  "HFFQ" },
+      174, 182, 20, 0, 0, kCapRed,  "HFFQ" },
 
     // HMF band (green caps)
     { Uc1Control::Knob,   11, uf8::Domain::ChannelStrip,
-      72,  232, 20, 0, 0, kCapGreen, "HMFG" },
+      82,  232, 20, 0, 0, kCapGreen, "HMFG" },
     { Uc1Control::Knob,   12, uf8::Domain::ChannelStrip,
-      182, 260, 20, 0, 0, kCapGreen, "HMFF" },
+      174, 260, 20, 0, 0, kCapGreen, "HMFF" },
     { Uc1Control::Knob,   13, uf8::Domain::ChannelStrip,
-      72,  300, 20, 0, 0, kCapGreen, "HMFQ" },
+      82,  300, 20, 0, 0, kCapGreen, "HMFQ" },
 
     // EQ Type / EQ In toggles
     { Uc1Control::Toggle, 14, uf8::Domain::ChannelStrip,
-      204, 356, 0, 28, 14, 0, "EQTY" },
+      204, 356, 0, 34, 18, 0, "EQTY" },
     { Uc1Control::Toggle, 15, uf8::Domain::ChannelStrip,
-      204, 376, 0, 28, 14, 0, "EQIN" },
+      204, 380, 0, 34, 18, 0, "EQIN" },
 
     // LMF band (blue caps)
     { Uc1Control::Knob,   16, uf8::Domain::ChannelStrip,
-      72,  430, 20, 0, 0, kCapBlue,  "LMFG" },
+      82,  430, 20, 0, 0, kCapBlue,  "LMFG" },
     { Uc1Control::Knob,   17, uf8::Domain::ChannelStrip,
-      182, 458, 20, 0, 0, kCapBlue,  "LMFF" },
+      174, 458, 20, 0, 0, kCapBlue,  "LMFF" },
     { Uc1Control::Knob,   18, uf8::Domain::ChannelStrip,
-      72,  498, 20, 0, 0, kCapBlue,  "LMFQ" },
+      82,  498, 20, 0, 0, kCapBlue,  "LMFQ" },
 
     // LF band (black caps)
     { Uc1Control::Knob,   19, uf8::Domain::ChannelStrip,
-      182, 558, 20, 0, 0, kCapBlack, "LFFQ" },
+      174, 558, 20, 0, 0, kCapBlack, "LFFQ" },
     { Uc1Control::Knob,   20, uf8::Domain::ChannelStrip,
-      72,  598, 20, 0, 0, kCapBlack, "LFGN" },
+      82,  598, 20, 0, 0, kCapBlack, "LFGN" },
     { Uc1Control::Toggle, 21, uf8::Domain::ChannelStrip,
-      204, 591, 0, 28, 14, 0, "LFBL" },
+      204, 600, 0, 34, 18, 0, "LFBL" },
 
     // ---- CENTRE COLUMN — Input/Output Gain (CS, physically on BC strip) -
     // Input-Gain knob (UC1 0x0C) → CS Input Trim slot (linkIdx 4). Same
@@ -5337,13 +5341,11 @@ constexpr Uc1Control kUc1Controls[] = {
       632, 510, 0, 66, 22, 0, "POL" },        // Polarity (Ø)
     { Uc1Control::DynBtn, 36, uf8::Domain::ChannelStrip,
       632, 536, 0, 66, 22, 0, "S/C L" },     // S/C Listen
-    // Channel-IN — narrow tall button per drawUc1Face_'s c3x slot.
-    // Coords match the actual draw: drawUc1Face_ paints the IN button at
-    // (kColRx + 162 + (66 - 33)/2, 510 + (3*22 - 37)/2) = (796.5, 524.5).
-    // Using c3x directly here (= 778) made the bbox sit 18 px left of
-    // the silk drawing — Frank 2026-05-09 flagged this as "verrutscht".
+    // Channel-IN — square 40×40 per Frank 2026-05-22. Coords mirror
+    // drawUc1Face_: inX = kColRx+162 + (66-40)/2 = 793,
+    //               inY = 510 + (3*22 - 40)/2   = 523.
     { Uc1Control::Toggle,  4, uf8::Domain::ChannelStrip,
-      796.5f, 524.5f, 0, 33, 37, 0, "IN" },  // Channel In / Input Trim
+      793.0f, 523.0f, 0, 40, 40, 0, "IN" },  // Channel In / Input Trim
 };
 
 constexpr int kUc1ControlsCount =
