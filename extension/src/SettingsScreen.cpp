@@ -114,6 +114,8 @@ bool reasixty_altDragSnapBack();
 void reasixty_setAltDragSnapBack(bool on);
 bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
+bool reasixty_wrapPluginCycle();
+void reasixty_setWrapPluginCycle(bool on);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_showTracksHiddenInTcp();
@@ -508,6 +510,15 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool hideOffline = reasixty_hideOfflineFx();
     if (ImGui_Checkbox(ctx, "Don't show offline FX", &hideOffline)) {
         reasixty_setHideOfflineFx(hideOffline);
+    }
+
+    // Wrap-around at the end of the FX chain. Default on (legacy
+    // behaviour). When off, both ends hard-stop on all four cycle
+    // paths and the UC1 carousel shows no neighbour name past the
+    // first/last FX. Frank 2026-05-22.
+    bool wrapCycle = reasixty_wrapPluginCycle();
+    if (ImGui_Checkbox(ctx, "Wrap Plugin Cycle", &wrapCycle)) {
+        reasixty_setWrapPluginCycle(wrapCycle);
     }
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.

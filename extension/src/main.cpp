@@ -474,6 +474,12 @@ std::atomic<bool>         g_altDragSnapBack{false};
 // applyFxCycle_ / applyInstanceCycle_ / StripInstance* skip TrackFX
 // slots whose TrackFX_GetOffline() returns true. Frank 2026-05-20.
 std::atomic<bool>         g_hideOfflineFx{false};
+// Wrap behaviour for all four cycle paths (Channel-Encoder FX/Instance
+// Cycle, per-strip V-Pot FX/Instance Cycle). Default on (legacy: end of
+// chain wraps to start, and start wraps to end). When off, both ends
+// hard-stop — "Next" at the last FX is a no-op, "Previous" at the first
+// FX is a no-op. Frank 2026-05-22.
+std::atomic<bool>         g_wrapPluginCycle{true};
 // REAPER TCP (arrange-view track panel) scrolls into view whenever a
 // UF8 selection change fires. Independent of the MCP follow because
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
@@ -1885,6 +1891,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "hide_offline_fx"); v && *v) {
         g_hideOfflineFx.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "wrap_plugin_cycle"); v && *v) {
+        g_wrapPluginCycle.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
     }
@@ -2944,8 +2953,14 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
         if (k < 0 || k >= sz) return {};
         return fxCycleDisplayName_(tr, ringFxIdx[k]);
     };
-    const int prevK = (curK - 1 + sz) % sz;
-    const int nxtK  = (curK + 1) % sz;
+    // Wrap-aware neighbour resolution. When Wrap Plugin Cycle is off,
+    // prev at the first slot and next at the last slot resolve to
+    // out-of-range and `label()` returns "" — so the UC1 carousel
+    // shows no name before the first FX / after the last FX. Frank
+    // 2026-05-22.
+    const bool wrap = g_wrapPluginCycle.load();
+    const int prevK = wrap ? ((curK - 1 + sz) % sz) : (curK - 1);
+    const int nxtK  = wrap ? ((curK + 1) % sz)      : (curK + 1);
     char trkName[128] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
     std::string header = trkName[0] ? std::string(trkName) : std::string{};
@@ -3083,8 +3098,17 @@ void applyInstanceCycle_(int step)
             curK = (int)k; break;
         }
     }
-    int nextK = (curK + step) % static_cast<int>(hits.size());
-    if (nextK < 0) nextK += static_cast<int>(hits.size());
+    const int sz = static_cast<int>(hits.size());
+    int nextK;
+    if (g_wrapPluginCycle.load()) {
+        nextK = (curK + step) % sz;
+        if (nextK < 0) nextK += sz;
+    } else {
+        nextK = curK + step;
+        if (nextK < 0)   nextK = 0;
+        if (nextK >= sz) nextK = sz - 1;
+        if (nextK == curK) return;   // hard-stop at edge, no carousel
+    }
     const Hit& target = hits[nextK];
     // Sync the per-strip Instance index on the focused track so the
     // Selection-Mode Instance colour-bar readout (stripInstanceActiveFx_)
@@ -3245,7 +3269,15 @@ void applyFxCycle_(int step)
         if (ring[k] == cur) { curK = static_cast<int>(k); break; }
     }
     const int sz = static_cast<int>(ring.size());
-    const int nextK = ((curK + step) % sz + sz) % sz;
+    int nextK;
+    if (g_wrapPluginCycle.load()) {
+        nextK = ((curK + step) % sz + sz) % sz;
+    } else {
+        nextK = curK + step;
+        if (nextK < 0)   nextK = 0;
+        if (nextK >= sz) nextK = sz - 1;
+        if (nextK == curK) return;   // hard-stop at edge, no carousel
+    }
     const int nextIdx = ring[nextK];
     setStripInstanceFx_(tr, nextIdx);
     syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
@@ -5407,7 +5439,15 @@ void drainInputQueue()
                             }
                         }
                         const int sz = static_cast<int>(ring.size());
-                        const int nextK = ((curK + step) % sz + sz) % sz;
+                        int nextK;
+                        if (g_wrapPluginCycle.load()) {
+                            nextK = ((curK + step) % sz + sz) % sz;
+                        } else {
+                            nextK = curK + step;
+                            if (nextK < 0)   nextK = 0;
+                            if (nextK >= sz) nextK = sz - 1;
+                            if (nextK == curK) break;   // hard-stop at edge
+                        }
                         const int next = ring[nextK];
                         setStripInstanceFx_(tr, next);
                         // Promote Instance landings into Instance state
@@ -5588,8 +5628,17 @@ void drainInputQueue()
                         }
                     }
                 }
-                int nextK = (curK + step) % static_cast<int>(hits.size());
-                if (nextK < 0) nextK += static_cast<int>(hits.size());
+                const int sz = static_cast<int>(hits.size());
+                int nextK;
+                if (g_wrapPluginCycle.load()) {
+                    nextK = (curK + step) % sz;
+                    if (nextK < 0) nextK += sz;
+                } else {
+                    nextK = curK + step;
+                    if (nextK < 0)   nextK = 0;
+                    if (nextK >= sz) nextK = sz - 1;
+                    if (nextK == curK) break;   // hard-stop at edge
+                }
                 const Hit& target = hits[nextK];
 
                 // Commit: cursor moves, the matching Instance index for
@@ -10152,6 +10201,21 @@ bool hostAltHeld_()
 #endif
 }
 
+// Host-keyboard Shift held? Polled in onTimer and forwarded to the
+// bindings modifier framework via setKeyboardShiftHeld. Frank 2026-05-22.
+bool hostShiftHeld_()
+{
+#if defined(__APPLE__)
+    const CGEventFlags f = CGEventSourceFlagsState(
+        kCGEventSourceStateCombinedSessionState);
+    return (f & kCGEventFlagMaskShift) != 0;
+#elif defined(_WIN32)
+    return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+#else
+    return false;
+#endif
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -11532,6 +11596,12 @@ int g_tickCounter = 0;
 void onTimer()
 {
     ++g_tickCounter;
+
+    // Keyboard-Shift modifier mirror. Polled here so the host-OS Shift
+    // key engages the bindings Shift slot the same as a HW `mod_shift`
+    // press would. OR'd inside the bindings layer (see Bindings.cpp
+    // `g_modShiftKbHeld`). Frank 2026-05-22.
+    uf8::bindings::setKeyboardShiftHeld(hostShiftHeld_());
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
@@ -13326,6 +13396,12 @@ void reasixty_setHideOfflineFx(bool on)
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
     }
+}
+bool reasixty_wrapPluginCycle()       { return g_wrapPluginCycle.load(); }
+void reasixty_setWrapPluginCycle(bool on)
+{
+    g_wrapPluginCycle.store(on);
+    SetExtState("rea_sixty", "wrap_plugin_cycle", on ? "1" : "0", true);
 }
 bool reasixty_tcpFollowsSelection()   { return g_tcpFollowsSelection.load(); }
 void reasixty_setTcpFollowsSelection(bool on)

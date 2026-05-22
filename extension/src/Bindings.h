@@ -426,6 +426,11 @@ std::string configPath();
 // in-flight press record. Atomics so the libusb input thread can
 // publish without locking.
 void     setModifierHeld(Modifier m, bool held);
+// Mirror the host-OS keyboard Shift key into the modifier state.
+// OR'd with the HW `mod_shift` flag inside modifierHeld(Shift) /
+// currentModifierSnapshot(), so either source independently engages
+// the Shift slot. Polled in main.cpp's onTimer. Frank 2026-05-22.
+void     setKeyboardShiftHeld(bool held);
 bool     modifierHeld(Modifier m);
 Modifier currentModifierSnapshot();
 
