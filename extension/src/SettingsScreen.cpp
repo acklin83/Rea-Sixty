@@ -1857,16 +1857,10 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     //                              put OVER them so they read as off-
     //                              domain (they're not BC)
     drawInOutGain();
-    if (dimDomain == uf8::Domain::BusComp) {
-        // Two ~36 px squares centred on the knob positions, covering the
-        // knob + label so the CS-domain pair reads dim while editing BC.
-        constexpr float kInOutDimSize = 50;
-        const float dimX_L = kColCx + kInOutCxL - kInOutDimSize / 2.0f;
-        const float dimX_R = kColCx + kInOutCxR - kInOutDimSize / 2.0f;
-        const float dimY   = kInOutY - 22;        // ring top
-        rect_(c, dimX_L, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
-        rect_(c, dimX_R, dimY, kInOutDimSize, kInOutDimSize, kDim, 0, 4.0);
-    }
+    // (Frank 2026-05-22: the per-knob dim rect was visually noisy — black
+    // squares behind round caps read worse than just leaving the CS knobs
+    // at full brightness on the BC chassis. The labels INPUT / OUTPUT
+    // already disambiguate them from the BC parameter knobs.)
     } // end if (!ccpOnly) — dim overlay + InOutGain
 }
 
@@ -5555,7 +5549,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 namespace {
 
 constexpr float kUf8FaceW       = 860;
-constexpr float kUf8FaceH       = 504;
+constexpr float kUf8FaceH       = 520;
 constexpr float kUf8StripW      = 80;
 constexpr float kUf8StripGap    = 7;
 // Centre 8 strips:  8*80 + 7*7 = 689.  ox = (860 - 689) / 2 = 85.5
@@ -6998,6 +6992,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Text(ctx, "GR Meter param:");
         ImGui_SameLine(ctx, nullptr, nullptr);
 
+        // Fill the remaining line width so the combo's right edge lines
+        // up with the mockup canvas below it. Frank 2026-05-22.
+        {
+            double comboAvX = 0, comboAvY = 0;
+            ImGui_GetContentRegionAvail(ctx, &comboAvX, &comboAvY);
+            ImGui_SetNextItemWidth(ctx, comboAvX);
+        }
         if (ImGui_BeginCombo(ctx, "##fxl_gr_combo", preview, 0)) {
             // None entry first — selects the GainReduction_dB fallback.
             {
@@ -7177,13 +7178,23 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // the UC1 (content fills to the chassis edge, unlike the UF8 which
     // has 85 px of empty bezel and stays visible). When the window is
     // narrow, fall back to the previous 72%/28% split.
-    constexpr double kMockupW  = 860.0;
-    constexpr double kRightMin = 280.0;
-    constexpr double kPaneGap  = 12.0;
+    constexpr double kMockupW   = 860.0;
+    // BeginChild reserves padding + scrollbar room inside its bbox; pad
+    // the left pane beyond the raw mockup width so the right edge of
+    // the UC1 schematic doesn't clip and trigger a horizontal scroll.
+    constexpr double kMockupSafe = kMockupW + 24.0;
+    constexpr double kRightMin   = 280.0;
+    // Cap the param list on wide screens so it stays compact; give the
+    // freed space to the mockup pane. Frank 2026-05-22.
+    constexpr double kRightPreferred = 360.0;
+    constexpr double kPaneGap    = 12.0;
     double leftW, rightW;
-    if (avX >= kMockupW + kPaneGap + kRightMin) {
-        leftW  = kMockupW;
-        rightW = avX - leftW - kPaneGap;
+    if (avX >= kMockupSafe + kPaneGap + kRightMin) {
+        rightW = kRightPreferred;
+        if (rightW > avX - kMockupSafe - kPaneGap)
+            rightW = avX - kMockupSafe - kPaneGap;
+        if (rightW < kRightMin) rightW = kRightMin;
+        leftW = avX - rightW - kPaneGap;
     } else {
         leftW  = avX * 0.72;
         rightW = avX - leftW - kPaneGap;
@@ -7340,7 +7351,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             char hint[256];
             if (!fx.ok) {
                 ImGui_TextColored(ctx, 0xC0C0FFFF,
-                    "Param list from stored snapshot — drag to bind. "
+                    "Param list from stored snapshot — drag to bind.");
+                ImGui_TextColored(ctx, 0xC0C0FFFF,
                     "Wiggle listen needs a live FX.");
                 ImGui_Spacing(ctx);
             }
