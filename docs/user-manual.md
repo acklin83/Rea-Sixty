@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.2. Earlier manuals (anything dated before 2026-05-21) are superseded.
+This manual documents Rea-Sixty v0.1.4. Earlier manuals (anything dated before 2026-05-22) are superseded.
 
 \newpage
 
@@ -221,7 +221,6 @@ Per strip while Nav Mode is active:
 - **Top-soft-key** — press = jump (and, in Regions view, optionally drill). LED colour = the region / marker's REAPER colour (or grey if *Color-bar source: Force palette grey* is set).
 - **Scribble strip upper row** — the marker / region name.
 - **Scribble strip lower row** — configurable: Off (V-Pot value preserved) / Index (`R03`, `M07`) / Timecode (`MM:SS`).
-- **Strip 0 / strip 7 lower row** — optional `<<` / `>>` pagination hints when there are more items than fit (only meaningful when the lower row is Index or Timecode).
 - **Colour bar** — the marker / region's colour (or palette grey, per setting).
 
 ## Paging
@@ -229,7 +228,6 @@ Per strip while Nav Mode is active:
 When the project has more items than 8 strips, the overlay pages 8 at a time. Pagination via:
 
 - **CHANNEL encoder rotation** while Nav Mode is active — pages forward / backward.
-- The pagination hints on strip 0 / 7 lower row mirror REAPER's prev / next state.
 
 ## UC1 Encoder 2 takeover
 
@@ -280,7 +278,7 @@ Per strip, from top to bottom:
 | `SOLO` | Solo | LED colour follows REAPER track colour when *Settings → Device → Display behaviour → "SEL LED follows REAPER track colour"* is on. |
 | `CUT` | Mute |  |
 | `SEL` | Selection-Mode dependent | NORM = exclusive select; REC = arm; REC+MON = arm + monitor; AUTO = cycle automation mode. Long-press on a folder parent toggles spill. |
-| Capacitive touch (fader) | Drives REAPER's "touch" automation | Alt/Option held during touch → snap back on release (Settings → Device → Faders). |
+| Capacitive touch (fader) | Drives REAPER's "touch" automation | Alt/Option held during touch → snap back on release (Settings → Device → Keyboard Options). |
 | 100 mm motorised fader | Track volume | Full 16-bit pitch-bend protocol. |
 
 ## Above the strips: 8 Top Soft-Keys + bank selectors
@@ -456,7 +454,7 @@ If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their pri
 
 The Settings window is a dockable ReaImGui context. Open with the `360°` key (default), the `mixer_toggle` builtin, or REAPER's Action `Rea-Sixty: Toggle Settings window`.
 
-Seven sidebar tabs: Device · Bindings · Modes · FX Learn · Selection Sets · Parameter Groups · About.
+Eight sidebar tabs: Device · Appearance · Bindings · Modes · FX Learn · Selection Sets · Parameter Groups · About.
 
 ## Device pane
 
@@ -494,19 +492,25 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | TCP follows UF8 selection | UF8-triggered track selection scrolls REAPER's arrange-view track panel (action 40913). MCP follow is always on. |
 | Show tracks hidden in TCP | Off (default) → tracks REAPER has hidden in TCP also disappear from the UF8. |
 | Show tracks hidden in MCP | Same, independently, for MCP hidden tracks. |
+| Hide tracks in collapsed folders | Independent surface-side mirror of REAPER's "hide children of collapsed folders" preference. When on, any track whose ancestor folder has `I_FOLDERCOMPACT == 2` (fully collapsed) drops from the UF8 strip list. Walks ancestors on every track-list rebuild so the filter follows live folder-state changes. Default off. |
+| Long track-name handling (combo) | How track names longer than the 7-char scribble-strip slot are shortened. *Truncate* (default) keeps the legacy first-7-chars cut ("Background Vocals" → "Backgro"). *Smart abbreviate* drops separators, then vowels after the first letter of each token, then collapses repeated consonants, then proportionally distributes the remaining char budget across tokens ("Background Vocals" → "BckgVcl", "Drums Bus" → "DrmsBs"). Short all-caps tokens (DI / FX / EQ / …) survive untouched. Mode switch repaints all 8 strips immediately. |
 
 ### Plug-ins
 
 | Toggle | Effect |
 |---|---|
 | Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip TrackFX slots whose `TrackFX_GetOffline` returns true. Offline-only tracks show a `-`. |
+| Wrap Plugin Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
 | Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a `show_focused_plugin_gui` binding lands on a UF8-mapped plug-in, also engage UF8 Plugin Mode with GUI. |
 
-### Faders
+### Keyboard Options
 
 | Toggle | Effect |
 |---|---|
-| Alt/Option + fader drag → snap back | Hold Alt/Option while moving a fader; release while still holding Alt → fader snaps back to its touch-on value. Mirrors REAPER's mouse Alt-drag. |
+| Alt/Option + fader drag → snap back to original on release | Hold Alt/Option while moving a fader; release while still holding Alt → fader snaps back to its touch-on value. Mirrors REAPER's mouse Alt-drag. |
+| Keyboard Shift acts as Shift modifier | When on, holding **Shift** on the host keyboard counts as the Shift modifier for any binding's Plain/Shift/Cmd/Ctrl modifier slot — in addition to the hardware `mod_*` bindings. |
+| Keyboard Cmd acts as Cmd modifier | Same, for Cmd on macOS. |
+| Keyboard Ctrl acts as Ctrl modifier | Same, for Ctrl on Windows / Linux. |
 
 ### Pending
 
@@ -515,6 +519,24 @@ A single line documents currently-deferred features (multi-UF8 drag-to-reorder).
 ### UC1 GR calibration
 
 Per-tick offset editor for the mechanical BC VU meter and the CS Dynamics GR LEDs. See chapter UC1 hardware → UC1 GR Calibration.
+
+\newpage
+
+## Appearance pane
+
+### Theme
+
+Three-way radio:
+
+- **Vanilla** (default) — ReaImGui's built-in dark theme, no overlay.
+- **Dark** — Rea-Sixty's themed dark palette (blue-grey base + soft accents).
+- **Light** — the Light counterpart for users on a light-mode REAPER setup.
+
+Re-themes every Settings panel + the FX Learn schematic. Hardware-face colours (UF8 silk-screen mockups, UC1 schematic) stay constant.
+
+### Font Size
+
+Three-way radio: **Small** / **Normal** / **Large**. Drives every Settings widget except the UF8 / UC1 mockup schematic labels — those stay locked at 12 px so the schematics don't reflow when the picker changes. Numeric inputs (GR-cal table, FX Learn binding column) scale with the font picker so layouts stay aligned across sizes.
 
 \newpage
 
@@ -620,17 +642,29 @@ Each line shows the bound layer + button + modifier + long-press flag, or "(unbo
 
 **UF8 strip display**
 
-- **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible.
-- **Pagination hints `<<`, `>>` on strip 0 / 7 lower row** (checkbox): only meaningful when Lower-row format is Index or Timecode.
+- **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible; Index / Timecode overlay marker metadata on the lower row.
 - **Color-bar source** (radio): `REAPER marker colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
 
 **UC1 Encoder 2**
 
-- **Take over UC1 Encoder 2 while Nav Mode is active** (checkbox). When off, Encoder 2 rotation stays bound to its normal action.
-- **Carousel scope** — currently single option *Mirror UF8 view*. Other scopes deferred.
-- **Plain push action** (radio): `Jump + Drill` / `Jump only` / `Drill only`.
-- **Shift + push action** (radio): `Drill` / `Back` / `Toggle View`.
-- **Long-press action** (radio): `Back` / `Add marker at playhead` / `Disabled`. Long-press threshold ~500 ms.
+- **Take over UC1 Encoder 2 while Nav Mode is active** (checkbox). When off, Encoder 2 rotation stays bound to its normal action (`bc_track_scroll` by default) and the UC1 LCD does not switch to the marker carousel — only UF8 reflects Nav Mode.
+- **Carousel scope** — currently single option *Mirror UF8 view*. Independent UC1 scopes (Always Regions / Always Markers / Always Markers-in-UF8-region) are not yet implemented.
+
+**Push actions** — Plain push, Shift + push, and Long-press each pick any of the same 7 actions via dropdown:
+
+| Action | Effect |
+|---|---|
+| Jump + Drill | In Regions view: jump transport to the region start AND enter the region's marker list. In Markers view: jump only (drill is meaningless there). |
+| Jump only | Move transport / edit cursor to the cursor item. |
+| Drill only | Enter the region's marker list (Regions view only; no-op elsewhere). |
+| Back | Return from a drilled-into Markers-in-Region view to Regions. |
+| Toggle View | Flip between Regions and Markers (all). |
+| Add marker at playhead | Insert an empty marker at the playhead (or edit cursor when stopped). |
+| Disabled | No-op. |
+
+Defaults: Plain = Jump+Drill, Shift = Drill only, Long = Back.
+
+View-locks (Markers-only / Regions-only) suppress **Drill only** specifically (Jump+Drill collapses to Jump only; Drill only becomes a no-op). Every other action fires regardless of lock. Long-press threshold ~500 ms.
 
 **Auto-Follow**
 
@@ -672,6 +706,14 @@ Editor body — depends on the domain:
 - **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
 - **None (UF8-only):** the UF8 strip-bar schematic. Drag a strip slot (V-Pot, top soft-key, etc.) onto a plug-in parameter.
 
+### Right-click context menu
+
+Right-clicking a mapped control on the UF8 schematic opens per-control options:
+
+- **Copy / Paste / Clear** the binding.
+- **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — propagates the source-strip's attributes (faderInverted, V-Pot inverted / vpotMode / defaultNorm / stripColour, Solo / Cut / Sel colour, Reverse LED flag) onto every strip to the right.
+- **Reverse LED [off/on]** on a Solo / Cut / Sel button — XORs the LED on/off bit before painting. Use this for plug-ins whose Cut/Bypass param reports `1 = inactive` so the LED would otherwise stay bright while the function is off. Saved per `(fader-bank, strip, button)` in `user_plugins.json`.
+
 ### Multi-instance picker
 
 When the focused track has multiple FX matching the map's name, the editor surfaces a combo to choose which Instance's live readouts feed the editor. Picked index is per plug-in.
@@ -692,24 +734,24 @@ Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.jso
 
 ## Selection Sets pane
 
-Eight slots (1..8). Recall toggles — press the active slot's button again to deactivate. Filter ANDs with Folder Mode / Show-Only-Selected / AUTO-mode filters.
+Eight slots (1..8). The slot acts as a filter — combined with any active Folder Mode / Show-Only-Selected / AUTO-mode filters (a track must pass all of them). Recall toggles — pressing the active slot's hardware button again deactivates it.
 
 Each slot is either:
 
 - **Snapshot** — fixed list of REAPER track GUIDs frozen at save time.
-- **Group** — bound to a REAPER track group (1..64). Membership refreshes every onTimer tick from `GetSetTrackGroupMembership` across all Lead/Follow categories.
+- **Group** — bound to a REAPER track group (1..64). Membership refreshes every onTimer tick from `GetSetTrackGroupMembership` across all Lead/Follow categories (ANY category).
 
-Per-slot row, left to right:
+The slot rows are laid out as a fixed-width 7-column table so columns align across rows regardless of slot type. Left to right:
 
-- **• / blank** active-row marker dot.
+- **`• Slot N`** — the `•` prefix marks the currently active slot.
 - **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (ProjExtState, persists with the project save). Group slots benefit most from Global since "group N" is a stable concept across projects.
 - **Type** combo: `Snapshot` / `Group`.
 - **Name** text field.
-- **Grp** spinner (Group type only) — REAPER track group index 1..64.
-- Track count display: `(N tracks)`.
-- **Save** button — overwrite the slot's GUID list with the current REAPER selection (also converts a Group slot to Snapshot).
-- **Recall** / **Deactivate** button — toggle the active slot.
-- **Clear** button — empty the slot.
+- **Grp** spinner (Group rows) — REAPER track group index 1..64. Snapshot rows show `(N tracks)` in this column instead.
+- **Save** button — Snapshot rows only. Overwrites the slot's GUID list with the current REAPER selection. (Save is hidden on Group rows — pressing it there would silently convert the slot to Snapshot and drop the live group binding, which is bad UX.)
+- **Clear** button — Snapshot rows only. Empties the slot.
+
+**Recall is not a settings-pane button**: slot activation lives on the hardware. Bind a button to the `Recall Selection Slot (toggle)` builtin with param 1..8 — pressing it engages the slot; pressing it again disengages. The `•` marker shows which slot is currently active.
 
 ### Auto-mode binding
 
@@ -733,10 +775,10 @@ Top of the pane:
 
 - **Multi-Select acts as temporary Parameter Group** (checkbox). When on AND no persistent slot is active AND multiple tracks are selected, those tracks become the live group.
 
-Per-slot row (8 slots):
+Slot rows are laid out as a fixed-width 6-column table (so columns stay aligned across rows). Per row, left to right:
 
-- **• / blank** active-row marker.
-- **Active** checkbox — toggle this slot's active state.
+- **`• Slot N`** — `•` prefix marks an active slot.
+- **Active** checkbox — toggle this slot's active state. Multiple slots can be active simultaneously (the fan-out is union-of-all-active-slot-members).
 - **Name** text field.
 - Member count display: `(N members)`.
 - **Add Selected** button — add currently-selected REAPER tracks to this slot's membership.
@@ -1008,11 +1050,11 @@ Engage with the `uf8_plugin_mode_toggle` (or `_with_gui`) builtin. Default bindi
 
 While UF8 Plug-in Mode is on:
 
-- All 8 strips become the strips of a single FX-Learn-mapped plug-in
-- Two fader banks (16 strips total for plug-ins that need more than 8 controls) — Bank ← / Bank → flips between A and B
-- 8 soft-keys above each strip drive the FX Learn-mapped TopSoftKey slot per bank
-- The active group of soft-key cells is the bank's "active TopSoftKey ring" — 1 of 8 ringed brightly
-- Unassigned banks act as no-ops (LEDs dim)
+- All 8 strips become the strips of a single FX-Learn-mapped plug-in — addressable even when fewer than 8 REAPER tracks are visible (strips past the bank-track count source their content from the focused FX instead of going blank).
+- Two fader banks (16 strips total for plug-ins that need more than 8 controls) — Bank ← / Bank → flips between A and B.
+- 8 soft-keys above each strip drive the FX Learn-mapped TopSoftKey slot per bank.
+- The active group of soft-key cells is the bank's "active TopSoftKey ring" — 1 of 8 ringed brightly.
+- Unassigned banks act as no-ops (LEDs dim).
 
 The active plug-in is the focused track's first UF8-Mode-mapped instance, or the Instance the cursor is currently on.
 
