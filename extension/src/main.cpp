@@ -488,6 +488,12 @@ std::atomic<bool>         g_wrapPluginCycle{true};
 std::atomic<bool>         g_keyboardShiftModifier{true};
 std::atomic<bool>         g_keyboardCmdModifier  {true};
 std::atomic<bool>         g_keyboardCtrlModifier {true};
+// Settings-window appearance. `g_themeSelection` maps to uf8::Theme
+// (0 = Vanilla / default, 1 = Mixnote). `g_fontScale` maps to font
+// presets (0 = Small 12px, 1 = Normal 14px, 2 = Large 18px). Both
+// live in `rea_sixty` ExtState. Frank 2026-05-22.
+std::atomic<int>          g_themeSelection{0};
+std::atomic<int>          g_fontScale{1};
 // REAPER TCP (arrange-view track panel) scrolls into view whenever a
 // UF8 selection change fires. Independent of the MCP follow because
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
@@ -1910,6 +1916,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "kb_ctrl_modifier"); v && *v) {
         g_keyboardCtrlModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "theme"); v && *v) {
+        g_themeSelection.store(std::atoi(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "font_scale"); v && *v) {
+        g_fontScale.store(std::atoi(v));
     }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
@@ -13471,6 +13483,24 @@ void reasixty_setKeyboardCtrlModifier(bool on)
     g_keyboardCtrlModifier.store(on);
     SetExtState("rea_sixty", "kb_ctrl_modifier", on ? "1" : "0", true);
     if (!on) uf8::bindings::setKeyboardCtrlHeld(false);
+}
+int  reasixty_theme()                 { return g_themeSelection.load(); }
+void reasixty_setTheme(int t)
+{
+    g_themeSelection.store(t);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", t);
+    SetExtState("rea_sixty", "theme", buf, true);
+}
+int  reasixty_fontScale()             { return g_fontScale.load(); }
+void reasixty_setFontScale(int s)
+{
+    if (s < 0) s = 0;
+    if (s > 2) s = 2;
+    g_fontScale.store(s);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", s);
+    SetExtState("rea_sixty", "font_scale", buf, true);
 }
 bool reasixty_tcpFollowsSelection()   { return g_tcpFollowsSelection.load(); }
 void reasixty_setTcpFollowsSelection(bool on)

@@ -13,6 +13,7 @@
 
 class ImGui_Context;
 class ImGui_DrawList;
+class ImGui_Font;
 class ImGui_ListClipper;
 // Patched 2026-05-02 — v0.10 added ImGui_Function* trailing callback args
 // to several text-input APIs (e.g. InputTextWithHint). Forward-declare so
@@ -351,6 +352,18 @@ REAIMGUIAPI_EXTERN ReaImGuiFunc<double(ImGui_Context* ctx)> ImGui_GetDeltaTime R
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double* wOut, double* hOut)> ImGui_GetDisplaySize REAIMGUIAPI_INIT("ImGui_GetDisplaySize");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, char* typeOut, int typeOut_sz, char* payloadOutNeedBig, int payloadOutNeedBig_sz, bool* is_previewOut, bool* is_deliveryOut)> ImGui_GetDragDropPayload REAIMGUIAPI_INIT("ImGui_GetDragDropPayload");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<double(ImGui_Context* ctx)> ImGui_GetFontSize REAIMGUIAPI_INIT("ImGui_GetFontSize");
+// Font lifecycle (added 2026-05-22). Sigs verified against the v0.10
+// dylib's embedded metadata: CreateFont returns a sizeless font (size
+// is selected at PushFont time via font_size_base_unscaled). Attach /
+// Detach are the generic resource hooks — typed as ImGui_Font* here
+// because we only attach fonts; if other attachable resources are
+// ever needed (images, draw-list splitters, etc.) overload via
+// separate forward-declared functor objects, do not change this type.
+REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_Font*(const char* family, int* flagsInOptional)> ImGui_CreateFont REAIMGUIAPI_INIT("ImGui_CreateFont");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, ImGui_Font* font)> ImGui_Attach REAIMGUIAPI_INIT("ImGui_Attach");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, ImGui_Font* font)> ImGui_Detach REAIMGUIAPI_INIT("ImGui_Detach");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, ImGui_Font* font, double font_size_base_unscaled)> ImGui_PushFont REAIMGUIAPI_INIT("ImGui_PushFont");
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx)> ImGui_PopFont REAIMGUIAPI_INIT("ImGui_PopFont");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_DrawList*(ImGui_Context* ctx)> ImGui_GetForegroundDrawList REAIMGUIAPI_INIT("ImGui_GetForegroundDrawList");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<int(ImGui_Context* ctx)> ImGui_GetFrameCount REAIMGUIAPI_INIT("ImGui_GetFrameCount");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<double(ImGui_Context* ctx)> ImGui_GetFrameHeight REAIMGUIAPI_INIT("ImGui_GetFrameHeight");

@@ -122,6 +122,10 @@ bool reasixty_keyboardCmdModifier();
 void reasixty_setKeyboardCmdModifier(bool on);
 bool reasixty_keyboardCtrlModifier();
 void reasixty_setKeyboardCtrlModifier(bool on);
+int  reasixty_theme();
+void reasixty_setTheme(int t);
+int  reasixty_fontScale();
+void reasixty_setFontScale(int s);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_showTracksHiddenInTcp();
@@ -239,6 +243,51 @@ namespace uf8 {
 //   - Export Diagnostic Report button — produces
 //     ~/Desktop/rea_sixty_diag_<date>.zip with build hash, REAPER version,
 //     recent extension log, USB device tree.
+// Appearance — theme + font-size pickers. Frank 2026-05-22.
+void SettingsScreen::drawAppearance(ImGui_Context* ctx)
+{
+    ImGui_Text(ctx, "Theme");
+    ImGui_Separator(ctx);
+
+    int theme = reasixty_theme();
+    if (ImGui_RadioButtonEx(ctx, "Vanilla",     &theme, 0)) {
+        reasixty_setTheme(theme);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "MixnoteStyle", &theme, 1)) {
+        reasixty_setTheme(theme);
+    }
+    ImGui_Text(ctx,
+        "  Vanilla = the original Rea-Sixty dark blue. MixnoteStyle = "
+        "Indigo accent");
+    ImGui_Text(ctx,
+        "  on neutral dark, ported from the RAPID project.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Font Size");
+    ImGui_Separator(ctx);
+
+    int scale = reasixty_fontScale();
+    if (ImGui_RadioButtonEx(ctx, "Small",  &scale, 0)) {
+        reasixty_setFontScale(scale);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "Normal", &scale, 1)) {
+        reasixty_setFontScale(scale);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "Large",  &scale, 2)) {
+        reasixty_setFontScale(scale);
+    }
+    ImGui_Text(ctx,
+        "  Changes apply on the next frame. If a long form looks cramped at "
+        "Large,");
+    ImGui_Text(ctx,
+        "  resize the window — ReaImGui doesn't reflow widget rects until the "
+        "next layout pass.");
+}
+
 void SettingsScreen::drawDevice(ImGui_Context* ctx)
 {
     ImGui_Text(ctx, "Connected devices");

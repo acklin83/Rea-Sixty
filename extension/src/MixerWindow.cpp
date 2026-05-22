@@ -14,6 +14,10 @@
 #define REAIMGUIAPI_IMPLEMENT
 #include "reaper_imgui_functions.h"
 
+// Settings → Appearance state, defined in main.cpp at file scope.
+int reasixty_theme();
+int reasixty_fontScale();
+
 namespace uf8 {
 
 namespace {
@@ -24,6 +28,7 @@ namespace {
 // dedicated window, not as a tab in here.
 enum Section : int {
     kSecDevice = 0,
+    kSecAppearance,
     kSecBindings,
     kSecModes,
     kSecFxLearn,
@@ -42,6 +47,7 @@ struct RailEntry {
 
 constexpr RailEntry kRail[] = {
     { "Device",         kSecDevice,        false, &SettingsScreen::drawDevice        },
+    { "Appearance",     kSecAppearance,    false, &SettingsScreen::drawAppearance    },
     { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
     { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
@@ -92,6 +98,11 @@ struct MixerWindow::Impl {
     // visibility flag; when invisible, we skip Begin/End entirely and
     // ReaImGui closes the OS window. Re-toggling resumes drawing.
     ImGui_Context* ctx = nullptr;
+    // Sans-serif font (sizeless in v0.10 — size is selected at PushFont
+    // time via the third arg). Re-created per context because every
+    // ensureCtx allocates a fresh ImGui_Context, and Attached resources
+    // bind to a single context.
+    ImGui_Font*    font = nullptr;
     bool           visible = false;
     int            selected = kSecDevice;
     // Session counter — bumped on every closed→open transition. Used to
@@ -146,6 +157,14 @@ struct MixerWindow::Impl {
             "Rea-Sixty v2",
             &sizeW, &sizeH,
             /*pos_x*/ nullptr, /*pos_y*/ nullptr);
+
+        // Load a generic sans-serif font and attach to the freshly
+        // created context. CreateFont in v0.10 returns a sizeless
+        // resource — size is chosen at PushFont time. The previous
+        // font (if any) belonged to the now-orphaned context and is
+        // GC'd by ReaImGui on the next defer cycle.
+        font = ImGui_CreateFont("sans-serif", /*flagsInOptional*/ nullptr);
+        if (ctx && font) ImGui_Attach(ctx, font);
     }
 };
 
@@ -167,6 +186,9 @@ void MixerWindow::toggle()
         // any prior session: no remembered id-stack, no stale window
         // pose, no half-popped style stack.
         impl_->ctx = nullptr;
+        // Font is bound to the dropped context — ensureCtx allocates
+        // a new one paired with the new ctx.
+        impl_->font = nullptr;
     }
 }
 
@@ -205,7 +227,19 @@ void MixerWindow::onRunTick()
                            &condFirst, /*pivot_x*/ nullptr,
                            /*pivot_y*/ nullptr);
 
-    const int pushed = ThemeBridge::pushAll(impl_->ctx);
+    // Resolve active palette + font size from the Settings → Appearance
+    // pickers (definitions live in main.cpp at file scope, hence the
+    // ::-qualified call). Frank 2026-05-22.
+    const Theme        theme   = static_cast<Theme>(::reasixty_theme());
+    const ThemePalette& palette = paletteFor(theme);
+    const int   scaleIdx = ::reasixty_fontScale();
+    constexpr double kFontSizes[3] = { 12.0, 14.0, 18.0 };
+    const double fontPx = kFontSizes[
+        (scaleIdx < 0 || scaleIdx > 2) ? 1 : scaleIdx];
+    if (impl_->font) {
+        ImGui_PushFont(impl_->ctx, impl_->font, fontPx);
+    }
+    const int pushed = ThemeBridge::pushAll(impl_->ctx, palette);
 
     // NoSavedSettings tells ImGui not to persist closed/collapsed/
     // off-screen pose for this window across toggles — without it,
@@ -314,6 +348,9 @@ void MixerWindow::onRunTick()
     }
 
     ThemeBridge::popAll(impl_->ctx, pushed);
+    if (impl_->font) {
+        ImGui_PopFont(impl_->ctx);
+    }
 }
 
 } // namespace uf8
