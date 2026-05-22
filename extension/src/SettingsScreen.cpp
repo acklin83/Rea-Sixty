@@ -7223,9 +7223,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_Text(ctx, title);
             ImGui_TextDisabled(ctx,
                 "Drive a sine into the plug-in; adjust its threshold so its "
-                "INTERNAL meter reads exactly the breakpoint dB. Then type "
-                "or click +/− on the matching column until UC1 aligns. "
-                "Values are correction offsets in dB. Ctrl-click +/− = ±1.0.");
+                "INTERNAL meter reads exactly the breakpoint dB.");
+            ImGui_TextDisabled(ctx,
+                "Then type or click +/− on the matching column until UC1 "
+                "aligns. Values are correction offsets in dB. "
+                "Ctrl-click +/− = ±1.0.");
             ImGui_Spacing(ctx);
 
             // 110 base — fits "+0.00" with breathing room at Normal,
