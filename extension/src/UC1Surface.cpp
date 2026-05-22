@@ -1486,109 +1486,76 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 reasixty_markNavOverlayDirty();
             };
 
-            // Phase 2.8c — gesture meanings come from user settings.
-            //   plainAct : 0 Jump+Drill, 1 Jump, 2 Drill
-            //   shiftAct : 0 Drill,      1 Back, 2 Toggle View
-            //   longAct  : 0 Back,       1 Add marker @ playhead, 2 Off
+            // Unified action enum — every gesture (plain / shift / long)
+            // picks any of these via Settings → Modes → Nav.
+            //   0 Jump + Drill   1 Jump only      2 Drill only
+            //   3 Back           4 Toggle View    5 Add marker @ playhead
+            //   6 Disabled
+            // Drill is the only action a view-lock can suppress (lock
+            // collapses Jump+Drill to Jump only and silently drops
+            // Drill only). Other actions fire regardless of lock.
             const int plainAct = reasixty_navUc1Push();
             const int shiftAct = reasixty_navUc1PushShift();
             const int longAct  = reasixty_navUc1LongPress();
-            const auto curView = ov.view();
+            const auto curView   = ov.view();
             const bool inRegions = (curView == uf8::nav::View::Regions);
 
-            // Long-press dispatch (lock-aware).
-            if (isLong) {
-                if (lock != uf8::nav::ViewLock::None) {
-                    ++stats_.buttonEventsHandled;
-                    return;  // locks suppress shift / long-press
-                }
-                if (longAct == 0) {           // Back
+            auto doJump = [&]() {
+                if (inRegions) GoToRegion(nullptr, jumpIdx, false);
+                else            SetEditCurPos(jumpPos, true, true);
+                ov.clearCursorPin();
+                markDirty();
+            };
+            auto doDrill = [&]() {
+                // Drill is only meaningful in Regions view under no lock.
+                if (lock != uf8::nav::ViewLock::None) return;
+                if (!inRegions) return;
+                ov.drillIntoRegion(ci);
+                markDirty();
+            };
+
+            auto dispatchAction = [&](int act) {
+                switch (act) {
+                case 0: // Jump + Drill
+                    doJump();
+                    doDrill();
+                    break;
+                case 1: // Jump only
+                    doJump();
+                    break;
+                case 2: // Drill only
+                    doDrill();
+                    break;
+                case 3: // Back
                     if (!inRegions) {
                         ov.backToRegions();
                         markDirty();
                     }
-                } else if (longAct == 1) {    // Add marker at playhead
+                    break;
+                case 4: // Toggle View (Regions <-> MarkersAll)
+                    ov.setView(inRegions
+                        ? uf8::nav::View::MarkersAll
+                        : uf8::nav::View::Regions);
+                    markDirty();
+                    break;
+                case 5: { // Add marker at playhead / edit cursor
                     const int ps = GetPlayState();
                     const double pos = (ps & 1)
                         ? GetPlayPosition() : GetCursorPosition();
                     AddProjectMarker(nullptr, false, pos, 0.0, "", -1);
                     markDirty();
+                    break;
                 }
-                // longAct == 2: disabled
-                ++stats_.buttonEventsHandled;
-                return;
-            }
+                case 6: // Disabled
+                default:
+                    break;
+                }
+            };
 
-            // Shift-press dispatch (lock-suppressed).
-            if (isShift) {
-                if (lock != uf8::nav::ViewLock::None) {
-                    ++stats_.buttonEventsHandled;
-                    return;
-                }
-                if (shiftAct == 0) {          // Drill
-                    if (inRegions) {
-                        ov.drillIntoRegion(ci);
-                        markDirty();
-                    }
-                } else if (shiftAct == 1) {   // Back
-                    if (!inRegions) {
-                        ov.backToRegions();
-                        markDirty();
-                    }
-                } else if (shiftAct == 2) {   // Toggle View (R <-> MA)
-                    ov.setView(inRegions
-                        ? uf8::nav::View::MarkersAll
-                        : uf8::nav::View::Regions);
-                    markDirty();
-                }
-                ++stats_.buttonEventsHandled;
-                return;
-            }
+            if      (isLong)  dispatchAction(longAct);
+            else if (isShift) dispatchAction(shiftAct);
+            else              dispatchAction(plainAct);
 
-            // Plain push dispatch — honoured under every lock.
-            // Lock-suppressed branches fall back to "Jump only" or no-op.
-            if (lock == uf8::nav::ViewLock::MarkersOnly) {
-                // Drill is meaningless on markers; treat plainAct as
-                // {Jump, Jump, no-op}.
-                if (plainAct != 2) {
-                    SetEditCurPos(jumpPos, true, true);
-                    ov.clearCursorPin();
-                    markDirty();
-                }
-                ++stats_.buttonEventsHandled;
-                return;
-            }
-            if (lock == uf8::nav::ViewLock::RegionsOnly) {
-                // Drill suppressed by the lock — plainAct collapses to
-                // {Jump, Jump, no-op}.
-                if (plainAct != 2) {
-                    GoToRegion(nullptr, jumpIdx, false);
-                    ov.clearCursorPin();
-                    markDirty();
-                }
-                ++stats_.buttonEventsHandled;
-                return;
-            }
-
-            // ViewLock::None — full plain-action matrix.
-            if (curView == uf8::nav::View::Regions) {
-                const bool doJump  = (plainAct != 2);   // 0 or 1
-                const bool doDrill = (plainAct != 1);   // 0 or 2
-                if (doJump) GoToRegion(nullptr, jumpIdx, false);
-                if (doDrill) {
-                    ov.drillIntoRegion(ci);  // clears pin internally
-                } else if (doJump) {
-                    ov.clearCursorPin();
-                }
-                if (doJump || doDrill) markDirty();
-            } else {
-                // Markers / MarkersInRegion — drill not applicable.
-                if (plainAct != 2) {
-                    SetEditCurPos(jumpPos, true, true);
-                    ov.clearCursorPin();
-                    markDirty();
-                }
-            }
             ++stats_.buttonEventsHandled;
             return;
         }

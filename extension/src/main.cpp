@@ -322,21 +322,23 @@ std::atomic<int>  g_navRegionPress{0};
 std::atomic<bool> g_navUc1Takeover{true};
 
 // Phase 2.8c — UC1 push gesture actions. The table is parsed by the
-// gesture-dispatch path in UC1Surface::handleButton_.
-//   nav_uc1_push          0=Jump+Drill (factory) 1=Jump only 2=Drill only
-//   nav_uc1_push_shift    0=Drill 1=Back 2=Toggle View
-//   nav_uc1_long_press    0=Back 1=Add marker @ playhead 2=Disabled
-std::atomic<int>  g_navUc1Push{0};
-std::atomic<int>  g_navUc1PushShift{0};
-std::atomic<int>  g_navUc1LongPress{0};
+// gesture-dispatch path in UC1Surface::handleButton_. All three gestures
+// share the unified action enum (Frank 2026-05-22):
+//   0 Jump+Drill   1 Jump only      2 Drill only
+//   3 Back         4 Toggle View    5 Add marker @ playhead   6 Disabled
+// nav_uc1_push retains its old key (0..2 mapping is unchanged). The
+// shift and long-press keys gained a _v2 suffix because their previous
+// 0..2 semantics differed from the unified enum — old values were
+// dropped to avoid silent meaning-shift; defaults match prior behaviour
+// (shift=Drill, long=Back).
+std::atomic<int>  g_navUc1Push{0};       // default Jump+Drill
+std::atomic<int>  g_navUc1PushShift{2};  // default Drill only
+std::atomic<int>  g_navUc1LongPress{3};  // default Back
 
 // Phase 2.8c — UF8 strip display preferences.
 //   nav_lower_row     0=Off (V-Pot value), 1=Index (R03/M07), 2=Timecode
-//   nav_paginate      bool, show << / >> hints on strips 0/7 when pages
-//                     exist beyond the visible 8-window
 //   nav_color_bar     0=REAPER marker colour, 1=Force palette grey
 std::atomic<int>  g_navLowerRow{0};
-std::atomic<bool> g_navPaginate{false};
 std::atomic<int>  g_navColorBar{0};
 
 // Re-render trigger for the timer when the focused-param slot changes.
@@ -505,6 +507,12 @@ std::atomic<bool>         g_tcpFollowsSelection{false};
 // on to ignore that view's hidden flag. Frank 2026-05-20.
 std::atomic<bool>         g_showTracksHiddenInTcp{false};
 std::atomic<bool>         g_showTracksHiddenInMcp{false};
+// When on, any track whose ancestor folder has I_FOLDERCOMPACT == 2
+// (fully collapsed) is dropped from the strip list. Mirrors REAPER's
+// "hide children of collapsed folders" preference but as an independent
+// surface-side filter so the user can toggle it without changing the
+// global REAPER setting. Frank 2026-05-22.
+std::atomic<bool>         g_hideTracksInCollapsedFolders{false};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -817,6 +825,19 @@ void rebuildVisibleTrackList() {
             && !(GetMediaTrackInfo_Value(tr, "B_SHOWINMIXER") > 0.5))
         {
             continue;
+        }
+        // Folder-collapse filter: walk ancestors, drop the track if
+        // any parent folder is fully collapsed (I_FOLDERCOMPACT == 2).
+        if (g_hideTracksInCollapsedFolders.load()) {
+            bool hidden = false;
+            for (MediaTrack* p = GetParentTrack(tr); p;
+                 p = GetParentTrack(p))
+            {
+                const int compact = static_cast<int>(
+                    GetMediaTrackInfo_Value(p, "I_FOLDERCOMPACT"));
+                if (compact == 2) { hidden = true; break; }
+            }
+            if (hidden) continue;
         }
         g_visibleTracks.push_back(tr);
     }
@@ -1864,26 +1885,23 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "nav_uc1_push"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 2) n = 0;
+        if (n < 0 || n > 6) n = 0;
         g_navUc1Push.store(n);
     }
-    if (const char* v = GetExtState("rea_sixty", "nav_uc1_push_shift"); v && *v) {
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_push_shift_v2"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 2) n = 0;
+        if (n < 0 || n > 6) n = 2;
         g_navUc1PushShift.store(n);
     }
-    if (const char* v = GetExtState("rea_sixty", "nav_uc1_long_press"); v && *v) {
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_long_press_v2"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 2) n = 0;
+        if (n < 0 || n > 6) n = 3;
         g_navUc1LongPress.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "nav_lower_row"); v && *v) {
         int n = std::atoi(v);
         if (n < 0 || n > 2) n = 0;
         g_navLowerRow.store(n);
-    }
-    if (const char* v = GetExtState("rea_sixty", "nav_paginate"); v && *v) {
-        g_navPaginate.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
         int n = std::atoi(v);
@@ -1931,6 +1949,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "show_tracks_hidden_in_mcp"); v && *v) {
         g_showTracksHiddenInMcp.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "hide_collapsed_folder_children"); v && *v) {
+        g_hideTracksInCollapsedFolders.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
@@ -7730,23 +7751,12 @@ void pushNavOverlayDecorations()
         }
 
         // Phase 2.8c — optional lower-row write. Off (=0) leaves the
-        // V-Pot value untouched per the 2.8a revision; Index / Timecode
-        // formats overwrite it with marker/region metadata. Pagination
-        // hints take precedence on strips 0/7 when there's a page in
-        // that direction.
+        // V-Pot value untouched; Index / Timecode formats overwrite it
+        // with marker / region metadata.
         const int   lowerFmt   = g_navLowerRow.load();
-        const bool  paginate   = g_navPaginate.load();
-        const int   pageCount  = ov.pageCount();
-        const int   pageIdx    = ov.pageOffset();
-        const bool  hasPrev    = (pageIdx > 0);
-        const bool  hasNext    = (pageIdx + 1 < pageCount);
         if (lowerFmt != 0) {
             std::string lower;
-            if (paginate && s == 0 && hasPrev) {
-                lower = "<<     ";
-            } else if (paginate && s == 7 && hasNext) {
-                lower = "     >>";
-            } else if (it) {
+            if (it) {
                 char buf[16];
                 if (lowerFmt == 1) {
                     // Index: 'R03' for regions, 'M03' for markers.
@@ -13177,14 +13187,13 @@ static void writeNavSetting_(const char* key, std::atomic<int>& slot,
     SetExtState("rea_sixty", key, buf, true);
 }
 void reasixty_setNavUc1Push(int v)
-    { writeNavSetting_("nav_uc1_push", g_navUc1Push, v, 2); }
+    { writeNavSetting_("nav_uc1_push", g_navUc1Push, v, 6); }
 void reasixty_setNavUc1PushShift(int v)
-    { writeNavSetting_("nav_uc1_push_shift", g_navUc1PushShift, v, 2); }
+    { writeNavSetting_("nav_uc1_push_shift_v2", g_navUc1PushShift, v, 6); }
 void reasixty_setNavUc1LongPress(int v)
-    { writeNavSetting_("nav_uc1_long_press", g_navUc1LongPress, v, 2); }
+    { writeNavSetting_("nav_uc1_long_press_v2", g_navUc1LongPress, v, 6); }
 
 int  reasixty_navLowerRow()    { return g_navLowerRow.load(); }
-bool reasixty_navPaginate()    { return g_navPaginate.load(); }
 int  reasixty_navColorBar()    { return g_navColorBar.load(); }
 
 void reasixty_setNavLowerRow(int v)
@@ -13195,12 +13204,6 @@ void reasixty_setNavLowerRow(int v)
     // overlay reclaims (or releases) the lower row.
     g_navOverlayDirty.store(true);
     g_lastValueLine.fill({});
-}
-void reasixty_setNavPaginate(bool on)
-{
-    g_navPaginate.store(on);
-    SetExtState("rea_sixty", "nav_paginate", on ? "1" : "0", true);
-    g_navOverlayDirty.store(true);
 }
 void reasixty_setNavColorBar(int v)
 {
@@ -13525,6 +13528,20 @@ void reasixty_setShowTracksHiddenInMcp(bool on)
 {
     g_showTracksHiddenInMcp.store(on);
     SetExtState("rea_sixty", "show_tracks_hidden_in_mcp", on ? "1" : "0", true);
+    g_bankDirty.store(true);
+    rebuildVisibleTrackList();
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+}
+bool reasixty_hideTracksInCollapsedFolders()
+{ return g_hideTracksInCollapsedFolders.load(); }
+void reasixty_setHideTracksInCollapsedFolders(bool on)
+{
+    g_hideTracksInCollapsedFolders.store(on);
+    SetExtState("rea_sixty", "hide_collapsed_folder_children",
+                on ? "1" : "0", true);
     g_bankDirty.store(true);
     rebuildVisibleTrackList();
     if (g_uc1_surface) {

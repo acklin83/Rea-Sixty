@@ -129,6 +129,8 @@ void reasixty_setFontScale(int s);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_showTracksHiddenInTcp();
+bool reasixty_hideTracksInCollapsedFolders();
+void reasixty_setHideTracksInCollapsedFolders(bool on);
 void reasixty_setShowTracksHiddenInTcp(bool on);
 bool reasixty_showTracksHiddenInMcp();
 void reasixty_setShowTracksHiddenInMcp(bool on);
@@ -147,10 +149,8 @@ void reasixty_setNavUc1Push(int v);
 void reasixty_setNavUc1PushShift(int v);
 void reasixty_setNavUc1LongPress(int v);
 int  reasixty_navLowerRow();
-bool reasixty_navPaginate();
 int  reasixty_navColorBar();
 void reasixty_setNavLowerRow(int v);
-void reasixty_setNavPaginate(bool on);
 void reasixty_setNavColorBar(int v);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
@@ -532,6 +532,16 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool showMcpHidden = reasixty_showTracksHiddenInMcp();
     if (ImGui_Checkbox(ctx, "Show tracks hidden in MCP", &showMcpHidden)) {
         reasixty_setShowTracksHiddenInMcp(showMcpHidden);
+    }
+    // Independent surface-side mirror of REAPER's "hide children of
+    // collapsed folders" preference. When on, any track whose ancestor
+    // folder is fully collapsed (I_FOLDERCOMPACT == 2) drops from the
+    // strip list. Frank 2026-05-22.
+    bool hideCollapsed = reasixty_hideTracksInCollapsedFolders();
+    if (ImGui_Checkbox(ctx,
+            "Hide tracks in collapsed folders", &hideCollapsed))
+    {
+        reasixty_setHideTracksInCollapsedFolders(hideCollapsed);
     }
 
     // Track names longer than the 7-char scribble-strip slot need shortening.
@@ -1010,7 +1020,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         const uint32_t border = selected ? 0xAACCFFFF : 0x4A5060FF;
         const uint32_t txt    = selected ? 0xFFFFFFFF : 0xD0D4DAFF;
         rect_(c, x, y, w, h, fill, border, /*rounding*/ 3.5);
+        // Silk-screen label font locked to 10 px so all hardware
+        // buttons read at the same calm weight (matches the
+        // AUTOMATION row). Frank 2026-05-22.
+        ImGui_PushFont(ctx, nullptr, 10.0);
         drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
+        ImGui_PopFont(ctx);
         return clicked;
     };
 
@@ -1019,13 +1034,22 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
                           const char* label)
     {
         rect_(c, x, y, w, h, 0x1A1E24FF, 0x383C44FF, 3.0);
+        ImGui_PushFont(ctx, nullptr, 10.0);
         drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, 0x70747CFF, label);
+        ImGui_PopFont(ctx);
     };
 
-    // Group label — small all-caps text painted on the chassis above
-    // a related cluster of controls (mirrors the SSL silk-screen).
-    auto drawGroupLabel = [&](float x, float y, const char* text) {
-        drawText_(c, x, y, 0x9CA0AAFF, text);
+    // Centered group label — pin the text's horizontal centre to `cx`.
+    // Font locked to 10 px so the section banners match the silk-screen
+    // button labels and stay calm against the small button frames.
+    // Frank 2026-05-22.
+    auto drawGroupLabelCentered = [&](float cx, float y, const char* text) {
+        ImGui_PushFont(ctx, nullptr, 10.0);
+        double tw = 0, th = 0;
+        ImGui_CalcTextSize(c.ctx, text, &tw, &th, nullptr, nullptr);
+        drawText_(c, cx - static_cast<float>(tw) / 2.0f, y,
+                  0x9CA0AAFF, text);
+        ImGui_PopFont(ctx);
     };
 
     // ---- Chassis ----
@@ -1133,8 +1157,13 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     // Group labels need a >= 14 px vertical gap to the button row below
     // (default font height ≈ 13 — anything tighter clips the descenders
     // into the button border).
-    drawGroupLabel(20, 6, "LAYER");
-    drawGroupLabel(64, 6, "QUICK");
+    // Block centres: LAYER buttons span x=15..51 (cx=33); QUICK x=57..93 (cx=75).
+    // y rule: label_y = first_button_y - 14 — leaves ~6 px gap BELOW
+    // the 10 px label (visual height ≈ 8) so the title breathes from
+    // the button row. Slack above varies per section (canvas top vs
+    // previous row). Frank 2026-05-22.
+    drawGroupLabelCentered(33, 8, "LAYER");
+    drawGroupLabelCentered(75, 8, "QUICK");
     // Layer + Quick buttons follow the same hardware-proxy + live-ring
     // pattern as the sub-bank selectors below: click dispatches the
     // binding (so the schematic click switches the actual layer / engages
@@ -1197,7 +1226,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
 
     drawHwBtn(15, 108, 78, 24, ButtonId::Btn360, "360\xC2\xB0");
 
-    drawGroupLabel(15, 136, "SEND / PLUGIN");
+    drawGroupLabelCentered(54, 138, "SEND / PLUGIN");
     {
         constexpr ButtonId kSp[8] = {
             ButtonId::SendPlugin1, ButtonId::SendPlugin2,
@@ -1220,17 +1249,14 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(13, 260, 50, 22, ButtonId::PluginBtn, "PLUGIN");
     drawHwBtn(67, 260, 50, 22, ButtonId::Channel,   "CHANNEL");
 
-    // PAGE — label sits 18 px above the arrow row so the descenders
-    // don't touch the button frame.
-    drawGroupLabel(48, 282, "PAGE");
+    drawGroupLabelCentered(65, 286, "PAGE");
     drawHwBtn(13, 300, 50, 22, ButtonId::PageLeft,  "\xE2\x97\x82");
     drawHwBtn(67, 300, 50, 22, ButtonId::PageRight, "\xE2\x96\xB8");
 
     drawHwBtn(13, 326, 104, 22, ButtonId::Flip, "FLIP");
 
-    drawGroupLabel(36, 354, "AUTOMATION");
-    // 3 columns × 2 rows. 33-wide buttons fit "WRITE" / "LATCH" / "TOUCH"
-    // without overflow at the default ImGui font.
+    drawGroupLabelCentered(65, 358, "AUTOMATION");
+    // 3 columns × 2 rows.
     drawHwBtn(13,  372, 33, 22, ButtonId::AutoOff,   "OFF");
     drawHwBtn(48,  372, 33, 22, ButtonId::AutoRead,  "READ");
     drawHwBtn(83,  372, 33, 22, ButtonId::AutoWrite, "WRITE");
@@ -1238,10 +1264,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(48,  396, 33, 22, ButtonId::AutoLatch, "LATCH");
     drawHwBtn(83,  396, 33, 22, ButtonId::AutoTouch, "TOUCH");
 
-    // Foot-switch jacks (back-panel TRS) decoded 2026-05-19. Rendered
-    // below AUTOMATION since the schematic has space there and the
-    // jacks have no fixed face position to anchor to anyway.
-    drawGroupLabel(34, 424, "FOOT SWITCHES");
+    // Foot-switch jacks (back-panel TRS) decoded 2026-05-19.
+    drawGroupLabelCentered(65, 428, "FOOT SWITCHES");
     drawHwBtn(13, 442, 50, 22, ButtonId::Foot1, "FOOT 1");
     drawHwBtn(67, 442, 50, 22, ButtonId::Foot2, "FOOT 2");
 
@@ -1289,7 +1313,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(852, 80, 64, 22, ButtonId::Pan,  "PAN");
     drawHwBtn(921, 80, 64, 22, ButtonId::Fine, "FINE");
 
-    drawGroupLabel(852, 112, "SELECTION MODE");
+    drawGroupLabelCentered(918, 114, "SELECTION MODE");
     drawHwBtn(852, 128, 43, 20, ButtonId::SelectionNorm, "NORM");
     drawHwBtn(899, 128, 43, 20, ButtonId::SelectionRec,  "REC");
     drawHwBtn(946, 128, 39, 20, ButtonId::SelectionAuto, "AUTO");
@@ -1323,8 +1347,11 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
             const float y2 = cy + std::sin(ang) * r1;
             line_(c, x1, y1, x2, y2, 0x555A66FF, 1.0);
         }
-        // Centered CHANNEL label above the dial.
-        drawTextCentered_(c, cx, 158, 0x9CA0AAFF, "CHANNEL");
+        // Centered CHANNEL label above the dial — 10 px to match the
+        // other section banners.
+        ImGui_PushFont(ctx, nullptr, 10.0);
+        drawTextCentered_(c, cx, 154, 0x9CA0AAFF, "CHANNEL");
+        ImGui_PopFont(ctx);
     }
 
     // NAV / NUDGE / FOCUS — sit below the encoder. Encoder Push has its
@@ -1340,14 +1367,17 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(852, 270, 65, 18, ButtonId::ChannelPush,    "PUSH");
     drawHwBtn(919, 270, 66, 18, ButtonId::ChannelEncoder, "ROTATE");
 
-    drawGroupLabel(902, 298, "BANK");
+    drawGroupLabelCentered(917, 300, "BANK");
     drawHwBtn(870, 314, 42, 22, ButtonId::BankLeft,  "\xE2\x97\x82");
     drawHwBtn(922, 314, 42, 22, ButtonId::BankRight, "\xE2\x96\xB8");
 
-    // Zoom pad — cross. Shifted down to follow the encoder column.
+    // Zoom pad — cross. baseY tuned so the bottom arrow (baseY+32+26)
+    // is flush with the FOOT 1 / FOOT 2 row bottom (y=442, h=22 → 464),
+    // visually anchoring the right column to the left one.
+    // Frank 2026-05-22.
     {
         constexpr float cx = 918;
-        constexpr float baseY = 372;
+        constexpr float baseY = 406;
         drawHwBtn(cx - 17, baseY - 32, 34, 26, ButtonId::ZoomUp,
                   "\xE2\x96\xB2");
         drawHwBtn(cx - 54, baseY,      34, 26, ButtonId::ZoomLeft,
@@ -1947,7 +1977,16 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
     const float stripY = faceH + 4;
     rect_(c, 4, stripY, W - 8, stripH - 8,
           0x14181EFF, 0x2A3038FF, /*rounding*/ 6.0);
-    drawText_(c, 18, stripY + 8, 0x9CA0AAFF, "ENCODER 2");
+    // Centered banner — matches the UF8 schematic convention of
+    // section titles pinned to the horizontal centre of their button
+    // block. Frank 2026-05-22.
+    {
+        const char* kEncTitle = "ENCODER 2";
+        double tw = 0, th = 0;
+        ImGui_CalcTextSize(c.ctx, kEncTitle, &tw, &th, nullptr, nullptr);
+        drawText_(c, W / 2.0f - static_cast<float>(tw) / 2.0f,
+                  stripY + 8, 0x9CA0AAFF, kEncTitle);
+    }
     const float tileY = stripY + 24;
     drawHwBtn(W / 2.0f - 100, tileY, 90, 22,
               ButtonId::Uc1Encoder2,     "ROTATE");
@@ -2785,7 +2824,15 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                 dirty = true;
             }
             if (!has) return;
-            ImGui_Indent(ctx, nullptr);
+            // Inline layout: color swatch + Off/Dim/Bright radios sit
+            // to the RIGHT of the checkbox, pinned at a fixed x-offset
+            // so Active + Inactive rows align vertically even if only
+            // one is ticked. Offset (165 px) leaves room for the
+            // checkbox + "Override Inactive" label without the inline
+            // content drifting back under either row's text.
+            // Frank 2026-05-22.
+            double inlineX = 165.0;
+            ImGui_SameLine(ctx, &inlineX, nullptr);
             const int curRgba =
                 (int(rgb[0]) << 24) |
                 (int(rgb[1]) << 16) |
@@ -2794,7 +2841,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
             snprintf(btnId, sizeof(btnId),
                           "##cur_%s_%s", prefix, idTag);
             int btnFlags = 0;
-            double bw = 56.0, bh = 22.0;
+            double bw = 40.0, bh = 18.0;
             if (ImGui_ColorButton(ctx, btnId, curRgba,
                                   &btnFlags, &bw, &bh)) {
                 char popId[64];
@@ -2838,8 +2885,6 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                 ImGui_EndPopup(ctx);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_Text(ctx, "  ");
-            ImGui_SameLine(ctx, nullptr, nullptr);
             const char* names[] = {"Off", "Dim", "Bright"};
             for (int j = 0; j < 3; ++j) {
                 char rId[64];
@@ -2853,7 +2898,6 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                 }
                 if (j < 2) ImGui_SameLine(ctx, nullptr, nullptr);
             }
-            ImGui_Unindent(ctx, nullptr);
         };
         drawOverrideRow("Active",   s.led.hasActive,
                         s.led.color,         s.led.brightness,         "act");
@@ -4144,11 +4188,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         s_selected >= ButtonId::TopSoftKey1
         && s_selected <= ButtonId::TopSoftKey8;
     if (s_selected == ButtonId::None) {
-        ImGui_Text(ctx,
-            "Click a button in the mockup above to edit its binding. "
-            "Click Layer 1/2/3 + Q1/Q2/Q3 + V-POT/Soft 1-5 to switch "
-            "what's live on the hardware; click a top-soft-key tile to "
-            "edit the slot at that (Layer, Quick, Sub-Bank) coordinate.");
+        // Nothing selected — leave the editor area blank. Help text
+        // dropped 2026-05-22; the schematic is self-explanatory.
     } else if (isTopSoftKey) {
         const int slotIdx =
             static_cast<int>(s_selected)
@@ -8503,21 +8544,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
     ImGui_Text(ctx,
         "  Off keeps the V-Pot value visible. Index / Timecode "
-        "overlay marker metadata on the lower row (Phase 2.8a left "
-        "the V-Pot field untouched by default).");
-
-    ImGui_Spacing(ctx);
-    bool pag = reasixty_navPaginate();
-    if (ImGui_Checkbox(ctx,
-            "Pagination hints (<<, >>) on strip 0 / 7 lower row",
-            &pag))
-    {
-        reasixty_setNavPaginate(pag);
-    }
-    ImGui_Text(ctx,
-        "  Only meaningful when Lower-row format is Index or "
-        "Timecode. Hints replace the strip's lower-row text when a "
-        "prev / next page exists.");
+        "overlay marker metadata on the lower row.");
 
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Color-bar source:");
@@ -8533,10 +8560,6 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     {
         reasixty_setNavColorBar(1);
     }
-    ImGui_Text(ctx,
-        "  REAPER honours the colour override set on each marker / "
-        "region. Force grey suppresses it so the cursor's "
-        "top-soft-key ring is the only colour cue.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -8559,59 +8582,64 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx, "Carousel scope:");
     ImGui_RadioButton(ctx, "Mirror UF8 view##nav_uc1_scope_mirror", true);
     ImGui_Text(ctx,
-        "  Other scopes (Always Regions / Always Markers / Always "
-        "Markers-in-UF8-region) arrive in Phase 2.8d.");
+        "  Independent UC1 scopes (Always Regions / Always Markers / "
+        "Always Markers-in-UF8-region) — not yet implemented.");
+
+    // Unified push-action picker — same 7-option list for all three
+    // gestures (plain / shift / long). Drill is suppressed under any
+    // view-lock (locks collapse Jump+Drill to Jump only); the other
+    // actions fire regardless of lock. Frank 2026-05-22.
+    static const char* kNavActionNames[7] = {
+        "Jump + Drill",
+        "Jump only",
+        "Drill only",
+        "Back",
+        "Toggle View",
+        "Add marker at playhead",
+        "Disabled",
+    };
+    auto drawNavActionRow = [&](const char* label,
+                                const char* comboId,
+                                int  current,
+                                void (*setter)(int)) {
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, label);
+        ImGui_TableNextColumn(ctx);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        if (ImGui_BeginCombo(ctx, comboId, kNavActionNames[current], nullptr)) {
+            for (int j = 0; j < 7; ++j) {
+                bool sel = (j == current);
+                if (ImGui_Selectable(ctx, kNavActionNames[j], &sel,
+                                     nullptr, nullptr, nullptr))
+                {
+                    setter(j);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+    };
 
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Plain push action:");
-    int up = reasixty_navUc1Push();
-    if (ImGui_RadioButton(ctx, "Jump + Drill##nav_uc1_push_both", up == 0)) {
-        reasixty_setNavUc1Push(0);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Jump only##nav_uc1_push_jump", up == 1)) {
-        reasixty_setNavUc1Push(1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Drill only##nav_uc1_push_drill", up == 2)) {
-        reasixty_setNavUc1Push(2);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Shift + push action:");
-    int us = reasixty_navUc1PushShift();
-    if (ImGui_RadioButton(ctx, "Drill##nav_uc1_pshift_drill", us == 0)) {
-        reasixty_setNavUc1PushShift(0);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Back##nav_uc1_pshift_back", us == 1)) {
-        reasixty_setNavUc1PushShift(1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Toggle View##nav_uc1_pshift_toggle", us == 2)) {
-        reasixty_setNavUc1PushShift(2);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Long-press action:");
-    int ul = reasixty_navUc1LongPress();
-    if (ImGui_RadioButton(ctx, "Back##nav_uc1_long_back", ul == 0)) {
-        reasixty_setNavUc1LongPress(0);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Add marker at playhead##nav_uc1_long_addmark",
-                          ul == 1))
-    {
-        reasixty_setNavUc1LongPress(1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Disabled##nav_uc1_long_off", ul == 2)) {
-        reasixty_setNavUc1LongPress(2);
+    int navTblFlags = 0;
+    if (ImGui_BeginTable(ctx, "nav_push_actions", 2, &navTblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
+        double wLabel = scaleW_(ctx, 160.0);
+        double wCombo = scaleW_(ctx, 210.0);
+        ImGui_TableSetupColumn(ctx, "label", &wFlag, &wLabel, nullptr);
+        ImGui_TableSetupColumn(ctx, "combo", &wFlag, &wCombo, nullptr);
+        drawNavActionRow("Plain push action", "##nav_uc1_push_combo",
+                         reasixty_navUc1Push(), reasixty_setNavUc1Push);
+        drawNavActionRow("Shift + push action", "##nav_uc1_pshift_combo",
+                         reasixty_navUc1PushShift(), reasixty_setNavUc1PushShift);
+        drawNavActionRow("Long-press action", "##nav_uc1_long_combo",
+                         reasixty_navUc1LongPress(), reasixty_setNavUc1LongPress);
+        ImGui_EndTable(ctx);
     }
     ImGui_Text(ctx,
-        "  Long-press threshold is ~500 ms. While a view-lock toggle "
-        "(Markers-only / Regions-only) is engaged, shift and long-press "
-        "are suppressed — only plain push fires.");
+        "  Long-press threshold is ~500 ms. View-locks "
+        "(Markers-only / Regions-only) suppress Drill only — other "
+        "actions fire regardless.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -8624,11 +8652,6 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     {
         reasixty_setNavAutoFollow(autoFollow);
     }
-    ImGui_Text(ctx,
-        "  While Nav Mode is active, the cursor strip tracks whichever "
-        "marker / region the playhead is on (or the edit cursor when "
-        "stopped). In Markers-in-Region view, the overlay auto-rolls "
-        "into the next region when the playhead crosses out.");
         ImGui_EndTabItem(ctx);
     }
 
@@ -8650,110 +8673,140 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
         "Eight slots. Recall toggles — press the active slot's button "
-        "again to deactivate. Filter ANDs with Folder Mode / "
-        "Show-Only-Selected / AUTO-mode filters.");
+        "again to deactivate.");
+    ImGui_Text(ctx,
+        "The slot acts as a filter, combined with any active "
+        "Folder Mode / Show-Only-Selected / AUTO-mode filters.");
     ImGui_Text(ctx,
         "  Global = workspace-wide, persists immediately. "
         "Unchecked = project-scoped, persists with project save.");
     ImGui_Spacing(ctx);
 
     const int active = reasixty_selsetActive();
-    for (int slot = 1; slot <= 8; ++slot) {
-        char idtag[32];
-        snprintf(idtag, sizeof(idtag), "selset_row_%d", slot);
-        ImGui_PushID(ctx, idtag);
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "selset_tbl", 7, &tblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag   = ImGui_TableColumnFlags_WidthFixed;
+        double wSlot   = scaleW_(ctx,  70.0);
+        double wGlob   = scaleW_(ctx,  70.0);
+        double wType   = scaleW_(ctx,  95.0);
+        double wName   = scaleW_(ctx, 190.0);
+        double wMid    = scaleW_(ctx, 140.0);
+        // Save + Clear share identical column + button widths so they
+        // sit on the same horizontal pitch on every row. Recall is
+        // not exposed here — slot activation goes through the
+        // hardware buttons (param 1..8). Frank 2026-05-22.
+        double wSave   = scaleW_(ctx,  70.0);
+        double wClear  = scaleW_(ctx,  70.0);
+        ImGui_TableSetupColumn(ctx, "slot",   &wFlag, &wSlot,   nullptr);
+        ImGui_TableSetupColumn(ctx, "global", &wFlag, &wGlob,   nullptr);
+        ImGui_TableSetupColumn(ctx, "type",   &wFlag, &wType,   nullptr);
+        ImGui_TableSetupColumn(ctx, "name",   &wFlag, &wName,   nullptr);
+        ImGui_TableSetupColumn(ctx, "mid",    &wFlag, &wMid,    nullptr);
+        ImGui_TableSetupColumn(ctx, "save",   &wFlag, &wSave,   nullptr);
+        ImGui_TableSetupColumn(ctx, "clear",  &wFlag, &wClear,  nullptr);
 
-        // Slot label + active-row marker. Active row prefixes with a dot
-        // since ReaImGui v0.10 has no reliable cell-background paint.
-        char header[24];
-        snprintf(header, sizeof(header), "%s Slot %d",
-                      (active == slot) ? "•" : " ", slot);
-        ImGui_Text(ctx, header);
-        ImGui_SameLine(ctx, nullptr, nullptr);
+        for (int slot = 1; slot <= 8; ++slot) {
+            char idtag[32];
+            snprintf(idtag, sizeof(idtag), "selset_row_%d", slot);
+            ImGui_PushID(ctx, idtag);
 
-        // Global checkbox — when on, the slot's content lives in
-        // ExtState (workspace-global, persisted immediately). When off,
-        // ProjExtState (per-project, only written to disk on project
-        // save). Group slots benefit most from Global since "group N"
-        // is a stable concept across projects.
-        bool isGlobal = reasixty_selsetGlobal(slot);
-        if (ImGui_Checkbox(ctx, "Global##gl", &isGlobal)) {
-            reasixty_setSelsetGlobal(slot, isGlobal);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
+            // Col 1 — Slot label + active marker.
+            ImGui_TableNextColumn(ctx);
+            char header[24];
+            snprintf(header, sizeof(header), "%s Slot %d",
+                          (active == slot) ? "•" : " ", slot);
+            ImGui_Text(ctx, header);
 
-        // Type picker — Snapshot or Group. Default Snapshot.
-        const int typeInt = reasixty_selsetType(slot);
-        const char* preview = (typeInt == 1) ? "Group" : "Snapshot";
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 90.0));
-        if (ImGui_BeginCombo(ctx, "##type", preview, nullptr)) {
-            bool isSnap = (typeInt == 0);
-            bool isGrp  = (typeInt == 1);
-            if (ImGui_Selectable(ctx, "Snapshot", &isSnap,
-                                 nullptr, nullptr, nullptr))
-            {
-                reasixty_setSelsetType(slot, 0);
+            // Col 2 — Global checkbox.
+            ImGui_TableNextColumn(ctx);
+            bool isGlobal = reasixty_selsetGlobal(slot);
+            if (ImGui_Checkbox(ctx, "Global##gl", &isGlobal)) {
+                reasixty_setSelsetGlobal(slot, isGlobal);
             }
-            if (ImGui_Selectable(ctx, "Group", &isGrp,
-                                 nullptr, nullptr, nullptr))
-            {
-                reasixty_setSelsetType(slot, 1);
+
+            // Col 3 — Type picker.
+            ImGui_TableNextColumn(ctx);
+            const int typeInt = reasixty_selsetType(slot);
+            const char* preview = (typeInt == 1) ? "Group" : "Snapshot";
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 90.0));
+            if (ImGui_BeginCombo(ctx, "##type", preview, nullptr)) {
+                bool isSnap = (typeInt == 0);
+                bool isGrp  = (typeInt == 1);
+                if (ImGui_Selectable(ctx, "Snapshot", &isSnap,
+                                     nullptr, nullptr, nullptr))
+                {
+                    reasixty_setSelsetType(slot, 0);
+                }
+                if (ImGui_Selectable(ctx, "Group", &isGrp,
+                                     nullptr, nullptr, nullptr))
+                {
+                    reasixty_setSelsetType(slot, 1);
+                }
+                ImGui_EndCombo(ctx);
             }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
 
-        // Name field.
-        char nameBuf[64] = {0};
-        std::strncpy(nameBuf, reasixty_selsetName(slot), sizeof(nameBuf) - 1);
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 180.0));
-        if (ImGui_InputTextWithHint(ctx, "##name",
-                                    "Slot name",
-                                    nameBuf, sizeof(nameBuf),
-                                    nullptr, nullptr))
-        {
-            reasixty_setSelsetName(slot, nameBuf);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Group spinner only for Group slots.
-        if (typeInt == 1) {
-            int g = reasixty_selsetGroupIdx(slot);
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 80.0));
-            if (ImGui_InputInt(ctx, "Grp##gi", &g,
-                               nullptr, nullptr, nullptr))
+            // Col 4 — Name input.
+            ImGui_TableNextColumn(ctx);
+            char nameBuf[64] = {0};
+            std::strncpy(nameBuf, reasixty_selsetName(slot),
+                         sizeof(nameBuf) - 1);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 180.0));
+            if (ImGui_InputTextWithHint(ctx, "##name",
+                                        "Slot name",
+                                        nameBuf, sizeof(nameBuf),
+                                        nullptr, nullptr))
             {
-                reasixty_setSelsetGroupIdx(slot, g);
+                reasixty_setSelsetName(slot, nameBuf);
             }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-        }
 
-        // Live track count.
-        char info[32];
-        snprintf(info, sizeof(info), "(%d tracks)",
-                      reasixty_selsetTrackCount(slot));
-        ImGui_Text(ctx, info);
-        ImGui_SameLine(ctx, nullptr, nullptr);
+            // Col 5 — Group spinner (Group rows) OR live track count
+            // (Snapshot rows). Group track count omitted: it changes
+            // live with REAPER's track-group membership and adds no
+            // useful info next to the spinner.
+            ImGui_TableNextColumn(ctx);
+            if (typeInt == 1) {
+                int g = reasixty_selsetGroupIdx(slot);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 80.0));
+                if (ImGui_InputInt(ctx, "Grp##gi", &g,
+                                   nullptr, nullptr, nullptr))
+                {
+                    reasixty_setSelsetGroupIdx(slot, g);
+                }
+            } else {
+                char info[32];
+                snprintf(info, sizeof(info), "(%d tracks)",
+                              reasixty_selsetTrackCount(slot));
+                ImGui_Text(ctx, info);
+            }
 
-        // Action buttons. Save only makes sense for Snapshot (it
-        // overwrites the slot's GUID list with the current REAPER
-        // selection — and converts a Group slot to Snapshot if
-        // pressed). Recall toggles the active slot regardless of type.
-        if (ImGui_Button(ctx, "Save##sv", 0, 0)) {
-            reasixty_selsetSaveCurrent(slot);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        const char* recallLabel = (active == slot)
-            ? "Deactivate##rc" : "Recall##rc";
-        if (ImGui_Button(ctx, recallLabel, 0, 0)) {
-            reasixty_selsetRecallToggle(slot);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Clear##cl", 0, 0)) {
-            reasixty_selsetClear(slot);
-        }
+            // Cols 6/7 — Save + Clear, identical width so they sit on
+            // a clean grid. Both hidden on Group rows (no-ops there:
+            // Save would convert the slot to Snapshot, Clear can't
+            // touch live group membership). Slot activation lives on
+            // the hardware via the Recall Selection Slot builtin.
+            double kBtnW = scaleW_(ctx, 64.0);
+            double kBtnH = 0.0;
 
-        ImGui_PopID(ctx);
+            // Col 6 — Save (Snapshot only).
+            ImGui_TableNextColumn(ctx);
+            if (typeInt == 0) {
+                if (ImGui_Button(ctx, "Save##sv", &kBtnW, &kBtnH)) {
+                    reasixty_selsetSaveCurrent(slot);
+                }
+            }
+
+            // Col 7 — Clear (Snapshot only).
+            ImGui_TableNextColumn(ctx);
+            if (typeInt == 0) {
+                if (ImGui_Button(ctx, "Clear##cl", &kBtnW, &kBtnH)) {
+                    reasixty_selsetClear(slot);
+                }
+            }
+
+            ImGui_PopID(ctx);
+        }
+        ImGui_EndTable(ctx);
     }
 
     ImGui_Spacing(ctx);
@@ -8815,53 +8868,83 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
     }
 
     auto& st = uf8::param_groups::state();
-    for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
-        char idtag[32];
-        snprintf(idtag, sizeof(idtag), "param_group_row_%d", slot);
-        ImGui_PushID(ctx, idtag);
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "pg_tbl", 6, &tblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag   = ImGui_TableColumnFlags_WidthFixed;
+        double wSlot   = scaleW_(ctx,  70.0);
+        double wActive = scaleW_(ctx,  75.0);
+        double wName   = scaleW_(ctx, 230.0);
+        double wMid    = scaleW_(ctx, 110.0);
+        // Add + Clear share identical column + button widths so the
+        // pair lines up cleanly across all 8 rows. Frank 2026-05-22.
+        double wAdd    = scaleW_(ctx, 120.0);
+        double wClear  = scaleW_(ctx, 120.0);
+        ImGui_TableSetupColumn(ctx, "slot",   &wFlag, &wSlot,   nullptr);
+        ImGui_TableSetupColumn(ctx, "active", &wFlag, &wActive, nullptr);
+        ImGui_TableSetupColumn(ctx, "name",   &wFlag, &wName,   nullptr);
+        ImGui_TableSetupColumn(ctx, "mid",    &wFlag, &wMid,    nullptr);
+        ImGui_TableSetupColumn(ctx, "add",    &wFlag, &wAdd,    nullptr);
+        ImGui_TableSetupColumn(ctx, "clear",  &wFlag, &wClear,  nullptr);
 
-        // Active dot prefix mirrors the Selection Sets pattern.
-        char header[24];
-        snprintf(header, sizeof(header), "%s Slot %d",
-                      st.slots[slot].active ? "\xe2\x80\xa2" : " ",
-                      slot + 1);
-        ImGui_Text(ctx, header);
-        ImGui_SameLine(ctx, nullptr, nullptr);
+        for (int slot = 0; slot < uf8::param_groups::kSlotCount; ++slot) {
+            char idtag[32];
+            snprintf(idtag, sizeof(idtag), "param_group_row_%d", slot);
+            ImGui_PushID(ctx, idtag);
 
-        bool active = st.slots[slot].active;
-        if (ImGui_Checkbox(ctx, "Active##act", &active)) {
-            uf8::param_groups::toggleGroupActive(slot);
+            // Col 1 — Slot label + active marker.
+            ImGui_TableNextColumn(ctx);
+            char header[24];
+            snprintf(header, sizeof(header), "%s Slot %d",
+                          st.slots[slot].active ? "\xe2\x80\xa2" : " ",
+                          slot + 1);
+            ImGui_Text(ctx, header);
+
+            // Col 2 — Active checkbox.
+            ImGui_TableNextColumn(ctx);
+            bool active = st.slots[slot].active;
+            if (ImGui_Checkbox(ctx, "Active##act", &active)) {
+                uf8::param_groups::toggleGroupActive(slot);
+            }
+
+            // Col 3 — Name input.
+            ImGui_TableNextColumn(ctx);
+            char nameBuf[64] = {0};
+            std::strncpy(nameBuf, st.slots[slot].name.c_str(),
+                         sizeof(nameBuf) - 1);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
+            if (ImGui_InputTextWithHint(ctx, "##name",
+                                        "Slot name (e.g. Drums)",
+                                        nameBuf, sizeof(nameBuf),
+                                        nullptr, nullptr))
+            {
+                st.slots[slot].name = nameBuf;
+                uf8::param_groups::save();
+            }
+
+            // Col 4 — Member count.
+            ImGui_TableNextColumn(ctx);
+            char info[40];
+            snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);
+            ImGui_Text(ctx, info);
+
+            // Cols 5/6 — Add Selected + Clear, identical widths.
+            double kBtnW = scaleW_(ctx, 110.0);
+            double kBtnH = 0.0;
+
+            ImGui_TableNextColumn(ctx);
+            if (ImGui_Button(ctx, "Add Selected##add", &kBtnW, &kBtnH)) {
+                uf8::param_groups::addSelectedToGroup(slot);
+            }
+
+            ImGui_TableNextColumn(ctx);
+            if (ImGui_Button(ctx, "Clear##clr", &kBtnW, &kBtnH)) {
+                uf8::param_groups::clearGroupMembership(slot);
+            }
+
+            ImGui_PopID(ctx);
         }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        char nameBuf[64] = {0};
-        std::strncpy(nameBuf, st.slots[slot].name.c_str(),
-                     sizeof(nameBuf) - 1);
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
-        if (ImGui_InputTextWithHint(ctx, "##name",
-                                    "Slot name (e.g. Drums)",
-                                    nameBuf, sizeof(nameBuf),
-                                    nullptr, nullptr))
-        {
-            st.slots[slot].name = nameBuf;
-            uf8::param_groups::save();
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        char info[40];
-        snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);
-        ImGui_Text(ctx, info);
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        if (ImGui_Button(ctx, "Add Selected##add", nullptr, nullptr)) {
-            uf8::param_groups::addSelectedToGroup(slot);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Clear##clr", nullptr, nullptr)) {
-            uf8::param_groups::clearGroupMembership(slot);
-        }
-
-        ImGui_PopID(ctx);
+        ImGui_EndTable(ctx);
     }
 
     ImGui_Spacing(ctx);
