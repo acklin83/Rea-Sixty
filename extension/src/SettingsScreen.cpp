@@ -128,12 +128,8 @@ int  reasixty_fontScale();
 void reasixty_setFontScale(int s);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
-bool reasixty_showTracksHiddenInTcp();
-bool reasixty_hideTracksInCollapsedFolders();
-void reasixty_setHideTracksInCollapsedFolders(bool on);
-void reasixty_setShowTracksHiddenInTcp(bool on);
-bool reasixty_showTracksHiddenInMcp();
-void reasixty_setShowTracksHiddenInMcp(bool on);
+int  reasixty_visibilityFollow();
+void reasixty_setVisibilityFollow(int v);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
 int  reasixty_navDefaultView();
@@ -522,27 +518,24 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         reasixty_setTcpFollowsSelection(tcpFollow);
     }
 
-    // Show tracks REAPER has hidden in TCP / MCP. Default both OFF — the
-    // UF8 mirrors REAPER's track-panel visibility. Either toggle ON keeps
-    // tracks on the surface even when that view hides them. Frank 2026-05-20.
-    bool showTcpHidden = reasixty_showTracksHiddenInTcp();
-    if (ImGui_Checkbox(ctx, "Show tracks hidden in TCP", &showTcpHidden)) {
-        reasixty_setShowTracksHiddenInTcp(showTcpHidden);
+    // Visibility follow: the surface mirrors what's visible in either
+    // REAPER's TCP (arrange-view) or MCP (mixer). TCP-mode also hides
+    // children of fully-collapsed folders because REAPER's
+    // "Hide children of collapsed folders" pref clears B_SHOWINTCP on
+    // those children — no separate toggle needed. Frank 2026-05-22.
+    int visFollow = reasixty_visibilityFollow();
+    ImGui_Text(ctx, "Surface mirrors:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "TCP", &visFollow, 0)) {
+        reasixty_setVisibilityFollow(visFollow);
     }
-    bool showMcpHidden = reasixty_showTracksHiddenInMcp();
-    if (ImGui_Checkbox(ctx, "Show tracks hidden in MCP", &showMcpHidden)) {
-        reasixty_setShowTracksHiddenInMcp(showMcpHidden);
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "MCP", &visFollow, 1)) {
+        reasixty_setVisibilityFollow(visFollow);
     }
-    // Independent surface-side mirror of REAPER's "hide children of
-    // collapsed folders" preference. When on, any track whose ancestor
-    // folder is fully collapsed (I_FOLDERCOMPACT == 2) drops from the
-    // strip list. Frank 2026-05-22.
-    bool hideCollapsed = reasixty_hideTracksInCollapsedFolders();
-    if (ImGui_Checkbox(ctx,
-            "Hide tracks in collapsed folders", &hideCollapsed))
-    {
-        reasixty_setHideTracksInCollapsedFolders(hideCollapsed);
-    }
+    ImGui_TextDisabled(ctx,
+        "TCP hides children of collapsed folders when REAPER's "
+        "'Hide children of collapsed folders' preference is on.");
 
     // Track names longer than the 7-char scribble-strip slot need shortening.
     // Truncate keeps the legacy first-7-chars behaviour. Smart Abbreviate

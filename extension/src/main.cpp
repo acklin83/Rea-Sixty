@@ -501,18 +501,13 @@ std::atomic<int>          g_fontScale{1};
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
 // Frank 2026-05-20.
 std::atomic<bool>         g_tcpFollowsSelection{false};
-// Show tracks hidden in REAPER's TCP / MCP on the UF8. Default BOTH
-// off — a track hidden in either view is dropped from g_visibleTracks
-// so the UF8 mirrors what's actually visible in REAPER. Flip a toggle
-// on to ignore that view's hidden flag. Frank 2026-05-20.
-std::atomic<bool>         g_showTracksHiddenInTcp{false};
-std::atomic<bool>         g_showTracksHiddenInMcp{false};
-// When on, any track whose ancestor folder has I_FOLDERCOMPACT == 2
-// (fully collapsed) is dropped from the strip list. Mirrors REAPER's
-// "hide children of collapsed folders" preference but as an independent
-// surface-side filter so the user can toggle it without changing the
-// global REAPER setting. Frank 2026-05-22.
-std::atomic<bool>         g_hideTracksInCollapsedFolders{false};
+// Which REAPER view the UF8 mirrors for track visibility: 0 = TCP
+// (arrange-view panel), 1 = MCP (mixer). A track hidden in the
+// selected view drops from g_visibleTracks so the surface matches
+// what the user sees in REAPER. Default TCP — children of a collapsed
+// folder fall out automatically as long as REAPER's "Hide children of
+// collapsed folders" pref is active. Frank 2026-05-22.
+std::atomic<int>          g_visibilityFollow{0};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -812,33 +807,14 @@ void rebuildVisibleTrackList() {
             const int am = GetTrackAutomationMode(tr);
             if (am == 0 || am == 1) continue;
         }
-        // TCP / MCP hidden filter: by default the UF8 mirrors what's
-        // visible in REAPER's track panels, so tracks hidden in TCP or
-        // MCP drop off the surface too. Either toggle bypasses the
-        // corresponding view's filter. Frank 2026-05-20.
-        if (!g_showTracksHiddenInTcp.load()
-            && !(GetMediaTrackInfo_Value(tr, "B_SHOWINTCP") > 0.5))
-        {
-            continue;
-        }
-        if (!g_showTracksHiddenInMcp.load()
-            && !(GetMediaTrackInfo_Value(tr, "B_SHOWINMIXER") > 0.5))
-        {
-            continue;
-        }
-        // Folder-collapse filter: walk ancestors, drop the track if
-        // any parent folder is fully collapsed (I_FOLDERCOMPACT == 2).
-        if (g_hideTracksInCollapsedFolders.load()) {
-            bool hidden = false;
-            for (MediaTrack* p = GetParentTrack(tr); p;
-                 p = GetParentTrack(p))
-            {
-                const int compact = static_cast<int>(
-                    GetMediaTrackInfo_Value(p, "I_FOLDERCOMPACT"));
-                if (compact == 2) { hidden = true; break; }
-            }
-            if (hidden) continue;
-        }
+        // Visibility-follow filter: the surface mirrors what's visible
+        // in REAPER's selected view (TCP or MCP). IsTrackVisible folds
+        // both the per-track B_SHOWIN* flag AND ancestor folder-collapse
+        // state into one call, so children of a collapsed folder are
+        // dropped in TCP-mode without us having to walk the hierarchy.
+        // B_SHOWIN* alone misses the folder-collapse case. Frank 2026-05-22.
+        const bool followMcp = (g_visibilityFollow.load() == 1);
+        if (!IsTrackVisible(tr, followMcp)) continue;
         g_visibleTracks.push_back(tr);
     }
 
@@ -1944,14 +1920,23 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
     }
-    if (const char* v = GetExtState("rea_sixty", "show_tracks_hidden_in_tcp"); v && *v) {
-        g_showTracksHiddenInTcp.store(std::atoi(v) != 0);
-    }
-    if (const char* v = GetExtState("rea_sixty", "show_tracks_hidden_in_mcp"); v && *v) {
-        g_showTracksHiddenInMcp.store(std::atoi(v) != 0);
-    }
-    if (const char* v = GetExtState("rea_sixty", "hide_collapsed_folder_children"); v && *v) {
-        g_hideTracksInCollapsedFolders.store(std::atoi(v) != 0);
+    // Visibility-follow mode (0 = TCP, 1 = MCP). Falls back to the
+    // three legacy keys when the new key is absent, so 0.1.4 users keep
+    // their previous intent on first launch of 0.1.5+. Frank 2026-05-22.
+    if (const char* v = GetExtState("rea_sixty", "visibility_follow"); v && *v) {
+        const int n = std::atoi(v);
+        g_visibilityFollow.store((n == 1) ? 1 : 0);
+    } else {
+        const char* tcpH = GetExtState("rea_sixty", "show_tracks_hidden_in_tcp");
+        const char* mcpH = GetExtState("rea_sixty", "show_tracks_hidden_in_mcp");
+        const char* hcfc = GetExtState("rea_sixty", "hide_collapsed_folder_children");
+        const bool legacyHideCollapsed = (hcfc && *hcfc && std::atoi(hcfc) != 0);
+        const bool legacyShowTcpHidden = (tcpH && *tcpH && std::atoi(tcpH) != 0);
+        const bool legacyShowMcpHidden = (mcpH && *mcpH && std::atoi(mcpH) != 0);
+        int mode = 0;   // TCP default
+        if (legacyHideCollapsed)                            mode = 0;
+        else if (legacyShowTcpHidden && !legacyShowMcpHidden) mode = 1;
+        g_visibilityFollow.store(mode);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_vpot_push"); v && *v) {
         g_recVpotPush.store(parseRecRmeAction(v));
@@ -2640,19 +2625,24 @@ std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx);
 void applySelectRelative_(int step)
 {
     if (step == 0) return;
-    const int trackCount = CountTracks(nullptr);
-    if (trackCount == 0) return;
+    // Walk g_visibleTracks, not the raw project list, so encoder
+    // ChSelect honours the same visibility filter the strips do —
+    // otherwise users can scroll past hidden / collapsed-folder
+    // tracks even when they're invisible on the surface. Frank 2026-05-22.
+    const int vc = visibleTrackCount();
+    if (vc == 0) return;
     int cur = -1;
-    for (int t = 0; t < trackCount; ++t) {
-        if (GetMediaTrackInfo_Value(GetTrack(nullptr, t), "I_SELECTED") > 0.5) {
+    for (int t = 0; t < vc; ++t) {
+        MediaTrack* tr = visibleTrackAt(t);
+        if (tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) {
             cur = t;
             break;
         }
     }
     int next = (cur >= 0 ? cur : 0) + step;
-    if (next < 0) next = 0;
-    if (next > trackCount - 1) next = trackCount - 1;
-    if (MediaTrack* tr = GetTrack(nullptr, next)) {
+    if (next < 0)        next = 0;
+    if (next > vc - 1)   next = vc - 1;
+    if (MediaTrack* tr = visibleTrackAt(next)) {
         SetOnlyTrackSelected(tr);
         followSelectedInMixer(tr);
     }
@@ -4475,20 +4465,11 @@ void drainInputQueue()
             if (g_selectAccum <= -1.0) { step = static_cast<int>(g_selectAccum);        g_selectAccum -= step; }
             if (step == 0) continue;
 
-            int cur = -1;
-            for (int t = 0; t < trackCount; ++t) {
-                if (GetMediaTrackInfo_Value(GetTrack(nullptr, t), "I_SELECTED") > 0.5) {
-                    cur = t;
-                    break;
-                }
-            }
-            int next = (cur >= 0 ? cur : 0) + step;
-            if (next < 0) next = 0;
-            if (next > trackCount - 1) next = trackCount - 1;
-            if (MediaTrack* tr = GetTrack(nullptr, next)) {
-                SetOnlyTrackSelected(tr);
-                followSelectedInMixer(tr);
-            }
+            // Delegate to applySelectRelative_ so this drain path walks
+            // g_visibleTracks (and skips hidden / collapsed-folder tracks)
+            // exactly like the bindings-routed entry point at line 15352.
+            // Frank 2026-05-22.
+            applySelectRelative_(step);
             continue;
         }
 
@@ -13511,37 +13492,32 @@ void reasixty_setTcpFollowsSelection(bool on)
     g_tcpFollowsSelection.store(on);
     SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
 }
-bool reasixty_showTracksHiddenInTcp() { return g_showTracksHiddenInTcp.load(); }
-void reasixty_setShowTracksHiddenInTcp(bool on)
+// Walk g_visibleTracks from cur by signed step; clamp at ends. nullptr
+// cur snaps to the first visible track on +step, or the last on -step
+// (matches "no idea where we are" defaults). UC1 channel encoder uses
+// this so it honours the same visibility filter as the UF8 surface.
+// Frank 2026-05-22.
+MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step)
 {
-    g_showTracksHiddenInTcp.store(on);
-    SetExtState("rea_sixty", "show_tracks_hidden_in_tcp", on ? "1" : "0", true);
-    g_bankDirty.store(true);
-    rebuildVisibleTrackList();
-    if (g_uc1_surface) {
-        g_uc1_surface->invalidateCache();
-        g_uc1_surface->refresh();
+    const int vc = visibleTrackCount();
+    if (vc == 0) return nullptr;
+    int idx = -1;
+    if (cur) {
+        for (int t = 0; t < vc; ++t) {
+            if (visibleTrackAt(t) == cur) { idx = t; break; }
+        }
     }
+    int next = (idx >= 0) ? idx + step : (step >= 0 ? 0 : vc - 1);
+    if (next < 0)      next = 0;
+    if (next > vc - 1) next = vc - 1;
+    return visibleTrackAt(next);
 }
-bool reasixty_showTracksHiddenInMcp() { return g_showTracksHiddenInMcp.load(); }
-void reasixty_setShowTracksHiddenInMcp(bool on)
+int  reasixty_visibilityFollow() { return g_visibilityFollow.load(); }
+void reasixty_setVisibilityFollow(int v)
 {
-    g_showTracksHiddenInMcp.store(on);
-    SetExtState("rea_sixty", "show_tracks_hidden_in_mcp", on ? "1" : "0", true);
-    g_bankDirty.store(true);
-    rebuildVisibleTrackList();
-    if (g_uc1_surface) {
-        g_uc1_surface->invalidateCache();
-        g_uc1_surface->refresh();
-    }
-}
-bool reasixty_hideTracksInCollapsedFolders()
-{ return g_hideTracksInCollapsedFolders.load(); }
-void reasixty_setHideTracksInCollapsedFolders(bool on)
-{
-    g_hideTracksInCollapsedFolders.store(on);
-    SetExtState("rea_sixty", "hide_collapsed_folder_children",
-                on ? "1" : "0", true);
+    const int n = (v == 1) ? 1 : 0;
+    g_visibilityFollow.store(n);
+    SetExtState("rea_sixty", "visibility_follow", n ? "1" : "0", true);
     g_bankDirty.store(true);
     rebuildVisibleTrackList();
     if (g_uc1_surface) {
@@ -15376,7 +15352,7 @@ void registerBindingHandlers()
             }
         },
         nullptr,
-        "Encoder: dispatch by current mode (Channel Select / Nudge / Mousewheel / Instance / FX / Selset / Markers / Bank by 1ch / Last Touched Param)",
+        "Encoder: dispatch by current mode",
         false
     });
     registerBuiltin("instance_cycle", DescBuilder{

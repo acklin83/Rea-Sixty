@@ -40,7 +40,7 @@ constexpr ExtKey kKeys[] = {
     { "rea_sixty", "fx_chain_pin_x" },
     { "rea_sixty", "fx_chain_pin_y" },
     { "rea_sixty", "gr_any_fx" },
-    { "rea_sixty", "hide_collapsed_folder_children" },
+    { "rea_sixty", "visibility_follow" },
     { "rea_sixty", "modes_subtab" },
     { "rea_sixty", "nav_auto_follow" },
     { "rea_sixty", "nav_color_bar" },

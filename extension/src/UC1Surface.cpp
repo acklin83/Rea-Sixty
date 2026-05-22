@@ -47,6 +47,7 @@ extern "C" int  reasixty_navUc1LongPress();
 // is visible (and, on UF8, rebank the 8-strip window around it). Shared
 // with UF8's SEL/CHANNEL-encoder paths so UC1 encoders feel identical.
 void reasixty_followSelectedInMixer(MediaTrack* tr);
+MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
 // Settings → Modes → FX/Instance Cycle — controls-routing bitmask. Bit 2
@@ -688,17 +689,11 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // triple scroll doesn't visually animate on the UC1 LCD —
         // refresh() builds the new triple but the firmware appears to
         // need this redraw signal to actually advance the carousel.
-        const int n = CountTracks(nullptr);
-        if (n <= 0) return;
-        int cur = -1;
-        if (focusedTrack_) {
-            cur = static_cast<int>(GetMediaTrackInfo_Value(
-                static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
-        }
-        int next = cur + step;
-        if (next < 0) next = 0;
-        if (next >= n) next = n - 1;
-        MediaTrack* tr = GetTrack(nullptr, next);
+        // Step through the visible-track list (not the raw project
+        // list) so hidden / collapsed-folder tracks are skipped —
+        // mirrors the UF8 surface filter. Frank 2026-05-22.
+        MediaTrack* tr = reasixty_stepVisibleTrack(
+            static_cast<MediaTrack*>(focusedTrack_), step);
         if (tr) {
             SetOnlyTrackSelected(tr);
             reasixty_followSelectedInMixer(tr);
@@ -738,10 +733,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             device_->send(buildDisplayInvalidate(0x0F));
         }
         if (logThis) {
+            const int landed = tr
+                ? static_cast<int>(GetMediaTrackInfo_Value(
+                      tr, "IP_TRACKNUMBER"))
+                : 0;
             char line[96];
             snprintf(line, sizeof(line),
-                "UC1 CHANNEL delta=%d step=%d → track %d of %d\n",
-                (int)ev.delta, step, next + 1, n);
+                "UC1 CHANNEL delta=%d step=%d → track %d\n",
+                (int)ev.delta, step, landed);
         }
         ++stats_.knobEventsHandled;
         return;
