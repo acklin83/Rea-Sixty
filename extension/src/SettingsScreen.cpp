@@ -952,6 +952,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
 {
     constexpr float W = 1000, H = 490;
 
+    // Lock the schematic font to Small (12 px) so the labels stay
+    // readable regardless of the global font-size picker. ReaImGui
+    // v0.10 accepts font=nil meaning "keep current font, override
+    // size only". Popped at function exit. Frank 2026-05-22.
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
+
     double oxd = 0, oyd = 0;
     ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
 
@@ -1368,6 +1374,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
     // Right-click context menu — must live inside the same canvas ID
     // scope as the OpenPopup call so the popup ID matches.
     renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
+
+    ImGui_PopFont(ctx);
 }
 
 // Render the full UC1 schematic. Layout follows the SSL UC1 hardware
@@ -1842,6 +1850,7 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
 void drawUc1Vector(ImGui_Context* ctx)
 {
     constexpr float W = 860, H = 660;
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
     double oxd = 0, oyd = 0;
     ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
     ImGui_InvisibleButton(ctx, "uc1_canvas", W, H, /*flags*/ nullptr);
@@ -1850,6 +1859,7 @@ void drawUc1Vector(ImGui_Context* ctx)
         static_cast<float>(oxd), static_cast<float>(oyd)
     };
     drawUc1Face_(c, uf8::Domain::None);
+    ImGui_PopFont(ctx);
 }
 
 // Click-to-bind variant: paints the UC1 face + a small "bindings strip"
@@ -1860,6 +1870,10 @@ void drawUc1Vector(ImGui_Context* ctx)
 // future bindable UC1 controls slot into the same strip.
 void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
 {
+    // Same font-lock rationale as drawUf8Vector — schematic labels
+    // stay readable at 12 px regardless of the global Font Size
+    // picker. Frank 2026-05-22.
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
     // ccpOnly UC1 face: chassis is 208 px tall starting at y=12, brand
     // line at y=206. Pad to 232 so the strip below has 16 px breathing
     // room below the CCP chassis edge.
@@ -1947,6 +1961,8 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
     renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
+
+    ImGui_PopFont(ctx);
 }
 
 // Push a Rea-Sixty-themed colour set so the editor's combos / buttons /
