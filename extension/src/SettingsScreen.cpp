@@ -1451,7 +1451,7 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
         circle_(c, cx, cy, r * 0.78f, cap,        0x80808055);
         line_(c,  cx, cy - r * 0.85f, cx, cy - r * 0.45f, 0xE8E8E8FF, 1.6);
         if (label) {
-            drawTextCentered_(c, cx, cy + r + 9, 0xB8BCC4FF, label);
+            drawTextCentered_(c, cx, cy + r + 13, 0xB8BCC4FF, label);
         }
     };
     auto btn = [&](float x, float y, float w, float h, const char* label,
@@ -1482,7 +1482,7 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
         rect_(c, 4, 4, W - 8, H - 8, 0x14181EFF, 0x2A3038FF, /*rounding*/ 8.0);
     }
 
-    constexpr float kSmallToggleW = 28, kSmallToggleH = 14;
+    constexpr float kSmallToggleW = 34, kSmallToggleH = 18;
     auto smallToggle = [&](float x, float y, const char* label) {
         rect_(c, x, y, kSmallToggleW, kSmallToggleH,
               0x252A33FF, 0x4A5060FF, 2.5);
@@ -1516,49 +1516,44 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
 
         // Filters: Lo-Pass column 1 (top-left), Hi-Pass column 2 diagonal
         // below it. NO IN buttons — they don't exist on UC1.
-        knob(kColLx + 60,  44, 20, kGreyCap, "LO-PASS");
-        knob(kColLx + 170, 70, 20, kGreyCap, "HI-PASS");
+        // 2026-05-22: EQ knobs shifted inward — GAIN/Q col 60→70, FREQ
+        // col 170→162 — so the side labels (HF / HMF / LMF / LF) breathe.
+        knob(kColLx + 70,  44, 20, kGreyCap, "LO-PASS");
+        knob(kColLx + 162, 70, 20, kGreyCap, "HI-PASS");
         sectionLabel(kColLx + 14, 110, "FILTERS");
         line_(c, kColLx + 70, 122, kColLx + kColLw - 8, 122, 0x383C44FF, 1.0);
 
         // HF band — Gain in col 1, Freq in col 2 diagonal, HF Bell toggle
-        // beside the Freq knob. Knob spacing 28 px (was 24) for a calmer
-        // visual rhythm matching the LMF band below.
+        // beside the Freq knob.
         drawText_(c, kColLx + 14, 152, 0xB8BCC4FF, "HF");
-        knob(kColLx + 60,  154, 20, kRedCap, "GAIN");
-        knob(kColLx + 170, 182, 20, kRedCap, "FREQ");
+        knob(kColLx + 70,  154, 20, kRedCap, "GAIN");
+        knob(kColLx + 162, 182, 20, kRedCap, "FREQ");
         smallToggle(kColLx + 192, 146, "BELL");
 
-        // HMF band — Gain + Q in col 1, Freq in col 2. Q matches the
-        // band's silk-screen colour (green). Knob spacing GAIN→FREQ 28,
-        // FREQ→Q 38 (slightly more than before so the diagonals breathe).
+        // HMF band — Gain + Q in col 1, Freq in col 2.
         drawText_(c, kColLx + 14, 230, 0xB8BCC4FF, "HMF");
-        knob(kColLx + 60,  232, 20, kGreenCap, "GAIN");
-        knob(kColLx + 170, 260, 20, kGreenCap, "FREQ");
-        knob(kColLx + 60,  300, 20, kGreenCap, "Q");
+        knob(kColLx + 70,  232, 20, kGreenCap, "GAIN");
+        knob(kColLx + 162, 260, 20, kGreenCap, "FREQ");
+        knob(kColLx + 70,  300, 20, kGreenCap, "Q");
 
         // EQ Type + EQ In: stacked in column 2 deep in the gap between
-        // HMF and LMF, with 16-20 px breathing above TYPE and below IN.
+        // HMF and LMF. Spacing bumped to 22 px for the larger 34×18
+        // toggle footprint.
         smallToggle(kColLx + 192, 356, "TYPE");
-        smallToggle(kColLx + 192, 376, "IN");
+        smallToggle(kColLx + 192, 380, "IN");
 
-        // LMF band — Gain + Q in col 1, Freq in col 2. Q in band-blue.
-        // Whole block shifted +32 vs HMF baseline so TYPE/IN get their
-        // breathing room.
+        // LMF band — Gain + Q in col 1, Freq in col 2.
         drawText_(c, kColLx + 14, 428, 0xB8BCC4FF, "LMF");
-        knob(kColLx + 60,  430, 20, kBlueCap, "GAIN");
-        knob(kColLx + 170, 458, 20, kBlueCap, "FREQ");
-        knob(kColLx + 60,  498, 20, kBlueCap, "Q");
+        knob(kColLx + 70,  430, 20, kBlueCap, "GAIN");
+        knob(kColLx + 162, 458, 20, kBlueCap, "FREQ");
+        knob(kColLx + 70,  498, 20, kBlueCap, "Q");
 
-        // LF band — both controls in black per silk-screen. Layout
-        // mirrors LMF's Q+FREQ diagonal (Freq upper-right, Gain lower-
-        // left), and LF Bell mirrors the HF Bell — HF Bell sits at the
-        // level of HF Gain (above HF Freq); LF Bell sits at the level
-        // of LF Gain (below LF Freq).
+        // LF band — both controls in black per silk-screen. LF Bell
+        // dropped to y=600 so the FREQ label (cy+r+13 = 591) clears.
         drawText_(c, kColLx + 14, 556, 0xB8BCC4FF, "LF");
-        knob(kColLx + 170, 558, 20, kBlackCap, "FREQ");
-        knob(kColLx + 60,  598, 20, kBlackCap, "GAIN");
-        smallToggle(kColLx + 192, 591, "BELL");
+        knob(kColLx + 162, 558, 20, kBlackCap, "FREQ");
+        knob(kColLx + 70,  598, 20, kBlackCap, "GAIN");
+        smallToggle(kColLx + 192, 600, "BELL");
     }
 
     // ---- Centre column: Bus Comp (top) + Central Control (bottom) ------
@@ -1757,7 +1752,8 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     // section above — Threshold sits below Range diagonally, Hold
     // sits below Release diagonally. Same visual rhythm as the EQ
     // bands' Gain/Freq pairs in the left column.
-    sectionLabel(kColRx + 14, 270, "GATE / EXPANDER");
+    // 2026-05-22 (Frank): section label moved from the section top
+    // to the FAST ATK row, right-aligned to the column edge.
     {
         const float c1x = kColRx + 60, c2x = kColRx + 156;
         knob(c1x, 308, 20, kGreyCap, "RANGE");
@@ -1767,6 +1763,17 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     }
     dynBtn(kColRx + 14, 430, "EXPAND");
     dynBtn(kColRx + 14, 456, "FAST ATK");
+    {
+        // Right-aligned label at the FAST ATK row. Use ImGui_CalcTextSize
+        // to measure the actual rendered width (12 px font lock applies
+        // here because callers wrap the schematic in PushFont(nil,12)).
+        double tw = 0, th = 0;
+        ImGui_CalcTextSize(c.ctx, "GATE / EXPANDER", &tw, &th,
+                           nullptr, nullptr);
+        const float labelX = kColRx + kColRw - 14 - static_cast<float>(tw);
+        const float labelY = 456 + (22 - static_cast<float>(th)) / 2.0f;
+        drawText_(c, labelX, labelY, 0x9CA0AAFF, "GATE / EXPANDER");
+    }
 
     // Channel section — pinned to the bottom of the column. Three
     // columns; small toggles keep their full width so "S/C LISTEN"
@@ -1776,10 +1783,9 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     {
         constexpr float bw = 66;          // small-toggle width — fits "S/C LISTEN"
         constexpr float bh = 22;          // small toggle height
-        // Half-size dimensions for IN / SOLO / CUT / FINE.
-        constexpr float lbw = 33;         // half of bw
-        constexpr float lh  = 28;         // half of original 56
-        constexpr float inH = 37;         // half of original 74
+        // 2026-05-22 (Frank): IN / SOLO / CUT / FINE all square + larger
+        // (40×40, up from 33×28 rect for SOLO/CUT/FINE and 33×37 for IN).
+        constexpr float bigSq = 40.0f;
         // Column 1 left edge (kColRx+14) flush with the dynBtn left
         // edge above (EXPAND / FAST ATK), so Polarity / S/C LISTEN /
         // SOLO CLR sit in the same vertical line as the dynamics
@@ -1794,27 +1800,25 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
         drawTextCentered_(c, c1x + bw / 2.0f, 547, 0xC0C4CCFF, "S/C LISTEN");
         rect_(c, c1x, 562, bw, bh, 0x252A33FF, 0x4A5060FF, 3.0);
         drawTextCentered_(c, c1x + bw / 2.0f, 573, 0xC0C4CCFF, "SOLO CLR");
-        // Large bottom row — SOLO / CUT / FINE share one Y-line, but
-        // each button is half-size and centred in its column slot.
-        // Bottom edge (largeY + lh = 635) bündig with the LF Gain
-        // label bottom on the left column.
-        const float largeY = 607;
-        const float soloX = c1x + (bw - lbw) / 2.0f;
-        const float cutX  = c2x + (bw - lbw) / 2.0f;
-        const float fineX = c3x + (bw - lbw) / 2.0f;
-        rect_(c, soloX, largeY, lbw, lh, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, soloX + lbw / 2.0f, largeY + lh / 2.0f, 0x303338FF, "SOLO");
-        rect_(c, cutX, largeY, lbw, lh, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, cutX + lbw / 2.0f, largeY + lh / 2.0f, 0x303338FF, "CUT");
+        // Large bottom row — SOLO / CUT / FINE share one Y-line, all
+        // square 40×40 and centred in their column slot.
+        const float largeY = 595;
+        const float soloX = c1x + (bw - bigSq) / 2.0f;
+        const float cutX  = c2x + (bw - bigSq) / 2.0f;
+        const float fineX = c3x + (bw - bigSq) / 2.0f;
+        rect_(c, soloX, largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
+        drawTextCentered_(c, soloX + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "SOLO");
+        rect_(c, cutX,  largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
+        drawTextCentered_(c, cutX  + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "CUT");
         // Column 3 — Channel-IN spans the small-toggle rows (centred
-        // vertically over the three of them); FINE in the large
-        // bottom row, half-size.
-        const float inX = c3x + (bw - lbw) / 2.0f;
-        const float inY = 510 + (3 * bh - inH) / 2.0f;
-        rect_(c, inX, inY, lbw, inH, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, inX + lbw / 2.0f, inY + inH / 2.0f, 0x303338FF, "IN");
-        rect_(c, fineX, largeY, lbw, lh, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, fineX + lbw / 2.0f, largeY + lh / 2.0f, 0x303338FF, "FINE");
+        // vertically over the three of them); FINE in the large bottom
+        // row, same 40×40 footprint.
+        const float inX = c3x + (bw - bigSq) / 2.0f;
+        const float inY = 510 + (3 * bh - bigSq) / 2.0f;
+        rect_(c, inX, inY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
+        drawTextCentered_(c, inX + bigSq / 2.0f, inY + bigSq / 2.0f, 0x303338FF, "IN");
+        rect_(c, fineX, largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
+        drawTextCentered_(c, fineX + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "FINE");
     }
     } // end if (!ccpOnly) — Right column
 
@@ -5549,7 +5553,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 namespace {
 
 constexpr float kUf8FaceW       = 860;
-constexpr float kUf8FaceH       = 490;
+constexpr float kUf8FaceH       = 504;
 constexpr float kUf8StripW      = 80;
 constexpr float kUf8StripGap    = 7;
 // Centre 8 strips:  8*80 + 7*7 = 689.  ox = (860 - 689) / 2 = 85.5
@@ -5571,7 +5575,7 @@ constexpr float kUf8FaderRailW  = 22;
 
 // Bank L/R buttons (FX-Learn mockup only — no native position on the
 // UF8 hardware face). Placed below the strip area, centred.
-constexpr float kUf8BankBtnY    = 466;
+constexpr float kUf8BankBtnY    = 482;
 constexpr float kUf8BankBtnH    = 18;
 constexpr float kUf8BankBtnW    = 60;
 
@@ -5654,10 +5658,12 @@ void drawUf8Face_(VCanvas& c)
               kUf8FaderRailW + 2, 10,
               0x60C060CC, 0xE8F0E8FF, 2.0);
 
-        // Strip number under the fader rail
+        // Strip number under the fader rail — 14 px below the rail
+        // bottom (was 4) so it doesn't squeeze against the Bank L/R
+        // buttons that sit just below at the same y. Frank 2026-05-22.
         char snum[8];
         snprintf(snum, sizeof(snum), "%d", s + 1);
-        drawTextCentered_(c, cx, kUf8FaderRailY + kUf8FaderRailH + 4,
+        drawTextCentered_(c, cx, kUf8FaderRailY + kUf8FaderRailH + 14,
                           0x707680FF, snum);
     }
 
