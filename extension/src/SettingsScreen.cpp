@@ -1631,9 +1631,12 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     // bright when editing a CS map, dimmed when editing a BC map.
     //   col 1 (THR / ATTACK / RATIO / S/C HPF)
     //   col 2 (MAKE-UP / RELEASE / IN-toggle / MIX)
+    // 2026-05-22 (Frank): row spacing bumped 62→68 px so knob labels
+    // get breathing room before the next row's knob top, mirroring the
+    // EQ-column visual rhythm.
     {
         const float c1x = kColCx + 120, c2x = kColCx + 240;
-        const float ry[4] = { 172, 234, 296, 358 };
+        const float ry[4] = { 172, 240, 308, 376 };
         knob(c1x, ry[0], 20, kAccentBC, "THR");
         knob(c2x, ry[0], 20, kAccentBC, "MAKE-UP");
         knob(c1x, ry[1], 20, kAccentBC, "ATTACK");
@@ -1653,7 +1656,9 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     // Coordinates mirror the BC bottom-row y so they visually align with
     // S/C HPF and MIX, but the kGreyCap accent + dim-after rendering
     // make their CS domain explicit.
-    constexpr float kInOutY  = 358;
+    // Aligned to the new BC bottom-row y (376 = ry[3]) so S/C HPF / MIX
+    // and INPUT / OUTPUT still sit on the same visual baseline.
+    constexpr float kInOutY  = 376;
     constexpr float kInOutCxL = 60, kInOutCxR = 300;
     auto drawInOutGain = [&]() {
         const float cInL = kColCx + kInOutCxL, cInR = kColCx + kInOutCxR;
@@ -5275,29 +5280,30 @@ constexpr Uc1Control kUc1Controls[] = {
     // omit this slot will render it as ghost (off-domain). Coordinates
     // mirror drawUc1Face_'s kInOutCxL/kInOutCxR/kInOutY (310/550, 358).
     { Uc1Control::Knob,    4, uf8::Domain::ChannelStrip,
-      310, 358, 20, 0, 0, kCapGrey, "IN G" },
+      310, 376, 20, 0, 0, kCapGrey, "IN G" },
     { Uc1Control::Knob,    1, uf8::Domain::ChannelStrip,
-      550, 358, 20, 0, 0, kCapGrey, "OUT G" },
+      550, 376, 20, 0, 0, kCapGrey, "OUT G" },
 
     // ---- CENTRE COLUMN — BC ---------------------------------------------
     // Threshold, Make-Up, Attack, Release, Ratio, S/C HPF, Mix.
+    // Row spacing 62→68 px per drawUc1Face_ 2026-05-22.
     { Uc1Control::Knob,    1, uf8::Domain::BusComp,
       370, 172, 20, 0, 0, kCapBC, "THR" },
     { Uc1Control::Knob,    2, uf8::Domain::BusComp,
       490, 172, 20, 0, 0, kCapBC, "MAKE" },
     { Uc1Control::Knob,    3, uf8::Domain::BusComp,
-      370, 234, 20, 0, 0, kCapBC, "ATK" },
+      370, 240, 20, 0, 0, kCapBC, "ATK" },
     { Uc1Control::Knob,    4, uf8::Domain::BusComp,
-      490, 234, 20, 0, 0, kCapBC, "REL" },
+      490, 240, 20, 0, 0, kCapBC, "REL" },
     { Uc1Control::Knob,    5, uf8::Domain::BusComp,
-      370, 296, 20, 0, 0, kCapBC, "RAT" },
+      370, 308, 20, 0, 0, kCapBC, "RAT" },
     // BC IN = compressor in/out toggle = BC linkIdx 0 (Bypass).
     { Uc1Control::Toggle,  0, uf8::Domain::BusComp,
-      476, 282, 0, 28, 28, 0, "IN" },
+      476, 294, 0, 28, 28, 0, "IN" },
     { Uc1Control::Knob,    6, uf8::Domain::BusComp,
-      370, 358, 20, 0, 0, kCapBC, "S/C" },
+      370, 376, 20, 0, 0, kCapBC, "S/C" },
     { Uc1Control::Knob,    7, uf8::Domain::BusComp,
-      490, 358, 20, 0, 0, kCapBC, "MIX" },
+      490, 376, 20, 0, 0, kCapBC, "MIX" },
 
     // ---- RIGHT COLUMN — CS Comp + Gate + Channel ------------------------
     // Comp section
