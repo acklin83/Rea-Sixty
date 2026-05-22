@@ -48,6 +48,8 @@ extern "C" int  reasixty_navUc1LongPress();
 // with UF8's SEL/CHANNEL-encoder paths so UC1 encoders feel identical.
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step);
+int reasixty_stripInstanceActiveFx(MediaTrack* tr);
+std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
 // Settings → Modes → FX/Instance Cycle — controls-routing bitmask. Bit 2
@@ -376,6 +378,13 @@ void UC1Surface::applyBcTrackScroll(int step)
     MediaTrack* tr = GetTrack(nullptr, found);
     if (!tr) return;
     setBcAnchorTrack(tr);
+    // Encoder 2 BC-scroll is the user expressing "show me BC" — flip
+    // focus so resolveActiveFx_ / Toggle Focused UI / etc. target the
+    // BC instance instead of the channel's CS / last-cursor FX. Without
+    // this, the LCD shows BC's name (via bcBindings_.busCompMap) but
+    // fp.domain stays at ChannelStrip and the push action opens the CS
+    // (or nothing) on the focused track. Frank 2026-05-22.
+    uf8::setFocus({uf8::Domain::BusComp, 0});
     refresh();
 }
 
@@ -3348,7 +3357,16 @@ void UC1Surface::refresh()
     // pushed here because refresh() may run AFTER the encoder handler
     // (via setFocusedTrack's internal refresh) and reset whatever
     // banner state was last written.
-    const bool havePlugin = bindings.channelMap || bcBindings_.busCompMap;
+    // Colour-bar enable: any plug-in context — SSL Instance (CS or BC)
+    // OR a fall-through-target FX on the focused track (cursor's
+    // default-to-FX[0]). Mirrors the CS-branch fallback below so the
+    // bar's coloured stripe lights up for non-Instance plug-ins too,
+    // not just SSL Instances. Frank 2026-05-22.
+    const bool haveActiveFx = focusedTrack_
+        && reasixty_stripInstanceActiveFx(
+               static_cast<MediaTrack*>(focusedTrack_)) >= 0;
+    const bool havePlugin = bindings.channelMap || bcBindings_.busCompMap
+        || haveActiveFx;
     device_->send(buildColourBarEnable(havePlugin));
 
     // Release stale readout zones for any domain the new focused track
@@ -3441,11 +3459,29 @@ void UC1Surface::refresh()
                 }
                 instanceTrack = focusedTrack_;
                 useBc        = false;
+            } else if (focusedTrack_) {
+                // No CS on focused track — fall through to the
+                // channel's active FX (cursor default-to-FX[0]) so a
+                // non-Instance plug-in (UF8-learned or unmapped) still
+                // gets named on the LCD. Mirrors the UF8 colour-bar
+                // fallback in main.cpp pushZonesForVisibleSlots so
+                // "was angezeigt wird = was beim Push aufgeht" holds.
+                // BC-focus stays strict (above branch) — the BC anchor
+                // is a narrow concept that should not surface non-BC
+                // plug-ins. Frank 2026-05-22.
+                MediaTrack* fT =
+                    static_cast<MediaTrack*>(focusedTrack_);
+                const int fxIdx = reasixty_stripInstanceActiveFx(fT);
+                if (fxIdx >= 0) {
+                    baseLabel     = reasixty_fxCycleDisplayName(fT, fxIdx);
+                    instanceTrack = focusedTrack_;
+                    useBc         = false;
+                }
             }
-            // else: "MAIN" — no CS on focused track, don't fall back
-            // to BC anchor.
         }
-        if (baseLabel.empty()) baseLabel = "MAIN";
+        // "REAPER" (formerly "MAIN") fires only when no SSL Instance
+        // matched AND the channel has zero FX. Frank 2026-05-22.
+        if (baseLabel.empty()) baseLabel = "REAPER";
 
         // Central label width — buildCentralLabel accepts up to 8 chars
         // (Frank 2026-05-09 widening probe). The A/B/C multi-instance
@@ -3524,7 +3560,14 @@ void UC1Surface::refresh()
     // Carousel triple sends, in SSL 360°'s order: LARGE then SMALL.
     // Must come AFTER buildColourBarEnable + buildCentralLabel above
     // — uc1_47 capture order is layout-enable → label → LARGE → SMALL.
-    device_->send(std::vector<uint8_t>(largeTriple));
+    // Skip the LARGE triple when the instance/FX carousel is active —
+    // showInstanceCarousel + the instanceCarouselActive_ branch above
+    // already pushed the plug-in-name triple into the same LCD slot.
+    // Without this gate, refresh()'s BC-track-name triple clobbers the
+    // carousel's plug-in names mid-scroll. Frank 2026-05-22.
+    if (!instanceCarouselActive_) {
+        device_->send(std::vector<uint8_t>(largeTriple));
+    }
     device_->send(std::vector<uint8_t>(smallTriple));
 
     // Focused-track colour bar — single palette byte. Uses the same

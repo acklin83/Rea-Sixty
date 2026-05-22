@@ -2703,12 +2703,16 @@ void applyMarkerStep_(int step)
     SetEditCurPos(cur, true, true);
 }
 
-// Shift the visible-track window by one strip (sign of step).
+// Shift the visible-track window by one strip (sign of step). The
+// clamp uses `trackCount - 8` (not `trackCount - 1`) so banking can't
+// push the last track left of strip 7 — when there are fewer than 8
+// tracks, no banking is possible because all tracks already fit on
+// the surface. Frank 2026-05-22.
 void applyBankByOne_(int step)
 {
     if (step == 0) return;
     const int trackCount = visibleTrackCount();
-    const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
+    const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
     int next = g_bankOffset.load() + step;
     if (next < 0)        next = 0;
     if (next > maxStart) next = maxStart;
@@ -3140,6 +3144,7 @@ void applyInstanceCycle_(int step)
     }
     const int sz = static_cast<int>(hits.size());
     int nextK;
+    bool edgeNoMove = false;
     if (g_wrapPluginCycle.load()) {
         nextK = (curK + step) % sz;
         if (nextK < 0) nextK += sz;
@@ -3147,7 +3152,18 @@ void applyInstanceCycle_(int step)
         nextK = curK + step;
         if (nextK < 0)   nextK = 0;
         if (nextK >= sz) nextK = sz - 1;
-        if (nextK == curK) return;   // hard-stop at edge, no carousel
+        if (nextK == curK) edgeNoMove = true;   // no move, still show carousel
+    }
+    if (edgeNoMove) {
+        // Hard-stop at edge: state stays put but show the carousel for
+        // the current FX so the user gets the same visual feedback as
+        // a normal cycle step (Frank 2026-05-22 — last/first plug-in
+        // should still display its name when CCW/CW past the edge).
+        std::vector<int> ring;
+        ring.reserve(hits.size());
+        for (const auto& h : hits) ring.push_back(h.fxIdx);
+        showCycleCarousel_(tr, curK, ring);
+        return;
     }
     const Hit& target = hits[nextK];
     // Sync the per-strip Instance index on the focused track so the
@@ -3176,22 +3192,24 @@ void applyInstanceCycle_(int step)
         uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
         triggerPluginModeFollowSync_();
     }
+    // Show the carousel BEFORE refresh() so the central LCD goes
+    // straight into carousel layout (sub=0x02) and refresh()'s central-
+    // label branch sees instanceCarouselActive_ and re-emits the
+    // carousel frames instead of briefly rendering the post-cycle
+    // central label (track name fallback / plug-in shortName) and then
+    // having the carousel overwrite it. Without this reorder the LCD
+    // flashed track-name → plug-in-name on every detent. Frank 2026-05-22.
+    std::vector<int> ring;
+    ring.reserve(hits.size());
+    for (const auto& h : hits) ring.push_back(h.fxIdx);
+    showCycleCarousel_(tr, nextK, ring);
+
     g_uc1_surface->invalidateCache();
     g_uc1_surface->refresh();
     g_pageDirty.store(true);
     g_bankDirty.store(true);
 
     followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
-
-    // Instance carousel — feed the UC1 central LCD with the prev/curr/next
-    // displayShort labels of the cycle's neighbours, plus the track name
-    // as the header (parallel to BC-scroll's "BUS COMP 2" banner). The
-    // overlay is mutually exclusive with bcScrollOverlay; showInstanceCarousel
-    // clears that flag so the headers don't fight.
-    std::vector<int> ring;
-    ring.reserve(hits.size());
-    for (const auto& h : hits) ring.push_back(h.fxIdx);
-    showCycleCarousel_(tr, nextK, ring);
 }
 
 // When the FX-Cursor lands on an FX that happens to be a learned Instance
@@ -3316,21 +3334,29 @@ void applyFxCycle_(int step)
         nextK = curK + step;
         if (nextK < 0)   nextK = 0;
         if (nextK >= sz) nextK = sz - 1;
-        if (nextK == curK) return;   // hard-stop at edge, no carousel
+        if (nextK == curK) {
+            // Hard-stop at edge: keep state, still show the carousel
+            // (matches applyInstanceCycle_ — Frank 2026-05-22).
+            showCycleCarousel_(tr, curK, ring);
+            return;
+        }
     }
     const int nextIdx = ring[nextK];
     setStripInstanceFx_(tr, nextIdx);
     syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
                                        /*setBcAnchor*/ true);
     g_bankDirty.store(true);
+
+    // Carousel before refresh so the LCD doesn't flash track-name on
+    // intermediate central-label render — see applyInstanceCycle_.
+    showCycleCarousel_(tr, nextK, ring);
+
     if (g_uc1_surface) {
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
     }
 
     followFocusedPluginGuiAcrossCycle_(tr, nextIdx);
-
-    showCycleCarousel_(tr, nextK, ring);
 }
 
 // Walk through populated Selection-Set slots (skipping empty ones),
@@ -3426,6 +3452,12 @@ ActiveFxTarget resolveActiveFx_()
             }
         }
     }
+    // Final fallback — any FX on the focused track via the cursor's
+    // default-to-FX[0] semantics. Matches the UF8 colour-bar / UC1 CS
+    // LCD fallback so "was angezeigt wird = was beim Push aufgeht"
+    // holds for non-Instance plug-ins too. Frank 2026-05-22.
+    const int defaulted = stripInstanceActiveFx_(tr);
+    if (defaulted >= 0) return {tr, defaulted};
     return {nullptr, -1};
 }
 
@@ -3446,21 +3478,89 @@ void applyShowFocusedPluginGui_()
         g_bankDirty.store(true);
         SetExtState("ReaSixty", "uf8PluginMode", "0", true);
         g_pluginGuiSyncRequest.store(true);
+        // Also close the Toggle-UI-tracked window. When auto-engage
+        // put us in UF8 Plugin Mode, the window is tracked by BOTH
+        // g_uf8GuiShownTr (UF8 Plugin Mode drain) and g_focusedGuiShownTr
+        // (Toggle UI). After a track change, refocusFocusedPluginGuiToCurrentSelection_
+        // re-targets g_focusedGuiShownTr to the new track, but
+        // g_uf8GuiShownTr stays stale on the old one. Without this
+        // extra close, the disengage drain only closes the (already-
+        // dead) stale UF8 window, leaving the refocus-opened window
+        // floating until the user presses Toggle UI a second time.
+        // Frank 2026-05-22.
+        if (g_focusedGuiShownTr
+            && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+        {
+            TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                         g_focusedGuiShownFx, /*hide floating*/ 2);
+        }
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
+    // Same symmetry for SSL Strip Mode: when its with-GUI variant is
+    // active, Toggle Plugin UI press disengages the mode + closes the
+    // window. Without this, SSL Strip Mode's CS window is tracked by
+    // g_csGuiShownTr (its drain) but the Toggle UI press would open a
+    // SECOND window via resolveActiveFx_ and start tracking it via
+    // g_focusedGuiShownTr → two state vars pointing at one FX, toggle
+    // gets out of sync. The g_pluginGuiSyncRequest fires the drain
+    // which closes the CS window via g_csGuiShownTr. Frank 2026-05-22.
+    if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
+        g_pluginFaderMode.store(false);
+        g_pluginFaderModeWithGui.store(false);
+        SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+        g_pageDirty.store(true);
+        g_bankDirty.store(true);
+        g_pluginGuiSyncRequest.store(true);
+        if (g_focusedGuiShownTr
+            && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+        {
+            TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                         g_focusedGuiShownFx, /*hide floating*/ 2);
+        }
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
         return;
     }
 
-    // Target resolution:
-    //   1) REAPER's currently-focused FX window (GetFocusedFX2) — works
-    //      for ANY FX type, not just SSL Instances. Frank 2026-05-16:
-    //      "müsste doch für alle FX gehen, für die instances haben wir
-    //      doch SSL Strip Mode" — Instance-specific GUI follow is
-    //      covered by SSL Strip Mode / UF8 Plugin Mode's instance cycle.
-    //   2) Fallback: resolveActiveFx_ (V-Pot cycle cursor, then focused
-    //      Instance) — opens something sensible when no FX window
-    //      currently holds REAPER focus.
+    // Toggle-by-owned-state: when this builtin owns a floating window
+    // (g_focusedGuiShownTr set), the press closes it — ignore whatever
+    // resolveActiveFx_ would resolve to now. Without this gate, every
+    // touched-knob shifts the cursor (and thus resolveActiveFx_'s
+    // answer) so the second press would land on a DIFFERENT FX and
+    // open a new window instead of closing the previously-opened one,
+    // and refocusFocusedPluginGuiToCurrentSelection_ would keep
+    // following selection across track changes. Frank 2026-05-22:
+    // "press zum schliessen, nicht zum aufmachen eines neuen".
+    if (g_focusedGuiShownTr
+        && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+    {
+        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                     g_focusedGuiShownFx, /*hide floating*/ 2);
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
+    g_focusedGuiShownTr = nullptr;
+    g_focusedGuiShownFx = -1;
+
+    // Target resolution for the OPEN side (priority reversed 2026-05-22
+    // — Frank's mantra "was angezeigt wird = was beim Push aufgeht"):
+    //   1) resolveActiveFx_ — what the surface is currently showing
+    //      (V-Pot cycle cursor → focused-domain Instance → cursor
+    //      default-to-FX[0]).
+    //   2) Fallback: REAPER's currently-focused FX window
+    //      (GetFocusedFX2) — covers the case where the user opened an
+    //      FX chain manually and the surface has no current target.
     MediaTrack* tr = nullptr;
     int fxIdx = -1;
     {
+        auto t = resolveActiveFx_();
+        tr    = t.tr;
+        fxIdx = t.fxIdx;
+    }
+    if (!tr) {
         int trNum = -1, itemNum = -1, fxNum = -1;
         const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
         if ((ret & 1) && trNum > 0) {
@@ -3474,29 +3574,7 @@ void applyShowFocusedPluginGui_()
             }
         }
     }
-    if (!tr) {
-        auto t = resolveActiveFx_();
-        tr    = t.tr;
-        fxIdx = t.fxIdx;
-    }
     if (!tr || fxIdx < 0) return;
-
-    const bool alreadyShown =
-        g_focusedGuiShownTr == tr && g_focusedGuiShownFx == fxIdx;
-    if (alreadyShown) {
-        TrackFX_Show(tr, fxIdx, /*hide floating*/ 2);
-        g_focusedGuiShownTr = nullptr;
-        g_focusedGuiShownFx = -1;
-        return;
-    }
-    // Close any previously-owned window before opening the new one so
-    // repeated cycles don't stack floating GUIs.
-    if (g_focusedGuiShownTr
-        && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
-    {
-        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
-                     g_focusedGuiShownFx, 2);
-    }
     // Auto-engage UF8 Plugin Mode — same trigger as the V-Pot cycle
     // path (Settings → Modes → "Auto-engage UF8 Plugin Mode for
     // UF8-mapped plug-ins"). Without this, the toggle was inconsistent:
@@ -6909,7 +6987,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                 case SelectionMode::Instance:
                                 case SelectionMode::InstanceCycle:
                                 default:
-                                    k = g_shiftHeld.load()
+                                    // Shift+SEL → additive multi-select.
+                                    // Read through the unified modifier
+                                    // API so the host-keyboard Shift
+                                    // (Settings → Modes → Keyboard
+                                    // Options) acts the same as the
+                                    // UF8 hardware Shift modifier —
+                                    // g_shiftHeld alone misses the
+                                    // keyboard path. Frank 2026-05-22.
+                                    k = uf8::bindings::modifierHeld(
+                                            uf8::bindings::Modifier::Shift)
                                         ? PendingInput::SelectToggle
                                         : PendingInput::SelectExclusive;
                                     // Arm long-press detection — only
@@ -8858,6 +8945,22 @@ void pushZonesForVisibleSlots()
             const int instFxIdx = stripInstanceActiveFx_(tr);
             if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
             if (csType.empty()) csType = "-";
+        } else if (g_uc1_surface
+                && tr == g_uc1_surface->focusedTrack()
+                && stripInstanceFxRaw_(tr) >= 0
+                && (!map || stripInstanceFxRaw_(tr) != mapFxIdx))
+        {
+            // Focused-strip cursor override: when the user has
+            // explicitly cycled (raw cursor set) on the focused track
+            // AND the cursor points at a different FX than the
+            // focused-domain Instance, show the cursor's FX. Covers
+            // `Encoder: cycle FX` landing on an unmapped / cross-domain
+            // plug-in. Comes BEFORE the focused.domain==None branch
+            // because cycling into UF8-only territory parks the focus
+            // at None — that branch would then fire and never reach
+            // the cursor-aware path. Frank 2026-05-22.
+            const int rawCursor = stripInstanceFxRaw_(tr);
+            csType = fxCycleDisplayName_(tr, rawCursor);
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
             if (uf8Ctx.map) {
@@ -8865,8 +8968,21 @@ void pushZonesForVisibleSlots()
                                         uf8Ctx.map->displayShort.c_str());
             }
         } else {
-            csType = map ? instanceLabel_(tr, mapFxIdx, map->displayShort)
-                         : std::string{};
+            if (map) {
+                csType = instanceLabel_(tr, mapFxIdx, map->displayShort);
+            } else if (g_uc1_surface
+                    && tr == g_uc1_surface->focusedTrack())
+            {
+                // Focused strip + no Instance in the focused domain:
+                // fall through to the active-FX cursor (defaults to
+                // FX[0]) so a non-Instance plug-in still gets named.
+                // Non-focused strips without an Instance fall to the
+                // "REAPER" fallback below — keeps the surface calm
+                // when the user hasn't navigated to those tracks.
+                // Frank 2026-05-22.
+                const int fxIdx = stripInstanceActiveFx_(tr);
+                if (fxIdx >= 0) csType = fxCycleDisplayName_(tr, fxIdx);
+            }
         }
         // REC + RME override: show the track's hardware input name in
         // the colour-bar zone (e.g. "Mic 1" / "Line 3") instead of the
@@ -9907,6 +10023,25 @@ void chaseLastTouchedFx()
         uf8::setFocus({map->domain, linkIdx});
         uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                     std::memory_order_relaxed);
+        // Move the strip's FX-cursor to the touched plug-in so Toggle
+        // Focused UI + the cursor-driven display paths line up with
+        // what the user just touched. Without this, a cursor that was
+        // previously parked elsewhere (e.g. a UF8-only plug-in opened
+        // via cycle) keeps winning over the focused-domain Instance in
+        // resolveActiveFx_ step 1 → push opens the old plug-in even
+        // though the LCD shows the touched plug-in's name. Gate: any
+        // PluginMap match reaches here (built-in SSL Instance, user
+        // FX-Learn CS/BC, user UF8-only), so all surfaced-knob touches
+        // realign the cursor. Wholly unmapped plug-ins return early
+        // above and never reach this point. Frank 2026-05-22.
+        setStripInstanceFx_(tr, fxIdx);
+        // Re-target the Toggle UI window so it follows the touched FX
+        // on the same track — mirrors the cycle-step follow behaviour
+        // ("was angezeigt wird = was beim Push aufgeht"). Same gates as
+        // the cycle path: only fires when the Settings toggle is on,
+        // a Toggle UI window is owned on this track, and the target
+        // differs from what's currently open. Frank 2026-05-22.
+        followFocusedPluginGuiAcrossCycle_(tr, fxIdx);
     }
     if (!inputChanged) return;
     lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
@@ -12291,28 +12426,19 @@ void onTimer()
             // and the colour bar dropped to BC — three desynced targets
             // (Frank 2026-05-17).
             const auto pick = csForStripModeOnTrack_(tr);
-            if (pick.fxIndex >= 0) targetFx = pick.fxIndex;
-            const int n = TrackFX_GetCount(tr);
-            char nameBuf[256];
-            // No CS instance found — fall back to a UF8-only mapped
-            // plug-in's GUI when the cycle landed on one. Same active-
-            // instance plumbing, just keyed by uf8OnlyInstanceIndex.
-            if (targetFx < 0) {
-                const int wantUf8 = uc1::uf8OnlyInstanceIndex(tr);
-                int seenU = 0, lastUf8Fx = -1;
-                for (int fx = 0; fx < n; ++fx) {
-                    if (!uf8::fxIdentityName(tr, fx, nameBuf, sizeof(nameBuf)))
-                        continue;
-                    const auto* um = uf8::user_plugins::lookupOwnedByName(nameBuf);
-                    if (!um || um->domain != uf8::Domain::None || !um->uf8Mode)
-                        continue;
-                    lastUf8Fx = fx;
-                    if (seenU == wantUf8) { targetFx = fx; break; }
-                    ++seenU;
-                }
-                if (targetFx < 0) targetFx = lastUf8Fx;
+            if (pick.fxIndex >= 0) {
+                targetFx = pick.fxIndex;
+                targetTr = tr;
             }
-            if (targetFx >= 0) targetTr = tr;
+            // No UF8-only fallback here: SSL Strip Mode is conceptually
+            // CS-only (its fader / V-Pot routing targets CS slots, and
+            // a UF8-only plug-in has no Output Gain for the motor
+            // fader). When the cycle lands on UF8 territory or the
+            // track has no CS at all, the close-stale branch below
+            // shuts any prior CS GUI and we exit without opening
+            // anything. Users who want a UF8 plug-in GUI to follow the
+            // cycle should be in UF8 Plugin Mode (with GUI), which has
+            // its own drain. Frank 2026-05-22.
         }
 
         // Close the previously-shown CS GUI if it differs from the new
@@ -13491,6 +13617,18 @@ void reasixty_setTcpFollowsSelection(bool on)
 {
     g_tcpFollowsSelection.store(on);
     SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
+}
+// Bridges for UC1Surface so the LCD CS-branch fallback can name the
+// channel's active FX (cursor default-to-FX[0]) without a layering
+// break. Wraps the in-anon-namespace helpers stripInstanceActiveFx_ /
+// fxCycleDisplayName_. Frank 2026-05-22.
+int reasixty_stripInstanceActiveFx(MediaTrack* tr)
+{
+    return stripInstanceActiveFx_(tr);
+}
+std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx)
+{
+    return fxCycleDisplayName_(tr, fxIdx);
 }
 // Walk g_visibleTracks from cur by signed step; clamp at ends. nullptr
 // cur snaps to the first visible track on +step, or the last on -step
@@ -15862,7 +16000,8 @@ void registerBindingHandlers()
             if (!firing) return;
             if (tryFaderBankNav(-1)) return;   // UF8 Plugin Mode fader-bank
             const int trackCount = visibleTrackCount();
-            const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
+            // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
+            const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
             int next = g_bankOffset.load() - 8;
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
@@ -15876,7 +16015,8 @@ void registerBindingHandlers()
             if (!firing) return;
             if (tryFaderBankNav(+1)) return;
             const int trackCount = visibleTrackCount();
-            const int maxStart   = trackCount > 1 ? trackCount - 1 : 0;
+            // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
+            const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
             int next = g_bankOffset.load() + 8;
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
