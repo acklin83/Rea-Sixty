@@ -6563,6 +6563,13 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
     VCanvas c { ctx, dl, ox, oy };
+
+    // Lock the schematic font to 12 px so the chassis labels +
+    // per-control overlays (TopSoftKey labels etc.) stay readable
+    // when the global Font Size picker is set higher. Same rationale
+    // as drawUf8Vector / drawUc1*Vector. Frank 2026-05-22.
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
+
     drawUf8Face_(c);
 
     // Strip colour bars first so the per-control overlays paint on
@@ -6575,6 +6582,8 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     for (int i = 0; i < n; ++i) {
         drawUf8Control_(ctx, dl, ox, oy, tbl[i], fx);
     }
+
+    ImGui_PopFont(ctx);
 
     ImGui_SetCursorScreenPos(ctx, oxd, oyd);
     ImGui_Dummy(ctx, kUf8FaceW, kUf8FaceH);
@@ -6607,6 +6616,9 @@ void drawFxLearnSchematic_(ImGui_Context* ctx,
 
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
 
+    // Lock the schematic font to 12 px (see drawFxLearnUf8Schematic_).
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
+
     // Paint the full UC1 face including the dim overlay over the
     // off-domain section.
     VCanvas c { ctx, dl, ox, oy };
@@ -6618,6 +6630,8 @@ void drawFxLearnSchematic_(ImGui_Context* ctx,
         if (ctrl.domain != domain) continue;
         drawUc1Control_(ctx, dl, ox, oy, ctrl, topo, fx);
     }
+
+    ImGui_PopFont(ctx);
 
     // Reserve content rect so the parent BeginChild scrolls to fit.
     ImGui_SetCursorScreenPos(ctx, oxd, oyd);
