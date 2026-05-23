@@ -15,6 +15,7 @@
 #include "Bindings.h"
 #include "GrCalibration.h"
 #include "ParameterGroups.h"
+#include "AutoLearnEngine.h"
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
@@ -4371,6 +4372,12 @@ int g_lastTouchedParam     = -1;
 std::string g_fxSelectorKey;
 std::string g_fxSelectorScope;   // editing match for which the key is valid
 
+// AutoLearn state — suggestions live between "AutoLearn" button click and
+// the user accepting/dismissing the preview popup.
+bool g_autoLearnOpen = false;
+std::vector<uf8::autolearn::Suggestion>    g_autoLearnSlots;
+std::vector<uf8::autolearn::Uf8Suggestion> g_autoLearnUf8;
+
 const char* domainLabel_(uf8::Domain d)
 {
     switch (d) {
@@ -6912,6 +6919,22 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                           editing->paramSnapshot.size());
             ImGui_TextDisabled(ctx, info);
         }
+        // AutoLearn button — requires a param snapshot (live or stored).
+        if (!editing->paramSnapshot.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "AutoLearn##fxl_auto", nullptr, nullptr)) {
+                g_autoLearnSlots = uf8::autolearn::suggestSlots(
+                    editing->paramSnapshot, editing->domain);
+                if (editing->uf8Mode)
+                    g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
+                        editing->paramSnapshot,
+                        /* faderBankCount */ 1);
+                else
+                    g_autoLearnUf8.clear();
+                g_autoLearnOpen = true;
+                ImGui_OpenPopup(ctx, "AutoLearn Preview##fxl_alp", nullptr);
+            }
+        }
     } else if (!editing->paramSnapshot.empty()) {
         ImGui_Spacing(ctx);
         char banner[160];
@@ -6920,6 +6943,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             "Listen / wiggle requires inserting the plug-in.",
             editing->paramSnapshot.size());
         ImGui_TextColored(ctx, 0xC0C0FFFF, banner);
+        // AutoLearn also works from snapshot alone.
+        if (ImGui_Button(ctx, "AutoLearn##fxl_auto_snap", nullptr, nullptr)) {
+            g_autoLearnSlots = uf8::autolearn::suggestSlots(
+                editing->paramSnapshot, editing->domain);
+            if (editing->uf8Mode)
+                g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
+                    editing->paramSnapshot, 1);
+            else
+                g_autoLearnUf8.clear();
+            g_autoLearnOpen = true;
+            ImGui_OpenPopup(ctx, "AutoLearn Preview##fxl_alp", nullptr);
+        }
     }
 
     // No-instance path — always offer the Insert button so the user can
@@ -7014,6 +7049,188 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (!g_lastSaveError.empty()) {
         ImGui_Spacing(ctx);
         ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
+    }
+
+    // ---- AutoLearn Preview Modal -----------------------------------------
+    if (g_autoLearnOpen) {
+        double centerX = 0, centerY = 0;
+        ImGui_GetWindowPos(ctx, &centerX, &centerY);
+        double winW = 0, winH = 0;
+        ImGui_GetWindowSize(ctx, &winW, &winH);
+        double popW = 520, popH = 420;
+        ImGui_SetNextWindowPos(ctx,
+            centerX + (winW - popW) / 2,
+            centerY + (winH - popH) / 2,
+            0/*ImGuiCond_Appearing*/, nullptr, nullptr);
+        ImGui_SetNextWindowSize(ctx, popW, popH, 0);
+    }
+    int popFlags = 0;
+    if (ImGui_BeginPopupModal(ctx, "AutoLearn Preview##fxl_alp",
+                              &g_autoLearnOpen, &popFlags))
+    {
+        char hdr[128];
+        snprintf(hdr, sizeof(hdr), "%zu UC1 slot(s) matched",
+                 g_autoLearnSlots.size());
+        ImGui_Text(ctx, hdr);
+        ImGui_Spacing(ctx);
+
+        // UC1 slot suggestions table.
+        int tblFlags = 0;
+        if (ImGui_BeginTable(ctx, "##al_tbl", 5, &tblFlags,
+                             nullptr, nullptr, nullptr))
+        {
+            ImGui_TableSetupColumn(ctx, "",          nullptr, nullptr, nullptr);
+            ImGui_TableSetupColumn(ctx, "SSL Slot",  nullptr, nullptr, nullptr);
+            ImGui_TableSetupColumn(ctx, "Param",     nullptr, nullptr, nullptr);
+            ImGui_TableSetupColumn(ctx, "Conf",      nullptr, nullptr, nullptr);
+            ImGui_TableSetupColumn(ctx, "Idx",       nullptr, nullptr, nullptr);
+            ImGui_TableHeadersRow(ctx);
+
+            for (size_t i = 0; i < g_autoLearnSlots.size(); ++i) {
+                auto& s = g_autoLearnSlots[i];
+                ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+                ImGui_TableNextColumn(ctx);
+                char cbId[32];
+                snprintf(cbId, sizeof(cbId), "##al_cb_%d", static_cast<int>(i));
+                ImGui_Checkbox(ctx, cbId, &s.accepted);
+
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, s.slotName.c_str());
+
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, s.paramName.c_str());
+
+                ImGui_TableNextColumn(ctx);
+                char confBuf[16];
+                snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                         static_cast<double>(s.confidence) * 100.0);
+                if (s.confidence >= 0.9f)
+                    ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                else if (s.confidence >= 0.7f)
+                    ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                else
+                    ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+
+                ImGui_TableNextColumn(ctx);
+                char idxBuf[16];
+                snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
+                ImGui_TextDisabled(ctx, idxBuf);
+            }
+            ImGui_EndTable(ctx);
+        }
+
+        // UF8 bank suggestions (if any).
+        if (!g_autoLearnUf8.empty()) {
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            char uf8Hdr[128];
+            snprintf(uf8Hdr, sizeof(uf8Hdr),
+                "%zu UF8 V-Pot slot(s) grouped by category",
+                g_autoLearnUf8.size());
+            ImGui_Text(ctx, uf8Hdr);
+            ImGui_Spacing(ctx);
+
+            int uf8Flags = 0;
+            if (ImGui_BeginTable(ctx, "##al_uf8_tbl", 5, &uf8Flags,
+                                 nullptr, nullptr, nullptr))
+            {
+                ImGui_TableSetupColumn(ctx, "",         nullptr, nullptr, nullptr);
+                ImGui_TableSetupColumn(ctx, "Bank:Strip", nullptr, nullptr, nullptr);
+                ImGui_TableSetupColumn(ctx, "Category", nullptr, nullptr, nullptr);
+                ImGui_TableSetupColumn(ctx, "Param",    nullptr, nullptr, nullptr);
+                ImGui_TableSetupColumn(ctx, "Idx",      nullptr, nullptr, nullptr);
+                ImGui_TableHeadersRow(ctx);
+
+                for (size_t i = 0; i < g_autoLearnUf8.size(); ++i) {
+                    auto& u = g_autoLearnUf8[i];
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+                    ImGui_TableNextColumn(ctx);
+                    char cbId[32];
+                    snprintf(cbId, sizeof(cbId), "##al_uf8cb_%d",
+                             static_cast<int>(i));
+                    ImGui_Checkbox(ctx, cbId, &u.accepted);
+
+                    ImGui_TableNextColumn(ctx);
+                    char posBuf[32];
+                    snprintf(posBuf, sizeof(posBuf), "FB%d B%d S%d",
+                             u.faderBank + 1, u.vpotBank + 1, u.strip + 1);
+                    ImGui_Text(ctx, posBuf);
+
+                    ImGui_TableNextColumn(ctx);
+                    ImGui_Text(ctx, u.category.c_str());
+
+                    ImGui_TableNextColumn(ctx);
+                    ImGui_Text(ctx, u.paramName.c_str());
+
+                    ImGui_TableNextColumn(ctx);
+                    char idxBuf[16];
+                    snprintf(idxBuf, sizeof(idxBuf), "%d", u.vst3Param);
+                    ImGui_TextDisabled(ctx, idxBuf);
+                }
+                ImGui_EndTable(ctx);
+            }
+        }
+
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+
+        // Apply / Cancel buttons.
+        if (ImGui_Button(ctx, "Apply##al_apply", nullptr, nullptr)) {
+            // Write accepted UC1 slot suggestions into the map.
+            UserPluginMap copy = *editing;
+            for (const auto& s : g_autoLearnSlots) {
+                if (!s.accepted) continue;
+                // Remove any existing binding for this linkIdx.
+                copy.slots.erase(
+                    std::remove_if(copy.slots.begin(), copy.slots.end(),
+                        [&](const UserLinkSlot& us) {
+                            return us.linkIdx == s.linkIdx;
+                        }),
+                    copy.slots.end());
+                copy.slots.push_back({s.linkIdx, s.vst3Param, false, {}});
+            }
+            // Write accepted UF8 V-Pot bank suggestions.
+            for (const auto& u : g_autoLearnUf8) {
+                if (!u.accepted) continue;
+                const int fb = std::clamp(u.faderBank, 0,
+                    uf8::kUserUf8FaderBankCount - 1);
+                const int vb = std::clamp(u.vpotBank, 0,
+                    uf8::kUserUf8VpotBankCount - 1);
+                const int st = std::clamp(u.strip, 0, 7);
+                auto& bs = copy.uf8.banks.banks[fb][vb][st];
+                bs.vst3Param = u.vst3Param;
+                if (bs.label.empty()) bs.label = u.paramName;
+            }
+            uf8::user_plugins::upsert(std::move(copy));
+            persistAndReport_();
+            // Re-resolve editing pointer after upsert.
+            for (const auto& m : user_plugins::get().maps) {
+                if (m.match == g_editingMatch) { editing = &m; break; }
+            }
+            g_autoLearnOpen = false;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##al_cancel", nullptr, nullptr)) {
+            g_autoLearnOpen = false;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        // Select All / Deselect All helpers.
+        if (ImGui_SmallButton(ctx, "All##al_all")) {
+            for (auto& s : g_autoLearnSlots) s.accepted = true;
+            for (auto& u : g_autoLearnUf8) u.accepted = true;
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_SmallButton(ctx, "None##al_none")) {
+            for (auto& s : g_autoLearnSlots) s.accepted = false;
+            for (auto& u : g_autoLearnUf8) u.accepted = false;
+        }
+
+        ImGui_EndPopup(ctx);
     }
 
     ImGui_Spacing(ctx);
