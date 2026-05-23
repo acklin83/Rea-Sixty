@@ -3040,15 +3040,31 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
 void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
 {
     if (!g_pluginGuiFollowsInstance.load()) return;
-    if (g_focusedGuiShownTr == tr
-        && g_focusedGuiShownFx >= 0
-        && g_focusedGuiShownFx != targetFxIdx)
-    {
+    if (!g_focusedGuiShownTr) return;        // Toggle UI not currently open
+    if (!tr || targetFxIdx < 0) return;
+    // Same track, different FX → close old, open new on same track.
+    if (g_focusedGuiShownTr == tr) {
+        if (g_focusedGuiShownFx == targetFxIdx) return;
         TrackFX_Show(tr, g_focusedGuiShownFx, 2);
         TrackFX_Show(tr, targetFxIdx, 3);
         pinFxGuiIfEnabled_(tr, targetFxIdx);
         g_focusedGuiShownFx = targetFxIdx;
+        return;
     }
+    // Cross-track: a UF8 V-Pot edit (or other touched-FX chase) just hit
+    // a different track than the GUI was opened on. Re-target the floating
+    // window to the new (track, fx). Same Settings gate as same-track
+    // follow above (g_pluginGuiFollowsInstance) — track selection / UC1
+    // focus are NOT changed here; that's the orthogonal trackSelFollowsParam
+    // path. Frank 2026-05-23.
+    if (ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*")) {
+        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                     g_focusedGuiShownFx, /*hide floating*/ 2);
+    }
+    TrackFX_Show(tr, targetFxIdx, /*float window*/ 3);
+    pinFxGuiIfEnabled_(tr, targetFxIdx);
+    g_focusedGuiShownTr = static_cast<void*>(tr);
+    g_focusedGuiShownFx = targetFxIdx;
 }
 
 // Plugin-mode "follow active Instance" GUI sync trigger. Used by every
@@ -8981,19 +8997,17 @@ void pushZonesForVisibleSlots()
         } else {
             if (map) {
                 csType = instanceLabel_(tr, mapFxIdx, map->displayShort);
-            } else if (g_uc1_surface
-                    && tr == g_uc1_surface->focusedTrack())
-            {
-                // Focused strip + no Instance in the focused domain:
-                // fall through to the active-FX cursor (defaults to
-                // FX[0]) so a non-Instance plug-in still gets named.
-                // Non-focused strips without an Instance fall to the
-                // "REAPER" fallback below — keeps the surface calm
-                // when the user hasn't navigated to those tracks.
-                // Frank 2026-05-22.
-                const int fxIdx = stripInstanceActiveFx_(tr);
-                if (fxIdx >= 0) csType = fxCycleDisplayName_(tr, fxIdx);
             }
+        }
+        // Last-resort fallback for every strip — focused or not — so a
+        // track with FX but no recognised Instance still gets named
+        // instead of "REAPER". Reverses the 2026-05-22 "calm surface"
+        // gate that limited the cursor fallback to the focused strip;
+        // that asymmetry made non-focused strips read "REAPER" while
+        // the focused one read the actual plug-in (Frank 2026-05-23).
+        if (csType.empty()) {
+            const int fxIdx = stripInstanceActiveFx_(tr);
+            if (fxIdx >= 0) csType = fxCycleDisplayName_(tr, fxIdx);
         }
         // REC + RME override: show the track's hardware input name in
         // the colour-bar zone (e.g. "Mic 1" / "Line 3") instead of the

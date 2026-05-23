@@ -89,17 +89,76 @@ struct QuickLearnWindow::Impl {
     int  baseFx    = -1;
     int  baseParam = -1;
 
-    // DisplayShort for the new map
-    char displayShort[8] = {};
+    // DisplayShort for the new map. 32-byte buffer matches the working
+    // pattern in SettingsScreen.cpp's FX-Learn label input — earlier 8-byte
+    // size paired with SetNextItemWidth produced an invisible InputText in
+    // ReaImGui v0.10.
+    char displayShort[32] = {};
 
     void ensureCtx()
     {
         if (ctx) return;
-        int sizeW = 480, sizeH = 520;
+        // ReaImGui persists pos+size across sessions per context name;
+        // these are first-run defaults only.
+        int sizeW = 520, sizeH = 720;
         ctx = ImGui_CreateContext("Rea-Sixty QuickLearn",
                                  &sizeW, &sizeH, nullptr, nullptr);
         font = ImGui_CreateFont("sans-serif", nullptr);
         if (ctx && font) ImGui_Attach(ctx, font);
+    }
+
+    // Strip plug-in format prefix (VST3: / AU: / JS: / CLAP: etc.) from a
+    // raw FX name. Used both as the UserPluginMap.match key and as the
+    // default displayShort when the user doesn't supply one.
+    static std::string stripFxPrefix_(const std::string& raw)
+    {
+        for (const char* pfx : {"VST3: ", "VST: ", "VSTi: ", "VST3i: ",
+                                 "JS: ", "AU: ", "AUi: ",
+                                 "CLAP: ", "CLAPi: "})
+        {
+            const size_t L = std::strlen(pfx);
+            if (raw.compare(0, L, pfx) == 0) return raw.substr(L);
+        }
+        return raw;
+    }
+
+    // Returns the highest faderBank index with any non-empty UF8 slot in
+    // the given map, plus 1 — so we can re-create the right number of
+    // fader-bank rows when seeding the queue from an existing learn.
+    static int countUsedFaderBanks_(const UserPluginMap& m)
+    {
+        int used = 0;
+        for (int fb = 0; fb < kUserUf8FaderBankCount; ++fb)
+            for (int vb = 0; vb < kUserUf8VpotBankCount; ++vb)
+                for (int st = 0; st < 8; ++st)
+                    if (m.uf8.banks.banks[fb][vb][st].vst3Param >= 0)
+                        used = std::max(used, fb + 1);
+        return used > 0 ? used : 1;
+    }
+
+    // Seed Setup-phase inputs (domainChoice / faderBankCount /
+    // displayShort) from an existing UserPluginMap for the resolved FX,
+    // if any. Called from toggle() so re-opening QuickLearn on a known
+    // plug-in lands the user on familiar settings.
+    void seedFromExistingMap_()
+    {
+        if (fxMatch.empty()) return;
+        const auto* m = user_plugins::lookupOwnedByName(fxMatch);
+        if (!m) return;
+        // Domain + uf8 mode → domainChoice
+        if (m->domain == Domain::ChannelStrip)
+            domainChoice = m->uf8Mode ? 2 : 0;
+        else if (m->domain == Domain::BusComp)
+            domainChoice = m->uf8Mode ? 3 : 1;
+        else
+            domainChoice = 4; // UF8-only
+        faderBankCount = countUsedFaderBanks_(*m);
+        // displayShort: empty user buffer + map has one → seed.
+        if (!m->displayShort.empty()) {
+            std::strncpy(displayShort, m->displayShort.c_str(),
+                         sizeof(displayShort) - 1);
+            displayShort[sizeof(displayShort) - 1] = '\0';
+        }
     }
 
     void resolveActiveFx()
@@ -110,55 +169,60 @@ struct QuickLearnWindow::Impl {
         fxMatch.clear();
         if (!fxTrack) return;
 
-        // Use GetLastTouchedFX as primary source.
-        int trWord = -1, fxWord = -1, paramWord = -1;
-        if (GetLastTouchedFX(&trWord, &fxWord, &paramWord)) {
-            const int trLow = trWord & 0xFFFF;
-            if (trLow > 0 && !((trWord & 0xFFFF0000) != 0)) {
-                MediaTrack* tr = GetTrack(nullptr, trLow - 1);
-                if (tr) {
+        // Anchor on the selected track. GetLastTouchedFX is global —
+        // using it as the primary source meant a knob touched on a
+        // different track earlier still won over the currently-selected
+        // track's plug-in, even after a fresh track-select. Frank
+        // 2026-05-23. Priority within the selected track:
+        //   1) REAPER's focused FX (matches what's shown in the FX
+        //      chain header) — if it's on the selected track.
+        //   2) Last-touched FX — if on the selected track.
+        //   3) FX[0] — first plug-in on the selected track.
+        auto adopt = [&](MediaTrack* tr, int fi) -> bool {
+            if (!tr || fi < 0) return false;
+            char buf[512] = {};
+            TrackFX_GetFXName(tr, fi, buf, sizeof(buf));
+            if (!buf[0]) return false;
+            fxTrack = tr;
+            fxIdx   = fi;
+            fxName  = buf;
+            fxMatch = stripFxPrefix_(fxName);
+            return true;
+        };
+
+        // 1) Focused FX (FX chain or floating window with input focus).
+        {
+            int trNum = -1, itemNum = -1, fxNum = -1;
+            const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
+            if ((ret & 1) && trNum > 0) {
+                MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+                const int candFx = fxNum & 0x00FFFFFF;
+                if (cand == fxTrack && candFx >= 0
+                    && candFx < TrackFX_GetCount(fxTrack))
+                {
+                    if (adopt(fxTrack, candFx)) return;
+                }
+            }
+        }
+
+        // 2) Last-touched FX — only if it's on the selected track.
+        {
+            int trWord = -1, fxWord = -1, paramWord = -1;
+            if (GetLastTouchedFX(&trWord, &fxWord, &paramWord)) {
+                const int trLow = trWord & 0xFFFF;
+                if (trLow > 0 && !((trWord & 0xFFFF0000) != 0)) {
+                    MediaTrack* tr = GetTrack(nullptr, trLow - 1);
                     const int fi = fxWord & 0xFFFFFF;
-                    if (!((fxWord >> 24) & 0x01)) {
-                        char buf[512] = {};
-                        TrackFX_GetFXName(tr, fi, buf, sizeof(buf));
-                        if (buf[0]) {
-                            fxTrack = tr;
-                            fxIdx   = fi;
-                            fxName  = buf;
-                            // Derive match from the name (strip prefix like
-                            // "VST3: " or "JS: ").
-                            fxMatch = fxName;
-                            // Strip common prefixes.
-                            for (const char* pfx : {"VST3: ", "VST: ", "VSTi: ",
-                                                     "VST3i: ", "JS: ", "AU: ",
-                                                     "AUi: ", "CLAP: ", "CLAPi: "}) {
-                                if (fxMatch.substr(0, strlen(pfx)) == pfx) {
-                                    fxMatch = fxMatch.substr(strlen(pfx));
-                                    break;
-                                }
-                            }
-                            return;
-                        }
+                    if (tr == fxTrack && !((fxWord >> 24) & 0x01)) {
+                        if (adopt(fxTrack, fi)) return;
                     }
                 }
             }
         }
 
-        // Fallback: first FX on selected track.
-        if (fxTrack && TrackFX_GetCount(fxTrack) > 0) {
-            char buf[512] = {};
-            TrackFX_GetFXName(fxTrack, 0, buf, sizeof(buf));
-            fxIdx   = 0;
-            fxName  = buf;
-            fxMatch = fxName;
-            for (const char* pfx : {"VST3: ", "VST: ", "VSTi: ",
-                                     "VST3i: ", "JS: ", "AU: ",
-                                     "AUi: ", "CLAP: ", "CLAPi: "}) {
-                if (fxMatch.substr(0, strlen(pfx)) == pfx) {
-                    fxMatch = fxMatch.substr(strlen(pfx));
-                    break;
-                }
-            }
+        // 3) FX[0] of the selected track.
+        if (TrackFX_GetCount(fxTrack) > 0) {
+            adopt(fxTrack, 0);
         }
     }
 
@@ -220,6 +284,51 @@ struct QuickLearnWindow::Impl {
                 }
             }
         }
+
+        // Pre-fill from existing UserPluginMap so re-learn shows the
+        // current bindings, editable in Mapping phase.
+        if (!fxMatch.empty()) {
+            if (const auto* m = user_plugins::lookupOwnedByName(fxMatch)) {
+                for (auto& qs : queue) {
+                    if (qs.target == QLTarget::Uc1) {
+                        for (const auto& s : m->slots) {
+                            if (s.linkIdx == qs.linkIdx
+                             && s.vst3Param >= 0)
+                            {
+                                qs.boundParam = s.vst3Param;
+                                qs.boundName  = paramNameForBound_(s.vst3Param);
+                                break;
+                            }
+                        }
+                    } else {
+                        const auto& bs = m->uf8.banks.banks
+                            [std::clamp(qs.faderBank, 0,
+                                        kUserUf8FaderBankCount - 1)]
+                            [std::clamp(qs.vpotBank,  0,
+                                        kUserUf8VpotBankCount - 1)]
+                            [std::clamp(qs.strip,     0, 7)];
+                        if (bs.vst3Param >= 0) {
+                            qs.boundParam = bs.vst3Param;
+                            qs.boundName  = !bs.label.empty()
+                                ? bs.label
+                                : paramNameForBound_(bs.vst3Param);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Resolve a VST3 param index to its current display name on the live
+    // FX. Used when re-hydrating bindings from an existing UserPluginMap
+    // — UF8BankSlot stores a saved label but UC1 slots don't, so we read
+    // back from the plug-in to keep the Mapping list readable.
+    std::string paramNameForBound_(int p)
+    {
+        if (!fxTrack || fxIdx < 0 || p < 0) return {};
+        char buf[256] = {};
+        TrackFX_GetParamName(fxTrack, fxIdx, p, buf, sizeof(buf));
+        return buf;
     }
 
     void snapshotBaseline()
@@ -341,7 +450,7 @@ struct QuickLearnWindow::Impl {
         if (displayShort[0])
             map.displayShort = displayShort;
         else if (map.displayShort.empty())
-            map.displayShort = "USR";
+            map.displayShort = !fxMatch.empty() ? fxMatch : "USR";
 
         // Apply UC1 slot bindings.
         for (const auto& qs : queue) {
@@ -424,8 +533,29 @@ void QuickLearnWindow::toggle()
         impl_->queue.clear();
         impl_->currentSlot = 0;
         impl_->displayShort[0] = '\0';
-        // Resolve the active FX.
+        // Resolve the active FX, then seed Setup-phase inputs from any
+        // existing UserPluginMap so re-opening on a known plug-in lands
+        // the user on familiar settings (domain/UF8/displayShort).
         impl_->resolveActiveFx();
+        impl_->seedFromExistingMap_();
+        // If this plug-in is already learned, skip the Setup step and
+        // drop the user straight into the editable Mapping list. Setup
+        // is only needed for first-time learn (domain pick + UF8 toggle).
+        if (!impl_->fxMatch.empty()
+            && user_plugins::lookupOwnedByName(impl_->fxMatch))
+        {
+            impl_->buildQueue();
+            impl_->phase = QLPhase::Mapping;
+            int firstUnbound = -1;
+            for (size_t i = 0; i < impl_->queue.size(); ++i) {
+                if (impl_->queue[i].boundParam < 0) {
+                    firstUnbound = static_cast<int>(i);
+                    break;
+                }
+            }
+            impl_->currentSlot = firstUnbound >= 0 ? firstUnbound : 0;
+            impl_->snapshotBaseline();
+        }
     }
 }
 
@@ -528,7 +658,6 @@ void QuickLearnWindow::onRunTick()
 
                 ImGui_Spacing(impl_->ctx);
                 ImGui_Text(impl_->ctx, "Display label:");
-                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 int inputFlags = 0;
                 ImGui_InputText(impl_->ctx, "##ql_dshort",
                                 impl_->displayShort,
@@ -541,13 +670,23 @@ void QuickLearnWindow::onRunTick()
                 if (ImGui_Button(impl_->ctx, "Start##ql_start",
                                  nullptr, nullptr)) {
                     impl_->buildQueue();
-                    if (impl_->autoLearnFirst) {
-                        impl_->applyAutoLearn();
+                    if (impl_->autoLearnFirst) impl_->applyAutoLearn();
+                    // Always land in Mapping so the user sees the full
+                    // slot list with existing bindings, click-to-re-wiggle
+                    // any row, then explicitly hit "Done" → Review → Save.
+                    // (Was: hop to Review when all slots were already
+                    // bound, which made bindings non-editable.)
+                    impl_->phase = QLPhase::Mapping;
+                    int firstUnbound = -1;
+                    for (size_t i = 0; i < impl_->queue.size(); ++i) {
+                        if (impl_->queue[i].boundParam < 0) {
+                            firstUnbound = static_cast<int>(i);
+                            break;
+                        }
                     }
-                    if (impl_->phase != QLPhase::Review) {
-                        impl_->phase = QLPhase::Mapping;
-                        impl_->snapshotBaseline();
-                    }
+                    impl_->currentSlot =
+                        firstUnbound >= 0 ? firstUnbound : 0;
+                    impl_->snapshotBaseline();
                 }
                 ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 if (ImGui_Button(impl_->ctx, "Cancel##ql_cancel_setup",
@@ -565,6 +704,16 @@ void QuickLearnWindow::onRunTick()
                     impl_->phase = QLPhase::Review;
                     break;
                 }
+
+                // Display label editor — always available while in
+                // Mapping so users get to it whether they came through
+                // Setup or skipped it (existing-map auto-jump).
+                ImGui_Text(impl_->ctx, "Display label:");
+                int dsFlags = 0;
+                ImGui_InputText(impl_->ctx, "##ql_dshort_map",
+                                impl_->displayShort,
+                                sizeof(impl_->displayShort), &dsFlags);
+                ImGui_Spacing(impl_->ctx);
 
                 const int total = static_cast<int>(impl_->queue.size());
                 const int cur   = std::clamp(impl_->currentSlot, 0, total - 1);
@@ -611,33 +760,57 @@ void QuickLearnWindow::onRunTick()
                 ImGui_Separator(impl_->ctx);
                 ImGui_Spacing(impl_->ctx);
 
-                // Show slot list with status.
+                // Show slot list with status. Rows are Selectable so the
+                // user can click any [OK] / [ ] entry to move focus there
+                // and re-wiggle that slot — needed when QuickLearn opens
+                // on an already-learned plug-in and bindings need editing.
                 int childFlags = 0;
-                double childH = 280;
+                double childH = 320;
                 if (ImGui_BeginChild(impl_->ctx, "##ql_list",
                                      nullptr, &childH, nullptr, &childFlags))
                 {
+                    int clickIdx = -1;
                     for (int i = 0; i < total; ++i) {
-                        const auto& qs = impl_->queue[static_cast<size_t>(i)];
+                        auto& qs = impl_->queue[static_cast<size_t>(i)];
                         char row[256];
+                        char selId[40];
+                        snprintf(selId, sizeof(selId), "##ql_row_%d", i);
                         if (qs.boundParam >= 0) {
                             snprintf(row, sizeof(row),
-                                "[OK] %s -> %s (p%d)",
+                                "[OK] %s -> %s (p%d)%s",
                                 qs.label.c_str(), qs.boundName.c_str(),
-                                qs.boundParam);
-                            if (i == cur)
-                                ImGui_TextColored(impl_->ctx, 0x80FF80FF, row);
-                            else
-                                ImGui_Text(impl_->ctx, row);
+                                qs.boundParam, selId);
                         } else if (i == cur) {
                             snprintf(row, sizeof(row),
-                                ">>> %s  (waiting...)", qs.label.c_str());
-                            ImGui_TextColored(impl_->ctx, 0xFFFF80FF, row);
+                                ">>> %s  (waiting...)%s",
+                                qs.label.c_str(), selId);
                         } else {
-                            snprintf(row, sizeof(row),
-                                "[ ] %s", qs.label.c_str());
-                            ImGui_TextDisabled(impl_->ctx, row);
+                            snprintf(row, sizeof(row), "[ ] %s%s",
+                                qs.label.c_str(), selId);
                         }
+                        // Colour by state. Selectable carries the click
+                        // hit-region; the colour push only affects the
+                        // text inside it.
+                        uint32_t textCol = 0;
+                        if (qs.boundParam >= 0)
+                            textCol = (i == cur) ? 0x80FF80FF : 0xFFFFFFFF;
+                        else if (i == cur)
+                            textCol = 0xFFFF80FF;
+                        else
+                            textCol = 0x808080FF;
+                        int colCount = 1;
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_Text, textCol);
+                        bool sel = (i == cur);
+                        int selFlags = 0;
+                        if (ImGui_Selectable(impl_->ctx, row, &sel,
+                                             &selFlags, nullptr, nullptr))
+                            clickIdx = i;
+                        ImGui_PopStyleColor(impl_->ctx, &colCount);
+                    }
+                    if (clickIdx >= 0) {
+                        impl_->currentSlot = clickIdx;
+                        impl_->snapshotBaseline();
                     }
                 }
                 ImGui_EndChild(impl_->ctx);
