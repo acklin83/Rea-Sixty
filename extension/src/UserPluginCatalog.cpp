@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <list>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -46,6 +47,10 @@ struct ViewCacheEntry {
     std::string             displayShort;
     PluginMap               map;          // points into the strings + slotsBuf
     std::vector<LinkSlot>   slotsBuf;
+    // Owned storage for per-slot custom labels. LinkSlot::name points into
+    // these when a customLabel override is present on the UserLinkSlot.
+    // Using std::list so pointers stay stable when the container grows.
+    std::list<std::string>  customLabelPool;
 };
 std::vector<ViewCacheEntry> g_viewCache;
 
@@ -283,8 +288,12 @@ std::string serialize_(const UserPluginCatalog& c)
             firstSlot = false;
             os << "\n        { \"linkIdx\": " << s.linkIdx
                << ", \"vst3Param\": "         << s.vst3Param
-               << ", \"inverted\": "          << (s.inverted ? "true" : "false")
-               << " }";
+               << ", \"inverted\": "          << (s.inverted ? "true" : "false");
+            if (!s.customLabel.empty()) {
+                os << ", \"customLabel\": ";
+                appendEscaped_(os, s.customLabel);
+            }
+            os << " }";
         }
         os << "\n      ]";
         // Metering block — emit when any field is non-default. Older
@@ -336,8 +345,12 @@ std::string serialize_(const UserPluginCatalog& c)
                 first = false;
                 os << "\n        { \"linkIdx\": " << s.linkIdx
                    << ", \"vst3Param\": "         << s.vst3Param
-                   << ", \"inverted\": "          << (s.inverted ? "true" : "false")
-                   << " }";
+                   << ", \"inverted\": "          << (s.inverted ? "true" : "false");
+                if (!s.customLabel.empty()) {
+                    os << ", \"customLabel\": ";
+                    appendEscaped_(os, s.customLabel);
+                }
+                os << " }";
             }
             os << "\n      ]";
         };
@@ -504,6 +517,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getIntI_(so, "linkIdx", us.linkIdx);
                 getIntI_(so, "vst3Param", us.vst3Param);
                 getBoolI_(so, "inverted", us.inverted);
+                getStrI_(so, "customLabel", us.customLabel);
                 if (us.linkIdx < 0 || us.vst3Param < 0) continue;
                 dest.push_back(us);
             }
@@ -810,10 +824,15 @@ void rebuildViewCache_()
         e.slotsBuf.reserve(m.slots.size());
         for (const auto& us : m.slots) {
             const LinkSlot* canon = canonicalSlot_(us.linkIdx, m.domain);
+            const char* slotName = canon ? canon->name : "";
+            if (!us.customLabel.empty()) {
+                e.customLabelPool.push_back(us.customLabel);
+                slotName = e.customLabelPool.back().c_str();
+            }
             LinkSlot ls{
                 us.linkIdx,
                 canon ? canon->id     : "",
-                canon ? canon->name   : "",
+                slotName,
                 canon ? canon->legend : "",
                 us.vst3Param,
                 us.inverted,

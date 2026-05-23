@@ -9612,8 +9612,11 @@ void pushZonesForVisibleSlots()
                 if (bs.vst3Param >= 0) {
                     char pn[64]  = {0};
                     char vbuf[64] = {0};
-                    TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
-                        bs.vst3Param, pn, sizeof(pn));
+                    if (!bs.label.empty())
+                        std::strncpy(pn, bs.label.c_str(), sizeof(pn) - 1);
+                    else
+                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
+                            bs.vst3Param, pn, sizeof(pn));
                     const double norm = TrackFX_GetParamNormalized(
                         uctx.tr, uctx.fxIdx, bs.vst3Param);
                     const double v = bs.inverted ? 1.0 - norm : norm;

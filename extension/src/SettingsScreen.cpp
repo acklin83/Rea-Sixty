@@ -4734,6 +4734,25 @@ void autoAdvanceListening_(const uf8::PluginMap& topo)
     g_listeningLinkIdx = -1;
 }
 
+// Set or clear the custom display label on a mapped slot.
+void setCustomLabel_(int linkIdx, const std::string& label)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        for (auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) {
+                s.customLabel = label;
+                uf8::user_plugins::upsert(m);
+                persistAndReport_();
+                return;
+            }
+        }
+        break;
+    }
+}
+
 // Toggle the inverted-flag on a mapped slot.
 void toggleInverted_(int linkIdx)
 {
@@ -5521,11 +5540,14 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ImGui_Separator(ctx);
 
             bool inverted = false;
+            std::string curLabel;
             for (const auto& m : uf8::user_plugins::get().maps) {
                 if (m.match != g_editingMatch) continue;
                 for (const auto& s : m.slots) {
                     if (s.linkIdx == ctrl.linkIdx) {
-                        inverted = s.inverted; break;
+                        inverted = s.inverted;
+                        curLabel = s.customLabel;
+                        break;
                     }
                 }
                 break;
@@ -5536,6 +5558,35 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                 toggleInverted_(ctrl.linkIdx);
             }
+
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Display label:");
+            static char s_labelBuf[64] = {};
+            static int  s_labelLinkIdx = -1;
+            // Seed the buffer when opening for a new slot.
+            if (s_labelLinkIdx != ctrl.linkIdx) {
+                s_labelLinkIdx = ctrl.linkIdx;
+                std::strncpy(s_labelBuf, curLabel.c_str(),
+                             sizeof(s_labelBuf) - 1);
+                s_labelBuf[sizeof(s_labelBuf) - 1] = '\0';
+            }
+            int inputFlags = 0;
+            if (ImGui_InputText(ctx, "##fxl_label", s_labelBuf,
+                                sizeof(s_labelBuf), &inputFlags))
+            {
+                setCustomLabel_(ctrl.linkIdx, s_labelBuf);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (curLabel.empty()) {
+                ImGui_TextDisabled(ctx, "(default)");
+            } else {
+                if (ImGui_SmallButton(ctx, "X##fxl_label_clear")) {
+                    s_labelBuf[0] = '\0';
+                    setCustomLabel_(ctrl.linkIdx, "");
+                }
+            }
+
+            ImGui_Separator(ctx);
             if (ImGui_MenuItem(ctx, "Clear binding", nullptr,
                                nullptr, nullptr)) {
                 if (g_listeningLinkIdx == ctrl.linkIdx)

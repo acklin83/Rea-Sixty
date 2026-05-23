@@ -27,6 +27,11 @@ struct UserLinkSlot {
     int  linkIdx;     // SSL 360 Link virtual-strip slot. 0..46 + 100..119.
     int  vst3Param;   // VST3 parameter index on this user plugin.
     bool inverted = false;
+    // Per-slot display override — shown on scribble strips instead of the
+    // default name (VST3 param name or canonical SSL slot name). Empty
+    // string means "use default". Additive field — old readers silently
+    // ignore it, no format-version bump needed.
+    std::string customLabel;
 };
 
 struct UserMetering {
