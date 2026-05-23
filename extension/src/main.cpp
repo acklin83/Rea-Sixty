@@ -15301,7 +15301,7 @@ void registerBindingHandlers()
             if (firing) g_quickLearnToggleRequest.store(true);
         },
         [](int /*param*/) -> bool { return g_quickLearnWindow.isOpen(); },
-        "QuickLearn: Rapid FX Parameter Mapping", false
+        "QuickLearn: FX Parameter Mapping Popup", false
     });
 
     // ---- Phase 2.5 surface-filter modes ----------------------------------

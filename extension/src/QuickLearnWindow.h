@@ -1,6 +1,6 @@
 #pragma once
 //
-// QuickLearnWindow — standalone popup for rapid FX parameter mapping.
+// QuickLearnWindow — standalone popup for FX parameter mapping.
 //
 // Triggered by the "quick_learn" builtin action. Opens a floating ImGui
 // window that guides the user through mapping plugin parameters to

@@ -1,5 +1,5 @@
 //
-// QuickLearnWindow — standalone popup for rapid FX parameter mapping.
+// QuickLearnWindow — standalone popup for FX parameter mapping.
 //
 // Follows the MixerWindow pattern: lazy ImGui context, session counter,
 // visibility flag, main-thread render via onRunTick().
