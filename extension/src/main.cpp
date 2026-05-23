@@ -65,6 +65,7 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
+#include "QuickLearnWindow.h"
 #include "Palette.h"
 #include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
@@ -147,6 +148,9 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // device, fixed by routing through onTimer().
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
+// QuickLearn popup (Phase: AutoLearn/QuickLearn feature set).
+uf8::QuickLearnWindow g_quickLearnWindow;
+std::atomic<bool> g_quickLearnToggleRequest{false};
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -12342,6 +12346,9 @@ void onTimer()
     if (g_mixerToggleRequest.exchange(false)) {
         g_mixerWindow.toggle();
     }
+    if (g_quickLearnToggleRequest.exchange(false)) {
+        g_quickLearnWindow.toggle();
+    }
 
     // Plug-in GUI request flags — all main-thread because TrackFX_Show
     // creates AppKit windows. Set by the show_focused_plugin_gui /
@@ -12662,6 +12669,7 @@ void onTimer()
     // onRunTick.
     static bool s_lastMixerVisible = false;
     g_mixerWindow.onRunTick();
+    g_quickLearnWindow.onRunTick();
     const bool nowVisible = g_mixerWindow.isOpen();
     if (nowVisible != s_lastMixerVisible) {
         uf8::bindings::onMixerVisibilityChanged(nowVisible);
@@ -15194,6 +15202,14 @@ void registerBindingHandlers()
         // honestly.
         [](int /*param*/) -> bool { return g_mixerWindow.isOpen(); },
         "Open / Close Rea-Sixty Settings", false
+    });
+
+    registerBuiltin("quick_learn", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_quickLearnToggleRequest.store(true);
+        },
+        [](int /*param*/) -> bool { return g_quickLearnWindow.isOpen(); },
+        "QuickLearn: Rapid FX Parameter Mapping", false
     });
 
     // ---- Phase 2.5 surface-filter modes ----------------------------------
