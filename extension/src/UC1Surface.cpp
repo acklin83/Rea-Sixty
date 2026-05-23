@@ -28,6 +28,10 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
                              int param, double n, bool setRet,
                              double after);
 
+// Shift-Fine mode check (defined in main.cpp). Returns true when the
+// Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
+bool reasixty_shiftFineActive();
+
 // Platform-normalised track-colour reader (defined in main.cpp).
 // GetTrackColor returns 0xBBGGRR on Windows, 0xRRGGBB on macOS/Linux.
 // This helper swaps R<->B on Windows so callers see a uniform
@@ -642,7 +646,8 @@ double UC1Surface::clickToDelta_(int8_t delta) const
     // per click — slightly snappier but responsive).
     constexpr double kStepPerClick = 1.0 / 64.0;
     double d = delta * kStepPerClick;
-    if (fineMode_.load(std::memory_order_relaxed)) d *= 0.25;
+    if (fineMode_.load(std::memory_order_relaxed)
+        || reasixty_shiftFineActive()) d *= 0.25;
     return d;
 }
 
@@ -814,8 +819,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 next = curN + step * pStep;
             } else {
                 // Continuous — 1% per detent, 0.1% in fine mode.
-                const double scale = fineMode_.load(std::memory_order_relaxed)
-                                       ? 0.001 : 0.01;
+                const bool fine = fineMode_.load(std::memory_order_relaxed)
+                                 || reasixty_shiftFineActive();
+                const double scale = fine ? 0.001 : 0.01;
                 next = curN + step * scale;
             }
             if (next < 0.0) next = 0.0;
@@ -843,8 +849,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point xportLastT{};
         const int step = stepFromAccumulator(xportAcc, xportLastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
-        const double secsPerDetent = fineMode_.load(std::memory_order_relaxed)
-                                       ? 0.05 : 0.5;
+        const bool fine2 = fineMode_.load(std::memory_order_relaxed)
+                          || reasixty_shiftFineActive();
+        const double secsPerDetent = fine2 ? 0.05 : 0.5;
         const double curPos = GetCursorPosition();
         double newPos = curPos + step * secsPerDetent;
         if (newPos < 0.0) newPos = 0.0;

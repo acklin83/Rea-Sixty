@@ -494,6 +494,10 @@ std::atomic<bool>         g_wrapPluginCycle{true};
 std::atomic<bool>         g_keyboardShiftModifier{true};
 std::atomic<bool>         g_keyboardCmdModifier  {true};
 std::atomic<bool>         g_keyboardCtrlModifier {true};
+std::atomic<bool>         g_shiftFineMode        {false}; // Shift = fine mode for V-Pots/encoders
+// Forward declarations — defined later but called from drainInputQueue.
+bool hostShiftHeld_();
+bool shiftFineActive_();
 // Settings-window appearance. `g_themeSelection` maps to uf8::Theme
 // (0 = Vanilla / default, 1 = Mixnote). `g_fontScale` maps to font
 // presets (0 = Small 12px, 1 = Normal 14px, 2 = Large 18px). Both
@@ -1914,6 +1918,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "kb_ctrl_modifier"); v && *v) {
         g_keyboardCtrlModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "shift_fine_mode"); v && *v) {
+        g_shiftFineMode.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "theme"); v && *v) {
         g_themeSelection.store(std::atoi(v));
@@ -5084,7 +5091,7 @@ void drainInputQueue()
                     if (fr.active()) {
                         if (fr.valid) {
                             double delta = e.value;
-                            if (g_shiftHeld.load()) delta *= 0.25;
+                            if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
                             if (g_flip.load() && g_forcePan.load() && tr) {
                                 // FLIP+PAN held → V-Pot drives the strip
                                 // track's own pan (P_PAN), not the send.
@@ -5105,7 +5112,7 @@ void drainInputQueue()
                         if (vr.valid) {
                             if (g_forcePan.load()) {
                                 double delta = e.value;
-                                if (g_shiftHeld.load()) delta *= 0.25;
+                                if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
                                 writePan(vr, delta, e.strip);
                             } else {
                                 double dPb = e.value;
@@ -5136,7 +5143,7 @@ void drainInputQueue()
                                 uctx.tr, uctx.fxIdx, bs.vst3Param);
                             double delta = e.value
                                 * (bs.inverted ? -1.0 : 1.0);
-                            if (g_shiftHeld.load()) delta *= 0.25;
+                            if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
                             double next = cur + delta;
                             if (next < 0.0) next = 0.0;
                             if (next > 1.0) next = 1.0;
@@ -5221,7 +5228,7 @@ void drainInputQueue()
                     // 1× for a 128-detent sweep, matching SSL's V-Pot
                     // feel in 360°. Fine mode (Shift) quarters.
                     double delta = e.value * (sl.inverted ? -1.0 : 1.0);
-                    if (g_shiftHeld.load()) delta *= 0.25;
+                    if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
                     double next = cur + delta;
                     if (next < 0.0) next = 0.0;
                     if (next > 1.0) next = 1.0;
@@ -5243,7 +5250,7 @@ void drainInputQueue()
                         const double cur = TrackFX_GetParamNormalized(
                             tr, pn.fxIndex, pn.vst3Param);
                         double delta = e.value * 0.5;  // pan range 0..1, half-scale of REAPER's -1..+1
-                        if (g_shiftHeld.load()) delta *= 0.25;
+                        if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
                         const double next = uf8::applyVirtualNotch(
                             cur, delta, /*center*/0.5, /*zone*/0.012,
                             0.0, 1.0);
@@ -10401,6 +10408,15 @@ bool hostCtrlHeld_()
 #endif
 }
 
+// Returns true when any Shift source (UF8 hardware OR keyboard) should
+// engage fine mode for V-Pots / encoders. Gated by the Settings toggle
+// "Shift activates Fine mode". Does NOT affect faders.
+bool shiftFineActive_()
+{
+    if (!g_shiftFineMode.load()) return false;
+    return g_shiftHeld.load() || hostShiftHeld_();
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -13605,6 +13621,13 @@ void reasixty_setKeyboardCtrlModifier(bool on)
     SetExtState("rea_sixty", "kb_ctrl_modifier", on ? "1" : "0", true);
     if (!on) uf8::bindings::setKeyboardCtrlHeld(false);
 }
+bool reasixty_shiftFineMode()         { return g_shiftFineMode.load(); }
+void reasixty_setShiftFineMode(bool on)
+{
+    g_shiftFineMode.store(on);
+    SetExtState("rea_sixty", "shift_fine_mode", on ? "1" : "0", true);
+}
+bool reasixty_shiftFineActive()       { return shiftFineActive_(); }
 int  reasixty_theme()                 { return g_themeSelection.load(); }
 void reasixty_setTheme(int t)
 {
@@ -14388,6 +14411,59 @@ pnputil /add-driver $inf /install
     }
     return true;
 }
+
+bool reasixty_uninstallWinUsbDriver(std::string* errOut)
+{
+    // PowerShell one-liner: find our rea_sixty_winusb.inf in the driver
+    // store and remove it. Also delete the signing cert we created.
+    static const char* kPsUninstall = R"PS($ErrorActionPreference = 'Stop'
+
+# Remove driver from store.
+$drivers = pnputil /enum-drivers | Out-String
+$match = [regex]::Match($drivers,
+    'Published Name:\s+(oem\d+\.inf)[\s\S]*?Original Name:\s+rea_sixty_winusb\.inf')
+if ($match.Success) {
+    $oem = $match.Groups[1].Value
+    pnputil /delete-driver $oem /uninstall 2>&1 | Out-Null
+}
+
+# Remove signing cert from all stores.
+$subject = 'CN=Rea-Sixty Driver Signer'
+foreach ($store in @('My','Root','TrustedPublisher')) {
+    Get-ChildItem "Cert:\LocalMachine\$store" |
+        Where-Object { $_.Subject -eq $subject } |
+        Remove-Item -Force 2>$null
+}
+)PS";
+
+    char tmpDir[MAX_PATH] = {0};
+    if (!GetTempPathA(MAX_PATH, tmpDir)) {
+        if (errOut) *errOut = "GetTempPathA failed";
+        return false;
+    }
+    char psPath[MAX_PATH];
+    snprintf(psPath, sizeof(psPath),
+             "%srea_sixty_winusb_uninstall.ps1", tmpDir);
+
+    if (FILE* f = std::fopen(psPath, "wb")) {
+        std::fwrite(kPsUninstall, 1, std::strlen(kPsUninstall), f);
+        std::fclose(f);
+    } else {
+        if (errOut) *errOut = std::string("could not write ") + psPath;
+        return false;
+    }
+
+    char args[MAX_PATH + 128];
+    snprintf(args, sizeof(args),
+             "-NoProfile -ExecutionPolicy Bypass -File \"%s\"", psPath);
+    HINSTANCE rc = ShellExecuteA(nullptr, "runas", "powershell.exe",
+                                 args, nullptr, SW_HIDE);
+    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
+        if (errOut) *errOut = "powershell launch failed (user cancelled UAC?)";
+        return false;
+    }
+    return true;
+}
 #endif
 
 #ifdef __linux__
@@ -14417,6 +14493,22 @@ bool reasixty_installLinuxUdevRule(std::string* errOut)
     const char* cmd =
         "pkexec sh -c '"
         "cp /tmp/rea_sixty_udev.rules /etc/udev/rules.d/99-rea-sixty.rules && "
+        "udevadm control --reload-rules && "
+        "udevadm trigger"
+        "'";
+    int rc = std::system(cmd);
+    if (rc != 0) {
+        if (errOut) *errOut = "pkexec failed or was cancelled (rc=" + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
+}
+
+bool reasixty_uninstallLinuxUdevRule(std::string* errOut)
+{
+    const char* cmd =
+        "pkexec sh -c '"
+        "rm -f /etc/udev/rules.d/99-rea-sixty.rules && "
         "udevadm control --reload-rules && "
         "udevadm trigger"
         "'";

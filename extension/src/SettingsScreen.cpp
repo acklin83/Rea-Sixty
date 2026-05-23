@@ -123,6 +123,8 @@ bool reasixty_keyboardCmdModifier();
 void reasixty_setKeyboardCmdModifier(bool on);
 bool reasixty_keyboardCtrlModifier();
 void reasixty_setKeyboardCtrlModifier(bool on);
+bool reasixty_shiftFineMode();
+void reasixty_setShiftFineMode(bool on);
 int  reasixty_theme();
 void reasixty_setTheme(int t);
 int  reasixty_fontScale();
@@ -206,9 +208,11 @@ bool reasixty_setupImportViaDialog(std::string* errOut);
 bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
 #ifdef _WIN32
 bool reasixty_installWinUsbDriver(std::string* errOut);
+bool reasixty_uninstallWinUsbDriver(std::string* errOut);
 #endif
 #ifdef __linux__
 bool reasixty_installLinuxUdevRule(std::string* errOut);
+bool reasixty_uninstallLinuxUdevRule(std::string* errOut);
 #endif
 bool reasixty_importLayerViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
@@ -631,6 +635,14 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         &kbCtrl))
     {
         reasixty_setKeyboardCtrlModifier(kbCtrl);
+    }
+    ImGui_Spacing(ctx);
+    bool shiftFine = reasixty_shiftFineMode();
+    if (ImGui_Checkbox(ctx,
+        "Shift activates Fine mode (V-Pots / encoders, not faders)",
+        &shiftFine))
+    {
+        reasixty_setShiftFineMode(shiftFine);
     }
 
     // UC1 GR calibration sits at the very bottom of the Device pane per
@@ -9399,6 +9411,21 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 : ("Driver install failed: " + err);
         }
     }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Uninstall##winusb_uninstall",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_uninstallWinUsbDriver(&err)) {
+            s_winusbMsg = "Driver uninstall started — follow the UAC "
+                          "prompt, then unplug + replug the devices. "
+                          "Reinstall SSL 360° to restore its driver.";
+        } else {
+            s_winusbMsg = err.empty()
+                ? "Driver uninstall failed."
+                : ("Driver uninstall failed: " + err);
+        }
+    }
     if (!s_winusbMsg.empty()) {
         ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
     }
@@ -9430,6 +9457,20 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
             s_udevMsg = err.empty()
                 ? "udev install failed."
                 : ("udev install failed: " + err);
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Uninstall##udev_uninstall",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_uninstallLinuxUdevRule(&err)) {
+            s_udevMsg = "udev rule removed. Unplug + replug UF8 + UC1, "
+                        "then restart REAPER.";
+        } else {
+            s_udevMsg = err.empty()
+                ? "udev uninstall failed."
+                : ("udev uninstall failed: " + err);
         }
     }
     if (!s_udevMsg.empty()) {
