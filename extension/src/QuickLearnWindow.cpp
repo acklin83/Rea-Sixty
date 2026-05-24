@@ -718,15 +718,20 @@ void QuickLearnWindow::toggle()
 
     impl_->visible = true;
     ++impl_->sessionGen;
-    impl_->focusPendingFrames = 15;   // raise above plug-in GUIs
-    // Keep impl_->ctx / impl_->font alive across toggles. Resetting
-    // them to nullptr on every open used to force ensureCtx to call
-    // ImGui_CreateContext again — and ReaImGui's per-name context
-    // cache returned the SAME (closed-state) context from the
-    // previous session, so Begin's *p_open=true override was never
-    // honoured and the window stayed hidden on the second action
-    // trigger (Frank 2026-05-24). ensureCtx() is a no-op when
-    // ctx is already valid, so this just skips the recreation.
+    impl_->focusPendingFrames = 3;    // 3 frames of raise attempts (open path)
+    // Fresh ImGui context per open — same trick MixerWindow uses.
+    // We previously kept ctx alive across toggles to dodge a ReaImGui
+    // per-name context cache that returned closed-state on re-open;
+    // that workaround caused a worse bug (Frank 2026-05-24): after
+    // the first body click the host window went inactive and stopped
+    // accepting any further OS or ImGui input. Resetting the ctx
+    // pointer forces ensureCtx() to call ImGui_CreateContext again,
+    // which (combined with NoSavedSettings + the session-bumped
+    // winId in ImGui_Begin) gives a brand-new host window every
+    // open — input routing stays healthy. ReaImGui v0.10 GCs the
+    // orphaned previous context on its next defer cycle.
+    impl_->ctx  = nullptr;
+    impl_->font = nullptr;
     // Reset state machine.
     impl_->phase = QLPhase::Setup;
     impl_->domainChoice   = 0;
@@ -817,19 +822,15 @@ void QuickLearnWindow::onRunTick()
         double sW = sizeW, sH = sizeH;
         int condFirst = ImGui_Cond_FirstUseEver;
         ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condFirst);
-        if (impl_->focusPendingFrames > 0) {
-            // ImGui-level focus only. The macOS bring-to-front helper
-            // (makeKeyAndOrderFront + activateIgnoringOtherApps) was
-            // breaking the host window entirely — title-bar drag, the
-            // red close button, and every in-body click stopped working
-            // after the raise pulse fired (Frank 2026-05-24). Plain
-            // ImGui_SetNextWindowFocus seems to leave the OS window
-            // healthy; the trade-off is the host may appear behind a
-            // floating plug-in GUI, which we'll address differently if
-            // it bites.
-            ImGui_SetNextWindowFocus(impl_->ctx);
-            --impl_->focusPendingFrames;
-        }
+        // No SetNextWindowFocus / bring-to-front pulses. With the focus
+        // pulse on, clicking anywhere in the body deactivated the host
+        // window — the title bar greyed out and every subsequent click,
+        // drag and keystroke was ignored (Frank 2026-05-24). Removing
+        // the pulse entirely makes the window behave like every other
+        // ReaImGui host on this codebase (Mixer, Settings). If the
+        // host opens behind a floating plug-in GUI, we'll solve that
+        // problem with a different mechanism later.
+        (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
         if (bodyVisible) {
