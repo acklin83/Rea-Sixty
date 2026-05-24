@@ -825,39 +825,15 @@ void QuickLearnWindow::onRunTick()
     if (impl_->font) ImGui_PushFont(impl_->ctx, impl_->font, fontPx);
     const int pushed = ThemeBridge::pushAll(impl_->ctx, palette);
 
-    // NoSavedSettings: don't let ReaImGui persist this window's inner
-    // state across sessions. Earlier ReaImGui's persistence pinned a
-    // bad collapsed/tiny-size state (seen as quickLearnSizeH=79 in
-    // reaper-extstate.ini) — once that state was stuck, the inner
-    // window opened as a sliver below the title bar and looked like
-    // "the window never appears". Frank 2026-05-24.
-    // Combined with a session-bumped winId (sessionGen++ on each open)
-    // this guarantees a fresh, unconstrained inner window per open.
-    // NoCollapse: prevent title-bar-only state entirely.
+    // Match MixerWindow's minimal flag set — a working reference for
+    // a standalone ReaImGui host with editable InputTexts and Combos.
+    // The aggressive flag pile (NoMove/NoResize/NoScrollbar/...) was
+    // an attempted workaround for a click-through bug that never
+    // actually traced to drag-move, and it broke per-row InputText /
+    // Combo activation by preventing the window from claiming focus
+    // on body clicks. Frank 2026-05-24.
     int winFlags = ImGui_WindowFlags_NoCollapse
-                 | ImGui_WindowFlags_NoSavedSettings
-                 | ImGui_WindowFlags_NoScrollbar
-                 | ImGui_WindowFlags_NoScrollWithMouse
-                 | ImGui_WindowFlags_NoMove
-                 | ImGui_WindowFlags_NoResize;
-    // NoMove is REQUIRED here, not just a polish nicety. Source dive
-    // through Dear ImGui (imgui.cpp:5298 StartMouseMovingWindow) +
-    // ReaImGui (cocoa_window.mm:200-203, sets [NSWindow
-    // setIgnoresMouseEvents:YES] when ViewportFlags_NoInputs flips
-    // on): when the user clicks any empty space on a movable window,
-    // ImGui starts a drag-move, which propagates to the viewport as
-    // NoInputs, which makes the entire OS host window click-through.
-    // The mouse-up event then lands on whatever window is *behind*
-    // ours, so our MovingWindow state never clears — the host stays
-    // click-through forever. NoMove makes StartMouseMovingWindow a
-    // no-op, NoInputs is never set, the window stays responsive.
-    // (The previous "labels became un-editable with NoMove" theory
-    // was wrong; the real culprit there was bufsz=8 vs a 12-byte
-    // buffer holding a 9-char seeded string.)
-    // NoResize: paired with NoMove for the same reason; resize-grip
-    // drag would otherwise initiate a similar move-like sequence.
-    // NoScrollbar/NoScrollWithMouse: inner is sized to display, no
-    // scroll needed.
+                 | ImGui_WindowFlags_NoSavedSettings;
     char winId[64];
     snprintf(winId, sizeof(winId),
              "QuickLearn##session_%d", impl_->sessionGen);
@@ -1213,21 +1189,13 @@ void QuickLearnWindow::onRunTick()
                 const double colLabelW = scaleW_(impl_->ctx, 100.0);
                 const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
                 const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
-                // Structural parity with AutoLearn: NO BeginChild
-                // wrap; ScrollY ON the table with explicit outer_size_h
-                // — this is the only nesting that lets per-row
-                // InputText activate in ReaImGui v0.10's multi-viewport
-                // hover gate (see imgui.cpp:4732 IsWindowContentHoverable
-                // viewport check; agent-research 2026-05-24). The
-                // earlier BeginChild wrap routed clicks through a
-                // child window in our standalone context, breaking
-                // the InputText's hover claim.
+                // Match AutoLearn exactly: no ScrollY, no outer_size.
+                // The standalone window itself scrolls when the queue
+                // exceeds the visible area.
                 int tblFlags = ImGui_TableFlags_RowBg
-                             | ImGui_TableFlags_ScrollY
                              | ImGui_TableFlags_BordersInnerH;
-                double tblH = scaleW_(impl_->ctx, 360.0);
                 if (ImGui_BeginTable(impl_->ctx, "##ql_tbl", 3,
-                                     &tblFlags, nullptr, &tblH, nullptr))
+                                     &tblFlags, nullptr, nullptr, nullptr))
                 {
                     int    wF1 = wFixed, wF2 = wStretch, wF3 = wFixed;
                     double w1 = colSlotW, w2 = 0,        w3 = colLabelW;
@@ -1284,45 +1252,113 @@ void QuickLearnWindow::onRunTick()
                         ImGui_PopStyleColor(impl_->ctx, &popCount);
 
                         // ---- Param column ----
-                        // Plain text — the previous incarnation tried a
-                        // BeginCombo per row but with 64 rows in a
-                        // ScrollY table that broke window interaction
-                        // entirely (Frank 2026-05-24). Inline picker
-                        // moved to a dedicated "Pick…" row below the
-                        // table so only ONE Combo lives in the widget
-                        // tree at a time.
+                        // Per-row BeginCombo with inline filter (mirrors
+                        // AutoLearn lines 7785-7877). Lists every param
+                        // from the FX's paramSnapshot so the user isn't
+                        // limited to whatever wiggle detected.
                         ImGui_TableNextColumn(impl_->ctx);
-                        char paramStr[128];
-                        if (qs.boundParam >= 0) {
-                            snprintf(paramStr, sizeof(paramStr),
-                                "%s   p%d",
-                                qs.boundName.c_str(), qs.boundParam);
-                        } else if (i == cur) {
-                            snprintf(paramStr, sizeof(paramStr),
-                                "(waiting…)");
-                        } else {
-                            paramStr[0] = '\0';
-                        }
-                        if (paramStr[0]) {
-                            ImGui_PushStyleColor(impl_->ctx,
-                                ImGui_Col_Text, textCol);
-                            ImGui_Text(impl_->ctx, paramStr);
-                            int popTxt = 1;
-                            ImGui_PopStyleColor(impl_->ctx, &popTxt);
+                        {
+                            char comboId[48];
+                            snprintf(comboId, sizeof(comboId),
+                                     "##ql_param_%d", i);
+                            int comboFlags = ImGui_ComboFlags_HeightLargest;
+                            ImGui_SetNextItemWidth(impl_->ctx, -1.0);
+                            const char* paramPreview;
+                            char waitBuf[16];
+                            if (qs.boundParam < 0) {
+                                if (i == cur) {
+                                    snprintf(waitBuf, sizeof(waitBuf),
+                                             "(waiting…)");
+                                    paramPreview = waitBuf;
+                                } else {
+                                    paramPreview = "(unmapped)";
+                                }
+                            } else {
+                                paramPreview = qs.boundName.c_str();
+                            }
+                            if (ImGui_BeginCombo(impl_->ctx, comboId,
+                                                 paramPreview, &comboFlags))
+                            {
+                                const bool justOpened =
+                                    ImGui_IsWindowAppearing(impl_->ctx);
+                                static char s_paramFilter[64] = {0};
+                                static int  s_paramFilterRow = -1;
+                                if (justOpened || s_paramFilterRow != i) {
+                                    s_paramFilter[0] = 0;
+                                    s_paramFilterRow = i;
+                                    ImGui_SetKeyboardFocusHere(impl_->ctx,
+                                                               nullptr);
+                                }
+                                ImGui_PushItemWidth(impl_->ctx, -1.0);
+                                ImGui_InputTextWithHint(impl_->ctx,
+                                    "##ql_paramfilter", "filter…",
+                                    s_paramFilter, sizeof(s_paramFilter),
+                                    nullptr, nullptr);
+                                ImGui_PopItemWidth(impl_->ctx);
+                                std::string flt = s_paramFilter;
+                                for (auto& c : flt)
+                                    c = static_cast<char>(std::tolower(
+                                        static_cast<unsigned char>(c)));
+
+                                // (unmapped) entry first — clears row.
+                                {
+                                    bool sel = (qs.boundParam < 0);
+                                    int  sf  = 0;
+                                    char clrId[64];
+                                    snprintf(clrId, sizeof(clrId),
+                                        "(unmapped)##ql_paramclr_%d", i);
+                                    if (ImGui_Selectable(impl_->ctx, clrId,
+                                            &sel, &sf, nullptr, nullptr))
+                                    {
+                                        qs.boundParam = -1;
+                                        qs.boundName.clear();
+                                        qs.labelBuf[0] = '\0';
+                                    }
+                                }
+
+                                for (const auto& pi : impl_->paramSnapshot) {
+                                    if (!flt.empty()) {
+                                        std::string lc = pi.second;
+                                        for (auto& c : lc)
+                                            c = static_cast<char>(
+                                                std::tolower(
+                                                  static_cast<unsigned char>(c)));
+                                        if (lc.find(flt) == std::string::npos)
+                                            continue;
+                                    }
+                                    bool sel = (qs.boundParam == pi.first);
+                                    int sf = 0;
+                                    char rowId[300];
+                                    snprintf(rowId, sizeof(rowId),
+                                        "[%4d] %s##ql_paramopt_%d_%d",
+                                        pi.first, pi.second.c_str(),
+                                        i, pi.first);
+                                    if (ImGui_Selectable(impl_->ctx, rowId,
+                                            &sel, &sf, nullptr, nullptr))
+                                    {
+                                        if (qs.boundParam != pi.first) {
+                                            qs.boundParam = pi.first;
+                                            qs.boundName  = pi.second;
+                                            if (qs.labelBuf[0] == '\0') {
+                                                std::strncpy(qs.labelBuf,
+                                                    pi.second.c_str(),
+                                                    sizeof(qs.labelBuf) - 1);
+                                                qs.labelBuf[
+                                                    sizeof(qs.labelBuf) - 1]
+                                                    = '\0';
+                                            }
+                                        }
+                                    }
+                                }
+                                ImGui_EndCombo(impl_->ctx);
+                            }
                         }
 
                         // ---- Label column ----
-                        // Exact copy of the working AutoLearn pattern
-                        // from SettingsScreen.cpp:7755-7783 (the
-                        // "SSL Slot cell"). Local stack editBuf,
-                        // strncpy from labelBuf, bufsz=8 (= scribble-
-                        // strip 7 chars + NUL), nullptr for flagsInOpt,
-                        // copy back on TRUE return. Per-row InputText
-                        // with our previous "persistent buffer +
-                        // &inputFlags" formulation refused to enter
-                        // edit mode in the table; AutoLearn's version
-                        // works, so we use AutoLearn's version. Frank
-                        // 2026-05-24.
+                        // Mirrors AutoLearn's "SSL Slot cell" (lines
+                        // 7755-7783): local stack editBuf, bufsz=8,
+                        // copy back on TRUE return. Truncates to the
+                        // 7-char scribble-strip width.
                         ImGui_TableNextColumn(impl_->ctx);
                         if (qs.boundParam >= 0) {
                             char editBuf[16] = {};
@@ -1331,14 +1367,6 @@ void QuickLearnWindow::onRunTick()
                             char lblId[48];
                             snprintf(lblId, sizeof(lblId),
                                      "##ql_lbl_%d", i);
-                            // Belt-and-suspenders: ensure this
-                            // InputText can claim hover even if a
-                            // parent (cell, row, table) would
-                            // otherwise win HoveredId. Without this,
-                            // ItemHoverable (imgui.cpp:4855-4887)
-                            // can silently block the click from
-                            // reaching SetActiveID.
-                            ImGui_SetNextItemAllowOverlap(impl_->ctx);
                             ImGui_SetNextItemWidth(impl_->ctx, -1.0);
                             if (ImGui_InputTextWithHint(impl_->ctx,
                                     lblId,
@@ -1346,8 +1374,6 @@ void QuickLearnWindow::onRunTick()
                                     editBuf, 8,
                                     nullptr, nullptr))
                             {
-                                // Truncate to 7 hardware chars,
-                                // copy back to persistent storage.
                                 editBuf[7] = '\0';
                                 std::strncpy(qs.labelBuf, editBuf,
                                              sizeof(qs.labelBuf) - 1);
