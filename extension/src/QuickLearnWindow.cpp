@@ -34,6 +34,8 @@
 #ifdef __APPLE__
 namespace uf8 {
     void macosBringWindowToFront(void* hwnd, const char* titleHint);
+    void macosGetScreenSize(int* w, int* h);
+    void macosPinWindow(void* hwnd, int x, int y);
 }
 #endif
 
@@ -96,6 +98,12 @@ struct QuickLearnWindow::Impl {
     ImGui_Font*    font    = nullptr;
     bool           visible = false;
     int            sessionGen = 0;
+    // One-shot flag: macOS-side OS host centering happens once on the
+    // first render frame after each open. CreateContext args alone
+    // don't reliably centre — ReaImGui defaults to (0, 0) for
+    // unknown context names. macosPinWindow on the resolved HWND
+    // does the job. Frank 2026-05-24.
+    bool           pendingCenterOnFirstFrame = false;
     // Counter — non-zero for the first N frames after toggle()-to-open
     // (or after a re-open press while already visible). Each of those
     // frames calls ImGui_SetNextWindowFocus AND the macOS bring-to-front
@@ -180,16 +188,29 @@ struct QuickLearnWindow::Impl {
         const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
         if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
         if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
-        // No position hint — let ReaImGui place the host with its
-        // default centering, same as MixerWindow. The old code read
-        // a persisted (x, y) from ExtState; a stale (60, 120) from
-        // earlier debugging sessions made the host open at the top-
-        // left every time. Frank 2026-05-24: "zentrier es wie jedes
-        // andere fenster". ReaImGui's internal host-state machinery
-        // remembers the user's last drag across REAPER sessions, so
-        // dropping our own persistence here doesn't lose the pose.
-        int* posXp = nullptr;
-        int* posYp = nullptr;
+        // Explicitly center the host on the primary screen. ReaImGui
+        // doesn't centre new hosts automatically — passing nullptr
+        // here just dropped the window at (0, 0). Frank 2026-05-24:
+        // "zentrier es wie jedes andere fenster". Compute (screen -
+        // host) / 2 and pin it on the very first open; the user's
+        // drags afterwards land in ReaImGui's own per-context
+        // persistence (keyed by the bumped "v2" context name), so
+        // we only center on the first run.
+        int posX = -1, posY = -1;
+#ifdef __APPLE__
+        {
+            int sw = 0, sh = 0;
+            uf8::macosGetScreenSize(&sw, &sh);
+            if (sw > 0 && sh > 0) {
+                posX = (sw - sizeW) / 2;
+                posY = (sh - sizeH) / 2;
+                if (posX < 0) posX = 0;
+                if (posY < 0) posY = 0;
+            }
+        }
+#endif
+        int* posXp = (posX >= 0) ? &posX : nullptr;
+        int* posYp = (posY >= 0) ? &posY : nullptr;
         // Context-name bump (Frank 2026-05-24): ReaImGui keys its own
         // host-pose persistence by context name. The old "Rea-Sixty
         // QuickLearn" key carried a stale top-left pose from
@@ -741,6 +762,7 @@ void QuickLearnWindow::toggle()
     // orphaned previous context on its next defer cycle.
     impl_->ctx  = nullptr;
     impl_->font = nullptr;
+    impl_->pendingCenterOnFirstFrame = true;
     // Reset state machine.
     impl_->phase = QLPhase::Setup;
     impl_->domainChoice   = 0;
@@ -874,6 +896,30 @@ void QuickLearnWindow::onRunTick()
         (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
+#ifdef __APPLE__
+        // One-shot OS-level centering. CreateContext alone doesn't
+        // centre — ReaImGui places new context-named hosts at (0, 0).
+        // Compute (screen - host) / 2 from macosGetScreenSize and pin
+        // the host with macosPinWindow once, right after Begin has
+        // materialised the OS window. The pin happens on a single
+        // frame; subsequent user drags persist via ReaImGui's own
+        // host-state, keyed on the bumped "v2" context name.
+        if (impl_->pendingCenterOnFirstFrame && bodyVisible) {
+            void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
+            int sw = 0, sh = 0;
+            uf8::macosGetScreenSize(&sw, &sh);
+            int hw = static_cast<int>(dispW > 0 ? dispW : 520);
+            int hh = static_cast<int>(dispH > 0 ? dispH : 720);
+            if (hwnd && sw > 0 && sh > 0) {
+                int px = (sw - hw) / 2;
+                int py = (sh - hh) / 2;
+                if (px < 0) px = 0;
+                if (py < 0) py = 0;
+                uf8::macosPinWindow(hwnd, px, py);
+                impl_->pendingCenterOnFirstFrame = false;
+            }
+        }
+#endif
         if (bodyVisible) {
             // Capture the current host-context shape and persist when
             // it diverges meaningfully from the last-saved value. Polled
@@ -1159,7 +1205,6 @@ void QuickLearnWindow::onRunTick()
                              | ImGui_TableFlags_ScrollY
                              | ImGui_TableFlags_BordersInnerH;
                 double tblH = scaleW_(impl_->ctx, 340.0);
-                int clickIdx = -1;
                 if (ImGui_BeginTable(impl_->ctx, "##ql_tbl", 3,
                                      &tblFlags, nullptr, &tblH, nullptr))
                 {
@@ -1200,25 +1245,21 @@ void QuickLearnWindow::onRunTick()
                             textCol = 0x808080FF;
 
                         // ---- Slot column ----
-                        // Selectable confined to this column only (no
-                        // SpanAllColumns). With Param being a Combo and
-                        // Label an InputText, those cells need to own
-                        // their click hit-areas — a row-spanning
-                        // Selectable was eating their clicks and made
-                        // the table feel un-clickable. Frank 2026-05-24.
+                        // Plain text. The previous incarnation had a
+                        // Selectable here to allow "click row to set
+                        // current"; in ReaImGui v0.10 that Selectable
+                        // appears to absorb the click-and-drag focus
+                        // sequence the InputText in column 2 needs to
+                        // enter edit mode, so the scribble-label
+                        // editors silently refused to activate.
+                        // Navigation between slots still works via
+                        // wiggle-auto-advance and Skip/Undo buttons.
+                        // Frank 2026-05-24.
                         ImGui_TableNextColumn(impl_->ctx);
-                        char selId[64];
-                        snprintf(selId, sizeof(selId),
-                                 "%s##ql_slot_%d",
-                                 qs.label.c_str(), i);
-                        bool selBool = (i == cur);
-                        int  selFlags = 0;
-                        int popCount = 1;
                         ImGui_PushStyleColor(impl_->ctx,
                             ImGui_Col_Text, textCol);
-                        if (ImGui_Selectable(impl_->ctx, selId, &selBool,
-                                             &selFlags, nullptr, nullptr))
-                            clickIdx = i;
+                        ImGui_Text(impl_->ctx, qs.label.c_str());
+                        int popCount = 1;
                         ImGui_PopStyleColor(impl_->ctx, &popCount);
 
                         // ---- Param column ----
@@ -1274,10 +1315,6 @@ void QuickLearnWindow::onRunTick()
                         }
                     }
                     ImGui_EndTable(impl_->ctx);
-                }
-                if (clickIdx >= 0) {
-                    impl_->currentSlot = clickIdx;
-                    impl_->snapshotBaseline();
                 }
 
                 ImGui_Spacing(impl_->ctx);
