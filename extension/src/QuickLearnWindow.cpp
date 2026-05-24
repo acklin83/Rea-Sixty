@@ -818,18 +818,16 @@ void QuickLearnWindow::onRunTick()
         int condFirst = ImGui_Cond_FirstUseEver;
         ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condFirst);
         if (impl_->focusPendingFrames > 0) {
-            // Raise the QuickLearn host window above any focused
-            // plug-in GUI. ImGui_SetNextWindowFocus only reorders
-            // ImGui's internal stack — to bring the OS-level host
-            // window over a REAPER plug-in's floating window we also
-            // need a platform call. Repeated for a few frames because
-            // ReaImGui may still be materialising the host on the
-            // first tick after CreateContext.
+            // ImGui-level focus only. The macOS bring-to-front helper
+            // (makeKeyAndOrderFront + activateIgnoringOtherApps) was
+            // breaking the host window entirely — title-bar drag, the
+            // red close button, and every in-body click stopped working
+            // after the raise pulse fired (Frank 2026-05-24). Plain
+            // ImGui_SetNextWindowFocus seems to leave the OS window
+            // healthy; the trade-off is the host may appear behind a
+            // floating plug-in GUI, which we'll address differently if
+            // it bites.
             ImGui_SetNextWindowFocus(impl_->ctx);
-#ifdef __APPLE__
-            void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
-            uf8::macosBringWindowToFront(hwnd, "QuickLearn");
-#endif
             --impl_->focusPendingFrames;
         }
         const bool bodyVisible =
