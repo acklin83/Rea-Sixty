@@ -63,6 +63,41 @@ void macosPinWindow(void* hwnd, int x, int y)
     }
 }
 
+// Same as macosPinWindow but with a title-substring fallback when the
+// HWND argument doesn't resolve via isKindOfClass: NSWindow / NSView.
+// ReaImGui's host HWND is a SWELL pseudo-handle that neither test
+// catches; we walk NSApp's window list and match by title. Frank
+// 2026-05-24 — needed to centre QuickLearn after Begin materialises
+// the host.
+void macosPinWindowByTitle(void* hwnd, const char* titleHint, int x, int y)
+{
+    @autoreleasepool {
+        NSWindow* w = windowFromHwnd_(hwnd);
+        if (!w && titleHint && *titleHint) {
+            NSString* needle =
+                [NSString stringWithUTF8String:titleHint];
+            for (NSWindow* cand in [NSApp windows]) {
+                NSString* title = [cand title];
+                if (!title) continue;
+                if ([title rangeOfString:needle].location !=
+                    NSNotFound)
+                {
+                    w = cand;
+                    break;
+                }
+            }
+        }
+        if (!w) return;
+        NSScreen* scr = primaryScreen_();
+        if (!scr) return;
+        NSRect frame = [w frame];
+        const CGFloat sh = NSHeight([scr frame]);
+        const CGFloat nsY = sh - (CGFloat)y - frame.size.height;
+        frame.origin = NSMakePoint((CGFloat)x, nsY);
+        [w setFrame:frame display:YES animate:NO];
+    }
+}
+
 // Fill in (x, y, w, h) with the window's Win32-style top-left rect.
 // Returns true on success. No-op + returns false if hwnd isn't a
 // recognised window.

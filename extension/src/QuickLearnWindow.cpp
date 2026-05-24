@@ -36,6 +36,8 @@ namespace uf8 {
     void macosBringWindowToFront(void* hwnd, const char* titleHint);
     void macosGetScreenSize(int* w, int* h);
     void macosPinWindow(void* hwnd, int x, int y);
+    void macosPinWindowByTitle(void* hwnd, const char* titleHint,
+                               int x, int y);
 }
 #endif
 
@@ -835,14 +837,27 @@ void QuickLearnWindow::onRunTick()
     int winFlags = ImGui_WindowFlags_NoCollapse
                  | ImGui_WindowFlags_NoSavedSettings
                  | ImGui_WindowFlags_NoScrollbar
-                 | ImGui_WindowFlags_NoScrollWithMouse;
-    // NoScrollbar/NoScrollWithMouse keep the inner's own scrollbars
-    // hidden (we want the inner to be the same shape as the host).
-    // We *don't* set NoMove/NoResize because they apparently inhibit
-    // child-widget input handling in ReaImGui v0.10 — InputTexts in
-    // the body weren't focusable while those flags were set. The
-    // Cond_Always pos/size below pins the inner regardless, so a
-    // stray drag-attempt by the user simply snaps back next frame.
+                 | ImGui_WindowFlags_NoScrollWithMouse
+                 | ImGui_WindowFlags_NoMove
+                 | ImGui_WindowFlags_NoResize;
+    // NoMove is REQUIRED here, not just a polish nicety. Source dive
+    // through Dear ImGui (imgui.cpp:5298 StartMouseMovingWindow) +
+    // ReaImGui (cocoa_window.mm:200-203, sets [NSWindow
+    // setIgnoresMouseEvents:YES] when ViewportFlags_NoInputs flips
+    // on): when the user clicks any empty space on a movable window,
+    // ImGui starts a drag-move, which propagates to the viewport as
+    // NoInputs, which makes the entire OS host window click-through.
+    // The mouse-up event then lands on whatever window is *behind*
+    // ours, so our MovingWindow state never clears — the host stays
+    // click-through forever. NoMove makes StartMouseMovingWindow a
+    // no-op, NoInputs is never set, the window stays responsive.
+    // (The previous "labels became un-editable with NoMove" theory
+    // was wrong; the real culprit there was bufsz=8 vs a 12-byte
+    // buffer holding a 9-char seeded string.)
+    // NoResize: paired with NoMove for the same reason; resize-grip
+    // drag would otherwise initiate a similar move-like sequence.
+    // NoScrollbar/NoScrollWithMouse: inner is sized to display, no
+    // scroll needed.
     char winId[64];
     snprintf(winId, sizeof(winId),
              "QuickLearn##session_%d", impl_->sessionGen);
@@ -915,7 +930,8 @@ void QuickLearnWindow::onRunTick()
                 int py = (sh - hh) / 2;
                 if (px < 0) px = 0;
                 if (py < 0) py = 0;
-                uf8::macosPinWindow(hwnd, px, py);
+                uf8::macosPinWindowByTitle(hwnd,
+                    "Rea-Sixty QuickLearn", px, py);
                 impl_->pendingCenterOnFirstFrame = false;
             }
         }
