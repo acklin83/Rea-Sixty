@@ -844,28 +844,26 @@ void QuickLearnWindow::onRunTick()
         // Without an explicit SetNextWindowPos, ImGui placed the inner
         // window at its default new-window offset (~60 px from the
         // host origin), leaving an L-shaped transparent strip across
-        // the top and left of the OS host. MixerWindow doesn't hit
-        // this because its inner-window size (1500×1080) is larger
-        // than its CreateContext host (1280×720), so the inner
-        // overflows the host and there are no transparent margins.
+        // the top and left of the OS host.
         //
-        // Fix: pin the inner to (0, 0) every frame. Oversize it a
-        // bit (host width × 4, host height × 4) so the inner reliably
-        // overflows whatever shape the user has dragged the host
-        // into — no transparent margins regardless of host size.
-        // ImGui clips to the host content area, so the oversize is
-        // free; ImGui_WindowFlags_NoScrollbar / NoScrollWithMouse
-        // (added below) keep the user from seeing scrollbars from
-        // the inner overflow.
+        // Fix: pin the inner to (0, 0) and size it to the current
+        // host display every frame. ImGui_GetDisplaySize reports the
+        // OS host's content area (changes when the user resizes the
+        // host), so the inner stays exactly host-sized — no
+        // transparent margins, no fullscreen blowout from over-sizing.
+        double dispW = 0, dispH = 0;
+        ImGui_GetDisplaySize(impl_->ctx, &dispW, &dispH);
         double posX = 0, posY = 0;
         int condAlwaysPos = ImGui_Cond_Always;
         ImGui_SetNextWindowPos(impl_->ctx, posX, posY,
                                &condAlwaysPos,
                                /*pivot_x*/ nullptr,
                                /*pivot_y*/ nullptr);
-        double sW = sizeW * 4.0, sH = sizeH * 4.0;
-        int condAlwaysSize = ImGui_Cond_Always;
-        ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condAlwaysSize);
+        if (dispW > 0 && dispH > 0) {
+            int condAlwaysSize = ImGui_Cond_Always;
+            ImGui_SetNextWindowSize(impl_->ctx, dispW, dispH,
+                                    &condAlwaysSize);
+        }
         (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
