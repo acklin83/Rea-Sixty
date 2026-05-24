@@ -916,8 +916,12 @@ void QuickLearnWindow::onRunTick()
             void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
             int sw = 0, sh = 0;
             uf8::macosGetScreenSize(&sw, &sh);
-            int hw = static_cast<int>(dispW > 0 ? dispW : 520);
-            int hh = static_cast<int>(dispH > 0 ? dispH : 720);
+            // Read the actual host size now that Begin has materialised
+            // the OS window; centre based on that.
+            double dW = 0, dH = 0;
+            ImGui_GetDisplaySize(impl_->ctx, &dW, &dH);
+            int hw = static_cast<int>(dW > 0 ? dW : sizeW);
+            int hh = static_cast<int>(dH > 0 ? dH : sizeH);
             if (hwnd && sw > 0 && sh > 0) {
                 int px = (sw - hw) / 2;
                 int py = (sh - hh) / 2;
