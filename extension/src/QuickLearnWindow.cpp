@@ -874,40 +874,33 @@ void QuickLearnWindow::onRunTick()
         const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
         if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
         if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
-        // ROOT CAUSE of the "first-click greys out the window and
-        // breaks all input" symptom (Frank 2026-05-24, after digging
-        // through the ReaImGui v0.9.3.3 changelog):
+        // CRITICAL (Frank 2026-05-24, found by reading the ReaImGui
+        // source + Dear ImGui core, not by another round of guessing):
         //
-        //   ReaImGui reports hit-test transparency to SWELL's
-        //   WindowFromPoint on macOS. Any pixel of the OS host that
-        //   ImGui has NOT covered with opaque content is treated as
-        //   click-through — the click skips QuickLearn entirely and
-        //   lands on whatever's behind, the host loses key status,
-        //   and every subsequent event goes to the wrong window.
+        // ReaImGui v0.10 runs in multi-viewport mode. The inner ImGui
+        // window IS the OS host's viewport — `window->Pos` IS the
+        // host's screen position, `window->Size` IS the host's
+        // content size. Cond_Always SetNextWindowPos(0, 0) thus calls
+        // CocoaWindow::setPosition(0, 0) every frame, which calls
+        // [NSWindow setFrameTopLeftPoint:] — the host gets snapped to
+        // the screen top-left no matter what CreateContext or
+        // macosPinWindow set. Same story for SetNextWindowSize
+        // Cond_Always — fullscreen blowout via [NSWindow
+        // setContentSize:].
         //
-        // Without an explicit SetNextWindowPos, ImGui placed the inner
-        // window at its default new-window offset (~60 px from the
-        // host origin), leaving an L-shaped transparent strip across
-        // the top and left of the OS host.
+        // The earlier "hit-test transparency L-strip" theory was
+        // wrong. The real input-loss cause is in imgui.cpp:5298
+        // StartMouseMovingWindow — clicking empty space on a movable
+        // window kicks off a drag-move, which propagates to viewport
+        // as NoInputs → setIgnoresMouseEvents:YES. NoMove (set in
+        // winFlags above) prevents that path entirely.
         //
-        // Fix: pin the inner to (0, 0) and size it to the current
-        // host display every frame. ImGui_GetDisplaySize reports the
-        // OS host's content area (changes when the user resizes the
-        // host), so the inner stays exactly host-sized — no
-        // transparent margins, no fullscreen blowout from over-sizing.
-        double dispW = 0, dispH = 0;
-        ImGui_GetDisplaySize(impl_->ctx, &dispW, &dispH);
-        double posX = 0, posY = 0;
-        int condAlwaysPos = ImGui_Cond_Always;
-        ImGui_SetNextWindowPos(impl_->ctx, posX, posY,
-                               &condAlwaysPos,
-                               /*pivot_x*/ nullptr,
-                               /*pivot_y*/ nullptr);
-        if (dispW > 0 && dispH > 0) {
-            int condAlwaysSize = ImGui_Cond_Always;
-            ImGui_SetNextWindowSize(impl_->ctx, dispW, dispH,
-                                    &condAlwaysSize);
-        }
+        // We therefore do NOT override pos / size here. The host
+        // takes the size from CreateContext args, the position from
+        // CreateContext args + ReaImGui's own host-pose persistence,
+        // and the user resizes/moves the host with the native title
+        // bar (NoMove only blocks ImGui's internal drag, not the OS
+        // chrome).
         (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
