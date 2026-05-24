@@ -57,15 +57,30 @@ enum class QLTarget : int {
 
 // One slot in the sequential mapping queue.
 struct QLSlot {
-    std::string label;       // display: "Comp Thr", "FB1 B2 S3", etc.
+    std::string label;       // display: "Comp Thr", "Bank 1 - V-Pot 1", etc.
     int         linkIdx = -1;   // UC1 linkIdx (QLTarget::Uc1) or -1
     int         faderBank = 0;  // UF8 coords (QLTarget::Uf8)
     int         vpotBank  = 0;
     int         strip     = 0;
     QLTarget    target;
     int         boundParam = -1;  // VST3 param bound by wiggle, -1 = unbound
-    std::string boundName;        // VST3 param name (for review)
+    std::string boundName;        // raw VST3 param name (read-only, from plug-in)
+    // Scribble-strip label written to UserLinkSlot::customLabel /
+    // UF8BankSlot::label on Save. 7-char hardware limit; we keep a few
+    // extra chars in the buffer for the trailing NUL + safe input.
+    char        labelBuf[12] = {};
 };
+
+// scaleW_ — local copy of SettingsScreen.cpp's font-relative width helper
+// so QuickLearn's table widths track the user's font-size choice in the
+// same way the AutoLearn table does. Keeping the implementation in sync.
+inline double scaleW_(ImGui_Context* ctx, double designWidth)
+{
+    constexpr double kRefSize = 14.0;
+    const double fs = ImGui_GetFontSize(ctx);
+    if (fs <= 0) return designWidth;
+    return designWidth * (fs / kRefSize);
+}
 
 } // anonymous namespace
 
@@ -319,15 +334,26 @@ struct QuickLearnWindow::Impl {
             }
         }
 
-        // UF8 V-Pot banks.
+        // UF8 V-Pot banks. Slot-label nomenclature matches the AutoLearn
+        // Preview table (Frank 2026-05-24): "Bank N - V-Pot M" for the
+        // single-fader-bank case, prefixed with "FB X · " when a second
+        // fader bank is in play. Keeps the two FX-Learn surfaces visually
+        // and semantically consistent.
         if (wantUf8 || dom == Domain::None) {
             for (int fb = 0; fb < faderBankCount; ++fb) {
                 for (int vb = 0; vb < kUserUf8VpotBankCount; ++vb) {
                     for (int st = 0; st < 8; ++st) {
                         QLSlot qs;
-                        char lbl[32];
-                        snprintf(lbl, sizeof(lbl), "FB%d B%d S%d",
-                                 fb + 1, vb + 1, st + 1);
+                        char lbl[40];
+                        if (faderBankCount > 1) {
+                            snprintf(lbl, sizeof(lbl),
+                                "FB %c · Bank %d - V-Pot %d",
+                                static_cast<char>('A' + fb),
+                                vb + 1, st + 1);
+                        } else {
+                            snprintf(lbl, sizeof(lbl),
+                                "Bank %d - V-Pot %d", vb + 1, st + 1);
+                        }
                         qs.label     = lbl;
                         qs.faderBank = fb;
                         qs.vpotBank  = vb;
@@ -341,6 +367,11 @@ struct QuickLearnWindow::Impl {
 
         // Pre-fill from existing UserPluginMap so re-learn shows the
         // current bindings, editable in Mapping phase.
+        auto seedLabelBuf = [](char* buf, size_t cap, const std::string& s) {
+            if (s.empty()) { buf[0] = '\0'; return; }
+            std::strncpy(buf, s.c_str(), cap - 1);
+            buf[cap - 1] = '\0';
+        };
         if (!fxMatch.empty()) {
             if (const auto* m = user_plugins::lookupOwnedByName(fxMatch)) {
                 for (auto& qs : queue) {
@@ -351,6 +382,12 @@ struct QuickLearnWindow::Impl {
                             {
                                 qs.boundParam = s.vst3Param;
                                 qs.boundName  = paramNameForBound_(s.vst3Param);
+                                // labelBuf = customLabel if set, else
+                                // the raw param name as a starting point.
+                                seedLabelBuf(qs.labelBuf,
+                                    sizeof(qs.labelBuf),
+                                    !s.customLabel.empty()
+                                        ? s.customLabel : qs.boundName);
                                 break;
                             }
                         }
@@ -363,9 +400,14 @@ struct QuickLearnWindow::Impl {
                             [std::clamp(qs.strip,     0, 7)];
                         if (bs.vst3Param >= 0) {
                             qs.boundParam = bs.vst3Param;
-                            qs.boundName  = !bs.label.empty()
-                                ? bs.label
-                                : paramNameForBound_(bs.vst3Param);
+                            // boundName is the *raw* plug-in param name —
+                            // displayed in the read-only Param column.
+                            // Scribble label travels through labelBuf.
+                            qs.boundName  = paramNameForBound_(bs.vst3Param);
+                            seedLabelBuf(qs.labelBuf,
+                                sizeof(qs.labelBuf),
+                                !bs.label.empty()
+                                    ? bs.label : qs.boundName);
                         }
                     }
                 }
@@ -440,7 +482,15 @@ struct QuickLearnWindow::Impl {
             params.push_back(std::move(pi));
         }
 
-        // Run AutoLearn engine.
+        // Run AutoLearn engine. When the engine fills a slot, seed the
+        // editable labelBuf from the param name so the Mapping table
+        // shows something useful in the Label column right away (user
+        // can tighten the wording before hitting Save).
+        auto seedLabelBuf = [](char* buf, size_t cap, const std::string& s) {
+            if (s.empty()) { buf[0] = '\0'; return; }
+            std::strncpy(buf, s.c_str(), cap - 1);
+            buf[cap - 1] = '\0';
+        };
         const Domain dom = domainFromChoice();
         if (dom != Domain::None) {
             auto suggestions = autolearn::suggestSlots(params, dom);
@@ -452,6 +502,8 @@ struct QuickLearnWindow::Impl {
                     {
                         qs.boundParam = s.vst3Param;
                         qs.boundName  = s.paramName;
+                        seedLabelBuf(qs.labelBuf,
+                            sizeof(qs.labelBuf), s.paramName);
                         break;
                     }
                 }
@@ -470,6 +522,8 @@ struct QuickLearnWindow::Impl {
                     {
                         qs.boundParam = u.vst3Param;
                         qs.boundName  = u.paramName;
+                        seedLabelBuf(qs.labelBuf,
+                            sizeof(qs.labelBuf), u.paramName);
                         break;
                     }
                 }
@@ -506,7 +560,9 @@ struct QuickLearnWindow::Impl {
         else if (map.displayShort.empty())
             map.displayShort = !fxMatch.empty() ? fxMatch : "USR";
 
-        // Apply UC1 slot bindings.
+        // Apply UC1 slot bindings. labelBuf -> customLabel (scribble
+        // strip override); when the user didn't touch it, falls back to
+        // the param name so the strip isn't blank.
         for (const auto& qs : queue) {
             if (qs.boundParam < 0) continue;
             if (qs.target == QLTarget::Uc1) {
@@ -517,11 +573,14 @@ struct QuickLearnWindow::Impl {
                             return s.linkIdx == qs.linkIdx;
                         }),
                     map.slots.end());
-                map.slots.push_back({qs.linkIdx, qs.boundParam, false, {}});
+                const std::string lbl = qs.labelBuf[0]
+                    ? std::string(qs.labelBuf) : qs.boundName;
+                map.slots.push_back({qs.linkIdx, qs.boundParam, false, lbl});
             }
         }
 
-        // Apply UF8 V-Pot bank bindings.
+        // Apply UF8 V-Pot bank bindings. labelBuf -> UF8BankSlot.label
+        // (drives the V-Pot scribble) with the same fallback rule.
         for (const auto& qs : queue) {
             if (qs.boundParam < 0) continue;
             if (qs.target == QLTarget::Uf8) {
@@ -532,7 +591,8 @@ struct QuickLearnWindow::Impl {
                 const int st = std::clamp(qs.strip, 0, 7);
                 auto& bs = map.uf8.banks.banks[fb][vb][st];
                 bs.vst3Param = qs.boundParam;
-                if (bs.label.empty()) bs.label = qs.boundName;
+                bs.label = qs.labelBuf[0]
+                    ? std::string(qs.labelBuf) : qs.boundName;
             }
         }
 
@@ -869,15 +929,20 @@ void QuickLearnWindow::onRunTick()
             // ================================================================
             // MAPPING PHASE
             // ================================================================
+            // Table-based layout (Frank 2026-05-24) — mirrors the
+            // AutoLearn Preview table's columns and styling so the two
+            // FX-Learn surfaces feel like the same product. The old
+            // "[OK]" / ">>>" / "[ ]" prefixes were redundant with the
+            // row-text colour; dropped. Status now lives in the row
+            // background tint (current row = highlight, conflict = red).
+            // Per-row scribble labels are editable inline.
             case QLPhase::Mapping: {
                 if (impl_->queue.empty()) {
                     impl_->phase = QLPhase::Review;
                     break;
                 }
 
-                // Display label editor — always available while in
-                // Mapping so users get to it whether they came through
-                // Setup or skipped it (existing-map auto-jump).
+                // Display label editor — always available.
                 ImGui_Text(impl_->ctx, "Display label:");
                 int dsFlags = 0;
                 ImGui_InputText(impl_->ctx, "##ql_dshort_map",
@@ -890,26 +955,36 @@ void QuickLearnWindow::onRunTick()
                 const int cur   = std::clamp(impl_->currentSlot, 0, total - 1);
                 auto& slot = impl_->queue[static_cast<size_t>(cur)];
 
+                // Progress + active-slot prompt on one combined line —
+                // saves vertical space and keeps the wiggle target front
+                // and centre for the user's eyes.
                 char progress[64];
                 snprintf(progress, sizeof(progress), "Slot %d / %d",
                          cur + 1, total);
                 ImGui_Text(impl_->ctx, progress);
-                ImGui_Spacing(impl_->ctx);
-
-                // Current slot highlight.
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                ImGui_TextDisabled(impl_->ctx, "  —  ");
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 char prompt[256];
                 snprintf(prompt, sizeof(prompt),
-                    "%s  —  wiggle the parameter now...",
+                    "%s  (wiggle the parameter now…)",
                     slot.label.c_str());
-                ImGui_TextColored(impl_->ctx, 0x80FF80FF, prompt);
+                ImGui_TextColored(impl_->ctx, 0xFFFF80FF, prompt);
 
-                // Poll for wiggle.
+                // Poll for wiggle — also seed labelBuf when a param is
+                // freshly detected so the Label column shows something
+                // immediately (user can tighten the wording before Save).
                 {
                     int detectedParam = -1;
                     std::string detectedName;
                     if (impl_->pollWiggle(detectedParam, detectedName)) {
                         slot.boundParam = detectedParam;
                         slot.boundName  = detectedName;
+                        if (slot.labelBuf[0] == '\0') {
+                            std::strncpy(slot.labelBuf, detectedName.c_str(),
+                                sizeof(slot.labelBuf) - 1);
+                            slot.labelBuf[sizeof(slot.labelBuf) - 1] = '\0';
+                        }
                         // Auto-advance to next unbound slot.
                         bool advanced = false;
                         for (int i = cur + 1; i < total; ++i) {
@@ -921,7 +996,6 @@ void QuickLearnWindow::onRunTick()
                             }
                         }
                         if (!advanced) {
-                            // All remaining slots bound — go to review.
                             impl_->phase = QLPhase::Review;
                         }
                     }
@@ -931,60 +1005,117 @@ void QuickLearnWindow::onRunTick()
                 ImGui_Separator(impl_->ctx);
                 ImGui_Spacing(impl_->ctx);
 
-                // Show slot list with status. Rows are Selectable so the
-                // user can click any [OK] / [ ] entry to move focus there
-                // and re-wiggle that slot — needed when QuickLearn opens
-                // on an already-learned plug-in and bindings need editing.
-                int childFlags = 0;
-                double childH = 320;
-                if (ImGui_BeginChild(impl_->ctx, "##ql_list",
-                                     nullptr, &childH, nullptr, &childFlags))
+                // ---- Slot table ----
+                // Columns: Slot (location) | Param (read-only, from
+                // plug-in) | Label (editable, scribble-strip override).
+                // Width budget tuned at the AutoLearn-default 14 px font
+                // (scaleW_ stretches at larger fonts).
+                const double colSlotW  = scaleW_(impl_->ctx, 150.0);
+                const double colLabelW = scaleW_(impl_->ctx, 100.0);
+                const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
+                const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
+                int tblFlags = ImGui_TableFlags_RowBg
+                             | ImGui_TableFlags_ScrollY
+                             | ImGui_TableFlags_BordersInnerH;
+                double tblH = scaleW_(impl_->ctx, 360.0);
+                int clickIdx = -1;
+                if (ImGui_BeginTable(impl_->ctx, "##ql_tbl", 3,
+                                     &tblFlags, nullptr, &tblH, nullptr))
                 {
-                    int clickIdx = -1;
+                    int    wF1 = wFixed, wF2 = wStretch, wF3 = wFixed;
+                    double w1 = colSlotW, w2 = 0,        w3 = colLabelW;
+                    ImGui_TableSetupColumn(impl_->ctx, "Slot",  &wF1, &w1, nullptr);
+                    ImGui_TableSetupColumn(impl_->ctx, "Param", &wF2, &w2, nullptr);
+                    ImGui_TableSetupColumn(impl_->ctx, "Label", &wF3, &w3, nullptr);
+                    ImGui_TableHeadersRow(impl_->ctx);
+
                     for (int i = 0; i < total; ++i) {
                         auto& qs = impl_->queue[static_cast<size_t>(i)];
-                        char row[256];
-                        char selId[40];
-                        snprintf(selId, sizeof(selId), "##ql_row_%d", i);
-                        if (qs.boundParam >= 0) {
-                            snprintf(row, sizeof(row),
-                                "[OK] %s -> %s (p%d)%s",
-                                qs.label.c_str(), qs.boundName.c_str(),
-                                qs.boundParam, selId);
-                        } else if (i == cur) {
-                            snprintf(row, sizeof(row),
-                                ">>> %s  (waiting...)%s",
-                                qs.label.c_str(), selId);
-                        } else {
-                            snprintf(row, sizeof(row), "[ ] %s%s",
-                                qs.label.c_str(), selId);
+                        ImGui_TableNextRow(impl_->ctx, nullptr, nullptr);
+
+                        // Row tint — current row gets a translucent
+                        // highlight strip so the user's eye locks on it.
+                        if (i == cur) {
+                            int rowBgTarget = ImGui_TableBgTarget_RowBg0;
+                            // Dim blue-grey, RGBA 0xRRGGBBAA.
+                            ImGui_TableSetBgColor(impl_->ctx, rowBgTarget,
+                                                  0x4060A050, nullptr);
                         }
-                        // Colour by state. Selectable carries the click
-                        // hit-region; the colour push only affects the
-                        // text inside it.
-                        uint32_t textCol = 0;
+
+                        // Per-row text colour: bound = white-ish,
+                        // current-unbound = yellow, empty = dim grey.
+                        uint32_t textCol;
                         if (qs.boundParam >= 0)
-                            textCol = (i == cur) ? 0x80FF80FF : 0xFFFFFFFF;
+                            textCol = (i == cur) ? 0x80FF80FF : 0xE0E0E0FF;
                         else if (i == cur)
                             textCol = 0xFFFF80FF;
                         else
                             textCol = 0x808080FF;
+
+                        // ---- Slot column ----
+                        ImGui_TableNextColumn(impl_->ctx);
+                        char selId[64];
+                        snprintf(selId, sizeof(selId),
+                                 "%s##ql_slot_%d",
+                                 qs.label.c_str(), i);
+                        bool selBool = (i == cur);
+                        int  selFlags = ImGui_SelectableFlags_SpanAllColumns
+                                      | ImGui_SelectableFlags_AllowItemOverlap;
                         int colCount = 1;
                         ImGui_PushStyleColor(impl_->ctx,
                             ImGui_Col_Text, textCol);
-                        bool sel = (i == cur);
-                        int selFlags = 0;
-                        if (ImGui_Selectable(impl_->ctx, row, &sel,
+                        if (ImGui_Selectable(impl_->ctx, selId, &selBool,
                                              &selFlags, nullptr, nullptr))
                             clickIdx = i;
                         ImGui_PopStyleColor(impl_->ctx, &colCount);
+
+                        // ---- Param column ----
+                        ImGui_TableNextColumn(impl_->ctx);
+                        char paramStr[96];
+                        if (qs.boundParam >= 0) {
+                            snprintf(paramStr, sizeof(paramStr),
+                                "%s   p%d",
+                                qs.boundName.c_str(), qs.boundParam);
+                        } else if (i == cur) {
+                            snprintf(paramStr, sizeof(paramStr),
+                                "(waiting…)");
+                        } else {
+                            paramStr[0] = '\0';
+                        }
+                        if (paramStr[0]) {
+                            ImGui_PushStyleColor(impl_->ctx,
+                                ImGui_Col_Text, textCol);
+                            ImGui_Text(impl_->ctx, paramStr);
+                            int pop = 1;
+                            ImGui_PopStyleColor(impl_->ctx, &pop);
+                        }
+
+                        // ---- Label column ----
+                        // Editable scribble-strip text (7-char hardware
+                        // budget, mirroring AutoLearn's customLabel input).
+                        // Only meaningful when the slot has a bound param.
+                        ImGui_TableNextColumn(impl_->ctx);
+                        if (qs.boundParam >= 0) {
+                            char lblId[40];
+                            snprintf(lblId, sizeof(lblId),
+                                     "##ql_lbl_%d", i);
+                            ImGui_SetNextItemWidth(impl_->ctx, -1.0);
+                            int inputFlags = 0;
+                            // Hint = raw param name → tells the user
+                            // what was bound even when they cleared the
+                            // override field.
+                            ImGui_InputTextWithHint(impl_->ctx, lblId,
+                                qs.boundName.c_str(),
+                                qs.labelBuf, 8,
+                                &inputFlags, nullptr);
+                        }
                     }
-                    if (clickIdx >= 0) {
-                        impl_->currentSlot = clickIdx;
-                        impl_->snapshotBaseline();
-                    }
+                    ImGui_EndTable(impl_->ctx);
                 }
-                ImGui_EndChild(impl_->ctx);
+                if (clickIdx >= 0) {
+                    impl_->currentSlot = clickIdx;
+                    impl_->snapshotBaseline();
+                }
 
                 ImGui_Spacing(impl_->ctx);
 
@@ -1002,9 +1133,10 @@ void QuickLearnWindow::onRunTick()
                 ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 if (ImGui_Button(impl_->ctx, "Undo##ql_undo",
                                  nullptr, nullptr)) {
-                    // Clear current binding and go back.
+                    // Clear current binding (param + label) and step back.
                     slot.boundParam = -1;
                     slot.boundName.clear();
+                    slot.labelBuf[0] = '\0';
                     for (int i = cur - 1; i >= 0; --i) {
                         impl_->currentSlot = i;
                         impl_->snapshotBaseline();
@@ -1027,31 +1159,69 @@ void QuickLearnWindow::onRunTick()
             // ================================================================
             // REVIEW PHASE
             // ================================================================
+            // Same 3-column table as Mapping (Slot | Param | Label) so
+            // the user reads the same mental picture before hitting
+            // Save. Labels are read-only here — to edit, hit Back.
             case QLPhase::Review: {
-                ImGui_Text(impl_->ctx, "Review mappings:");
+                char rvHdr[160];
+                snprintf(rvHdr, sizeof(rvHdr),
+                    "Review mappings — %s", impl_->fxName.c_str());
+                ImGui_Text(impl_->ctx, rvHdr);
                 ImGui_Spacing(impl_->ctx);
 
                 int boundCount = 0;
-                int childFlags = 0;
-                double childH = 350;
-                if (ImGui_BeginChild(impl_->ctx, "##ql_review",
-                                     nullptr, &childH, nullptr, &childFlags))
+                for (const auto& qs : impl_->queue)
+                    if (qs.boundParam >= 0) ++boundCount;
+                char rvCount[80];
+                snprintf(rvCount, sizeof(rvCount),
+                    "%d slot(s) mapped", boundCount);
+                ImGui_TextDisabled(impl_->ctx, rvCount);
+                ImGui_Spacing(impl_->ctx);
+
+                const double colSlotW  = scaleW_(impl_->ctx, 150.0);
+                const double colLabelW = scaleW_(impl_->ctx, 100.0);
+                const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
+                const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
+                int tblFlags = ImGui_TableFlags_RowBg
+                             | ImGui_TableFlags_ScrollY
+                             | ImGui_TableFlags_BordersInnerH;
+                double tblH = scaleW_(impl_->ctx, 360.0);
+                if (boundCount > 0
+                    && ImGui_BeginTable(impl_->ctx, "##ql_rvtbl", 3,
+                                        &tblFlags, nullptr, &tblH, nullptr))
                 {
+                    int    wF1 = wFixed, wF2 = wStretch, wF3 = wFixed;
+                    double w1 = colSlotW, w2 = 0,        w3 = colLabelW;
+                    ImGui_TableSetupColumn(impl_->ctx, "Slot",  &wF1, &w1, nullptr);
+                    ImGui_TableSetupColumn(impl_->ctx, "Param", &wF2, &w2, nullptr);
+                    ImGui_TableSetupColumn(impl_->ctx, "Label", &wF3, &w3, nullptr);
+                    ImGui_TableHeadersRow(impl_->ctx);
+
                     for (const auto& qs : impl_->queue) {
                         if (qs.boundParam < 0) continue;
-                        ++boundCount;
-                        char row[256];
-                        snprintf(row, sizeof(row), "%s  ->  %s (p%d)",
-                            qs.label.c_str(), qs.boundName.c_str(),
-                            qs.boundParam);
-                        ImGui_Text(impl_->ctx, row);
+                        ImGui_TableNextRow(impl_->ctx, nullptr, nullptr);
+
+                        ImGui_TableNextColumn(impl_->ctx);
+                        ImGui_Text(impl_->ctx, qs.label.c_str());
+
+                        ImGui_TableNextColumn(impl_->ctx);
+                        char paramStr[96];
+                        snprintf(paramStr, sizeof(paramStr),
+                            "%s   p%d",
+                            qs.boundName.c_str(), qs.boundParam);
+                        ImGui_Text(impl_->ctx, paramStr);
+
+                        ImGui_TableNextColumn(impl_->ctx);
+                        ImGui_Text(impl_->ctx,
+                            qs.labelBuf[0] ? qs.labelBuf
+                                            : qs.boundName.c_str());
                     }
-                    if (boundCount == 0) {
-                        ImGui_TextDisabled(impl_->ctx,
-                            "No parameters mapped.");
-                    }
+                    ImGui_EndTable(impl_->ctx);
                 }
-                ImGui_EndChild(impl_->ctx);
+                if (boundCount == 0) {
+                    ImGui_TextDisabled(impl_->ctx,
+                        "No parameters mapped.");
+                }
 
                 ImGui_Spacing(impl_->ctx);
                 ImGui_Separator(impl_->ctx);
