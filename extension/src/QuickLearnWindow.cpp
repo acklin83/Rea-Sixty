@@ -688,7 +688,7 @@ void QuickLearnWindow::toggle()
     // ever seeing it — looks broken. The user closes via the title-bar
     // X or the in-window Cancel/Save buttons instead.
     if (impl_->visible) {
-        impl_->focusPendingFrames = 15;   // ~0.5 s of raise attempts
+        impl_->focusPendingFrames = 3;    // 3 frames of raise attempts
         // Re-resolve the active FX in case the user has since focused
         // a different plug-in window. We only re-seed when we don't
         // have one yet (avoid blowing away in-progress mapping work).
@@ -1161,15 +1161,20 @@ void QuickLearnWindow::onRunTick()
                         else
                             textCol = 0x808080FF;
 
-                        // ---- Slot column (Selectable spans the row) ----
+                        // ---- Slot column ----
+                        // Selectable confined to this column only (no
+                        // SpanAllColumns). With Param being a Combo and
+                        // Label an InputText, those cells need to own
+                        // their click hit-areas — a row-spanning
+                        // Selectable was eating their clicks and made
+                        // the table feel un-clickable. Frank 2026-05-24.
                         ImGui_TableNextColumn(impl_->ctx);
                         char selId[64];
                         snprintf(selId, sizeof(selId),
                                  "%s##ql_slot_%d",
                                  qs.label.c_str(), i);
                         bool selBool = (i == cur);
-                        int  selFlags = ImGui_SelectableFlags_SpanAllColumns
-                                      | ImGui_SelectableFlags_AllowItemOverlap;
+                        int  selFlags = 0;
                         int popCount = 1;
                         ImGui_PushStyleColor(impl_->ctx,
                             ImGui_Col_Text, textCol);

@@ -140,7 +140,16 @@ void macosBringWindowToFront(void* hwnd, const char* titleHint)
         // First: force REAPER to be the active app regardless of who
         // has focus right now. Without this, orderFront leaves the
         // window behind out-of-process plug-in GUIs.
-        [NSApp activateIgnoringOtherApps:YES];
+        // Gate on "REAPER not already active" — when QuickLearn's raise
+        // pulse runs for several frames in a row, repeatedly activating
+        // an already-active app caused the AppKit event loop to drop
+        // mouse / drag events sent to our host window (Frank 2026-05-24:
+        // QuickLearn was visible but un-clickable/un-draggable after
+        // the bring-to-front pulse). One activation is enough; the
+        // subsequent makeKeyAndOrderFront calls handle z-order without
+        // re-touching app activation.
+        if (![NSApp isActive])
+            [NSApp activateIgnoringOtherApps:YES];
 
         NSWindow* w = windowFromHwnd_(hwnd);
         // Fallback 1: HWND wasn't recognised — scan ordered windows
