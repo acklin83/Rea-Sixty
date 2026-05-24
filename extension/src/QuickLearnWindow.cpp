@@ -1183,111 +1183,32 @@ void QuickLearnWindow::onRunTick()
                             clickIdx = i;
                         ImGui_PopStyleColor(impl_->ctx, &popCount);
 
-                        // ---- Param column (combo dropdown) ----
-                        // Preview = bound name + idx, or "(waiting…)" for
-                        // the current unbound row, else "(unmapped)".
-                        // Opening the combo lets the user search the
-                        // full plug-in param list — alternative to the
-                        // wiggle path. Mirrors AutoLearn's filter combo.
+                        // ---- Param column ----
+                        // Plain text — the previous incarnation tried a
+                        // BeginCombo per row but with 64 rows in a
+                        // ScrollY table that broke window interaction
+                        // entirely (Frank 2026-05-24). Inline picker
+                        // moved to a dedicated "Pick…" row below the
+                        // table so only ONE Combo lives in the widget
+                        // tree at a time.
                         ImGui_TableNextColumn(impl_->ctx);
-                        char paramPreview[128];
+                        char paramStr[128];
                         if (qs.boundParam >= 0) {
-                            snprintf(paramPreview, sizeof(paramPreview),
+                            snprintf(paramStr, sizeof(paramStr),
                                 "%s   p%d",
                                 qs.boundName.c_str(), qs.boundParam);
                         } else if (i == cur) {
-                            snprintf(paramPreview, sizeof(paramPreview),
+                            snprintf(paramStr, sizeof(paramStr),
                                 "(waiting…)");
                         } else {
-                            snprintf(paramPreview, sizeof(paramPreview),
-                                "(unmapped)");
+                            paramStr[0] = '\0';
                         }
-                        char comboId[40];
-                        snprintf(comboId, sizeof(comboId),
-                                 "##ql_param_%d", i);
-                        int comboFlags = ImGui_ComboFlags_HeightLargest;
-                        ImGui_SetNextItemWidth(impl_->ctx, -1.0);
-                        ImGui_PushStyleColor(impl_->ctx,
-                            ImGui_Col_Text, textCol);
-                        const bool comboOpen = ImGui_BeginCombo(
-                            impl_->ctx, comboId, paramPreview, &comboFlags);
-                        int popCol2 = 1;
-                        ImGui_PopStyleColor(impl_->ctx, &popCol2);
-                        if (comboOpen) {
-                            // Per-row filter state — static buffer is
-                            // re-seeded when the row changes, same trick
-                            // the AutoLearn combo uses.
-                            const bool justOpened =
-                                ImGui_IsWindowAppearing(impl_->ctx);
-                            static char s_filter[64] = {0};
-                            static int  s_filterRow = -1;
-                            if (justOpened || s_filterRow != i) {
-                                s_filter[0] = 0;
-                                s_filterRow = i;
-                                ImGui_SetKeyboardFocusHere(impl_->ctx,
-                                    nullptr);
-                            }
-                            ImGui_PushItemWidth(impl_->ctx, -1.0);
-                            ImGui_InputTextWithHint(impl_->ctx,
-                                "##ql_paramfilter", "filter…",
-                                s_filter, sizeof(s_filter),
-                                nullptr, nullptr);
-                            ImGui_PopItemWidth(impl_->ctx);
-                            std::string flt = s_filter;
-                            for (auto& c : flt)
-                                c = static_cast<char>(std::tolower(
-                                    static_cast<unsigned char>(c)));
-
-                            // "(unmapped)" — clears the binding without
-                            // touching labelBuf so a re-pick can reuse
-                            // the typed scribble label.
-                            {
-                                bool sel = (qs.boundParam < 0);
-                                int  sf  = 0;
-                                char clrId[64];
-                                snprintf(clrId, sizeof(clrId),
-                                    "(unmapped)##ql_paramclr_%d", i);
-                                if (ImGui_Selectable(impl_->ctx, clrId,
-                                        &sel, &sf, nullptr, nullptr))
-                                {
-                                    qs.boundParam = -1;
-                                    qs.boundName.clear();
-                                }
-                            }
-
-                            for (const auto& pp : impl_->paramSnapshot) {
-                                if (!flt.empty()) {
-                                    std::string lc = pp.second;
-                                    for (auto& c : lc)
-                                        c = static_cast<char>(std::tolower(
-                                            static_cast<unsigned char>(c)));
-                                    if (lc.find(flt) == std::string::npos)
-                                        continue;
-                                }
-                                bool sel = (qs.boundParam == pp.first);
-                                int  sf  = 0;
-                                char rowId[300];
-                                snprintf(rowId, sizeof(rowId),
-                                    "[%4d] %s##ql_paramopt_%d_%d",
-                                    pp.first, pp.second.c_str(),
-                                    i, pp.first);
-                                if (ImGui_Selectable(impl_->ctx, rowId,
-                                        &sel, &sf, nullptr, nullptr))
-                                {
-                                    if (qs.boundParam != pp.first) {
-                                        qs.boundParam = pp.first;
-                                        qs.boundName  = pp.second;
-                                        if (qs.labelBuf[0] == '\0') {
-                                            std::strncpy(qs.labelBuf,
-                                                pp.second.c_str(),
-                                                sizeof(qs.labelBuf) - 1);
-                                            qs.labelBuf[sizeof(qs.labelBuf) - 1]
-                                                = '\0';
-                                        }
-                                    }
-                                }
-                            }
-                            ImGui_EndCombo(impl_->ctx);
+                        if (paramStr[0]) {
+                            ImGui_PushStyleColor(impl_->ctx,
+                                ImGui_Col_Text, textCol);
+                            ImGui_Text(impl_->ctx, paramStr);
+                            int popTxt = 1;
+                            ImGui_PopStyleColor(impl_->ctx, &popTxt);
                         }
 
                         // ---- Label column ----
