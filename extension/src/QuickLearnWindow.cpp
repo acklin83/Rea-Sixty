@@ -670,17 +670,36 @@ void QuickLearnWindow::onRunTick()
     if (impl_->font) ImGui_PushFont(impl_->ctx, impl_->font, fontPx);
     const int pushed = ThemeBridge::pushAll(impl_->ctx, palette);
 
-    // Stable winId + no NoSavedSettings so ImGui itself can persist
-    // the inner-window state across the lifetime of the context. (The
-    // host-window size + pos are also explicitly persisted to ExtState
-    // below — that survives even context destruction / app restart.)
-    int winFlags = ImGui_WindowFlags_NoCollapse;
-    const char* winId = "QuickLearn";
+    // NoSavedSettings: don't let ReaImGui persist this window's inner
+    // state across sessions. Earlier ReaImGui's persistence pinned a
+    // bad collapsed/tiny-size state (seen as quickLearnSizeH=79 in
+    // reaper-extstate.ini) — once that state was stuck, the inner
+    // window opened as a sliver below the title bar and looked like
+    // "the window never appears". Frank 2026-05-24.
+    // Combined with a session-bumped winId (sessionGen++ on each open)
+    // this guarantees a fresh, unconstrained inner window per open.
+    // NoCollapse: prevent title-bar-only state entirely.
+    int winFlags = ImGui_WindowFlags_NoCollapse
+                 | ImGui_WindowFlags_NoSavedSettings;
+    char winId[64];
+    snprintf(winId, sizeof(winId),
+             "QuickLearn##session_%d", impl_->sessionGen);
     bool open = impl_->visible;
 
     if (impl_->visible) {
         int condAlways = ImGui_Cond_Always;
         ImGui_SetNextWindowCollapsed(impl_->ctx, false, &condAlways);
+        // Explicit pos/size on the FirstUseEver ID so the inner window
+        // adopts our remembered shape on the first frame of each session.
+        // We use the same persisted values that CreateContext read.
+        int sizeW = 520, sizeH = 720;
+        const char* sw = GetExtState("ReaSixty", "quickLearnSizeW");
+        const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
+        if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
+        if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
+        double sW = sizeW, sH = sizeH;
+        int condFirst = ImGui_Cond_FirstUseEver;
+        ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condFirst);
         if (impl_->focusPendingFrames > 0) {
             // Raise the QuickLearn host window above any focused
             // plug-in GUI. ImGui_SetNextWindowFocus only reorders
@@ -719,10 +738,26 @@ void QuickLearnWindow::onRunTick()
             const int ih = static_cast<int>(curH);
             const int ix = static_cast<int>(curX);
             const int iy = static_cast<int>(curY);
-            if (iw != impl_->lastSavedW) { persist("quickLearnSizeW", iw); impl_->lastSavedW = iw; }
-            if (ih != impl_->lastSavedH) { persist("quickLearnSizeH", ih); impl_->lastSavedH = ih; }
-            if (ix != impl_->lastSavedX) { persist("quickLearnPosX",  ix); impl_->lastSavedX = ix; }
-            if (iy != impl_->lastSavedY) { persist("quickLearnPosY",  iy); impl_->lastSavedY = iy; }
+            // Write-side sanity gate: only persist sizes within the
+            // same range the read-side accepts. Without this, any
+            // transient tiny GetWindowSize result (collapse animation,
+            // ReaImGui startup race) could pin a bad sizeH like 79 into
+            // ExtState forever (Frank 2026-05-24 — fixed alongside the
+            // NoSavedSettings switch on the inner window).
+            if (iw >= 320 && iw <= 4096 && iw != impl_->lastSavedW) {
+                persist("quickLearnSizeW", iw); impl_->lastSavedW = iw;
+            }
+            if (ih >= 320 && ih <= 4096 && ih != impl_->lastSavedH) {
+                persist("quickLearnSizeH", ih); impl_->lastSavedH = ih;
+            }
+            // Position: clamp to a generous on-screen range so a stray
+            // off-screen result doesn't pin a useless pose.
+            if (ix >= -100 && ix <= 8192 && ix != impl_->lastSavedX) {
+                persist("quickLearnPosX",  ix); impl_->lastSavedX = ix;
+            }
+            if (iy >= -100 && iy <= 8192 && iy != impl_->lastSavedY) {
+                persist("quickLearnPosY",  iy); impl_->lastSavedY = iy;
+            }
             // ---- Render content based on phase ----
             switch (impl_->phase) {
 
