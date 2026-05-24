@@ -874,33 +874,32 @@ void QuickLearnWindow::onRunTick()
         const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
         if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
         if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
-        // CRITICAL (Frank 2026-05-24, found by reading the ReaImGui
-        // source + Dear ImGui core, not by another round of guessing):
-        //
-        // ReaImGui v0.10 runs in multi-viewport mode. The inner ImGui
-        // window IS the OS host's viewport — `window->Pos` IS the
-        // host's screen position, `window->Size` IS the host's
-        // content size. Cond_Always SetNextWindowPos(0, 0) thus calls
-        // CocoaWindow::setPosition(0, 0) every frame, which calls
-        // [NSWindow setFrameTopLeftPoint:] — the host gets snapped to
-        // the screen top-left no matter what CreateContext or
-        // macosPinWindow set. Same story for SetNextWindowSize
-        // Cond_Always — fullscreen blowout via [NSWindow
-        // setContentSize:].
-        //
-        // The earlier "hit-test transparency L-strip" theory was
-        // wrong. The real input-loss cause is in imgui.cpp:5298
-        // StartMouseMovingWindow — clicking empty space on a movable
-        // window kicks off a drag-move, which propagates to viewport
-        // as NoInputs → setIgnoresMouseEvents:YES. NoMove (set in
-        // winFlags above) prevents that path entirely.
-        //
-        // We therefore do NOT override pos / size here. The host
-        // takes the size from CreateContext args, the position from
-        // CreateContext args + ReaImGui's own host-pose persistence,
-        // and the user resizes/moves the host with the native title
-        // bar (NoMove only blocks ImGui's internal drag, not the OS
-        // chrome).
+        // Initial pose: centered, default size. Cond_FirstUseEver fires
+        // once per ImGui context — with toggle()-time ctx reset, that
+        // means once per open. Multi-viewport mode forwards these to
+        // CocoaWindow::setPosition/setSize, so the OS host moves with
+        // the inner ImGui window's pos. The CreateContext positional
+        // args are ignored by ReaImGui v0.10 (our vendored header
+        // is from v0.1.1 and has a stale signature), so this
+        // SetNextWindowPos / SetNextWindowSize is the real source
+        // of truth for the initial host pose. Frank 2026-05-24.
+        int condFirst = ImGui_Cond_FirstUseEver;
+        double initW = sizeW, initH = sizeH;
+        ImGui_SetNextWindowSize(impl_->ctx, initW, initH, &condFirst);
+#ifdef __APPLE__
+        {
+            int sw = 0, sh = 0;
+            uf8::macosGetScreenSize(&sw, &sh);
+            if (sw > 0 && sh > 0) {
+                double cx = (sw - initW) * 0.5;
+                double cy = (sh - initH) * 0.5;
+                if (cx < 0) cx = 0;
+                if (cy < 0) cy = 0;
+                ImGui_SetNextWindowPos(impl_->ctx, cx, cy,
+                    &condFirst, nullptr, nullptr);
+            }
+        }
+#endif
         (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
