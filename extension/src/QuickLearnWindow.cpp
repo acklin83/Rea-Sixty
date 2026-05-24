@@ -802,7 +802,18 @@ void QuickLearnWindow::onRunTick()
     // this guarantees a fresh, unconstrained inner window per open.
     // NoCollapse: prevent title-bar-only state entirely.
     int winFlags = ImGui_WindowFlags_NoCollapse
-                 | ImGui_WindowFlags_NoSavedSettings;
+                 | ImGui_WindowFlags_NoSavedSettings
+                 | ImGui_WindowFlags_NoResize
+                 | ImGui_WindowFlags_NoMove
+                 | ImGui_WindowFlags_NoScrollbar
+                 | ImGui_WindowFlags_NoScrollWithMouse;
+    // NoResize/NoMove: the inner ImGui window is pinned to the host
+    // content area (0,0 + oversized). User resizes/moves the OS host
+    // frame, not the inner. Without these, ImGui-driven drag/resize
+    // would fight our Cond_Always pos/size.
+    // NoScrollbar/NoScrollWithMouse: the inner is intentionally
+    // oversized for hit-test coverage; we don't want scrollbars or
+    // mouse-wheel scrolling the (mostly-empty) inner.
     char winId[64];
     snprintf(winId, sizeof(winId),
              "QuickLearn##session_%d", impl_->sessionGen);
@@ -819,17 +830,42 @@ void QuickLearnWindow::onRunTick()
         const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
         if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
         if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
-        double sW = sizeW, sH = sizeH;
-        int condFirst = ImGui_Cond_FirstUseEver;
-        ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condFirst);
-        // No SetNextWindowFocus / bring-to-front pulses. With the focus
-        // pulse on, clicking anywhere in the body deactivated the host
-        // window — the title bar greyed out and every subsequent click,
-        // drag and keystroke was ignored (Frank 2026-05-24). Removing
-        // the pulse entirely makes the window behave like every other
-        // ReaImGui host on this codebase (Mixer, Settings). If the
-        // host opens behind a floating plug-in GUI, we'll solve that
-        // problem with a different mechanism later.
+        // ROOT CAUSE of the "first-click greys out the window and
+        // breaks all input" symptom (Frank 2026-05-24, after digging
+        // through the ReaImGui v0.9.3.3 changelog):
+        //
+        //   ReaImGui reports hit-test transparency to SWELL's
+        //   WindowFromPoint on macOS. Any pixel of the OS host that
+        //   ImGui has NOT covered with opaque content is treated as
+        //   click-through — the click skips QuickLearn entirely and
+        //   lands on whatever's behind, the host loses key status,
+        //   and every subsequent event goes to the wrong window.
+        //
+        // Without an explicit SetNextWindowPos, ImGui placed the inner
+        // window at its default new-window offset (~60 px from the
+        // host origin), leaving an L-shaped transparent strip across
+        // the top and left of the OS host. MixerWindow doesn't hit
+        // this because its inner-window size (1500×1080) is larger
+        // than its CreateContext host (1280×720), so the inner
+        // overflows the host and there are no transparent margins.
+        //
+        // Fix: pin the inner to (0, 0) every frame. Oversize it a
+        // bit (host width × 4, host height × 4) so the inner reliably
+        // overflows whatever shape the user has dragged the host
+        // into — no transparent margins regardless of host size.
+        // ImGui clips to the host content area, so the oversize is
+        // free; ImGui_WindowFlags_NoScrollbar / NoScrollWithMouse
+        // (added below) keep the user from seeing scrollbars from
+        // the inner overflow.
+        double posX = 0, posY = 0;
+        int condAlwaysPos = ImGui_Cond_Always;
+        ImGui_SetNextWindowPos(impl_->ctx, posX, posY,
+                               &condAlwaysPos,
+                               /*pivot_x*/ nullptr,
+                               /*pivot_y*/ nullptr);
+        double sW = sizeW * 4.0, sH = sizeH * 4.0;
+        int condAlwaysSize = ImGui_Cond_Always;
+        ImGui_SetNextWindowSize(impl_->ctx, sW, sH, &condAlwaysSize);
         (void)impl_->focusPendingFrames;
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
