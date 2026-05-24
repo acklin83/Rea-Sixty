@@ -876,35 +876,53 @@ void QuickLearnWindow::onRunTick()
             }
         }
 #endif
-        (void)impl_->focusPendingFrames;
+        // ImGui-side focus pulse for the first few frames after open.
+        // Pairs with the OS-level bring-to-front below — the ImGui side
+        // marks our window as nav-focused, the OS side makes the NSWindow
+        // key. Both are needed for InputText activation (Button/Combo
+        // work without OS key state, but InputText needs the host
+        // window to be key for SetActiveID to stick across frames).
+        // Frank 2026-05-24.
+        if (impl_->focusPendingFrames > 0) {
+            ImGui_SetNextWindowFocus(impl_->ctx);
+        }
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
 #ifdef __APPLE__
-        // One-shot OS-level centering. CreateContext alone doesn't
-        // centre — ReaImGui places new context-named hosts at (0, 0).
-        // Compute (screen - host) / 2 from macosGetScreenSize and pin
-        // the host with macosPinWindow once, right after Begin has
-        // materialised the OS window. The pin happens on a single
-        // frame; subsequent user drags persist via ReaImGui's own
-        // host-state, keyed on the bumped "v2" context name.
-        if (impl_->pendingCenterOnFirstFrame && bodyVisible) {
+        // One-shot OS-level centering + bring-to-front pulse on the
+        // first few frames after open. The centering is single-shot
+        // (subsequent user drags persist via ReaImGui's own host-state,
+        // keyed on the bumped "v2" context name). The bring-to-front
+        // runs for the duration of focusPendingFrames so the newly-
+        // created NSWindow becomes key — without this, mouse clicks
+        // reach buttons / combos (they only need mouse) but InputText
+        // silently refused to activate because the OS host was never
+        // promoted to key. Capped at 3 frames total (set in toggle())
+        // to avoid the "broken clicks after pulse" issue where
+        // repeated NSApp activations dropped mouse events.
+        if (bodyVisible) {
             void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
-            int sw = 0, sh = 0;
-            uf8::macosGetScreenSize(&sw, &sh);
-            // Read the actual host size now that Begin has materialised
-            // the OS window; centre based on that.
-            double dW = 0, dH = 0;
-            ImGui_GetDisplaySize(impl_->ctx, &dW, &dH);
-            int hw = static_cast<int>(dW > 0 ? dW : sizeW);
-            int hh = static_cast<int>(dH > 0 ? dH : sizeH);
-            if (hwnd && sw > 0 && sh > 0) {
-                int px = (sw - hw) / 2;
-                int py = (sh - hh) / 2;
-                if (px < 0) px = 0;
-                if (py < 0) py = 0;
-                uf8::macosPinWindowByTitle(hwnd,
-                    "Rea-Sixty QuickLearn", px, py);
-                impl_->pendingCenterOnFirstFrame = false;
+            if (impl_->pendingCenterOnFirstFrame && hwnd) {
+                int sw = 0, sh = 0;
+                uf8::macosGetScreenSize(&sw, &sh);
+                double dW = 0, dH = 0;
+                ImGui_GetDisplaySize(impl_->ctx, &dW, &dH);
+                int hw = static_cast<int>(dW > 0 ? dW : sizeW);
+                int hh = static_cast<int>(dH > 0 ? dH : sizeH);
+                if (sw > 0 && sh > 0) {
+                    int px = (sw - hw) / 2;
+                    int py = (sh - hh) / 2;
+                    if (px < 0) px = 0;
+                    if (py < 0) py = 0;
+                    uf8::macosPinWindowByTitle(hwnd,
+                        "Rea-Sixty QuickLearn", px, py);
+                    impl_->pendingCenterOnFirstFrame = false;
+                }
+            }
+            if (impl_->focusPendingFrames > 0 && hwnd) {
+                uf8::macosBringWindowToFront(hwnd,
+                    "Rea-Sixty QuickLearn");
+                --impl_->focusPendingFrames;
             }
         }
 #endif
@@ -1067,9 +1085,76 @@ void QuickLearnWindow::onRunTick()
             // background tint (current row = highlight, conflict = red).
             // Per-row scribble labels are editable inline.
             case QLPhase::Mapping: {
+                // ---- Domain + fader-bank selector ----
+                // Available in Mapping (not only Setup) so re-opening
+                // QuickLearn on an already-learned plug-in still lets
+                // the user switch CS/BC/UF8 without going back through
+                // Setup. On change: rebuild the queue + param snapshot
+                // and re-seed any bindings that survived the
+                // restructure (handled by buildQueue's lookupOwnedByName
+                // pre-fill). In-progress unsaved wiggles on slots that
+                // no longer exist after the change are lost — acceptable
+                // since a domain switch is a structural reset.
+                auto applyStructuralChange = [&]() {
+                    impl_->buildQueue();
+                    impl_->buildParamSnapshot();
+                    int firstUnbound = -1;
+                    for (size_t i = 0; i < impl_->queue.size(); ++i) {
+                        if (impl_->queue[i].boundParam < 0) {
+                            firstUnbound = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                    impl_->currentSlot =
+                        firstUnbound >= 0 ? firstUnbound : 0;
+                    impl_->snapshotBaseline();
+                };
+                ImGui_Text(impl_->ctx, "Mode:");
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(impl_->ctx, "CS##ql_map_cs",
+                        impl_->domainChoice == 0)
+                    && impl_->domainChoice != 0)
+                { impl_->domainChoice = 0; applyStructuralChange(); }
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(impl_->ctx, "BC##ql_map_bc",
+                        impl_->domainChoice == 1)
+                    && impl_->domainChoice != 1)
+                { impl_->domainChoice = 1; applyStructuralChange(); }
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(impl_->ctx, "CS+UF8##ql_map_csuf8",
+                        impl_->domainChoice == 2)
+                    && impl_->domainChoice != 2)
+                { impl_->domainChoice = 2; applyStructuralChange(); }
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(impl_->ctx, "BC+UF8##ql_map_bcuf8",
+                        impl_->domainChoice == 3)
+                    && impl_->domainChoice != 3)
+                { impl_->domainChoice = 3; applyStructuralChange(); }
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(impl_->ctx, "UF8##ql_map_uf8",
+                        impl_->domainChoice == 4)
+                    && impl_->domainChoice != 4)
+                { impl_->domainChoice = 4; applyStructuralChange(); }
+                if (impl_->uf8FromChoice()) {
+                    ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                    ImGui_TextDisabled(impl_->ctx, "   FB:");
+                    ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                    if (ImGui_RadioButton(impl_->ctx, "1##ql_map_fb1",
+                            impl_->faderBankCount == 1)
+                        && impl_->faderBankCount != 1)
+                    { impl_->faderBankCount = 1; applyStructuralChange(); }
+                    ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                    if (ImGui_RadioButton(impl_->ctx, "2##ql_map_fb2",
+                            impl_->faderBankCount == 2)
+                        && impl_->faderBankCount != 2)
+                    { impl_->faderBankCount = 2; applyStructuralChange(); }
+                }
+                ImGui_Separator(impl_->ctx);
+                ImGui_Spacing(impl_->ctx);
+
                 if (impl_->queue.empty()) {
                     ImGui_TextDisabled(impl_->ctx,
-                        "No slots — adjust setup and reopen.");
+                        "No slots — change Mode above or Cancel.");
                     if (ImGui_Button(impl_->ctx,
                             "Cancel##ql_cancel_empty",
                             nullptr, nullptr))
