@@ -34,6 +34,7 @@
 #ifdef __APPLE__
 namespace uf8 {
     void macosBringWindowToFront(void* hwnd, const char* titleHint);
+    void macosMakeWindowKey(void* hwnd, const char* titleHint);
     void macosGetScreenSize(int* w, int* h);
     void macosPinWindow(void* hwnd, int x, int y);
     void macosPinWindowByTitle(void* hwnd, const char* titleHint,
@@ -880,31 +881,40 @@ void QuickLearnWindow::onRunTick()
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
 #ifdef __APPLE__
-        // One-shot OS-level centering. CreateContext alone doesn't
-        // centre — ReaImGui places new context-named hosts at (0, 0).
-        // Compute (screen - host) / 2 from macosGetScreenSize and pin
-        // the host with macosPinWindow once, right after Begin has
-        // materialised the OS window. The pin happens on a single
-        // frame; subsequent user drags persist via ReaImGui's own
-        // host-state, keyed on the bumped "v2" context name.
-        if (impl_->pendingCenterOnFirstFrame && bodyVisible) {
+        if (bodyVisible) {
             void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
-            int sw = 0, sh = 0;
-            uf8::macosGetScreenSize(&sw, &sh);
-            // Read the actual host size now that Begin has materialised
-            // the OS window; centre based on that.
-            double dW = 0, dH = 0;
-            ImGui_GetDisplaySize(impl_->ctx, &dW, &dH);
-            int hw = static_cast<int>(dW > 0 ? dW : sizeW);
-            int hh = static_cast<int>(dH > 0 ? dH : sizeH);
-            if (hwnd && sw > 0 && sh > 0) {
-                int px = (sw - hw) / 2;
-                int py = (sh - hh) / 2;
-                if (px < 0) px = 0;
-                if (py < 0) py = 0;
-                uf8::macosPinWindowByTitle(hwnd,
-                    "Rea-Sixty QuickLearn", px, py);
-                impl_->pendingCenterOnFirstFrame = false;
+            // One-shot OS-level centering on first frame after open.
+            if (impl_->pendingCenterOnFirstFrame && hwnd) {
+                int sw = 0, sh = 0;
+                uf8::macosGetScreenSize(&sw, &sh);
+                double dW = 0, dH = 0;
+                ImGui_GetDisplaySize(impl_->ctx, &dW, &dH);
+                int hw = static_cast<int>(dW > 0 ? dW : sizeW);
+                int hh = static_cast<int>(dH > 0 ? dH : sizeH);
+                if (sw > 0 && sh > 0) {
+                    int px = (sw - hw) / 2;
+                    int py = (sh - hh) / 2;
+                    if (px < 0) px = 0;
+                    if (py < 0) py = 0;
+                    uf8::macosPinWindowByTitle(hwnd,
+                        "Rea-Sixty QuickLearn", px, py);
+                    impl_->pendingCenterOnFirstFrame = false;
+                }
+            }
+            // Gentle key-window promotion — every frame, no-op when
+            // already key. ReaImGui v0.10 multi-viewport never
+            // promotes auxiliary viewport NSWindows to key on mouse
+            // clicks, which kills InputText activation (no key →
+            // no WM_SETFOCUS → no -makeFirstResponder on InputView
+            // → keyDown:/insertText: never delivered → SetActiveID
+            // can't sustain edit mode). macosMakeWindowKey calls
+            // only -makeKeyWindow — no orderFront, no NSApp
+            // activation — so it doesn't interfere with mouse
+            // routing the way macosBringWindowToFront does. Frank
+            // 2026-05-24.
+            if (hwnd) {
+                uf8::macosMakeWindowKey(hwnd,
+                    "Rea-Sixty QuickLearn");
             }
         }
 #endif

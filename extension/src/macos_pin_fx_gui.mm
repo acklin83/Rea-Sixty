@@ -216,4 +216,36 @@ void macosBringWindowToFront(void* hwnd, const char* titleHint)
     }
 }
 
+// Gentle key-window promotion. UNLIKE macosBringWindowToFront, this
+// does NOT call [NSApp activateIgnoringOtherApps:YES] (which kills
+// mouse-event delivery to the host) and does NOT call orderFront
+// (which makes the window jump above plug-in GUIs). It only flips
+// the NSWindow's key flag via -makeKeyWindow when the window is
+// eligible. The promotion is required for InputText activation in
+// ReaImGui v0.10's multi-viewport mode (auxiliary viewport
+// contexts never receive WM_SETFOCUS on mouse clicks alone, so
+// OS keyboard never routes to the InputView and SetActiveID
+// can't sustain edit mode).
+void macosMakeWindowKey(void* hwnd, const char* titleHint)
+{
+    @autoreleasepool {
+        NSWindow* w = windowFromHwnd_(hwnd);
+        if (!w && titleHint && *titleHint) {
+            NSString* needle = [NSString stringWithUTF8String:titleHint];
+            for (NSWindow* cand in [NSApp windows]) {
+                NSString* title = [cand title];
+                if (!title) continue;
+                if ([title rangeOfString:needle].location != NSNotFound) {
+                    w = cand;
+                    break;
+                }
+            }
+        }
+        if (!w) return;
+        if (![w canBecomeKeyWindow]) return;
+        if ([w isKeyWindow]) return;
+        [w makeKeyWindow];
+    }
+}
+
 } // namespace uf8
