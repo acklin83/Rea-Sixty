@@ -190,7 +190,13 @@ struct QuickLearnWindow::Impl {
         // dropping our own persistence here doesn't lose the pose.
         int* posXp = nullptr;
         int* posYp = nullptr;
-        ctx = ImGui_CreateContext("Rea-Sixty QuickLearn",
+        // Context-name bump (Frank 2026-05-24): ReaImGui keys its own
+        // host-pose persistence by context name. The old "Rea-Sixty
+        // QuickLearn" key carried a stale top-left pose from
+        // debugging; bumping the suffix forces a fresh entry, which
+        // ReaImGui places centered on the display like every other
+        // first-time host. Same trick MixerWindow used ("Rea-Sixty v2").
+        ctx = ImGui_CreateContext("Rea-Sixty QuickLearn v2",
                                  &sizeW, &sizeH, posXp, posYp);
         font = ImGui_CreateFont("sans-serif", nullptr);
         if (ctx && font) ImGui_Attach(ctx, font);
@@ -1244,6 +1250,16 @@ void QuickLearnWindow::onRunTick()
                         }
 
                         // ---- Label column ----
+                        // Buffer size MUST match the full sizeof(labelBuf)
+                        // (Frank 2026-05-24). Earlier the InputText was
+                        // told bufsz=8 while labelBuf is 12 bytes; a
+                        // seeded value like "CH3 Tune" (8 chars + NUL =
+                        // 9 bytes) had no NUL within the first 8 bytes,
+                        // so ImGui treated the buffer as malformed and
+                        // refused to enter edit mode silently. Display
+                        // is still scribble-strip-shaped (7-char hw),
+                        // we just allow longer typing and truncate on
+                        // save in saveMap().
                         ImGui_TableNextColumn(impl_->ctx);
                         if (qs.boundParam >= 0) {
                             char lblId[40];
@@ -1253,7 +1269,7 @@ void QuickLearnWindow::onRunTick()
                             int inputFlags = 0;
                             ImGui_InputTextWithHint(impl_->ctx, lblId,
                                 qs.boundName.c_str(),
-                                qs.labelBuf, 8,
+                                qs.labelBuf, sizeof(qs.labelBuf),
                                 &inputFlags, nullptr);
                         }
                     }
