@@ -65,7 +65,6 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
-#include "QuickLearnWindow.h"
 #include "Palette.h"
 #include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
@@ -148,9 +147,6 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // device, fixed by routing through onTimer().
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
-// QuickLearn popup (Phase: AutoLearn/QuickLearn feature set).
-uf8::QuickLearnWindow g_quickLearnWindow;
-std::atomic<bool> g_quickLearnToggleRequest{false};
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -12400,9 +12396,6 @@ void onTimer()
     if (g_mixerToggleRequest.exchange(false)) {
         g_mixerWindow.toggle();
     }
-    if (g_quickLearnToggleRequest.exchange(false)) {
-        g_quickLearnWindow.toggle();
-    }
 
     // Plug-in GUI request flags — all main-thread because TrackFX_Show
     // creates AppKit windows. Set by the show_focused_plugin_gui /
@@ -12723,7 +12716,6 @@ void onTimer()
     // onRunTick.
     static bool s_lastMixerVisible = false;
     g_mixerWindow.onRunTick();
-    g_quickLearnWindow.onRunTick();
     const bool nowVisible = g_mixerWindow.isOpen();
     if (nowVisible != s_lastMixerVisible) {
         uf8::bindings::onMixerVisibilityChanged(nowVisible);
@@ -12782,16 +12774,6 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
-// QuickLearn toggle as a REAPER action — same handler the `quick_learn`
-// surface-binding builtin uses (Frank 2026-05-24, "Kannst du mir
-// QuickLearn noch als Reaper Action geben"). Lets the user bind a
-// keyboard shortcut / MIDI command in REAPER's Action List.
-custom_action_register_t g_actionQuickLearn{
-    0, "REASIXTY_TOGGLE_QUICKLEARN",
-    "Rea-Sixty: Toggle QuickLearn window", nullptr,
-};
-int g_cmdQuickLearn = 0;
-
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
 // triggered via menu/keyboard, not custom_action registered entries.
@@ -12803,7 +12785,6 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
-    if (command == g_cmdQuickLearn)     { g_quickLearnToggleRequest.store(true); return true; }
     return false;
 }
 
@@ -15345,14 +15326,6 @@ void registerBindingHandlers()
         "Open / Close Rea-Sixty Settings", false
     });
 
-    registerBuiltin("quick_learn", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) g_quickLearnToggleRequest.store(true);
-        },
-        [](int /*param*/) -> bool { return g_quickLearnWindow.isOpen(); },
-        "QuickLearn: FX Parameter Mapping Popup", false
-    });
-
     // ---- Phase 2.5 surface-filter modes ----------------------------------
     // Toggles only — actual filter/expand/selection-set logic lands in a
     // follow-up phase. Bind-able now so users can wire them to hardware
@@ -16749,7 +16722,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
-    g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");

@@ -173,7 +173,6 @@ add_library(reaper_uf8 MODULE
     src/PluginMap.cpp
     src/UserPluginCatalog.cpp
     src/AutoLearnEngine.cpp
-    src/QuickLearnWindow.cpp
     src/PluginChunkPatch.cpp
     src/FocusedParam.cpp
     src/UF8Device.cpp

@@ -15,7 +15,6 @@
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
-#import <objc/runtime.h>
 
 namespace uf8 {
 
@@ -67,9 +66,7 @@ void macosPinWindow(void* hwnd, int x, int y)
 // Same as macosPinWindow but with a title-substring fallback when the
 // HWND argument doesn't resolve via isKindOfClass: NSWindow / NSView.
 // ReaImGui's host HWND is a SWELL pseudo-handle that neither test
-// catches; we walk NSApp's window list and match by title. Frank
-// 2026-05-24 — needed to centre QuickLearn after Begin materialises
-// the host.
+// catches; we walk NSApp's window list and match by title.
 void macosPinWindowByTitle(void* hwnd, const char* titleHint, int x, int y)
 {
     @autoreleasepool {
@@ -161,157 +158,6 @@ void* macosFindFxChainWindow(const char* trackName)
             return (__bridge void*)w;
         }
         return nullptr;
-    }
-}
-
-// Raise the OS-level window owning `hwnd` to the front AND make it
-// key (focused). Used by QuickLearn to surface itself above floating
-// plug-in GUIs after a REAPER-action trigger. Falls back to a
-// title-based scan of NSApp's window list when the HWND cast fails
-// (ReaImGui's host can be a custom Cocoa class that isKindOfClass
-// doesn't catch). Pass titleHint for the title-fallback path.
-void macosBringWindowToFront(void* hwnd, const char* titleHint)
-{
-    @autoreleasepool {
-        // First: force REAPER to be the active app regardless of who
-        // has focus right now. Without this, orderFront leaves the
-        // window behind out-of-process plug-in GUIs.
-        // Gate on "REAPER not already active" — when QuickLearn's raise
-        // pulse runs for several frames in a row, repeatedly activating
-        // an already-active app caused the AppKit event loop to drop
-        // mouse / drag events sent to our host window (Frank 2026-05-24:
-        // QuickLearn was visible but un-clickable/un-draggable after
-        // the bring-to-front pulse). One activation is enough; the
-        // subsequent makeKeyAndOrderFront calls handle z-order without
-        // re-touching app activation.
-        if (![NSApp isActive])
-            [NSApp activateIgnoringOtherApps:YES];
-
-        NSWindow* w = windowFromHwnd_(hwnd);
-        // Fallback 1: HWND wasn't recognised — scan ordered windows
-        // for the title hint and use that.
-        if (!w && titleHint && *titleHint) {
-            NSString* needle =
-                [NSString stringWithUTF8String:titleHint];
-            for (NSWindow* cand in [NSApp windows]) {
-                NSString* title = [cand title];
-                if (!title) continue;
-                if ([title rangeOfString:needle].location !=
-                    NSNotFound)
-                {
-                    w = cand;
-                    break;
-                }
-            }
-        }
-        // Fallback 2: still nothing — raise every visible app window
-        // (heavy-handed but better than failing silently).
-        if (!w) {
-            for (NSWindow* cand in [NSApp windows]) {
-                if ([cand isVisible]) [cand orderFrontRegardless];
-            }
-            return;
-        }
-        [w makeKeyAndOrderFront:nil];
-        [w orderFrontRegardless];
-    }
-}
-
-// IMP that always returns YES — installed on the per-instance NSWindow
-// subclass to override -canBecomeKeyWindow. The trailing "c@:" type
-// encoding describes (BOOL ret, id self, SEL _cmd).
-static BOOL uf8_returnYes_imp(id self, SEL _cmd) { (void)self; (void)_cmd; return YES; }
-
-// Force a SWELL-backed NSWindow to be key-eligible AND promote it to
-// key. ReaImGui's standalone host NSWindows return NO from
-// -canBecomeKeyWindow by default (SWELL's borderless utility window
-// class), which blocks -makeKeyWindow silently — without key state,
-// -keyDown:/-insertText: never reach the InputView, so ImGui's
-// SetActiveID activates the InputText visually (cursor appears) but
-// no keystrokes arrive. The fix is to swizzle -canBecomeKeyWindow on
-// the per-window subclass (ReaImGui already isa-swizzled each host
-// NSWindow to its own subclass via CocoaInject::makeSubclass, so
-// class_replaceMethod here only affects THIS host — no leak to
-// REAPER's main window or other ReaImGui contexts). Frank 2026-05-24:
-// "ich gebs gleich auf" frustration cycle, root cause finally located
-// via source-level analysis of ReaImGui's cocoa_inject.mm.
-//
-// Also walks subviews to install the InputView as first responder so
-// keyDown:/insertText: route to ImGui's backend without an extra
-// click.
-void macosForceWindowKeyEligible(void* hwnd, const char* titleHint)
-{
-    @autoreleasepool {
-        NSWindow* w = windowFromHwnd_(hwnd);
-        if (!w && titleHint && *titleHint) {
-            NSString* needle = [NSString stringWithUTF8String:titleHint];
-            for (NSWindow* cand in [NSApp windows]) {
-                NSString* title = [cand title];
-                if (!title) continue;
-                if ([title rangeOfString:needle].location != NSNotFound) {
-                    w = cand;
-                    break;
-                }
-            }
-        }
-        if (!w) return;
-        Class cls = object_getClass(w);
-        SEL sel = @selector(canBecomeKeyWindow);
-        class_replaceMethod(cls, sel,
-                            (IMP)uf8_returnYes_imp, "c@:");
-        if (![w isKeyWindow]) [w makeKeyWindow];
-        // Hunt the InputView in the host's view hierarchy and make it
-        // first responder so keystrokes route immediately. ReaImGui's
-        // input view class name contains "InputView" — case-insensitive
-        // match to dodge namespace prefixes.
-        NSView* root = [w contentView];
-        NSMutableArray<NSView*>* stack = [NSMutableArray array];
-        if (root) [stack addObject:root];
-        while ([stack count] > 0) {
-            NSView* v = [stack lastObject];
-            [stack removeLastObject];
-            NSString* cn = NSStringFromClass([v class]);
-            if (cn && [cn rangeOfString:@"InputView"
-                          options:NSCaseInsensitiveSearch].location
-                      != NSNotFound)
-            {
-                [w makeFirstResponder:v];
-                break;
-            }
-            for (NSView* sub in [v subviews]) [stack addObject:sub];
-        }
-    }
-}
-
-// Gentle key-window promotion. UNLIKE macosBringWindowToFront, this
-// does NOT call [NSApp activateIgnoringOtherApps:YES] (which kills
-// mouse-event delivery to the host) and does NOT call orderFront
-// (which makes the window jump above plug-in GUIs). It only flips
-// the NSWindow's key flag via -makeKeyWindow when the window is
-// eligible. The promotion is required for InputText activation in
-// ReaImGui v0.10's multi-viewport mode (auxiliary viewport
-// contexts never receive WM_SETFOCUS on mouse clicks alone, so
-// OS keyboard never routes to the InputView and SetActiveID
-// can't sustain edit mode).
-void macosMakeWindowKey(void* hwnd, const char* titleHint)
-{
-    @autoreleasepool {
-        NSWindow* w = windowFromHwnd_(hwnd);
-        if (!w && titleHint && *titleHint) {
-            NSString* needle = [NSString stringWithUTF8String:titleHint];
-            for (NSWindow* cand in [NSApp windows]) {
-                NSString* title = [cand title];
-                if (!title) continue;
-                if ([title rangeOfString:needle].location != NSNotFound) {
-                    w = cand;
-                    break;
-                }
-            }
-        }
-        if (!w) return;
-        if (![w canBecomeKeyWindow]) return;
-        if ([w isKeyWindow]) return;
-        [w makeKeyWindow];
     }
 }
 

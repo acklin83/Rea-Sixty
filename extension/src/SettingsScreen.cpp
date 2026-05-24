@@ -2360,7 +2360,6 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "show_focused_plugin_gui"
                  || n == "show_fx_chain"
                  || n == "close_all_fx_guis"
-                 || n == "quick_learn"
                  || n.rfind("plugin_", 0) == 0)
                     return "Plug-in";
 
