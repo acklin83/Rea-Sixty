@@ -1303,27 +1303,40 @@ void QuickLearnWindow::onRunTick()
                         }
 
                         // ---- Label column ----
-                        // Buffer size MUST match the full sizeof(labelBuf)
-                        // (Frank 2026-05-24). Earlier the InputText was
-                        // told bufsz=8 while labelBuf is 12 bytes; a
-                        // seeded value like "CH3 Tune" (8 chars + NUL =
-                        // 9 bytes) had no NUL within the first 8 bytes,
-                        // so ImGui treated the buffer as malformed and
-                        // refused to enter edit mode silently. Display
-                        // is still scribble-strip-shaped (7-char hw),
-                        // we just allow longer typing and truncate on
-                        // save in saveMap().
+                        // Exact copy of the working AutoLearn pattern
+                        // from SettingsScreen.cpp:7755-7783 (the
+                        // "SSL Slot cell"). Local stack editBuf,
+                        // strncpy from labelBuf, bufsz=8 (= scribble-
+                        // strip 7 chars + NUL), nullptr for flagsInOpt,
+                        // copy back on TRUE return. Per-row InputText
+                        // with our previous "persistent buffer +
+                        // &inputFlags" formulation refused to enter
+                        // edit mode in the table; AutoLearn's version
+                        // works, so we use AutoLearn's version. Frank
+                        // 2026-05-24.
                         ImGui_TableNextColumn(impl_->ctx);
                         if (qs.boundParam >= 0) {
-                            char lblId[40];
+                            char editBuf[16] = {};
+                            std::strncpy(editBuf, qs.labelBuf,
+                                         sizeof(editBuf) - 1);
+                            char lblId[48];
                             snprintf(lblId, sizeof(lblId),
                                      "##ql_lbl_%d", i);
                             ImGui_SetNextItemWidth(impl_->ctx, -1.0);
-                            int inputFlags = 0;
-                            ImGui_InputTextWithHint(impl_->ctx, lblId,
-                                qs.boundName.c_str(),
-                                qs.labelBuf, sizeof(qs.labelBuf),
-                                &inputFlags, nullptr);
+                            if (ImGui_InputTextWithHint(impl_->ctx,
+                                    lblId,
+                                    qs.boundName.c_str(),
+                                    editBuf, 8,
+                                    nullptr, nullptr))
+                            {
+                                // Truncate to 7 hardware chars,
+                                // copy back to persistent storage.
+                                editBuf[7] = '\0';
+                                std::strncpy(qs.labelBuf, editBuf,
+                                             sizeof(qs.labelBuf) - 1);
+                                qs.labelBuf[sizeof(qs.labelBuf) - 1]
+                                    = '\0';
+                            }
                         }
                     }
                     ImGui_EndTable(impl_->ctx);
