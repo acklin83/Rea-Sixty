@@ -35,6 +35,7 @@
 namespace uf8 {
     void macosBringWindowToFront(void* hwnd, const char* titleHint);
     void macosMakeWindowKey(void* hwnd, const char* titleHint);
+    void macosForceWindowKeyEligible(void* hwnd, const char* titleHint);
     void macosGetScreenSize(int* w, int* h);
     void macosPinWindow(void* hwnd, int x, int y);
     void macosPinWindowByTitle(void* hwnd, const char* titleHint,
@@ -883,7 +884,15 @@ void QuickLearnWindow::onRunTick()
 #ifdef __APPLE__
         if (bodyVisible) {
             void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
-            // One-shot OS-level centering on first frame after open.
+            // One-shot OS-level centering + key-eligibility swizzle
+            // on first frame after open. The swizzle installs
+            // -canBecomeKeyWindow → YES on the per-window subclass
+            // (ReaImGui isa-swizzled each host to its own subclass,
+            // so this leak-free) and makes the window key + sets the
+            // InputView as first responder. Without this the SWELL
+            // default canBecomeKeyWindow returns NO and makeKeyWindow
+            // is a silent no-op, which kills InputText editing (cursor
+            // appears on click but no keystrokes reach the field).
             if (impl_->pendingCenterOnFirstFrame && hwnd) {
                 int sw = 0, sh = 0;
                 uf8::macosGetScreenSize(&sw, &sh);
@@ -898,6 +907,8 @@ void QuickLearnWindow::onRunTick()
                     if (py < 0) py = 0;
                     uf8::macosPinWindowByTitle(hwnd,
                         "Rea-Sixty QuickLearn", px, py);
+                    uf8::macosForceWindowKeyEligible(hwnd,
+                        "Rea-Sixty QuickLearn");
                     impl_->pendingCenterOnFirstFrame = false;
                 }
             }

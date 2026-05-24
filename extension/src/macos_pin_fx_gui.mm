@@ -15,6 +15,7 @@
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 
 namespace uf8 {
 
@@ -213,6 +214,72 @@ void macosBringWindowToFront(void* hwnd, const char* titleHint)
         }
         [w makeKeyAndOrderFront:nil];
         [w orderFrontRegardless];
+    }
+}
+
+// IMP that always returns YES — installed on the per-instance NSWindow
+// subclass to override -canBecomeKeyWindow. The trailing "c@:" type
+// encoding describes (BOOL ret, id self, SEL _cmd).
+static BOOL uf8_returnYes_imp(id self, SEL _cmd) { (void)self; (void)_cmd; return YES; }
+
+// Force a SWELL-backed NSWindow to be key-eligible AND promote it to
+// key. ReaImGui's standalone host NSWindows return NO from
+// -canBecomeKeyWindow by default (SWELL's borderless utility window
+// class), which blocks -makeKeyWindow silently — without key state,
+// -keyDown:/-insertText: never reach the InputView, so ImGui's
+// SetActiveID activates the InputText visually (cursor appears) but
+// no keystrokes arrive. The fix is to swizzle -canBecomeKeyWindow on
+// the per-window subclass (ReaImGui already isa-swizzled each host
+// NSWindow to its own subclass via CocoaInject::makeSubclass, so
+// class_replaceMethod here only affects THIS host — no leak to
+// REAPER's main window or other ReaImGui contexts). Frank 2026-05-24:
+// "ich gebs gleich auf" frustration cycle, root cause finally located
+// via source-level analysis of ReaImGui's cocoa_inject.mm.
+//
+// Also walks subviews to install the InputView as first responder so
+// keyDown:/insertText: route to ImGui's backend without an extra
+// click.
+void macosForceWindowKeyEligible(void* hwnd, const char* titleHint)
+{
+    @autoreleasepool {
+        NSWindow* w = windowFromHwnd_(hwnd);
+        if (!w && titleHint && *titleHint) {
+            NSString* needle = [NSString stringWithUTF8String:titleHint];
+            for (NSWindow* cand in [NSApp windows]) {
+                NSString* title = [cand title];
+                if (!title) continue;
+                if ([title rangeOfString:needle].location != NSNotFound) {
+                    w = cand;
+                    break;
+                }
+            }
+        }
+        if (!w) return;
+        Class cls = object_getClass(w);
+        SEL sel = @selector(canBecomeKeyWindow);
+        class_replaceMethod(cls, sel,
+                            (IMP)uf8_returnYes_imp, "c@:");
+        if (![w isKeyWindow]) [w makeKeyWindow];
+        // Hunt the InputView in the host's view hierarchy and make it
+        // first responder so keystrokes route immediately. ReaImGui's
+        // input view class name contains "InputView" — case-insensitive
+        // match to dodge namespace prefixes.
+        NSView* root = [w contentView];
+        NSMutableArray<NSView*>* stack = [NSMutableArray array];
+        if (root) [stack addObject:root];
+        while ([stack count] > 0) {
+            NSView* v = [stack lastObject];
+            [stack removeLastObject];
+            NSString* cn = NSStringFromClass([v class]);
+            if (cn && [cn rangeOfString:@"InputView"
+                          options:NSCaseInsensitiveSearch].location
+                      != NSNotFound)
+            {
+                [w makeFirstResponder:v];
+                break;
+            }
+            for (NSView* sub in [v subviews]) [stack addObject:sub];
+        }
     }
 }
 
