@@ -36,6 +36,59 @@ std::string toLower(const std::string& s)
     return r;
 }
 
+// Detect a "CH<N>" / "Channel <N>" / "Chan <N>" / "Ch<N>" prefix and return
+// the 1-based channel index. Returns 0 when no prefix is found. Tolerates a
+// space, hyphen, dot or underscore between prefix and digits ("CH 1",
+// "Ch-1", "ch.1", "Ch_1"). Pass a lowercased name in.
+int extractChannelIndex(const std::string& lower)
+{
+    const char* prefixes[] = { "channel", "chan", "ch" };
+    for (const char* pfx : prefixes) {
+        const size_t L = std::strlen(pfx);
+        if (lower.size() <= L) continue;
+        if (lower.compare(0, L, pfx) != 0) continue;
+        size_t i = L;
+        while (i < lower.size() &&
+               (lower[i] == ' ' || lower[i] == '-' ||
+                lower[i] == '.' || lower[i] == '_')) ++i;
+        if (i >= lower.size() ||
+            !std::isdigit(static_cast<unsigned char>(lower[i]))) continue;
+        int n = 0;
+        while (i < lower.size() &&
+               std::isdigit(static_cast<unsigned char>(lower[i]))) {
+            n = n * 10 + (lower[i] - '0');
+            ++i;
+        }
+        if (n >= 1) return n;
+    }
+    return 0;
+}
+
+// Identify params claimed by suggestUf8Strips (CH<N> Vol/Level/Mute/etc.).
+// suggestSlots and suggestUf8Banks both skip these so the channel-mixer
+// params get a single, correctly-positioned home in the strip suggestion
+// list rather than getting double-mapped to V-Pots or singular SSL slots.
+bool isChannelStripCandidate(const std::string& lower)
+{
+    if (extractChannelIndex(lower) < 1) return false;
+    return lower.find("volume") != std::string::npos
+        || lower.find("level")  != std::string::npos
+        || lower.find("fader")  != std::string::npos
+        || lower.find(" vol")   != std::string::npos
+        || (lower.size() >= 3 &&
+            lower.compare(lower.size() - 3, 3, "vol") == 0)
+        || lower.find("output") != std::string::npos
+        || lower.find("mute")   != std::string::npos
+        || lower.find(" cut")   != std::string::npos
+        || (lower.size() >= 3 &&
+            lower.compare(lower.size() - 3, 3, "cut") == 0)
+        || lower.find("solo")   != std::string::npos
+        || lower.find("select") != std::string::npos
+        || lower.find(" sel")   != std::string::npos
+        || (lower.size() >= 3 &&
+            lower.compare(lower.size() - 3, 3, "sel") == 0);
+}
+
 // Strip leading/trailing whitespace + collapse internal runs to single space.
 std::string normalise(const std::string& s)
 {
@@ -77,6 +130,8 @@ struct DictEntry {
     std::string category;     // "EQ", "Comp", "Gate", "Filter", "I/O", "Misc"
     std::string displayName;  // canonical name for the suggestion
     int         sourceCount = 1;  // how many sources contributed this pattern
+    bool        fromUser = false; // true = added by mergeUserMaps (lower
+                                  // confidence cap; base seeds win 1.0)
 };
 
 // Key = normalised param-name pattern. Value = best DictEntry for that pattern.
@@ -237,6 +292,11 @@ static const SeedRow kGenericSeeds[] = {
     {"gain",              9, Domain::None, "EQ", "HF Gain"},
     {"q",                13, Domain::None, "EQ", "HMF Q"},
     {"bandwidth",        13, Domain::None, "EQ", "HMF Q"},
+    // Bypass — linkIdx 0 in both CS and BC topologies. Frank
+    // 2026-05-24: the engine used to hard-skip "bypass" params at
+    // the top of suggestSlots, so the slot stayed unmapped even on
+    // plug-ins that literally have a "Bypass" param.
+    {"bypass",            0, Domain::None, "Misc", "Bypass"},
 };
 
 // ---- Build dictionary ------------------------------------------------------
@@ -291,8 +351,17 @@ void mergeUserMaps(Dict& dict, Domain domain)
                 if (key.empty()) break;
 
                 // Look up the canonical display name from built-in maps.
+                // CRITICAL: filter by the user-map's domain. linkIdx is
+                // NOT unique across domains — e.g. linkIdx 1 is
+                // FaderLevel in CS but Threshold in BC. Without this
+                // filter the first matching PluginMap wins regardless
+                // of domain, so user-mapped CS slots get tagged with
+                // BC slot names and AutoLearn happily suggests
+                // "Threshold ← Out Gain @ 100%" on every new map
+                // (Frank 2026-05-24).
                 std::string dispName;
                 for (const auto& bm : allPluginMaps()) {
+                    if (bm.domain != m.domain) continue;
                     const auto* ls = findSlotByLinkIdx(bm, slot.linkIdx);
                     if (ls && ls->name) { dispName = ls->name; break; }
                 }
@@ -301,12 +370,22 @@ void mergeUserMaps(Dict& dict, Domain domain)
                 // Determine category from built-in seeds or fall back.
                 std::string cat2 = "Misc";
                 auto it = dict.find(key);
-                if (it != dict.end() && it->second.linkIdx == slot.linkIdx) {
-                    cat2 = it->second.category;
-                    it->second.sourceCount++;
+                if (it != dict.end()) {
+                    // Existing entry — only count this user-map as a
+                    // corroborating source when the slot matches.
+                    // Conflict (different linkIdx) is silently dropped:
+                    // do NOT overwrite a base seed or an earlier user
+                    // entry with potentially-bad data (Frank 2026-05-24,
+                    // accidental Width binding on bx_console caused
+                    // every "LC Threshold" param to suggest "Width @
+                    // 100%" across all later plug-ins).
+                    if (it->second.linkIdx == slot.linkIdx) {
+                        it->second.sourceCount++;
+                    }
                 } else {
                     // Insert new entry from user map.
-                    dict[key] = {slot.linkIdx, m.domain, cat2, dispName, 1};
+                    dict[key] = {slot.linkIdx, m.domain, cat2, dispName,
+                                 1, /*fromUser*/ true};
                 }
                 break;
             }
@@ -323,13 +402,26 @@ struct Match {
     std::string category;
 };
 
-// Try exact match (normalised) → confidence 1.0.
+// Try exact match (normalised) → confidence 1.0 for base seeds, capped
+// lower for user-learned entries. Single-source user maps top out at
+// 0.75 (yellow zone) so Frank gets a visual cue to verify — accidental
+// or domain-specific user mappings shouldn't claim canonical authority.
+// Sourcecount ≥ 3 means the same pattern appeared in multiple user
+// maps and treats the entry as reliable (0.95).
 bool tryExact(const Dict& dict, const std::string& norm, Match& out)
 {
     auto it = dict.find(norm);
     if (it == dict.end()) return false;
-    out = {it->second.linkIdx, 1.0f, it->second.displayName, it->second.category};
-    if (it->second.sourceCount >= 3) out.confidence += 0.05f;
+    float conf = 1.0f;
+    if (it->second.fromUser) {
+        conf = (it->second.sourceCount >= 3) ? 0.95f : 0.75f;
+    }
+    // Hard cap at 1.0 — earlier code added +0.05 for sourceCount≥3 and
+    // produced 105% renders (Frank 2026-05-24). Base-seed exact matches
+    // already top out at 1.0; the bump was redundant.
+    if (conf > 1.0f) conf = 1.0f;
+    out = {it->second.linkIdx, conf, it->second.displayName,
+           it->second.category};
     return true;
 }
 
@@ -463,15 +555,55 @@ std::vector<Suggestion> suggestSlots(
 
     for (const auto& pi : params) {
         if (pi.name.empty()) continue;
-        // Skip likely non-mappable params (bypass, enable, etc. handled separately).
         std::string norm = normalise(pi.name);
-        if (norm == "bypass" || norm == "enable" || norm == "on/off") continue;
+        // (Previously hard-skipped "bypass" / "enable" / "on/off"
+        // claiming they were "handled separately" — they weren't, the
+        // Bypass SSL slot never got a candidate and stayed unmapped
+        // even on plug-ins with a clearly-named "Bypass" param. Skip
+        // removed 2026-05-24; the dictionary now matches them
+        // properly. The strict-keyword filter below still prevents
+        // "Bypass" param ↔ non-Bypass slot cross-matches.)
+
+        // Skip channel-numbered params (CH<N>, Channel <N>, …). They
+        // belong to UF8 strip / V-Pot positions — see suggestUf8Strips
+        // and the channel-positioned branch of suggestUf8Banks. SSL
+        // slots are single-instance and grabbing one of "CH7 Phase" /
+        // "CH7 Enable" / "CH8 Pan" for the singular "Polarity" / "EQ
+        // In" / "Pan" slots gives Frank's "wrong-channel" mismatch
+        // (2026-05-24).
+        if (extractChannelIndex(norm) >= 1) continue;
 
         Match m{};
         if (tryExact(dict, norm, m) ||
             trySubstring(dict, norm, m) ||
             tryToken(dict, tokenise(norm), m))
         {
+            // Semantic-keyword guard. Some words are too distinctive
+            // to ignore: when one side carries the keyword and the
+            // other doesn't, the match is structurally wrong and we
+            // reject it outright. Stops "Bypass ← Meter Scale @ 82%"
+            // (Bypass is a control toggle, not a meter param) and
+            // "Out Trim ← Output Pan @ 83%" (pan ≠ output trim).
+            // (Frank 2026-05-24.)
+            auto lc = [](std::string s) {
+                for (auto& c : s)
+                    c = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(c)));
+                return s;
+            };
+            const std::string paramLc = lc(pi.name);
+            const std::string slotLc  = lc(m.slotName);
+            static const char* kStrictKeywords[] = {
+                "bypass", "pan"
+            };
+            bool semOk = true;
+            for (const char* kw : kStrictKeywords) {
+                const bool paramHas = paramLc.find(kw) != std::string::npos;
+                const bool slotHas  = slotLc.find(kw)  != std::string::npos;
+                if (paramHas != slotHas) { semOk = false; break; }
+            }
+            if (!semOk) continue;
+
             candidates.push_back({pi.vst3Param, m.linkIdx, m.confidence,
                                   pi.name, m.slotName});
         }
@@ -499,6 +631,34 @@ std::vector<Suggestion> suggestSlots(
     return results;
 }
 
+// Extract the lowercased "control-kind" suffix from a CH<N>-prefixed
+// param name. "CH1 Pan" → "pan", "Channel 7 Send 2 Level" → "send 2
+// level". Returns empty when no CH<N> prefix or no suffix after the
+// digits. Used by suggestUf8Banks to group channels of the same
+// control type into one V-Pot bank.
+std::string extractChannelControlKind(const std::string& lower)
+{
+    const char* prefixes[] = { "channel", "chan", "ch" };
+    for (const char* pfx : prefixes) {
+        const size_t L = std::strlen(pfx);
+        if (lower.size() <= L || lower.compare(0, L, pfx) != 0) continue;
+        size_t i = L;
+        while (i < lower.size() &&
+               (lower[i] == ' ' || lower[i] == '-' ||
+                lower[i] == '.' || lower[i] == '_')) ++i;
+        if (i >= lower.size() ||
+            !std::isdigit(static_cast<unsigned char>(lower[i]))) continue;
+        while (i < lower.size() &&
+               std::isdigit(static_cast<unsigned char>(lower[i]))) ++i;
+        while (i < lower.size() &&
+               (lower[i] == ' ' || lower[i] == '-' ||
+                lower[i] == '.' || lower[i] == '_')) ++i;
+        if (i >= lower.size()) return {};
+        return lower.substr(i);
+    }
+    return {};
+}
+
 std::vector<Uf8Suggestion> suggestUf8Banks(
     const std::vector<UserParamInfo>& params,
     int faderBankCount)
@@ -506,40 +666,106 @@ std::vector<Uf8Suggestion> suggestUf8Banks(
     if (faderBankCount < 1) faderBankCount = 1;
     if (faderBankCount > 2) faderBankCount = 2;
 
-    // Classify all non-trivial params by category.
+    auto lowerOf = [](const std::string& s) {
+        std::string out = s;
+        for (auto& c : out)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
+    };
+
+    // Pass A: split params into channel-positioned (CH<N> + non-strip
+    // keyword) and category-classified (un-numbered). Strip-keyword
+    // channelled params (CH<N> Volume / Mute / Solo / Sel) are handed
+    // off to suggestUf8Strips and skipped here so we don't double-map.
+    struct ChnParam {
+        int         chN;
+        std::string kind;       // suffix after "CH<N> "
+        int         vst3Param;
+        std::string name;
+    };
     struct CatParam {
         int         vst3Param;
         std::string name;
         std::string category;
     };
-    std::vector<CatParam> classified;
+    std::vector<ChnParam> channelled;
+    std::vector<CatParam> unNumbered;
+
     for (const auto& pi : params) {
         if (pi.name.empty()) continue;
-        std::string norm = normalise(pi.name);
-        if (norm == "bypass" || norm == "enable" || norm == "on/off") continue;
-        // Skip likely enum/toggle params for V-Pot mapping.
+        const std::string norm = normalise(pi.name);
+        if (norm == "bypass" || norm == "enable" || norm == "on/off")
+            continue;
         if (pi.wasEnum) continue;
-        classified.push_back({pi.vst3Param, pi.name, classifyParamName(norm)});
+
+        const std::string lower = lowerOf(pi.name);
+        if (isChannelStripCandidate(lower)) continue;     // strips claim it
+
+        const int chN = extractChannelIndex(lower);
+        if (chN >= 1) {
+            channelled.push_back({chN, extractChannelControlKind(lower),
+                                  pi.vst3Param, pi.name});
+        } else {
+            unNumbered.push_back({pi.vst3Param, pi.name,
+                                  classifyParamName(norm)});
+        }
     }
 
-    // Group by category, preserving order within each group.
-    const char* categoryOrder[] = {"EQ", "Comp", "Gate", "Filter", "I/O", "Misc"};
-    std::vector<Uf8Suggestion> results;
+    // Pass B: group channelled params by control-kind in first-seen
+    // order. Each unique kind claims one V-Pot bank; CH<N> goes to
+    // strip (N-1)%8, fader-bank (N-1)/8.
+    std::unordered_map<std::string, std::vector<ChnParam>> byKind;
+    std::vector<std::string> kindOrder;
+    for (const auto& c : channelled) {
+        if (byKind.find(c.kind) == byKind.end())
+            kindOrder.push_back(c.kind);
+        byKind[c.kind].push_back(c);
+    }
 
-    int vpotBank = 0;
+    std::vector<Uf8Suggestion> results;
+    int  nextVpotBank = 0;
+
+    for (const auto& kind : kindOrder) {
+        if (nextVpotBank >= kUserUf8VpotBankCount) break;
+        for (const auto& c : byKind[kind]) {
+            const int fb = (c.chN - 1) / 8;
+            const int st = (c.chN - 1) % 8;
+            if (fb >= faderBankCount) continue;
+            // Title-case the kind for the Category column display.
+            std::string cat = kind;
+            if (!cat.empty())
+                cat[0] = static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(cat[0])));
+            results.push_back({
+                fb, nextVpotBank, st,
+                c.vst3Param, c.name, cat,
+                0.95f,      // channel-positioned = high confidence
+                true
+            });
+        }
+        ++nextVpotBank;
+    }
+
+    // Pass C: pack the remaining V-Pot banks with category-classified
+    // un-numbered params. Uses the existing EQ / Comp / Gate / Filter /
+    // I-O / Misc grouping. Confidence stays at 0.5 since the position
+    // is heuristic — no semantic match between the strip and the param.
+    const char* categoryOrder[] = {"EQ", "Comp", "Gate", "Filter", "I/O", "Misc"};
+    int vpotBank = nextVpotBank;
     int strip    = 0;
     int faderBank = 0;
     const int maxStrips = 8 * kUserUf8VpotBankCount * faderBankCount;
 
     for (const char* cat : categoryOrder) {
-        for (const auto& cp : classified) {
+        for (const auto& cp : unNumbered) {
             if (cp.category != cat) continue;
+            if (vpotBank >= kUserUf8VpotBankCount) break;
             if (static_cast<int>(results.size()) >= maxStrips) break;
 
             results.push_back({
                 faderBank, vpotBank, strip,
                 cp.vst3Param, cp.name, cp.category,
-                0.5f,  // UF8 suggestions are category-based, not name-matched
+                0.5f,
                 true
             });
 
@@ -554,11 +780,106 @@ std::vector<Uf8Suggestion> suggestUf8Banks(
                 }
             }
         }
-        if (faderBank >= faderBankCount && vpotBank >= kUserUf8VpotBankCount)
-            break;
+        if (faderBank >= faderBankCount &&
+            vpotBank >= kUserUf8VpotBankCount) break;
     }
 
     return results;
+}
+
+std::vector<Uf8StripSuggestion> suggestUf8Strips(
+    const std::vector<UserParamInfo>& params,
+    int faderBankCount)
+{
+    if (faderBankCount < 1) faderBankCount = 1;
+    if (faderBankCount > 2) faderBankCount = 2;
+
+    auto lowerOf = [](const std::string& s) {
+        std::string out = s;
+        for (auto& c : out)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
+    };
+
+    // Extract a 1-based channel index from a "CH<N>" or "Channel <N>"
+    // prefix. Returns 0 if no match. Tolerates a space, hyphen or
+    // dot between prefix and digits ("CH 1", "Ch-1", "ch.1").
+    auto chIndex = [](const std::string& lower) -> int {
+        const char* prefixes[] = { "channel", "chan", "ch" };
+        for (const char* pfx : prefixes) {
+            const size_t L = std::strlen(pfx);
+            if (lower.size() <= L) continue;
+            if (lower.compare(0, L, pfx) != 0) continue;
+            size_t i = L;
+            while (i < lower.size() &&
+                   (lower[i] == ' ' || lower[i] == '-' ||
+                    lower[i] == '.' || lower[i] == '_')) ++i;
+            if (i >= lower.size() || !std::isdigit(
+                    static_cast<unsigned char>(lower[i]))) continue;
+            int n = 0;
+            while (i < lower.size() && std::isdigit(
+                       static_cast<unsigned char>(lower[i]))) {
+                n = n * 10 + (lower[i] - '0');
+                ++i;
+            }
+            if (n >= 1) return n;
+        }
+        return 0;
+    };
+
+    std::vector<Uf8StripSuggestion> out;
+    const int maxStrip = 8 * faderBankCount;   // 8 or 16
+
+    for (const auto& pi : params) {
+        if (pi.name.empty()) continue;
+        const std::string lower = lowerOf(pi.name);
+        const int n = chIndex(lower);
+        if (n < 1 || n > maxStrip) continue;
+
+        using Kind = Uf8StripSuggestion::Kind;
+        Kind kind;
+        // Order matters: "Mute"/"Solo"/"Sel" win over "Volume" because
+        // some plug-ins name buttons "Channel 1 Mute Level" etc. Check
+        // the button-style keywords first.
+        if (lower.find("mute") != std::string::npos ||
+            lower.find(" cut") != std::string::npos ||
+            (lower.size() >= 3 && lower.compare(lower.size() - 3, 3, "cut") == 0))
+            kind = Kind::Cut;
+        else if (lower.find("solo") != std::string::npos)
+            kind = Kind::Solo;
+        else if (lower.find("select") != std::string::npos ||
+                 lower.find(" sel")   != std::string::npos ||
+                 (lower.size() >= 3 &&
+                  lower.compare(lower.size() - 3, 3, "sel") == 0))
+            kind = Kind::Sel;
+        else if (lower.find("volume") != std::string::npos ||
+                 lower.find("level")  != std::string::npos ||
+                 lower.find("fader")  != std::string::npos ||
+                 lower.find(" vol")   != std::string::npos ||
+                 (lower.size() >= 3 &&
+                  lower.compare(lower.size() - 3, 3, "vol") == 0) ||
+                 lower.find("output") != std::string::npos)
+            kind = Kind::Fader;
+        else
+            continue;
+
+        const int fb = (n - 1) / 8;
+        const int st = (n - 1) % 8;
+        if (fb >= faderBankCount) continue;
+
+        out.push_back({ kind, fb, st, pi.vst3Param, pi.name, 0.85f, true });
+    }
+
+    // Stable sort: by kind (Fader, Cut, Solo, Sel), then by faderBank,
+    // then by strip. Keeps the preview table well grouped.
+    std::sort(out.begin(), out.end(),
+        [](const Uf8StripSuggestion& a, const Uf8StripSuggestion& b) {
+            if (a.kind != b.kind) return static_cast<int>(a.kind) < static_cast<int>(b.kind);
+            if (a.faderBank != b.faderBank) return a.faderBank < b.faderBank;
+            return a.strip < b.strip;
+        });
+
+    return out;
 }
 
 } // namespace autolearn

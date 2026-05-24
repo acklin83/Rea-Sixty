@@ -128,4 +128,48 @@ void* macosFindFxChainWindow(const char* trackName)
     }
 }
 
+// Raise the OS-level window owning `hwnd` to the front AND make it
+// key (focused). Used by QuickLearn to surface itself above floating
+// plug-in GUIs after a REAPER-action trigger. Falls back to a
+// title-based scan of NSApp's window list when the HWND cast fails
+// (ReaImGui's host can be a custom Cocoa class that isKindOfClass
+// doesn't catch). Pass titleHint for the title-fallback path.
+void macosBringWindowToFront(void* hwnd, const char* titleHint)
+{
+    @autoreleasepool {
+        // First: force REAPER to be the active app regardless of who
+        // has focus right now. Without this, orderFront leaves the
+        // window behind out-of-process plug-in GUIs.
+        [NSApp activateIgnoringOtherApps:YES];
+
+        NSWindow* w = windowFromHwnd_(hwnd);
+        // Fallback 1: HWND wasn't recognised — scan ordered windows
+        // for the title hint and use that.
+        if (!w && titleHint && *titleHint) {
+            NSString* needle =
+                [NSString stringWithUTF8String:titleHint];
+            for (NSWindow* cand in [NSApp windows]) {
+                NSString* title = [cand title];
+                if (!title) continue;
+                if ([title rangeOfString:needle].location !=
+                    NSNotFound)
+                {
+                    w = cand;
+                    break;
+                }
+            }
+        }
+        // Fallback 2: still nothing — raise every visible app window
+        // (heavy-handed but better than failing silently).
+        if (!w) {
+            for (NSWindow* cand in [NSApp windows]) {
+                if ([cand isVisible]) [cand orderFrontRegardless];
+            }
+            return;
+        }
+        [w makeKeyAndOrderFront:nil];
+        [w orderFrontRegardless];
+    }
+}
+
 } // namespace uf8

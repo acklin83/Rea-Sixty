@@ -9634,19 +9634,9 @@ void pushZonesForVisibleSlots()
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                 const auto& bs = uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
-                if (bs.vst3Param >= 0) {
-                    char pn[64]  = {0};
-                    char vbuf[64] = {0};
-                    if (!bs.label.empty())
-                        std::strncpy(pn, bs.label.c_str(), sizeof(pn) - 1);
-                    else
-                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
-                            bs.vst3Param, pn, sizeof(pn));
-                    const double norm = TrackFX_GetParamNormalized(
-                        uctx.tr, uctx.fxIdx, bs.vst3Param);
-                    const double v = bs.inverted ? 1.0 - norm : norm;
-                    TrackFX_FormatParamValueNormalized(uctx.tr,
-                        uctx.fxIdx, bs.vst3Param, v, vbuf, sizeof(vbuf));
+                const auto& fb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                auto sanitizeFormattedValue = [](char* vbuf, size_t cap)
+                {
                     std::string valStr(vbuf);
                     for (size_t p = 0; p + 2 < valStr.size(); ) {
                         if (static_cast<unsigned char>(valStr[p])     == 0xE2 &&
@@ -9661,7 +9651,41 @@ void pushZonesForVisibleSlots()
                     }
                     while (!valStr.empty() && valStr.front() == ' ')
                         valStr.erase(0, 1);
-                    valLine = composeValueLine(pn, valStr);
+                    return valStr;
+                };
+                if (bs.vst3Param >= 0) {
+                    char pn[64]  = {0};
+                    char vbuf[64] = {0};
+                    if (!bs.label.empty())
+                        std::strncpy(pn, bs.label.c_str(), sizeof(pn) - 1);
+                    else
+                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
+                            bs.vst3Param, pn, sizeof(pn));
+                    const double norm = TrackFX_GetParamNormalized(
+                        uctx.tr, uctx.fxIdx, bs.vst3Param);
+                    const double v = bs.inverted ? 1.0 - norm : norm;
+                    TrackFX_FormatParamValueNormalized(uctx.tr,
+                        uctx.fxIdx, bs.vst3Param, v, vbuf, sizeof(vbuf));
+                    valLine = composeValueLine(pn,
+                        sanitizeFormattedValue(vbuf, sizeof(vbuf)));
+                } else if (fb.faderVst3Param >= 0) {
+                    // V-Pot bank slot empty but the fader is mapped to a
+                    // user param — surface its label + value so a
+                    // fader-only mapping is still visible on the scribble.
+                    char pn[64]  = {0};
+                    char vbuf[64] = {0};
+                    if (!fb.faderLabel.empty())
+                        std::strncpy(pn, fb.faderLabel.c_str(), sizeof(pn) - 1);
+                    else
+                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
+                            fb.faderVst3Param, pn, sizeof(pn));
+                    const double norm = TrackFX_GetParamNormalized(
+                        uctx.tr, uctx.fxIdx, fb.faderVst3Param);
+                    const double v = fb.faderInverted ? 1.0 - norm : norm;
+                    TrackFX_FormatParamValueNormalized(uctx.tr,
+                        uctx.fxIdx, fb.faderVst3Param, v, vbuf, sizeof(vbuf));
+                    valLine = composeValueLine(pn,
+                        sanitizeFormattedValue(vbuf, sizeof(vbuf)));
                 } else {
                     valLine = std::string(19, ' ');
                 }
@@ -12758,6 +12782,16 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
+// QuickLearn toggle as a REAPER action — same handler the `quick_learn`
+// surface-binding builtin uses (Frank 2026-05-24, "Kannst du mir
+// QuickLearn noch als Reaper Action geben"). Lets the user bind a
+// keyboard shortcut / MIDI command in REAPER's Action List.
+custom_action_register_t g_actionQuickLearn{
+    0, "REASIXTY_TOGGLE_QUICKLEARN",
+    "Rea-Sixty: Toggle QuickLearn window", nullptr,
+};
+int g_cmdQuickLearn = 0;
+
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
 // triggered via menu/keyboard, not custom_action registered entries.
@@ -12769,6 +12803,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
+    if (command == g_cmdQuickLearn)     { g_quickLearnToggleRequest.store(true); return true; }
     return false;
 }
 
@@ -16714,6 +16749,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
+    g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");

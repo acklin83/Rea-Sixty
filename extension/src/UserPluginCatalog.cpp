@@ -403,7 +403,9 @@ std::string serialize_(const UserPluginCatalog& c)
                     os << "\n            { "
                        << "\"fader\": { \"vst3Param\": " << sb.faderVst3Param
                        << ", \"inverted\": " << (sb.faderInverted ? "true" : "false")
-                       << " }, "
+                       << ", \"label\": ";
+                    appendEscaped_(os, sb.faderLabel);
+                    os << " }, "
                        << "\"solo\": { \"vst3Param\": " << sb.soloVst3Param
                        << ", \"colour\": " << static_cast<unsigned>(sb.soloColour)
                        << ", \"invert\": " << (sb.soloInvert ? "true" : "false")
@@ -631,6 +633,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 {
                     getIntI_(fo, "vst3Param", sb.faderVst3Param);
                     getBoolI_(fo, "inverted", sb.faderInverted);
+                    getStrI_(fo, "label", sb.faderLabel);
                 }
                 int colTmp = 0;
                 if (auto* so2 = so->get_item_by_name("solo");

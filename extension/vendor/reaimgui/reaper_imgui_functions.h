@@ -424,7 +424,15 @@ REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int*
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* v1InOut, int* v2InOut, int* flagsInOptional)> ImGui_InputInt2 REAIMGUIAPI_INIT("ImGui_InputInt2");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* v1InOut, int* v2InOut, int* v3InOut, int* flagsInOptional)> ImGui_InputInt3 REAIMGUIAPI_INIT("ImGui_InputInt3");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* v1InOut, int* v2InOut, int* v3InOut, int* v4InOut, int* flagsInOptional)> ImGui_InputInt4 REAIMGUIAPI_INIT("ImGui_InputInt4");
-REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, char* bufInOutNeedBig, int bufInOutNeedBig_sz, int* flagsInOptional)> ImGui_InputText REAIMGUIAPI_INIT("ImGui_InputText");
+// Patched 2026-05-24: v0.10 added a trailing optional ImGui_Function*
+// callback arg (6 args, was 5 in v0.1.1). Per dylib metadata args are
+// `ctx,label,bufInOutNeedBig,bufInOutNeedBig_sz,flagsInOptional,
+// callbackInOptional`. Without this, the trampoline reads the 6th arg
+// from a stack/register slot we never wrote — at minimum the widget
+// silently no-ops (FX Learn right-click "Display label" had no input
+// box visible), at worst v0.10 invokes garbage as a callback. Call
+// sites must pass nullptr for the new last arg.
+REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, char* bufInOutNeedBig, int bufInOutNeedBig_sz, int* flagsInOptional, ImGui_Function* callbackInOptional)> ImGui_InputText REAIMGUIAPI_INIT("ImGui_InputText");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_InputTextFlags_AllowTabInput REAIMGUIAPI_INIT("ImGui_InputTextFlags_AllowTabInput");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_InputTextFlags_AlwaysOverwrite REAIMGUIAPI_INIT("ImGui_InputTextFlags_AlwaysOverwrite");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_InputTextFlags_AutoSelectAll REAIMGUIAPI_INIT("ImGui_InputTextFlags_AutoSelectAll");

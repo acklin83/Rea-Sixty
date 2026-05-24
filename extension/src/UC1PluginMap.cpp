@@ -524,7 +524,12 @@ void rebuildUserCache_locked_()
             ? std::string("USR")
             : um.displayShort;
         e->domain         = um.domain;
-        e->grVst3Param    = um.metering.grVst3Param;
+        // grVst3Param picker removed 2026-05-24 — runtime always uses
+        // the PreSonus GainReduction_dB host extension. Field stays in
+        // the catalog for back-compat but is ignored here. Forcing -1
+        // makes every downstream `if (grParam >= 0)` branch fall through
+        // to the GainReduction_dB read path without further changes.
+        e->grVst3Param    = -1;
         e->grOffsetDb     = um.metering.grOffsetDb;
         for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
         for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];

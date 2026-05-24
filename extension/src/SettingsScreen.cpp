@@ -772,6 +772,34 @@ namespace {
 
 using uf8::bindings::ButtonId;
 
+// Centre the next popup window on the parent ImGui host window's
+// screen rect. Call directly before ImGui_BeginPopupModal (or any
+// next-window-conditioning call) — uses Cond_Appearing so it lands
+// centered on open but the user can still drag it around without
+// ImGui yanking it back every frame.
+//
+// Why parent-window-relative and not ImGui_GetDisplaySize: on some
+// ReaImGui v0.10 builds GetDisplaySize returns the host context's
+// content area rather than the OS display. For a Settings panel
+// narrower than the popup, (DisplaySize/2 - popSize/2) goes negative
+// and the popup clamps to (0,0) — the AutoLearn modal regression
+// Frank reported on 2026-05-24. GetWindowPos/Size of the parent are
+// screen coordinates of the Settings window, so the popup lands
+// visibly centered on whichever monitor Settings is on.
+void centerNextPopupOnDisplay_(ImGui_Context* ctx)
+{
+    double parentX = 0, parentY = 0;
+    ImGui_GetWindowPos(ctx, &parentX, &parentY);
+    double parentW = 0, parentH = 0;
+    ImGui_GetWindowSize(ctx, &parentW, &parentH);
+    int    cond  = ImGui_Cond_Appearing;
+    double pivot = 0.5;
+    ImGui_SetNextWindowPos(ctx,
+        parentX + parentW * 0.5,
+        parentY + parentH * 0.5,
+        &cond, &pivot, &pivot);
+}
+
 // Short button-face label shown over the schematic (≈ what's printed on
 // the physical UF8 silk-screen). Used by the editor header too.
 const char* hwFaceLabel(ButtonId id)
@@ -3906,6 +3934,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         };
 
         // ---- Recall confirm -------------------------------------
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
         if (ImGui_BeginPopupModal(ctx,
                                   "Recall preset?###bp_recall_confirm",
@@ -3934,6 +3963,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Save as … ------------------------------------------
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
         if (ImGui_BeginPopupModal(ctx, "Save preset###bp_save_as",
                                   nullptr, nullptr)) {
@@ -3980,6 +4010,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Rename ---------------------------------------------
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
         if (ImGui_BeginPopupModal(ctx, "Rename preset###bp_rename",
                                   nullptr, nullptr)) {
@@ -4022,6 +4053,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         // ---- Delete confirm -------------------------------------
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
         if (ImGui_BeginPopupModal(ctx,
                                   "Delete preset?###bp_delete_confirm",
@@ -4306,21 +4338,75 @@ char g_pickerFilter[64] = {};
 int  g_pickerSelectedIdx = -1;   // index into g_installedFx (filtered or full)
 
 // Best-effort developer/vendor lookup for the FX-Learn master list.
-// Returns the vendor parsed from the first installed FX whose name
-// contains the map's match substring. Empty when the catalog hasn't
-// been loaded yet or no installed FX matches. The vendor portion
-// follows REAPER's "Name (Vendor)" convention at the tail of the FX
-// name string.
+// Returns the vendor parsed from the trailing "(Vendor)" of either the
+// map's match string (which the user often pastes already including
+// "(Vendor)") or, failing that, the first installed FX whose name
+// contains the match. Empty when no parens vendor can be inferred.
+//
+// Subtleties (Frank 2026-05-24 — SSL Delta showed up under "Other"):
+//   * VST3 names often carry a TRAILING channel-format parens after the
+//     vendor, e.g. "SSL Delta Control 16 (SSL) (mono)". The previous
+//     rfind(" (") implementation returned "mono". We now strip
+//     channel-format trailers (mono / stereo / Nch / N.M) and retry.
+//   * Vendors themselves can contain parens, e.g. "Universal Audio
+//     (UADx)". Naïve rfind would clip the closing paren and return
+//     "UADx)". We balance-match the outer parens by counting depth
+//     from the right so nested vendor parens come through intact.
 std::string fxlMasterDeveloperFor_(const std::string& match)
 {
-    if (match.empty() || g_installedFx.empty()) return {};
+    if (match.empty()) return {};
+
+    // Channel-format markers REAPER appends after the vendor on VST3
+    // names. "mono" / "stereo" / "quad" plus the "Nch" / "N.M" family
+    // (5.1, 7.1, 8ch, 16ch, …).
+    auto isChannelMarker = [](const std::string& s) {
+        if (s == "mono" || s == "stereo" || s == "quad") return true;
+        bool hasDigit = false;
+        for (char c : s) {
+            if (std::isdigit(static_cast<unsigned char>(c))) { hasDigit = true; continue; }
+            if (c == '.' || c == 'c' || c == 'h') continue;
+            return false;
+        }
+        return hasDigit;
+    };
+
+    // Walk parens from the right with depth balancing. Skip trailing
+    // channel-format parens and retry on the remainder. Up to 4 tries
+    // (defensive — REAPER never tacks on more than one format marker).
+    auto extractTailVendor = [&](std::string name) -> std::string {
+        for (int tries = 0; tries < 4; ++tries) {
+            const auto end = name.rfind(')');
+            if (end == std::string::npos) break;
+            int depth = 1;
+            ptrdiff_t i = static_cast<ptrdiff_t>(end) - 1;
+            while (i >= 0) {
+                if      (name[i] == ')') ++depth;
+                else if (name[i] == '(') { if (--depth == 0) break; }
+                --i;
+            }
+            if (i < 1 || name[i - 1] != ' ') break;
+            const size_t open = static_cast<size_t>(i);
+            std::string content = name.substr(open + 1, end - open - 1);
+            if (isChannelMarker(content)) {
+                name.resize(open - 1);   // strip " (marker)" suffix
+                continue;
+            }
+            return content;
+        }
+        return {};
+    };
+
+    // 1) Try the match string itself — many user maps were captured
+    //    with the trailing "(Vendor)" already baked in (the picker
+    //    auto-fills from the REAPER FX name, which often includes it).
+    if (auto v = extractTailVendor(match); !v.empty()) return v;
+
+    // 2) Otherwise look up the first installed FX whose displayed name
+    //    contains the match substring and extract from there.
+    if (g_installedFx.empty()) return {};
     for (const auto& fx : g_installedFx) {
         if (fx.name.find(match) == std::string::npos) continue;
-        const auto paren = fx.name.rfind(" (");
-        if (paren == std::string::npos) return {};
-        const auto end = fx.name.rfind(')');
-        if (end == std::string::npos || end <= paren + 2) return {};
-        return fx.name.substr(paren + 2, end - paren - 2);
+        return extractTailVendor(fx.name);
     }
     return {};
 }
@@ -4390,6 +4476,20 @@ std::string g_fxSelectorScope;   // editing match for which the key is valid
 bool g_autoLearnOpen = false;
 std::vector<uf8::autolearn::Suggestion>    g_autoLearnSlots;
 std::vector<uf8::autolearn::Uf8Suggestion> g_autoLearnUf8;
+std::vector<uf8::autolearn::Uf8StripSuggestion> g_autoLearnUf8Strips;
+
+// Pre-flight Setup modal state (Frank 2026-05-24 — replaces the bare
+// "click and run" with an explicit domain / target picker). Pops first;
+// on Run, builds the suggestion vectors above, closes itself, and arms
+// `g_autoLearnPreviewPending` so the next frame can OpenPopup for the
+// Preview. (ImGui modals are exclusive — closing one and opening
+// another in the same frame silently drops the second OpenPopup.)
+bool g_autoLearnSetupOpen        = false;
+bool g_autoLearnSetupPending     = false;   // armed by "Create + AutoLearn"
+bool g_autoLearnPreviewPending   = false;
+int  g_autoLearnSetupPrimary     = 1;   // 1=CS, 2=BC, 3=UF8-only
+bool g_autoLearnSetupVpots       = true;
+bool g_autoLearnSetupStrips      = false;
 
 const char* domainLabel_(uf8::Domain d)
 {
@@ -5100,6 +5200,15 @@ void setUf8Label_(int strip, int bank, const std::string& label)
     });
 }
 
+void setUf8FaderLabel_(int strip, const std::string& label)
+{
+    std::string trimmed = label;
+    if (trimmed.size() > 7) trimmed.resize(7);
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.strips[g_uf8EditingFaderBank][strip].faderLabel = trimmed;
+    });
+}
+
 // Per-binding colour read / write. V-Pot no longer carries a colour
 // (Frank 2026-05-13: "V-Pot Farbe raus, bringt nichts.") — the LCD
 // strip-colour-bar uses stripColour read via getUf8StripColour_ below.
@@ -5552,10 +5661,24 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         char popId[40];
         snprintf(popId, sizeof(popId), "fxl_ctx_%d", ctrl.linkIdx);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
-            char title[160];
-            snprintf(title, sizeof(title),
-                "%s  -> param %d",
-                slot->name ? slot->name : "(slot)", mapped);
+            char title[200];
+            char pname[128] = {0};
+            const UserPluginMap* editing = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps) {
+                if (m.match == g_editingMatch) { editing = &m; break; }
+            }
+            if (editing) {
+                paramNameFor_(*editing, fx, mapped, pname, sizeof(pname));
+            }
+            if (pname[0]) {
+                snprintf(title, sizeof(title),
+                    "%s  ->  %s",
+                    slot->name ? slot->name : "(slot)", pname);
+            } else {
+                snprintf(title, sizeof(title),
+                    "%s  ->  param %d",
+                    slot->name ? slot->name : "(slot)", mapped);
+            }
             ImGui_TextDisabled(ctx, title);
             ImGui_Separator(ctx);
 
@@ -5592,7 +5715,8 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             }
             int inputFlags = 0;
             if (ImGui_InputText(ctx, "##fxl_label", s_labelBuf,
-                                sizeof(s_labelBuf), &inputFlags))
+                                sizeof(s_labelBuf), &inputFlags,
+                                nullptr))
             {
                 setCustomLabel_(ctrl.linkIdx, s_labelBuf);
             }
@@ -6210,16 +6334,43 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         snprintf(popId, sizeof(popId), "fxl_uf8_ctx_%d_%d",
                       int(ctrl.kind), ctrl.strip);
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
-            char title[160];
+            char title[200];
+            char pname[128] = {0};
+            const UserPluginMap* editingForTitle = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps) {
+                if (m.match == g_editingMatch) {
+                    editingForTitle = &m; break;
+                }
+            }
+            if (editingForTitle) {
+                paramNameFor_(*editingForTitle, fx, mapped,
+                              pname, sizeof(pname));
+            }
+            const char* nm = pname[0] ? pname : nullptr;
             if (isNav) {
-                snprintf(title, sizeof(title),
-                    "Bank %s -> param %d",
-                    ctrl.kind == Uf8Control::BankLeftBtn
-                        ? "\xE2\x97\x82" : "\xE2\x96\xB8",
-                    mapped);
+                if (nm) {
+                    snprintf(title, sizeof(title),
+                        "Bank %s  ->  %s",
+                        ctrl.kind == Uf8Control::BankLeftBtn
+                            ? "\xE2\x97\x82" : "\xE2\x96\xB8",
+                        nm);
+                } else {
+                    snprintf(title, sizeof(title),
+                        "Bank %s  ->  param %d",
+                        ctrl.kind == Uf8Control::BankLeftBtn
+                            ? "\xE2\x97\x82" : "\xE2\x96\xB8",
+                        mapped);
+                }
             } else {
-                snprintf(title, sizeof(title),
-                    "strip %d -> param %d", ctrl.strip + 1, mapped);
+                if (nm) {
+                    snprintf(title, sizeof(title),
+                        "strip %d  ->  %s",
+                        ctrl.strip + 1, nm);
+                } else {
+                    snprintf(title, sizeof(title),
+                        "strip %d  ->  param %d",
+                        ctrl.strip + 1, mapped);
+                }
             }
             ImGui_TextDisabled(ctx, title);
             ImGui_Separator(ctx);
@@ -6233,6 +6384,37 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     inv ? "Inverted [on]" : "Inverted [off]");
                 if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                     toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
+                }
+            }
+
+            // Fader display-label edit. Mirrors the V-Pot label edit
+            // block below — but fader-label storage lives on
+            // UserUf8StripBinding (per fader-bank, NOT per V-Pot bank),
+            // so the popup persists into strip[g_uf8EditingFaderBank].
+            if (ctrl.kind == Uf8Control::Fader) {
+                std::string curFLabel;
+                for (const auto& m : uf8::user_plugins::get().maps) {
+                    if (m.match != g_editingMatch) continue;
+                    curFLabel = m.uf8.strips[g_uf8EditingFaderBank]
+                                            [ctrl.strip].faderLabel;
+                    break;
+                }
+                ImGui_Separator(ctx);
+                static char s_fLblBuf[16];
+                static int  s_fLblStrip = -1;
+                if (s_fLblStrip != ctrl.strip) {
+                    s_fLblStrip = ctrl.strip;
+                    std::strncpy(s_fLblBuf, curFLabel.c_str(),
+                                 sizeof(s_fLblBuf) - 1);
+                    s_fLblBuf[sizeof(s_fLblBuf) - 1] = '\0';
+                }
+                if (ImGui_InputTextWithHint(ctx,
+                        "Label##fxl_uf8_fader_lbl",
+                        "(auto from param name)",
+                        s_fLblBuf, int(sizeof(s_fLblBuf)),
+                        nullptr, nullptr))
+                {
+                    setUf8FaderLabel_(ctrl.strip, std::string(s_fLblBuf));
                 }
             }
 
@@ -6766,19 +6948,227 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
     }
 
-    // ---- Header / breadcrumb --------------------------------------------
-    if (ImGui_Button(ctx, "<- All maps##fxl_back", nullptr, nullptr)) {
-        g_editingMatch.clear();
-        g_listeningLinkIdx = -1;
-        g_listeningUf8.clear();
-        return;
+    // ---- Header row -----------------------------------------------------
+    // One-line header: [Default *] [Short____] [Picker ───────] [+ New]
+    //                  [Delete] [Export] [Import]
+    // No "<- All maps" back-button — the master view is gone; the picker
+    // IS the navigation. Default + Short live here (per-map properties,
+    // formerly on the master table). Action buttons land on the right.
+
+    // Default toggle. One-of-per-primary-mode is enforced inside
+    // user_plugins::upsert — so flipping this on a CS map clears the
+    // flag from any other CS map automatically.
+    {
+        char btnId[64];
+        snprintf(btnId, sizeof(btnId),
+            "%s##fxl_hdr_default", editing->isDefault ? "*" : "-");
+        if (ImGui_Button(ctx, btnId, nullptr, nullptr)) {
+            UserPluginMap copy = *editing;
+            copy.isDefault = !copy.isDefault;
+            user_plugins::upsert(std::move(copy));
+            persistAndReport_();
+            return;   // re-resolve editing pointer next frame
+        }
+        if (ImGui_IsItemHovered(ctx, nullptr)) {
+            ImGui_SetTooltip(ctx,
+                "Default — this map wins over the built-in "
+                "SSL CS / 4K / BC in SSL Strip Mode");
+        }
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
-    char hdr[256];
-    snprintf(hdr, sizeof(hdr), "  Editing: %s  [%s]",
+
+    // Short-label edit (7-char colour-bar zone). Persists on every
+    // keystroke; mirrors the V-Pot label edit pattern.
+    {
+        char shortBuf[16] = {};
+        std::strncpy(shortBuf, editing->displayShort.c_str(), 7);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 84.0));
+        if (ImGui_InputTextWithHint(ctx, "##fxl_hdr_short", "Short",
+                shortBuf, 8, nullptr, nullptr))
+        {
+            UserPluginMap copy = *editing;
+            copy.displayShort = shortBuf;
+            if (copy.displayShort.size() > 7) copy.displayShort.resize(7);
+            user_plugins::upsert(std::move(copy));
+            persistAndReport_();
+            return;   // re-resolve editing pointer next frame
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+
+    // Map switcher — combo with search + developer-tree popup. The
+    // master view is gone; this picker is the only navigation. Reserve
+    // pixel width on the right so the +New / Delete / Export / Import
+    // buttons land on the same line.
+    char preview[200];
+    snprintf(preview, sizeof(preview), "  %s  [%s]",
                   editing->match.c_str(),
                   modeLabel_(editing->domain, editing->uf8Mode));
-    ImGui_Text(ctx, hdr);
+    {
+        const double trailingW = scaleW_(ctx, 290.0);  // 4 action buttons
+        double availX = 0, availY = 0;
+        ImGui_GetContentRegionAvail(ctx, &availX, &availY);
+        double pickerW = availX - trailingW;
+        if (pickerW < scaleW_(ctx, 180.0)) pickerW = scaleW_(ctx, 180.0);
+        ImGui_SetNextItemWidth(ctx, pickerW);
+    }
+    constexpr double kMapPopupW = 420.0;
+    ImGui_SetNextWindowSizeConstraints(
+        ctx, kMapPopupW, 0.0, kMapPopupW, 999999.0);
+    int mapComboFlags = ImGui_ComboFlags_HeightLargest;
+    if (ImGui_BeginCombo(ctx, "##fxl_map_picker", preview,
+                         &mapComboFlags))
+    {
+        const bool popupJustOpened = ImGui_IsWindowAppearing(ctx);
+
+        static char mapSearchBuf[128] = {0};
+        if (popupJustOpened) {
+            mapSearchBuf[0] = 0;
+            ImGui_SetKeyboardFocusHere(ctx, nullptr);
+        }
+        ImGui_PushItemWidth(ctx, -1.0);
+        ImGui_InputTextWithHint(ctx, "##fxl_map_search",
+            "Search maps…", mapSearchBuf, sizeof(mapSearchBuf),
+            nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+
+        std::string filter(mapSearchBuf);
+        std::transform(filter.begin(), filter.end(), filter.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+        const bool filtering = !filter.empty();
+        auto toLower = [](std::string s) {
+            for (auto& c : s)
+                c = std::tolower(static_cast<unsigned char>(c));
+            return s;
+        };
+
+        // Bucket every user map by developer. Empty developer string
+        // collapses into "Other" so the entry is still reachable.
+        std::unordered_map<std::string, std::vector<const uf8::UserPluginMap*>>
+            bucket;
+        std::vector<std::string> devOrder;  // first-seen order for stable UX
+        for (const auto& m : uf8::user_plugins::get().maps) {
+            if (m.match.empty()) continue;
+            std::string dev = fxlMasterDeveloperFor_(m.match);
+            if (dev.empty()) dev = "Other";
+            if (filtering) {
+                const std::string keyMatch   = toLower(m.match);
+                const std::string keyShort   = toLower(m.displayShort);
+                const std::string keyDev     = toLower(dev);
+                if (keyMatch.find(filter)   == std::string::npos
+                 && keyShort.find(filter)   == std::string::npos
+                 && keyDev.find(filter)     == std::string::npos) {
+                    continue;
+                }
+            }
+            if (bucket.find(dev) == bucket.end()) devOrder.push_back(dev);
+            bucket[dev].push_back(&m);
+        }
+        for (auto& kv : bucket) {
+            std::sort(kv.second.begin(), kv.second.end(),
+                [](const uf8::UserPluginMap* a,
+                   const uf8::UserPluginMap* b) {
+                    return a->match < b->match;
+                });
+        }
+        std::sort(devOrder.begin(), devOrder.end());
+
+        if (devOrder.empty()) {
+            ImGui_TextDisabled(ctx, filtering
+                ? "(no maps match the filter)"
+                : "(no user maps yet)");
+        }
+        for (const auto& dev : devOrder) {
+            int treeFlags = ImGui_TreeNodeFlags_SpanAvailWidth;
+            if (filtering) {
+                int cond = ImGui_Cond_Always;
+                ImGui_SetNextItemOpen(ctx, true, &cond);
+            } else {
+                treeFlags |= ImGui_TreeNodeFlags_DefaultOpen;
+            }
+            if (ImGui_TreeNode(ctx, dev.c_str(), &treeFlags)) {
+                for (const auto* m : bucket[dev]) {
+                    char rowLbl[260];
+                    snprintf(rowLbl, sizeof(rowLbl),
+                        "%s  [%s]##fxl_mp_%s",
+                        m->match.c_str(),
+                        modeLabel_(m->domain, m->uf8Mode),
+                        m->match.c_str());
+                    bool sel = (m->match == g_editingMatch);
+                    int  sf  = 0;
+                    if (ImGui_Selectable(ctx, rowLbl, &sel, &sf,
+                                         nullptr, nullptr))
+                    {
+                        if (m->match != g_editingMatch) {
+                            g_editingMatch     = m->match;
+                            g_listeningLinkIdx = -1;
+                            g_listeningUf8.clear();
+                            SetExtState("ReaSixty",
+                                "fxLearnLastMatch",
+                                g_editingMatch.c_str(), true);
+                        }
+                    }
+                }
+                ImGui_TreePop(ctx);
+            }
+        }
+        ImGui_EndCombo(ctx);
+    }
+
+    // ---- Trailing action buttons --------------------------------------
+    // + New / Delete / Export / Import. Same handlers as the (now-
+    // removed) master-view toolbar; sit on the same row as the picker so
+    // catalog management stays one click away from any open map.
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "+ New##fxl_hdr_new", nullptr, nullptr)) {
+        std::memset(g_newMatch,   0, sizeof(g_newMatch));
+        std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
+        g_newPrimaryMode = 1;
+        g_newUf8Mode     = false;
+        g_newError.clear();
+        std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
+        g_pickerSelectedIdx = -1;
+        if (g_installedFx.empty()) loadInstalledFx_();
+        ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Delete##fxl_hdr_del", nullptr, nullptr)) {
+        g_pendingDeleteMatch = editing->match;
+        g_pendingDeleteOpen  = true;
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Export##fxl_hdr_export", nullptr, nullptr)) {
+        std::string err;
+        const std::string chosen = reasixty_fxLearnExportViaDialog(&err);
+        if (chosen.empty()) {
+            if (!err.empty()) g_lastSaveError = "Export failed: " + err;
+        } else {
+            g_lastSaveError = "Exported to " + chosen;
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Import##fxl_hdr_import", nullptr, nullptr)) {
+        std::string err;
+        if (reasixty_fxLearnImportViaDialog(&err)) {
+            g_lastSaveError.clear();
+            if (!err.empty()) g_lastSaveError = err;
+        } else if (!err.empty()) {
+            g_lastSaveError = "Import failed: " + err;
+        }
+    }
+    if (!g_lastSaveError.empty()) {
+        ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
+    }
+
+    // The map-picker / Default-toggle / Short-input may have just
+    // changed g_editingMatch on this very frame. If so, bail and let
+    // the next frame re-resolve `editing` for the freshly selected map
+    // — otherwise the rest of the editor below would render against
+    // the old pointer.
+    if (editing->match != g_editingMatch) {
+        g_listeningLinkIdx = -1;
+        return;
+    }
 
     // ---- Mode-change row -------------------------------------------------
     // Lets the user re-assign primary mode (CS / BC / UF8-only) and toggle
@@ -6795,28 +7185,34 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         auto applyPrimary = [&](int newPrimary) {
             if (newPrimary == curPrimary) return;
-            // Switching CS↔BC or anything→UF8-only invalidates the slot
-            // bindings (the schematic topology is incompatible). Stage
-            // the change and pop the confirm modal; non-destructive
-            // switches (UF8-only → CS/BC, which has no slots) apply
-            // immediately.
-            const bool destructive =
-                (newPrimary != 3) &&
-                ((curPrimary == 1 && newPrimary == 2) ||
-                 (curPrimary == 2 && newPrimary == 1));
-            const bool toUf8Only = (newPrimary == 3);
-            if (destructive || toUf8Only) {
-                g_pendingModePrimary = newPrimary;
-                g_pendingModeMatch   = editing->match;
-                g_pendingModeOpen    = true;
-                return;
-            }
+            // All switches are non-destructive: the outgoing domain's
+            // slot bindings stash to csSlotCache / bcSlotCache and the
+            // incoming domain restores from its cache. Flip back any
+            // time to recover. UF8 bank / strip bindings are domain-
+            // independent and stay intact. (Frank 2026-05-24 — the
+            // confirm dialog was a leftover from when slots were
+            // wiped on switch; the cache mechanism makes it unneeded.)
             UserPluginMap copy = *editing;
-            copy.domain  = (newPrimary == 1) ? uf8::Domain::ChannelStrip
-                         : (newPrimary == 2) ? uf8::Domain::BusComp
-                         :                     uf8::Domain::None;
-            copy.uf8Mode = copy.domain == uf8::Domain::None
-                             ? true : copy.uf8Mode;
+            const uf8::Domain newDom =
+                (newPrimary == 1) ? uf8::Domain::ChannelStrip
+              : (newPrimary == 2) ? uf8::Domain::BusComp
+              :                      uf8::Domain::None;
+            // Stash outgoing slots into the matching cache.
+            if (copy.domain == uf8::Domain::ChannelStrip) {
+                copy.csSlotCache = copy.slots;
+            } else if (copy.domain == uf8::Domain::BusComp) {
+                copy.bcSlotCache = copy.slots;
+            }
+            // Restore incoming domain's previously-stashed slots, if any.
+            if (newDom == uf8::Domain::ChannelStrip) {
+                copy.slots = copy.csSlotCache;
+            } else if (newDom == uf8::Domain::BusComp) {
+                copy.slots = copy.bcSlotCache;
+            } else {
+                copy.slots.clear();
+            }
+            copy.domain  = newDom;
+            copy.uf8Mode = (newDom == uf8::Domain::None) ? true : copy.uf8Mode;
             uf8::user_plugins::upsert(std::move(copy));
             persistAndReport_();
         };
@@ -6933,19 +7329,17 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_TextDisabled(ctx, info);
         }
         // AutoLearn button — requires a param snapshot (live or stored).
+        // Opens the Setup pre-flight modal; suggestions are built on Run.
         if (!editing->paramSnapshot.empty()) {
             ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "AutoLearn##fxl_auto", nullptr, nullptr)) {
-                g_autoLearnSlots = uf8::autolearn::suggestSlots(
-                    editing->paramSnapshot, editing->domain);
-                if (editing->uf8Mode)
-                    g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
-                        editing->paramSnapshot,
-                        /* faderBankCount */ 1);
-                else
-                    g_autoLearnUf8.clear();
-                g_autoLearnOpen = true;
-                ImGui_OpenPopup(ctx, "AutoLearn Preview##fxl_alp", nullptr);
+            if (ImGui_Button(ctx, "AutoLearn…##fxl_auto", nullptr, nullptr)) {
+                g_autoLearnSetupPrimary =
+                    (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
+                    (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+                g_autoLearnSetupVpots  = editing->uf8Mode;
+                g_autoLearnSetupStrips = false;
+                g_autoLearnSetupOpen   = true;
+                ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
             }
         }
     } else if (!editing->paramSnapshot.empty()) {
@@ -6957,16 +7351,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             editing->paramSnapshot.size());
         ImGui_TextColored(ctx, 0xC0C0FFFF, banner);
         // AutoLearn also works from snapshot alone.
-        if (ImGui_Button(ctx, "AutoLearn##fxl_auto_snap", nullptr, nullptr)) {
-            g_autoLearnSlots = uf8::autolearn::suggestSlots(
-                editing->paramSnapshot, editing->domain);
-            if (editing->uf8Mode)
-                g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
-                    editing->paramSnapshot, 1);
-            else
-                g_autoLearnUf8.clear();
-            g_autoLearnOpen = true;
-            ImGui_OpenPopup(ctx, "AutoLearn Preview##fxl_alp", nullptr);
+        if (ImGui_Button(ctx, "AutoLearn…##fxl_auto_snap", nullptr, nullptr)) {
+            g_autoLearnSetupPrimary =
+                (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
+                (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+            g_autoLearnSetupVpots  = editing->uf8Mode;
+            g_autoLearnSetupStrips = false;
+            g_autoLearnSetupOpen   = true;
+            ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
         }
     }
 
@@ -7064,95 +7456,549 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
     }
 
+    // ---- AutoLearn Setup pre-flight modal --------------------------------
+    // Pops first; on Run, applies the domain switch (if any), builds the
+    // suggestion vectors, closes itself + opens the Preview modal.
+    if (g_autoLearnSetupOpen) {
+        centerNextPopupOnDisplay_(ctx);
+        int condApp = ImGui_Cond_Appearing;
+        ImGui_SetNextWindowSize(ctx, 380.0, 260.0, &condApp);
+    }
+    int setupFlags = 0;
+    if (ImGui_BeginPopupModal(ctx, "AutoLearn Setup##fxl_alsetup",
+                              &g_autoLearnSetupOpen, &setupFlags))
+    {
+        ImGui_Text(ctx, "AutoLearn for:");
+        ImGui_Spacing(ctx);
+        if (ImGui_RadioButton(ctx, "Channel-Strip slots (CS)##als_cs",
+                              g_autoLearnSetupPrimary == 1))
+            g_autoLearnSetupPrimary = 1;
+        if (ImGui_RadioButton(ctx, "Bus-Comp slots (BC)##als_bc",
+                              g_autoLearnSetupPrimary == 2))
+            g_autoLearnSetupPrimary = 2;
+        if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
+                              g_autoLearnSetupPrimary == 3))
+            g_autoLearnSetupPrimary = 3;
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Checkbox(ctx, "Also fill UF8 V-Pot banks##als_vp",
+                       &g_autoLearnSetupVpots);
+        ImGui_Checkbox(ctx, "Also fill UF8 Faders + Mute/Solo/Sel##als_st",
+                       &g_autoLearnSetupStrips);
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Run##als_run", nullptr, nullptr)) {
+            // Apply domain switch via the same cache-swap logic
+            // applyPrimary uses. UF8-only forces uf8Mode=true; CS/BC
+            // turning on UF8 layers also sets uf8Mode=true so the runtime
+            // accepts the strip bindings.
+            const uf8::Domain newDom =
+                (g_autoLearnSetupPrimary == 1) ? uf8::Domain::ChannelStrip
+              : (g_autoLearnSetupPrimary == 2) ? uf8::Domain::BusComp
+              :                                   uf8::Domain::None;
+            const bool wantUf8 = g_autoLearnSetupVpots
+                              || g_autoLearnSetupStrips
+                              || (newDom == uf8::Domain::None);
+            if (editing->domain != newDom || editing->uf8Mode != wantUf8) {
+                UserPluginMap copy = *editing;
+                // Stash outgoing slots.
+                if (copy.domain == uf8::Domain::ChannelStrip)
+                    copy.csSlotCache = copy.slots;
+                else if (copy.domain == uf8::Domain::BusComp)
+                    copy.bcSlotCache = copy.slots;
+                // Restore incoming slots from cache.
+                if (newDom == uf8::Domain::ChannelStrip)
+                    copy.slots = copy.csSlotCache;
+                else if (newDom == uf8::Domain::BusComp)
+                    copy.slots = copy.bcSlotCache;
+                else
+                    copy.slots.clear();
+                copy.domain  = newDom;
+                copy.uf8Mode = (newDom == uf8::Domain::None) ? true : wantUf8;
+                uf8::user_plugins::upsert(std::move(copy));
+                persistAndReport_();
+                // Re-resolve editing pointer for the just-upserted copy.
+                for (const auto& m : user_plugins::get().maps) {
+                    if (m.match == g_editingMatch) { editing = &m; break; }
+                }
+            }
+            // Now build the suggestion vectors against the (possibly new)
+            // domain. UC1 slots only when the new domain isn't UF8-only.
+            // For UC1: expand the engine's hit-list into ONE row per
+            // topology slot so the preview shows every editable slot,
+            // not only the ones AutoLearn matched (Frank 2026-05-24:
+            // "die gehen wir ja eh alle durch, immer alle anzeigen").
+            // Each row carries:
+            //   - engine vst3Param/paramName/conf when matched, else
+            //     vst3Param=-1, conf<0 (rendered as "—" / unmapped)
+            //   - existing customLabel from editing->slots if present
+            if (newDom != uf8::Domain::None) {
+                auto engineHits = uf8::autolearn::suggestSlots(
+                    editing->paramSnapshot, newDom);
+                std::unordered_map<int, const uf8::autolearn::Suggestion*>
+                    hitByLink;
+                for (const auto& h : engineHits)
+                    hitByLink[h.linkIdx] = &h;
+                // Also index existing user-map bindings + customLabels
+                // so rows pre-populate with the current catalog state.
+                std::unordered_map<int, const uf8::UserLinkSlot*>
+                    existingByLink;
+                for (const auto& us : editing->slots)
+                    existingByLink[us.linkIdx] = &us;
+                // Param-name lookup table for fallback when an existing
+                // binding's vst3Param isn't in the engine hit set.
+                std::unordered_map<int, std::string> paramNameByIdx;
+                for (const auto& pi : editing->paramSnapshot)
+                    paramNameByIdx[pi.vst3Param] = pi.name;
+                g_autoLearnSlots.clear();
+                if (const uf8::PluginMap* topo = canonicalTopology_(newDom)) {
+                    for (const auto& slot : topo->slots) {
+                        if (!slot.name) continue;
+                        uf8::autolearn::Suggestion row{};
+                        row.linkIdx  = slot.linkIdx;
+                        row.slotName = slot.name;
+                        // Priority: engine hit > existing binding > empty
+                        auto it = hitByLink.find(slot.linkIdx);
+                        auto eit = existingByLink.find(slot.linkIdx);
+                        if (it != hitByLink.end()) {
+                            row.vst3Param  = it->second->vst3Param;
+                            row.paramName  = it->second->paramName;
+                            row.confidence = it->second->confidence;
+                            row.accepted   = true;
+                        } else if (eit != existingByLink.end() &&
+                                   eit->second->vst3Param >= 0) {
+                            row.vst3Param  = eit->second->vst3Param;
+                            auto pn = paramNameByIdx.find(row.vst3Param);
+                            row.paramName  = (pn != paramNameByIdx.end())
+                                ? pn->second : std::string();
+                            row.confidence = -1.0f;  // existing, not AL
+                            row.accepted   = true;
+                        } else {
+                            row.vst3Param  = -1;
+                            row.confidence = -1.0f;
+                            row.accepted   = false;
+                        }
+                        if (eit != existingByLink.end())
+                            row.customLabel = eit->second->customLabel;
+                        g_autoLearnSlots.push_back(std::move(row));
+                    }
+                } else {
+                    g_autoLearnSlots = std::move(engineHits);
+                }
+            } else {
+                g_autoLearnSlots.clear();
+            }
+            if (g_autoLearnSetupVpots) {
+                g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
+                    editing->paramSnapshot, /* faderBankCount */ 1);
+            } else {
+                g_autoLearnUf8.clear();
+            }
+            if (g_autoLearnSetupStrips) {
+                g_autoLearnUf8Strips = uf8::autolearn::suggestUf8Strips(
+                    editing->paramSnapshot, /* faderBankCount */ 2);
+            } else {
+                g_autoLearnUf8Strips.clear();
+            }
+            g_autoLearnSetupOpen     = false;
+            g_autoLearnPreviewPending = true;   // fires on next frame
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##als_cancel", nullptr, nullptr)) {
+            g_autoLearnSetupOpen = false;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
+    }
+
+    // Deferred OpenPopup for the Preview. Runs OUTSIDE the Setup
+    // BeginPopupModal scope so the popup stack is clean by the time
+    // ImGui sees this call. Without this hand-off ImGui silently
+    // drops the second OpenPopup because the Setup popup is still on
+    // the stack mid-frame.
+    if (g_autoLearnPreviewPending) {
+        g_autoLearnPreviewPending = false;
+        g_autoLearnOpen           = true;
+        ImGui_OpenPopup(ctx, "AutoLearn Preview##fxl_alp", nullptr);
+    }
+
     // ---- AutoLearn Preview Modal -----------------------------------------
+    // Centered on the OS display (previously centered on the parent
+    // Settings window, which could overflow on small / off-screen
+    // layouts). Cond_Appearing keeps the user's drag persistent.
     if (g_autoLearnOpen) {
-        double centerX = 0, centerY = 0;
-        ImGui_GetWindowPos(ctx, &centerX, &centerY);
-        double winW = 0, winH = 0;
-        ImGui_GetWindowSize(ctx, &winW, &winH);
-        double popW = 520, popH = 420;
-        ImGui_SetNextWindowPos(ctx,
-            centerX + (winW - popW) / 2,
-            centerY + (winH - popH) / 2,
-            0/*ImGuiCond_Appearing*/, nullptr, nullptr);
-        ImGui_SetNextWindowSize(ctx, popW, popH, 0);
+        centerNextPopupOnDisplay_(ctx);
+        int condApp = ImGui_Cond_Appearing;
+        ImGui_SetNextWindowSize(ctx, 620.0, 540.0, &condApp);
     }
     int popFlags = 0;
     if (ImGui_BeginPopupModal(ctx, "AutoLearn Preview##fxl_alp",
                               &g_autoLearnOpen, &popFlags))
     {
-        char hdr[128];
-        snprintf(hdr, sizeof(hdr), "%zu UC1 slot(s) matched",
-                 g_autoLearnSlots.size());
+        // Unified header — same phrasing whether the suggestions are
+        // CS, BC, UF8, or any combination. Each section count appears
+        // on its own line; empty sections collapse so the layout
+        // doesn't reflow per domain.
+        const char* domainHdr =
+            (editing->domain == uf8::Domain::ChannelStrip) ? "Channel Strip" :
+            (editing->domain == uf8::Domain::BusComp)      ? "Bus Comp"      :
+                                                              "UF8-only";
+        char hdr[160];
+        snprintf(hdr, sizeof(hdr),
+            "AutoLearn results — %s map", domainHdr);
         ImGui_Text(ctx, hdr);
+        char counts[200];
+        snprintf(counts, sizeof(counts),
+            "  %zu SSL slot · %zu UF8 Strip · %zu UF8 V-Pot suggestion(s)",
+            g_autoLearnSlots.size(), g_autoLearnUf8Strips.size(),
+            g_autoLearnUf8.size());
+        ImGui_TextDisabled(ctx, counts);
         ImGui_Spacing(ctx);
 
-        // UC1 slot suggestions table.
-        int tblFlags = 0;
-        if (ImGui_BeginTable(ctx, "##al_tbl", 5, &tblFlags,
-                             nullptr, nullptr, nullptr))
-        {
-            ImGui_TableSetupColumn(ctx, "",          nullptr, nullptr, nullptr);
-            ImGui_TableSetupColumn(ctx, "SSL Slot",  nullptr, nullptr, nullptr);
-            ImGui_TableSetupColumn(ctx, "Param",     nullptr, nullptr, nullptr);
-            ImGui_TableSetupColumn(ctx, "Conf",      nullptr, nullptr, nullptr);
-            ImGui_TableSetupColumn(ctx, "Idx",       nullptr, nullptr, nullptr);
-            ImGui_TableHeadersRow(ctx);
+        // Column-width budget shared by ALL three tables so the Param
+        // column ends up the same width regardless of section. Conf and
+        // Category both use the same `colInfoW` so the stretch math
+        // produces identical Param widths across the SSL / V-Pot /
+        // Strip tables (Frank 2026-05-24).
+        const double colCheckW = scaleW_(ctx, 28.0);
+        const double colSlotW  = scaleW_(ctx, 160.0);
+        const double colInfoW  = scaleW_(ctx, 72.0);
+        const double colIdxW   = scaleW_(ctx, 48.0);
+        const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
+        const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
 
-            for (size_t i = 0; i < g_autoLearnSlots.size(); ++i) {
-                auto& s = g_autoLearnSlots[i];
-                ImGui_TableNextRow(ctx, nullptr, nullptr);
+        // UC1 / SSL slot suggestions table. SSL Slot + Param columns
+        // are dropdowns: pick a different slot or a different param
+        // inline without leaving the Preview. Manual overrides flip
+        // the row's confidence to -1 ("User") so the original AutoLearn
+        // strength is no longer claimed.
+        if (!g_autoLearnSlots.empty()) {
+            const uf8::PluginMap* topo = canonicalTopology_(editing->domain);
 
-                ImGui_TableNextColumn(ctx);
-                char cbId[32];
-                snprintf(cbId, sizeof(cbId), "##al_cb_%d", static_cast<int>(i));
-                ImGui_Checkbox(ctx, cbId, &s.accepted);
-
-                ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, s.slotName.c_str());
-
-                ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, s.paramName.c_str());
-
-                ImGui_TableNextColumn(ctx);
-                char confBuf[16];
-                snprintf(confBuf, sizeof(confBuf), "%.0f%%",
-                         static_cast<double>(s.confidence) * 100.0);
-                if (s.confidence >= 0.9f)
-                    ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
-                else if (s.confidence >= 0.7f)
-                    ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
-                else
-                    ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
-
-                ImGui_TableNextColumn(ctx);
-                char idxBuf[16];
-                snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
-                ImGui_TextDisabled(ctx, idxBuf);
+            // Detect duplicate slot assignments — when two accepted
+            // rows target the same linkIdx, Apply silently keeps the
+            // last one and the user wonders why their mapping vanished.
+            // Pre-count accepted hits per linkIdx + per vst3Param so
+            // the row loop below can flag both conflict types.
+            // Slot collisions can no longer happen (one row per
+            // topology linkIdx) so we only detect param duplicates —
+            // two SSL slots both bound to the same VST3 param, almost
+            // always unintended. Unmapped rows (vst3Param < 0) are
+            // skipped so the count isn't inflated by every empty row.
+            std::unordered_map<int, int> slotHits;
+            std::unordered_map<int, int> paramHits;
+            for (const auto& s : g_autoLearnSlots) {
+                if (!s.accepted) continue;
+                ++slotHits[s.linkIdx];
+                if (s.vst3Param >= 0) ++paramHits[s.vst3Param];
             }
-            ImGui_EndTable(ctx);
+            int paramConflicts = 0;
+            for (const auto& [_, n] : paramHits)
+                if (n > 1) ++paramConflicts;
+            if (paramConflicts > 0) {
+                char warn[200];
+                snprintf(warn, sizeof(warn),
+                    "⚠ %d param conflict(s) — two slots target the "
+                    "same plug-in param. Repick or unmap to resolve.",
+                    paramConflicts);
+                ImGui_TextColored(ctx, 0xFF6060FF, warn);
+                ImGui_Spacing(ctx);
+            }
+
+            int tblFlags = 0;
+            if (ImGui_BeginTable(ctx, "##al_tbl", 5, &tblFlags,
+                                 nullptr, nullptr, nullptr))
+            {
+                int    wF1 = wFixed, wF2 = wFixed,
+                       wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
+                double cW = colCheckW, sW = colSlotW,
+                       pW = 0, fW = colInfoW, iW = colIdxW;
+                ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
+                ImGui_TableSetupColumn(ctx, "SSL Slot", &wF2, &sW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
+                ImGui_TableHeadersRow(ctx);
+
+                for (size_t i = 0; i < g_autoLearnSlots.size(); ++i) {
+                    auto& s = g_autoLearnSlots[i];
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+                    // Conflict tint — translucent red row bg when this
+                    // row's bound param is also bound by another
+                    // accepted row.
+                    const bool rowConflict = s.accepted &&
+                        s.vst3Param >= 0 &&
+                        paramHits[s.vst3Param] > 1;
+                    if (rowConflict) {
+                        // Translucent red row bg (RGBA 0xRRGGBBAA).
+                        int rowBgTarget = ImGui_TableBgTarget_RowBg0;
+                        ImGui_TableSetBgColor(ctx, rowBgTarget,
+                                              0xCC444480,
+                                              nullptr);
+                    }
+
+                    ImGui_TableNextColumn(ctx);
+                    char cbId[32];
+                    snprintf(cbId, sizeof(cbId), "##al_cb_%d",
+                             static_cast<int>(i));
+                    ImGui_Checkbox(ctx, cbId, &s.accepted);
+
+                    // SSL Slot cell — read-only canonical name unless
+                    // the user overrides with a custom display label
+                    // (1..7 chars, ends up on the scribble strip). The
+                    // canonical slot name shows as a dim hint when no
+                    // override is set.
+                    ImGui_TableNextColumn(ctx);
+                    {
+                        static char s_slotLabelBuf[16] = {};
+                        static int  s_slotLabelRow    = -1;
+                        if (s_slotLabelRow != static_cast<int>(i)) {
+                            // Seed buffer when focus enters this row;
+                            // ImGui can't have one InputText per row
+                            // with independent state, so we share a
+                            // static buffer and re-seed on row change.
+                            // (Editing one row at a time matches the
+                            // typical workflow.)
+                        }
+                        char editBuf[16] = {0};
+                        std::strncpy(editBuf, s.customLabel.c_str(),
+                                     sizeof(editBuf) - 1);
+                        char inpId[48];
+                        snprintf(inpId, sizeof(inpId),
+                                 "##al_slotlbl_%d", static_cast<int>(i));
+                        ImGui_SetNextItemWidth(ctx, -1.0);
+                        if (ImGui_InputTextWithHint(ctx, inpId,
+                                s.slotName.c_str(),
+                                editBuf, 8,
+                                nullptr, nullptr))
+                        {
+                            s.customLabel = editBuf;
+                            if (s.customLabel.size() > 7)
+                                s.customLabel.resize(7);
+                        }
+                    }
+
+                    // Param dropdown — every snapshotted param + an
+                    // inline search filter. Long lists are common
+                    // (FabFilter Pro-Q has 400+ params).
+                    ImGui_TableNextColumn(ctx);
+                    {
+                        char comboId[48];
+                        snprintf(comboId, sizeof(comboId),
+                                 "##al_param_%d", static_cast<int>(i));
+                        int comboFlags = ImGui_ComboFlags_HeightLargest;
+                        ImGui_SetNextItemWidth(ctx, -1.0);
+                        const char* paramPreview = (s.vst3Param < 0)
+                            ? "(unmapped)"
+                            : s.paramName.c_str();
+                        if (ImGui_BeginCombo(ctx, comboId, paramPreview,
+                                             &comboFlags))
+                        {
+                            const bool justOpened =
+                                ImGui_IsWindowAppearing(ctx);
+                            static char s_paramFilter[64] = {0};
+                            static int  s_paramFilterRow = -1;
+                            if (justOpened ||
+                                s_paramFilterRow != static_cast<int>(i))
+                            {
+                                s_paramFilter[0] = 0;
+                                s_paramFilterRow = static_cast<int>(i);
+                                ImGui_SetKeyboardFocusHere(ctx, nullptr);
+                            }
+                            ImGui_PushItemWidth(ctx, -1.0);
+                            ImGui_InputTextWithHint(ctx,
+                                "##al_paramfilter", "filter…",
+                                s_paramFilter, sizeof(s_paramFilter),
+                                nullptr, nullptr);
+                            ImGui_PopItemWidth(ctx);
+                            std::string flt = s_paramFilter;
+                            for (auto& c : flt)
+                                c = static_cast<char>(std::tolower(
+                                    static_cast<unsigned char>(c)));
+
+                            // (unmapped) entry first — clears the row.
+                            {
+                                bool sel = (s.vst3Param < 0);
+                                int  sf  = 0;
+                                char clrId[64];
+                                snprintf(clrId, sizeof(clrId),
+                                    "(unmapped)##al_paramclr_%d",
+                                    static_cast<int>(i));
+                                if (ImGui_Selectable(ctx, clrId, &sel,
+                                        &sf, nullptr, nullptr))
+                                {
+                                    s.vst3Param = -1;
+                                    s.paramName.clear();
+                                    s.confidence = -1.0f;
+                                    s.accepted = false;
+                                }
+                            }
+
+                            for (const auto& pi :
+                                 editing->paramSnapshot)
+                            {
+                                if (!flt.empty()) {
+                                    std::string lc = pi.name;
+                                    for (auto& c : lc)
+                                        c = static_cast<char>(
+                                            std::tolower(
+                                              static_cast<unsigned char>(c)));
+                                    if (lc.find(flt) == std::string::npos)
+                                        continue;
+                                }
+                                bool sel = (s.vst3Param == pi.vst3Param);
+                                int sf = 0;
+                                char rowId[300];
+                                snprintf(rowId, sizeof(rowId),
+                                    "[%4d] %s##al_paramopt_%d_%d",
+                                    pi.vst3Param, pi.name.c_str(),
+                                    static_cast<int>(i), pi.vst3Param);
+                                if (ImGui_Selectable(ctx, rowId, &sel,
+                                        &sf, nullptr, nullptr))
+                                {
+                                    if (s.vst3Param != pi.vst3Param) {
+                                        s.vst3Param  = pi.vst3Param;
+                                        s.paramName  = pi.name;
+                                        s.confidence = -1.0f; // user
+                                        // Auto-accept: picking a param
+                                        // implicitly opts the row in
+                                        // so the user doesn't have to
+                                        // also tick the checkbox.
+                                        s.accepted   = true;
+                                    }
+                                }
+                            }
+                            ImGui_EndCombo(ctx);
+                        }
+                    }
+
+                    // Conf — original AutoLearn strength, OR "User"
+                    // when either dropdown above was manually changed.
+                    ImGui_TableNextColumn(ctx);
+                    if (s.confidence < 0.0f) {
+                        ImGui_TextColored(ctx, 0xC0C0FFFF, "User");
+                    } else {
+                        char confBuf[16];
+                        snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                                 static_cast<double>(s.confidence) * 100.0);
+                        if (s.confidence >= 0.9f)
+                            ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                        else if (s.confidence >= 0.7f)
+                            ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                        else
+                            ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+                    }
+
+                    ImGui_TableNextColumn(ctx);
+                    char idxBuf[16];
+                    snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
+                    ImGui_TextDisabled(ctx, idxBuf);
+                }
+                ImGui_EndTable(ctx);
+            }
         }
 
-        // UF8 bank suggestions (if any).
+        // UF8 strip-control suggestions (Fader / Mute / Solo / Sel
+        // detected from "CH<N> <kw>" param names). Same 5-column shape
+        // as the SSL/V-Pot tables so Param widths line up.
+        if (!g_autoLearnUf8Strips.empty()) {
+            if (!g_autoLearnSlots.empty() || !g_autoLearnUf8.empty()) {
+                ImGui_Spacing(ctx);
+                ImGui_Separator(ctx);
+                ImGui_Spacing(ctx);
+            }
+
+            int stFlags = 0;
+            if (ImGui_BeginTable(ctx, "##al_strip_tbl", 5, &stFlags,
+                                 nullptr, nullptr, nullptr))
+            {
+                int    wF1 = wFixed, wF2 = wFixed,
+                       wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
+                double cW = colCheckW, sW = colSlotW,
+                       pW = 0, fW = colInfoW, iW = colIdxW;
+                ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Position", &wF2, &sW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
+                ImGui_TableHeadersRow(ctx);
+
+                using Kind = uf8::autolearn::Uf8StripSuggestion::Kind;
+                auto kindStr = [](Kind k) {
+                    switch (k) {
+                        case Kind::Fader: return "Fader";
+                        case Kind::Cut:   return "Mute";
+                        case Kind::Solo:  return "Solo";
+                        case Kind::Sel:   return "Sel";
+                    }
+                    return "?";
+                };
+                for (size_t i = 0; i < g_autoLearnUf8Strips.size(); ++i) {
+                    auto& s = g_autoLearnUf8Strips[i];
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+                    ImGui_TableNextColumn(ctx);
+                    char cbId[32];
+                    snprintf(cbId, sizeof(cbId), "##al_stcb_%d",
+                             static_cast<int>(i));
+                    ImGui_Checkbox(ctx, cbId, &s.accepted);
+
+                    ImGui_TableNextColumn(ctx);
+                    char posBuf[64];
+                    snprintf(posBuf, sizeof(posBuf),
+                        "Bank %d - %s %d",
+                        s.faderBank + 1, kindStr(s.kind), s.strip + 1);
+                    ImGui_Text(ctx, posBuf);
+
+                    ImGui_TableNextColumn(ctx);
+                    ImGui_Text(ctx, s.paramName.c_str());
+
+                    ImGui_TableNextColumn(ctx);
+                    char confBuf[16];
+                    snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                             static_cast<double>(s.confidence) * 100.0);
+                    if (s.confidence >= 0.9f)
+                        ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                    else if (s.confidence >= 0.7f)
+                        ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                    else
+                        ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+
+                    ImGui_TableNextColumn(ctx);
+                    char idxBuf[16];
+                    snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
+                    ImGui_TextDisabled(ctx, idxBuf);
+                }
+                ImGui_EndTable(ctx);
+            }
+        }
+
+        // UF8 V-Pot bank suggestions (if any). Same 5-column shape as
+        // the SSL table so widths line up.
         if (!g_autoLearnUf8.empty()) {
-            ImGui_Spacing(ctx);
-            ImGui_Separator(ctx);
-            char uf8Hdr[128];
-            snprintf(uf8Hdr, sizeof(uf8Hdr),
-                "%zu UF8 V-Pot slot(s) grouped by category",
-                g_autoLearnUf8.size());
-            ImGui_Text(ctx, uf8Hdr);
-            ImGui_Spacing(ctx);
+            if (!g_autoLearnSlots.empty() || !g_autoLearnUf8Strips.empty()) {
+                ImGui_Spacing(ctx);
+                ImGui_Separator(ctx);
+                ImGui_Spacing(ctx);
+            }
 
             int uf8Flags = 0;
             if (ImGui_BeginTable(ctx, "##al_uf8_tbl", 5, &uf8Flags,
                                  nullptr, nullptr, nullptr))
             {
-                ImGui_TableSetupColumn(ctx, "",         nullptr, nullptr, nullptr);
-                ImGui_TableSetupColumn(ctx, "Bank:Strip", nullptr, nullptr, nullptr);
-                ImGui_TableSetupColumn(ctx, "Category", nullptr, nullptr, nullptr);
-                ImGui_TableSetupColumn(ctx, "Param",    nullptr, nullptr, nullptr);
-                ImGui_TableSetupColumn(ctx, "Idx",      nullptr, nullptr, nullptr);
+                int    wF1 = wFixed, wF2 = wFixed,
+                       wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
+                double cW = colCheckW, sW = colSlotW,
+                       pW = 0, fW = colInfoW, iW = colIdxW;
+                ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Position", &wF2, &sW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
                 ImGui_TableHeadersRow(ctx);
 
                 for (size_t i = 0; i < g_autoLearnUf8.size(); ++i) {
@@ -7165,17 +8011,39 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                              static_cast<int>(i));
                     ImGui_Checkbox(ctx, cbId, &u.accepted);
 
+                    // Position label — "Bank N - V-Pot M" using V-Pot
+                    // bank (Top-Soft-Key 1..8) for `Bank` and strip
+                    // (1..8) for the V-Pot index. Fader-bank prefix
+                    // only appears when AutoLearn populated bank B
+                    // (≥9-control plug-ins); for normal 1-fader-bank
+                    // maps the prefix stays hidden — Frank 2026-05-24.
                     ImGui_TableNextColumn(ctx);
-                    char posBuf[32];
-                    snprintf(posBuf, sizeof(posBuf), "FB%d B%d S%d",
-                             u.faderBank + 1, u.vpotBank + 1, u.strip + 1);
+                    char posBuf[64];
+                    if (u.faderBank > 0) {
+                        snprintf(posBuf, sizeof(posBuf),
+                            "FB %c · Bank %d - V-Pot %d",
+                            (char)('A' + u.faderBank),
+                            u.vpotBank + 1, u.strip + 1);
+                    } else {
+                        snprintf(posBuf, sizeof(posBuf),
+                            "Bank %d - V-Pot %d",
+                            u.vpotBank + 1, u.strip + 1);
+                    }
                     ImGui_Text(ctx, posBuf);
 
                     ImGui_TableNextColumn(ctx);
-                    ImGui_Text(ctx, u.category.c_str());
+                    ImGui_Text(ctx, u.paramName.c_str());
 
                     ImGui_TableNextColumn(ctx);
-                    ImGui_Text(ctx, u.paramName.c_str());
+                    char confBuf[16];
+                    snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                             static_cast<double>(u.confidence) * 100.0);
+                    if (u.confidence >= 0.9f)
+                        ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                    else if (u.confidence >= 0.7f)
+                        ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                    else
+                        ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
 
                     ImGui_TableNextColumn(ctx);
                     char idxBuf[16];
@@ -7186,6 +8054,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
         }
 
+
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -7195,15 +8064,21 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // Write accepted UC1 slot suggestions into the map.
             UserPluginMap copy = *editing;
             for (const auto& s : g_autoLearnSlots) {
-                if (!s.accepted) continue;
-                // Remove any existing binding for this linkIdx.
+                // Skip empty / unchecked rows. customLabel-only edits
+                // without a param binding have nothing to anchor to on
+                // the scribble strip, so we drop them too.
+                if (!s.accepted || s.vst3Param < 0) continue;
+                // Remove any existing binding for this linkIdx so the
+                // upsert is clean.
                 copy.slots.erase(
                     std::remove_if(copy.slots.begin(), copy.slots.end(),
                         [&](const UserLinkSlot& us) {
                             return us.linkIdx == s.linkIdx;
                         }),
                     copy.slots.end());
-                copy.slots.push_back({s.linkIdx, s.vst3Param, false, {}});
+                copy.slots.push_back({s.linkIdx, s.vst3Param,
+                                      /*inverted*/ false,
+                                      s.customLabel});
             }
             // Write accepted UF8 V-Pot bank suggestions.
             for (const auto& u : g_autoLearnUf8) {
@@ -7216,6 +8091,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 auto& bs = copy.uf8.banks.banks[fb][vb][st];
                 bs.vst3Param = u.vst3Param;
                 if (bs.label.empty()) bs.label = u.paramName;
+            }
+            // Write accepted UF8 strip-control suggestions.
+            using StKind = uf8::autolearn::Uf8StripSuggestion::Kind;
+            for (const auto& s : g_autoLearnUf8Strips) {
+                if (!s.accepted) continue;
+                const int fb = std::clamp(s.faderBank, 0,
+                    uf8::kUserUf8FaderBankCount - 1);
+                const int st = std::clamp(s.strip, 0, 7);
+                auto& sb = copy.uf8.strips[fb][st];
+                switch (s.kind) {
+                    case StKind::Fader:
+                        sb.faderVst3Param = s.vst3Param;
+                        if (sb.faderLabel.empty()) {
+                            sb.faderLabel = s.paramName.size() > 7
+                                ? s.paramName.substr(0, 7) : s.paramName;
+                        }
+                        break;
+                    case StKind::Cut:  sb.cutVst3Param  = s.vst3Param; break;
+                    case StKind::Solo: sb.soloVst3Param = s.vst3Param; break;
+                    case StKind::Sel:  sb.selVst3Param  = s.vst3Param; break;
+                }
             }
             uf8::user_plugins::upsert(std::move(copy));
             persistAndReport_();
@@ -7236,11 +8132,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_SmallButton(ctx, "All##al_all")) {
             for (auto& s : g_autoLearnSlots) s.accepted = true;
             for (auto& u : g_autoLearnUf8) u.accepted = true;
+            for (auto& s : g_autoLearnUf8Strips) s.accepted = true;
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_SmallButton(ctx, "None##al_none")) {
             for (auto& s : g_autoLearnSlots) s.accepted = false;
             for (auto& u : g_autoLearnUf8) u.accepted = false;
+            for (auto& s : g_autoLearnUf8Strips) s.accepted = false;
         }
 
         ImGui_EndPopup(ctx);
@@ -7250,116 +8148,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // ---- GR-meter picker -------------------------------------------------
-    // Lets the user designate which VST3 parameter on this learned plug-in
-    // represents the gain-reduction readout for the UC1 needle / Comp
-    // strip / UF8 GR row. When unset (-1), the GR poll falls back to the
-    // PreSonus GainReduction_dB named-config-parm. The combo lists every
-    // param on the active FX so the user picks once — no listening, no
-    // wiggling (a meter output isn't user-adjustable, the click-to-wiggle
-    // listen flow makes no sense for it). The live raw value next to the
-    // combo lets the user verify they picked the right param.
-    {
-        const int curParam = editing->metering.grVst3Param;
-
-        char preview[160];
-        if (curParam < 0) {
-            snprintf(preview, sizeof(preview),
-                "(none — fall back to GainReduction_dB)");
-        } else {
-            char pname[128] = {0};
-            const bool gotName = paramNameFor_(*editing, fx, curParam,
-                                               pname, sizeof(pname));
-            if (gotName) {
-                snprintf(preview, sizeof(preview),
-                    "[%d] %s%s", curParam, pname,
-                    fx.ok ? "" : "  (from snapshot)");
-            } else {
-                snprintf(preview, sizeof(preview),
-                    "[%d] (no name available)", curParam);
-            }
-        }
-
-        ImGui_Text(ctx, "GR Meter param:");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Fill the remaining line width so the combo's right edge lines
-        // up with the mockup canvas below it. Frank 2026-05-22.
-        {
-            double comboAvX = 0, comboAvY = 0;
-            ImGui_GetContentRegionAvail(ctx, &comboAvX, &comboAvY);
-            ImGui_SetNextItemWidth(ctx, comboAvX);
-        }
-        if (ImGui_BeginCombo(ctx, "##fxl_gr_combo", preview, 0)) {
-            // None entry first — selects the GainReduction_dB fallback.
-            {
-                bool sel = (curParam < 0);
-                int  sf  = 0;
-                if (ImGui_Selectable(ctx,
-                        "(none — fall back to GainReduction_dB)##fxl_gr_none",
-                        &sel, &sf, nullptr, nullptr)) {
-                    clearGrMeter_();
-                }
-            }
-            const int paramCount = paramCountFor_(*editing, fx);
-            const int kMaxParams = 1024;
-            const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
-            for (int p = 0; p < n; ++p) {
-                char pname[128] = {0};
-                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
-                char rowLbl[200];
-                snprintf(rowLbl, sizeof(rowLbl),
-                    "[%4d] %s##fxl_gr_p_%d", p, pname, p);
-                bool sel = (p == curParam);
-                int  sf  = 0;
-                if (ImGui_Selectable(ctx, rowLbl, &sel, &sf,
-                                     nullptr, nullptr)) {
-                    bindGrMeter_(p);
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-
-        // Compute live calibrated values once so both the inline
-        // readout and the popup live-preview share the same numbers.
-        bool   havePreview = false;
-        double previewRaw = 0.0, previewAbs = 0.0;
-        double previewBc  = 0.0, previewLeds = 0.0;
-        if (curParam >= 0 && fx.ok) {
-            double mn = 0.0, mx = 0.0;
-            previewRaw = TrackFX_GetParam(fx.tr, fx.fxIdx,
-                                          curParam, &mn, &mx);
-            previewAbs = (previewRaw < 0) ? -previewRaw : previewRaw;
-            previewBc   = uf8::applyGrCalibration(
-                previewAbs, uf8::kBcVuBpDb,  editing->metering.grBcVuCalDb,
-                uf8::kBcVuBpCount);
-            previewLeds = uf8::applyGrCalibration(
-                previewAbs, uf8::kLedsBpDb, editing->metering.grLedsCalDb,
-                uf8::kLedsBpCount);
-            havePreview = true;
-        }
-
-        // Inline live readout next to the combo — domain-scoped to the
-        // active renderer (BC: needle dB; CS/UF8: LEDs dB). The actual
-        // calibration table renders inline at the bottom of the editor,
-        // under the mockup (Frank 2026-05-15: popup mode closed on
-        // every live-update tick, unusable while audio plays).
-        if (havePreview) {
-            const bool isBc =
-                (editing->domain == uf8::Domain::BusComp);
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            char inlineBuf[128];
-            const double shown = isBc ? previewBc : previewLeds;
-            snprintf(inlineBuf, sizeof(inlineBuf),
-                "  raw %+.2f → %s %.2f dB", previewRaw,
-                isBc ? "VU" : "GR", shown);
-            ImGui_TextColored(ctx, 0xFFC080FF, inlineBuf);
-        }
-
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Spacing(ctx);
-    }
+    // (GR-meter param picker removed 2026-05-24 — every compressor we
+    // map exposes the PreSonus GainReduction_dB host extension, so the
+    // VST3-param override never carried its weight. Runtime now reads
+    // GainReduction_dB unconditionally; the per-map grVst3Param field
+    // stays in JSON for back-compat but is ignored at the cache layer.)
 
     // ---- Two-column body ------------------------------------------------
     // UF8-only maps (domain==None) have no CS/BC schematic — the UC1
@@ -7576,39 +8369,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
             // Live readout — what we're actually reading from the
             // plug-in and what gets pushed to the renderer after
-            // |abs| + cal. Always rendered (regardless of grVst3Param
-            // state) so Frank can see if the plug-in is feeding us
-            // something other than dB. Uses the same read path as
-            // UC1Surface::readGr (FormattedParamValue for picker,
-            // GainReduction_dB fallback otherwise) so the displayed
-            // numbers match the on-device meter exactly.
+            // |abs| + cal. Uses the PreSonus GainReduction_dB host
+            // extension, same path as UC1Surface::readGr, so the
+            // displayed numbers match the on-device meter exactly.
             if (fx.ok) {
-                double rawDb = 0.0;
-                bool   gotIt = false;
-                if (editing->metering.grVst3Param >= 0) {
-                    char fbuf[64] = {0};
-                    if (TrackFX_GetFormattedParamValue(fx.tr, fx.fxIdx,
-                            editing->metering.grVst3Param,
-                            fbuf, sizeof(fbuf)) && fbuf[0]) {
-                        rawDb = std::atof(fbuf);
-                        gotIt = true;
-                    } else {
-                        double mn = 0.0, mx = 0.0;
-                        rawDb = TrackFX_GetParam(fx.tr, fx.fxIdx,
-                            editing->metering.grVst3Param, &mn, &mx);
-                        gotIt = true;
-                    }
-                } else {
-                    char buf[64] = {0};
-                    if (TrackFX_GetNamedConfigParm(fx.tr, fx.fxIdx,
-                            "GainReduction_dB", buf, sizeof(buf))) {
-                        rawDb = std::atof(buf);
-                        gotIt = true;
-                    }
-                }
-                if (gotIt) {
-                    const double absV = (rawDb < 0) ? -rawDb : rawDb;
-                    const double calV = uf8::applyGrCalibration(
+                char buf[64] = {0};
+                if (TrackFX_GetNamedConfigParm(fx.tr, fx.fxIdx,
+                        "GainReduction_dB", buf, sizeof(buf))) {
+                    const double rawDb = std::atof(buf);
+                    const double absV  = (rawDb < 0) ? -rawDb : rawDb;
+                    const double calV  = uf8::applyGrCalibration(
                         absV, bp, curArr, nCal);
                     char liveBuf[200];
                     snprintf(liveBuf, sizeof(liveBuf),
@@ -7618,7 +8388,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 } else {
                     ImGui_TextDisabled(ctx,
                         "Live: no GR reading (plug-in doesn't expose "
-                        "GainReduction_dB and no GR param picked).");
+                        "the PreSonus GainReduction_dB host extension).");
                 }
             } else {
                 ImGui_TextDisabled(ctx,
@@ -7846,84 +8616,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_EndChild(ctx);
     }
 
-    // Mode-change confirm popup. Hoisted to the editor scope (not nested in
-    // the radio cell) so the popup ID-stack matches the BeginPopupModal
-    // site — same pattern as the delete popup in the master view.
-    if (g_pendingModeOpen) {
-        ImGui_OpenPopup(ctx, "Change mode?###fxl_mode_popup", nullptr);
-        g_pendingModeOpen = false;
-    }
-    // Fixed size so the wrapped explanation doesn't collapse the popup
-    // to its minimum width (Frank 2026-05-12: previously a 2-pixel-wide
-    // tower). Cond_Always so resizing isn't sticky between opens.
-    int condAlways = ImGui_Cond_Always;
-    ImGui_SetNextWindowSize(ctx, 420.0, 0.0, &condAlways);
-    if (ImGui_BeginPopupModal(ctx, "Change mode?###fxl_mode_popup",
-                              nullptr, nullptr)) {
-        const char* targetLabel =
-            (g_pendingModePrimary == 1) ? "CS" :
-            (g_pendingModePrimary == 2) ? "BC" : "UF8 only";
-        ImGui_Text(ctx, "Change primary mode?");
-        ImGui_Spacing(ctx);
-        char line[256];
-        snprintf(line, sizeof(line),
-            "  %s  →  %s",
-            modeLabel_(editing->domain, editing->uf8Mode), targetLabel);
-        ImGui_Text(ctx, line);
-        ImGui_Spacing(ctx);
-        ImGui_TextWrapped(ctx,
-            "The SSL-Link slot bindings get swapped to the other domain's "
-            "saved set (CS bindings stash to csSlotCache, BC bindings to "
-            "bcSlotCache). Flip back any time to restore the previous "
-            "bindings. UF8 bank / strip bindings stay intact.");
-        ImGui_Spacing(ctx);
-
-        if (ImGui_Button(ctx, "Apply##fxl_mode_ok", nullptr, nullptr)) {
-            UserPluginMap copy = *editing;
-            const uf8::Domain newDom =
-                (g_pendingModePrimary == 1) ? uf8::Domain::ChannelStrip
-              : (g_pendingModePrimary == 2) ? uf8::Domain::BusComp
-              :                                uf8::Domain::None;
-            // Stash the outgoing slot list into the matching cache so
-            // a future swap restores it (Frank 2026-05-15). Only the
-            // CS↔BC pair benefits — UF8-only has no slots. If a cache
-            // already exists for the outgoing domain it gets replaced
-            // with the latest set rather than merged: the active slots
-            // are always the authoritative version.
-            if (copy.domain == uf8::Domain::ChannelStrip) {
-                copy.csSlotCache = copy.slots;
-            } else if (copy.domain == uf8::Domain::BusComp) {
-                copy.bcSlotCache = copy.slots;
-            }
-            // Restore the incoming domain's previously-stashed slots,
-            // if any. Otherwise we land on an empty slot list as
-            // before — first-time switch behaviour stays identical.
-            if (newDom == uf8::Domain::ChannelStrip) {
-                copy.slots = copy.csSlotCache;
-            } else if (newDom == uf8::Domain::BusComp) {
-                copy.slots = copy.bcSlotCache;
-            } else {
-                copy.slots.clear();
-            }
-            copy.domain  = newDom;
-            copy.uf8Mode = copy.domain == uf8::Domain::None ? true : copy.uf8Mode;
-            // GR-meter binding refers to a vst3Param index on the learned
-            // plug-in — that's still valid across mode switches, so we
-            // keep it. (User can clear it manually if they re-learn.)
-            uf8::user_plugins::upsert(std::move(copy));
-            persistAndReport_();
-            g_pendingModeMatch.clear();
-            g_pendingModePrimary = 0;
-            ImGui_CloseCurrentPopup(ctx);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Cancel##fxl_mode_cancel", nullptr, nullptr)) {
-            g_pendingModeMatch.clear();
-            g_pendingModePrimary = 0;
-            ImGui_CloseCurrentPopup(ctx);
-        }
-        ImGui_EndPopup(ctx);
-    }
+    // Mode-change confirm popup removed 2026-05-24 — Frank: switches
+    // are reversible via csSlotCache / bcSlotCache, the confirm was a
+    // leftover from when slots were wiped on switch. applyPrimary above
+    // does the cache-swap inline now.
 }
 
 } // namespace
@@ -7932,285 +8628,66 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 {
     using namespace uf8;
 
-    // Editor-View takes over when a map is being edited. Master-View is
-    // the default. Switch is driven by g_editingMatch (set by the Edit
-    // button below; cleared by the editor's "<- All maps" breadcrumb).
-    if (!g_editingMatch.empty()) {
-        drawFxLearnEditor_(ctx);
-        return;
-    }
-
-    ImGui_Text(ctx, "FX Learn — User Plugin Maps");
-    ImGui_Spacing(ctx);
-    ImGui_TextWrapped(ctx,
-        "Teach third-party plug-ins to behave as virtual Channel-Strip or "
-        "Bus-Comp. Built-in maps (SSL CS 2 / 4K B/E/G / BC 2 / 360 Link) "
-        "always win — user maps can't shadow them.");
-    ImGui_Spacing(ctx);
-
-    if (ImGui_Button(ctx, "+ New##fxl_new", nullptr, nullptr)) {
-        std::memset(g_newMatch,   0, sizeof(g_newMatch));
-        std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
-        g_newPrimaryMode = 1;
-        g_newUf8Mode     = false;
-        g_newError.clear();
-        std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
-        g_pickerSelectedIdx = -1;
-        if (g_installedFx.empty()) loadInstalledFx_();
-        ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, "Export…##fxl_export", nullptr, nullptr)) {
-        std::string err;
-        const std::string chosen = reasixty_fxLearnExportViaDialog(&err);
-        if (chosen.empty()) {
-            if (!err.empty()) g_lastSaveError = "Export failed: " + err;
-        } else {
-            g_lastSaveError = "Exported to " + chosen;
-        }
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, "Import…##fxl_import", nullptr, nullptr)) {
-        std::string err;
-        if (reasixty_fxLearnImportViaDialog(&err)) {
-            g_lastSaveError.clear();
-            if (!err.empty()) g_lastSaveError = err;  // partial: in-memory ok
-        } else if (!err.empty()) {
-            g_lastSaveError = "Import failed: " + err;
-        }
-    }
-
-    if (!g_lastSaveError.empty()) {
-        ImGui_Spacing(ctx);
-        // Use TextColored via packed RGBA (red, fully opaque).
-        ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // Lazy-load the installed-FX catalog so the Developer column has
-    // something to look up. Cached for the session — same store the
-    // "+ New" picker uses.
-    if (g_installedFx.empty()) loadInstalledFx_();
-
     const auto& cat = user_plugins::get();
 
+    // Empty catalog — welcome state. Just "+ New" / "Import" so the
+    // user has a path to land their first map. The popups below still
+    // render so both buttons can open their modals.
     if (cat.maps.empty()) {
-        ImGui_TextDisabled(ctx,
-            "No user plugin maps yet. Click '+ New' to teach a third-party "
-            "plug-in.");
-    } else {
-        // Search field — matches case-insensitively against either the
-        // map's `match` (FX name) or its derived developer string.
-        double sw = 320;
-        ImGui_PushItemWidth(ctx, sw);
-        ImGui_InputTextWithHint(ctx, "##fxl_master_filter",
-            "search name or developer",
-            g_fxlMasterFilter,
-            static_cast<int>(sizeof(g_fxlMasterFilter)),
-            nullptr, nullptr);
-        ImGui_PopItemWidth(ctx);
+        ImGui_Text(ctx, "FX Learn — User Plugin Maps");
+        ImGui_Spacing(ctx);
+        ImGui_TextWrapped(ctx,
+            "No user plugin maps yet. Teach a third-party plug-in to "
+            "behave as a virtual Channel-Strip or Bus-Comp Instance. "
+            "Tick **Default** ( * ) on a map to make it the first-choice "
+            "plug-in for SSL Strip Mode.");
         ImGui_Spacing(ctx);
 
-        std::string flt = g_fxlMasterFilter;
-        for (auto& c : flt) c = static_cast<char>(std::tolower(c));
-        auto lc = [](std::string s) {
-            for (auto& c : s) c = static_cast<char>(std::tolower(c));
-            return s;
-        };
-
-        // Resolve developer per row up front so the sort comparator
-        // doesn't keep re-scanning g_installedFx (O(N*M) → O(N)).
-        struct Row { size_t idx; std::string dev; };
-        std::vector<Row> rows;
-        rows.reserve(cat.maps.size());
-        for (size_t i = 0; i < cat.maps.size(); ++i) {
-            Row r{ i, fxlMasterDeveloperFor_(cat.maps[i].match) };
-            if (!flt.empty()) {
-                const std::string nameLc = lc(cat.maps[i].match);
-                const std::string devLc  = lc(r.dev);
-                if (nameLc.find(flt) == std::string::npos
-                    && devLc.find(flt)  == std::string::npos) {
-                    continue;
-                }
+        if (ImGui_Button(ctx, "+ New##fxl_new_welcome", nullptr, nullptr)) {
+            std::memset(g_newMatch,   0, sizeof(g_newMatch));
+            std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
+            g_newPrimaryMode = 1;
+            g_newUf8Mode     = false;
+            g_newError.clear();
+            std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
+            g_pickerSelectedIdx = -1;
+            if (g_installedFx.empty()) loadInstalledFx_();
+            ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Import…##fxl_import_welcome", nullptr, nullptr)) {
+            std::string err;
+            if (reasixty_fxLearnImportViaDialog(&err)) {
+                g_lastSaveError.clear();
+                if (!err.empty()) g_lastSaveError = err;
+            } else if (!err.empty()) {
+                g_lastSaveError = "Import failed: " + err;
             }
-            rows.push_back(std::move(r));
         }
-
-        // Sort state — manual instead of ImGui_TableFlags_Sortable
-        // because ReaImGui's TableGetColumnSortSpecs hand-off always
-        // returned colIdx=0/dir=0 here regardless of which header
-        // was clicked (verified on macOS arm64 reaimgui 0.10,
-        // 2026-05-17). Sortable columns render as buttons in the
-        // header row.
-        enum class FxlSort : uint8_t { Name, Developer };
-        static FxlSort s_sortCol = FxlSort::Name;
-        static bool    s_sortAsc = true;
-
-        {
-            const bool asc = s_sortAsc;
-            const auto col = s_sortCol;
-            std::sort(rows.begin(), rows.end(),
-                [&](const Row& a, const Row& b) {
-                    const std::string aKey = (col == FxlSort::Name)
-                        ? lc(cat.maps[a.idx].match) : lc(a.dev);
-                    const std::string bKey = (col == FxlSort::Name)
-                        ? lc(cat.maps[b.idx].match) : lc(b.dev);
-                    return asc ? (aKey < bKey) : (aKey > bKey);
-                });
+        if (!g_lastSaveError.empty()) {
+            ImGui_Spacing(ctx);
+            ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
         }
-
-        const int kCols = 7;
-        int tblFlags = 0;
-        // CRITICAL: each TableSetupColumn that passes a non-null init_width
-        // MUST also pass WidthFixed in flags — otherwise ImGui interprets
-        // the value as a stretch *weight*, which with values like 36..240
-        // explodes the column layout and bricks the parent window for the
-        // next frame (Begin returns false forever). See learnings.md
-        // "ReaImGui TableSetupColumn pixel-width trap" (2026-05-03).
-        if (ImGui_BeginTable(ctx, "fxl_master", kCols, &tblFlags,
-                             nullptr, nullptr, nullptr)) {
-            int wFlag = ImGui_TableColumnFlags_WidthFixed;
-            // Scale every column with font size so the Short field +
-            // Mode / Slots / Actions buttons all fit at Large.
-            double wDefault = scaleW_(ctx, 36.0),
-                   wShort   = scaleW_(ctx, 100.0),
-                   wMatch   = scaleW_(ctx, 240.0),
-                   wDev     = scaleW_(ctx, 140.0),
-                   wDomain  = scaleW_(ctx, 72.0),
-                   wSlots   = scaleW_(ctx, 64.0),
-                   wActions = scaleW_(ctx, 100.0);
-            ImGui_TableSetupColumn(ctx, "Default",      &wFlag, &wDefault, nullptr);
-            ImGui_TableSetupColumn(ctx, "Short Max. 7", &wFlag, &wShort,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Name",         &wFlag, &wMatch,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Developer",    &wFlag, &wDev,     nullptr);
-            ImGui_TableSetupColumn(ctx, "Mode",         &wFlag, &wDomain,  nullptr);
-            ImGui_TableSetupColumn(ctx, "Slots",        &wFlag, &wSlots,   nullptr);
-            ImGui_TableSetupColumn(ctx, "Actions",      &wFlag, &wActions, nullptr);
-
-            // Manual header row — TableHeadersRow + ImGui sort flags
-            // were no-ops on the current reaimgui build (see memory:
-            // reaimgui-table-sort-broken). Static labels for non-
-            // sortable columns; Name + Developer are buttons that
-            // toggle direction (^ desc / v asc) or claim the sort.
-            ImGui_TableNextRow(ctx, nullptr, nullptr);
-            auto sortHeader = [&](const char* labelBase, FxlSort col) {
-                const bool active = (s_sortCol == col);
-                char btn[64];
-                const char* arrow = active ? (s_sortAsc ? " v" : " ^") : "";
-                snprintf(btn, sizeof(btn), "%s%s##fxl_sort_%d",
-                    labelBase, arrow, static_cast<int>(col));
-                if (ImGui_Button(ctx, btn, nullptr, nullptr)) {
-                    if (active) s_sortAsc = !s_sortAsc;
-                    else { s_sortCol = col; s_sortAsc = true; }
-                }
-            };
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Default");
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Short Max. 7");
-            ImGui_TableNextColumn(ctx); sortHeader("Name",      FxlSort::Name);
-            ImGui_TableNextColumn(ctx); sortHeader("Developer", FxlSort::Developer);
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Mode");
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Slots");
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Actions");
-
-            // Index loop so per-row IDs are stable. A drop while iterating
-            // would invalidate references; defer destructive actions to
-            // post-loop via the popup.
-            for (const auto& row : rows) {
-                const size_t i = row.idx;
-                const UserPluginMap& m = cat.maps[i];
-
-                ImGui_TableNextRow(ctx, nullptr, nullptr);
-
-                // Default — clickable star toggle.
-                ImGui_TableNextColumn(ctx);
-                {
-                    char btnId[64];
-                    snprintf(btnId, sizeof(btnId),
-                        "%s##fxl_def_%zu", m.isDefault ? "*" : "-", i);
-                    if (ImGui_Button(ctx, btnId, nullptr, nullptr)) {
-                        UserPluginMap copy = m;
-                        copy.isDefault = !copy.isDefault;
-                        user_plugins::upsert(std::move(copy));
-                        persistAndReport_();
-                    }
-                }
-
-                // Short — editable inline so the user can rename the
-                // colour-bar label without re-creating the map. Persists
-                // on every keystroke (matches the V-Pot label edit
-                // pattern in the FX-Learn schematic popup). Up to 7
-                // chars (UF8 / UC1 colour-bar zone width).
-                ImGui_TableNextColumn(ctx);
-                {
-                    char shortBuf[16] = {};
-                    std::strncpy(shortBuf, m.displayShort.c_str(),
-                                 sizeof(shortBuf) - 1);
-                    char shortId[64];
-                    snprintf(shortId, sizeof(shortId),
-                                  "##fxl_short_%zu", i);
-                    if (ImGui_InputTextWithHint(ctx, shortId, "USR",
-                            shortBuf, 8, nullptr, nullptr))
-                    {
-                        UserPluginMap copy = m;
-                        copy.displayShort = shortBuf;
-                        if (copy.displayShort.size() > 7)
-                            copy.displayShort.resize(7);
-                        user_plugins::upsert(std::move(copy));
-                        persistAndReport_();
-                    }
-                }
-
-                ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, m.match.c_str());
-
-                // Developer — parsed from the matching installed FX's
-                // trailing "(Vendor)". Dimmed dash when no match.
-                ImGui_TableNextColumn(ctx);
-                if (row.dev.empty()) ImGui_TextDisabled(ctx, "—");
-                else                 ImGui_Text(ctx, row.dev.c_str());
-
-                ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, modeLabel_(m.domain, m.uf8Mode));
-
-                ImGui_TableNextColumn(ctx);
-                {
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "%zu", m.slots.size());
-                    ImGui_Text(ctx, buf);
-                }
-
-                ImGui_TableNextColumn(ctx);
-                {
-                    char editId[64];
-                    snprintf(editId, sizeof(editId),
-                                  "Edit##fxl_edit_%zu", i);
-                    if (ImGui_Button(ctx, editId, nullptr, nullptr)) {
-                        g_editingMatch     = m.match;
-                        g_listeningLinkIdx = -1;
-                        std::memset(g_paramFilter, 0, sizeof(g_paramFilter));
-                    }
-
-                    ImGui_SameLine(ctx, nullptr, nullptr);
-                    char delId[64];
-                    snprintf(delId, sizeof(delId),
-                                  "Del##fxl_del_%zu", i);
-                    if (ImGui_Button(ctx, delId, nullptr, nullptr)) {
-                        // Defer the OpenPopup to the outer scope so the
-                        // popup ID-stack matches BeginPopupModal below;
-                        // calling OpenPopup inside the table cell uses a
-                        // deeper ID prefix, BeginPopupModal can't find it.
-                        g_pendingDeleteMatch = m.match;
-                        g_pendingDeleteOpen  = true;
-                    }
-                }
+    } else {
+        // Restore last-edited map from ExtState when no map is active
+        // (fresh Settings-open, or user returned from a deleted map).
+        // Fall back to the first catalog entry if the persisted match
+        // no longer exists (deletion, rename via Import, etc.).
+        if (g_editingMatch.empty()) {
+            const char* saved = GetExtState("ReaSixty", "fxLearnLastMatch");
+            std::string candidate = (saved && *saved) ? saved : "";
+            bool found = false;
+            for (const auto& m : cat.maps) {
+                if (m.match == candidate) { found = true; break; }
             }
-
-            ImGui_EndTable(ctx);
+            if (!found) candidate = cat.maps.front().match;
+            g_editingMatch = candidate;
+            SetExtState("ReaSixty", "fxLearnLastMatch",
+                        g_editingMatch.c_str(), true);
         }
+        drawFxLearnEditor_(ctx);
     }
+
 
     // Hoist the deferred OpenPopup for Delete out of the table-cell scope
     // (see g_pendingDeleteOpen comment).
@@ -8220,6 +8697,14 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     }
 
     // ---- "+ New" popup ----------------------------------------------------
+    // The new-map picker hosts a long installed-FX list — give it a
+    // generous fixed shape so the browser isn't a 200-px stub. Centered
+    // on first appearance; user can drag/resize after.
+    {
+        int condApp = ImGui_Cond_Appearing;
+        centerNextPopupOnDisplay_(ctx);
+        ImGui_SetNextWindowSize(ctx, 640.0, 620.0, &condApp);
+    }
     if (ImGui_BeginPopupModal(ctx, "fxl_new_popup", nullptr, nullptr)) {
         ImGui_Text(ctx, "New User Plugin Map");
         ImGui_Spacing(ctx);
@@ -8342,7 +8827,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
 
-        if (ImGui_Button(ctx, "Create##fxl_new_ok", nullptr, nullptr)) {
+        // Shared create-or-fail logic. Returns true on successful create
+        // (popup closed, editor switched to the new map). `alsoAutoLearn`
+        // arms the deferred Setup-modal trigger so the next frame opens
+        // AutoLearn for the freshly-created map automatically.
+        auto tryCreate = [&](bool alsoAutoLearn) {
             g_newError.clear();
 
             std::string match = g_newMatch;
@@ -8359,39 +8848,147 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
             if (match.empty()) {
                 g_newError = "Match string is required.";
-            } else if (disp.empty()) {
+                return;
+            }
+            if (disp.empty()) {
                 g_newError = "Display label is required (1..7 ASCII chars).";
-            } else if (g_newPrimaryMode < 1 || g_newPrimaryMode > 3) {
+                return;
+            }
+            if (g_newPrimaryMode < 1 || g_newPrimaryMode > 3) {
                 g_newError = "Pick a mode.";
-            } else if (user_plugins::collidesWithBuiltin(match)) {
+                return;
+            }
+            if (user_plugins::collidesWithBuiltin(match)) {
                 g_newError = "That match string collides with a built-in plugin map.";
-            } else {
-                // Reject duplicate match within the catalog up-front so the
-                // user gets a clear message instead of a silent overwrite.
-                bool dup = false;
-                for (const auto& existing : user_plugins::get().maps) {
-                    if (existing.match == match) { dup = true; break; }
-                }
-                if (dup) {
+                return;
+            }
+            for (const auto& existing : user_plugins::get().maps) {
+                if (existing.match == match) {
                     g_newError = "A user map with that match already exists.";
-                } else {
-                    UserPluginMap m;
-                    m.match        = match;
-                    m.displayShort = disp;
-                    m.domain       = (g_newPrimaryMode == 2) ? Domain::BusComp
-                                  : (g_newPrimaryMode == 1) ? Domain::ChannelStrip
-                                  :                            Domain::None;
-                    m.uf8Mode      = (g_newPrimaryMode == 3) ? true
-                                                              : g_newUf8Mode;
-                    m.isDefault    = false;
-                    user_plugins::upsert(std::move(m));
-                    persistAndReport_();
-                    if (g_lastSaveError.empty())
-                        ImGui_CloseCurrentPopup(ctx);
-                    else
-                        g_newError = g_lastSaveError;  // surfaced in popup too
+                    return;
                 }
             }
+
+            UserPluginMap m;
+            m.match        = match;
+            m.displayShort = disp;
+            m.domain       = (g_newPrimaryMode == 2) ? Domain::BusComp
+                          : (g_newPrimaryMode == 1) ? Domain::ChannelStrip
+                          :                            Domain::None;
+            m.uf8Mode      = (g_newPrimaryMode == 3) ? true : g_newUf8Mode;
+            m.isDefault    = false;
+            user_plugins::upsert(std::move(m));
+            persistAndReport_();
+            if (!g_lastSaveError.empty()) {
+                g_newError = g_lastSaveError;
+                return;
+            }
+            g_editingMatch     = match;
+            g_listeningLinkIdx = -1;
+            SetExtState("ReaSixty", "fxLearnLastMatch",
+                        g_editingMatch.c_str(), true);
+            if (alsoAutoLearn) {
+                // Seed the Setup modal from the just-created map's
+                // domain + UF8 flag. Defer the OpenPopup to the next
+                // frame so the +New modal's close has cleared the
+                // popup stack (ImGui modals are exclusive).
+                g_autoLearnSetupPrimary = g_newPrimaryMode;
+                g_autoLearnSetupVpots   = (g_newPrimaryMode == 3)
+                                          ? true : g_newUf8Mode;
+                g_autoLearnSetupStrips  = false;
+                g_autoLearnSetupPending = true;
+            }
+            ImGui_CloseCurrentPopup(ctx);
+        };
+
+        // Check whether the user's match string already corresponds to
+        // a live FX in the project. When YES, "Create + AutoLearn" can
+        // pick up the existing instance for its param snapshot. When
+        // NO, we relabel the button "Insert + AutoLearn" and add the
+        // plug-in to the focused / first track before AutoLearn runs.
+        // Match against the cleaned (trimmed) version of g_newMatch.
+        std::string matchCheck = g_newMatch;
+        while (!matchCheck.empty() &&
+               (matchCheck.front() == ' ' || matchCheck.front() == '\t'))
+            matchCheck.erase(matchCheck.begin());
+        while (!matchCheck.empty() &&
+               (matchCheck.back() == ' ' || matchCheck.back() == '\t'))
+            matchCheck.pop_back();
+
+        bool fxLiveInSession = false;
+        if (!matchCheck.empty()) {
+            const int nTracks = CountTracks(nullptr);
+            for (int t = 0; t < nTracks && !fxLiveInSession; ++t) {
+                MediaTrack* tr = GetTrack(nullptr, t);
+                if (!tr) continue;
+                const int nFx = TrackFX_GetCount(tr);
+                for (int i = 0; i < nFx; ++i) {
+                    char buf[256];
+                    if (uf8::fxIdentityName(tr, i, buf, sizeof(buf)) &&
+                        std::strstr(buf, matchCheck.c_str()))
+                    {
+                        fxLiveInSession = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (ImGui_Button(ctx, "Create##fxl_new_ok", nullptr, nullptr)) {
+            tryCreate(/*alsoAutoLearn*/ false);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* alLabel = fxLiveInSession
+            ? "Create + AutoLearn##fxl_new_ok_al"
+            : "Insert + AutoLearn##fxl_new_ok_al";
+        if (ImGui_Button(ctx, alLabel, nullptr, nullptr)) {
+            bool insertOk = true;
+            if (!fxLiveInSession) {
+                // Insert on focused / first selected track. Falls back
+                // to track 0 when no selection. Master track is avoided
+                // (TrackFX_AddByName on master often produces a hidden
+                // monitor-FX rather than a regular track-FX, breaking
+                // the snapshot path).
+                MediaTrack* tr = GetSelectedTrack(nullptr, 0);
+                if (!tr && CountTracks(nullptr) > 0)
+                    tr = GetTrack(nullptr, 0);
+                std::string insertName = matchCheck;
+                if (g_pickerSelectedIdx >= 0 &&
+                    g_pickerSelectedIdx < (int)g_installedFx.size()) {
+                    // Prefer the full FX name picked from the browser
+                    // — REAPER's fuzzy matcher is more reliable on
+                    // the full "VST3: Pro-C 2 (FabFilter)" string
+                    // than on a substring.
+                    insertName =
+                        g_installedFx[g_pickerSelectedIdx].name;
+                }
+                if (!tr) {
+                    g_newError = "Insert failed — no track to host "
+                                 "the plug-in. Add a track first.";
+                    insertOk = false;
+                } else if (insertName.empty()) {
+                    g_newError = "Insert failed — pick a plug-in from "
+                                 "the list or fill in a match string.";
+                    insertOk = false;
+                } else {
+                    const int idx = TrackFX_AddByName(tr,
+                        insertName.c_str(), false, -1);
+                    if (idx >= 0) {
+                        // Float the FX window so the snapshot path
+                        // picks it up and the user can wiggle controls.
+                        TrackFX_Show(tr, idx, 3);
+                        // Selecting the track makes it the focused
+                        // track so the editor's snapshot-on-first-
+                        // resolve auto-fires for the new map.
+                        SetOnlyTrackSelected(tr);
+                    } else {
+                        g_newError = "Insert failed — REAPER couldn't "
+                                     "find a plug-in matching the name.";
+                        insertOk = false;
+                    }
+                }
+            }
+            if (insertOk) tryCreate(/*alsoAutoLearn*/ true);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Cancel##fxl_new_cancel", nullptr, nullptr)) {
@@ -8400,12 +8997,23 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_EndPopup(ctx);
     }
 
+    // Deferred AutoLearn-Setup trigger fired by "Create + AutoLearn"
+    // (see tryCreate). Runs outside the +New popup scope so the popup
+    // stack is clean by the time we OpenPopup — same hand-off pattern
+    // as the AutoLearn Setup → Preview transition.
+    if (g_autoLearnSetupPending) {
+        g_autoLearnSetupPending = false;
+        g_autoLearnSetupOpen    = true;
+        ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
+    }
+
     // ---- Delete confirm popup --------------------------------------------
     // Wider / shorter shape so the wrapped "fall back to no mapping" line
     // fits on one row and the match string isn't truncated (Frank
     // 2026-05-19). Cond_Always so resizing isn't sticky between opens.
     {
         int condAlways = ImGui_Cond_Always;
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, 520.0, 0.0, &condAlways);
     }
     if (ImGui_BeginPopupModal(ctx, "Delete learned FX###fxl_del_popup",
@@ -9345,6 +9953,7 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     }
     {
         int condAlways = ImGui_Cond_Always;
+        centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, 520.0, 0.0, &condAlways);
     }
     if (ImGui_BeginPopupModal(ctx,

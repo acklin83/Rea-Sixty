@@ -126,8 +126,12 @@ struct UserUf8BankSet {
 // — that per-top-soft-key dimension is dropped, migration takes
 // strips[0][slot] only.)
 struct UserUf8StripBinding {
-    int  faderVst3Param = -1;                 // -1 = fall through to track vol
-    bool faderInverted  = false;
+    int          faderVst3Param = -1;         // -1 = fall through to track vol
+    bool         faderInverted  = false;
+    std::string  faderLabel;                  // scribble-strip override for
+                                              // the fader's bound param (1..7
+                                              // chars). Empty = use the
+                                              // plug-in's own param name.
     int  soloVst3Param  = -1;                 // -1 = track solo
     int  cutVst3Param   = -1;                 // -1 = track mute
     int  selVst3Param   = -1;                 // -1 = track select

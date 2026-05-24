@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.2
+date: v0.1.7
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.4. Earlier manuals (anything dated before 2026-05-22) are superseded.
+This manual documents Rea-Sixty v0.1.7. Earlier manuals (anything dated before 2026-05-24) are superseded.
 
 \newpage
 
@@ -63,9 +63,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.1.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.1.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.1.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.1.7.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.1.7.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.1.7.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
 
 ## Enabling the surface
 
@@ -325,7 +325,7 @@ Three buttons in their own cluster:
 |---|---|
 | `FLIP` | `flip` — swap fader and V-Pot values for the active mode. |
 | `PAN` | `pan_force` — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO modes. |
-| `FINE` | `mod_shift` modifier (the SSL "FINE" = "Shift" key). Held + control rotation = fine resolution. Double-click latches it on; press again to unlatch. |
+| `FINE` | `mod_shift` modifier (the SSL "FINE" = "Shift" key). Double-click latches it on; press again to unlatch. With *Settings → Device → Keyboard Options → Shift activates Fine mode* on, holding this also drops V-Pot / encoder step size to ×0.25 (faders unaffected). |
 
 ## Layer keys
 
@@ -511,6 +511,7 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | Keyboard Shift acts as Shift modifier | When on, holding **Shift** on the host keyboard counts as the Shift modifier for any binding's Plain/Shift/Cmd/Ctrl modifier slot — in addition to the hardware `mod_*` bindings. |
 | Keyboard Cmd acts as Cmd modifier | Same, for Cmd on macOS. |
 | Keyboard Ctrl acts as Ctrl modifier | Same, for Ctrl on Windows / Linux. |
+| Shift activates Fine mode (V-Pots / encoders, not faders) | When on, holding the Shift modifier (keyboard Shift, UF8 `FINE` key, or UC1 `Fine` button) drops V-Pot + encoder step size to ×0.25 for momentary fine resolution. Faders are deliberately excluded (they already have Alt-drag for fine control). Stacks with the UC1 `Fine` toggle. Off by default. |
 
 ### Pending
 
@@ -699,6 +700,7 @@ Top bar:
 - **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode dispatch.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
+- **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
 - Breadcrumb **`← All maps`** to leave the editor.
 
 Editor body — depends on the domain:
@@ -713,6 +715,19 @@ Right-clicking a mapped control on the UF8 schematic opens per-control options:
 - **Copy / Paste / Clear** the binding.
 - **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — propagates the source-strip's attributes (faderInverted, V-Pot inverted / vpotMode / defaultNorm / stripColour, Solo / Cut / Sel colour, Reverse LED flag) onto every strip to the right.
 - **Reverse LED [off/on]** on a Solo / Cut / Sel button — XORs the LED on/off bit before painting. Use this for plug-ins whose Cut/Bypass param reports `1 = inactive` so the LED would otherwise stay bright while the function is off. Saved per `(fader-bank, strip, button)` in `user_plugins.json`.
+- **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` in `user_plugins.json` — no schema bump.
+
+### QuickLearn (standalone popup)
+
+A wiggle-driven shortcut to either create a new FX Learn map or edit an existing one without opening the full Settings → FX Learn pane. Triggered via the `quick_learn` builtin (bind any UF8 / UC1 key to it under Settings → Bindings → Plug-in category).
+
+Three-phase flow:
+
+- **Setup** — pick domain (`Channel Strip` / `Bus Comp` / `CS + UF8` / `BC + UF8` / `UF8-only`), fader-bank count (1 or 2), and an optional *AutoLearn first* checkbox that pre-fills the wiggle list with the AutoLearn engine's confidence-scored suggestions.
+- **Mapping** — the popup highlights one schematic target at a time. Touch / wiggle the matching plug-in parameter on the focused FX; the engine auto-advances to the next unmapped target on detect. Skip / Back keys are available.
+- **Review & Save** — final overview with per-slot edit; Save writes into `user_plugins.json`. When invoked on an FX that already has a user map, QuickLearn loads it for editing instead of starting from scratch.
+
+QuickLearn renders in its own ReaImGui context (separate from the Settings window), is theme-aware, and runs on the main thread off `onRunTick`.
 
 ### Multi-instance picker
 
@@ -831,6 +846,7 @@ Section appears only when the build is Windows.
 
 - Text: binds UF8 + UC1 to WinUSB so libusb can claim them without Zadig. One-time setup, requires admin. SSL 360° stops seeing the devices after install — reinstall SSL 360° to revert.
 - **Install UF8/UC1 WinUSB driver** button — kicks off the in-product installer with a UAC + publisher prompt. After acceptance, unplug + replug devices.
+- **Uninstall** button — runs `pnputil /delete-driver /uninstall` (UAC prompt), removes `rea_sixty_winusb.inf` from the driver store, and clears the Rea-Sixty signing cert from the My / Root / TrustedPublisher stores. After uninstall, unplug + replug devices; the SSL 360° driver (or whatever was previously bound) takes over again.
 
 ### Linux udev rule (Linux only)
 
@@ -838,6 +854,7 @@ Section appears only when the build is Linux.
 
 - Text: grants non-root USB access by installing `/etc/udev/rules.d/99-rea-sixty.rules`. One-time setup, requires sudo (graphical password prompt).
 - **Install Linux udev rule** button — runs pkexec, writes the rule, reloads udev. After install, unplug + replug UF8 + UC1, then restart REAPER.
+- **Uninstall** button — pkexec removes `/etc/udev/rules.d/99-rea-sixty.rules`, then reloads + triggers udev. After uninstall the surface drops back to root-only USB access until a rule is reinstalled.
 
 ### Logs
 
@@ -911,6 +928,7 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **`plugin_move_down`** — move the cursor FX down one slot.
 - **`show_fx_chain`** — open / close REAPER's FX chain window for the focused track (pinned per the FX-chain pin settings).
 - **`close_all_fx_guis`** — close every floating FX window in the project.
+- **`quick_learn`** — open the standalone QuickLearn popup window (parameter wiggle-detect → CS / BC / UF8-only mapping). Picks up the focused track's active FX as the learn target. When no user map exists yet it creates one; if a map is already in the catalog it reopens it for editing. See *Settings → FX Learn → QuickLearn* for the flow.
 
 ## Instance navigation
 

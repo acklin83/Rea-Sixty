@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -22,6 +24,15 @@
 #include "FocusedParam.h"
 #include "PluginMap.h"
 #include "UserPluginCatalog.h"
+
+// Defined in macos_pin_fx_gui.mm. Raises the OS-level window owning the
+// passed HWND-equivalent to the front and steals focus. Platform helper
+// — Windows / Linux fallback below uses SWELL via main.cpp.
+#ifdef __APPLE__
+namespace uf8 {
+    void macosBringWindowToFront(void* hwnd, const char* titleHint);
+}
+#endif
 
 // Settings → Appearance state, defined in main.cpp at file scope.
 int reasixty_theme();
@@ -65,6 +76,20 @@ struct QuickLearnWindow::Impl {
     ImGui_Font*    font    = nullptr;
     bool           visible = false;
     int            sessionGen = 0;
+    // Counter — non-zero for the first N frames after toggle()-to-open.
+    // Each of those frames calls ImGui_SetNextWindowFocus AND the
+    // macOS bring-to-front helper so the host OS window definitely
+    // surfaces above any floating plug-in GUI. One frame proved
+    // unreliable (Frank 2026-05-24): the ReaImGui host window can
+    // still be in the middle of materialising on the first frame
+    // after CreateContext, so we run the raise for ~3 frames.
+    int            focusPendingFrames = 0;
+    // Track the last-persisted host shape so we only call SetExtState
+    // when something actually changed (avoid churn during render).
+    int            lastSavedW = -1;
+    int            lastSavedH = -1;
+    int            lastSavedX = INT32_MIN;
+    int            lastSavedY = INT32_MIN;
 
     // ---- State machine ----
     QLPhase phase = QLPhase::Setup;
@@ -98,11 +123,27 @@ struct QuickLearnWindow::Impl {
     void ensureCtx()
     {
         if (ctx) return;
-        // ReaImGui persists pos+size across sessions per context name;
-        // these are first-run defaults only.
+        // Size + position are persisted to ExtState per-frame after
+        // ImGui_Begin (see onRunTick). We restore those values here as
+        // the CreateContext hints so the new host-window opens at the
+        // user's last shape. Defaults 520×720 (centered) on first run.
+        // (Previous code relied on ReaImGui's per-context persistence,
+        // but ImGui_WindowFlags_NoSavedSettings + a session-bumped
+        // winId both blocked it — Frank 2026-05-24.)
         int sizeW = 520, sizeH = 720;
+        const char* sw = GetExtState("ReaSixty", "quickLearnSizeW");
+        const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
+        if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
+        if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
+        int posX = -1, posY = -1;
+        const char* px = GetExtState("ReaSixty", "quickLearnPosX");
+        const char* py = GetExtState("ReaSixty", "quickLearnPosY");
+        if (px && *px) posX = std::atoi(px);
+        if (py && *py) posY = std::atoi(py);
+        int* posXp = (posX >= 0) ? &posX : nullptr;
+        int* posYp = (posY >= 0) ? &posY : nullptr;
         ctx = ImGui_CreateContext("Rea-Sixty QuickLearn",
-                                 &sizeW, &sizeH, nullptr, nullptr);
+                                 &sizeW, &sizeH, posXp, posYp);
         font = ImGui_CreateFont("sans-serif", nullptr);
         if (ctx && font) ImGui_Attach(ctx, font);
     }
@@ -523,8 +564,15 @@ void QuickLearnWindow::toggle()
     impl_->visible = !wasOpen;
     if (impl_->visible) {
         ++impl_->sessionGen;
-        impl_->ctx  = nullptr;
-        impl_->font = nullptr;
+        impl_->focusPendingFrames = 3;   // raise above plug-in GUIs
+        // Keep impl_->ctx / impl_->font alive across toggles. Resetting
+        // them to nullptr on every open used to force ensureCtx to call
+        // ImGui_CreateContext again — and ReaImGui's per-name context
+        // cache returned the SAME (closed-state) context from the
+        // previous session, so Begin's *p_open=true override was never
+        // honoured and the window stayed hidden on the second action
+        // trigger (Frank 2026-05-24). ensureCtx() is a no-op when
+        // ctx is already valid, so this just skips the recreation.
         // Reset state machine.
         impl_->phase = QLPhase::Setup;
         impl_->domainChoice   = 0;
@@ -576,19 +624,59 @@ void QuickLearnWindow::onRunTick()
     if (impl_->font) ImGui_PushFont(impl_->ctx, impl_->font, fontPx);
     const int pushed = ThemeBridge::pushAll(impl_->ctx, palette);
 
-    int winFlags = ImGui_WindowFlags_NoSavedSettings
-                 | ImGui_WindowFlags_NoCollapse;
-    char winId[64];
-    snprintf(winId, sizeof(winId),
-             "QuickLearn##ql_session_%d", impl_->sessionGen);
+    // Stable winId + no NoSavedSettings so ImGui itself can persist
+    // the inner-window state across the lifetime of the context. (The
+    // host-window size + pos are also explicitly persisted to ExtState
+    // below — that survives even context destruction / app restart.)
+    int winFlags = ImGui_WindowFlags_NoCollapse;
+    const char* winId = "QuickLearn";
     bool open = impl_->visible;
 
     if (impl_->visible) {
         int condAlways = ImGui_Cond_Always;
         ImGui_SetNextWindowCollapsed(impl_->ctx, false, &condAlways);
+        if (impl_->focusPendingFrames > 0) {
+            // Raise the QuickLearn host window above any focused
+            // plug-in GUI. ImGui_SetNextWindowFocus only reorders
+            // ImGui's internal stack — to bring the OS-level host
+            // window over a REAPER plug-in's floating window we also
+            // need a platform call. Repeated for a few frames because
+            // ReaImGui may still be materialising the host on the
+            // first tick after CreateContext.
+            ImGui_SetNextWindowFocus(impl_->ctx);
+#ifdef __APPLE__
+            void* hwnd = ImGui_GetNativeHwnd(impl_->ctx);
+            uf8::macosBringWindowToFront(hwnd, "QuickLearn");
+#endif
+            --impl_->focusPendingFrames;
+        }
         const bool bodyVisible =
             ImGui_Begin(impl_->ctx, winId, &open, &winFlags);
         if (bodyVisible) {
+            // Capture the current host-context shape and persist when
+            // it diverges meaningfully from the last-saved value. Polled
+            // every frame; only writes ExtState on real changes so we
+            // don't churn the registry mid-drag. ImGui_GetWindowSize /
+            // _Pos report the inner ImGui window; for a non-docked
+            // ReaImGui host that's the host content area (drifts ~20-
+            // 30 px from the host frame size, but converges quickly).
+            double curW = 0, curH = 0;
+            ImGui_GetWindowSize(impl_->ctx, &curW, &curH);
+            double curX = 0, curY = 0;
+            ImGui_GetWindowPos(impl_->ctx, &curX, &curY);
+            auto persist = [](const char* key, int v) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%d", v);
+                SetExtState("ReaSixty", key, buf, true);
+            };
+            const int iw = static_cast<int>(curW);
+            const int ih = static_cast<int>(curH);
+            const int ix = static_cast<int>(curX);
+            const int iy = static_cast<int>(curY);
+            if (iw != impl_->lastSavedW) { persist("quickLearnSizeW", iw); impl_->lastSavedW = iw; }
+            if (ih != impl_->lastSavedH) { persist("quickLearnSizeH", ih); impl_->lastSavedH = ih; }
+            if (ix != impl_->lastSavedX) { persist("quickLearnPosX",  ix); impl_->lastSavedX = ix; }
+            if (iy != impl_->lastSavedY) { persist("quickLearnPosY",  iy); impl_->lastSavedY = iy; }
             // ---- Render content based on phase ----
             switch (impl_->phase) {
 
@@ -661,7 +749,8 @@ void QuickLearnWindow::onRunTick()
                 int inputFlags = 0;
                 ImGui_InputText(impl_->ctx, "##ql_dshort",
                                 impl_->displayShort,
-                                sizeof(impl_->displayShort), &inputFlags);
+                                sizeof(impl_->displayShort), &inputFlags,
+                                nullptr);
 
                 ImGui_Spacing(impl_->ctx);
                 ImGui_Separator(impl_->ctx);
@@ -712,7 +801,8 @@ void QuickLearnWindow::onRunTick()
                 int dsFlags = 0;
                 ImGui_InputText(impl_->ctx, "##ql_dshort_map",
                                 impl_->displayShort,
-                                sizeof(impl_->displayShort), &dsFlags);
+                                sizeof(impl_->displayShort), &dsFlags,
+                                nullptr);
                 ImGui_Spacing(impl_->ctx);
 
                 const int total = static_cast<int>(impl_->queue.size());
