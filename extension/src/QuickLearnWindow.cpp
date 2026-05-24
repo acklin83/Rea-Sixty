@@ -1331,6 +1331,14 @@ void QuickLearnWindow::onRunTick()
                             char lblId[48];
                             snprintf(lblId, sizeof(lblId),
                                      "##ql_lbl_%d", i);
+                            // Belt-and-suspenders: ensure this
+                            // InputText can claim hover even if a
+                            // parent (cell, row, table) would
+                            // otherwise win HoveredId. Without this,
+                            // ItemHoverable (imgui.cpp:4855-4887)
+                            // can silently block the click from
+                            // reaching SetActiveID.
+                            ImGui_SetNextItemAllowOverlap(impl_->ctx);
                             ImGui_SetNextItemWidth(impl_->ctx, -1.0);
                             if (ImGui_InputTextWithHint(impl_->ctx,
                                     lblId,

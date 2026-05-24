@@ -571,6 +571,13 @@ REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double local_y)> ImGui_
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double pos_x, double pos_y)> ImGui_SetCursorScreenPos REAIMGUIAPI_INIT("ImGui_SetCursorScreenPos");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* type, const char* data, int* condInOptional)> ImGui_SetDragDropPayload REAIMGUIAPI_INIT("ImGui_SetDragDropPayload");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx)> ImGui_SetItemAllowOverlap REAIMGUIAPI_INIT("ImGui_SetItemAllowOverlap");
+// Patched 2026-05-24 — v0.10 added SetNextItemAllowOverlap (marks the
+// NEXT item as allow-overlap, where SetItemAllowOverlap marks the
+// previous one). Needed for InputText hit-test in tables on macOS
+// multi-viewport: without it, a parent cell/Selectable can claim
+// HoveredId and silently block the InputText's activation click
+// (imgui.cpp:4855-4887 ItemHoverable gate).
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx)> ImGui_SetNextItemAllowOverlap REAIMGUIAPI_INIT("ImGui_SetNextItemAllowOverlap");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx)> ImGui_SetItemDefaultFocus REAIMGUIAPI_INIT("ImGui_SetItemDefaultFocus");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, int* offsetInOptional)> ImGui_SetKeyboardFocusHere REAIMGUIAPI_INIT("ImGui_SetKeyboardFocusHere");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, int cursor_type)> ImGui_SetMouseCursor REAIMGUIAPI_INIT("ImGui_SetMouseCursor");
