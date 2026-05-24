@@ -11,11 +11,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "reaper_plugin_functions.h"
@@ -45,8 +48,10 @@ namespace {
 
 enum class QLPhase : int {
     Setup,       // choose domain + fader banks
-    Mapping,     // sequential wiggle-detect
-    Review,      // confirm + save
+    Mapping,     // sequential wiggle-detect + editable table + Save
+                 // (Review was merged into Mapping — Frank 2026-05-24:
+                 // with the editable table, a separate read-only review
+                 // step was duplicate ceremony. Save lives on Mapping now.)
 };
 
 // What we're mapping right now — UC1 slots or UF8 V-Pot banks.
@@ -135,6 +140,30 @@ struct QuickLearnWindow::Impl {
     // size paired with SetNextItemWidth produced an invisible InputText in
     // ReaImGui v0.10.
     char displayShort[32] = {};
+    // Editable match-substring for the UserPluginMap. Seeded from the
+    // auto-derived fxMatch (FX name without "VST3: " etc.) and writable by
+    // the user — useful when a plug-in's full name carries a version
+    // suffix you don't want to bake into the match key. Frank 2026-05-24.
+    char matchBuf[64] = {};
+
+    // Param snapshot for the Param dropdown in the Mapping table.
+    // Built once on entering Mapping; pair = (vst3Param, paramName).
+    // We rebuild it lazily so re-entering Mapping after a Setup tweak
+    // gets fresh names.
+    std::vector<std::pair<int, std::string>> paramSnapshot;
+
+    void buildParamSnapshot()
+    {
+        paramSnapshot.clear();
+        if (!fxTrack || fxIdx < 0) return;
+        const int n = TrackFX_GetNumParams(fxTrack, fxIdx);
+        paramSnapshot.reserve(static_cast<size_t>(n));
+        for (int p = 0; p < n; ++p) {
+            char name[256] = {};
+            TrackFX_GetParamName(fxTrack, fxIdx, p, name, sizeof(name));
+            paramSnapshot.emplace_back(p, std::string(name));
+        }
+    }
 
     void ensureCtx()
     {
@@ -215,6 +244,14 @@ struct QuickLearnWindow::Impl {
             std::strncpy(displayShort, m->displayShort.c_str(),
                          sizeof(displayShort) - 1);
             displayShort[sizeof(displayShort) - 1] = '\0';
+        }
+        // matchBuf: seed from the stored map.match so re-learn re-uses
+        // whatever override the user already committed (don't snap
+        // back to the auto-derived FX name).
+        if (!m->match.empty()) {
+            std::strncpy(matchBuf, m->match.c_str(),
+                         sizeof(matchBuf) - 1);
+            matchBuf[sizeof(matchBuf) - 1] = '\0';
         }
     }
 
@@ -530,27 +567,36 @@ struct QuickLearnWindow::Impl {
             }
         }
 
-        // Advance currentSlot to first unbound.
+        // Advance currentSlot to first unbound (or leave on last if
+        // all are already bound — user can still re-pick any row).
         for (int i = 0; i < static_cast<int>(queue.size()); ++i) {
             if (queue[static_cast<size_t>(i)].boundParam < 0) {
                 currentSlot = i;
                 return;
             }
         }
-        // All bound — go to review.
-        phase = QLPhase::Review;
     }
 
     void saveMap()
     {
-        if (fxMatch.empty()) return;
+        // Effective match key — user override wins over auto-derived
+        // fxMatch (Frank 2026-05-24). Empty buffer falls back so we
+        // never write a blank match.
+        const std::string effMatch = (matchBuf[0] != '\0')
+            ? std::string(matchBuf) : fxMatch;
+        if (effMatch.empty()) return;
 
         UserPluginMap map;
-        // Check if a map already exists for this match.
-        if (const auto* existing = user_plugins::lookupOwnedByName(fxMatch))
+        // Check if a map already exists. Lookup uses the *effective*
+        // key so renaming the match doesn't lose existing slots when
+        // the same plug-in is re-learned with a tweaked substring.
+        if (const auto* existing = user_plugins::lookupOwnedByName(effMatch))
             map = *existing;
         else
-            map.match = fxMatch;
+            map.match = effMatch;
+        // Always write the current effective match (covers the rename
+        // case where existing != nullptr but the user changed matchBuf).
+        map.match = effMatch;
 
         map.domain  = domainFromChoice();
         map.uf8Mode = uf8FromChoice() || map.domain == Domain::None;
@@ -558,7 +604,7 @@ struct QuickLearnWindow::Impl {
         if (displayShort[0])
             map.displayShort = displayShort;
         else if (map.displayShort.empty())
-            map.displayShort = !fxMatch.empty() ? fxMatch : "USR";
+            map.displayShort = !effMatch.empty() ? effMatch : "USR";
 
         // Apply UC1 slot bindings. labelBuf -> customLabel (scribble
         // strip override); when the user didn't touch it, falls back to
@@ -654,6 +700,7 @@ void QuickLearnWindow::toggle()
                 && user_plugins::lookupOwnedByName(impl_->fxMatch))
             {
                 impl_->buildQueue();
+                impl_->buildParamSnapshot();
                 impl_->phase = QLPhase::Mapping;
                 int firstUnbound = -1;
                 for (size_t i = 0; i < impl_->queue.size(); ++i) {
@@ -686,13 +733,22 @@ void QuickLearnWindow::toggle()
     impl_->faderBankCount = 1;
     impl_->autoLearnFirst = false;
     impl_->queue.clear();
+    impl_->paramSnapshot.clear();
     impl_->currentSlot = 0;
     impl_->displayShort[0] = '\0';
+    impl_->matchBuf[0] = '\0';
     // Resolve the active FX, then seed Setup-phase inputs from any
     // existing UserPluginMap so re-opening on a known plug-in lands
     // the user on familiar settings (domain/UF8/displayShort).
     impl_->resolveActiveFx();
     impl_->seedFromExistingMap_();
+    // Seed matchBuf from the auto-derived fxMatch — user can override
+    // before saving (Frank 2026-05-24).
+    if (!impl_->fxMatch.empty()) {
+        std::strncpy(impl_->matchBuf, impl_->fxMatch.c_str(),
+                     sizeof(impl_->matchBuf) - 1);
+        impl_->matchBuf[sizeof(impl_->matchBuf) - 1] = '\0';
+    }
     // If this plug-in is already learned, skip the Setup step and
     // drop the user straight into the editable Mapping list. Setup
     // is only needed for first-time learn (domain pick + UF8 toggle).
@@ -700,6 +756,7 @@ void QuickLearnWindow::toggle()
         && user_plugins::lookupOwnedByName(impl_->fxMatch))
     {
         impl_->buildQueue();
+        impl_->buildParamSnapshot();
         impl_->phase = QLPhase::Mapping;
         int firstUnbound = -1;
         for (size_t i = 0; i < impl_->queue.size(); ++i) {
@@ -900,12 +957,13 @@ void QuickLearnWindow::onRunTick()
                 if (ImGui_Button(impl_->ctx, "Start##ql_start",
                                  nullptr, nullptr)) {
                     impl_->buildQueue();
+                    impl_->buildParamSnapshot();
                     if (impl_->autoLearnFirst) impl_->applyAutoLearn();
                     // Always land in Mapping so the user sees the full
                     // slot list with existing bindings, click-to-re-wiggle
-                    // any row, then explicitly hit "Done" → Review → Save.
-                    // (Was: hop to Review when all slots were already
-                    // bound, which made bindings non-editable.)
+                    // any row OR pick params via the column dropdown,
+                    // then hit Save. Review phase was merged into
+                    // Mapping (Frank 2026-05-24).
                     impl_->phase = QLPhase::Mapping;
                     int firstUnbound = -1;
                     for (size_t i = 0; i < impl_->queue.size(); ++i) {
@@ -938,26 +996,51 @@ void QuickLearnWindow::onRunTick()
             // Per-row scribble labels are editable inline.
             case QLPhase::Mapping: {
                 if (impl_->queue.empty()) {
-                    impl_->phase = QLPhase::Review;
+                    ImGui_TextDisabled(impl_->ctx,
+                        "No slots — adjust setup and reopen.");
+                    if (ImGui_Button(impl_->ctx,
+                            "Cancel##ql_cancel_empty",
+                            nullptr, nullptr))
+                    {
+                        open = false;
+                    }
                     break;
                 }
 
-                // Display label editor — always available.
+                // ---- Display label + Match header block ----
+                // Two inputs side-by-side. Display label drives the
+                // FX-name header in mixer/Toggle UI; Match overrides
+                // the substring used by UserPluginCatalog::lookupOwnedByName
+                // (auto-seeded from the raw FX name minus the format
+                // prefix — user can shorten or rewrite to control which
+                // plug-ins this map binds to). Frank 2026-05-24.
+                const double colInputW = scaleW_(impl_->ctx, 160.0);
                 ImGui_Text(impl_->ctx, "Display label:");
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                ImGui_SetNextItemWidth(impl_->ctx, colInputW);
                 int dsFlags = 0;
                 ImGui_InputText(impl_->ctx, "##ql_dshort_map",
                                 impl_->displayShort,
                                 sizeof(impl_->displayShort), &dsFlags,
                                 nullptr);
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                ImGui_Text(impl_->ctx, "   Match:");
+                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
+                ImGui_SetNextItemWidth(impl_->ctx, colInputW);
+                int mtFlags = 0;
+                ImGui_InputTextWithHint(impl_->ctx, "##ql_match_map",
+                                impl_->fxMatch.c_str(),
+                                impl_->matchBuf,
+                                sizeof(impl_->matchBuf),
+                                &mtFlags, nullptr);
+
                 ImGui_Spacing(impl_->ctx);
 
                 const int total = static_cast<int>(impl_->queue.size());
                 const int cur   = std::clamp(impl_->currentSlot, 0, total - 1);
                 auto& slot = impl_->queue[static_cast<size_t>(cur)];
 
-                // Progress + active-slot prompt on one combined line —
-                // saves vertical space and keeps the wiggle target front
-                // and centre for the user's eyes.
+                // Progress + active-slot prompt on one line.
                 char progress[64];
                 snprintf(progress, sizeof(progress), "Slot %d / %d",
                          cur + 1, total);
@@ -971,9 +1054,9 @@ void QuickLearnWindow::onRunTick()
                     slot.label.c_str());
                 ImGui_TextColored(impl_->ctx, 0xFFFF80FF, prompt);
 
-                // Poll for wiggle — also seed labelBuf when a param is
-                // freshly detected so the Label column shows something
-                // immediately (user can tighten the wording before Save).
+                // Poll for wiggle (only on the live current slot, which
+                // is what snapshotBaseline tracks). Seed labelBuf when
+                // freshly bound so the Label column shows immediately.
                 {
                     int detectedParam = -1;
                     std::string detectedName;
@@ -985,20 +1068,39 @@ void QuickLearnWindow::onRunTick()
                                 sizeof(slot.labelBuf) - 1);
                             slot.labelBuf[sizeof(slot.labelBuf) - 1] = '\0';
                         }
-                        // Auto-advance to next unbound slot.
-                        bool advanced = false;
+                        // Auto-advance to next unbound slot. If all
+                        // bound, leave the cursor where it is — user
+                        // hits Save when satisfied (no auto-jump to a
+                        // separate review screen anymore).
                         for (int i = cur + 1; i < total; ++i) {
                             if (impl_->queue[static_cast<size_t>(i)].boundParam < 0) {
                                 impl_->currentSlot = i;
                                 impl_->snapshotBaseline();
-                                advanced = true;
                                 break;
                             }
                         }
-                        if (!advanced) {
-                            impl_->phase = QLPhase::Review;
-                        }
                     }
+                }
+
+                // ---- Conflict scan (mirrors AutoLearn Preview) ----
+                // Count vst3Param hits across all bound slots so the
+                // table can tint conflict rows red and a warning shows
+                // above the table. Two slots → same plug-in param is
+                // almost always unintended.
+                std::unordered_map<int, int> paramHits;
+                for (const auto& qs : impl_->queue) {
+                    if (qs.boundParam >= 0) ++paramHits[qs.boundParam];
+                }
+                int paramConflicts = 0;
+                for (const auto& kv : paramHits)
+                    if (kv.second > 1) ++paramConflicts;
+                if (paramConflicts > 0) {
+                    char warn[200];
+                    snprintf(warn, sizeof(warn),
+                        "%d param conflict(s) — two slots target the "
+                        "same plug-in param. Repick or undo to resolve.",
+                        paramConflicts);
+                    ImGui_TextColored(impl_->ctx, 0xFF6060FF, warn);
                 }
 
                 ImGui_Spacing(impl_->ctx);
@@ -1006,10 +1108,11 @@ void QuickLearnWindow::onRunTick()
                 ImGui_Spacing(impl_->ctx);
 
                 // ---- Slot table ----
-                // Columns: Slot (location) | Param (read-only, from
-                // plug-in) | Label (editable, scribble-strip override).
-                // Width budget tuned at the AutoLearn-default 14 px font
-                // (scaleW_ stretches at larger fonts).
+                // Columns: Slot (location) | Param (dropdown — pick by
+                // wiggle OR by combo with filter) | Label (editable
+                // scribble-strip override). Width budget tuned at the
+                // AutoLearn-default 14 px font (scaleW_ stretches at
+                // larger fonts).
                 const double colSlotW  = scaleW_(impl_->ctx, 150.0);
                 const double colLabelW = scaleW_(impl_->ctx, 100.0);
                 const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
@@ -1017,7 +1120,7 @@ void QuickLearnWindow::onRunTick()
                 int tblFlags = ImGui_TableFlags_RowBg
                              | ImGui_TableFlags_ScrollY
                              | ImGui_TableFlags_BordersInnerH;
-                double tblH = scaleW_(impl_->ctx, 360.0);
+                double tblH = scaleW_(impl_->ctx, 340.0);
                 int clickIdx = -1;
                 if (ImGui_BeginTable(impl_->ctx, "##ql_tbl", 3,
                                      &tblFlags, nullptr, &tblH, nullptr))
@@ -1033,11 +1136,17 @@ void QuickLearnWindow::onRunTick()
                         auto& qs = impl_->queue[static_cast<size_t>(i)];
                         ImGui_TableNextRow(impl_->ctx, nullptr, nullptr);
 
-                        // Row tint — current row gets a translucent
-                        // highlight strip so the user's eye locks on it.
-                        if (i == cur) {
+                        // Row tint priority: conflict > current.
+                        const bool rowConflict = qs.boundParam >= 0
+                            && paramHits[qs.boundParam] > 1;
+                        if (rowConflict) {
+                            // Translucent red (AutoLearn parity).
                             int rowBgTarget = ImGui_TableBgTarget_RowBg0;
-                            // Dim blue-grey, RGBA 0xRRGGBBAA.
+                            ImGui_TableSetBgColor(impl_->ctx, rowBgTarget,
+                                                  0xCC444480, nullptr);
+                        } else if (i == cur) {
+                            int rowBgTarget = ImGui_TableBgTarget_RowBg0;
+                            // Dim blue-grey current-row strip.
                             ImGui_TableSetBgColor(impl_->ctx, rowBgTarget,
                                                   0x4060A050, nullptr);
                         }
@@ -1052,7 +1161,7 @@ void QuickLearnWindow::onRunTick()
                         else
                             textCol = 0x808080FF;
 
-                        // ---- Slot column ----
+                        // ---- Slot column (Selectable spans the row) ----
                         ImGui_TableNextColumn(impl_->ctx);
                         char selId[64];
                         snprintf(selId, sizeof(selId),
@@ -1061,39 +1170,122 @@ void QuickLearnWindow::onRunTick()
                         bool selBool = (i == cur);
                         int  selFlags = ImGui_SelectableFlags_SpanAllColumns
                                       | ImGui_SelectableFlags_AllowItemOverlap;
-                        int colCount = 1;
+                        int popCount = 1;
                         ImGui_PushStyleColor(impl_->ctx,
                             ImGui_Col_Text, textCol);
                         if (ImGui_Selectable(impl_->ctx, selId, &selBool,
                                              &selFlags, nullptr, nullptr))
                             clickIdx = i;
-                        ImGui_PopStyleColor(impl_->ctx, &colCount);
+                        ImGui_PopStyleColor(impl_->ctx, &popCount);
 
-                        // ---- Param column ----
+                        // ---- Param column (combo dropdown) ----
+                        // Preview = bound name + idx, or "(waiting…)" for
+                        // the current unbound row, else "(unmapped)".
+                        // Opening the combo lets the user search the
+                        // full plug-in param list — alternative to the
+                        // wiggle path. Mirrors AutoLearn's filter combo.
                         ImGui_TableNextColumn(impl_->ctx);
-                        char paramStr[96];
+                        char paramPreview[128];
                         if (qs.boundParam >= 0) {
-                            snprintf(paramStr, sizeof(paramStr),
+                            snprintf(paramPreview, sizeof(paramPreview),
                                 "%s   p%d",
                                 qs.boundName.c_str(), qs.boundParam);
                         } else if (i == cur) {
-                            snprintf(paramStr, sizeof(paramStr),
+                            snprintf(paramPreview, sizeof(paramPreview),
                                 "(waiting…)");
                         } else {
-                            paramStr[0] = '\0';
+                            snprintf(paramPreview, sizeof(paramPreview),
+                                "(unmapped)");
                         }
-                        if (paramStr[0]) {
-                            ImGui_PushStyleColor(impl_->ctx,
-                                ImGui_Col_Text, textCol);
-                            ImGui_Text(impl_->ctx, paramStr);
-                            int pop = 1;
-                            ImGui_PopStyleColor(impl_->ctx, &pop);
+                        char comboId[40];
+                        snprintf(comboId, sizeof(comboId),
+                                 "##ql_param_%d", i);
+                        int comboFlags = ImGui_ComboFlags_HeightLargest;
+                        ImGui_SetNextItemWidth(impl_->ctx, -1.0);
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_Text, textCol);
+                        const bool comboOpen = ImGui_BeginCombo(
+                            impl_->ctx, comboId, paramPreview, &comboFlags);
+                        int popCol2 = 1;
+                        ImGui_PopStyleColor(impl_->ctx, &popCol2);
+                        if (comboOpen) {
+                            // Per-row filter state — static buffer is
+                            // re-seeded when the row changes, same trick
+                            // the AutoLearn combo uses.
+                            const bool justOpened =
+                                ImGui_IsWindowAppearing(impl_->ctx);
+                            static char s_filter[64] = {0};
+                            static int  s_filterRow = -1;
+                            if (justOpened || s_filterRow != i) {
+                                s_filter[0] = 0;
+                                s_filterRow = i;
+                                ImGui_SetKeyboardFocusHere(impl_->ctx,
+                                    nullptr);
+                            }
+                            ImGui_PushItemWidth(impl_->ctx, -1.0);
+                            ImGui_InputTextWithHint(impl_->ctx,
+                                "##ql_paramfilter", "filter…",
+                                s_filter, sizeof(s_filter),
+                                nullptr, nullptr);
+                            ImGui_PopItemWidth(impl_->ctx);
+                            std::string flt = s_filter;
+                            for (auto& c : flt)
+                                c = static_cast<char>(std::tolower(
+                                    static_cast<unsigned char>(c)));
+
+                            // "(unmapped)" — clears the binding without
+                            // touching labelBuf so a re-pick can reuse
+                            // the typed scribble label.
+                            {
+                                bool sel = (qs.boundParam < 0);
+                                int  sf  = 0;
+                                char clrId[64];
+                                snprintf(clrId, sizeof(clrId),
+                                    "(unmapped)##ql_paramclr_%d", i);
+                                if (ImGui_Selectable(impl_->ctx, clrId,
+                                        &sel, &sf, nullptr, nullptr))
+                                {
+                                    qs.boundParam = -1;
+                                    qs.boundName.clear();
+                                }
+                            }
+
+                            for (const auto& pp : impl_->paramSnapshot) {
+                                if (!flt.empty()) {
+                                    std::string lc = pp.second;
+                                    for (auto& c : lc)
+                                        c = static_cast<char>(std::tolower(
+                                            static_cast<unsigned char>(c)));
+                                    if (lc.find(flt) == std::string::npos)
+                                        continue;
+                                }
+                                bool sel = (qs.boundParam == pp.first);
+                                int  sf  = 0;
+                                char rowId[300];
+                                snprintf(rowId, sizeof(rowId),
+                                    "[%4d] %s##ql_paramopt_%d_%d",
+                                    pp.first, pp.second.c_str(),
+                                    i, pp.first);
+                                if (ImGui_Selectable(impl_->ctx, rowId,
+                                        &sel, &sf, nullptr, nullptr))
+                                {
+                                    if (qs.boundParam != pp.first) {
+                                        qs.boundParam = pp.first;
+                                        qs.boundName  = pp.second;
+                                        if (qs.labelBuf[0] == '\0') {
+                                            std::strncpy(qs.labelBuf,
+                                                pp.second.c_str(),
+                                                sizeof(qs.labelBuf) - 1);
+                                            qs.labelBuf[sizeof(qs.labelBuf) - 1]
+                                                = '\0';
+                                        }
+                                    }
+                                }
+                            }
+                            ImGui_EndCombo(impl_->ctx);
                         }
 
                         // ---- Label column ----
-                        // Editable scribble-strip text (7-char hardware
-                        // budget, mirroring AutoLearn's customLabel input).
-                        // Only meaningful when the slot has a bound param.
                         ImGui_TableNextColumn(impl_->ctx);
                         if (qs.boundParam >= 0) {
                             char lblId[40];
@@ -1101,9 +1293,6 @@ void QuickLearnWindow::onRunTick()
                                      "##ql_lbl_%d", i);
                             ImGui_SetNextItemWidth(impl_->ctx, -1.0);
                             int inputFlags = 0;
-                            // Hint = raw param name → tells the user
-                            // what was bound even when they cleared the
-                            // override field.
                             ImGui_InputTextWithHint(impl_->ctx, lblId,
                                 qs.boundName.c_str(),
                                 qs.labelBuf, 8,
@@ -1119,7 +1308,10 @@ void QuickLearnWindow::onRunTick()
 
                 ImGui_Spacing(impl_->ctx);
 
-                // Controls.
+                // ---- Controls ----
+                // Save replaces the old Done/Review-then-Save flow
+                // (Frank 2026-05-24). With the table editable in-place,
+                // a separate Review step was duplicate ceremony.
                 if (ImGui_Button(impl_->ctx, "Skip##ql_skip",
                                  nullptr, nullptr)) {
                     for (int i = cur + 1; i < total; ++i) {
@@ -1133,7 +1325,6 @@ void QuickLearnWindow::onRunTick()
                 ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 if (ImGui_Button(impl_->ctx, "Undo##ql_undo",
                                  nullptr, nullptr)) {
-                    // Clear current binding (param + label) and step back.
                     slot.boundParam = -1;
                     slot.boundName.clear();
                     slot.labelBuf[0] = '\0';
@@ -1144,104 +1335,36 @@ void QuickLearnWindow::onRunTick()
                     }
                 }
                 ImGui_SameLine(impl_->ctx, nullptr, nullptr);
-                if (ImGui_Button(impl_->ctx, "Done##ql_done",
-                                 nullptr, nullptr)) {
-                    impl_->phase = QLPhase::Review;
+                {
+                    int boundCount = 0;
+                    for (const auto& qs : impl_->queue)
+                        if (qs.boundParam >= 0) ++boundCount;
+                    if (boundCount > 0) {
+                        if (ImGui_Button(impl_->ctx, "Save##ql_save",
+                                         nullptr, nullptr)) {
+                            impl_->saveMap();
+                            open = false;
+                        }
+                    } else {
+                        // Render Save in disabled style (ReaImGui v0.10
+                        // doesn't expose BeginDisabled, so we fake it
+                        // with a dim button colour pair).
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_Button,        0x44444460);
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_ButtonHovered, 0x44444460);
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_ButtonActive,  0x44444460);
+                        ImGui_PushStyleColor(impl_->ctx,
+                            ImGui_Col_Text,          0x80808080);
+                        ImGui_Button(impl_->ctx, "Save##ql_save_dis",
+                                     nullptr, nullptr);
+                        int popped = 4;
+                        ImGui_PopStyleColor(impl_->ctx, &popped);
+                    }
                 }
                 ImGui_SameLine(impl_->ctx, nullptr, nullptr);
                 if (ImGui_Button(impl_->ctx, "Cancel##ql_cancel_map",
-                                 nullptr, nullptr)) {
-                    open = false;
-                }
-                break;
-            }
-
-            // ================================================================
-            // REVIEW PHASE
-            // ================================================================
-            // Same 3-column table as Mapping (Slot | Param | Label) so
-            // the user reads the same mental picture before hitting
-            // Save. Labels are read-only here — to edit, hit Back.
-            case QLPhase::Review: {
-                char rvHdr[160];
-                snprintf(rvHdr, sizeof(rvHdr),
-                    "Review mappings — %s", impl_->fxName.c_str());
-                ImGui_Text(impl_->ctx, rvHdr);
-                ImGui_Spacing(impl_->ctx);
-
-                int boundCount = 0;
-                for (const auto& qs : impl_->queue)
-                    if (qs.boundParam >= 0) ++boundCount;
-                char rvCount[80];
-                snprintf(rvCount, sizeof(rvCount),
-                    "%d slot(s) mapped", boundCount);
-                ImGui_TextDisabled(impl_->ctx, rvCount);
-                ImGui_Spacing(impl_->ctx);
-
-                const double colSlotW  = scaleW_(impl_->ctx, 150.0);
-                const double colLabelW = scaleW_(impl_->ctx, 100.0);
-                const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
-                const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
-                int tblFlags = ImGui_TableFlags_RowBg
-                             | ImGui_TableFlags_ScrollY
-                             | ImGui_TableFlags_BordersInnerH;
-                double tblH = scaleW_(impl_->ctx, 360.0);
-                if (boundCount > 0
-                    && ImGui_BeginTable(impl_->ctx, "##ql_rvtbl", 3,
-                                        &tblFlags, nullptr, &tblH, nullptr))
-                {
-                    int    wF1 = wFixed, wF2 = wStretch, wF3 = wFixed;
-                    double w1 = colSlotW, w2 = 0,        w3 = colLabelW;
-                    ImGui_TableSetupColumn(impl_->ctx, "Slot",  &wF1, &w1, nullptr);
-                    ImGui_TableSetupColumn(impl_->ctx, "Param", &wF2, &w2, nullptr);
-                    ImGui_TableSetupColumn(impl_->ctx, "Label", &wF3, &w3, nullptr);
-                    ImGui_TableHeadersRow(impl_->ctx);
-
-                    for (const auto& qs : impl_->queue) {
-                        if (qs.boundParam < 0) continue;
-                        ImGui_TableNextRow(impl_->ctx, nullptr, nullptr);
-
-                        ImGui_TableNextColumn(impl_->ctx);
-                        ImGui_Text(impl_->ctx, qs.label.c_str());
-
-                        ImGui_TableNextColumn(impl_->ctx);
-                        char paramStr[96];
-                        snprintf(paramStr, sizeof(paramStr),
-                            "%s   p%d",
-                            qs.boundName.c_str(), qs.boundParam);
-                        ImGui_Text(impl_->ctx, paramStr);
-
-                        ImGui_TableNextColumn(impl_->ctx);
-                        ImGui_Text(impl_->ctx,
-                            qs.labelBuf[0] ? qs.labelBuf
-                                            : qs.boundName.c_str());
-                    }
-                    ImGui_EndTable(impl_->ctx);
-                }
-                if (boundCount == 0) {
-                    ImGui_TextDisabled(impl_->ctx,
-                        "No parameters mapped.");
-                }
-
-                ImGui_Spacing(impl_->ctx);
-                ImGui_Separator(impl_->ctx);
-                ImGui_Spacing(impl_->ctx);
-
-                if (boundCount > 0) {
-                    if (ImGui_Button(impl_->ctx, "Save##ql_save",
-                                     nullptr, nullptr)) {
-                        impl_->saveMap();
-                        open = false;
-                    }
-                    ImGui_SameLine(impl_->ctx, nullptr, nullptr);
-                }
-                if (ImGui_Button(impl_->ctx, "Back##ql_back",
-                                 nullptr, nullptr)) {
-                    impl_->phase = QLPhase::Mapping;
-                    impl_->snapshotBaseline();
-                }
-                ImGui_SameLine(impl_->ctx, nullptr, nullptr);
-                if (ImGui_Button(impl_->ctx, "Cancel##ql_cancel_rev",
                                  nullptr, nullptr)) {
                     open = false;
                 }
