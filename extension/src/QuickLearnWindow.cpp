@@ -76,13 +76,14 @@ struct QuickLearnWindow::Impl {
     ImGui_Font*    font    = nullptr;
     bool           visible = false;
     int            sessionGen = 0;
-    // Counter — non-zero for the first N frames after toggle()-to-open.
-    // Each of those frames calls ImGui_SetNextWindowFocus AND the
-    // macOS bring-to-front helper so the host OS window definitely
-    // surfaces above any floating plug-in GUI. One frame proved
-    // unreliable (Frank 2026-05-24): the ReaImGui host window can
-    // still be in the middle of materialising on the first frame
-    // after CreateContext, so we run the raise for ~3 frames.
+    // Counter — non-zero for the first N frames after toggle()-to-open
+    // (or after a re-open press while already visible). Each of those
+    // frames calls ImGui_SetNextWindowFocus AND the macOS bring-to-front
+    // helper so the host OS window definitely surfaces above any floating
+    // plug-in GUI. Bumped from 3 to 15 (~0.5 s at 30 Hz, Frank 2026-05-24):
+    // some plug-in GUIs aggressively re-claim front status for several
+    // frames after losing focus, especially out-of-process VST3 hosts —
+    // a one-shot raise wasn't sticky enough.
     int            focusPendingFrames = 0;
     // Track the last-persisted host shape so we only call SetExtState
     // when something actually changed (avoid churn during render).
@@ -204,21 +205,11 @@ struct QuickLearnWindow::Impl {
 
     void resolveActiveFx()
     {
-        fxTrack = GetSelectedTrack(nullptr, 0);
+        fxTrack = nullptr;
         fxIdx = -1;
         fxName.clear();
         fxMatch.clear();
-        if (!fxTrack) return;
 
-        // Anchor on the selected track. GetLastTouchedFX is global —
-        // using it as the primary source meant a knob touched on a
-        // different track earlier still won over the currently-selected
-        // track's plug-in, even after a fresh track-select. Frank
-        // 2026-05-23. Priority within the selected track:
-        //   1) REAPER's focused FX (matches what's shown in the FX
-        //      chain header) — if it's on the selected track.
-        //   2) Last-touched FX — if on the selected track.
-        //   3) FX[0] — first plug-in on the selected track.
         auto adopt = [&](MediaTrack* tr, int fi) -> bool {
             if (!tr || fi < 0) return false;
             char buf[512] = {};
@@ -231,22 +222,44 @@ struct QuickLearnWindow::Impl {
             return true;
         };
 
-        // 1) Focused FX (FX chain or floating window with input focus).
+        // Priority:
+        //   1) Focused FX (any track, incl. master) — the plug-in whose
+        //      window currently has OS focus. Strongest signal for the
+        //      QuickLearn use case "I have a plug-in open, hit the
+        //      action, map it now". Frank 2026-05-24: previously this
+        //      required `cand == selected_track` which blocked the
+        //      common "plug-in floating, no/other track selected" case.
+        //   2) Selected-track + last-touched FX (only if on selected
+        //      track — global last-touched is too stale to trust).
+        //   3) Selected-track + FX[0].
         {
             int trNum = -1, itemNum = -1, fxNum = -1;
             const int ret = GetFocusedFX2(&trNum, &itemNum, &fxNum);
-            if ((ret & 1) && trNum > 0) {
-                MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+            // ret&1: track FX focused. ret&4 set means "no longer focused"
+            // (mask off — we still want a recently-focused FX as the
+            // target since the user may have just clicked QuickLearn).
+            if ((ret & 1) && trNum >= 0) {
+                MediaTrack* cand = (trNum == 0)
+                    ? GetMasterTrack(nullptr)
+                    : GetTrack(nullptr, trNum - 1);
                 const int candFx = fxNum & 0x00FFFFFF;
-                if (cand == fxTrack && candFx >= 0
-                    && candFx < TrackFX_GetCount(fxTrack))
+                if (cand && candFx >= 0
+                    && candFx < TrackFX_GetCount(cand))
                 {
-                    if (adopt(fxTrack, candFx)) return;
+                    if (adopt(cand, candFx)) return;
                 }
             }
         }
 
-        // 2) Last-touched FX — only if it's on the selected track.
+        MediaTrack* sel = GetSelectedTrack(nullptr, 0);
+        if (!sel) {
+            // Master track fallback when nothing's selected.
+            sel = GetMasterTrack(nullptr);
+            if (!sel || TrackFX_GetCount(sel) == 0) return;
+        }
+        fxTrack = sel;
+
+        // Selected-track + last-touched FX (only when on selected).
         {
             int trWord = -1, fxWord = -1, paramWord = -1;
             if (GetLastTouchedFX(&trWord, &fxWord, &paramWord)) {
@@ -254,16 +267,16 @@ struct QuickLearnWindow::Impl {
                 if (trLow > 0 && !((trWord & 0xFFFF0000) != 0)) {
                     MediaTrack* tr = GetTrack(nullptr, trLow - 1);
                     const int fi = fxWord & 0xFFFFFF;
-                    if (tr == fxTrack && !((fxWord >> 24) & 0x01)) {
-                        if (adopt(fxTrack, fi)) return;
+                    if (tr == sel && !((fxWord >> 24) & 0x01)) {
+                        if (adopt(sel, fi)) return;
                     }
                 }
             }
         }
 
-        // 3) FX[0] of the selected track.
-        if (TrackFX_GetCount(fxTrack) > 0) {
-            adopt(fxTrack, 0);
+        // FX[0] of the selected track (last resort).
+        if (TrackFX_GetCount(sel) > 0) {
+            adopt(sel, 0);
         }
     }
 
@@ -560,50 +573,83 @@ QuickLearnWindow::~QuickLearnWindow() { delete impl_; }
 
 void QuickLearnWindow::toggle()
 {
-    const bool wasOpen = impl_->visible;
-    impl_->visible = !wasOpen;
+    // Toggle semantic (Frank 2026-05-24): when the window is already
+    // open, do NOT close — just raise it above any focused plug-in GUI.
+    // Rationale: the most common QuickLearn workflow is "plug-in window
+    // floating in front → hit REAPER action → wiggle and map". If the
+    // QuickLearn host happens to be hidden behind the plug-in GUI when
+    // the action fires, a plain toggle would close it without the user
+    // ever seeing it — looks broken. The user closes via the title-bar
+    // X or the in-window Cancel/Save buttons instead.
     if (impl_->visible) {
-        ++impl_->sessionGen;
-        impl_->focusPendingFrames = 3;   // raise above plug-in GUIs
-        // Keep impl_->ctx / impl_->font alive across toggles. Resetting
-        // them to nullptr on every open used to force ensureCtx to call
-        // ImGui_CreateContext again — and ReaImGui's per-name context
-        // cache returned the SAME (closed-state) context from the
-        // previous session, so Begin's *p_open=true override was never
-        // honoured and the window stayed hidden on the second action
-        // trigger (Frank 2026-05-24). ensureCtx() is a no-op when
-        // ctx is already valid, so this just skips the recreation.
-        // Reset state machine.
-        impl_->phase = QLPhase::Setup;
-        impl_->domainChoice   = 0;
-        impl_->faderBankCount = 1;
-        impl_->autoLearnFirst = false;
-        impl_->queue.clear();
-        impl_->currentSlot = 0;
-        impl_->displayShort[0] = '\0';
-        // Resolve the active FX, then seed Setup-phase inputs from any
-        // existing UserPluginMap so re-opening on a known plug-in lands
-        // the user on familiar settings (domain/UF8/displayShort).
-        impl_->resolveActiveFx();
-        impl_->seedFromExistingMap_();
-        // If this plug-in is already learned, skip the Setup step and
-        // drop the user straight into the editable Mapping list. Setup
-        // is only needed for first-time learn (domain pick + UF8 toggle).
-        if (!impl_->fxMatch.empty()
-            && user_plugins::lookupOwnedByName(impl_->fxMatch))
-        {
-            impl_->buildQueue();
-            impl_->phase = QLPhase::Mapping;
-            int firstUnbound = -1;
-            for (size_t i = 0; i < impl_->queue.size(); ++i) {
-                if (impl_->queue[i].boundParam < 0) {
-                    firstUnbound = static_cast<int>(i);
-                    break;
+        impl_->focusPendingFrames = 15;   // ~0.5 s of raise attempts
+        // Re-resolve the active FX in case the user has since focused
+        // a different plug-in window. We only re-seed when we don't
+        // have one yet (avoid blowing away in-progress mapping work).
+        if (impl_->fxName.empty() || impl_->phase == QLPhase::Setup) {
+            impl_->resolveActiveFx();
+            impl_->seedFromExistingMap_();
+            if (impl_->phase == QLPhase::Setup
+                && !impl_->fxMatch.empty()
+                && user_plugins::lookupOwnedByName(impl_->fxMatch))
+            {
+                impl_->buildQueue();
+                impl_->phase = QLPhase::Mapping;
+                int firstUnbound = -1;
+                for (size_t i = 0; i < impl_->queue.size(); ++i) {
+                    if (impl_->queue[i].boundParam < 0) {
+                        firstUnbound = static_cast<int>(i);
+                        break;
+                    }
                 }
+                impl_->currentSlot = firstUnbound >= 0 ? firstUnbound : 0;
+                impl_->snapshotBaseline();
             }
-            impl_->currentSlot = firstUnbound >= 0 ? firstUnbound : 0;
-            impl_->snapshotBaseline();
         }
+        return;
+    }
+
+    impl_->visible = true;
+    ++impl_->sessionGen;
+    impl_->focusPendingFrames = 15;   // raise above plug-in GUIs
+    // Keep impl_->ctx / impl_->font alive across toggles. Resetting
+    // them to nullptr on every open used to force ensureCtx to call
+    // ImGui_CreateContext again — and ReaImGui's per-name context
+    // cache returned the SAME (closed-state) context from the
+    // previous session, so Begin's *p_open=true override was never
+    // honoured and the window stayed hidden on the second action
+    // trigger (Frank 2026-05-24). ensureCtx() is a no-op when
+    // ctx is already valid, so this just skips the recreation.
+    // Reset state machine.
+    impl_->phase = QLPhase::Setup;
+    impl_->domainChoice   = 0;
+    impl_->faderBankCount = 1;
+    impl_->autoLearnFirst = false;
+    impl_->queue.clear();
+    impl_->currentSlot = 0;
+    impl_->displayShort[0] = '\0';
+    // Resolve the active FX, then seed Setup-phase inputs from any
+    // existing UserPluginMap so re-opening on a known plug-in lands
+    // the user on familiar settings (domain/UF8/displayShort).
+    impl_->resolveActiveFx();
+    impl_->seedFromExistingMap_();
+    // If this plug-in is already learned, skip the Setup step and
+    // drop the user straight into the editable Mapping list. Setup
+    // is only needed for first-time learn (domain pick + UF8 toggle).
+    if (!impl_->fxMatch.empty()
+        && user_plugins::lookupOwnedByName(impl_->fxMatch))
+    {
+        impl_->buildQueue();
+        impl_->phase = QLPhase::Mapping;
+        int firstUnbound = -1;
+        for (size_t i = 0; i < impl_->queue.size(); ++i) {
+            if (impl_->queue[i].boundParam < 0) {
+                firstUnbound = static_cast<int>(i);
+                break;
+            }
+        }
+        impl_->currentSlot = firstUnbound >= 0 ? firstUnbound : 0;
+        impl_->snapshotBaseline();
     }
 }
 
