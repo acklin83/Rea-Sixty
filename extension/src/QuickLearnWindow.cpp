@@ -180,13 +180,16 @@ struct QuickLearnWindow::Impl {
         const char* sh = GetExtState("ReaSixty", "quickLearnSizeH");
         if (sw && *sw) { int v = std::atoi(sw); if (v >= 320 && v <= 4096) sizeW = v; }
         if (sh && *sh) { int v = std::atoi(sh); if (v >= 320 && v <= 4096) sizeH = v; }
-        int posX = -1, posY = -1;
-        const char* px = GetExtState("ReaSixty", "quickLearnPosX");
-        const char* py = GetExtState("ReaSixty", "quickLearnPosY");
-        if (px && *px) posX = std::atoi(px);
-        if (py && *py) posY = std::atoi(py);
-        int* posXp = (posX >= 0) ? &posX : nullptr;
-        int* posYp = (posY >= 0) ? &posY : nullptr;
+        // No position hint — let ReaImGui place the host with its
+        // default centering, same as MixerWindow. The old code read
+        // a persisted (x, y) from ExtState; a stale (60, 120) from
+        // earlier debugging sessions made the host open at the top-
+        // left every time. Frank 2026-05-24: "zentrier es wie jedes
+        // andere fenster". ReaImGui's internal host-state machinery
+        // remembers the user's last drag across REAPER sessions, so
+        // dropping our own persistence here doesn't lose the pose.
+        int* posXp = nullptr;
+        int* posYp = nullptr;
         ctx = ImGui_CreateContext("Rea-Sixty QuickLearn",
                                  &sizeW, &sizeH, posXp, posYp);
         font = ImGui_CreateFont("sans-serif", nullptr);
@@ -803,17 +806,15 @@ void QuickLearnWindow::onRunTick()
     // NoCollapse: prevent title-bar-only state entirely.
     int winFlags = ImGui_WindowFlags_NoCollapse
                  | ImGui_WindowFlags_NoSavedSettings
-                 | ImGui_WindowFlags_NoResize
-                 | ImGui_WindowFlags_NoMove
                  | ImGui_WindowFlags_NoScrollbar
                  | ImGui_WindowFlags_NoScrollWithMouse;
-    // NoResize/NoMove: the inner ImGui window is pinned to the host
-    // content area (0,0 + oversized). User resizes/moves the OS host
-    // frame, not the inner. Without these, ImGui-driven drag/resize
-    // would fight our Cond_Always pos/size.
-    // NoScrollbar/NoScrollWithMouse: the inner is intentionally
-    // oversized for hit-test coverage; we don't want scrollbars or
-    // mouse-wheel scrolling the (mostly-empty) inner.
+    // NoScrollbar/NoScrollWithMouse keep the inner's own scrollbars
+    // hidden (we want the inner to be the same shape as the host).
+    // We *don't* set NoMove/NoResize because they apparently inhibit
+    // child-widget input handling in ReaImGui v0.10 — InputTexts in
+    // the body weren't focusable while those flags were set. The
+    // Cond_Always pos/size below pins the inner regardless, so a
+    // stray drag-attempt by the user simply snaps back next frame.
     char winId[64];
     snprintf(winId, sizeof(winId),
              "QuickLearn##session_%d", impl_->sessionGen);
@@ -900,14 +901,12 @@ void QuickLearnWindow::onRunTick()
             if (ih >= 320 && ih <= 4096 && ih != impl_->lastSavedH) {
                 persist("quickLearnSizeH", ih); impl_->lastSavedH = ih;
             }
-            // Position: clamp to a generous on-screen range so a stray
-            // off-screen result doesn't pin a useless pose.
-            if (ix >= -100 && ix <= 8192 && ix != impl_->lastSavedX) {
-                persist("quickLearnPosX",  ix); impl_->lastSavedX = ix;
-            }
-            if (iy >= -100 && iy <= 8192 && iy != impl_->lastSavedY) {
-                persist("quickLearnPosY",  iy); impl_->lastSavedY = iy;
-            }
+            // Position is no longer persisted: ReaImGui's own host
+            // state machinery remembers the user's drag pose across
+            // sessions, and the inner ImGui window is pinned to (0,0)
+            // every frame anyway. Writing curX/curY would just store
+            // zeros forever. Frank 2026-05-24.
+            (void)ix; (void)iy;
             // ---- Render content based on phase ----
             switch (impl_->phase) {
 
