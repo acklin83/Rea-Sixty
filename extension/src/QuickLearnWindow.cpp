@@ -1213,12 +1213,19 @@ void QuickLearnWindow::onRunTick()
                 const double colLabelW = scaleW_(impl_->ctx, 100.0);
                 const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
                 const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
-                int tblFlags = ImGui_TableFlags_RowBg
-                             | ImGui_TableFlags_ScrollY
-                             | ImGui_TableFlags_BordersInnerH;
-                double tblH = scaleW_(impl_->ctx, 340.0);
+                // Scrolling moved to an OUTER BeginChild so the table
+                // itself can use 0 flags (matches AutoLearn exactly).
+                // Frank 2026-05-24: ScrollY directly on the table
+                // appeared to swallow InputText activation clicks in
+                // ReaImGui v0.10 multi-viewport.
+                int childFlags = 0;
+                double childH = scaleW_(impl_->ctx, 360.0);
+                ImGui_BeginChild(impl_->ctx, "##ql_tbl_scroll",
+                                 /*size_w*/ nullptr, &childH,
+                                 /*border*/ nullptr, &childFlags);
+                int tblFlags = 0;
                 if (ImGui_BeginTable(impl_->ctx, "##ql_tbl", 3,
-                                     &tblFlags, nullptr, &tblH, nullptr))
+                                     &tblFlags, nullptr, nullptr, nullptr))
                 {
                     int    wF1 = wFixed, wF2 = wStretch, wF3 = wFixed;
                     double w1 = colSlotW, w2 = 0,        w3 = colLabelW;
@@ -1341,6 +1348,7 @@ void QuickLearnWindow::onRunTick()
                     }
                     ImGui_EndTable(impl_->ctx);
                 }
+                ImGui_EndChild(impl_->ctx);
 
                 ImGui_Spacing(impl_->ctx);
 
