@@ -32,7 +32,38 @@ struct UserLinkSlot {
     // string means "use default". Additive field — old readers silently
     // ignore it, no format-version bump needed.
     std::string customLabel;
+
+    // Knob-travel customisation (additive; defaults are byte-identical
+    // to the pre-feature behaviour). All values are in normalised param
+    // space [0..1]. `sensitivity` scales the raw encoder delta before
+    // clamp/curve so coarse-stepped params (compressor ratios, stepped
+    // sidechain freqs) can be slowed down per-slot. `curvePoints` carries
+    // intermediate (x,y) breakpoints for a piecewise-linear knob-travel
+    // curve; endpoints are implicit at (0,rangeMin) and (1,rangeMax).
+    // Empty curvePoints => pure linear with range.
+    float rangeMin    = 0.0f;
+    float rangeMax    = 1.0f;
+    float sensitivity = 1.0f;
+    std::vector<std::pair<float, float>> curvePoints;
 };
+
+// Knob-travel evaluators. `applyCurve(sl, t)` maps the encoder's
+// virtual position t∈[0..1] to a normalised FX param value v∈[0..1],
+// honouring rangeMin/rangeMax and any user-defined curve breakpoints.
+// `inverseCurve(sl, v)` is the inverse — given the current FX param
+// value, recover t so deltas can be applied in encoder-space and then
+// re-mapped. Both are O(curvePoints.size()) — typical use is ≤10
+// points so cost is negligible.
+//
+// Defaults (rangeMin=0, rangeMax=1, sensitivity=1, no curve) make
+// applyCurve(t)=t and inverseCurve(v)=v — byte-identical to the
+// pre-feature linear path.
+//
+// `sensitivity` is applied OUTSIDE these helpers — at the encoder-
+// delta site, before clamp. Keeping it out of the curve math makes
+// the inverse exact.
+float applyCurve(const UserLinkSlot& sl, float t);
+float inverseCurve(const UserLinkSlot& sl, float v);
 
 struct UserMetering {
     // Set vst3Param ≥ 0 to enable; -1 means "not learned" (fall back to
@@ -302,6 +333,15 @@ const PluginMap* lookupByName(std::string_view fxName);
 // owned UserPluginMap (not the synthesised PluginMap view) so callers
 // can read the uf8.* fields directly. Lifetime: until next mutation.
 const UserPluginMap* lookupOwnedByName(std::string_view fxName);
+
+// Lookup a single UserLinkSlot by (fxName, linkIdx). Walks the same
+// match rule as lookupOwnedByName, then searches the resolved map's
+// `slots` for one with `linkIdx == idx`. Returns nullptr when no map
+// matches or no slot in the map has the requested linkIdx — at which
+// point callers fall back to the default linear encoder path. Used at
+// the V-Pot delta site to fetch knob-travel customisation (range,
+// sensitivity, curve points) for user-learned FX params.
+const UserLinkSlot* lookupOwnedSlot(std::string_view fxName, int linkIdx);
 
 // Return true iff `match` would also be matched by any built-in
 // PluginMap's `match` substring (or vice versa). Used by the editor to

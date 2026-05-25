@@ -201,6 +201,15 @@ struct ActionStep {
     // toggle off. For one-shot REAPER actions (no toggle state) this is
     // an opt-in checkbox in the Bindings editor — Frank 2026-05-07.
     bool        fireOnInactive = false;
+    // For ActionType::Builtin steps targeting fx_param_inc / fx_param_dec
+    // (and any future stepped-param builtins): the per-press step size in
+    // normalised param space (0..1), and whether the press wraps from
+    // rangeMax→rangeMin (true) or clamps at the boundary (false). Both
+    // fields are additive — defaults reproduce pre-feature behaviour
+    // (no step, no wrap) so other builtins ignore them. `param` carries
+    // the target FX Learn linkIdx for these two builtins.
+    float       stepValue    = 0.0f;
+    bool        wrap         = false;
 };
 
 // Optional per-slot LED override. Each (color, brightness) pair is
@@ -365,12 +374,25 @@ struct Config {
 //   pressed  current button physical state (relevant for Hold)
 //   param    Binding.param, action-specific
 struct BuiltinDescriptor {
-    using Run     = std::function<void(bool firing, bool pressed, int param)>;
-    using StateOf = std::function<bool(int param)>;
+    using Run         = std::function<void(bool firing, bool pressed, int param)>;
+    using StateOf     = std::function<bool(int param)>;
+    // Step-aware variant — receives the full ActionStep so the handler
+    // can read fields beyond `param` (stepValue, wrap, label, etc.).
+    // Preferred when set; falls back to `run` otherwise. Used by the
+    // stepped-builtin family (fx_param_inc / fx_param_dec) that needs
+    // the float step size and the wrap flag.
+    //
+    // Placed at the END of the struct so existing positional brace
+    // initializers across main.cpp keep working — they just leave
+    // runWithStep empty (the default), which dispatch handles
+    // transparently.
+    using RunWithStep = std::function<
+        void(bool firing, bool pressed, const ActionStep& step)>;
     Run         run;
     StateOf     stateOf;       // may be empty; consumed by Phase B LED-pusher
     std::string displayName;   // human-friendly label for the picker UI
     bool        usesParam = false;  // hide param field in UI when false
+    RunWithStep runWithStep;
 };
 
 void registerBuiltin(const char* name, BuiltinDescriptor desc);

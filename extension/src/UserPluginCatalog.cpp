@@ -281,6 +281,27 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "      \"uf8Mode\": "       << (m.uf8Mode   ? "true" : "false") << ",\n";
         if (m.snapshotTakenAt > 0)
             os << "      \"snapshotTakenAt\": " << m.snapshotTakenAt << ",\n";
+        // Emit the optional knob-travel fields (range / sensitivity / curve
+        // points). All are additive — only written when non-default so
+        // existing files stay byte-identical until the user actually
+        // customises a slot. Used for both `slots` and the per-domain
+        // caches below.
+        auto emitSlotKnobTravel = [&](const UserLinkSlot& s) {
+            if (s.rangeMin != 0.0f) os << ", \"rangeMin\": " << s.rangeMin;
+            if (s.rangeMax != 1.0f) os << ", \"rangeMax\": " << s.rangeMax;
+            if (s.sensitivity != 1.0f)
+                os << ", \"sensitivity\": " << s.sensitivity;
+            if (!s.curvePoints.empty()) {
+                os << ", \"curvePoints\": [";
+                bool firstPt = true;
+                for (const auto& pt : s.curvePoints) {
+                    if (!firstPt) os << ",";
+                    firstPt = false;
+                    os << " [" << pt.first << ", " << pt.second << "]";
+                }
+                os << " ]";
+            }
+        };
         os << "      \"slots\": [";
         bool firstSlot = true;
         for (const auto& s : m.slots) {
@@ -293,6 +314,7 @@ std::string serialize_(const UserPluginCatalog& c)
                 os << ", \"customLabel\": ";
                 appendEscaped_(os, s.customLabel);
             }
+            emitSlotKnobTravel(s);
             os << " }";
         }
         os << "\n      ]";
@@ -350,6 +372,7 @@ std::string serialize_(const UserPluginCatalog& c)
                     os << ", \"customLabel\": ";
                     appendEscaped_(os, s.customLabel);
                 }
+                emitSlotKnobTravel(s);
                 os << " }";
             }
             os << "\n      ]";
@@ -520,6 +543,32 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getIntI_(so, "vst3Param", us.vst3Param);
                 getBoolI_(so, "inverted", us.inverted);
                 getStrI_(so, "customLabel", us.customLabel);
+                // Knob-travel fields (additive, see UserLinkSlot). Missing
+                // keys leave the struct defaults — byte-identical no-op
+                // behaviour for pre-feature files.
+                double tmp = 0.0;
+                if (getDoubleI_(so, "rangeMin",    tmp)) us.rangeMin    = (float)tmp;
+                if (getDoubleI_(so, "rangeMax",    tmp)) us.rangeMax    = (float)tmp;
+                if (getDoubleI_(so, "sensitivity", tmp)) us.sensitivity = (float)tmp;
+                if (auto* cpa = so->get_item_by_name("curvePoints");
+                    cpa && cpa->is_array() && cpa->m_array)
+                {
+                    const int pn = cpa->m_array->GetSize();
+                    us.curvePoints.reserve(pn);
+                    for (int pi = 0; pi < pn; ++pi) {
+                        wdl_json_element* pe = cpa->enum_item(pi);
+                        if (!pe || !pe->is_array() || !pe->m_array) continue;
+                        if (pe->m_array->GetSize() < 2) continue;
+                        wdl_json_element* xe = pe->enum_item(0);
+                        wdl_json_element* ye = pe->enum_item(1);
+                        if (!xe || !ye) continue;
+                        const char* xs = xe->get_string_value(true);
+                        const char* ys = ye->get_string_value(true);
+                        if (!xs || !ys) continue;
+                        us.curvePoints.emplace_back((float)std::atof(xs),
+                                                    (float)std::atof(ys));
+                    }
+                }
                 if (us.linkIdx < 0 || us.vst3Param < 0) continue;
                 dest.push_back(us);
             }
@@ -1043,9 +1092,111 @@ const UserPluginMap* lookupOwnedByName(std::string_view fxName)
     return nullptr;
 }
 
+const UserLinkSlot* lookupOwnedSlot(std::string_view fxName, int linkIdx)
+{
+    const UserPluginMap* m = lookupOwnedByName(fxName);
+    if (!m) return nullptr;
+    for (const auto& sl : m->slots) {
+        if (sl.linkIdx == linkIdx) return &sl;
+    }
+    return nullptr;
+}
+
 bool collidesWithBuiltin(std::string_view match)
 {
     return collidesWithBuiltin_(match);
 }
 
 } // namespace uf8::user_plugins
+
+namespace uf8 {
+
+// Piecewise-linear forward evaluator. See header for contract.
+//
+// t∈[0..1] walks segments (0,rangeMin) → curvePoints[i] → (1,rangeMax).
+// Curve point x values are clamped to [0..1]; the segment-walk assumes
+// they are sorted by x (editor enforces this on edit). An unsorted list
+// won't crash — it just produces a fold-back curve, which the editor's
+// drag handling actively prevents.
+float applyCurve(const UserLinkSlot& sl, float t)
+{
+    if (t < 0.0f) t = 0.0f;
+    else if (t > 1.0f) t = 1.0f;
+    if (sl.curvePoints.empty()) {
+        return sl.rangeMin + t * (sl.rangeMax - sl.rangeMin);
+    }
+    float prevX = 0.0f, prevY = sl.rangeMin;
+    for (const auto& pt : sl.curvePoints) {
+        float xi = pt.first;
+        float yi = pt.second;
+        if (xi < 0.0f) xi = 0.0f; else if (xi > 1.0f) xi = 1.0f;
+        if (yi < 0.0f) yi = 0.0f; else if (yi > 1.0f) yi = 1.0f;
+        if (t <= xi) {
+            const float span = xi - prevX;
+            const float u    = (span > 1e-6f) ? (t - prevX) / span : 0.0f;
+            return prevY + u * (yi - prevY);
+        }
+        prevX = xi;
+        prevY = yi;
+    }
+    const float span = 1.0f - prevX;
+    const float u    = (span > 1e-6f) ? (t - prevX) / span : 0.0f;
+    return prevY + u * (sl.rangeMax - prevY);
+}
+
+// Inverse evaluator — finds the first segment whose y-range contains v
+// and linear-interpolates back to t. With a non-monotonic curve the
+// "first match" determines which encoder-position the FX value gets
+// mapped to; users get what they draw.
+//
+// If v lies outside the curve's reachable y range (e.g. external
+// automation moved the param past rangeMax), the helper clamps to the
+// nearest endpoint t — subsequent encoder turns then move within the
+// curve's reachable region rather than jumping.
+float inverseCurve(const UserLinkSlot& sl, float v)
+{
+    if (v < 0.0f) v = 0.0f;
+    else if (v > 1.0f) v = 1.0f;
+    if (sl.curvePoints.empty()) {
+        const float span = sl.rangeMax - sl.rangeMin;
+        if (span > 1e-6f || span < -1e-6f) {
+            const float t = (v - sl.rangeMin) / span;
+            if (t < 0.0f) return 0.0f;
+            if (t > 1.0f) return 1.0f;
+            return t;
+        }
+        return 0.0f;
+    }
+    float prevX = 0.0f, prevY = sl.rangeMin;
+    const size_t nPts = sl.curvePoints.size();
+    for (size_t i = 0; i <= nPts; ++i) {
+        float nextX, nextY;
+        if (i < nPts) {
+            nextX = sl.curvePoints[i].first;
+            nextY = sl.curvePoints[i].second;
+            if (nextX < 0.0f) nextX = 0.0f; else if (nextX > 1.0f) nextX = 1.0f;
+            if (nextY < 0.0f) nextY = 0.0f; else if (nextY > 1.0f) nextY = 1.0f;
+        } else {
+            nextX = 1.0f;
+            nextY = sl.rangeMax;
+        }
+        const float yLo = (prevY < nextY) ? prevY : nextY;
+        const float yHi = (prevY < nextY) ? nextY : prevY;
+        if (v >= yLo && v <= yHi) {
+            const float yspan = nextY - prevY;
+            const float u = (yspan > 1e-6f || yspan < -1e-6f)
+                                ? (v - prevY) / yspan
+                                : 0.0f;
+            return prevX + u * (nextX - prevX);
+        }
+        prevX = nextX;
+        prevY = nextY;
+    }
+    // v out of every segment's y-range — snap to the endpoint t closest
+    // to v in param space.
+    const float dLo = (v > sl.rangeMin) ? v - sl.rangeMin : sl.rangeMin - v;
+    const float dHi = (v > sl.rangeMax) ? v - sl.rangeMax : sl.rangeMax - v;
+    return (dLo <= dHi) ? 0.0f : 1.0f;
+}
+
+} // namespace uf8

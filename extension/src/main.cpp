@@ -2204,6 +2204,17 @@ struct PendingInput {
                               //   region items jump + drill, marker
                               //   items just jump the edit cursor. strip
                               //   = 0..7, value unused.
+        FxParamStep,          // fx_param_inc / fx_param_dec builtins:
+                              //   step the focused-domain FX slot identified
+                              //   by `strip` (linkIdx, low 7 bits) on the
+                              //   currently focused track. Bit 7 of strip
+                              //   selects wrap (set) vs clamp (clear).
+                              //   value = signed step in normalised param
+                              //   space (positive for inc, negative for
+                              //   dec). Drain looks up the UserLinkSlot
+                              //   for range/curve/sensitivity scaling so
+                              //   the button stays in sync with the V-Pot
+                              //   bound to the same param.
     };
     Kind    kind;
     uint8_t strip;
@@ -4540,6 +4551,66 @@ void drainInputQueue()
             applySelectRelative_(step);
             continue;
         }
+        if (e.kind == PendingInput::FxParamStep) {
+            // fx_param_inc / fx_param_dec — step an FX Learn slot on the
+            // focused-domain plugin of the currently-focused track. Same
+            // target resolution as the V-Pot dispatch, so a button bound
+            // to inc and a V-Pot bound to the same slot stay in sync.
+            const int linkIdx = static_cast<int>(e.strip & 0x7F);
+            const bool wrap   = (e.strip & 0x80) != 0;
+            const double step = e.value;  // signed: + = inc, − = dec
+            if (linkIdx < 0 || step == 0.0) continue;
+            MediaTrack* tr = g_uc1_surface
+                ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
+                : nullptr;
+            if (!tr) tr = GetSelectedTrack(nullptr, 0);
+            if (!tr) continue;
+            const auto focused = uf8::getFocusedParam();
+            auto mm = uf8::lookupPluginOnTrack(tr, focused.domain);
+            if (!mm.map || mm.fxIndex < 0) continue;
+            const auto* sl = uf8::findSlotByLinkIdx(*mm.map, linkIdx);
+            if (!sl) continue;
+            char fxBuf[256] = {0};
+            TrackFX_GetFXName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));
+            const uf8::UserLinkSlot* usl =
+                uf8::user_plugins::lookupOwnedSlot(fxBuf, sl->linkIdx);
+            const double cur = TrackFX_GetParamNormalized(
+                tr, mm.fxIndex, sl->vst3Param);
+            double next;
+            if (usl) {
+                // Encoder-space step (t∈[0..1]) gets remapped via the
+                // slot's range/curve. Sensitivity is the encoder-feel
+                // multiplier — buttons skip it: the user already set
+                // an explicit step size in the builtin's editor.
+                double t = static_cast<double>(
+                    uf8::inverseCurve(*usl, static_cast<float>(cur)));
+                t += step;
+                if (wrap) {
+                    while (t > 1.0) t -= 1.0;
+                    while (t < 0.0) t += 1.0;
+                } else {
+                    if (t < 0.0) t = 0.0;
+                    if (t > 1.0) t = 1.0;
+                }
+                next = static_cast<double>(
+                    uf8::applyCurve(*usl, static_cast<float>(t)));
+            } else {
+                // No knob-travel customisation — direct step in param
+                // space.
+                next = cur + step;
+                if (wrap) {
+                    while (next > 1.0) next -= 1.0;
+                    while (next < 0.0) next += 1.0;
+                } else {
+                    if (next < 0.0) next = 0.0;
+                    if (next > 1.0) next = 1.0;
+                }
+            }
+            TrackFX_SetParamNormalized(tr, mm.fxIndex, sl->vst3Param, next);
+            uf8::param_groups::broadcastBuiltinSlot(
+                tr, focused.domain, sl->linkIdx, next);
+            continue;
+        }
 
         const int slot = stripToVisibleSlot(e.strip, bankOffset);
         MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
@@ -5208,9 +5279,32 @@ void drainInputQueue()
                     // feel in 360°. Fine mode (Shift) quarters.
                     double delta = e.value * (sl.inverted ? -1.0 : 1.0);
                     if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
-                    double next = cur + delta;
-                    if (next < 0.0) next = 0.0;
-                    if (next > 1.0) next = 1.0;
+                    // Per-slot knob-travel customisation (user-learned FX
+                    // maps only — built-in CS/BC slots fall through to
+                    // the linear path with defaults). Sensitivity scales
+                    // delta first; range+curve then remap via t-space
+                    // around the current FX value so external automation
+                    // writes stay coherent. Defaults are byte-identical
+                    // to the previous linear clamp.
+                    char fxBuf[256] = {0};
+                    TrackFX_GetFXName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));
+                    const uf8::UserLinkSlot* usl =
+                        uf8::user_plugins::lookupOwnedSlot(fxBuf, sl.linkIdx);
+                    double next;
+                    if (usl) {
+                        delta *= static_cast<double>(usl->sensitivity);
+                        double t = static_cast<double>(
+                            uf8::inverseCurve(*usl, static_cast<float>(cur)));
+                        t += delta;
+                        if (t < 0.0) t = 0.0;
+                        if (t > 1.0) t = 1.0;
+                        next = static_cast<double>(
+                            uf8::applyCurve(*usl, static_cast<float>(t)));
+                    } else {
+                        next = cur + delta;
+                        if (next < 0.0) next = 0.0;
+                        if (next > 1.0) next = 1.0;
+                    }
                     const bool slOk = TrackFX_SetParamNormalized(
                         tr, mm.fxIndex, sl.vst3Param, next);
                     const double slAfter = TrackFX_GetParamNormalized(
@@ -16691,6 +16785,42 @@ void registerBindingHandlers()
         [](int) { return uf8::param_groups::multiSelectAsTempGroup(); },
         "Param Groups → Multi-Select acts as Temp Group", false
     });
+
+    // fx_param_inc / fx_param_dec — step an FX Learn slot on the focused-
+    // domain plugin of the currently-focused track. The two builtins are
+    // identical except for delta sign; the FX-Learn editor in Settings
+    // exposes them via the action-picker custom widgets (slot + step +
+    // wrap), and both honour the slot's range/curve so a button bound to
+    // inc and a V-Pot bound to the same slot stay in sync.
+    //
+    // `runWithStep` lets the handler read stepValue + wrap straight off
+    // the ActionStep; the legacy `run` callback is intentionally left
+    // empty so the dispatch path uses the step-aware variant.
+    auto registerFxParamStep =
+        [](const char* name, bool isInc, const char* displayName) {
+            BuiltinDescriptor d;
+            d.displayName = displayName;
+            d.usesParam   = true;          // param = target linkIdx
+            d.runWithStep = [isInc](bool firing, bool /*pressed*/,
+                                    const uf8::bindings::ActionStep& step) {
+                if (!firing) return;
+                if (step.param < 0) return;
+                const float stepMag = (step.stepValue > 0.0f)
+                                          ? step.stepValue
+                                          : 0.05f;  // sensible fallback
+                const double signedStep =
+                    static_cast<double>(stepMag) * (isInc ? 1.0 : -1.0);
+                const uint8_t encStrip =
+                    static_cast<uint8_t>(step.param & 0x7F)
+                    | static_cast<uint8_t>(step.wrap ? 0x80 : 0x00);
+                queueInput({PendingInput::FxParamStep, encStrip, signedStep});
+            };
+            registerBuiltin(name, std::move(d));
+        };
+    registerFxParamStep("fx_param_inc", /*isInc*/true,
+                        "FX param: step up");
+    registerFxParamStep("fx_param_dec", /*isInc*/false,
+                        "FX param: step down");
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

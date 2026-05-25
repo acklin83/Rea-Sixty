@@ -2112,6 +2112,11 @@ struct ActionFieldsRef {
     int*                        midiData1;
     int*                        midiData2;
     bool*                       fireOnInactive = nullptr;  // optional — REAPER actions only
+    // Step-aware builtin fields (fx_param_inc / fx_param_dec). Optional
+    // — older call sites that don't touch stepped builtins leave these
+    // null; the picker hides the step/wrap widgets in that case.
+    float*                      stepValue      = nullptr;
+    bool*                       wrap           = nullptr;
 };
 
 bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
@@ -2437,6 +2442,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
                     return "Modifiers";
 
+                if (n.rfind("fx_param_", 0) == 0)
+                    return "FX Param";
+
                 return "";
             };
             static const char* kCats[] = {
@@ -2457,6 +2465,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 "Tracks",
                 "Brightness",
                 "Modifiers",
+                "FX Param",
             };
 
             std::unordered_map<std::string, std::vector<std::string>> bucket;
@@ -2550,6 +2559,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 const char d = (*f.action)[9];
                 if (d >= '1' && d <= '5') sslBankIdx = d - '0';
             }
+            const bool isFxParamStep =
+                (*f.action == "fx_param_inc" || *f.action == "fx_param_dec");
             if (isMod) {
                 static char kModeItems[] =
                     "Momentary (held = active)\0"
@@ -2563,6 +2574,109 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     dirty = true;
                 }
                 ImGui_PopItemWidth(ctx);
+            } else if (isFxParamStep) {
+                // Target slot, step size, and wrap flag. The slot combo
+                // walks the built-in SSL CS / BC PluginMap registry —
+                // linkIdx values are stable across SSL plug-in variants,
+                // so picking "9 — HF Gain" here will hit the same
+                // parameter on any user-mapped plug-in whose V-Pot bank
+                // honours that linkIdx. Step / wrap require the step-
+                // aware ActionFieldsRef fields; if a caller passed them
+                // null the widgets degrade gracefully.
+
+                // Build a stable linkIdx → name table from the built-in
+                // maps. First-hit wins; linkIds present in multiple maps
+                // (most are) take their name from the first kMaps entry
+                // that defines them. Cached statically so we don't
+                // rebuild it on every popup tick.
+                struct LinkIdxName { int linkIdx; const char* name; };
+                static std::vector<LinkIdxName> s_linkTbl;
+                if (s_linkTbl.empty()) {
+                    auto all = uf8::allPluginMaps();
+                    std::unordered_map<int, const char*> seen;
+                    for (const auto& m : all) {
+                        for (const auto& slot : m.slots) {
+                            if (seen.find(slot.linkIdx) != seen.end())
+                                continue;
+                            seen[slot.linkIdx] =
+                                (slot.name && *slot.name) ? slot.name
+                                                          : "(slot)";
+                        }
+                    }
+                    s_linkTbl.reserve(seen.size());
+                    for (auto& kv : seen)
+                        s_linkTbl.push_back({kv.first, kv.second});
+                    std::sort(s_linkTbl.begin(), s_linkTbl.end(),
+                              [](auto& a, auto& b) {
+                                  return a.linkIdx < b.linkIdx;
+                              });
+                }
+                auto slotName = [&](int linkIdx) -> const char* {
+                    for (const auto& e : s_linkTbl)
+                        if (e.linkIdx == linkIdx) return e.name;
+                    return "(custom)";
+                };
+
+                snprintf(idbuf, sizeof(idbuf),
+                              "Target slot##%s_fxpslot", prefix);
+                double slotW = 240;
+                ImGui_PushItemWidth(ctx, slotW);
+                char preview[96];
+                if (*f.param < 0) {
+                    snprintf(preview, sizeof(preview), "(unset)");
+                } else {
+                    snprintf(preview, sizeof(preview),
+                                  "%d  %s", *f.param, slotName(*f.param));
+                }
+                int comboFlags = ImGui_ComboFlags_HeightLargest;
+                if (ImGui_BeginCombo(ctx, idbuf, preview, &comboFlags)) {
+                    for (const auto& e : s_linkTbl) {
+                        char row[96];
+                        snprintf(row, sizeof(row),
+                                      "%d  %s##fxp_%d",
+                                      e.linkIdx, e.name, e.linkIdx);
+                        bool sel = (*f.param == e.linkIdx);
+                        int selFlags = 0;
+                        if (ImGui_Selectable(ctx, row, &sel, &selFlags,
+                                              nullptr, nullptr))
+                        {
+                            *f.param = e.linkIdx;
+                            dirty = true;
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                ImGui_PopItemWidth(ctx);
+
+                // Step size + wrap. Only render when the caller provided
+                // step-aware pointers; otherwise leave the picker on the
+                // generic Param int input (rare case — most call sites
+                // wire the new fields after this patch).
+                if (f.stepValue) {
+                    double step = static_cast<double>(*f.stepValue);
+                    if (step <= 0.0) step = 0.05;
+                    snprintf(idbuf, sizeof(idbuf),
+                                  "Step##%s_fxpstep", prefix);
+                    double sw = 160;
+                    ImGui_PushItemWidth(ctx, sw);
+                    int sliderFlags = 0;
+                    if (ImGui_SliderDouble(ctx, idbuf, &step,
+                                            0.001, 0.5, "%.3f",
+                                            &sliderFlags)) {
+                        *f.stepValue = static_cast<float>(step);
+                        dirty = true;
+                    }
+                    ImGui_PopItemWidth(ctx);
+                }
+                if (f.wrap) {
+                    snprintf(idbuf, sizeof(idbuf),
+                                  "Wrap at min/max##%s_fxpwrap", prefix);
+                    bool w = *f.wrap;
+                    if (ImGui_Checkbox(ctx, idbuf, &w)) {
+                        *f.wrap = w;
+                        dirty = true;
+                    }
+                }
             } else if (isRouting) {
                 snprintf(idbuf, sizeof(idbuf),
                               "Flip onto V-Pots (default: Faders)##%s_routeflip",
@@ -2796,6 +2910,7 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
         &st.midiDevice, &st.midiChannel, &st.midiMsgType,
         &st.midiData1, &st.midiData2,
         &st.fireOnInactive,
+        &st.stepValue, &st.wrap,
     };
     return drawActionPicker(ctx, prefix, ref, layer, id, isLongPress,
                             modIdx, stepIdx);
@@ -3469,6 +3584,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
         &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
         &sp.midiData1, &sp.midiData2,
         &sp.fireOnInactive,
+        &sp.stepValue, &sp.wrap,
     };
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
@@ -3748,6 +3864,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
                 &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
                 &sp.midiData1, &sp.midiData2,
                 &sp.fireOnInactive,
+                &sp.stepValue, &sp.wrap,
             };
             char prefix[48];
             snprintf(prefix, sizeof(prefix), "uq%d_%d_%d_s%d",
@@ -4484,6 +4601,17 @@ std::string g_editingMatch;
 int         g_listeningLinkIdx = -1;
 char        g_paramFilter[64]  = {};
 
+// Curve-editor popup trigger. The per-slot context menu writes the
+// target linkIdx here when "Advanced…" is picked; the next frame the
+// FX-Learn editor sees a non-negative value, ImGui_OpenPopup's the
+// "Curve editor" modal, and stores the active link-idx into
+// g_curveEditorActiveLinkIdx so subsequent frames render the same
+// slot's curve. The popup lives inside the long-lived Settings ctx
+// (BeginPopupModal) — standalone Begin() windows are broken for
+// keyboard input in this ReaImGui build.
+int g_curveEditorOpenLinkIdx   = -1;
+int g_curveEditorActiveLinkIdx = -1;
+
 // (GR-meter picker uses an inline combo dropdown; no listening flag.)
 
 // Click-and-turn state: when a slot is in listening mode we poll
@@ -4922,6 +5050,343 @@ void toggleInverted_(int linkIdx)
         }
         break;
     }
+}
+
+// Knob-travel mutators. All four share the same find-slot-and-write
+// pattern as setCustomLabel_ / toggleInverted_ above. Persist on every
+// change so the user's edits survive an unexpected close — same UX
+// contract as the label editor.
+template <class Mut>
+void mutateSlot_(int linkIdx, Mut&& mut)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        for (auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) {
+                mut(s);
+                uf8::user_plugins::upsert(m);
+                persistAndReport_();
+                return;
+            }
+        }
+        break;
+    }
+}
+
+void setSlotRangeMin_(int linkIdx, float v)
+{
+    if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+        s.rangeMin = v;
+        if (s.rangeMax < v) s.rangeMax = v;
+    });
+}
+
+void setSlotRangeMax_(int linkIdx, float v)
+{
+    if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+        s.rangeMax = v;
+        if (s.rangeMin > v) s.rangeMin = v;
+    });
+}
+
+void setSlotSensitivity_(int linkIdx, float v)
+{
+    if (v < 0.1f) v = 0.1f; else if (v > 4.0f) v = 4.0f;
+    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+        s.sensitivity = v;
+    });
+}
+
+void setSlotCurvePoints_(int linkIdx,
+                         std::vector<std::pair<float, float>> pts)
+{
+    mutateSlot_(linkIdx,
+        [pts = std::move(pts)](uf8::UserLinkSlot& s) {
+            s.curvePoints = pts;
+        });
+}
+
+// Snapshot the active slot's full state into a UserLinkSlot copy.
+// Returns false when no slot matches — caller bails the popup. Lives
+// next to the mutators because read + write share the same map walk.
+bool fetchSlotSnapshot_(int linkIdx, uf8::UserLinkSlot& out)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) {
+                out = s;
+                return true;
+            }
+        }
+        break;
+    }
+    return false;
+}
+
+// Curve-editor modal. Inside the long-lived Settings ctx — standalone
+// Begin() windows broke input in the QuickLearn experiment, so this
+// stays a BeginPopupModal under the parent context. Sensitivity slider
+// + draggable-point canvas + Linear/Log/Exp/Reset preset row. Frank
+// 2026-05-25.
+void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
+{
+    if (g_curveEditorOpenLinkIdx >= 0) {
+        ImGui_OpenPopup(ctx, "Curve editor###fxl_curve_editor", nullptr);
+        g_curveEditorActiveLinkIdx = g_curveEditorOpenLinkIdx;
+        g_curveEditorOpenLinkIdx   = -1;
+    }
+    if (g_curveEditorActiveLinkIdx < 0) return;
+
+    int popupCond = ImGui_Cond_Always;
+    ImGui_SetNextWindowSize(ctx, scaleW_(ctx, 320.0),
+                            scaleW_(ctx, 380.0), &popupCond);
+    centerNextPopupOnDisplay_(ctx);
+
+    if (!ImGui_BeginPopupModal(ctx, "Curve editor###fxl_curve_editor",
+                               nullptr, nullptr)) {
+        return;
+    }
+
+    uf8::UserLinkSlot sl{};
+    if (!fetchSlotSnapshot_(g_curveEditorActiveLinkIdx, sl)) {
+        g_curveEditorActiveLinkIdx = -1;
+        ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+        return;
+    }
+
+    // Sensitivity row.
+    {
+        double sens = static_cast<double>(sl.sensitivity);
+        int flags = 0;
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        if (ImGui_SliderDouble(ctx,
+                "Sensitivity##fxl_curve_sens",
+                &sens, 0.1, 4.0, "%.2fx", &flags))
+        {
+            setSlotSensitivity_(g_curveEditorActiveLinkIdx,
+                                static_cast<float>(sens));
+            sl.sensitivity = static_cast<float>(sens);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_SmallButton(ctx, "1x##fxl_curve_sens_reset")) {
+            setSlotSensitivity_(g_curveEditorActiveLinkIdx, 1.0f);
+            sl.sensitivity = 1.0f;
+        }
+        ImGui_TextDisabled(ctx,
+            "Slows / speeds the encoder. Shift = Fine still applies on top.");
+    }
+
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, "Knob travel curve:");
+
+    // Canvas.
+    const double canvasW = scaleW_(ctx, 260.0);
+    const double canvasH = scaleW_(ctx, 180.0);
+    double cx = 0.0, cy = 0.0;
+    ImGui_GetCursorScreenPos(ctx, &cx, &cy);
+    int btnFlags = 0;
+    ImGui_InvisibleButton(ctx, "##fxl_curve_canvas",
+                          canvasW, canvasH, &btnFlags);
+    const bool hovered = ImGui_IsItemHovered(ctx, nullptr);
+    auto* dl = ImGui_GetWindowDrawList(ctx);
+
+    // Backing rect + light grid.
+    {
+        double rounding = 4.0;
+        ImGui_DrawList_AddRectFilled(dl, cx, cy,
+                                      cx + canvasW, cy + canvasH,
+                                      0xFF1A1A1A, &rounding, nullptr);
+        // Reference linear line from (0, rangeMin) → (1, rangeMax).
+        const double xL = cx;
+        const double xR = cx + canvasW;
+        const double yL = cy + canvasH * (1.0 - sl.rangeMin);
+        const double yR = cy + canvasH * (1.0 - sl.rangeMax);
+        double refThick = 1.0;
+        ImGui_DrawList_AddLine(dl, xL, yL, xR, yR,
+                               0x44FFFFFF, &refThick);
+    }
+
+    // Static drag state. Survives across frames inside the popup.
+    static int s_dragIdx = -1;  // index into curvePoints; -1 = none
+
+    // Helpers for px↔(t, v) mapping.
+    auto toCanvas = [&](float t, float v) {
+        return std::pair<double, double>{
+            cx + static_cast<double>(t) * canvasW,
+            cy + static_cast<double>(1.0f - v) * canvasH
+        };
+    };
+
+    // Draw the current curve (piecewise-linear, endpoints implicit).
+    {
+        std::vector<std::pair<float, float>> pts;
+        pts.reserve(sl.curvePoints.size() + 2);
+        pts.emplace_back(0.0f, sl.rangeMin);
+        for (const auto& p : sl.curvePoints) pts.push_back(p);
+        pts.emplace_back(1.0f, sl.rangeMax);
+        for (size_t i = 1; i < pts.size(); ++i) {
+            auto [ax, ay] = toCanvas(pts[i - 1].first, pts[i - 1].second);
+            auto [bx, by] = toCanvas(pts[i].first,     pts[i].second);
+            double thick = 2.0;
+            ImGui_DrawList_AddLine(dl, ax, ay, bx, by,
+                                   0xFFFFC080, &thick);
+        }
+    }
+
+    // Draw + hit-test points.
+    const double kPointR = 5.0;
+    int nearestIdx = -1;
+    double mouseX = 0.0, mouseY = 0.0;
+    ImGui_GetMousePos(ctx, &mouseX, &mouseY);
+    {
+        double bestDist = kPointR + 2.0;
+        for (size_t i = 0; i < sl.curvePoints.size(); ++i) {
+            auto [px, py] = toCanvas(sl.curvePoints[i].first,
+                                     sl.curvePoints[i].second);
+            ImGui_DrawList_AddCircleFilled(dl, px, py, kPointR,
+                                            0xFFFFC080, nullptr);
+            double thin = 1.0;
+            int seg = 0;
+            ImGui_DrawList_AddCircle(dl, px, py, kPointR,
+                                     0xFF202020, &seg, &thin);
+            if (hovered) {
+                const double dx = mouseX - px;
+                const double dy = mouseY - py;
+                const double d  = std::sqrt(dx * dx + dy * dy);
+                if (d < bestDist) {
+                    bestDist   = d;
+                    nearestIdx = static_cast<int>(i);
+                }
+            }
+        }
+        // Draw endpoint markers (visual only — they track rangeMin / Max
+        // edited in the parent context menu, not draggable here).
+        auto [eAx, eAy] = toCanvas(0.0f, sl.rangeMin);
+        auto [eBx, eBy] = toCanvas(1.0f, sl.rangeMax);
+        ImGui_DrawList_AddCircleFilled(dl, eAx, eAy, kPointR,
+                                        0xFF6090FF, nullptr);
+        ImGui_DrawList_AddCircleFilled(dl, eBx, eBy, kPointR,
+                                        0xFF6090FF, nullptr);
+    }
+
+    // Mouse interaction. Left-click adds a point if none under cursor,
+    // else starts dragging. Right-click on a point removes it.
+    if (hovered) {
+        bool repeat = false;
+        const bool lClick = ImGui_IsMouseClicked(ctx, 0, &repeat);
+        const bool rClick = ImGui_IsMouseClicked(ctx, 1, &repeat);
+        if (lClick) {
+            if (nearestIdx >= 0) {
+                s_dragIdx = nearestIdx;
+            } else {
+                // Add a new point at the mouse pos.
+                float t = static_cast<float>((mouseX - cx) / canvasW);
+                float v = static_cast<float>(1.0 - (mouseY - cy) / canvasH);
+                if (t < 0.01f) t = 0.01f;
+                if (t > 0.99f) t = 0.99f;
+                if (v < 0.0f)  v = 0.0f;
+                if (v > 1.0f)  v = 1.0f;
+                auto pts = sl.curvePoints;
+                pts.emplace_back(t, v);
+                std::sort(pts.begin(), pts.end(),
+                          [](const auto& a, const auto& b) {
+                              return a.first < b.first;
+                          });
+                setSlotCurvePoints_(g_curveEditorActiveLinkIdx,
+                                    std::move(pts));
+            }
+        }
+        if (rClick && nearestIdx >= 0) {
+            auto pts = sl.curvePoints;
+            pts.erase(pts.begin() + nearestIdx);
+            setSlotCurvePoints_(g_curveEditorActiveLinkIdx,
+                                std::move(pts));
+        }
+    }
+    if (ImGui_IsMouseReleased(ctx, 0)) {
+        s_dragIdx = -1;
+    }
+    // While dragging, update the dragged point's (t, v) from the mouse.
+    // Clamp X away from 0/1 so endpoints stay implicit, sort by X to
+    // keep the piecewise-linear walk monotonic.
+    if (s_dragIdx >= 0 &&
+        s_dragIdx < static_cast<int>(sl.curvePoints.size()))
+    {
+        float t = static_cast<float>((mouseX - cx) / canvasW);
+        float v = static_cast<float>(1.0 - (mouseY - cy) / canvasH);
+        if (t < 0.01f) t = 0.01f;
+        if (t > 0.99f) t = 0.99f;
+        if (v < 0.0f)  v = 0.0f;
+        if (v > 1.0f)  v = 1.0f;
+        auto pts = sl.curvePoints;
+        pts[s_dragIdx] = { t, v };
+        std::sort(pts.begin(), pts.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.first < b.first;
+                  });
+        // After sort, the dragged index may have moved — re-find it by
+        // matching (t, v) to keep dragging coherent.
+        for (size_t i = 0; i < pts.size(); ++i) {
+            if (pts[i].first == t && pts[i].second == v) {
+                s_dragIdx = static_cast<int>(i);
+                break;
+            }
+        }
+        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+    }
+
+    // Preset row. Curves are expressed in absolute param-space y (not
+    // relative to range envelope), so users tweaking Min/Max afterwards
+    // get a sensible result without auto-rescaling the points.
+    ImGui_Separator(ctx);
+    if (ImGui_SmallButton(ctx, "Linear##fxl_curve_preset_lin")) {
+        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, {});
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_SmallButton(ctx, "Log##fxl_curve_preset_log")) {
+        const float a = sl.rangeMin;
+        const float b = sl.rangeMax;
+        std::vector<std::pair<float, float>> pts = {
+            {0.25f, a + (b - a) * 0.55f},
+            {0.50f, a + (b - a) * 0.80f},
+            {0.75f, a + (b - a) * 0.93f},
+        };
+        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_SmallButton(ctx, "Exp##fxl_curve_preset_exp")) {
+        const float a = sl.rangeMin;
+        const float b = sl.rangeMax;
+        std::vector<std::pair<float, float>> pts = {
+            {0.25f, a + (b - a) * 0.07f},
+            {0.50f, a + (b - a) * 0.20f},
+            {0.75f, a + (b - a) * 0.45f},
+        };
+        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_SmallButton(ctx, "Reset all##fxl_curve_preset_reset")) {
+        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, {});
+        setSlotSensitivity_(g_curveEditorActiveLinkIdx, 1.0f);
+    }
+
+    ImGui_TextDisabled(ctx,
+        "Click empty canvas to add a point. Drag to move. Right-click to remove.");
+
+    ImGui_Separator(ctx);
+    if (ImGui_Button(ctx, "Close##fxl_curve_close", nullptr, nullptr)) {
+        s_dragIdx = -1;
+        g_curveEditorActiveLinkIdx = -1;
+        ImGui_CloseCurrentPopup(ctx);
+    }
+    ImGui_EndPopup(ctx);
 }
 
 // ---- UF8 helpers (Phase 3) ------------------------------------------------
@@ -5606,19 +6071,76 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     // unreadable). Param name surfaces in the hover tooltip below.
 
     // "i" inverted-flag indicator (upper-right corner of the bbox).
+    // Also pull the knob-travel fields here so the schematic can
+    // visualise customised range / curve on the ring (single map walk
+    // amortises across the two reads).
+    bool   slotInverted   = false;
+    float  slotRangeMin   = 0.0f;
+    float  slotRangeMax   = 1.0f;
+    bool   slotHasCurve   = false;
+    bool   slotKnobCustom = false;  // any non-default knob-travel field
     if (isMapped) {
-        bool inv = false;
         for (const auto& m : uf8::user_plugins::get().maps) {
             if (m.match != g_editingMatch) continue;
             for (const auto& s : m.slots) {
-                if (s.linkIdx == ctrl.linkIdx) { inv = s.inverted; break; }
+                if (s.linkIdx == ctrl.linkIdx) {
+                    slotInverted   = s.inverted;
+                    slotRangeMin   = s.rangeMin;
+                    slotRangeMax   = s.rangeMax;
+                    slotHasCurve   = !s.curvePoints.empty();
+                    slotKnobCustom = slotHasCurve
+                                  || slotRangeMin != 0.0f
+                                  || slotRangeMax != 1.0f
+                                  || s.sensitivity != 1.0f;
+                    break;
+                }
             }
             break;
         }
-        if (inv) {
+        if (slotInverted) {
             ImGui_DrawList_AddText(dl,
                 ox + bx + bw - 6, oy + by - 4,
                 0xFFC04CFF, "i");
+        }
+    }
+
+    // Knob-travel range visualisation. SSL knob convention: the indicator
+    // sweeps ~270° clockwise from 7-o'clock (start) to 5-o'clock (end).
+    // We render two radial tick marks at the angles corresponding to
+    // rangeMin / rangeMax in absolute [0..1] param space — so a slot
+    // configured Min=0.3 / Max=0.7 shows the active arc in the middle
+    // of the ring. Curve presence is hinted by a small dot in the centre
+    // (the full curve editor lives in the right-click "Advanced…" popup).
+    if (isMapped && ctrl.kind == Uc1Control::Knob && slotKnobCustom) {
+        const double cxR = ox + ctrl.cx;
+        const double cyR = oy + ctrl.cy;
+        const double rOuter = ctrl.r + 6.0;
+        const double rInner = ctrl.r + 2.0;
+        // -135° → +135° relative to the 12-o'clock axis (= +90° in
+        // standard ImGui radians where 0 = East, π/2 = South). Map
+        // v∈[0..1] → angle starting at 8-o'clock CCW (5π/4) sweeping
+        // 1.5π clockwise to 4-o'clock (7π/4 mod 2π = -π/4).
+        auto angleFor = [](float v) {
+            constexpr double kStart = 3.92699;   // 5π/4 (≈225°)
+            constexpr double kSweep = 4.71239;   // 3π/2 (≈270°)
+            return kStart + static_cast<double>(v) * kSweep;
+        };
+        auto tick = [&](float v, uint32_t col) {
+            const double a = angleFor(v);
+            const double ca = std::cos(a);
+            const double sa = std::sin(a);
+            const double xi = cxR + rInner * ca;
+            const double yi = cyR + rInner * sa;
+            const double xo = cxR + rOuter * ca;
+            const double yo = cyR + rOuter * sa;
+            double thick = 2.0;
+            ImGui_DrawList_AddLine(dl, xi, yi, xo, yo, col, &thick);
+        };
+        tick(slotRangeMin, 0xFF8FE3A8);
+        tick(slotRangeMax, 0xFFE38F8F);
+        if (slotHasCurve) {
+            ImGui_DrawList_AddCircleFilled(dl, cxR, cyR, 2.5,
+                                            0xFFFFC080, nullptr);
         }
     }
 
@@ -5716,12 +6238,18 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             bool inverted = false;
             std::string curLabel;
+            float curRangeMin = 0.0f, curRangeMax = 1.0f, curSensitivity = 1.0f;
+            bool  curHasCurve = false;
             for (const auto& m : uf8::user_plugins::get().maps) {
                 if (m.match != g_editingMatch) continue;
                 for (const auto& s : m.slots) {
                     if (s.linkIdx == ctrl.linkIdx) {
-                        inverted = s.inverted;
-                        curLabel = s.customLabel;
+                        inverted       = s.inverted;
+                        curLabel       = s.customLabel;
+                        curRangeMin    = s.rangeMin;
+                        curRangeMax    = s.rangeMax;
+                        curSensitivity = s.sensitivity;
+                        curHasCurve    = !s.curvePoints.empty();
                         break;
                     }
                 }
@@ -5732,6 +6260,49 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 inverted ? "Inverted [on]" : "Inverted [off]");
             if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                 toggleInverted_(ctrl.linkIdx);
+            }
+
+            // Inline Min/Max range — covers the common case without
+            // forcing the user to open Advanced. Sliders are independent
+            // (setters auto-correct the opposing edge so Min stays ≤
+            // Max). Both 0..1 in normalised param space.
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Knob travel:");
+            {
+                double vMinD = static_cast<double>(curRangeMin);
+                int sliderFlags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                if (ImGui_SliderDouble(ctx, "Min##fxl_range_min",
+                        &vMinD, 0.0, 1.0, "%.3f", &sliderFlags)) {
+                    setSlotRangeMin_(ctrl.linkIdx,
+                                     static_cast<float>(vMinD));
+                }
+                double vMaxD = static_cast<double>(curRangeMax);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                if (ImGui_SliderDouble(ctx, "Max##fxl_range_max",
+                        &vMaxD, 0.0, 1.0, "%.3f", &sliderFlags)) {
+                    setSlotRangeMax_(ctrl.linkIdx,
+                                     static_cast<float>(vMaxD));
+                }
+                if (ImGui_SmallButton(ctx, "Reset##fxl_range_reset")) {
+                    setSlotRangeMin_(ctrl.linkIdx, 0.0f);
+                    setSlotRangeMax_(ctrl.linkIdx, 1.0f);
+                }
+                if (curHasCurve || curSensitivity != 1.0f) {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    ImGui_TextDisabled(ctx,
+                        curHasCurve ? "• curve + custom sens"
+                                    : "• custom sens");
+                }
+            }
+
+            // "Advanced…" opens the curve editor + sensitivity slider.
+            // Hidden behind a submenu so the common case (just Min/Max)
+            // stays uncluttered. Frank 2026-05-25.
+            ImGui_Separator(ctx);
+            if (ImGui_MenuItem(ctx, "Advanced…", nullptr,
+                               nullptr, nullptr)) {
+                g_curveEditorOpenLinkIdx = ctrl.linkIdx;
             }
 
             ImGui_Separator(ctx);
@@ -8652,6 +9223,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // are reversible via csSlotCache / bcSlotCache, the confirm was a
     // leftover from when slots were wiped on switch. applyPrimary above
     // does the cache-swap inline now.
+
+    // Knob-travel "Advanced…" popup. Rendered at the end of the editor
+    // so it overlays the schematic and editor body. Opens when the
+    // per-slot context menu sets g_curveEditorOpenLinkIdx; the popup
+    // itself reads + writes the live slot via mutateSlot_ + persists
+    // every change inline. Frank 2026-05-25.
+    drawFxLearnCurveEditorPopup_(ctx);
 }
 
 } // namespace

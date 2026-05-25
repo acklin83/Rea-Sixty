@@ -750,6 +750,14 @@ void serializeStepFields_(const ActionStep& s, std::ostringstream& os)
     if (s.fireOnInactive) {
         os << ", \"fire_on_inactive\": true";
     }
+    // Stepped-builtin fields (fx_param_inc / fx_param_dec). Only written
+    // when non-default to keep the JSON tight for the common case.
+    if (s.stepValue != 0.0f) {
+        os << ", \"step_value\": " << s.stepValue;
+    }
+    if (s.wrap) {
+        os << ", \"wrap\": true";
+    }
 }
 
 bool slotHasLedOverride_(const ActionSlot& s)
@@ -1065,6 +1073,12 @@ bool parseStepFields_(wdl_json_element* obj, ActionStep& out)
     if (auto* v = obj->get_item_by_name("fire_on_inactive"))
         if (auto* s = v->get_string_value(true))
             out.fireOnInactive = (std::atoi(s) != 0);
+    if (auto* v = obj->get_item_by_name("step_value"))
+        if (auto* s = v->get_string_value(true))
+            out.stepValue = static_cast<float>(std::atof(s));
+    if (auto* v = obj->get_item_by_name("wrap"))
+        if (auto* s = v->get_string_value(true))
+            out.wrap = (std::atoi(s) != 0);
     if (auto* mi = obj->get_item_by_name("midi"); mi && mi->is_object()) {
         if (auto* v = mi->get_item_by_name("device"))
             if (auto* s = v->get_string_value()) out.midiDevice = s;
@@ -2401,9 +2415,21 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             break;
         case ActionType::Builtin: {
             auto it = g_builtins.find(a.action);
-            if (it != g_builtins.end() && it->second.run) {
-                it->second.run(firing, pressed, a.param);
-            } else if (firing) {
+            if (it != g_builtins.end()) {
+                // Step-aware handlers get the full ActionStep so they
+                // can read stepValue / wrap / label — used by the
+                // stepped-builtin family (fx_param_inc / fx_param_dec).
+                // Plain handlers stay on the legacy `param`-only path.
+                if (it->second.runWithStep) {
+                    it->second.runWithStep(firing, pressed, a);
+                    break;
+                }
+                if (it->second.run) {
+                    it->second.run(firing, pressed, a.param);
+                    break;
+                }
+            }
+            if (firing) {
                 // Diagnostic: an action name references a builtin that
                 // isn't registered. Usually means a stale dead-builtin
                 // reference (e.g. quick_select_3 in a not-fully-migrated
