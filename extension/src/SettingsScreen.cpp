@@ -151,6 +151,13 @@ int  reasixty_navLowerRow();
 int  reasixty_navColorBar();
 void reasixty_setNavLowerRow(int v);
 void reasixty_setNavColorBar(int v);
+extern "C" int  reasixty_navUf8Show();
+extern "C" int  reasixty_navUf8Takeover();
+void reasixty_setNavUf8Show(bool on);
+void reasixty_setNavUf8Takeover(bool on);
+int  reasixty_uiSpelling();
+void reasixty_setUiSpelling(int v);
+const char* reasixty_sp(const char* uk, const char* us);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
@@ -292,6 +299,19 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButtonEx(ctx, "Large",  &scale, 2)) {
         reasixty_setFontScale(scale);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Spelling");
+    ImGui_Separator(ctx);
+    int sp = reasixty_uiSpelling();
+    if (ImGui_RadioButtonEx(ctx, "British (Colour, Grey)",  &sp, 0)) {
+        reasixty_setUiSpelling(sp);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "American (Color, Gray)", &sp, 1)) {
+        reasixty_setUiSpelling(sp);
     }
 }
 
@@ -9428,19 +9448,57 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "overlay marker metadata on the lower row.");
 
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Color-bar source:");
+    ImGui_Text(ctx, reasixty_sp("Colour-bar source:", "Color-bar source:"));
     int cb = reasixty_navColorBar();
     if (ImGui_RadioButton(ctx,
-            "REAPER marker colour##nav_cb_reaper", cb == 0))
+            reasixty_sp("REAPER marker colour##nav_cb_reaper",
+                        "REAPER marker color##nav_cb_reaper"), cb == 0))
     {
         reasixty_setNavColorBar(0);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButton(ctx,
-            "Force palette grey##nav_cb_grey", cb == 1))
+            reasixty_sp("Keep track colour##nav_cb_track",
+                        "Keep track color##nav_cb_track"), cb == 2))
+    {
+        reasixty_setNavColorBar(2);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx,
+            reasixty_sp("Force palette grey##nav_cb_grey",
+                        "Force palette gray##nav_cb_grey"), cb == 1))
     {
         reasixty_setNavColorBar(1);
     }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "UF8");
+    ImGui_Separator(ctx);
+
+    bool uf8Show = reasixty_navUf8Show() != 0;
+    if (ImGui_Checkbox(ctx,
+            "Show marker overlay on UF8",
+            &uf8Show))
+    {
+        reasixty_setNavUf8Show(uf8Show);
+    }
+    ImGui_Text(ctx,
+        "  When off, UF8 strips stay in regular track view even while "
+        "Nav Mode is active — useful if you navigate only via UC1 "
+        "Encoder 2.");
+
+    bool uf8Take = reasixty_navUf8Takeover() != 0;
+    if (ImGui_Checkbox(ctx,
+            "Channel encoder moves Nav cursor while active",
+            &uf8Take))
+    {
+        reasixty_setNavUf8Takeover(uf8Take);
+    }
+    ImGui_Text(ctx,
+        "  Rotation: one marker/region per detent (mirrors UC1 Encoder 2) "
+        "instead of paging eight at a time. Push: plain / shift / "
+        "long-press actions from the picker below (shared with UC1).");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -9457,7 +9515,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx,
         "  When off, Encoder 2 rotation stays bound to its normal "
         "action (bc_track_scroll by default) and the UC1 LCD does not "
-        "switch to the marker carousel — only UF8 reflects Nav Mode.");
+        "switch to the marker carousel.");
 
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Carousel scope:");

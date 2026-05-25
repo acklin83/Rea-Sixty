@@ -65,12 +65,14 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "MixerWindow.h"
+#include "NavDispatch.h"
 #include "Palette.h"
 #include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "SetupBundle.h"
+#include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
 #include "UC1Surface.h"
@@ -337,9 +339,42 @@ std::atomic<int>  g_navUc1LongPress{3};  // default Back
 
 // Phase 2.8c — UF8 strip display preferences.
 //   nav_lower_row     0=Off (V-Pot value), 1=Index (R03/M07), 2=Timecode
-//   nav_color_bar     0=REAPER marker colour, 1=Force palette grey
+//   nav_color_bar     0=REAPER marker colour, 1=Force palette grey,
+//                     2=Keep track colour (overlay strips stay on
+//                       their underlying track's colour)
 std::atomic<int>  g_navLowerRow{0};
 std::atomic<int>  g_navColorBar{0};
+
+// Phase 2.8d (2026-05-25) — UF8 surface toggles, parallel to
+// g_navUc1Takeover. Both default to the historical behaviour so existing
+// users see no change until they opt in via Settings → Modes → NAV.
+//   g_navUf8Show     — strips render the marker/region overlay
+//                      (color-bar override + slot labels + jump intercept).
+//                      Off → UF8 stays in regular track view even while
+//                      Nav Mode is internally active.
+//   g_navUf8Takeover — UF8 Channel Encoder rotation moves the overlay's
+//                      drill cursor (one item per detent, mirrors UC1
+//                      Encoder 2). Push gesture (id 0x76) dispatches the
+//                      same plain/shift/long action picker UC1 uses
+//                      (g_navUc1Push / Shift / LongPress), so users
+//                      share a single config across surfaces.
+//                      Off → rotation pages the overlay 8-at-a-time
+//                      (legacy behaviour) and push fires the hard-coded
+//                      "Back" intercept.
+std::atomic<bool> g_navUf8Show{true};
+std::atomic<bool> g_navUf8Takeover{false};
+
+// Honorary SSL toggle — flips user-facing strings between British
+// ("Colour", "Grey") and American ("Color", "Gray"). Pure decoration;
+// zero functional impact. 0=British (default), 1=American.
+std::atomic<int>  g_uiSpelling{0};
+
+// Forward declarations for the reasixty_navUc1* accessors defined at
+// the bottom of this file — needed by the UF8 push-gesture branch in
+// the input drain loop above the definition site.
+extern "C" int reasixty_navUc1Push();
+extern "C" int reasixty_navUc1PushShift();
+extern "C" int reasixty_navUc1LongPress();
 
 // Re-render trigger for the timer when the focused-param slot changes.
 // The actual focused-param state lives in FocusedParam.h
@@ -1563,140 +1598,7 @@ enum BallisticMode : int {
 };
 std::atomic<int> g_ballisticMode{BM_Peak};
 
-// Track-name abbreviation strategy used everywhere a track name has to
-// fit a fixed-width scribble slot (currently UF8's 7-char upper row).
-// Truncate keeps the legacy first-N-chars behaviour; SmartAbbrev runs a
-// vowel-drop + space-strip reduction that's a closer fit to how console
-// mixers shorten labels.
-enum TrackNameMode : int {
-    TNM_Truncate    = 0,
-    TNM_SmartAbbrev = 1,
-};
-std::atomic<int> g_trackNameMode{TNM_Truncate};
-
-// Shorten `src` to at most `maxLen` chars. In Truncate mode this is a
-// straight resize. SmartAbbrev tries to keep every word visible:
-//   1) split on space / dash / underscore / slash;
-//   2) per token: keep first char, drop later vowels;
-//   3) collapse runs of repeated consonants per token;
-//   4) if combined length still exceeds maxLen, distribute the budget
-//      proportionally to each token's shortened length, guaranteeing at
-//      least one char per token so "Background Vocals" lands as
-//      "BckgrV" or similar instead of "Bckgrnd" (which loses the V).
-// All-uppercase short tokens (DI, FX, EQ, …) survive untouched.
-std::string abbreviateTrackName_(const std::string& src, int maxLen)
-{
-    if (maxLen <= 0) return src;
-    if (static_cast<int>(src.size()) <= maxLen) return src;
-    if (g_trackNameMode.load() != TNM_SmartAbbrev) {
-        std::string out = src;
-        out.resize(maxLen);
-        return out;
-    }
-    auto isSep = [](char c) {
-        return c == ' ' || c == '\t' || c == '-' || c == '_' || c == '/';
-    };
-    std::vector<std::string> tokens;
-    {
-        std::string cur;
-        for (char c : src) {
-            if (isSep(c)) {
-                if (!cur.empty()) { tokens.push_back(cur); cur.clear(); }
-            } else {
-                cur.push_back(c);
-            }
-        }
-        if (!cur.empty()) tokens.push_back(cur);
-    }
-    if (tokens.empty()) {
-        std::string out = src;
-        out.resize(maxLen);
-        return out;
-    }
-    // Pass 1: just strip separators. Often enough on its own.
-    {
-        std::string joined;
-        for (auto& t : tokens) joined += t;
-        if (static_cast<int>(joined.size()) <= maxLen) return joined;
-    }
-
-    auto isVowel = [](char c) {
-        const char l = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(c)));
-        return l == 'a' || l == 'e' || l == 'i' || l == 'o' || l == 'u';
-    };
-    auto isAcronymToken = [](const std::string& t) {
-        if (t.size() < 2 || t.size() > 4) return false;
-        for (char c : t) {
-            if (!std::isupper(static_cast<unsigned char>(c))) return false;
-        }
-        return true;
-    };
-    // Pass 2: per-token vowel drop (keep first char + every consonant).
-    std::vector<std::string> abbr;
-    abbr.reserve(tokens.size());
-    for (auto& t : tokens) {
-        if (isAcronymToken(t)) { abbr.push_back(t); continue; }
-        std::string a;
-        for (size_t i = 0; i < t.size(); ++i) {
-            if (i == 0 || !isVowel(t[i])) a.push_back(t[i]);
-        }
-        if (a.empty()) a.push_back(t[0]);
-        abbr.push_back(std::move(a));
-    }
-    {
-        std::string joined;
-        for (auto& a : abbr) joined += a;
-        if (static_cast<int>(joined.size()) <= maxLen) return joined;
-    }
-    // Pass 3: collapse repeated consonants inside each token.
-    int totalSize = 0;
-    for (auto& a : abbr) {
-        std::string c;
-        for (char ch : a) {
-            if (!c.empty() && c.back() == ch && !isVowel(ch)) continue;
-            c.push_back(ch);
-        }
-        a = std::move(c);
-        totalSize += static_cast<int>(a.size());
-    }
-    if (totalSize <= maxLen) {
-        std::string joined;
-        for (auto& a : abbr) joined += a;
-        return joined;
-    }
-    // Pass 4: distribute the char budget across tokens proportionally to
-    // their shortened length, but reserve at least 1 char per remaining
-    // token so the last word doesn't get dropped entirely.
-    const int n = static_cast<int>(abbr.size());
-    std::string out;
-    int remaining = maxLen;
-    for (int i = 0; i < n; ++i) {
-        const int reserveForRest = n - 1 - i;
-        const int maxThis = remaining - reserveForRest;
-        int take;
-        if (i == n - 1) {
-            take = remaining;
-        } else {
-            const double share =
-                static_cast<double>(maxLen) *
-                static_cast<double>(abbr[i].size()) /
-                static_cast<double>(totalSize);
-            take = static_cast<int>(share + 0.5);
-            if (take < 1) take = 1;
-        }
-        if (take > maxThis) take = maxThis;
-        if (take > static_cast<int>(abbr[i].size())) {
-            take = static_cast<int>(abbr[i].size());
-        }
-        if (take < 1) take = 1;
-        out.append(abbr[i], 0, static_cast<size_t>(take));
-        remaining -= take;
-        if (remaining <= 0) break;
-    }
-    if (static_cast<int>(out.size()) > maxLen) out.resize(maxLen);
-    return out;
-}
+// g_trackNameMode now lives in TrackName.cpp (extern in TrackName.h).
 
 struct BrightnessBytes {
     uint8_t uf8_led; uint8_t uf8_lcd;
@@ -1885,8 +1787,21 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 1) n = 0;
+        if (n < 0 || n > 2) n = 0;
         g_navColorBar.store(n);
+    }
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uf8_show");
+        g_navUf8Show.store((v && *v) ? (std::atoi(v) != 0) : true);
+    }
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uf8_takeover");
+        g_navUf8Takeover.store((v && *v) ? (std::atoi(v) != 0) : false);
+    }
+    if (const char* v = GetExtState("rea_sixty", "ui_spelling"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 1) n = 0;
+        g_uiSpelling.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "rec_rme_enabled"); v && *v) {
         g_recRmeEnabled.store(std::atoi(v) != 0);
@@ -4522,16 +4437,21 @@ void drainInputQueue()
             if (g_encoderAccum >=  1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (g_encoderAccum <= -1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
             if (step != 0) {
-                // Phase 2.8 Nav Mode — encoder rotation pages the
-                // overlay while active. Redundant with PageLeft/Right
-                // by design (per ROADMAP "Channel encoder rotate → same
-                // paging, redundant input path"); the UC1 Encoder 2
-                // carousel in Phase 2.8b will instead drive an
-                // item-granularity cursor.
+                // Phase 2.8 Nav Mode — encoder rotation interception.
+                // Default: pages the overlay 8 items at a time (legacy
+                // PageLeft/Right redundancy). With g_navUf8Takeover on
+                // (Settings → Modes → NAV), each detent moves the drill
+                // cursor one item instead — mirrors UC1 Encoder 2 and
+                // keeps the UC1 carousel + UF8 strips in sync because
+                // both render from overlay.cursor.
                 if (uf8::nav::Overlay::instance().active()) {
                     auto& ov = uf8::nav::Overlay::instance();
-                    for (int i = 0; i <  step; ++i) ov.pageNext();
-                    for (int i = 0; i > step;  --i) ov.pagePrev();
+                    if (g_navUf8Takeover.load()) {
+                        ov.moveCursor(step);
+                    } else {
+                        for (int i = 0; i <  step; ++i) ov.pageNext();
+                        for (int i = 0; i > step;  --i) ov.pagePrev();
+                    }
                     g_navOverlayDirty.store(true);
                     if (g_sync) g_sync->invalidate();
                     continue;
@@ -6800,7 +6720,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // release in v1).
             if (!handledNatively
                 && id >= 0x18 && id <= 0x1F
-                && uf8::nav::Overlay::instance().active())
+                && uf8::nav::Overlay::instance().active()
+                && g_navUf8Show.load())
             {
                 if (pressed) {
                     queueInput({PendingInput::NavJumpStrip,
@@ -6849,10 +6770,46 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
-                } else if (id == 0x76 || id == 0x43) {
-                    // Back is a no-op under any view lock — the locked
-                    // view is supposed to stay locked. Without a lock,
-                    // back exits MarkersInRegion / MarkersAll → Regions.
+                } else if (id == 0x76) {
+                    // Channel-encoder push. With UF8 Takeover on, this
+                    // becomes a gesture trigger (press → store time;
+                    // release → plain/shift/long action via the shared
+                    // dispatcher, same trio of settings as UC1 Encoder
+                    // 2). Otherwise stays at the legacy hard-coded Back.
+                    if (g_navUf8Takeover.load()) {
+                        using namespace std::chrono;
+                        static steady_clock::time_point sPressTime{};
+                        static bool sPressed = false;
+                        if (pressed) {
+                            sPressTime = steady_clock::now();
+                            sPressed   = true;
+                        } else if (sPressed) {
+                            sPressed = false;
+                            const auto held = duration_cast<milliseconds>(
+                                steady_clock::now() - sPressTime).count();
+                            const bool isLong  = held > 500;
+                            const bool isShift = (uf8::bindings::currentModifierSnapshot()
+                                                  == uf8::bindings::Modifier::Shift);
+                            const int plainAct = reasixty_navUc1Push();
+                            const int shiftAct = reasixty_navUc1PushShift();
+                            const int longAct  = reasixty_navUc1LongPress();
+                            const int act = isLong ? longAct
+                                          : (isShift ? shiftAct : plainAct);
+                            uf8::nav::dispatchPushAction(act);
+                            g_navOverlayDirty.store(true);
+                            if (g_sync) g_sync->invalidate();
+                        }
+                    } else if (pressed
+                               && ov.viewLock() == uf8::nav::ViewLock::None
+                               && ov.view() != uf8::nav::View::Regions)
+                    {
+                        ov.backToRegions();
+                        g_navOverlayDirty.store(true);
+                        if (g_sync) g_sync->invalidate();
+                    }
+                    handledOv = true;
+                } else if (id == 0x43) {
+                    // Quick1 stays hardcoded Back — independent of takeover.
                     if (pressed
                         && ov.viewLock() == uf8::nav::ViewLock::None
                         && ov.view() != uf8::nav::View::Regions)
@@ -7165,7 +7122,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // re-routes the strip's track input instead of moving
                 // gain / pan. Shift release falls back to the gain/pan
                 // wiring on the next event.
-                if (inRecMode && rmeOn && g_shiftHeld.load()
+                // Honour BOTH HW Shift and keyboard Shift (gated by
+                // Settings → Modes → Keyboard Options) — same pattern
+                // as the SEL+Shift multi-select path (main.cpp:~6976).
+                const bool shiftMod = uf8::bindings::modifierHeld(
+                    uf8::bindings::Modifier::Shift);
+                if (inRecMode && rmeOn && shiftMod
                     && g_recVpotShiftInputCh.load())
                 {
                     queueInput({PendingInput::InputChannelDelta,
@@ -7579,7 +7541,16 @@ std::array<std::string, 8> g_lastSlotLabel{};
 // 0=Off / 1=Dim / 2=On so transitions between any two visible levels
 // trigger a re-push.
 std::array<int8_t, 8>      g_lastTopSoftKey{-1, -1, -1, -1, -1, -1, -1, -1};
-std::array<std::string, 8> g_lastCsType{};
+// Sentinel that can't be a real label nor a blank send — guarantees
+// the first refresh (after extension load or bank shift) actually
+// emits a frame, even when the resolved csType is empty. Without
+// this, dedup ("" == "") swallowed the clear-frame for plug-in-empty
+// tracks and the firmware kept the last LCD content (e.g. "4K E" left
+// over from an SSL 360° session). Frank 2026-05-25.
+inline constexpr const char* kCsTypeSentinel = "\x01";
+std::array<std::string, 8> g_lastCsType{
+    kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel,
+    kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel };
 std::array<std::string, 8> g_lastValueLine{};
 std::array<std::string, 8> g_lastFaderDb{};
 std::array<std::string, 8> g_lastChanNum{};
@@ -7700,10 +7671,14 @@ uint32_t navColorForStrip(int slot)
     const auto& items = ov.items();
     const int idx = ov.pageOffset() * 8 + slot;
     if (idx < 0 || idx >= static_cast<int>(items.size())) return 0;
-    // Phase 2.8c: 'Force palette grey' suppresses per-marker colour
-    // and renders every strip on the neutral fallback so the cursor
+    const int cbMode = g_navColorBar.load();
+    // 'Force palette grey' suppresses per-marker colour so the cursor
     // ring is the only colour cue.
-    if (g_navColorBar.load() == 1) return 0xCCCCCCu;
+    if (cbMode == 1) return 0xCCCCCCu;
+    // 'Keep Track Colour' affects only the LCD colour-bar (handled at
+    // the refresh callsite). The top-soft-key LED above the strip
+    // keeps marker/region colour so the user still has a visual cue
+    // even when the bar matches the track.
     const uint32_t raw = static_cast<uint32_t>(items[idx].color);
     if (raw == 0) return 0xCCCCCCu;   // neutral fallback for "no override"
     return raw & 0x00FFFFFFu;
@@ -8153,7 +8128,7 @@ void pushZonesForVisibleSlots()
     if (bankChanged || routingChanged) {
         g_lastTrackName.fill({});
         g_lastSlotLabel.fill({});
-        g_lastCsType.fill({});
+        g_lastCsType.fill(kCsTypeSentinel);
         g_lastValueLine.fill({});
         g_lastFaderDb.fill({});
         g_lastChanNum.fill({});
@@ -8952,7 +8927,7 @@ void pushZonesForVisibleSlots()
             // was using to advance it.
             const int instFxIdx = stripInstanceActiveFx_(tr);
             if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
-            if (csType.empty()) csType = "-";
+            // Empty when no FX — blank slot reads cleaner than "-".
         } else if ((g_encoderMode.load() == EncoderMode::FxCycle
                  || g_encoderMode.load() == EncoderMode::Instance)
                 && g_uc1_surface
@@ -8965,9 +8940,43 @@ void pushZonesForVisibleSlots()
             // UC1's carousel walks every FX, so non-Instance landings on
             // FX Cycle look like UF8 "shows only Instances". Frank
             // 2026-05-20.
+            //
+            // Instance-mode safeguard (Frank 2026-05-25): the raw cursor
+            // can be stale from a prior FX-Cycle session and point at an
+            // unmapped FX. FX-Cycle wants to display whatever's there;
+            // Instance-Cycle must only ever show mapped Instances. When
+            // the stale cursor isn't on a mapped FX, fall back to the
+            // map/mapFxIdx label so the focused strip mirrors what the
+            // non-focused strips already render.
             const int instFxIdx = stripInstanceActiveFx_(tr);
-            if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
-            if (csType.empty()) csType = "-";
+            bool cursorIsMapped = false;
+            if (g_encoderMode.load() == EncoderMode::Instance
+                && instFxIdx >= 0)
+            {
+                char fxName[256];
+                if (uf8::fxIdentityName(tr, instFxIdx, fxName, sizeof(fxName))) {
+                    const auto* pm = uf8::lookupPluginMapByName(fxName);
+                    if (pm && (pm->domain == uf8::Domain::ChannelStrip
+                            || pm->domain == uf8::Domain::BusComp))
+                        cursorIsMapped = true;
+                    if (!cursorIsMapped) {
+                        const auto* um =
+                            uf8::user_plugins::lookupOwnedByName(fxName);
+                        if (um && um->domain == uf8::Domain::None && um->uf8Mode)
+                            cursorIsMapped = true;
+                    }
+                }
+            }
+            const bool instanceModeStaleCursor =
+                (g_encoderMode.load() == EncoderMode::Instance)
+                && instFxIdx >= 0 && !cursorIsMapped;
+            if (instanceModeStaleCursor && map) {
+                csType = instanceLabel_(tr, mapFxIdx, map->displayShort);
+            } else if (instFxIdx >= 0) {
+                csType = fxCycleDisplayName_(tr, instFxIdx);
+            }
+            // No "-" placeholder — leave empty when no FX so the LCD
+            // slot reads as "nothing here" rather than a dash.
         } else if (g_uc1_surface
                 && tr == g_uc1_surface->focusedTrack()
                 && stripInstanceFxRaw_(tr) >= 0
@@ -9055,7 +9064,12 @@ void pushZonesForVisibleSlots()
                         // Length-budget: the colour-bar zone fits 7
                         // characters. Try shortening the common RME-
                         // device prefixes (MADI / ANALOG / ADAT / SPDIF
-                        // / AES) before falling back to a hard truncate.
+                        // / AES) first — domain-specific shortcuts that
+                        // beat generic abbreviation. Then route through
+                        // abbreviateTrackName_ which honours Settings →
+                        // Track-name mode (Truncate vs Smart Abbreviate),
+                        // so user-set aliases like "Drums OH" / "Vocal
+                        // Mic" get vowel-dropped instead of cut mid-word.
                         if (s2.size() > 7) {
                             auto shorten =
                                 [&](const char* longP, const char* shortP) {
@@ -9073,12 +9087,15 @@ void pushZonesForVisibleSlots()
                             shorten("SPDIF ",  "SP ");
                             shorten("AES ",    "AE ");
                         }
-                        csType = std::move(s2);
+                        csType = abbreviateTrackName_(s2, 7);
                     }
                 }
             }
         }
-        if (csType.empty()) csType = "REAPER";
+        // Empty slot when nothing matched — track has zero plug-ins.
+        // A blank LCD field reads "nothing here" faster than a literal
+        // "REAPER" / "MAIN" label that suggests something is loaded.
+        // Frank 2026-05-25.
         if (csType.size() > 7) csType.resize(7);
         if (csType != g_lastCsType[s]) {
             g_lastCsType[s] = csType;
@@ -11792,14 +11809,15 @@ void pushUf8GlobalLeds()
         g_lastPageRightLit = 0;
     }
 
-    // Channel-encoder mode LEDs. Driven by the binding actually wired to
-    // each cell, NOT by a hardcoded mode comparison — so when the user
-    // remaps e.g. the FOCUS button to `encoder_instance`, its LED lights
-    // bright in Instance mode instead of Focus mode. Each mode builtin
-    // (encoder_nav/nudge/focus/instance) exposes a stateOf that returns
-    // true when its mode is active; we look up the bound builtin name
-    // for each cell's ButtonId and ask its stateOf.
-    if (encMode != g_lastEncoderMode || !g_globalLedsInit) {
+    // Channel-encoder mode LEDs. Driven by the binding actually wired
+    // to each cell — we look up the bound builtin and ask its stateOf.
+    // Caches last-pushed state per cell so the lookup runs every tick
+    // (cheap) but the LED frame goes out only on change. Previously
+    // gated on `encMode != g_lastEncoderMode`, which broke any binding
+    // whose stateOf depended on something other than g_encoderMode
+    // (e.g. marker_overlay_toggle on Nav) — the gate never tripped so
+    // the LED froze. Frank 2026-05-25.
+    {
         const int activeLayer = uf8::bindings::getActiveLayer();
         auto cellActive = [&](uf8::bindings::ButtonId id) -> bool {
             const auto bd = uf8::bindings::getBinding(activeLayer, id);
@@ -11808,12 +11826,24 @@ void pushUf8GlobalLeds()
             if (sp.type != uf8::bindings::ActionType::Builtin) return false;
             return uf8::bindings::builtinStateOf(sp.action, sp.param);
         };
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Nav,
-            cellActive(uf8::bindings::ButtonId::Nav));
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Nudge,
-            cellActive(uf8::bindings::ButtonId::Nudge));
-        sendUf8GlobalLed(uf8::Uf8GlobalLed::Focus,
-            cellActive(uf8::bindings::ButtonId::EncFocus));
+        static int sLastNav   = -1;
+        static int sLastNudge = -1;
+        static int sLastFocus = -1;
+        const int navOn   = cellActive(uf8::bindings::ButtonId::Nav)      ? 1 : 0;
+        const int nudgeOn = cellActive(uf8::bindings::ButtonId::Nudge)    ? 1 : 0;
+        const int focusOn = cellActive(uf8::bindings::ButtonId::EncFocus) ? 1 : 0;
+        if (!g_globalLedsInit || navOn != sLastNav) {
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::Nav, navOn != 0);
+            sLastNav = navOn;
+        }
+        if (!g_globalLedsInit || nudgeOn != sLastNudge) {
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::Nudge, nudgeOn != 0);
+            sLastNudge = nudgeOn;
+        }
+        if (!g_globalLedsInit || focusOn != sLastFocus) {
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::Focus, focusOn != 0);
+            sLastFocus = focusOn;
+        }
         g_lastEncoderMode = encMode;
     }
 
@@ -12058,7 +12088,14 @@ void onTimer()
     if (g_sync) {
         // Phase 2.8 Nav Mode hijacks the colour-bar: marker/region colour
         // (or neutral fallback when no override) replaces track colour.
-        if (uf8::nav::Overlay::instance().active()) {
+        // Suppressed when UF8 Show is off, OR when Color-bar source is
+        // "Keep Track Color" (g_navColorBar == 2) — both paths fall
+        // back to the regular reaperColorForVisibleSlot callback.
+        const bool overlayOnUf8 =
+            uf8::nav::Overlay::instance().active()
+            && g_navUf8Show.load()
+            && g_navColorBar.load() != 2;
+        if (overlayOnUf8) {
             g_sync->refresh(navColorForStrip);
         } else {
             g_sync->refresh(reaperColorForVisibleSlot);
@@ -12071,8 +12108,9 @@ void onTimer()
     // baselines. Cache state for those three zones is owned by the
     // overlay path while it's running; the next overlay-toggle exit
     // sets g_navOverlayDirty so the track-render path re-pushes its
-    // own content on the next tick.
-    if (uf8::nav::Overlay::instance().active()) {
+    // own content on the next tick. Gated by g_navUf8Show: when off,
+    // strips keep their regular track-side content.
+    if (uf8::nav::Overlay::instance().active() && g_navUf8Show.load()) {
         pushNavOverlayDecorations();
     }
     pushUf8GlobalLeds();
@@ -13371,8 +13409,42 @@ void reasixty_setNavLowerRow(int v)
 }
 void reasixty_setNavColorBar(int v)
 {
-    writeNavSetting_("nav_color_bar", g_navColorBar, v, 1);
+    writeNavSetting_("nav_color_bar", g_navColorBar, v, 2);
     if (g_sync) g_sync->invalidate();
+}
+
+extern "C" int  reasixty_navUf8Show()     { return g_navUf8Show.load() ? 1 : 0; }
+extern "C" int  reasixty_navUf8Takeover() { return g_navUf8Takeover.load() ? 1 : 0; }
+
+void reasixty_setNavUf8Show(bool on)
+{
+    g_navUf8Show.store(on);
+    SetExtState("rea_sixty", "nav_uf8_show", on ? "1" : "0", true);
+    // Toggling visibility flips which side of the overlay/track-render
+    // owns the strip zones — force a full re-push so dedup caches don't
+    // hold the wrong content.
+    g_navOverlayDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+void reasixty_setNavUf8Takeover(bool on)
+{
+    g_navUf8Takeover.store(on);
+    SetExtState("rea_sixty", "nav_uf8_takeover", on ? "1" : "0", true);
+}
+
+int  reasixty_uiSpelling() { return g_uiSpelling.load(); }
+void reasixty_setUiSpelling(int v)
+{
+    if (v < 0 || v > 1) v = 0;
+    g_uiSpelling.store(v);
+    char buf[2] = { static_cast<char>('0' + v), 0 };
+    SetExtState("rea_sixty", "ui_spelling", buf, true);
+}
+// Tiny helper: pick British or American spelling at render time. Used
+// across SettingsScreen wherever a user-facing string differs.
+const char* reasixty_sp(const char* uk, const char* us)
+{
+    return g_uiSpelling.load() == 1 ? us : uk;
 }
 
 // ---- Selection-Set settings exports --------------------------------------
@@ -15504,11 +15576,27 @@ void registerBindingHandlers()
     // updated to 'Channel Select' (Frank 2026-05-19) and ExtState now
     // serialises as 'ChSelect'. The load path accepts both 'Nav' and
     // 'ChSelect' so round-tripping older dumps still works.
+    // Any user-initiated encoder-mode change exits Nav Mode (Frank
+    // 2026-05-25 "wenn ich Channel Encoder → Instance Cycle mache,
+    // sollte aus dem Nav Mode exited werden"). Project-load /
+    // setup-bundle paths bypass this — they restore saved state, not
+    // user intent.
+    auto exitNavModeIfActive = []() {
+        auto& ov = uf8::nav::Overlay::instance();
+        if (!ov.active()) return;
+        ov.setActive(false);
+        ov.setViewLock(uf8::nav::ViewLock::None);
+        g_pageDirty.store(true);
+        g_bankDirty.store(true);
+        g_navOverlayDirty.store(true);
+        if (g_sync) g_sync->invalidate();
+    };
     registerBuiltin("encoder_nav", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [exitNavModeIfActive](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
             g_encoderMode.store(EncoderMode::ChSelect);
             SetExtState("ReaSixty", "encoderMode", "ChSelect", true);
+            exitNavModeIfActive();
         },
         [](int) { return g_encoderMode.load() == EncoderMode::ChSelect; },
         "Encoder Mode → Channel Select", false
@@ -15518,12 +15606,13 @@ void registerBindingHandlers()
     // 2026-05-19 "push auf nav wenn aktiv schaltet ihn nicht aus").
     // Re-tap toggles off; the next physical encoder rotation lands on
     // Channel-Select again.
-    auto setOrToggleMode = [](EncoderMode target, const char* extKey) {
+    auto setOrToggleMode = [exitNavModeIfActive](EncoderMode target, const char* extKey) {
         const bool already = (g_encoderMode.load() == target);
         const EncoderMode next = already ? EncoderMode::ChSelect : target;
         g_encoderMode.store(next);
         SetExtState("ReaSixty", "encoderMode",
                     already ? "ChSelect" : extKey, true);
+        exitNavModeIfActive();
     };
     registerBuiltin("encoder_nudge", DescBuilder{
         [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {

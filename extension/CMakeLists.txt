@@ -170,6 +170,7 @@ add_library(reaper_uf8 MODULE
     src/main.cpp
     src/Protocol.cpp
     src/Palette.cpp
+    src/TrackName.cpp
     src/PluginMap.cpp
     src/UserPluginCatalog.cpp
     src/AutoLearnEngine.cpp
@@ -196,6 +197,7 @@ add_library(reaper_uf8 MODULE
     src/ParameterGroups.cpp
     # Phase 2.8 — Nav Mode (Markers & Regions) overlay
     src/MarkerOverlay.cpp
+    src/NavDispatch.cpp
     # Setup bundle (save/restore of the whole configuration)
     src/SetupBundle.cpp
 )

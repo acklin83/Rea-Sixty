@@ -14,7 +14,9 @@
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
 #include "GrCalibration.h" // uf8::applyGrCalibration + kBcVuBpDb / kLedsBpDb
 #include "MarkerOverlay.h"  // Phase 2.8b: Encoder 2 intercept for Nav Mode cursor
+#include "NavDispatch.h"    // shared push-action dispatcher (UC1 + UF8)
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
+#include "TrackName.h"  // abbreviateTrackName_ (Smart Abbreviate / Truncate)
 
 // Defined in main.cpp — marks the UF8 Nav overlay decoration cache
 // dirty so the next tick re-pushes after a cursor move or view
@@ -683,7 +685,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (ev.id == knob::kChannelEncoder) {
         static int acc = 0;
         static std::chrono::steady_clock::time_point lastT{};
-        int step = stepFromAccumulator(acc, lastT, 4);
+        // ticksPerStep=3 (was 4) — encoder fires 3 OR 4 ticks per detent
+        // inconsistently; with 4 the 3-tick clicks got eaten by the 100 ms
+        // GAP-RESET, costing Frank "3-4 clicks per track step" (diagnosed
+        // 2026-05-25 via /tmp/rea_sixty_encoder.log). 3 catches both: 3-tick
+        // clicks fire one step cleanly; 4-tick clicks fire one step + leave
+        // 1 residual which the next gap-reset wipes.
+        int step = stepFromAccumulator(acc, lastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
         // SEL Mode override — when bit 2 (UC1 Encoder 1) is ticked in
         // Settings → Modes → FX/Instance Cycle AND SelectionMode is
@@ -1028,7 +1036,11 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (ev.id == knob::kBcEncoder) {
         static int acc = 0;
         static std::chrono::steady_clock::time_point lastT{};
-        int step = stepFromAccumulator(acc, lastT, 3);
+        // ticksPerStep=2 (was 3) — BC encoder hardware fires 2 OR 3 ticks
+        // per detent (also batches as single delta=2 events), so with 3 the
+        // 2-tick clicks got eaten exactly like E1 with 4 (same diagnosis
+        // 2026-05-25). 2 catches both common cases.
+        int step = stepFromAccumulator(acc, lastT, 2);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
         // Phase 2.8b — Nav Mode cursor scroll. When the overlay is
         // active, Encoder 2 walks one marker/region per detent regardless
@@ -1483,93 +1495,15 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             const bool isShift = (uf8::bindings::currentModifierSnapshot()
                                   == uf8::bindings::Modifier::Shift);
 
-            auto& ov = uf8::nav::Overlay::instance();
-            const auto& items = ov.items();
-            const int ci = ov.cursorIdx();
-            if (ci < 0 || ci >= static_cast<int>(items.size())) {
-                ++stats_.buttonEventsHandled;
-                return;
-            }
-            // Snapshot the cursor item's fields by value. The shift +
-            // MarkersInRegion branch below calls backToRegions(), which
-            // re-runs enumerate() and reuses items_'s storage — a
-            // captured reference would dangle. Cheap to copy.
-            const int    jumpIdx = items[ci].idx;
-            const double jumpPos = items[ci].pos;
-            const auto   lock    = ov.viewLock();
-            auto markDirty = []{
-                reasixty_markNavOverlayDirty();
-            };
-
-            // Unified action enum — every gesture (plain / shift / long)
-            // picks any of these via Settings → Modes → Nav.
-            //   0 Jump + Drill   1 Jump only      2 Drill only
-            //   3 Back           4 Toggle View    5 Add marker @ playhead
-            //   6 Disabled
-            // Drill is the only action a view-lock can suppress (lock
-            // collapses Jump+Drill to Jump only and silently drops
-            // Drill only). Other actions fire regardless of lock.
+            // Unified action enum (see NavDispatch.h). Resolve the gesture
+            // → action via Settings, dispatch via the shared free
+            // function so the UF8 channel-encoder push at main.cpp:6720
+            // can share the same logic.
             const int plainAct = reasixty_navUc1Push();
             const int shiftAct = reasixty_navUc1PushShift();
             const int longAct  = reasixty_navUc1LongPress();
-            const auto curView   = ov.view();
-            const bool inRegions = (curView == uf8::nav::View::Regions);
-
-            auto doJump = [&]() {
-                if (inRegions) GoToRegion(nullptr, jumpIdx, false);
-                else            SetEditCurPos(jumpPos, true, true);
-                ov.clearCursorPin();
-                markDirty();
-            };
-            auto doDrill = [&]() {
-                // Drill is only meaningful in Regions view under no lock.
-                if (lock != uf8::nav::ViewLock::None) return;
-                if (!inRegions) return;
-                ov.drillIntoRegion(ci);
-                markDirty();
-            };
-
-            auto dispatchAction = [&](int act) {
-                switch (act) {
-                case 0: // Jump + Drill
-                    doJump();
-                    doDrill();
-                    break;
-                case 1: // Jump only
-                    doJump();
-                    break;
-                case 2: // Drill only
-                    doDrill();
-                    break;
-                case 3: // Back
-                    if (!inRegions) {
-                        ov.backToRegions();
-                        markDirty();
-                    }
-                    break;
-                case 4: // Toggle View (Regions <-> MarkersAll)
-                    ov.setView(inRegions
-                        ? uf8::nav::View::MarkersAll
-                        : uf8::nav::View::Regions);
-                    markDirty();
-                    break;
-                case 5: { // Add marker at playhead / edit cursor
-                    const int ps = GetPlayState();
-                    const double pos = (ps & 1)
-                        ? GetPlayPosition() : GetCursorPosition();
-                    AddProjectMarker(nullptr, false, pos, 0.0, "", -1);
-                    markDirty();
-                    break;
-                }
-                case 6: // Disabled
-                default:
-                    break;
-                }
-            };
-
-            if      (isLong)  dispatchAction(longAct);
-            else if (isShift) dispatchAction(shiftAct);
-            else              dispatchAction(plainAct);
+            const int act = isLong ? longAct : (isShift ? shiftAct : plainAct);
+            uf8::nav::dispatchPushAction(act);
 
             ++stats_.buttonEventsHandled;
             return;
@@ -3323,9 +3257,12 @@ void UC1Surface::refresh()
         curIdx = static_cast<int>(GetMediaTrackInfo_Value(
             static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
     }
-    const std::string prevName = nameOfIdx(curIdx - 1);
-    const std::string currName = nameOfIdx(curIdx);
-    const std::string nextName = nameOfIdx(curIdx + 1);
+    // UC1 CS carousel slot fits 12 chars; UC1 BC carousel slot fits 14
+    // (per hardware testing 2026-05-25). abbreviateTrackName_ honours the
+    // global Smart Abbreviate / Truncate toggle from Settings.
+    const std::string prevName = abbreviateTrackName_(nameOfIdx(curIdx - 1), 12);
+    const std::string currName = abbreviateTrackName_(nameOfIdx(curIdx),     12);
+    const std::string nextName = abbreviateTrackName_(nameOfIdx(curIdx + 1), 12);
     // Build triples but defer sending — uc1_47 Encoder 1 burst at
     // t=1.4309s shows SSL 360°'s order is layout-enable → central-label
     // → LARGE triple → SMALL triple → palette → invalidate(0x0F). The
@@ -3337,9 +3274,9 @@ void UC1Surface::refresh()
     auto smallTriple = buildTrackNameTripleSmall(prevName, currName, nextName);
     lastSmallTripleFrame_ = smallTriple;
     auto largeTriple = buildTrackNameTripleLarge(
-        bcNameAtRank(bcRank - 1),
-        bcNameAtRank(bcRank),
-        bcNameAtRank(bcRank + 1));
+        abbreviateTrackName_(bcNameAtRank(bcRank - 1), 14),
+        abbreviateTrackName_(bcNameAtRank(bcRank),     14),
+        abbreviateTrackName_(bcNameAtRank(bcRank + 1), 14));
     lastLargeTripleFrame_ = largeTriple;
 
     // 7-segment push moved to the end of refresh() — see below. Several
@@ -3486,9 +3423,9 @@ void UC1Surface::refresh()
                 }
             }
         }
-        // "REAPER" (formerly "MAIN") fires only when no SSL Instance
-        // matched AND the channel has zero FX. Frank 2026-05-22.
-        if (baseLabel.empty()) baseLabel = "REAPER";
+        // Zero plug-ins on this track → leave the central label blank;
+        // the empty LCD field is a clearer "nothing here" cue than a
+        // literal label. Frank 2026-05-25.
 
         // Central label width — buildCentralLabel accepts up to 8 chars
         // (Frank 2026-05-09 widening probe). The A/B/C multi-instance
