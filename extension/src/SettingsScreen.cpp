@@ -6116,13 +6116,17 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         const double cyR = oy + ctrl.cy;
         const double rOuter = ctrl.r + 6.0;
         const double rInner = ctrl.r + 2.0;
-        // -135° → +135° relative to the 12-o'clock axis (= +90° in
-        // standard ImGui radians where 0 = East, π/2 = South). Map
-        // v∈[0..1] → angle starting at 8-o'clock CCW (5π/4) sweeping
-        // 1.5π clockwise to 4-o'clock (7π/4 mod 2π = -π/4).
+        // Standard rotary knob layout: min at 7 o'clock (lower-left),
+        // sweep clockwise *over the top* through 12 o'clock to 5 o'clock
+        // (lower-right). In ImGui's y-down screen-space angle convention
+        // (0 = East, π/2 = South, π = West, 3π/2 = North), 7 o'clock sits
+        // at 2π/3 (cos≈-0.5, sin≈+0.866 → lower-left) and 5 o'clock at
+        // π/3 (cos≈+0.5, sin≈+0.866 → lower-right). The 300° sweep goes
+        // through 3π/2 (= 12 o'clock, top) on its way round — so the
+        // dead-zone gap sits at the bottom where it belongs.
         auto angleFor = [](float v) {
-            constexpr double kStart = 3.92699;   // 5π/4 (≈225°)
-            constexpr double kSweep = 4.71239;   // 3π/2 (≈270°)
+            constexpr double kStart = 2.09439;   // 2π/3 (≈120°) — 7 o'clock
+            constexpr double kSweep = 5.23599;   // 5π/3 (≈300°)
             return kStart + static_cast<double>(v) * kSweep;
         };
         auto tick = [&](float v, uint32_t col) {
