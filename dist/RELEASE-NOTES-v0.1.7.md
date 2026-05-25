@@ -1,6 +1,6 @@
 # Rea-Sixty v0.1.7
 
-Surface polish + Nav-mode symmetry release. UC1 encoder calibration removes lost detents, Smart Abbreviate preserves trailing digit runs across UF8 + UC1, and Nav Mode now drills via the UF8 channel-encoder with the same plain/shift/long action picker as UC1 Encoder 2. Plus a palette quantizer pass (pink ≠ magenta now, dark greys go off instead of pale-violet), UF8 channel-number digits switched to REAPER's real track number (matches what UC1 already shows), and a new TCP-pinning behaviour so pinned tracks stay anchored to the leftmost strips through banking.
+Big release: AutoLearn matching engine maps a freshly-loaded plug-in's parameters to UC1 slots and UF8 V-Pot banks automatically, with a slot-editor preview where you accept / reject each suggestion. FX Learn Editor was overhauled to be the single landing page (no more master-view), with per-slot editable scribble labels via right-click and a new per-fader scribble override. Plus Shift-Fine mode (Shift = 0.25× step on every encoder + V-Pot), USB-driver uninstall buttons on Windows/Linux, UC1 encoder calibration that no longer eats short detents, Smart Abbreviate that preserves trailing digit runs ("M33" stays "M33"), Nav Mode symmetry between UF8 and UC1, a palette quantizer pass (pink ≠ magenta, dark greys go off), real REAPER track numbers on the UF8 header, and pinned tracks that survive banking in TCP-mirror mode.
 
 ## Install via ReaPack (recommended)
 
@@ -19,6 +19,34 @@ First-run setup buttons (`Settings → About`):
 - **macOS:** nothing extra
 
 ## What's new
+
+### AutoLearn — automatic plug-in mapping
+
+New matching engine + Preview UI that takes a plug-in's parameter list and suggests UC1 slots + UF8 V-Pot bank assignments. Two-layer dictionary (hardcoded SSL seeds + patterns learned from existing user maps), three-pass matching (exact → substring → token), per-suggestion confidence score colour-coded in the UI. Open the **FX Learn Editor**, pick a plug-in (live FX on the focused track, or a stored snapshot), hit **AutoLearn** — modal popup shows every topology slot with the matched parameter, editable customLabel inline, Param dropdown with inline filter + `(unmapped)` entry, conflict highlighting for duplicate-param assignments, and confidence-score column. Accept / reject individual rows, then apply. Pre-flight Setup modal asks for the target domain (CS / BC / UF8-only) + UF8 V-Pot bank + UF8 Strip targets before running. Engine guards: strict keyword match for Bypass / Pan so "Bypass" no longer steals "Meter Scale" and "Out Trim" no longer steals "Output Pan"; CH-N-prefixed params detected and routed to UF8 strips / channel-positioned V-Pots rather than the generic V-Pot banks.
+
+### FX Learn Editor overhaul
+
+The editor is now the only landing page — no more master-view detour. Map picker combo + **Default** / **Short** / **+ New** / **Delete** / **Export** / **Import** all live in the editor header. Last-edited map persists across sessions via ExtState so the picker re-opens where you left it. The `+ New` popup adapts: **Create + AutoLearn** when the FX isn't in the session, **Insert + AutoLearn** when it is. The GR-meter VST3-param picker is gone — runtime always uses the PreSonus `GainReduction_dB` host extension now (introduced last release). All modals anchor to the parent host window's screen-centre via a new `centerNextPopupOnDisplay_` helper, so wide popups no longer slam into the top-left corner on this ReaImGui build.
+
+### Per-slot custom display labels
+
+New `customLabel` field on every user-mapped slot: right-click any slot in the FX Learn Editor → **Edit display label** → set a short string that overrides the parameter's default name on UF8/UC1 scribble strips. Empty string = fall back to the parameter name. Canonical name shows as placeholder while editing. JSON-persisted as an additive field (no format version bump, backward-compatible with v0.1.6 maps).
+
+### Per-fader scribble label
+
+New `faderLabel` field on each UserUf8StripBinding — scribble-strip override per fader. UF8 plug-in mode reads it when the V-Pot bank slot for that strip is unmapped, so a fader that controls a custom parameter can be labelled independently of the V-Pot row.
+
+### Shift activates Fine mode
+
+New **Settings → Modes → "Shift activates Fine mode"** toggle. With it on, holding the keyboard Shift key OR pressing the UF8 Shift button momentarily engages Fine mode (0.25× step) on every V-Pot and UC1 encoder. Releases back to normal step on release. Faders are unaffected. Works alongside the existing UC1 Fine button toggle — Shift wins while held.
+
+### USB driver uninstall buttons
+
+**Settings → About** gains **Uninstall** buttons next to the existing Install buttons:
+- **Windows:** removes the WinUSB driver + signing cert via PowerShell (UAC prompt).
+- **Linux:** removes `/etc/udev/rules.d/99-rea-sixty.rules` via pkexec.
+
+Use case: switching back to SSL 360° temporarily, troubleshooting, or uninstalling cleanly.
 
 ### UC1 encoder calibration
 
@@ -73,6 +101,9 @@ Shift+V-Pot for input-channel selection now honours keyboard Shift (gated by **S
 
 ## Bug fixes
 
+- AutoLearn engine: exact-match confidence capped at 1.0 (was rendering as 105%); single-source user-learned entries capped at 0.75 (yellow "verify this" signal); CH-N params no longer pollute the V-Pot bank suggestions.
+- AutoLearn domain-filtered slot-name lookup — linkIdx isn't unique across domains, the old code returned BC Threshold's name for any CS linkIdx=1 binding (Out Gain @ 100% bug gone).
+- ReaImGui vendor binding: `ImGui_InputText` signature corrected to 6 args (callbackInOptional trailer was added in v0.10) — fixes the invisible-widget bug on the Display-label InputText in the FX Learn right-click menu.
 - UC1 CHANNEL + BC encoders no longer skip detents on quick rotations.
 - Nav-mode marker-overlay LEDs no longer freeze on encoder-mode-only refresh gating.
 - UF8 channel-number digit no longer shows a misleading visible-slot index when folders are collapsed.
