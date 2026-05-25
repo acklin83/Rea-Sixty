@@ -547,6 +547,18 @@ std::atomic<bool>         g_tcpFollowsSelection{false};
 // folder fall out automatically as long as REAPER's "Hide children of
 // collapsed folders" pref is active. Frank 2026-05-22.
 std::atomic<int>          g_visibilityFollow{0};
+// Pinned-tracks behaviour: when Surface mirrors TCP and tracks are
+// pinned (B_TCPPIN, REAPER's "pin to top of arrange view" feature),
+// keep them anchored to the leftmost strips so banking never scrolls
+// them off-surface. REAPER's TCP renders pinned tracks at top
+// regardless of scroll — the surface mirrors that behaviour. Only
+// active in TCP-mode (MCP has no pinning concept) and when 1..7
+// tracks are pinned; ≥ 8 pinned tracks would freeze the surface so
+// we fall back to normal banking (pinned still sort first in the
+// visible list — they spill across banks). g_pinnedCount is
+// recomputed each tick in rebuildVisibleTrackList. Frank 2026-05-25.
+std::atomic<bool>         g_pinnedSurvivesBanking{true};
+std::atomic<int>          g_pinnedCount{0};
 std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
@@ -718,6 +730,20 @@ inline MediaTrack* visibleTrackAt(int idx) {
 // negative slots, so existing null-check callers stay correct without
 // extra guards.
 inline int stripToVisibleSlot(int strip, int bankOffset) {
+    // Pinned-sticky: the first g_pinnedCount entries of g_visibleTracks
+    // are the TCP-pinned tracks (rebuildVisibleTrackList sorts them to
+    // the front). When sticky is active they occupy strips 0..(P-1)
+    // unconditionally — bankOffset and auto-fill-from-right only apply
+    // to strips ≥ P, and the existing `strip + bankOffset` math already
+    // hits the right index there because pinned tracks sit at the head
+    // of the list. Sticky disables itself when ≥ 8 tracks are pinned
+    // (surface would otherwise be frozen). See g_pinnedSurvivesBanking
+    // declaration for full rationale.
+    const int pinnedCount = g_pinnedCount.load();
+    const bool sticky = g_pinnedSurvivesBanking.load()
+                     && pinnedCount > 0 && pinnedCount < 8;
+    if (sticky && strip < pinnedCount) return strip;
+
     if (g_autoFillFromRight.load()
         && g_selectionMode.load() == SelectionMode::Auto)
     {
@@ -856,6 +882,24 @@ void rebuildVisibleTrackList() {
         if (!IsTrackVisible(tr, followMcp)) continue;
         g_visibleTracks.push_back(tr);
     }
+
+    // TCP-mode only: re-sort the list so B_TCPPIN tracks come first,
+    // matching how REAPER's TCP itself renders them (always at top
+    // regardless of scroll). std::stable_partition preserves the
+    // relative order of pinned vs. non-pinned, so multiple pinned
+    // tracks stay in REAPER track-number order on the surface.
+    // MCP-mode skips this — MCP has no pinning concept. Pinned count
+    // is cached for stripToVisibleSlot's sticky check.
+    int pinnedCount = 0;
+    if (g_visibilityFollow.load() == 0 && !g_visibleTracks.empty()) {
+        auto firstNonPinned = std::stable_partition(
+            g_visibleTracks.begin(), g_visibleTracks.end(),
+            [](MediaTrack* tr) {
+                return GetMediaTrackInfo_Value(tr, "B_TCPPIN") > 0.5;
+            });
+        pinnedCount = static_cast<int>(firstNonPinned - g_visibleTracks.begin());
+    }
+    g_pinnedCount.store(pinnedCount);
 
     // Clamp bankOffset when a filter (selset / show-only-selected /
     // folder mode) shrinks the list past the current offset, so the
@@ -1845,6 +1889,9 @@ void loadBrightness()
     // Visibility-follow mode (0 = TCP, 1 = MCP). Falls back to the
     // three legacy keys when the new key is absent, so 0.1.4 users keep
     // their previous intent on first launch of 0.1.5+. Frank 2026-05-22.
+    if (const char* v = GetExtState("rea_sixty", "pinned_survives_banking"); v && *v) {
+        g_pinnedSurvivesBanking.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "visibility_follow"); v && *v) {
         const int n = std::atoi(v);
         g_visibilityFollow.store((n == 1) ? 1 : 0);
@@ -7432,8 +7479,14 @@ std::string slotLabelForVisibleSlot(int slot)
         if (s.size() > 12) s.resize(12);
         return s;
     }
+    // Fallback uses IP_TRACKNUMBER (REAPER's actual track number) so
+    // folder-collapsed sessions display the same number on the LCD as
+    // in REAPER's track headers.
+    const int trkNo = static_cast<int>(
+        GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
     char fallback[8];
-    snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
+    snprintf(fallback, sizeof(fallback), "CH %d",
+             trkNo > 0 ? trkNo : realSlot + 1);
     return fallback;
 }
 
@@ -9107,9 +9160,13 @@ void pushZonesForVisibleSlots()
         // strips that map to a track.)
 
         // Channel Number Zone — the tiny digit top-left of each strip's
-        // color bar. REAPER track index is 0-based; UF8 expects 1-based
-        // ASCII. In user-strip mode, blank when the strip has no user
-        // bindings at all (Frank's "buttons ohne Funktion ausblenden").
+        // color bar. Shows REAPER's actual track number (IP_TRACKNUMBER,
+        // 1-based) — NOT the visible-slot index. Collapsed folders make
+        // those two numbers diverge, and Frank wants the strip's digit
+        // to match what the REAPER track manager / track headers show.
+        // Matches UC1's 7-segment indicator (UC1Surface.cpp:3691). In
+        // user-strip mode, blank when the strip has no user bindings at
+        // all (Frank's "buttons ohne Funktion ausblenden").
         {
             std::string chan;
             const bool stripHasUserFunction = userStripActive
@@ -9119,8 +9176,10 @@ void pushZonesForVisibleSlots()
             if (userStripActive && !stripHasUserFunction) {
                 chan = "  ";
             } else {
+                const int trkNo = static_cast<int>(
+                    GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
                 char buf[8];
-                snprintf(buf, sizeof(buf), "%d", realSlot + 1);
+                snprintf(buf, sizeof(buf), "%d", trkNo > 0 ? trkNo : realSlot + 1);
                 chan = buf;
             }
             if (!overlayActive && chan != g_lastChanNum[s]) {
@@ -9340,8 +9399,15 @@ void pushZonesForVisibleSlots()
                 n = name;
             }
             if (n.empty() && !blankInUserStripMode) {
+                // Fallback name for unnamed tracks — use REAPER's
+                // actual track number (IP_TRACKNUMBER) not the visible
+                // -slot index so it stays consistent with the channel-
+                // number digit zone when folders are collapsed.
+                const int trkNo = static_cast<int>(
+                    GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
                 char fallback[8];
-                snprintf(fallback, sizeof(fallback), "CH %d", realSlot + 1);
+                snprintf(fallback, sizeof(fallback), "CH %d",
+                         trkNo > 0 ? trkNo : realSlot + 1);
                 n = fallback;
             }
             if (blankInUserStripMode) {
@@ -13792,6 +13858,18 @@ void reasixty_setVisibilityFollow(int v)
     const int n = (v == 1) ? 1 : 0;
     g_visibilityFollow.store(n);
     SetExtState("rea_sixty", "visibility_follow", n ? "1" : "0", true);
+    g_bankDirty.store(true);
+    rebuildVisibleTrackList();
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+}
+bool reasixty_pinnedSurvivesBanking() { return g_pinnedSurvivesBanking.load(); }
+void reasixty_setPinnedSurvivesBanking(bool v)
+{
+    g_pinnedSurvivesBanking.store(v);
+    SetExtState("rea_sixty", "pinned_survives_banking", v ? "1" : "0", true);
     g_bankDirty.store(true);
     rebuildVisibleTrackList();
     if (g_uc1_surface) {

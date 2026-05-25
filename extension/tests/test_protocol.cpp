@@ -145,6 +145,32 @@ int main()
     // entries closer when the input is also in the band, fixing this
     // case without breaking pure cyan / lime / yellow matching.
     EXPECT(quantize(0x00427D) == 0x04);
+    // Pink (hue ~330°) and magenta (hue ~300°) have no dedicated
+    // anchors in the 11-entry display palette. Naive nearest-match
+    // collapses both onto the closest violet (0x06 at 285°), so
+    // FF0080 and FB02FF render identically — but the SEL LEDs have
+    // distinct pink/magenta entries, so the strip and the LED look
+    // mismatched. We split the gap: hue 320..340° (pink) is pulled
+    // to 0x0B light violet (RGB C0,80,FF — visually pink-ish on the
+    // LCD), while magenta stays at 0x06. Pure red is untouched.
+    EXPECT(quantize(0xFF0080) == 0x0B);   // bright pink (hue 330°) → 0x0B
+    EXPECT(quantize(0xFF40A0) == 0x0B);   // desaturated pink → 0x0B
+    EXPECT(quantize(0xFB02FF) == 0x06);   // magenta (hue 299°) → 0x06 (distinct from pink)
+    EXPECT(quantize(0xFF00FF) == 0x06);   // pure magenta → 0x06
+    EXPECT(quantize(0xFF0000) == 0x02);   // pure red unchanged
+
+    // Greys (and near-greys) → 0x00 OFF. There's no white/grey/black
+    // anchor in the palette, and the LCD lights every quantised cell
+    // at constant brightness — so any grey input snapped to 0x01
+    // (light violet, S=0.373) rendered as a bright pale-violet cell,
+    // making dark grey tracks look "white". Short-circuit greys to
+    // OFF instead. Threshold (mx-mn) < 8 catches REAPER's colour
+    // picker rounding.
+    EXPECT(quantize(0x4C4C4C) == 0x00);   // dark grey
+    EXPECT(quantize(0x808080) == 0x00);   // medium grey
+    EXPECT(quantize(0xCCCCCC) == 0x00);   // light grey
+    EXPECT(quantize(0xFFFFFF) == 0x00);   // pure white
+    EXPECT(quantize(0x4C4C4D) == 0x00);   // 1-bit-off grey still grey
 
     // --- LED colour pair (cap31, cap33). Lock the bytes captured from
     //     SSL 360° so a regression in the formula or colour-table is caught.

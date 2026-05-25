@@ -133,6 +133,8 @@ bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 int  reasixty_visibilityFollow();
 void reasixty_setVisibilityFollow(int v);
+bool reasixty_pinnedSurvivesBanking();
+void reasixty_setPinnedSurvivesBanking(bool v);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
 int  reasixty_navDefaultView();
@@ -561,6 +563,17 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     ImGui_TextDisabled(ctx,
         "TCP hides children of collapsed folders when REAPER's "
         "'Hide children of collapsed folders' preference is on.");
+
+    // Pinned-tracks behaviour. Only effective in TCP-mode (MCP has
+    // no pin concept) — rebuildVisibleTrackList silently skips the
+    // reorder when Surface mirrors MCP, so the checkbox is harmless
+    // in that mode. Hint via TextDisabled instead of greying out.
+    {
+        bool pinSurvives = reasixty_pinnedSurvivesBanking();
+        if (ImGui_Checkbox(ctx, "Pinned tracks survive banking", &pinSurvives)) {
+            reasixty_setPinnedSurvivesBanking(pinSurvives);
+        }
+    }
 
     // Track names longer than the 7-char scribble-strip slot need shortening.
     // Truncate keeps the legacy first-7-chars behaviour. Smart Abbreviate

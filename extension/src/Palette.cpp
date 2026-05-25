@@ -69,6 +69,34 @@ bool inBlueBand(double hueDeg)
     return hueDeg >= kBlueBandLo && hueDeg <= kBlueBandHi;
 }
 
+// Pink-input band → light-violet palette anchor (0x0B at hue 270°,
+// RGB C0,80,FF — the G=128 reads visually as pink/lilac on the UF8
+// LCD). The display palette has no pink and no magenta anchor: only
+// 0x06 deep violet (285°) and 0x0B light violet (270°). Without a
+// bias, every hue in [290°, 345°] collapses onto whichever of those
+// two is closer in polar HSV — and that's always 0x06, so pink
+// (FF0080, 330°) and magenta (FB02FF, 300°) both render as the same
+// violet. We split the gap by hue: 290..320° (magenta) keeps its
+// natural 0x06 match; 320..340° (pink) gets pulled toward 0x0B with
+// a strong 0.2× multiplier. Pure red (≥340°) still wins because the
+// raw distance to red is small enough that even 0.2× of 0x0B's
+// distance can't beat it. LEDs have explicit pink + magenta entries
+// and are unaffected.
+constexpr double kPinkInputLo     = 320.0;
+constexpr double kPinkInputHi     = 340.0;
+constexpr double kLightVioletLo   = 265.0;  // catches 0x0B at 270°
+constexpr double kLightVioletHi   = 275.0;
+constexpr double kPinkMul         = 0.2;
+
+bool inPinkInputBand(double hueDeg)
+{
+    return hueDeg >= kPinkInputLo && hueDeg <= kPinkInputHi;
+}
+bool inLightVioletBand(double hueDeg)
+{
+    return hueDeg >= kLightVioletLo && hueDeg <= kLightVioletHi;
+}
+
 
 // Reference RGB for each palette index — identified by direct on-device
 // probe (uf8_palette_probe, re-run 2026-04-21 after the original sweep
@@ -114,10 +142,25 @@ std::optional<Rgb> paletteEntry(uint8_t index)
 
 uint8_t quantize(Rgb c)
 {
+    // Greys and near-greys → 0x00 OFF. The display palette has no
+    // white / grey / black anchor — the lowest-saturation entries are
+    // 0x01 (A0,A0,FF light violet, S=0.373) and 0x0A (A0,FF,A0 pale
+    // green, S=0.373). Without this short-circuit, an input like
+    // 4C4C4C (pure dark grey) snaps to 0x01 and renders bright on the
+    // LCD because palette cells light at constant intensity — dark
+    // grey track ⇒ bright pale-violet cell. 0x00 means "cell off",
+    // which is the correct visual for "REAPER has no chromatic
+    // information here". Threshold (mx - mn) < 8 catches pure greys
+    // and single-bit rounding from REAPER's colour picker; anything
+    // ≥ 8 has visible chroma and quantises normally.
+    const int rawMx = std::max({c.r, c.g, c.b});
+    const int rawMn = std::min({c.r, c.g, c.b});
+    if ((rawMx - rawMn) < 8) return 0x00;
     // Nearest-match in the HSV chromatic plane — see chromaXY() above
     // for the why.
     const ChromaXY cxy = chromaXY(c);
     const bool inputBlueFamily = !cxy.grey && inBlueBand(cxy.hueDeg);
+    const bool inputPinkFamily = !cxy.grey && inPinkInputBand(cxy.hueDeg);
     double bestDist = std::numeric_limits<double>::infinity();
     uint8_t bestIdx = 0x01;  // default if literally nothing matches
 
@@ -132,6 +175,16 @@ uint8_t quantize(Rgb c)
         // 240°) lands on cyan because the angular gap is smaller.
         if (inputBlueFamily && !pxy.grey && inBlueBand(pxy.hueDeg)) {
             d *= kFamilyMul;
+        }
+        // Pink-leaning inputs (hue 320..340°, e.g. FF0080 at 330°) →
+        // 0x0B light violet (hue 270°). Magenta inputs (hue ~300°)
+        // already land on 0x06 naturally; this pulls the pink range
+        // off 0x06 so pink and magenta render as visually distinct
+        // palette entries. Strong 0.2× because 0x0B is geometrically
+        // far from pink in polar HSV — needs to beat both red (0x02)
+        // and the closer deep-violet 0x06.
+        if (inputPinkFamily && !pxy.grey && inLightVioletBand(pxy.hueDeg)) {
+            d *= kPinkMul;
         }
         if (d < bestDist) {
             bestDist = d;

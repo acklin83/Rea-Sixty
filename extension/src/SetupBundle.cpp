@@ -50,6 +50,7 @@ constexpr ExtKey kKeys[] = {
     { "rea_sixty", "nav_uc1_long_press_v2" },
     { "rea_sixty", "nav_uc1_push" },
     { "rea_sixty", "nav_uc1_push_shift_v2" },
+    { "rea_sixty", "pinned_survives_banking" },
     { "rea_sixty", "nav_uc1_takeover" },
     { "rea_sixty", "plugin_gui_follows_instance" },
     { "rea_sixty", "plugin_gui_pin_center" },
