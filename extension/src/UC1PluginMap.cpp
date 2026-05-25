@@ -524,12 +524,14 @@ void rebuildUserCache_locked_()
             ? std::string("USR")
             : um.displayShort;
         e->domain         = um.domain;
-        // grVst3Param picker removed 2026-05-24 — runtime always uses
-        // the PreSonus GainReduction_dB host extension. Field stays in
-        // the catalog for back-compat but is ignored here. Forcing -1
-        // makes every downstream `if (grParam >= 0)` branch fall through
-        // to the GainReduction_dB read path without further changes.
-        e->grVst3Param    = -1;
+        // grVst3Param: when set (≥0) the GR read path uses this VST3
+        // param directly instead of the PreSonus GainReduction_dB host
+        // extension. Re-enabled 2026-05-25 — the host-extension auto-
+        // detect doesn't reach every compressor, and the per-map
+        // override gives users a manual route around that. Default is
+        // -1 (fall back to GainReduction_dB), set via the small "GR"
+        // popup next to the AutoLearn button in the FX Learn editor.
+        e->grVst3Param    = um.metering.grVst3Param;
         e->grOffsetDb     = um.metering.grOffsetDb;
         for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
         for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];

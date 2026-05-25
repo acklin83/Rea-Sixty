@@ -7948,6 +7948,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 g_autoLearnSetupOpen   = true;
                 ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
             }
+            // Compact GR-meter override picker next to AutoLearn — opens
+            // a popup with the param combo + offset slider. Default
+            // behaviour (grVst3Param < 0) falls back to REAPER's
+            // GainReduction_dB host extension; this override is only
+            // needed for compressors that don't expose it. Re-introduced
+            // 2026-05-25 (the original full-width row was dropped on
+            // 2026-05-24 as redundant; the popup form is far less noisy).
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            const bool grSet = (editing->metering.grVst3Param >= 0);
+            const char* grBtn = grSet ? "GR ✓##fxl_grbtn"
+                                       : "GR##fxl_grbtn";
+            if (ImGui_Button(ctx, grBtn, nullptr, nullptr)) {
+                ImGui_OpenPopup(ctx, "GR meter##fxl_grpop", nullptr);
+            }
         }
     } else if (!editing->paramSnapshot.empty()) {
         ImGui_Spacing(ctx);
@@ -7967,6 +7981,110 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             g_autoLearnSetupOpen   = true;
             ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
         }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const bool grSet = (editing->metering.grVst3Param >= 0);
+        const char* grBtn = grSet ? "GR ✓##fxl_grbtn_snap"
+                                   : "GR##fxl_grbtn_snap";
+        if (ImGui_Button(ctx, grBtn, nullptr, nullptr)) {
+            ImGui_OpenPopup(ctx, "GR meter##fxl_grpop", nullptr);
+        }
+    }
+
+    // GR-meter override popup. Shared id across the live + snapshot
+    // entry points so a click on either "GR" button opens this single
+    // popup. Combo lists every VST3 param on the editing map; "(none)"
+    // restores the default GainReduction_dB host-extension behaviour.
+    // Offset is a per-map dB shift applied BEFORE |abs| at render time
+    // (lets the user calibrate compressors whose GR reads negative-
+    // going from a non-zero floor at rest).
+    if (ImGui_BeginPopup(ctx, "GR meter##fxl_grpop", nullptr)) {
+        ImGui_Text(ctx, "GR meter parameter");
+        ImGui_Separator(ctx);
+
+        const int curGrParam = editing->metering.grVst3Param;
+        char grPreview[160];
+        if (curGrParam < 0) {
+            snprintf(grPreview, sizeof(grPreview),
+                          "(none — host GainReduction_dB)");
+        } else {
+            char pname[128] = {0};
+            paramNameFor_(*editing, fx, curGrParam, pname, sizeof(pname));
+            snprintf(grPreview, sizeof(grPreview),
+                          "[%d] %s",
+                          curGrParam,
+                          pname[0] ? pname : "(param)");
+        }
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 280.0));
+        int grComboFlags = ImGui_ComboFlags_HeightLargest;
+        if (ImGui_BeginCombo(ctx, "##fxl_gr_combo",
+                              grPreview, &grComboFlags)) {
+            // (none) row first.
+            {
+                bool sel = (curGrParam < 0);
+                int sf = 0;
+                if (ImGui_Selectable(ctx,
+                        "(none — host GainReduction_dB)##fxl_gr_none",
+                        &sel, &sf, nullptr, nullptr)) {
+                    clearGrMeter_();
+                }
+            }
+            const int paramCount = paramCountFor_(*editing, fx);
+            const int kMaxParams = 1024;
+            const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
+            for (int p = 0; p < n; ++p) {
+                char pname[128] = {0};
+                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+                char rowLbl[200];
+                snprintf(rowLbl, sizeof(rowLbl),
+                              "[%4d] %s##fxl_gr_p_%d", p, pname, p);
+                bool sel = (p == curGrParam);
+                int sf = 0;
+                if (ImGui_Selectable(ctx, rowLbl, &sel, &sf,
+                                      nullptr, nullptr)) {
+                    bindGrMeter_(p);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+
+        // Offset slider — applied pre-|abs| at render time. Range covers
+        // the bulk of real compressors; SSL-style compressors typically
+        // need +0 dB while plug-ins reading "GR below -∞" may need ±20.
+        ImGui_Spacing(ctx);
+        double offsetDb = editing->metering.grOffsetDb;
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
+        int grOffsetFlags = 0;
+        if (ImGui_SliderDouble(ctx,
+                "Offset (dB)##fxl_gr_off",
+                &offsetDb, -24.0, 24.0, "%+.2f", &grOffsetFlags)) {
+            setGrOffset_(offsetDb);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_SmallButton(ctx, "0 dB##fxl_gr_off_reset")) {
+            setGrOffset_(0.0);
+        }
+
+        // Live readout — only meaningful when a live FX is present and
+        // a manual param is set. Helps verify the override is reading
+        // the expected value before the user closes the popup.
+        if (curGrParam >= 0 && fx.ok) {
+            double mn = 0.0, mx = 0.0;
+            const double raw = TrackFX_GetParam(
+                fx.tr, fx.fxIdx, curGrParam, &mn, &mx);
+            const double abs = (raw < 0.0) ? -raw : raw;
+            char liveBuf[96];
+            snprintf(liveBuf, sizeof(liveBuf),
+                          "raw %+.2f  →  |abs| %.2f dB",
+                          raw, abs);
+            ImGui_TextColored(ctx, 0xFFC080FF, liveBuf);
+        }
+
+        ImGui_Separator(ctx);
+        if (ImGui_Button(ctx, "Close##fxl_gr_close",
+                          nullptr, nullptr)) {
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
     }
 
     // No-instance path — always offer the Insert button so the user can
