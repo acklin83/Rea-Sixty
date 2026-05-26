@@ -710,32 +710,59 @@ Editor body — depends on the domain:
 
 ### Right-click context menu
 
-Right-clicking a mapped control on the UF8 schematic opens per-control options:
+Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control options:
 
 - **Copy / Paste / Clear** the binding.
-- **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — propagates the source-strip's attributes (faderInverted, V-Pot inverted / vpotMode / defaultNorm / stripColour, Solo / Cut / Sel colour, Reverse LED flag) onto every strip to the right.
+- **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — propagates the source-strip's attributes onto every strip to the right. Carried fields: faderInverted; V-Pot inverted / vpotMode / polarity / defaultNorm / stripColour / travel (range + curve + sensitivity); Solo / Cut / Sel colour; Reverse LED flag.
+- **Inverted [off/on]** on a Fader / V-Pot — flips the rotation / direction-to-value mapping.
 - **Reverse LED [off/on]** on a Solo / Cut / Sel button — XORs the LED on/off bit before painting. Use this for plug-ins whose Cut/Bypass param reports `1 = inactive` so the LED would otherwise stay bright while the function is off. Saved per `(fader-bank, strip, button)` in `user_plugins.json`.
-- **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` in `user_plugins.json` — no schema bump.
+- **V-Pot mode: Value / Toggle** on a V-Pot — Value = continuous (rotate scrubs, push resets to *Push reset*); Toggle = binary (rotate ignored, push flips 0↔1).
+- **Polarity: Unipolar / Bipolar** on a Value-mode V-Pot — Unipolar (default) renders the LCD ring as L→R sweep; Bipolar renders centre-out (like SSL Pan) and makes the Log / Exp curve presets mirror around 0.5. Made for Pan, EQ-gain, mid-range freq sweeps — anything where "neutral" sits in the middle.
+- **Knob travel** (V-Pot only — see *Knob travel + curve editor* below) — inline Min / Max sliders + **Advanced…** opens the curve editor.
+- **Push reset** slider (Value-mode V-Pot) — the value the V-Pot snaps to when pushed. On a Bipolar V-Pot, a small "0.5" quick-set button + hint appears when the slider isn't already at centre.
+- **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump.
 
-### QuickLearn (standalone popup)
+### Knob travel + curve editor
 
-A wiggle-driven shortcut to either create a new FX Learn map or edit an existing one without opening the full Settings → FX Learn pane. Triggered via the `quick_learn` builtin (bind any UF8 / UC1 key to it under Settings → Bindings → Plug-in category).
+Every user-learned FX-Learn slot and every UF8 V-Pot binding can carry a custom range, response curve, and encoder sensitivity. Defaults (Min=0, Max=1, sensitivity=1, no curve) make the maths byte-identical to a plain linear mapping, so untouched bindings behave exactly as if the feature wasn't there.
 
-Three-phase flow:
+In the per-slot right-click menu:
 
-- **Setup** — pick domain (`Channel Strip` / `Bus Comp` / `CS + UF8` / `BC + UF8` / `UF8-only`), fader-bank count (1 or 2), and an optional *AutoLearn first* checkbox that pre-fills the wiggle list with the AutoLearn engine's confidence-scored suggestions.
-- **Mapping** — the popup highlights one schematic target at a time. Touch / wiggle the matching plug-in parameter on the focused FX; the engine auto-advances to the next unmapped target on detect. Skip / Back keys are available.
-- **Review & Save** — final overview with per-slot edit; Save writes into `user_plugins.json`. When invoked on an FX that already has a user map, QuickLearn loads it for editing instead of starting from scratch.
+- **Min** / **Max** sliders (0..1) — clamp the effective parameter range. A V-Pot or UC1 knob turned fully CCW lands at Min; fully CW lands at Max. Sliders auto-correct the opposing edge to keep Min ≤ Max.
+- **Reset** — restores Min=0, Max=1.
+- **Advanced…** — opens the Curve editor popup.
 
-QuickLearn renders in its own ReaImGui context (separate from the Settings window), is theme-aware, and runs on the main thread off `onRunTick`.
+The Curve editor popup:
+
+- **Sensitivity** slider (0.1× .. 4×) — encoder-delta multiplier. Combines multiplicatively with Shift = Fine (Shift still quarters on top of the user-set sensitivity). Hidden when editing a fader target.
+- **Canvas** — draw a piecewise-linear response curve. Click empty space to add a breakpoint, drag to move, right-click to remove. The Y axis is normalised within [Min..Max], so the Linear preset is always a 45° diagonal regardless of how the range is trimmed.
+- **Presets** — **Linear** (clears all breakpoints), **Log** (param rushes to the top — fine control near 0; on a Bipolar V-Pot the curve mirrors around 0.5 for a gentle ramp near centre + coarse at the edges), **Exp** (param stays small longer — fine control near 1; Bipolar mirrors for fine control at centre + rush to extremes), **Reset all** (clears curve + resets sensitivity to 1×). Bipolar polarity is re-read on every preset click so flipping it in the parent menu takes effect without re-opening the editor.
+- **Close** dismisses the popup; all edits persist live as you make them.
+
+In the FX-Learn schematic, slots with customised knob travel show:
+
+- Two radial ticks at the Min / Max angles on the on-screen knob (7 o'clock → 12 → 5).
+- A small centre dot when a curve is set.
+
+UF8 V-Pots dispatch the math at the encoder-delta site (`sensitivity → inverseCurve → step → applyCurve`) so external automation writes stay coherent. UC1 channel-strip / bus-comp knobs and the EXT_FUNCS encoder honour the same path — a UC1 knob and a UF8 V-Pot bound to the same parameter stay in lock-step. Built-in SSL CS / BC slots are intentionally untouched and keep the legacy linear + EQ-gain virtual-notch path; knob travel only kicks in when a user-learned slot is present for the focused plug-in.
+
+> **UF8 faders intentionally exclude knob travel.** Absolute-position + motor feedback creates round-trip races with plug-in quantisation (fader jumps during user motion, snaps on release). The plug-in's own taper is the right place for fader-side shaping.
 
 ### Multi-instance picker
 
 When the focused track has multiple FX matching the map's name, the editor surfaces a combo to choose which Instance's live readouts feed the editor. Picked index is per plug-in.
 
-### GR meter combo
+### GR meter override
 
-Per learnable plug-in, a combo: `None` / `(named parameter)` / `Use PreSonus standard`. When set to PreSonus standard, the UF8 strip's GR meter (and the UC1 Comp meter when *GR meter source: Show any GR Data* is on) is driven via REAPER's `TrackFX_GetNamedConfigParm(... "GainReduction_dB" ...)` query — works for any plug-in implementing the PreSonus VST3 host extension.
+Default GR meter behaviour is to read the host-extension `GainReduction_dB` value REAPER exposes for any plug-in implementing the PreSonus VST3 convention. That works for most modern compressors out of the box, with no setup.
+
+When a plug-in doesn't expose the host-extension (or exposes a wrong value), a small **GR** button next to **AutoLearn** in the editor header opens a compact override popup:
+
+- Combo lists every VST3 parameter on the editing map; pick the one that reads the plug-in's gain-reduction value.
+- **Offset (dB)** slider — added before |abs| at render time. Lets you calibrate compressors whose GR reads negative-going (e.g. -6 dB at peak reduction → set offset −6 so the meter reads +6).
+- **(none)** / **Use host extension** clears the override and restores the default behaviour.
+
+When set, the button shows a tick mark next to the **GR** label. The override flows through to both the UC1 BC VU motor calibration tables and the DYN GR LED strip. Per-map; saved in `user_plugins.json` under `metering.grVst3Param` + `metering.grOffsetDb`.
 
 ### Param snapshot
 
@@ -824,6 +851,7 @@ The pane stacks several sections from top to bottom.
 
 ### Versions
 
+- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.1.8`. Past a tag: `v0.1.8-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
 - **Build** — date + time of the compiled extension.
 - **REAPER** — the host REAPER version string.
 - **ReaImGui** — the bundled-ABI banner (currently v0.10).
@@ -928,7 +956,8 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **`plugin_move_down`** — move the cursor FX down one slot.
 - **`show_fx_chain`** — open / close REAPER's FX chain window for the focused track (pinned per the FX-chain pin settings).
 - **`close_all_fx_guis`** — close every floating FX window in the project.
-- **`quick_learn`** — open the standalone QuickLearn popup window (parameter wiggle-detect → CS / BC / UF8-only mapping). Picks up the focused track's active FX as the learn target. When no user map exists yet it creates one; if a map is already in the catalog it reopens it for editing. See *Settings → FX Learn → QuickLearn* for the flow.
+- **`fx_param_inc`** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in PluginMap registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to `fx_param_inc` and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
+- **`fx_param_dec`** — same as `fx_param_inc` with the sign flipped.
 
 ## Instance navigation
 
@@ -1075,6 +1104,8 @@ While UF8 Plug-in Mode is on:
 - Unassigned banks act as no-ops (LEDs dim).
 
 The active plug-in is the focused track's first UF8-Mode-mapped instance, or the Instance the cursor is currently on.
+
+Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Pot on the schematic). Each `(fader-bank, soft-key bank, strip)` V-Pot carries its own *V-Pot mode* (Value / Toggle), *Polarity* (Unipolar / Bipolar — Bipolar renders the LCD ring centre-out, like SSL Pan), *Push reset* value, *display label*, *strip colour*, and *knob travel* (Min / Max range + response curve + sensitivity — see *Knob travel + curve editor* under FX Learn pane). Fill Sequential propagates every one of these fields to the strips to the right.
 
 ## 360° Link
 
