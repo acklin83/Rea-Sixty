@@ -23,6 +23,15 @@
 
 namespace uf8 {
 
+// Parameter polarity. Forward-declared near the top of the namespace so
+// UserLinkSlot (below) can carry a member of this type — the full
+// description still lives next to the UF8 V-Pot bank structs further
+// down, where the original V-Pot semantic comments live.
+enum class VPotPolarity : uint8_t {
+    Unipolar = 0,
+    Bipolar  = 1,
+};
+
 struct UserLinkSlot {
     int  linkIdx;     // SSL 360 Link virtual-strip slot. 0..46 + 100..119.
     int  vst3Param;   // VST3 parameter index on this user plugin.
@@ -45,6 +54,21 @@ struct UserLinkSlot {
     float rangeMax    = 1.0f;
     float sensitivity = 1.0f;
     std::vector<std::pair<float, float>> curvePoints;
+    // Polarity — same semantic as UserUf8BankSlot::polarity (uses the
+    // same VPotPolarity enum, declared just above the UF8 V-Pot bank
+    // structs below). UC1 hardware has no native bipolar ring mode
+    // (see pushKnobRing_ in UC1Surface), so this currently only drives
+    // the curve-editor Log/Exp preset shape (mirror around 0.5 when
+    // Bipolar). Useful symmetry with the UF8 V-Pot right-click menu so
+    // the same param doesn't carry different polarity defaults across
+    // surfaces.
+    VPotPolarity polarity = VPotPolarity::Unipolar;
+    // Push-reset target in normalised param space [0..1]. UC1 has no
+    // push, so this is dormant on UC1; persisted for the editor UI's
+    // parity with UF8 V-Pots and as a slot-level hint for future UF8-
+    // mirroring paths that fall back to the slot when no dedicated UF8
+    // V-Pot binding exists. Default 0.5 mirrors the UF8 V-Pot default.
+    double defaultNorm = 0.5;
 };
 
 // Knob-travel evaluators. `applyCurve(sl, t)` maps the encoder's
@@ -77,6 +101,26 @@ inline float inverseCurve(const UserLinkSlot& sl, float v) {
     return inverseCurve(v, sl.rangeMin, sl.rangeMax, sl.curvePoints);
 }
 
+// Stepped-parameter helpers. REAPER reports per-step size in normalised
+// [0..1] space via TrackFX_GetParameterStepSizes — we treat that as the
+// authoritative grid. The encoder handlers use these to:
+//   - tickStepped: convert raw detents into logical step ticks, honouring
+//     the user's sensitivity (interpreted as detent speed). Default sens=1
+//     emits one step per 2 detents (matches the existing UC1 baseline
+//     in handleKnob_'s stepped branch).
+//   - snapToStep: round any normalised value to the nearest step grid
+//     point, used for Min/Max clamps and push-reset targets on stepped
+//     params so they always land exactly on a valid step.
+//   - numStepsFor: derive the discrete value count from pStep for editor
+//     display ("Stepped parameter — N values").
+struct SteppedTickResult {
+    int   logicalSteps;   // signed; 0 = sub-threshold, caller skips write
+    float newAccum;       // residual to persist on caller's accumulator
+};
+SteppedTickResult tickStepped(float accum, int rawDetents, float sensitivity);
+float snapToStep(float v, float pStep);
+int   numStepsFor(float pStep);
+
 struct UserMetering {
     // Set vst3Param ≥ 0 to enable; -1 means "not learned" (fall back to
     // REAPER's GainReduction_dB named-config-parm).
@@ -102,15 +146,13 @@ enum class VPotMode : uint8_t {
     Toggle = 1,   // binary; rotate ignored, push flips 0↔1
 };
 
-// Parameter polarity for V-Pot LED ring rendering + Log/Exp curve preset
-// shape. Pan-like params have centre=0.5 and bend symmetrically; gain-
-// like params sweep 0→1 with one-sided emphasis. The hardware encoder
-// itself is polarity-agnostic; this only changes the LED ring direction
-// and the curve presets produced by the editor.
-enum class VPotPolarity : uint8_t {
-    Unipolar = 0,  // LED ring sweeps L→R; Log/Exp bend toward one end
-    Bipolar  = 1,  // LED ring renders centre-out; Log/Exp mirror around 0.5
-};
+// VPotPolarity is declared near the top of the namespace (forward-
+// referenced by UserLinkSlot). Semantic: Unipolar = LED ring sweeps
+// L→R, Log/Exp bend toward one end; Bipolar = LED ring renders
+// centre-out, Log/Exp mirror around 0.5. The hardware encoder itself
+// is polarity-agnostic — polarity only changes the LED ring direction
+// (UF8 V-Pots; UC1 ring is L→R only) and the curve presets produced
+// by the editor.
 
 // Per-binding knob-travel customisation. Same semantic as UserLinkSlot's
 // rangeMin/rangeMax/sensitivity/curvePoints fields (see applyCurve /

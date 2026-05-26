@@ -715,6 +715,25 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // Step through the visible-track list (not the raw project
         // list) so hidden / collapsed-folder tracks are skipped —
         // mirrors the UF8 surface filter. Frank 2026-05-22.
+        // Validate focusedTrack_ here in addition to poll() — an Enc1
+        // turn between a track delete and the next poll tick would
+        // otherwise pass a stale pointer to stepVisibleTrack, which
+        // jumps to first/last instead of stepping. Same "above the
+        // deleted one" fallback as the poll-side branch.
+        if (focusedTrack_
+            && !ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*")) {
+            focusedTrack_ = nullptr;
+            const int total = CountTracks(nullptr);
+            MediaTrack* fallback = nullptr;
+            if (total > 0) {
+                int idx = lastFocusedTrackIdx_ - 1;
+                if (idx < 0) idx = 0;
+                if (idx >= total) idx = total - 1;
+                fallback = GetTrack(nullptr, idx);
+            }
+            if (fallback) setFocusedTrack(fallback);
+            lastFocusedTrackIdx_ = -1;
+        }
         MediaTrack* tr = reasixty_stepVisibleTrack(
             static_cast<MediaTrack*>(focusedTrack_), step);
         if (tr) {
@@ -820,12 +839,58 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 match.fxIndex, s.vst3Param,
                 &pStep, &pSmallStep, &pLargeStep, &isToggle);
             double next = curN;
+            // Look up usl up front so both the stepped + continuous
+            // branches can read sens / range without re-querying.
+            char fxBuf[256] = {0};
+            TrackFX_GetFXName(
+                static_cast<MediaTrack*>(focusedTrack_),
+                match.fxIndex, fxBuf, sizeof(fxBuf));
+            const uf8::UserLinkSlot* usl =
+                uf8::user_plugins::lookupOwnedSlot(fxBuf, s.linkIdx);
             if (haveStepInfo && isToggle) {
                 // 1 detent (in either direction) flips the toggle.
                 next = (curN >= 0.5) ? 0.0 : 1.0;
             } else if (haveStepInfo && pStep > 0.0) {
-                // Discrete-stepped enum — advance one step per detent.
-                next = curN + step * pStep;
+                // Stepped enum — input `step` is already pre-accumulated
+                // upstream (3 raw detents → 1 step via extAcc, see
+                // line 782). At sens=1.0 we keep the legacy "1 step per
+                // detent" feel; sens>1 fires multiple steps per detent,
+                // sens<1 uses a residual accumulator so a slow turn
+                // still advances eventually. Range snaps to the step
+                // grid.
+                const bool fineSt = fineMode_.load(std::memory_order_relaxed)
+                                   || reasixty_shiftFineActive();
+                float sens = usl ? usl->sensitivity : 1.0f;
+                if (sens < 0.1f) sens = 0.1f;
+                else if (sens > 8.0f) sens = 8.0f;
+                if (fineSt) sens *= 0.25f;
+                static float s_accExt[0x40]{};
+                static std::chrono::steady_clock::time_point s_lastExt[0x40]{};
+                auto& acc   = s_accExt[s.linkIdx & 0x3F];
+                auto& lastT = s_lastExt[s.linkIdx & 0x3F];
+                const auto now = std::chrono::steady_clock::now();
+                if (lastT.time_since_epoch().count() != 0
+                    && now - lastT > std::chrono::milliseconds(150)) {
+                    acc = 0.0f;
+                }
+                lastT = now;
+                if ((step > 0 && acc < 0.0f)
+                    || (step < 0 && acc > 0.0f)) acc = 0.0f;
+                acc += static_cast<float>(step) * sens;
+                const int logical = static_cast<int>(acc);
+                acc -= static_cast<float>(logical);
+                if (logical == 0) {
+                    ++stats_.knobEventsHandled;
+                    return;
+                }
+                const float pStepF = static_cast<float>(pStep);
+                const double minN = static_cast<double>(uf8::snapToStep(
+                    usl ? usl->rangeMin : 0.0f, pStepF));
+                const double maxN = static_cast<double>(uf8::snapToStep(
+                    usl ? usl->rangeMax : 1.0f, pStepF));
+                next = curN + logical * pStep;
+                if (next < minN) next = minN;
+                if (next > maxN) next = maxN;
             } else {
                 // Continuous — 1% per detent, 0.1% in fine mode. When the
                 // bound plug-in is a user-learned map with an explicit
@@ -836,12 +901,6 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                                  || reasixty_shiftFineActive();
                 const double scale = fine ? 0.001 : 0.01;
                 double delta = step * scale;
-                char fxBuf[256] = {0};
-                TrackFX_GetFXName(
-                    static_cast<MediaTrack*>(focusedTrack_),
-                    match.fxIndex, fxBuf, sizeof(fxBuf));
-                const uf8::UserLinkSlot* usl =
-                    uf8::user_plugins::lookupOwnedSlot(fxBuf, s.linkIdx);
                 if (usl) {
                     delta *= static_cast<double>(usl->sensitivity);
                     double t = static_cast<double>(
@@ -1059,11 +1118,15 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (ev.id == knob::kBcEncoder) {
         static int acc = 0;
         static std::chrono::steady_clock::time_point lastT{};
-        // ticksPerStep=2 (was 3) — BC encoder hardware fires 2 OR 3 ticks
-        // per detent (also batches as single delta=2 events), so with 3 the
-        // 2-tick clicks got eaten exactly like E1 with 4 (same diagnosis
-        // 2026-05-25). 2 catches both common cases.
-        int step = stepFromAccumulator(acc, lastT, 2);
+        // ticksPerStep=3 — matches Encoder 1 (Frank 2026-05-26 reported
+        // Enc2 occasionally skipping values at threshold 2: a 3-tick
+        // detent landed step=1 with residual=1, the next 1-tick burst
+        // pushed acc to 2 → step=1 fired again, advancing two BC tracks
+        // for one physical click. Threshold 3 catches both 3-tick
+        // detents and 2-tick burst pairs without double-firing; the
+        // earlier "2-tick clicks get eaten" worry didn't reproduce here
+        // because the gap-reset already absorbs lone shorts.
+        int step = stepFromAccumulator(acc, lastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
         // Phase 2.8b — Nav Mode cursor scroll. When the overlay is
         // active, Encoder 2 walks one marker/region per detent regardless
@@ -1226,41 +1289,71 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     const bool haveStepInfo = TrackFX_GetParameterStepSizes(
         tr, fxIdx, vst3Param, &pStep, &pSmall, &pLarge, &isToggle);
 
+    // Hoist the user-slot lookup so both the stepped + continuous
+    // branches can honour per-binding sensitivity / range. Built-in
+    // SSL CS/BC params have no UserLinkSlot — usl stays null and the
+    // defaults (sens=1, range 0..1) preserve byte-identical behaviour.
+    char fxBuf[256] = {0};
+    TrackFX_GetFXName(tr, fxIdx, fxBuf, sizeof(fxBuf));
+    const uf8::Domain dom = busCompContext
+        ? uf8::Domain::BusComp
+        : uf8::Domain::ChannelStrip;
+    int linkIdx = -1;
+    {
+        auto mm = uf8::lookupPluginOnTrack(tr, dom);
+        if (mm.map && mm.fxIndex == fxIdx) {
+            linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
+        }
+    }
+    const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+        ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+        : nullptr;
+
     double next;
     if (haveStepInfo && isToggle) {
         // Any detent flips the toggle. Sign of delta is irrelevant.
         next = (cur >= 0.5) ? 0.0 : 1.0;
     } else if (haveStepInfo && pStep > 0.0) {
         // Discrete-stepped — accumulate raw detents into logical steps
-        // so a fast hardware scroll doesn't slam through 8 stops before
-        // the user lifts. ticksPerStep=2 means every 2 raw detents
-        // advance one parameter step; on a slow turn that feels
-        // close to "1 click = 1 step" because the encoder usually
-        // emits ev.delta=1 per physical detent. Per-knob state so
-        // touching another knob doesn't carry over.
-        static int  s_stepAcc[0x20]{};
+        // so a fast hardware scroll doesn't slam through 8 stops. The
+        // detents-per-step threshold derives from user sensitivity:
+        // sens=1 → 2 detents/step (legacy baseline); sens=2 → 1
+        // detent/step; sens=0.5 → 4 detents/step; sens≥4 fires multiple
+        // steps per detent via the fractional accumulator. Range snaps
+        // to the step grid when usl carries a custom rangeMin/Max.
+        static float s_stepAcc[0x20]{};
         static std::chrono::steady_clock::time_point s_stepLastT[0x20]{};
         auto& acc   = s_stepAcc[ev.id & 0x1F];
         auto& lastT = s_stepLastT[ev.id & 0x1F];
         const auto now = std::chrono::steady_clock::now();
         if (lastT.time_since_epoch().count() != 0
             && now - lastT > std::chrono::milliseconds(150)) {
-            acc = 0;
+            acc = 0.0f;
         }
         lastT = now;
-        if ((ev.delta > 0 && acc < 0) || (ev.delta < 0 && acc > 0)) acc = 0;
-        acc += ev.delta;
-        constexpr int ticksPerStep = 2;
-        int logical = acc / ticksPerStep;
-        acc -= logical * ticksPerStep;
-        if (logical == 0) {
-            // Sub-threshold detent — leave the param untouched, skip
-            // the write + the broadcast/follow plumbing below.
+        const int signedDet = ev.delta * (map->inverted[ev.id] ? -1 : 1);
+        float sens = usl ? usl->sensitivity : 1.0f;
+        // Shift-fine: quarter the effective speed (more detents per
+        // step). Honours both the surface's own fine toggle and the
+        // global keyboard-Shift fine modifier — matches the continuous
+        // branch in this same function and the UF8 V-Pot paths.
+        const bool fineSt = fineMode_.load(std::memory_order_relaxed)
+                          || reasixty_shiftFineActive();
+        if (fineSt) sens *= 0.25f;
+        const auto r = uf8::tickStepped(acc, signedDet, sens);
+        acc = r.newAccum;
+        if (r.logicalSteps == 0) {
             ++stats_.knobEventsHandled;
             return;
         }
-        const int dir = logical * (map->inverted[ev.id] ? -1 : 1);
-        next = std::clamp(cur + dir * pStep, 0.0, 1.0);
+        const float pStepF = static_cast<float>(pStep);
+        const double minN = static_cast<double>(uf8::snapToStep(
+            usl ? usl->rangeMin : 0.0f, pStepF));
+        const double maxN = static_cast<double>(uf8::snapToStep(
+            usl ? usl->rangeMax : 1.0f, pStepF));
+        next = cur + r.logicalSteps * pStep;
+        if (next < minN) next = minN;
+        if (next > maxN) next = maxN;
     } else {
         // Continuous — clickToDelta_ + EQ-gain magnet, plus per-slot
         // knob travel (range/curve/sensitivity) when the bound plug-in
@@ -1269,21 +1362,6 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // + EQ-gain-magnet path so default behaviour is byte-identical.
         // Mirrors the UF8 V-Pot branch in main.cpp so a UC1 knob and a
         // UF8 V-Pot bound to the same param share scaling.
-        char fxBuf[256] = {0};
-        TrackFX_GetFXName(tr, fxIdx, fxBuf, sizeof(fxBuf));
-        const uf8::Domain dom = busCompContext
-            ? uf8::Domain::BusComp
-            : uf8::Domain::ChannelStrip;
-        int linkIdx = -1;
-        {
-            auto mm = uf8::lookupPluginOnTrack(tr, dom);
-            if (mm.map && mm.fxIndex == fxIdx) {
-                linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
-            }
-        }
-        const uf8::UserLinkSlot* usl = (linkIdx >= 0)
-            ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
-            : nullptr;
 
         double delta = clickToDelta_(ev.delta);
         if (isEqGain) delta *= 0.5;
@@ -3183,7 +3261,35 @@ void UC1Surface::refresh()
     // our cache in that case so subsequent ticks recover cleanly.
     if (focusedTrack_ &&
         !ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*")) {
+        // Track was deleted under us. Drop the dangling pointer FIRST so
+        // setFocusedTrack's "same pointer" early-exit doesn't skip the
+        // refresh, then snap focus to the track that was DIRECTLY ABOVE
+        // the deleted one. lastFocusedTrackIdx_ was cached on the
+        // previous tick while the pointer was still valid; tracks below
+        // shift down by one on delete, so the track now at
+        // (oldIdx - 1) is the one we want — or, when the deleted track
+        // was already #0, the new #0. Falls back to project track 0
+        // when no cached index is available (cold-start race). Without
+        // this the UC1 carousel stayed stuck on the deleted track and
+        // the next Enc 1 turn jumped to first/last via stepVisibleTrack
+        // on a stale pointer (Frank 2026-05-26).
         focusedTrack_ = nullptr;
+        const int total = CountTracks(nullptr);
+        MediaTrack* fallback = nullptr;
+        if (total > 0) {
+            int idx = lastFocusedTrackIdx_ - 1;
+            if (idx < 0) idx = 0;
+            if (idx >= total) idx = total - 1;
+            fallback = GetTrack(nullptr, idx);
+        }
+        if (fallback) setFocusedTrack(fallback);
+        lastFocusedTrackIdx_ = -1;
+    } else if (focusedTrack_) {
+        // Cache index while pointer is known good. IP_TRACKNUMBER is
+        // 1-based with 0 = master; convert to zero-based project index.
+        const int tn = static_cast<int>(GetMediaTrackInfo_Value(
+            static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER"));
+        if (tn > 0) lastFocusedTrackIdx_ = tn - 1;
     }
 
     auto bindings = focusedTrack_ ? lookupBindingsOnTrack(focusedTrack_) : UC1Bindings{};

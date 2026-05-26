@@ -273,6 +273,12 @@ private:
     // --- state ---
     UC1Device* device_ = nullptr;
     void*      focusedTrack_ = nullptr;  // MediaTrack*
+    // Last-known zero-based project index of focusedTrack_. Updated each
+    // poll tick while the pointer is valid; consumed when the pointer
+    // goes invalid (track deletion) so the fallback can land on the
+    // track that was directly above the deleted one instead of always
+    // snapping to track 0.
+    int        lastFocusedTrackIdx_ = -1;
 
     // BC display anchor — null until the BC encoder is used (then it
     // pins). Persists across CHANNEL-encoder scrolling so the BC

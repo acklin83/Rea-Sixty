@@ -3171,12 +3171,36 @@ void applyInstanceCycle_(int step)
     // per-strip V-Pot path in StripInstanceDelta still updates this
     // map independently for non-focused strips.
     setStripInstanceFx_(tr, target.fxIdx);
+    // Preserve the user's focused slot across the cycle when the new
+    // instance offers the same LinkSlot. Without this, cycling jumped
+    // every UC1/UF8 focused-param surface back to slotIdx=0, which for
+    // many plug-ins is the bypass / "FX In" toggle — Frank 2026-05-26
+    // "wenn instance gewechselt wird, gehen die params default auf
+    // Bypass." Domain match is required (a BC→CS cycle's slotIdx isn't
+    // meaningful) and the slot must exist on the target plug-in
+    // (different plug-in families on the same domain may have a
+    // narrower Link map). Domain::None (UF8-only user maps) doesn't
+    // share the SSL LinkSlot table — keep the legacy slot=0 reset
+    // there.
+    auto preservedSlot = [&](uf8::Domain newDom) -> int {
+        if (newDom != fp.domain) return 0;
+        if (fp.slotIdx <= 0) return 0;
+        char fxName[256];
+        if (!uf8::fxIdentityName(tr, target.fxIdx, fxName, sizeof(fxName)))
+            return 0;
+        const auto* pm = uf8::lookupPluginMapByName(fxName);
+        if (!pm) return 0;
+        if (!uf8::findSlotByLinkIdx(*pm, fp.slotIdx)) return 0;
+        return fp.slotIdx;
+    };
     if (target.dom == uf8::Domain::ChannelStrip) {
-        uf8::setFocus({target.dom, 0});
+        uf8::setFocus({target.dom,
+                       preservedSlot(uf8::Domain::ChannelStrip)});
         uc1::setCsInstanceIndex(tr, target.instIdx);
         triggerPluginModeFollowSync_();
     } else if (target.dom == uf8::Domain::BusComp) {
-        uf8::setFocus({target.dom, 0});
+        uf8::setFocus({target.dom,
+                       preservedSlot(uf8::Domain::BusComp)});
         uc1::setBcInstanceIndex(tr, target.instIdx);
         // Pin the BC anchor to the focused track so Encoder 2 + the
         // BC carousel agree with the cycle's selection. Idempotent
@@ -5191,36 +5215,88 @@ void drainInputQueue()
                         {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, bs.vst3Param);
-                            double delta = e.value
-                                * (bs.inverted ? -1.0 : 1.0);
-                            if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
-                            // Per-binding knob travel — sensitivity scales
-                            // delta, range+curve remap via t-space so a
-                            // V-Pot bound here stays in sync with the same
-                            // param driven elsewhere. Defaults are linear,
-                            // so untouched bindings keep byte-identical
-                            // behaviour.
+                            // Probe REAPER for stepped-param info up front
+                            // so the curve / accumulator branches stay
+                            // mutually exclusive. pStep is in normalised
+                            // [0..1] space.
+                            double pStep=0.0, pSmall=0.0, pLarge=0.0;
+                            bool isToggle = false;
+                            const bool stepped =
+                                TrackFX_GetParameterStepSizes(uctx.tr,
+                                    uctx.fxIdx, bs.vst3Param,
+                                    &pStep, &pSmall, &pLarge, &isToggle);
                             const auto& kt = bs.travel;
                             double next;
-                            if (kt.isCustom()) {
-                                delta *= static_cast<double>(kt.sensitivity);
-                                double t = static_cast<double>(
-                                    uf8::inverseCurve(
-                                        static_cast<float>(cur),
-                                        kt.rangeMin, kt.rangeMax,
-                                        kt.curvePoints));
-                                t += delta;
-                                if (t < 0.0) t = 0.0;
-                                if (t > 1.0) t = 1.0;
-                                next = static_cast<double>(
-                                    uf8::applyCurve(
-                                        static_cast<float>(t),
-                                        kt.rangeMin, kt.rangeMax,
-                                        kt.curvePoints));
+                            if (stepped && isToggle) {
+                                // Any detent flips the toggle. Sens /
+                                // range / curve don't apply.
+                                next = (cur >= 0.5) ? 0.0 : 1.0;
+                            } else if (stepped && pStep > 0.0) {
+                                // Per-(strip,bank) accumulator with idle
+                                // reset — mirrors UC1Surface.cpp:1241-1250
+                                // pattern so a fast hardware scroll
+                                // doesn't slam through stops, and a sub-
+                                // threshold reversal doesn't fight the
+                                // residue.
+                                static float s_acc[8][6]{};
+                                static std::chrono::steady_clock::time_point
+                                    s_last[8][6]{};
+                                auto& acc   = s_acc[s & 7][bank & 7];
+                                auto& lastT = s_last[s & 7][bank & 7];
+                                const auto now =
+                                    std::chrono::steady_clock::now();
+                                if (lastT.time_since_epoch().count() != 0
+                                    && now - lastT > std::chrono::milliseconds(150)) {
+                                    acc = 0.0f;
+                                }
+                                lastT = now;
+                                const int rawDet = static_cast<int>(
+                                    std::round(e.value * 128.0));
+                                const int signedDet = rawDet
+                                    * (bs.inverted ? -1 : 1);
+                                float sens = kt.sensitivity;
+                                if (g_shiftHeld.load() || shiftFineActive_())
+                                    sens *= 0.25f;
+                                const auto r = uf8::tickStepped(
+                                    acc, signedDet, sens);
+                                acc = r.newAccum;
+                                if (r.logicalSteps == 0) break;
+                                const float pStepF = static_cast<float>(pStep);
+                                const double minN = static_cast<double>(
+                                    uf8::snapToStep(kt.rangeMin, pStepF));
+                                const double maxN = static_cast<double>(
+                                    uf8::snapToStep(kt.rangeMax, pStepF));
+                                next = cur + r.logicalSteps * pStep;
+                                if (next < minN) next = minN;
+                                if (next > maxN) next = maxN;
                             } else {
-                                next = cur + delta;
-                                if (next < 0.0) next = 0.0;
-                                if (next > 1.0) next = 1.0;
+                                // Continuous param — existing knob-travel
+                                // path. Defaults are linear so untouched
+                                // bindings keep byte-identical behaviour.
+                                double delta = e.value
+                                    * (bs.inverted ? -1.0 : 1.0);
+                                if (g_shiftHeld.load() || shiftFineActive_())
+                                    delta *= 0.25;
+                                if (kt.isCustom()) {
+                                    delta *= static_cast<double>(kt.sensitivity);
+                                    double t = static_cast<double>(
+                                        uf8::inverseCurve(
+                                            static_cast<float>(cur),
+                                            kt.rangeMin, kt.rangeMax,
+                                            kt.curvePoints));
+                                    t += delta;
+                                    if (t < 0.0) t = 0.0;
+                                    if (t > 1.0) t = 1.0;
+                                    next = static_cast<double>(
+                                        uf8::applyCurve(
+                                            static_cast<float>(t),
+                                            kt.rangeMin, kt.rangeMax,
+                                            kt.curvePoints));
+                                } else {
+                                    next = cur + delta;
+                                    if (next < 0.0) next = 0.0;
+                                    if (next > 1.0) next = 1.0;
+                                }
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, next);
@@ -5297,38 +5373,79 @@ void drainInputQueue()
                     const uf8::LinkSlot& sl = *slPtr;
                     const double cur = TrackFX_GetParamNormalized(tr, mm.fxIndex,
                                                                   sl.vst3Param);
-                    // e.value is pan-scaled (≈1/128 per event). The
-                    // earlier 4× multiplier (32-detent full sweep) was
-                    // too coarse — values jumped past target. Drop to
-                    // 1× for a 128-detent sweep, matching SSL's V-Pot
-                    // feel in 360°. Fine mode (Shift) quarters.
-                    double delta = e.value * (sl.inverted ? -1.0 : 1.0);
-                    if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
-                    // Per-slot knob-travel customisation (user-learned FX
-                    // maps only — built-in CS/BC slots fall through to
-                    // the linear path with defaults). Sensitivity scales
-                    // delta first; range+curve then remap via t-space
-                    // around the current FX value so external automation
-                    // writes stay coherent. Defaults are byte-identical
-                    // to the previous linear clamp.
                     char fxBuf[256] = {0};
                     TrackFX_GetFXName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));
                     const uf8::UserLinkSlot* usl =
                         uf8::user_plugins::lookupOwnedSlot(fxBuf, sl.linkIdx);
+                    // Detect stepped param up front. pStep is REAPER's
+                    // per-step size in normalised [0..1] space; isToggle
+                    // = a 2-value param the plug-in renders as a switch.
+                    double pStep=0.0, pSmall=0.0, pLarge=0.0;
+                    bool isToggle = false;
+                    const bool stepped = TrackFX_GetParameterStepSizes(
+                        tr, mm.fxIndex, sl.vst3Param,
+                        &pStep, &pSmall, &pLarge, &isToggle);
                     double next;
-                    if (usl) {
-                        delta *= static_cast<double>(usl->sensitivity);
-                        double t = static_cast<double>(
-                            uf8::inverseCurve(*usl, static_cast<float>(cur)));
-                        t += delta;
-                        if (t < 0.0) t = 0.0;
-                        if (t > 1.0) t = 1.0;
-                        next = static_cast<double>(
-                            uf8::applyCurve(*usl, static_cast<float>(t)));
+                    if (stepped && isToggle) {
+                        next = (cur >= 0.5) ? 0.0 : 1.0;
+                    } else if (stepped && pStep > 0.0) {
+                        // Per-strip accumulator. Built-in CS/BC slots use
+                        // sens=1.0 (2 detents per step) → same baseline
+                        // as the UC1 stepped path; user-learned slots
+                        // pick up their custom sens + snapped range.
+                        static float s_acc[8]{};
+                        static std::chrono::steady_clock::time_point
+                            s_last[8]{};
+                        const int sIdx = static_cast<int>(e.strip) & 7;
+                        auto& acc   = s_acc[sIdx];
+                        auto& lastT = s_last[sIdx];
+                        const auto now =
+                            std::chrono::steady_clock::now();
+                        if (lastT.time_since_epoch().count() != 0
+                            && now - lastT > std::chrono::milliseconds(150)) {
+                            acc = 0.0f;
+                        }
+                        lastT = now;
+                        const int rawDet = static_cast<int>(
+                            std::round(e.value * 128.0));
+                        const int signedDet = rawDet
+                            * (sl.inverted ? -1 : 1);
+                        float sens = usl ? usl->sensitivity : 1.0f;
+                        if (g_shiftHeld.load() || shiftFineActive_())
+                            sens *= 0.25f;
+                        const auto r = uf8::tickStepped(
+                            acc, signedDet, sens);
+                        acc = r.newAccum;
+                        if (r.logicalSteps == 0) break;
+                        const float pStepF = static_cast<float>(pStep);
+                        const double minN = static_cast<double>(
+                            uf8::snapToStep(usl ? usl->rangeMin : 0.0f,
+                                            pStepF));
+                        const double maxN = static_cast<double>(
+                            uf8::snapToStep(usl ? usl->rangeMax : 1.0f,
+                                            pStepF));
+                        next = cur + r.logicalSteps * pStep;
+                        if (next < minN) next = minN;
+                        if (next > maxN) next = maxN;
                     } else {
-                        next = cur + delta;
-                        if (next < 0.0) next = 0.0;
-                        if (next > 1.0) next = 1.0;
+                        // Continuous param — existing knob-travel path.
+                        double delta = e.value * (sl.inverted ? -1.0 : 1.0);
+                        if (g_shiftHeld.load() || shiftFineActive_())
+                            delta *= 0.25;
+                        if (usl) {
+                            delta *= static_cast<double>(usl->sensitivity);
+                            double t = static_cast<double>(
+                                uf8::inverseCurve(*usl, static_cast<float>(cur)));
+                            t += delta;
+                            if (t < 0.0) t = 0.0;
+                            if (t > 1.0) t = 1.0;
+                            next = static_cast<double>(
+                                uf8::applyCurve(*usl, static_cast<float>(t)));
+                        } else {
+                            next = cur + delta;
+                            if (next < 0.0) next = 0.0;
+                            if (next > 1.0) next = 1.0;
+                        }
                     }
                     const bool slOk = TrackFX_SetParamNormalized(
                         tr, mm.fxIndex, sl.vst3Param, next);
@@ -5445,6 +5562,21 @@ void drainInputQueue()
                                 pushNext = bs.defaultNorm;
                                 if (pushNext < 0.0) pushNext = 0.0;
                                 if (pushNext > 1.0) pushNext = 1.0;
+                                // Stepped param → snap to nearest step
+                                // grid so push always lands on a valid
+                                // value, not between steps.
+                                double pStep=0.0, pSmall=0.0, pLarge=0.0;
+                                bool isToggle = false;
+                                if (TrackFX_GetParameterStepSizes(uctx.tr,
+                                        uctx.fxIdx, bs.vst3Param,
+                                        &pStep, &pSmall, &pLarge, &isToggle)
+                                    && !isToggle && pStep > 0.0)
+                                {
+                                    pushNext = static_cast<double>(
+                                        uf8::snapToStep(
+                                            static_cast<float>(pushNext),
+                                            static_cast<float>(pStep)));
+                                }
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, pushNext);
@@ -5515,7 +5647,41 @@ void drainInputQueue()
                             if (pushNext > 1.0) pushNext = 1.0;
                         }
                     } else {
-                        pushNext = slPtr->deflt.value_or(0.5);
+                        // User-learned slot override: when a UserLinkSlot
+                        // exists for (FX name, linkIdx), its defaultNorm
+                        // wins over the canonical slot's deflt. UC1 has
+                        // no push so the UserLinkSlot.defaultNorm is
+                        // otherwise dormant — this is the path that lets
+                        // a UF8 V-Pot mirroring a CS/BC user-learned slot
+                        // honour the reset value set in the FX-Learn
+                        // editor (Frank 2026-05-26). Falls back to the
+                        // canonical deflt when no UserLinkSlot is owned,
+                        // and to 0.5 when neither exists (ext::* slots).
+                        char fxBuf[256] = {0};
+                        TrackFX_GetFXName(tr, mm.fxIndex,
+                                          fxBuf, sizeof(fxBuf));
+                        const uf8::UserLinkSlot* usl =
+                            uf8::user_plugins::lookupOwnedSlot(
+                                fxBuf, focused.slotIdx);
+                        if (usl) {
+                            pushNext = usl->defaultNorm;
+                            if (pushNext < 0.0) pushNext = 0.0;
+                            if (pushNext > 1.0) pushNext = 1.0;
+                        } else {
+                            pushNext = slPtr->deflt.value_or(0.5);
+                        }
+                        // Stepped param → snap to nearest step grid.
+                        double pStep=0.0, pSmall=0.0, pLarge=0.0;
+                        bool isToggle = false;
+                        if (TrackFX_GetParameterStepSizes(tr, mm.fxIndex,
+                                slPtr->vst3Param,
+                                &pStep, &pSmall, &pLarge, &isToggle)
+                            && !isToggle && pStep > 0.0)
+                        {
+                            pushNext = static_cast<double>(uf8::snapToStep(
+                                static_cast<float>(pushNext),
+                                static_cast<float>(pStep)));
+                        }
                     }
                     TrackFX_SetParamNormalized(tr, mm.fxIndex,
                         slPtr->vst3Param, pushNext);

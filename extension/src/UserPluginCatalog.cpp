@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <list>
@@ -311,6 +312,16 @@ std::string serialize_(const UserPluginCatalog& c)
                     os << " [" << pt.first << ", " << pt.second << "]";
                 }
                 os << " ]";
+            }
+            // Polarity / defaultNorm — additive (Frank 2026-05-26).
+            // Default = Unipolar / 0.5; only emit when customised so
+            // pre-feature catalogs stay byte-identical.
+            if (s.polarity != VPotPolarity::Unipolar) {
+                os << ", \"polarity\": ";
+                appendEscaped_(os, vpotPolarityName_(s.polarity));
+            }
+            if (s.defaultNorm != 0.5) {
+                os << ", \"defaultNorm\": " << s.defaultNorm;
             }
         };
         // KnobTravel sub-struct writer for UF8 V-Pot + fader bindings.
@@ -619,6 +630,13 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                                                     (float)std::atof(ys));
                     }
                 }
+                // Polarity / defaultNorm (Frank 2026-05-26). Both
+                // additive — missing keys leave struct defaults.
+                std::string polStr;
+                if (getStrI_(so, "polarity", polStr)) {
+                    us.polarity = vpotPolarityFromName_(polStr.c_str());
+                }
+                getDoubleI_(so, "defaultNorm", us.defaultNorm);
                 if (us.linkIdx < 0 || us.vst3Param < 0) continue;
                 dest.push_back(us);
             }
@@ -1287,6 +1305,53 @@ float inverseCurve(float v, float rangeMin, float rangeMax,
     const float dLo = (v > rangeMin) ? v - rangeMin : rangeMin - v;
     const float dHi = (v > rangeMax) ? v - rangeMax : rangeMax - v;
     return (dLo <= dHi) ? 0.0f : 1.0f;
+}
+
+// Stepped-parameter helpers — see UserPluginCatalog.h for the rationale.
+// pStep is REAPER's per-step size in normalised [0..1] space, returned by
+// TrackFX_GetParameterStepSizes.
+float snapToStep(float v, float pStep)
+{
+    if (pStep <= 0.0f) return v;
+    if (v < 0.0f) v = 0.0f;
+    else if (v > 1.0f) v = 1.0f;
+    const float n = std::floor(v / pStep + 0.5f);
+    float snapped = n * pStep;
+    if (snapped < 0.0f) snapped = 0.0f;
+    if (snapped > 1.0f) snapped = 1.0f;
+    return snapped;
+}
+
+int numStepsFor(float pStep)
+{
+    if (pStep <= 0.0f) return 2;
+    const int n = static_cast<int>(std::floor(1.0f / pStep + 0.5f)) + 1;
+    return (n < 2) ? 2 : n;
+}
+
+// Map signed raw-detent events into logical step ticks via a fractional
+// accumulator. sensitivity is the user-facing knob from the editor;
+// effRate (logical steps emitted per detent) = clamp(sens, 0.1, 8) * 0.5.
+// That keeps the default sens=1.0 at "2 detents per step", matching the
+// pre-feature UC1 baseline (UC1Surface.cpp:1253).
+SteppedTickResult tickStepped(float accum, int rawDetents, float sensitivity)
+{
+    // Floor low enough that Shift-fine (×0.25) on the editor's slider
+    // minimum (0.1) still slows further — clamping to 0.1 here would
+    // swallow Shift at the user's lowest setting (Frank 2026-05-26).
+    // Upper clamp keeps an absurd typed-in value (>8 → 4 steps per
+    // detent) from making the encoder feel uncontrollable.
+    if (sensitivity < 0.001f) sensitivity = 0.001f;
+    else if (sensitivity > 8.0f) sensitivity = 8.0f;
+    const float effRate = sensitivity * 0.5f;
+    if ((rawDetents > 0 && accum < 0.0f)
+        || (rawDetents < 0 && accum > 0.0f)) {
+        accum = 0.0f;
+    }
+    accum += static_cast<float>(rawDetents) * effRate;
+    const int logical = static_cast<int>(accum);
+    accum -= static_cast<float>(logical);
+    return SteppedTickResult{ logical, accum };
 }
 
 } // namespace uf8

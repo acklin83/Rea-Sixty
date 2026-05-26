@@ -4630,6 +4630,12 @@ struct CurveEditorTarget {
     // change in the parent context menu takes effect immediately.
     // Default (unset) treated as unipolar.
     std::function<bool()> isBipolar;
+    // Stepped-param probe — populated by curveTargetForSlot_ /
+    // curveTargetForUf8VPot_ when the resolved param has a non-zero
+    // pStep. Returns true if stepped (and writes pStep + numSteps);
+    // false otherwise. Drives the popup UI swap (curve hidden, label
+    // change). Optional — unset = treat as continuous.
+    std::function<bool(double& pStep, int& numSteps)> fetchSteppedInfo;
     bool valid() const { return static_cast<bool>(read); }
 };
 bool              g_curveEditorRequestOpen = false;
@@ -5134,6 +5140,41 @@ void setSlotCurvePoints_(int linkIdx,
         });
 }
 
+// Polarity (Unipolar/Bipolar) — same semantic as UF8 V-Pot polarity but
+// stored on UserLinkSlot. Drives the curve-editor Log/Exp preset shape;
+// UC1 LED ring has no bipolar mode so it stays L→R on the hardware.
+void setSlotPolarity_(int linkIdx, uf8::VPotPolarity p)
+{
+    mutateSlot_(linkIdx, [p](uf8::UserLinkSlot& s) {
+        s.polarity = p;
+    });
+}
+
+uf8::VPotPolarity getSlotPolarity_(int linkIdx)
+{
+    if (g_editingMatch.empty() || linkIdx < 0)
+        return uf8::VPotPolarity::Unipolar;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) return s.polarity;
+        }
+        break;
+    }
+    return uf8::VPotPolarity::Unipolar;
+}
+
+// Push-reset target. UC1 has no push; stored for symmetry with the UF8
+// V-Pot menu + so a UF8 V-Pot mirroring this slot can pick the value
+// up downstream.
+void setSlotDefaultNorm_(int linkIdx, double v)
+{
+    if (v < 0.0) v = 0.0; else if (v > 1.0) v = 1.0;
+    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+        s.defaultNorm = v;
+    });
+}
+
 // ---- UF8 V-Pot / Fader knob-travel mutators ------------------------------
 //
 // Forward-declared so the curve-editor target factories below can capture
@@ -5203,10 +5244,34 @@ CurveEditorTarget curveTargetForSlot_(int linkIdx, const char* displayName)
     t.setCurvePoints = [linkIdx](std::vector<std::pair<float, float>> pts) {
         setSlotCurvePoints_(linkIdx, std::move(pts));
     };
+    t.isBipolar = [linkIdx]() {
+        return getSlotPolarity_(linkIdx) == uf8::VPotPolarity::Bipolar;
+    };
+    // Stepped-param probe — resolves the live (track, fxIdx, paramIdx)
+    // at call-time so a mid-session FX swap (different instance picked
+    // in the editor's FX selector) is honoured.
+    t.fetchSteppedInfo = [linkIdx](double& pStep, int& numSteps) -> bool {
+        const int mapped = mappedVst3For_(linkIdx);
+        if (mapped < 0) return false;
+        auto list = findEditingFxAll_(g_editingMatch);
+        if (list.empty()) return false;
+        auto fx = pickEditingFx_(list);
+        if (!fx.ok) return false;
+        double pS=0.0, pSm=0.0, pL=0.0; bool isT=false;
+        if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped,
+                &pS, &pSm, &pL, &isT)) return false;
+        if (isT || pS <= 0.0) return false;
+        pStep    = pS;
+        numSteps = uf8::numStepsFor(static_cast<float>(pS));
+        return true;
+    };
     return t;
 }
 
 // Build a target wrapping a UF8 V-Pot binding at (strip, vpotBank).
+// Forward — defined further down in the UF8 helpers section.
+int mappedVst3ForUf8_(int kind, int strip, int bank);
+
 CurveEditorTarget curveTargetForUf8VPot_(int strip, int bank,
                                          const char* displayName)
 {
@@ -5228,6 +5293,21 @@ CurveEditorTarget curveTargetForUf8VPot_(int strip, int bank,
         return getUf8VPotPolarity_(strip, bank)
                == uf8::VPotPolarity::Bipolar;
     };
+    t.fetchSteppedInfo = [strip, bank](double& pStep, int& numSteps) -> bool {
+        const int mapped = mappedVst3ForUf8_(1 /*VPot*/, strip, bank);
+        if (mapped < 0) return false;
+        auto list = findEditingFxAll_(g_editingMatch);
+        if (list.empty()) return false;
+        auto fx = pickEditingFx_(list);
+        if (!fx.ok) return false;
+        double pS=0.0, pSm=0.0, pL=0.0; bool isT=false;
+        if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped,
+                &pS, &pSm, &pL, &isT)) return false;
+        if (isT || pS <= 0.0) return false;
+        pStep    = pS;
+        numSteps = uf8::numStepsFor(static_cast<float>(pS));
+        return true;
+    };
     return t;
 }
 
@@ -5247,8 +5327,8 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     if (!g_curveEditorActive || !g_curveEditorTarget.valid()) return;
 
     int popupCond = ImGui_Cond_Always;
-    ImGui_SetNextWindowSize(ctx, scaleW_(ctx, 320.0),
-                            scaleW_(ctx, 380.0), &popupCond);
+    ImGui_SetNextWindowSize(ctx, scaleW_(ctx, 420.0),
+                            scaleW_(ctx, 390.0), &popupCond);
     centerNextPopupOnDisplay_(ctx);
 
     if (!ImGui_BeginPopupModal(ctx, "Curve editor###fxl_curve_editor",
@@ -5267,6 +5347,15 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         return;
     }
 
+    // Probe REAPER for stepped-param info. When the bound param is a
+    // stepped enum (PSP Townhouse attack-time etc.) the curve canvas is
+    // meaningless — we still expose sensitivity (interpreted as detent
+    // speed) but hide the curve UI and label the helper text differently.
+    double curvePStep = 0.0;
+    int    curveNumSteps = 0;
+    const bool isStepped = g_curveEditorTarget.fetchSteppedInfo
+        && g_curveEditorTarget.fetchSteppedInfo(curvePStep, curveNumSteps);
+
     // Sensitivity row — only when the target supports it. Faders use
     // absolute position so a delta-scaling sensitivity makes no sense
     // there; we hide the row entirely rather than disable, to keep the
@@ -5274,10 +5363,24 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     if (g_curveEditorTarget.supportsSensitivity) {
         double sens = static_cast<double>(sl.sensitivity);
         int flags = 0;
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        ImGui_Text(ctx, isStepped ? "Detent speed:" : "Sensitivity:");
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 150.0));
         if (ImGui_SliderDouble(ctx,
-                "Sensitivity##fxl_curve_sens",
+                "##fxl_curve_sens_s",
                 &sens, 0.1, 4.0, "%.2fx", &flags))
+        {
+            g_curveEditorTarget.setSensitivity(static_cast<float>(sens));
+            sl.sensitivity = static_cast<float>(sens);
+        }
+        // InputDouble next to the slider so the user can type an exact
+        // sensitivity (Frank 2026-05-26). Clamped inside the setter so
+        // out-of-range typed values land at 0.1..4.0.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        double sStep = 0.0, sFast = 0.0;
+        int sInFlags = 0;
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+        if (ImGui_InputDouble(ctx, "##fxl_curve_sens_i",
+                &sens, &sStep, &sFast, "%.2fx", &sInFlags))
         {
             g_curveEditorTarget.setSensitivity(static_cast<float>(sens));
             sl.sensitivity = static_cast<float>(sens);
@@ -5287,15 +5390,39 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
             g_curveEditorTarget.setSensitivity(1.0f);
             sl.sensitivity = 1.0f;
         }
-        ImGui_TextDisabled(ctx,
-            "Slows / speeds the encoder. Shift = Fine still applies on top.");
+        ImGui_TextDisabled(ctx, isStepped
+            ? "1.0 = 1 step per 2 detents. Higher = faster. Shift = Fine."
+            : "Encoder speed. Shift still applies Fine on top.");
         ImGui_Separator(ctx);
+    }
+
+    // Stepped param — early-exit before the curve canvas / preset row.
+    // The curve concept doesn't map to discrete steps; we show one info
+    // line with REAPER's reported step count + per-step size, then the
+    // standard Close button.
+    if (isStepped) {
+        char info[160];
+        snprintf(info, sizeof(info),
+            "Stepped parameter — %d values (~%.3f per step). "
+            "Curve disabled; Min/Max snap to the step grid.",
+            curveNumSteps, curvePStep);
+        ImGui_TextWrapped(ctx, info);
+        ImGui_Separator(ctx);
+        if (ImGui_Button(ctx, "Close##fxl_curve_close_stepped",
+                         nullptr, nullptr)) {
+            // Canvas + s_dragIdx are inside the early-exit's else
+            // branch — no drag state to reset here.
+            g_curveEditorActive = false;
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
+        return;
     }
 
     ImGui_Text(ctx, "Knob travel curve:");
 
     // Canvas.
-    const double canvasW = scaleW_(ctx, 260.0);
+    const double canvasW = scaleW_(ctx, 340.0);
     const double canvasH = scaleW_(ctx, 180.0);
     double cx = 0.0, cy = 0.0;
     ImGui_GetCursorScreenPos(ctx, &cx, &cy);
@@ -5544,7 +5671,7 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     }
 
     ImGui_TextDisabled(ctx,
-        "Click empty canvas to add a point. Drag to move. Right-click to remove.");
+        "Click empty canvas: add point. Drag: move. Right-click: remove.");
 
     ImGui_Separator(ctx);
     if (ImGui_Button(ctx, "Close##fxl_curve_close", nullptr, nullptr)) {
@@ -6491,16 +6618,20 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             std::string curLabel;
             float curRangeMin = 0.0f, curRangeMax = 1.0f, curSensitivity = 1.0f;
             bool  curHasCurve = false;
+            uf8::VPotPolarity curPolarity = uf8::VPotPolarity::Unipolar;
+            double curDefaultNorm = 0.5;
             for (const auto& m : uf8::user_plugins::get().maps) {
                 if (m.match != g_editingMatch) continue;
                 for (const auto& s : m.slots) {
                     if (s.linkIdx == ctrl.linkIdx) {
-                        inverted       = s.inverted;
-                        curLabel       = s.customLabel;
-                        curRangeMin    = s.rangeMin;
-                        curRangeMax    = s.rangeMax;
-                        curSensitivity = s.sensitivity;
-                        curHasCurve    = !s.curvePoints.empty();
+                        inverted        = s.inverted;
+                        curLabel        = s.customLabel;
+                        curRangeMin     = s.rangeMin;
+                        curRangeMax     = s.rangeMax;
+                        curSensitivity  = s.sensitivity;
+                        curHasCurve     = !s.curvePoints.empty();
+                        curPolarity     = s.polarity;
+                        curDefaultNorm  = s.defaultNorm;
                         break;
                     }
                 }
@@ -6513,27 +6644,134 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 toggleInverted_(ctrl.linkIdx);
             }
 
+            // Polarity (Unipolar / Bipolar). Mirrors the UF8 V-Pot menu
+            // (see ~7382). UC1 LED ring stays L→R regardless — the
+            // hardware has no centre-out mode — but the curve editor's
+            // Log/Exp presets read this via t.isBipolar so Bipolar params
+            // get the mirrored-around-0.5 preset shape. Frank 2026-05-26.
+            //
+            // Toggle / DynBtn controls (EQ-In, Bell, Polarity, S/C Listen,
+            // Fast Atk / Peak / Expand, Dyn-In) are binary switches with
+            // no continuous travel — Polarity / Knob-travel / Push-reset /
+            // Advanced make no sense on them, so we skip the entire block.
+            const bool isPotControl = (ctrl.kind == Uc1Control::Knob);
+            if (isPotControl)
+            {
+                bool isUni = (curPolarity == uf8::VPotPolarity::Unipolar);
+                if (ImGui_MenuItem(ctx,
+                        "Polarity: Unipolar (0 \xE2\x86\x92 1)",
+                        nullptr, &isUni, nullptr)) {
+                    setSlotPolarity_(ctrl.linkIdx,
+                                     uf8::VPotPolarity::Unipolar);
+                }
+                bool isBi = (curPolarity == uf8::VPotPolarity::Bipolar);
+                if (ImGui_MenuItem(ctx,
+                        "Polarity: Bipolar (\xE2\x88\x92 \xE2\x97\x82 0.5 \xE2\x96\xB8 +)",
+                        nullptr, &isBi, nullptr)) {
+                    setSlotPolarity_(ctrl.linkIdx,
+                                     uf8::VPotPolarity::Bipolar);
+                }
+            }
+
             // Inline Min/Max range — covers the common case without
             // forcing the user to open Advanced. Sliders are independent
             // (setters auto-correct the opposing edge so Min stays ≤
             // Max). Both 0..1 in normalised param space.
+            if (isPotControl) {
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "Knob travel:");
-            {
-                double vMinD = static_cast<double>(curRangeMin);
-                int sliderFlags = 0;
-                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
-                if (ImGui_SliderDouble(ctx, "Min##fxl_range_min",
-                        &vMinD, 0.0, 1.0, "%.3f", &sliderFlags)) {
-                    setSlotRangeMin_(ctrl.linkIdx,
-                                     static_cast<float>(vMinD));
+            // Probe stepped-info up front so the rangeRow setters can
+            // snap Min/Max to the step grid and we can show the
+            // reachable-step-count hint below the table.
+            double slotPStep = 0.0;
+            bool   slotIsStepped = false;
+            if (fx.ok) {
+                double pSm=0.0, pL=0.0; bool isT=false;
+                if (TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped,
+                        &slotPStep, &pSm, &pL, &isT)
+                    && !isT && slotPStep > 0.0)
+                {
+                    slotIsStepped = true;
                 }
-                double vMaxD = static_cast<double>(curRangeMax);
-                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
-                if (ImGui_SliderDouble(ctx, "Max##fxl_range_max",
-                        &vMaxD, 0.0, 1.0, "%.3f", &sliderFlags)) {
-                    setSlotRangeMax_(ctrl.linkIdx,
-                                     static_cast<float>(vMaxD));
+            }
+            {
+                // Fixed-width 4-col table so Min and Max rows align
+                // pixel-perfect: Label | Slider | Input | Set. Frank
+                // 2026-05-26. Both widgets bind the same setter; the
+                // setter clamps + auto-corrects the opposite edge.
+                // Zero step on InputDouble hides the +/- buttons.
+                int tblFlags = 0;
+                if (ImGui_BeginTable(ctx, "##fxl_range_tbl", 4,
+                                     &tblFlags, nullptr, nullptr,
+                                     nullptr)) {
+                    int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+                    double wLbl  = scaleW_(ctx, 40.0);
+                    double wSld  = scaleW_(ctx, 115.0);
+                    double wInp  = scaleW_(ctx, 75.0);
+                    double wBtn  = scaleW_(ctx, 50.0);
+                    ImGui_TableSetupColumn(ctx, "l", &wFlag, &wLbl, nullptr);
+                    ImGui_TableSetupColumn(ctx, "s", &wFlag, &wSld, nullptr);
+                    ImGui_TableSetupColumn(ctx, "i", &wFlag, &wInp, nullptr);
+                    ImGui_TableSetupColumn(ctx, "b", &wFlag, &wBtn, nullptr);
+
+                    auto rangeRow = [&](const char* label,
+                                        const char* slId,
+                                        const char* inId,
+                                        const char* btnId,
+                                        double val,
+                                        std::function<void(float)> setter)
+                    {
+                        ImGui_TableNextColumn(ctx);
+                        ImGui_Text(ctx, label);
+                        ImGui_TableNextColumn(ctx);
+                        int sFlags = 0;
+                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                        if (ImGui_SliderDouble(ctx, slId, &val, 0.0, 1.0,
+                                               "%.3f", &sFlags)) {
+                            setter(static_cast<float>(val));
+                        }
+                        ImGui_TableNextColumn(ctx);
+                        double step = 0.0, fast = 0.0;
+                        int iFlags = 0;
+                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+                        if (ImGui_InputDouble(ctx, inId, &val,
+                                              &step, &fast, "%.3f",
+                                              &iFlags)) {
+                            setter(static_cast<float>(val));
+                        }
+                        ImGui_TableNextColumn(ctx);
+                        if (fx.ok && ImGui_SmallButton(ctx, btnId)) {
+                            const double cur = TrackFX_GetParamNormalized(
+                                fx.tr, fx.fxIdx, mapped);
+                            setter(static_cast<float>(cur));
+                        }
+                    };
+
+                    rangeRow("Min:", "##fxl_range_min_s",
+                             "##fxl_range_min_i",
+                             "Set##fxl_range_min_cap",
+                             static_cast<double>(curRangeMin),
+                             [linkIdx = ctrl.linkIdx,
+                              slotIsStepped, slotPStep](float v) {
+                                 if (slotIsStepped) {
+                                     v = uf8::snapToStep(v,
+                                         static_cast<float>(slotPStep));
+                                 }
+                                 setSlotRangeMin_(linkIdx, v);
+                             });
+                    rangeRow("Max:", "##fxl_range_max_s",
+                             "##fxl_range_max_i",
+                             "Set##fxl_range_max_cap",
+                             static_cast<double>(curRangeMax),
+                             [linkIdx = ctrl.linkIdx,
+                              slotIsStepped, slotPStep](float v) {
+                                 if (slotIsStepped) {
+                                     v = uf8::snapToStep(v,
+                                         static_cast<float>(slotPStep));
+                                 }
+                                 setSlotRangeMax_(linkIdx, v);
+                             });
+                    ImGui_EndTable(ctx);
                 }
                 if (ImGui_SmallButton(ctx, "Reset##fxl_range_reset")) {
                     setSlotRangeMin_(ctrl.linkIdx, 0.0f);
@@ -6544,6 +6782,66 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     ImGui_TextDisabled(ctx,
                         curHasCurve ? "• curve + custom sens"
                                     : "• custom sens");
+                }
+                // Stepped-param hint — count of reachable steps in the
+                // current Min..Max window. The +1 in the count comes
+                // from inclusive endpoints (e.g. Min=0.0, Max=1.0 with
+                // pStep=1/9 → 10 steps).
+                if (slotIsStepped) {
+                    const double span = static_cast<double>(curRangeMax)
+                                      - static_cast<double>(curRangeMin);
+                    int reach = static_cast<int>(std::floor(
+                        span / slotPStep + 0.5)) + 1;
+                    if (reach < 1) reach = 1;
+                    char hint[64];
+                    snprintf(hint, sizeof(hint),
+                        "~%d step%s reachable in this range",
+                        reach, reach == 1 ? "" : "s");
+                    ImGui_TextDisabled(ctx, hint);
+                }
+            }
+
+            // Push-reset value. UC1 knobs have no physical push, so this
+            // is dormant on UC1 itself — but a UF8 V-Pot mirroring the
+            // same slot can pick it up, and the value is stored on the
+            // slot for symmetry with the UF8 V-Pot menu (Frank
+            // 2026-05-26). "Capture current value" reads the live param
+            // so the user can dial the FX to the desired rest position
+            // and snap it as the reset target.
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Push reset value (UF8 mirror):");
+            {
+                double tmpDn = curDefaultNorm;
+                int dnFlags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                if (ImGui_SliderDouble(ctx, "##fxl_slot_dn_s",
+                        &tmpDn, 0.0, 1.0, "%.3f", &dnFlags)) {
+                    setSlotDefaultNorm_(ctrl.linkIdx, tmpDn);
+                }
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                double dnStep = 0.0, dnFast = 0.0;
+                int dnInFlags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+                if (ImGui_InputDouble(ctx, "##fxl_slot_dn_i", &tmpDn,
+                        &dnStep, &dnFast, "%.3f", &dnInFlags)) {
+                    setSlotDefaultNorm_(ctrl.linkIdx, tmpDn);
+                }
+                // Bipolar hint — non-binding nudge toward 0.5.
+                if (curPolarity == uf8::VPotPolarity::Bipolar
+                    && std::abs(curDefaultNorm - 0.5) > 0.01)
+                {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    if (ImGui_SmallButton(ctx, "0.5##fxl_slot_dn_centre")) {
+                        setSlotDefaultNorm_(ctrl.linkIdx, 0.5);
+                    }
+                }
+                if (fx.ok) {
+                    if (ImGui_MenuItem(ctx, "Capture current value",
+                                       nullptr, nullptr, nullptr)) {
+                        const double cur = TrackFX_GetParamNormalized(
+                            fx.tr, fx.fxIdx, mapped);
+                        setSlotDefaultNorm_(ctrl.linkIdx, cur);
+                    }
                 }
             }
 
@@ -6557,6 +6855,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     ctrl.linkIdx,
                     slot && slot->name ? slot->name : nullptr));
             }
+            }   // end isPotControl block (knob travel + push reset + advanced)
 
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "Display label:");
@@ -7257,24 +7556,94 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     if (fetchUf8VPotTravel_(ctrl.strip, bank, curTravel)) {
                         ImGui_Separator(ctx);
                         ImGui_Text(ctx, "Knob travel:");
-                        double vMinD = static_cast<double>(curTravel.rangeMin);
-                        int sliderFlags = 0;
-                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
-                        if (ImGui_SliderDouble(ctx,
-                                "Min##fxl_uf8_range_min",
-                                &vMinD, 0.0, 1.0, "%.3f", &sliderFlags))
-                        {
-                            setUf8VPotRangeMin_(ctrl.strip, bank,
-                                                static_cast<float>(vMinD));
+                        // Stepped probe — drives Min/Max snap + reach hint.
+                        double uf8PStep = 0.0;
+                        bool   uf8IsStepped = false;
+                        if (fx.ok) {
+                            double pSm=0.0, pL=0.0; bool isT=false;
+                            if (TrackFX_GetParameterStepSizes(fx.tr,
+                                    fx.fxIdx, mapped,
+                                    &uf8PStep, &pSm, &pL, &isT)
+                                && !isT && uf8PStep > 0.0)
+                            {
+                                uf8IsStepped = true;
+                            }
                         }
-                        double vMaxD = static_cast<double>(curTravel.rangeMax);
-                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
-                        if (ImGui_SliderDouble(ctx,
-                                "Max##fxl_uf8_range_max",
-                                &vMaxD, 0.0, 1.0, "%.3f", &sliderFlags))
-                        {
-                            setUf8VPotRangeMax_(ctrl.strip, bank,
-                                                static_cast<float>(vMaxD));
+                        // 4-col fixed-width table so Min/Max align
+                        // pixel-perfect: Label | Slider | Input | Set.
+                        int tblFlags = 0;
+                        if (ImGui_BeginTable(ctx, "##fxl_uf8_range_tbl",
+                                             4, &tblFlags, nullptr,
+                                             nullptr, nullptr)) {
+                            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+                            double wLbl  = scaleW_(ctx, 40.0);
+                            double wSld  = scaleW_(ctx, 115.0);
+                            double wInp  = scaleW_(ctx, 75.0);
+                            double wBtn  = scaleW_(ctx, 50.0);
+                            ImGui_TableSetupColumn(ctx, "l", &wFlag, &wLbl, nullptr);
+                            ImGui_TableSetupColumn(ctx, "s", &wFlag, &wSld, nullptr);
+                            ImGui_TableSetupColumn(ctx, "i", &wFlag, &wInp, nullptr);
+                            ImGui_TableSetupColumn(ctx, "b", &wFlag, &wBtn, nullptr);
+
+                            auto rangeRow = [&](const char* label,
+                                                const char* slId,
+                                                const char* inId,
+                                                const char* btnId,
+                                                double val,
+                                                std::function<void(float)> setter)
+                            {
+                                ImGui_TableNextColumn(ctx);
+                                ImGui_Text(ctx, label);
+                                ImGui_TableNextColumn(ctx);
+                                int sFlags = 0;
+                                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                                if (ImGui_SliderDouble(ctx, slId, &val,
+                                        0.0, 1.0, "%.3f", &sFlags)) {
+                                    setter(static_cast<float>(val));
+                                }
+                                ImGui_TableNextColumn(ctx);
+                                double step = 0.0, fast = 0.0;
+                                int iFlags = 0;
+                                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+                                if (ImGui_InputDouble(ctx, inId, &val,
+                                        &step, &fast, "%.3f", &iFlags)) {
+                                    setter(static_cast<float>(val));
+                                }
+                                ImGui_TableNextColumn(ctx);
+                                if (fx.ok && ImGui_SmallButton(ctx, btnId)) {
+                                    const double cur = TrackFX_GetParamNormalized(
+                                        fx.tr, fx.fxIdx, mapped);
+                                    setter(static_cast<float>(cur));
+                                }
+                            };
+
+                            rangeRow("Min:",
+                                "##fxl_uf8_range_min_s",
+                                "##fxl_uf8_range_min_i",
+                                "Set##fxl_uf8_range_min_cap",
+                                static_cast<double>(curTravel.rangeMin),
+                                [strip = ctrl.strip, bank,
+                                 uf8IsStepped, uf8PStep](float v) {
+                                    if (uf8IsStepped) {
+                                        v = uf8::snapToStep(v,
+                                            static_cast<float>(uf8PStep));
+                                    }
+                                    setUf8VPotRangeMin_(strip, bank, v);
+                                });
+                            rangeRow("Max:",
+                                "##fxl_uf8_range_max_s",
+                                "##fxl_uf8_range_max_i",
+                                "Set##fxl_uf8_range_max_cap",
+                                static_cast<double>(curTravel.rangeMax),
+                                [strip = ctrl.strip, bank,
+                                 uf8IsStepped, uf8PStep](float v) {
+                                    if (uf8IsStepped) {
+                                        v = uf8::snapToStep(v,
+                                            static_cast<float>(uf8PStep));
+                                    }
+                                    setUf8VPotRangeMax_(strip, bank, v);
+                                });
+                            ImGui_EndTable(ctx);
                         }
                         if (ImGui_SmallButton(ctx,
                                 "Reset##fxl_uf8_range_reset"))
@@ -7289,6 +7658,19 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             ImGui_TextDisabled(ctx,
                                 hasCurve ? "• curve + custom sens"
                                          : "• custom sens");
+                        }
+                        if (uf8IsStepped) {
+                            const double span =
+                                static_cast<double>(curTravel.rangeMax)
+                              - static_cast<double>(curTravel.rangeMin);
+                            int reach = static_cast<int>(std::floor(
+                                span / uf8PStep + 0.5)) + 1;
+                            if (reach < 1) reach = 1;
+                            char hint[64];
+                            snprintf(hint, sizeof(hint),
+                                "~%d step%s reachable in this range",
+                                reach, reach == 1 ? "" : "s");
+                            ImGui_TextDisabled(ctx, hint);
                         }
                         if (ImGui_MenuItem(ctx, "Advanced…##fxl_uf8_adv",
                                            nullptr, nullptr, nullptr))
@@ -7412,8 +7794,18 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (curMode == uf8::VPotMode::Value) {
                     double tmp = curDeflt;
                     int sliderFlags = 0;
-                    if (ImGui_SliderDouble(ctx, "Push reset##fxl_uf8_dn",
+                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                    if (ImGui_SliderDouble(ctx, "##fxl_uf8_dn_s",
                             &tmp, 0.0, 1.0, "%.3f", &sliderFlags)) {
+                        setUf8DefaultNorm_(ctrl.strip, bank, tmp);
+                    }
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    double dnStep = 0.0, dnFast = 0.0;
+                    int dnInFlags = 0;
+                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+                    if (ImGui_InputDouble(ctx,
+                            "Push reset##fxl_uf8_dn_i", &tmp,
+                            &dnStep, &dnFast, "%.3f", &dnInFlags)) {
                         setUf8DefaultNorm_(ctrl.strip, bank, tmp);
                     }
                     // Non-binding hint for bipolar params — 0.5 is the
