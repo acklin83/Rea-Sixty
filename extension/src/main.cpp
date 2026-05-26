@@ -12521,8 +12521,13 @@ void onTimer()
             teardownAccessor();
         } else {
             MediaTrack* tr = static_cast<MediaTrack*>(focus);
+            // Non-finite guard: a single Inf sample from a corrupted source
+            // or denormal-explosion take-FX latches the peak-hold at +Inf
+            // (decay path `Inf - 1.5 = Inf` never recovers), pinning the
+            // input meter at full deflection forever — not even Stop or
+            // a track-switch frees it. Clamp to a sane silent floor.
             auto peakToDb = [](double p) -> float {
-                if (p <= 0.0) return -120.f;
+                if (!std::isfinite(p) || p <= 0.0) return -120.f;
                 return static_cast<float>(20.0 * std::log10(p));
             };
 
@@ -12536,11 +12541,6 @@ void onTimer()
             }
             // "off" or any unrecognised value → leave at -120 (silent).
 
-            if (tr != s_lastVuTrack) {
-                teardownAccessor();
-                s_vuAccessor = CreateTrackAudioAccessor(tr);
-                s_lastVuTrack = tr;
-            }
             // Peak-hold with decay, applied to all four channels (in L/R
             // + out L/R). Without it a steady sine produces 1-2 dB peak
             // jitter per tick (block size doesn't align with the sine
@@ -12550,6 +12550,16 @@ void onTimer()
             // enough to absorb sample-block variability.
             static double s_holdInL  = -120.0, s_holdInR  = -120.0;
             static double s_holdOutL = -120.0, s_holdOutR = -120.0;
+            if (tr != s_lastVuTrack) {
+                teardownAccessor();
+                s_vuAccessor = CreateTrackAudioAccessor(tr);
+                s_lastVuTrack = tr;
+                // Reset peak-hold across track switches: stale hold from
+                // the previous track (especially a pegged value) must not
+                // bleed into the new focus.
+                s_holdInL = s_holdInR = -120.0;
+                s_holdOutL = s_holdOutR = -120.0;
+            }
             // Linear-dB rate-limited fall. Original "0.85 of distance-from-
             // floor" formula (commit 2026-04-28) decayed exponentially in
             // linear-distance-from-floor space — h=-3 fell to h=-59 in 5
@@ -12558,6 +12568,10 @@ void onTimer()
             // ≈ 45 dB/sec gives full-scale fall in ~1.3 s — standard VU look.
             constexpr double kDbPerTick = 1.5;
             auto holdPeak = [&](double& hold, double raw) {
+                // Belt-and-suspenders: if hold ever lands on a non-finite
+                // value (Inf/NaN), the decay arithmetic never recovers —
+                // reset to silent floor before applying this tick's raw.
+                if (!std::isfinite(hold)) hold = -120.0;
                 if (raw > hold) hold = raw;
                 else {
                     const double next = hold - kDbPerTick;
