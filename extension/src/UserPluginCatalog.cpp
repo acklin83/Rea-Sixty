@@ -180,6 +180,17 @@ VPotMode vpotModeFromName_(const char* s)
     return VPotMode::Value;
 }
 
+const char* vpotPolarityName_(VPotPolarity p)
+{
+    return p == VPotPolarity::Bipolar ? "bipolar" : "unipolar";
+}
+
+VPotPolarity vpotPolarityFromName_(const char* s)
+{
+    if (s && std::strcmp(s, "bipolar") == 0) return VPotPolarity::Bipolar;
+    return VPotPolarity::Unipolar;
+}
+
 bool uf8MapHasContent_(const UserUf8Map& u)
 {
     for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
@@ -302,6 +313,37 @@ std::string serialize_(const UserPluginCatalog& c)
                 os << " ]";
             }
         };
+        // KnobTravel sub-struct writer for UF8 V-Pot + fader bindings.
+        // Wraps the four fields in a nested "travel" object so older
+        // readers (no travel key) ignore them; current readers parse
+        // them as additive metadata.
+        auto emitKnobTravelObj = [&](const char* keyPrefix,
+                                     const KnobTravel& t) {
+            if (!t.isCustom()) return;
+            os << ", \"" << keyPrefix << "\": {";
+            bool any = false;
+            auto sep = [&]() { if (any) os << ","; any = true; };
+            if (t.rangeMin != 0.0f) {
+                sep(); os << " \"rangeMin\": " << t.rangeMin;
+            }
+            if (t.rangeMax != 1.0f) {
+                sep(); os << " \"rangeMax\": " << t.rangeMax;
+            }
+            if (t.sensitivity != 1.0f) {
+                sep(); os << " \"sensitivity\": " << t.sensitivity;
+            }
+            if (!t.curvePoints.empty()) {
+                sep(); os << " \"curvePoints\": [";
+                bool firstPt = true;
+                for (const auto& pt : t.curvePoints) {
+                    if (!firstPt) os << ",";
+                    firstPt = false;
+                    os << " [" << pt.first << ", " << pt.second << "]";
+                }
+                os << " ]";
+            }
+            os << " }";
+        };
         os << "      \"slots\": [";
         bool firstSlot = true;
         for (const auto& s : m.slots) {
@@ -403,8 +445,16 @@ std::string serialize_(const UserPluginCatalog& c)
                         os << ", \"inverted\": " << (bs.inverted ? "true" : "false")
                            << ", \"defaultNorm\": " << bs.defaultNorm
                            << ", \"stripColour\": "
-                           << static_cast<unsigned>(bs.stripColour)
-                           << " }";
+                           << static_cast<unsigned>(bs.stripColour);
+                        // Polarity emitted only when non-default
+                        // (bipolar) so existing files stay
+                        // byte-identical until a user opts in.
+                        if (bs.polarity != VPotPolarity::Unipolar) {
+                            os << ", \"polarity\": ";
+                            appendEscaped_(os, vpotPolarityName_(bs.polarity));
+                        }
+                        emitKnobTravelObj("travel", bs.travel);
+                        os << " }";
                     }
                     os << "\n            ]";
                 }
@@ -611,6 +661,39 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         if (auto* uo = po->get_item_by_name("uf8");
             uo && uo->is_object())
         {
+            // KnobTravel sub-object reader — invoked for each fader and
+            // each V-Pot binding. Missing keys leave the struct defaults
+            // (= linear / no curve / sensitivity 1.0), so pre-feature
+            // files remain byte-identical no-ops.
+            auto parseKnobTravel = [&](wdl_json_element* parent,
+                                       KnobTravel& t) {
+                auto* to = parent->get_item_by_name("travel");
+                if (!to || !to->is_object()) return;
+                double tmp = 0.0;
+                if (getDoubleI_(to, "rangeMin",    tmp)) t.rangeMin    = (float)tmp;
+                if (getDoubleI_(to, "rangeMax",    tmp)) t.rangeMax    = (float)tmp;
+                if (getDoubleI_(to, "sensitivity", tmp)) t.sensitivity = (float)tmp;
+                if (auto* cpa = to->get_item_by_name("curvePoints");
+                    cpa && cpa->is_array() && cpa->m_array)
+                {
+                    const int pn = cpa->m_array->GetSize();
+                    t.curvePoints.clear();
+                    t.curvePoints.reserve(pn);
+                    for (int pi = 0; pi < pn; ++pi) {
+                        wdl_json_element* pe = cpa->enum_item(pi);
+                        if (!pe || !pe->is_array() || !pe->m_array) continue;
+                        if (pe->m_array->GetSize() < 2) continue;
+                        wdl_json_element* xe = pe->enum_item(0);
+                        wdl_json_element* ye = pe->enum_item(1);
+                        if (!xe || !ye) continue;
+                        const char* xs = xe->get_string_value(true);
+                        const char* ys = ye->get_string_value(true);
+                        if (!xs || !ys) continue;
+                        t.curvePoints.emplace_back((float)std::atof(xs),
+                                                   (float)std::atof(ys));
+                    }
+                }
+            };
             // Helper for parsing one bank slot object (V-Pot binding).
             auto parseBankSlot = [&](wdl_json_element* so,
                                      UserUf8BankSlot& bs) {
@@ -629,6 +712,11 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     bs.stripColour =
                         static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                 }
+                std::string pol;
+                if (getStrI_(so, "polarity", pol)) {
+                    bs.polarity = vpotPolarityFromName_(pol.c_str());
+                }
+                parseKnobTravel(so, bs.travel);
             };
             // v7: banksByFaderBank [fb][vpotBank][slot]. v6 had a flat
             // `banks` [vpotBank][slot] — migrate into faderBank=0.
@@ -1118,15 +1206,16 @@ namespace uf8 {
 // they are sorted by x (editor enforces this on edit). An unsorted list
 // won't crash — it just produces a fold-back curve, which the editor's
 // drag handling actively prevents.
-float applyCurve(const UserLinkSlot& sl, float t)
+float applyCurve(float t, float rangeMin, float rangeMax,
+                 const std::vector<std::pair<float, float>>& curvePoints)
 {
     if (t < 0.0f) t = 0.0f;
     else if (t > 1.0f) t = 1.0f;
-    if (sl.curvePoints.empty()) {
-        return sl.rangeMin + t * (sl.rangeMax - sl.rangeMin);
+    if (curvePoints.empty()) {
+        return rangeMin + t * (rangeMax - rangeMin);
     }
-    float prevX = 0.0f, prevY = sl.rangeMin;
-    for (const auto& pt : sl.curvePoints) {
+    float prevX = 0.0f, prevY = rangeMin;
+    for (const auto& pt : curvePoints) {
         float xi = pt.first;
         float yi = pt.second;
         if (xi < 0.0f) xi = 0.0f; else if (xi > 1.0f) xi = 1.0f;
@@ -1141,7 +1230,7 @@ float applyCurve(const UserLinkSlot& sl, float t)
     }
     const float span = 1.0f - prevX;
     const float u    = (span > 1e-6f) ? (t - prevX) / span : 0.0f;
-    return prevY + u * (sl.rangeMax - prevY);
+    return prevY + u * (rangeMax - prevY);
 }
 
 // Inverse evaluator — finds the first segment whose y-range contains v
@@ -1153,32 +1242,33 @@ float applyCurve(const UserLinkSlot& sl, float t)
 // automation moved the param past rangeMax), the helper clamps to the
 // nearest endpoint t — subsequent encoder turns then move within the
 // curve's reachable region rather than jumping.
-float inverseCurve(const UserLinkSlot& sl, float v)
+float inverseCurve(float v, float rangeMin, float rangeMax,
+                   const std::vector<std::pair<float, float>>& curvePoints)
 {
     if (v < 0.0f) v = 0.0f;
     else if (v > 1.0f) v = 1.0f;
-    if (sl.curvePoints.empty()) {
-        const float span = sl.rangeMax - sl.rangeMin;
+    if (curvePoints.empty()) {
+        const float span = rangeMax - rangeMin;
         if (span > 1e-6f || span < -1e-6f) {
-            const float t = (v - sl.rangeMin) / span;
+            const float t = (v - rangeMin) / span;
             if (t < 0.0f) return 0.0f;
             if (t > 1.0f) return 1.0f;
             return t;
         }
         return 0.0f;
     }
-    float prevX = 0.0f, prevY = sl.rangeMin;
-    const size_t nPts = sl.curvePoints.size();
+    float prevX = 0.0f, prevY = rangeMin;
+    const size_t nPts = curvePoints.size();
     for (size_t i = 0; i <= nPts; ++i) {
         float nextX, nextY;
         if (i < nPts) {
-            nextX = sl.curvePoints[i].first;
-            nextY = sl.curvePoints[i].second;
+            nextX = curvePoints[i].first;
+            nextY = curvePoints[i].second;
             if (nextX < 0.0f) nextX = 0.0f; else if (nextX > 1.0f) nextX = 1.0f;
             if (nextY < 0.0f) nextY = 0.0f; else if (nextY > 1.0f) nextY = 1.0f;
         } else {
             nextX = 1.0f;
-            nextY = sl.rangeMax;
+            nextY = rangeMax;
         }
         const float yLo = (prevY < nextY) ? prevY : nextY;
         const float yHi = (prevY < nextY) ? nextY : prevY;
@@ -1194,8 +1284,8 @@ float inverseCurve(const UserLinkSlot& sl, float v)
     }
     // v out of every segment's y-range — snap to the endpoint t closest
     // to v in param space.
-    const float dLo = (v > sl.rangeMin) ? v - sl.rangeMin : sl.rangeMin - v;
-    const float dHi = (v > sl.rangeMax) ? v - sl.rangeMax : sl.rangeMax - v;
+    const float dLo = (v > rangeMin) ? v - rangeMin : rangeMin - v;
+    const float dHi = (v > rangeMax) ? v - rangeMax : rangeMax - v;
     return (dLo <= dHi) ? 0.0f : 1.0f;
 }
 

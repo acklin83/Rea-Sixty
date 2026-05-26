@@ -62,8 +62,20 @@ struct UserLinkSlot {
 // `sensitivity` is applied OUTSIDE these helpers — at the encoder-
 // delta site, before clamp. Keeping it out of the curve math makes
 // the inverse exact.
-float applyCurve(const UserLinkSlot& sl, float t);
-float inverseCurve(const UserLinkSlot& sl, float v);
+//
+// Primitive-argument variants exist so non-UserLinkSlot bindings (e.g.
+// UF8 user-map per-strip fader / V-Pot records) can apply the same
+// math without forcing every binding type to inherit a common base.
+float applyCurve(float t, float rangeMin, float rangeMax,
+                 const std::vector<std::pair<float, float>>& curvePoints);
+float inverseCurve(float v, float rangeMin, float rangeMax,
+                   const std::vector<std::pair<float, float>>& curvePoints);
+inline float applyCurve(const UserLinkSlot& sl, float t) {
+    return applyCurve(t, sl.rangeMin, sl.rangeMax, sl.curvePoints);
+}
+inline float inverseCurve(const UserLinkSlot& sl, float v) {
+    return inverseCurve(v, sl.rangeMin, sl.rangeMax, sl.curvePoints);
+}
 
 struct UserMetering {
     // Set vst3Param ≥ 0 to enable; -1 means "not learned" (fall back to
@@ -90,6 +102,36 @@ enum class VPotMode : uint8_t {
     Toggle = 1,   // binary; rotate ignored, push flips 0↔1
 };
 
+// Parameter polarity for V-Pot LED ring rendering + Log/Exp curve preset
+// shape. Pan-like params have centre=0.5 and bend symmetrically; gain-
+// like params sweep 0→1 with one-sided emphasis. The hardware encoder
+// itself is polarity-agnostic; this only changes the LED ring direction
+// and the curve presets produced by the editor.
+enum class VPotPolarity : uint8_t {
+    Unipolar = 0,  // LED ring sweeps L→R; Log/Exp bend toward one end
+    Bipolar  = 1,  // LED ring renders centre-out; Log/Exp mirror around 0.5
+};
+
+// Per-binding knob-travel customisation. Same semantic as UserLinkSlot's
+// rangeMin/rangeMax/sensitivity/curvePoints fields (see applyCurve /
+// inverseCurve), but lives directly on UF8 strip / V-Pot bindings so
+// each (faderBank, vpotBank, strip) entry can carry its own curve.
+// Defaults make the math byte-identical to the previous linear path.
+struct KnobTravel {
+    float rangeMin    = 0.0f;
+    float rangeMax    = 1.0f;
+    float sensitivity = 1.0f;
+    std::vector<std::pair<float, float>> curvePoints;
+    // Cheap "is this customised?" probe — drives tick / colour overlays
+    // in the editor without poking each field.
+    bool isCustom() const {
+        return rangeMin != 0.0f
+            || rangeMax != 1.0f
+            || sensitivity != 1.0f
+            || !curvePoints.empty();
+    }
+};
+
 // One slot in one of eight UF8 banks. vst3Param=-1 => empty slot
 // (top-soft-key blank, V-Pot no-op).
 struct UserUf8BankSlot {
@@ -106,6 +148,8 @@ struct UserUf8BankSlot {
     // + TopSoftKey LED + strip bar; the V-Pot/Soft-Key sharing was
     // removed when Frank split those into independent registers.
     uint32_t     stripColour = 0;
+    KnobTravel   travel{};                    // per V-Pot range/curve
+    VPotPolarity polarity = VPotPolarity::Unipolar;
 };
 
 // TopSoftKey LED appearance — bank-scoped (Frank 2026-05-13:
@@ -159,6 +203,11 @@ struct UserUf8BankSet {
 struct UserUf8StripBinding {
     int          faderVst3Param = -1;         // -1 = fall through to track vol
     bool         faderInverted  = false;
+    // Fader knob travel was tried 2026-05-26 and reverted same day:
+    // absolute-position + motor-feedback creates round-trip races
+    // (fader jumps during user motion, snaps on release). V-Pot keeps
+    // the feature — see UserUf8BankSlot::travel. If someone wants to
+    // revisit, the fix needs touch-snapshot echo, not curve math.
     std::string  faderLabel;                  // scribble-strip override for
                                               // the fader's bound param (1..7
                                               // chars). Empty = use the

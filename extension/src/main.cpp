@@ -5194,9 +5194,34 @@ void drainInputQueue()
                             double delta = e.value
                                 * (bs.inverted ? -1.0 : 1.0);
                             if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
-                            double next = cur + delta;
-                            if (next < 0.0) next = 0.0;
-                            if (next > 1.0) next = 1.0;
+                            // Per-binding knob travel — sensitivity scales
+                            // delta, range+curve remap via t-space so a
+                            // V-Pot bound here stays in sync with the same
+                            // param driven elsewhere. Defaults are linear,
+                            // so untouched bindings keep byte-identical
+                            // behaviour.
+                            const auto& kt = bs.travel;
+                            double next;
+                            if (kt.isCustom()) {
+                                delta *= static_cast<double>(kt.sensitivity);
+                                double t = static_cast<double>(
+                                    uf8::inverseCurve(
+                                        static_cast<float>(cur),
+                                        kt.rangeMin, kt.rangeMax,
+                                        kt.curvePoints));
+                                t += delta;
+                                if (t < 0.0) t = 0.0;
+                                if (t > 1.0) t = 1.0;
+                                next = static_cast<double>(
+                                    uf8::applyCurve(
+                                        static_cast<float>(t),
+                                        kt.rangeMin, kt.rangeMax,
+                                        kt.curvePoints));
+                            } else {
+                                next = cur + delta;
+                                if (next < 0.0) next = 0.0;
+                                if (next > 1.0) next = 1.0;
+                            }
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, next);
                             uf8::param_groups::broadcastUserParam(
@@ -9407,15 +9432,37 @@ void pushZonesForVisibleSlots()
             if (bs.vst3Param < 0) {
                 vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
             } else {
-                const double norm = TrackFX_GetParamNormalized(
+                double norm = TrackFX_GetParamNormalized(
                     uctx.tr, uctx.fxIdx, bs.vst3Param);
                 if (bs.vpotMode == uf8::VPotMode::Toggle) {
                     vpotBar[s] = (norm >= 0.5)
                         ? static_cast<uint16_t>(0x7F)
                         : (uint16_t{0x00} | (uint16_t{0x80} << 8));
                 } else {
+                    // V-Pot ring follows encoder t-space: invert the
+                    // curve so the LED ring sweep matches the encoder
+                    // travel, not raw param value. Without this, a tight
+                    // range / steep curve would compress the ring into a
+                    // sliver of its sweep.
+                    const auto& kt = bs.travel;
+                    if (kt.isCustom()) {
+                        norm = static_cast<double>(
+                            uf8::inverseCurve(
+                                static_cast<float>(norm),
+                                kt.rangeMin, kt.rangeMax,
+                                kt.curvePoints));
+                    }
                     const double v = bs.inverted ? 1.0 - norm : norm;
-                    vpotBar[s] = vpotPosFromUnipolar(v);
+                    // Bipolar params render centre-out — same encoding
+                    // pattern as SSL Pan / Gain / Trim slots. Map our
+                    // [0..1] norm to the [-1..+1] signed input the
+                    // bipolar helper expects. Mode register 0x08 above
+                    // tells the firmware to render this as centre-out.
+                    if (bs.polarity == uf8::VPotPolarity::Bipolar) {
+                        vpotBar[s] = vpotPosFromBipolar(v * 2.0 - 1.0);
+                    } else {
+                        vpotBar[s] = vpotPosFromUnipolar(v);
+                    }
                 }
             }
         } else if (g_forcePan.load()) {
@@ -10089,9 +10136,10 @@ void pushZonesForVisibleSlots()
                 continue;
             }
             // FX Learn UF8: user-bank V-Pot mode register.
-            //   Toggle slot → 0x03 (binary indicator, no bar)
-            //   Value slot  → 0x01 (unipolar L→R)
-            //   Empty slot  → 0x03 (no bar)
+            //   Toggle slot           → 0x03 (binary indicator, no bar)
+            //   Value + Unipolar      → 0x01 (L→R sweep)
+            //   Value + Bipolar       → 0x08 (centre-out, like SSL Pan)
+            //   Empty slot            → 0x03 (no bar)
             if (g_uf8PluginMode.load() && !g_flip.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
@@ -10101,6 +10149,8 @@ void pushZonesForVisibleSlots()
                         || bs.vpotMode == uf8::VPotMode::Toggle)
                     {
                         vpotMode[s] = 0x03;
+                    } else if (bs.polarity == uf8::VPotPolarity::Bipolar) {
+                        vpotMode[s] = 0x08;
                     } else {
                         vpotMode[s] = 0x01;
                     }

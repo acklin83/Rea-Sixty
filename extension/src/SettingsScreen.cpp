@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -4601,16 +4602,39 @@ std::string g_editingMatch;
 int         g_listeningLinkIdx = -1;
 char        g_paramFilter[64]  = {};
 
-// Curve-editor popup trigger. The per-slot context menu writes the
-// target linkIdx here when "Advanced…" is picked; the next frame the
-// FX-Learn editor sees a non-negative value, ImGui_OpenPopup's the
-// "Curve editor" modal, and stores the active link-idx into
-// g_curveEditorActiveLinkIdx so subsequent frames render the same
-// slot's curve. The popup lives inside the long-lived Settings ctx
-// (BeginPopupModal) — standalone Begin() windows are broken for
+// Curve-editor popup target abstraction. The per-slot / per-binding
+// context menus build a CurveEditorTarget and call openCurveEditor_();
+// the next frame the editor sees `requestOpen` and starts driving the
+// popup off `active`. The popup lives inside the long-lived Settings
+// ctx (BeginPopupModal) — standalone Begin() windows are broken for
 // keyboard input in this ReaImGui build.
-int g_curveEditorOpenLinkIdx   = -1;
-int g_curveEditorActiveLinkIdx = -1;
+//
+// A target is identified by `idSuffix` (used for ImGui IDs so the modal
+// reseats correctly when re-opened against a different binding) and
+// provides callbacks to read the current KnobTravel snapshot + to
+// persist each of the four fields. Sensitivity may be disabled (faders
+// use absolute position, sensitivity would just compress throw); we
+// hide the slider when `supportsSensitivity` is false.
+struct CurveEditorTarget {
+    std::string idSuffix;        // ImGui ID disambiguator
+    std::string titleSuffix;     // shown in popup title bar
+    bool        supportsSensitivity = true;
+    std::function<bool(uf8::KnobTravel&)> read;
+    std::function<void(float)>            setRangeMin;
+    std::function<void(float)>            setRangeMax;
+    std::function<void(float)>            setSensitivity;
+    std::function<void(std::vector<std::pair<float, float>>)>
+                                          setCurvePoints;
+    // Predicate: should Log/Exp presets be generated as bipolar
+    // (mirrored around 0.5)? Read at button-click time so a polarity
+    // change in the parent context menu takes effect immediately.
+    // Default (unset) treated as unipolar.
+    std::function<bool()> isBipolar;
+    bool valid() const { return static_cast<bool>(read); }
+};
+bool              g_curveEditorRequestOpen = false;
+CurveEditorTarget g_curveEditorTarget{};
+bool              g_curveEditorActive      = false;
 
 // (GR-meter picker uses an inline combo dropdown; no listening flag.)
 
@@ -5110,6 +5134,23 @@ void setSlotCurvePoints_(int linkIdx,
         });
 }
 
+// ---- UF8 V-Pot / Fader knob-travel mutators ------------------------------
+//
+// Forward-declared so the curve-editor target factories below can capture
+// them. They share the editing-map / persist plumbing with the existing
+// per-slot helpers but address `editing->uf8.{strips,banks}` instead of
+// `editing->slots[]`. Frank 2026-05-26: per (faderBank, vpotBank, strip)
+// — each binding can carry its own curve, and Fill Sequential carries
+// the curve along with the rest of the strip attributes.
+void setUf8VPotRangeMin_(int strip, int bank, float v);
+void setUf8VPotRangeMax_(int strip, int bank, float v);
+void setUf8VPotSensitivity_(int strip, int bank, float v);
+void setUf8VPotCurvePoints_(int strip, int bank,
+                            std::vector<std::pair<float, float>> pts);
+bool fetchUf8VPotTravel_(int strip, int bank, uf8::KnobTravel& out);
+uf8::VPotPolarity getUf8VPotPolarity_(int strip, int bank);
+void setUf8VPotPolarity_(int strip, int bank, uf8::VPotPolarity p);
+
 // Snapshot the active slot's full state into a UserLinkSlot copy.
 // Returns false when no slot matches — caller bails the popup. Lives
 // next to the mutators because read + write share the same map walk.
@@ -5129,19 +5170,81 @@ bool fetchSlotSnapshot_(int linkIdx, uf8::UserLinkSlot& out)
     return false;
 }
 
+// Open the curve-editor popup against `t`. Called from per-binding
+// context menus ("Advanced…" item). Defers the actual ImGui_OpenPopup
+// to the next frame so the menu's BeginPopupContextItem can close
+// cleanly first.
+void openCurveEditor_(CurveEditorTarget t)
+{
+    g_curveEditorTarget      = std::move(t);
+    g_curveEditorRequestOpen = true;
+}
+
+// Build a target wrapping a UserLinkSlot (FX-Learn schematic).
+CurveEditorTarget curveTargetForSlot_(int linkIdx, const char* displayName)
+{
+    CurveEditorTarget t;
+    char suf[32]; snprintf(suf, sizeof(suf), "slot_%d", linkIdx);
+    t.idSuffix    = suf;
+    t.titleSuffix = displayName ? displayName : "slot";
+    t.supportsSensitivity = true;
+    t.read = [linkIdx](uf8::KnobTravel& out) -> bool {
+        uf8::UserLinkSlot sl{};
+        if (!fetchSlotSnapshot_(linkIdx, sl)) return false;
+        out.rangeMin    = sl.rangeMin;
+        out.rangeMax    = sl.rangeMax;
+        out.sensitivity = sl.sensitivity;
+        out.curvePoints = sl.curvePoints;
+        return true;
+    };
+    t.setRangeMin    = [linkIdx](float v) { setSlotRangeMin_(linkIdx, v); };
+    t.setRangeMax    = [linkIdx](float v) { setSlotRangeMax_(linkIdx, v); };
+    t.setSensitivity = [linkIdx](float v) { setSlotSensitivity_(linkIdx, v); };
+    t.setCurvePoints = [linkIdx](std::vector<std::pair<float, float>> pts) {
+        setSlotCurvePoints_(linkIdx, std::move(pts));
+    };
+    return t;
+}
+
+// Build a target wrapping a UF8 V-Pot binding at (strip, vpotBank).
+CurveEditorTarget curveTargetForUf8VPot_(int strip, int bank,
+                                         const char* displayName)
+{
+    CurveEditorTarget t;
+    char suf[40]; snprintf(suf, sizeof(suf), "uf8vp_%d_%d", strip, bank);
+    t.idSuffix    = suf;
+    t.titleSuffix = displayName ? displayName : "V-Pot";
+    t.supportsSensitivity = true;
+    t.read = [strip, bank](uf8::KnobTravel& out) -> bool {
+        return fetchUf8VPotTravel_(strip, bank, out);
+    };
+    t.setRangeMin    = [strip, bank](float v) { setUf8VPotRangeMin_(strip, bank, v); };
+    t.setRangeMax    = [strip, bank](float v) { setUf8VPotRangeMax_(strip, bank, v); };
+    t.setSensitivity = [strip, bank](float v) { setUf8VPotSensitivity_(strip, bank, v); };
+    t.setCurvePoints = [strip, bank](std::vector<std::pair<float, float>> pts) {
+        setUf8VPotCurvePoints_(strip, bank, std::move(pts));
+    };
+    t.isBipolar = [strip, bank]() {
+        return getUf8VPotPolarity_(strip, bank)
+               == uf8::VPotPolarity::Bipolar;
+    };
+    return t;
+}
+
 // Curve-editor modal. Inside the long-lived Settings ctx — standalone
 // Begin() windows broke input in the QuickLearn experiment, so this
 // stays a BeginPopupModal under the parent context. Sensitivity slider
 // + draggable-point canvas + Linear/Log/Exp/Reset preset row. Frank
-// 2026-05-25.
+// 2026-05-25. Target-driven 2026-05-26 — same popup serves FX-Learn
+// slots, UF8 V-Pots, and UF8 faders.
 void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
 {
-    if (g_curveEditorOpenLinkIdx >= 0) {
+    if (g_curveEditorRequestOpen) {
         ImGui_OpenPopup(ctx, "Curve editor###fxl_curve_editor", nullptr);
-        g_curveEditorActiveLinkIdx = g_curveEditorOpenLinkIdx;
-        g_curveEditorOpenLinkIdx   = -1;
+        g_curveEditorActive      = true;
+        g_curveEditorRequestOpen = false;
     }
-    if (g_curveEditorActiveLinkIdx < 0) return;
+    if (!g_curveEditorActive || !g_curveEditorTarget.valid()) return;
 
     int popupCond = ImGui_Cond_Always;
     ImGui_SetNextWindowSize(ctx, scaleW_(ctx, 320.0),
@@ -5153,16 +5256,22 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         return;
     }
 
-    uf8::UserLinkSlot sl{};
-    if (!fetchSlotSnapshot_(g_curveEditorActiveLinkIdx, sl)) {
-        g_curveEditorActiveLinkIdx = -1;
+    // Snapshot via target.read each frame so external mutations (e.g.
+    // a parallel context menu wiring Min) flow into the popup without
+    // a stale frame. Bail if the target's underlying binding vanished.
+    uf8::KnobTravel sl{};
+    if (!g_curveEditorTarget.read(sl)) {
+        g_curveEditorActive = false;
         ImGui_CloseCurrentPopup(ctx);
         ImGui_EndPopup(ctx);
         return;
     }
 
-    // Sensitivity row.
-    {
+    // Sensitivity row — only when the target supports it. Faders use
+    // absolute position so a delta-scaling sensitivity makes no sense
+    // there; we hide the row entirely rather than disable, to keep the
+    // popup compact for the fader case.
+    if (g_curveEditorTarget.supportsSensitivity) {
         double sens = static_cast<double>(sl.sensitivity);
         int flags = 0;
         ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
@@ -5170,20 +5279,19 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
                 "Sensitivity##fxl_curve_sens",
                 &sens, 0.1, 4.0, "%.2fx", &flags))
         {
-            setSlotSensitivity_(g_curveEditorActiveLinkIdx,
-                                static_cast<float>(sens));
+            g_curveEditorTarget.setSensitivity(static_cast<float>(sens));
             sl.sensitivity = static_cast<float>(sens);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_SmallButton(ctx, "1x##fxl_curve_sens_reset")) {
-            setSlotSensitivity_(g_curveEditorActiveLinkIdx, 1.0f);
+            g_curveEditorTarget.setSensitivity(1.0f);
             sl.sensitivity = 1.0f;
         }
         ImGui_TextDisabled(ctx,
             "Slows / speeds the encoder. Shift = Fine still applies on top.");
+        ImGui_Separator(ctx);
     }
 
-    ImGui_Separator(ctx);
     ImGui_Text(ctx, "Knob travel curve:");
 
     // Canvas.
@@ -5203,11 +5311,14 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         ImGui_DrawList_AddRectFilled(dl, cx, cy,
                                       cx + canvasW, cy + canvasH,
                                       0xFF1A1A1A, &rounding, nullptr);
-        // Reference linear line from (0, rangeMin) → (1, rangeMax).
+        // Reference linear line — corner-to-corner. The canvas Y axis
+        // is normalised to the slot's [rangeMin..rangeMax] envelope
+        // (see toCanvas below), so Linear is always a 45° diagonal
+        // regardless of how the user trimmed the range.
         const double xL = cx;
         const double xR = cx + canvasW;
-        const double yL = cy + canvasH * (1.0 - sl.rangeMin);
-        const double yR = cy + canvasH * (1.0 - sl.rangeMax);
+        const double yL = cy + canvasH;
+        const double yR = cy;
         double refThick = 1.0;
         ImGui_DrawList_AddLine(dl, xL, yL, xR, yR,
                                0x44FFFFFF, &refThick);
@@ -5216,11 +5327,27 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     // Static drag state. Survives across frames inside the popup.
     static int s_dragIdx = -1;  // index into curvePoints; -1 = none
 
-    // Helpers for px↔(t, v) mapping.
+    // Helpers for px↔(t, v) mapping. v is stored in absolute param-space
+    // [0..1] (so applyCurve/inverseCurve consume the points unchanged
+    // and the Log/Exp preset math stays straightforward) but DISPLAYED
+    // normalised within [rangeMin..rangeMax] — the canvas top edge is
+    // rangeMax, bottom edge is rangeMin. Without this rescale a tight
+    // range (e.g. Min=0, Max=0.5) would paint Linear as a flat-ish
+    // shallow line instead of the 45° diagonal users expect.
+    const float kSpan = sl.rangeMax - sl.rangeMin;
+    const bool  kSpanOk = (kSpan > 1e-6f);
+    auto vToCanvasNorm = [&](float v) -> float {
+        if (!kSpanOk) return 0.5f;
+        return (v - sl.rangeMin) / kSpan;
+    };
+    auto canvasNormToV = [&](float vNorm) -> float {
+        if (!kSpanOk) return sl.rangeMin;
+        return sl.rangeMin + vNorm * kSpan;
+    };
     auto toCanvas = [&](float t, float v) {
         return std::pair<double, double>{
             cx + static_cast<double>(t) * canvasW,
-            cy + static_cast<double>(1.0f - v) * canvasH
+            cy + static_cast<double>(1.0f - vToCanvasNorm(v)) * canvasH
         };
     };
 
@@ -5286,28 +5413,30 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
             if (nearestIdx >= 0) {
                 s_dragIdx = nearestIdx;
             } else {
-                // Add a new point at the mouse pos.
+                // Add a new point at the mouse pos. Canvas Y is
+                // normalised within [rangeMin..rangeMax]; convert back
+                // to absolute param-space for storage.
                 float t = static_cast<float>((mouseX - cx) / canvasW);
-                float v = static_cast<float>(1.0 - (mouseY - cy) / canvasH);
-                if (t < 0.01f) t = 0.01f;
-                if (t > 0.99f) t = 0.99f;
-                if (v < 0.0f)  v = 0.0f;
-                if (v > 1.0f)  v = 1.0f;
+                float vNorm = static_cast<float>(
+                    1.0 - (mouseY - cy) / canvasH);
+                if (t < 0.01f)    t = 0.01f;
+                if (t > 0.99f)    t = 0.99f;
+                if (vNorm < 0.0f) vNorm = 0.0f;
+                if (vNorm > 1.0f) vNorm = 1.0f;
+                const float v = canvasNormToV(vNorm);
                 auto pts = sl.curvePoints;
                 pts.emplace_back(t, v);
                 std::sort(pts.begin(), pts.end(),
                           [](const auto& a, const auto& b) {
                               return a.first < b.first;
                           });
-                setSlotCurvePoints_(g_curveEditorActiveLinkIdx,
-                                    std::move(pts));
+                g_curveEditorTarget.setCurvePoints(std::move(pts));
             }
         }
         if (rClick && nearestIdx >= 0) {
             auto pts = sl.curvePoints;
             pts.erase(pts.begin() + nearestIdx);
-            setSlotCurvePoints_(g_curveEditorActiveLinkIdx,
-                                std::move(pts));
+            g_curveEditorTarget.setCurvePoints(std::move(pts));
         }
     }
     if (ImGui_IsMouseReleased(ctx, 0)) {
@@ -5320,11 +5449,13 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         s_dragIdx < static_cast<int>(sl.curvePoints.size()))
     {
         float t = static_cast<float>((mouseX - cx) / canvasW);
-        float v = static_cast<float>(1.0 - (mouseY - cy) / canvasH);
-        if (t < 0.01f) t = 0.01f;
-        if (t > 0.99f) t = 0.99f;
-        if (v < 0.0f)  v = 0.0f;
-        if (v > 1.0f)  v = 1.0f;
+        float vNorm = static_cast<float>(
+            1.0 - (mouseY - cy) / canvasH);
+        if (t < 0.01f)    t = 0.01f;
+        if (t > 0.99f)    t = 0.99f;
+        if (vNorm < 0.0f) vNorm = 0.0f;
+        if (vNorm > 1.0f) vNorm = 1.0f;
+        const float v = canvasNormToV(vNorm);
         auto pts = sl.curvePoints;
         pts[s_dragIdx] = { t, v };
         std::sort(pts.begin(), pts.end(),
@@ -5339,42 +5470,77 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
                 break;
             }
         }
-        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+        g_curveEditorTarget.setCurvePoints(std::move(pts));
     }
 
     // Preset row. Curves are expressed in absolute param-space y (not
     // relative to range envelope), so users tweaking Min/Max afterwards
     // get a sensible result without auto-rescaling the points.
     ImGui_Separator(ctx);
+    // Bipolar targets (e.g. Pan) get Log/Exp shapes that mirror around
+    // 0.5 — fine control at the centre and rush to the extremes, or
+    // vice versa — instead of the one-sided unipolar bend. Checked at
+    // click time so a polarity flip in the parent menu takes effect
+    // without re-opening the popup. Frank 2026-05-26.
+    const bool bipolar = g_curveEditorTarget.isBipolar
+                            && g_curveEditorTarget.isBipolar();
     if (ImGui_SmallButton(ctx, "Linear##fxl_curve_preset_lin")) {
-        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, {});
+        g_curveEditorTarget.setCurvePoints({});
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_SmallButton(ctx, "Log##fxl_curve_preset_log")) {
         const float a = sl.rangeMin;
         const float b = sl.rangeMax;
-        std::vector<std::pair<float, float>> pts = {
-            {0.25f, a + (b - a) * 0.55f},
-            {0.50f, a + (b - a) * 0.80f},
-            {0.75f, a + (b - a) * 0.93f},
-        };
-        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+        std::vector<std::pair<float, float>> pts;
+        if (bipolar) {
+            // Mirrored around 0.5 — gentle ramp near centre, coarse at
+            // the edges. Useful when fine control near the extremes is
+            // less important than feel near the neutral position.
+            const float c = a + (b - a) * 0.5f;
+            pts = {
+                {0.25f, a + (b - a) * 0.30f},
+                {0.50f, c},
+                {0.75f, a + (b - a) * 0.70f},
+            };
+        } else {
+            pts = {
+                {0.25f, a + (b - a) * 0.55f},
+                {0.50f, a + (b - a) * 0.80f},
+                {0.75f, a + (b - a) * 0.93f},
+            };
+        }
+        g_curveEditorTarget.setCurvePoints(std::move(pts));
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_SmallButton(ctx, "Exp##fxl_curve_preset_exp")) {
         const float a = sl.rangeMin;
         const float b = sl.rangeMax;
-        std::vector<std::pair<float, float>> pts = {
-            {0.25f, a + (b - a) * 0.07f},
-            {0.50f, a + (b - a) * 0.20f},
-            {0.75f, a + (b - a) * 0.45f},
-        };
-        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, std::move(pts));
+        std::vector<std::pair<float, float>> pts;
+        if (bipolar) {
+            // Mirrored — rushes to the extremes early, leaving fine
+            // control concentrated around 0.5. Pan / mid-range freq
+            // sweeps feel right with this shape.
+            const float c = a + (b - a) * 0.5f;
+            pts = {
+                {0.25f, a + (b - a) * 0.10f},
+                {0.50f, c},
+                {0.75f, a + (b - a) * 0.90f},
+            };
+        } else {
+            pts = {
+                {0.25f, a + (b - a) * 0.07f},
+                {0.50f, a + (b - a) * 0.20f},
+                {0.75f, a + (b - a) * 0.45f},
+            };
+        }
+        g_curveEditorTarget.setCurvePoints(std::move(pts));
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_SmallButton(ctx, "Reset all##fxl_curve_preset_reset")) {
-        setSlotCurvePoints_(g_curveEditorActiveLinkIdx, {});
-        setSlotSensitivity_(g_curveEditorActiveLinkIdx, 1.0f);
+        g_curveEditorTarget.setCurvePoints({});
+        if (g_curveEditorTarget.supportsSensitivity) {
+            g_curveEditorTarget.setSensitivity(1.0f);
+        }
     }
 
     ImGui_TextDisabled(ctx,
@@ -5383,7 +5549,7 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     if (ImGui_Button(ctx, "Close##fxl_curve_close", nullptr, nullptr)) {
         s_dragIdx = -1;
-        g_curveEditorActiveLinkIdx = -1;
+        g_curveEditorActive = false;
         ImGui_CloseCurrentPopup(ctx);
     }
     ImGui_EndPopup(ctx);
@@ -5547,7 +5713,8 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     // the user having to touch every strip after a Fill (Frank 2026-05-21).
     bool         srcFaderInverted = false;
     bool         srcVpotInverted  = false;
-    uf8::VPotMode srcVpotMode     = uf8::VPotMode::Value;
+    uf8::VPotMode     srcVpotMode     = uf8::VPotMode::Value;
+    uf8::VPotPolarity srcVpotPolarity = uf8::VPotPolarity::Unipolar;
     double       srcVpotDefault   = 0.5;
     uint32_t     srcStripColour   = 0;
     uint32_t     srcSoloColour    = 0;
@@ -5556,6 +5723,10 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     bool         srcSoloInvert    = false;
     bool         srcCutInvert     = false;
     bool         srcSelInvert     = false;
+    // Snapshot V-Pot knob-travel too so a user who set up Min/Max +
+    // curve on the source strip gets it propagated to every filled
+    // strip. (Fader has no knob-travel — see UserUf8StripBinding.)
+    uf8::KnobTravel srcVpotTravel{};
     {
         const auto& srcU  = editing->uf8;
         const auto& srcS  = srcU.strips[g_uf8EditingFaderBank][strip];
@@ -5563,6 +5734,7 @@ int fillSequentialUf8_(int kind, int strip, int bank,
         srcFaderInverted = srcS.faderInverted;
         srcVpotInverted  = srcVB.inverted;
         srcVpotMode      = srcVB.vpotMode;
+        srcVpotPolarity  = srcVB.polarity;
         srcVpotDefault   = srcVB.defaultNorm;
         srcStripColour   = srcVB.stripColour;
         srcSoloColour    = srcS.soloColour;
@@ -5571,6 +5743,7 @@ int fillSequentialUf8_(int kind, int strip, int bank,
         srcSoloInvert    = srcS.soloInvert;
         srcCutInvert     = srcS.cutInvert;
         srcSelInvert     = srcS.selInvert;
+        srcVpotTravel    = srcVB.travel;
     }
 
     int filled = 0;
@@ -5615,8 +5788,10 @@ int fillSequentialUf8_(int kind, int strip, int bank,
                 bs.vst3Param   = found;
                 bs.inverted    = srcVpotInverted;
                 bs.vpotMode    = srcVpotMode;
+                bs.polarity    = srcVpotPolarity;
                 bs.defaultNorm = srcVpotDefault;
                 bs.stripColour = srcStripColour;
+                bs.travel      = srcVpotTravel;
                 break;
             }
             default: continue;
@@ -5680,6 +5855,23 @@ void setUf8VPotMode_(int strip, int bank, uf8::VPotMode mode)
     });
 }
 
+uf8::VPotPolarity getUf8VPotPolarity_(int strip, int bank)
+{
+    if (g_editingMatch.empty()) return uf8::VPotPolarity::Unipolar;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        return m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].polarity;
+    }
+    return uf8::VPotPolarity::Unipolar;
+}
+
+void setUf8VPotPolarity_(int strip, int bank, uf8::VPotPolarity p)
+{
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].polarity = p;
+    });
+}
+
 void setUf8DefaultNorm_(int strip, int bank, double norm)
 {
     if (norm < 0.0) norm = 0.0; if (norm > 1.0) norm = 1.0;
@@ -5705,6 +5897,61 @@ void setUf8FaderLabel_(int strip, const std::string& label)
         u.strips[g_uf8EditingFaderBank][strip].faderLabel = trimmed;
     });
 }
+
+// ---- UF8 V-Pot knob-travel mutators -----------------------------------
+// Range clamps both ways so Min ≤ Max always holds. Sensitivity clamps
+// to [0.1, 4.0] like the FX-Learn slot path.
+void setUf8VPotRangeMin_(int strip, int bank, float v)
+{
+    if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        bs.travel.rangeMin = v;
+        if (bs.travel.rangeMax < v) bs.travel.rangeMax = v;
+    });
+}
+
+void setUf8VPotRangeMax_(int strip, int bank, float v)
+{
+    if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        bs.travel.rangeMax = v;
+        if (bs.travel.rangeMin > v) bs.travel.rangeMin = v;
+    });
+}
+
+void setUf8VPotSensitivity_(int strip, int bank, float v)
+{
+    if (v < 0.1f) v = 0.1f; else if (v > 4.0f) v = 4.0f;
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        bs.travel.sensitivity = v;
+    });
+}
+
+void setUf8VPotCurvePoints_(int strip, int bank,
+                            std::vector<std::pair<float, float>> pts)
+{
+    mutateUf8_([pts = std::move(pts), strip, bank](uf8::UserUf8Map& u) {
+        auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        bs.travel.curvePoints = pts;
+    });
+}
+
+bool fetchUf8VPotTravel_(int strip, int bank, uf8::KnobTravel& out)
+{
+    if (g_editingMatch.empty()) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        out = m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].travel;
+        return true;
+    }
+    return false;
+}
+
+// Fader knob-travel helpers intentionally absent — see comment on
+// UserUf8StripBinding for the rationale (reverted 2026-05-26).
 
 // Per-binding colour read / write. V-Pot no longer carries a colour
 // (Frank 2026-05-13: "V-Pot Farbe raus, bringt nichts.") — the LCD
@@ -6306,7 +6553,9 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ImGui_Separator(ctx);
             if (ImGui_MenuItem(ctx, "Advanced…", nullptr,
                                nullptr, nullptr)) {
-                g_curveEditorOpenLinkIdx = ctrl.linkIdx;
+                openCurveEditor_(curveTargetForSlot_(
+                    ctrl.linkIdx,
+                    slot && slot->name ? slot->name : nullptr));
             }
 
             ImGui_Separator(ctx);
@@ -6992,6 +7241,64 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                     toggleUf8Inverted_(ctrl.kind, ctrl.strip, bank);
                 }
+
+                // Knob travel — V-Pot only. Faders intentionally
+                // excluded: an absolute-position + motor-feedback
+                // control creates round-trip race conditions with the
+                // curve (Frank 2026-05-26: fader jumps on movement and
+                // resets on release because the echo path's
+                // inverseCurve fights plugin-side quantisation).
+                // Min/Max also dropped on principle — a fader range
+                // limiter would just compress physical throw without
+                // user benefit; if a param shouldn't reach full, the
+                // plugin's own range is the right place to enforce it.
+                if (ctrl.kind == Uf8Control::VPot) {
+                    uf8::KnobTravel curTravel{};
+                    if (fetchUf8VPotTravel_(ctrl.strip, bank, curTravel)) {
+                        ImGui_Separator(ctx);
+                        ImGui_Text(ctx, "Knob travel:");
+                        double vMinD = static_cast<double>(curTravel.rangeMin);
+                        int sliderFlags = 0;
+                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                        if (ImGui_SliderDouble(ctx,
+                                "Min##fxl_uf8_range_min",
+                                &vMinD, 0.0, 1.0, "%.3f", &sliderFlags))
+                        {
+                            setUf8VPotRangeMin_(ctrl.strip, bank,
+                                                static_cast<float>(vMinD));
+                        }
+                        double vMaxD = static_cast<double>(curTravel.rangeMax);
+                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                        if (ImGui_SliderDouble(ctx,
+                                "Max##fxl_uf8_range_max",
+                                &vMaxD, 0.0, 1.0, "%.3f", &sliderFlags))
+                        {
+                            setUf8VPotRangeMax_(ctrl.strip, bank,
+                                                static_cast<float>(vMaxD));
+                        }
+                        if (ImGui_SmallButton(ctx,
+                                "Reset##fxl_uf8_range_reset"))
+                        {
+                            setUf8VPotRangeMin_(ctrl.strip, bank, 0.0f);
+                            setUf8VPotRangeMax_(ctrl.strip, bank, 1.0f);
+                        }
+                        const bool hasCurve = !curTravel.curvePoints.empty();
+                        const bool hasSens  = curTravel.sensitivity != 1.0f;
+                        if (hasCurve || hasSens) {
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                            ImGui_TextDisabled(ctx,
+                                hasCurve ? "• curve + custom sens"
+                                         : "• custom sens");
+                        }
+                        if (ImGui_MenuItem(ctx, "Advanced…##fxl_uf8_adv",
+                                           nullptr, nullptr, nullptr))
+                        {
+                            openCurveEditor_(
+                                curveTargetForUf8VPot_(ctrl.strip, bank,
+                                                       "V-Pot"));
+                        }
+                    }
+                }
             }
 
             // Fader display-label edit. Mirrors the V-Pot label edit
@@ -7065,6 +7372,29 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                    nullptr, &isTgl, nullptr)) {
                     setUf8VPotMode_(ctrl.strip, bank, uf8::VPotMode::Toggle);
                 }
+
+                // Polarity — controls LED ring rendering (centre-out vs
+                // L→R sweep) AND the shape of Log/Exp curve presets in
+                // the editor. Bipolar params (Pan, EQ-gain, mid-range
+                // freq sweeps) get a centre-out ring and curves that
+                // mirror around 0.5. Default Unipolar — explicit opt-in
+                // so existing setups don't change behaviour.
+                if (curMode == uf8::VPotMode::Value) {
+                    const auto curPol = getUf8VPotPolarity_(ctrl.strip, bank);
+                    bool isUni = (curPol == uf8::VPotPolarity::Unipolar);
+                    if (ImGui_MenuItem(ctx, "Polarity: Unipolar (0 \xE2\x86\x92 1)",
+                                       nullptr, &isUni, nullptr)) {
+                        setUf8VPotPolarity_(ctrl.strip, bank,
+                                            uf8::VPotPolarity::Unipolar);
+                    }
+                    bool isBi  = (curPol == uf8::VPotPolarity::Bipolar);
+                    if (ImGui_MenuItem(ctx,
+                            "Polarity: Bipolar (\xE2\x88\x92 \xE2\x97\x82 0.5 \xE2\x96\xB8 +)",
+                            nullptr, &isBi, nullptr)) {
+                        setUf8VPotPolarity_(ctrl.strip, bank,
+                                            uf8::VPotPolarity::Bipolar);
+                    }
+                }
                 ImGui_Separator(ctx);
 
                 static char s_lblBuf[16];
@@ -7085,6 +7415,22 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     if (ImGui_SliderDouble(ctx, "Push reset##fxl_uf8_dn",
                             &tmp, 0.0, 1.0, "%.3f", &sliderFlags)) {
                         setUf8DefaultNorm_(ctrl.strip, bank, tmp);
+                    }
+                    // Non-binding hint for bipolar params — 0.5 is the
+                    // intuitive centre but we leave the slider as the
+                    // source of truth so the user can pick anything.
+                    if (getUf8VPotPolarity_(ctrl.strip, bank)
+                            == uf8::VPotPolarity::Bipolar
+                        && std::abs(curDeflt - 0.5) > 0.01)
+                    {
+                        ImGui_SameLine(ctx, nullptr, nullptr);
+                        if (ImGui_SmallButton(ctx,
+                                "0.5##fxl_uf8_dn_centre"))
+                        {
+                            setUf8DefaultNorm_(ctrl.strip, bank, 0.5);
+                        }
+                        ImGui_TextDisabled(ctx,
+                            "Bipolar params usually centre at 0.5.");
                     }
                     if (fx.ok) {
                         if (ImGui_MenuItem(ctx, "Capture current value",
@@ -9347,10 +9693,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // does the cache-swap inline now.
 
     // Knob-travel "Advanced…" popup. Rendered at the end of the editor
-    // so it overlays the schematic and editor body. Opens when the
-    // per-slot context menu sets g_curveEditorOpenLinkIdx; the popup
-    // itself reads + writes the live slot via mutateSlot_ + persists
-    // every change inline. Frank 2026-05-25.
+    // so it overlays the schematic and editor body. Opens when a
+    // context menu calls openCurveEditor_() with a CurveEditorTarget
+    // — the same popup serves FX-Learn slots, UF8 V-Pots, and UF8
+    // faders. Frank 2026-05-26 generalisation.
     drawFxLearnCurveEditorPopup_(ctx);
 }
 
@@ -10651,6 +10997,8 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Text(ctx, "Versions");
     ImGui_Separator(ctx);
     char line[256];
+    snprintf(line, sizeof(line), "  Version:  %s", REASIXTY_VERSION_STR);
+    ImGui_Text(ctx, line);
     snprintf(line, sizeof(line), "  Build:    %s %s",
                   __DATE__, __TIME__);
     ImGui_Text(ctx, line);

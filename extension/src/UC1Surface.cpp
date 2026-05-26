@@ -48,6 +48,7 @@ extern "C" int  reasixty_navUc1PushShift();
 extern "C" int  reasixty_navUc1LongPress();
 #include "ParameterGroups.h"  // multi-track param sync on UC1-originated writes
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
+#include "UserPluginCatalog.h"  // user_plugins::lookupOwnedSlot + UserLinkSlot curve helpers
 
 // Defined in main.cpp — scroll REAPER's MCP so the just-selected track
 // is visible (and, on UF8, rebank the 8-strip window around it). Shared
@@ -826,11 +827,33 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 // Discrete-stepped enum — advance one step per detent.
                 next = curN + step * pStep;
             } else {
-                // Continuous — 1% per detent, 0.1% in fine mode.
+                // Continuous — 1% per detent, 0.1% in fine mode. When the
+                // bound plug-in is a user-learned map with an explicit
+                // UserLinkSlot for this slot, apply per-slot knob travel
+                // (sensitivity + range/curve) so the EXT_FUNCS encoder
+                // and a UF8 V-Pot bound to the same slot stay in sync.
                 const bool fine = fineMode_.load(std::memory_order_relaxed)
                                  || reasixty_shiftFineActive();
                 const double scale = fine ? 0.001 : 0.01;
-                next = curN + step * scale;
+                double delta = step * scale;
+                char fxBuf[256] = {0};
+                TrackFX_GetFXName(
+                    static_cast<MediaTrack*>(focusedTrack_),
+                    match.fxIndex, fxBuf, sizeof(fxBuf));
+                const uf8::UserLinkSlot* usl =
+                    uf8::user_plugins::lookupOwnedSlot(fxBuf, s.linkIdx);
+                if (usl) {
+                    delta *= static_cast<double>(usl->sensitivity);
+                    double t = static_cast<double>(
+                        uf8::inverseCurve(*usl, static_cast<float>(curN)));
+                    t += delta;
+                    if (t < 0.0) t = 0.0;
+                    if (t > 1.0) t = 1.0;
+                    next = static_cast<double>(
+                        uf8::applyCurve(*usl, static_cast<float>(t)));
+                } else {
+                    next = curN + delta;
+                }
             }
             if (next < 0.0) next = 0.0;
             if (next > 1.0) next = 1.0;
@@ -1239,14 +1262,50 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         const int dir = logical * (map->inverted[ev.id] ? -1 : 1);
         next = std::clamp(cur + dir * pStep, 0.0, 1.0);
     } else {
-        // Continuous — existing path: clickToDelta_ + EQ-gain magnet.
+        // Continuous — clickToDelta_ + EQ-gain magnet, plus per-slot
+        // knob travel (range/curve/sensitivity) when the bound plug-in
+        // is a user-learned map with an explicit UserLinkSlot. Built-in
+        // SSL CS/BC slots have no UserLinkSlot → keep the legacy linear
+        // + EQ-gain-magnet path so default behaviour is byte-identical.
+        // Mirrors the UF8 V-Pot branch in main.cpp so a UC1 knob and a
+        // UF8 V-Pot bound to the same param share scaling.
+        char fxBuf[256] = {0};
+        TrackFX_GetFXName(tr, fxIdx, fxBuf, sizeof(fxBuf));
+        const uf8::Domain dom = busCompContext
+            ? uf8::Domain::BusComp
+            : uf8::Domain::ChannelStrip;
+        int linkIdx = -1;
+        {
+            auto mm = uf8::lookupPluginOnTrack(tr, dom);
+            if (mm.map && mm.fxIndex == fxIdx) {
+                linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
+            }
+        }
+        const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+            ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+            : nullptr;
+
         double delta = clickToDelta_(ev.delta);
         if (isEqGain) delta *= 0.5;
         delta *= (map->inverted[ev.id] ? -1.0 : 1.0);
-        next = isEqGain
-            ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
-                                     /*zone*/0.015, 0.0, 1.0)
-            : std::clamp(cur + delta, 0.0, 1.0);
+        if (usl) {
+            // User customised travel — skip the EQ-gain virtual notch
+            // (it presumes SSL EQ topology) and apply sensitivity +
+            // range/curve via t-space around the current value.
+            delta *= static_cast<double>(usl->sensitivity);
+            double t = static_cast<double>(
+                uf8::inverseCurve(*usl, static_cast<float>(cur)));
+            t += delta;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+            next = static_cast<double>(
+                uf8::applyCurve(*usl, static_cast<float>(t)));
+        } else {
+            next = isEqGain
+                ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
+                                         /*zone*/0.015, 0.0, 1.0)
+                : std::clamp(cur + delta, 0.0, 1.0);
+        }
     }
     const bool uc1SetOk = TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
     const double uc1After = TrackFX_GetParamNormalized(tr, fxIdx, vst3Param);
