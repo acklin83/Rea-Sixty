@@ -101,23 +101,30 @@ else()
 endif()
 
 # ----- the plugin -------------------------------------------------------------
-# Generated header holding the current HEAD commit count. Touched on
-# every build so the About box stays current without a CMake reconfig.
-# The Phony target guarantees the command runs each build; SettingsScreen
-# includes the file and depends on it via OBJECT_DEPENDS below.
+# Generated header holding the current HEAD commit count + git-describe
+# version string. Must regenerate on EVERY build because the inputs (git
+# HEAD, tag list, working-tree dirty bit) change without touching any
+# source file CMake can dependency-track. The previous OUTPUT+DEPENDS
+# pattern only re-ran when the .cmake script itself changed, so a
+# tag-push between builds produced a stale REASIXTY_VERSION_STR baked
+# into the dylib (v0.1.8 Mac release shipped with v0.1.7-5-…-dirty).
+# The script itself short-circuits when the new content matches the old,
+# so always-run is cheap and doesn't trigger needless recompiles.
 set(REASIXTY_COMMIT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/commit_count.h")
-add_custom_command(
-    OUTPUT ${REASIXTY_COMMIT_HEADER}
+add_custom_target(reasixty_commit_count_gen ALL
+    BYPRODUCTS ${REASIXTY_COMMIT_HEADER}
     COMMAND ${CMAKE_COMMAND}
         -DOUTFILE=${REASIXTY_COMMIT_HEADER}
         -DGIT_ROOT=${CMAKE_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_commit_count.cmake
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_commit_count.cmake
-    COMMENT "Updating commit count for About"
-    VERBATIM
-)
-add_custom_target(reasixty_commit_count_gen ALL
-    DEPENDS ${REASIXTY_COMMIT_HEADER})
+    COMMENT "Updating commit count + version for About"
+    VERBATIM)
+# Force SettingsScreen.cpp recompile when the header content changes so
+# REASIXTY_VERSION_STR / REASIXTY_COMMIT_COUNT actually update in the
+# binary. (Without this the new header could exist on disk but cached
+# .o files would keep the old macro values.)
+set_source_files_properties(src/SettingsScreen.cpp
+    PROPERTIES OBJECT_DEPENDS ${REASIXTY_COMMIT_HEADER})
 
 # Bake extension/resources/factory.rea60config into a header so a
 # user-triggered "Reset to factory defaults" works on a fresh REAPER
