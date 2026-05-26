@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.7. Earlier manuals (anything dated before 2026-05-24) are superseded.
+This manual documents Rea-Sixty v0.1.8. Earlier manuals (anything dated before 2026-05-26) are superseded.
 
 \newpage
 
@@ -728,16 +728,27 @@ Every user-learned FX-Learn slot and every UF8 V-Pot binding can carry a custom 
 
 In the per-slot right-click menu:
 
-- **Min** / **Max** sliders (0..1) — clamp the effective parameter range. A V-Pot or UC1 knob turned fully CCW lands at Min; fully CW lands at Max. Sliders auto-correct the opposing edge to keep Min ≤ Max.
+- **Min** / **Max** rows — a fixed-width 4-column table (label · slider · numeric input · **Set** button) so both rows line up pixel-perfect. Slider scrubs in 0..1; the input accepts exact values; **Set** snaps the edge to the plug-in's *current* parameter value (handy when you've dialled the FX to where you want the limit and just want to capture it). Sliders auto-correct the opposing edge to keep Min ≤ Max.
 - **Reset** — restores Min=0, Max=1.
 - **Advanced…** — opens the Curve editor popup.
 
 The Curve editor popup:
 
-- **Sensitivity** slider (0.1× .. 4×) — encoder-delta multiplier. Combines multiplicatively with Shift = Fine (Shift still quarters on top of the user-set sensitivity). Hidden when editing a fader target.
+- **Sensitivity** — a single labelled row (label on its own line, then slider + numeric input + **1x** reset button). Range 0.1× .. 4×, encoder-delta multiplier. Combines multiplicatively with Shift = Fine (Shift still quarters on top of the user-set value). Hidden when editing a fader target.
 - **Canvas** — draw a piecewise-linear response curve. Click empty space to add a breakpoint, drag to move, right-click to remove. The Y axis is normalised within [Min..Max], so the Linear preset is always a 45° diagonal regardless of how the range is trimmed.
 - **Presets** — **Linear** (clears all breakpoints), **Log** (param rushes to the top — fine control near 0; on a Bipolar V-Pot the curve mirrors around 0.5 for a gentle ramp near centre + coarse at the edges), **Exp** (param stays small longer — fine control near 1; Bipolar mirrors for fine control at centre + rush to extremes), **Reset all** (clears curve + resets sensitivity to 1×). Bipolar polarity is re-read on every preset click so flipping it in the parent menu takes effect without re-opening the editor.
 - **Close** dismisses the popup; all edits persist live as you make them.
+
+### Stepped parameters
+
+When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/release time selectors, HPF slope pickers, oversampling toggles) — anything REAPER reports with a non-zero per-step size via `TrackFX_GetParameterStepSizes` — the editor automatically switches to a stepped-aware layout. Sensitivity, range, and push-reset still apply; curve does not.
+
+- **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 knobs (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at slider min (0.1×) Shift gives an effective 0.025× (≈40 detents per step) for ultra-precise crawling.
+- **Canvas + preset row hidden.** A single info line replaces them: `Stepped parameter — N values (~X.XXX per step). Curve disabled; Min/Max snap to the step grid.`
+- **Min / Max** in the right-click menu snap on commit to the nearest step boundary, so the encoder always traverses real values. Below the table a hint line reads `~K steps reachable in this range`.
+- **Push reset** (Value-mode V-Pots) snaps the chosen default to the nearest step.
+
+The runtime accumulator decays after 150 ms of inactivity, so reversing direction at sub-threshold doesn't leave residual fractional steps fighting the new motion.
 
 In the FX-Learn schematic, slots with customised knob travel show:
 
@@ -967,6 +978,8 @@ These step *only* the Instance index (CS / BC / UF8-Mode-mapped). They are the f
 - **`instance_prev`** — previous Instance in the focused domain.
 - **`domain_cs`** — set the focused domain to Channel Strip (so subsequent `instance_next` walks CS Instances, UC1 CS section refreshes).
 - **`domain_bc`** — set the focused domain to Bus Comp.
+
+The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and Domain::None (UF8-only user maps) still reset to slot 0 because the slot index isn't meaningful there.
 
 ## Per-track automation modes
 
