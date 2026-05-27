@@ -1401,6 +1401,15 @@ void saveCurrentSelectionToSlot_(int slot1to8) {
     g_bankDirty.store(true);
 }
 
+// Temp-selset handler forward decls — bodies live further down in the
+// same anonymous namespace (~line 13569). Declared at namespace scope
+// rather than block-scope so MSVC links them to the internal-linkage
+// definitions; block-scope decls inside drainSelsets_ would imply
+// external linkage and produce LNK2019 on Win.
+void tempSelsetAddSelected_();
+void tempSelsetRemoveSelected_();
+void tempSelsetToggleRecall_();
+
 // onTimer drain. Detect project switch, then process queued recall /
 // save requests, then refresh the active GUID set for Group slots so
 // the next rebuildVisibleTrackList tick sees up-to-date membership.
@@ -1488,15 +1497,14 @@ void drainSelsets_() {
         refreshActiveSelsetGuids_();
     }
 
-    // Forward decls — handler bodies live near the brightness/mixer
-// actions (~line 13280) inside this same anonymous namespace.
-void tempSelsetAddSelected_();
-void tempSelsetRemoveSelected_();
-void tempSelsetToggleRecall_();
-
-// Temp-selset main-thread work. Drained AFTER the slot drain so a
+    // Temp-selset main-thread work. Drained AFTER the slot drain so a
     // recall toggle here sees the up-to-date g_selsetActive (the slot
     // path may have just deactivated a slot to honour mutual exclusion).
+    // Handler bodies are defined later in this same anonymous namespace
+    // (~line 13569); forward decls live at namespace scope above this
+    // function so MSVC's linker doesn't treat block-scope `extern` decls
+    // as a separate external symbol (Clang accepted both forms; MSVC
+    // unresolved-externals'd on the Win build of v0.1.10).
     if (g_tempSelsetAddRequest.exchange(false)) {
         tempSelsetAddSelected_();
     }

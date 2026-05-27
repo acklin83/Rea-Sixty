@@ -48,16 +48,21 @@ string(REGEX REPLACE "-[0-9]+-g[0-9a-f]+.*$" "" VERSION_TAG "${VERSION_TAG}")
 string(REGEX REPLACE "-dirty$"               "" VERSION_TAG "${VERSION_TAG}")
 
 set(VERSION_NAME "")
-set(VERSION_NAMES_FILE "${GIT_ROOT}/extension/version-names.tsv")
+# CMakeLists invokes us with -DGIT_ROOT=${CMAKE_SOURCE_DIR}, which is
+# the `extension/` directory itself — not the repo root. The TSV sits
+# directly inside `extension/`.
+set(VERSION_NAMES_FILE "${GIT_ROOT}/version-names.tsv")
 if(EXISTS "${VERSION_NAMES_FILE}")
     file(STRINGS "${VERSION_NAMES_FILE}" VN_LINES)
     foreach(LINE IN LISTS VN_LINES)
         # Skip comments + blank lines.
-        if(LINE MATCHES "^[ \t]*(#|$)")
+        if(LINE MATCHES "^[ \t]*$" OR LINE MATCHES "^[ \t]*#")
             continue()
         endif()
-        # Tag and codename are TAB-separated.
-        string(REGEX MATCH "^([^\t]+)\t(.+)$" _ "${LINE}")
+        # Tag and codename separated by any whitespace run (tab or
+        # spaces both fine). Capture tag as the leading non-whitespace
+        # token, codename as everything after the first whitespace run.
+        string(REGEX MATCH "^([^ \t]+)[ \t]+(.+)$" _ "${LINE}")
         if(CMAKE_MATCH_1 STREQUAL "${VERSION_TAG}")
             set(VERSION_NAME "${CMAKE_MATCH_2}")
             break()
