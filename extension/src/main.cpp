@@ -1362,6 +1362,25 @@ void selsetApplyAutoModeToSlot_(int slot1to8, int mode)
     }
 }
 
+// Twin of selsetApplyAutoModeToSlot_ for the Temporary Selection Set.
+// Walks g_tempSelsetGuids against the current project's tracks and
+// forces each to `mode`. Same idempotency guard.
+void tempSelsetApplyAutoMode_(int mode)
+{
+    if (mode < 0 || mode > 5) return;
+    if (g_tempSelsetGuids.empty()) return;
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        char gb[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", gb, false);
+        if (!g_tempSelsetGuids.count(gb)) continue;
+        if (GetTrackAutomationMode(tr) == mode) continue;
+        SetTrackAutomationMode(tr, mode);
+    }
+}
+
 void refreshActiveSelsetGuids_() {
     g_selsetActiveGuids.clear();
     const int slot = g_selsetActive.load();
@@ -1469,6 +1488,11 @@ void drainSelsets_() {
         // deactivates the temp set (and tempSelsetToggleRecall_ does
         // the reverse). Frank 2026-05-27.
         if (g_tempSelsetActive.load()) {
+            // Revert temp's auto-mode before clearing the flag, same
+            // gating as the slot-side. Mirrors the slot's outgoing
+            // revert above so the user doesn't end up with temp's
+            // members still armed after switching to a slot.
+            if (autoModeGate) tempSelsetApplyAutoMode_(0);
             g_tempSelsetActive.store(false);
             tempSelsetWriteToProject_();
         }
@@ -13627,6 +13651,18 @@ void tempSelsetToggleRecall_()
     const bool wasActive = g_tempSelsetActive.load();
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
+    // Selection-Set Auto-Mode applies to the temp set too — same
+    // gating as the 1..8 slots. Recall ON in Sel Mode Auto with a
+    // non-disabled global mode → force every member track to that
+    // mode. Recall OFF → revert to Trim/Read. Frank 2026-05-27.
+    const int autoModeWant = g_selsetAutoMode.load();
+    const bool autoModeGate =
+        (g_selectionMode.load() == SelectionMode::Auto)
+        && (autoModeWant >= 0);
+    if (autoModeGate) {
+        if (!wasActive) tempSelsetApplyAutoMode_(autoModeWant);
+        else            tempSelsetApplyAutoMode_(0);
+    }
     // Slot ↔ Temp are mutually exclusive. Turning temp ON requests the
     // active slot's deactivation through the same drain path that
     // handles selset_recall (so auto-mode revert + follow-selected hook
