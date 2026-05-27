@@ -684,7 +684,7 @@ extern int   g_focusedGuiShownFx;
 
 // Surface-visible track list — REAPER's full track set filtered by
 // g_folderMode (parents-only: only top-level / depth-0 tracks pass,
-// plus the children of g_spilledParent when one is held expanded) and
+// plus the direct children of every entry in g_spilledParents) and
 // g_showOnlySelected (live "currently selected" filter, not a saved
 // selection set). Independent of REAPER's MCP collapse state — folder
 // mode here is a pure surface filter. Rebuilt once per onTimer tick
@@ -694,13 +694,19 @@ extern int   g_focusedGuiShownFx;
 // full track set via CountTracks/GetTrack.
 std::vector<MediaTrack*> g_visibleTracks;
 
-// Long-press SEL on a parent (folder-start) track temporarily exposes
-// its direct children on the strips immediately to the right, until the
-// user long-presses SEL on the same parent again or on a different
-// parent. Only meaningful when g_folderMode is on. Stored as raw
-// MediaTrack*; revalidated against ValidatePtr2 every rebuild because
-// REAPER may free the track behind our back when the user reorders.
-std::atomic<MediaTrack*> g_spilledParent{nullptr};
+// Long-press SEL on a parent (folder-start) track expands its direct
+// children on the strips. The filter requires the FULL ancestor chain
+// to be present in the set for a child to be visible — so collapsing a
+// folder only removes that one entry; its descendants stay in the set
+// but become inert (their parent's chain is broken). Re-spilling the
+// ancestor lights the descendants back up automatically, persisting
+// drill-down state across collapse/re-spill cycles without an extra
+// snapshot store. Only meaningful when g_folderMode is on. Main-thread-
+// only — checkSelLongPressSpill, rebuildVisibleTrackList, and the
+// setters all run inside onTimer or from UI callbacks. Revalidated
+// against ValidatePtr2 every rebuild because REAPER may free a track
+// behind our back when the user reorders or deletes.
+std::unordered_set<MediaTrack*> g_spilledParents;
 
 // Per-strip SEL press state for long-press detection. press_ms = epoch
 // millis at the press edge (0 = not currently held). spill_fired = true
@@ -795,6 +801,28 @@ struct SelSet {
 };
 std::array<SelSet, 8> g_selsets;
 std::unordered_set<std::string> g_selsetActiveGuids;  // membership cache
+
+// Ad-hoc "Temporary Selection Set" — independent of the 8 persistent
+// slots, not shown in Settings, no project / ExtState persistence. Built
+// up live via REASIXTY_TEMP_SELSET_ADD (insert every REAPER-selected
+// track's GUID) and REASIXTY_TEMP_SELSET_REMOVE (erase ditto). RECALL
+// flips g_tempSelsetActive; when active AND the set is non-empty, the
+// surface filter intersects against it (ANDed with the slot-based
+// filter — both can be on simultaneously, but the common case is one
+// or the other). Survives within a REAPER session; cleared on
+// extension reload.
+std::unordered_set<std::string> g_tempSelsetGuids;
+std::atomic<bool> g_tempSelsetActive{false};
+// Main-thread drain flags for the temp-selset builtins. Lambdas can
+// fire from the libusb input thread; REAPER track APIs + SetProjExtState
+// are main-thread-only, so the lambdas just publish a request and the
+// drainSelsets_ tick consumes them. Mirrors g_selsetSaveRequest /
+// g_selsetActivateRequest for the slot-based selsets. Frank 2026-05-27:
+// without this the writes silently no-op'd and the temp set never
+// persisted to the project.
+std::atomic<bool> g_tempSelsetAddRequest{false};
+std::atomic<bool> g_tempSelsetRemoveRequest{false};
+std::atomic<bool> g_tempSelsetRecallRequest{false};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -820,10 +848,11 @@ std::atomic<int>  g_selsetSaveRequest{0};
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
     const bool selOnly    = g_showOnlySelected.load();
-    MediaTrack* spilled   = g_spilledParent.load();
-    if (spilled && !ValidatePtr2(nullptr, spilled, "MediaTrack*")) {
-        spilled = nullptr;
-        g_spilledParent.store(nullptr);
+    if (!g_spilledParents.empty()) {
+        for (auto it = g_spilledParents.begin(); it != g_spilledParents.end();) {
+            if (!ValidatePtr2(nullptr, *it, "MediaTrack*")) it = g_spilledParents.erase(it);
+            else ++it;
+        }
     }
     const int  n = CountTracks(nullptr);
     g_visibleTracks.clear();
@@ -832,17 +861,25 @@ void rebuildVisibleTrackList() {
         MediaTrack* tr = GetTrack(nullptr, i);
         if (!tr) continue;
         if (folderMode) {
-            // Parents-only: a track passes when it's at top level
-            // (GetTrackDepth == 0) — covers folder-start tracks AND
-            // non-folder root tracks alike. Children pass only if they
-            // are DIRECT children of the currently-spilled parent
-            // (long-press SEL on that parent flipped the spill on).
-            // Independent of REAPER's MCP collapse state — the user
-            // wanted a hardware-only filter, not a mirror.
+            // Parents-only with strict ancestor-chain spill: a track
+            // passes when it's at top level (depth==0) — covers folder-
+            // start and non-folder root tracks alike — OR every ancestor
+            // folder up the chain is in g_spilledParents. Walking the
+            // chain (instead of just checking the direct parent) means
+            // collapsing a Level-1 folder hides its Level-3 grandchildren
+            // even if their Level-2 parent is still in the set; the
+            // grandchildren reappear on re-spill of Level-1 without us
+            // having to track snapshot state.
             const int depth = GetTrackDepth(tr);
             if (depth != 0) {
-                if (!spilled) continue;
-                if (GetParentTrack(tr) != spilled) continue;
+                if (g_spilledParents.empty()) continue;
+                MediaTrack* anc = GetParentTrack(tr);
+                bool chainOk = true;
+                while (anc) {
+                    if (!g_spilledParents.count(anc)) { chainOk = false; break; }
+                    anc = GetParentTrack(anc);
+                }
+                if (!chainOk) continue;
             }
         }
         // Show-only-selected: live filter against current selection (not
@@ -861,6 +898,15 @@ void rebuildVisibleTrackList() {
             char guidBuf[64] = {0};
             GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
             if (!g_selsetActiveGuids.count(guidBuf)) continue;
+        }
+        // Temporary Selection Set — independent ad-hoc filter ANDed with
+        // the slot filter above. Empty set = pass-through so a freshly-
+        // recalled (but empty) temp set doesn't hide everything; user
+        // builds it up via REASIXTY_TEMP_SELSET_ADD afterwards.
+        if (g_tempSelsetActive.load() && !g_tempSelsetGuids.empty()) {
+            char guidBuf[64] = {0};
+            GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
+            if (!g_tempSelsetGuids.count(guidBuf)) continue;
         }
         // AUTO-mode filter: hide tracks in Trim/Read (0) or Read (1) so
         // the user only sees tracks armed for automation writing. Only
@@ -1045,7 +1091,7 @@ inline void selsetKeyDataProject_(int slot, char* out, size_t n) {
 void selsetWriteToProject_(int slot1to8) {
     if (slot1to8 < 1 || slot1to8 > 8) return;
     const SelSet& s = g_selsets[slot1to8 - 1];
-    // Persist the scope flag so the next load reads from the right key.
+    // Persist the scope flag (always in global ExtState, reliable).
     char flagKey[32];
     selsetKeyFlag_(slot1to8, flagKey, sizeof(flagKey));
     SetExtState("rea_sixty", flagKey, s.global ? "global" : "project", true);
@@ -1054,45 +1100,224 @@ void selsetWriteToProject_(int slot1to8) {
                       && s.type == SelSetType::Snapshot;
     const std::string serialized = isEmpty ? "" : selsetSerialize_(s);
 
-    char globalKey[32], projKey[32];
+    char globalKey[32];
     selsetKeyDataGlobal_ (slot1to8, globalKey, sizeof(globalKey));
-    selsetKeyDataProject_(slot1to8, projKey,   sizeof(projKey));
     if (s.global) {
-        // Global write + clear the project-scoped key so the slot's
-        // content lives in exactly one place. Avoids stale duplicates
-        // if the user toggles back and forth.
+        // Global write — reliable via SetExtState.
         SetExtState("rea_sixty", globalKey, serialized.c_str(), true);
-        SetProjExtState(nullptr, "rea_sixty", projKey, "");
     } else {
-        SetProjExtState(nullptr, "rea_sixty", projKey, serialized.c_str());
+        // Project-scoped data goes through the projectconfig hook below
+        // (slotsSaveExt_). SetProjExtState was unreliable on Frank's
+        // build — see setprojextstate-not-reliable.md. MarkProjectDirty
+        // gets the user a Save prompt so the hook gets a chance to run.
+        if (ReaProject* p = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(p);
+        // Clear any stale global mirror so a switch from global → project
+        // doesn't leave two copies floating around.
         SetExtState("rea_sixty", globalKey, "", true);
     }
 }
 
+// projectconfig hooks for the 1..8 Selection Set slots — project-scoped
+// data. Mirrors the temp-selset pattern (see g_tempSelsetProjConfig).
+// Global-scoped slots stay on SetExtState (reliable) and are skipped
+// by these callbacks. Each populated project-scoped slot writes one
+// line: `SELSET_<N>_DATA "<serialized>"` where serialised is the same
+// TAB-delimited format selsetSerialize_ produces.
+void slotsSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                   struct project_config_extension_t* /*reg*/)
+{
+    for (int i = 1; i <= 8; ++i) {
+        const SelSet& s = g_selsets[i - 1];
+        if (s.global) continue;
+        const bool isEmpty = s.name.empty() && s.guids.empty()
+                          && s.type == SelSetType::Snapshot;
+        if (isEmpty) continue;
+        const std::string serialized = selsetSerialize_(s);
+        ctx->AddLine("SELSET_%d_DATA \"%s\"", i, serialized.c_str());
+    }
+}
+
+bool slotsProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                       bool /*isUndo*/,
+                       struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "SELSET_", 7) != 0) return false;
+    p += 7;
+    int slot = 0;
+    while (*p >= '0' && *p <= '9') { slot = slot * 10 + (*p - '0'); ++p; }
+    if (slot < 1 || slot > 8) return false;
+    if (std::strncmp(p, "_DATA", 5) != 0) return false;
+    p += 5;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (*p == '"') ++p;
+    std::string field;
+    while (*p && *p != '"') field += *p++;
+    selsetDeserialize_(field.c_str(), g_selsets[slot - 1]);
+    g_selsets[slot - 1].global = false;
+    return true;
+}
+
+void slotsBeginLoad_(bool /*isUndo*/,
+                     struct project_config_extension_t* /*reg*/)
+{
+    // Reset only project-scoped slots — global slots are independent of
+    // the project and stay loaded from SetExtState (refreshed by
+    // loadSelsetsFromProject_'s flag-driven path).
+    for (int i = 0; i < 8; ++i) {
+        if (!g_selsets[i].global) g_selsets[i] = SelSet{};
+    }
+}
+
+project_config_extension_t g_slotsProjConfig{
+    slotsProcessLine_,
+    slotsSaveExt_,
+    slotsBeginLoad_,
+    nullptr
+};
+
+// Temporary-selection-set persistence: TAB-joined GUIDs in ProjExtState
+// key "temp_selset", recall flag in "temp_selset_active" ("1" / ""). Per-
+// project (so a working set saved in Project A doesn't leak into Project
+// B). Called by tempSelsetWriteToProject_ on every mutation, and by
+// loadSelsetsFromProject_ on project switch.
+constexpr char kTempSelsetDelim = '\t';
+// Persistence runs through the projectconfig hooks below, NOT through
+// SetProjExtState. The session of 2026-05-27 proved that SetProjExtState
+// writes were accepted in-memory (readback worked) but REAPER never
+// serialised them to the saved .rpp — even with MarkProjectDirty +
+// explicit project pointer. The official `project_config_extension_t`
+// pattern (SaveExtensionConfig / ProcessExtensionLine) puts our lines
+// directly into the .rpp chunk REAPER writes, bypassing whatever
+// ExtState quirk lost the data.
+//
+// tempSelsetWriteToProject_ is therefore now just a "mark project as
+// needing save" trigger so the user gets the standard Save prompt /
+// star indicator after touching the temp set. Actual disk write is
+// driven by REAPER calling tempSelsetSaveExt_ from the projectconfig
+// hook on Cmd+S.
+void tempSelsetWriteToProject_() {
+    if (ReaProject* p = EnumProjects(-1, nullptr, 0)) {
+        MarkProjectDirty(p);
+    }
+}
+
+// projectconfig SaveExtensionConfig — REAPER calls this during a
+// project save. We write two RPP chunk lines that REAPER stores
+// verbatim and feeds back via ProcessExtensionLine on the next load.
+// Format uses quoted strings so the LineParser keeps tabs / spaces
+// intact inside the GUID list.
+void tempSelsetSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                        struct project_config_extension_t* /*reg*/)
+{
+    std::string joined;
+    bool first = true;
+    for (const auto& g : g_tempSelsetGuids) {
+        if (!first) joined += '\t';
+        joined += g;
+        first = false;
+    }
+    if (!joined.empty()) {
+        ctx->AddLine("TEMPSELSET_DATA \"%s\"", joined.c_str());
+    }
+    if (g_tempSelsetActive.load()) {
+        ctx->AddLine("TEMPSELSET_ACTIVE 1");
+    }
+}
+
+bool tempSelsetProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                            bool /*isUndo*/,
+                            struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "TEMPSELSET_DATA", 15) == 0) {
+        p += 15;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '"') ++p;
+        std::string field;
+        while (*p && *p != '"') field += *p++;
+        size_t pos = 0;
+        while (pos <= field.size()) {
+            size_t next = field.find('\t', pos);
+            std::string g = (next == std::string::npos)
+                            ? field.substr(pos) : field.substr(pos, next - pos);
+            if (!g.empty()) g_tempSelsetGuids.insert(std::move(g));
+            if (next == std::string::npos) break;
+            pos = next + 1;
+        }
+        return true;
+    }
+    if (std::strncmp(p, "TEMPSELSET_ACTIVE", 17) == 0) {
+        p += 17;
+        while (*p == ' ' || *p == '\t') ++p;
+        g_tempSelsetActive.store(*p == '1');
+        return true;
+    }
+    return false;
+}
+
+void tempSelsetBeginLoad_(bool /*isUndo*/,
+                          struct project_config_extension_t* /*reg*/)
+{
+    g_tempSelsetGuids.clear();
+    g_tempSelsetActive.store(false);
+}
+
+project_config_extension_t g_tempSelsetProjConfig{
+    tempSelsetProcessLine_,
+    tempSelsetSaveExt_,
+    tempSelsetBeginLoad_,
+    nullptr
+};
+
+// Load now flows through the projectconfig BeginLoadProjectState +
+// ProcessExtensionLine callbacks driven by REAPER. Stub kept so the
+// existing call from loadSelsetsFromProject_ compiles and so that
+// dylib reloads in the middle of an already-open project still pick
+// up state — but the moment a real save / load round trip happens,
+// REAPER's projectconfig path wins.
+void tempSelsetLoadFromProject_(ReaProject* /*proj*/) {
+    // No-op — projectconfig hook owns load.
+}
+
 void loadSelsetsFromProject_() {
     ReaProject* proj = EnumProjects(-1, nullptr, 0);
+    // Per-slot scope flag lives in global ExtState (reliable). For
+    // global-scoped slots the data also lives there; for project-scoped
+    // slots the data is fed in by the projectconfig hook
+    // (slotsProcessLine_) before this drain runs, so we don't read the
+    // .rpp directly here. SetProjExtState was unreliable on Frank's
+    // build — see setprojextstate-not-reliable.md.
     for (int i = 1; i <= 8; ++i) {
-        char flagKey[32], globalKey[32], projKey[32];
+        char flagKey[32], globalKey[32];
         selsetKeyFlag_(i,        flagKey,   sizeof(flagKey));
         selsetKeyDataGlobal_(i,  globalKey, sizeof(globalKey));
-        selsetKeyDataProject_(i, projKey,   sizeof(projKey));
         const char* flagStr = GetExtState("rea_sixty", flagKey);
         const bool isGlobal = flagStr && *flagStr
                             && std::strcmp(flagStr, "global") == 0;
-        char val[8192] = {0};
         if (isGlobal) {
+            char val[8192] = {0};
             const char* d = GetExtState("rea_sixty", globalKey);
             if (d && *d) std::strncpy(val, d, sizeof(val) - 1);
+            if (val[0]) selsetDeserialize_(val, g_selsets[i - 1]);
+            else        g_selsets[i - 1] = SelSet{};
+            g_selsets[i - 1].global = true;
         } else {
-            GetProjExtState(proj, "rea_sixty", projKey, val, sizeof(val));
+            // Project-scoped — the projectconfig hook already populated
+            // g_selsets[i-1] for this project (or left it default-empty
+            // if no SELSET_<N>_DATA line was present). Just refresh the
+            // global flag so the in-memory state agrees with ExtState.
+            g_selsets[i - 1].global = false;
         }
-        if (val[0]) {
-            selsetDeserialize_(val, g_selsets[i - 1]);
-        } else {
-            g_selsets[i - 1] = SelSet{};
-        }
-        g_selsets[i - 1].global = isGlobal;
     }
+    // Temp selset rides the same project-load tick — same dirty flag,
+    // same source-of-truth project pointer. Kept simple (single set, no
+    // global-vs-project switch); pure ProjExtState persistence.
+    tempSelsetLoadFromProject_(proj);
     g_selsetsLoadedFor = proj;
     g_selsetsDirty.store(false);
 }
@@ -1231,6 +1456,13 @@ void drainSelsets_() {
         {
             selsetApplyAutoModeToSlot_(prevActive, 0);
         }
+        // Slot ↔ Temp are mutually exclusive — activating a slot
+        // deactivates the temp set (and tempSelsetToggleRecall_ does
+        // the reverse). Frank 2026-05-27.
+        if (g_tempSelsetActive.load()) {
+            g_tempSelsetActive.store(false);
+            tempSelsetWriteToProject_();
+        }
         g_selsetActive.store(actReq);
         refreshActiveSelsetGuids_();
         // Snap the bank to the first channel of the selset so the surface
@@ -1255,12 +1487,37 @@ void drainSelsets_() {
     {
         refreshActiveSelsetGuids_();
     }
+
+    // Forward decls — handler bodies live near the brightness/mixer
+// actions (~line 13280) inside this same anonymous namespace.
+void tempSelsetAddSelected_();
+void tempSelsetRemoveSelected_();
+void tempSelsetToggleRecall_();
+
+// Temp-selset main-thread work. Drained AFTER the slot drain so a
+    // recall toggle here sees the up-to-date g_selsetActive (the slot
+    // path may have just deactivated a slot to honour mutual exclusion).
+    if (g_tempSelsetAddRequest.exchange(false)) {
+        tempSelsetAddSelected_();
+    }
+    if (g_tempSelsetRemoveRequest.exchange(false)) {
+        tempSelsetRemoveSelected_();
+    }
+    if (g_tempSelsetRecallRequest.exchange(false)) {
+        tempSelsetToggleRecall_();
+    }
 }
 
 // Long-press SEL → folder spill toggle. Polled at the start of onTimer
 // (before rebuildVisibleTrackList) so the rebuilt list immediately
 // reflects spill changes. Skips silently when folder_mode is off — no
 // visible effect even if user happens to long-press SEL.
+//
+// Toggle is per-folder only: collapsing removes just this entry,
+// leaving any previously-spilled descendants in the set as dormant
+// state. The strict-ancestor filter in rebuildVisibleTrackList hides
+// them while this folder is collapsed, and a future re-spill restores
+// the drill-down without any explicit snapshot.
 void checkSelLongPressSpill() {
     if (!g_folderMode.load()) return;
     const int64_t now = nowMs_();
@@ -1276,8 +1533,8 @@ void checkSelLongPressSpill() {
         // worth spilling. Non-folder top-level tracks fail this gate
         // and the long-press is a no-op for them.
         if (GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") < 0.5) continue;
-        MediaTrack* cur = g_spilledParent.load();
-        g_spilledParent.store(cur == tr ? nullptr : tr);
+        if (g_spilledParents.count(tr)) g_spilledParents.erase(tr);
+        else                            g_spilledParents.insert(tr);
         g_bankDirty.store(true);
     }
 }
@@ -2627,6 +2884,101 @@ void applySelectRelative_(int step)
         followSelectedInMixer(tr);
     }
 }
+// Encoder cycle action — scroll through the visible-track list,
+// selecting the next/prev track and syncing UC1's focused-track when
+// the UC1 surface is present. Mirrors what UC1 Encoder 1 did before it
+// became bindable (track-scroll + CS-domain focus + setFocusedTrack);
+// also bind-able to UF8 ChannelEncoder / strip buttons / etc., in
+// which case the UC1-specific bits no-op silently. Cursor = REAPER's
+// currently-selected track, falling back to first / last visible.
+void applyTrackScroll_(int step)
+{
+    if (step == 0) return;
+    const int vc = visibleTrackCount();
+    if (vc == 0) return;
+    int cur = -1;
+    if (g_uc1_surface) {
+        // Prefer UC1's own focused-track when present — keeps the
+        // CHANNEL encoder grounded on the channel UC1 is showing, even
+        // if REAPER's selection wandered off via mouse / external
+        // action. Falls through to REAPER selection if UC1 focus isn't
+        // on a visible track.
+        MediaTrack* uf = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        if (uf) {
+            for (int t = 0; t < vc; ++t) {
+                if (visibleTrackAt(t) == uf) { cur = t; break; }
+            }
+        }
+    }
+    if (cur < 0) {
+        for (int t = 0; t < vc; ++t) {
+            MediaTrack* tr = visibleTrackAt(t);
+            if (tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) {
+                cur = t;
+                break;
+            }
+        }
+    }
+    int next = (cur >= 0 ? cur : (step >= 0 ? 0 : vc - 1)) + step;
+    if (next < 0)        next = 0;
+    if (next > vc - 1)   next = vc - 1;
+    MediaTrack* tgt = visibleTrackAt(next);
+    if (!tgt) return;
+    SetOnlyTrackSelected(tgt);
+    followSelectedInMixer(tgt);
+    if (g_uc1_surface) {
+        g_uc1_surface->setFocusedTrack(tgt);
+        // CHANNEL encoder = "selected channel" navigator. Force CS
+        // focus so UC1's central LCD + UF8 scribble strips switch to
+        // CS info — preserved from the pre-bind hardcoded behaviour.
+        const auto fp = uf8::getFocusedParam();
+        if (fp.domain != uf8::Domain::ChannelStrip) {
+            uf8::setFocus({uf8::Domain::ChannelStrip, 0});
+            g_uc1_surface->refresh();
+        }
+    }
+}
+
+// Encoder cycle action — scroll prev/next track within the Temporary
+// Selection Set, regardless of whether the temp filter is currently
+// recalled. Walks REAPER's project track order (not the visible list)
+// because the temp set is a fixed working set independent of the
+// current surface filter. Cursor = current REAPER selection: if the
+// selected track is already in the set, step from there; otherwise
+// start at the set's first project-order track.
+void applyTempSelsetScroll_(int step)
+{
+    if (step == 0) return;
+    if (g_tempSelsetGuids.empty()) return;
+    std::vector<MediaTrack*> members;
+    const int n = CountTracks(nullptr);
+    members.reserve(g_tempSelsetGuids.size());
+    int curIdx = -1;
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        char gb[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", gb, false);
+        if (!g_tempSelsetGuids.count(gb)) continue;
+        if (GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5
+            && curIdx < 0)
+        {
+            curIdx = static_cast<int>(members.size());
+        }
+        members.push_back(tr);
+    }
+    if (members.empty()) return;
+    int next = (curIdx >= 0 ? curIdx : 0) + step;
+    const int last = static_cast<int>(members.size()) - 1;
+    if (next < 0)    next = 0;
+    if (next > last) next = last;
+    MediaTrack* tgt = members[static_cast<size_t>(next)];
+    if (tgt) {
+        SetOnlyTrackSelected(tgt);
+        followSelectedInMixer(tgt);
+    }
+}
+
 void applyPlayheadNudge_(int step)
 {
     if (step == 0) return;
@@ -9491,8 +9843,9 @@ void pushZonesForVisibleSlots()
 
         struct UserFaderHandle {
             MediaTrack* tr; int fxIdx; int vst3Param; bool inverted;
+            std::string label;
         };
-        UserFaderHandle userF{nullptr, -1, -1, false};
+        UserFaderHandle userF{nullptr, -1, -1, false, {}};
         if (g_uf8PluginMode.load() && !flipActive) {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const int bank = std::clamp(g_softKeyBank.load(),
@@ -9500,7 +9853,8 @@ void pushZonesForVisibleSlots()
                 const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
                 if (sb.faderVst3Param >= 0) {
                     userF = { uctx.tr, uctx.fxIdx,
-                              sb.faderVst3Param, sb.faderInverted };
+                              sb.faderVst3Param, sb.faderInverted,
+                              sb.faderLabel };
                 }
             }
         }
@@ -9686,12 +10040,18 @@ void pushZonesForVisibleSlots()
             // FX Learn UF8: when a user-mapped fader binding exists for
             // this strip, show the bound param's name instead of the
             // track name. Lets the user see at a glance which param
-            // each fader drives.
+            // each fader drives. User-supplied faderLabel wins over the
+            // plug-in's own short name so the Fader Label field in
+            // Settings → FX Learn actually affects the scribble.
             if (userFaderActive) {
-                char pn[64] = {0};
-                TrackFX_GetParamName(userF.tr, userF.fxIdx,
-                    userF.vst3Param, pn, sizeof(pn));
-                if (pn[0]) n = pn;
+                if (!userF.label.empty()) {
+                    n = userF.label;
+                } else {
+                    char pn[64] = {0};
+                    TrackFX_GetParamName(userF.tr, userF.fxIdx,
+                        userF.vst3Param, pn, sizeof(pn));
+                    if (pn[0]) n = pn;
+                }
             }
             // FX Learn UF8: in user-strip mode without a fader binding
             // for this strip, blank the upper scribble — Frank's
@@ -13202,6 +13562,58 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
+// Temporary Selection Set handlers — invoked by the temp_selset_*
+// built-ins (Bindings UI "Selection Sets" category). Pure surface
+// concept (ad-hoc working set); no Settings slot, ProjExtState-persisted
+// via tempSelsetWriteToProject_.
+void tempSelsetAddSelected_()
+{
+    const int n = CountSelectedTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetSelectedTrack(nullptr, i);
+        if (!tr) continue;
+        char buf[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+        if (buf[0]) g_tempSelsetGuids.insert(buf);
+    }
+    tempSelsetWriteToProject_();
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+void tempSelsetRemoveSelected_()
+{
+    const int n = CountSelectedTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetSelectedTrack(nullptr, i);
+        if (!tr) continue;
+        char buf[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+        if (buf[0]) g_tempSelsetGuids.erase(buf);
+    }
+    tempSelsetWriteToProject_();
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+void tempSelsetToggleRecall_()
+{
+    const bool wasActive = g_tempSelsetActive.load();
+    g_tempSelsetActive.store(!wasActive);
+    tempSelsetWriteToProject_();
+    // Slot ↔ Temp are mutually exclusive. Turning temp ON requests the
+    // active slot's deactivation through the same drain path that
+    // handles selset_recall (so auto-mode revert + follow-selected hook
+    // fire correctly). Turning temp OFF leaves the slot state alone —
+    // re-pressing temp's button is just a temp toggle, not a slot
+    // restore.
+    if (!wasActive && g_selsetActive.load() >= 1) {
+        g_selsetActivateRequest.store(-1);
+    }
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
 // triggered via menu/keyboard, not custom_action registered entries.
@@ -14161,6 +14573,11 @@ std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx)
 // (matches "no idea where we are" defaults). UC1 channel encoder uses
 // this so it honours the same visibility filter as the UF8 surface.
 // Frank 2026-05-22.
+// File-scope shim — anonymous-namespace applyTrackScroll_ has internal
+// linkage, so UC1Surface.cpp can't call it directly. Wrapper lives at
+// external linkage and forwards into the anonymous-ns implementation.
+void reasixty_applyTrackScroll(int step) { applyTrackScroll_(step); }
+
 MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step)
 {
     const int vc = visibleTrackCount();
@@ -14481,7 +14898,7 @@ bool reasixty_folderMode()
 void reasixty_setFolderMode(bool on)
 {
     g_folderMode.store(on);
-    if (!on) g_spilledParent.store(nullptr);
+    if (!on) g_spilledParents.clear();
     g_pageDirty.store(true);
     g_bankDirty.store(true);
     SetExtState("ReaSixty", "folderMode", on ? "1" : "0", true);
@@ -15810,10 +16227,10 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_folderMode.load();
             g_folderMode.store(next);
-            // Spilled parent is meaningless without folder mode — drop
-            // the reference so toggling folder mode back on starts
-            // collapsed (long-press SEL re-spills as needed).
-            if (!next) g_spilledParent.store(nullptr);
+            // Spilled parents are meaningless without folder mode — drop
+            // them so toggling folder mode back on starts collapsed
+            // (long-press SEL re-spills as needed).
+            if (!next) g_spilledParents.clear();
             g_pageDirty.store(true);
             // Bank-dirty re-renders every strip from the new filtered
             // list — without this, dedup pins each strip to its previous
@@ -15878,6 +16295,37 @@ void registerBindingHandlers()
         },
         nullptr, "Encoder: cycle Selection Set (off → 1 → 2 → … → off)",
         false
+    });
+
+    // Temp Selection Set — ad-hoc working set, no Settings slot, lives
+    // in ProjExtState. Three button built-ins (Add / Remove / Recall)
+    // plus the temp_selset_scroll encoder action (registered earlier
+    // alongside select_relative).
+    registerBuiltin("temp_selset_add", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // Lambda may fire from the libusb input thread — REAPER
+            // track APIs + SetProjExtState are main-thread-only, so
+            // queue the work for drainSelsets_ to consume on the next
+            // onTimer tick. Frank 2026-05-27.
+            g_tempSelsetAddRequest.store(true);
+        },
+        nullptr, "Temp Selection Set: add REAPER-selected tracks", false
+    });
+    registerBuiltin("temp_selset_remove", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_tempSelsetRemoveRequest.store(true);
+        },
+        nullptr, "Temp Selection Set: remove REAPER-selected tracks", false
+    });
+    registerBuiltin("temp_selset_recall", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_tempSelsetRecallRequest.store(true);
+        },
+        [](int) { return g_tempSelsetActive.load(); },
+        "Temp Selection Set: recall (toggle filter)", true
     });
 
     // FX Learn lebt als Settings-Tab im Mixer-Window, nicht als Builtin —
@@ -16131,6 +16579,20 @@ void registerBindingHandlers()
         },
         nullptr, "Encoder: select prev/next track", false
     });
+    registerBuiltin("track_scroll", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyTrackScroll_(param);
+        },
+        nullptr, "Encoder: scroll tracks", false
+    });
+    registerBuiltin("temp_selset_scroll", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyTempSelsetScroll_(param);
+        },
+        nullptr, "Encoder: scroll tracks in Temp Selection Set", false
+    });
     registerBuiltin("playhead_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
@@ -16324,6 +16786,13 @@ void registerBindingHandlers()
             if (g_uc1_surface) g_uc1_surface->applyBcTrackScroll(param);
         },
         nullptr, "Encoder: scroll BC anchor track", false
+    });
+    registerBuiltin("bc_track_scroll_select", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            if (g_uc1_surface) g_uc1_surface->applyBcTrackScrollAndSelect(param);
+        },
+        nullptr, "Encoder: scroll and select BC anchor track", false
     });
 
     // UC1 Encoder 2 push — default Plain action: toggle the floating
@@ -17250,6 +17719,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
+    // Temp Selection Set persistence — official SDK pattern. REAPER
+    // calls SaveExtensionConfig during Cmd+S to emit our state into
+    // the .rpp, and ProcessExtensionLine to feed it back on next load.
+    // Replaces an earlier SetProjExtState attempt where the writes
+    // never made it to disk (Frank 2026-05-27).
+    plugin_register("projectconfig", &g_tempSelsetProjConfig);
+    // 1..8 Selection Set slots — project-scoped data uses the same
+    // projectconfig pattern. Global-scoped slots stay on SetExtState
+    // (reliable). Preemptive migration so the slots don't bite us the
+    // way temp_selset did. Frank 2026-05-27.
+    plugin_register("projectconfig", &g_slotsProjConfig);
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");
     return 1;

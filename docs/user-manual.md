@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.7
+date: v0.1.10
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,9 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.8. Earlier manuals (anything dated before 2026-05-26) are superseded.
+This manual documents Rea-Sixty v0.1.10. Earlier manuals (anything dated before 2026-05-27) are superseded.
+
+Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
 \newpage
 
@@ -418,11 +420,11 @@ A column of buttons + the central LCD + the two encoders:
 
 ## CHANNEL encoder (left of the central LCD)
 
-The large rotary on the central control panel.
+The large rotary on the central control panel. ButtonId `Uc1Encoder1` in the bindings system.
 
-- **Rotation** — Channel Select (move REAPER track selection ±). The surrounding 7-segment digit shows the absolute REAPER track number of the focused track.
+- **Rotation** — `track_scroll` by default (step REAPER track selection ±, with UC1 focused-track and CS-domain focus following along). Rebindable in Settings → Bindings → UC1 (ROTATE tile under ENCODER 1) — Shift = `instance_cycle` by default; Cmd / Ctrl free.
 - **Push** — push event arrives as button 0x0D; default binding empty.
-- When **Settings → Modes → FX / Cycle → "UC1 Encoder 1 (CHANNEL)"** is ticked AND a cycle-kind Selection Mode is engaged, rotation drives `reasixty_dispatchSelModeCycle` instead.
+- When **Settings → Modes → FX / Cycle → "UC1 Encoder 1 (CHANNEL)"** is ticked AND a cycle-kind Selection Mode is engaged, rotation drives `reasixty_dispatchSelModeCycle` instead, regardless of the binding.
 
 ## Secondary encoder (right of the central LCD)
 
@@ -797,7 +799,7 @@ Each slot is either:
 The slot rows are laid out as a fixed-width 7-column table so columns align across rows regardless of slot type. Left to right:
 
 - **`• Slot N`** — the `•` prefix marks the currently active slot.
-- **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (ProjExtState, persists with the project save). Group slots benefit most from Global since "group N" is a stable concept across projects.
+- **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (saved into the project's RPP chunk on Cmd+S). Group slots benefit most from Global since "group N" is a stable concept across projects.
 - **Type** combo: `Snapshot` / `Group`.
 - **Name** text field.
 - **Grp** spinner (Group rows) — REAPER track group index 1..64. Snapshot rows show `(N tracks)` in this column instead.
@@ -940,9 +942,12 @@ Bind these to a non-CHANNEL rotation (UC1 Encoder 2, footswitches with rotation,
 - **`instance_cycle`** — Instance Cycle on focused track (rotation = step ±).
 - **`fx_cycle`** — FX Cycle on focused track.
 - **`select_relative`** — step REAPER track selection ±1.
+- **`track_scroll`** — visible-track scroll + select + UC1 focused-track follow + force CS-domain focus. Like `select_relative` but UC1-aware. Default binding on UC1 Encoder 1.
 - **`playhead_nudge`** — playhead nudge ±.
 - **`mouse_scroll`** — synthesised scroll-wheel under the screen cursor.
-- **`bc_track_scroll`** — scroll the UC1's Bus Comp anchor track ±1 (which track the BC section is pinned to).
+- **`bc_track_scroll`** — scroll the UC1's Bus Comp anchor track ±1 (which track the BC section is pinned to). REAPER selection and UF8 bank stay put.
+- **`bc_track_scroll_select`** — same scroll as `bc_track_scroll`, but additionally pulls REAPER selection + UF8 bank to the new BC anchor. Use this when you want the BC encoder to drive the whole surface, not just the UC1 carousel.
+- **`temp_selset_scroll`** — encoder scroll within the Temporary Selection Set (see below). Walks the temp set in REAPER project order; works regardless of whether the temp filter is recalled.
 
 ## Plug-in Mixer modes
 
@@ -1024,9 +1029,12 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## Selection Sets
 
-- **`selset_recall` (param: 1..8)** — toggle slot N: activate if inactive, deactivate if already active. Activation filters the surface to the slot's tracks and snaps the bank to strip 0 = first slot track.
+- **`selset_recall` (param: 1..8)** — toggle slot N: activate if inactive, deactivate if already active. Activation filters the surface to the slot's tracks and snaps the bank to strip 0 = first slot track. Mutually exclusive with the Temporary Selection Set's recall — activating a slot deactivates the temp filter, and vice versa.
 - **`selset_save` (param: 1..8)** — save the current REAPER track selection into slot N.
 - **`selset_cycle`** — encoder-rotation handler that steps off → first populated slot → next → … → off. Skips empty slots.
+- **`temp_selset_add`** — add every currently-selected REAPER track to the Temporary Selection Set.
+- **`temp_selset_remove`** — remove every currently-selected REAPER track from the Temporary Selection Set.
+- **`temp_selset_recall`** — toggle the Temporary Selection Set's surface filter on / off. LED state-of reports the active flag, so a bound button lights up when the filter is engaged.
 
 ## Surface filters / view toggles
 
@@ -1167,7 +1175,18 @@ A Group slot tracks REAPER's track-group membership in real time. Add a track to
 
 ## Persistence
 
-Snapshot slots store GUIDs in REAPER's ProjExtState (per project). Group slots store: group index, project-scoped or global. The `Selection-Set auto-mode` value is project-global (ExtState).
+Project-scoped Snapshot + Group slots are saved into the project's RPP chunk via REAPER's project-config hook (lines `SELSET_<N>_DATA "..."`). Global-scoped slots ride REAPER's global ExtState (`reaper-extstate.ini`). The per-slot global/project flag itself, plus the `Selection-Set auto-mode` value, also live in global ExtState.
+
+## Temporary Selection Set
+
+A ninth, ad-hoc selection set living alongside the 8 numbered slots — no Settings UI, no slot name, just three actions you bind to hardware. Useful when you want to spin up a working set of tracks for a session ("just these 6 drum mics + the 2 talkback mics") without burning one of the named slots.
+
+- **`temp_selset_add`** — adds every currently REAPER-selected track to the temp set.
+- **`temp_selset_remove`** — removes every currently REAPER-selected track from the temp set.
+- **`temp_selset_recall`** — toggles the surface filter on / off. While on, only temp-set tracks are visible. Mutually exclusive with the 1..8 slot recall — activating either kind drops the other.
+- **`temp_selset_scroll`** (encoder rotation) — steps REAPER track selection through the temp set in project order. Works regardless of whether the filter is currently recalled.
+
+Persists per-project (saved into the RPP via the same project-config hook the numbered slots use). Cleared on REAPER restart only if you delete it manually; otherwise it survives save → reopen.
 
 \newpage
 
@@ -1242,13 +1261,15 @@ Emit any MIDI message: Note On/Off, CC, Program Change, Pitch Bend, NRPN. Channe
 
 Toggle: `folder_mode` builtin. When on, only top-level (depth-0) tracks are visible on the surface. Folder children appear only when "spilled" — long-press a folder parent's `SEL` button to toggle that parent's spill.
 
+**Nested folders (ancestor-chain spill).** Long-pressing a folder at any depth spills *that* folder; the ancestor chain stays in the spill set as well, so the intermediate hierarchy remains visible. Collapsing an ancestor (re-long-pressing it) hides its subtree but **keeps the descendants' spill state in memory**, so re-spilling that ancestor restores the previous drill-down without having to long-press each level again. Toggling Folder Mode off (or re-pressing the `folder_mode` builtin) clears the spill set entirely.
+
 ## Show Only Selected
 
 Toggle: `show_only_selected` builtin. When on, only currently-selected tracks appear on the surface. Live filter — changing REAPER selection updates the surface within one timer tick.
 
 ## Selection-Set filter
 
-ANDs with Folder Mode / Show Only Selected. When a selset is active, only its tracks appear (further filtered by Folder Mode if also on).
+ANDs with Folder Mode / Show Only Selected. When a selset is active, only its tracks appear (further filtered by Folder Mode if also on). The Temporary Selection Set is a separate filter that ANDs in the same way; a 1..8 slot and the temp set are mutually exclusive (only one can be recalled at a time).
 
 ## Hide-hidden filter
 

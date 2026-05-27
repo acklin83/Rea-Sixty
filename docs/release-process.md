@@ -8,6 +8,8 @@ Default: bump the patch version (last tag + 0.0.1). Ask Frank ONLY if:
 - The diff since last tag looks like substantive new functionality (then offer minor bump).
 - He's already told you the version to use.
 
+**Always ask for the release codename** (added 2026-05-27). Free choice, no theme — Frank picks. Append a row to `extension/version-names.tsv` as `vX.Y.Z<TAB>Codename` before tagging so the build bakes `REASIXTY_VERSION_NAME` into the About tab. If Frank explicitly says "kein Codename" / skips it, leave the row out — the About line silently hides on empty.
+
 Don't ask about IPs, paths, or platform availability — they're below.
 
 ## Repos

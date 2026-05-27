@@ -38,7 +38,34 @@ if(NOT GIT_DESC_RC EQUAL 0 OR VERSION_STR STREQUAL "")
     set(VERSION_STR "unknown")
 endif()
 
-set(NEW_CONTENT "#pragma once\n#define REASIXTY_COMMIT_COUNT ${COMMIT_COUNT}\n#define REASIXTY_VERSION_STR \"${VERSION_STR}\"\n")
+# Strip post-release suffixes ("-5-g1c923ab", "-dirty") so the codename
+# lookup matches the most recent tag. A dev build between v0.1.10 and
+# v0.1.11 still shows v0.1.10's codename — fine, until v0.1.11 ships
+# with its own entry the next codename overrides on the first tagged
+# build.
+set(VERSION_TAG "${VERSION_STR}")
+string(REGEX REPLACE "-[0-9]+-g[0-9a-f]+.*$" "" VERSION_TAG "${VERSION_TAG}")
+string(REGEX REPLACE "-dirty$"               "" VERSION_TAG "${VERSION_TAG}")
+
+set(VERSION_NAME "")
+set(VERSION_NAMES_FILE "${GIT_ROOT}/extension/version-names.tsv")
+if(EXISTS "${VERSION_NAMES_FILE}")
+    file(STRINGS "${VERSION_NAMES_FILE}" VN_LINES)
+    foreach(LINE IN LISTS VN_LINES)
+        # Skip comments + blank lines.
+        if(LINE MATCHES "^[ \t]*(#|$)")
+            continue()
+        endif()
+        # Tag and codename are TAB-separated.
+        string(REGEX MATCH "^([^\t]+)\t(.+)$" _ "${LINE}")
+        if(CMAKE_MATCH_1 STREQUAL "${VERSION_TAG}")
+            set(VERSION_NAME "${CMAKE_MATCH_2}")
+            break()
+        endif()
+    endforeach()
+endif()
+
+set(NEW_CONTENT "#pragma once\n#define REASIXTY_COMMIT_COUNT ${COMMIT_COUNT}\n#define REASIXTY_VERSION_STR \"${VERSION_STR}\"\n#define REASIXTY_VERSION_NAME \"${VERSION_NAME}\"\n")
 
 if(EXISTS ${OUTFILE})
     file(READ ${OUTFILE} OLD_CONTENT)

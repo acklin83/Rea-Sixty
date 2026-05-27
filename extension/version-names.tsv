@@ -1,0 +1,9 @@
+# Rea-Sixty release codenames. Source-of-truth for the About-tab
+# "Codename:" line. One entry per row: tag (with leading v) TAB codename.
+# Parsed by extension/cmake/write_commit_count.cmake on every build —
+# git describe must match the tag exactly (post-release dev builds with
+# a `-N-gabc` suffix strip back to the base tag, so a v0.1.10 codename
+# also shows on its dirty / post-release builds until the next tag).
+# Frank picks each codename at release time; old versions without an
+# entry render the About line empty.
+v0.1.10	Prettyyyyy... Prettyyyyy... Pretty Good!

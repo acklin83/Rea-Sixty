@@ -898,6 +898,7 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::SelectionRec:  return "REC";
         case ButtonId::SelectionAuto: return "AUTO";
         case ButtonId::ChannelEncoder: return "Channel Encoder";
+        case ButtonId::Uc1Encoder1:    return "UC1 Encoder 1";
         case ButtonId::Uc1Encoder2:    return "UC1 Encoder 2";
         case ButtonId::Uc1Encoder2Push: return "UC1 Encoder 2 Push";
         default:                     return uf8::bindings::toName(id);
@@ -2045,20 +2046,29 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
     const float stripY = faceH + 4;
     rect_(c, 4, stripY, W - 8, stripH - 8,
           0x14181EFF, 0x2A3038FF, /*rounding*/ 6.0);
-    // Centered banner — matches the UF8 schematic convention of
-    // section titles pinned to the horizontal centre of their button
-    // block. Frank 2026-05-22.
-    {
-        const char* kEncTitle = "ENCODER 2";
+    // Two side-by-side banners — Encoder 1 (CHANNEL, left) and Encoder
+    // 2 (BC, right). Each block holds its ROTATE tile (PUSH only on
+    // Encoder 2 because UC1 doesn't expose a hardware push on Enc 1).
+    // Frank 2026-05-22 / 2026-05-27.
+    const float blockW = (W - 8) / 2.0f;
+    const float blockL = 4.0f;
+    const float blockR = 4.0f + blockW;
+    auto centeredBanner = [&](float blockX, float blockWidth, const char* title) {
         double tw = 0, th = 0;
-        ImGui_CalcTextSize(c.ctx, kEncTitle, &tw, &th, nullptr, nullptr);
-        drawText_(c, W / 2.0f - static_cast<float>(tw) / 2.0f,
-                  stripY + 8, 0x9CA0AAFF, kEncTitle);
-    }
+        ImGui_CalcTextSize(c.ctx, title, &tw, &th, nullptr, nullptr);
+        drawText_(c, blockX + blockWidth / 2.0f - static_cast<float>(tw) / 2.0f,
+                  stripY + 8, 0x9CA0AAFF, title);
+    };
+    centeredBanner(blockL, blockW, "ENCODER 1");
+    centeredBanner(blockR, blockW, "ENCODER 2");
     const float tileY = stripY + 24;
-    drawHwBtn(W / 2.0f - 100, tileY, 90, 22,
+    // Encoder 1: ROTATE only (no PUSH hardware).
+    drawHwBtn(blockL + blockW / 2.0f - 45, tileY, 90, 22,
+              ButtonId::Uc1Encoder1,     "ROTATE");
+    // Encoder 2: ROTATE + PUSH side by side, centred within the block.
+    drawHwBtn(blockR + blockW / 2.0f - 95, tileY, 90, 22,
               ButtonId::Uc1Encoder2,     "ROTATE");
-    drawHwBtn(W / 2.0f + 10,  tileY, 90, 22,
+    drawHwBtn(blockR + blockW / 2.0f + 5,  tileY, 90, 22,
               ButtonId::Uc1Encoder2Push, "PUSH");
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
@@ -2366,7 +2376,10 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "instance_cycle" || n == "fx_cycle"
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
+                 || n == "bc_track_scroll_select"
                  || n == "select_relative"
+                 || n == "track_scroll"
+                 || n == "temp_selset_scroll"
                  || n == "playhead_nudge"
                  || n == "mouse_scroll")
                     return "Cycle Actions";
@@ -2427,7 +2440,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("recv_all_", 0) == 0)
                     return "Sends / Receives";
 
-                if (n.rfind("selset_", 0) == 0) return "Selection Sets";
+                if (n.rfind("selset_", 0) == 0
+                 || n.rfind("temp_selset_", 0) == 0) return "Selection Sets";
 
                 if (n.rfind("param_group_", 0) == 0
                  || n == "multi_select_as_temp_group_toggle")
@@ -3167,6 +3181,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // Momentary picks short OR long on release; Toggle / Hold fire primary
     // on press then long additively on hold-and-release past threshold.
     const bool isEncoder = (id == ButtonId::ChannelEncoder
+                          || id == ButtonId::Uc1Encoder1
                           || id == ButtonId::Uc1Encoder2);
     const bool longPressAvailable = !plainIsModifier && !isEncoder;
 
@@ -11391,6 +11406,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     char line[256];
     snprintf(line, sizeof(line), "  Version:  %s", REASIXTY_VERSION_STR);
     ImGui_Text(ctx, line);
+    if (REASIXTY_VERSION_NAME[0]) {
+        snprintf(line, sizeof(line), "  Codename: %s", REASIXTY_VERSION_NAME);
+        ImGui_Text(ctx, line);
+    }
     snprintf(line, sizeof(line), "  Build:    %s %s",
                   __DATE__, __TIME__);
     ImGui_Text(ctx, line);

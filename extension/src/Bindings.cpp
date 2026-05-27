@@ -122,6 +122,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::SelectionRec,  "selection_rec"  },
     { ButtonId::SelectionAuto, "selection_auto" },
     { ButtonId::ChannelEncoder, "channel_encoder" },
+    { ButtonId::Uc1Encoder1,      "uc1_encoder_1"      },
     { ButtonId::Uc1Encoder2,      "uc1_encoder_2"      },
     { ButtonId::Uc1Encoder2Push,  "uc1_encoder_2_push" },
     { ButtonId::Uc1Magnifier,     "uc1_magnifier"      },
@@ -423,6 +424,22 @@ void seedFactoryDefaults_(Config& c)
         spPlain.type   = ActionType::Builtin;
         spPlain.action = "encoder_mode_dispatch";
         auto& spShift = ce.shortPress[static_cast<int>(Modifier::Shift)];
+        spShift.type   = ActionType::Builtin;
+        spShift.action = "instance_cycle";
+    }
+
+    // UC1 Encoder 1 rotation. Plain = track_scroll (the pre-bind
+    // hardcoded "step focused-track + force CS focus + UC1 setFocusedTrack"
+    // behaviour, now a builtin). Shift = instance_cycle for symmetry
+    // with Encoder 2. Cmd/Ctrl free.
+    {
+        auto& e1 = L1[ButtonId::Uc1Encoder1];
+        e1.behavior = Behavior::Momentary;
+        e1.label    = "UC1 Enc 1";
+        auto& spPlain = e1.shortPress[static_cast<int>(Modifier::Plain)];
+        spPlain.type   = ActionType::Builtin;
+        spPlain.action = "track_scroll";
+        auto& spShift = e1.shortPress[static_cast<int>(Modifier::Shift)];
         spShift.type   = ActionType::Builtin;
         spShift.action = "instance_cycle";
     }

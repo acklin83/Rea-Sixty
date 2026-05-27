@@ -94,6 +94,17 @@ public:
     // bindings dispatch. step < 0 = previous BC track, step > 0 = next.
     void applyBcTrackScroll(int step);
 
+    // Same scroll logic as applyBcTrackScroll, but additionally calls
+    // SetOnlyTrackSelected + followSelectedInMixer so REAPER's track
+    // selection and the UF8 bank follow the BC anchor. Exposed for the
+    // `bc_track_scroll_select` builtin — alternative for users who
+    // want the BC encoder to drive selection too.
+    void applyBcTrackScrollAndSelect(int step);
+
+private:
+    void applyBcTrackScrollImpl_(int step, bool selectAlso);
+public:
+
     // Show a 3-slot instance/FX-cycle carousel on the central LCD.
     // Mirrors the BC-scroll overlay UX: claims the central layout
     // sub=0x02, writes `header` to the LCD top label, and replaces

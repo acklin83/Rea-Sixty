@@ -99,6 +99,14 @@ enum class ButtonId : uint16_t {
     // binds them in Settings.
     ChannelEncoder,
 
+    // UC1 Encoder 1 (Primary Encoder left of the central LCD, labelled
+    // CHANNEL). Rotation = `track_scroll` by default (preserves the
+    // hardcoded "step focused track + force CS focus + hide CS readout"
+    // behaviour that lived in UC1Surface before this surface became
+    // bindable). SEL Mode FX/Instance Cycle override still intercepts
+    // inside UC1Surface before dispatch reaches the bindings.
+    Uc1Encoder1,
+
     // UC1 Encoder 2 (Secondary Encoder right of the central LCD).
     // Rotation = `bc_track_scroll` by default (preserves the pre-bind
     // behaviour); Shift = `instance_cycle`. User can swap in `fx_cycle`

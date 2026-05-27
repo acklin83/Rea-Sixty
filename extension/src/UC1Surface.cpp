@@ -55,6 +55,11 @@ extern "C" int  reasixty_navUc1LongPress();
 // with UF8's SEL/CHANNEL-encoder paths so UC1 encoders feel identical.
 void reasixty_followSelectedInMixer(MediaTrack* tr);
 MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step);
+// Generic "scroll tracks" — same handler the `track_scroll` builtin
+// invokes. Used here as the dispatchEncoder fallback for Uc1Encoder1
+// so bindings.json files saved before this encoder became bindable
+// still scroll tracks (factory behaviour).
+void reasixty_applyTrackScroll(int step);
 int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
@@ -339,14 +344,12 @@ void UC1Surface::setBcAnchorTrack(void* track)
     refresh();
 }
 
-void UC1Surface::applyBcTrackScroll(int step)
+void UC1Surface::applyBcTrackScrollImpl_(int step, bool selectAlso)
 {
-    // Legacy MAIN-mode BC-encoder behaviour, now exposed as a public
-    // method so the `bc_track_scroll` builtin can reach it after
-    // bindings dispatch. Walks BC-bearing tracks in project order
-    // relative to the current BC anchor, re-anchors to the hit.
-    // Encoder 2 only moves the BC carousel — REAPER track selection
-    // and UF8 bank stay put (Frank 2026-05-07).
+    // Shared BC-track step + re-anchor. selectAlso=true additionally
+    // pulls REAPER selection + UF8 bank to the new anchor (Frank
+    // 2026-05-27 "scroll and select" variant). Default false preserves
+    // the classic Encoder-2 contract: carousel moves, selection stays.
     if (step == 0) return;
     const int n = CountTracks(nullptr);
     if (n <= 0) return;
@@ -385,6 +388,10 @@ void UC1Surface::applyBcTrackScroll(int step)
     MediaTrack* tr = GetTrack(nullptr, found);
     if (!tr) return;
     setBcAnchorTrack(tr);
+    if (selectAlso) {
+        SetOnlyTrackSelected(tr);
+        reasixty_followSelectedInMixer(tr);
+    }
     // Encoder 2 BC-scroll is the user expressing "show me BC" — flip
     // focus so resolveActiveFx_ / Toggle Focused UI / etc. target the
     // BC instance instead of the channel's CS / last-cursor FX. Without
@@ -393,6 +400,16 @@ void UC1Surface::applyBcTrackScroll(int step)
     // (or nothing) on the focused track. Frank 2026-05-22.
     uf8::setFocus({uf8::Domain::BusComp, 0});
     refresh();
+}
+
+void UC1Surface::applyBcTrackScroll(int step)
+{
+    applyBcTrackScrollImpl_(step, /*selectAlso=*/false);
+}
+
+void UC1Surface::applyBcTrackScrollAndSelect(int step)
+{
+    applyBcTrackScrollImpl_(step, /*selectAlso=*/true);
 }
 
 void UC1Surface::showInstanceCarousel(const std::string& prev,
@@ -734,26 +751,17 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             if (fallback) setFocusedTrack(fallback);
             lastFocusedTrackIdx_ = -1;
         }
-        MediaTrack* tr = reasixty_stepVisibleTrack(
-            static_cast<MediaTrack*>(focusedTrack_), step);
-        if (tr) {
-            SetOnlyTrackSelected(tr);
-            reasixty_followSelectedInMixer(tr);
-            setFocusedTrack(tr);
-            // Channel encoder = "selected channel" navigator. Force CS
-            // focus so the central LCD + UF8 scribble strips switch to
-            // CS info (per user intent: channel-encoder = CS, BC-encoder
-            // = BC). Preserve slotIdx if already in CS focus so an
-            // ongoing param edit doesn't lose its selection. refresh()
-            // re-renders the LCD with the new domain — without it the
-            // central label stays on the previous BC plug-in name even
-            // after the focus shift, since setFocusedTrack already ran
-            // refresh() with the OLD domain.
-            const auto fp = uf8::getFocusedParam();
-            if (fp.domain != uf8::Domain::ChannelStrip) {
-                uf8::setFocus({uf8::Domain::ChannelStrip, 0});
-                refresh();
-            }
+        // Bindings-routed dispatch (Uc1Encoder1). Falls back to the
+        // factory `track_scroll` handler when no binding exists so
+        // older bindings.json files saved before this encoder became
+        // bindable still scroll tracks. Default Plain binding wires
+        // Uc1Encoder1 → track_scroll, making the bindings path the
+        // normal path. The CS-readout overlay + carousel redraw below
+        // fire unconditionally — they're hardware-UI side effects of
+        // ANY Encoder 1 rotation, independent of the binding's action.
+        if (!uf8::bindings::dispatchEncoder(
+                uf8::bindings::ButtonId::Uc1Encoder1, step)) {
+            reasixty_applyTrackScroll(step);
         }
         if (device_) {
             // Hide the CS readout (zone 0x03) so the channel-name
@@ -775,9 +783,10 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             device_->send(buildDisplayInvalidate(0x0F));
         }
         if (logThis) {
-            const int landed = tr
+            MediaTrack* landedTr = static_cast<MediaTrack*>(focusedTrack_);
+            const int landed = landedTr
                 ? static_cast<int>(GetMediaTrackInfo_Value(
-                      tr, "IP_TRACKNUMBER"))
+                      landedTr, "IP_TRACKNUMBER"))
                 : 0;
             char line[96];
             snprintf(line, sizeof(line),
