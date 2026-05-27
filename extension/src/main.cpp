@@ -11134,7 +11134,25 @@ void chaseFocusedFxWindow()
     // UF8-only maps (domain==None) shouldn't clobber the CS/BC focus
     // when the user touches them — they have no UC1 representation.
     if (domain != uf8::Domain::None) {
-        uf8::setFocus({domain, 0});
+        // Slot-sticky chase: when the chase target is in the SAME
+        // domain as the current focus AND the new FX exposes the
+        // current LinkSlot, keep it. Otherwise reset to 0. Mirrors
+        // applyInstanceCycle_'s v0.1.9 fix — without this, scrolling
+        // tracks while a plug-in window is open snaps every UC1 /
+        // V-Pot focused-param surface back to slot 0 (= Bypass on
+        // most plug-ins). Frank 2026-05-27 — only reproducible in
+        // Strip Mode with the plug-in window open, because that's
+        // exactly when `SSL Strip Mode follows focused plugin window`
+        // makes this code path fire on every channel switch.
+        const auto fp = uf8::getFocusedParam();
+        int slot = 0;
+        if (fp.domain == domain && fp.slotIdx > 0) {
+            const auto* pm = uf8::lookupPluginMapByName(fxName);
+            if (pm && uf8::findSlotByLinkIdx(*pm, fp.slotIdx)) {
+                slot = fp.slotIdx;
+            }
+        }
+        uf8::setFocus({domain, slot});
     }
     uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                 std::memory_order_relaxed);
