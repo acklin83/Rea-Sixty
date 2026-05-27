@@ -45,11 +45,11 @@ In Wireshark, click each `USBPcap*` interface — the one that shows burst traff
 
 ### Capture every session as follows
 1. Start Wireshark on the chosen USBPcap interface
-2. Perform the action described in `captures/uc1/README.md` for this capture
+2. Perform the action described in the local capture plan (`.local-docs/captures/uc1/README.md`) for this capture
 3. Stop Wireshark, save as `captures/uc1/<name>.pcapng` with the exact filename listed
 4. Write a sibling `<name>.md` next to the pcapng describing host state (REAPER version, SSL 360° version, plugin version, what exactly was done and at which second)
 
-The planned capture list — and the REAPER-side action each one expects — lives in `captures/uc1/README.md`. That file is the source of truth; follow it in order.
+The planned capture list — and the REAPER-side action each one expects — lives in the local capture plan (`.local-docs/captures/uc1/README.md`, not pushed). That file is the source of truth; follow it in order.
 
 ### For each capture — write a sibling `.md`
 

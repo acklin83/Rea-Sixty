@@ -56,3 +56,6 @@ CLAUDE.md
 docs/plan-*.md
 docs/handoff-*.md
 docs/youre-finally-free.md
+
+# Local-only docs (credentials, runbooks — never push)
+.local-docs/
