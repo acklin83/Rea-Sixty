@@ -6531,6 +6531,13 @@ void drainInputQueue()
                 }
                 break;
             }
+            // PendingInput::Kind values not handled here are either
+            // processed earlier in this drain (TouchOriginSnapshot at
+            // the if-cascade above) or routed through other surface
+            // paths entirely. Explicit default: silences -Wswitch
+            // without claiming we handle every kind in this switch.
+            default:
+                break;
         }
     }
 }
