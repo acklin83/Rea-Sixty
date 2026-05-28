@@ -46,6 +46,11 @@ extern "C" int  reasixty_navUc1Takeover();
 extern "C" int  reasixty_navUc1Push();
 extern "C" int  reasixty_navUc1PushShift();
 extern "C" int  reasixty_navUc1LongPress();
+// Per-surface Nav Mode (2026-05-28). 0 = Mirror UF8 (legacy), 1 = UC1
+// Regions, 2 = UC1 Markers. Independent UC1 cursor is mutated via the
+// delta helper below; clamp + render happen in pushUc1NavCarousel.
+int reasixty_navUc1Mode();
+extern "C" int reasixty_navUc1CursorDelta(int delta);
 #include "ParameterGroups.h"  // multi-track param sync on UC1-originated writes
 #include "PluginMap.h" // uf8::lookupPluginOnTrack + slotIdxForVst3Param
 #include "UserPluginCatalog.h"  // user_plugins::lookupOwnedSlot + UserLinkSlot curve helpers
@@ -1175,7 +1180,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         if (uf8::nav::Overlay::instance().active()
             && reasixty_navUc1Takeover())
         {
-            uf8::nav::Overlay::instance().moveCursor(step);
+            // Independent UC1 modes (Regions / Markers) use a UC1-local
+            // cursor so UF8's overlay cursor stays untouched. Mirror
+            // mode (== 0) walks the shared Overlay cursor as before.
+            if (reasixty_navUc1Mode() != 0) {
+                reasixty_navUc1CursorDelta(step);
+            } else {
+                uf8::nav::Overlay::instance().moveCursor(step);
+            }
             reasixty_markNavOverlayDirty();
             ++stats_.knobEventsHandled;
             return;
@@ -1717,7 +1729,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             const int shiftAct = reasixty_navUc1PushShift();
             const int longAct  = reasixty_navUc1LongPress();
             const int act = isLong ? longAct : (isShift ? shiftAct : plainAct);
-            uf8::nav::dispatchPushAction(act);
+            uf8::nav::dispatchPushActionUc1(act);
 
             ++stats_.buttonEventsHandled;
             return;

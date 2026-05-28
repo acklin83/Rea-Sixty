@@ -202,6 +202,67 @@ void Overlay::enumerate()
     }
 }
 
+void Overlay::enumerateFiltered(View v, int filterRegionIdx,
+                                std::vector<Item>* out)
+{
+    if (!out) return;
+    out->clear();
+
+    int nmarkers = 0, nregions = 0;
+    CountProjectMarkers(nullptr, &nmarkers, &nregions);
+    const int total = nmarkers + nregions;
+
+    double filterStart = 0.0, filterEnd = 0.0;
+    bool haveFilter = false;
+    if (v == View::MarkersInRegion && filterRegionIdx >= 0) {
+        for (int i = 0; i < total; ++i) {
+            bool isrgn = false;
+            double pos = 0.0, rgnend = 0.0;
+            const char* name = nullptr;
+            int idx = 0, color = 0;
+            if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                     &name, &idx, &color)) continue;
+            if (isrgn && idx == filterRegionIdx) {
+                filterStart = pos;
+                filterEnd   = rgnend;
+                haveFilter  = true;
+                break;
+            }
+        }
+        if (!haveFilter) return;  // region gone — empty list
+    }
+
+    for (int i = 0; i < total; ++i) {
+        bool isrgn = false;
+        double pos = 0.0, rgnend = 0.0;
+        const char* name = nullptr;
+        int idx = 0, color = 0;
+        if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                 &name, &idx, &color)) continue;
+        switch (v) {
+        case View::Regions:
+            if (!isrgn) continue;
+            break;
+        case View::MarkersInRegion:
+            if (isrgn) continue;
+            if (pos < filterStart || pos > filterEnd) continue;
+            break;
+        case View::MarkersAll:
+            if (isrgn) continue;
+            break;
+        }
+        Item it;
+        it.idx      = idx;
+        it.enumPos  = i;
+        it.isRegion = isrgn;
+        it.pos      = pos;
+        it.rgnEnd   = rgnend;
+        it.color    = color;
+        if (name) it.name = name;
+        out->push_back(std::move(it));
+    }
+}
+
 void Overlay::window(Item const** out, int& outCount) const
 {
     outCount = 0;
@@ -245,6 +306,20 @@ void Overlay::drillIntoRegion(int enumPos)
     // User-driven drill: disarm auto-roll until the playhead actually
     // arrives in this region. Without this the next tick would
     // observe playhead-still-in-previous-region and roll us back.
+    wasInFilter_ = false;
+    cursorPinned_ = false;
+    enumerate();
+}
+
+void Overlay::drillIntoRegionByIdx(int reaperRegionIdx)
+{
+    if (reaperRegionIdx < 0) return;
+    if (view_ == View::MarkersInRegion
+        && filterRegionIdx_ == reaperRegionIdx) return;
+    filterRegionIdx_ = reaperRegionIdx;
+    view_ = View::MarkersInRegion;
+    cursorIdx_   = 0;
+    pageOffset_  = 0;
     wasInFilter_ = false;
     cursorPinned_ = false;
     enumerate();

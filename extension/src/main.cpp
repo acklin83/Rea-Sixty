@@ -307,15 +307,32 @@ std::atomic<bool> g_uc1NavLcdActive{true};
 // Phase 2.8c — Nav default-view-on-toggle-enter.
 //   0 = Regions (factory default)
 //   1 = Markers in current region
-//   2 = Markers (all)
-//   3 = Last used (no view change on entry)
-// Consumed by navToggle()'s activation branch.
-std::atomic<int>  g_navDefaultView{0};
+// Legacy g_navDefaultView removed 2026-05-28 — superseded by
+// g_navUf8Mode below. The new model: UF8 Mode picker IS the
+// entry-default. "Markers-in-region" as a default is gone (drill or
+// UC1=Markers coupling reaches it); "Last used" is gone (confusing).
 
 // Phase 2.8c — Region-press behaviour for the UF8 top-soft-key tap
 // in Nav Mode (NavJumpStrip drain). 0 = Jump + Drill, 1 = Jump only,
 // 2 = Drill only.
 std::atomic<int>  g_navRegionPress{0};
+
+// Per-surface Mode (2026-05-28). Replaces the legacy 4-state
+// g_navDefaultView. UF8 is the primary view authority (drives the
+// Overlay singleton); UC1 may mirror UF8 or maintain an independent
+// scope. When UC1=Markers AND UF8=Regions, the UC1 carousel auto-
+// scopes to markers within UF8's currently-selected region (live).
+//
+//   g_navUf8Mode  0 = Regions       1 = Markers (all)
+//   g_navUc1Mode  0 = Mirror UF8    1 = Regions    2 = Markers
+//
+// Drill-down is unchanged in Mirror mode; in independent UC1 modes
+// drill becomes implicit (the UF8-cursor → UC1-scope coupling does
+// it), so push-action Drill / Back degrade to Jump-only / no-op.
+std::atomic<int>  g_navUf8Mode{0};
+std::atomic<int>  g_navUc1Mode{0};
+// UC1-local cursor for independent modes. Session-only (not persisted).
+std::atomic<int>  g_navUc1Cursor{0};
 
 // Phase 2.8c — UC1 Encoder 2 take-over preference. When false, the
 // UC1 Encoder 2 stays bound to its normal action (bc_track_scroll or
@@ -2098,10 +2115,18 @@ void loadBrightness()
         const bool follow = (v && *v) ? (std::atoi(v) != 0) : true;
         uf8::nav::Overlay::instance().setAutoFollow(follow);
     }
-    if (const char* v = GetExtState("rea_sixty", "nav_default_view"); v && *v) {
+    // Legacy nav_default_view ExtState key is silently ignored
+    // (replaced by nav_uf8_mode below). Users who set 1 (Markers-in-
+    // region) or 3 (Last used) fall back to Regions on first launch.
+    if (const char* v = GetExtState("rea_sixty", "nav_uf8_mode"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 3) n = 0;
-        g_navDefaultView.store(n);
+        if (n < 0 || n > 1) n = 0;
+        g_navUf8Mode.store(n);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_uc1_mode"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navUc1Mode.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "nav_region_press"); v && *v) {
         int n = std::atoi(v);
@@ -4869,8 +4894,15 @@ void drainInputQueue()
                 // (its items are regions; drill would invalidate them).
                 const int  press     = g_navRegionPress.load();
                 const bool doJump    = (press != 2);
+                // Suppress drill when UC1 is in an independent Mode —
+                // UC1's Markers carousel auto-scopes to UF8's region
+                // cursor, so drilling on UF8 would replace UF8's region
+                // list with markers and break the coupling (UC1 needs
+                // UF8 in Regions view to know which region to scope to).
+                const bool uc1Indep  = g_navUc1Mode.load() != 0;
                 const bool doDrill   = (press != 1)
-                    && (ov.viewLock() == uf8::nav::ViewLock::None);
+                    && (ov.viewLock() == uf8::nav::ViewLock::None)
+                    && !uc1Indep;
                 if (doJump) {
                     GoToRegion(nullptr, it.idx, false);
                 }
@@ -8473,33 +8505,12 @@ void pushNavOverlayDecorations()
     if (nowActive && !s_wasActiveForView
         && ov.viewLock() == uf8::nav::ViewLock::None)
     {
-        const int dv = g_navDefaultView.load();
-        if (dv == 0) {
-            ov.setView(uf8::nav::View::Regions);
-        } else if (dv == 1) {
-            // Markers in current region: snap to whichever region
-            // contains the playhead (or edit cursor when stopped).
-            // Falls back to Regions view if the playhead is in a gap.
-            ov.setView(uf8::nav::View::Regions);
-            const int ps  = GetPlayState();
-            const double pos = (ps & 1)
-                ? GetPlayPosition() : GetCursorPosition();
-            int hit = -1;
-            const auto& its = ov.items();
-            for (int i = 0; i < static_cast<int>(its.size()); ++i) {
-                if (its[i].isRegion
-                    && pos + 1e-6 >= its[i].pos
-                    && pos <= its[i].rgnEnd + 1e-6)
-                {
-                    hit = i;
-                    break;
-                }
-            }
-            if (hit >= 0) ov.drillIntoRegion(hit);
-        } else if (dv == 2) {
-            ov.setView(uf8::nav::View::MarkersAll);
-        }
-        // dv == 3 (Last used) — leave the prior view intact.
+        // UF8 Mode picker drives the entry default. Two options only:
+        // 0 = Regions, 1 = Markers (all). Drill is reached via region
+        // press or implicitly via UC1=Markers coupling.
+        ov.setView(g_navUf8Mode.load() == 1
+                       ? uf8::nav::View::MarkersAll
+                       : uf8::nav::View::Regions);
     }
     s_wasActiveForView = nowActive;
 
@@ -8705,6 +8716,41 @@ void pushUc1NavCarousel()
     }
     s_wasOverlayActive = overlayOn;
 
+    // Cross-coupling: when UF8=Markers and UC1=Regions, drive Overlay's
+    // filter from UC1's region cursor so UF8 shows markers within UC1's
+    // currently-selected region. Runs BEFORE the takeover-gated early
+    // return because UF8 needs the updated Overlay view even when UC1
+    // LCD takeover is off (e.g. user navigates only via UF8).
+    if (overlayOn
+        && ov.viewLock() == uf8::nav::ViewLock::None
+        && g_navUf8Mode.load() == 1
+        && g_navUc1Mode.load() == 1)
+    {
+        std::vector<uf8::nav::Item> uc1Regions;
+        uf8::nav::Overlay::enumerateFiltered(
+            uf8::nav::View::Regions, -1, &uc1Regions);
+        const int last = static_cast<int>(uc1Regions.size()) - 1;
+        int cur = g_navUc1Cursor.load();
+        if (cur < 0) cur = 0;
+        if (cur > last) cur = (last < 0) ? 0 : last;
+        g_navUc1Cursor.store(cur);
+        const int rId = (cur >= 0 && cur < static_cast<int>(uc1Regions.size()))
+                      ? uc1Regions[cur].idx : -1;
+        if (rId >= 0) {
+            ov.drillIntoRegionByIdx(rId);
+        }
+    } else if (overlayOn
+               && ov.viewLock() == uf8::nav::ViewLock::None
+               && ov.view() == uf8::nav::View::MarkersInRegion)
+    {
+        // Coupling condition no longer holds (user changed a Mode or
+        // UC1 left Regions) → revert Overlay to plain MarkersAll or
+        // Regions per the UF8 Mode setting.
+        ov.setView(g_navUf8Mode.load() == 1
+                       ? uf8::nav::View::MarkersAll
+                       : uf8::nav::View::Regions);
+    }
+
     const bool takeoverOn = g_uc1NavLcdActive.load();
 
     if (!overlayOn || !takeoverOn) {
@@ -8714,9 +8760,120 @@ void pushUc1NavCarousel()
         return;
     }
 
-    const auto& items = ov.items();
-    const int n  = static_cast<int>(items.size());
-    const int ci = ov.cursorIdx();
+    // Per-surface Mode (2026-05-28). When g_navUc1Mode == 0 the UC1
+    // mirrors UF8 (legacy behaviour: read items + cursor from the
+    // Overlay singleton). Otherwise UC1 builds its own filtered list
+    // off REAPER's raw marker/region table and tracks its own cursor.
+    // Markers mode auto-scopes to UF8's currently-selected region
+    // when UF8 is in Regions view — that's the "drill-down by
+    // coupling" workflow Frank wants for tracking sessions.
+    const int uc1Mode = g_navUc1Mode.load();
+
+    std::vector<uf8::nav::Item> uc1Items;
+    const std::vector<uf8::nav::Item>* itemsPtr = nullptr;
+    int ci = 0;
+    std::string header;
+
+    if (uc1Mode == 0) {
+        // Mirror UF8.
+        itemsPtr = &ov.items();
+        ci       = ov.cursorIdx();
+        switch (ov.view()) {
+        case uf8::nav::View::Regions:
+            header = "REGIONS";
+            break;
+        case uf8::nav::View::MarkersInRegion: {
+            const int filterIdx = ov.filterRegionIdx();
+            std::string rgnName;
+            if (filterIdx >= 0) {
+                int nmarkers = 0, nregions = 0;
+                CountProjectMarkers(nullptr, &nmarkers, &nregions);
+                const int total = nmarkers + nregions;
+                for (int i = 0; i < total; ++i) {
+                    bool isrgn = false;
+                    double pos = 0.0, rgnend = 0.0;
+                    const char* nm = nullptr;
+                    int rid = 0, color = 0;
+                    if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
+                                             &nm, &rid, &color)) continue;
+                    if (isrgn && rid == filterIdx) {
+                        if (nm) rgnName = nm;
+                        break;
+                    }
+                }
+            }
+            if (rgnName.empty()) {
+                header = "MARKERS";
+            } else {
+                header = "M: " + rgnName;
+                if (header.size() > 14) header.resize(14);
+            }
+            break;
+        }
+        case uf8::nav::View::MarkersAll:
+            header = "MARKERS";
+            break;
+        }
+    } else {
+        // Independent UC1 scope. Build into uc1Items.
+        if (uc1Mode == 1) {
+            // Always Regions.
+            uf8::nav::Overlay::enumerateFiltered(
+                uf8::nav::View::Regions, -1, &uc1Items);
+            header = "REGIONS";
+        } else {
+            // uc1Mode == 2: Always Markers, optionally scoped to UF8's
+            // currently-selected region.
+            int scopedRegionIdx = -1;
+            std::string rgnName;
+            if (ov.view() == uf8::nav::View::Regions) {
+                const auto& uf8Items = ov.items();
+                const int uf8Ci      = ov.cursorIdx();
+                if (uf8Ci >= 0
+                    && uf8Ci < static_cast<int>(uf8Items.size())
+                    && uf8Items[uf8Ci].isRegion)
+                {
+                    scopedRegionIdx = uf8Items[uf8Ci].idx;
+                    rgnName         = uf8Items[uf8Ci].name;
+                }
+            }
+            // Snap UC1 cursor to the first marker of the new region
+            // whenever the UF8 region cursor moves to a different one.
+            // Without this the UC1 stays parked at the old index (which
+            // is meaningless in the new list), and the user has to spin
+            // back to 0 manually after every UF8 region change.
+            static int s_lastScopedRegionIdx = -2;   // -2 = uninit
+            if (scopedRegionIdx != s_lastScopedRegionIdx) {
+                s_lastScopedRegionIdx = scopedRegionIdx;
+                g_navUc1Cursor.store(0);
+            }
+            if (scopedRegionIdx >= 0) {
+                uf8::nav::Overlay::enumerateFiltered(
+                    uf8::nav::View::MarkersInRegion,
+                    scopedRegionIdx, &uc1Items);
+                header = "IN: " + rgnName;
+                if (header.size() > 14) header.resize(14);
+            } else {
+                uf8::nav::Overlay::enumerateFiltered(
+                    uf8::nav::View::MarkersAll, -1, &uc1Items);
+                header = "MARKERS";
+            }
+        }
+        itemsPtr = &uc1Items;
+        // Clamp the UC1-local cursor to the list size every tick — UF8
+        // cursor moves change the UC1 list under us so the stored
+        // cursor can outlast its target.
+        const int last = static_cast<int>(uc1Items.size()) - 1;
+        int cur = g_navUc1Cursor.load();
+        if (cur < 0) cur = 0;
+        if (cur > last && last >= 0) cur = last;
+        if (last < 0) cur = 0;
+        g_navUc1Cursor.store(cur);
+        ci = cur;
+    }
+
+    const auto& items = *itemsPtr;
+    const int n = static_cast<int>(items.size());
 
     auto nameOf = [&](int idx) -> std::string {
         if (idx < 0 || idx >= n) return std::string();
@@ -8727,46 +8884,6 @@ void pushUc1NavCarousel()
     const std::string prev = nameOf(ci - 1);
     const std::string curr = nameOf(ci);
     const std::string next = nameOf(ci + 1);
-
-    std::string header;
-    switch (ov.view()) {
-    case uf8::nav::View::Regions:
-        header = "REGIONS";
-        break;
-    case uf8::nav::View::MarkersInRegion: {
-        // Look up the filter region's name so the header tells the
-        // user which region they're drilled into.
-        const int filterIdx = ov.filterRegionIdx();
-        std::string rgnName;
-        if (filterIdx >= 0) {
-            int nmarkers = 0, nregions = 0;
-            CountProjectMarkers(nullptr, &nmarkers, &nregions);
-            const int total = nmarkers + nregions;
-            for (int i = 0; i < total; ++i) {
-                bool isrgn = false;
-                double pos = 0.0, rgnend = 0.0;
-                const char* nm = nullptr;
-                int rid = 0, color = 0;
-                if (!EnumProjectMarkers3(nullptr, i, &isrgn, &pos, &rgnend,
-                                         &nm, &rid, &color)) continue;
-                if (isrgn && rid == filterIdx) {
-                    if (nm) rgnName = nm;
-                    break;
-                }
-            }
-        }
-        if (rgnName.empty()) {
-            header = "MARKERS";
-        } else {
-            header = "M: " + rgnName;
-            if (header.size() > 14) header.resize(14);
-        }
-        break;
-    }
-    case uf8::nav::View::MarkersAll:
-        header = "MARKERS";
-        break;
-    }
 
     uint8_t palette = 0x00;
     if (ci >= 0 && ci < n) {
@@ -14243,16 +14360,64 @@ extern "C" void reasixty_reloadGlobalExtState()
     if (g_sync) g_sync->invalidate();
 }
 
-// Phase 2.8c — Nav default-view + region-press settings accessors.
-int  reasixty_navDefaultView()         { return g_navDefaultView.load(); }
-void reasixty_setNavDefaultView(int v)
+// Per-surface Nav Mode + region-press settings accessors.
+int  reasixty_navUf8Mode()             { return g_navUf8Mode.load(); }
+void reasixty_setNavUf8Mode(int v)
 {
-    if (v < 0 || v > 3) v = 0;
-    g_navDefaultView.store(v);
+    if (v < 0 || v > 1) v = 0;
+    g_navUf8Mode.store(v);
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", v);
-    SetExtState("rea_sixty", "nav_default_view", buf, true);
+    SetExtState("rea_sixty", "nav_uf8_mode", buf, true);
+    // Live-apply: if Nav is currently active without a view-lock,
+    // the picker change should take immediate effect on UF8 (and on
+    // UC1 via Mirror). Without this the user sees the radio flip but
+    // no surface update until Nav is toggled off/on.
+    auto& ov = uf8::nav::Overlay::instance();
+    if (ov.active() && ov.viewLock() == uf8::nav::ViewLock::None) {
+        ov.setView(v == 1 ? uf8::nav::View::MarkersAll
+                          : uf8::nav::View::Regions);
+        g_navOverlayDirty.store(true);
+        if (g_sync) g_sync->invalidate();
+    }
 }
+int  reasixty_navUc1Mode()             { return g_navUc1Mode.load(); }
+void reasixty_setNavUc1Mode(int v)
+{
+    if (v < 0 || v > 2) v = 0;
+    g_navUc1Mode.store(v);
+    // Switching out of Mirror or between independent modes invalidates
+    // the UC1 cursor (different items list); snap it back to 0.
+    g_navUc1Cursor.store(0);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", v);
+    SetExtState("rea_sixty", "nav_uc1_mode", buf, true);
+    // Live-apply: signal the carousel-render path so the next tick
+    // rebuilds UC1's items + header against the new mode.
+    g_navOverlayDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+
+// UC1 Nav cursor — independent of Overlay's cursor when
+// g_navUc1Mode != 0. The carousel-render path clamps this each tick
+// against the just-built UC1 items count; this delta-mutator is
+// called from UC1Surface::handleKnob_ on the input thread, so do the
+// minimum: atomic RMW + dirty-flag. Returns true when the cursor
+// actually moved (caller marks overlay dirty for a re-push).
+extern "C" int reasixty_navUc1CursorDelta(int delta)
+{
+    if (delta == 0) return 0;
+    int cur = g_navUc1Cursor.load();
+    int next = cur + delta;
+    if (next < 0) next = 0;
+    // Upper bound applied on the main thread in pushUc1NavCarousel —
+    // we don't have items.size() here without a REAPER API call.
+    if (next == cur) return 0;
+    g_navUc1Cursor.store(next);
+    return 1;
+}
+extern "C" int  reasixty_navUc1CursorGet()      { return g_navUc1Cursor.load(); }
+extern "C" void reasixty_navUc1CursorSet(int v) { g_navUc1Cursor.store(v); }
 
 int  reasixty_navRegionPress()         { return g_navRegionPress.load(); }
 void reasixty_setNavRegionPress(int v)

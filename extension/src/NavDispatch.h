@@ -19,4 +19,12 @@ namespace uf8::nav {
 // for any surface-specific bookkeeping (stats counters etc.).
 bool dispatchPushAction(int actionEnum);
 
+// UC1-specific variant — operates on the UC1's independent filtered
+// list + g_navUc1Cursor when g_navUc1Mode != 0. In independent modes
+// Drill / Back are no-ops, Jump+Drill degrades to Jump only, Toggle
+// View flips g_navUc1Mode between Regions (1) and Markers (2).
+// In Mirror mode (g_navUc1Mode == 0) this delegates directly to
+// dispatchPushAction so legacy behaviour is preserved.
+bool dispatchPushActionUc1(int actionEnum);
+
 } // namespace uf8::nav

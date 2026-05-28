@@ -87,6 +87,19 @@ public:
     // Items in the current view, in display order.
     const std::vector<Item>& items() const { return items_; }
 
+    // Build a filtered item list off REAPER's marker/region table
+    // without mutating Overlay state. Used by UC1 to render its own
+    // scoped carousel (Mode = Regions / Markers / Markers-in-Region)
+    // while UF8 keeps driving the primary view_.
+    //   - v = Regions          → all regions; filterRegionIdx ignored.
+    //   - v = MarkersInRegion  → markers within the region whose
+    //                            REAPER idx matches filterRegionIdx;
+    //                            if filterRegionIdx < 0 or no such
+    //                            region, returns empty.
+    //   - v = MarkersAll       → all markers; filterRegionIdx ignored.
+    static void enumerateFiltered(View v, int filterRegionIdx,
+                                  std::vector<Item>* out);
+
     // The 8-window for the strips (may be shorter than 8 near list end).
     void window(Item const** out, int& outCount) const;
 
@@ -98,6 +111,13 @@ public:
     // Drill helpers.
     void drillIntoRegion(int enumPos);   // switch to MarkersInRegion for items_[enumPos]
     void backToRegions();
+
+    // Drill directly by REAPER region idx (not enumPos). Used by the
+    // UF8↔UC1 cross-coupling: when UF8=Markers and UC1=Regions, the
+    // UC1 cursor's region idx drives Overlay's filter so UF8 shows
+    // markers inside that region. No-op when the requested idx is
+    // already the active filter.
+    void drillIntoRegionByIdx(int reaperRegionIdx);
 
     // Manual cursor movement (UC1 Encoder 2 rotation). Sets the
     // cursor-pin latch so auto-follow stops writing the cursor until

@@ -138,8 +138,10 @@ bool reasixty_pinnedSurvivesBanking();
 void reasixty_setPinnedSurvivesBanking(bool v);
 bool reasixty_navAutoFollow();
 void reasixty_setNavAutoFollow(bool follow);
-int  reasixty_navDefaultView();
-void reasixty_setNavDefaultView(int v);
+int  reasixty_navUf8Mode();
+void reasixty_setNavUf8Mode(int v);
+int  reasixty_navUc1Mode();
+void reasixty_setNavUc1Mode(int v);
 int  reasixty_navRegionPress();
 void reasixty_setNavRegionPress(int v);
 extern "C" int  reasixty_navUc1Takeover();
@@ -10835,8 +10837,6 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         persistActive(3);
 
     // Activation — read-only mirror of the three bindable Nav toggles.
-    // Shows which physical button currently fires each. The bind UI
-    // lives in Settings → Bindings; we just point the user there.
     ImGui_Text(ctx, "Activation");
     ImGui_Separator(ctx);
     ImGui_Text(ctx,
@@ -10884,54 +10884,90 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     navMirror("marker_overlay_regions_only_toggle",
               "Nav Mode: Regions only (no drill)");
 
+    // -- Per-surface matrix ------------------------------------------
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "View defaults");
+    ImGui_Text(ctx, "Per-surface");
     ImGui_Separator(ctx);
 
-    ImGui_Text(ctx, "Default view on Nav Mode entry:");
-    int dv = reasixty_navDefaultView();
-    if (ImGui_RadioButton(ctx, "Regions##nav_dv_regions", dv == 0)) {
-        reasixty_setNavDefaultView(0);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx,
-            "Markers in current region##nav_dv_mir", dv == 1))
+    const int uc1Mode = reasixty_navUc1Mode();
+    const int uf8Mode = reasixty_navUf8Mode();
+
+    int matrixFlags = 0;
+    if (ImGui_BeginTable(ctx, "nav_per_surface", 3, &matrixFlags,
+                         nullptr, nullptr, nullptr))
     {
-        reasixty_setNavDefaultView(1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Markers (all)##nav_dv_all", dv == 2)) {
-        reasixty_setNavDefaultView(2);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Last used##nav_dv_last", dv == 3)) {
-        reasixty_setNavDefaultView(3);
+        int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
+        double wLabel = scaleW_(ctx, 180.0);
+        double wCol   = scaleW_(ctx, 260.0);
+        ImGui_TableSetupColumn(ctx, "label", &wFlag, &wLabel, nullptr);
+        ImGui_TableSetupColumn(ctx, "uf8",   &wFlag, &wCol,   nullptr);
+        ImGui_TableSetupColumn(ctx, "uc1",   &wFlag, &wCol,   nullptr);
+
+        // Header row
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "");
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "UF8");
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "UC1");
+
+        // Show overlay
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "Show overlay");
+        ImGui_TableNextColumn(ctx);
+        bool uf8Show = reasixty_navUf8Show() != 0;
+        if (ImGui_Checkbox(ctx, "On 8 strips##nav_uf8_show", &uf8Show)) {
+            reasixty_setNavUf8Show(uf8Show);
+        }
+        ImGui_TableNextColumn(ctx);
+        bool uc1Show = reasixty_navUc1Takeover() != 0;
+        if (ImGui_Checkbox(ctx, "Take over LCD##nav_uc1_show", &uc1Show)) {
+            reasixty_setNavUc1Takeover(uc1Show);
+        }
+
+        // Mode
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "Mode");
+        ImGui_TableNextColumn(ctx);
+        if (ImGui_RadioButton(ctx, "Regions##nav_uf8_mode_r", uf8Mode == 0)) {
+            reasixty_setNavUf8Mode(0);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Markers##nav_uf8_mode_m", uf8Mode == 1)) {
+            reasixty_setNavUf8Mode(1);
+        }
+        ImGui_TableNextColumn(ctx);
+        if (ImGui_RadioButton(ctx, "Mirror UF8##nav_uc1_mode_mir", uc1Mode == 0)) {
+            reasixty_setNavUc1Mode(0);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Regions##nav_uc1_mode_r", uc1Mode == 1)) {
+            reasixty_setNavUc1Mode(1);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Markers##nav_uc1_mode_m", uc1Mode == 2)) {
+            reasixty_setNavUc1Mode(2);
+        }
+
+        ImGui_EndTable(ctx);
     }
     ImGui_Text(ctx,
-        "  Applied only by the plain marker_overlay_toggle. "
-        "'Markers in current region' snaps to the region under the "
-        "playhead; falls back to Regions if the playhead is in a gap.");
+        "  When UC1=Markers and UF8=Regions, UC1 shows the markers "
+        "within UF8's currently-selected region (live, follows UF8's "
+        "cursor). Drill is implicit through this coupling.");
 
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Region-press behaviour (UF8 top-soft-key):");
-    int rp = reasixty_navRegionPress();
-    if (ImGui_RadioButton(ctx, "Jump + Drill##nav_rp_both", rp == 0)) {
-        reasixty_setNavRegionPress(0);
+    bool uf8TakeNav = reasixty_navUf8Takeover() != 0;
+    if (ImGui_Checkbox(ctx,
+            "UF8 Channel encoder moves Nav cursor (asymmetric — UC1 "
+            "Encoder 2 always does this when LCD takeover is on)",
+            &uf8TakeNav))
+    {
+        reasixty_setNavUf8Takeover(uf8TakeNav);
     }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Jump only##nav_rp_jump", rp == 1)) {
-        reasixty_setNavRegionPress(1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Drill only##nav_rp_drill", rp == 2)) {
-        reasixty_setNavRegionPress(2);
-    }
-    ImGui_Text(ctx,
-        "  What a tap on a region's top-soft-key does. Jump = move "
-        "transport to the region start; Drill = enter the region's "
-        "marker list. RegionsOnly view-lock always suppresses Drill.");
 
+    // -- UF8 strip display -------------------------------------------
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "UF8 strip display");
@@ -10950,11 +10986,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (ImGui_RadioButton(ctx, "Timecode (MM:SS)##nav_lr_tc", lr == 2)) {
         reasixty_setNavLowerRow(2);
     }
-    ImGui_Text(ctx,
-        "  Off keeps the V-Pot value visible. Index / Timecode "
-        "overlay marker metadata on the lower row.");
 
-    ImGui_Spacing(ctx);
     ImGui_Text(ctx, reasixty_sp("Colour-bar source:", "Color-bar source:"));
     int cb = reasixty_navColorBar();
     if (ImGui_RadioButton(ctx,
@@ -10978,63 +11010,16 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         reasixty_setNavColorBar(1);
     }
 
+    // -- UC1 Encoder 2 push actions ----------------------------------
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "UF8");
+    ImGui_Text(ctx, "Encoder push actions (UC1 Encoder 2 + UF8 Channel encoder)");
     ImGui_Separator(ctx);
-
-    bool uf8Show = reasixty_navUf8Show() != 0;
-    if (ImGui_Checkbox(ctx,
-            "Show marker overlay on UF8",
-            &uf8Show))
-    {
-        reasixty_setNavUf8Show(uf8Show);
-    }
     ImGui_Text(ctx,
-        "  When off, UF8 strips stay in regular track view even while "
-        "Nav Mode is active — useful if you navigate only via UC1 "
-        "Encoder 2.");
+        "  Shared between both surfaces. UF8 Channel encoder dispatches "
+        "the same plain / shift / long-press actions when its takeover "
+        "checkbox above is on.");
 
-    bool uf8Take = reasixty_navUf8Takeover() != 0;
-    if (ImGui_Checkbox(ctx,
-            "Channel encoder moves Nav cursor while active",
-            &uf8Take))
-    {
-        reasixty_setNavUf8Takeover(uf8Take);
-    }
-    ImGui_Text(ctx,
-        "  Rotation: one marker/region per detent (mirrors UC1 Encoder 2) "
-        "instead of paging eight at a time. Push: plain / shift / "
-        "long-press actions from the picker below (shared with UC1).");
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "UC1 Encoder 2");
-    ImGui_Separator(ctx);
-
-    bool takeover = reasixty_navUc1Takeover() != 0;
-    if (ImGui_Checkbox(ctx,
-            "Take over UC1 Encoder 2 while Nav Mode is active",
-            &takeover))
-    {
-        reasixty_setNavUc1Takeover(takeover);
-    }
-    ImGui_Text(ctx,
-        "  When off, Encoder 2 rotation stays bound to its normal "
-        "action (bc_track_scroll by default) and the UC1 LCD does not "
-        "switch to the marker carousel.");
-
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Carousel scope:");
-    ImGui_RadioButton(ctx, "Mirror UF8 view##nav_uc1_scope_mirror", true);
-    ImGui_Text(ctx,
-        "  Independent UC1 scopes (Always Regions / Always Markers / "
-        "Always Markers-in-UF8-region) — not yet implemented.");
-
-    // Unified push-action picker — same 7-option list for all three
-    // gestures (plain / shift / long). Drill is suppressed under any
-    // view-lock (locks collapse Jump+Drill to Jump only); the other
-    // actions fire regardless of lock. Frank 2026-05-22.
     static const char* kNavActionNames[7] = {
         "Jump + Drill",
         "Jump only",
@@ -11065,7 +11050,6 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         }
     };
 
-    ImGui_Spacing(ctx);
     int navTblFlags = 0;
     if (ImGui_BeginTable(ctx, "nav_push_actions", 2, &navTblFlags,
                          nullptr, nullptr, nullptr)) {
@@ -11082,18 +11066,39 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                          reasixty_navUc1LongPress(), reasixty_setNavUc1LongPress);
         ImGui_EndTable(ctx);
     }
-    ImGui_Text(ctx,
-        "  Long-press threshold is ~500 ms. View-locks "
-        "(Markers-only / Regions-only) suppress Drill only — other "
-        "actions fire regardless.");
+    if (uc1Mode != 0) {
+        ImGui_TextDisabled(ctx,
+            "  In independent UC1 mode: Drill / Back are no-ops; "
+            "Jump+Drill degrades to Jump only.");
+    }
 
+    // -- Behaviour ---------------------------------------------------
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Auto-Follow");
+    ImGui_Text(ctx, "Behaviour");
     ImGui_Separator(ctx);
+
+    // Region-press radio is only meaningful when UC1 mirrors UF8 (in
+    // independent modes drill on a region tap doesn't fire). Hide
+    // entirely rather than grey to keep the page short.
+    if (uc1Mode == 0) {
+        ImGui_Text(ctx, "Region press (UF8 top-soft-key):");
+        int rp = reasixty_navRegionPress();
+        if (ImGui_RadioButton(ctx, "Jump + Drill##nav_rp_both", rp == 0)) {
+            reasixty_setNavRegionPress(0);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Jump only##nav_rp_jump", rp == 1)) {
+            reasixty_setNavRegionPress(1);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Drill only##nav_rp_drill", rp == 2)) {
+            reasixty_setNavRegionPress(2);
+        }
+    }
     bool autoFollow = reasixty_navAutoFollow();
     if (ImGui_Checkbox(ctx,
-                       "Auto-Follow playhead / edit cursor",
+                       "Auto-follow playhead / edit cursor",
                        &autoFollow))
     {
         reasixty_setNavAutoFollow(autoFollow);
