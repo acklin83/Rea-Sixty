@@ -3452,6 +3452,18 @@ void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
     if (!g_pluginGuiFollowsInstance.load()) return;
     if (!g_focusedGuiShownTr) return;        // Toggle UI not currently open
     if (!tr || targetFxIdx < 0) return;
+    // Never chase an Acustica (Acqua) GUI — host-driven TrackFX_Show on it
+    // faults inside the plug-in. Close the window we were tracking and stop
+    // following rather than open the Acustica one. See fxIsAcustica.
+    if (uf8::fxIsAcustica(tr, targetFxIdx)) {
+        if (ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*")) {
+            TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                         g_focusedGuiShownFx, /*hide floating*/ 2);
+        }
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
     // Same track, different FX → close old, open new on same track.
     if (g_focusedGuiShownTr == tr) {
         if (g_focusedGuiShownFx == targetFxIdx) return;
@@ -4111,8 +4123,10 @@ void refocusFocusedPluginGuiToCurrentSelection_()
         TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
                      g_focusedGuiShownFx, 2);
     }
-    if (fxIdx < 0) {
-        // No FX on the new track — leave the window closed.
+    if (fxIdx < 0 || uf8::fxIsAcustica(newTr, fxIdx)) {
+        // No FX on the new track, or an Acustica (Acqua) GUI we must not
+        // host-open (it faults). Old window already closed above — leave
+        // it closed rather than chase.
         g_focusedGuiShownTr = nullptr;
         g_focusedGuiShownFx = -1;
         return;
@@ -13509,8 +13523,11 @@ void onTimer()
             g_csGuiShownFx = -1;
         }
 
-        if (wantOpen && targetTr && targetFx >= 0) {
-            // showflag: 3 = floating GUI shown.
+        if (wantOpen && targetTr && targetFx >= 0
+            && !uf8::fxIsAcustica(targetTr, targetFx)) {
+            // showflag: 3 = floating GUI shown. Acustica (Acqua) GUIs are
+            // never host-opened — they fault inside the plug-in. The
+            // close-stale branch above still ran, so no window lingers.
             TrackFX_Show(targetTr, targetFx, 3);
             pinFxGuiIfEnabled_(targetTr, targetFx);
             g_csGuiShownTr = targetTr;
@@ -13565,7 +13582,9 @@ void onTimer()
                 g_uf8GuiShownTr = nullptr;
                 g_uf8GuiShownFx = -1;
             }
-            if (uf8WantOpen && uf8TargetTr && uf8TargetFx >= 0) {
+            if (uf8WantOpen && uf8TargetTr && uf8TargetFx >= 0
+                && !uf8::fxIsAcustica(uf8TargetTr, uf8TargetFx)) {
+                // Never host-open an Acustica (Acqua) GUI — it faults.
                 // Don't pop a floating window when the FX is already
                 // visible in the chain — the user explicitly chose the
                 // chain view and a second window for the same FX is
@@ -13643,7 +13662,9 @@ void onTimer()
                 g_instanceGuiShownFx       = -1;
                 g_instanceGuiShownOpenMode = -1;
             }
-            if (instWantOpen && instTargetTr && instTargetFx >= 0) {
+            if (instWantOpen && instTargetTr && instTargetFx >= 0
+                && !uf8::fxIsAcustica(instTargetTr, instTargetFx)) {
+                // Never host-open an Acustica (Acqua) GUI — it faults.
                 // Auto-engage UF8 Plugin Mode (Settings → Modes → Cycle).
                 // When ON + the cycle's active FX is in the UF8 user-
                 // plugin catalog: open the FX window first so REAPER

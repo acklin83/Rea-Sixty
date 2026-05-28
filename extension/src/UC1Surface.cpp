@@ -3327,6 +3327,10 @@ void UC1Surface::pollGainReduction_()
         } else if (::reasixty_grAnyFx()) {
             const int fxCount = TrackFX_GetCount(csTr);
             for (int fx = 0; fx < fxCount; ++fx) {
+                // Never poll an Acustica (Acqua) plug-in we weren't
+                // explicitly mapped to — its engine faults under host
+                // config-parm polling from this thread. See fxIsAcustica.
+                if (uf8::fxIsAcustica(csTr, fx)) continue;
                 char buf[64] = {0};
                 if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
                                                 buf, sizeof(buf))) {

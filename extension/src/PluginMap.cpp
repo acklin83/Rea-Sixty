@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <string>
 
 #include "reaper_plugin_functions.h"
@@ -433,6 +434,38 @@ bool fxIdentityName(void* trackOpaque, int fx, char* buf, int bufSize)
         return true;
     }
     buf[0] = 0;
+    return false;
+}
+
+bool fxIsAcustica(void* trackOpaque, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return false;
+
+    auto hasVendorTag = [](const char* s) {
+        if (!s || !s[0]) return false;
+        std::string lower(s);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        return lower.find("acustica") != std::string::npos
+            || lower.find("acqua")    != std::string::npos;
+    };
+
+    char buf[256];
+    // Display name carries the "(Acustica…)" vendor tag — primary signal.
+    buf[0] = 0;
+    if (TrackFX_GetFXName(tr, fx, buf, sizeof(buf)) && hasVendorTag(buf)) {
+        return true;
+    }
+    // Factory name rarely carries the vendor, but check it too in case a
+    // future REAPER / wrapper variant exposes it there.
+    buf[0] = 0;
+    if (TrackFX_GetNamedConfigParm(tr, fx, "original_name", buf, sizeof(buf))
+            && hasVendorTag(buf)) {
+        return true;
+    }
     return false;
 }
 

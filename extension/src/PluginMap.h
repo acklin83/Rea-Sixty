@@ -120,6 +120,18 @@ struct PluginMatch {
 // TrackFX_GetFXName for *display* (it honours user rename).
 bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize);
 
+// True when the FX is an Acustica Audio (Acqua-engine) plug-in. The Acqua
+// engine has a non-standard threading model and faults inside its own code
+// (access violation) when the host polls its params / named-config-parms
+// from the control-surface thread, or when we open its GUI via
+// TrackFX_Show. Product names are arbitrary words (TIGERMIX, AQUARIUS,
+// Coral, Lava, …) and the catalogue grows constantly, so we match the
+// *vendor* tag instead: REAPER appends "(Acustica…)" to VST/VST3 display
+// names. That tag is present in TrackFX_GetFXName but NOT in original_name,
+// so we check both, case-insensitively. Callers use this to skip Acustica
+// FX in the GR "Any FX" poll walk and in the auto-GUI window-chase.
+bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
+
 // FX-GUID stringification — wraps TrackFX_GetFXGUID + guidToString.
 // Stable identity for an FX slot across reorder. Empty string when
 // the FX is gone or REAPER returns no GUID (e.g. record-FX bit set
