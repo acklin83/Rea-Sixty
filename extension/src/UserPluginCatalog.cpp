@@ -540,6 +540,19 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "\n    }";
     }
     if (!firstPlugin) os << "\n  ";
+    os << "]";
+    // Quick-Learn skip list (v7) — top-level array of match substrings.
+    // Always emitted (empty array when none) so the field is discoverable;
+    // v6 readers ignore an unknown top-level key.
+    os << ",\n  \"skipped_matches\": [";
+    bool firstSkip = true;
+    for (const auto& s : c.skipMatches) {
+        if (!firstSkip) os << ",";
+        firstSkip = false;
+        os << "\n    ";
+        appendEscaped_(os, s);
+    }
+    if (!firstSkip) os << "\n  ";
     os << "]\n}\n";
     return os.str();
 }
@@ -561,6 +574,21 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
     }
     out.formatVersion = fv;
     out.maps.clear();
+    out.skipMatches.clear();
+
+    // Quick-Learn skip list (v7). Parsed before the plugins early-return so
+    // a catalog that holds only skips (no learned maps) still loads them.
+    if (auto* skipArr = root->get_item_by_name("skipped_matches");
+        skipArr && skipArr->is_array() && skipArr->m_array)
+    {
+        const int sn = skipArr->m_array->GetSize();
+        for (int i = 0; i < sn; ++i) {
+            wdl_json_element* se = skipArr->enum_item(i);
+            if (!se) continue;
+            if (const char* s = se->get_string_value(true); s && s[0])
+                out.skipMatches.emplace_back(s);
+        }
+    }
 
     auto* arr = root->get_item_by_name("plugins");
     if (!arr || !arr->is_array() || !arr->m_array) return true;
@@ -1172,6 +1200,45 @@ bool removeByMatch(std::string_view match)
 int generation()
 {
     return g_generation.load(std::memory_order_relaxed);
+}
+
+// ----- Quick-Learn skip list (v7) ------------------------------------------
+
+void addSkip(std::string match)
+{
+    if (match.empty()) return;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (const auto& s : g_catalog.skipMatches) {
+        if (s == match) return;  // already present
+    }
+    g_catalog.skipMatches.push_back(std::move(match));
+    g_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool removeSkip(std::string_view match)
+{
+    std::lock_guard<std::mutex> lk(g_mutex);
+    auto it = std::find_if(g_catalog.skipMatches.begin(),
+                           g_catalog.skipMatches.end(),
+        [&](const std::string& x) { return x == match; });
+    if (it == g_catalog.skipMatches.end()) return false;
+    g_catalog.skipMatches.erase(it);
+    g_generation.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+bool isSkipped(std::string_view fxName)
+{
+    // First-hit substring rule, mirroring lookupOwnedByName.
+    for (const auto& s : g_catalog.skipMatches) {
+        if (!s.empty() && fxName.find(s) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+const std::vector<std::string>& skips()
+{
+    return g_catalog.skipMatches;
 }
 
 const PluginMap* lookupByName(std::string_view fxName)

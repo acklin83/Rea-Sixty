@@ -86,6 +86,13 @@
 // also call reasixty_actionPickerStart / Cancel / etc.
 void reasixty_actionPickerPoll();
 
+// Quick-Learn sweep entry point. Defined in SettingsScreen.cpp; called from
+// the main-thread drain after the Settings window is opened to FX Learn.
+// Resolves the focused / next-unlearned FX in the project, primes the +New
+// dialog, and arms the auto-advance sweep. No-op-with-status when every
+// project plug-in is already mapped or skipped.
+void reasixty_startQuickLearn();
+
 // Forward-declared so the encoder-rotation drain (further up) and
 // UC1Surface.cpp can both route physical-control deltas through the same
 // focused-track helper. Defined further down with the other reasixty_*
@@ -149,6 +156,7 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // device, fixed by routing through onTimer().
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
+std::atomic<bool> g_quickLearnRequest{false};
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -13405,6 +13413,14 @@ void onTimer()
         g_mixerWindow.toggle();
     }
 
+    // Quick-Learn — drained on the main thread (TrackFX_Show + ImGui ctx
+    // are main-thread-only). Open Settings to FX Learn, then let
+    // SettingsScreen resolve the target FX and prime the +New dialog.
+    if (g_quickLearnRequest.exchange(false)) {
+        g_mixerWindow.openToFxLearn();
+        reasixty_startQuickLearn();
+    }
+
     // Plug-in GUI request flags — all main-thread because TrackFX_Show
     // creates AppKit windows. Set by the show_focused_plugin_gui /
     // show_fx_chain / close_all_fx_guis builtins which may fire on the
@@ -13789,6 +13805,11 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
+custom_action_register_t g_actionQuickLearn{
+    0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn focused FX", nullptr,
+};
+int g_cmdQuickLearn = 0;
+
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
 // concept (ad-hoc working set); no Settings slot, ProjExtState-persisted
@@ -13864,6 +13885,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
+    if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
     return false;
 }
 
@@ -16795,6 +16817,17 @@ void registerBindingHandlers()
         "Open / Close Rea-Sixty Settings", false
     });
 
+    // Quick-Learn project sweep — same request flag as the native action
+    // REASIXTY_QUICK_LEARN, exposed as a builtin so it can be put on a UF8 /
+    // UC1 button from the Bindings editor. One-shot (fires on press edge);
+    // nullptr stateOf like the other one-shot actions.
+    registerBuiltin("quick_learn", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_quickLearnRequest.store(true);
+        },
+        nullptr, "FX: Quick Learn (project sweep)", false
+    });
+
     // ---- Phase 2.5 surface-filter modes ----------------------------------
     // Toggles only — actual filter/expand/selection-set logic lands in a
     // follow-up phase. Bind-able now so users can wire them to hardware
@@ -18296,6 +18329,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
+    g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

@@ -336,6 +336,13 @@ struct UserPluginMap {
 struct UserPluginCatalog {
     int                         formatVersion = 1;
     std::vector<UserPluginMap>  maps;
+    // Quick-Learn skip list (v7). Match substrings the user explicitly
+    // chose NOT to learn during a Quick-Learn project sweep. The sweep's
+    // "next unlearned FX" resolver skips any FX whose identity name
+    // contains one of these substrings, so junk / utility / analyzer
+    // plug-ins stay out of the way across sessions. Independent of `maps`
+    // — a skipped plug-in is neither learned nor offered.
+    std::vector<std::string>    skipMatches;
 };
 
 namespace user_plugins {
@@ -362,7 +369,10 @@ namespace user_plugins {
 // v5 readers seeing v6 files drop the new field (revert to track default
 // for fader/solo/cut/sel); v5 files load in v6 readers by replicating
 // the single `strips` row into all 8 banks (behaviour preserved).
-constexpr int kCurrentFormatVersion = 6;
+// v7 (2026-05-28): added top-level `skipped_matches` array (Quick-Learn
+// skip list). v6 readers seeing a v7 file ignore the array; v6 files load
+// in v7 readers with an empty skip list (no behaviour change).
+constexpr int kCurrentFormatVersion = 7;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
@@ -444,6 +454,25 @@ bool collidesWithBuiltin(std::string_view match);
 // for user maps) compare against a stored snapshot to detect changes
 // without having to walk the catalog content for diffs.
 int generation();
+
+// ----- Quick-Learn skip list (v7) ------------------------------------------
+// Add `match` to the skip list (no-op if already present). Stages in
+// memory like the other mutators — call save() to persist. Bumps
+// generation().
+void addSkip(std::string match);
+
+// Remove `match` from the skip list (exact-string match against a stored
+// entry). Returns true if an entry was removed. Bumps generation().
+bool removeSkip(std::string_view match);
+
+// True iff `fxName` contains any skip-list entry as a substring — same
+// first-hit substring rule as lookupOwnedByName. Used by the Quick-Learn
+// sweep to skip plug-ins the user opted out of.
+bool isSkipped(std::string_view fxName);
+
+// Read-only view of the skip list (for the management UI). Lifetime:
+// until the next mutation.
+const std::vector<std::string>& skips();
 
 } // namespace user_plugins
 } // namespace uf8

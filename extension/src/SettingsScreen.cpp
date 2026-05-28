@@ -2427,6 +2427,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "show_focused_plugin_gui"
                  || n == "show_fx_chain"
                  || n == "close_all_fx_guis"
+                 || n == "quick_learn"
                  || n.rfind("plugin_", 0) == 0)
                     return "Plug-in";
 
@@ -4608,10 +4609,12 @@ void loadInstalledFx_()
     }
 }
 
-// Heuristic: build a displayShort from a full FX name. Strips the
-// "VSTn: " prefix, removes trailing vendor "(...)" parens, then takes
-// the first 7 chars (UF8 / UC1 colour-bar zone width).
-std::string deriveShortLabel_(const std::string& fxName)
+// Clean match root from a full FX name: strips the "VSTn: " / "AU: "
+// prefix and the trailing vendor " (...)" parens, then trims. Result is a
+// stable substring that matches every instance of the plug-in regardless of
+// wrapper (e.g. "VST3: Pro-Q 4 (FabFilter)" → "Pro-Q 4"). Used to pre-fill
+// the Quick-Learn match field and as the skip-list key.
+std::string deriveMatchRoot_(const std::string& fxName)
 {
     std::string s = fxName;
     auto colon = s.find(": ");
@@ -4620,8 +4623,172 @@ std::string deriveShortLabel_(const std::string& fxName)
     if (paren != std::string::npos) s = s.substr(0, paren);
     while (!s.empty() && s.front() == ' ') s.erase(s.begin());
     while (!s.empty() && s.back()  == ' ') s.pop_back();
+    return s;
+}
+
+// Heuristic: build a displayShort from a full FX name. Same cleaning as
+// deriveMatchRoot_, then takes the first 7 chars (UF8 / UC1 colour-bar
+// zone width).
+std::string deriveShortLabel_(const std::string& fxName)
+{
+    std::string s = deriveMatchRoot_(fxName);
     if (s.size() > 7) s.resize(7);
     return s;
+}
+
+// ===== Quick-Learn project sweep ===========================================
+// The native action REASIXTY_QUICK_LEARN drives a guided pass over every
+// unmapped plug-in in the project. It reuses the +New dialog + AutoLearn
+// flow wholesale; this block only adds target resolution, progress, and
+// auto-advance on top (the persistent skip list lives in UserPluginCatalog).
+// Entry point is reasixty_startQuickLearn() at file scope (see end of file).
+// Plan: ~/.claude/plans/memoized-growing-hinton.md
+bool        g_qlSweepActive         = false;  // a sweep is in progress
+std::string g_qlCurrentMatch;                 // identity name being offered
+// Frame countdown before (re)opening the +New popup. A plain bool fails on
+// the skip path: skipping closes the popup AND wants to reopen the SAME
+// popup id — closing + opening the same id in one frame nets to closed in
+// ImGui. The counter delays the OpenPopup by a frame so the close fully
+// processes first. Set to 2 by qlOfferTarget_; the draw drain decrements it
+// and opens on the tick it reaches 0.
+int         g_qlOpenNewModalDelay   = 0;
+bool        g_qlAdvancePending      = false;  // arm "resolve + offer next"
+std::string g_qlStatus;                       // transient banner text
+
+struct QlTarget { MediaTrack* tr = nullptr; int fxIdx = -1; std::string name; };
+
+// True when (tr,fx) is worth offering to learn: real identity name, NOT
+// already known (built-in OR user catalog), NOT an Acustica/Acqua plug-in
+// (its engine faults under the param snapshot — see fxIsAcustica), and NOT
+// on the user's skip list. Fills nameOut with the identity name.
+bool qlIsLearnable_(MediaTrack* tr, int fx, std::string& nameOut)
+{
+    if (!tr || fx < 0) return false;
+    char buf[256];
+    if (!uf8::fxIdentityName(tr, fx, buf, sizeof(buf)) || !buf[0]) return false;
+    if (uf8::fxIsAcustica(tr, fx)) return false;
+    if (uf8::lookupPluginMapByName(buf) != nullptr) return false; // built-in/user
+    if (user_plugins::isSkipped(buf)) return false;
+    nameOut.assign(buf);
+    return true;
+}
+
+// First learnable FX in the project, in stable order: master track first,
+// then tracks top-to-bottom, FX-chain order within each. No dedup needed —
+// learned / skipped FX are excluded, so a just-learned plug-in drops out of
+// the result on the next call automatically.
+QlTarget qlResolveNext_()
+{
+    std::string nm;
+    auto scan = [&](MediaTrack* tr) -> QlTarget {
+        if (!tr) return {};
+        const int n = TrackFX_GetCount(tr);
+        for (int fx = 0; fx < n; ++fx)
+            if (qlIsLearnable_(tr, fx, nm)) return {tr, fx, nm};
+        return {};
+    };
+    if (QlTarget t = scan(GetMasterTrack(nullptr)); t.fxIdx >= 0) return t;
+    const int nTr = CountTracks(nullptr);
+    for (int i = 0; i < nTr; ++i)
+        if (QlTarget t = scan(GetTrack(nullptr, i)); t.fxIdx >= 0) return t;
+    return {};
+}
+
+// Count of DISTINCT learnable plug-in names left in the project (for the
+// "(N remaining)" label). Dedups by identity name so eight tracks sharing
+// one compressor count as one.
+int qlCountRemaining_()
+{
+    std::vector<std::string> seen;
+    auto consider = [&](MediaTrack* tr) {
+        if (!tr) return;
+        const int n = TrackFX_GetCount(tr);
+        for (int fx = 0; fx < n; ++fx) {
+            std::string nm;
+            if (!qlIsLearnable_(tr, fx, nm)) continue;
+            if (std::find(seen.begin(), seen.end(), nm) == seen.end())
+                seen.push_back(std::move(nm));
+        }
+    };
+    consider(GetMasterTrack(nullptr));
+    const int nTr = CountTracks(nullptr);
+    for (int i = 0; i < nTr; ++i) consider(GetTrack(nullptr, i));
+    return static_cast<int>(seen.size());
+}
+
+// Prime the +New dialog globals for `tgt`, select the host track and float
+// the FX so the editor's param snapshot picks it up, then arm the deferred
+// OpenPopup. Acustica is excluded upstream, so floating is safe here.
+void qlOfferTarget_(const QlTarget& tgt)
+{
+    SetOnlyTrackSelected(tgt.tr);
+    TrackFX_Show(tgt.tr, tgt.fxIdx, /*float window*/ 3);
+
+    // Match defaults to the cleaned root (strips "VST3: " / " (Vendor)") so
+    // it matches every instance / wrapper of the same plug-in; the user can
+    // still edit it. Falls back to the full name if cleaning emptied it.
+    // Display short reuses the same heuristic, truncated to 7 chars.
+    const std::string root = deriveMatchRoot_(tgt.name);
+    const std::string match = root.empty() ? tgt.name : root;
+    std::snprintf(g_newMatch, sizeof(g_newMatch), "%s", match.c_str());
+    const std::string disp = deriveShortLabel_(tgt.name);
+    std::snprintf(g_newDisplay, sizeof(g_newDisplay), "%s", disp.c_str());
+    g_newPrimaryMode = 1;
+    g_newUf8Mode     = false;
+    g_newError.clear();
+    std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
+    g_pickerSelectedIdx = -1;
+    if (g_installedFx.empty()) loadInstalledFx_();
+
+    g_qlSweepActive         = true;
+    g_qlCurrentMatch        = match;  // header label + skip-list key
+    g_qlStatus.clear();
+    g_qlOpenNewModalDelay   = 2;      // open after the close fully processes
+}
+
+// Action entry: resolve a target (prefer REAPER's focused FX) and offer it,
+// or set a "nothing to do" status. Called from reasixty_startQuickLearn().
+void qlStartSweep_()
+{
+    QlTarget tgt;
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum >= 0
+        && itemNum < 0)                       // track FX only, not take FX
+    {
+        MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
+                                      : GetTrack(nullptr, trNum - 1);
+        const int fx = fxNum & 0x00FFFFFF;
+        std::string nm;
+        if (tr && fx >= 0 && fx < TrackFX_GetCount(tr)
+            && qlIsLearnable_(tr, fx, nm))
+        {
+            tgt = {tr, fx, nm};
+        }
+    }
+    if (tgt.fxIdx < 0) tgt = qlResolveNext_();
+    if (tgt.fxIdx < 0) {
+        g_qlSweepActive = false;
+        g_qlOpenNewModalDelay = 0;
+        g_qlStatus = "Quick Learn: every project plug-in is already "
+                     "mapped or skipped.";
+        return;
+    }
+    qlOfferTarget_(tgt);
+}
+
+// Advance to the next learnable FX after a Save or Skip. Closes the sweep
+// (with a "done" banner) when none remain. Called from the FX-Learn draw
+// drain when g_qlAdvancePending is set.
+void qlAdvance_()
+{
+    QlTarget tgt = qlResolveNext_();
+    if (tgt.fxIdx < 0) {
+        g_qlSweepActive = false;
+        g_qlOpenNewModalDelay = 0;
+        g_qlStatus = "Quick Learn complete — no more unmapped plug-ins.";
+        return;
+    }
+    qlOfferTarget_(tgt);
 }
 
 // Editor-View state. `g_editingMatch` is the current map's `match`
@@ -4684,6 +4851,16 @@ int g_listeningPrevIdx     = -1;
 int g_lastTouchedTr        = -2;   // -2 = uninitialised; -1 = no last touch
 int g_lastTouchedFx        = -1;
 int g_lastTouchedParam     = -1;
+
+// AutoLearn Preview per-row wiggle. g_alListenRow = the g_autoLearnSlots
+// index whose "Learn" button is armed (-1 = none). Same GetLastTouchedFX
+// mechanism as the editor listen above, but it writes into the PREVIEW row
+// (vst3Param / paramName / confidence=User / accepted) rather than the
+// catalog — Apply still commits everything. Baseline snapshotted on arm.
+int g_alListenRow          = -1;
+int g_alPrevTr             = -2;
+int g_alPrevFx             = -1;
+int g_alPrevParam          = -1;
 // Plugin-selector key — "trackIdx:fxIdx" of the FX instance whose param
 // list the editor reads from. -1 trackIdx = master. Empty string = pick
 // first match (auto). Cleared whenever the editing map changes so the
@@ -8504,7 +8681,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
         g_pickerSelectedIdx = -1;
         if (g_installedFx.empty()) loadInstalledFx_();
-        ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
+        ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Delete##fxl_hdr_del", nullptr, nullptr)) {
@@ -9151,6 +9328,48 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx, counts);
         ImGui_Spacing(ctx);
 
+        // Per-row wiggle learn. While a row's "Learn" button is armed
+        // (g_alListenRow), poll GetLastTouchedFX for a fresh touch on an
+        // FX matching this map and bind the moved param into the PREVIEW
+        // row. Mirrors the editor's click-and-turn poll; baseline was
+        // snapshotted when the button armed so a stale touch can't bind.
+        if (g_alListenRow >= 0
+            && g_alListenRow < static_cast<int>(g_autoLearnSlots.size()))
+        {
+            int t = -1, f = -1, p = -1;
+            if (GetLastTouchedFX(&t, &f, &p)) {
+                const bool changed = (t != g_alPrevTr || f != g_alPrevFx
+                                   || p != g_alPrevParam);
+                if (changed) {
+                    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                                   : (t > 0)  ? GetTrack(nullptr, t - 1)
+                                              : nullptr;
+                    char fxName[256] = {};
+                    if (tr && uf8::fxIdentityName(tr, f, fxName, sizeof(fxName))
+                        && std::string(fxName).find(editing->match)
+                               != std::string::npos)
+                    {
+                        auto& row = g_autoLearnSlots[g_alListenRow];
+                        row.vst3Param = p;
+                        row.paramName.clear();
+                        for (const auto& pi : editing->paramSnapshot)
+                            if (pi.vst3Param == p) { row.paramName = pi.name; break; }
+                        if (row.paramName.empty()) {
+                            char pn[128] = {};
+                            if (TrackFX_GetParamName(tr, f, p, pn, sizeof(pn)))
+                                row.paramName = pn;
+                        }
+                        row.confidence = -1.0f;  // user
+                        row.accepted   = true;
+                        g_alListenRow  = -1;     // captured — disarm
+                    }
+                    g_alPrevTr = t; g_alPrevFx = f; g_alPrevParam = p;
+                }
+            }
+        } else {
+            g_alListenRow = -1;
+        }
+
         // Column-width budget shared by ALL three tables so the Param
         // column ends up the same width regardless of section. Conf and
         // Category both use the same `colInfoW` so the stretch math
@@ -9208,12 +9427,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 int    wF1 = wFixed, wF2 = wFixed,
                        wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
                 double cW = colCheckW, sW = colSlotW,
-                       pW = 0, fW = colInfoW, iW = colIdxW;
+                       pW = 0, fW = colInfoW, iW = scaleW_(ctx, 72.0);
                 ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
                 ImGui_TableSetupColumn(ctx, "SSL Slot", &wF2, &sW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
-                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Learn",    &wF5, &iW, nullptr);
                 ImGui_TableHeadersRow(ctx);
 
                 for (size_t i = 0; i < g_autoLearnSlots.size(); ++i) {
@@ -9386,10 +9605,48 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
                     }
 
+                    // Learn — wiggle a control on the live plug-in to bind
+                    // the moved param to this slot. Replaces the old Idx
+                    // readout (the index shows in the Param dropdown). Needs
+                    // a live FX instance (Quick Learn floats one).
                     ImGui_TableNextColumn(ctx);
-                    char idxBuf[16];
-                    snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
-                    ImGui_TextDisabled(ctx, idxBuf);
+                    {
+                        const bool listening = (g_alListenRow ==
+                                                static_cast<int>(i));
+                        char lrnId[48];
+                        snprintf(lrnId, sizeof(lrnId),
+                                 listening ? "wiggle…##al_learn_%d"
+                                           : "Learn##al_learn_%d",
+                                 static_cast<int>(i));
+                        int pushed = 0;
+                        if (listening) {
+                            ImGui_PushStyleColor(ctx, ImGui_Col_Button,
+                                                 0x3377CCFF);
+                            ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered,
+                                                 0x4488DDFF);
+                            ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,
+                                                 0x55AAFFFF);
+                            pushed = 3;
+                        }
+                        if (ImGui_Button(ctx, lrnId, nullptr, nullptr)) {
+                            if (listening) {
+                                g_alListenRow = -1;       // toggle off
+                            } else {
+                                g_alListenRow = static_cast<int>(i);
+                                // Baseline the current touch so a stale
+                                // prior wiggle doesn't bind instantly.
+                                int t = -1, f = -1, p = -1;
+                                if (GetLastTouchedFX(&t, &f, &p)) {
+                                    g_alPrevTr = t; g_alPrevFx = f;
+                                    g_alPrevParam = p;
+                                } else {
+                                    g_alPrevTr = -1; g_alPrevFx = -1;
+                                    g_alPrevParam = -1;
+                                }
+                            }
+                        }
+                        if (pushed) ImGui_PopStyleColor(ctx, &pushed);
+                    }
                 }
                 ImGui_EndTable(ctx);
             }
@@ -9614,6 +9871,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
             g_autoLearnOpen = false;
             ImGui_CloseCurrentPopup(ctx);
+            // Quick-Learn: this plug-in is now mapped — arm the advance to
+            // the next unlearned FX (drained in the FX-Learn draw below).
+            if (g_qlSweepActive) g_qlAdvancePending = true;
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Cancel##al_cancel", nullptr, nullptr)) {
@@ -10130,6 +10390,39 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
     const auto& cat = user_plugins::get();
 
+    // Quick-Learn status banner (sweep complete / nothing to do). Set by the
+    // sweep engine; cleared when the next sweep offers a target.
+    if (!g_qlSweepActive && !g_qlStatus.empty()) {
+        ImGui_TextColored(ctx, 0x66CCFFFF, g_qlStatus.c_str());
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Dismiss##fxl_ql_status", nullptr, nullptr))
+            g_qlStatus.clear();
+        ImGui_Spacing(ctx);
+    }
+
+    // Quick-Learn skip list — collapsed by default. Lets the user un-skip a
+    // plug-in they previously opted out of during a sweep.
+    if (!user_plugins::skips().empty()) {
+        char hdr[64];
+        snprintf(hdr, sizeof(hdr), "Quick-Learn skip list (%zu)###fxl_skiplist",
+                 user_plugins::skips().size());
+        if (ImGui_CollapsingHeader(ctx, hdr, nullptr, nullptr)) {
+            std::string toRemove;
+            for (const auto& s : user_plugins::skips()) {
+                ImGui_Text(ctx, s.c_str());
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                char btn[320];
+                snprintf(btn, sizeof(btn), "Remove##fxl_unskip_%s", s.c_str());
+                if (ImGui_Button(ctx, btn, nullptr, nullptr)) toRemove = s;
+            }
+            if (!toRemove.empty()) {
+                user_plugins::removeSkip(toRemove);
+                persistAndReport_();
+            }
+        }
+        ImGui_Spacing(ctx);
+    }
+
     // Empty catalog — welcome state. Just "+ New" / "Import" so the
     // user has a path to land their first map. The popups below still
     // render so both buttons can open their modals.
@@ -10152,7 +10445,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
             g_pickerSelectedIdx = -1;
             if (g_installedFx.empty()) loadInstalledFx_();
-            ImGui_OpenPopup(ctx, "fxl_new_popup", nullptr);
+            ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Import…##fxl_import_welcome", nullptr, nullptr)) {
@@ -10205,8 +10498,19 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         centerNextPopupOnDisplay_(ctx);
         ImGui_SetNextWindowSize(ctx, 640.0, 620.0, &condApp);
     }
-    if (ImGui_BeginPopupModal(ctx, "fxl_new_popup", nullptr, nullptr)) {
-        ImGui_Text(ctx, "New User Plugin Map");
+    // Visible title via "###" so the window bar reads cleanly; the popup ID
+    // stays "fxl_new_popup" (text after ###), so the OpenPopup calls above
+    // still match. Replaces the old raw-ID title + redundant inner heading.
+    if (ImGui_BeginPopupModal(ctx, "New User Plugin Map###fxl_new_popup",
+                              nullptr, nullptr)) {
+        if (g_qlSweepActive) {
+            char hdr[320];
+            snprintf(hdr, sizeof(hdr),
+                     "Quick Learn — %s   (%d remaining)",
+                     g_qlCurrentMatch.c_str(), qlCountRemaining_());
+            ImGui_TextColored(ctx, 0x66CCFFFF, hdr);
+            ImGui_Separator(ctx);
+        }
         ImGui_Spacing(ctx);
 
         // -- Plugin browser --------------------------------------------------
@@ -10493,6 +10797,22 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Cancel##fxl_new_cancel", nullptr, nullptr)) {
             ImGui_CloseCurrentPopup(ctx);
+            // Cancel ends a Quick-Learn sweep. It is NOT a skip — the
+            // plug-in stays unmapped and will be offered again next run.
+            g_qlSweepActive       = false;
+            g_qlOpenNewModalDelay = 0;
+        }
+        // Quick-Learn: skip this plug-in for good (persistent skip list)
+        // and advance to the next unmapped FX.
+        if (g_qlSweepActive) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Skip this plug-in##fxl_new_skip",
+                             nullptr, nullptr)) {
+                uf8::user_plugins::addSkip(g_qlCurrentMatch);
+                persistAndReport_();
+                ImGui_CloseCurrentPopup(ctx);
+                g_qlAdvancePending = true;
+            }
         }
         ImGui_EndPopup(ctx);
     }
@@ -10505,6 +10825,21 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         g_autoLearnSetupPending = false;
         g_autoLearnSetupOpen    = true;
         ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
+    }
+
+    // Quick-Learn hand-offs. Run here (after every modal's EndPopup above)
+    // so the popup stack is clean before OpenPopup — same rule as the
+    // Setup trigger. Advance first: it (re)arms the delayed open below via
+    // qlOfferTarget_, or ends the sweep with a banner when none remain.
+    if (g_qlAdvancePending) {
+        g_qlAdvancePending = false;
+        qlAdvance_();
+    }
+    // Delayed open: decrement each frame, open on the tick it reaches 0.
+    // The delay lets a same-frame CloseCurrentPopup (skip path) settle
+    // before reopening the same popup id — see g_qlOpenNewModalDelay.
+    if (g_qlOpenNewModalDelay > 0 && --g_qlOpenNewModalDelay == 0) {
+        ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
     }
 
     // ---- Delete confirm popup --------------------------------------------
@@ -11684,3 +12019,12 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
 }
 
 } // namespace uf8
+
+// File-scope entry point for the Quick-Learn action. Declared in main.cpp
+// (external linkage) and called from the main-thread drain after the
+// Settings window has been opened to FX Learn. Forwards to the sweep engine
+// in the anonymous namespace above (same-TU access is fine).
+void reasixty_startQuickLearn()
+{
+    uf8::qlStartSweep_();
+}

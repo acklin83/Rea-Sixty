@@ -31,6 +31,12 @@ public:
     // "Rea-Sixty: Toggle Plugin Mixer Window".
     void toggle();
 
+    // Open the window (if closed) and switch to the FX Learn section.
+    // Used by the Quick-Learn action to drop the user straight into the
+    // FX-Learn tab with the +New dialog primed. Idempotent if already
+    // open — just selects the section, no close.
+    void openToFxLearn();
+
     bool isOpen() const;
 
     // Called from IReaperControlSurface::Run() each tick. No-op when closed.

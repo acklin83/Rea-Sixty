@@ -192,6 +192,15 @@ void MixerWindow::toggle()
     }
 }
 
+void MixerWindow::openToFxLearn()
+{
+    // Select the FX Learn rail entry first, then open if needed. toggle()
+    // only resets the ImGui ctx/font — it leaves impl_->selected intact —
+    // so setting the section before opening survives the context refresh.
+    impl_->selected = kSecFxLearn;
+    if (!impl_->visible) toggle();
+}
+
 bool MixerWindow::isOpen() const { return impl_->visible; }
 
 void MixerWindow::onRunTick()
