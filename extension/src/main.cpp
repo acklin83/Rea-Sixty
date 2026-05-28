@@ -563,6 +563,20 @@ std::atomic<RecRmeAction> g_recVpotPush{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recCut{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recSolo{RecRmeAction::None};
 
+// UC1 mirror of the UF8 V-Pot triplet — REC + RME mode hijacks
+// Encoder 2 (rotation/push) and the central Cut / Solo buttons against
+// the focused track. Independent toggles + assignments so the user
+// can opt UC1 in/out without affecting UF8.
+std::atomic<bool>         g_recUc1Enc2RotateGain{false};
+std::atomic<bool>         g_recUc1Enc2ShiftInputCh{false};
+// Out-of-the-box assignments mirror Frank's recommended SSL workflow:
+// 48V → Enc2 Push, Pad → Cut, Phase → Polarity. ExtState load below
+// overrides if the user picked something else.
+std::atomic<RecRmeAction> g_recUc1Enc2Push{RecRmeAction::Toggle48V};
+std::atomic<RecRmeAction> g_recUc1Cut{RecRmeAction::TogglePad};
+std::atomic<RecRmeAction> g_recUc1Solo{RecRmeAction::None};
+std::atomic<RecRmeAction> g_recUc1Polarity{RecRmeAction::TogglePhase};
+
 inline const char* recRmeActionStr(RecRmeAction a)
 {
     switch (a) {
@@ -2204,6 +2218,24 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "rec_solo"); v && *v) {
         g_recSolo.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_enc2_rotate_gain"); v && *v) {
+        g_recUc1Enc2RotateGain.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_enc2_shift_inputch"); v && *v) {
+        g_recUc1Enc2ShiftInputCh.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_enc2_push"); v && *v) {
+        g_recUc1Enc2Push.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_cut"); v && *v) {
+        g_recUc1Cut.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_solo"); v && *v) {
+        g_recUc1Solo.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uc1_polarity"); v && *v) {
+        g_recUc1Polarity.store(parseRecRmeAction(v));
     }
     const char* sff = GetExtState("rea_sixty", "strip_follows_focused_fx");
     if (sff && *sff) {
@@ -14525,6 +14557,13 @@ int  reasixty_recVpotPush()          { return static_cast<int>(g_recVpotPush.loa
 int  reasixty_recCut()               { return static_cast<int>(g_recCut.load()); }
 int  reasixty_recSolo()              { return static_cast<int>(g_recSolo.load()); }
 
+bool reasixty_recUc1Enc2RotateGain()   { return g_recUc1Enc2RotateGain.load(); }
+bool reasixty_recUc1Enc2ShiftInputCh() { return g_recUc1Enc2ShiftInputCh.load(); }
+int  reasixty_recUc1Enc2Push()         { return static_cast<int>(g_recUc1Enc2Push.load()); }
+int  reasixty_recUc1Cut()              { return static_cast<int>(g_recUc1Cut.load()); }
+int  reasixty_recUc1Solo()             { return static_cast<int>(g_recUc1Solo.load()); }
+int  reasixty_recUc1Polarity()         { return static_cast<int>(g_recUc1Polarity.load()); }
+
 void reasixty_setRecRmeEnabled(bool on)
 {
     g_recRmeEnabled.store(on);
@@ -14697,6 +14736,290 @@ void reasixty_setRecSolo(int v)
     const auto a = static_cast<RecRmeAction>(v);
     g_recSolo.store(a);
     SetExtState("rea_sixty", "rec_solo", recRmeActionStr(a), true);
+}
+
+void reasixty_setRecUc1Enc2RotateGain(bool on)
+{
+    g_recUc1Enc2RotateGain.store(on);
+    SetExtState("rea_sixty", "rec_uc1_enc2_rotate_gain", on ? "1" : "0", true);
+}
+void reasixty_setRecUc1Enc2ShiftInputCh(bool on)
+{
+    g_recUc1Enc2ShiftInputCh.store(on);
+    SetExtState("rea_sixty", "rec_uc1_enc2_shift_inputch", on ? "1" : "0", true);
+}
+void reasixty_setRecUc1Enc2Push(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUc1Enc2Push.store(a);
+    SetExtState("rea_sixty", "rec_uc1_enc2_push", recRmeActionStr(a), true);
+}
+void reasixty_setRecUc1Cut(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUc1Cut.store(a);
+    SetExtState("rea_sixty", "rec_uc1_cut", recRmeActionStr(a), true);
+}
+void reasixty_setRecUc1Solo(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUc1Solo.store(a);
+    SetExtState("rea_sixty", "rec_uc1_solo", recRmeActionStr(a), true);
+}
+void reasixty_setRecUc1Polarity(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUc1Polarity.store(a);
+    SetExtState("rea_sixty", "rec_uc1_polarity", recRmeActionStr(a), true);
+}
+
+// UC1-side dispatch bridges. Called from UC1Surface::handleKnob_ /
+// handleButton_ on the main thread (the surface drains its input
+// queue from poll() — see UC1Surface::poll), so REAPER track APIs are
+// safe here. Track is always the UC1's focused track (single-strip
+// surface, no banking).
+//
+// `which`: 0 = Encoder 2 Push, 1 = Cut, 2 = Solo. Returns true when
+// the action fired (caller should suppress the legacy mute/solo/push
+// fallback); false on None / unresolved cmdId / TotalReaper missing.
+// True when REC + RME wiring should hijack a UC1 input. Mirrors the
+// gate UF8 uses (main.cpp ~7587, 7644): RME on + SelectionMode is Rec
+// or RecMon. AUTO / Instance / Norm fall through to the surface's
+// legacy behaviour even when the RME toggle is on.
+static inline bool recRmeUc1Active_()
+{
+    if (!g_recRmeEnabled.load()) return false;
+    const auto m = g_selectionMode.load();
+    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
+}
+
+// Public wrapper so UC1Surface's LED branches can take the same gate
+// decision without exposing g_selectionMode / SelectionMode.
+bool reasixty_recRmeActiveForUc1() { return recRmeUc1Active_(); }
+
+// True when SelectionMode is Rec or RecMon (independent of RME).
+// Used by UC1Surface to switch the Fine button to momentary in REC
+// mode (Frank prefers hold-to-Shift while tracking; the readout flash
+// from a toggle is also distracting during tracking).
+bool reasixty_inRecOrRecMonMode()
+{
+    const auto m = g_selectionMode.load();
+    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
+}
+
+// LED-mirror helper for UC1 Cut/Solo. `which`: 1 = Cut, 2 = Solo.
+// Returns:
+//   -1 → no mirror (REC+RME inactive, button unassigned, or action
+//        has no P_EXT echo e.g. Autolevel). Caller should render the
+//        button's regular B_MUTE / I_SOLO state.
+//    0 → mirrored toggle is OFF.
+//    1 → mirrored toggle is ON.
+// Timestamp set whenever the user lands an input-channel cycle via
+// Shift+Enc2; the readout below substitutes the channel name for the
+// flag line for ~1.5s so the user can see what channel they're on.
+std::atomic<int64_t> g_recUc1InputChanFlashMs{0};
+inline void markRecUc1InputChanFlash_()
+{
+    using namespace std::chrono;
+    g_recUc1InputChanFlashMs.store(
+        duration_cast<milliseconds>(
+            steady_clock::now().time_since_epoch()).count());
+}
+inline bool recUc1InputChanFlashActive_()
+{
+    using namespace std::chrono;
+    const auto now = duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count();
+    return (now - g_recUc1InputChanFlashMs.load()) < 1500;
+}
+
+// Build a 7-char abbreviation of an RME-style input channel name.
+// "MADI 5" → "MA 5", "ANALOG 1" → "An 1", "Drums OH" → first 7 chars.
+// Stereo pairs already include the "/N" suffix from caller.
+inline std::string abbrevInputChanName_(std::string name)
+{
+    auto prefix = [&](const char* longP, const char* shortP) {
+        const auto ll = std::strlen(longP);
+        if (name.size() >= ll && name.compare(0, ll, longP) == 0) {
+            name.replace(0, ll, shortP);
+        }
+    };
+    if (name.size() > 7) {
+        prefix("MADI ",   "MA ");
+        prefix("ANALOG ", "An ");
+        prefix("Analog ", "An ");
+        prefix("ADAT ",   "AD ");
+        prefix("SPDIF ",  "SP ");
+        prefix("AES ",    "AS ");
+    }
+    if (name.size() > 7) name.resize(7);
+    return name;
+}
+
+// Readout-line builder for UC1's CS readout zone. Mirrors the UF8
+// V-Pot value-line layout (main.cpp ~10403): flags on the left,
+// gain dB on the right. Returns false when REC+RME isn't active for
+// this track or TotalReaper hasn't populated any of the P_EXT keys.
+bool reasixty_recUc1ReadoutText(MediaTrack* tr,
+                                std::string* outLabel,
+                                std::string* outValue)
+{
+    if (!tr || !outLabel || !outValue) return false;
+    if (!recRmeUc1Active_()) return false;
+    auto readExt = [&](const char* key) -> std::string {
+        char buf[64] = {0};
+        GetSetMediaTrackInfo_String(tr, const_cast<char*>(key), buf, false);
+        return std::string(buf);
+    };
+    const bool on48v   = readExt("P_EXT:totalreaper_48v")   == "1";
+    const bool onPad   = readExt("P_EXT:totalreaper_pad")   == "1";
+    const bool onPhase = readExt("P_EXT:totalreaper_phase") == "1";
+    const std::string gainStr = readExt("P_EXT:totalreaper_gain");
+    // All four empty / cleared → TotalReaper hasn't echoed anything
+    // for this track yet (input isn't an RME pre, or /sendall hasn't
+    // populated). Skip the readout so the focused-param zone keeps
+    // its normal content rather than displaying "0.0dB" misleadingly.
+    if (!on48v && !onPad && !onPhase && gainStr.empty()) return false;
+
+    // Input-channel flash: when the user just shifted-rotated to a new
+    // input channel, swap the flag line for the channel name for ~1.5s.
+    bool labelSet = false;
+    if (recUc1InputChanFlashActive_()) {
+        const int recInput = static_cast<int>(
+            GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+        if (recInput >= 0
+            && !(recInput & 4096)
+            && !(recInput & 2048))
+        {
+            const int chan = recInput & 0x3FF;
+            if (const char* nm = GetInputChannelName(chan); nm && *nm) {
+                std::string s2(nm);
+                if ((recInput & 1024) != 0) {
+                    // Stereo pair: append "/<n+1>" from trailing digit.
+                    size_t numStart = s2.size();
+                    while (numStart > 0
+                        && std::isdigit(static_cast<unsigned char>(
+                                            s2[numStart - 1])))
+                    {
+                        --numStart;
+                    }
+                    if (numStart < s2.size()) {
+                        const int leftNum =
+                            std::atoi(s2.c_str() + numStart);
+                        char buf[16];
+                        snprintf(buf, sizeof(buf), "/%d", leftNum + 1);
+                        s2 += buf;
+                    }
+                }
+                *outLabel = "In " + abbrevInputChanName_(std::move(s2));
+                labelSet = true;
+            }
+        }
+    }
+    if (!labelSet) {
+        std::string flags;
+        flags += on48v   ? "48V" : "   ";
+        flags += ' ';
+        flags += onPad   ? "Pd"  : "  ";
+        flags += ' ';
+        flags += onPhase ? "Ph"  : "  ";
+        *outLabel = flags;
+    }
+
+    char gbuf[16];
+    if (gainStr.empty()) {
+        snprintf(gbuf, sizeof(gbuf), " --dB");
+    } else {
+        double db = std::atof(gainStr.c_str());
+        if (db < 0.0) db = 0.0;
+        snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
+    }
+    *outValue = gbuf;
+    return true;
+}
+
+int reasixty_recUc1ButtonMirroredState(int which, MediaTrack* tr)
+{
+    if (!tr) return -1;
+    if (!recRmeUc1Active_()) return -1;
+    const RecRmeAction a = (which == 1) ? g_recUc1Cut.load()
+                         : (which == 2) ? g_recUc1Solo.load()
+                         : (which == 3) ? g_recUc1Polarity.load()
+                                        : RecRmeAction::None;
+    if (a == RecRmeAction::None) return -1;
+    const char* key = recRmePExtKey(a);
+    if (!key) return -1;
+    return (readTrackPExt_(tr, key) == "1") ? 1 : 0;
+}
+
+// Predicate form — same gate as dispatch but doesn't fire the action.
+// Used to balance press/release on Uc1Encoder2Push so we don't leak
+// an unpaired release into bindings::dispatch when the press was
+// hijacked by REC+RME.
+bool reasixty_recRmeUc1ButtonAssigned(int which)
+{
+    if (!recRmeUc1Active_()) return false;
+    const RecRmeAction a =
+        (which == 0) ? g_recUc1Enc2Push.load() :
+        (which == 1) ? g_recUc1Cut.load()      :
+        (which == 2) ? g_recUc1Solo.load()     :
+        (which == 3) ? g_recUc1Polarity.load() : RecRmeAction::None;
+    if (a == RecRmeAction::None) return false;
+    return totalReaperCmdId_(a) != 0;
+}
+
+bool reasixty_dispatchUc1RecRmeButton(int which, MediaTrack* tr)
+{
+    if (!tr) return false;
+    if (!recRmeUc1Active_()) return false;
+    const RecRmeAction a =
+        (which == 0) ? g_recUc1Enc2Push.load() :
+        (which == 1) ? g_recUc1Cut.load()      :
+        (which == 2) ? g_recUc1Solo.load()     :
+        (which == 3) ? g_recUc1Polarity.load() : RecRmeAction::None;
+    if (a == RecRmeAction::None) return false;
+    const int cmd = totalReaperCmdId_(a);
+    if (cmd == 0) return false;
+    runReaperActionOnTrack_(cmd, tr);
+    return true;
+}
+
+// signedStep already in physical detents (UC1 stepFromAccumulator).
+// Returns true on dispatch (so caller suppresses BC-track-scroll
+// fallback), false when REC+RME inactive or TotalReaper missing.
+bool reasixty_dispatchUc1RecRmeGain(MediaTrack* tr, int signedStep)
+{
+    if (!tr) return false;
+    if (!recRmeUc1Active_()) return false;
+    if (!g_recUc1Enc2RotateGain.load()) return false;
+    if (signedStep == 0) return true;   // consumed but nothing to do
+    const int cmd = totalReaperGainCmdId_(signedStep);
+    if (cmd == 0) return false;
+    runReaperActionOnTrackN_(cmd, tr,
+                             signedStep > 0 ? signedStep : -signedStep);
+    return true;
+}
+
+bool reasixty_dispatchUc1RecRmeInputChan(MediaTrack* tr, int signedStep)
+{
+    if (!tr) return false;
+    if (!recRmeUc1Active_()) return false;
+    if (!g_recUc1Enc2ShiftInputCh.load()) return false;
+    if (signedStep == 0) return true;
+    const int cur = static_cast<int>(
+        GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+    if (cur < 0) return true;             // no audio input bound; consumed
+    if (cur & 4096) return true;          // MIDI — skip
+    if (cur & 2048) return true;          // multichannel — skip
+    const int flags = cur & ~0x3FF;
+    int chan = (cur & 0x3FF) + signedStep;
+    const int maxIn = GetNumAudioInputs();
+    if (chan < 0) chan = 0;
+    if (maxIn > 0 && chan > maxIn - 1) chan = maxIn - 1;
+    SetMediaTrackInfo_Value(tr, "I_RECINPUT",
+                            static_cast<double>(flags | chan));
+    markRecUc1InputChanFlash_();
+    return true;
 }
 
 bool reasixty_stripFollowsFocusedFx()

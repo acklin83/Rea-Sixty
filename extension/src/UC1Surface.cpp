@@ -98,6 +98,35 @@ std::string reasixty_fxUserRename(void* tr, int fxIdx);
 // instead of the "Folder" placeholder. No-op outside folder mode.
 void reasixty_bumpFolderReveal(MediaTrack* tr);
 
+// REC + RME (TotalReaper) bridges for UC1 — defined in main.cpp.
+// Surface calls these from handleKnob_ / handleButton_ on the main
+// thread (UC1Surface::poll drains its queue there, so REAPER track
+// APIs are safe). All return true when the action consumed the input
+// (caller suppresses fallback). `which`: 0 = Enc2 Push, 1 = Cut,
+// 2 = Solo. signedStep for the encoder bridges is already in physical
+// detents — pass stepFromAccumulator's output directly.
+bool reasixty_dispatchUc1RecRmeButton(int which, MediaTrack* tr);
+bool reasixty_dispatchUc1RecRmeGain(MediaTrack* tr, int signedStep);
+bool reasixty_dispatchUc1RecRmeInputChan(MediaTrack* tr, int signedStep);
+// LED-mirror lookup for Cut/Solo. Returns -1 when REC+RME isn't
+// governing the button (caller falls back to B_MUTE / I_SOLO);
+// 0/1 = mirrored P_EXT toggle state. `which`: 1 = Cut, 2 = Solo.
+int  reasixty_recUc1ButtonMirroredState(int which, MediaTrack* tr);
+// Predicate: would dispatchUc1RecRmeButton fire? Used to swallow the
+// release edge on Uc1Encoder2Push so bindings::dispatch never sees
+// an unpaired release. `which`: 0 = Enc2 Push, 1 = Cut, 2 = Solo,
+// 3 = Polarity.
+bool reasixty_recRmeUc1ButtonAssigned(int which);
+// Build the REC+RME readout (UF8 V-Pot value-line format) for the
+// focused track. Returns false when not applicable; UC1 then renders
+// the regular focused-param readout in its place.
+bool reasixty_recUc1ReadoutText(MediaTrack* tr,
+                                std::string* outLabel,
+                                std::string* outValue);
+// True when SelectionMode is Rec or RecMon — used to switch the UC1
+// Fine button to momentary (hold-to-Shift) instead of toggle.
+bool reasixty_inRecOrRecMonMode();
+
 namespace uc1 {
 
 namespace {
@@ -1163,6 +1192,33 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             ++stats_.knobEventsHandled;
             return;
         }
+        // REC + RME (TotalReaper) override — when active, Encoder 2
+        // rotation steps preamp gain ±1 dB on the focused track, or
+        // changes the input channel when Shift is held. Mirrors the
+        // UF8 V-Pot logic at main.cpp ~7846. Bridges resolve to false
+        // when RME is off / SelectionMode isn't Rec, so the normal
+        // bindings dispatch path runs in every other case.
+        if (focusedTrack_) {
+            auto* trMedia = static_cast<MediaTrack*>(focusedTrack_);
+            // UC1 has no Shift button — Fine doubles as Shift here so
+            // users without keyboard-Shift enabled can still reach the
+            // input-channel cycle (already true elsewhere via
+            // reasixty_shiftFineActive).
+            const bool shiftMod =
+                uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)
+                || fineMode_.load(std::memory_order_relaxed);
+            if (shiftMod) {
+                if (reasixty_dispatchUc1RecRmeInputChan(trMedia, step)) {
+                    ++stats_.knobEventsHandled;
+                    return;
+                }
+            } else {
+                if (reasixty_dispatchUc1RecRmeGain(trMedia, step)) {
+                    ++stats_.knobEventsHandled;
+                    return;
+                }
+            }
+        }
         // Bindings-routed dispatch (Uc1Encoder2). Falls back to the
         // legacy BC-track-scroll when no binding exists (older
         // bindings.json files saved before this surface became
@@ -1517,6 +1573,18 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // parameter sweeps; toggle lets the user engage Fine once and
     // adjust as many knobs as they want.
     if (ev.id == button::kFine) {
+        // In REC / RecMon: Fine acts as a momentary modifier (hold to
+        // engage; release to drop). Doubles as the Shift-equivalent for
+        // the Enc2 input-channel toggle while tracking. Readout text
+        // is suppressed in this mode so the readout zone can keep its
+        // REC+RME content (48V/Pd/Ph + gain) instead of flashing
+        // "Fine On/Off".
+        if (reasixty_inRecOrRecMonMode()) {
+            fineMode_.store(ev.pressed, std::memory_order_relaxed);
+            pushButtonLed_(ev.id, ev.pressed);
+            if (ev.pressed) ++stats_.buttonEventsHandled;
+            return;
+        }
         if (ev.pressed) {
             const bool next = !fineMode_.load(std::memory_order_relaxed);
             fineMode_.store(next, std::memory_order_relaxed);
@@ -1664,6 +1732,19 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         // exit) — those branches stay hardcoded so the menu UX matches
         // SSL360 regardless of user binding.
         if (mode_ == Uc1Mode::Main) {
+            // REC + RME override — runs the user-assigned TotalReaper
+            // action on press; swallows the matching release so the
+            // regular Uc1Encoder2Push binding never sees half of a
+            // press/release pair (would leak an unpaired release into
+            // any Hold-behaviour binding).
+            if (reasixty_recRmeUc1ButtonAssigned(0) && focusedTrack_) {
+                if (ev.pressed) {
+                    reasixty_dispatchUc1RecRmeButton(
+                        0, static_cast<MediaTrack*>(focusedTrack_));
+                    ++stats_.buttonEventsHandled;
+                }
+                return;
+            }
             const bool handled = uf8::bindings::dispatch(
                 uf8::bindings::ButtonId::Uc1Encoder2Push, ev.pressed);
             if (!handled && ev.pressed) {
@@ -1767,6 +1848,14 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     if (ev.id == button::kSolo) {
         if (ev.pressed && focusedTrack_) {
             MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
+            // REC + RME override — dispatch the user-assigned
+            // TotalReaper action instead of toggling REAPER solo. LED
+            // refresh runs through pollButtonLeds_, which mirrors the
+            // P_EXT state under the same gate.
+            if (reasixty_dispatchUc1RecRmeButton(2, tr)) {
+                ++stats_.buttonEventsHandled;
+                return;
+            }
             CSurf_OnSoloChange(tr, -1);
             const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
             uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
@@ -1787,6 +1876,12 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     if (ev.id == button::kCut) {
         if (ev.pressed && focusedTrack_) {
             MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
+            // REC + RME override — see kSolo branch above. LED tracks
+            // the assigned toggle's P_EXT mirror.
+            if (reasixty_dispatchUc1RecRmeButton(1, tr)) {
+                ++stats_.buttonEventsHandled;
+                return;
+            }
             CSurf_OnMuteChange(tr, -1);
             const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
             uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
@@ -1854,6 +1949,16 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // want it routed to REAPER track state. LED mirrors B_PHASE
     // regardless (refresh() picks it up on track changes).
     if (ev.id == button::kPolarity) {
+        // REC + RME override — dispatch the user-assigned TotalReaper
+        // action (default: Phase Invert) on press; swallow release so
+        // it doesn't double-toggle.
+        if (reasixty_recRmeUc1ButtonAssigned(3)) {
+            if (ev.pressed) {
+                reasixty_dispatchUc1RecRmeButton(3, tr);
+                ++stats_.buttonEventsHandled;
+            }
+            return;
+        }
         const bool cur = GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5;
         const double phaseNext = cur ? 0.0 : 1.0;
         SetMediaTrackInfo_Value(tr, "B_PHASE", phaseNext);
@@ -2139,6 +2244,40 @@ void UC1Surface::pushFocusedParamReadout_()
     // jumping into the wrong LCD region instead of landing in the
     // EXT_FUNCS parameter field.
     if (mode_ != Uc1Mode::Main) return;
+
+    // REC + RME override: when the surface is in Rec/RecMon and RME is
+    // on, the CS readout zone shows TotalMix preamp state (48V/Pd/Ph
+    // flags + gain dB) for the focused track instead of the focused
+    // plug-in param. Mirrors the UF8 V-Pot value line.
+    if (focusedTrack_
+        && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
+    {
+        auto* trMedia = static_cast<MediaTrack*>(focusedTrack_);
+        std::string rmeLabel, rmeValue;
+        if (reasixty_recUc1ReadoutText(trMedia, &rmeLabel, &rmeValue)) {
+            auto readout = formatReadout(rmeLabel, rmeValue);
+            if (!csScrollOverlayActive_ && !bcScrollOverlayActive_
+                && !instanceCarouselActive_ && !navCarouselActive_
+                && readout != lastZone03Text_)
+            {
+                lastZone03Text_ = readout;
+                device_->send(buildReadoutPrecursor(0x00));
+                if (!lastLargeTripleFrame_.empty()) {
+                    device_->send(std::vector<uint8_t>(lastLargeTripleFrame_));
+                }
+                device_->send(buildDisplayText(
+                    zone::kChannelStripReadout, readout, readout.size()));
+                lastZone03Edit_ = std::chrono::steady_clock::now();
+            }
+            // Owned the CS readout this tick — fall through so BC
+            // domain still renders its own focused-param value line.
+            // CS-domain focused params are intentionally suppressed
+            // while REC+RME owns the zone.
+            const auto focused2 = uf8::getFocusedParam();
+            if (focused2.domain != uf8::Domain::BusComp) return;
+        }
+    }
+
     const auto focused = uf8::getFocusedParam();
     if (focused.domain == uf8::Domain::None) return;
 
@@ -2982,15 +3121,27 @@ void UC1Surface::pollButtonLeds_()
         if (btn == button::kFine) on = fineMode_.load(std::memory_order_relaxed);
 
         if (btn == button::kSolo) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(2, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kCut) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(1, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kPolarity) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kSoloClear) {
@@ -3774,15 +3925,27 @@ void UC1Surface::refresh()
         // would use the wrong bank and leave stale LEDs lit after
         // track switches.
         if (btn == button::kSolo) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(2, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kCut) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(1, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kPolarity) {
-            pushButtonLed_(btn, tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+            const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
+            const bool ledOn = (mirrored >= 0)
+                ? (mirrored == 1)
+                : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+            pushButtonLed_(btn, ledOn);
             continue;
         }
         if (btn == button::kSoloClear) {

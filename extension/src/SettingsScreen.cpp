@@ -164,6 +164,19 @@ const char* reasixty_sp(const char* uk, const char* us);
 void reasixty_setRecVpotPush(int v);
 void reasixty_setRecCut(int v);
 void reasixty_setRecSolo(int v);
+
+bool reasixty_recUc1Enc2RotateGain();
+bool reasixty_recUc1Enc2ShiftInputCh();
+int  reasixty_recUc1Enc2Push();
+int  reasixty_recUc1Cut();
+int  reasixty_recUc1Solo();
+int  reasixty_recUc1Polarity();
+void reasixty_setRecUc1Enc2RotateGain(bool on);
+void reasixty_setRecUc1Enc2ShiftInputCh(bool on);
+void reasixty_setRecUc1Enc2Push(int v);
+void reasixty_setRecUc1Cut(int v);
+void reasixty_setRecUc1Solo(int v);
+void reasixty_setRecUc1Polarity(int v);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -10783,6 +10796,34 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                     reasixty_recCut(),       reasixty_setRecCut);
         pickerCombo("Solo button##rec_rme",
                     reasixty_recSolo(),      reasixty_setRecSolo);
+
+        // UC1 — focused-track scope (single-strip surface, no banking).
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Text(ctx, "UC1 — focused track");
+        ImGui_Spacing(ctx);
+        bool uc1GainRot = reasixty_recUc1Enc2RotateGain();
+        if (ImGui_Checkbox(ctx,
+                           "Encoder 2 rotation → Preamp gain ±1 dB",
+                           &uc1GainRot))
+        {
+            reasixty_setRecUc1Enc2RotateGain(uc1GainRot);
+        }
+        bool uc1ShiftInputCh = reasixty_recUc1Enc2ShiftInputCh();
+        if (ImGui_Checkbox(ctx,
+                           "Encoder 2 rotation + Shift → Change input channel",
+                           &uc1ShiftInputCh))
+        {
+            reasixty_setRecUc1Enc2ShiftInputCh(uc1ShiftInputCh);
+        }
+        pickerCombo("Encoder 2 push##rec_rme_uc1",
+                    reasixty_recUc1Enc2Push(), reasixty_setRecUc1Enc2Push);
+        pickerCombo("Cut button##rec_rme_uc1",
+                    reasixty_recUc1Cut(),      reasixty_setRecUc1Cut);
+        pickerCombo("Solo button##rec_rme_uc1",
+                    reasixty_recUc1Solo(),     reasixty_setRecUc1Solo);
+        pickerCombo("Polarity button##rec_rme_uc1",
+                    reasixty_recUc1Polarity(), reasixty_setRecUc1Polarity);
     }
 
         ImGui_EndTabItem(ctx);
