@@ -117,6 +117,11 @@ bool reasixty_dispatchUc1RecRmeInputChan(MediaTrack* tr, int signedStep);
 // governing the button (caller falls back to B_MUTE / I_SOLO);
 // 0/1 = mirrored P_EXT toggle state. `which`: 1 = Cut, 2 = Solo.
 int  reasixty_recUc1ButtonMirroredState(int which, MediaTrack* tr);
+// True when REC + RME is currently driving the UC1 readout zone
+// (RME on + SelectionMode = Rec/RecMon). Used to suppress the
+// CS-scroll carousel on Enc1 so the live preamp readout stays
+// visible during channel changes.
+bool reasixty_recRmeActiveForUc1();
 // Predicate: would dispatchUc1RecRmeButton fire? Used to swallow the
 // release edge on Uc1Encoder2Push so bindings::dispatch never sees
 // an unpaired release. `which`: 0 = Enc2 Push, 1 = Cut, 2 = Solo,
@@ -341,7 +346,7 @@ void UC1Surface::setBcAnchorTrack(void* track)
     // could re-render the BC param the moment the overlay expired and
     // visually destroy the carousel.
     bcScrollOverlayUntil_ =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
     bcAnchorTrack_ = track;
     grSettleUntil_ = std::chrono::steady_clock::now()
                    + std::chrono::milliseconds(250);
@@ -803,11 +808,17 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // Encoder 1 gedreht wird, soll die obere parameter-zeile
             // ausgeblendet werden". Set the overlay flag so subsequent
             // pushFocusedParamReadout_ ticks skip zone 0x03 until the
-            // user actually touches a CS knob (or 3s elapse). Mirror
+            // user actually touches a CS knob (or 1s elapses). Mirror
             // of bcScrollOverlay for the CS side.
-            csScrollOverlayActive_ = true;
+            //
+            // Skip entirely in REC + RME mode: the CS readout there
+            // shows live preamp state (48V/Pd/Ph + gain) for the
+            // focused track, which the user is actively monitoring while
+            // tracking. Channel-name carousel would mask each Enc1 step
+            // for 1 s before the new track's preamp state appears.
+            csScrollOverlayActive_ = !reasixty_recRmeActiveForUc1();
             csScrollOverlayUntil_  = std::chrono::steady_clock::now()
-                                   + std::chrono::milliseconds(3000);
+                                   + std::chrono::milliseconds(1000);
             if (!lastZone03Text_.empty()) {
                 lastZone03Text_.clear();
                 device_->send(buildDisplayInvalidate(zone::kChannelStripReadout));
