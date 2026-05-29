@@ -4947,6 +4947,10 @@ int g_lastTouchedParam     = -1;
 // (vst3Param / paramName / confidence=User / accepted) rather than the
 // catalog — Apply still commits everything. Baseline snapshotted on arm.
 int g_alListenRow          = -1;
+// Which preview table the armed Learn button belongs to (0 = SSL slots,
+// 1 = UF8 Strips, 2 = UF8 V-Pots). g_alListenRow indexes that table.
+enum { kAlTblSlot = 0, kAlTblStrip = 1, kAlTblVpot = 2 };
+int g_alListenKind         = kAlTblSlot;
 int g_alPrevTr             = -2;
 int g_alPrevFx             = -1;
 int g_alPrevParam          = -1;
@@ -9468,37 +9472,56 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // FX matching this map and bind the moved param into the PREVIEW
         // row. Mirrors the editor's click-and-turn poll; baseline was
         // snapshotted when the button armed so a stale touch can't bind.
-        if (g_alListenRow >= 0
-            && g_alListenRow < static_cast<int>(g_autoLearnSlots.size()))
-        {
-            int t = -1, f = -1, p = -1;
-            if (GetLastTouchedFX(&t, &f, &p)) {
-                const bool changed = (t != g_alPrevTr || f != g_alPrevFx
-                                   || p != g_alPrevParam);
-                if (changed) {
-                    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
-                                   : (t > 0)  ? GetTrack(nullptr, t - 1)
-                                              : nullptr;
-                    char fxName[256] = {};
-                    if (tr && uf8::fxIdentityName(tr, f, fxName, sizeof(fxName))
-                        && std::string(fxName).find(editing->match)
-                               != std::string::npos)
-                    {
-                        auto& row = g_autoLearnSlots[g_alListenRow];
-                        row.vst3Param = p;
-                        row.paramName.clear();
-                        for (const auto& pi : editing->paramSnapshot)
-                            if (pi.vst3Param == p) { row.paramName = pi.name; break; }
-                        if (row.paramName.empty()) {
-                            char pn[128] = {};
-                            if (TrackFX_GetParamName(tr, f, p, pn, sizeof(pn)))
-                                row.paramName = pn;
+        if (g_alListenRow >= 0) {
+            // Resolve the armed row's bindable fields in whichever preview
+            // table it lives in — all three row types share vst3Param /
+            // paramName / confidence / accepted.
+            int*         rowParam = nullptr;
+            std::string* rowName  = nullptr;
+            float*       rowConf  = nullptr;
+            bool*        rowAcc   = nullptr;
+            auto pick = [&](auto& vec) {
+                if (g_alListenRow < static_cast<int>(vec.size())) {
+                    auto& r = vec[g_alListenRow];
+                    rowParam = &r.vst3Param; rowName = &r.paramName;
+                    rowConf  = &r.confidence; rowAcc = &r.accepted;
+                }
+            };
+            if (g_alListenKind == kAlTblStrip)      pick(g_autoLearnUf8Strips);
+            else if (g_alListenKind == kAlTblVpot)  pick(g_autoLearnUf8);
+            else                                    pick(g_autoLearnSlots);
+
+            if (!rowParam) {
+                g_alListenRow = -1;
+            } else {
+                int t = -1, f = -1, p = -1;
+                if (GetLastTouchedFX(&t, &f, &p)) {
+                    const bool changed = (t != g_alPrevTr || f != g_alPrevFx
+                                       || p != g_alPrevParam);
+                    if (changed) {
+                        MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                                       : (t > 0)  ? GetTrack(nullptr, t - 1)
+                                                  : nullptr;
+                        char fxName[256] = {};
+                        if (tr && uf8::fxIdentityName(tr, f, fxName, sizeof(fxName))
+                            && std::string(fxName).find(editing->match)
+                                   != std::string::npos)
+                        {
+                            *rowParam = p;
+                            rowName->clear();
+                            for (const auto& pi : editing->paramSnapshot)
+                                if (pi.vst3Param == p) { *rowName = pi.name; break; }
+                            if (rowName->empty()) {
+                                char pn[128] = {};
+                                if (TrackFX_GetParamName(tr, f, p, pn, sizeof(pn)))
+                                    *rowName = pn;
+                            }
+                            *rowConf = -1.0f;  // user
+                            *rowAcc  = true;
+                            g_alListenRow = -1;   // captured — disarm
                         }
-                        row.confidence = -1.0f;  // user
-                        row.accepted   = true;
-                        g_alListenRow  = -1;     // captured — disarm
+                        g_alPrevTr = t; g_alPrevFx = f; g_alPrevParam = p;
                     }
-                    g_alPrevTr = t; g_alPrevFx = f; g_alPrevParam = p;
                 }
             }
         } else {
@@ -9513,9 +9536,102 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         const double colCheckW = scaleW_(ctx, 28.0);
         const double colSlotW  = scaleW_(ctx, 160.0);
         const double colInfoW  = scaleW_(ctx, 72.0);
-        const double colIdxW   = scaleW_(ctx, 48.0);
+        const double colLearnW = scaleW_(ctx, 72.0);  // shared Learn column
         const int    wFixed    = ImGui_TableColumnFlags_WidthFixed;
         const int    wStretch  = ImGui_TableColumnFlags_WidthStretch;
+
+        // Shared Param-dropdown cell — used by the UF8 Strip + V-Pot tables
+        // so they match the SSL-slot table (pick any snapshotted param, with
+        // an inline filter). Writes the row's fields; manual pick flips
+        // confidence to "User" and auto-accepts. `tag` keeps ImGui IDs
+        // unique per table; `rowKey` must be unique across tables.
+        auto alParamCombo = [&](const char* tag, int rowKey,
+                                int& vst3Param, std::string& paramName,
+                                float& confidence, bool& accepted) {
+            char comboId[64];
+            snprintf(comboId, sizeof(comboId), "##al_%s_param_%d", tag, rowKey);
+            int comboFlags = ImGui_ComboFlags_HeightLargest;
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            const char* preview = (vst3Param < 0) ? "(unmapped)"
+                                                   : paramName.c_str();
+            if (ImGui_BeginCombo(ctx, comboId, preview, &comboFlags)) {
+                const bool justOpened = ImGui_IsWindowAppearing(ctx);
+                static char s_flt[64] = {0};
+                static int  s_fltKey  = -1;
+                if (justOpened || s_fltKey != rowKey) {
+                    s_flt[0] = 0; s_fltKey = rowKey;
+                    ImGui_SetKeyboardFocusHere(ctx, nullptr);
+                }
+                ImGui_PushItemWidth(ctx, -1.0);
+                ImGui_InputTextWithHint(ctx, "##al_pf", "filter…",
+                                        s_flt, sizeof(s_flt), nullptr, nullptr);
+                ImGui_PopItemWidth(ctx);
+                std::string flt = s_flt;
+                for (auto& c : flt)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                {
+                    bool sel = (vst3Param < 0); int sf = 0;
+                    char clr[64];
+                    snprintf(clr, sizeof(clr), "(unmapped)##al_%s_clr_%d", tag, rowKey);
+                    if (ImGui_Selectable(ctx, clr, &sel, &sf, nullptr, nullptr)) {
+                        vst3Param = -1; paramName.clear();
+                        confidence = -1.0f; accepted = false;
+                    }
+                }
+                for (const auto& pi : editing->paramSnapshot) {
+                    if (!flt.empty()) {
+                        std::string lc = pi.name;
+                        for (auto& c : lc)
+                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (lc.find(flt) == std::string::npos) continue;
+                    }
+                    bool sel = (vst3Param == pi.vst3Param); int sf = 0;
+                    char rid[300];
+                    snprintf(rid, sizeof(rid), "[%4d] %s##al_%s_opt_%d_%d",
+                             pi.vst3Param, pi.name.c_str(), tag, rowKey, pi.vst3Param);
+                    if (ImGui_Selectable(ctx, rid, &sel, &sf, nullptr, nullptr)) {
+                        if (vst3Param != pi.vst3Param) {
+                            vst3Param = pi.vst3Param; paramName = pi.name;
+                            confidence = -1.0f; accepted = true;
+                        }
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        };
+
+        // Shared Learn cell — arms a per-row wiggle capture (see the drain
+        // above). `kind` routes the captured param to the right table.
+        auto alLearnCell = [&](const char* tag, int kind, int rowKey) {
+            const bool listening = (g_alListenRow == rowKey
+                                    && g_alListenKind == kind);
+            char lid[64];
+            snprintf(lid, sizeof(lid),
+                     listening ? "wiggle…##al_%s_lrn_%d"
+                               : "Learn##al_%s_lrn_%d", tag, rowKey);
+            int pushed = 0;
+            if (listening) {
+                ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0x3377CCFF);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x4488DDFF);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x55AAFFFF);
+                pushed = 3;
+            }
+            if (ImGui_Button(ctx, lid, nullptr, nullptr)) {
+                if (listening) {
+                    g_alListenRow = -1;
+                } else {
+                    g_alListenRow  = rowKey;
+                    g_alListenKind = kind;
+                    int t = -1, f = -1, p = -1;
+                    if (GetLastTouchedFX(&t, &f, &p)) {
+                        g_alPrevTr = t; g_alPrevFx = f; g_alPrevParam = p;
+                    } else {
+                        g_alPrevTr = -1; g_alPrevFx = -1; g_alPrevParam = -1;
+                    }
+                }
+            }
+            if (pushed) ImGui_PopStyleColor(ctx, &pushed);
+        };
 
         // UC1 / SSL slot suggestions table. SSL Slot + Param columns
         // are dropdowns: pick a different slot or a different param
@@ -9768,6 +9884,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                                 g_alListenRow = -1;       // toggle off
                             } else {
                                 g_alListenRow = static_cast<int>(i);
+                                g_alListenKind = kAlTblSlot;
                                 // Baseline the current touch so a stale
                                 // prior wiggle doesn't bind instantly.
                                 int t = -1, f = -1, p = -1;
@@ -9804,12 +9921,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 int    wF1 = wFixed, wF2 = wFixed,
                        wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
                 double cW = colCheckW, sW = colSlotW,
-                       pW = 0, fW = colInfoW, iW = colIdxW;
+                       pW = 0, fW = colInfoW, iW = colLearnW;
                 ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Position", &wF2, &sW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
-                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Learn",    &wF5, &iW, nullptr);
                 ImGui_TableHeadersRow(ctx);
 
                 using Kind = uf8::autolearn::Uf8StripSuggestion::Kind;
@@ -9840,23 +9957,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     ImGui_Text(ctx, posBuf);
 
                     ImGui_TableNextColumn(ctx);
-                    ImGui_Text(ctx, s.paramName.c_str());
+                    alParamCombo("strip", 1000 + static_cast<int>(i),
+                                 s.vst3Param, s.paramName,
+                                 s.confidence, s.accepted);
 
                     ImGui_TableNextColumn(ctx);
-                    char confBuf[16];
-                    snprintf(confBuf, sizeof(confBuf), "%.0f%%",
-                             static_cast<double>(s.confidence) * 100.0);
-                    if (s.confidence >= 0.9f)
-                        ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
-                    else if (s.confidence >= 0.7f)
-                        ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
-                    else
-                        ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+                    if (s.confidence < 0.0f) {
+                        ImGui_TextColored(ctx, 0xC0C0FFFF, "User");
+                    } else {
+                        char confBuf[16];
+                        snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                                 static_cast<double>(s.confidence) * 100.0);
+                        if (s.confidence >= 0.9f)
+                            ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                        else if (s.confidence >= 0.7f)
+                            ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                        else
+                            ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+                    }
 
                     ImGui_TableNextColumn(ctx);
-                    char idxBuf[16];
-                    snprintf(idxBuf, sizeof(idxBuf), "%d", s.vst3Param);
-                    ImGui_TextDisabled(ctx, idxBuf);
+                    alLearnCell("strip", kAlTblStrip, 1000 + static_cast<int>(i));
                 }
                 ImGui_EndTable(ctx);
             }
@@ -9878,12 +9999,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 int    wF1 = wFixed, wF2 = wFixed,
                        wF3 = wStretch, wF4 = wFixed, wF5 = wFixed;
                 double cW = colCheckW, sW = colSlotW,
-                       pW = 0, fW = colInfoW, iW = colIdxW;
+                       pW = 0, fW = colInfoW, iW = colLearnW;
                 ImGui_TableSetupColumn(ctx, "",         &wF1, &cW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Position", &wF2, &sW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Param",    &wF3, &pW, nullptr);
                 ImGui_TableSetupColumn(ctx, "Conf",     &wF4, &fW, nullptr);
-                ImGui_TableSetupColumn(ctx, "Idx",      &wF5, &iW, nullptr);
+                ImGui_TableSetupColumn(ctx, "Learn",    &wF5, &iW, nullptr);
                 ImGui_TableHeadersRow(ctx);
 
                 for (size_t i = 0; i < g_autoLearnUf8.size(); ++i) {
@@ -9917,23 +10038,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     ImGui_Text(ctx, posBuf);
 
                     ImGui_TableNextColumn(ctx);
-                    ImGui_Text(ctx, u.paramName.c_str());
+                    alParamCombo("vpot", 2000 + static_cast<int>(i),
+                                 u.vst3Param, u.paramName,
+                                 u.confidence, u.accepted);
 
                     ImGui_TableNextColumn(ctx);
-                    char confBuf[16];
-                    snprintf(confBuf, sizeof(confBuf), "%.0f%%",
-                             static_cast<double>(u.confidence) * 100.0);
-                    if (u.confidence >= 0.9f)
-                        ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
-                    else if (u.confidence >= 0.7f)
-                        ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
-                    else
-                        ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+                    if (u.confidence < 0.0f) {
+                        ImGui_TextColored(ctx, 0xC0C0FFFF, "User");
+                    } else {
+                        char confBuf[16];
+                        snprintf(confBuf, sizeof(confBuf), "%.0f%%",
+                                 static_cast<double>(u.confidence) * 100.0);
+                        if (u.confidence >= 0.9f)
+                            ImGui_TextColored(ctx, 0x80FF80FF, confBuf);
+                        else if (u.confidence >= 0.7f)
+                            ImGui_TextColored(ctx, 0xFFFF80FF, confBuf);
+                        else
+                            ImGui_TextColored(ctx, 0xFF8080FF, confBuf);
+                    }
 
                     ImGui_TableNextColumn(ctx);
-                    char idxBuf[16];
-                    snprintf(idxBuf, sizeof(idxBuf), "%d", u.vst3Param);
-                    ImGui_TextDisabled(ctx, idxBuf);
+                    alLearnCell("vpot", kAlTblVpot, 2000 + static_cast<int>(i));
                 }
                 ImGui_EndTable(ctx);
             }
