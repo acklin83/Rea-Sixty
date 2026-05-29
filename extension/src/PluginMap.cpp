@@ -466,6 +466,18 @@ bool fxIsAcustica(void* trackOpaque, int fx)
             && hasVendorTag(buf)) {
         return true;
     }
+    // Install path / type-specific identifier — REAPER derives this from
+    // the plug-in's registration (no call into Acqua's engine, so reading
+    // it here is safe, same class as original_name). On Windows the VST3
+    // lives under "...\VST3\Acustica\<Product>.vst3", so fx_ident carries
+    // the "Acustica" folder even when the display-name vendor tag is
+    // absent. Most reliable signal across the ever-growing catalogue of
+    // arbitrary product names. Frank 2026-05-29 (TIGERMIX crash).
+    buf[0] = 0;
+    if (TrackFX_GetNamedConfigParm(tr, fx, "fx_ident", buf, sizeof(buf))
+            && hasVendorTag(buf)) {
+        return true;
+    }
     return false;
 }
 

@@ -426,13 +426,26 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // the PreSonus GainReduction_dB convention if no SSL CS / mapped
     // CS plug-in is on the focused track. ReaComp / FabFilter etc. work
     // out of the box. Off limits the meter to SSL CS / mapped plug-ins.
-    static char kGrItems[] =
-        "Only Show Channel Strip GR\0Show any GR Data\0";
+    // BeginCombo + Selectable, never ImGui_Combo with \0-items — the
+    // latter renders an invisible/empty control in ReaImGui v0.10, which
+    // is exactly why this GR-source toggle was unreachable (and the Any-FX
+    // poll stuck on its default, crashing on Acustica). Frank 2026-05-29.
+    static const char* kGrLabels[2] = {
+        "Only Show Channel Strip GR", "Show any GR Data"
+    };
     int grIdx = reasixty_grAnyFx() ? 1 : 0;
-    if (ImGui_Combo(ctx, "GR meter source", &grIdx,
-                    kGrItems,
-                    /*popup_max_height_in_items*/ nullptr)) {
-        reasixty_setGrAnyFx(grIdx == 1);
+    if (ImGui_BeginCombo(ctx, "GR meter source", kGrLabels[grIdx],
+                         /*flags*/ nullptr)) {
+        for (int i = 0; i < 2; ++i) {
+            bool sel = (grIdx == i);
+            if (ImGui_Selectable(ctx, kGrLabels[i], &sel,
+                                 /*flags*/ nullptr,
+                                 /*size_w*/ nullptr,
+                                 /*size_h*/ nullptr)) {
+                reasixty_setGrAnyFx(i == 1);
+            }
+        }
+        ImGui_EndCombo(ctx);
     }
 
     // V-Pot / SC / BC parameter edits on a non-selected track auto-select
@@ -540,16 +553,22 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         }
     }
 
-    // Ballistic dropdown. Combo's `items` arg is a NUL-separated list
-    // followed by a final NUL terminator — the string literal already
-    // ends with one implicit \0, so "Peak\0VU\0RMS\0" is the proper
-    // double-terminated form.
-    static char kBallisticItems[] = "Peak\0VU\0RMS\0";
-    int ballistic = reasixty_ballisticMode();
-    if (ImGui_Combo(ctx, "Meter ballistic", &ballistic,
-                    kBallisticItems,
-                    /*popup_max_height_in_items*/ nullptr)) {
-        reasixty_setBallisticMode(ballistic);
+    // Ballistic dropdown. BeginCombo + Selectable — ImGui_Combo with
+    // \0-items renders invisible in ReaImGui v0.10 (see GR meter source).
+    static const char* kBallisticLabels[3] = { "Peak", "VU", "RMS" };
+    int ballistic = std::clamp(reasixty_ballisticMode(), 0, 2);
+    if (ImGui_BeginCombo(ctx, "Meter ballistic", kBallisticLabels[ballistic],
+                         /*flags*/ nullptr)) {
+        for (int i = 0; i < 3; ++i) {
+            bool sel = (ballistic == i);
+            if (ImGui_Selectable(ctx, kBallisticLabels[i], &sel,
+                                 /*flags*/ nullptr,
+                                 /*size_w*/ nullptr,
+                                 /*size_h*/ nullptr)) {
+                reasixty_setBallisticMode(i);
+            }
+        }
+        ImGui_EndCombo(ctx);
     }
 
     ImGui_Spacing(ctx);
@@ -2598,16 +2617,29 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             const bool isFxParamStep =
                 (*f.action == "fx_param_inc" || *f.action == "fx_param_dec");
             if (isMod) {
-                static char kModeItems[] =
-                    "Momentary (held = active)\0"
-                    "Toggle (press flips state)\0";
+                // BeginCombo + Selectable — ImGui_Combo with \0-items
+                // renders invisible in ReaImGui v0.10 (see GR meter source).
+                static const char* kModeLabels[2] = {
+                    "Momentary (held = active)",
+                    "Toggle (press flips state)"
+                };
                 snprintf(idbuf, sizeof(idbuf), "Mode##%s_modemod", prefix);
                 int m = (*f.param == 1) ? 1 : 0;
                 double pw = 200;
                 ImGui_PushItemWidth(ctx, pw);
-                if (ImGui_Combo(ctx, idbuf, &m, kModeItems, nullptr)) {
-                    *f.param = m;
-                    dirty = true;
+                if (ImGui_BeginCombo(ctx, idbuf, kModeLabels[m],
+                                     /*flags*/ nullptr)) {
+                    for (int i = 0; i < 2; ++i) {
+                        bool sel = (m == i);
+                        if (ImGui_Selectable(ctx, kModeLabels[i], &sel,
+                                             /*flags*/ nullptr,
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr)) {
+                            *f.param = i;
+                            dirty = true;
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
                 }
                 ImGui_PopItemWidth(ctx);
             } else if (isFxParamStep) {
@@ -2744,48 +2776,60 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                         dirty = true;
                     }
                 }
-                char comboItems[8 * 32 + 1] = {0};
-                size_t pos = 0;
-                for (int i = 0; i < 8; ++i) {
-                    const char* l = (labels && labels[i] && *labels[i])
+                // BeginCombo + Selectable — ImGui_Combo with \0-items
+                // renders invisible in ReaImGui v0.10 (see GR meter
+                // source). Iterate the 8 SSL slot labels directly; no
+                // \0-buffer needed.
+                auto slotLabel = [&](int i) -> const char* {
+                    return (labels && labels[i] && *labels[i])
                         ? labels[i] : "(empty)";
-                    const size_t n = std::strlen(l);
-                    if (pos + n + 2 < sizeof(comboItems)) {
-                        std::memcpy(comboItems + pos, l, n);
-                        pos += n;
-                        comboItems[pos++] = '\0';
-                    }
-                }
-                comboItems[pos] = '\0';
+                };
                 snprintf(idbuf, sizeof(idbuf),
                               "SSL function##%s_sslslot", prefix);
                 int slot = std::clamp(*f.param, 0, 7);
                 double pw = 240;
                 ImGui_PushItemWidth(ctx, pw);
-                if (ImGui_Combo(ctx, idbuf, &slot, comboItems, nullptr)) {
-                    *f.param = slot;
-                    dirty = true;
-                    // Auto-fill the slot's display label only for
-                    // explicit-bank SSL actions. ssl_softkey is
-                    // bank-aware so freezing one slot's name into
-                    // sp.label would mis-display on every other bank.
-                    if (sslBankIdx >= 0 && f.label && labels) {
-                        const char* prevName =
-                            labels[std::clamp(slot, 0, 7)];
-                        // Detect "previously auto-filled with an SSL
-                        // name" by comparing against any of this
-                        // bank's labels. User-typed labels survive.
-                        bool wasAutoFilled = f.label->empty();
-                        for (int j = 0; !wasAutoFilled && j < 8; ++j) {
-                            if (labels[j] && *labels[j]
-                                && *f.label == labels[j]) {
-                                wasAutoFilled = true;
+                if (ImGui_BeginCombo(ctx, idbuf, slotLabel(slot),
+                                     /*flags*/ nullptr)) {
+                    for (int i = 0; i < 8; ++i) {
+                        // ##suffix keeps IDs unique — several slots can
+                        // share the "(empty)" label and would collide.
+                        char selId[64];
+                        snprintf(selId, sizeof(selId), "%s##sslslot%d",
+                                 slotLabel(i), i);
+                        bool sel = (slot == i);
+                        if (!ImGui_Selectable(ctx, selId, &sel,
+                                              /*flags*/ nullptr,
+                                              /*size_w*/ nullptr,
+                                              /*size_h*/ nullptr)) {
+                            continue;
+                        }
+                        slot = i;
+                        *f.param = slot;
+                        dirty = true;
+                        // Auto-fill the slot's display label only for
+                        // explicit-bank SSL actions. ssl_softkey is
+                        // bank-aware so freezing one slot's name into
+                        // sp.label would mis-display on every other bank.
+                        if (sslBankIdx >= 0 && f.label && labels) {
+                            const char* prevName =
+                                labels[std::clamp(slot, 0, 7)];
+                            // Detect "previously auto-filled with an SSL
+                            // name" by comparing against any of this
+                            // bank's labels. User-typed labels survive.
+                            bool wasAutoFilled = f.label->empty();
+                            for (int j = 0; !wasAutoFilled && j < 8; ++j) {
+                                if (labels[j] && *labels[j]
+                                    && *f.label == labels[j]) {
+                                    wasAutoFilled = true;
+                                }
+                            }
+                            if (wasAutoFilled && prevName && *prevName) {
+                                *f.label = prevName;
                             }
                         }
-                        if (wasAutoFilled && prevName && *prevName) {
-                            *f.label = prevName;
-                        }
                     }
+                    ImGui_EndCombo(ctx);
                 }
                 ImGui_PopItemWidth(ctx);
             } else {
@@ -3239,17 +3283,29 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             // Behavior combo lives only in the SHORT column — it
             // applies to both columns.
             if (!isLongCol) {
-                static char kBehaviorItems[] =
-                    "Momentary (fire on press)\0"
-                    "Toggle (flip on each press)\0"
-                    "Hold (state mirrors button)\0";
-                int b = static_cast<int>(bd.behavior);
+                // BeginCombo + Selectable — ImGui_Combo with \0-items
+                // renders invisible in ReaImGui v0.10 (see GR meter source).
+                static const char* kBehaviorLabels[3] = {
+                    "Momentary (fire on press)",
+                    "Toggle (flip on each press)",
+                    "Hold (state mirrors button)"
+                };
+                int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
                 double bw = 240;
                 ImGui_PushItemWidth(ctx, bw);
-                if (ImGui_Combo(ctx, "Behavior##pri_beh", &b, kBehaviorItems,
-                                nullptr)) {
-                    bd.behavior = static_cast<Behavior>(b);
-                    dirty = true;
+                if (ImGui_BeginCombo(ctx, "Behavior##pri_beh",
+                                     kBehaviorLabels[b], /*flags*/ nullptr)) {
+                    for (int i = 0; i < 3; ++i) {
+                        bool sel = (b == i);
+                        if (ImGui_Selectable(ctx, kBehaviorLabels[i], &sel,
+                                             /*flags*/ nullptr,
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr)) {
+                            bd.behavior = static_cast<Behavior>(i);
+                            dirty = true;
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
                 }
                 ImGui_PopItemWidth(ctx);
                 ImGui_Spacing(ctx);

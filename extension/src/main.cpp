@@ -13379,6 +13379,14 @@ void onTimer()
                     if (!gotIt && g_grAnyFx.load()) {
                         const int fxCount = TrackFX_GetCount(tr);
                         for (int fx = 0; fx < fxCount; ++fx) {
+                            // Never poll an Acustica (Acqua) plug-in we
+                            // weren't explicitly mapped to — its engine
+                            // faults under host config-parm polling from
+                            // this thread (access violation in the .vst3).
+                            // Twin of the guarded walk in UC1Surface; this
+                            // UF8 CS-GR copy was missed by the original
+                            // fix (e95f41a). See fxIsAcustica.
+                            if (uf8::fxIsAcustica(tr, fx)) continue;
                             char buf[64] = {0};
                             if (!TrackFX_GetNamedConfigParm(
                                     tr, fx, "GainReduction_dB",

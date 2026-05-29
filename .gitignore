@@ -30,6 +30,7 @@ captures/**/*.mp4
 
 # CMake build outputs
 extension/build/
+extension/build-dbg/
 
 # Vendored SDKs (fetched on demand)
 extension/vendor/
