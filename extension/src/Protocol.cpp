@@ -270,8 +270,11 @@ constexpr PaletteEntry kSelPalette[] = {
     {  0, 255, 255, {0xF0, 0xFF, 0x10, 0xF1}}, // cyan (also lightblue)
     {  0,   0, 255, {0x00, 0xFF, 0x00, 0xF1}}, // blue
     {128,   0, 255, {0x03, 0xFF, 0x01, 0xF3}}, // purple
-    {255,   0, 255, {0x2F, 0xF4, 0x12, 0xF1}}, // magenta
-    {255,   0, 128, {0x0F, 0xFF, 0x01, 0xF1}}, // pink
+    // magenta/pink LED bytes were swapped in the original on-device probe
+    // (FB02FF rendered pink, FF0080 rendered magenta). Bytes corrected
+    // 2026-05-29; RGB references are the input-hue anchors and stay put.
+    {255,   0, 255, {0x0F, 0xFF, 0x01, 0xF1}}, // magenta
+    {255,   0, 128, {0x2F, 0xF4, 0x12, 0xF1}}, // pink
     {255, 255, 255, {0xFF, 0xFF, 0x11, 0xF1}}, // white
 };
 } // namespace
