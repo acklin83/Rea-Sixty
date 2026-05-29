@@ -5165,6 +5165,13 @@ void drainInputQueue()
 
         const int slot = stripToVisibleSlot(e.strip, bankOffset);
         MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
+        // g_visibleTracks caches track pointers between rebuilds. A track
+        // deleted since the last rebuild leaves a dangling entry; passing it
+        // to TrackFX_GetCount/etc. reads garbage (e.g. a huge FX count that
+        // ran a vector push_back to a bad_array_new_length trap — crash
+        // 2026-05-29, per-strip Instance cycle). Treat a stale pointer as
+        // "no track" so the existing null-handling below drops the event.
+        if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
         // PM and routing modes keep all 8 strips addressable even past
         // the last visible track. Only a curated subset of events have
         // PM/routing branches that source from focused FX or route
