@@ -281,6 +281,13 @@ private:
     // to change value) is Phase B.1 — TBD pending capture data.
     void renderExtFuncsSubscreen_();
 
+    // Render the ROUTING LCD content for the focused track's CS plug-in
+    // CURRENT routing-flag combo (no change applied). Called on entering
+    // ROUTING so the order indicator shows immediately instead of staying
+    // blank until the user's first encoder click. No-op outside ROUTING /
+    // when no focused CS plug-in.
+    void renderRoutingSubscreen_();
+
     // --- state ---
     UC1Device* device_ = nullptr;
     void*      focusedTrack_ = nullptr;  // MediaTrack*

@@ -5247,6 +5247,17 @@ void resetGrCal_(int which)
 // `match` so subsequent edits can render the param list / V-Pot picker /
 // GR-meter picker even when no live instance is loaded. Overwrites any
 // previous snapshot. Persists immediately.
+// REAPER appends a fixed block of MIDI-learn params to every VST3's
+// parameter list — "MIDI CC 0|0" … "MIDI CC 0|127", "MIDI Pitch",
+// "MIDI Program", "MIDI Channel Pressure", etc. They're never real
+// plug-in controls; skip them so they can't poison AutoLearn matching
+// (e.g. an "Input" param stealing a slot) and don't clutter the
+// param-picker dropdown. (Frank 2026-05-29.)
+inline bool isReaperMidiParam_(const char* name)
+{
+    return name && std::strncmp(name, "MIDI ", 5) == 0;
+}
+
 void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
 {
     if (match.empty() || !fx.ok) return;
@@ -5262,6 +5273,10 @@ void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
             pi.vst3Param = p;
             if (TrackFX_GetParamName(fx.tr, fx.fxIdx, p, name, sizeof(name)))
                 pi.name = name;
+            // Drop REAPER's injected MIDI-learn params (vst3Param index
+            // is preserved on the real controls, so this only trims the
+            // noise tail).
+            if (isReaperMidiParam_(pi.name.c_str())) continue;
             double mn = 0, mx = 1, def = 0;
             TrackFX_GetParamEx(fx.tr, fx.fxIdx, p, &mn, &mx, &def);
             const double range = mx - mn;
@@ -10549,6 +10564,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             for (int p = 0; p < n; ++p) {
                 pname[0] = 0;
                 paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+
+                // Hide REAPER's injected MIDI-learn params (MIDI CC … /
+                // Pitch / Program / Channel Pressure) — never real
+                // controls, just clutter in the picker. (Frank 2026-05-29.)
+                if (isReaperMidiParam_(pname)) continue;
 
                 if (!filt.empty()) {
                     if (std::string(pname).find(filt) == std::string::npos)

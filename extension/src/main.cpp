@@ -11517,7 +11517,7 @@ bool shiftFineActive_()
 
 bool vpotFineActive_()
 {
-    return vpotFineActive_() || g_uc1Fine.load();
+    return shiftFineActive_() || g_uc1Fine.load();
 }
 
 void commitDebouncedTouchReleases()

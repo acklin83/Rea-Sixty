@@ -143,6 +143,26 @@ namespace uc1 {
 
 namespace {
 
+// Routing-preset table — 10 main 4-tuples (FiltIn, FiltSC, EqSC,
+// DynPreEq) the SSL CS plug-in's routing GUI cycles through (decoded
+// from the user's 2026-05-01 dump-routing-flags sequence). ExtSC adds a
+// b-variant per preset (20 total cycle positions = idx 0..19). Shared by
+// the ROUTING encoder handler and renderRoutingSubscreen_() so the
+// entry-render and the scroll stay in lockstep.
+struct RoutingPreset { uint8_t filtIn, filtSC, eqSC, dynPreEq; };
+constexpr RoutingPreset kRoutingPresets[10] = {
+    { 1, 0, 0, 0 },  // Order 1:  F → E → D
+    { 0, 0, 0, 0 },  // Order 2:  E → F → D (Filters off main)
+    { 0, 0, 0, 1 },  // Order 3:  D → E → F (Filters off main)
+    { 1, 0, 0, 1 },  // Order 4:  F → D → E
+    { 1, 1, 0, 1 },  // Order 5:  F → D → E (Filt → S/C)
+    { 1, 0, 1, 0 },  // Order 6:  F → E → D (EQ → S/C)
+    { 1, 1, 0, 0 },  // Order 7:  F → E → D (Filt → S/C)
+    { 1, 1, 1, 0 },  // Order 8:  E → F → D (Filt+EQ → S/C)
+    { 0, 0, 1, 0 },  // Order 9:  E → F → D (EQ → S/C)
+    { 0, 1, 1, 1 },  // Order 10: alt (D → E + Filt+EQ S/C)
+};
+
 // Read whether the plug-in is effectively bypassed, honouring the
 // per-binding bypassInverted flag. SSL-stock plug-ins expose a "Bypass"
 // param (1 = bypassed); user plug-ins like bx_townhouse expose "Comp In"
@@ -550,6 +570,47 @@ void UC1Surface::showNavCarousel(const std::string& prev,
     }
 }
 
+void UC1Surface::renderRoutingSubscreen_()
+{
+    if (!device_ || !focusedTrack_) return;
+    auto match = uf8::lookupPluginOnTrack(focusedTrack_,
+                                          uf8::Domain::ChannelStrip);
+    if (!match.map) return;
+    // Same flag read as the ROUTING encoder handler, with step=0: show the
+    // order indicator for the plug-in's CURRENT routing combo on entry.
+    auto readFlag = [&](const char* slotId) -> int {
+        for (const auto& s : match.map->slots) {
+            if (s.id && std::strcmp(s.id, slotId) == 0 && s.vst3Param >= 0) {
+                return TrackFX_GetParamNormalized(
+                    static_cast<MediaTrack*>(focusedTrack_),
+                    match.fxIndex, s.vst3Param) >= 0.5 ? 1 : 0;
+            }
+        }
+        return 0;
+    };
+    const int curFiltIn   = readFlag("FiltersToInput");
+    const int curFiltSC   = readFlag("FiltersToSC");
+    const int curEqSC     = readFlag("EqToSC");
+    const int curDynPreEq = readFlag("DynamicsPreEq");
+    const int curExtSC    = readFlag("ExternalSC");
+    int curPresetIdx = -1;
+    for (int i = 0; i < 10; ++i) {
+        if (kRoutingPresets[i].filtIn   == curFiltIn   &&
+            kRoutingPresets[i].filtSC   == curFiltSC   &&
+            kRoutingPresets[i].eqSC     == curEqSC     &&
+            kRoutingPresets[i].dynPreEq == curDynPreEq) {
+            curPresetIdx = i;
+            break;
+        }
+    }
+    // Non-preset combo (dialed by hand) → show Order 1, matching the
+    // encoder handler's -1→0 starting point.
+    const int idx = (curPresetIdx >= 0) ? curPresetIdx : 0;
+    const uint8_t orderByte = static_cast<uint8_t>(
+        (idx + 1) | (curExtSC ? 0x80 : 0x00));
+    device_->send(buildRoutingOrderIndicator(orderByte));
+}
+
 void UC1Surface::setMode(Uc1Mode m)
 {
     if (mode_ == m) return;
@@ -586,6 +647,7 @@ void UC1Surface::setMode(Uc1Mode m)
         extFuncsActive_ = false;  // always start in list mode
         renderExtFuncsSubscreen_();
     }
+    if (m == Uc1Mode::Routing) renderRoutingSubscreen_();
     // Returning to MAIN re-runs refresh() so the carousel + central
     // label repaint over the menu-mode LCD layout. refresh() is gated
     // to MAIN-only (added when EXT_FUNCS leaked BC carousel), so we
@@ -1020,26 +1082,8 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             ++stats_.knobEventsHandled;
             return;
         }
-        // Routing-preset table — 10 main 4-tuples (FiltIn, FiltSC, EqSC,
-        // DynPreEq) the SSL CS plug-in's routing GUI cycles through
-        // (decoded from user's 2026-05-01 dump-routing-flags sequence
-        // covering manual Orders 1..9 + a 10th non-manual reachable
-        // combo; manual Order 10 "EQ → Dyn → Filters" is unreachable
-        // in this plug-in's routing UI). ExtSC adds the b-variant for
-        // each preset (20 total cycle positions = idx 0..19).
-        struct Preset { uint8_t filtIn, filtSC, eqSC, dynPreEq; };
-        static constexpr Preset kPresets[10] = {
-            { 1, 0, 0, 0 },  // Order 1:  F → E → D
-            { 0, 0, 0, 0 },  // Order 2:  E → F → D (Filters off main)
-            { 0, 0, 0, 1 },  // Order 3:  D → E → F (Filters off main)
-            { 1, 0, 0, 1 },  // Order 4:  F → D → E
-            { 1, 1, 0, 1 },  // Order 5:  F → D → E (Filt → S/C)
-            { 1, 0, 1, 0 },  // Order 6:  F → E → D (EQ → S/C)
-            { 1, 1, 0, 0 },  // Order 7:  F → E → D (Filt → S/C)
-            { 1, 1, 1, 0 },  // Order 8:  E → F → D (Filt+EQ → S/C)
-            { 0, 0, 1, 0 },  // Order 9:  E → F → D (EQ → S/C)
-            { 0, 1, 1, 1 },  // Order 10: alt (D → E + Filt+EQ S/C)
-        };
+        // Routing-preset table is file-scope (kRoutingPresets) so the
+        // entry-render path (renderRoutingSubscreen_) shares it.
         // Read current flags to find which preset position we're at —
         // gives the user a stable starting point if they entered the
         // routing GUI at any combo, including dialed-by-hand. -1 if
@@ -1061,10 +1105,10 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         const int curExtSC    = readFlag("ExternalSC");
         int curPresetIdx = -1;
         for (int i = 0; i < 10; ++i) {
-            if (kPresets[i].filtIn   == curFiltIn   &&
-                kPresets[i].filtSC   == curFiltSC   &&
-                kPresets[i].eqSC     == curEqSC     &&
-                kPresets[i].dynPreEq == curDynPreEq) {
+            if (kRoutingPresets[i].filtIn   == curFiltIn   &&
+                kRoutingPresets[i].filtSC   == curFiltSC   &&
+                kRoutingPresets[i].eqSC     == curEqSC     &&
+                kRoutingPresets[i].dynPreEq == curDynPreEq) {
                 curPresetIdx = i;
                 break;
             }
@@ -1079,7 +1123,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         while (newCombined >= 20) newCombined -= 20;
         const int newPresetIdx = newCombined / 2;
         const int newExtSC     = newCombined % 2;
-        const Preset& p = kPresets[newPresetIdx];
+        const RoutingPreset& p = kRoutingPresets[newPresetIdx];
         // Apply the preset.
         auto setFlag = [&](const char* slotId, int v) {
             for (const auto& s : match.map->slots) {

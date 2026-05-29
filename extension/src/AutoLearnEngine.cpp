@@ -311,6 +311,19 @@ Dict buildBaseDict(Domain domain)
             const auto& r = rows[i];
             // Skip entries that don't match the requested domain.
             if (r.domain != Domain::None && r.domain != domain) continue;
+            // BusComp linkIdx space is tiny (0..7) and fully owned by
+            // kBcSeeds. The generic seeds carry CS-NAMESPACE linkIdx
+            // values (Comp Thr=27, Out Trim=37, … and crucially
+            // "input"→4 = "Input Trim" in CS). Merged into a BC dict
+            // those either point at non-existent BC slots (≥8) or
+            // COLLIDE: "input"→4 lands on the BC Release slot, so a
+            // 1176's "Input" param steals Release from the literal
+            // "Release" param (Frank 2026-05-29). Only Bypass (linkIdx
+            // 0) is shared across both topologies, so for BusComp keep
+            // generic Bypass and drop the rest.
+            if (domain == Domain::BusComp
+                && r.domain == Domain::None
+                && r.linkIdx != 0) continue;
             std::string key = r.pattern;  // already lowercase
             DictEntry entry{r.linkIdx, r.domain, r.category, r.displayName, 1};
             auto it = dict.find(key);
