@@ -342,6 +342,14 @@ std::atomic<int>  g_navUc1Mode{0};
 // UC1-local cursor for independent modes. Session-only (not persisted).
 std::atomic<int>  g_navUc1Cursor{0};
 
+// Playhead-nudge step size (Encoder Nudge mode). g_nudgeUnit is an
+// ApplyNudge nudgeunits value (0=ms, 1=sec, 2=grid, 16=measures.beats/
+// "bars", 17=samples, 18=frames); g_nudgeAmount is the magnitude per
+// detent. Default = grid (follows the project grid → covers beats/bars).
+constexpr int       kNudgeUnitGrid = 2;
+std::atomic<int>    g_nudgeUnit{kNudgeUnitGrid};
+std::atomic<double> g_nudgeAmount{1.0};
+
 // Phase 2.8c — UC1 Encoder 2 take-over preference. When false, the
 // UC1 Encoder 2 stays bound to its normal action (bc_track_scroll or
 // whatever the user has assigned) and the LCD shows MAIN content
@@ -2141,6 +2149,18 @@ void loadBrightness()
         if (n < 0 || n > 2) n = 0;
         g_navRegionPress.store(n);
     }
+    if (const char* v = GetExtState("rea_sixty", "nudge_unit"); v && *v) {
+        const int u = std::atoi(v);
+        // Accept only known ApplyNudge units; anything else (incl. the
+        // retired -1 "Follow REAPER" sentinel) falls back to grid.
+        const bool ok = (u == 0 || u == 1 || u == 2 ||
+                         u == 16 || u == 17 || u == 18);
+        g_nudgeUnit.store(ok ? u : kNudgeUnitGrid);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nudge_amount"); v && *v) {
+        const double a = std::atof(v);
+        if (a > 0.0) g_nudgeAmount.store(a);
+    }
     {
         const char* v = GetExtState("rea_sixty", "nav_uc1_takeover");
         g_navUc1Takeover.store((v && *v) ? (std::atoi(v) != 0) : true);
@@ -2814,8 +2834,8 @@ MediaTrack* routeTargetTrack_(const StripRoute& r)
     return nullptr;
 }
 
-// Nudge step per physical detent (seconds). User-settings-facing later;
-// hard-coded for now.
+// Fallback nudge step per physical detent (seconds). Used only when
+// REAPER's own Nudge/Set setting can't be read (see readReaperNudge_).
 constexpr double kNudgeSecondsPerStep = 1.0;
 
 // Follow mode: when a track becomes selected, either snap the UF8 bank
@@ -3076,9 +3096,27 @@ void applyTempSelsetScroll_(int step)
     }
 }
 
+// Playhead nudge — move the edit cursor by the user's configured unit +
+// amount (Settings → Modes → Nudge). ApplyNudge with nudgewhat=6 honours
+// every REAPER unit (ms / seconds / grid / measures.beats / samples /
+// frames); there's no native action that nudges the edit cursor by a unit,
+// so this is the path. One ApplyNudge per consumed detent.
 void applyPlayheadNudge_(int step)
 {
     if (step == 0) return;
+    const bool   reverse = step < 0;
+    const int    n       = step < 0 ? -step : step;
+    const int    unit    = g_nudgeUnit.load();
+    const double amt     = g_nudgeAmount.load();
+
+    if (ApplyNudge && amt > 0.0) {
+        for (int i = 0; i < n; ++i)
+            ApplyNudge(nullptr, 0 /*nudge-by*/, 6 /*edit cursor*/,
+                       unit, amt, reverse, 1);
+        return;
+    }
+    // Fallback: fixed 1 s/detent when ApplyNudge is unavailable or the
+    // amount is unset.
     const double cur = GetCursorPosition();
     SetEditCurPos(cur + step * kNudgeSecondsPerStep, true, false);
 }
@@ -4957,10 +4995,7 @@ void drainInputQueue()
             int step = 0;
             if (g_nudgeAccum >=  1.0) { step = static_cast<int>(g_nudgeAccum); g_nudgeAccum -= step; }
             if (g_nudgeAccum <= -1.0) { step = static_cast<int>(g_nudgeAccum); g_nudgeAccum -= step; }
-            if (step != 0) {
-                const double cur = GetCursorPosition();
-                SetEditCurPos(cur + step * kNudgeSecondsPerStep, true, false);
-            }
+            if (step != 0) applyPlayheadNudge_(step);
             continue;
         }
         if (e.kind == PendingInput::MouseScroll) {
@@ -14477,6 +14512,26 @@ void reasixty_setNavRegionPress(int v)
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", v);
     SetExtState("rea_sixty", "nav_region_press", buf, true);
+}
+
+// Playhead-nudge step size (Encoder Nudge mode). unit < 0 = Follow REAPER
+// Nudge/Set; otherwise an ApplyNudge nudgeunits value + amount magnitude.
+int  reasixty_nudgeUnit()              { return g_nudgeUnit.load(); }
+void reasixty_setNudgeUnit(int v)
+{
+    g_nudgeUnit.store(v);
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d", v);
+    SetExtState("rea_sixty", "nudge_unit", buf, true);
+}
+double reasixty_nudgeAmount()          { return g_nudgeAmount.load(); }
+void reasixty_setNudgeAmount(double v)
+{
+    if (v < 0.0) v = 0.0;
+    g_nudgeAmount.store(v);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%g", v);
+    SetExtState("rea_sixty", "nudge_amount", buf, true);
 }
 
 extern "C" int  reasixty_navUc1Takeover()  { return g_navUc1Takeover.load() ? 1 : 0; }

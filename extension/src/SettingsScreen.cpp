@@ -144,6 +144,10 @@ int  reasixty_navUc1Mode();
 void reasixty_setNavUc1Mode(int v);
 int  reasixty_navRegionPress();
 void reasixty_setNavRegionPress(int v);
+int    reasixty_nudgeUnit();
+void   reasixty_setNudgeUnit(int v);
+double reasixty_nudgeAmount();
+void   reasixty_setNudgeAmount(double v);
 extern "C" int  reasixty_navUc1Takeover();
 extern "C" int  reasixty_navUc1Push();
 extern "C" int  reasixty_navUc1PushShift();
@@ -11438,6 +11442,71 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     {
         reasixty_setNavAutoFollow(autoFollow);
     }
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- Nudge ------------------------------------------------------
+    int flagsNudge = tabFlagsFor(4);
+    if (ImGui_BeginTabItem(ctx, "Nudge", nullptr, &flagsNudge)) {
+        persistActive(4);
+
+    ImGui_Text(ctx, "Playhead nudge step");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx,
+        "Step size for the CHANNEL encoder in Nudge mode (encoder_nudge). "
+        "One detent = one step.");
+    ImGui_Spacing(ctx);
+
+    // Units map straight onto ApplyNudge's nudgeunits enum (0=ms, 1=sec,
+    // 2=grid, 16=measures.beats, 17=samples, 18=frames). "Grid" is the
+    // musical option — it follows the project grid, so beats/bars come for
+    // free without modelling time signatures.
+    struct NudgeUnit { const char* label; int unit; };
+    static const NudgeUnit kNudgeUnits[] = {
+        { "Milliseconds (ms)",        0 },
+        { "Seconds",                  1 },
+        { "Grid",                     2 },
+        { "Bars (measures.beats)",   16 },
+        { "Samples",                 17 },
+        { "Frames",                  18 },
+    };
+    const int kNudgeUnitCount =
+        (int)(sizeof(kNudgeUnits) / sizeof(kNudgeUnits[0]));
+
+    const int curUnit = reasixty_nudgeUnit();
+    int curIdx = 0;
+    for (int i = 0; i < kNudgeUnitCount; ++i) {
+        if (kNudgeUnits[i].unit == curUnit) { curIdx = i; break; }
+    }
+
+    ImGui_Text(ctx, "Unit");
+    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
+    if (ImGui_BeginCombo(ctx, "##nudge_unit", kNudgeUnits[curIdx].label,
+                         nullptr)) {
+        for (int i = 0; i < kNudgeUnitCount; ++i) {
+            bool sel = (i == curIdx);
+            if (ImGui_Selectable(ctx, kNudgeUnits[i].label, &sel,
+                                 nullptr, nullptr, nullptr)) {
+                reasixty_setNudgeUnit(kNudgeUnits[i].unit);
+            }
+        }
+        ImGui_EndCombo(ctx);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Amount per detent");
+    double amt   = reasixty_nudgeAmount();
+    double step  = 0.0, fast = 0.0;
+    int    flags = 0;
+    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+    if (ImGui_InputDouble(ctx, "##nudge_amount", &amt, &step, &fast,
+                          "%g", &flags)) {
+        if (amt < 0.0) amt = 0.0;
+        reasixty_setNudgeAmount(amt);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Text(ctx, kNudgeUnits[curIdx].label);
+
         ImGui_EndTabItem(ctx);
     }
 

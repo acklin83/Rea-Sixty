@@ -925,7 +925,7 @@ Switch which Selection Mode is active (see chapter **Selection Modes** for what 
 Change which job the large CHANNEL encoder does. The current mode persists across REAPER restarts.
 
 - **`encoder_nav`** — Channel Select (the default; rotation moves track selection ±1).
-- **`encoder_nudge`** — playhead nudge (step size from REAPER's nudge setting).
+- **`encoder_nudge`** — playhead nudge. Step size is set in **Settings → Modes → Nudge**: an amount + unit (ms, seconds, grid, bars, samples, frames). Default is one **grid** step per detent — "Grid" follows the project grid, so it covers beats and bars.
 - **`encoder_focus`** — synthesised mouse-wheel under the screen cursor (use to scroll plug-in windows, browsers, etc.).
 - **`encoder_markers`** — step prev / next REAPER marker.
 - **`encoder_bank_by_1`** — surface bank by 1 strip per detent.
