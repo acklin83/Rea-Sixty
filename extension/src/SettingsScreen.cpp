@@ -2432,6 +2432,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "show_fx_chain"
                  || n == "close_all_fx_guis"
                  || n == "quick_learn"
+                 || n == "quick_learn_track"
                  || n.rfind("plugin_", 0) == 0)
                     return "Plug-in";
 
@@ -4648,6 +4649,8 @@ std::string deriveShortLabel_(const std::string& fxName)
 // Entry point is reasixty_startQuickLearn() at file scope (see end of file).
 // Plan: ~/.claude/plans/memoized-growing-hinton.md
 bool        g_qlSweepActive         = false;  // a sweep is in progress
+MediaTrack* g_qlScopeTrack          = nullptr;// non-null = Track mode: limit
+                                              // the sweep to this track only
 std::string g_qlCurrentMatch;                 // identity name being offered
 // Frame countdown before (re)opening the +New popup. A plain bool fails on
 // the skip path: skipping closes the popup AND wants to reopen the SAME
@@ -4691,6 +4694,8 @@ QlTarget qlResolveNext_()
             if (qlIsLearnable_(tr, fx, nm)) return {tr, fx, nm};
         return {};
     };
+    // Track mode: only the scoped track.
+    if (g_qlScopeTrack) return scan(g_qlScopeTrack);
     if (QlTarget t = scan(GetMasterTrack(nullptr)); t.fxIdx >= 0) return t;
     const int nTr = CountTracks(nullptr);
     for (int i = 0; i < nTr; ++i)
@@ -4714,6 +4719,10 @@ int qlCountRemaining_()
                 seen.push_back(std::move(nm));
         }
     };
+    if (g_qlScopeTrack) {
+        consider(g_qlScopeTrack);     // Track mode
+        return static_cast<int>(seen.size());
+    }
     consider(GetMasterTrack(nullptr));
     const int nTr = CountTracks(nullptr);
     for (int i = 0; i < nTr; ++i) consider(GetTrack(nullptr, i));
@@ -4754,6 +4763,7 @@ void qlOfferTarget_(const QlTarget& tgt)
 // or set a "nothing to do" status. Called from reasixty_startQuickLearn().
 void qlStartSweep_()
 {
+    g_qlScopeTrack = nullptr;                  // Project mode
     QlTarget tgt;
     int trNum = -1, itemNum = -1, fxNum = -1;
     if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum >= 0
@@ -4780,6 +4790,78 @@ void qlStartSweep_()
     qlOfferTarget_(tgt);
 }
 
+// Track mode entry: limit the sweep to one track — the focused FX's track,
+// else the first selected track. Same offer/advance machinery, just scoped
+// by g_qlScopeTrack.
+// The track a Track-mode sweep would target: focused-FX track, else the
+// first selected track. nullptr when neither resolves.
+MediaTrack* qlPickScopeTrack_()
+{
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum >= 0
+        && itemNum < 0)
+    {
+        MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
+                                      : GetTrack(nullptr, trNum - 1);
+        if (tr) return tr;
+    }
+    return GetSelectedTrack(nullptr, 0);
+}
+
+// True when the Track-mode target track has at least one learnable FX.
+// Side-effect-free — used to decide whether to open the window at all.
+bool qlTrackHasTarget_()
+{
+    MediaTrack* tr = qlPickScopeTrack_();
+    if (!tr) return false;
+    std::string nm;
+    const int n = TrackFX_GetCount(tr);
+    for (int fx = 0; fx < n; ++fx)
+        if (qlIsLearnable_(tr, fx, nm)) return true;
+    return false;
+}
+
+// True when the project (master + all tracks) has at least one learnable
+// FX. Side-effect-free; doesn't touch g_qlScopeTrack.
+bool qlProjectHasTarget_()
+{
+    std::string nm;
+    auto scan = [&](MediaTrack* tr) {
+        if (!tr) return false;
+        const int n = TrackFX_GetCount(tr);
+        for (int fx = 0; fx < n; ++fx)
+            if (qlIsLearnable_(tr, fx, nm)) return true;
+        return false;
+    };
+    if (scan(GetMasterTrack(nullptr))) return true;
+    const int nTr = CountTracks(nullptr);
+    for (int i = 0; i < nTr; ++i)
+        if (scan(GetTrack(nullptr, i))) return true;
+    return false;
+}
+
+void qlStartSweepTrack_()
+{
+    MediaTrack* tr = qlPickScopeTrack_();
+    if (!tr) {
+        g_qlSweepActive = false;
+        g_qlOpenNewModalDelay = 0;
+        g_qlScopeTrack = nullptr;
+        g_qlStatus = "Quick Learn Track: select a track first.";
+        return;
+    }
+    g_qlScopeTrack = tr;
+    QlTarget tgt = qlResolveNext_();
+    if (tgt.fxIdx < 0) {
+        g_qlSweepActive = false;
+        g_qlOpenNewModalDelay = 0;
+        g_qlScopeTrack = nullptr;
+        g_qlStatus = "Quick Learn Track: this track has no unmapped plug-ins.";
+        return;
+    }
+    qlOfferTarget_(tgt);
+}
+
 // Advance to the next learnable FX after a Save or Skip. Closes the sweep
 // (with a "done" banner) when none remain. Called from the FX-Learn draw
 // drain when g_qlAdvancePending is set.
@@ -4789,7 +4871,10 @@ void qlAdvance_()
     if (tgt.fxIdx < 0) {
         g_qlSweepActive = false;
         g_qlOpenNewModalDelay = 0;
-        g_qlStatus = "Quick Learn complete — no more unmapped plug-ins.";
+        g_qlStatus = g_qlScopeTrack
+            ? "Quick Learn Track complete — no more unmapped plug-ins on this track."
+            : "Quick Learn complete — no more unmapped plug-ins.";
+        g_qlScopeTrack = nullptr;
         return;
     }
     qlOfferTarget_(tgt);
@@ -4891,6 +4976,8 @@ bool g_autoLearnPreviewPending   = false;
 int  g_autoLearnSetupPrimary     = 1;   // 1=CS, 2=BC, 3=UF8-only
 bool g_autoLearnSetupVpots       = true;
 bool g_autoLearnSetupStrips      = false;
+bool g_autoLearnSetupParamFaders = false;  // generic params → 8 faders;
+                                           // defaults on when V-Pots is off
 
 const char* domainLabel_(uf8::Domain d)
 {
@@ -8600,6 +8687,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
         // Bucket every user map by developer. Empty developer string
         // collapses into "Other" so the entry is still reachable.
+        // fxlMasterDeveloperFor_ falls back to the installed-FX list to
+        // recover the vendor for maps whose match string has it stripped
+        // (i.e. all non-SSL maps) — so the list MUST be loaded before the
+        // bucket loop, else only SSL (vendor baked into its match) gets a
+        // developer and everything else collapses to "Other".
+        if (g_installedFx.empty()) loadInstalledFx_();
         std::unordered_map<std::string, std::vector<const uf8::UserPluginMap*>>
             bucket;
         std::vector<std::string> devOrder;  // first-seen order for stable UX
@@ -8894,6 +8987,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
                 g_autoLearnSetupVpots  = editing->uf8Mode;
                 g_autoLearnSetupStrips = false;
+                g_autoLearnSetupParamFaders = !editing->uf8Mode;
                 g_autoLearnSetupOpen   = true;
                 ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
             }
@@ -8927,6 +9021,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
             g_autoLearnSetupVpots  = editing->uf8Mode;
             g_autoLearnSetupStrips = false;
+            g_autoLearnSetupParamFaders = !editing->uf8Mode;
             g_autoLearnSetupOpen   = true;
             ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
         }
@@ -8937,6 +9032,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_Button(ctx, grBtn, nullptr, nullptr)) {
             ImGui_OpenPopup(ctx, "GR meter##fxl_grpop", nullptr);
         }
+    }
+
+    // Quick Learn launchers — guided sweep over unmapped plug-ins, next to
+    // AutoLearn. Project = whole project; Track = focused/selected track
+    // only. Same entry points as the REAPER actions / bindable builtins;
+    // always available regardless of the current map's snapshot state.
+    if (ImGui_Button(ctx, "QL Project##fxl_qlproj", nullptr, nullptr)) {
+        uf8::qlStartSweep_();
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "QL Track##fxl_qltrack", nullptr, nullptr)) {
+        uf8::qlStartSweepTrack_();
     }
 
     // GR-meter override popup. Shared id across the live + snapshot
@@ -9158,8 +9265,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         ImGui_Checkbox(ctx, "Also fill UF8 V-Pot banks##als_vp",
                        &g_autoLearnSetupVpots);
-        ImGui_Checkbox(ctx, "Also fill UF8 Faders + Mute/Solo/Sel##als_st",
+        ImGui_Checkbox(ctx, "Also fill UF8 Faders + Mute/Solo/Sel (CH<N> names)##als_st",
                        &g_autoLearnSetupStrips);
+        ImGui_Checkbox(ctx, "Map all params to UF8 Faders##als_pf",
+                       &g_autoLearnSetupParamFaders);
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -9174,6 +9283,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
               :                                   uf8::Domain::None;
             const bool wantUf8 = g_autoLearnSetupVpots
                               || g_autoLearnSetupStrips
+                              || g_autoLearnSetupParamFaders
                               || (newDom == uf8::Domain::None);
             if (editing->domain != newDom || editing->uf8Mode != wantUf8) {
                 UserPluginMap copy = *editing;
@@ -9275,6 +9385,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     editing->paramSnapshot, /* faderBankCount */ 2);
             } else {
                 g_autoLearnUf8Strips.clear();
+            }
+            // Generic params → faders. Appended to the same strip list so
+            // it shares the preview table + apply path. Skip any fader
+            // strip the CH<N> pass (above) already claimed so the two
+            // don't fight over the same physical fader.
+            if (g_autoLearnSetupParamFaders) {
+                using StKind = uf8::autolearn::Uf8StripSuggestion::Kind;
+                bool takenFader[2][8] = {};   // [faderBank][strip]
+                for (const auto& s : g_autoLearnUf8Strips)
+                    if (s.kind == StKind::Fader &&
+                        s.faderBank >= 0 && s.faderBank < 2 &&
+                        s.strip >= 0 && s.strip < 8)
+                        takenFader[s.faderBank][s.strip] = true;
+                auto pf = uf8::autolearn::suggestUf8ParamFaders(
+                    editing->paramSnapshot, /* faderBankCount */ 2);
+                for (auto& s : pf) {
+                    if (s.faderBank >= 0 && s.faderBank < 2 &&
+                        s.strip >= 0 && s.strip < 8 &&
+                        takenFader[s.faderBank][s.strip]) continue;
+                    g_autoLearnUf8Strips.push_back(std::move(s));
+                }
             }
             g_autoLearnSetupOpen     = false;
             g_autoLearnPreviewPending = true;   // fires on next frame
@@ -10704,6 +10835,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_autoLearnSetupVpots   = (g_newPrimaryMode == 3)
                                           ? true : g_newUf8Mode;
                 g_autoLearnSetupStrips  = false;
+                g_autoLearnSetupParamFaders = !g_autoLearnSetupVpots;
                 g_autoLearnSetupPending = true;
             }
             ImGui_CloseCurrentPopup(ctx);
@@ -12096,4 +12228,23 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
 void reasixty_startQuickLearn()
 {
     uf8::qlStartSweep_();
+}
+
+// Track-scoped variant — limits the sweep to the focused/selected track.
+void reasixty_startQuickLearnTrack()
+{
+    uf8::qlStartSweepTrack_();
+}
+
+// Probe: does the focused/selected track have anything to learn? Lets the
+// caller skip opening the FX-Learn window when there's nothing to do.
+bool reasixty_quickLearnTrackHasTarget()
+{
+    return uf8::qlTrackHasTarget_();
+}
+
+// Probe: does the project have anything to learn? Same purpose, project scope.
+bool reasixty_quickLearnHasTarget()
+{
+    return uf8::qlProjectHasTarget_();
 }

@@ -33,6 +33,8 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
+// Publish UC1 Fine state so UF8 V-Pot rotation honours UC1 Fine too.
+void reasixty_setUc1Fine(bool on);
 
 // Platform-normalised track-colour reader (defined in main.cpp).
 // GetTrackColor returns 0xBBGGRR on Windows, 0xRRGGBB on macOS/Linux.
@@ -1604,6 +1606,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         // "Fine On/Off".
         if (reasixty_inRecOrRecMonMode()) {
             fineMode_.store(ev.pressed, std::memory_order_relaxed);
+            reasixty_setUc1Fine(ev.pressed);
             pushButtonLed_(ev.id, ev.pressed);
             if (ev.pressed) ++stats_.buttonEventsHandled;
             return;
@@ -1611,6 +1614,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         if (ev.pressed) {
             const bool next = !fineMode_.load(std::memory_order_relaxed);
             fineMode_.store(next, std::memory_order_relaxed);
+            reasixty_setUc1Fine(next);
             pushButtonLed_(ev.id, next);
             pushButtonReadout_(ev.id, "Fine", next ? "On" : "Off",
                                zone::kChannelStripReadout);

@@ -81,5 +81,16 @@ std::vector<Uf8StripSuggestion> suggestUf8Strips(
     const std::vector<UserParamInfo>& params,
     int faderBankCount = 1);
 
+// Build UF8 Fader suggestions for a generic FX: every usable param laid
+// 1:1 onto the 8 faders (overflow to fader-bank 1), category-sorted like
+// suggestUf8Banks. Unlike suggestUf8Strips this needs no "CH<N>" naming —
+// it's the "put these params on the faders" path for plug-ins with no
+// channel structure, so the user can map even with the V-Pot target off.
+// All suggestions are Kind::Fader; bypass / enable / enum params are
+// skipped (toggles don't belong on a motor fader).
+std::vector<Uf8StripSuggestion> suggestUf8ParamFaders(
+    const std::vector<UserParamInfo>& params,
+    int faderBankCount = 1);
+
 } // namespace autolearn
 } // namespace uf8

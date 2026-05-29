@@ -92,6 +92,13 @@ void reasixty_actionPickerPoll();
 // dialog, and arms the auto-advance sweep. No-op-with-status when every
 // project plug-in is already mapped or skipped.
 void reasixty_startQuickLearn();
+// Track-scoped Quick Learn — limits the sweep to the focused/selected track.
+void reasixty_startQuickLearnTrack();
+// True when that track actually has a learnable FX — used to avoid opening
+// the FX-Learn window for nothing.
+bool reasixty_quickLearnTrackHasTarget();
+// Same, project scope.
+bool reasixty_quickLearnHasTarget();
 
 // Forward-declared so the encoder-rotation drain (further up) and
 // UC1Surface.cpp can both route physical-control deltas through the same
@@ -157,6 +164,7 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
 std::atomic<bool> g_quickLearnRequest{false};
+std::atomic<bool> g_quickLearnTrackRequest{false};  // Track-scoped variant
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -559,9 +567,16 @@ std::atomic<bool>         g_keyboardShiftModifier{true};
 std::atomic<bool>         g_keyboardCmdModifier  {true};
 std::atomic<bool>         g_keyboardCtrlModifier {true};
 std::atomic<bool>         g_shiftFineMode        {false}; // Shift = fine mode for V-Pots/encoders
+std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button held/latched
+                                                          // (published from UC1Surface)
 // Forward declarations — defined later but called from drainInputQueue.
 bool hostShiftHeld_();
 bool shiftFineActive_();
+// True when any source should make V-Pot rotation fine: UF8 Shift (incl.
+// the migrated Fine button), the Shift-activates-Fine setting, OR the UC1
+// Fine button. The UC1 source was missing — holding Fine on the UC1 left
+// UF8 V-Pots coarse (Frank 2026-05-29).
+bool vpotFineActive_();
 // Settings-window appearance. `g_themeSelection` maps to uf8::Theme
 // (0 = Vanilla / default, 1 = Mixnote). `g_fontScale` maps to font
 // presets (0 = Small 12px, 1 = Normal 14px, 2 = Large 18px). Both
@@ -721,6 +736,13 @@ extern std::array<std::string, 8> g_panOverlayText;
 // for kFolderRevealMs, then it reverts to "Folder".
 constexpr int64_t kFolderRevealMs = 3000;
 extern std::array<int64_t, 8>     g_folderRevealUntilMs;
+
+// V-Pot push reset safety net: after a V-Pot push, ignore rotation on the
+// same strip for this window. Stops the tiny twist that often rides along
+// with the press from nudging the param straight back off the just-set
+// reset value (Frank 2026-05-29).
+constexpr int64_t kVpotPushRotSuppressMs = 250;
+extern std::array<int64_t, 8>     g_vpotPushSuppressUntilMs;
 
 // Forward declarations for followFocusedPluginGuiAcrossCycle_ — the
 // definitions live ~500 lines below in the same anonymous namespace.
@@ -5605,6 +5627,14 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::PanDelta: {
+                // V-Pot push reset safety net: a tiny twist riding along
+                // with a push would otherwise bump the param back off the
+                // just-reset value. Swallow rotation for a short window
+                // after a push on the same strip.
+                if (e.strip < 8 &&
+                    nowMs_() < g_vpotPushSuppressUntilMs[e.strip]) {
+                    break;
+                }
                 // Diag (Frank 2026-05-19): V-Pot state snapshot, same
                 // pattern as the FADER state line above.
                 {
@@ -5670,7 +5700,7 @@ void drainInputQueue()
                     if (fr.active()) {
                         if (fr.valid) {
                             double delta = e.value;
-                            if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
+                            if (vpotFineActive_()) delta *= 0.25;
                             if (g_flip.load() && g_forcePan.load() && tr) {
                                 // FLIP+PAN held → V-Pot drives the strip
                                 // track's own pan (P_PAN), not the send.
@@ -5691,7 +5721,7 @@ void drainInputQueue()
                         if (vr.valid) {
                             if (g_forcePan.load()) {
                                 double delta = e.value;
-                                if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
+                                if (vpotFineActive_()) delta *= 0.25;
                                 writePan(vr, delta, e.strip);
                             } else {
                                 double dPb = e.value;
@@ -5760,7 +5790,7 @@ void drainInputQueue()
                                 const int signedDet = rawDet
                                     * (bs.inverted ? -1 : 1);
                                 float sens = kt.sensitivity;
-                                if (g_shiftHeld.load() || shiftFineActive_())
+                                if (vpotFineActive_())
                                     sens *= 0.25f;
                                 const auto r = uf8::tickStepped(
                                     acc, signedDet, sens);
@@ -5780,7 +5810,7 @@ void drainInputQueue()
                                 // bindings keep byte-identical behaviour.
                                 double delta = e.value
                                     * (bs.inverted ? -1.0 : 1.0);
-                                if (g_shiftHeld.load() || shiftFineActive_())
+                                if (vpotFineActive_())
                                     delta *= 0.25;
                                 if (kt.isCustom()) {
                                     delta *= static_cast<double>(kt.sensitivity);
@@ -5916,7 +5946,7 @@ void drainInputQueue()
                         const int signedDet = rawDet
                             * (sl.inverted ? -1 : 1);
                         float sens = usl ? usl->sensitivity : 1.0f;
-                        if (g_shiftHeld.load() || shiftFineActive_())
+                        if (vpotFineActive_())
                             sens *= 0.25f;
                         const auto r = uf8::tickStepped(
                             acc, signedDet, sens);
@@ -5935,7 +5965,7 @@ void drainInputQueue()
                     } else {
                         // Continuous param — existing knob-travel path.
                         double delta = e.value * (sl.inverted ? -1.0 : 1.0);
-                        if (g_shiftHeld.load() || shiftFineActive_())
+                        if (vpotFineActive_())
                             delta *= 0.25;
                         if (usl) {
                             delta *= static_cast<double>(usl->sensitivity);
@@ -5970,7 +6000,7 @@ void drainInputQueue()
                         const double cur = TrackFX_GetParamNormalized(
                             tr, pn.fxIndex, pn.vst3Param);
                         double delta = e.value * 0.5;  // pan range 0..1, half-scale of REAPER's -1..+1
-                        if (g_shiftHeld.load() || shiftFineActive_()) delta *= 0.25;
+                        if (vpotFineActive_()) delta *= 0.25;
                         const double next = uf8::applyVirtualNotch(
                             cur, delta, /*center*/0.5, /*zone*/0.012,
                             0.0, 1.0);
@@ -5997,8 +6027,12 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::PanCenter: {
-                if (e.strip < 8)
+                if (e.strip < 8) {
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
+                    // Arm the rotation safety net for this strip.
+                    g_vpotPushSuppressUntilMs[e.strip] =
+                        nowMs_() + kVpotPushRotSuppressMs;
+                }
                 // V-pot push: with a plug-in of the focused domain present
                 // (and not in global Pan mode), reset the focused param to
                 // its midpoint. Otherwise, re-center pan.
@@ -8419,6 +8453,7 @@ std::array<std::string, 8> g_panOverlayText{};
 // drainInputQueue so a parent strip briefly shows the real value before
 // reverting to "Folder". See kFolderRevealMs in the forward decls.
 std::array<int64_t, 8>     g_folderRevealUntilMs{};
+std::array<int64_t, 8>     g_vpotPushSuppressUntilMs{};
 
 // CUT LED last-pushed state per strip — int8_t with -1 = unknown / force
 // re-push, 0/1 = effective mute state. Effective mute follows routing:
@@ -11467,6 +11502,11 @@ bool shiftFineActive_()
     return g_shiftHeld.load() || hostShiftHeld_();
 }
 
+bool vpotFineActive_()
+{
+    return vpotFineActive_() || g_uc1Fine.load();
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -13452,8 +13492,18 @@ void onTimer()
     // are main-thread-only). Open Settings to FX Learn, then let
     // SettingsScreen resolve the target FX and prime the +New dialog.
     if (g_quickLearnRequest.exchange(false)) {
-        g_mixerWindow.openToFxLearn();
-        reasixty_startQuickLearn();
+        // Don't pop the FX-Learn window if the project has nothing to learn.
+        if (reasixty_quickLearnHasTarget()) {
+            g_mixerWindow.openToFxLearn();
+            reasixty_startQuickLearn();
+        }
+    }
+    if (g_quickLearnTrackRequest.exchange(false)) {
+        // Don't pop the FX-Learn window if this track has nothing to learn.
+        if (reasixty_quickLearnTrackHasTarget()) {
+            g_mixerWindow.openToFxLearn();
+            reasixty_startQuickLearnTrack();
+        }
     }
 
     // Plug-in GUI request flags — all main-thread because TrackFX_Show
@@ -13841,9 +13891,13 @@ custom_action_register_t g_actionToggleMixer{
 int g_cmdToggleMixer = 0;
 
 custom_action_register_t g_actionQuickLearn{
-    0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn focused FX", nullptr,
+    0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn Project", nullptr,
 };
 int g_cmdQuickLearn = 0;
+custom_action_register_t g_actionQuickLearnTrack{
+    0, "REASIXTY_QUICK_LEARN_TRACK", "Rea-Sixty: Quick Learn Track", nullptr,
+};
+int g_cmdQuickLearnTrack = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -13921,6 +13975,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
     if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
+    if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
     return false;
 }
 
@@ -14903,6 +14958,9 @@ void reasixty_setShiftFineMode(bool on)
     SetExtState("rea_sixty", "shift_fine_mode", on ? "1" : "0", true);
 }
 bool reasixty_shiftFineActive()       { return shiftFineActive_(); }
+// Published by UC1Surface when its Fine button toggles/holds, so UF8
+// V-Pot rotation honours UC1 Fine too. Session-only (not persisted).
+void reasixty_setUc1Fine(bool on)     { g_uc1Fine.store(on); }
 int  reasixty_theme()                 { return g_themeSelection.load(); }
 void reasixty_setTheme(int t)
 {
@@ -16880,7 +16938,13 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (firing) g_quickLearnRequest.store(true);
         },
-        nullptr, "FX: Quick Learn (project sweep)", false
+        nullptr, "FX: Quick Learn Project", false
+    });
+    registerBuiltin("quick_learn_track", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_quickLearnTrackRequest.store(true);
+        },
+        nullptr, "FX: Quick Learn Track", false
     });
 
     // ---- Phase 2.5 surface-filter modes ----------------------------------
@@ -18385,6 +18449,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
     g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
+    g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

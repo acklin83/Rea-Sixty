@@ -883,5 +883,45 @@ std::vector<Uf8StripSuggestion> suggestUf8Strips(
     return out;
 }
 
+std::vector<Uf8StripSuggestion> suggestUf8ParamFaders(
+    const std::vector<UserParamInfo>& params,
+    int faderBankCount)
+{
+    if (faderBankCount < 1) faderBankCount = 1;
+    if (faderBankCount > 2) faderBankCount = 2;
+
+    // Same usable-param filter as suggestUf8Banks: drop empty names,
+    // bypass/enable toggles, and enum params (a motor fader wants a
+    // continuous value).
+    struct Cand { int vst3Param; std::string name; std::string category; };
+    std::vector<Cand> cands;
+    for (const auto& pi : params) {
+        if (pi.name.empty()) continue;
+        const std::string norm = normalise(pi.name);
+        if (norm == "bypass" || norm == "enable" || norm == "on/off") continue;
+        if (pi.wasEnum) continue;
+        cands.push_back({pi.vst3Param, pi.name, classifyParamName(norm)});
+    }
+
+    // Category-sorted (same order as the V-Pot packer), laid 1:1 onto
+    // fader strips 0..7, overflow to fader-bank 1.
+    const char* categoryOrder[] = {"EQ", "Comp", "Gate", "Filter", "I/O", "Misc"};
+    std::vector<Uf8StripSuggestion> out;
+    int placed = 0;
+    const int maxStrips = 8 * faderBankCount;
+    for (const char* cat : categoryOrder) {
+        for (const auto& c : cands) {
+            if (c.category != cat) continue;
+            if (placed >= maxStrips) break;
+            out.push_back({Uf8StripSuggestion::Kind::Fader,
+                           placed / 8, placed % 8,
+                           c.vst3Param, c.name, 0.6f, true});
+            ++placed;
+        }
+        if (placed >= maxStrips) break;
+    }
+    return out;
+}
+
 } // namespace autolearn
 } // namespace uf8
