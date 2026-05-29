@@ -5114,6 +5114,12 @@ void drainInputQueue()
             MediaTrack* tr = g_uc1_surface
                 ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
                 : nullptr;
+            // focusedTrack() is a cached pointer that can dangle after a
+            // track delete — guard it like resolveActiveFx_ (line ~3969)
+            // before it reaches lookupPluginOnTrack/TrackFX_* below, or a
+            // stale ptr yields a garbage FX count → runaway-vector trap
+            // (same class as the 2026-05-29 drainInputQueue crash).
+            if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
             if (!tr) tr = GetSelectedTrack(nullptr, 0);
             if (!tr) continue;
             const auto focused = uf8::getFocusedParam();

@@ -499,7 +499,12 @@ int findFxIndexByGuid(void* trackOpaque, const std::string& guidStr)
 PluginMatch lookupPluginOnTrack(void* trackOpaque)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
-    if (!tr) return { nullptr, -1 };
+    // Callers often pass a cached MediaTrack* (focusedTrack(), g_visibleTracks)
+    // that can dangle after a track delete. TrackFX_GetCount on a freed track
+    // returns garbage → the loop walks bogus FX indices → trap. Validate here,
+    // the single chokepoint, so every caller is covered. ValidatePtr2 is
+    // main-thread-only — same constraint TrackFX_GetCount already imposes.
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return { nullptr, -1 };
     const int n = TrackFX_GetCount(tr);
     char buf[512];
     for (int fx = 0; fx < n; ++fx) {
@@ -521,7 +526,10 @@ PluginMatch lookupPluginOnTrack(void* trackOpaque, Domain domain)
 {
     if (domain == Domain::None) return { nullptr, -1 };
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
-    if (!tr) return { nullptr, -1 };
+    // See the no-domain overload above: guard the cached pointer at the
+    // chokepoint so a stale track can't drive TrackFX_GetCount into a
+    // garbage count and runaway loop. Main-thread-only.
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return { nullptr, -1 };
     const int n = TrackFX_GetCount(tr);
     // Multi-instance: walk all matches in this domain and return the
     // one at the user's active instance index. Falls back to first hit
