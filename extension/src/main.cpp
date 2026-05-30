@@ -18310,10 +18310,28 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             if (char* slash = std::strrchr(path, '\\')) *slash = 0;
             wchar_t wpath[MAX_PATH] = {0};
             MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
-            SetDefaultDllDirectories(
-                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
-                | LOAD_LIBRARY_SEARCH_USER_DIRS);
-            AddDllDirectory(wpath);
+            // Pre-load our delay-load deps explicitly by FULL PATH, WITHOUT
+            // touching the process-global DLL search. The previous approach
+            // (SetDefaultDllDirectories + AddDllDirectory) was process-global
+            // and permanent: it dropped LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR from
+            // the default search for the WHOLE process, so any plug-in that
+            // loads sub-DLLs from its own directory (Acustica/Acqua: TIGERMIX,
+            // TIGERT, … load from ...\VST3\<p>.vst3\Contents\x86_64-win\)
+            // could no longer find them → access violation inside the plug-in
+            // on open. DLL_LOAD_DIR cannot be set via SetDefaultDllDirectories
+            // (it is a per-call LoadLibraryEx flag only), so there is no way
+            // to keep that behaviour while changing the default — hence: don't
+            // change the default. Loading libusb-1.0 / hidapi by full path
+            // here puts their base names in the loaded-module list, so the
+            // /DELAYLOAD stubs resolve to these already-loaded modules at
+            // first use. Frank 2026-05-30 (TIGER/TIGERMIX open-crash).
+            for (const wchar_t* dep : { L"libusb-1.0.dll", L"hidapi.dll" }) {
+                wchar_t full[MAX_PATH] = {0};
+                _snwprintf(full, MAX_PATH, L"%s\\%s", wpath, dep);
+                LoadLibraryExW(full, nullptr,
+                               LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                                   | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            }
         }
     }
 #endif
