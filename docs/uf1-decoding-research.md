@@ -150,6 +150,106 @@ order, each an isolated USBPcap capture so the diff is clean:
 8. **SEL colour-follow** — toggle "Plug-in Mixer UF8/UF1 SEL Keys" and change
    a REAPER track colour; confirm it's the same `FF 38/39` SEL palette as UF8.
 
+## Decoding the 4.3″ display / SSL Meter
+
+The big colour TFT (SSL Meter: Peak/RMS bars, VU/PPM needles, phase
+correlation, L/R balance, Lissajous vector scope, 31-band RTA — plus the
+Plug-in-Mixer EQ-curve graph) is the hardest and most uncertain part. Notes
+below capture the strategy and the conclusions from the 2026-05-31 design
+discussion.
+
+### Strong prior: SSL pushes *values*, not bitmaps
+
+No device we've decoded streams a framebuffer. The UF8 scribble strips are
+**colour TFTs** yet are driven entirely by semantic commands (text zones
+`FF 66 …`, palette index, meter level 0–31, V-Pot-bar position) — never pixels.
+The UC1 has **no graphical screen at all** (3-digit 7-seg + small text LCDs +
+LED rings/meters). So SSL's consistent design is **device-side rendering**: the
+firmware holds the renderer, the host sends numbers. That's the good news —
+"decode" likely means *find which opcode carries which value*, not *reverse a
+pixel format*.
+
+**Caveat:** the dense graphics (**Lissajous**, **31-band RTA**) have **zero
+precedent** in our UF8/UC1 decode (UC1 has no graphical display). The UF1 is
+advertised **hi-speed USB** (UF8/UC1 are likely full-speed), which *could* mean
+those specific surfaces are pushed as partial bitmaps. Settle it on capture #1.
+
+### Step 1 — bitmap vs. value (the deciding test)
+
+| Signature | Bitmap / framebuffer | Value-push (expected) |
+| --- | --- | --- |
+| Bandwidth | big fixed OUT blocks ≈ W×H×bpp (480×272×2 ≈ 261 KB/frame) | small frames, scale with meter count not pixels |
+| Freeze-signal test (mute audio) | screen keeps streaming identical blocks (double-buffer) | traffic collapses to heartbeat |
+| Entropy | payload looks random/compressed | clear `opcode + payload`, ramps monotonically with level |
+| Enumeration | check `bcdUSB` + EP max-packet on `lsusb -v` | — |
+
+### Step 2 — isolate each meter with a crafted test signal
+
+Same calibrated-ramp method that cracked UF8 VU / UC1 `FF 13 04` / UC1 needle
+`FF 5B`. One element per capture, diff against idle baseline:
+
+| Element | Test signal | Expected wire shape |
+| --- | --- | --- |
+| Peak / RMS bargraph | sine at −20/−12/−6/0 dBFS | level array, 1 byte/segment (cf. UF8 `FF 66 21 09`) |
+| VU / PPM needle | calibrated steady tone | position byte/needle (cf. UC1 `FF 5B 02 00 <pos>`, pos≈dB×10) |
+| 31-band RTA | **slow sine sweep 20 Hz→20 kHz** (pink noise = all bands) | one value walks the array index → reveals layout + band order |
+| Phase correlation | mono (+1) / L−R inverted (−1) / uncorrelated noise (≈0) | single signed byte swings |
+| L/R balance | tone hard-L then hard-R | single byte swings |
+| Lissajous scope | mono→45° line; L-only→horizontal; sine L + 90°-shift R→circle | (x,y) point pairs → point cloud; few bytes → on-device synth; nothing structured → bitmap region |
+| EQ-curve graph (PM) | change one EQ band (LF gain) by a known step | likely drawn on-device from CS params we already push (freq/gain/Q), or a precomputed polyline |
+
+The SSL Meter plug-in GUI **mirrors the UF1 display 1:1** (manual p.180), so the
+on-screen values are ground-truth for the byte-correlation.
+
+### Can we just forward the SSL Meter stream 1:1? — No.
+
+Asked 2026-05-31. The graphics are **not** produced by the plug-in. Topology
+(see [`plugin-ipc-notes.md`](plugin-ipc-notes.md)):
+
+```
+SSL Meter (VST3) ──[JUCE IPC: Apache Thrift, ENCRYPTED envelope]──▶ SSL360Core ──[vendor-USB]──▶ UF1
+```
+
+- The plug-in only emits **data** (params, meter values) to **SSL360Core** over
+  Thrift wrapped in `kEncryptedThriftContainerThriftId`.
+- **SSL360Core is the renderer *and* the exclusive USB owner** — it makes the
+  UF1 frames, and it can't co-own the device with us.
+
+So there is no plug-in-side "stream" to relay, and Core (the renderer) is the
+exact component we replace. Two near-variants and their verdicts:
+
+1. **Raw USB-MITM (keep Core running, proxy its USB OUT):** the only literal 1:1
+   path, but requires a fake-device shim (Core claims USB exclusively) and keeps
+   the **entire SSL stack as a hard dependency** — defeats the project. Not a
+   product path.
+2. **Value-relay via REAPER (the sane version):** keep SSL Meter loaded, read its
+   computed values through host hooks (as we already do for GR via the PreSonus
+   `GainReduction_dB` extension) and format our own UF1 frames. Works only as far
+   as the plug-in exposes values to the host — likely simple meters (Peak/RMS,
+   correlation, maybe VU); the **RTA array and Lissajous cloud almost certainly
+   are not exposed**.
+
+Tapping the plug-in→Core data directly is rejected: it's **encrypted**, so it
+would mean breaking SSL's envelope (not passive USB observation) — collapsing
+the project's interop rationale — and `plugin-ipc-notes.md` already records the
+decision *not* to reimplement the Thrift IPC / encryption envelope.
+
+### Staging (recommendation)
+
+- **Phase A** (cheap): non-Meter 4.3″ content — names, timecode, V-Pot param
+  labels/values, soft-key labels, colour, fader dB → reuses the known
+  `FF 66 …` zone family.
+- **Phase B**: simple meters — Peak/RMS bars, VU needles, phase/balance, RTA
+  (value arrays; calibrated decode; light DSP, or value-relay from SSL Meter).
+- **Phase C** (hardest, optional): Lissajous + full SSL-Meter parity + EQ-curve
+  graph. Most DSP, possibly bitmap. The natural v1 cut line.
+
+**Two problems, not one:** (a) the *wire format* (tractable via the tests above)
+and (b) the *data source* — because we replace SSL360Core we have no SSL Meter
+feeding us, so anything not value-relayable means Rea-Sixty computes the DSP
+itself from a REAPER audio tap. Determining (a) also tells us how expensive (b)
+is.
+
 ## Open questions
 
 - **VID/PID/endpoints** — unverified; `0x0024` is a guess. Confirm on enum.
