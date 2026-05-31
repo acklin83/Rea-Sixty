@@ -28,6 +28,9 @@ captures/**/*.mov
 captures/**/*.mp4
 !captures/.keep
 
+# Generated test-signal audio (regenerate via analysis/gen_test_signals.py)
+captures/test-signals/
+
 # CMake build outputs
 extension/build/
 extension/build-dbg/

@@ -201,6 +201,10 @@ Same calibrated-ramp method that cracked UF8 VU / UC1 `FF 13 04` / UC1 needle
 The SSL Meter plug-in GUI **mirrors the UF1 display 1:1** (manual p.180), so the
 on-screen values are ground-truth for the byte-correlation.
 
+Generate the calibrated WAVs for every row above with
+[`analysis/gen_test_signals.py`](../analysis/gen_test_signals.py)
+(`python3 analysis/gen_test_signals.py` → `captures/test-signals/`, git-ignored).
+
 ### Can we just forward the SSL Meter stream 1:1? — No.
 
 Asked 2026-05-31. The graphics are **not** produced by the plug-in. Topology
