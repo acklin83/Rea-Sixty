@@ -195,13 +195,13 @@ prioritised capture plan.
 | Aspect | UF8 | UC1 | **UF1** |
 | --- | --- | --- | --- |
 | Faders | 8 | 0 | **1** (touch, 100 mm) |
-| Graphical TFT | 8× small scribble | 1× (plugin) | **4.3" main + 1.77" channel** |
+| Graphical TFT | 8× small scribble TFT | **none** (3-digit 7-seg + small text LCDs + LED rings/meters) | **4.3" main + 1.77" channel** |
 | Jog wheel | no | no | **yes** (+ scrub) |
 | Foot-switches | no | no | **2** |
 | Built-in USB hub (THRU) | yes | — | **yes** |
 | V-MIDI per layer | port-group | — | **single port (1/5/9)** |
 | SSL Meter plug-in surface | no | no | **yes** (new) |
-| EQ-curve graph | no | yes (UC1 has it) | **yes** |
+| EQ-curve graph **on hardware** | no | **no** (curve only in the on-screen 360° mixer, not on the UC1 itself) | **yes** (drawn on the 4.3") |
 
 ## Sources
 

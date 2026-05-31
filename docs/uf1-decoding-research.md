@@ -107,7 +107,7 @@ The UF1 is a **hybrid** of the two devices we already drive:
 | 1 motorised touch fader | UF8 strip fader | `buildFaderPosition` / `FF 1E 03`, motor-limp `FF 1D 02`, touch `FF 20 02`, position `FF 21 03` — likely **strip index fixed at 0** |
 | RGB soft keys (46) | UF8 per-strip + global LEDs | `FF 38/39 04 <cell>` pair-write family, tri-state Off/Dim/Bright (cap44) |
 | SEL-key colour-follow | UF8 SEL DAW-colour | `ColorSync.cpp`, `FF 38/39` SEL palette (cap33) — same feature, same bytes likely |
-| 4.3" parameter display | UC1 big display + UF8 LCD zones | UC1 zone commands (`UC1Protocol.h`) — UF1's screen is closer to UC1's than to UF8's per-strip scribbles |
+| 4.3" **text/value** zones (names, timecode, param labels, fader dB) | UF8 colour-TFT LCD zones + UC1 text/7-seg zones | `FF 66 …` zone family + `UC1Protocol.h` text zones — reusable. **NB: the UC1 has no graphical screen** (7-seg + small text LCDs only), so there is **no precedent for the 4.3" graphical content** (EQ curve, SSL Meter) — that part is genuinely new |
 | Channel/notched encoder | UC1 encoders / UF8 channel encoder | `encoder_*` actions (see [`concepts.md`](concepts.md)) |
 | Jog/shuttle wheel | **NEW** — neither UF8 nor UC1 has one | needs fresh decode; probably an IN-direction delta frame like the V-Pot rotation |
 | 5 transport + 6 secondary keys | UF8 transport buttons | button-event `FF 22 03 <id> 00 <state>` — new ID map to capture |
