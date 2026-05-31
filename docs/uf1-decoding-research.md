@@ -14,19 +14,23 @@ third device in the SSL 360° "U-series" after the UF8 (8-fader, decoded — see
 decoded — see [`protocol-notes-uc1.md`](protocol-notes-uc1.md)). The UF1 is
 the single-fader advanced DAW controller.
 
-> ⚠️ **Manual not in the repo yet.** `docs/docs/` currently holds only
-> `SSL UC1 User Guide_Rev12.pdf` and `SSL UF8 User Guide_Rev11.pdf`. The
-> **UF1 User Guide is missing.** I could not fetch it automatically: the SSL
-> download/support hosts (`*.solidstatelogic.com`,
-> `eu1.download.solidstatelogic.com`) are not on this environment's network
-> allowlist, so `curl`/WebFetch return 403 / "Host not in allowlist".
->
-> **Action for Frank:** drop the PDF into `docs/docs/` (the current public
-> revision is **SSL UF1 User Guide Rev 4.0**, found at
-> `https://eu1.download.solidstatelogic.com/UF1/SSL UF1 User Guide_Rev4.0.pdf`).
-> Once it's committed I'll distil it into a `uf1-manual-reference.md` the same
-> way [`uf8-manual-reference.md`](uf8-manual-reference.md) was distilled from
-> the UF8 guide.
+> ✅ **Manual now in the repo.** `docs/docs/SSL UF1 User Guide_Rev4.0.pdf`
+> (Rev 4.0, 200 pp.) was added 2026-05-31. It is distilled into
+> [`uf1-manual-reference.md`](uf1-manual-reference.md) — read that for the
+> confirmed hardware/architecture detail; this doc keeps the decode strategy
+> and open questions.
+
+## Confirmed by the manual (2026-05-31)
+
+Reading `SSL UF1 User Guide_Rev4.0.pdf` upgraded several hypotheses below from
+guess to fact (detail in [`uf1-manual-reference.md`](uf1-manual-reference.md)):
+the **two-stack architecture is identical to the UF8** (HUI/MCU + proprietary
+Plug-in Mixer, p.28); the **SEL-key colour-follow is the same feature we
+already ship** (p.23); the UF1 needs a **360° handshake at boot** before its
+displays render (p.192) — so an init/wakeup replay is required, same as UF8.
+**Still open** (capture-only): the real **VID/PID/endpoints**, the **jog-wheel**
+and **foot-switch** encodings, and how the **4.3" graphical content** (SSL Meter
+/ EQ-curve) is pushed.
 
 ## What the UF1 is (public material)
 
