@@ -72,6 +72,7 @@
 #include "PluginMap.h"
 #include "Protocol.h"
 #include "SetupBundle.h"
+#include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -13257,6 +13258,61 @@ void onTimer()
 
             float dbInL = -120.f;
             float dbInR = -120.f;
+
+            // "Rea-Sixty Input Level" probe override. If the user dropped the
+            // JSFX anywhere on the focused track — main FX chain OR the
+            // input/record FX chain — read its L/R peak sliders instead of the
+            // AudioAccessor. The probe meters whatever signal flows INTO it
+            // (live armed/monitored input, an upstream plug-in's output, or a
+            // media source) and is live even while the transport is stopped,
+            // which the AudioAccessor path cannot do. Absent the probe we fall
+            // through to the AudioAccessor fallback below (Item-Level as
+            // normal). Cache the FX index; revalidate by name each tick so an
+            // FX add/remove/reorder or track switch rescans.
+            static MediaTrack* s_inLvlTrack = nullptr;
+            static int         s_inLvlFx    = -1;  // may carry 0x1000000 rec-FX flag
+            auto nameIsInputLevel = [](MediaTrack* t, int fx) -> bool {
+                char nm[256] = {0};
+                return TrackFX_GetFXName(t, fx, nm, sizeof(nm))
+                    && std::strstr(nm, "Rea-Sixty Input Level") != nullptr;
+            };
+            if (s_inLvlTrack != tr || s_inLvlFx == -1
+                || !nameIsInputLevel(tr, s_inLvlFx)) {
+                s_inLvlTrack = tr;
+                s_inLvlFx = -1;
+                const int nMain = TrackFX_GetCount(tr);
+                for (int i = 0; i < nMain; ++i) {
+                    if (nameIsInputLevel(tr, i)) { s_inLvlFx = i; break; }
+                }
+                if (s_inLvlFx == -1) {
+                    // Input/record FX chain: address as idx | 0x1000000.
+                    const int nRec = TrackFX_GetRecCount(tr);
+                    for (int i = 0; i < nRec; ++i) {
+                        const int ri = i | 0x1000000;
+                        if (nameIsInputLevel(tr, ri)) { s_inLvlFx = ri; break; }
+                    }
+                }
+            }
+            bool gotHelper = false;
+            if (s_inLvlFx != -1) {
+                // slider1/slider2 = peak L/R in dBFS. Read the formatted value
+                // (numeric, no unit for a plain JS slider) and atof it; fall
+                // back to the raw param value — same proven pattern as the GR
+                // probe read (UC1Surface.cpp readGr).
+                auto readDb = [&](int p) -> float {
+                    char fb[64] = {0};
+                    if (TrackFX_GetFormattedParamValue(tr, s_inLvlFx, p,
+                                                       fb, sizeof(fb)) && fb[0])
+                        return static_cast<float>(std::atof(fb));
+                    double mn = 0.0, mx = 0.0;
+                    return static_cast<float>(
+                        TrackFX_GetParam(tr, s_inLvlFx, p, &mn, &mx));
+                };
+                dbInL = readDb(0);
+                dbInR = readDb(1);
+                gotHelper = true;
+            }
+
             // Gate on transport playing/recording. AudioAccessor returns
             // valid samples at the project playhead even when stopped, so
             // without this gate the input meter freezes at the audio level
@@ -13264,7 +13320,7 @@ void onTimer()
             // GetPlayState bits: 1 = playing, 2 = paused, 4 = recording.
             const int playState = GetPlayState();
             const bool transportLive = (playState & 1) || (playState & 4);
-            if (s_vuAccessor && transportLive) {
+            if (!gotHelper && s_vuAccessor && transportLive) {
                 AudioAccessorValidateState(s_vuAccessor);
                 constexpr int kBlock  = 512;
                 constexpr int kNchans = 2;
@@ -18273,6 +18329,49 @@ void registerBindingHandlers()
                         "FX param: step down");
 }
 
+// Write the embedded "Rea-Sixty Input Level" JSFX into REAPER's Effects
+// folder on load so it appears in the FX browser without a manual copy.
+// Idempotent: only writes when the file is missing or its bytes differ from
+// the shipped copy, so a user's local edits survive a reload but a new
+// shipped revision (bump the "// rev N" line in the .jsfx) propagates.
+static void reasixty_deployInputLevelJsfx()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string fxRoot = std::string(base) + "/Effects";
+    const std::string dir    = fxRoot + "/Rea-Sixty";
+#ifdef _WIN32
+    _mkdir(fxRoot.c_str());  // OK if it already exists
+    _mkdir(dir.c_str());
+#else
+    mkdir(fxRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_input_level.jsfx";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kInputLevelJsfxBytes);
+    const size_t len  = uf8::setup_bundle::kInputLevelJsfxSize;
+
+    // Skip the write if an identical copy is already on disk.
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
@@ -18368,6 +18467,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         snprintf(m, sizeof(m), "LoadAPI: %d missing (proceeding)", missing);
         initLog(m);
     }
+
+    initLog("step: deploy input-level JSFX");
+    // Make the "Rea-Sixty Input Level" probe available in the FX browser.
+    reasixty_deployInputLevelJsfx();
 
     initLog("step: capture g_reaperGetFunc");
     // Capture rec->GetFunc for SWELL APIs not in the plug-in SDK

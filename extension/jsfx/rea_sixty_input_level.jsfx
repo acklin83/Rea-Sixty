@@ -1,0 +1,63 @@
+desc:Rea-Sixty Input Level
+author:Rea-Sixty
+tags:metering analysis
+// rev 1
+
+// Stereo input-level probe. Shipped with the Rea-Sixty REAPER extension so
+// the UC1's dedicated input meter can show the level of whatever signal is
+// flowing INTO this plug-in — egal was vorher kommt: a live armed/monitored
+// hardware input, the output of an upstream plug-in, or a media source.
+//
+// Why this exists: the extension's normal input meter reads samples at the
+// project playhead via AudioAccessor, so it only ever sees recorded/playing
+// media and is gated on the transport running. It cannot meter a live input
+// while stopped. Drop this probe anywhere in a track's FX chain (including
+// the input/record FX chain) and the extension reads its peak instead.
+//
+// Placement: anywhere. Audio passes through unchanged (pure measurement).
+//   - Channels 1-2: signal to meter (passed through untouched)
+//
+// The extension finds this plug-in by name ("Rea-Sixty Input Level") on the
+// focused track, reads slider1 (peak L, dBFS) and slider2 (peak R, dBFS) via
+// TrackFX_GetParam on its timer tick, and feeds the UC1 input meter. When the
+// probe is absent the extension falls back to its AudioAccessor input meter.
+
+slider1:peak_l=-120<-120,24,0.01>Peak L (dBFS)
+slider2:peak_r=-120<-120,24,0.01>Peak R (dBFS)
+
+in_pin:In L
+in_pin:In R
+out_pin:Out L
+out_pin:Out R
+
+@init
+eps = 1e-12;
+hold_l = 0;
+hold_r = 0;
+// Per-sample linear decay coefficient for the peak-hold envelope, recomputed
+// in @block so it tracks srate changes. hold *= dec each sample => ~150 ms
+// full-scale fall, matching the extension's UC1 VU convention. This bridges
+// the gap between sample-rate updates here and the host's ~30 Hz read, so
+// transients between reads are not lost.
+dec = exp(-1 / (44100 * 0.15));
+
+@block
+// Publish the previous block's held peak as dBFS (one block of latency,
+// ~1 ms — negligible), then refresh the decay coefficient for this block.
+db_l = 20 * log10(hold_l + eps);
+db_r = 20 * log10(hold_r + eps);
+db_l < -120 ? db_l = -120;
+db_r < -120 ? db_r = -120;
+slider1 = db_l;
+slider2 = db_r;
+sliderchange(slider1);
+sliderchange(slider2);
+dec = exp(-1 / (srate * 0.15));
+
+@sample
+// Absolute peak, held with gentle decay. Rising edge latches instantly.
+al = abs(spl0);
+ar = abs(spl1);
+hold_l = al > hold_l ? al : hold_l * dec;
+hold_r = ar > hold_r ? ar : hold_r * dec;
+// Pass-through: spl0 / spl1 untouched (JSFX default forwards them).

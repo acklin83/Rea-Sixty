@@ -148,6 +148,29 @@ add_custom_command(
 add_custom_target(reasixty_factory_bundle_gen ALL
     DEPENDS ${REASIXTY_FACTORY_BUNDLE_HEADER})
 
+# Same embedding pattern for the Rea-Sixty Input Level JSFX probe. The
+# extension writes this into <ResourcePath>/Effects/Rea-Sixty/ on load so it
+# shows up in REAPER's FX browser without a manual copy.
+set(REASIXTY_INPUT_LEVEL_JSFX_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/jsfx/rea_sixty_input_level.jsfx")
+set(REASIXTY_INPUT_LEVEL_JSFX_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/input_level_jsfx.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_INPUT_LEVEL_JSFX_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRCFILE=${REASIXTY_INPUT_LEVEL_JSFX_SRC}
+        -DOUTFILE=${REASIXTY_INPUT_LEVEL_JSFX_HEADER}
+        -DSYMBOL=kInputLevelJsfx
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    DEPENDS
+        ${REASIXTY_INPUT_LEVEL_JSFX_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    COMMENT "Embedding rea_sixty_input_level.jsfx"
+    VERBATIM
+)
+add_custom_target(reasixty_input_level_jsfx_gen ALL
+    DEPENDS ${REASIXTY_INPUT_LEVEL_JSFX_HEADER})
+
 # Same embedding pattern for the Windows WinUSB INF. The Settings UI
 # (Win-only branch) writes this to %TEMP% and feeds it to pnputil so
 # the user can bind WinUSB to UF8 + UC1 with a single elevated click.
@@ -260,6 +283,7 @@ endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
+add_dependencies(reaper_uf8 reasixty_input_level_jsfx_gen)
 if(WIN32)
     add_dependencies(reaper_uf8 reasixty_winusb_inf_gen)
 endif()
