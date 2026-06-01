@@ -1,7 +1,7 @@
 desc:Rea-Sixty Input Level
 author:Rea-Sixty
 tags:metering analysis
-// rev 10
+// rev 11
 
 // Stereo input-level probe. Shipped with the Rea-Sixty REAPER extension so
 // the UC1's dedicated input meter can show the level of whatever signal is
@@ -34,12 +34,19 @@ out_pin:Out R
 eps = 0.000000000001; // 1e-12; EEL2 has no exponent-notation literals
 hold_l = 0;
 hold_r = 0;
+hsamp_l = 0;          // remaining flat-hold samples (L)
+hsamp_r = 0;          // remaining flat-hold samples (R)
 // Per-sample linear decay coefficient for the peak-hold envelope, recomputed
 // in @block so it tracks srate changes. hold *= dec each sample => ~150 ms
-// full-scale fall, matching the extension's UC1 VU convention. This bridges
-// the gap between sample-rate updates here and the host's ~30 Hz read, so
-// transients between reads are not lost.
+// full-scale fall, matching the extension's UC1 VU convention.
 dec = exp(-1 / (44100 * 0.15));
+// FLAT peak-hold window. A transient (snare hit) is latched instantly but
+// must stay flat — NOT decay — long enough that the host's ~30 Hz read is
+// guaranteed to catch the true peak. Without it a peak landing just after a
+// read decayed ~3 dB before the next read, so a -12 dBFS snare metered -15
+// (Frank 2026-06-01). 120 ms safely exceeds the read interval; the decay
+// release only begins once the window expires.
+htime = 44100 * 0.12;
 
 @block
 // Publish the previous block's held peak as dBFS (one block of latency,
@@ -55,14 +62,20 @@ db_r < -120 ? db_r = -120;
 // — banned for a meter). The write alone feeds the UC1.
 slider1 = db_l;
 slider2 = db_r;
-dec = exp(-1 / (srate * 0.15));
+dec   = exp(-1 / (srate * 0.15));
+htime = srate * 0.12;
 
 @sample
-// Absolute peak, held with gentle decay. Rising edge latches instantly.
+// Absolute peak with flat-hold then decay. Rising edge latches instantly and
+// re-arms the flat-hold window; while the window runs the peak stays put so
+// the host always reads the true level; once it expires the gentle decay
+// release takes over.
 al = abs(spl0);
 ar = abs(spl1);
-hold_l = al > hold_l ? al : hold_l * dec;
-hold_r = ar > hold_r ? ar : hold_r * dec;
+al > hold_l ? ( hold_l = al; hsamp_l = htime; )
+            : ( hsamp_l > 0 ? ( hsamp_l -= 1; ) : ( hold_l = hold_l * dec; ) );
+ar > hold_r ? ( hold_r = ar; hsamp_r = htime; )
+            : ( hsamp_r > 0 ? ( hsamp_r -= 1; ) : ( hold_r = hold_r * dec; ) );
 // Pass-through: spl0 / spl1 untouched (JSFX default forwards them).
 
 @gfx 180 200

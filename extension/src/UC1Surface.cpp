@@ -4323,11 +4323,35 @@ void UC1Surface::pushCsVu(float inputL, float inputR,
                          uint8_t (&lastL)[kNleds],
                          uint8_t (&lastR)[kNleds]) {
         // Each LED i lights independently per channel when that channel's
-        // dB exceeds the LED's threshold. LED 0 (-60 dBFS) lights as
+        // dB reaches the LED's threshold. LED 0 (-60 dBFS) lights as
         // soon as audio is present.
+        //
+        // Tolerance: a signal at exactly the labelled level (e.g. a -18
+        // dBFS tone on the -18 LED) must light it. The measured peak sits
+        // a sliver BELOW the true level — discrete sample peaks rarely
+        // land on the sine crest, plus float rounding in 20*log10 — so a
+        // bare `>=` left the -18 LED dark until ~-17.9 (Frank 2026-06-01).
+        // 0.1 dB margin closes the gap; adjacent thresholds are >= 1 dB
+        // apart so it can't bleed into the next LED.
+        constexpr float kLedTolDb = 0.1f;
+        // Hysteresis: a steady tone sitting ON a threshold jitters a few
+        // tenths of a dB tick-to-tick (block-aligned peak sampling). The
+        // input path is smoothed by the JSFX probe's 150 ms peak-hold, but
+        // the output path reads Track_GetPeakInfo straight and the 1.5 dB/
+        // tick fall follows brief dips — so the boundary LED flickered
+        // (Frank 2026-06-01). Once lit, an LED stays lit until the level
+        // drops kLedHystDb below its on-threshold; a separate off-threshold
+        // debounces the boundary without slowing the meter's ballistics.
+        // 0.6 dB swallows the jitter and still clears the >= 1 dB LED gap.
+        constexpr float kLedHystDb = 0.6f;
+        auto ledOn = [&](float db, int i, uint8_t prev) -> uint8_t {
+            const float onTh = kThreshold[i] - kLedTolDb;
+            if (prev == 0x01) return (db >= onTh - kLedHystDb) ? 0x01 : 0x00;
+            return (db >= onTh) ? 0x01 : 0x00;
+        };
         for (int i = 0; i < kNleds; ++i) {
-            const uint8_t targetL = (dbL >= kThreshold[i]) ? 0x01 : 0x00;
-            const uint8_t targetR = (dbR >= kThreshold[i]) ? 0x01 : 0x00;
+            const uint8_t targetL = ledOn(dbL, i, lastL[i]);
+            const uint8_t targetR = ledOn(dbR, i, lastR[i]);
             const uint8_t cellL = static_cast<uint8_t>(base + 2 * i);
             const uint8_t cellR = static_cast<uint8_t>(base + 2 * i + 1);
             if (lastL[i] != targetL) {
