@@ -1,7 +1,7 @@
 desc:Rea-Sixty Input Level
 author:Rea-Sixty
 tags:metering analysis
-// rev 1
+// rev 10
 
 // Stereo input-level probe. Shipped with the Rea-Sixty REAPER extension so
 // the UC1's dedicated input meter can show the level of whatever signal is
@@ -22,8 +22,8 @@ tags:metering analysis
 // TrackFX_GetParam on its timer tick, and feeds the UC1 input meter. When the
 // probe is absent the extension falls back to its AudioAccessor input meter.
 
-slider1:peak_l=-120<-120,24,0.01>Peak L (dBFS)
-slider2:peak_r=-120<-120,24,0.01>Peak R (dBFS)
+slider1:-120<-120,24,0.01>Peak L (dBFS)
+slider2:-120<-120,24,0.01>Peak R (dBFS)
 
 in_pin:In L
 in_pin:In R
@@ -31,7 +31,7 @@ out_pin:Out L
 out_pin:Out R
 
 @init
-eps = 1e-12;
+eps = 0.000000000001; // 1e-12; EEL2 has no exponent-notation literals
 hold_l = 0;
 hold_r = 0;
 // Per-sample linear decay coefficient for the peak-hold envelope, recomputed
@@ -48,10 +48,13 @@ db_l = 20 * log10(hold_l + eps);
 db_r = 20 * log10(hold_r + eps);
 db_l < -120 ? db_l = -120;
 db_r < -120 ? db_r = -120;
+// Plain slider write, no notify — exactly how HeDa Track_Inspector and other
+// metering JSFX publish a DSP-computed value for external readers. The slider
+// variable IS the host parameter storage; TrackFX_GetParam reads it live. NO
+// sliderchange (display only) and NO slider_automate (would record automation
+// — banned for a meter). The write alone feeds the UC1.
 slider1 = db_l;
 slider2 = db_r;
-sliderchange(slider1);
-sliderchange(slider2);
 dec = exp(-1 / (srate * 0.15));
 
 @sample
@@ -61,3 +64,50 @@ ar = abs(spl1);
 hold_l = al > hold_l ? al : hold_l * dec;
 hold_r = ar > hold_r ? ar : hold_r * dec;
 // Pass-through: spl0 / spl1 untouched (JSFX default forwards them).
+
+@gfx 180 200
+// Two vertical peak meters (L / R) so the FX window reads as a meter, not
+// two faders. slider1 / slider2 are still the data channel to the extension;
+// here they are only displayed.
+gfx_set(0.07, 0.07, 0.08, 1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+dbmin = -60; dbmax = 6;          // displayed scale
+pad   = 14;
+labh  = 18;                      // room for the L / R + value labels
+mtop  = 8;
+mh    = gfx_h - mtop - labh;
+bw    = (gfx_w - pad * 3) / 2;
+
+// 0 dB reference line across both bars
+zfrac = (0 - dbmin) / (dbmax - dbmin);
+zy    = mtop + mh - zfrac * mh;
+gfx_set(0.35, 0.35, 0.38, 1);
+gfx_line(pad - 4, zy, gfx_w - pad + 4, zy);
+
+i = 0;
+loop(2,
+  v = i == 0 ? slider1 : slider2;
+  v < dbmin ? v = dbmin;
+  v > dbmax ? v = dbmax;
+  frac = (v - dbmin) / (dbmax - dbmin);
+  bx   = pad + i * (bw + pad);
+
+  // trough
+  gfx_set(0.16, 0.16, 0.18, 1);
+  gfx_rect(bx, mtop, bw, mh);
+
+  // fill (green < -12, amber < -3, red above)
+  fh = frac * mh;
+  v > -3  ? gfx_set(0.90, 0.22, 0.20, 1)
+  : (v > -12 ? gfx_set(0.92, 0.72, 0.20, 1)
+  :            gfx_set(0.22, 0.80, 0.34, 1));
+  gfx_rect(bx, mtop + mh - fh, bw, fh);
+
+  // channel label + dB value
+  gfx_set(0.82, 0.82, 0.85, 1);
+  gfx_x = bx; gfx_y = mtop + mh + 3;
+  gfx_drawstr(i == 0 ? "L " : "R ");
+  gfx_drawnumber(v, 1);
+  i += 1;
+);

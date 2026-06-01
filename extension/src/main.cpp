@@ -13295,15 +13295,17 @@ void onTimer()
             }
             bool gotHelper = false;
             if (s_inLvlFx != -1) {
-                // slider1/slider2 = peak L/R in dBFS. Read the formatted value
-                // (numeric, no unit for a plain JS slider) and atof it; fall
-                // back to the raw param value — same proven pattern as the GR
-                // probe read (UC1Surface.cpp readGr).
+                // slider1/slider2 = peak L/R in dBFS. Read the RAW param value,
+                // NOT GetFormattedParamValue: for a JSFX the slider variable IS
+                // the host parameter storage and its raw value is already real
+                // dBFS, updated live by the probe's @block DSP write. The
+                // formatted display string, by contrast, is only refreshed by
+                // UI/sliderchange events and goes stale when the FX window is
+                // closed — which is why the meter previously froze at the last
+                // manual fader position. (Unlike the GR readGr path, where the
+                // raw param is a normalised/proprietary VST3 scale and the
+                // formatted string is the only sane source — see UC1Surface.)
                 auto readDb = [&](int p) -> float {
-                    char fb[64] = {0};
-                    if (TrackFX_GetFormattedParamValue(tr, s_inLvlFx, p,
-                                                       fb, sizeof(fb)) && fb[0])
-                        return static_cast<float>(std::atof(fb));
                     double mn = 0.0, mx = 0.0;
                     return static_cast<float>(
                         TrackFX_GetParam(tr, s_inLvlFx, p, &mn, &mx));
