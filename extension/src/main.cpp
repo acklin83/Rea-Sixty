@@ -18349,7 +18349,15 @@ static void reasixty_deployInputLevelJsfx()
     mkdir(fxRoot.c_str(), 0755);
     mkdir(dir.c_str(), 0755);
 #endif
-    const std::string path = dir + "/rea_sixty_input_level.jsfx";
+    // Deploy WITHOUT a .jsfx extension: REAPER appends the bracketed relative
+    // path ("JS: Rea-Sixty Input Level [Rea-Sixty/rea_sixty_input_level.jsfx]")
+    // to the displayed name for .jsfx-extension files; extensionless files
+    // (like every stock / ReaTeam effect) show the clean "JS: <desc>".
+    const std::string path = dir + "/Rea-Sixty Input Level";
+    // Remove the legacy .jsfx copy from earlier builds — leaving it would give
+    // two files with the same desc, and REAPER would re-append the path to
+    // disambiguate, defeating the rename.
+    std::remove((dir + "/rea_sixty_input_level.jsfx").c_str());
     const char*  data = reinterpret_cast<const char*>(
         uf8::setup_bundle::kInputLevelJsfxBytes);
     const size_t len  = uf8::setup_bundle::kInputLevelJsfxSize;
