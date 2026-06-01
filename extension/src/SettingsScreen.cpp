@@ -4579,6 +4579,13 @@ std::vector<InstalledFx> g_installedFx;
 char g_pickerFilter[64] = {};
 int  g_pickerSelectedIdx = -1;   // index into g_installedFx (filtered or full)
 
+// Vendor grouping for the "+New" picker, mirroring the main FX-Learn map
+// dropdown (vendors alphabetical, plug-ins alphabetical within each vendor).
+// Built once per load/reload of g_installedFx — NOT per render — because
+// the catalog can be thousands of entries and vendor extraction is linear.
+std::vector<std::string> g_pickerDevOrder;                       // sorted vendors
+std::unordered_map<std::string, std::vector<size_t>> g_pickerBuckets; // vendor -> indices into g_installedFx
+
 // Best-effort developer/vendor lookup for the FX-Learn master list.
 // Returns the vendor parsed from the trailing "(Vendor)" of either the
 // map's match string (which the user often pastes already including
@@ -4653,6 +4660,33 @@ std::string fxlMasterDeveloperFor_(const std::string& match)
     return {};
 }
 
+// Bucket g_installedFx by vendor for the "+New" picker. Same scheme as the
+// main FX-Learn map dropdown: vendor parsed from the trailing "(Vendor)" of
+// the FX name (empty → "Other"), vendors sorted alphabetically, plug-ins
+// sorted alphabetically by display name within each vendor.
+void rebuildPickerBuckets_()
+{
+    g_pickerDevOrder.clear();
+    g_pickerBuckets.clear();
+    for (size_t i = 0; i < g_installedFx.size(); ++i) {
+        std::string dev = fxlMasterDeveloperFor_(g_installedFx[i].name);
+        if (dev.empty()) dev = "Other";
+        auto it = g_pickerBuckets.find(dev);
+        if (it == g_pickerBuckets.end()) {
+            g_pickerDevOrder.push_back(dev);
+            it = g_pickerBuckets.emplace(dev, std::vector<size_t>{}).first;
+        }
+        it->second.push_back(i);
+    }
+    std::sort(g_pickerDevOrder.begin(), g_pickerDevOrder.end());
+    for (auto& kv : g_pickerBuckets) {
+        std::sort(kv.second.begin(), kv.second.end(),
+            [](size_t a, size_t b) {
+                return g_installedFx[a].name < g_installedFx[b].name;
+            });
+    }
+}
+
 void loadInstalledFx_()
 {
     g_installedFx.clear();
@@ -4668,6 +4702,7 @@ void loadInstalledFx_()
         // Defensive cap so a bug in EnumInstalledFX can't lock us up.
         if (idx > 20000) break;
     }
+    rebuildPickerBuckets_();
 }
 
 // Clean match root from a full FX name: strips the "VSTn: " / "AU: "
@@ -10878,12 +10913,13 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         int    childFlags = 0, winFlags = 0;
         if (ImGui_BeginChild(ctx, "fxl_picker_list", &childW, &childH,
                              &childFlags, &winFlags)) {
-            for (size_t i = 0; i < g_installedFx.size(); ++i) {
-                if (!flt.empty()) {
-                    std::string lc = g_installedFx[i].name;
-                    for (auto& c : lc) c = static_cast<char>(std::tolower(c));
-                    if (lc.find(flt) == std::string::npos) continue;
-                }
+            // Grouped by vendor, alphabetical — same scheme as the main
+            // FX-Learn map dropdown. Buckets are prebuilt on load/reload.
+            if (g_pickerBuckets.empty() && !g_installedFx.empty())
+                rebuildPickerBuckets_();
+
+            // Per-row click handler: select + auto-fill match / short label.
+            auto pickRow = [&](size_t i) {
                 bool selected = (int(i) == g_pickerSelectedIdx);
                 int  selFlags = 0;
                 char rowId[640];
@@ -10908,6 +10944,41 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     std::string s = deriveShortLabel_(g_installedFx[i].name);
                     std::strncpy(g_newDisplay, s.c_str(), 7);
                     g_newDisplay[7] = '\0';
+                }
+            };
+
+            const bool filtering = !flt.empty();
+            for (const auto& dev : g_pickerDevOrder) {
+                const auto bit = g_pickerBuckets.find(dev);
+                if (bit == g_pickerBuckets.end()) continue;
+
+                // When filtering, pre-scan so vendors with no surviving
+                // entry are skipped entirely (no empty tree nodes).
+                if (filtering) {
+                    bool any = false;
+                    for (size_t i : bit->second) {
+                        std::string lc = g_installedFx[i].name;
+                        for (auto& c : lc) c = static_cast<char>(std::tolower(c));
+                        if (lc.find(flt) != std::string::npos) { any = true; break; }
+                    }
+                    if (!any) continue;
+                }
+
+                int treeFlags = ImGui_TreeNodeFlags_SpanAvailWidth;
+                if (filtering) {
+                    int cond = ImGui_Cond_Always;
+                    ImGui_SetNextItemOpen(ctx, true, &cond);
+                }
+                if (ImGui_TreeNode(ctx, dev.c_str(), &treeFlags)) {
+                    for (size_t i : bit->second) {
+                        if (filtering) {
+                            std::string lc = g_installedFx[i].name;
+                            for (auto& c : lc) c = static_cast<char>(std::tolower(c));
+                            if (lc.find(flt) == std::string::npos) continue;
+                        }
+                        pickRow(i);
+                    }
+                    ImGui_TreePop(ctx);
                 }
             }
             ImGui_EndChild(ctx);
