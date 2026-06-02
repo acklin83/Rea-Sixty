@@ -281,6 +281,21 @@ private:
     // to change value) is Phase B.1 — TBD pending capture data.
     void renderExtFuncsSubscreen_();
 
+    // One resolved EXT FUNCS carousel entry (label + the param to read/adjust).
+    // Built fresh per interaction from either the SSL built-in list (kExtFuncs,
+    // resolved via slotId against the focused CS plug-in) or, for a user-mapped
+    // non-SSL CS plug-in, that map's user-curated `extFuncs`.
+    struct ExtFuncItem {
+        std::string shortLabel;   // 3-slot carousel (<= 14 chars)
+        std::string longLabel;    // LCD header
+        int         vst3Param = -1;  // -1 = label only, nothing to read/adjust
+        int         linkIdx   = -1;  // >=0 = SSL slot (enables usl knob-travel
+                                     // + param-group broadcast); -1 = free param
+    };
+    // Resolve the active EXT FUNCS list for the focused CS plug-in. Empty when
+    // a user-mapped CS plug-in has no curated entries (caller shows "(none)").
+    std::vector<ExtFuncItem> activeExtFuncs_();
+
     // Render the ROUTING LCD content for the focused track's CS plug-in
     // CURRENT routing-flag combo (no change applied). Called on entering
     // ROUTING so the order indicator shows immediately instead of staying

@@ -13,6 +13,7 @@
 // design.
 //
 
+#include <array>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -313,6 +314,20 @@ struct UserParamInfo {
 //   domain=BusComp,      uf8Mode=true  → BC + UF8
 //   domain=None,         uf8Mode=true  → UF8 only
 //   domain=None,         uf8Mode=false → invalid (filtered at load/save)
+// One user-curated EXT FUNCS slot (UC1 BACK-button drill-down menu, CS mode
+// only). The hidden menu's contents are normally the fixed SSL list
+// (kExtFuncs in UC1Surface.cpp); for a non-SSL user-mapped CS plug-in the
+// user can instead fill these 10 slots (2×5 grid under the CS mockup) with
+// any of the plug-in's params. `name` doubles as the LCD header (full) and
+// the 3-slot carousel label (truncated to 14). `vst3Param == -1` = empty
+// slot (skipped in the carousel). Decoupled from `slots` on purpose — an
+// EXT FUNCS param need not be on any physical control.
+struct ExtFuncEntry {
+    std::string name;
+    int         vst3Param = -1;
+};
+constexpr int kUserExtFuncsCount = 10;
+
 struct UserPluginMap {
     std::string                match;          // substring of TrackFX_GetFXName
     Domain                     domain = Domain::None;
@@ -331,6 +346,10 @@ struct UserPluginMap {
     // domain at least once.
     std::vector<UserLinkSlot>  csSlotCache;
     std::vector<UserLinkSlot>  bcSlotCache;
+    // User-curated UC1 EXT FUNCS list (v8). CS-mode only; empty = the hidden
+    // menu shows nothing for this plug-in (SSL built-ins keep their fixed
+    // list, handled entirely in UC1Surface — they never reach this struct).
+    std::array<ExtFuncEntry, kUserExtFuncsCount> extFuncs{};
 };
 
 struct UserPluginCatalog {
@@ -372,7 +391,10 @@ namespace user_plugins {
 // v7 (2026-05-28): added top-level `skipped_matches` array (Quick-Learn
 // skip list). v6 readers seeing a v7 file ignore the array; v6 files load
 // in v7 readers with an empty skip list (no behaviour change).
-constexpr int kCurrentFormatVersion = 7;
+// v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
+// EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
+// v8 readers seeing a v7 file load with an empty list (no behaviour change).
+constexpr int kCurrentFormatVersion = 8;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

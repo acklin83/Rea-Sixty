@@ -537,6 +537,29 @@ std::string serialize_(const UserPluginCatalog& c)
             }
             os << "\n      ]";
         }
+        // EXT FUNCS list (v8). Emit only populated slots, each with its grid
+        // index, so positions (and named-but-unassigned slots) survive.
+        {
+            bool anyExt = false;
+            for (const auto& e : m.extFuncs)
+                if (!e.name.empty() || e.vst3Param >= 0) { anyExt = true; break; }
+            if (anyExt) {
+                os << ",\n      \"extFuncs\": [";
+                bool firstExt = true;
+                for (int i = 0; i < kUserExtFuncsCount; ++i) {
+                    const auto& e = m.extFuncs[i];
+                    if (e.name.empty() && e.vst3Param < 0) continue;
+                    if (!firstExt) os << ",";
+                    firstExt = false;
+                    os << "\n        { \"slot\": " << i
+                       << ", \"name\": ";
+                    appendEscaped_(os, e.name);
+                    os << ", \"vst3Param\": " << e.vst3Param
+                       << " }";
+                }
+                os << "\n      ]";
+            }
+        }
         os << "\n    }";
     }
     if (!firstPlugin) os << "\n  ";
@@ -941,6 +964,23 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 getBoolI_(po2, "wasEnum", pi.wasEnum);
                 if (pi.vst3Param < 0) continue;
                 m.paramSnapshot.push_back(std::move(pi));
+            }
+        }
+
+        // Parse extFuncs array (v8+; absent in v7 files). Each entry carries
+        // its grid `slot` index so positions/gaps are preserved.
+        if (auto* efArr = po->get_item_by_name("extFuncs");
+            efArr && efArr->is_array() && efArr->m_array)
+        {
+            const int en = efArr->m_array->GetSize();
+            for (int e = 0; e < en; ++e) {
+                wdl_json_element* eo = efArr->enum_item(e);
+                if (!eo || !eo->is_object()) continue;
+                int slot = -1;
+                getIntI_(eo, "slot", slot);
+                if (slot < 0 || slot >= kUserExtFuncsCount) continue;
+                getStrI_(eo, "name", m.extFuncs[slot].name);
+                getIntI_(eo, "vst3Param", m.extFuncs[slot].vst3Param);
             }
         }
 

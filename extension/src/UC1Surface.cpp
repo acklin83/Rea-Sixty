@@ -203,7 +203,6 @@ constexpr ExtFuncsEntry kExtFuncs[] = {
     { "MicDrive",     "MIC DRV",   "Mic / Drive"     },
     { "CompMix",      "COMP MIX",  "Comp Mix"        },
 };
-constexpr int kExtFuncsCount = sizeof(kExtFuncs) / sizeof(kExtFuncs[0]);
 
 // Label for the zone-0x03/0x05 readout based on which knob was touched.
 // Kept short here — the surface clips/pads to 22 chars before sending.
@@ -918,11 +917,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         static std::chrono::steady_clock::time_point extLastT{};
         const int step = stepFromAccumulator(extAcc, extLastT, 3);
         if (step == 0) { ++stats_.knobEventsHandled; return; }
+
+        // Active list — either the SSL built-in set or the focused user CS
+        // plug-in's curated entries. Empty ⇒ nothing to scroll/adjust.
+        auto items = activeExtFuncs_();
+        const int n = static_cast<int>(items.size());
+        if (n == 0) { ++stats_.knobEventsHandled; return; }
+
         if (!extFuncsActive_) {
             // Inactive (list) mode — rotate cursor with wrap.
             extFuncsIdx_ += step;
-            while (extFuncsIdx_ < 0)               extFuncsIdx_ += kExtFuncsCount;
-            while (extFuncsIdx_ >= kExtFuncsCount) extFuncsIdx_ -= kExtFuncsCount;
+            while (extFuncsIdx_ < 0)  extFuncsIdx_ += n;
+            while (extFuncsIdx_ >= n) extFuncsIdx_ -= n;
             renderExtFuncsSubscreen_();
             ++stats_.knobEventsHandled;
             return;
@@ -932,19 +938,25 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             ++stats_.knobEventsHandled;
             return;
         }
+        if (extFuncsIdx_ < 0 || extFuncsIdx_ >= n) extFuncsIdx_ = 0;
+        const auto& item = items[extFuncsIdx_];
+        if (item.vst3Param < 0) {   // label-only (SSL slot absent on plug-in)
+            renderExtFuncsSubscreen_();
+            ++stats_.knobEventsHandled;
+            return;
+        }
         auto match = uf8::lookupPluginOnTrack(focusedTrack_,
                                               uf8::Domain::ChannelStrip);
         if (!match.map) {
             ++stats_.knobEventsHandled;
             return;
         }
-        const auto& cur = kExtFuncs[extFuncsIdx_];
-        for (const auto& s : match.map->slots) {
-            if (!s.id || std::strcmp(s.id, cur.slotId) != 0) continue;
-            if (s.vst3Param < 0) break;
+        auto* tr = static_cast<MediaTrack*>(focusedTrack_);
+        const int vst3Param = item.vst3Param;
+        const int linkIdx   = item.linkIdx;   // -1 = free param (no usl)
+        {
             const double curN = TrackFX_GetParamNormalized(
-                static_cast<MediaTrack*>(focusedTrack_),
-                match.fxIndex, s.vst3Param);
+                tr, match.fxIndex, vst3Param);
             // Per-param step sizing. Toggles flip on a single detent;
             // stepped enums advance one step per detent; continuous
             // params use 1%/detent (0.1% in fine mode). REAPER returns
@@ -953,29 +965,27 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             double pStep = 0.0, pSmallStep = 0.0, pLargeStep = 0.0;
             bool isToggle = false;
             const bool haveStepInfo = TrackFX_GetParameterStepSizes(
-                static_cast<MediaTrack*>(focusedTrack_),
-                match.fxIndex, s.vst3Param,
+                tr, match.fxIndex, vst3Param,
                 &pStep, &pSmallStep, &pLargeStep, &isToggle);
             double next = curN;
-            // Look up usl up front so both the stepped + continuous
-            // branches can read sens / range without re-querying.
+            // usl knob-travel customisation only applies to SSL slots (which
+            // carry a stable linkIdx). Free user EXT FUNCS params have no usl
+            // → plain linear/stepped behaviour (range/curve/reset deferred).
             char fxBuf[256] = {0};
-            TrackFX_GetFXName(
-                static_cast<MediaTrack*>(focusedTrack_),
-                match.fxIndex, fxBuf, sizeof(fxBuf));
-            const uf8::UserLinkSlot* usl =
-                uf8::user_plugins::lookupOwnedSlot(fxBuf, s.linkIdx);
+            TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf));
+            const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+                ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+                : nullptr;
             if (haveStepInfo && isToggle) {
                 // 1 detent (in either direction) flips the toggle.
                 next = (curN >= 0.5) ? 0.0 : 1.0;
             } else if (haveStepInfo && pStep > 0.0) {
                 // Stepped enum — input `step` is already pre-accumulated
-                // upstream (3 raw detents → 1 step via extAcc, see
-                // line 782). At sens=1.0 we keep the legacy "1 step per
-                // detent" feel; sens>1 fires multiple steps per detent,
-                // sens<1 uses a residual accumulator so a slow turn
-                // still advances eventually. Range snaps to the step
-                // grid.
+                // upstream (3 raw detents → 1 step via extAcc). At sens=1.0
+                // we keep the legacy "1 step per detent" feel; sens>1 fires
+                // multiple steps per detent, sens<1 uses a residual
+                // accumulator so a slow turn still advances eventually.
+                // Range snaps to the step grid.
                 const bool fineSt = fineMode_.load(std::memory_order_relaxed)
                                    || reasixty_shiftFineActive();
                 float sens = usl ? usl->sensitivity : 1.0f;
@@ -984,8 +994,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 if (fineSt) sens *= 0.25f;
                 static float s_accExt[0x40]{};
                 static std::chrono::steady_clock::time_point s_lastExt[0x40]{};
-                auto& acc   = s_accExt[s.linkIdx & 0x3F];
-                auto& lastT = s_lastExt[s.linkIdx & 0x3F];
+                const int accKey = (linkIdx >= 0 ? linkIdx : vst3Param) & 0x3F;
+                auto& acc   = s_accExt[accKey];
+                auto& lastT = s_lastExt[accKey];
                 const auto now = std::chrono::steady_clock::now();
                 if (lastT.time_since_epoch().count() != 0
                     && now - lastT > std::chrono::milliseconds(150)) {
@@ -1034,15 +1045,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             }
             if (next < 0.0) next = 0.0;
             if (next > 1.0) next = 1.0;
-            TrackFX_SetParamNormalized(
-                static_cast<MediaTrack*>(focusedTrack_),
-                match.fxIndex, s.vst3Param, next);
-            uf8::param_groups::broadcastBuiltinSlot(
-                static_cast<MediaTrack*>(focusedTrack_),
-                uf8::Domain::ChannelStrip, s.linkIdx, next);
-            reasixty_bumpFolderReveal(
-                static_cast<MediaTrack*>(focusedTrack_));
-            break;
+            TrackFX_SetParamNormalized(tr, match.fxIndex, vst3Param, next);
+            // Param-group broadcast only for SSL slots (stable linkIdx);
+            // free params aren't part of the cross-surface slot graph.
+            if (linkIdx >= 0)
+                uf8::param_groups::broadcastBuiltinSlot(
+                    tr, uf8::Domain::ChannelStrip, linkIdx, next);
+            reasixty_bumpFolderReveal(tr);
         }
         renderExtFuncsSubscreen_();
         ++stats_.knobEventsHandled;
@@ -2465,59 +2474,118 @@ void UC1Surface::pushFocusedParamReadout_()
     // case so this surface always mirrors selection.
 }
 
+std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
+{
+    std::vector<ExtFuncItem> out;
+    if (!focusedTrack_) {
+        // No focused track — fall back to the SSL labels (values unresolved).
+        for (const auto& k : kExtFuncs)
+            out.push_back({ k.shortLabel, k.longLabel, -1, -1 });
+        return out;
+    }
+    auto* tr = static_cast<MediaTrack*>(focusedTrack_);
+    auto match = uf8::lookupPluginOnTrack(focusedTrack_, uf8::Domain::ChannelStrip);
+
+    // User-mapped (non-SSL) CS plug-in? Its curated EXT FUNCS win. A user map
+    // with NO curated entries yields an empty menu on purpose — we do NOT fall
+    // back to the SSL list for a plug-in that isn't SSL. SSL built-ins have no
+    // user map (built-ins are unshadowable) so they always take the path below.
+    const uf8::UserPluginMap* um = nullptr;
+    char fxBuf[256] = {0};
+    if (match.map && match.fxIndex >= 0
+        && TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf)))
+    {
+        um = uf8::user_plugins::lookupOwnedByName(fxBuf);
+    }
+    if (um) {
+        for (const auto& e : um->extFuncs) {
+            if (e.vst3Param < 0) continue;        // skip empty/unassigned slots
+            ExtFuncItem it;
+            it.longLabel  = e.name;
+            // Carousel fits 11 chars on the UC1 LCD (Frank, empirical
+            // 2026-06-02). Header (longLabel) keeps the full name.
+            it.shortLabel = e.name.size() > 11 ? e.name.substr(0, 11) : e.name;
+            it.vst3Param  = e.vst3Param;
+            it.linkIdx    = -1;                    // free param: no usl/broadcast
+            out.push_back(std::move(it));
+        }
+        return out;   // possibly empty → caller renders "(none)"
+    }
+
+    // SSL / built-in default — all 10 labels always shown; value resolves per
+    // slotId where the slot exists on the focused plug-in (prior behaviour).
+    for (const auto& k : kExtFuncs) {
+        ExtFuncItem it;
+        it.shortLabel = k.shortLabel;
+        it.longLabel  = k.longLabel;
+        it.vst3Param  = -1;
+        it.linkIdx    = -1;
+        if (match.map) {
+            for (const auto& s : match.map->slots) {
+                if (s.id && std::strcmp(s.id, k.slotId) == 0 && s.vst3Param >= 0) {
+                    it.vst3Param = s.vst3Param;
+                    it.linkIdx   = s.linkIdx;
+                    break;
+                }
+            }
+        }
+        out.push_back(std::move(it));
+    }
+    return out;
+}
+
 void UC1Surface::renderExtFuncsSubscreen_()
 {
     if (!device_ || mode_ != Uc1Mode::ExtFuncs) return;
-    // Wrap idx into bounds — defensive against drift.
+    auto items = activeExtFuncs_();
+    const int n = static_cast<int>(items.size());
+    // SSL360 re-sends the banner at the start of every scroll-step frame
+    // burst (uc1_37) — acts as a redraw signal.
+    device_->send(buildCentralMode(CentralMode::ExtFuncs));
+    if (n == 0) {
+        // User-mapped CS plug-in with no curated EXT FUNCS → empty menu.
+        device_->send(buildLcdHeader("EXT FUNCS"));
+        device_->send(buildTrackNameTripleLarge("", "(none)", ""));
+        return;
+    }
+    // Wrap idx into bounds — defensive against drift / list length change.
     int idx = extFuncsIdx_;
     if (idx < 0) idx = 0;
-    if (idx >= kExtFuncsCount) idx = kExtFuncsCount - 1;
+    if (idx >= n) idx = n - 1;
     extFuncsIdx_ = idx;
-    const auto& cur = kExtFuncs[idx];
-    const auto& prev = kExtFuncs[(idx - 1 + kExtFuncsCount) % kExtFuncsCount];
-    const auto& next = kExtFuncs[(idx + 1) % kExtFuncsCount];
-    // SSL360 re-sends the banner at the start of every scroll-step
-    // frame burst (uc1_37). Acts as a redraw signal — without it
-    // the firmware sometimes ignores the trailing indicator frames.
-    device_->send(buildCentralMode(CentralMode::ExtFuncs));
-    device_->send(buildLcdHeader(cur.longLabel));
-    device_->send(buildTrackNameTripleLarge(prev.shortLabel,
-        cur.shortLabel, next.shortLabel));
-    // Read the current item's parameter value via PluginMap slot
-    // lookup → TrackFX_FormatParamValueNormalized. Display in the
-    // value field (FF 66 <len> 0E). Skip silently if no plug-in /
-    // entry isn't on the focused plug-in.
+    const auto& cur  = items[idx];
+    const auto& prev = items[(idx - 1 + n) % n];
+    const auto& next = items[(idx + 1) % n];
+    device_->send(buildLcdHeader(cur.longLabel.c_str()));
+    device_->send(buildTrackNameTripleLarge(prev.shortLabel.c_str(),
+        cur.shortLabel.c_str(), next.shortLabel.c_str()));
+    // Read the current item's parameter value →
+    // TrackFX_FormatParamValueNormalized. Display in the value field
+    // (FF 66 <len> 0E). Skip silently if the entry has no resolved param.
     //
     // buildLcdRoundIndicator(v) is sent even though the yellow arc
     // doesn't visibly paint — empirically the firmware uses it as a
     // commit/repaint trigger for the bottom LCD region. Without it,
     // the value text caches and stops updating on subsequent encoder
     // detents (only the very first value-frame paints).
-    if (focusedTrack_) {
+    if (focusedTrack_ && cur.vst3Param >= 0) {
         auto match = uf8::lookupPluginOnTrack(focusedTrack_,
                                               uf8::Domain::ChannelStrip);
         if (match.map) {
-            for (const auto& s : match.map->slots) {
-                if (s.id && std::strcmp(s.id, cur.slotId) == 0
-                         && s.vst3Param >= 0) {
-                    char buf[64] = {};
-                    const double v = TrackFX_GetParamNormalized(
-                        static_cast<MediaTrack*>(focusedTrack_),
-                        match.fxIndex, s.vst3Param);
-                    TrackFX_FormatParamValueNormalized(
-                        static_cast<MediaTrack*>(focusedTrack_),
-                        match.fxIndex, s.vst3Param, v, buf, sizeof(buf));
-                    std::string val{buf};
-                    while (!val.empty() && val.front() == ' ') val.erase(0, 1);
-                    const size_t sp = val.find(' ');
-                    if (sp != std::string::npos) val.erase(sp);
-                    if (val.size() > 8) val.resize(8);
-                    device_->send(buildLcdValue(val));
-                    device_->send(buildLcdUnit(""));
-                    device_->send(buildLcdRoundIndicator(v));
-                    break;
-                }
-            }
+            auto* tr = static_cast<MediaTrack*>(focusedTrack_);
+            char buf[64] = {};
+            const double v = TrackFX_GetParamNormalized(
+                tr, match.fxIndex, cur.vst3Param);
+            TrackFX_FormatParamValueNormalized(
+                tr, match.fxIndex, cur.vst3Param, v, buf, sizeof(buf));
+            std::string val{buf};
+            while (!val.empty() && val.front() == ' ') val.erase(0, 1);
+            const size_t sp = val.find(' ');
+            if (sp != std::string::npos) val.erase(sp);
+            if (val.size() > 8) val.resize(8);
+            device_->send(buildLcdValue(val));
+            device_->send(buildLcdUnit(""));
+            device_->send(buildLcdRoundIndicator(v));
         }
     }
     // Commit (FF 66 02 09 <flag>) is NOT sent per scroll step —

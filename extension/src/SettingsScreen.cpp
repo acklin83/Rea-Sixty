@@ -5334,6 +5334,28 @@ void resetGrCal_(int which)
     }
 }
 
+// Set one UC1 EXT FUNCS slot on the currently-edited user map (CS mode).
+// `name` is the user label, `vst3Param` the assigned param (-1 = clear).
+// Persists immediately; no-op when nothing changed. Mirrors setGrCal_'s
+// catalog-copy → upsert pattern so it's safe to call from inside the
+// fxl_slots child (upsert replaces the map in place — no realloc).
+void setExtFunc_(int slot, const std::string& name, int vst3Param)
+{
+    if (g_editingMatch.empty()) return;
+    if (slot < 0 || slot >= uf8::kUserExtFuncsCount) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        auto& e = m.extFuncs[slot];
+        if (e.name == name && e.vst3Param == vst3Param) return;
+        e.name      = name;
+        e.vst3Param = vst3Param;
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+
 // Snapshot every VST3 param on `fx` into the user map identified by
 // `match` so subsequent edits can render the param list / V-Pot picker /
 // GR-meter picker even when no live instance is loaded. Overwrites any
@@ -10419,6 +10441,89 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             drawFxLearnUf8Schematic_(ctx, fx);
         } else if (topo) {
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
+        }
+
+        // -------- UC1 EXT FUNCS curation (Frank 2026-06-01) ----------
+        // The UC1's hidden BACK-button menu (CS mode). For a user-mapped
+        // (non-SSL) CS plug-in the user fills 10 slots (2×5 grid, same
+        // 860 px width as the mockup) with name + param. SSL built-ins
+        // keep their fixed list (handled in UC1Surface, never reach here).
+        // Shown only under the UC1 face (not UF8) and only in CS mode.
+        if (s_mockup != 1 && editing->domain == uf8::Domain::ChannelStrip) {
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Spacing(ctx);
+            ImGui_Text(ctx, "UC1 EXT FUNCS — hidden BACK-menu (CS mode)");
+            ImGui_TextDisabled(ctx,
+                "Name + param per slot; empty slots are skipped on the "
+                "surface. Carousel shows up to 11 chars of the name.");
+            ImGui_Spacing(ctx);
+
+            // Raw pixels (NOT scaleW_) so the grid matches the mockup, which
+            // is a fixed 860 px raw schematic. Row = 4 widgets + 3 inter-item
+            // gaps (~8 px each); budget 145+270 ×2 + 3·~8 ≈ 854 ≤ 860, so it
+            // stays inside the mockup's existing horizontal scroll extent.
+            const double nameW   = 145.0;
+            const double assignW = 270.0;
+
+            auto drawExtSlot = [&](int slot) {
+                ImGui_BeginGroup(ctx);
+                const auto& e = editing->extFuncs[slot];
+
+                // Name field.
+                char nameBuf[64] = {};
+                std::strncpy(nameBuf, e.name.c_str(), sizeof(nameBuf) - 1);
+                char nameId[32];
+                snprintf(nameId, sizeof(nameId), "##fxl_ef_name_%d", slot);
+                ImGui_SetNextItemWidth(ctx, nameW);
+                if (ImGui_InputTextWithHint(ctx, nameId, "Name", nameBuf,
+                        static_cast<int>(sizeof(nameBuf)), nullptr, nullptr)) {
+                    setExtFunc_(slot, nameBuf, e.vst3Param);
+                }
+                ImGui_SameLine(ctx, nullptr, nullptr);
+
+                // Assignment combo — current plug-in's params + "(none)".
+                std::string curLabel = "(none)";
+                if (e.vst3Param >= 0) {
+                    curLabel = "#" + std::to_string(e.vst3Param);
+                    for (const auto& pi : editing->paramSnapshot)
+                        if (pi.vst3Param == e.vst3Param) { curLabel = pi.name; break; }
+                }
+                char comboId[32];
+                snprintf(comboId, sizeof(comboId), "##fxl_ef_p_%d", slot);
+                ImGui_SetNextItemWidth(ctx, assignW);
+                if (ImGui_BeginCombo(ctx, comboId, curLabel.c_str(), nullptr)) {
+                    bool selNone = (e.vst3Param < 0);
+                    if (ImGui_Selectable(ctx, "(none)##fxl_ef_none", &selNone,
+                            nullptr, nullptr, nullptr)) {
+                        setExtFunc_(slot, e.name, -1);
+                    }
+                    for (const auto& pi : editing->paramSnapshot) {
+                        char itId[160];
+                        snprintf(itId, sizeof(itId), "%s##fxl_ef_%d_%d",
+                                 pi.name.c_str(), slot, pi.vst3Param);
+                        bool sel = (pi.vst3Param == e.vst3Param);
+                        if (ImGui_Selectable(ctx, itId, &sel,
+                                nullptr, nullptr, nullptr)) {
+                            setExtFunc_(slot, e.name, pi.vst3Param);
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                ImGui_EndGroup(ctx);
+            };
+
+            if (editing->paramSnapshot.empty()) {
+                ImGui_TextDisabled(ctx,
+                    "Insert a matching FX (or build the param snapshot) to "
+                    "assign params.");
+            }
+            // Two 5-row groups side by side: slots 0..4 | 5..9.
+            for (int r = 0; r < 5; ++r) {
+                drawExtSlot(r);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                drawExtSlot(r + 5);
+            }
         }
 
         // -------- Per-breakpoint GR calibration (Frank 2026-05-15) ----
