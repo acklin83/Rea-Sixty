@@ -350,6 +350,12 @@ struct UserPluginMap {
     // menu shows nothing for this plug-in (SSL built-ins keep their fixed
     // list, handled entirely in UC1Surface — they never reach this struct).
     std::array<ExtFuncEntry, kUserExtFuncsCount> extFuncs{};
+    // UC1 POL button behaviour. Default true = the Polarity button toggles
+    // REAPER's per-track phase (B_PHASE), as it always has. When false the
+    // button instead drives whatever param is FX-Learned onto the Polarity
+    // slot (linkIdx 5), like any other CS button. Additive — old files
+    // default to true. Frank 2026-06-02.
+    bool useReaperTrackPolarity = true;
 };
 
 struct UserPluginCatalog {

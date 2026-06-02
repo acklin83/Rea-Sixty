@@ -291,6 +291,10 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "      \"displayShort\": "; appendEscaped_(os, m.displayShort); os << ",\n";
         os << "      \"isDefault\": "     << (m.isDefault ? "true" : "false") << ",\n";
         os << "      \"uf8Mode\": "       << (m.uf8Mode   ? "true" : "false") << ",\n";
+        // Additive (Frank 2026-06-02) — only written when the user has turned
+        // the default off, so pre-feature catalogs stay byte-identical.
+        if (!m.useReaperTrackPolarity)
+            os << "      \"useReaperTrackPolarity\": false,\n";
         if (m.snapshotTakenAt > 0)
             os << "      \"snapshotTakenAt\": " << m.snapshotTakenAt << ",\n";
         // Emit the optional knob-travel fields (range / sensitivity / curve
@@ -638,6 +642,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         bool uf8ModeRead = false;
         const bool hadUf8Mode = getBoolI_(po, "uf8Mode", uf8ModeRead);
         if (hadUf8Mode) m.uf8Mode = uf8ModeRead;
+        // Additive; missing key keeps the struct default (true).
+        getBoolI_(po, "useReaperTrackPolarity", m.useReaperTrackPolarity);
         int snapTs = 0;
         if (getIntI_(po, "snapshotTakenAt", snapTs))
             m.snapshotTakenAt = snapTs;

@@ -5510,6 +5510,29 @@ void setCustomLabel_(int linkIdx, const std::string& label)
     }
 }
 
+// UC1 POL button: per-plugin "use REAPER track polarity (B_PHASE)" flag.
+// Default true = current behaviour; false = POL drives its FX-Learned param.
+bool getUseTrackPolarity_()
+{
+    if (g_editingMatch.empty()) return true;
+    for (const auto& m : uf8::user_plugins::get().maps)
+        if (m.match == g_editingMatch) return m.useReaperTrackPolarity;
+    return true;
+}
+void setUseTrackPolarity_(bool v)
+{
+    if (g_editingMatch.empty()) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        if (m.useReaperTrackPolarity == v) return;
+        m.useReaperTrackPolarity = v;
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        return;
+    }
+}
+
 // Toggle the inverted-flag on a mapped slot.
 void toggleInverted_(int linkIdx)
 {
@@ -6601,14 +6624,19 @@ feel_presets::KnobFeel feelFromUf8VPot_(int strip, int bank)
 
 void applyFeelToUf8VPot_(int strip, int bank, const feel_presets::KnobFeel& f)
 {
-    setUf8VPotRangeMin_(strip, bank, f.rangeMin);
-    setUf8VPotRangeMax_(strip, bank, f.rangeMax);
-    setUf8VPotSensitivity_(strip, bank, f.sensitivity);
-    setUf8VPotCurvePoints_(strip, bank, f.curvePoints);
-    setUf8VPotPolarity_(strip, bank, f.polarity);
-    setUf8DefaultNorm_(strip, bank, f.defaultNorm);
+    // One direct mutate (not the per-field setters): setUf8VPotRangeMin_
+    // clamp-reorders rangeMax, so chaining the setters could leave the range
+    // wrong and partially overwrite an existing feel. Assign every field
+    // outright, mirroring applyFeelToLinkSlot_.
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[g_uf8EditingFaderBank][bank][strip].inverted = f.inverted;
+        auto& s = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        s.inverted           = f.inverted;
+        s.defaultNorm        = f.defaultNorm;
+        s.polarity           = f.polarity;
+        s.travel.rangeMin    = f.rangeMin;
+        s.travel.rangeMax    = f.rangeMax;
+        s.travel.sensitivity = f.sensitivity;
+        s.travel.curvePoints = f.curvePoints;
     });
 }
 
@@ -6686,9 +6714,19 @@ void drawFeelPresetMenu_(
             else
                 snprintf(lbl, sizeof(lbl), "%d: (empty)##sv_%s_%d",
                          i + 1, idScope, i);
-            if (ImGui_MenuItem(ctx, lbl, nullptr, nullptr, nullptr))
-                requestFeelSave_(i, current(),
-                                 presets[i].used ? presets[i].name.c_str() : "");
+            if (ImGui_MenuItem(ctx, lbl, nullptr, nullptr, nullptr)) {
+                if (presets[i].used) {
+                    // Overwrite in place, keeping the slot's name — no rename
+                    // dialog. The dialog path didn't reliably overwrite an
+                    // already-used slot, so the old feel came back on Apply
+                    // (Frank 2026-06-02).
+                    feel_presets::KnobFeel nf = current();
+                    nf.name = presets[i].name;
+                    feel_presets::set(i, nf);
+                } else {
+                    requestFeelSave_(i, current(), "");
+                }
+            }
         }
         ImGui_EndMenu(ctx);
     }
@@ -6722,6 +6760,11 @@ void drawFeelPresetMenu_(
         }
         ImGui_EndMenu(ctx);
     }
+
+    // Reset this control's feel to defaults (linear, no curve, 1x, unipolar,
+    // push-reset 0.5, not inverted) — applying a default-constructed bundle.
+    if (ImGui_MenuItem(ctx, "Reset feel to default", nullptr, nullptr, nullptr))
+        apply(feel_presets::KnobFeel{});
 }
 
 // Fader knob-travel helpers intentionally absent — see comment on
@@ -7303,6 +7346,18 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 inverted ? "Inverted [on]" : "Inverted [off]");
             if (ImGui_MenuItem(ctx, invLbl, nullptr, nullptr, nullptr)) {
                 toggleInverted_(ctrl.linkIdx);
+            }
+
+            // POL button special case: ticked (default) = the Polarity button
+            // toggles REAPER's per-track phase (B_PHASE); unticked = it drives
+            // the param FX-Learned onto this slot, like any other button.
+            // Only on the CS Polarity slot (linkIdx 5). Frank 2026-06-02.
+            if (ctrl.linkIdx == 5 &&
+                ctrl.domain == uf8::Domain::ChannelStrip) {
+                bool useTrack = getUseTrackPolarity_();
+                if (ImGui_Checkbox(ctx,
+                        "Reaper Track Polarity##fxl_pol_trk", &useTrack))
+                    setUseTrackPolarity_(useTrack);
             }
 
             // Polarity (Unipolar / Bipolar). Mirrors the UF8 V-Pot menu

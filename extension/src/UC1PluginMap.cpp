@@ -439,8 +439,9 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
     for (auto& v : out.buttonParam)    v = kParamNone;
     for (auto& v : out.inverted)       v = false;
     for (auto& v : out.buttonInverted) v = false;
-    out.bypassParam    = kParamNone;
-    out.bypassInverted = false;
+    out.bypassParam        = kParamNone;
+    out.bypassInverted     = false;
+    out.polarityUsesTrack  = um.useReaperTrackPolarity;
 
     const LinkToUc1* table     = nullptr;
     int              tableSize = 0;

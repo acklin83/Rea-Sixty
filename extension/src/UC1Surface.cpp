@@ -2029,25 +2029,35 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // want it routed to REAPER track state. LED mirrors B_PHASE
     // regardless (refresh() picks it up on track changes).
     if (ev.id == button::kPolarity) {
-        // REC + RME override — dispatch the user-assigned TotalReaper
-        // action (default: Phase Invert) on press; swallow release so
-        // it doesn't double-toggle.
-        if (reasixty_recRmeUc1ButtonAssigned(3)) {
-            if (ev.pressed) {
-                reasixty_dispatchUc1RecRmeButton(3, tr);
-                ++stats_.buttonEventsHandled;
+        // Default: POL toggles REAPER track phase (B_PHASE). When the user
+        // turned that off for this plug-in AND FX-Learned a param onto the
+        // Polarity slot, fall through to the generic buttonParam path so POL
+        // behaves like any other CS button. Frank 2026-06-02.
+        const bool useTrack = !bindings.channelMap
+            || bindings.channelMap->polarityUsesTrack
+            || bindings.channelMap->buttonParam[button::kPolarity] == kParamNone;
+        if (useTrack) {
+            // REC + RME override — dispatch the user-assigned TotalReaper
+            // action (default: Phase Invert) on press; swallow release so
+            // it doesn't double-toggle.
+            if (reasixty_recRmeUc1ButtonAssigned(3)) {
+                if (ev.pressed) {
+                    reasixty_dispatchUc1RecRmeButton(3, tr);
+                    ++stats_.buttonEventsHandled;
+                }
+                return;
             }
+            const bool cur = GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5;
+            const double phaseNext = cur ? 0.0 : 1.0;
+            SetMediaTrackInfo_Value(tr, "B_PHASE", phaseNext);
+            uf8::param_groups::broadcastTrackBool(tr, "B_PHASE", phaseNext);
+            pushButtonLed_(ev.id, !cur);
+            pushButtonReadout_(ev.id, "Polarity", !cur ? "In" : "Out",
+                               zone::kChannelStripReadout);
+            ++stats_.buttonEventsHandled;
             return;
         }
-        const bool cur = GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5;
-        const double phaseNext = cur ? 0.0 : 1.0;
-        SetMediaTrackInfo_Value(tr, "B_PHASE", phaseNext);
-        uf8::param_groups::broadcastTrackBool(tr, "B_PHASE", phaseNext);
-        pushButtonLed_(ev.id, !cur);
-        pushButtonReadout_(ev.id, "Polarity", !cur ? "In" : "Out",
-                           zone::kChannelStripReadout);
-        ++stats_.buttonEventsHandled;
-        return;
+        // else: drop through to the generic param-toggle dispatch below.
     }
 
     // Channel IN — two modes:
@@ -3298,12 +3308,20 @@ void UC1Surface::pollButtonLeds_()
             continue;
         }
         if (btn == button::kPolarity) {
-            const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
-            const bool ledOn = (mirrored >= 0)
-                ? (mirrored == 1)
-                : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
-            pushButtonLed_(btn, ledOn);
-            continue;
+            const bool useTrack = !bindings.channelMap
+                || bindings.channelMap->polarityUsesTrack
+                || bindings.channelMap->buttonParam[button::kPolarity]
+                       == kParamNone;
+            if (useTrack) {
+                const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
+                const bool ledOn = (mirrored >= 0)
+                    ? (mirrored == 1)
+                    : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+                pushButtonLed_(btn, ledOn);
+                continue;
+            }
+            // else: drop through — `on` already holds the bound-param state
+            // (ledForParam, computed above); the final pushButtonLed_ uses it.
         }
         if (btn == button::kSoloClear) {
             bool anySolo = false;
@@ -4106,12 +4124,20 @@ void UC1Surface::refresh()
             continue;
         }
         if (btn == button::kPolarity) {
-            const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
-            const bool ledOn = (mirrored >= 0)
-                ? (mirrored == 1)
-                : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
-            pushButtonLed_(btn, ledOn);
-            continue;
+            const bool useTrack = !bindings.channelMap
+                || bindings.channelMap->polarityUsesTrack
+                || bindings.channelMap->buttonParam[button::kPolarity]
+                       == kParamNone;
+            if (useTrack) {
+                const int mirrored = reasixty_recUc1ButtonMirroredState(3, tr);
+                const bool ledOn = (mirrored >= 0)
+                    ? (mirrored == 1)
+                    : (tr && GetMediaTrackInfo_Value(tr, "B_PHASE") > 0.5);
+                pushButtonLed_(btn, ledOn);
+                continue;
+            }
+            // else: drop through — `on` already holds the bound-param state
+            // (ledForParam, computed above); the final pushButtonLed_ uses it.
         }
         if (btn == button::kSoloClear) {
             bool anySolo = false;

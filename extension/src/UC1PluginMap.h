@@ -73,6 +73,14 @@ struct PluginBindings {
     // aggregate-init of the built-in SSL binding tables stays valid (this
     // member zero-fills). Frank 2026-06-02.
     bool buttonInverted[0x20];
+
+    // POL button behaviour. true (default) = the Polarity button toggles
+    // REAPER track phase (B_PHASE). false = it drives the FX-Learned param
+    // on the Polarity slot like any other button. Copied from
+    // UserPluginMap.useReaperTrackPolarity in synthesizeUserBinding_;
+    // built-in SSL maps keep the default via the member initialiser.
+    // Frank 2026-06-02.
+    bool polarityUsesTrack = true;
 };
 
 // Resolved lookup for a given track state: two plugin contexts plus
