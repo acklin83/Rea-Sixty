@@ -5212,6 +5212,15 @@ int mappedVst3For_(int linkIdx)
 }
 
 // Bind / overwrite a slot's vst3Param on the editing map, then save.
+// FX-Learn "Display label" input state. File-scope (not a popup-local static)
+// so bindSlot_ can invalidate the seed: re-binding a slot to a *different*
+// param clears its custom label (the label was for the old param), and the
+// editor field must re-read the now-empty value instead of keeping the stale
+// text — otherwise the field shows a name the binding no longer uses. Frank
+// 2026-06-02.
+char g_fxlLabelBuf[64] = {};
+int  g_fxlLabelLinkIdx = -1;
+
 void bindSlot_(int linkIdx, int vst3Param)
 {
     if (g_editingMatch.empty() || linkIdx < 0 || vst3Param < 0) return;
@@ -5223,6 +5232,13 @@ void bindSlot_(int linkIdx, int vst3Param)
         bool replaced = false;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
+                // Binding to a different param invalidates a custom label
+                // (it named the old param) — clear it so the display falls
+                // back to the new param's name and the editor field matches.
+                if (s.vst3Param != vst3Param && !s.customLabel.empty()) {
+                    s.customLabel.clear();
+                    g_fxlLabelLinkIdx = -1;  // force the editor field re-seed
+                }
                 s.vst3Param = vst3Param;
                 replaced = true;
                 break;
@@ -7303,28 +7319,28 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "Display label:");
-            static char s_labelBuf[64] = {};
-            static int  s_labelLinkIdx = -1;
-            // Seed the buffer when opening for a new slot.
-            if (s_labelLinkIdx != ctrl.linkIdx) {
-                s_labelLinkIdx = ctrl.linkIdx;
-                std::strncpy(s_labelBuf, curLabel.c_str(),
-                             sizeof(s_labelBuf) - 1);
-                s_labelBuf[sizeof(s_labelBuf) - 1] = '\0';
+            // Seed the buffer when opening for a new slot, or when bindSlot_
+            // invalidated the seed (g_fxlLabelLinkIdx = -1) after a re-bind
+            // cleared the custom label.
+            if (g_fxlLabelLinkIdx != ctrl.linkIdx) {
+                g_fxlLabelLinkIdx = ctrl.linkIdx;
+                std::strncpy(g_fxlLabelBuf, curLabel.c_str(),
+                             sizeof(g_fxlLabelBuf) - 1);
+                g_fxlLabelBuf[sizeof(g_fxlLabelBuf) - 1] = '\0';
             }
             int inputFlags = 0;
-            if (ImGui_InputText(ctx, "##fxl_label", s_labelBuf,
-                                sizeof(s_labelBuf), &inputFlags,
+            if (ImGui_InputText(ctx, "##fxl_label", g_fxlLabelBuf,
+                                sizeof(g_fxlLabelBuf), &inputFlags,
                                 nullptr))
             {
-                setCustomLabel_(ctrl.linkIdx, s_labelBuf);
+                setCustomLabel_(ctrl.linkIdx, g_fxlLabelBuf);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (curLabel.empty()) {
                 ImGui_TextDisabled(ctx, "(default)");
             } else {
                 if (ImGui_SmallButton(ctx, "X##fxl_label_clear")) {
-                    s_labelBuf[0] = '\0';
+                    g_fxlLabelBuf[0] = '\0';
                     setCustomLabel_(ctrl.linkIdx, "");
                 }
             }
