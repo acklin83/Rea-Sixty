@@ -8,7 +8,11 @@
 // manual has none. Two-level chapter → section navigation on the left, the
 // selected chapter rendered (and anchor-scrolled) on the right.
 
-struct ImGui_Context;
+// Must match reaper_imgui_functions.h's elaborated-type-specifier exactly:
+// MSVC encodes struct vs class in the mangled symbol, so a `struct`
+// mis-declaration here links fine on clang but fails on Windows. Frank
+// 2026-06-02.
+class ImGui_Context;
 
 namespace uf8 {
 
@@ -23,7 +27,7 @@ public:
 // Font + base-size accessors, defined in MixerWindow.cpp and refreshed each
 // frame. The manual renderer needs the bold and monospace faces (the manual
 // leans heavily on both) plus the active UI font size to scale headings.
-struct ImGui_Font;
+class ImGui_Font;
 ImGui_Font* reasixty_uiSansFont();
 ImGui_Font* reasixty_uiBoldFont();
 ImGui_Font* reasixty_uiMonoFont();
