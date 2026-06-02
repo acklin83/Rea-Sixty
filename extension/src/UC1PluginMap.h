@@ -64,6 +64,15 @@ struct PluginBindings {
     // the VST3 value (rare; most SSL params are CW=up). Indexed by knob
     // ID like knobParam.
     bool inverted[0x20];
+
+    // Per-button invert (user FX-Learn override). Flips the LED + readout
+    // "active" sense for a param-toggle button so a plug-in whose param
+    // reads 1=off still lights the button when active. Indexed by button
+    // ID like buttonParam. The IN / Bus-Comp-IN bypass buttons use
+    // bypassInverted instead (linkIdx 0). Appended last so the positional
+    // aggregate-init of the built-in SSL binding tables stays valid (this
+    // member zero-fills). Frank 2026-06-02.
+    bool buttonInverted[0x20];
 };
 
 // Resolved lookup for a given track state: two plugin contexts plus

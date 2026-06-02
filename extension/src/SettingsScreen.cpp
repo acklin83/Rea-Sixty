@@ -6797,8 +6797,13 @@ constexpr Uc1Control kUc1Controls[] = {
     // Channel-IN — square 40×40 per Frank 2026-05-22. Coords mirror
     // drawUc1Face_: inX = kColRx+162 + (66-40)/2 = 793,
     //               inY = 510 + (3*22 - 40)/2   = 523.
-    { Uc1Control::Toggle,  4, uf8::Domain::ChannelStrip,
-      793.0f, 523.0f, 0, 40, 40, 0, "IN" },  // Channel In / Input Trim
+    // Channel-IN = CS in/out toggle = CS Bypass slot (linkIdx 0), mirroring
+    // BC IN → BusComp linkIdx 0. Previously linkIdx 4 (Input Trim) — wrong:
+    // it collided with the IN-Gain knob's slot, mislabelled the button
+    // "Input Trim" (clashing with the Input Level meter), and disagreed with
+    // the runtime which toggles the CS bypass. Frank 2026-06-02.
+    { Uc1Control::Toggle,  0, uf8::Domain::ChannelStrip,
+      793.0f, 523.0f, 0, 40, 40, 0, "IN" },  // Channel In → Bypass
 };
 
 constexpr int kUc1ControlsCount =
@@ -7020,8 +7025,17 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
 
     if (exists && isMapped) {
-        char popId[40];
-        snprintf(popId, sizeof(popId), "fxl_ctx_%d", ctrl.linkIdx);
+        // Popup id must be unique per *physical* control, not per linkIdx:
+        // two controls can share a linkIdx (e.g. the centre IN-Gain knob and
+        // a Channel-IN toggle both bind the same slot). Keying the popup on
+        // linkIdx alone made both controls open the same popup id, so ImGui
+        // rendered both blocks in one frame → "conflicting ID" error, doubled
+        // Inverted/Display-label/Clear rows, and the knob-style editor
+        // bleeding onto the toggle. cx/cy uniquify it. Frank 2026-06-02.
+        char popId[48];
+        snprintf(popId, sizeof(popId), "fxl_ctx_%d_%d_%d",
+                 ctrl.linkIdx, static_cast<int>(ctrl.cx),
+                 static_cast<int>(ctrl.cy));
         if (ImGui_BeginPopupContextItem(ctx, popId, nullptr)) {
             char title[200];
             char pname[128] = {0};
@@ -9472,6 +9486,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (const uf8::PluginMap* topo = canonicalTopology_(newDom)) {
                     for (const auto& slot : topo->slots) {
                         if (!slot.name) continue;
+                        // SSL 360 Link "Quick Access" slots (QuickAccess1..6)
+                        // are wrapper-only params with no UF8/UC1 hardware
+                        // control — drop them from the suggestion list so they
+                        // don't show as dead, un-mappable rows. Frank
+                        // 2026-06-02.
+                        if (slot.id &&
+                            std::strncmp(slot.id, "QuickAccess", 11) == 0)
+                            continue;
                         uf8::autolearn::Suggestion row{};
                         row.linkIdx  = slot.linkIdx;
                         row.slotName = slot.name;

@@ -2135,7 +2135,21 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     }
     TrackFX_SetParamNormalized(tr, bindings.channelFxIdx, vst3Param, next);
     reasixty_bumpFolderReveal(tr);
-    pushButtonLed_(ev.id, next >= 0.5);
+    // User FX-Learn invert: flip the "active" sense for the LED + readout so
+    // a param that reads 1=off still lights when engaged. Skipped for the
+    // 3-state EQ-colour cycle (no binary on/off). Mirrors bypassInverted.
+    const bool btnInv = !is3StateEqColour
+                      && bindings.channelMap->buttonInverted[ev.id];
+    const bool btnActive = btnInv ? (next < 0.5) : (next >= 0.5);
+    pushButtonLed_(ev.id, btnActive);
+
+    // Resolved readout name. Knobs already display the user's FX-Learn
+    // custom label because their readout reads slot.name (= customLabel for
+    // user plug-ins) via pushFocusedParamReadout_. Buttons were overwriting
+    // that with the hard-coded labelFor() below, so custom button names
+    // never stuck (Frank 2026-06-02: "kommt nachher wieder der normale").
+    // Pull slot.name here and feed it to the readout, same source as knobs.
+    std::string btnLabel;
 
     // Project the toggled param onto UF8 so all 8 V-Pots show + control
     // it across the bank — same broadcast model the UC1 knob path uses.
@@ -2149,6 +2163,11 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     if (uf8Match.map) {
         const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
         if (slotIdx >= 0) {
+            if (const uf8::LinkSlot* sp =
+                    uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx);
+                sp && sp->name && sp->name[0]) {
+                btnLabel = sp->name;
+            }
             uf8::param_groups::broadcastBuiltinSlot(
                 static_cast<MediaTrack*>(focusedTrack_),
                 uf8::Domain::ChannelStrip, slotIdx, next);
@@ -2186,18 +2205,20 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     {
         valueText = fmtBuf;
         // Plugins commonly format binary params as "0"/"1"; those
-        // read better as "Out"/"In" on the LCD.
-        if (valueText == "0") valueText = "Out";
-        else if (valueText == "1") valueText = "In";
+        // read better as "Out"/"In" on the LCD. Honour the invert flag
+        // so the text matches the LED.
+        if (valueText == "0" || valueText == "1")
+            valueText = btnActive ? "In" : "Out";
     } else {
-        valueText = (next > 0.5) ? "In" : "Out";
+        valueText = btnActive ? "In" : "Out";
     }
     // S/C Listen is an "On/Off" toggle, not "In/Out".
     if (ev.id == button::kScListen) {
-        valueText = (next > 0.5) ? "On" : "Off";
+        valueText = btnActive ? "On" : "Off";
     }
-    pushButtonReadout_(ev.id, labelFor(ev.id), valueText,
-                       zone::kChannelStripReadout);
+    pushButtonReadout_(ev.id,
+                       btnLabel.empty() ? labelFor(ev.id) : btnLabel.c_str(),
+                       valueText, zone::kChannelStripReadout);
     ++stats_.buttonEventsHandled;
 }
 
@@ -3207,7 +3228,8 @@ void UC1Surface::pollButtonLeds_()
         if (!map || !tr) return false;
         const int p = map->buttonParam[btnId];
         if (p == kParamNone) return false;
-        return TrackFX_GetParamNormalized(tr, fxIdx, p) >= 0.5;
+        const bool raw = TrackFX_GetParamNormalized(tr, fxIdx, p) >= 0.5;
+        return map->buttonInverted[btnId] ? !raw : raw;
     };
     auto stateFor = [&](uint8_t btn, bool on) -> LedState {
         if (!on) return LedState::Off;
@@ -4006,8 +4028,8 @@ void UC1Surface::refresh()
         if (!map || !tr) return false;
         const int p = map->buttonParam[btnId];
         if (p == kParamNone) return false;
-        const double v = TrackFX_GetParamNormalized(tr, fxIdx, p);
-        return v >= 0.5;
+        const bool raw = TrackFX_GetParamNormalized(tr, fxIdx, p) >= 0.5;
+        return map->buttonInverted[btnId] ? !raw : raw;
     };
     auto stateFor = [&](uint8_t btn, bool on) -> LedState {
         if (!on) return LedState::Off;

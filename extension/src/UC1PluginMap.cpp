@@ -435,9 +435,10 @@ constexpr LinkToUc1 kBcLinkToUc1[] = {
 // touch them here).
 void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
 {
-    for (auto& v : out.knobParam)   v = kParamNone;
-    for (auto& v : out.buttonParam) v = kParamNone;
-    for (auto& v : out.inverted)    v = false;
+    for (auto& v : out.knobParam)      v = kParamNone;
+    for (auto& v : out.buttonParam)    v = kParamNone;
+    for (auto& v : out.inverted)       v = false;
+    for (auto& v : out.buttonInverted) v = false;
     out.bypassParam    = kParamNone;
     out.bypassInverted = false;
 
@@ -475,7 +476,8 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
                 out.inverted[table[i].knobId]  = slot.inverted;
             }
             if (table[i].buttonId != kNoUc1) {
-                out.buttonParam[table[i].buttonId] = slot.vst3Param;
+                out.buttonParam[table[i].buttonId]    = slot.vst3Param;
+                out.buttonInverted[table[i].buttonId] = slot.inverted;
             }
             break;
         }
