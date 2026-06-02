@@ -15,6 +15,7 @@
 
 #include "Bindings.h"
 #include "GrCalibration.h"
+#include "KnobFeelPresets.h"
 #include "ParameterGroups.h"
 #include "AutoLearnEngine.h"
 #include "PluginMap.h"
@@ -6523,6 +6524,206 @@ bool fetchUf8VPotTravel_(int strip, int bank, uf8::KnobTravel& out)
     return false;
 }
 
+// ---- Knob "feel" presets (FX-Learn right-click) --------------------------
+// Five named, globally-persisted bundles of the per-slot tuning fields
+// (invert / range / sensitivity / curve / polarity / push-reset), reusable
+// across knobs + plug-ins (KnobFeelPresets). UC1 knob adapters here; the
+// shared menu + name modal are surface-neutral. UF8 V-Pot adapters live next
+// to the UF8 popup. Frank 2026-06-02.
+
+feel_presets::KnobFeel feelFromLinkSlot_(int linkIdx)
+{
+    feel_presets::KnobFeel f;
+    uf8::UserLinkSlot s{};
+    if (fetchSlotSnapshot_(linkIdx, s)) {
+        f.inverted    = s.inverted;
+        f.rangeMin    = s.rangeMin;
+        f.rangeMax    = s.rangeMax;
+        f.sensitivity = s.sensitivity;
+        f.curvePoints = s.curvePoints;
+        f.polarity    = s.polarity;
+        f.defaultNorm = s.defaultNorm;
+    }
+    return f;
+}
+
+void applyFeelToLinkSlot_(int linkIdx, const feel_presets::KnobFeel& f)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        for (auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) {
+                s.inverted    = f.inverted;
+                s.rangeMin    = f.rangeMin;
+                s.rangeMax    = f.rangeMax;
+                s.sensitivity = f.sensitivity;
+                s.curvePoints = f.curvePoints;
+                s.polarity    = f.polarity;
+                s.defaultNorm = f.defaultNorm;
+                uf8::user_plugins::upsert(m);
+                persistAndReport_();
+                return;
+            }
+        }
+        break;
+    }
+}
+
+// UF8 V-Pot adapters — same feel bundle, addressed by (strip, bank) under the
+// current editing fader bank. Read via the existing travel/polarity getters +
+// a direct walk for invert/push-reset; write via the existing per-field
+// setters + mutateUf8_ for invert.
+feel_presets::KnobFeel feelFromUf8VPot_(int strip, int bank)
+{
+    feel_presets::KnobFeel f;
+    uf8::KnobTravel t{};
+    if (fetchUf8VPotTravel_(strip, bank, t)) {
+        f.rangeMin    = t.rangeMin;
+        f.rangeMax    = t.rangeMax;
+        f.sensitivity = t.sensitivity;
+        f.curvePoints = t.curvePoints;
+    }
+    f.polarity = getUf8VPotPolarity_(strip, bank);
+    if (!g_editingMatch.empty()) {
+        for (const auto& m : uf8::user_plugins::get().maps) {
+            if (m.match != g_editingMatch) continue;
+            const auto& bs =
+                m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip];
+            f.inverted    = bs.inverted;
+            f.defaultNorm = bs.defaultNorm;
+            break;
+        }
+    }
+    return f;
+}
+
+void applyFeelToUf8VPot_(int strip, int bank, const feel_presets::KnobFeel& f)
+{
+    setUf8VPotRangeMin_(strip, bank, f.rangeMin);
+    setUf8VPotRangeMax_(strip, bank, f.rangeMax);
+    setUf8VPotSensitivity_(strip, bank, f.sensitivity);
+    setUf8VPotCurvePoints_(strip, bank, f.curvePoints);
+    setUf8VPotPolarity_(strip, bank, f.polarity);
+    setUf8DefaultNorm_(strip, bank, f.defaultNorm);
+    mutateUf8_([&](uf8::UserUf8Map& u) {
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].inverted = f.inverted;
+    });
+}
+
+// Deferred name-entry modal for "Save feel to → slot". Staged like the curve
+// editor (openCurveEditor_) so the right-click popup closes cleanly first.
+struct FeelNamePrompt {
+    bool                   requestOpen = false;
+    bool                   focusNext   = false;
+    int                    slot        = -1;
+    char                   buf[48]     = {};
+    feel_presets::KnobFeel pending{};
+};
+FeelNamePrompt g_feelNamePrompt;
+
+void requestFeelSave_(int slot, const feel_presets::KnobFeel& feel,
+                      const char* seedName)
+{
+    g_feelNamePrompt.slot    = slot;
+    g_feelNamePrompt.pending = feel;
+    std::strncpy(g_feelNamePrompt.buf, seedName ? seedName : "",
+                 sizeof(g_feelNamePrompt.buf) - 1);
+    g_feelNamePrompt.buf[sizeof(g_feelNamePrompt.buf) - 1] = '\0';
+    g_feelNamePrompt.requestOpen = true;
+}
+
+void drawFeelNamePrompt_(ImGui_Context* ctx)
+{
+    if (g_feelNamePrompt.requestOpen) {
+        ImGui_OpenPopup(ctx, "##fxl_feel_name", nullptr);
+        g_feelNamePrompt.requestOpen = false;
+        g_feelNamePrompt.focusNext   = true;
+    }
+    // Plain popup (not modal): closes on Esc / click-away on its own, so no
+    // dismiss button needed. The Save button proved unclickable inside this
+    // popup layer (Frank 2026-06-02) — Enter commits instead, which is faster
+    // anyway. Auto-focus the field so the user can type + Enter immediately.
+    if (!ImGui_BeginPopup(ctx, "##fxl_feel_name", nullptr))
+        return;
+    ImGui_Text(ctx, "Preset name (Enter to save):");
+    if (g_feelNamePrompt.focusNext) {
+        ImGui_SetKeyboardFocusHere(ctx, nullptr);
+        g_feelNamePrompt.focusNext = false;
+    }
+    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
+    int inFlags = ImGui_InputTextFlags_EnterReturnsTrue
+                | ImGui_InputTextFlags_AutoSelectAll;
+    const bool commit = ImGui_InputText(ctx, "##feel_name",
+                                        g_feelNamePrompt.buf,
+                                        sizeof(g_feelNamePrompt.buf),
+                                        &inFlags, nullptr);
+    if (commit && g_feelNamePrompt.slot >= 0 && g_feelNamePrompt.buf[0]) {
+        g_feelNamePrompt.pending.name = g_feelNamePrompt.buf;
+        feel_presets::set(g_feelNamePrompt.slot, g_feelNamePrompt.pending);
+        ImGui_CloseCurrentPopup(ctx);
+    }
+    ImGui_EndPopup(ctx);
+}
+
+// Shared "Save feel to" + "Apply feel from" submenus for a control's
+// right-click popup. `current` snapshots the control's feel for saving;
+// `apply` writes a chosen preset back onto it. idScope uniquifies widget ids.
+void drawFeelPresetMenu_(
+    ImGui_Context* ctx, const char* idScope,
+    const std::function<feel_presets::KnobFeel()>& current,
+    const std::function<void(const feel_presets::KnobFeel&)>& apply)
+{
+    const auto& presets = feel_presets::get();
+    char lbl[96];
+
+    if (ImGui_BeginMenu(ctx, "Save feel to", nullptr)) {
+        for (int i = 0; i < feel_presets::kCount; ++i) {
+            if (presets[i].used)
+                snprintf(lbl, sizeof(lbl), "%d: %s##sv_%s_%d",
+                         i + 1, presets[i].name.c_str(), idScope, i);
+            else
+                snprintf(lbl, sizeof(lbl), "%d: (empty)##sv_%s_%d",
+                         i + 1, idScope, i);
+            if (ImGui_MenuItem(ctx, lbl, nullptr, nullptr, nullptr))
+                requestFeelSave_(i, current(),
+                                 presets[i].used ? presets[i].name.c_str() : "");
+        }
+        ImGui_EndMenu(ctx);
+    }
+
+    bool anyUsed = false;
+    for (const auto& p : presets) if (p.used) { anyUsed = true; break; }
+    if (ImGui_BeginMenu(ctx, "Apply feel from", nullptr)) {
+        if (!anyUsed) {
+            ImGui_TextDisabled(ctx, "(no presets saved)");
+        } else {
+            for (int i = 0; i < feel_presets::kCount; ++i) {
+                if (!presets[i].used) continue;
+                snprintf(lbl, sizeof(lbl), "%d: %s##ap_%s_%d",
+                         i + 1, presets[i].name.c_str(), idScope, i);
+                if (ImGui_MenuItem(ctx, lbl, nullptr, nullptr, nullptr))
+                    apply(presets[i]);
+            }
+        }
+        ImGui_EndMenu(ctx);
+    }
+
+    // Clear lives in its own submenu of plain MenuItems — a SmallButton on
+    // SameLine after a full-width MenuItem isn't reliably clickable.
+    if (anyUsed && ImGui_BeginMenu(ctx, "Clear preset", nullptr)) {
+        for (int i = 0; i < feel_presets::kCount; ++i) {
+            if (!presets[i].used) continue;
+            snprintf(lbl, sizeof(lbl), "%d: %s##clr_%s_%d",
+                     i + 1, presets[i].name.c_str(), idScope, i);
+            if (ImGui_MenuItem(ctx, lbl, nullptr, nullptr, nullptr))
+                feel_presets::clear(i);
+        }
+        ImGui_EndMenu(ctx);
+    }
+}
+
 // Fader knob-travel helpers intentionally absent — see comment on
 // UserUf8StripBinding for the rationale (reverted 2026-05-26).
 
@@ -7343,6 +7544,21 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     g_fxlLabelBuf[0] = '\0';
                     setCustomLabel_(ctrl.linkIdx, "");
                 }
+            }
+
+            // Knob "feel" presets — save/apply the tuning bundle (invert /
+            // range / curve / polarity / push-reset) across knobs. Knobs only;
+            // toggles/buttons have no travel. Frank 2026-06-02.
+            if (isPotControl) {
+                ImGui_Separator(ctx);
+                char fpScope[24];
+                snprintf(fpScope, sizeof(fpScope), "uc1k_%d", ctrl.linkIdx);
+                const int lid = ctrl.linkIdx;
+                drawFeelPresetMenu_(ctx, fpScope,
+                    [lid] { return feelFromLinkSlot_(lid); },
+                    [lid](const feel_presets::KnobFeel& f) {
+                        applyFeelToLinkSlot_(lid, f);
+                    });
             }
 
             ImGui_Separator(ctx);
@@ -8294,6 +8510,21 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     }
                 }
                 ImGui_Separator(ctx);
+            }
+
+            // Knob "feel" presets — V-Pot only (shares the global store with
+            // the UC1 knob popup). Frank 2026-06-02.
+            if (ctrl.kind == Uf8Control::VPot) {
+                ImGui_Separator(ctx);
+                char fpScope[32];
+                snprintf(fpScope, sizeof(fpScope), "uf8v_%d_%d",
+                         ctrl.strip, bank);
+                const int st = ctrl.strip, bk = bank;
+                drawFeelPresetMenu_(ctx, fpScope,
+                    [st, bk] { return feelFromUf8VPot_(st, bk); },
+                    [st, bk](const feel_presets::KnobFeel& f) {
+                        applyFeelToUf8VPot_(st, bk, f);
+                    });
             }
 
             // Colour picker — Solo / Cut / Sel only. V-Pot colour
@@ -10894,6 +11125,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // — the same popup serves FX-Learn slots, UF8 V-Pots, and UF8
     // faders. Frank 2026-05-26 generalisation.
     drawFxLearnCurveEditorPopup_(ctx);
+    drawFeelNamePrompt_(ctx);
 }
 
 } // namespace

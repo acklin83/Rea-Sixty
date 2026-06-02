@@ -734,7 +734,8 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 - **Polarity: Unipolar / Bipolar** on a Value-mode V-Pot — Unipolar (default) renders the LCD ring as L→R sweep; Bipolar renders centre-out (like SSL Pan) and makes the Log / Exp curve presets mirror around 0.5. Made for Pan, EQ-gain, mid-range freq sweeps — anything where "neutral" sits in the middle.
 - **Knob travel** (V-Pot only — see *Knob travel + curve editor* below) — inline Min / Max sliders + **Advanced…** opens the curve editor.
 - **Push reset** slider (Value-mode V-Pot) — the value the V-Pot snaps to when pushed. On a Bipolar V-Pot, a small "0.5" quick-set button + hint appears when the slider isn't already at centre.
-- **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump.
+- **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump. Re-binding a slot to a *different* parameter clears its custom label (the label named the old param), so the field and the readout stay in agreement.
+- **Save feel to** / **Apply feel from** / **Clear preset** (UC1 knobs + UF8 V-Pots only) — reusable tuning presets; see *Feel presets* below.
 
 ### Knob travel + curve editor
 
@@ -752,6 +753,20 @@ The Curve editor popup:
 - **Canvas** — draw a piecewise-linear response curve. Click empty space to add a breakpoint, drag to move, right-click to remove. The Y axis is normalised within [Min..Max], so the Linear preset is always a 45° diagonal regardless of how the range is trimmed.
 - **Presets** — **Linear** (clears all breakpoints), **Log** (param rushes to the top — fine control near 0; on a Bipolar V-Pot the curve mirrors around 0.5 for a gentle ramp near centre + coarse at the edges), **Exp** (param stays small longer — fine control near 1; Bipolar mirrors for fine control at centre + rush to extremes), **Reset all** (clears curve + resets sensitivity to 1×). Bipolar polarity is re-read on every preset click so flipping it in the parent menu takes effect without re-opening the editor.
 - **Close** dismisses the popup; all edits persist live as you make them.
+
+### Feel presets
+
+A tuned "feel" — the bundle of per-control tuning values, independent of which parameter the control is bound to — can be saved into one of **five named preset slots** and re-applied to any other knob or V-Pot, on any plug-in. Useful for reusing, say, a Log frequency sweep or a slow stepped-detent across many controls without re-dialling each one.
+
+The preset carries: **invert · Min/Max range · sensitivity · curve · polarity · push-reset**. It deliberately does **not** carry the binding (which parameter) or the display label (which names a specific parameter).
+
+At the bottom of the right-click menu on a **UC1 knob** or **UF8 V-Pot**:
+
+- **Save feel to ▸** — pick a slot (`1: (empty)` … or an existing name to overwrite); a small dialog asks for a name. The current control's feel is captured into that slot.
+- **Apply feel from ▸** — lists the saved presets by name; picking one writes its feel onto the right-clicked control.
+- **Clear preset ▸** — lists the saved presets; picking one empties that slot.
+
+The five slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 knob can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on knobs and V-Pots.
 
 ### Stepped parameters
 

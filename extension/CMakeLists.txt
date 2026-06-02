@@ -241,6 +241,7 @@ add_library(reaper_uf8 MODULE
     src/MixerWindow.cpp
     src/MixerLayout.cpp
     src/ManualView.cpp
+    src/KnobFeelPresets.cpp
     src/SettingsScreen.cpp
     src/ThemeBridge.cpp
     # Phase 2.7 Bindings — Phase A
