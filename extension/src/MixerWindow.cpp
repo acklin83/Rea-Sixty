@@ -1,5 +1,6 @@
 #include "MixerWindow.h"
 #include "SettingsScreen.h"
+#include "ManualView.h"
 #include "ThemeBridge.h"
 
 #include <cstdio>
@@ -18,6 +19,20 @@
 int reasixty_theme();
 int reasixty_fontScale();
 
+// Font + base-size accessors consumed by the Manual renderer (ManualView.cpp).
+// Refreshed each frame from the live Settings context so the renderer always
+// uses the context's currently-attached faces and the active UI font size.
+namespace {
+ImGui_Font* g_uiSans = nullptr;
+ImGui_Font* g_uiBold = nullptr;
+ImGui_Font* g_uiMono = nullptr;
+double      g_uiFontPx = 14.0;
+}
+ImGui_Font* reasixty_uiSansFont() { return g_uiSans; }
+ImGui_Font* reasixty_uiBoldFont() { return g_uiBold; }
+ImGui_Font* reasixty_uiMonoFont() { return g_uiMono; }
+double      reasixty_uiFontPx()   { return g_uiFontPx; }
+
 namespace uf8 {
 
 namespace {
@@ -34,6 +49,7 @@ enum Section : int {
     kSecFxLearn,
     kSecSelectionSets,
     kSecParameterGroups,
+    kSecManual,
     kSecAbout,
     kSecCount,
 };
@@ -53,7 +69,8 @@ constexpr RailEntry kRail[] = {
     { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
     { "Selection Sets",  kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets },
     { "Parameter Groups",kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
-    { "About",           kSecAbout,          true,  &SettingsScreen::drawAbout         },
+    { "Manual",          kSecManual,         true,  &ManualView::draw                  },
+    { "About",           kSecAbout,          false, &SettingsScreen::drawAbout         },
 };
 
 constexpr double kRailWidthPx = 160.0;
@@ -103,6 +120,11 @@ struct MixerWindow::Impl {
     // ensureCtx allocates a fresh ImGui_Context, and Attached resources
     // bind to a single context.
     ImGui_Font*    font = nullptr;
+    // Bold + monospace faces for the Manual renderer (the embedded manual
+    // leans heavily on **bold** and `code`). Created/attached alongside the
+    // sans face and dropped with it on every context refresh.
+    ImGui_Font*    fontBold = nullptr;
+    ImGui_Font*    fontMono = nullptr;
     bool           visible = false;
     int            selected = kSecDevice;
     // Session counter — bumped on every closed→open transition. Used to
@@ -165,6 +187,14 @@ struct MixerWindow::Impl {
         // GC'd by ReaImGui on the next defer cycle.
         font = ImGui_CreateFont("sans-serif", /*flagsInOptional*/ nullptr);
         if (ctx && font) ImGui_Attach(ctx, font);
+        // Bold + monospace companions. FontFlags_Bold == 1 (the vendored
+        // header omits the enum constant; the value is stable across ReaImGui
+        // versions and confirmed against the installed dylib metadata).
+        int boldFlag = 1;
+        fontBold = ImGui_CreateFont("sans-serif", &boldFlag);
+        if (ctx && fontBold) ImGui_Attach(ctx, fontBold);
+        fontMono = ImGui_CreateFont("monospace", /*flagsInOptional*/ nullptr);
+        if (ctx && fontMono) ImGui_Attach(ctx, fontMono);
     }
 };
 
@@ -189,6 +219,8 @@ void MixerWindow::toggle()
         // Font is bound to the dropped context — ensureCtx allocates
         // a new one paired with the new ctx.
         impl_->font = nullptr;
+        impl_->fontBold = nullptr;
+        impl_->fontMono = nullptr;
     }
 }
 
@@ -245,6 +277,11 @@ void MixerWindow::onRunTick()
     constexpr double kFontSizes[3] = { 12.0, 14.0, 18.0 };
     const double fontPx = kFontSizes[
         (scaleIdx < 0 || scaleIdx > 2) ? 1 : scaleIdx];
+    // Publish the live faces + size for the Manual renderer.
+    g_uiSans   = impl_->font;
+    g_uiBold   = impl_->fontBold;
+    g_uiMono   = impl_->fontMono;
+    g_uiFontPx = fontPx;
     if (impl_->font) {
         ImGui_PushFont(impl_->ctx, impl_->font, fontPx);
     }

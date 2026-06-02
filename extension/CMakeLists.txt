@@ -171,6 +171,29 @@ add_custom_command(
 add_custom_target(reasixty_input_level_jsfx_gen ALL
     DEPENDS ${REASIXTY_INPUT_LEVEL_JSFX_HEADER})
 
+# Bake the canonical user manual (docs/user-manual.md) into a header so the
+# Settings → Manual tab renders it offline, always in lockstep with the repo
+# doc — no second copy to maintain, no runtime file to ship.
+set(REASIXTY_USER_MANUAL_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/../docs/user-manual.md")
+set(REASIXTY_USER_MANUAL_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/user_manual.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_USER_MANUAL_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRCFILE=${REASIXTY_USER_MANUAL_SRC}
+        -DOUTFILE=${REASIXTY_USER_MANUAL_HEADER}
+        -DSYMBOL=kUserManual
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    DEPENDS
+        ${REASIXTY_USER_MANUAL_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    COMMENT "Embedding docs/user-manual.md"
+    VERBATIM
+)
+add_custom_target(reasixty_user_manual_gen ALL
+    DEPENDS ${REASIXTY_USER_MANUAL_HEADER})
+
 # Same embedding pattern for the Windows WinUSB INF. The Settings UI
 # (Win-only branch) writes this to %TEMP% and feeds it to pnputil so
 # the user can bind WinUSB to UF8 + UC1 with a single elevated click.
@@ -217,6 +240,7 @@ add_library(reaper_uf8 MODULE
     # Phase 2.6 — Plugin Mixer Window + Phase 2.7 — Settings Screen
     src/MixerWindow.cpp
     src/MixerLayout.cpp
+    src/ManualView.cpp
     src/SettingsScreen.cpp
     src/ThemeBridge.cpp
     # Phase 2.7 Bindings — Phase A
@@ -284,6 +308,11 @@ endif()
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
 add_dependencies(reaper_uf8 reasixty_input_level_jsfx_gen)
+add_dependencies(reaper_uf8 reasixty_user_manual_gen)
+# Recompile the manual renderer whenever the embedded header changes so a
+# fresh docs/user-manual.md propagates into the binary.
+set_source_files_properties(src/ManualView.cpp
+    PROPERTIES OBJECT_DEPENDS ${REASIXTY_USER_MANUAL_HEADER})
 if(WIN32)
     add_dependencies(reaper_uf8 reasixty_winusb_inf_gen)
 endif()
