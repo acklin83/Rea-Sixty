@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.10
+date: v0.1.15
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.10. Earlier manuals (anything dated before 2026-05-27) are superseded.
+This manual documents Rea-Sixty v0.1.15. Earlier manuals (anything dated before 2026-05-27) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -412,7 +412,7 @@ The mechanical BC VU meter is driven from REAPER via the PreSonus standard `Gain
 
 A column of buttons + the central LCD + the two encoders:
 
-- **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.).
+- **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.). From the main screen, **Back** opens the **EXT FUNCS** menu — a hidden list of channel-strip parameters that don't have a dedicated knob. Scroll it with the secondary encoder; push the encoder to switch from scrolling to adjusting the selected parameter. For SSL channel-strip plug-ins the list is the fixed SSL set; for user-mapped (non-SSL) channel strips it's whatever you curate (see *FX Learn pane → UC1 EXT FUNCS list*).
 - **Routing** — opens the Routing menu on the LCD.
 - **Presets** — opens the Presets menu.
 - **360°** — default `mixer_toggle` (open / close Rea-Sixty Settings; bindable on its own UC1 entry so it can diverge from the UF8 360° key).
@@ -709,6 +709,18 @@ Editor body — depends on the domain:
 
 - **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
 - **None (UF8-only):** the UF8 strip-bar schematic. Drag a strip slot (V-Pot, top soft-key, etc.) onto a plug-in parameter.
+
+### UC1 EXT FUNCS list (CS mode)
+
+Below the UC1 mockup, **Channel Strip domain only**, a 4-column grid lets you fill the UC1's hidden **EXT FUNCS** menu (opened with the UC1's **Back** button) with up to 10 of this plug-in's parameters. The grid is two side-by-side groups of five rows; each row is a **Name** field plus a **parameter** dropdown.
+
+- The **Name** is shown on the UC1 LCD — the carousel shows up to **11 characters**, the header line shows the full name.
+- Empty rows are skipped on the surface; the order on the device follows the grid (left column top-to-bottom, then right column).
+- The dropdown lists this plug-in's parameters (from the FX-Learn param snapshot); pick **(none)** to clear a slot.
+- This applies to **user-mapped (non-SSL) channel-strip plug-ins only**. SSL channel strips keep their fixed built-in EXT FUNCS list and are not edited here.
+- Saved per plug-in in `user_plugins.json` (`extFuncs`, schema v8).
+
+Note: a parameter you put in EXT FUNCS that's also on a physical V-Pot uses the plain encoder path — it doesn't share that V-Pot's range / curve / sensitivity. (SSL built-in EXT FUNCS slots keep full knob travel.)
 
 ### Right-click context menu
 
