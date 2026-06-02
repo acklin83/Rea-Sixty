@@ -4336,18 +4336,12 @@ void UC1Surface::pushCsVu(float inputL, float inputR,
 {
     if (!device_) return;
 
-    // BC-bypass cascade: when the focused track's BC plug-in is
-    // bypassed, silence both meters.
-    if (focusedTrack_) {
-        UC1Bindings b = lookupBindingsOnTrack(focusedTrack_);
-        if (b.busCompMap && b.busCompMap->bypassParam != kParamNone) {
-            if (readPluginBypass_(
-                    static_cast<MediaTrack*>(focusedTrack_),
-                    b.busCompMap, b.busCompFxIdx)) {
-                inputL = inputR = outputL = outputR = -120.f;
-            }
-        }
-    }
+    // I/O meter is track-level (input = media/record-FX probe, output =
+    // Track_GetPeakInfo post-FX/post-fader) and intentionally independent of
+    // BC bypass: bypassing the BC must not blank the meter, since real audio
+    // still flows through the track (Frank 2026-06-02). The old BC-bypass
+    // cascade that silenced both meters here was removed for that reason; the
+    // BC knob-ring dim cascade stays — those are genuine BC controls.
 
     // Cell map decoded 2026-04-28 from `uc1_13_vu_meters.pcapng`.
     // Each meter is 16 LEDs tall × 2 cells per LED (L+R interleaved):
