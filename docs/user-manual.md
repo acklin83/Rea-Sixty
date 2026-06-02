@@ -28,7 +28,7 @@ What goes out on the USB wire is the same byte protocol SSL 360° uses, re-emitt
 
 ## What you need
 
-- REAPER on macOS (Apple Silicon), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.71.
+- REAPER on macOS (Apple Silicon; Intel via build-from-source), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.71.
 - An SSL UF8 plugged in over USB-C. UC1 is supported optionally; UF8-only or UC1-only rigs are fine.
 - **ReaImGui** (install via ReaPack from Extensions → ReaPack → Browse packages → ReaImGui). Without ReaImGui the Settings window stays empty, but hardware control still works.
 - **SSL 360° must not be running.** It claims the UF8/UC1 vendor interface exclusively. If it is running when REAPER starts, the surface will not appear and REAPER's Console shows an error.
@@ -1343,7 +1343,7 @@ ReaImGui isn't installed. Install it via ReaPack. Hardware control still works w
 
 - **Multi-UF8 support deferred.** Single-device assumption in bank-shift / colour-sync / VU-meter paths. The Connected devices list shows multi-UF8 setups but drag-to-reorder is greyed out.
 - **No SSL Plug-in Mixer side panel** (the on-screen Mixer view alongside the Settings tabs) — Phase 2.6 on the roadmap, not in this build.
-- **macOS: Intel binaries not shipped.** Apple Silicon only.
+- **macOS: pre-built binaries are Apple Silicon only.** Intel Macs are supported by building from source — the CMake build auto-detects the Homebrew prefix (`brew --prefix`) and works on both architectures without flags.
 - **Layer 3 LED hardware quirk** on certain UF8 units — confirmed not fixable from code; layer functionality still works.
 - **Firmware update breakage** is on the project to chase. Protocol is self-decoded; SSL gives no compatibility guarantees.
 
