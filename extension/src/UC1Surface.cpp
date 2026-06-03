@@ -2921,16 +2921,22 @@ UC1Surface::CascadeState UC1Surface::computeCascade_(
     s.csBypassed = readBypass(csTr, csBindings.channelMap, csBindings.channelFxIdx);
     s.bcBypassed = readBypass(bcTr, bcBindings.busCompMap, bcBindings.busCompFxIdx);
     if (csTr && csBindings.channelMap) {
-        const int eqInP = csBindings.channelMap->buttonParam[button::kEqIn];
-        if (eqInP != kParamNone) {
-            s.eqOff = TrackFX_GetParamNormalized(
-                csTr, csBindings.channelFxIdx, eqInP) < 0.5;
-        }
-        const int dynP = csBindings.channelMap->buttonParam[button::kDynIn];
-        if (dynP != kParamNone) {
-            s.dynOff = TrackFX_GetParamNormalized(
-                csTr, csBindings.channelFxIdx, dynP) < 0.5;
-        }
+        // eqOff / dynOff = "section is OUT". Must honour buttonInverted exactly
+        // like the EQ-IN / DYN-IN button LED (raw >= 0.5, then inverted) — so
+        // the knob-ring dim cascade tracks the button. Reading raw < 0.5
+        // ignored inversion, so an inverted IN button lit while the knobs
+        // dimmed, and vice versa (Frank 2026-06-03).
+        const PluginBindings* m = csBindings.channelMap;
+        auto sectionOff = [&](uint8_t btnId) -> bool {
+            const int p = m->buttonParam[btnId];
+            if (p == kParamNone) return false;
+            const bool raw = TrackFX_GetParamNormalized(
+                csTr, csBindings.channelFxIdx, p) >= 0.5;
+            const bool on  = m->buttonInverted[btnId] ? !raw : raw;
+            return !on;
+        };
+        if (m->buttonParam[button::kEqIn]  != kParamNone) s.eqOff  = sectionOff(button::kEqIn);
+        if (m->buttonParam[button::kDynIn] != kParamNone) s.dynOff = sectionOff(button::kDynIn);
     }
     return s;
 }
@@ -4445,13 +4451,12 @@ void UC1Surface::pushCsVu(float inputL, float inputR,
         // apart so it can't bleed into the next LED.
         constexpr float kLedTolDb = 0.1f;
         // Hysteresis: a steady tone sitting ON a threshold jitters a few
-        // tenths of a dB tick-to-tick (block-aligned peak sampling). The
-        // input path is smoothed by the JSFX probe's 150 ms peak-hold, but
-        // the output path reads Track_GetPeakInfo straight and the 1.5 dB/
-        // tick fall follows brief dips — so the boundary LED flickered
-        // (Frank 2026-06-01). Once lit, an LED stays lit until the level
-        // drops kLedHystDb below its on-threshold; a separate off-threshold
-        // debounces the boundary without slowing the meter's ballistics.
+        // tenths of a dB tick-to-tick (block-aligned peak sampling), so the
+        // boundary LED flickered (Frank 2026-06-01). Both channels now run
+        // the same meterTick ballistics upstream, but residual jitter still
+        // reaches the threshold compare. Once lit, an LED stays lit until the
+        // level drops kLedHystDb below its on-threshold; a separate off-
+        // threshold debounces the boundary without slowing the ballistics.
         // 0.6 dB swallows the jitter and still clears the >= 1 dB LED gap.
         constexpr float kLedHystDb = 0.6f;
         auto ledOn = [&](float db, int i, uint8_t prev) -> uint8_t {

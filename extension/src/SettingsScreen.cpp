@@ -204,8 +204,10 @@ bool reasixty_folderMode();
 void reasixty_setFolderMode(bool on);
 bool reasixty_showOnlySelected();
 void reasixty_setShowOnlySelected(bool on);
-int  reasixty_ballisticMode();
-void reasixty_setBallisticMode(int mode);
+// Per-meter peak fall rate (meterId: 0 = UC1 In, 1 = UC1 Out, 2 = UF8 strips).
+double reasixty_meterFall(int meterId);             // dB/s
+void   reasixty_setMeterFall(int meterId, double v);
+void   reasixty_copyMeter(int fromId, int toId);
 int  reasixty_trackNameMode();
 void reasixty_setTrackNameMode(int mode);
 void reasixty_exportDiagnostic();  // shows confirmation dialog itself
@@ -554,23 +556,47 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         }
     }
 
-    // Ballistic dropdown. BeginCombo + Selectable — ImGui_Combo with
-    // \0-items renders invisible in ReaImGui v0.10 (see GR meter source).
-    static const char* kBallisticLabels[3] = { "Peak", "VU", "RMS" };
-    int ballistic = std::clamp(reasixty_ballisticMode(), 0, 2);
-    if (ImGui_BeginCombo(ctx, "Meter ballistic", kBallisticLabels[ballistic],
-                         /*flags*/ nullptr)) {
-        for (int i = 0; i < 3; ++i) {
-            bool sel = (ballistic == i);
-            if (ImGui_Selectable(ctx, kBallisticLabels[i], &sel,
-                                 /*flags*/ nullptr,
-                                 /*size_w*/ nullptr,
-                                 /*size_h*/ nullptr)) {
-                reasixty_setBallisticMode(i);
-            }
+    // ── Metering ─────────────────────────────────────────────────────
+    // Peak-meter fall rate, per meter. All meters are peak-hold; this sets how
+    // fast each falls (dB/sec). 26.5 dB/s == REAPER's own meter decay, so the
+    // UC1 input falls in lock-step with the output (Frank 2026-06-03).
+    ImGui_Text(ctx, "Metering — peak fall rate");
+    ImGui_Separator(ctx);
+
+    {
+        int tblFlags = 0;
+        if (ImGui_BeginTable(ctx, "##metering_tbl", 2, &tblFlags,
+                             nullptr, nullptr, nullptr)) {
+            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+            double wName = scaleW_(ctx, 130.0);
+            double wFall = scaleW_(ctx, 150.0);
+            ImGui_TableSetupColumn(ctx, "n", &wFlag, &wName, nullptr);
+            ImGui_TableSetupColumn(ctx, "f", &wFlag, &wFall, nullptr);
+
+            auto fallRow = [&](const char* name, int mid) {
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, name);
+                ImGui_TableNextColumn(ctx);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                double v = reasixty_meterFall(mid), st = 1.0, fa = 5.0; int fl = 0;
+                char id[24]; snprintf(id, sizeof(id), "##mf%d", mid);
+                if (ImGui_InputDouble(ctx, id, &v, &st, &fa, "%.1f dB/s", &fl))
+                    reasixty_setMeterFall(mid, v);
+            };
+
+            fallRow("UC1 Input",  0);
+            fallRow("UC1 Output", 1);
+            fallRow("UF8 Strips", 2);
+            ImGui_EndTable(ctx);
         }
-        ImGui_EndCombo(ctx);
     }
+
+    if (ImGui_Button(ctx, "Copy Input to Output##meter",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+        reasixty_copyMeter(0, 1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Text(ctx, "match both UC1 meters");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

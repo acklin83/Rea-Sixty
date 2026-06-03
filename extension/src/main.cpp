@@ -1989,17 +1989,23 @@ inline void engageUf8PluginMode_(bool withGui)
     if (withGui) g_pluginGuiSyncRequest.store(true);
 }
 
-// Meter ballistic. Peak = raw peak per Track_GetPeakInfo (no smoothing
-// here; REAPER's own ballistics already apply); VU = exp-smoothed dB
-// with τ=300 ms; RMS = exp-smoothed linear power with τ=600 ms then
-// converted to dB. Implementation lives next to peakToVuByte further
-// below — declared here so loadBrightness() can read the persisted pref.
-enum BallisticMode : int {
-    BM_Peak = 0,
-    BM_VU   = 1,
-    BM_RMS  = 2,
+// ── Meter ballistics ────────────────────────────────────────────────
+// Three independent peak meters, each with a configurable fall rate:
+//   MID_UC1In  — UC1 Channel-Strip INPUT LED meter
+//   MID_UC1Out — UC1 Channel-Strip OUTPUT LED meter
+//   MID_Uf8    — UF8 per-strip peak meters (all 8 strips share one cfg)
+// All are peak-hold with a linear-in-dB fall at `fallDbPerSec`. Default
+// 26.5 dB/s == REAPER's own Track_GetPeakInfo decay (measured 2026-06-03),
+// so the input meter falls in lock-step with the output. (VU/RMS was tried
+// and dropped — Frank 2026-06-03: peak only.) Implementation (meterTick)
+// lives next to dbToVuByte_ below — declared here so loadBrightness() reads
+// the persisted prefs.
+enum MeterId : int { MID_UC1In = 0, MID_UC1Out = 1, MID_Uf8 = 2, MID_COUNT = 3 };
+
+struct MeterCfg {
+    std::atomic<double> fallDbPerSec{26.5};  // peak fall rate (dB/sec)
 };
-std::atomic<int> g_ballisticMode{BM_Peak};
+MeterCfg g_meter[MID_COUNT];
 
 // g_trackNameMode now lives in TrackName.cpp (extern in TrackName.h).
 
@@ -2356,10 +2362,12 @@ void loadBrightness()
     if (selm && *selm) {
         g_selectionMode.store(parseSelectionMode(selm));
     }
-    const char* bm = GetExtState("rea_sixty", "ballistic_mode");
-    if (bm && *bm) {
-        const int v = std::atoi(bm);
-        if (v >= BM_Peak && v <= BM_RMS) g_ballisticMode.store(v);
+    // Per-meter peak fall rate (UC1 In / UC1 Out / UF8). Key: meterN_fall.
+    for (int m = 0; m < MID_COUNT; ++m) {
+        char k[32];
+        snprintf(k, sizeof(k), "meter%d_fall", m);
+        const char* s = GetExtState("rea_sixty", k);
+        if (s && *s) { const double v = std::atof(s); if (v > 0.0) g_meter[m].fallDbPerSec.store(v); }
     }
     const char* tnm = GetExtState("ReaSixty", "trackNameMode");
     if (tnm && *tnm) {
@@ -11745,22 +11753,11 @@ void commitDebouncedTouchReleases()
     }
 }
 
-// Linear peak (0..1) → UF8 VU byte (0..31). -55 dBFS → 0, 0 dBFS → 31.
+// dBFS → UF8 VU byte (0..31). -55 dBFS → 0, 0 dBFS → 31.
 // The cutoff is intentionally above -60 dB: REAPER's track-peak ballistics
 // have a slow decay tail that drifts through -60..-55 even on silent
 // tracks, which would otherwise flicker the bottom LED. Snapping anything
 // below -55 to 0 gives a clean noise-floor.
-uint8_t peakToVuByte(double peak)
-{
-    if (peak <= 0.0) return 0;
-    const double dbfs = 20.0 * std::log10(peak);
-    if (dbfs >= 0.0)   return 0x1F;
-    if (dbfs <= -55.0) return 0x00;
-    const double f = (dbfs + 55.0) / 55.0;
-    const int byte = static_cast<int>(f * 31.0 + 0.5);
-    return static_cast<uint8_t>(std::clamp(byte, 0, 0x1F));
-}
-
 uint8_t dbToVuByte_(double dbfs)
 {
     if (dbfs >= 0.0)   return 0x1F;
@@ -11770,37 +11767,37 @@ uint8_t dbToVuByte_(double dbfs)
     return static_cast<uint8_t>(std::clamp(byte, 0, 0x1F));
 }
 
-// Per-channel envelope state for the BM_VU / BM_RMS smoothers (8 strips
-// × L/R). Reset to silence on init. Mode switch also resets — see
-// reasixty_setBallisticMode below.
-double g_vuEnvDb_[16];
-double g_rmsEnvPow_[16];
+// Per-meter envelope state for meterTick. UC1In/Out are stereo (2 each),
+// UF8 is 8 strips × L/R (16). Seeded to "unseen" (-1000) so the first tick
+// latches the measured level instead of ramping up from silence.
+double g_envUc1In_[2]  = { -1000.0, -1000.0 };
+double g_envUc1Out_[2] = { -1000.0, -1000.0 };
+double g_envUf8_[16];
 bool   g_meterEnvInit_ = false;
 std::chrono::steady_clock::time_point g_meterEnvLast_{};
 
-uint8_t peakToVuByteBallistic(double peakLin, int channel, double dtSec)
+// pushVuMeter caches the focused track's raw L/R peak here each tick so the
+// UC1 output meter can REUSE it instead of calling Track_GetPeakInfo a second
+// time on the same track in the same tick. That second call returns only the
+// peak since the first call (microseconds) — a near-instantaneous low sample
+// that makes the output meter under-read (e.g. a -6 dB signal lighting only
+// to -9). Reset to "not cached" each tick; valid only when g_focusPeakTrack
+// matches the track being metered (Frank 2026-06-03).
+MediaTrack* g_focusPeakTrack = nullptr;
+double      g_focusPeakL = 0.0, g_focusPeakR = 0.0;
+
+// One ballistics step. `env` is the caller-owned per-channel state, `instDb`
+// the instantaneous level this tick, `dtSec` real elapsed time. Peak-hold:
+// instant attack, linear-dB fall at the meter's configurable dB/sec rate.
+double meterTick(int meterId, double& env, double instDb, double dtSec)
 {
-    const int mode = g_ballisticMode.load();
-    if (mode == BM_Peak || channel < 0 || channel >= 16) {
-        return peakToVuByte(peakLin);
-    }
-    if (mode == BM_VU) {
-        const double dbInst = (peakLin <= 0.0) ? -120.0
-                                               : 20.0 * std::log10(peakLin);
-        constexpr double kTau = 0.30;  // 300 ms
-        const double alpha = 1.0 - std::exp(-dtSec / kTau);
-        g_vuEnvDb_[channel] += alpha * (dbInst - g_vuEnvDb_[channel]);
-        return dbToVuByte_(g_vuEnvDb_[channel]);
-    }
-    // RMS: smooth in linear-power domain, then convert to dB.
-    const double pow = peakLin * peakLin;
-    constexpr double kTau = 0.60;  // 600 ms
-    const double alpha = 1.0 - std::exp(-dtSec / kTau);
-    g_rmsEnvPow_[channel] += alpha * (pow - g_rmsEnvPow_[channel]);
-    const double dbf = (g_rmsEnvPow_[channel] <= 0.0)
-                     ? -120.0
-                     : 10.0 * std::log10(g_rmsEnvPow_[channel]);
-    return dbToVuByte_(dbf);
+    if (meterId < 0 || meterId >= MID_COUNT) return instDb;
+    if (!std::isfinite(env)) env = -120.0;
+    if (env <= -200.0) env = instDb;              // seed on first use
+    const double fall = g_meter[meterId].fallDbPerSec.load() * dtSec;
+    if (instDb > env) env = instDb;
+    else { const double n = env - fall; env = (n > instDb) ? n : instDb; }
+    return env;
 }
 
 std::array<uint8_t, 16> g_lastVuLevels{};
@@ -11816,6 +11813,10 @@ std::array<uint8_t, 8> g_uf8GrBytes{};
 
 void pushVuMeter()
 {
+    // Invalidate the focused-track peak cache each tick BEFORE the early-out:
+    // if UF8 isn't open we never read peaks here, so the UC1 output meter must
+    // fall back to its own Track_GetPeakInfo call (no double-read to avoid).
+    g_focusPeakTrack = nullptr;
     if (!g_dev || !g_dev->isOpen()) return;
 
     // UF8 Plugin Mode: scribble strips host FX-Learn-mapped plug-in
@@ -11859,7 +11860,7 @@ void pushVuMeter()
         if (dtSec <= 0.0)  dtSec = 0.001;
         if (dtSec >  1.0)  dtSec = 1.0;  // clamp gross stalls
     } else {
-        for (int i = 0; i < 16; ++i) { g_vuEnvDb_[i] = -120.0; g_rmsEnvPow_[i] = 0.0; }
+        for (int i = 0; i < 16; ++i) g_envUf8_[i] = -1000.0;
         g_meterEnvInit_ = true;
     }
     g_meterEnvLast_ = tNow;
@@ -11874,10 +11875,22 @@ void pushVuMeter()
                 // exposed via this call, so "in" and "out" end up
                 // mirroring each other for mono fader moves. Good
                 // enough until a JSFX probe exposes pre-fader.
-                rawL = peakToVuByteBallistic(Track_GetPeakInfo(tr, 0),
-                                             s * 2 + 0, dtSec);
-                rawR = peakToVuByteBallistic(Track_GetPeakInfo(tr, 1),
-                                             s * 2 + 1, dtSec);
+                const double pL = Track_GetPeakInfo(tr, 0);
+                const double pR = Track_GetPeakInfo(tr, 1);
+                // Cache for the UC1 output meter so it doesn't re-read (and
+                // rob) this track's peak in the same tick.
+                if (g_uc1_surface
+                    && tr == static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())) {
+                    g_focusPeakTrack = tr;
+                    g_focusPeakL = pL;
+                    g_focusPeakR = pR;
+                }
+                const double dbL = (pL <= 0.0) ? -120.0 : 20.0 * std::log10(pL);
+                const double dbR = (pR <= 0.0) ? -120.0 : 20.0 * std::log10(pR);
+                rawL = dbToVuByte_(meterTick(MID_Uf8, g_envUf8_[s * 2 + 0],
+                                             dbL, dtSec));
+                rawR = dbToVuByte_(meterTick(MID_Uf8, g_envUf8_[s * 2 + 1],
+                                             dbR, dtSec));
             }
         }
         levels[s * 2 + 0] = stepByte(s_held[s * 2 + 0], rawL);  // "input"
@@ -13172,17 +13185,13 @@ void onTimer()
     // now driven through sendLed() + the bank-shift refresh, this fallback
     // was overwriting the coloured frames with plain white on every tick.
     pushVuMeter();
-    // UC1 stereo VU.
-    //   Input  meter L/R: AudioAccessor (samples "immediately pre-FX"
-    //                     per REAPER docs). Pre-CS, pre-everything.
-    //   Output meter L/R: by default Track_GetPeakInfo (post-FX-chain,
-    //                     == what REAPER's track meter shows). User
-    //                     toggle via ExtState ("Rea-Sixty" /
-    //                     "cs_output_source"): "track" (default) shows
-    //                     post-FX-chain; "off" silences the strip.
-    //                     Default-on because the post-FX level is what
-    //                     the user hears, which is genuinely useful;
-    //                     toggle exists for purist SSL UC1 fidelity.
+    // UC1 stereo I/O meter. Both channels run the configurable ballistics
+    // engine (meterTick, per-meter Peak/VU) — see the MeterCfg comment block.
+    //   Input  meter L/R: "Rea-Sixty Input Level" JSFX probe if present
+    //                     (pre-FX, live even when stopped), else the
+    //                     AudioAccessor tiled gap-free over the playhead.
+    //   Output meter L/R: Track_GetPeakInfo (post-FX/post-fader == what
+    //                     REAPER's own track meter shows).
     if (g_uc1_surface) {
         void* focus = g_uc1_surface->focusedTrack();
         static MediaTrack*    s_lastVuTrack = nullptr;
@@ -13208,53 +13217,49 @@ void onTimer()
                 return static_cast<float>(20.0 * std::log10(p));
             };
 
-            // Output meter source — ExtState toggle, default = track meter.
-            float dbOutL = -120.f;
-            float dbOutR = -120.f;
-            const char* outSrc = GetExtState("Rea-Sixty", "cs_output_source");
-            if (!outSrc || !*outSrc || std::strcmp(outSrc, "track") == 0) {
+            // Output meter: post-FX/post-fader track peak == what REAPER's
+            // own meter shows. Always on (the "off" purist toggle was
+            // dropped 2026-06-03 — it just blanked half the I/O meter).
+            // Reuse pushVuMeter's full-tick peak for this track if it cached
+            // it this tick; otherwise read directly (focused track not on a
+            // UF8 strip → no prior call to rob this read). Calling
+            // Track_GetPeakInfo twice per tick on one track makes the 2nd call
+            // return a microsecond window that under-reads (Frank 2026-06-03).
+            float dbOutL, dbOutR;
+            if (g_focusPeakTrack == tr) {
+                dbOutL = peakToDb(g_focusPeakL);
+                dbOutR = peakToDb(g_focusPeakR);
+            } else {
                 dbOutL = peakToDb(Track_GetPeakInfo(tr, 0));
                 dbOutR = peakToDb(Track_GetPeakInfo(tr, 1));
             }
-            // "off" or any unrecognised value → leave at -120 (silent).
 
-            // Peak-hold with decay, applied to all four channels (in L/R
-            // + out L/R). Without it a steady sine produces 1-2 dB peak
-            // jitter per tick (block size doesn't align with the sine
-            // cycle), which flickers the LED at the boundary between
-            // two thresholds. Decay constant ~150 ms — fast enough that
-            // the meter falls off audibly after a transient, slow
-            // enough to absorb sample-block variability.
-            static double s_holdInL  = -120.0, s_holdInR  = -120.0;
-            static double s_holdOutL = -120.0, s_holdOutR = -120.0;
+            // Tick delta for the ballistics — own steady_clock so the UC1
+            // I/O meter's timing is independent of pushVuMeter's UF8 cadence.
+            // Ballistics themselves live in meterTick (per-meter Peak/VU);
+            // the old fixed 1.5 dB/tick holdPeak is gone — input now matches
+            // output because both run the same configurable engine.
+            static auto s_csLast = std::chrono::steady_clock::now();
+            static bool s_csInit = false;
+            const auto csNow = std::chrono::steady_clock::now();
+            double dtSec = 0.033;
+            if (s_csInit) {
+                dtSec = std::chrono::duration<double>(csNow - s_csLast).count();
+                if (dtSec <= 0.0) dtSec = 0.001;
+                if (dtSec >  1.0) dtSec = 1.0;  // clamp gross stalls
+            }
+            s_csInit = true;
+            s_csLast = csNow;
+
             if (tr != s_lastVuTrack) {
                 teardownAccessor();
                 s_vuAccessor = CreateTrackAudioAccessor(tr);
                 s_lastVuTrack = tr;
-                // Reset peak-hold across track switches: stale hold from
-                // the previous track (especially a pegged value) must not
-                // bleed into the new focus.
-                s_holdInL = s_holdInR = -120.0;
-                s_holdOutL = s_holdOutR = -120.0;
+                // Reset envelopes across track switches: a stale (especially
+                // pegged) hold from the previous track must not bleed in.
+                g_envUc1In_[0]  = g_envUc1In_[1]  = -1000.0;
+                g_envUc1Out_[0] = g_envUc1Out_[1] = -1000.0;
             }
-            // Linear-dB rate-limited fall. Original "0.85 of distance-from-
-            // floor" formula (commit 2026-04-28) decayed exponentially in
-            // linear-distance-from-floor space — h=-3 fell to h=-59 in 5
-            // ticks, fighting REAPER's internal peak ballistics and producing
-            // multi-LED flicker on the UC1 VU strip. Linear-dB at 1.5 dB/tick
-            // ≈ 45 dB/sec gives full-scale fall in ~1.3 s — standard VU look.
-            constexpr double kDbPerTick = 1.5;
-            auto holdPeak = [&](double& hold, double raw) {
-                // Belt-and-suspenders: if hold ever lands on a non-finite
-                // value (Inf/NaN), the decay arithmetic never recovers —
-                // reset to silent floor before applying this tick's raw.
-                if (!std::isfinite(hold)) hold = -120.0;
-                if (raw > hold) hold = raw;
-                else {
-                    const double next = hold - kDbPerTick;
-                    hold = (next > raw) ? next : raw;
-                }
-            };
 
             float dbInL = -120.f;
             float dbInR = -120.f;
@@ -13295,23 +13300,23 @@ void onTimer()
             }
             bool gotHelper = false;
             if (s_inLvlFx != -1) {
-                // slider1/slider2 = peak L/R in dBFS. Read the RAW param value,
-                // NOT GetFormattedParamValue: for a JSFX the slider variable IS
-                // the host parameter storage and its raw value is already real
-                // dBFS, updated live by the probe's @block DSP write. The
-                // formatted display string, by contrast, is only refreshed by
-                // UI/sliderchange events and goes stale when the FX window is
-                // closed — which is why the meter previously froze at the last
-                // manual fader position. (Unlike the GR readGr path, where the
-                // raw param is a normalised/proprietary VST3 scale and the
-                // formatted string is the only sane source — see UC1Surface.)
+                // slider1/2 = peak L/R, slider3/4 = RMS L/R, all in dBFS. Read
+                // the RAW param value, NOT GetFormattedParamValue: for a JSFX
+                // the slider variable IS the host parameter storage and its raw
+                // value is already real dBFS, updated live by the probe's
+                // @block DSP write. The formatted display string, by contrast,
+                // is only refreshed by UI/sliderchange events and goes stale
+                // when the FX window is closed — which is why the meter
+                // previously froze at the last manual fader position. (Unlike
+                // the GR readGr path, where the raw param is a normalised VST3
+                // scale and the formatted string is the only sane source.)
                 auto readDb = [&](int p) -> float {
                     double mn = 0.0, mx = 0.0;
                     return static_cast<float>(
                         TrackFX_GetParam(tr, s_inLvlFx, p, &mn, &mx));
                 };
-                dbInL = readDb(0);
-                dbInR = readDb(1);
+                dbInL = readDb(0);  // slider1 = peak L (dBFS)
+                dbInR = readDb(1);  // slider2 = peak R (dBFS)
                 gotHelper = true;
             }
 
@@ -13324,40 +13329,48 @@ void onTimer()
             const bool transportLive = (playState & 1) || (playState & 4);
             if (!gotHelper && s_vuAccessor && transportLive) {
                 AudioAccessorValidateState(s_vuAccessor);
-                constexpr int kBlock  = 512;
                 constexpr int kNchans = 2;
                 constexpr int kSr     = 48000;
-                static double buf[kBlock * kNchans];
+                constexpr int kMaxBlk = 4096;
+                static double buf[kMaxBlk * kNchans];
                 const double t = GetPlayPosition();
+                // Read FORWARD from the playhead a window covering one tick
+                // (~33 ms) + pad, so consecutive reads tile with no gap and no
+                // short transient falls between them. A fixed 512-sample
+                // (~11 ms) read once per ~33 ms tick swallowed clicks (Frank
+                // 2026-06-03). This is safe now that the meter is peak-only:
+                // PEAK takes the max over the window, so any not-yet-available
+                // trailing samples (zeros) can't lower it — the dilution that
+                // killed the (now-removed) RMS path no longer applies. Backward
+                // [t-dt, t] reads silence on this REAPER, so forward it is.
+                int nSamp = static_cast<int>(dtSec * kSr + 0.5) + 512;
+                if (nSamp < 512)     nSamp = 512;
+                if (nSamp > kMaxBlk) nSamp = kMaxBlk;
                 const int rc = GetAudioAccessorSamples(
-                    s_vuAccessor, kSr, kNchans, t, kBlock, buf);
+                    s_vuAccessor, kSr, kNchans, t, nSamp, buf);
                 if (rc > 0) {
                     double pL = 0.0, pR = 0.0;
-                    for (int i = 0; i < kBlock; ++i) {
+                    for (int i = 0; i < nSamp; ++i) {
                         const double sL = std::fabs(buf[i * 2]);
                         const double sR = std::fabs(buf[i * 2 + 1]);
                         if (sL > pL) pL = sL;
                         if (sR > pR) pR = sR;
                     }
-                    // Pre-FX raw input level — fader / pan stay out. With
-                    // no plug-in on the track, the input meter shows
-                    // unprocessed level entering the FX chain; the
-                    // output meter (Track_GetPeakInfo, post-FX-post-fader)
-                    // shows what the user hears after fader. The two are
-                    // expected to differ unless fader is at unity AND no
-                    // FX is loaded — that's the SSL I/O-meter convention.
+                    // Pre-FX raw input peak — fader / pan stay out. (SSL I/O
+                    // convention: in ≠ out unless fader at unity and no FX.)
                     dbInL = peakToDb(pL);
                     dbInR = peakToDb(pR);
                 }
             }
-            holdPeak(s_holdInL,  dbInL);
-            holdPeak(s_holdInR,  dbInR);
-            holdPeak(s_holdOutL, dbOutL);
-            holdPeak(s_holdOutR, dbOutR);
-            g_uc1_surface->pushCsVu(static_cast<float>(s_holdInL),
-                                    static_cast<float>(s_holdInR),
-                                    static_cast<float>(s_holdOutL),
-                                    static_cast<float>(s_holdOutR));
+            const float inL  = static_cast<float>(
+                meterTick(MID_UC1In,  g_envUc1In_[0],  dbInL,  dtSec));
+            const float inR  = static_cast<float>(
+                meterTick(MID_UC1In,  g_envUc1In_[1],  dbInR,  dtSec));
+            const float outL = static_cast<float>(
+                meterTick(MID_UC1Out, g_envUc1Out_[0], dbOutL, dtSec));
+            const float outR = static_cast<float>(
+                meterTick(MID_UC1Out, g_envUc1Out_[1], dbOutR, dtSec));
+            g_uc1_surface->pushCsVu(inL, inR, outL, outR);
         }
     }
     // UF8 GR — driven from the focused track's CS plug-in via
@@ -16454,8 +16467,11 @@ void reasixty_exportDiagnostic()
         std::fprintf(f, "Brightness scribble: %d\n", g_scribbleBrightness.load());
         std::fprintf(f, "SEL follows colour:  %s\n",
                      g_selFollowsColor.load() ? "yes" : "no");
-        std::fprintf(f, "Ballistic mode:      %d  (0=Peak 1=VU 2=RMS)\n",
-                     g_ballisticMode.load());
+        static const char* kMidNames[MID_COUNT] = { "UC1 In", "UC1 Out", "UF8" };
+        for (int m = 0; m < MID_COUNT; ++m) {
+            std::fprintf(f, "Meter %-7s fall: %.1f dB/s\n",
+                         kMidNames[m], g_meter[m].fallDbPerSec.load());
+        }
         std::fclose(f);
     }
 
@@ -16493,22 +16509,27 @@ void reasixty_exportDiagnostic()
     ShowMessageBox(msg, "Rea-Sixty diagnostic", 0);
 }
 
-int reasixty_ballisticMode()
+// ── Per-meter peak fall-rate accessors (used by SettingsScreen) ──────
+double reasixty_meterFall(int meterId)
 {
-    return g_ballisticMode.load();
+    if (meterId < 0 || meterId >= MID_COUNT) return 26.5;
+    return g_meter[meterId].fallDbPerSec.load();
 }
-
-void reasixty_setBallisticMode(int mode)
+void reasixty_setMeterFall(int meterId, double v)
 {
-    if (mode < BM_Peak) mode = BM_Peak;
-    if (mode > BM_RMS)  mode = BM_RMS;
-    g_ballisticMode.store(mode);
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", mode);
-    SetExtState("rea_sixty", "ballistic_mode", buf, true);
-    // Reset envelopes so the new mode starts cleanly from silence rather
-    // than carrying old smoothed values that don't match the new τ.
-    for (int i = 0; i < 16; ++i) { g_vuEnvDb_[i] = -120.0; g_rmsEnvPow_[i] = 0.0; }
+    if (meterId < 0 || meterId >= MID_COUNT) return;
+    if (v < 1.0)   v = 1.0;
+    if (v > 200.0) v = 200.0;
+    g_meter[meterId].fallDbPerSec.store(v);
+    char buf[32]; snprintf(buf, sizeof(buf), "%.2f", v);
+    char k[32]; snprintf(k, sizeof(k), "meter%d_fall", meterId);
+    SetExtState("rea_sixty", k, buf, true);
+}
+void reasixty_copyMeter(int fromId, int toId)
+{
+    if (fromId < 0 || fromId >= MID_COUNT) return;
+    if (toId   < 0 || toId   >= MID_COUNT) return;
+    reasixty_setMeterFall(toId, g_meter[fromId].fallDbPerSec.load());
 }
 
 int reasixty_trackNameMode()
