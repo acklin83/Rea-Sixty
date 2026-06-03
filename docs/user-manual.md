@@ -395,9 +395,11 @@ Channel section (lowest row of buttons):
 ## Channel Strip top row (2 knobs)
 
 - **Input Trim** (CS input gain)
-- **Channel Fader Level** (CS fader stage)
+- **Channel Fader Level** / **Output Gain** (CS fader stage)
 
 When SSL Strip Mode is engaged on the UF8, the **Channel Fader Level** parameter is what the UF8 motorised faders drive.
+
+The Output Gain knob can be flipped to drive **REAPER's track volume fader** instead of the CS Fader Level parameter — see *Native actions → Surface-state toggles → UC1 Out-Gain to REAPER fader*. Handy when the track has no SSL channel strip but you still want a hardware volume knob; the LED ring and readout follow the track fader while engaged.
 
 ## Bus Compressor section (7 knobs + 1 button)
 
@@ -485,7 +487,19 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | Plugin GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. |
 | Pin plug-in GUI position | Capture an XY coordinate (drag a window, click *Capture current*). Every subsequent managed `TrackFX_Show` snaps the window to that pin. Alternatively *Center on Screen*. |
 | Pin FX-chain GUI position | Same pattern for FX-chain windows. Title matching looks for "FX:" on macOS. |
-| Meter ballistic (combo) | Peak / VU / RMS — applies to the strip-bar level meters. |
+
+### Metering
+
+All level meters (UC1 Input + Output, UF8 strip bars) are **peak-hold**. The only adjustment is how fast each meter falls back after a peak, set per meter in **dB per second**.
+
+| Control | Effect |
+|---|---|
+| UC1 Input | Fall rate of the UC1's input-level meter. |
+| UC1 Output | Fall rate of the UC1's output-level meter. |
+| UF8 Strips | Fall rate of the UF8 strip-bar level meters. |
+| Copy Input to Output | Sets the UC1 Output fall rate to match UC1 Input. |
+
+Default is **26.5 dB/s** — REAPER's own meter decay, so the UC1 input meter falls in lock-step with the output. Lower = slower decay (longer peak hold); higher = snappier.
 
 ### Tracks
 
@@ -1114,6 +1128,7 @@ When held, these shift every other binding to its modifier slot. The three match
 
 - **`flip`** — swap fader and V-Pot values for the active routing target (e.g. swap send level and send pan between V-Pot ring and motorised fader).
 - **`pan_force`** — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO when you need pan back quickly.
+- **`uc1_outgain_fader_toggle`** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 
 ## Internal (not user-bindable)
 

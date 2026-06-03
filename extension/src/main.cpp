@@ -107,6 +107,15 @@ bool reasixty_quickLearnHasTarget();
 // helpers.
 bool reasixty_dispatchSelModeCycle(int step);
 
+// UC1 Out-Gain → REAPER fader toggle. Definitions live below the anonymous
+// namespace (external linkage so UC1Surface.cpp can read/write track volume
+// through the shared vol↔pb fader law). Forward-declared here so hookCommand2
+// and the builtin registration (both above the definitions) can call them.
+void   reasixty_toggleUc1OutGainFaderMode();
+bool   reasixty_uc1OutGainFaderMode();
+double reasixty_trackVolNorm(MediaTrack* tr);
+void   reasixty_setTrackVolNorm(MediaTrack* tr, double norm);
+
 // rec->GetFunc capture for SWELL/BrowseForSaveFile lookups. Defined at
 // file scope (not inside any anonymous namespace) so the SWELL-API
 // loader helpers further down — which sit in the first anonymous
@@ -476,6 +485,15 @@ std::atomic<bool> g_pluginFaderMode{false};
 // selected a track with no CS plug-in): g_csGuiShownTr cleared, future
 // selections never re-opened the GUI (Frank 2026-05-14).
 std::atomic<bool> g_pluginFaderModeWithGui{false};
+
+// UC1 Out-Gain → REAPER fader toggle. When true, the UC1 "Out Gain" pot
+// (knob::kCSFaderLevel, hw 0x16) drives REAPER track volume (D_VOL)
+// instead of its SSL Channel-Strip Fader Level plug-in param — works even
+// when the track carries no CS plug-in. Independent of g_pluginFaderMode
+// (which retargets the UF8 motor faders). Session-only / default-off,
+// mirroring g_flip; bound via the `uc1_outgain_fader_toggle` builtin and
+// the REASIXTY_UC1_OUTGAIN_FADER_TOGGLE REAPER action.
+std::atomic<bool> g_uc1OutGainFaderMode{false};
 
 // Phase 2.5 mode toggles. State-of-record only — bind-able via builtins
 // registered in registerBindingHandlers() and surfaced as Settings
@@ -13990,6 +14008,11 @@ custom_action_register_t g_actionQuickLearnTrack{
     0, "REASIXTY_QUICK_LEARN_TRACK", "Rea-Sixty: Quick Learn Track", nullptr,
 };
 int g_cmdQuickLearnTrack = 0;
+custom_action_register_t g_actionUc1OutGainFader{
+    0, "REASIXTY_UC1_OUTGAIN_FADER_TOGGLE",
+    "Rea-Sixty: Toggle UC1 Out-Gain (Mapped \xE2\x86\x94 REAPER Fader)", nullptr,
+};
+int g_cmdUc1OutGainFader = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -14068,10 +14091,55 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
     if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
     if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
+    if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
     return false;
 }
 
 } // anonymous
+
+// ---- UC1 Out-Gain → REAPER fader toggle (external linkage) -------------
+// State accessor + a 0..1 track-volume position that reuses the SAME
+// vol↔pb fader law as the UF8/track motor fader (linearVolumeToPb /
+// pbToLinearVolume), so the UC1 Out-Gain ring agrees with the printed
+// UF8 scale instead of a fresh ad-hoc dB range. Defined outside the
+// anonymous namespace so UC1Surface.cpp can link against them.
+bool reasixty_uc1OutGainFaderMode()
+{
+    return g_uc1OutGainFaderMode.load();
+}
+
+double reasixty_trackVolNorm(MediaTrack* tr)
+{
+    if (!tr) return 0.0;
+    const double pb = static_cast<double>(linearVolumeToPb(uiVolLinear(tr)));
+    double n = pb / static_cast<double>(kUf8FaderPbMax);
+    if (n < 0.0) n = 0.0;
+    if (n > 1.0) n = 1.0;
+    return n;
+}
+
+void reasixty_setTrackVolNorm(MediaTrack* tr, double norm)
+{
+    if (!tr) return;
+    if (norm < 0.0) norm = 0.0;
+    if (norm > 1.0) norm = 1.0;
+    const auto pb = static_cast<uint16_t>(
+        norm * static_cast<double>(kUf8FaderPbMax) + 0.5);
+    // Slew-safe volume write — same path the UF8 motor fader uses.
+    CSurf_OnVolumeChange(tr, pbToLinearVolume(pb), false);
+}
+
+// Shared by the `uc1_outgain_fader_toggle` builtin and the
+// REASIXTY_UC1_OUTGAIN_FADER_TOGGLE REAPER action. Session-only; the
+// SetExtState write is for parity with the other mode toggles (not
+// reloaded at startup — see g_flip).
+void reasixty_toggleUc1OutGainFaderMode()
+{
+    const bool next = !g_uc1OutGainFaderMode.load();
+    g_uc1OutGainFaderMode.store(next);
+    g_pageDirty.store(true);
+    SetExtState("ReaSixty", "uc1OutGainFaderMode", next ? "1" : "0", true);
+}
 
 // Normalised track-colour reader (external linkage so UC1Surface can
 // use it too). REAPER's GetTrackColor returns the platform-native
@@ -16604,6 +16672,19 @@ void registerBindingHandlers()
         "Toggle FLIP (fader ↔ V-Pot)", false
     });
 
+    // UC1 Out-Gain pot: SSL CS Fader Level param ↔ REAPER track volume.
+    // Shares reasixty_toggleUc1OutGainFaderMode() with the REAPER action
+    // REASIXTY_UC1_OUTGAIN_FADER_TOGGLE. stateOf drives the bound button's
+    // LED on UC1 / UF8.
+    registerBuiltin("uc1_outgain_fader_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            reasixty_toggleUc1OutGainFaderMode();
+        },
+        [](int) { return g_uc1OutGainFaderMode.load(); },
+        "Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)", false
+    });
+
     // ---- Selection-Mode toggles --------------------------------------
     // Four mutually-exclusive modes; firing a mode while it is already
     // active returns to Norm. Setting a different mode while another is
@@ -18623,6 +18704,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
     g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
+    g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

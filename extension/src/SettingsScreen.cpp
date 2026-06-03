@@ -2467,6 +2467,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "folder_mode" || n == "show_only_selected"
                  || n.rfind("ssl_strip_mode_", 0) == 0
                  || n.rfind("uf8_plugin_mode_", 0) == 0
+                 || n == "uc1_outgain_fader_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
@@ -10032,6 +10033,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_SetNextItemWidth(ctx, -1.0);
             const char* preview = (vst3Param < 0) ? "(unmapped)"
                                                    : paramName.c_str();
+            // Pin the popup width so it doesn't shrink as the search
+            // narrows the visible list — min.x == max.x freezes the
+            // width (same fix the action picker uses). Frank 2026-06-03.
+            const double kAlComboW = scaleW_(ctx, 320.0);
+            ImGui_SetNextWindowSizeConstraints(
+                ctx, kAlComboW, 0.0, kAlComboW, 999999.0);
             if (ImGui_BeginCombo(ctx, comboId, preview, &comboFlags)) {
                 const bool justOpened = ImGui_IsWindowAppearing(ctx);
                 static char s_flt[64] = {0};
@@ -10236,6 +10243,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         const char* paramPreview = (s.vst3Param < 0)
                             ? "(unmapped)"
                             : s.paramName.c_str();
+                        // Pin the popup width so it doesn't shrink as the
+                        // search narrows the list (Frank 2026-06-03).
+                        const double kAlParamComboW = scaleW_(ctx, 320.0);
+                        ImGui_SetNextWindowSizeConstraints(
+                            ctx, kAlParamComboW, 0.0,
+                            kAlParamComboW, 999999.0);
                         if (ImGui_BeginCombo(ctx, comboId, paramPreview,
                                              &comboFlags))
                         {
@@ -11104,7 +11117,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // the rest. 1024 is comfortably above any musical plugin.
             const int kMaxParams = 1024;
             const int n = (std::min)(paramCount, kMaxParams);
-            const std::string filt = g_paramFilter;
+            // Case-insensitive: lowercase the filter once, lowercase each
+            // param name before matching — so "out" finds "Output Gain".
+            std::string filt = g_paramFilter;
+            for (auto& c : filt)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
             char pname[128];
             for (int p = 0; p < n; ++p) {
@@ -11117,7 +11134,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (isReaperMidiParam_(pname)) continue;
 
                 if (!filt.empty()) {
-                    if (std::string(pname).find(filt) == std::string::npos)
+                    std::string lc(pname);
+                    for (auto& c : lc)
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lc.find(filt) == std::string::npos)
                         continue;
                 }
 

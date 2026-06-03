@@ -71,6 +71,13 @@ int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+// UC1 Out-Gain → REAPER fader toggle (main.cpp). When on, the Out-Gain
+// pot drives REAPER track volume instead of the SSL CS Fader Level param.
+// trackVolNorm/setTrackVolNorm use the shared vol↔pb fader law so the
+// ring matches the UF8/track motor fader.
+bool   reasixty_uc1OutGainFaderMode();
+double reasixty_trackVolNorm(MediaTrack* tr);
+void   reasixty_setTrackVolNorm(MediaTrack* tr, double norm);
 // Settings → Modes → FX/Instance Cycle — controls-routing bitmask. Bit 2
 // = UC1 Encoder 1 (CHANNEL), bit 3 = UC1 Encoder 2 (BC). When set AND
 // SelectionMode is Instance / InstanceCycle, the encoder rotation drives
@@ -1317,6 +1324,38 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 ev.id, (int)ev.delta);
         }
         ++stats_.knobEventsSuppressed;
+        return;
+    }
+
+    // REAPER-fader mode for the Out-Gain pot. When toggled (via the
+    // `uc1_outgain_fader_toggle` builtin / REASIXTY_UC1_OUTGAIN_FADER_TOGGLE
+    // action) the Out-Gain knob drives REAPER track volume instead of the
+    // SSL CS Fader Level param. This must branch BEFORE the bindings /
+    // param resolution below — track volume needs no CS plug-in, whereas
+    // the generic path suppresses the event when no map / param exists.
+    // The early return also skips the focused-param → UF8 projection block,
+    // which is keyed on a vst3Param we deliberately don't resolve here.
+    if (ev.id == knob::kCSFaderLevel && reasixty_uc1OutGainFaderMode()) {
+        MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
+        const double cur   = reasixty_trackVolNorm(tr);
+        const double delta = clickToDelta_(ev.delta);   // honours fine mode
+        const double next  = std::clamp(cur + delta, 0.0, 1.0);
+        reasixty_setTrackVolNorm(tr, next);
+        // Ring + LCD readout follow track volume (re-read so they reflect
+        // what REAPER actually applied, incl. any clamping / automation).
+        pushKnobRing_(ev.id, reasixty_trackVolNorm(tr));
+        if (device_) {
+            double vol = 1.0, pan = 0.0;
+            GetTrackUIVolPan(tr, &vol, &pan);
+            const double db = (vol > 0.0) ? 20.0 * std::log10(vol) : -150.0;
+            char vbuf[24];
+            if (db <= -149.9) snprintf(vbuf, sizeof(vbuf), "-inf");
+            else              snprintf(vbuf, sizeof(vbuf), "%.1fdB", db);
+            auto readout = formatReadout("Trk Vol", vbuf);
+            device_->send(buildDisplayText(
+                zone::kBusCompReadout, readout, readout.size()));
+        }
+        ++stats_.knobEventsHandled;
         return;
     }
 
@@ -3577,8 +3616,14 @@ void UC1Surface::pollKnobRings_()
         pushKnobRing_(knobId, visual, knobCascadeDim_(knobId, cascade));
     };
 
+    // Out-Gain fader mode: the Out-Gain ring tracks REAPER volume instead
+    // of the CS Fader Level param — plugin-independent, so it must skip the
+    // channelMap pushOne for kCSFaderLevel below (which would overwrite it)
+    // and still paint even when the track has no CS plug-in at all.
+    const bool outGainFader = reasixty_uc1OutGainFaderMode() && tr;
     if (tr && bindings.channelMap) {
         for (uint8_t knobId = 0; knobId < 0x20; ++knobId) {
+            if (outGainFader && knobId == knob::kCSFaderLevel) continue;
             pushOne(tr, knobId, bindings.channelMap, bindings.channelFxIdx);
         }
     }
@@ -3586,6 +3631,9 @@ void UC1Surface::pollKnobRings_()
         for (uint8_t knobId = 0; knobId < 0x20; ++knobId) {
             pushOne(bcTr, knobId, bcBindings.busCompMap, bcBindings.busCompFxIdx);
         }
+    }
+    if (outGainFader) {
+        pushKnobRing_(knob::kCSFaderLevel, reasixty_trackVolNorm(tr), false);
     }
 }
 
@@ -4185,8 +4233,15 @@ void UC1Surface::refresh()
     // Link, or learned via UC1PluginMap); otherwise clear every CS ring
     // fully dark — Frank 2026-05-07: "wenn kein CS Plugin auf selected
     // channel sollen die LEDs von EQ und DYN Section komplett aus sein".
+    const bool outGainFader = reasixty_uc1OutGainFaderMode() && tr;
     for (uint8_t knobId = 0; knobId < 0x20; ++knobId) {
         if (classifyKnob(knobId) != ControlDomain::ChannelStrip) continue;
+        // Out-Gain fader mode: ring tracks REAPER volume, plugin-independent
+        // (paints even with no CS plug-in, where the param path would clear).
+        if (outGainFader && knobId == knob::kCSFaderLevel) {
+            pushKnobRing_(knobId, reasixty_trackVolNorm(tr), false);
+            continue;
+        }
         if (tr && bindings.channelMap) {
             const int vst3Param = bindings.channelMap->knobParam[knobId];
             if (vst3Param == kParamNone) {
