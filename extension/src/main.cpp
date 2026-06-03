@@ -16089,20 +16089,24 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
 //      pnputil trusts CAT files signed by it.
 //   3. Builds a Windows file catalog (New-FileCatalog) over the package
 //      directory and Authenticode-signs it with the cert.
-//   4. Drops any pre-existing oem*.inf belonging to SSL's sslbus.inf
-//      bus driver (project goal: replace SSL 360°). Necessary because
-//      SSL's WHQL-signed driver outranks ours and pnputil's /install
-//      respects ranking; with SSL's INF gone, our WinUSB INF is the
-//      sole match for VID_31E9 PID_0021/0023 and PnP binds it.
-//   5. pnputil /add-driver /install — adds to store + binds onto both
-//      UF8 and UC1 in one shot.
+//   4. Adds our package to the driver store with "pnputil /add-driver".
+//      We deliberately do NOT remove SSL's sslbus.inf any more: it is the
+//      SHARED bus driver for the whole SSL family — UF8/UC1 AND UF1 +
+//      O-Series tiles (VID_31E9 PID_0024..0028). Deleting it (as older
+//      builds did) silently broke the UF1 in SSL 360° with a Code 28
+//      "no driver installed". We coexist with sslbus instead.
+//   5. Force-binds ONLY the UF8 (PID_0021) + UC1 (PID_0023) interfaces to
+//      our WinUSB INF via newdev's UpdateDriverForPlugAndPlayDevices with
+//      INSTALLFLAG_FORCE — the same call Zadig uses. pnputil's /install
+//      uses rank-based selection and refuses to swap a device that is
+//      already working on sslbus, so a plain /install can't move a UF8
+//      that SSL 360° already claimed; the FORCE call overrides the current
+//      binding. UF1/O-Series hardware ids are never named here, so they
+//      keep their sslbus binding and SSL 360° keeps working alongside us.
 //
-// The plain "pnputil /add-driver" path used previously failed on
-// Windows because the INF lacked a CAT signature (third-party-INF
-// rejection) and, even after we shipped a CAT, SSL's bus driver
-// outranked ours and PnP refused to swap. This wraps the full
-// Zadig-equivalent flow into a single UAC prompt; reversible only by
-// re-installing SSL 360°.
+// This wraps the full Zadig-equivalent flow into a single UAC prompt.
+// The Settings "uninstall" button removes our INF + cert (one staged copy
+// per pass); the UF8/UC1 then re-bind to sslbus on their next replug.
 //
 // Returns true if PowerShell was launched (final result is visible
 // only via the device state after the user clicks through UAC).
@@ -16169,18 +16173,59 @@ New-FileCatalog -Path $wd -CatalogFilePath $cat -CatalogVersion 2 | Out-Null
 $sig = Set-AuthenticodeSignature -FilePath $cat -Certificate $cert -HashAlgorithm SHA256
 if ($sig.Status -ne 'Valid') { throw "CAT signature failed: $($sig.Status)" }
 
-# Step 4: drop SSL's sslbus.inf if present. Walk pnputil's listing for
-# an entry whose Original Name matches sslbus.inf and delete it.
-$drivers = pnputil /enum-drivers | Out-String
-$sslMatch = [regex]::Match($drivers,
-    'Published Name:\s+(oem\d+\.inf)[\s\S]*?Original Name:\s+sslbus\.inf')
-if ($sslMatch.Success) {
-    $sslOem = $sslMatch.Groups[1].Value
-    pnputil /delete-driver $sslOem /uninstall 2>&1 | Out-Null
+# Step 4: add our package to the store. Do NOT delete SSL's sslbus.inf:
+# it is the shared bus driver for the whole SSL family (UF8/UC1 AND UF1 +
+# O-Series), and removing it breaks the UF1 in SSL 360 with Code 28.
+# We coexist with it and override only our two device interfaces below.
+pnputil /add-driver $inf | Out-Null
+
+# Resolve the staged published name (oemNN.inf) of our just-added package.
+# Walk enum-drivers line by line: "Published Name" precedes "Original Name"
+# inside each block, so track the last Published Name and grab it when we
+# reach our Original Name. (A lazy cross-entry regex mis-captures a foreign
+# oem, e.g. the first Published Name in the listing.)
+$ourInf = $inf
+$pub = $null
+foreach ($line in (pnputil /enum-drivers)) {
+    if ($line -match 'Published Name:\s+(oem\d+\.inf)') { $pub = $matches[1] }
+    elseif ($line -match 'Original Name:\s+rea_sixty_winusb\.inf') {
+        if ($pub) { $ourInf = Join-Path $env:WINDIR ('INF\' + $pub) }
+        break
+    }
 }
 
-# Step 5: install (rebind happens automatically with no competing INF).
-pnputil /add-driver $inf /install
+# Step 5: force-bind ONLY UF8 (PID_0021) + UC1 (PID_0023) to our WinUSB
+# INF. pnputil /install uses rank-based selection and will not swap a
+# device already working on sslbus, so go through newdev's
+# UpdateDriverForPlugAndPlayDevices with INSTALLFLAG_FORCE (the mechanism
+# Zadig uses) which overrides the current binding for a hardware id.
+# UF1 / O-Series ids are never named here -> they stay on sslbus.
+$nd = @'
+using System;
+using System.Runtime.InteropServices;
+public static class RsNewDev {
+  [DllImport("newdev.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool UpdateDriverForPlugAndPlayDevices(
+    IntPtr hwndParent, string HardwareId, string FullInfPath,
+    uint InstallFlags, out bool bRebootRequired);
+}
+'@
+Add-Type -TypeDefinition $nd
+$INSTALLFLAG_FORCE = 0x1
+# NOTE: only devices PRESENT right now get force-bound. A UF8/UC1 that is
+# first plugged in AFTER this runs goes through normal PnP ranking; with
+# sslbus in the store it may land on sslbus, so the user re-runs this with
+# the device attached. (The old delete-sslbus path auto-bound late hotplugs
+# but at the cost of breaking UF1 — this trade is deliberate.)
+foreach ($hwid in @('USB\VID_31E9&PID_0021','USB\VID_31E9&PID_0023')) {
+    $reboot = $false
+    try {
+        [void][RsNewDev]::UpdateDriverForPlugAndPlayDevices(
+            [IntPtr]::Zero, $hwid, $ourInf, $INSTALLFLAG_FORCE, [ref]$reboot)
+    } catch { }
+    # An absent device is a benign no-op (returns FALSE, no swap); only a
+    # currently-attached UF8/UC1 is rebound to WinUSB.
+}
 )PS";
 
     if (FILE* f = std::fopen(psPath, "wb")) {
