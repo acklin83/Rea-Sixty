@@ -177,6 +177,9 @@ White `00ffff`, Orange `003ff0`. Pure primaries exact; 8→4-bit quantization is
 (gamma-ish: G255→E in yellow, G128→3 in orange) — structure solid, exact curve TBD if needed.
 To set colour natively: `FF 38 04 <id> 00 (G4<<4|R4) (F0|B4) <ck>`. Revisit cap64/65 LED bytes
 under this model (the 1st FF38 frame per change is a transient — ignore for colour).
+**Colour is a UNIVERSAL element-addressed mechanism (cap74):** same FF38 GRB frame sets colour for
+button LEDs, SEL track colour (id 0x07), AND the EQ graph (id 0x03, changed by the "EQ Colour"
+toggle). One mechanism for all coloured elements.
 
 **Plugin-data screen (SSL Channel Strip, cap71/72) — FOCUS-BASED:**
 - `0x010e` (22 ch) = focused parameter readout: name(left)+value(right). All 4 V-pots correlate
