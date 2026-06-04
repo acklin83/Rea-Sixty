@@ -182,13 +182,17 @@ under this model (the 1st FF38 frame per change is a transient — ignore for co
 - `0x010e` (22 ch) = focused parameter readout: name(left)+value(right). All 4 V-pots correlate
   with this one address → it follows focus, NOT 4 separate named slots.
 - `0x0104` (13 ch) = section/soft-key label (S/C LISTEN, HQ MODE, A/B, EQ, DYN…).
-- `0x010f` (10 B) + `0x0122` (FD, 253 B) = value-bar graphics (the "up to 4" V-pot indicators).
+- `0x010f` (10 B) = value-bar graphics (the "up to 4" V-pot indicators).
+- **`0x0122` (FD frame, 251-byte payload) = EQ graph** (cap73): column-height array, one byte per
+  pixel column. Baseline 0 dB = `0x64` (100); boost raises columns (peak ≈187), cut dips below;
+  x = band freq, width = Q. Native: map EQ dB-response → 251 column heights, emit to `FF 67 FD 01 22`.
 - Full param set extracted (In Trim, High/Low Pass, LF/LMF/HMF/HF Gain/Freq/Q, Ratio, Threshold,
   Release, Range, Width, Mic, Out Trim, Mix). Same for all SSL Channel Strip plugins incl. Link 360.
 
 **Still unknown:**
-- Per-V-pot value-bar bytes inside 0x010f / 0x0122 (turn ONE v-pot, watch which bytes move).
+- Per-V-pot value-bar bytes inside 0x010f (turn ONE v-pot, watch which bytes move).
 - Meter plugin (SSL Meter / Meter Pro) — animated, needs audio. NEXT.
+- EQ graph dB→pixel-height scale exact curve (have baseline 100, peak ~187); 0x0122 short 8-byte frame role.
 - Field→screen-region mapping; FF39 vs FF38 roles; brightness field (cap65 dim/bright).
 - Keep transport STOPPED for layout diffs (meters animate = noise).
 
