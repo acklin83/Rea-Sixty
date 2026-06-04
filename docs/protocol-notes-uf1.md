@@ -161,11 +161,20 @@ diff static snapshots, timing irrelevant). Analyse with `analysis/uf1_screen_dum
 - `0x011c` text row = **8 fields × 25 bytes**, ASCII, null-padded. cap66: "FADER SEL" @field0,
   "1/10" @field1. cap52 ("OFF" state): dashes @fields 0/1/2, "OFF" @field4 (off 100).
 
-**Still unknown (need targeted diff capture):**
-- Field→screen-region mapping (which of the 8 fields is where on the LCD).
-- **Paging**: "1/10" = page 1 of 10. What cycles it (Mode? 5-8? arrows?). Decode one page fully first.
-- **Colour**: CA frame is pure ASCII, no colour byte → colour lives at a separate address. Select
-  tracks of different colours to find it (likely also cracks the open LED colour-index question).
+**Paging — SOLVED (cap68, Plugin Mode):** main text row `0x011c` = `REAPER | N/8 | OFF`.
+Pages cycled by **Left/Right nav buttons** (← 0x24 / → 0x26). 8 pages in Plugin Mode (DAW mode
+shows a different "1/10"). Per-page content is in 0x00xx param-zone + 0x0104, not 0x011c.
+
+**Colour — LOCATED, encoding UNSOLVED (cap68):** screen-element/track colour rides the **same
+FF38/FF39 frames as LEDs** (id-addressed; SEL=id 0x07), sent **on-change only**. red→
+`00 01 f0`+`00 f0 ff`, blue→`00 10 f1`+`00 0f f0` (reproducible). Nibble symmetry suggests a
+hue/palette index, not raw RGB. **Needs a multi-colour sweep (pure R/G/B/Y/C/W) — do NOT guess.**
+→ LED colour and screen colour are ONE mechanism (FF38+FF39 pair + FF3B on/off); re-read
+cap64/65 LED bytes in this light.
+
+**Still unknown:**
+- Field→screen-region mapping (which of the 8 text-row fields is where on the LCD).
+- FF38 vs FF39 roles (the pair) + full colour byte encoding (multi-colour sweep).
 - Keep transport STOPPED for layout diffs (meters animate = noise).
 
 ## TODO (subtractive order)
