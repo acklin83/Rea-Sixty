@@ -21,10 +21,10 @@ Fader (read+motor), 5 encoders + jog, all buttons. Manual confirms roles:
 - **Parameters page (1/8)** ✅ — paging Left/Right; `0x011c` shows page.
 - **Soft Keys (4) + labels** ✅ addr `0x0104`. Logical per-page assignments now KNOWN from manual
   p188 tables (CS2 / 4K B / 4K E / 360 Link) — see below.
-- **4× V-Pot param readouts (name+value) + readout bars** ⚠️ **RE-DECODE NEEDED.** Manual p187/p188:
-  the screen shows the 4 current-page params SIMULTANEOUSLY (e.g. Width/Mic/Out Trim/Comp Mix), one
-  per V-pot, each with a readout bar. My cap72 wrongly concluded a single focused readout (`0x010e`).
-  → capture: turn ONLY V-pot 1, find its name/value/bar addresses; repeat 2,3,4.
+- **V-Pot param readout + readout bars** ✅ RESOLVED (re-analysed cap71/72 with OUT frame-splitting,
+  no re-capture). REAPER+SSL sends ONE focused text readout `0x010e` (follows active V-pot) +
+  **4 readout bars in `0x010f`** (V-pot1=byte0+1, V2=byte2, V3=byte4, V4=byte6) + EQ graph `0x0122`.
+  The manual p187 depicts 4 named params, but the protocol uses 1 focused text + 4 bars + graph.
 - **Small channel-info LCD zone** (manual p182 "Small LCD Layout") ⚠️/❌ — `0x00xx` plane (we saw
   0x0004="PAN", 0x000c="dB"). Holds: CS TYPE, DAW track colour, **TrkNam**, **O/PdB output fader dB**,
   **Dynamics Metering (gate+comp GR)**, Pan label/value/bar, Bypass. Not systematically decoded.
@@ -53,7 +53,7 @@ We no longer need to capture these logically; they're documented per EQ type:
 (Full tables: docs/docs/SSL UF1 User Guide_Rev4.0.pdf p188.)
 
 ## What we still NEED to decode (priority order)
-1. **4 V-Pot param readouts + readout bars** (Channel Strip Mode) — re-capture, per-V-pot. ← corrects cap72.
+1. ~~4 V-Pot param readouts + bars~~ ✅ RESOLVED from existing capture (0x010e focused text + 0x010f 4 bars).
 2. **Small channel-info LCD zone** (`0x00xx`): TrkNam, O/PdB, Pan, CS TYPE, Bypass, **Dynamics GR meter**.
 3. **Meter graphic codecs**: Overview bargraphs + scope + correlation, Analogue VU, RTA 31-band.
 4. **Timecode** digit frame (after configuring HUI/MCU TC in REAPER).

@@ -181,12 +181,18 @@ under this model (the 1st FF38 frame per change is a transient — ignore for co
 button LEDs, SEL track colour (id 0x07), AND the EQ graph (id 0x03, changed by the "EQ Colour"
 toggle). One mechanism for all coloured elements.
 
-**Plugin-data screen (SSL Channel Strip, cap71/72):**
-- **CORRECTION (per manual p187/p188):** the screen shows the **4 current-page V-pot params
-  SIMULTANEOUSLY** (name+value+readout-bar each, e.g. Width/Mic/Out Trim/Comp Mix). My earlier
-  cap72 "single focused readout 0x010e" conclusion was WRONG — needs re-capture turning ONE
-  V-pot at a time to map the 4 param addresses. See `docs/uf1-plugin-mode-gap-analysis.md`.
-- `0x010e` (22 ch) = a param readout (one of the slots; cycled during cap72 as values changed).
+**Plugin-data screen (SSL Channel Strip, cap71/72) — RESOLVED (re-analysed existing capture
+with OUT frame-splitting; no re-capture needed):**
+- `0x010e` (22 ch) = **single focused param text readout** (name+value), follows the active V-pot
+  (shows "LF Gain…" / "LF Freq…" as Frank turned V-pot1/V-pot2). One readout, not 4 text slots.
+- `0x010f` (10 B) = **4 V-pot readout-bar positions**, mapped to bytes: V-pot1=byte0(+1),
+  V-pot2=byte2, V-pot3=byte4, V-pot4=byte6.
+- `0x0122` = EQ graph (251-col heights).
+- The manual p187 depicts 4 named params, but REAPER+SSL sends ONE focused text + 4 bars + graph.
+  (My earlier "needs re-capture" note was an over-correction — the existing data answers it.)
+- **Parser note:** the OUT stream concatenates multiple FF frames per URB; split on the length
+  byte (frame = FF op len <len bytes> ck, total len+4). `analysis/uf1_screen_dump.py` only read the
+  first frame per URB — use frame-splitting for full per-page dumps.
 - `0x0104` (13 ch) = section/soft-key label (S/C LISTEN, HQ MODE, A/B, EQ, DYN…).
 - `0x010f` (10 B) = value-bar graphics (the "up to 4" V-pot indicators).
 - **`0x0122` (FD frame, 251-byte payload) = EQ graph** (cap73): column-height array, one byte per

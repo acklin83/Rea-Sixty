@@ -23,11 +23,27 @@ def frames(pcap, dev=None):
                          capture_output=True, text=True).stdout
     for line in out.splitlines():
         h = line.strip().lower()
-        # a URB may concatenate frames; split on ff67 boundaries is unsafe (ff67 can
-        # appear in payload). Instead only take URBs that START with ff67 (the screen
-        # frames are sent as their own URBs in practice).
-        if h.startswith("ff67") and len(h) >= 10:
-            yield h
+        if len(h) < 8:
+            continue
+        # OUT URBs concatenate multiple FF frames; split on the length byte.
+        # SSL frame = FF <op> <len> <len bytes> <ck>, total = len+4.
+        try:
+            b = binascii.unhexlify(h)
+        except Exception:
+            continue
+        i = 0
+        while i + 4 <= len(b):
+            if b[i] != 0xFF:
+                i += 1
+                continue
+            ln = b[i + 2]
+            end = i + 3 + ln + 1
+            if end > len(b):
+                break
+            frame = b[i:end]
+            if frame[1] == 0x67 and len(frame) >= 6:
+                yield binascii.hexlify(frame).decode()
+            i = end
 
 def ascii_of(b):
     return ''.join(chr(c) if 32 <= c < 127 else '.' for c in b)
