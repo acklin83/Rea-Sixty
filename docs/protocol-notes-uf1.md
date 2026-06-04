@@ -194,7 +194,12 @@ toggle). One mechanism for all coloured elements.
 
 **Still unknown:**
 - Per-V-pot value-bar bytes inside 0x010f (turn ONE v-pot, watch which bytes move).
-- Meter plugin (SSL Meter / Meter Pro) — animated, needs audio. NEXT.
+- Meter (SSL Meter/Meter Pro): STRUCTURE mapped (cap75/76). MODE button (0x20) toggles
+  Channel↔Meter. Meter view: 0x011c = per-channel dB readouts (−inf silent), 0x010e = settings,
+  0x0104 = mode label (OVERVIEW/ANALOGUE/RTA/LOUDNESS) + soft-keys. `0x0122` = animated meter
+  graphic, length by mode (FD/253 bars, D2/210 RTA spectrum, 42/66, 3F/63). Graphic byte format
+  differs from EQ (OVERVIEW bars use values {0,3,14,15} = packed segment/bitmap, NOT 0..187 heights).
+  REMAINING: exact per-mode 0x0122 codec + dB-readout text format (own decode chapter).
 - EQ graph dB→pixel-height scale exact curve (have baseline 100, peak ~187); 0x0122 short 8-byte frame role.
 - Field→screen-region mapping; FF39 vs FF38 roles; brightness field (cap65 dim/bright).
 - Keep transport STOPPED for layout diffs (meters animate = noise).
