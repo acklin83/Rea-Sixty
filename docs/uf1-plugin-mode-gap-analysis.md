@@ -61,6 +61,8 @@ We no longer need to capture these logically; they're documented per EQ type:
    0x0127 correlation + 0x011c T-PEAK/RMS; Analogue = 0x0125/0x0127 VU needles L/R + 0x011c;
    RTA = 0x0122 31-band spectrum (64 B); Loudness = 0x011c LKFS/LRA + 0x000c momentary + 0x0122
    loudness-history graph. Exact byte→value scaling = optional polish (meters self-renderable).
-4. **Timecode** digit frame (after configuring HUI/MCU TC in REAPER).
+4. **Timecode** ✅ located (cap83): address `0x0119`, 11-byte, per-digit 7-segment encoding
+   (`0c`='1', `7f`/`7e`≈'0'; middle 5 bytes = visible digits, last 2 = fast ticks). **Only shown
+   in the MCU layer** — in Plugin Mode measures/beats is empty. Exact segment→digit map = polish.
 5. Status indicators: Solo Active, Fine-mode, Host label.
 6. **Then: NATIVE BUILD (UF1Surface + WinUSB-bind + init-replay cap66 → send).** ← the real next milestone.

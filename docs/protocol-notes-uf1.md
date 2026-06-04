@@ -209,7 +209,9 @@ with OUT frame-splitting; no re-capture needed):**
 - Per-V-pot value-bar bytes inside 0x010f (turn ONE v-pot, watch which bytes move).
 - Meter (SSL Meter/Meter Pro): STRUCTURE mapped (cap75/76). MODE button (0x20) toggles
   Channel↔Meter. Meter view: 0x011c = per-channel dB readouts (−inf silent), 0x010e = settings,
-  0x0104 = mode label (OVERVIEW/ANALOGUE/RTA/LOUDNESS) + soft-keys. `0x0122` = animated meter
+  0x0104 = 4 soft-key labels (confirmed by Frank): Overview/Analogue/RTA = `<mode>`·Reset·Fine·Presets;
+  Loudness = Loudness·Reset·Pause(Play, toggle)·Presets. SK1 = Meter Screen Selector (cycles modes).
+  `0x0122` = animated meter
   graphic, length by mode (FD/253 bars, D2/210 RTA spectrum, 42/66, 3F/63). Graphic byte format
   differs from EQ (OVERVIEW bars use values {0,3,14,15} = packed segment/bitmap, NOT 0..187 heights).
   Per-mode elements LOCATED (cap79/80/81): **Overview** 0x0122=Lissajous scope(251B) + 0x0126
