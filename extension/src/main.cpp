@@ -458,6 +458,18 @@ std::atomic<bool>  g_pendingFocusGuiSync{false};
 // track. With this gate, the coalescer ignores the swap traffic entirely.
 std::atomic<bool> g_inSelectionSwap{false};
 
+// Range-select state for the Shift+encoder "extend selection to adjacent
+// channels" builtin (track_select_range), mirroring REAPER's Shift+Arrow.
+// g_selAnchorTrack = frozen range start (the last plainly-selected single
+// track); g_selCursorTrack = the moving end the encoder walks. Both are
+// (re)set centrally in SetSurfaceSelected on any plain selection so a normal
+// select restarts the gesture. g_inRangeSelect guards the multi-track burst
+// the range op itself issues, so SetSurfaceSelected does not clobber the
+// anchor / latch focus mid-range. All touched on the main thread.
+std::atomic<void*> g_selAnchorTrack{nullptr};
+std::atomic<void*> g_selCursorTrack{nullptr};
+std::atomic<bool>  g_inRangeSelect{false};
+
 // When the user hits the PAN button, we globally override every strip's
 // V-Pot to act as pan control regardless of whether the track hosts an
 // SSL plug-in. Any V-Pot assignment soft key (0x68–0x6D) returns to
@@ -3050,6 +3062,68 @@ void applySelectRelative_(int step)
         followSelectedInMixer(tr);
     }
 }
+// Shift+encoder range-select — extend the track selection to adjacent
+// channels, REAPER Shift+Arrow style. The contiguous block runs from a
+// frozen anchor (g_selAnchorTrack = the last plainly-selected track) to a
+// cursor the encoder walks; reversing direction shrinks the range. Operates
+// in visible-track space so it follows the channels the surface shows.
+// Exposed as the `track_select_range` builtin. Main thread (drainInputQueue).
+void applySelectRangeRelative_(int step)
+{
+    if (step == 0) return;
+    const int vc = visibleTrackCount();
+    if (vc == 0) return;
+
+    auto idxOfVisible = [vc](void* p) -> int {
+        if (!p || !ValidatePtr2(nullptr, p, "MediaTrack*")) return -1;
+        for (int t = 0; t < vc; ++t)
+            if (visibleTrackAt(t) == p) return t;
+        return -1;
+    };
+
+    // Cursor = moving end. Lost (hidden / project change / never set) →
+    // fall back to the first REAPER-selected visible track, then strip 0.
+    int curIdx = idxOfVisible(g_selCursorTrack.load());
+    if (curIdx < 0) {
+        for (int t = 0; t < vc; ++t) {
+            MediaTrack* tr = visibleTrackAt(t);
+            if (tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) { curIdx = t; break; }
+        }
+        if (curIdx < 0) curIdx = 0;
+    }
+    // Anchor = frozen range start. Lost → begin a fresh gesture at the cursor.
+    int anchorIdx = idxOfVisible(g_selAnchorTrack.load());
+    if (anchorIdx < 0) anchorIdx = curIdx;
+
+    int nc = curIdx + step;
+    if (nc < 0)        nc = 0;
+    if (nc > vc - 1)   nc = vc - 1;
+
+    const int lo = std::min(anchorIdx, nc);
+    const int hi = std::max(anchorIdx, nc);
+    MediaTrack* loTr = visibleTrackAt(lo);
+    if (!loTr) return;
+
+    // Apply the contiguous block as one selection burst. g_inRangeSelect
+    // stops SetSurfaceSelected from re-anchoring / latching focus mid-burst
+    // (SEL LEDs still update per track — that path runs unconditionally).
+    // SetOnlyTrackSelected + SetTrackSelected do NOT trigger REAPER's mixer
+    // follow (only CSurf_OnSelectedChange does), so there is no per-track
+    // scroll; the single follow to the cursor happens via the focus drain.
+    g_inRangeSelect.store(true);
+    SetOnlyTrackSelected(loTr);
+    for (int i = lo + 1; i <= hi; ++i)
+        if (MediaTrack* tr = visibleTrackAt(i)) SetTrackSelected(tr, true);
+    g_inRangeSelect.store(false);
+
+    g_selCursorTrack.store(visibleTrackAt(nc));   // anchor stays frozen
+
+    // Focus + MCP/TCP/bank follow track the moving cursor via the onTimer
+    // focus drain (followSelectedInMixer + UC1 7-seg + UF8 bank). That path
+    // wraps CSurf_OnSelectedChange in g_inSelectionSwap, so its echo into
+    // SetSurfaceSelected does not disturb the frozen anchor.
+    if (MediaTrack* curTr = visibleTrackAt(nc)) g_pendingFocusTrack.store(curTr);
+}
 // Encoder cycle action — scroll through the visible-track list,
 // selecting the next/prev track and syncing UC1's focused-track when
 // the UC1 surface is present. Mirrors what UC1 Encoder 1 did before it
@@ -4406,9 +4480,23 @@ void followSelectedInMixer(MediaTrack* tr)
 {
     if (!kSelectFollowsMixer || !tr) return;
 
-    // REAPER MCP: scroll so the selected track becomes leftmost (or
-    // stays within the visible range if REAPER decides to keep context).
-    SetMixerScroll(tr);
+    // REAPER MCP: scroll the selected track into view. We used to force it to
+    // the leftmost strip via SetMixerScroll(tr), which yanked the mixer on
+    // *every* selection even when the track was already on-screen. Instead we
+    // fire the control-surface selection-changed report: REAPER's native mixer
+    // follow then scrolls *minimally* and *only when off-screen* — already-
+    // visible tracks stay put — which is exactly what we want, in wide, narrow
+    // and floating mixers alike (verified: CSurf_OnSelectedChange triggers the
+    // follow, SetOnlyTrackSelected / TrackList_AdjustWindows do not).
+    //
+    // The track is already exclusively selected at this point, so this only
+    // nudges the follow; it does not change selection. Guard with
+    // g_inSelectionSwap so the SetSurfaceSelected callback REAPER fires back
+    // into us is not re-latched by the coalescer (which would re-enter here).
+    // Frank 2026-06-04.
+    const bool prevSwap = g_inSelectionSwap.exchange(true);
+    CSurf_OnSelectedChange(tr, 1);
+    g_inSelectionSwap.store(prevSwap);
 
     // REAPER TCP: optional, gated on the Device setting "TCP follows UF8
     // selection". Action 40913 = "Track: Vertical scroll selected tracks
@@ -7088,8 +7176,15 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
     // swap (runReaperActionOnTrackN_) is running — that swap restores
     // selection state but is not a user focus change, so the surface
     // must not chase the swap traffic.
-    if (sel && !g_inSelectionSwap.load()) {
+    if (sel && !g_inSelectionSwap.load() && !g_inRangeSelect.load()) {
         g_pendingFocusTrack.store(tr);
+        // Plain single-track selection (mouse, SEL button, plain encoder,
+        // action): (re)anchor the Shift+encoder range gesture here so it
+        // starts fresh. Suppressed during our own range burst
+        // (g_inRangeSelect) and during the follow's CSurf echo
+        // (g_inSelectionSwap) so neither clobbers the frozen anchor.
+        g_selAnchorTrack.store(tr);
+        g_selCursorTrack.store(tr);
         if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
             g_pendingFocusGuiSync.store(true);
         }
@@ -17541,6 +17636,13 @@ void registerBindingHandlers()
             applyTrackScroll_(param);
         },
         nullptr, "Encoder: scroll tracks", false
+    });
+    registerBuiltin("track_select_range", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applySelectRangeRelative_(param);
+        },
+        nullptr, "Encoder: extend track selection (Shift+Arrow style)", false
     });
     registerBuiltin("temp_selset_scroll", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {

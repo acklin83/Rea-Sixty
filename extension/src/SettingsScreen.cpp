@@ -2444,6 +2444,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "bc_track_scroll_select"
                  || n == "select_relative"
                  || n == "track_scroll"
+                 || n == "track_select_range"
                  || n == "temp_selset_scroll"
                  || n == "playhead_nudge"
                  || n == "mouse_scroll")
