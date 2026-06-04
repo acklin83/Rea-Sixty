@@ -57,7 +57,9 @@ We no longer need to capture these logically; they're documented per EQ type:
 2. **Small channel-info LCD zone** (`0x00xx`) ✅ DONE (cap77/78): 0x000b TrkNam, 0x000c output dB,
    0x000e Pan, 0x000f Pan bar, 0x0017 CS TYPE, 0x0014 ch#, GR meter 0x0009 comp / 0x000a gate.
    Bypass = button LED only (confirmed, no screen element).
-3. **Meter graphic codecs**: Overview bargraphs + scope + correlation, Analogue VU, RTA 31-band.
+3. **Meter mode** ⚠️ partial: NUMERIC readouts ✅ (`0x011c` = T PEAK/RMS value/max/current);
+   0x0126/0127 = balance/correlation. **Exact `0x0122` pixel codec (scope/bars/VU/RTA) = LOW priority**
+   — can self-render meters from REAPER metering (like the EQ graph). Needs level-sweep if pursued.
 4. **Timecode** digit frame (after configuring HUI/MCU TC in REAPER).
 5. Status indicators: Solo Active, Fine-mode, Host label.
-6. Then: NATIVE BUILD (UF1Surface + WinUSB-bind + init-replay cap66 → send).
+6. **Then: NATIVE BUILD (UF1Surface + WinUSB-bind + init-replay cap66 → send).** ← the real next milestone.

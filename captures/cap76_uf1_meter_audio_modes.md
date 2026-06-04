@@ -21,8 +21,16 @@
 OVERVIEW bar frame (251 B) with white noise: values only `{0, 3, 14, 15}` (NOT 0..187 heights
 like the EQ graph). Looks like a packed segment/bitmap encoding, **per-mode specific**.
 
-## Remaining (own decode chapter, next session)
-- Exact per-mode 0x0122 byte format: OVERVIEW/ANALOGUE bars, RTA spectrum (210 B), LOUDNESS.
-- 0x011c dB-readout text format with real levels (field layout).
-- Correlate dB readout ↔ bar bytes to derive the level→graphic mapping.
-The meter STRUCTURE (addresses, modes, frame lengths) is mapped; the detailed graphic codecs remain.
+## Overview mode element breakdown (frame-split, white noise)
+- **`0x011c`** = the 6 numeric readouts: T PEAK (value/max/current) + RMS (value/max/current),
+  e.g. `-5.9 | -6.7 | -6.7 | -16.4 | -16.5 | -16.5`. **This is the actionable meter data.**
+- **`0x0122`** (251 B, values 0..48, ~600/s) = the dominant animated graphic = Lissajous scope
+  (+ likely L/R bargraphs packed). Sparse with white noise (scatter cloud).
+- **`0x0126` / `0x0127`** (2 B, ~160..164) = L-R balance bar / phase-correlation position.
+- `0x0125` = meter-instance label; 0x0009/a/0015/0016 = idle here.
+
+## Remaining (own chapter; LOW priority — can self-render)
+Exact per-mode `0x0122` pixel codec (Overview scope+bars, Analogue VU needle, RTA 31-band) needs a
+level-SWEEP capture per mode to map level→bytes. **But for native output we can render our own
+meters from REAPER metering (like the EQ graph), so matching SSL's exact pixel codec is optional
+polish.** The meter NUMERIC readouts (0x011c) + structure are decoded — enough to drive a meter.
