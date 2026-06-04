@@ -57,9 +57,10 @@ We no longer need to capture these logically; they're documented per EQ type:
 2. **Small channel-info LCD zone** (`0x00xx`) ✅ DONE (cap77/78): 0x000b TrkNam, 0x000c output dB,
    0x000e Pan, 0x000f Pan bar, 0x0017 CS TYPE, 0x0014 ch#, GR meter 0x0009 comp / 0x000a gate.
    Bypass = button LED only (confirmed, no screen element).
-3. **Meter mode** ✅ located (cap79/80/81): Overview = 0x0122 scope + 0x0126 balance + 0x0127
-   correlation + 0x011c T-PEAK/RMS; Analogue = 0x0125/0x0127 VU needles L/R + 0x011c; RTA = 0x0122
-   31-band spectrum (64 B). Exact byte→value scaling = optional polish (meters self-renderable).
+3. **Meter mode — ALL 4 ✅ located (cap79/80/81/82):** Overview = 0x0122 scope + 0x0126 balance +
+   0x0127 correlation + 0x011c T-PEAK/RMS; Analogue = 0x0125/0x0127 VU needles L/R + 0x011c;
+   RTA = 0x0122 31-band spectrum (64 B); Loudness = 0x011c LKFS/LRA + 0x000c momentary + 0x0122
+   loudness-history graph. Exact byte→value scaling = optional polish (meters self-renderable).
 4. **Timecode** digit frame (after configuring HUI/MCU TC in REAPER).
 5. Status indicators: Solo Active, Fine-mode, Host label.
 6. **Then: NATIVE BUILD (UF1Surface + WinUSB-bind + init-replay cap66 → send).** ← the real next milestone.
