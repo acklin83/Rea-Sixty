@@ -58,8 +58,10 @@ void reasixty_setVpotCaptureActive(bool active)
 // (defined in main.cpp; read by the UF8 bind paths). Frank 2026-06-20.
 bool reasixty_uf8LearnAsToggle();
 void reasixty_setUf8LearnAsToggle(bool v);
+bool reasixty_uf1Connected();
 const char* reasixty_uf8Serial();
 const char* reasixty_uc1Serial();
+const char* reasixty_uf1Serial();
 // REAPER Action picker — Settings → Bindings editor uses these to drive
 // REAPER's PromptForAction window and to resolve stored action strings
 // to their human-readable names. Implemented in main.cpp; the poll runs
@@ -557,6 +559,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     char line[128];
     const bool uf8On = reasixty_uf8Connected();
     const bool uc1On = reasixty_uc1Connected();
+    const bool uf1On = reasixty_uf1Connected();
 
     auto deviceLine = [&](const char* name, bool on, const char* serial) {
         if (on && serial && *serial) {
@@ -586,6 +589,8 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             reasixty_identifyUc1();
         }
     }
+
+    deviceLine("UF1", uf1On, reasixty_uf1Serial());
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

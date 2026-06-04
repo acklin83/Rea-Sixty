@@ -321,6 +321,8 @@ add_library(reaper_uf8 MODULE
     src/PluginChunkPatch.cpp
     src/FocusedParam.cpp
     src/UF8Device.cpp
+    src/UF1Protocol.cpp
+    src/UF1Device.cpp
     src/UC1Protocol.cpp
     src/UC1Device.cpp
     src/UC1PluginMap.cpp

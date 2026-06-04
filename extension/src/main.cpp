@@ -176,6 +176,7 @@ int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
 #include "UC1Surface.h"
+#include "UF1Device.h"
 #include "UF8Device.h"
 #include "UserPluginCatalog.h"
 #include "VirtualNotch.h"
@@ -354,6 +355,25 @@ std::unique_ptr<uf8::HidDevice>   g_hid;
 // side.
 std::unique_ptr<uc1::UC1Device>   g_uc1_dev;
 std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
+
+// UF1 — optional, Phase 0 bring-up (native driver, Mac-first). Separate
+// libusb context like UC1. Absence is fine; UF8/UC1 run independently. For
+// now this is claim + init-replay + input logging + a one-shot SEL colour
+// proof; the surface (screen features) comes after the path is verified.
+std::unique_ptr<uf1::UF1Device>   g_uf1_dev;
+
+// UF1 fader state. Set on the worker thread (onUf1Event), consumed on the main
+// thread (uf1PaintChannel_) — atomics, no queue needed for a single fader.
+std::atomic<uint16_t> g_uf1FaderPos{0};        // last 15-bit position from the fader
+std::atomic<bool>     g_uf1FaderHasPos{false}; // a position has been seen this session
+std::atomic<bool>     g_uf1FaderTouched{false};// capacitive touch state (motor limp while true)
+// UF1 display view (Phase 3, Meter-Bridge). The MODE button (id 0x20) toggles
+// the firmware's Channel <-> Meter layout autonomously (cap75: no host switch
+// opcode — it re-purposes the same element addresses by view context, e.g.
+// 0x011c = channel header in Channel view, 6x25 dB readouts in Meter view). We
+// mirror that toggle here so the main-thread painter streams the matching
+// content. The cap66 init lands in Channel view (cap84 cold-start), so false.
+std::atomic<bool>     g_uf1MeterView{false};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -1093,6 +1113,7 @@ int64_t nowMs_();
 // formatters live further down with the other strip caches.
 std::string formatPanReadout(double pan);
 std::string composeValueLine(std::string_view label, std::string_view value);
+std::string formatDbReadout(double linearAmp);
 constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
 extern std::array<std::string, 8> g_panOverlayText;
@@ -13603,6 +13624,10 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
 // on shutdown.
 void onTimer();
 void onUf8Input(const uint8_t* data, size_t len);
+void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag log)
+void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
+void openUf1BringUp_();                                  // claim + handlers + colour proof
+void uf1PaintChannel_();                                 // main-thread channel-zone + colour painter
 void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
                     int delta, const char* decision);
 void onMidiFromReaper(std::span<const uint8_t> bytes);
@@ -13702,6 +13727,9 @@ ReaSixtySurface::ReaSixtySurface()
         g_uc1_dev.reset();
     }
 
+    // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
+    openUf1BringUp_();
+
     plugin_register("timer", reinterpret_cast<void*>(onTimer));
 
     // Push the persisted brightness level to both devices now that
@@ -13721,6 +13749,8 @@ ReaSixtySurface::~ReaSixtySurface()
     g_uc1_surface.reset();
     if (g_uc1_dev) g_uc1_dev->close();
     g_uc1_dev.reset();
+    if (g_uf1_dev) g_uf1_dev->close();
+    g_uf1_dev.reset();
     g_slotTrack.fill(nullptr);
 }
 
@@ -14932,6 +14962,378 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
         // double-counts the user's hand and causes spurious LIMPs.
 
         i += frameSize;
+    }
+}
+
+// ---- UF1 bring-up (Phase 0) ------------------------------------------------
+// Read-proof + send-proof for the native UF1 path. Both handlers run on the
+// UF1 worker thread, so they ONLY log to a file — no REAPER/ImGui calls (see
+// feedback-reaper-api-input-thread). The real surface (queueInput dispatch,
+// screen features) comes after this path is verified on hardware.
+
+// Raw bulk-IN dump — skips pure idle polls (32 60 / 32 00) to keep the log
+// readable while a fader/button is exercised.
+void onUf1Input(const uint8_t* data, size_t len)
+{
+    if (len <= 2) return;  // bare report header = idle poll
+    if (FILE* f = std::fopen("/tmp/reaper_uf1_input.log", "a")) {
+        std::fprintf(f, "RAW [%zu] ", len);
+        for (size_t k = 0; k < len && k < 32; ++k) std::fprintf(f, "%02x ", data[k]);
+        std::fputc('\n', f);
+        std::fclose(f);
+    }
+}
+
+// Parsed control event — the human-readable read-proof.
+void onUf1Event(const uf1::InputEvent& ev)
+{
+    FILE* f = std::fopen("/tmp/reaper_uf1_input.log", "a");
+    if (!f) return;
+    switch (ev.kind) {
+        case uf1::InputKind::FaderTouch:
+            std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
+            g_uf1FaderTouched.store(ev.pressed);
+            // Release the motor the instant the user grips it so it goes limp
+            // under the finger (re-engaged by uf1PaintChannel_ on release).
+            // sendPriority is thread-safe; no REAPER API here.
+            if (ev.pressed && g_uf1_dev)
+                g_uf1_dev->sendPriority(uf1::buildMotorEnable(false));
+            break;
+        case uf1::InputKind::FaderPosition:
+            std::fprintf(f, "FADER POS %u (0x%04x)\n", ev.position, ev.position);
+            g_uf1FaderPos.store(ev.position);
+            g_uf1FaderHasPos.store(true);
+            break;
+        case uf1::InputKind::EncoderRotate:
+            std::fprintf(f, "ENC 0x%02x rotate %+d\n", ev.id, ev.delta);
+            break;
+        case uf1::InputKind::EncoderTouch:
+            std::fprintf(f, "ENC 0x%02x touch %s\n", ev.id, ev.pressed ? "down" : "up");
+            break;
+        case uf1::InputKind::Button:
+            std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
+            // MODE (0x20) toggles the firmware's Channel <-> Meter view. The
+            // device flips its own layout; we only mirror the state so the
+            // painter knows which content to stream. Atomic store only — no
+            // REAPER API on this thread (threading rule).
+            if (ev.id == uf1::btn::kMode && ev.pressed)
+                g_uf1MeterView.store(!g_uf1MeterView.load());
+            break;
+    }
+    std::fclose(f);
+}
+
+// Best-effort UF1 attach. Absence is fine — UF8/UC1 run independently.
+// On success: log input (read-proof) and queue a one-shot SEL colour + LED
+// (send-proof, flushed after the init replay completes).
+void openUf1BringUp_()
+{
+    g_uf1_dev = std::make_unique<uf1::UF1Device>();
+    if (!g_uf1_dev->open()) {
+        const std::string err = g_uf1_dev->lastError();
+        if (FILE* f = std::fopen("/tmp/rea_sixty_uf1_stale.log", "a")) {
+            const auto t = std::chrono::system_clock::now().time_since_epoch();
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
+            std::fprintf(f, "[%lld] UF1 open() failed: %s\n",
+                         static_cast<long long>(ms), err.c_str());
+            std::fclose(f);
+        }
+        g_uf1_dev.reset();
+        return;
+    }
+    // TODO(remove before release): full wire trace to /tmp/reaper_uf1_frames.log
+    // grows unbounded — bring-up diagnostics only.
+    g_uf1_dev->setFrameTrace(true);
+    g_uf1_dev->setRawInputHandler(onUf1Input);
+    g_uf1_dev->setInputHandler(onUf1Event);
+
+    // Header banner (0x011c — large-LCD header, NOT the 0x00xx channel plane,
+    // so no leading attribute byte). The channel-zone content + track colour
+    // are painted live by uf1PaintChannel_() from onTimer.
+    auto str = [](const char* s){ return std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(s), std::strlen(s)); };
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, str("Rea-Sixty")));
+
+    // Release the fader motor so it's hand-movable (the cap66 init leaves it
+    // engaged, holding wherever SSL last drove it — Frank saw it stuck at -12).
+    // Phase 0 has no REAPER fader wiring yet; limp lets the read-proof's fader
+    // position events flow. Motor engage + volume tracking + touch-release come
+    // with the fader<->volume wiring (later phase).
+    g_uf1_dev->send(uf1::buildMotorEnable(false));
+}
+
+// ---- UF1 Channel-zone painter (Phase 1 + 2) --------------------------------
+// Runs on the MAIN thread (onTimer) so REAPER-API reads are legal. Pushes the
+// Plugin-Mode channel-info zone (0x00xx plane) + the SEL/track-colour element
+// for whichever track is currently focused, change-detected so we don't hammer
+// the bus at 30 Hz.
+//
+// Wire format (decoded from cap77): every 0x00xx text element's payload is a
+// leading 0x00 attribute byte followed by the content. (Phase 0 omitted that
+// byte, which is why a bare "REA SIXTY" never rendered as a channel.)
+//   0x000b TrkNam : 0x00 + name
+//   0x000c OutdB  : 0x00 + value(6, NUL-padded) + "dB"
+//   0x000e Pan    : 0x00 + composeValueLine("Pan", value)  [19 chars]
+//   0x0014 Ch#    : 0x00 + track-number digits
+// Colour: FF 38 to element 0x07 (cap70/cap77 — grün/blau/gelb/cyan verified).
+
+// UF1 fader position (15-bit, 0..0x7FFF) <-> linear volume, using REAPER's
+// native fader taper (DB2SLIDER/SLIDER2DB) with the full travel mapped to a
+// +12 dB top — same law as the UF8 path but without the UF8 motor-echo
+// calibration (interpFaderCal) and on the UF1's clean 15-bit scale.
+constexpr uint16_t kUf1FaderMax   = 0x7FFF;
+constexpr double   kUf1FaderTopDb = 12.0;
+
+double uf1PosToVol_(uint16_t pos)
+{
+    if (pos == 0) return 0.0;
+    if (pos > kUf1FaderMax) pos = kUf1FaderMax;
+    const double topSlider = DB2SLIDER(kUf1FaderTopDb);
+    const double slider = static_cast<double>(pos) / static_cast<double>(kUf1FaderMax) * topSlider;
+    return std::pow(10.0, SLIDER2DB(slider) / 20.0);
+}
+
+uint16_t uf1VolToPos_(double linear)
+{
+    if (!(linear > 0.0)) return 0;
+    const double topSlider = DB2SLIDER(kUf1FaderTopDb);
+    if (!(topSlider > 0.0)) return 0;
+    const double slider = DB2SLIDER(20.0 * std::log10(linear));
+    double pos = slider / topSlider * static_cast<double>(kUf1FaderMax);
+    if (pos < 0) pos = 0;
+    if (pos > static_cast<double>(kUf1FaderMax)) pos = kUf1FaderMax;
+    return static_cast<uint16_t>(pos + 0.5);
+}
+
+// Format a dB value the way the UF1's Meter view does: one decimal, "-inf"
+// for silence (cap76: "-6.1", "-16.4", "-inf").
+std::string uf1FormatMeterDb_(float db)
+{
+    if (db <= -120.f) return "-inf";
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%.1f", db);
+    return std::string(buf);
+}
+
+// Phase 3 Meter-Bridge: paint the Meter-view readout row (element 0x011c). Six
+// 25-byte ASCII fields, NO 0x00 prefix (unlike the channel-info plane). SSL's
+// layout (cap76) is [Peak hold | Peak L | Peak R | RMS hold | RMS L | RMS R].
+// REAPER gives us a cheap, truthful Peak (Track_GetPeakInfo); it has no free
+// RMS source, so the three RMS fields stay blank rather than show invented
+// numbers (don't ship half-correct meter data). Peak-hold falls at REAPER's
+// own ~26.5 dB/s so the hold field decays like its native meter.
+// `force` (view just switched / track changed) resets the hold and bypasses
+// the change-throttle.
+void uf1PaintMeter_(MediaTrack* tr, bool force)
+{
+    auto peakToDb = [](double p) -> float {
+        if (!std::isfinite(p) || p <= 0.0) return -120.f;
+        return static_cast<float>(20.0 * std::log10(p));
+    };
+    const float dbL = peakToDb(Track_GetPeakInfo(tr, 0));
+    const float dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+    const float peak = (dbL > dbR) ? dbL : dbR;   // no std::max — MSVC macro trap
+
+    // Peak-hold: jump up instantly, fall at 26.5 dB/s.
+    static MediaTrack* sHoldTr = nullptr;
+    static float       sHold   = -120.f;
+    static auto        sHoldT  = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (force || tr != sHoldTr) { sHoldTr = tr; sHold = -120.f; }
+    if (peak >= sHold) {
+        sHold = peak;
+    } else {
+        const double dt = std::chrono::duration<double>(now - sHoldT).count();
+        sHold = static_cast<float>(sHold - 26.5 * dt);
+        if (sHold < peak) sHold = peak;
+    }
+    sHoldT = now;
+
+    const std::array<std::string, 6> fields{
+        uf1FormatMeterDb_(sHold),   // Peak hold
+        uf1FormatMeterDb_(dbL),     // Peak L
+        uf1FormatMeterDb_(dbR),     // Peak R
+        std::string(),              // RMS hold — no cheap REAPER source yet
+        std::string(),              // RMS L
+        std::string(),              // RMS R
+    };
+    std::vector<uint8_t> p;
+    p.reserve(6 * 25);
+    for (const auto& s : fields)
+        for (size_t k = 0; k < 25; ++k)
+            p.push_back(k < s.size() ? static_cast<uint8_t>(s[k]) : 0x00);
+
+    // Only resend when the rendered row actually changes.
+    static std::vector<uint8_t> sLast;
+    if (!force && p == sLast) return;
+    sLast = p;
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
+}
+
+void uf1PaintChannel_()
+{
+    if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
+
+    // Follow the user's focus: last-touched track, else the first selected.
+    MediaTrack* tr = GetLastTouchedTrack();
+    if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+
+    static MediaTrack* sTr = nullptr;
+    static std::string sName, sDb, sPan, sCh;
+    static uint32_t    sColor = 0xFFFFFFFFu;
+    static bool        sMeterView = false;
+
+    if (!tr) { sTr = nullptr; return; }
+    // The MODE button flips the firmware view; a switch forces a full repaint
+    // of the newly-shown plane (its change-detect statics went stale while
+    // hidden). The fader follows volume in BOTH views (handled below).
+    const bool meterView   = g_uf1MeterView.load();
+    const bool viewChanged = (meterView != sMeterView);
+    sMeterView = meterView;
+    const bool changed = (tr != sTr) || viewChanged;
+    sTr = tr;
+
+    // Replicate SSL 360's exact per-transition frame (cap75 payload diff of the
+    // 5 MODE presses): entering Meter view it writes 0x011f=00 once, entering
+    // Channel view it writes 0x0123=00 once (1-byte each). Their role is
+    // unconfirmed — they carry 0x00, so they look like a view-specific element
+    // reset, NOT a mode-select command (the firmware's own MODE button is what
+    // actually toggles the layout). We mirror them byte-for-byte anyway so the
+    // first hardware test isn't confounded by a captured frame we omitted.
+    if (viewChanged) {
+        const std::array<uint8_t, 1> zero{0x00};
+        g_uf1_dev->send(uf1::buildScreen(meterView ? 0x011f : 0x0123, zero));
+    }
+
+    if (meterView) {
+        uf1PaintMeter_(tr, changed);
+    } else {
+
+    // 0x00-prefixed text send for the channel-info plane.
+    auto sendZoneText = [&](uint16_t addr, const std::string& content) {
+        std::vector<uint8_t> p;
+        p.reserve(content.size() + 1);
+        p.push_back(0x00);
+        p.insert(p.end(), content.begin(), content.end());
+        g_uf1_dev->send(uf1::buildScreen(addr, p));
+    };
+
+    // Track name (0x000b)
+    char nameBuf[64];
+    trackDisplayName_(tr, nameBuf, sizeof(nameBuf));
+    std::string name(nameBuf);
+    if (name.size() > 12) name.resize(12);
+    if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+
+    // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
+    const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
+    const std::string dbv = formatDbReadout(volLin);
+    if (changed || dbv != sDb) {
+        sDb = dbv;
+        std::vector<uint8_t> p;
+        p.push_back(0x00);
+        for (size_t k = 0; k < 6; ++k)
+            p.push_back(k < dbv.size() ? static_cast<uint8_t>(dbv[k]) : 0x00);
+        p.push_back('d'); p.push_back('B');
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
+    }
+
+    // Pan (0x000e): 0x00 + 19-char value line
+    const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+    const std::string panLine = composeValueLine("Pan", formatPanReadout(pan));
+    if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
+
+    // Channel number (0x0014)
+    const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    const std::string ch = std::to_string(idx);
+    if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
+
+    // Track colour (Phase 1). Two consumers of the same track RGB:
+    //  - SEL / track-colour element 0x07 (FF38 GRB).
+    //  - The fader colour BAR (element 0x0018) — a palette INDEX, exactly the
+    //    UF8 colour-bar mechanism (cap77: rot=02 grün=03 blau=04 cyan=05 gelb=07
+    //    = uf8::quantize's palette verbatim), gated by the 0x0006 "channel
+    //    populated" flag (=01) just like the UF8 plug-in-slot-active gate.
+    const uint32_t rgb = trackColorRgb(tr);
+    if (changed || rgb != sColor) {
+        sColor = rgb;
+        g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, rgb));
+        const std::array<uint8_t, 1> active{0x01};
+        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+    }
+
+    // Channel-strip MAIN display (0x01xx plane): 4 V-pot param slots (0x010e,
+    // index 0..3 + 19-char "name...value" line). Painting these overwrites the
+    // MCU residue the init left in the main display (the "MCU look") and brings
+    // up the SSL Plugin-Mode channel-strip layout (where the colour bar lives).
+    // cap77 drove these with SSL plug-in params; for a generic track we show
+    // the most useful track params. (V-pot ROTATION wiring is separate — this
+    // is display only for now.)
+    {
+        static std::array<std::string, 4> sVpot{};
+        auto sendVpotParam = [&](uint8_t idx, const std::string& label,
+                                 const std::string& value) {
+            const std::string line = composeValueLine(label, value);  // 19 chars
+            if (!changed && line == sVpot[idx]) return;
+            sVpot[idx] = line;
+            std::vector<uint8_t> p;
+            p.reserve(1 + line.size());
+            p.push_back(idx);
+            p.insert(p.end(), line.begin(), line.end());
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+        };
+        const double panV = GetMediaTrackInfo_Value(tr, "D_PAN");
+        sendVpotParam(0, "Pan", formatPanReadout(panV));
+        sendVpotParam(1, "Vol", formatDbReadout(GetMediaTrackInfo_Value(tr, "D_VOL")) + "dB");
+        sendVpotParam(2, "", "");   // blank until V-pot mapping lands
+        sendVpotParam(3, "", "");
+        }
+    }  // end channel-view painting (else of meterView)
+
+    // Fader <-> volume.
+    //  - While touched: write the user's fader position to the focused track's
+    //    volume (motor is limp — released on touch-down in onUf1Event).
+    //  - While released: drive the motor to follow the track's volume so the
+    //    fader reflects DAW edits and the selected track.
+    //
+    // Touch-release is DEBOUNCED (150 ms) — the capacitive sensor bounces
+    // press/release ~9x/s during a sustained grip, and re-engaging the motor on
+    // each bounce snaps the fader back to the last committed value (the UF8
+    // "wobble"; see kTouchDebounceQuiet / g_touchReported). We only treat the
+    // fader as released once the sensor has stayed quiet for the window.
+    static auto sLastTouchSeen = std::chrono::steady_clock::now()
+                                 - std::chrono::seconds(10);
+    static uint16_t sLastMotorPos = 0xFFFF;
+    static bool     sMotorEngaged = false;
+    const auto nowT = std::chrono::steady_clock::now();
+    if (g_uf1FaderTouched.load()) sLastTouchSeen = nowT;
+    const bool touched = g_uf1FaderTouched.load()
+        || (nowT - sLastTouchSeen < std::chrono::milliseconds(150));
+    if (touched) {
+        const uint16_t pos = g_uf1FaderPos.load();
+        if (g_uf1FaderHasPos.load()) {
+            CSurf_OnVolumeChange(tr, uf1PosToVol_(pos), false);
+            // Echo the user's hand position to the firmware's MOTOR TARGET every
+            // tick while the motor is limp. FF 1E while limp only updates the
+            // target (it doesn't drive — verified: no mid-drag motion). This is
+            // the UF8 bit-7-echo mechanism (main.cpp:12080): keeping the target
+            // synced to the hand throughout the drag means the re-enable on
+            // release lands exactly where the user let go — no stale-target kick
+            // ("wobble"). Without it, re-enable drives to the pre-grab target.
+            g_uf1_dev->send(uf1::buildMotorPosition(pos));
+            sLastMotorPos = pos;
+        }
+        sMotorEngaged = false;        // motor released under the finger
+    } else {
+        // Released: the target is already at the user's final position (last
+        // drag echo), so re-enable lands clean. Also keep following DAW volume
+        // edits when the fader is idle.
+        const uint16_t pos = uf1VolToPos_(GetMediaTrackInfo_Value(tr, "D_VOL"));
+        if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
+        if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
     }
 }
 
@@ -21628,7 +22030,8 @@ void onTimer()
         const auto nowR = std::chrono::steady_clock::now();
         const bool ucStale = g_uc1_dev && g_uc1_dev->needsReopen();
         const bool ufStale = g_dev     && g_dev->needsReopen();
-        if ((ucStale || ufStale)
+        const bool u1Stale = g_uf1_dev && g_uf1_dev->needsReopen();
+        if ((ucStale || ufStale || u1Stale)
             && nowR - sLastReopen >= std::chrono::seconds(5))
         {
             sLastReopen = nowR;
@@ -21691,6 +22094,18 @@ void onTimer()
                 } else {
                     g_dev.reset();
                 }
+            }
+            if (u1Stale) {
+                if (FILE* f = std::fopen("/tmp/rea_sixty_uf1_stale.log", "a")) {
+                    const auto t = std::chrono::system_clock::now().time_since_epoch();
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
+                    std::fprintf(f, "[%lld] UF1 stale handle - reopening...\n",
+                                 static_cast<long long>(ms));
+                    std::fclose(f);
+                }
+                g_uf1_dev->close();
+                g_uf1_dev.reset();
+                openUf1BringUp_();
             }
             // Skip the rest of this tick — pointers may have shifted
             // under code that already cached them above this block.
@@ -22686,6 +23101,10 @@ void onTimer()
 
     tickIdentify();
 
+    // UF1 channel-zone + track-colour painter (Phase 1 + 2). Main-thread
+    // REAPER-API reads; change-detected sends. No-op if the UF1 is absent.
+    uf1PaintChannel_();
+
     // ImGui frame for the Plugin Mixer / Settings window. No-op while the
     // window is closed; when open, drives the entire ReaImGui paint cycle
     // for this tick. Kept last so any REAPER-API reads above (track
@@ -23345,6 +23764,11 @@ bool reasixty_uc1Connected()
     return g_uc1_dev && g_uc1_dev->isOpen();
 }
 
+bool reasixty_uf1Connected()
+{
+    return g_uf1_dev && g_uf1_dev->isOpen();
+}
+
 // SSL plug-in soft-key bank labels for the Settings → Soft-Key Banks
 // editor's read-only "stock" tabs. domain: 0 = ChannelStrip,
 // 1 = BusComp. Returns the 8-element label array for the bank, or
@@ -23532,6 +23956,12 @@ const char* reasixty_uc1Serial()
 {
     if (!g_uc1_dev) return "";
     return g_uc1_dev->serial().c_str();
+}
+
+const char* reasixty_uf1Serial()
+{
+    if (!g_uf1_dev) return "";
+    return g_uf1_dev->serial().c_str();
 }
 
 int reasixty_brightnessLevel()
