@@ -54,7 +54,8 @@ We no longer need to capture these logically; they're documented per EQ type:
 
 ## What we still NEED to decode (priority order)
 1. ~~4 V-Pot param readouts + bars~~ ✅ RESOLVED from existing capture (0x010e focused text + 0x010f 4 bars).
-2. **Small channel-info LCD zone** (`0x00xx`): TrkNam, O/PdB, Pan, CS TYPE, Bypass, **Dynamics GR meter**.
+2. **Small channel-info LCD zone** (`0x00xx`) ✅ mostly (cap77): 0x000b TrkNam, 0x000c output dB,
+   0x000e Pan, 0x000f Pan bar, 0x0017 CS TYPE, 0x0014 ch#. Remaining: **Bypass flag + Dynamics GR meter** (audio).
 3. **Meter graphic codecs**: Overview bargraphs + scope + correlation, Analogue VU, RTA 31-band.
 4. **Timecode** digit frame (after configuring HUI/MCU TC in REAPER).
 5. Status indicators: Solo Active, Fine-mode, Host label.
