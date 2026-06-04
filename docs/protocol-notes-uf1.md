@@ -181,9 +181,12 @@ under this model (the 1st FF38 frame per change is a transient — ignore for co
 button LEDs, SEL track colour (id 0x07), AND the EQ graph (id 0x03, changed by the "EQ Colour"
 toggle). One mechanism for all coloured elements.
 
-**Plugin-data screen (SSL Channel Strip, cap71/72) — FOCUS-BASED:**
-- `0x010e` (22 ch) = focused parameter readout: name(left)+value(right). All 4 V-pots correlate
-  with this one address → it follows focus, NOT 4 separate named slots.
+**Plugin-data screen (SSL Channel Strip, cap71/72):**
+- **CORRECTION (per manual p187/p188):** the screen shows the **4 current-page V-pot params
+  SIMULTANEOUSLY** (name+value+readout-bar each, e.g. Width/Mic/Out Trim/Comp Mix). My earlier
+  cap72 "single focused readout 0x010e" conclusion was WRONG — needs re-capture turning ONE
+  V-pot at a time to map the 4 param addresses. See `docs/uf1-plugin-mode-gap-analysis.md`.
+- `0x010e` (22 ch) = a param readout (one of the slots; cycled during cap72 as values changed).
 - `0x0104` (13 ch) = section/soft-key label (S/C LISTEN, HQ MODE, A/B, EQ, DYN…).
 - `0x010f` (10 B) = value-bar graphics (the "up to 4" V-pot indicators).
 - **`0x0122` (FD frame, 251-byte payload) = EQ graph** (cap73): column-height array, one byte per
