@@ -156,7 +156,9 @@ diff static snapshots, timing irrelevant). Analyse with `analysis/uf1_screen_dum
 **Address planes (cap66/77):**
 - `0x00xx` = **channel-info zone** (manual "small LCD", cap77): `0x000b`=TrkNam, `0x000c`=output
   fader dB, `0x000e`=Pan label+value, `0x000f`=Pan bar, `0x0017`=CS TYPE (4K E/4K B), `0x0014`=
-  channel #/pos. DAW colour via FF38. Bypass flag + Dynamics GR meter still TODO.
+  channel #/pos. DAW colour via FF38. **GR meter (cap78): `0x0009` = comp GR (`<gr><gr>0000`,
+  animated), `0x000a` = gate GR (idle here), `0x0015` = further meter (I/O?).** Bypass = **button
+  LED only** (no screen element — confirmed by Frank).
 - `0x01xx` = main display: 0x0104=soft-key label (F1/F2/F3/"SMPTE/BEATS"), 0x010e=value ("0.0dB"),
   0x010f="O O O O", **0x011c = main text row (len 0xCA=202)**, 0x0122=graphic/bar area (FD frame,
   253 B filled with 0x64).
