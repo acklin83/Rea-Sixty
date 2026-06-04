@@ -147,6 +147,27 @@ triplets. Canonical FF39 = `FF 39 04 <id> 00 00 <v> <ck>`; re-verify cap64/65 br
 from SSH → session 0, leaves UF1 dark). SSL 360 restart **re-enumerates** the UF1 → USBPcap
 device number changes (was dev 11, became dev 12). Re-check device number after any restart.
 
+## Screen grammar (FF 67) — structure decoded from cap52/cap66 (free, no new capture)
+**Frame model:** `FF 67 <len> <addrHi> <addrLo> <payload…> <ck>` — write `<len>` payload bytes
+to a **16-bit element address** `(addrHi addrLo)`. NOT a pixel framebuffer — high-level text/graphic
+elements at fixed addresses. Screen fully repainted ~24 Hz (every element resent each cycle →
+diff static snapshots, timing irrelevant). Analyse with `analysis/uf1_screen_dump.py <pcap> <dev>`.
+
+**Address planes (cap66):**
+- `0x00xx` = parameter/V-pot zone: 0x0004="PAN" (label), 0x000c="0.0 dB" (value), 0x0014="1".
+- `0x01xx` = main display: 0x0104=soft-key label (F1/F2/F3/"SMPTE/BEATS"), 0x010e=value ("0.0dB"),
+  0x010f="O O O O", **0x011c = main text row (len 0xCA=202)**, 0x0122=graphic/bar area (FD frame,
+  253 B filled with 0x64).
+- `0x011c` text row = **8 fields × 25 bytes**, ASCII, null-padded. cap66: "FADER SEL" @field0,
+  "1/10" @field1. cap52 ("OFF" state): dashes @fields 0/1/2, "OFF" @field4 (off 100).
+
+**Still unknown (need targeted diff capture):**
+- Field→screen-region mapping (which of the 8 fields is where on the LCD).
+- **Paging**: "1/10" = page 1 of 10. What cycles it (Mode? 5-8? arrows?). Decode one page fully first.
+- **Colour**: CA frame is pure ASCII, no colour byte → colour lives at a separate address. Select
+  tracks of different colours to find it (likely also cracks the open LED colour-index question).
+- Keep transport STOPPED for layout diffs (meters animate = noise).
+
 ## TODO (subtractive order)
 1. ~~Fader read~~ ✓ (cap53)
 2. ~~Fader motor-drive~~ ✓ (cap54)
