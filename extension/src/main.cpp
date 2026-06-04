@@ -3099,8 +3099,10 @@ void applySelectRangeRelative_(int step)
     if (nc < 0)        nc = 0;
     if (nc > vc - 1)   nc = vc - 1;
 
-    const int lo = std::min(anchorIdx, nc);
-    const int hi = std::max(anchorIdx, nc);
+    // Manual min/max — Windows defines min()/max() as macros (NOMINMAX is
+    // not set here), so std::min/std::max break the MSVC build.
+    const int lo = (anchorIdx < nc) ? anchorIdx : nc;
+    const int hi = (anchorIdx < nc) ? nc : anchorIdx;
     MediaTrack* loTr = visibleTrackAt(lo);
     if (!loTr) return;
 
