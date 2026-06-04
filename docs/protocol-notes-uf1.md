@@ -165,16 +165,22 @@ diff static snapshots, timing irrelevant). Analyse with `analysis/uf1_screen_dum
 Pages cycled by **Left/Right nav buttons** (← 0x24 / → 0x26). 8 pages in Plugin Mode (DAW mode
 shows a different "1/10"). Per-page content is in 0x00xx param-zone + 0x0104, not 0x011c.
 
-**Colour — LOCATED, encoding UNSOLVED (cap68):** screen-element/track colour rides the **same
-FF38/FF39 frames as LEDs** (id-addressed; SEL=id 0x07), sent **on-change only**. red→
-`00 01 f0`+`00 f0 ff`, blue→`00 10 f1`+`00 0f f0` (reproducible). Nibble symmetry suggests a
-hue/palette index, not raw RGB. **Needs a multi-colour sweep (pure R/G/B/Y/C/W) — do NOT guess.**
-→ LED colour and screen colour are ONE mechanism (FF38+FF39 pair + FF3B on/off); re-read
-cap64/65 LED bytes in this light.
+**Colour — SOLVED (cap70, ground-truth RGB sweep).** Element/track colour rides **FF38** frames
+(id-addressed; SEL=id 0x07), sent **on-change only**. The 2nd FF38 frame per change is the colour
+(FF39's 2nd value is constant `0000f0`):
+```
+FF 38 04 <id> | 00 | XX | YY | <ck>     XX = (G4<<4)|R4 ,  YY = 0xF0 | B4
+```
+**4-bit-per-channel, order G·R·B**, constant 0xF nibble in YY high. NOT RGB/BGR.
+Verified fwd+back: Red `000ff0`, Green `00f0f0`, Blue `0000ff`, Yellow `00eff0`, Cyan `00f0ff`,
+White `00ffff`, Orange `003ff0`. Pure primaries exact; 8→4-bit quantization is non-linear
+(gamma-ish: G255→E in yellow, G128→3 in orange) — structure solid, exact curve TBD if needed.
+To set colour natively: `FF 38 04 <id> 00 (G4<<4|R4) (F0|B4) <ck>`. Revisit cap64/65 LED bytes
+under this model (the 1st FF38 frame per change is a transient — ignore for colour).
 
 **Still unknown:**
 - Field→screen-region mapping (which of the 8 text-row fields is where on the LCD).
-- FF38 vs FF39 roles (the pair) + full colour byte encoding (multi-colour sweep).
+- FF39's role (constant here) vs FF38 (colour) vs FF3B (on/off); brightness field (cap65 dim/bright).
 - Keep transport STOPPED for layout diffs (meters animate = noise).
 
 ## TODO (subtractive order)
