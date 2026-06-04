@@ -178,9 +178,18 @@ White `00ffff`, Orange `003ff0`. Pure primaries exact; 8→4-bit quantization is
 To set colour natively: `FF 38 04 <id> 00 (G4<<4|R4) (F0|B4) <ck>`. Revisit cap64/65 LED bytes
 under this model (the 1st FF38 frame per change is a transient — ignore for colour).
 
+**Plugin-data screen (SSL Channel Strip, cap71/72) — FOCUS-BASED:**
+- `0x010e` (22 ch) = focused parameter readout: name(left)+value(right). All 4 V-pots correlate
+  with this one address → it follows focus, NOT 4 separate named slots.
+- `0x0104` (13 ch) = section/soft-key label (S/C LISTEN, HQ MODE, A/B, EQ, DYN…).
+- `0x010f` (10 B) + `0x0122` (FD, 253 B) = value-bar graphics (the "up to 4" V-pot indicators).
+- Full param set extracted (In Trim, High/Low Pass, LF/LMF/HMF/HF Gain/Freq/Q, Ratio, Threshold,
+  Release, Range, Width, Mic, Out Trim, Mix). Same for all SSL Channel Strip plugins incl. Link 360.
+
 **Still unknown:**
-- Field→screen-region mapping (which of the 8 text-row fields is where on the LCD).
-- FF39's role (constant here) vs FF38 (colour) vs FF3B (on/off); brightness field (cap65 dim/bright).
+- Per-V-pot value-bar bytes inside 0x010f / 0x0122 (turn ONE v-pot, watch which bytes move).
+- Meter plugin (SSL Meter / Meter Pro) — animated, needs audio. NEXT.
+- Field→screen-region mapping; FF39 vs FF38 roles; brightness field (cap65 dim/bright).
 - Keep transport STOPPED for layout diffs (meters animate = noise).
 
 ## TODO (subtractive order)
