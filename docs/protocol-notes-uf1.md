@@ -109,10 +109,15 @@ Channel encoder drives channel navigation (turning it moves the fader motor → 
 Same 15-bit LE scale, same checksum. NOTE vs UF8: same concept, different opcodes + value scale
 (UF8 = pitch-bend 14-bit, pb14_max=15583) → UF8 fader code not directly reusable.
 
-### Button LEDs (OUT 0x02, cap55)
-- `FF 3B 03 <led_id> 00 <state>` = LED on/off (01/00). led_ids seen: 05,06,07,1c,20,21.
-- `FF 39 04 <led_id> 00 <val>` = LED colour/level (4-byte, vals 0x11/0x12…).
-- LED id space ≠ button-event id space. Exact led_id↔button mapping TODO.
+### Button LEDs (OUT 0x02, cap55/cap64/cap65)
+- `FF 39 04 <led_id> 00 <val>` = LED **brightness/colour** (the active control for toggling).
+- `FF 3B 03 <led_id> 00 <state>` = on/off; role looser (initial enable?), FF39 carries the state.
+- LED ids: **Solo=0x05, Cut=0x06, Sel=0x07** (cap64).
+- **Brightness SOLVED by ground truth (cap65, Cut LED):** `val 0x00` = dim, `val 0x12` = bright red.
+  Cut LED is never off — dim-red unmuted, bright-red muted.
+- **Colour hypothesis (unconfirmed):** `val` low-nibble = colour index (Solo lit=0x11 green,
+  Cut lit=0x12 red), high-nibble 0x1 = bright, 0x00 = dim. Confirm via a multi-colour LED sweep.
+- Sel LED mirrors REAPER track selection (always lit on selected track).
 
 ## OUT endpoint 0x02 — idle steady-state loop (FF 67 family)
 ~25 Hz refresh loop, six frames repeating + FF 1B keepalive:
@@ -127,6 +132,20 @@ Same 15-bit LE scale, same checksum. NOTE vs UF8: same concept, different opcode
 Frame structure (hypothesis): `FF 67 <len> <b3> <b4> <payload…> <ck>`, byte after 67 = length
 (0x06, 0x03, 0xCA=202). Big FF 67 CA = one screen row carrying ASCII text + (likely) colour/
 layout attributes → high-level draw commands, screen is decodable (not a raw framebuffer).
+
+## Init handshake (cap66) — prerequisite for native output
+SSL 360 cold-starts the UF1 with: **wake opcodes** (zero-payload `FF <op> 00 <ck>`: FF01, FF02,
+FF05, FF4B, FF4E, FF47, FF4F, FF2D, FF1F, FF1E, FF1D) → **per-LED init sweep** (triplet
+`FF 38 04 <id> 00 00 <v> <ck>` + `FF 39 04 <id> 00 00 <v> <ck>` + `FF 3B 03 <id> 00 <ck>` for
+each LED id) → **FF 67 screen paint** → steady-state. Full stream in `cap66_uf1_init.pcapng`
+(UF1 analog of UF8's 752-frame init replay).
+
+**NEW LED opcode FF 38** pairs with FF39/FF3B in the init — LED writes may be FF38+FF39+FF3B
+triplets. Canonical FF39 = `FF 39 04 <id> 00 00 <v> <ck>`; re-verify cap64/65 brightness offset.
+
+**Operational:** restart SSL 360 only via SSL360Gui in Frank's desktop session (NOT SSL360Core
+from SSH → session 0, leaves UF1 dark). SSL 360 restart **re-enumerates** the UF1 → USBPcap
+device number changes (was dev 11, became dev 12). Re-check device number after any restart.
 
 ## TODO (subtractive order)
 1. ~~Fader read~~ ✓ (cap53)
