@@ -7424,6 +7424,30 @@ std::array<std::atomic<bool>, 8>     g_lastTouchPbValid{};
 std::array<uint16_t, 8>             g_lastFaderPb{};
 bool                                g_faderPbInit{false};
 
+// Touch-anchoring (Frank 2026-06-05). The capacitive position the firmware
+// reports at rest sits ~100-120 LSB BELOW the pb we drove the motor to
+// (measured: 0 dB parks at pb 12579 but reads back ~12456-12479, i.e.
+// ~-0.5 dB). Writing that raw readback as the first frame of a touch
+// silently nudged the track volume by ~-0.5 dB. Invisible when an
+// envelope already exists (the point is overwritten by playback), but on
+// a track with NO volume automation that first write became the envelope
+// seed AND the trim → the track dropped to -0.5 dB before the user moved.
+//
+// Fix: anchor each touch to the motor's known target (g_motorTargetPb,
+// the true current value as a pb) and apply only the RELATIVE readback
+// motion from the grab point. The first frame then reproduces the current
+// value exactly (a no-op write — no seed corruption); subsequent frames
+// track the user's motion. Mode-agnostic: the anchor is whatever the
+// motor was parked at, so track-vol / plugin / FLIP all pick up cleanly.
+std::array<std::atomic<uint16_t>, 8> g_motorTargetPb{};   // mirror of last driven motor pb (main thread)
+std::array<std::atomic<uint16_t>, 8> g_touchAnchorPb{};   // motor pb captured at touch-down
+std::array<std::atomic<uint16_t>, 8> g_touchGrabPb{};     // first raw readback of the touch
+std::array<std::atomic<bool>, 8>     g_touchGrabValid{};  // grab captured yet?
+// Effective (anchored) pb of the latest touch frame — what release writes
+// back, so the commit lands on the same value as the live drag instead of
+// snapping to the offset raw readback.
+std::array<std::atomic<uint16_t>, 8> g_lastTouchEffPb{};
+
 // Carry-over buffer for frames split across USB bulk-IN URBs. UF8
 // firmware emits FF-framed events back-to-back without aligning them
 // to USB packet boundaries, so a `FF 20 02 <strip> <state>` touch
@@ -7602,6 +7626,31 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // ended up, even if every frame this touch was sub-deadband.
                 g_lastTouchPb[strip].store(pb14);
                 g_lastTouchPbValid[strip].store(true);
+                // Touch-anchoring: map the raw readback onto the motor's
+                // known target by applying only the motion since the grab
+                // point. The first frame (pb14 == grab) reproduces the
+                // anchor exactly → a no-op write, so the ~100-LSB readback-
+                // vs-drive offset never nudges the trim / envelope seed.
+                // Subsequent frames track the user's motion. Falls back to
+                // raw pb14 when no valid anchor exists (anchor 0 = -INF /
+                // uninitialised, or sentinel > pbMax before the first
+                // motor-follow tick).
+                if (!g_touchGrabValid[strip].load()) {
+                    g_touchGrabPb[strip].store(pb14);
+                    g_touchGrabValid[strip].store(true);
+                }
+                uint16_t effPb = pb14;
+                {
+                    const uint16_t anchor = g_touchAnchorPb[strip].load();
+                    if (anchor != 0 && anchor <= kUf8FaderPbMax) {
+                        int eff = int(anchor)
+                                + (int(pb14) - int(g_touchGrabPb[strip].load()));
+                        if (eff < 0)                       eff = 0;
+                        if (eff > int(kUf8FaderPbMax))     eff = int(kUf8FaderPbMax);
+                        effPb = static_cast<uint16_t>(eff);
+                    }
+                }
+                g_lastTouchEffPb[strip].store(effPb);
                 // Echo the position back to UF8 with bit 7 of LSB SET.
                 // SSL360 does this throughout every touch (cap32 OUT
                 // frames). The firmware uses these echoes to update
@@ -7631,8 +7680,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 if (std::abs(signedDelta) >= 4) {
                     g_lastMsbOut[strip].store(msb);
                     g_lastLsbOut[strip].store(lsb);
-                    queueInput({PendingInput::VolumeAbs, strip, pbToLinearVolume(pb14)});
-                    faderInputLog_("POS", strip, pb14, prevPb, signedDelta, "ACC");
+                    queueInput({PendingInput::VolumeAbs, strip, pbToLinearVolume(effPb)});
+                    faderInputLog_("POS", strip, effPb, prevPb, signedDelta, "ACC");
                 } else {
                     faderInputLog_("POS", strip, pb14, prevPb, signedDelta, "REJ");
                 }
@@ -8074,6 +8123,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
                     g_touchReported[strip].store(true);
+                    // Touch-anchoring: freeze the motor's current target as
+                    // the anchor and arm grab-capture. The first POS frame
+                    // of this touch then writes the anchor verbatim (no-op)
+                    // instead of the offset raw readback — see g_motorTargetPb.
+                    g_touchAnchorPb[strip].store(g_motorTargetPb[strip].load());
+                    g_touchGrabValid[strip].store(false);
                     // Alt-drag snap-back: capture the pre-touch pb14 on
                     // the main thread. Done via the queue (not inline
                     // here) because REAPER track/FX API calls would
@@ -10695,6 +10750,9 @@ void pushZonesForVisibleSlots()
             } else {
                 pb = linearVolumeToPb(volLin);
             }
+            // Mirror the motor target so the input thread can anchor a
+            // touch to the true current position (see g_touchAnchorPb).
+            g_motorTargetPb[s].store(pb);
             if (!g_faderPbInit || pb != g_lastFaderPb[s]) {
                 g_lastFaderPb[s] = pb;
                 const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
@@ -11681,9 +11739,13 @@ void commitDebouncedTouchReleases()
             && hostAltHeld_();
         // Picked at outer scope because the motor re-engage block
         // below ALSO consumes it on the snap-back path.
+        // Non-snap-back writeback uses the anchored effective pb (same
+        // value the live drag wrote) — NOT the raw readback — so release
+        // lands exactly where the fader was driven instead of snapping
+        // back by the ~100-LSB readback offset. See g_touchAnchorPb.
         const uint16_t touchPb = userMoved
             ? (snapBack ? g_touchOriginPb[s].load()
-                        : g_lastTouchPb[s].load())
+                        : g_lastTouchEffPb[s].load())
             : 0;
         if (userMoved) {
             g_lastTouchPbValid[s].store(false);
