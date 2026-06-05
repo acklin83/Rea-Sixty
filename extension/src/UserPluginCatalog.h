@@ -33,6 +33,17 @@ enum class VPotPolarity : uint8_t {
     Bipolar  = 1,
 };
 
+// One entry in a per-button push-cycle. `norm` is the target value in
+// normalised param space [0..1]. `enabled` lets an option stay in the list
+// (and keep its position / stay visible in the editor) while being skipped
+// by the push-cycle — that's how "untick to exclude" works without losing
+// the option. See UserLinkSlot::pushSteps.
+struct PushStep {
+    int   vst3Param = -1;
+    float norm      = 0.0f;
+    bool  enabled   = true;
+};
+
 struct UserLinkSlot {
     int  linkIdx;     // SSL 360 Link virtual-strip slot. 0..46 + 100..119.
     int  vst3Param;   // VST3 parameter index on this user plugin.
@@ -70,6 +81,23 @@ struct UserLinkSlot {
     // mirroring paths that fall back to the slot when no dedicated UF8
     // V-Pot binding exists. Default 0.5 mirrors the UF8 V-Pot default.
     double defaultNorm = 0.5;
+
+    // Per-button push-cycle step list (additive; empty => legacy
+    // behaviour). For UC1 channel-strip discrete buttons (EQ Type, HF/LF
+    // Bell, Fast Attack, Peak, Expand, Gate Attack) bound to a stepped
+    // param, an EMPTY list means "auto-cycle through ALL of the bound
+    // param's discrete options" (the shipped behaviour). A NON-EMPTY list
+    // overrides that: each press advances to the next entry and writes
+    // `vst3Param := norm`. This serves two cases uniformly:
+    //   1. a curated SUBSET of one param's options (all entries share the
+    //      same vst3Param), and
+    //   2. a multi-param MACRO (entries reference different params) — used
+    //      when a third-party plugin splits an SSL-style concept across
+    //      several toggle params.
+    // A macro slot may carry vst3Param == -1 (no primary binding) and rely
+    // solely on pushSteps. Only the advanced-to step's param is written;
+    // sibling params are left as-is.
+    std::vector<PushStep> pushSteps;
 };
 
 // Knob-travel evaluators. `applyCurve(sl, t)` maps the encoder's

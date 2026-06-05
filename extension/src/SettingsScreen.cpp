@@ -5250,6 +5250,16 @@ int mappedVst3For_(int linkIdx)
 char g_fxlLabelBuf[64] = {};
 int  g_fxlLabelLinkIdx = -1;
 
+// "Push cycle → + Add step" picker state. Only one context popup is open at
+// a time, so a single set of globals suffices; reset when the active button
+// (linkIdx) changes. g_fxlAddParam is the chosen plugin param (-1 = none
+// yet); g_fxlAddNorm the value for non-stepped params; g_fxlAddFilter the
+// param-list search text.
+int   g_fxlAddLinkIdx = -1;
+int   g_fxlAddParam   = -1;
+float g_fxlAddNorm    = 0.5f;
+char  g_fxlAddFilter[64] = {};
+
 void bindSlot_(int linkIdx, int vst3Param)
 {
     if (g_editingMatch.empty() || linkIdx < 0 || vst3Param < 0) return;
@@ -5671,6 +5681,85 @@ void setSlotDefaultNorm_(int linkIdx, double v)
     mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
         s.defaultNorm = v;
     });
+}
+
+// ---- Per-button push-cycle steps -----------------------------------------
+//
+// A button's push-cycle is an ordered list of (param, value) steps. Empty +
+// a bound param = the shipped auto-cycle-all-options behaviour; a non-empty
+// list overrides it with a curated subset of one param's options OR a
+// multi-param macro. See UserLinkSlot::pushSteps + the UC1Surface runtime.
+
+// Current push-cycle for a slot (empty when the slot has none / doesn't
+// exist). Returns a copy for safe rendering.
+std::vector<uf8::PushStep> slotPushSteps_(int linkIdx)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return {};
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots)
+            if (s.linkIdx == linkIdx) return s.pushSteps;
+        break;
+    }
+    return {};
+}
+
+// True when a slot exists for this linkIdx and carries a real bound param
+// (vst3Param >= 0). Distinguishes a curated-subset slot (keep the param,
+// auto-cycle restored when steps cleared) from a macro slot (drop entirely
+// when steps cleared).
+bool slotHasBoundParam_(int linkIdx)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots)
+            if (s.linkIdx == linkIdx) return s.vst3Param >= 0;
+        break;
+    }
+    return false;
+}
+
+// Like mutateSlot_ but creates a macro slot (vst3Param = -1) when none
+// exists, so push-cycle steps can attach to an otherwise-unmapped button.
+template <class Mut>
+void mutateOrCreateSlot_(int linkIdx, Mut&& mut)
+{
+    if (g_editingMatch.empty() || linkIdx < 0) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        uf8::UserLinkSlot* slot = nullptr;
+        for (auto& s : m.slots)
+            if (s.linkIdx == linkIdx) { slot = &s; break; }
+        if (!slot) {
+            uf8::UserLinkSlot ns{};
+            ns.linkIdx   = linkIdx;
+            ns.vst3Param = -1;   // macro slot — no primary param
+            m.slots.push_back(ns);
+            slot = &m.slots.back();
+        }
+        mut(*slot);
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        return;
+    }
+}
+
+// Single writer for the push-cycle. An empty list drops a macro slot
+// entirely (button back to unmapped) but only clears the list on a param-
+// bound slot (auto-cycle restored). All add/remove/reorder edits route a
+// freshly-built vector through here.
+void setSlotPushSteps_(int linkIdx, std::vector<uf8::PushStep> steps)
+{
+    if (steps.empty() && !slotHasBoundParam_(linkIdx)) {
+        unbindSlot_(linkIdx);
+        return;
+    }
+    mutateOrCreateSlot_(linkIdx,
+        [steps = std::move(steps)](uf8::UserLinkSlot& s) {
+            s.pushSteps = steps;
+        });
 }
 
 // ---- UF8 V-Pot / Fader knob-travel mutators ------------------------------
@@ -7124,6 +7213,16 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const bool isMapped  = (mapped >= 0);
     const bool isListen  = (g_listeningLinkIdx == ctrl.linkIdx);
     const bool exists    = (slot != nullptr);
+    // Push-cycle applies to the discrete channel-strip buttons (EQ Type,
+    // HF/LF Bell, Fast Attack, Peak, Expand, Gate Attack, …) — any button-
+    // kind control except the plug-in-bypass IN toggles (linkIdx 0). A
+    // macro slot has steps but no bound param, so track that separately
+    // from isMapped for the ring colour + popup gate.
+    const bool isButtonCtrl = (ctrl.kind == Uc1Control::DynBtn
+                               || ctrl.kind == Uc1Control::Toggle);
+    const bool isPushCycleBtn = isButtonCtrl && ctrl.linkIdx != 0;
+    const bool hasPushSteps   = isPushCycleBtn
+                              && !slotPushSteps_(ctrl.linkIdx).empty();
 
     // Bounding box — knob = (cx-r, cy-r, 2r, 2r); toggle/btn = (cx, cy, w, h).
     float bx, by, bw, bh;
@@ -7147,6 +7246,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         ringCol = (0xFFE040u << 8) | bA;
     }
     else if (isMapped)  ringCol = 0x60C060FF;
+    else if (hasPushSteps) ringCol = 0x60C060FF;  // macro: customised
     else                ringCol = 0x808890FF;
 
     // Ring overlay on top of drawUc1Face_'s already-painted control.
@@ -7312,7 +7412,10 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         ImGui_EndDragDropTarget(ctx);
     }
 
-    if (exists && isMapped) {
+    // Open the popup for mapped controls and for the discrete push-cycle
+    // buttons even when unmapped, so an unmapped button can host the
+    // "Push cycle" builder (right-click → pick params/values to step).
+    if (exists && (isMapped || isPushCycleBtn)) {
         // Popup id must be unique per *physical* control, not per linkIdx:
         // two controls can share a linkIdx (e.g. the centre IN-Gain knob and
         // a Channel-IN toggle both bind the same slot). Keying the popup on
@@ -7338,10 +7441,18 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 snprintf(title, sizeof(title),
                     "%s  ->  %s",
                     slot->name ? slot->name : "(slot)", pname);
-            } else {
+            } else if (mapped >= 0) {
                 snprintf(title, sizeof(title),
                     "%s  ->  param %d",
                     slot->name ? slot->name : "(slot)", mapped);
+            } else if (hasPushSteps) {
+                snprintf(title, sizeof(title),
+                    "%s  ->  push cycle",
+                    slot->name ? slot->name : "(slot)");
+            } else {
+                snprintf(title, sizeof(title),
+                    "%s  ->  unmapped",
+                    slot->name ? slot->name : "(slot)");
             }
             ImGui_TextDisabled(ctx, title);
             ImGui_Separator(ctx);
@@ -7386,6 +7497,268 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (ImGui_Checkbox(ctx,
                         "Reaper Track Polarity##fxl_pol_trk", &useTrack))
                     setUseTrackPolarity_(useTrack);
+            }
+
+            // ---- Push cycle (discrete channel-strip buttons) -------------
+            // Curate which option values a button steps through on push: a
+            // subset of one param's discrete options, or a multi-param macro
+            // built from scratch. An empty list keeps the default behaviour
+            // (auto-cycle through ALL of the bound param's options).
+            if (isPushCycleBtn) {
+                ImGui_Separator(ctx);
+                ImGui_Text(ctx, "Push cycle:");
+
+                // Reset the +Add-step picker state when switching buttons.
+                if (g_fxlAddLinkIdx != ctrl.linkIdx) {
+                    g_fxlAddLinkIdx  = ctrl.linkIdx;
+                    g_fxlAddParam    = -1;
+                    g_fxlAddNorm     = 0.5f;
+                    g_fxlAddFilter[0] = '\0';
+                }
+
+                // Discrete-options probe: option count (>=2) for a param, or
+                // 0 when it has none (continuous → useless in a cycle, the
+                // value would just sit there). Uses live FX step sizes; falls
+                // back to the snapshot's wasEnum flag when no instance is
+                // loaded. `pStepOut` is the normalised step between options.
+                auto optionCountFor = [&](int p, double& pStepOut) -> int {
+                    pStepOut = 1.0;
+                    if (fx.ok) {
+                        double s=0.0, a=0.0, b=0.0; bool isT=false;
+                        if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, p,
+                                &s, &a, &b, &isT))
+                            return 0;
+                        if (isT) { pStepOut = 1.0; return 2; }   // on/off
+                        if (s > 0.0 && s < 1.0) {
+                            pStepOut = s;
+                            return uf8::numStepsFor(static_cast<float>(s));
+                        }
+                        return 0;
+                    }
+                    if (editing)
+                        for (const auto& pi : editing->paramSnapshot)
+                            if (pi.vst3Param == p) return pi.wasEnum ? 2 : 0;
+                    return 0;
+                };
+
+                // The bound param's discrete options (if any). An empty
+                // pushSteps + a discrete bound param shows ALL options as a
+                // checkbox list (the "untick to exclude" view) — excluded
+                // options stay in place, no separate layout to flip to.
+                double boundStep = 1.0;
+                const int boundOpts =
+                    isMapped ? optionCountFor(mapped, boundStep) : 0;
+                const bool boundDiscrete = boundOpts >= 2;
+
+                // Effective ordered list. When nothing is stored yet but the
+                // bound param is discrete, synthesise all options (enabled,
+                // natural order) so they're visible + reorderable from the
+                // start; the first edit materialises this into pushSteps.
+                std::vector<uf8::PushStep> view = slotPushSteps_(ctrl.linkIdx);
+                if (view.empty() && boundDiscrete) {
+                    for (int i = 0; i < boundOpts; ++i) {
+                        float nrm = static_cast<float>(i * boundStep);
+                        if (nrm > 1.0f) nrm = 1.0f;
+                        view.push_back(uf8::PushStep{mapped, nrm, true});
+                    }
+                }
+
+                // Persist an edited list. If it's exactly the bound param's
+                // options, all enabled in natural order, revert to auto-cycle
+                // (store nothing) so "all on" stays the lightweight default.
+                auto commit = [&](std::vector<uf8::PushStep> v) {
+                    bool canonical = boundDiscrete
+                        && static_cast<int>(v.size()) == boundOpts;
+                    if (canonical) {
+                        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
+                            float nrm = static_cast<float>(i * boundStep);
+                            if (nrm > 1.0f) nrm = 1.0f;
+                            const auto& s = v[i];
+                            const float dn = s.norm > nrm ? s.norm - nrm
+                                                          : nrm - s.norm;
+                            if (s.vst3Param != mapped || !s.enabled
+                                || dn > 1e-4f) { canonical = false; break; }
+                        }
+                    }
+                    setSlotPushSteps_(ctrl.linkIdx,
+                        canonical ? std::vector<uf8::PushStep>{} : v);
+                };
+
+                // Unified list: every entry stays visible. The ≡ handle drags
+                // to reorder; the checkbox includes/excludes the entry from
+                // the cycle (excluded ones keep their place); a macro step (a
+                // param other than the bound one) also gets an x to remove it.
+                if (!view.empty()) {
+                    ImGui_TextDisabled(ctx,
+                        "Drag \xE2\x89\xA1 to reorder \xC2\xB7 untick to exclude:");
+                    int dragFrom = -1, dragTo = -1, removeIdx = -1;
+                    for (int i = 0; i < static_cast<int>(view.size()); ++i) {
+                        const uf8::PushStep& st = view[i];
+                        const bool foreign = !isMapped || st.vst3Param != mapped;
+                        char pn[96] = {0};
+                        if (foreign && editing)
+                            paramNameFor_(*editing, fx, st.vst3Param,
+                                          pn, sizeof(pn));
+                        char vb[64] = {0};
+                        if (fx.ok)
+                            TrackFX_FormatParamValueNormalized(fx.tr, fx.fxIdx,
+                                st.vst3Param, st.norm, vb, sizeof(vb));
+                        char disp[180];
+                        if (foreign)
+                            snprintf(disp, sizeof(disp), "%s = %s",
+                                     pn[0] ? pn : "(param)", vb[0] ? vb : "?");
+                        else
+                            snprintf(disp, sizeof(disp), "%s",
+                                     vb[0] ? vb : "(option)");
+                        char cbId[208];
+                        snprintf(cbId, sizeof(cbId), "%s##fxl_ps_cb_%d", disp, i);
+
+                        // ≡ drag handle — source + drop target for reordering.
+                        char hId[40];
+                        snprintf(hId, sizeof(hId),
+                                 "\xE2\x89\xA1##fxl_ps_h_%d", i);
+                        ImGui_SmallButton(ctx, hId);
+                        int dndF = 0;
+                        if (ImGui_BeginDragDropSource(ctx, &dndF)) {
+                            char pl[8]; snprintf(pl, sizeof(pl), "%d", i);
+                            ImGui_SetDragDropPayload(ctx, "FXL_PSORD",
+                                                     pl, nullptr);
+                            ImGui_Text(ctx, disp);
+                            ImGui_EndDragDropSource(ctx);
+                        }
+                        if (ImGui_BeginDragDropTarget(ctx)) {
+                            char buf[8] = {0}; int af = 0;
+                            if (ImGui_AcceptDragDropPayload(ctx, "FXL_PSORD",
+                                    buf, static_cast<int>(sizeof(buf)), &af)) {
+                                dragFrom = std::atoi(buf); dragTo = i;
+                            }
+                            ImGui_EndDragDropTarget(ctx);
+                        }
+                        ImGui_SameLine(ctx, nullptr, nullptr);
+                        bool en = st.enabled;
+                        if (ImGui_Checkbox(ctx, cbId, &en)) {
+                            std::vector<uf8::PushStep> v = view;
+                            v[i].enabled = en;
+                            commit(v);
+                        }
+                        if (foreign) {
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                            char rmId[40];
+                            snprintf(rmId, sizeof(rmId), "x##fxl_ps_rm_%d", i);
+                            if (ImGui_SmallButton(ctx, rmId)) removeIdx = i;
+                        }
+                    }
+                    if (removeIdx >= 0) {
+                        std::vector<uf8::PushStep> v = view;
+                        v.erase(v.begin() + removeIdx);
+                        commit(v);
+                    } else if (dragFrom >= 0 && dragTo >= 0
+                               && dragFrom != dragTo
+                               && dragFrom < static_cast<int>(view.size())) {
+                        std::vector<uf8::PushStep> v = view;
+                        uf8::PushStep moved = v[dragFrom];
+                        v.erase(v.begin() + dragFrom);
+                        int dst = dragTo > dragFrom ? dragTo - 1 : dragTo;
+                        if (dst < 0) dst = 0;
+                        if (dst > static_cast<int>(v.size()))
+                            dst = static_cast<int>(v.size());
+                        v.insert(v.begin() + dst, moved);
+                        commit(v);
+                    }
+                    if (!slotPushSteps_(ctrl.linkIdx).empty()) {
+                        if (ImGui_SmallButton(ctx, boundDiscrete
+                                ? "Reset (cycle all)##fxl_ps_reset"
+                                : "Clear steps##fxl_ps_reset"))
+                            setSlotPushSteps_(ctrl.linkIdx, {});
+                    }
+                }
+
+                // + Add step — pick a plugin param (only ones that expose
+                // discrete options), then one of its values. Works off the
+                // live FX when present, else the param snapshot.
+                if (ImGui_BeginMenu(ctx, "+ Add step##fxl_ps_add", nullptr)) {
+                    const int pcount = editing
+                        ? paramCountFor_(*editing, fx) : 0;
+                    // Param search box.
+                    int fFlags = 0;
+                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+                    ImGui_InputText(ctx, "##fxl_ps_filter", g_fxlAddFilter,
+                                    sizeof(g_fxlAddFilter), &fFlags, nullptr);
+                    auto icontains = [](const char* hay, const char* needle) {
+                        if (!needle || !needle[0]) return true;
+                        if (!hay) return false;
+                        std::string h, n;
+                        for (const char* p = hay; *p; ++p)
+                            h += static_cast<char>(std::tolower((unsigned char)*p));
+                        for (const char* p = needle; *p; ++p)
+                            n += static_cast<char>(std::tolower((unsigned char)*p));
+                        return h.find(n) != std::string::npos;
+                    };
+                    // Param picker combo — only params that have options.
+                    char curPName[96] = {0};
+                    if (g_fxlAddParam >= 0 && editing)
+                        paramNameFor_(*editing, fx, g_fxlAddParam,
+                                      curPName, sizeof(curPName));
+                    if (ImGui_BeginCombo(ctx, "##fxl_ps_param",
+                            g_fxlAddParam >= 0 ? (curPName[0] ? curPName
+                                                              : "(param)")
+                                               : "Choose param…",
+                            nullptr)) {
+                        int shown = 0;
+                        for (int p = 0; p < pcount && shown < 1024; ++p) {
+                            char pn[96] = {0};
+                            if (editing)
+                                paramNameFor_(*editing, fx, p, pn, sizeof(pn));
+                            if (isReaperMidiParam_(pn)) continue;
+                            if (!icontains(pn, g_fxlAddFilter)) continue;
+                            double dummyStep = 1.0;
+                            if (optionCountFor(p, dummyStep) < 2) continue;
+                            ++shown;
+                            bool sel = (g_fxlAddParam == p);
+                            char rid[112];
+                            snprintf(rid, sizeof(rid), "%s##fxl_ps_p_%d",
+                                     pn[0] ? pn : "(param)", p);
+                            if (ImGui_Selectable(ctx, rid, &sel, nullptr,
+                                                 nullptr, nullptr)) {
+                                g_fxlAddParam = p;
+                            }
+                        }
+                        ImGui_EndCombo(ctx);
+                    }
+
+                    // Value picker — discrete options of the chosen param.
+                    if (g_fxlAddParam >= 0) {
+                        double pStep = 1.0;
+                        const int numSteps = optionCountFor(g_fxlAddParam, pStep);
+                        if (numSteps >= 2) {
+                            ImGui_TextDisabled(ctx, "Add option:");
+                            for (int i = 0; i < numSteps; ++i) {
+                                float nrm = static_cast<float>(i * pStep);
+                                if (nrm > 1.0f) nrm = 1.0f;
+                                char vbuf[64] = {0};
+                                if (fx.ok)
+                                    TrackFX_FormatParamValueNormalized(fx.tr,
+                                        fx.fxIdx, g_fxlAddParam, nrm,
+                                        vbuf, sizeof(vbuf));
+                                char oid[96];
+                                snprintf(oid, sizeof(oid), "%s##fxl_ps_opt_%d",
+                                         vbuf[0] ? vbuf
+                                                 : (i == 0 ? "OFF" : "ON"), i);
+                                if (ImGui_SmallButton(ctx, oid)) {
+                                    // Append to the effective list so the
+                                    // bound param's options are materialised
+                                    // too (don't drop them by writing only
+                                    // the new macro step).
+                                    std::vector<uf8::PushStep> v = view;
+                                    v.push_back(uf8::PushStep{
+                                        g_fxlAddParam, nrm, true});
+                                    commit(v);
+                                }
+                            }
+                        }
+                    }
+                    ImGui_EndMenu(ctx);
+                }
             }
 
             // Polarity (Unipolar / Bipolar). Mirrors the UF8 V-Pot menu

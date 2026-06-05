@@ -2158,67 +2158,150 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     // Plugin-param toggles (EQ In, Dyn In, Fast Attack, etc.). These
     // live on the Channel Strip plugin.
     if (!bindings.channelMap) { ++stats_.buttonEventsSuppressed; return; }
-    const int vst3Param = bindings.channelMap->buttonParam[ev.id];
-    if (vst3Param == kParamNone) { ++stats_.buttonEventsSuppressed; return; }
+    const int boundParam = bindings.channelMap->buttonParam[ev.id];
 
-    const double cur = TrackFX_GetParamNormalized(tr, bindings.channelFxIdx, vst3Param);
+    // A user FX-Learn binding may define an explicit push-cycle for this
+    // button — a curated subset of one param's options, or a multi-param
+    // macro (each press steps a different param). When present it overrides
+    // the auto-cycle below. Built-in plug-ins always return nullptr here, so
+    // their behaviour is untouched. See UserLinkSlot::pushSteps.
+    const std::vector<uf8::PushStep>* steps =
+        uc1::pushStepsForButton(bindings.channelMap, ev.id);
+    const bool usingSteps = (steps && !steps->empty());
 
-    // EQ Type on 4K E is a 3-state "EQ Colour" cycle (Brown → Black →
-    // Orange → Brown). 4K G's EQ Colour param exposes three normalised
-    // positions but only two distinct values (Pink at 0.0, Black at
-    // 0.5 / 1.0) — user-confirmed 2026-04-30 that 4K G should behave
-    // as a 2-way toggle, matching the UF8 V-Pot path. CS 2's EQ Type
-    // and 4K B (no EQ Type) are binary or absent.
-    const bool is3StateEqColour = (ev.id == button::kEqType)
-        && std::strcmp(bindings.channelMap->shortName, "4K E") == 0;
+    if (!usingSteps && boundParam == kParamNone) {
+        ++stats_.buttonEventsSuppressed; return;
+    }
 
-    double next;
-    bool isMultiStep = false;
-    if (is3StateEqColour) {
-        int step = static_cast<int>(cur * 2.0 + 0.5);
-        if (step < 0) step = 0;
-        if (step > 2) step = 2;
-        step = (step + 1) % 3;
-        next = step * 0.5;
-    } else {
-        // If the bound param exposes MORE than two discrete options
-        // (e.g. SPL Iron's "SC EQ" with 6 settings), cycle through them
-        // all on each press instead of jumping first↔last. Plain 2-state
-        // toggles (istoggle) and continuous params keep the binary 0↔1
-        // behaviour. Same detection the UF8 V-Pot push uses. Wraps from
-        // the last option back to the first.
-        double pStep = 0.0, pSmall = 0.0, pLarge = 0.0;
-        bool istoggle = false;
-        const bool stepped = TrackFX_GetParameterStepSizes(
-            tr, bindings.channelFxIdx, vst3Param,
-            &pStep, &pSmall, &pLarge, &istoggle);
-        const int numSteps = (stepped && !istoggle
-                              && pStep > 0.0 && pStep < 1.0)
-            ? uf8::numStepsFor(static_cast<float>(pStep))
-            : 2;
-        if (numSteps > 2) {
-            isMultiStep = true;
-            int idx = static_cast<int>(cur / pStep + 0.5);
-            if (idx < 0)             idx = 0;
-            if (idx >= numSteps)     idx = numSteps - 1;
-            idx = (idx + 1) % numSteps;
-            next = idx * pStep;
-            if (next > 1.0) next = 1.0;
+    // The param the write + LED + readout reflect. For an explicit step this
+    // is the advanced-to step's param (a macro slot may have no boundParam);
+    // for the auto-cycle it is the bound param.
+    int    vst3Param   = boundParam;
+    double next        = 0.0;
+    bool   isMultiStep = false;
+    bool   is3StateEqColour = false;
+    bool   stepsLedActive   = false;
+
+    if (usingSteps) {
+        const int n = static_cast<int>(steps->size());
+        auto live = [&](int i) {
+            const uf8::PushStep& st = (*steps)[i];
+            return st.vst3Param >= 0 && st.enabled;
+        };
+        auto stepMatches = [&](int i) {
+            if (i < 0 || i >= n) return false;
+            const uf8::PushStep& st = (*steps)[i];
+            if (st.vst3Param < 0) return false;
+            const double v = TrackFX_GetParamNormalized(
+                tr, bindings.channelFxIdx, st.vst3Param);
+            const double d = v - static_cast<double>(st.norm);
+            return d < 1e-3 && d > -1e-3;
+        };
+        // Count how many steps actually fire (enabled + real param). The
+        // editor's "untick to exclude" stores excluded options as disabled
+        // entries so they stay visible; the cycle skips them.
+        int enabledCount = 0, firstEnabled = -1;
+        for (int i = 0; i < n; ++i) if (live(i)) {
+            if (firstEnabled < 0) firstEnabled = i;
+            ++enabledCount;
+        }
+        if (enabledCount == 0) { ++stats_.buttonEventsSuppressed; return; }
+
+        // Determine where we are. A multi-param macro can have several steps
+        // matching the live state at once (an earlier param still holds its
+        // value), so "first step that matches" gets stuck the moment a later
+        // step writes a different param. Trust the remembered index while its
+        // step still matches; otherwise re-derive a sensible start. Then
+        // advance to the NEXT enabled step (wrap). We write only that step's
+        // param so a macro leaves sibling params untouched.
+        int curIdx = pushStepIdx_[ev.id];
+        if (!stepMatches(curIdx)) {
+            curIdx = -1;
+            for (int i = 0; i < n; ++i)
+                if (stepMatches(i)) { curIdx = i; break; }
+        }
+        int nextIdx;
+        if (curIdx < 0) {
+            // Nothing matched the live state → start at the first enabled.
+            nextIdx = firstEnabled;
         } else {
-            next = (cur < 0.5) ? 1.0 : 0.0;
+            // Advance to the next ENABLED step after the current one (wrap).
+            nextIdx = curIdx;
+            for (int k = 0; k < n; ++k) {
+                nextIdx = (nextIdx + 1) % n;
+                if (live(nextIdx)) break;
+            }
+        }
+        pushStepIdx_[ev.id] = nextIdx;
+        const uf8::PushStep& sel = (*steps)[nextIdx];
+        vst3Param      = sel.vst3Param;
+        next           = sel.norm;
+        isMultiStep    = (enabledCount > 2);
+        // Light the LED on any enabled step past the first enabled one,
+        // mirroring the auto-cycle's "any option past the first lights it".
+        stepsLedActive = (nextIdx != firstEnabled);
+        if (vst3Param < 0) { ++stats_.buttonEventsSuppressed; return; }
+    } else {
+        const double cur =
+            TrackFX_GetParamNormalized(tr, bindings.channelFxIdx, vst3Param);
+
+        // EQ Type on 4K E is a 3-state "EQ Colour" cycle (Brown → Black →
+        // Orange → Brown). 4K G's EQ Colour param exposes three normalised
+        // positions but only two distinct values (Pink at 0.0, Black at
+        // 0.5 / 1.0) — user-confirmed 2026-04-30 that 4K G should behave
+        // as a 2-way toggle, matching the UF8 V-Pot path. CS 2's EQ Type
+        // and 4K B (no EQ Type) are binary or absent.
+        is3StateEqColour = (ev.id == button::kEqType)
+            && std::strcmp(bindings.channelMap->shortName, "4K E") == 0;
+
+        if (is3StateEqColour) {
+            int step = static_cast<int>(cur * 2.0 + 0.5);
+            if (step < 0) step = 0;
+            if (step > 2) step = 2;
+            step = (step + 1) % 3;
+            next = step * 0.5;
+        } else {
+            // If the bound param exposes MORE than two discrete options
+            // (e.g. SPL Iron's "SC EQ" with 6 settings), cycle through them
+            // all on each press instead of jumping first↔last. Plain 2-state
+            // toggles (istoggle) and continuous params keep the binary 0↔1
+            // behaviour. Same detection the UF8 V-Pot push uses. Wraps from
+            // the last option back to the first.
+            double pStep = 0.0, pSmall = 0.0, pLarge = 0.0;
+            bool istoggle = false;
+            const bool stepped = TrackFX_GetParameterStepSizes(
+                tr, bindings.channelFxIdx, vst3Param,
+                &pStep, &pSmall, &pLarge, &istoggle);
+            const int numSteps = (stepped && !istoggle
+                                  && pStep > 0.0 && pStep < 1.0)
+                ? uf8::numStepsFor(static_cast<float>(pStep))
+                : 2;
+            if (numSteps > 2) {
+                isMultiStep = true;
+                int idx = static_cast<int>(cur / pStep + 0.5);
+                if (idx < 0)             idx = 0;
+                if (idx >= numSteps)     idx = numSteps - 1;
+                idx = (idx + 1) % numSteps;
+                next = idx * pStep;
+                if (next > 1.0) next = 1.0;
+            } else {
+                next = (cur < 0.5) ? 1.0 : 0.0;
+            }
         }
     }
     TrackFX_SetParamNormalized(tr, bindings.channelFxIdx, vst3Param, next);
     reasixty_bumpFolderReveal(tr);
     // User FX-Learn invert: flip the "active" sense for the LED + readout so
     // a param that reads 1=off still lights when engaged. Skipped for the
-    // 3-state EQ-colour cycle (no binary on/off). Mirrors bypassInverted.
-    const bool btnInv = !is3StateEqColour && !isMultiStep
+    // 3-state EQ-colour cycle (no binary on/off) and for explicit push-cycles
+    // (which decide active state by step index). Mirrors bypassInverted.
+    const bool btnInv = !usingSteps && !is3StateEqColour && !isMultiStep
                       && bindings.channelMap->buttonInverted[ev.id];
     // Multi-step params (>2 options) have no binary on/off, so light the
     // LED on any option past the first; binary params honour the invert.
-    const bool btnActive = isMultiStep ? (next > 1e-6)
-                         : (btnInv ? (next < 0.5) : (next >= 0.5));
+    const bool btnActive = usingSteps ? stepsLedActive
+                         : (isMultiStep ? (next > 1e-6)
+                         : (btnInv ? (next < 0.5) : (next >= 0.5)));
     pushButtonLed_(ev.id, btnActive);
 
     // Resolved readout name. Knobs already display the user's FX-Learn
@@ -3292,6 +3375,39 @@ void UC1Surface::pushButtonLed_(uint8_t buttonId, LedState state)
     device_->send(buildLedWrite(bank, cell.cell, stateByte));
 }
 
+// LED state for a push-cycle button (curated subset / macro): lit when the
+// current matched step index != 0, mirroring the press-time + auto-cycle
+// rule "any option past the first lights the LED". Keeps macro LEDs in sync
+// every poll instead of letting ledForParam (which only knows the bound
+// param) stomp the press-time LED back off. Returns false if no steps.
+static bool stepCycleLedOn_(MediaTrack* tr, int fxIdx,
+                            const std::vector<uf8::PushStep>* steps,
+                            int hintIdx)
+{
+    if (!tr || !steps || steps->empty()) return false;
+    const int n = static_cast<int>(steps->size());
+    auto matches = [&](int i) {
+        if (i < 0 || i >= n) return false;
+        const uf8::PushStep& st = (*steps)[i];
+        if (st.vst3Param < 0) return false;
+        const double v = TrackFX_GetParamNormalized(tr, fxIdx, st.vst3Param);
+        const double d = v - static_cast<double>(st.norm);
+        return d < 1e-3 && d > -1e-3;
+    };
+    int firstEnabled = -1;
+    for (int i = 0; i < n; ++i)
+        if ((*steps)[i].vst3Param >= 0 && (*steps)[i].enabled) {
+            firstEnabled = i; break;
+        }
+    // Prefer the remembered position (disambiguates multi-param macros);
+    // fall back to the first matching step, or none.
+    int idx = -1;
+    if (matches(hintIdx)) idx = hintIdx;
+    else for (int i = 0; i < n; ++i) if (matches(i)) { idx = i; break; }
+    // Lit on any enabled step past the first enabled one.
+    return idx >= 0 && (*steps)[idx].enabled && idx != firstEnabled;
+}
+
 void UC1Surface::pollButtonLeds_()
 {
     if (!device_) return;
@@ -3359,7 +3475,15 @@ void UC1Surface::pollButtonLeds_()
                     pushButtonLed_(btn, cin);
                     continue;
                 }
-                on = ledForParam(bindings.channelMap, bindings.channelFxIdx, btn);
+                // Push-cycle buttons (curated subset / macro) decide LED from
+                // the step index; others read the bound param directly.
+                if (const auto* steps =
+                        uc1::pushStepsForButton(bindings.channelMap, btn)) {
+                    on = stepCycleLedOn_(tr, bindings.channelFxIdx, steps, pushStepIdx_[btn]);
+                } else {
+                    on = ledForParam(bindings.channelMap,
+                                     bindings.channelFxIdx, btn);
+                }
                 break;
         }
 
@@ -4173,6 +4297,10 @@ void UC1Surface::refresh()
                     }
                     pushButtonLed_(btn, cin);
                     continue;
+                } else if (const auto* steps =
+                        uc1::pushStepsForButton(bindings.channelMap, btn)) {
+                    // Push-cycle (curated subset / macro): LED from step index.
+                    on = stepCycleLedOn_(tr, bindings.channelFxIdx, steps, pushStepIdx_[btn]);
                 } else {
                     on = ledForParam(bindings.channelMap,
                                      bindings.channelFxIdx, btn);

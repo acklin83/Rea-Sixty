@@ -306,6 +306,15 @@ private:
     // --- state ---
     UC1Device* device_ = nullptr;
     void*      focusedTrack_ = nullptr;  // MediaTrack*
+    // Current index within each button's explicit push-cycle (pushSteps),
+    // keyed by UC1 button id. A multi-param macro can have several steps
+    // matching the live param state at once, so we can't re-derive the
+    // position purely from state on each press — we remember where we are
+    // and only re-derive when the remembered step no longer matches.
+    // -1 = unknown (derive from state). See UC1Surface::handleButton_.
+    int        pushStepIdx_[0x20] = {
+        -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1 };
     // Last-known zero-based project index of focusedTrack_. Updated each
     // poll tick while the pointer is valid; consumed when the pointer
     // goes invalid (track deletion) so the fallback can land on the

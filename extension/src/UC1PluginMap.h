@@ -23,8 +23,11 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "UC1Protocol.h"
+
+namespace uf8 { struct PushStep; }  // UserPluginCatalog.h
 
 namespace uc1 {
 
@@ -127,6 +130,14 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName);
 // user-mapped BC). False covers Channel Strip and unrelated bindings;
 // callers should null-check the input first.
 bool isBusCompBinding(const PluginBindings* b);
+
+// Per-button push-cycle steps for a user FX-Learn binding, or nullptr when
+// the button has none (built-in plug-ins always return nullptr → legacy
+// auto-cycle). The returned vector is non-empty and owned by the binding
+// cache; consume it on the same main thread, do not store it across a
+// user_plugins generation bump. See UserLinkSlot::pushSteps.
+const std::vector<uf8::PushStep>*
+pushStepsForButton(const PluginBindings* channelMap, uint8_t buttonId);
 
 // Kind of a control — helps the surface decide which plugin slot to
 // route a knob to when both Bus Comp and Channel Strip are on the track.

@@ -432,9 +432,16 @@ constexpr LinkToUc1 kBcLinkToUc1[] = {
 
 // Fill a PluginBindings from a UserPluginMap. Caller owns the storage of
 // `out` — match/shortName must already point to stable strings (we don't
-// touch them here).
-void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
+// touch them here). `buttonSteps` (optional) receives each button's
+// push-cycle step list, keyed by UC1 button id, so the runtime can cycle a
+// curated subset / multi-param macro instead of the bound param's full
+// option set. PluginBindings itself stays a literal type (it is built via
+// constexpr makeEmpty), so the std::vector-backed steps live on the cache
+// entry rather than inside PluginBindings.
+void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
+                            std::array<std::vector<uf8::PushStep>, 0x20>* buttonSteps = nullptr)
 {
+    if (buttonSteps) for (auto& v : *buttonSteps) v.clear();
     for (auto& v : out.knobParam)      v = kParamNone;
     for (auto& v : out.buttonParam)    v = kParamNone;
     for (auto& v : out.inverted)       v = false;
@@ -456,7 +463,11 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
     }
 
     for (const auto& slot : um.slots) {
-        if (slot.vst3Param < 0) continue;
+        const bool hasSteps = !slot.pushSteps.empty();
+        // A macro slot may carry no primary param (vst3Param < 0) yet still
+        // drive a button via its push-cycle steps. Keep processing such a
+        // slot; skip only when it has neither a param nor steps.
+        if (slot.vst3Param < 0 && !hasSteps) continue;
         // SSL Link slot 0 = plug-in bypass on both CS and BC. Persist
         // the bound vst3Param into bypassParam so the IN button toggles
         // the plug-in's own bypass param rather than REAPER's
@@ -466,19 +477,23 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out)
         // expose "Comp In" (1=on, LED ON on 1). The FX-Learn UI's
         // inverted toggle on this slot drives bypassInverted, which
         // the IN-button + LED render paths consume.
-        if (slot.linkIdx == 0) {
+        if (slot.linkIdx == 0 && slot.vst3Param >= 0) {
             out.bypassParam    = slot.vst3Param;
             out.bypassInverted = slot.inverted;
         }
         for (int i = 0; i < tableSize; ++i) {
             if (table[i].linkIdx != slot.linkIdx) continue;
-            if (table[i].knobId != kNoUc1) {
+            if (table[i].knobId != kNoUc1 && slot.vst3Param >= 0) {
                 out.knobParam[table[i].knobId] = slot.vst3Param;
                 out.inverted[table[i].knobId]  = slot.inverted;
             }
             if (table[i].buttonId != kNoUc1) {
-                out.buttonParam[table[i].buttonId]    = slot.vst3Param;
-                out.buttonInverted[table[i].buttonId] = slot.inverted;
+                if (slot.vst3Param >= 0) {
+                    out.buttonParam[table[i].buttonId]    = slot.vst3Param;
+                    out.buttonInverted[table[i].buttonId] = slot.inverted;
+                }
+                if (buttonSteps && hasSteps)
+                    (*buttonSteps)[table[i].buttonId] = slot.pushSteps;
             }
             break;
         }
@@ -502,6 +517,13 @@ struct UserBindingEntry {
     // (rebuilt on user_plugins generation bump, main-thread only).
     double         bcVuCalDb[6] = {0,0,0,0,0,0};
     double         ledsCalDb[5] = {0,0,0,0,0};
+    // Per-button push-cycle step lists (keyed by UC1 button id). Empty =>
+    // legacy auto-cycle of the bound param. Lives here (not in
+    // PluginBindings) so PluginBindings stays a constexpr-buildable literal
+    // type. Lifetime = cache entry lifetime; pushStepsForButton() returns
+    // pointers into this, consumed on the same main thread before any
+    // rebuild.
+    std::array<std::vector<uf8::PushStep>, 0x20> buttonSteps;
 };
 
 std::mutex                                       g_userCacheMutex;
@@ -540,7 +562,7 @@ void rebuildUserCache_locked_()
         for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];
         e->bindings.match     = e->matchOwned.c_str();
         e->bindings.shortName = e->shortNameOwned.c_str();
-        synthesizeUserBinding_(um, e->bindings);
+        synthesizeUserBinding_(um, e->bindings, &e->buttonSteps);
         g_userCache.push_back(std::move(e));
     }
     g_userCacheGeneration =
@@ -573,6 +595,24 @@ bool isBusCompBinding(const PluginBindings* b)
         if (&e->bindings == b) return e->domain == uf8::Domain::BusComp;
     }
     return false;
+}
+
+const std::vector<uf8::PushStep>*
+pushStepsForButton(const PluginBindings* channelMap, uint8_t buttonId)
+{
+    if (!channelMap || buttonId >= 0x20) return nullptr;
+    // Built-in CS/4K bindings are never in g_userCache, so they fall
+    // through to nullptr → the runtime keeps its legacy auto-cycle. Only
+    // user FX-Learn maps own per-button step lists. The returned pointer is
+    // consumed immediately on the same (main) thread that may rebuild the
+    // cache, so no rebuild can intervene between this call and its use.
+    std::lock_guard<std::mutex> lk(g_userCacheMutex);
+    for (const auto& e : g_userCache) {
+        if (&e->bindings != channelMap) continue;
+        const auto& v = e->buttonSteps[buttonId];
+        return v.empty() ? nullptr : &v;
+    }
+    return nullptr;
 }
 
 const PluginBindings* lookupBindingsByName(std::string_view fxName)

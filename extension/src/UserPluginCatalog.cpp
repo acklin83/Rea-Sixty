@@ -327,6 +327,22 @@ std::string serialize_(const UserPluginCatalog& c)
             if (s.defaultNorm != 0.5) {
                 os << ", \"defaultNorm\": " << s.defaultNorm;
             }
+            // Per-button push-cycle steps — additive; only written when the
+            // user has curated a subset / built a macro. Empty list keeps the
+            // shipped auto-cycle-all-options behaviour and writes nothing.
+            if (!s.pushSteps.empty()) {
+                os << ", \"pushSteps\": [";
+                bool firstStep = true;
+                for (const auto& st : s.pushSteps) {
+                    if (!firstStep) os << ",";
+                    firstStep = false;
+                    os << " { \"vst3Param\": " << st.vst3Param
+                       << ", \"norm\": " << st.norm;
+                    if (!st.enabled) os << ", \"enabled\": false";
+                    os << " }";
+                }
+                os << " ]";
+            }
         };
         // KnobTravel sub-struct writer for UF8 V-Pot + fader bindings.
         // Wraps the four fields in a nested "travel" object so older
@@ -694,7 +710,32 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     us.polarity = vpotPolarityFromName_(polStr.c_str());
                 }
                 getDoubleI_(so, "defaultNorm", us.defaultNorm);
-                if (us.linkIdx < 0 || us.vst3Param < 0) continue;
+                // Per-button push-cycle steps (additive). Each entry is an
+                // object { "vst3Param", "norm" }. Absent => empty => legacy
+                // auto-cycle.
+                if (auto* psa = so->get_item_by_name("pushSteps");
+                    psa && psa->is_array() && psa->m_array)
+                {
+                    const int pn = psa->m_array->GetSize();
+                    us.pushSteps.reserve(pn);
+                    for (int pi = 0; pi < pn; ++pi) {
+                        wdl_json_element* pe = psa->enum_item(pi);
+                        if (!pe || !pe->is_object()) continue;
+                        PushStep st{};
+                        getIntI_(pe, "vst3Param", st.vst3Param);
+                        double nv = 0.0;
+                        if (getDoubleI_(pe, "norm", nv)) st.norm = (float)nv;
+                        // Additive; absent => enabled (default true).
+                        getBoolI_(pe, "enabled", st.enabled);
+                        if (st.vst3Param < 0) continue;
+                        us.pushSteps.push_back(st);
+                    }
+                }
+                if (us.linkIdx < 0) continue;
+                // A macro slot has no primary param (vst3Param < 0) but is
+                // still valid as long as it carries push-cycle steps. Only
+                // drop the slot when it has neither.
+                if (us.vst3Param < 0 && us.pushSteps.empty()) continue;
                 dest.push_back(us);
             }
         };
