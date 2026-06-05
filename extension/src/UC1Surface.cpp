@@ -2173,6 +2173,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         && std::strcmp(bindings.channelMap->shortName, "4K E") == 0;
 
     double next;
+    bool isMultiStep = false;
     if (is3StateEqColour) {
         int step = static_cast<int>(cur * 2.0 + 0.5);
         if (step < 0) step = 0;
@@ -2180,16 +2181,44 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         step = (step + 1) % 3;
         next = step * 0.5;
     } else {
-        next = (cur < 0.5) ? 1.0 : 0.0;
+        // If the bound param exposes MORE than two discrete options
+        // (e.g. SPL Iron's "SC EQ" with 6 settings), cycle through them
+        // all on each press instead of jumping first↔last. Plain 2-state
+        // toggles (istoggle) and continuous params keep the binary 0↔1
+        // behaviour. Same detection the UF8 V-Pot push uses. Wraps from
+        // the last option back to the first.
+        double pStep = 0.0, pSmall = 0.0, pLarge = 0.0;
+        bool istoggle = false;
+        const bool stepped = TrackFX_GetParameterStepSizes(
+            tr, bindings.channelFxIdx, vst3Param,
+            &pStep, &pSmall, &pLarge, &istoggle);
+        const int numSteps = (stepped && !istoggle
+                              && pStep > 0.0 && pStep < 1.0)
+            ? uf8::numStepsFor(static_cast<float>(pStep))
+            : 2;
+        if (numSteps > 2) {
+            isMultiStep = true;
+            int idx = static_cast<int>(cur / pStep + 0.5);
+            if (idx < 0)             idx = 0;
+            if (idx >= numSteps)     idx = numSteps - 1;
+            idx = (idx + 1) % numSteps;
+            next = idx * pStep;
+            if (next > 1.0) next = 1.0;
+        } else {
+            next = (cur < 0.5) ? 1.0 : 0.0;
+        }
     }
     TrackFX_SetParamNormalized(tr, bindings.channelFxIdx, vst3Param, next);
     reasixty_bumpFolderReveal(tr);
     // User FX-Learn invert: flip the "active" sense for the LED + readout so
     // a param that reads 1=off still lights when engaged. Skipped for the
     // 3-state EQ-colour cycle (no binary on/off). Mirrors bypassInverted.
-    const bool btnInv = !is3StateEqColour
+    const bool btnInv = !is3StateEqColour && !isMultiStep
                       && bindings.channelMap->buttonInverted[ev.id];
-    const bool btnActive = btnInv ? (next < 0.5) : (next >= 0.5);
+    // Multi-step params (>2 options) have no binary on/off, so light the
+    // LED on any option past the first; binary params honour the invert.
+    const bool btnActive = isMultiStep ? (next > 1e-6)
+                         : (btnInv ? (next < 0.5) : (next >= 0.5));
     pushButtonLed_(ev.id, btnActive);
 
     // Resolved readout name. Knobs already display the user's FX-Learn
