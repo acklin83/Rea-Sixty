@@ -131,6 +131,48 @@ void UF1Device::runInit_()
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
+    // Plugin-layout override (2026-06-05) — LEADING hypothesis for the
+    // colour-bar-won't-render + MODE-button-inert symptoms. The cap66 init we
+    // replay is the MCU-mode cold start: its first paints of 0x0000/0x000d/0x0011
+    // carry MCU flag values (02 00 / 04 / 00). cap84 (Plugin cold start) sets
+    // them to 03 00 / 03 / 01. We re-send the Plugin values at init-time (device
+    // thread, before any content) so the firmware enters the channel-strip/meter
+    // layout the fake-CS population needs. 0x0000 02/03 mirrors the UF8 slot
+    // empty/populated flag — suggestive, NOT proven (cross-frame-type value
+    // match). Re-asserted on `changed` in uf1PaintChannel_ (latched-or-dynamic).
+    {
+        auto sendModeFrame = [&](uint16_t addr, std::span<const uint8_t> payload) {
+            if (shuttingDown_.load()) return;
+            auto frame = uf1::buildScreen(addr, payload);
+            int transferred = 0;
+            int ircode = libusb_bulk_transfer(handle_, kEpOut, frame.data(),
+                                              static_cast<int>(frame.size()),
+                                              &transferred, 1000);
+            traceFrame_('O', frame.data(), frame.size(), ircode);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        };
+        // Full PLUGIN large-display state, mirrored byte-for-byte from cap85 —
+        // the live SSL 360 init that DOES render the channel-strip + EQ graph.
+        // The cap66 init we replay is MCU: it leaves 0x0100=8003 (MCU large
+        // display) and the 0x01xx structural bytes at 0. Setting 0x0000=03 alone
+        // got the colour bar + CS params (channel-info plane) but the LARGE LCD
+        // (0x01xx, where the 0x0122 EQ graph lives) stayed in MCU layout → EQ
+        // never painted. cap85-vs-cap66 diff: these are the EQ-render-specific
+        // structural bytes we were missing. 0x0100=0300 is the big one (plugin
+        // large-display layout). cap84 (plugin idle, no plug-in) reaches the same
+        // state but shows nothing for lack of EQ data — we have both now.
+        sendModeFrame(0x0000, std::vector<uint8_t>{0x03, 0x00});
+        sendModeFrame(0x000d, std::vector<uint8_t>{0x01});
+        sendModeFrame(0x0011, std::vector<uint8_t>{0x01});
+        sendModeFrame(0x0100, std::vector<uint8_t>{0x03, 0x00});
+        sendModeFrame(0x0101, std::vector<uint8_t>{0x05});
+        sendModeFrame(0x010d, std::vector<uint8_t>{0x02, 0x02, 0x08, 0x02});
+        sendModeFrame(0x0110, std::vector<uint8_t>{0x0f});
+        sendModeFrame(0x011a, std::vector<uint8_t>{0x02});
+        sendModeFrame(0x011d, std::vector<uint8_t>{0x19});
+        sendModeFrame(0x011e, std::vector<uint8_t>{0x18});
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // Init complete — worker can drain the user-send queue.
     initInProgress_ = false;

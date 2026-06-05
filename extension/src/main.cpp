@@ -14971,10 +14971,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 // feedback-reaper-api-input-thread). The real surface (queueInput dispatch,
 // screen features) comes after this path is verified on hardware.
 
+// Bring-up wire logging is OFF unless REASIXTY_UF1_TRACE is set (it grew
+// /tmp/reaper_uf1_input.log + /tmp/reaper_uf1_frames.log unbounded). Functional
+// input handling always runs; only the diagnostic writes are gated.
+static const bool g_uf1Trace = (std::getenv("REASIXTY_UF1_TRACE") != nullptr);
+
 // Raw bulk-IN dump — skips pure idle polls (32 60 / 32 00) to keep the log
 // readable while a fader/button is exercised.
 void onUf1Input(const uint8_t* data, size_t len)
 {
+    if (!g_uf1Trace) return;
     if (len <= 2) return;  // bare report header = idle poll
     if (FILE* f = std::fopen("/tmp/reaper_uf1_input.log", "a")) {
         std::fprintf(f, "RAW [%zu] ", len);
@@ -14984,14 +14990,13 @@ void onUf1Input(const uint8_t* data, size_t len)
     }
 }
 
-// Parsed control event — the human-readable read-proof.
+// Parsed control event — functional state updates always run; logging gated.
 void onUf1Event(const uf1::InputEvent& ev)
 {
-    FILE* f = std::fopen("/tmp/reaper_uf1_input.log", "a");
-    if (!f) return;
+    FILE* f = g_uf1Trace ? std::fopen("/tmp/reaper_uf1_input.log", "a") : nullptr;
     switch (ev.kind) {
         case uf1::InputKind::FaderTouch:
-            std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
+            if (f) std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
             g_uf1FaderTouched.store(ev.pressed);
             // Release the motor the instant the user grips it so it goes limp
             // under the finger (re-engaged by uf1PaintChannel_ on release).
@@ -15000,18 +15005,18 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1_dev->sendPriority(uf1::buildMotorEnable(false));
             break;
         case uf1::InputKind::FaderPosition:
-            std::fprintf(f, "FADER POS %u (0x%04x)\n", ev.position, ev.position);
+            if (f) std::fprintf(f, "FADER POS %u (0x%04x)\n", ev.position, ev.position);
             g_uf1FaderPos.store(ev.position);
             g_uf1FaderHasPos.store(true);
             break;
         case uf1::InputKind::EncoderRotate:
-            std::fprintf(f, "ENC 0x%02x rotate %+d\n", ev.id, ev.delta);
+            if (f) std::fprintf(f, "ENC 0x%02x rotate %+d\n", ev.id, ev.delta);
             break;
         case uf1::InputKind::EncoderTouch:
-            std::fprintf(f, "ENC 0x%02x touch %s\n", ev.id, ev.pressed ? "down" : "up");
+            if (f) std::fprintf(f, "ENC 0x%02x touch %s\n", ev.id, ev.pressed ? "down" : "up");
             break;
         case uf1::InputKind::Button:
-            std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
+            if (f) std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
             // MODE (0x20) toggles the firmware's Channel <-> Meter view. The
             // device flips its own layout; we only mirror the state so the
             // painter knows which content to stream. Atomic store only — no
@@ -15020,7 +15025,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterView.store(!g_uf1MeterView.load());
             break;
     }
-    std::fclose(f);
+    if (f) std::fclose(f);
 }
 
 // Best-effort UF1 attach. Absence is fine — UF8/UC1 run independently.
@@ -15041,9 +15046,9 @@ void openUf1BringUp_()
         g_uf1_dev.reset();
         return;
     }
-    // TODO(remove before release): full wire trace to /tmp/reaper_uf1_frames.log
-    // grows unbounded — bring-up diagnostics only.
-    g_uf1_dev->setFrameTrace(true);
+    // Wire trace (/tmp/reaper_uf1_frames.log) — diagnostics only, OFF unless
+    // REASIXTY_UF1_TRACE is set (it grows unbounded).
+    g_uf1_dev->setFrameTrace(g_uf1Trace);
     g_uf1_dev->setRawInputHandler(onUf1Input);
     g_uf1_dev->setInputHandler(onUf1Event);
 
@@ -15170,6 +15175,230 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
 }
 
+// ---- UF1 EQ graph (0x0122) native render ----------------------------------
+// The SSL Plugin-Mode channel-strip paints a frequency-response curve at screen
+// element 0x0122 (cap73): FF 67 FD 01 22 + 251 column-height bytes, one per
+// pixel column. 0 dB baseline = 100 (0x64); cap73 ground truth showed a max HMF
+// boost peaking at 187. We render the curve from the SSL Channel-Strip EQ band
+// params on the focused track (analog-prototype magnitudes — sample-rate
+// independent, which is what a plug-in's GUI plot draws). This is a parametric
+// render that TRACKS the real gain/freq/Q; the exact SSL proprietary curve
+// shape (E vs G proportional-Q etc.) can be refined against cap73 later — the
+// scale is already calibrated to cap73's 187 peak (~5.44 px/dB, +16 dB max).
+namespace {
+
+// Index of an FX on `tr` exposing SSL-channel-strip EQ params, or -1. Detected
+// by an "HF Gain" / "HMF Gain" param name so it works across SSL CS variants.
+int uf1FindEqFx_(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const int n = TrackFX_GetCount(tr);
+    char nm[128];
+    for (int fx = 0; fx < n; ++fx) {
+        const int pc = TrackFX_GetNumParams(tr, fx);
+        for (int p = 0; p < pc && p < 96; ++p) {
+            if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) &&
+                (std::strstr(nm, "HMF Gain") || std::strstr(nm, "HF Gain")))
+                return fx;
+        }
+    }
+    return -1;
+}
+
+std::string uf1Lower_(const char* s)
+{
+    std::string r(s);
+    for (char& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return r;
+}
+
+// Case-insensitive SUBSTRING match — SSL CS param names may carry prefixes
+// ("EQ HMF Gain") or case differences, so exact strcmp was missing them.
+int uf1ParamByName_(MediaTrack* tr, int fx, const char* want)
+{
+    const int pc = TrackFX_GetNumParams(tr, fx);
+    const std::string w = uf1Lower_(want);
+    char nm[128];
+    for (int p = 0; p < pc; ++p)
+        if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) &&
+            uf1Lower_(nm).find(w) != std::string::npos)
+            return p;
+    return -1;
+}
+
+// Formatted-value read + numeric parse. Handles "+5.0 dB", "1.5 kHz", "100 Hz",
+// "1.20" (Q). `khz` scaling triggers on a 'k'/'K' in the unit.
+double uf1ParamFmt_(MediaTrack* tr, int fx, int p, double fallback)
+{
+    if (p < 0) return fallback;
+    char buf[64];
+    if (!TrackFX_GetFormattedParamValue(tr, fx, p, buf, sizeof(buf))) return fallback;
+    double v = std::atof(buf);
+    if (std::strchr(buf, 'k') || std::strchr(buf, 'K')) v *= 1000.0;
+    return v;
+}
+
+// Frequency read with SSL's unit convention: the 4K E formats mid/high band
+// freqs in kHz WITHOUT a unit suffix ("3.00" = 3 kHz, "8.00" = 8 kHz), LF in Hz
+// ("200.0"). No 'k' to key on. Heuristic that covers both: a bare value < 30 is
+// kHz (EQ kHz displays span 0.2..22; any band shown in Hz reads >= 30), so ×1000.
+double uf1ParamFreq_(MediaTrack* tr, int fx, int p, double fallback)
+{
+    if (p < 0) return fallback;
+    char buf[64];
+    if (!TrackFX_GetFormattedParamValue(tr, fx, p, buf, sizeof(buf))) return fallback;
+    double v = std::atof(buf);
+    if (std::strchr(buf, 'k') || std::strchr(buf, 'K')) return v * 1000.0;
+    if (v > 0.0 && v < 30.0) v *= 1000.0;     // bare kHz value (no unit)
+    return v;
+}
+
+// Analog peaking-EQ magnitude (dB) at f for a bell centred at f0, gain g dB, Q.
+double uf1PeakDb_(double f, double f0, double g, double q)
+{
+    if (g == 0.0 || f0 <= 0.0 || q <= 0.0) return 0.0;
+    const double A  = std::pow(10.0, g / 40.0);
+    const double w2 = f * f, w0 = f0 * f0;
+    const double d  = w0 - w2;
+    const double num = std::hypot(d, f * f0 * A / q);
+    const double den = std::hypot(d, f * f0 / (A * q));
+    return 20.0 * std::log10(num / den);
+}
+// 1st-order-ish shelves (display curves): smooth g->0 transition around f0.
+double uf1LowShelfDb_(double f, double f0, double g)
+{
+    if (g == 0.0 || f0 <= 0.0) return 0.0;
+    return g / (1.0 + (f / f0) * (f / f0));
+}
+double uf1HighShelfDb_(double f, double f0, double g)
+{
+    if (g == 0.0 || f0 <= 0.0) return 0.0;
+    return g / (1.0 + (f0 / f) * (f0 / f));
+}
+// 2nd-order filter roll-offs (≈12 dB/oct) — only meaningful away from the rail.
+double uf1HpfDb_(double f, double fc)
+{
+    if (fc <= 21.0) return 0.0;                       // at/under the bottom rail = off
+    const double r = fc / f;
+    return -10.0 * std::log10(1.0 + r * r * r * r);
+}
+double uf1LpfDb_(double f, double fc)
+{
+    if (fc >= 19000.0) return 0.0;                    // at/over the top rail = off
+    const double r = f / fc;
+    return -10.0 * std::log10(1.0 + r * r * r * r);
+}
+
+} // namespace
+
+void uf1PaintEqGraph_(MediaTrack* tr, bool force)
+{
+    static MediaTrack* sFxTr = nullptr;
+    static int sFx = -1;
+    // Param-index cache (resolved on track/fx change). Order: HFg HFf HFt HMFg
+    // HMFf HMFq LMFg LMFf LMFq LFf LFg LFt HPF LPF EQIn.
+    static int ix[15];
+    static std::array<uint8_t, 251> sLast{};
+    static bool sHave = false;
+
+    const char* names[15] = {
+        "HF Gain","HF Freq","HF Type","HMF Gain","HMF Freq","HMF Q",
+        "LMF Gain","LMF Freq","LMF Q","LF Freq","LF Gain","LF Type",
+        "LPF","HPF","EQ In" };
+
+    // EQ source = the instance the SURFACE is currently working on, so the UF1
+    // EQ graph stays consistent with what UC1/UF8 show/control (Frank: "welche
+    // instanz auf uc1/uf8 aktiv ist muss zusammenpassen"). resolveActiveFx_() is
+    // the shared resolver — cursor from V-Pot/Encoder Instance-Cycle, then the
+    // focused-domain Instance. Fall back to the focused plug-in window, then to
+    // any EQ FX on the channel track. There are many 4K E instances; reading the
+    // selected track's first EQ (the old behaviour) picked the wrong one.
+    auto fxHasEq = [](MediaTrack* t, int fx) -> bool {
+        if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return false;
+        const int pc = TrackFX_GetNumParams(t, fx);
+        char pn[128];
+        for (int p = 0; p < pc && p < 96; ++p)
+            if (TrackFX_GetParamName(t, fx, p, pn, sizeof(pn)) &&
+                (std::strstr(pn, "HMF Gain") || std::strstr(pn, "HF Gain")))
+                return true;
+        return false;
+    };
+    MediaTrack* eqTr = nullptr; int eqFx = -1;
+    { ActiveFxTarget a = resolveActiveFx_();
+      if (fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
+    if (!eqTr) {
+        int trNum = -1, itemNum = -1, fxNum = -1;
+        if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
+            MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+            const int candFx = fxNum & 0x00FFFFFF;
+            if (fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
+        }
+    }
+    if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
+
+    if (sFxTr != eqTr || sFx != eqFx || force) {
+        sFxTr = eqTr;
+        sFx = eqFx;
+        if (sFx >= 0)
+            for (int k = 0; k < 15; ++k) ix[k] = uf1ParamByName_(eqTr, sFx, names[k]);
+    }
+
+    std::array<uint8_t, 251> col{};
+    auto dbToH = [](double db) {
+        double h = 100.0 + db * 5.44;            // cap73: 0 dB = 100, +16 dB ≈ 187
+        if (h < 0.0) h = 0.0; if (h > 199.0) h = 199.0;
+        return static_cast<uint8_t>(h + 0.5);
+    };
+
+    bool eqOn = sFx >= 0;
+    if (eqOn && ix[14] >= 0)                       // EQ In toggle
+        eqOn = TrackFX_GetParamNormalized(sFxTr, sFx, ix[14]) >= 0.5;
+
+    if (!eqOn) {
+        col.fill(100);
+    } else {
+        const double hfG=uf1ParamFmt_(sFxTr,sFx,ix[0],0),  hfF=uf1ParamFreq_(sFxTr,sFx,ix[1],8000);
+        const bool   hfBell = ix[2]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[2])>=0.5;
+        const double hmG=uf1ParamFmt_(sFxTr,sFx,ix[3],0),  hmF=uf1ParamFreq_(sFxTr,sFx,ix[4],3000),  hmQ=uf1ParamFmt_(sFxTr,sFx,ix[5],1.0);
+        const double lmG=uf1ParamFmt_(sFxTr,sFx,ix[6],0),  lmF=uf1ParamFreq_(sFxTr,sFx,ix[7],1000),  lmQ=uf1ParamFmt_(sFxTr,sFx,ix[8],1.0);
+        const double lfF=uf1ParamFreq_(sFxTr,sFx,ix[9],200), lfG=uf1ParamFmt_(sFxTr,sFx,ix[10],0);
+        const bool   lfBell = ix[11]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[11])>=0.5;
+        const double lpF=uf1ParamFmt_(sFxTr,sFx,ix[12],20000), hpF=uf1ParamFmt_(sFxTr,sFx,ix[13],20);
+        // Columns live at payload indices 2..250 (249 columns); 0..1 = the
+        // "00 01" format header below.
+        for (int x = 2; x < 251; ++x) {
+            const double frac = (x - 2) / 248.0;
+            const double f = 20.0 * std::pow(1000.0, frac);   // 20 Hz .. 20 kHz, log
+            double db = 0.0;
+            db += uf1PeakDb_(f, hmF, hmG, hmQ);
+            db += uf1PeakDb_(f, lmF, lmG, lmQ);
+            db += hfBell ? uf1PeakDb_(f, hfF, hfG, 0.7) : uf1HighShelfDb_(f, hfF, hfG);
+            db += lfBell ? uf1PeakDb_(f, lfF, lfG, 0.7) : uf1LowShelfDb_(f, lfF, lfG);
+            db += uf1HpfDb_(f, hpF);
+            db += uf1LpfDb_(f, lpF);
+            col[x] = dbToH(db);
+        }
+    }
+    // FD payload format (cap73, byte-exact): "00 01" header marker, then 249
+    // column heights. We were sending "00 <250 cols>" — missing the 0x01 marker
+    // and off by one column — so the device parsed it wrong and never drew it.
+    col[0] = 0x00;
+    col[1] = 0x01;
+
+    if (sHave && !force && col == sLast) return;
+    sLast = col; sHave = true;
+    // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
+    // to element 0x0122, always SHORT-then-FD (cap73: 260 FD / 260 short, 1:1).
+    // We were sending only the FD frame, so the device never refreshed the graph
+    // region (it showed the layout's flat baseline and ignored our curves). Send
+    // the companion first. val tracks ~0x64 in cap73 (a 0 dB cursor/refresh
+    // marker); 0x64 = neutral. Exact val semantics refinable.
+    const std::array<uint8_t, 2> eqRefresh{0x01, 0x64};
+    g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefresh));
+    g_uf1_dev->send(uf1::buildScreen(0x0122,
+        std::span<const uint8_t>(col.data(), col.size())));
+}
+
 void uf1PaintChannel_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -15204,6 +15433,33 @@ void uf1PaintChannel_()
     if (viewChanged) {
         const std::array<uint8_t, 1> zero{0x00};
         g_uf1_dev->send(uf1::buildScreen(meterView ? 0x011f : 0x0123, zero));
+    }
+
+    // Re-assert the Plugin-layout mode bytes (baked into UF1Device::runInit_ at
+    // init-time; mirrored here on any change as belt-and-suspenders for a firmware
+    // that re-latches MCU layout, or an init-thread race). 0x0000=03 00 / 0x000d=03
+    // / 0x0011=01 = cap84's Plugin cold-start values (vs cap66 MCU 02 00 / 04 / 00).
+    if (changed) {
+        // Plugin large-display state, mirrored from cap85 (the SSL 360 init that
+        // renders the channel-strip + EQ graph). Re-asserted here as belt-and-
+        // suspenders for UF1Device::runInit_ (latched-or-dynamic firmware). The
+        // 0x01xx bytes (esp. 0x0100=0300) put the LARGE LCD into plugin layout so
+        // the 0x0122 EQ graph paints; without them only the channel-info plane
+        // (colour bar + name/dB/pan) renders.
+        auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
+            g_uf1_dev->send(uf1::buildScreen(a,
+                std::span<const uint8_t>(std::data(p), p.size())));
+        };
+        put(0x0000, {0x03, 0x00});
+        put(0x000d, {0x01});
+        put(0x0011, {0x01});
+        put(0x0100, {0x03, 0x00});
+        put(0x0101, {0x05});
+        put(0x010d, {0x02, 0x02, 0x08, 0x02});
+        put(0x0110, {0x0f});
+        put(0x011a, {0x02});
+        put(0x011d, {0x19});
+        put(0x011e, {0x18});
     }
 
     if (meterView) {
@@ -15291,6 +15547,77 @@ void uf1PaintChannel_()
         sendVpotParam(2, "", "");   // blank until V-pot mapping lands
         sendVpotParam(3, "", "");
         }
+
+    // ---- FAKE-CS layout trigger (2026-06-05) -------------------------------
+    // The Plugin-Mode channel-strip LAYOUT + colour bar do not render on a
+    // generic track even though we drive 0x0018 (colour) + 0x0006 (active) +
+    // 0x010e (param). Offline diff cap77(renders)-vs-cap84(empty) + the UF8
+    // precedent (Protocol.h: SSL gates the bar on the plug-in slot being marked
+    // OCCUPIED — active-flag ALONE is insufficient, needs slot-name + CS-type)
+    // point to the never-sent delta: {0x0017 CS TYPE, 0x0104 soft-keys, 0x010f
+    // bars}. 0x0017 is the prime suspect = the UF1 twin of UF8 buildChannelStripType
+    // (both low-byte 0x17). The lever is UNTESTABLE offline (SSL never emits 0x0017
+    // without a real plug-in), so this is the one hardware experiment: fake the
+    // full channel-strip occupant set on every focused track. Verbatim cap77
+    // payloads (NOT synthetic) — the firmware may validate the CS-TYPE string
+    // against its known plug-in set; a fake label would risk a false negative.
+    // Additive + change-gated → cannot regress the working channel-text view.
+    if (changed) {
+        // 0x011c header: overwrite the MCU "FADER SEL | 1/10" the cap66 init left
+        // with the Plugin-mode header "REAPER | 1/8 | OFF" (verbatim from cap85,
+        // the init that renders the EQ). We were stuck in a hybrid MCU/Plugin
+        // state — the EQ-graph view needs the plugin header, not the MCU one.
+        static const uint8_t kPluginHeader[200] = {
+            0x52,0x45,0x41,0x50,0x45,0x52,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0x31,0x2f,0x38,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0x4f,0x46,0x46,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0 };
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
+            std::span<const uint8_t>(kPluginHeader, sizeof(kPluginHeader))));
+
+        // 0x0017 CS TYPE: 0x00 + verbatim "4K E" (cap77: 00 34 4b 20 45).
+        sendZoneText(uf1::scr::kCsType, "4K E");
+
+        // 0x0104 soft-key labels: <idx> + label (NOT 0x00-prefixed). cap77:
+        // idx0 = 0xd8 glyph, idx1 "PRE", idx2 "SOLO SAFE", idx3 "PLUG-IN".
+        auto sendSoftKey = [&](uint8_t idx, std::span<const uint8_t> body) {
+            std::vector<uint8_t> p;
+            p.reserve(1 + body.size());
+            p.push_back(idx);
+            p.insert(p.end(), body.begin(), body.end());
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, p));
+        };
+        auto sendSoftKeyText = [&](uint8_t idx, std::string_view t) {
+            sendSoftKey(idx, std::span<const uint8_t>(
+                reinterpret_cast<const uint8_t*>(t.data()), t.size()));
+        };
+        const std::array<uint8_t, 1> sk0{0xd8};
+        sendSoftKey(0, sk0);
+        sendSoftKeyText(1, "PRE");
+        sendSoftKeyText(2, "SOLO SAFE");
+        sendSoftKeyText(3, "PLUG-IN");
+
+        // 0x010f 4 V-pot readout bars: cap77 neutral payload, verbatim. Bar
+        // values aren't the point of this test — only the layout trigger is.
+        const std::array<uint8_t, 8> bars{0x32, 0x80, 0x00, 0x00, 0x00, 0x80, 0x64, 0x00};
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+    }
+
+    // 0x0122 EQ graph: rendered natively from the focused track's SSL
+    // Channel-Strip EQ band params (parametric magnitude → 251 columns).
+    // Called every tick (NOT change-gated) so it follows live knob turns; it
+    // re-resolves the FX/param indices only on track change (force) and
+    // change-detects the 251-byte output internally before transmitting.
+    uf1PaintEqGraph_(tr, changed);
     }  // end channel-view painting (else of meterView)
 
     // Fader <-> volume.
