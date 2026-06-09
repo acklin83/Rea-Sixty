@@ -16,6 +16,29 @@ namespace uf8::nav {
 
 namespace {
 constexpr int kPageSize = 8;
+
+// Resolve the colour REAPER actually DISPLAYS for the marker/region at
+// enumeration index `enumIndex`. EnumProjectMarkers3 returns the CUSTOM
+// colour, which is 0 when the user hasn't assigned one — the UF8 then drew
+// that strip grey (it only got a real colour once the user picked one;
+// Frank 2026-06-09). REAPER itself draws uncoloured markers in the theme's
+// default marker colour, exposed read-only as "I_DISPLAYEDCOLOR" on the
+// marker handle. Resolve it ONLY for the uncoloured case so user-coloured
+// markers stay byte-identical to before. Degrades gracefully to the custom
+// colour (0) when the handle API is missing (older REAPER) or the lookup
+// fails — navColorForStrip then keeps its grey fallback.
+int resolveDisplayedColor_(int enumIndex, int customColor)
+{
+    if (customColor != 0) return customColor;
+    if (GetRegionOrMarker && GetRegionOrMarkerInfo_Value) {
+        if (ProjectMarker* pm = GetRegionOrMarker(nullptr, enumIndex, nullptr)) {
+            const int disp = static_cast<int>(
+                GetRegionOrMarkerInfo_Value(nullptr, pm, "I_DISPLAYEDCOLOR"));
+            if (disp != 0) return disp;
+        }
+    }
+    return customColor;
+}
 }
 
 Overlay& Overlay::instance()
@@ -182,7 +205,7 @@ void Overlay::enumerate()
         it.isRegion = isrgn;
         it.pos      = pos;
         it.rgnEnd   = rgnend;
-        it.color    = color;
+        it.color    = resolveDisplayedColor_(i, color);
         if (name) it.name = name;
         items_.push_back(std::move(it));
     }
@@ -257,7 +280,7 @@ void Overlay::enumerateFiltered(View v, int filterRegionIdx,
         it.isRegion = isrgn;
         it.pos      = pos;
         it.rgnEnd   = rgnend;
-        it.color    = color;
+        it.color    = resolveDisplayedColor_(i, color);
         if (name) it.name = name;
         out->push_back(std::move(it));
     }
