@@ -3826,10 +3826,25 @@ struct PendingInput {
                               //   for range/curve/sensitivity scaling so
                               //   the button stays in sync with the V-Pot
                               //   bound to the same param.
+
+        // ---- UF1 (single-channel surface, follows focus, no bank) -------
+        // All global-scope: they resolve their own target via
+        // uf1FocusedTrack_() rather than the strip/bank model, so they are
+        // dispatched in the global section of drainInputQueue (like
+        // MainAction) before per-strip resolution.
+        Uf1Transport,    // value = Uf1TransportOp (CSurf_On* transport)
+        Uf1SoloToggle,   // toggle solo on the focused track
+        Uf1MuteToggle,   // toggle mute (CUT) on the focused track
+        Uf1SelectFocused,// exclusive-select the focused track
     };
     Kind    kind;
     uint8_t strip;
     double  value;
+};
+
+// Sub-ops for PendingInput::Uf1Transport (carried in PendingInput::value).
+enum class Uf1TransportOp : int {
+    Play = 0, Stop, Record, Rewind, Forward,
 };
 
 // Encoder-mode state. Default = Nav (= track select) matching the UF8's
@@ -10917,6 +10932,19 @@ void queueInput(PendingInput e)
     g_inQueue.push_back(e);
 }
 
+// UF1 follows the user's focus rather than a bank/strip: the single channel
+// shows (and acts on) the last-touched track, falling back to the first
+// selected track. Shared by uf1PaintChannel_ (display) and the UF1 button
+// dispatch in drainInputQueue (solo / cut / sel). Main-thread only — queries
+// REAPER track API, so it must never run on the libusb worker thread.
+MediaTrack* uf1FocusedTrack_()
+{
+    MediaTrack* tr = GetLastTouchedTrack();
+    if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    return tr;
+}
+
 // Forward decls: diag helpers live OUTSIDE this anonymous namespace
 // (after the closing `} // anonymous`) so UC1Surface.cpp can call
 // them via extern. Defined just below the namespace close.
@@ -11001,6 +11029,40 @@ void drainInputQueue()
         }
         if (e.kind == PendingInput::FocusSelected) {
             if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
+                followSelectedInMixer(tr);
+            }
+            continue;
+        }
+        // ---- UF1 buttons (single channel, follow focus) -----------------
+        if (e.kind == PendingInput::Uf1Transport) {
+            switch (static_cast<Uf1TransportOp>(static_cast<int>(e.value))) {
+                case Uf1TransportOp::Play:    CSurf_OnPlay();   break;
+                case Uf1TransportOp::Stop:    CSurf_OnStop();   break;
+                case Uf1TransportOp::Record:  CSurf_OnRecord(); break;
+                case Uf1TransportOp::Rewind:  CSurf_OnRew(1);   break;
+                case Uf1TransportOp::Forward: CSurf_OnFwd(1);   break;
+            }
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1SoloToggle) {
+            if (MediaTrack* tr = uf1FocusedTrack_()) {
+                CSurf_OnSoloChange(tr, -1);
+                const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+                uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
+            }
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1MuteToggle) {
+            if (MediaTrack* tr = uf1FocusedTrack_()) {
+                CSurf_OnMuteChange(tr, -1);
+                const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+                uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
+            }
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1SelectFocused) {
+            if (MediaTrack* tr = uf1FocusedTrack_()) {
+                SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
             }
             continue;
@@ -15021,8 +15083,43 @@ void onUf1Event(const uf1::InputEvent& ev)
             // device flips its own layout; we only mirror the state so the
             // painter knows which content to stream. Atomic store only — no
             // REAPER API on this thread (threading rule).
-            if (ev.id == uf1::btn::kMode && ev.pressed)
+            if (ev.id == uf1::btn::kMode && ev.pressed) {
                 g_uf1MeterView.store(!g_uf1MeterView.load());
+                break;
+            }
+            // All other actions go through queueInput → drainInputQueue so the
+            // REAPER API runs on the main thread (threading rule
+            // feedback-reaper-api-input-thread). Fire on press-down only.
+            if (ev.pressed) {
+                using TO = Uf1TransportOp;
+                auto tr = [](TO op){ queueInput({PendingInput::Uf1Transport, 0,
+                                                  static_cast<double>(static_cast<int>(op))}); };
+                switch (ev.id) {
+                    // Transport (CSurf_On* via the drain).
+                    case uf1::btn::kPlay: tr(TO::Play);    break;
+                    case uf1::btn::kStop: tr(TO::Stop);    break;
+                    case uf1::btn::kRec:  tr(TO::Record);  break;
+                    case uf1::btn::kRwd:  tr(TO::Rewind);  break;
+                    case uf1::btn::kFfw:  tr(TO::Forward); break;
+                    case uf1::btn::kCycle: // Transport: Toggle repeat
+                        queueInput({PendingInput::MainAction, 0, 1068.0});
+                        break;
+                    case uf1::btn::kClick: // Options: Toggle metronome
+                        queueInput({PendingInput::MainAction, 0, 40364.0});
+                        break;
+                    // Channel buttons act on the focused track.
+                    case uf1::btn::kSolo:
+                        queueInput({PendingInput::Uf1SoloToggle, 0, 0.0});
+                        break;
+                    case uf1::btn::kCut:
+                        queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
+                        break;
+                    case uf1::btn::kSel:
+                        queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
+                        break;
+                    default: break;  // other ids wired in later phases
+                }
+            }
             break;
     }
     if (f) std::fclose(f);
@@ -15404,9 +15501,7 @@ void uf1PaintChannel_()
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
 
     // Follow the user's focus: last-touched track, else the first selected.
-    MediaTrack* tr = GetLastTouchedTrack();
-    if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = uf1FocusedTrack_();
 
     static MediaTrack* sTr = nullptr;
     static std::string sName, sDb, sPan, sCh;

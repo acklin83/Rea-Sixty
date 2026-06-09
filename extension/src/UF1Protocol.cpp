@@ -117,6 +117,14 @@ std::vector<uint8_t> buildLed(uint8_t ledId, bool on) {
     return seal({kFrameMagic, 0x3B, 0x03, ledId, 0x00, static_cast<uint8_t>(on ? 0x01 : 0x00)});
 }
 
+std::vector<uint8_t> buildLedLevel(uint8_t ledId, uint8_t level) {
+    // FF 39 04 <id> 00 <level> 0xF0 <ck>. The trailing 0xF0 is the constant
+    // upper-colour byte (no blue) seen for the Solo/Cut LEDs in cap64/cap65;
+    // `level` carries brightness+colour-index (cap65 Cut ground truth: 0x12
+    // bright red / 0x00 dim red; cap64 Solo: 0x11 green / 0x00 off).
+    return seal({kFrameMagic, 0x39, 0x04, ledId, 0x00, level, 0xF0});
+}
+
 std::vector<uint8_t> buildMotorEnable(bool enable) {
     return seal({kFrameMagic, 0x1D, 0x02, 0x00, static_cast<uint8_t>(enable ? 0x01 : 0x00)});
 }

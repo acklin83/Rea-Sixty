@@ -111,6 +111,12 @@ uint8_t quantiseChannel(uint8_t v8);
 //   FF 3B 03 <led_id> 00 <state> <ck>            state 0x01 on / 0x00 off
 std::vector<uint8_t> buildLed(uint8_t ledId, bool on);
 
+// LED brightness/colour level (the active toggle path, post-init):
+//   FF 39 04 <led_id> 00 <level> 0xF0 <ck>
+// `level` is a combined brightness+colour-index byte (see buildLedLevel impl
+// and led::lvl* below). cap65 ground-truth: Cut FF39-alone toggles the LED.
+std::vector<uint8_t> buildLedLevel(uint8_t ledId, uint8_t level);
+
 // Fader motor enable / release:
 //   FF 1D 02 00 <01|00> <ck>                     01 engage (tracks host) / 00 limp
 std::vector<uint8_t> buildMotorEnable(bool enable);
@@ -134,6 +140,12 @@ std::vector<uint8_t> buildKeepalive(uint8_t counter);
 namespace led {
 constexpr uint8_t kSolo = 0x05, kCut = 0x06, kSel = 0x07;
 constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
+
+// FF39 level bytes (low nibble = colour index, high nibble 0x1 = bright).
+// cap65 Cut is visual ground truth; Solo green is cap64 frames + the pattern.
+constexpr uint8_t kLvlOff       = 0x00;  // dim / inactive
+constexpr uint8_t kLvlSoloGreen = 0x11;  // Solo lit (green)
+constexpr uint8_t kLvlCutRed    = 0x12;  // Cut lit (bright red)
 }
 
 // Screen element addresses (FF 67) — the subset we drive natively first.
