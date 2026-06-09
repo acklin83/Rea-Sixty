@@ -5753,7 +5753,6 @@ void drainInputQueue()
                 // on each tick so it always reflects whatever REAPER
                 // actually has (including envelope playback).
                 CSurf_OnVolumeChange(tr, e.value, false);
-                uf8::param_groups::broadcastTrackVolumeLinear(tr, e.value);
                 break;
             }
             case PendingInput::PanDelta: {
@@ -6013,7 +6012,6 @@ void drainInputQueue()
                     const double newLin = pbToLinearVolume(
                         static_cast<uint16_t>(newPb));
                     CSurf_OnVolumeChange(tr, newLin, false);
-                    uf8::param_groups::broadcastTrackVolumeLinear(tr, newLin);
                     break;
                 }
                 // FLIP+PAN no-slot swap: V-Pot writes track volume.
@@ -6031,7 +6029,6 @@ void drainInputQueue()
                     const double newLin = pbToLinearVolume(
                         static_cast<uint16_t>(newPb));
                     CSurf_OnVolumeChange(tr, newLin, false);
-                    uf8::param_groups::broadcastTrackVolumeLinear(tr, newLin);
                     break;
                 }
                 if (slPtr) {
@@ -6288,7 +6285,6 @@ void drainInputQueue()
                 if (isVPotPanFocus(focused)) slPtr = nullptr;
                 if (g_flip.load() && slPtr) {
                     CSurf_OnVolumeChange(tr, 1.0, false);
-                    uf8::param_groups::broadcastTrackVolumeLinear(tr, 1.0);
                     break;
                 }
                 if (slPtr) {
@@ -7440,13 +7436,47 @@ bool                                g_faderPbInit{false};
 // track the user's motion. Mode-agnostic: the anchor is whatever the
 // motor was parked at, so track-vol / plugin / FLIP all pick up cleanly.
 std::array<std::atomic<uint16_t>, 8> g_motorTargetPb{};   // mirror of last driven motor pb (main thread)
+// Per-strip motor engage state. The firmware silently discards drive frames
+// while a fader is limp (PM invariant #4), and we deliberately leave the
+// motor limp after a no-move tap (matches SSL 360°: touch-only release = no
+// re-enable). Without re-engaging on the next REAPER push, external volume
+// changes (routing dialog, automation, ganged moves) never reach a limp
+// fader — it stops following REAPER until physically moved again (Frank
+// 2026-06-09: "external input only sometimes moves the fader"). Tracked so
+// the motor-follow can re-engage a limp strip when REAPER drives it.
+// Init true: UF8Device::open() re-engages all 8 motors after init replay.
+std::array<std::atomic<bool>, 8>     g_faderMotorEngaged{
+    {true, true, true, true, true, true, true, true}};
 std::array<std::atomic<uint16_t>, 8> g_touchAnchorPb{};   // motor pb captured at touch-down
 std::array<std::atomic<uint16_t>, 8> g_touchGrabPb{};     // first raw readback of the touch
 std::array<std::atomic<bool>, 8>     g_touchGrabValid{};  // grab captured yet?
+// Last readback-vs-drive offset (LSB, signed) measured on a touch where the
+// fader was genuinely PARKED (a touch following a quiet gap, so the motor
+// had settled it on the target). Carried into rapid re-touches — where the
+// fader is displaced and the live grab−anchor gap is real displacement, NOT
+// offset — so we subtract the clean parked offset from pb14 and REAPER
+// follows the physical fader (load-bearing for ganged faders: without it,
+// plain anchoring discards the displacement and the ganged peers desync).
+std::array<std::atomic<int>, 8>      g_touchReadbackOffset{};
+// True when THIS touch began after a quiet gap (fader parked) → its
+// grab−anchor gap is a trustworthy offset measurement. Set at touch-down.
+std::array<std::atomic<bool>, 8>     g_touchParked{};
 // Effective (anchored) pb of the latest touch frame — what release writes
 // back, so the commit lands on the same value as the live drag instead of
 // snapping to the offset raw readback.
 std::array<std::atomic<uint16_t>, 8> g_lastTouchEffPb{};
+
+// Max plausible readback-vs-drive offset (LSB). When the grab readback at
+// touch-down is within this of the motor target, the fader is parked and the
+// gap is the pure readback offset. A larger gap = the fader is genuinely
+// DISPLACED from its parked position (motor couldn't re-park during a rapid
+// ganged push), so the gap is real displacement we must track, not discard.
+constexpr int kAnchorOffsetMax = 500;
+// A touch beginning after at least this long without a press counts as
+// "parked": the motor had settled the fader on target, so its grab−anchor
+// gap is a clean offset measurement. Rapid re-touches (shorter gap) reuse
+// the last parked offset instead of measuring a displacement-laden one.
+constexpr long kParkedQuietMs = 600;
 
 // Carry-over buffer for frames split across USB bulk-IN URBs. UF8
 // firmware emits FF-framed events back-to-back without aligning them
@@ -7642,9 +7672,29 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 uint16_t effPb = pb14;
                 {
                     const uint16_t anchor = g_touchAnchorPb[strip].load();
+                    const uint16_t grab   = g_touchGrabPb[strip].load();
+                    const int gap = int(grab) - int(anchor);
+                    // effPb = pb14 − readback offset. Which offset to trust:
+                    //  • Parked touch (gap within the plausible offset band):
+                    //    the gap IS the offset → use it AND remember it; the
+                    //    seed reproduces the parked value exactly
+                    //    (pb14−gap ≡ anchor + (pb14−grab)).
+                    //  • Displaced (gap too large — motor couldn't re-park
+                    //    during a rapid ganged push): the gap is real
+                    //    displacement, not offset. Subtract the last CLEAN
+                    //    parked offset so REAPER follows the physical fader
+                    //    instead of discarding the displacement (which desyncs
+                    //    ganged peers and mis-seeds the automation envelope).
                     if (anchor != 0 && anchor <= kUf8FaderPbMax) {
-                        int eff = int(anchor)
-                                + (int(pb14) - int(g_touchGrabPb[strip].load()));
+                        int offset;
+                        if (g_touchParked[strip].load()
+                            && std::abs(gap) <= kAnchorOffsetMax) {
+                            offset = gap;
+                            g_touchReadbackOffset[strip].store(offset);
+                        } else {
+                            offset = g_touchReadbackOffset[strip].load();
+                        }
+                        int eff = int(pb14) - offset;
                         if (eff < 0)                       eff = 0;
                         if (eff > int(kUf8FaderPbMax))     eff = int(kUf8FaderPbMax);
                         effPb = static_cast<uint16_t>(eff);
@@ -8120,6 +8170,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // firmware's tendency to drive toward its stale target
                 // between re-enable and the next position command.
                 if (state != 0) {
+                    // "Parked" = this touch follows a quiet gap, so the motor
+                    // had settled the fader on target and the grab−anchor gap
+                    // is a clean offset measurement (vs a rapid re-touch where
+                    // the gap is real displacement). Compare BEFORE
+                    // overwriting g_touchLastPress.
+                    {
+                        const auto nowT = std::chrono::steady_clock::now();
+                        const auto sinceLast = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                                nowT - g_touchLastPress[strip]).count();
+                        g_touchParked[strip].store(sinceLast >= kParkedQuietMs);
+                    }
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
                     g_touchReported[strip].store(true);
@@ -8129,6 +8191,28 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // instead of the offset raw readback — see g_motorTargetPb.
                     g_touchAnchorPb[strip].store(g_motorTargetPb[strip].load());
                     g_touchGrabValid[strip].store(false);
+                    // Touch-seed: write the STARTING value to REAPER on the
+                    // touch-down edge, before any movement frame arrives.
+                    // REAPER's Touch/Latch automation latches the envelope's
+                    // first point from the track value sampled while
+                    // GetTouchState() is true; if our first *movement* write
+                    // lands before REAPER samples, the envelope seeds at an
+                    // already-moved value (Frank 2026-06-09: "takes a later
+                    // value as the fader's starting point"). Queuing the
+                    // anchor (= frozen motor target = current volume) here
+                    // makes the true starting value the first thing REAPER
+                    // sees, so the envelope opens exactly where the fader
+                    // was. The first POS frame re-writes the same value
+                    // (no-op), then real motion follows. Skipped when the
+                    // anchor is invalid (-INF / uninit) — the POS path's raw
+                    // fallback covers that case.
+                    {
+                        const uint16_t a = g_touchAnchorPb[strip].load();
+                        if (a != 0 && a <= kUf8FaderPbMax) {
+                            queueInput({PendingInput::VolumeAbs, strip,
+                                        pbToLinearVolume(a)});
+                        }
+                    }
                     // Alt-drag snap-back: capture the pre-touch pb14 on
                     // the main thread. Done via the queue (not inline
                     // here) because REAPER track/FX API calls would
@@ -8150,6 +8234,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // on every ON is cheap (one 6-byte frame) and
                     // idempotent.
                     if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                    g_faderMotorEngaged[strip].store(false);
                     // Settings → Device → "Touch selects channel": queue
                     // an exclusive selection for this strip's track. Runs
                     // through the main-thread drain (SetOnlyTrackSelected
@@ -10757,6 +10842,24 @@ void pushZonesForVisibleSlots()
                 g_lastFaderPb[s] = pb;
                 const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                 const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                if (!g_faderMotorEngaged[s].load()) {
+                    // Strip is limp (left so by a no-move tap). The firmware
+                    // discards plain drive frames while limp (PM invariant
+                    // #4), so this external REAPER change would never reach
+                    // the fader — it'd stay stuck where it was last touched
+                    // while REAPER moves on. Re-engage SSL-style: first a
+                    // bit-7-SET echo to load the new target into the limp
+                    // firmware buffer (accepted while limp, invariant #3),
+                    // then FF 1D enable to drive there cleanly (no jerk — the
+                    // buffer already holds the new value). Safe here because
+                    // we're in the !g_touchReported branch: the finger is off
+                    // the cap, so this can't cause the "alle Fader sperren"
+                    // re-engage-against-hand regression (b1adad9).
+                    g_dev->send(uf8::buildFaderPosition(
+                        static_cast<uint8_t>(s), (lsb | 0x80), msb));
+                    g_dev->send(uf8::buildMotorEnable(static_cast<uint8_t>(s), true));
+                    g_faderMotorEngaged[s].store(true);
+                }
                 g_dev->send(uf8::buildFaderPosition(static_cast<uint8_t>(s), lsb, msb));
             }
         }
@@ -11831,7 +11934,6 @@ void commitDebouncedTouchReleases()
                     } else {
                         const double tLin = pbToLinearVolume(touchPb);
                         CSurf_OnVolumeChange(tr, tLin, false);
-                        uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                     }
                 } else if (g_pluginFaderMode.load()) {
                     if (csT.vst3Param >= 0) {
@@ -11850,12 +11952,10 @@ void commitDebouncedTouchReleases()
                     } else {
                         const double tLin = pbToLinearVolume(touchPb);
                         CSurf_OnVolumeChange(tr, tLin, false);
-                        uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                     }
                 } else {
                     const double tLin = pbToLinearVolume(touchPb);
                     CSurf_OnVolumeChange(tr, tLin, false);
-                    uf8::param_groups::broadcastTrackVolumeLinear(tr, tLin);
                 }
             }
         }
@@ -11912,6 +12012,7 @@ void commitDebouncedTouchReleases()
                 }
             }
             g_dev->send(uf8::buildMotorEnable(s, true));
+            g_faderMotorEngaged[s].store(true);
             // Snap-back: firmware's target buffer is still pointing at
             // the user's drag-end position (last bit-7 echo). Re-enable
             // alone leaves the motor parked there. Push an explicit

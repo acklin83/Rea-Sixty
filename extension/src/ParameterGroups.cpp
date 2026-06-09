@@ -419,15 +419,12 @@ void broadcastSoloMute(MediaTrack* leader, bool isSolo, int absoluteValue)
     }
 }
 
-void broadcastTrackVolumeLinear(MediaTrack* leader, double linValue)
-{
-    auto targets = resolveBroadcastTargets(leader);
-    if (targets.empty()) return;
-    ScopedSuppress guard;
-    for (auto* t : targets) {
-        CSurf_OnVolumeChange(t, linValue, false);
-    }
-}
+// NOTE: track volume is intentionally NOT broadcast through parameter
+// groups. REAPER already gangs the faders of multiple SELECTED tracks
+// natively (relative, offset-preserving), so a fan-out here only fought
+// it — writing the leader's ABSOLUTE level to every member collapsed a
+// mixed-level selection onto one value (Frank 2026-06-09). The temp /
+// persistent groups carry mute/solo and CS/BC plug-in controls only.
 
 bool inBroadcast()
 {

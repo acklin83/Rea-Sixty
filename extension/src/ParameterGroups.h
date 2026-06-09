@@ -116,13 +116,10 @@ void broadcastTrackBool(MediaTrack* leader,
 // new state has been read back.
 void broadcastSoloMute(MediaTrack* leader, bool isSolo, int absoluteValue);
 
-// Track-volume fan-out. Targets get the same absolute linear volume via
-// CSurf_OnVolumeChange so REAPER's surface-gesture slew applies uniformly
-// (raw D_VOL writes would zipper on slow moves — see send-vol-slew-
-// asymmetry). Mirrors absolute leader value, not delta: a mixed-level
-// selection collapses to the leader's level rather than each track
-// scrubbing its own.
-void broadcastTrackVolumeLinear(MediaTrack* leader, double linValue);
+// Track volume is intentionally NOT broadcast: REAPER gangs the faders of
+// multiple selected tracks natively (relative, offset-preserving). A
+// fan-out here only collapsed a mixed-level selection onto the leader's
+// absolute level (Frank 2026-06-09). Groups carry mute/solo + CS/BC only.
 
 // True when the broadcast helpers are currently executing (member
 // writes in flight). The REAPER CSURF_EXT_SETFXPARAM hook checks this
