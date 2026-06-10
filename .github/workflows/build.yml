@@ -3,6 +3,9 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v*']        # tag push builds the tagged commit so git describe
+                        # bakes the release codename into REASIXTY_VERSION_NAME;
+                        # the .so/.dll artifacts feed the release (no Linux/Win box)
   pull_request:
     branches: [main]
   workflow_dispatch:
