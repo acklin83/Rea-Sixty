@@ -3024,7 +3024,10 @@ int stripInstanceActiveFx_(MediaTrack* tr)
 
 // Forward decls — implementations live further down (followSelectedInMixer
 // after the encoder mode toggles, emitMouseScroll near the input dispatch).
-void followSelectedInMixer(MediaTrack* tr);
+// scrollTcp gates the optional TCP vertical-scroll: true for hardware-
+// originated selection (the direct callers), false for REAPER-originated
+// selection re-applied from the onTimer SetSurfaceSelected drain.
+void followSelectedInMixer(MediaTrack* tr, bool scrollTcp = true);
 void emitMouseScroll(int32_t delta);
 // applyInstanceCycle_ / applyFxCycle_ feed the UC1 instance carousel with
 // the same displayShort that the FX-Cycle colour-bar uses. The function
@@ -4478,7 +4481,7 @@ void runReaperActionOnTrack_(int cmdId, MediaTrack* tr)
     runReaperActionOnTrackN_(cmdId, tr, 1);
 }
 
-void followSelectedInMixer(MediaTrack* tr)
+void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
 {
     if (!kSelectFollowsMixer || !tr) return;
 
@@ -4496,16 +4499,29 @@ void followSelectedInMixer(MediaTrack* tr)
     // g_inSelectionSwap so the SetSurfaceSelected callback REAPER fires back
     // into us is not re-latched by the coalescer (which would re-enter here).
     // Frank 2026-06-04.
-    const bool prevSwap = g_inSelectionSwap.exchange(true);
-    CSurf_OnSelectedChange(tr, 1);
-    g_inSelectionSwap.store(prevSwap);
+    // GATED on scrollTcp (= hardware-originated selection only). REAPER reacts
+    // to CSurf_OnSelectedChange by scrolling BOTH the mixer AND the arrange
+    // (TCP) view to the track — so on a REAPER-originated selection re-broadcast
+    // (mouse, marquee zoom: REAPER re-emits the whole selection set) this would
+    // yank the arrange view back to the already-selected track. Diag 2026-06-10
+    // proved 40913 was NOT the cause — this call was. The track is already
+    // selected on the drain path, so skipping this only drops the redundant
+    // view-scroll nudge, not any selection state.
+    if (scrollTcp) {
+        const bool prevSwap = g_inSelectionSwap.exchange(true);
+        CSurf_OnSelectedChange(tr, 1);
+        g_inSelectionSwap.store(prevSwap);
+    }
 
     // REAPER TCP: optional, gated on the Device setting "TCP follows UF8
     // selection". Action 40913 = "Track: Vertical scroll selected tracks
-    // into view". Fires on the same selection events as the MCP scroll
-    // above so the arrange-view track panel keeps pace with the mixer.
-    // Frank 2026-05-20.
-    if (g_tcpFollowsSelection.load()) {
+    // into view". ONLY fires for HARDWARE-originated selection (UF8/UC1 SEL,
+    // encoder ChSelect, param-follow) — scrollTcp is false when this runs from
+    // the onTimer SetSurfaceSelected drain, i.e. a REAPER-originated selection
+    // (mouse, marquee zoom, actions). Without that gate a marquee zoom in the
+    // arrange view gets yanked straight back to the selected track the instant
+    // REAPER re-selects under the box. Frank 2026-06-10 (was: 2026-05-20).
+    if (g_tcpFollowsSelection.load() && scrollTcp) {
         Main_OnCommand(40913, 0);
     }
 
@@ -13326,7 +13342,7 @@ void onTimer()
     // Frank 2026-05-21.
     if (g_pendingFollowSelectedAfterRebuild.exchange(false)) {
         if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
-            followSelectedInMixer(tr);
+            followSelectedInMixer(tr, /*scrollTcp=*/false);
         }
     }
 
@@ -13339,7 +13355,10 @@ void onTimer()
         if (ValidatePtr2(nullptr, pending, "MediaTrack*")) {
             auto* tr = static_cast<MediaTrack*>(pending);
             if (g_uc1_surface) g_uc1_surface->setFocusedTrack(tr);
-            followSelectedInMixer(tr);
+            // REAPER-originated selection burst (mouse / marquee / actions):
+            // keep the MCP + bank follow, but DON'T vertical-scroll the TCP —
+            // that's reserved for hardware selection (see followSelectedInMixer).
+            followSelectedInMixer(tr, /*scrollTcp=*/false);
             // Plugin GUI follows active Instance — re-target the
             // show_focused_plugin_gui window to the newly-selected
             // track's focused FX (no-op when the setting is off or
