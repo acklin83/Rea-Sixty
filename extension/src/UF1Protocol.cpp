@@ -125,6 +125,13 @@ std::vector<uint8_t> buildLedLevel(uint8_t ledId, uint8_t level) {
     return seal({kFrameMagic, 0x39, 0x04, ledId, 0x00, level, 0xF0});
 }
 
+std::vector<uint8_t> buildLedPrimary(uint8_t ledId, uint8_t level) {
+    // FF 38 04 <id> 00 <level> 0xF0 <ck>. The FF38 primary companion to
+    // buildLedLevel — cap64 shows both frames are required to paint a button
+    // LED (FF38 then FF39, same level on the lit transition).
+    return seal({kFrameMagic, 0x38, 0x04, ledId, 0x00, level, 0xF0});
+}
+
 std::vector<uint8_t> buildMotorEnable(bool enable) {
     return seal({kFrameMagic, 0x1D, 0x02, 0x00, static_cast<uint8_t>(enable ? 0x01 : 0x00)});
 }

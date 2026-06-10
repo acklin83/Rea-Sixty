@@ -15087,38 +15087,19 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterView.store(!g_uf1MeterView.load());
                 break;
             }
-            // All other actions go through queueInput → drainInputQueue so the
-            // REAPER API runs on the main thread (threading rule
-            // feedback-reaper-api-input-thread). Fire on press-down only.
-            if (ev.pressed) {
-                using TO = Uf1TransportOp;
-                auto tr = [](TO op){ queueInput({PendingInput::Uf1Transport, 0,
-                                                  static_cast<double>(static_cast<int>(op))}); };
-                switch (ev.id) {
-                    // Transport (CSurf_On* via the drain).
-                    case uf1::btn::kPlay: tr(TO::Play);    break;
-                    case uf1::btn::kStop: tr(TO::Stop);    break;
-                    case uf1::btn::kRec:  tr(TO::Record);  break;
-                    case uf1::btn::kRwd:  tr(TO::Rewind);  break;
-                    case uf1::btn::kFfw:  tr(TO::Forward); break;
-                    case uf1::btn::kCycle: // Transport: Toggle repeat
-                        queueInput({PendingInput::MainAction, 0, 1068.0});
-                        break;
-                    case uf1::btn::kClick: // Options: Toggle metronome
-                        queueInput({PendingInput::MainAction, 0, 40364.0});
-                        break;
-                    // Channel buttons act on the focused track.
-                    case uf1::btn::kSolo:
-                        queueInput({PendingInput::Uf1SoloToggle, 0, 0.0});
-                        break;
-                    case uf1::btn::kCut:
-                        queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
-                        break;
-                    case uf1::btn::kSel:
-                        queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
-                        break;
-                    default: break;  // other ids wired in later phases
-                }
+            // All other UF1 buttons route through the shared Bindings
+            // system (Phase 1) — fromUf1DeviceId maps the device byte to a
+            // UF1-specific ButtonId, and dispatch() fires the bound action.
+            // dispatch() is worker-thread-safe by design (Bindings.cpp): the
+            // builtins themselves defer the REAPER API to the main-thread
+            // drain (threading rule feedback-reaper-api-input-thread). Mirrors
+            // the UF8 path in onUf8Input. Factory defaults reproduce the
+            // shipped transport + Solo/Cut/Sel behaviour; unbound buttons
+            // (NAV, arrows, secondary transport, …) are user-assignable.
+            // dispatch handles both press and release edges itself.
+            if (auto bId = uf8::bindings::fromUf1DeviceId(ev.id);
+                bId != uf8::bindings::ButtonId::None) {
+                uf8::bindings::dispatch(bId, ev.pressed);
             }
             break;
     }
@@ -15614,6 +15595,48 @@ void uf1PaintChannel_()
         const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+    }
+
+    // Solo / Cut button LEDs (cap64/cap65 ground truth). FF39 level byte:
+    // 0x11 = green (soloed), 0x12 = bright red (muted), 0x00 = dim/off. The
+    // Cut LED is never fully dark — 0x00 reads as dim red — matching cap65's
+    // observed dim-red-when-unmuted. Change-detected against the focused
+    // track's I_SOLO / B_MUTE so we don't re-send every tick (Sel 0x07 is the
+    // track-colour element painted above). NOTE: these follow the FACTORY
+    // solo/cut meaning; once a user rebinds the button via the UF1 page the
+    // bindings LED resolver supersedes this (later phase).
+    {
+        static int sSolo = -1, sMute = -1;
+        const bool soloed = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+        const bool muted  = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+
+        // Drive one button LED as SSL 360 does (cap64/cap65): the FF38 PRIMARY
+        // frame then the FF39 level — BOTH are required, FF39 alone is inert.
+        //   LIT  (on):  FF38 = bright primary, FF39 = 0x00
+        //   DIM  (off): FF38 = FF39 = dim colour pair (Cut stays dim red, not
+        //               fully dark — matches SSL + Frank's ground truth).
+        auto sendLed = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
+            const uint8_t prim = on ? litPrim          : dim;
+            const uint8_t lvl  = on ? uf1::led::kFf39Lit : dim;
+            g_uf1_dev->send(uf1::buildLedPrimary(id, prim));
+            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));
+        };
+
+        // Re-assert the FF3B enable on `changed`: init enables Solo/Cut, but
+        // the plugin-layout mode frames re-sent above (0x0100…) re-latch the
+        // button-LED bank. SSL 360 likewise re-enables at runtime (cap64).
+        if (changed) {
+            g_uf1_dev->send(uf1::buildLed(uf1::led::kSolo, true));
+            g_uf1_dev->send(uf1::buildLed(uf1::led::kCut, true));
+        }
+        if (changed || static_cast<int>(soloed) != sSolo) {
+            sSolo = soloed;
+            sendLed(uf1::led::kSolo, soloed, uf1::led::kPrimSoloLit, uf1::led::kDimSolo);
+        }
+        if (changed || static_cast<int>(muted) != sMute) {
+            sMute = muted;
+            sendLed(uf1::led::kCut, muted, uf1::led::kPrimCutLit, uf1::led::kDimCut);
+        }
     }
 
     // Channel-strip MAIN display (0x01xx plane): 4 V-pot param slots (0x010e,
@@ -27482,6 +27505,38 @@ void registerBindingHandlers()
                 queueInput({PendingInput::MainAction, 0,
                             static_cast<double>(actionId)});
             }
+        },
+        nullptr, "", false
+    });
+
+    // ---- UF1 button builtins (Phase 1) ----------------------------------
+    // Thin wrappers over the existing UF1 queueInput kinds so the bindings
+    // factory defaults reproduce the shipped hardcoded behaviour exactly
+    // (transport via CSurf_On*, Solo/Cut/Sel on the focused track). All
+    // defer the REAPER API to the main-thread drain (threading rule).
+    registerBuiltin("uf1_transport", DescBuilder{
+        [](bool firing, bool /*pressed*/, int op) {
+            if (firing)
+                queueInput({PendingInput::Uf1Transport, 0,
+                            static_cast<double>(op)});
+        },
+        nullptr, "", true  // usesParam: op = Uf1TransportOp
+    });
+    registerBuiltin("uf1_solo_focused", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) queueInput({PendingInput::Uf1SoloToggle, 0, 0.0});
+        },
+        nullptr, "", false
+    });
+    registerBuiltin("uf1_mute_focused", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
+        },
+        nullptr, "", false
+    });
+    registerBuiltin("uf1_select_focused", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
         },
         nullptr, "", false
     });

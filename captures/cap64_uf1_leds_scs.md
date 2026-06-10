@@ -18,9 +18,11 @@ LED frames on OUT 0x02:
 - `FF 3B 03 <led_id> 00 <01|00>` = on/off
 - `FF 39 04 <led_id> 00 <val>` = colour/level
 
-## OPEN — colour/level byte semantics NOT yet solved
-Observed `val` bytes: `0x00`, `0x11`, `0x12`. Counter-intuitive in this capture
-(button "on" emitted val 0x00, "off" emitted 0x11/0x12) and entangled with REAPER's own
-solo/select state — do NOT guess the encoding. Needs a clean capture that drives a single LED
-to known colours/brightness. led id 0x1C also moved alongside Solo (unexplained; maybe screen
-refresh coincidence). **TODO next LED session:** isolate one LED, sweep colour/brightness.
+## RESOLVED 2026-06-10 (native build, HW-verified)
+The "counter-intuitive val 0x00 vs 0x11/0x12" confusion was because this analysis tracked only
+FF39 and ignored the **FF38 companion frame**. A button LED needs the PAIR (FF38 then FF39).
+The `val 0x00`-on-"on" frames were the LIT state (FF38=bright primary 0xef/0x3f, FF39=0x00); the
+`0x11/0x12` frames were the DIM resting state (FF38=FF39=dim pair). See cap65 for the corrected
+table. Solo lit = FF38 0xef / FF39 0x00; Solo dim = 0x11/0x11. Cut lit = FF38 0x3f / FF39 0x00;
+Cut dim = 0x12/0x12 (dim red, never fully off). led id 0x1C moving alongside Solo: still
+unexplained (likely screen-refresh coincidence), harmless.

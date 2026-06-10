@@ -114,8 +114,18 @@ std::vector<uint8_t> buildLed(uint8_t ledId, bool on);
 // LED brightness/colour level (the active toggle path, post-init):
 //   FF 39 04 <led_id> 00 <level> 0xF0 <ck>
 // `level` is a combined brightness+colour-index byte (see buildLedLevel impl
-// and led::lvl* below). cap65 ground-truth: Cut FF39-alone toggles the LED.
+// and led::lvl* below).
+// IMPORTANT (cap64): the channel button LEDs need the FF38 PRIMARY companion
+// (buildLedPrimary) sent alongside this FF39 — FF39 alone is inert. cap65's
+// "FF39-only toggles Cut" was an incomplete capture read (it missed the FF38).
 std::vector<uint8_t> buildLedLevel(uint8_t ledId, uint8_t level);
+
+// FF38 primary companion to buildLedLevel. Same {id,00,level,F0} body, opcode
+// 0x38. cap64 proves both frames are required to paint a button LED — SSL 360
+// sends FF38 then FF39, both carrying the level on the lit transition. In the
+// resting/off state the two diverge: FF38 carries a per-LED dim byte (Solo
+// 0xef, Cut 0x3f — see led::kPrim*Off) while FF39 carries 0x00.
+std::vector<uint8_t> buildLedPrimary(uint8_t ledId, uint8_t level);
 
 // Fader motor enable / release:
 //   FF 1D 02 00 <01|00> <ck>                     01 engage (tracks host) / 00 limp
@@ -143,9 +153,16 @@ constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
 
 // FF39 level bytes (low nibble = colour index, high nibble 0x1 = bright).
 // cap65 Cut is visual ground truth; Solo green is cap64 frames + the pattern.
-constexpr uint8_t kLvlOff       = 0x00;  // dim / inactive
-constexpr uint8_t kLvlSoloGreen = 0x11;  // Solo lit (green)
-constexpr uint8_t kLvlCutRed    = 0x12;  // Cut lit (bright red)
+// LED state encoding, corrected against HW (Frank live 2026-06-10) +
+// re-read of cap64/cap65 with BOTH FF38 and FF39 frames. The earlier cap65
+// .md labelled bright/dim backwards because it only tracked FF39.
+//   LIT  (soloed/muted):  FF38 = <bright primary>, FF39 = 0x00
+//   DIM/off:              FF38 = FF39 = <dim colour pair>
+constexpr uint8_t kPrimSoloLit = 0xef;  // FF38 Solo lit (bright green)
+constexpr uint8_t kPrimCutLit  = 0x3f;  // FF38 Cut  lit (bright red)
+constexpr uint8_t kFf39Lit     = 0x00;  // FF39 carries 0x00 on the lit transition
+constexpr uint8_t kDimSolo     = 0x11;  // FF38=FF39 Solo resting (dim green)
+constexpr uint8_t kDimCut      = 0x12;  // FF38=FF39 Cut  resting (dim red, never fully off)
 }
 
 // Screen element addresses (FF 67) — the subset we drive natively first.

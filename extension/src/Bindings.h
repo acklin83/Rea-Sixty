@@ -147,12 +147,46 @@ enum class ButtonId : uint16_t {
     // can rebind it on the UC1 tab; UF8's Btn360 stays an independent
     // ButtonId so the two physical buttons can diverge.
     Uc1Btn360,
+
+    // ---- UF1 (Phase 1: buttons routed through Bindings) ------------------
+    // UF1 shares this Layer bindings map with UF8/UC1, so every UF1 control
+    // gets its OWN ButtonId — device ids overlap across surfaces (e.g. 0x1D
+    // is UF1 Solo but UF8 TopSoftKey6) yet map through distinct device-id
+    // tables (fromUf1DeviceId vs fromUf8DeviceId). Device ids decoded in
+    // UF1Protocol.h (namespace btn::). MODE (0x20) stays a firmware-local
+    // view toggle and is intentionally absent here. Encoders/jog = Phase 2.
+    //
+    // V-Pot + channel-encoder pushes (0x08..0x0D). Ship UNBOUND.
+    Uf1VpotAbovePush, Uf1Vpot1Push, Uf1Vpot2Push, Uf1Vpot3Push, Uf1Vpot4Push,
+    Uf1ChannelPush,
+    // Small-screen soft key (0x18) + 4 large-screen display soft keys
+    // (0x19..0x1C). Ship UNBOUND — user assigns (keystrokes, actions, …).
+    Uf1ChannelSoftKey, Uf1DisplaySoft1, Uf1DisplaySoft2, Uf1DisplaySoft3, Uf1DisplaySoft4,
+    // Channel strip Solo/Cut/Sel (0x1D..0x1F). Factory default =
+    // uf1_solo_focused / uf1_mute_focused / uf1_select_focused.
+    Uf1Solo, Uf1Cut, Uf1Sel,
+    // Nav block 0x21..0x27 (0x20 MODE excluded). Ship UNBOUND.
+    Uf1BankLeft, Uf1FiveToEight, Uf1BankRight,
+    Uf1ArrowLeft, Uf1Btn360, Uf1ArrowRight, Uf1Scrub,
+    // NAV cross 0x28..0x2C. Ship UNBOUND.
+    Uf1NavUp, Uf1NavLeft, Uf1NavCentre, Uf1NavRight, Uf1NavDown,
+    // Secondary transport soft-keys 0x30..0x36. Cycle/Click carry factory
+    // defaults (toggle repeat / metronome); the rest ship UNBOUND.
+    Uf1SecLeft, Uf1SecRight, Uf1Cycle, Uf1Click, Uf1SecKey1, Uf1SecKey2, Uf1Shift,
+    // Flip / Master / primary transport 0x38..0x3E. Transport carries
+    // factory defaults via uf1_transport; Flip/Master ship UNBOUND for now.
+    Uf1Flip, Uf1Master, Uf1Rwd, Uf1Ffw, Uf1Stop, Uf1Play, Uf1Rec,
 };
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None
 // if the id isn't a v1-bindable global — caller falls through to whatever
 // the existing legacy dispatch does (per-strip, MCU passthrough, etc.).
 ButtonId fromUf8DeviceId(uint8_t id);
+
+// Map UF1 device byte (FF 22 03 <id>) to ButtonId. Returns None for ids
+// that aren't bindable buttons (e.g. MODE 0x20, which stays a firmware-
+// local view toggle) — caller keeps its own handling for those.
+ButtonId fromUf1DeviceId(uint8_t id);
 
 // Snake_case name for JSON. Stable across versions.
 const char* toName(ButtonId id);

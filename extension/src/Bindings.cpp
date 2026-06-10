@@ -133,6 +133,47 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Foot1,            "foot_1"             },
     { ButtonId::Foot2,            "foot_2"             },
     { ButtonId::Uc1Btn360,        "uc1_btn_360"        },
+    // UF1 buttons (Phase 1).
+    { ButtonId::Uf1VpotAbovePush, "uf1_vpot_above_push" },
+    { ButtonId::Uf1Vpot1Push,     "uf1_vpot_1_push"     },
+    { ButtonId::Uf1Vpot2Push,     "uf1_vpot_2_push"     },
+    { ButtonId::Uf1Vpot3Push,     "uf1_vpot_3_push"     },
+    { ButtonId::Uf1Vpot4Push,     "uf1_vpot_4_push"     },
+    { ButtonId::Uf1ChannelPush,   "uf1_channel_push"    },
+    { ButtonId::Uf1ChannelSoftKey,"uf1_channel_softkey" },
+    { ButtonId::Uf1DisplaySoft1,  "uf1_display_soft_1"  },
+    { ButtonId::Uf1DisplaySoft2,  "uf1_display_soft_2"  },
+    { ButtonId::Uf1DisplaySoft3,  "uf1_display_soft_3"  },
+    { ButtonId::Uf1DisplaySoft4,  "uf1_display_soft_4"  },
+    { ButtonId::Uf1Solo,          "uf1_solo"            },
+    { ButtonId::Uf1Cut,           "uf1_cut"             },
+    { ButtonId::Uf1Sel,           "uf1_sel"             },
+    { ButtonId::Uf1BankLeft,      "uf1_bank_left"       },
+    { ButtonId::Uf1FiveToEight,   "uf1_5_to_8"          },
+    { ButtonId::Uf1BankRight,     "uf1_bank_right"      },
+    { ButtonId::Uf1ArrowLeft,     "uf1_arrow_left"      },
+    { ButtonId::Uf1Btn360,        "uf1_btn_360"         },
+    { ButtonId::Uf1ArrowRight,    "uf1_arrow_right"     },
+    { ButtonId::Uf1Scrub,         "uf1_scrub"           },
+    { ButtonId::Uf1NavUp,         "uf1_nav_up"          },
+    { ButtonId::Uf1NavLeft,       "uf1_nav_left"        },
+    { ButtonId::Uf1NavCentre,     "uf1_nav_centre"      },
+    { ButtonId::Uf1NavRight,      "uf1_nav_right"       },
+    { ButtonId::Uf1NavDown,       "uf1_nav_down"        },
+    { ButtonId::Uf1SecLeft,       "uf1_sec_left"        },
+    { ButtonId::Uf1SecRight,      "uf1_sec_right"       },
+    { ButtonId::Uf1Cycle,         "uf1_cycle"           },
+    { ButtonId::Uf1Click,         "uf1_click"           },
+    { ButtonId::Uf1SecKey1,       "uf1_sec_key_1"       },
+    { ButtonId::Uf1SecKey2,       "uf1_sec_key_2"       },
+    { ButtonId::Uf1Shift,         "uf1_shift"           },
+    { ButtonId::Uf1Flip,          "uf1_flip"            },
+    { ButtonId::Uf1Master,        "uf1_master"          },
+    { ButtonId::Uf1Rwd,           "uf1_rwd"             },
+    { ButtonId::Uf1Ffw,           "uf1_ffw"             },
+    { ButtonId::Uf1Stop,          "uf1_stop"            },
+    { ButtonId::Uf1Play,          "uf1_play"            },
+    { ButtonId::Uf1Rec,           "uf1_rec"             },
 };
 
 } // namespace
@@ -215,6 +256,60 @@ ButtonId fromUf8DeviceId(uint8_t id)
         case 0x70: return ButtonId::SelectionNorm;
         case 0x71: return ButtonId::SelectionRec;
         case 0x72: return ButtonId::SelectionAuto;
+        default:   return ButtonId::None;
+    }
+}
+
+ButtonId fromUf1DeviceId(uint8_t id)
+{
+    switch (id) {
+        // V-Pot + channel-encoder pushes 0x08..0x0D.
+        case 0x08: return ButtonId::Uf1VpotAbovePush;
+        case 0x09: return ButtonId::Uf1Vpot1Push;
+        case 0x0A: return ButtonId::Uf1Vpot2Push;
+        case 0x0B: return ButtonId::Uf1Vpot3Push;
+        case 0x0C: return ButtonId::Uf1Vpot4Push;
+        case 0x0D: return ButtonId::Uf1ChannelPush;
+        // Soft keys 0x18..0x1C.
+        case 0x18: return ButtonId::Uf1ChannelSoftKey;
+        case 0x19: return ButtonId::Uf1DisplaySoft1;
+        case 0x1A: return ButtonId::Uf1DisplaySoft2;
+        case 0x1B: return ButtonId::Uf1DisplaySoft3;
+        case 0x1C: return ButtonId::Uf1DisplaySoft4;
+        // Channel strip 0x1D..0x1F.
+        case 0x1D: return ButtonId::Uf1Solo;
+        case 0x1E: return ButtonId::Uf1Cut;
+        case 0x1F: return ButtonId::Uf1Sel;
+        // Nav block 0x21..0x27 (0x20 MODE handled locally, returns None).
+        case 0x21: return ButtonId::Uf1BankLeft;
+        case 0x22: return ButtonId::Uf1FiveToEight;
+        case 0x23: return ButtonId::Uf1BankRight;
+        case 0x24: return ButtonId::Uf1ArrowLeft;
+        case 0x25: return ButtonId::Uf1Btn360;
+        case 0x26: return ButtonId::Uf1ArrowRight;
+        case 0x27: return ButtonId::Uf1Scrub;
+        // NAV cross 0x28..0x2C.
+        case 0x28: return ButtonId::Uf1NavUp;
+        case 0x29: return ButtonId::Uf1NavLeft;
+        case 0x2A: return ButtonId::Uf1NavCentre;
+        case 0x2B: return ButtonId::Uf1NavRight;
+        case 0x2C: return ButtonId::Uf1NavDown;
+        // Secondary transport 0x30..0x36.
+        case 0x30: return ButtonId::Uf1SecLeft;
+        case 0x31: return ButtonId::Uf1SecRight;
+        case 0x32: return ButtonId::Uf1Cycle;
+        case 0x33: return ButtonId::Uf1Click;
+        case 0x34: return ButtonId::Uf1SecKey1;
+        case 0x35: return ButtonId::Uf1SecKey2;
+        case 0x36: return ButtonId::Uf1Shift;
+        // Flip / Master / primary transport 0x38..0x3E.
+        case 0x38: return ButtonId::Uf1Flip;
+        case 0x39: return ButtonId::Uf1Master;
+        case 0x3A: return ButtonId::Uf1Rwd;
+        case 0x3B: return ButtonId::Uf1Ffw;
+        case 0x3C: return ButtonId::Uf1Stop;
+        case 0x3D: return ButtonId::Uf1Play;
+        case 0x3E: return ButtonId::Uf1Rec;
         default:   return ButtonId::None;
     }
 }
@@ -665,6 +760,42 @@ void seedFactoryDefaults_(Config& c)
         L[ButtonId::Quick2] = mkBuiltin(nB, Behavior::Momentary, "Q2");
         L[ButtonId::Quick3] = mkBuiltin(nC, Behavior::Momentary, "Q3");
     }
+
+    // ---- UF1 buttons (Phase 1) -----------------------------------------
+    // Layer-1 factory defaults reproduce the shipped hardcoded behaviour.
+    // Primary transport via uf1_transport (param = Uf1TransportOp:
+    // Play=0, Stop=1, Record=2, Rewind=3, Forward=4 — see main.cpp).
+    L1[ButtonId::Uf1Play] = mkBuiltin("uf1_transport", Behavior::Momentary, "PLAY",
+                                      255, 255, 255, /*op Play*/ 0);
+    L1[ButtonId::Uf1Stop] = mkBuiltin("uf1_transport", Behavior::Momentary, "STOP",
+                                      255, 255, 255, /*op Stop*/ 1);
+    L1[ButtonId::Uf1Rec]  = mkBuiltin("uf1_transport", Behavior::Momentary, "REC",
+                                      255, 255, 255, /*op Record*/ 2);
+    L1[ButtonId::Uf1Rwd]  = mkBuiltin("uf1_transport", Behavior::Momentary, "RWD",
+                                      255, 255, 255, /*op Rewind*/ 3);
+    L1[ButtonId::Uf1Ffw]  = mkBuiltin("uf1_transport", Behavior::Momentary, "FFW",
+                                      255, 255, 255, /*op Forward*/ 4);
+    // Cycle / Click — REAPER native actions (toggle repeat 1068 / metronome
+    // 40364), matching the shipped UF1 mapping. ActionType::Reaper funnels
+    // through the main-thread queue.
+    {
+        auto mkReaper = [](const char* id, const char* label) {
+            Binding bd; bd.behavior = Behavior::Momentary; bd.label = label;
+            auto& s = bd.shortPress[static_cast<int>(Modifier::Plain)];
+            s.type = ActionType::Reaper; s.action = id;
+            return bd;
+        };
+        L1[ButtonId::Uf1Cycle] = mkReaper("1068",  "CYCLE");
+        L1[ButtonId::Uf1Click] = mkReaper("40364", "CLICK");
+    }
+    // Channel strip — focused-track Solo / Cut / Sel.
+    L1[ButtonId::Uf1Solo] = mkBuiltin("uf1_solo_focused",   Behavior::Momentary, "SOLO");
+    L1[ButtonId::Uf1Cut]  = mkBuiltin("uf1_mute_focused",   Behavior::Momentary, "CUT");
+    L1[ButtonId::Uf1Sel]  = mkBuiltin("uf1_select_focused", Behavior::Momentary, "SEL");
+    // All other UF1 buttons (NAV block/cross, arrows, display soft-keys,
+    // secondary transport, Flip/Master, V-Pot pushes) ship UNBOUND — the
+    // user assigns them in Settings → Bindings → UF1, matching how UF8
+    // ships Nav/Nudge unbound.
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -1751,7 +1882,14 @@ bool invokeBuiltin(const std::string& name, int param)
 // load with an empty list (no migration needed; presets are an
 // additive feature). The Bindings → Sub-Bank cell editor exposes
 // Save/Recall/Rename/Delete.
-constexpr int kCurrentBindingsVersion = 14;
+// v14 (2026-06-16): Shift+360 → learn_hud_toggle backfill (see
+// upgradeBackfillShift360LearnHud_) — owned by main / the Learn-HUD work.
+// v15 (2026-06-10): UF1 buttons routed through Bindings (new UF1 ButtonIds).
+// Backfill Layer-1 transport + Solo/Cut/Sel factory defaults into older
+// configs (upgradeBackfillUf1Buttons_) so the UF1 keeps working post-upgrade.
+// (Was authored as v14 on the UF1 branch; renumbered to v15 on rebase since
+// main already took v14 for the Shift+360 migration.)
+constexpr int kCurrentBindingsVersion = 15;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2000,6 +2138,51 @@ void upgradeRetireQuickSelect_(Config& c)
 //    only reset those when empty so user customizations to other
 //    builtins / REAPER actions / cross-layer jumps survive.
 //
+// v14→v15 (2026-06-10): UF1 buttons moved from a hardcoded dispatch in
+// main.cpp into the shared Bindings system. Existing configs predate the
+// UF1 ButtonIds entirely, so without this backfill the UF1's transport +
+// Solo/Cut/Sel would go DEAD on upgrade (old hardcoded path removed, no
+// binding present). Fill the Layer-1 factory defaults if missing — only
+// missing slots, so a user who already customised a UF1 button keeps it.
+// All other UF1 buttons stay unbound (their factory state).
+void upgradeBackfillUf1Buttons_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto fillBuiltin = [&](ButtonId id, const char* action,
+                           const char* label, int param) {
+        if (L1.bindings.find(id) != L1.bindings.end()) return;
+        Binding bd;
+        bd.behavior = Behavior::Momentary;
+        bd.label    = label;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = action;
+        sp.param  = param;
+        L1.bindings[id] = bd;
+    };
+    auto fillReaper = [&](ButtonId id, const char* actionId, const char* label) {
+        if (L1.bindings.find(id) != L1.bindings.end()) return;
+        Binding bd;
+        bd.behavior = Behavior::Momentary;
+        bd.label    = label;
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Reaper;
+        sp.action = actionId;
+        L1.bindings[id] = bd;
+    };
+    // Transport (param = Uf1TransportOp: Play=0/Stop=1/Record=2/Rwd=3/Ffw=4).
+    fillBuiltin(ButtonId::Uf1Play, "uf1_transport", "PLAY", 0);
+    fillBuiltin(ButtonId::Uf1Stop, "uf1_transport", "STOP", 1);
+    fillBuiltin(ButtonId::Uf1Rec,  "uf1_transport", "REC",  2);
+    fillBuiltin(ButtonId::Uf1Rwd,  "uf1_transport", "RWD",  3);
+    fillBuiltin(ButtonId::Uf1Ffw,  "uf1_transport", "FFW",  4);
+    fillReaper(ButtonId::Uf1Cycle, "1068",  "CYCLE");
+    fillReaper(ButtonId::Uf1Click, "40364", "CLICK");
+    fillBuiltin(ButtonId::Uf1Solo, "uf1_solo_focused",   "SOLO", 0);
+    fillBuiltin(ButtonId::Uf1Cut,  "uf1_mute_focused",   "CUT",  0);
+    fillBuiltin(ButtonId::Uf1Sel,  "uf1_select_focused", "SEL",  0);
+}
+
 // Both passes preserve color, brightness, inactive*, label, and
 // any modifier-row / longPress slots. They only touch
 // shortPress[Plain].
@@ -2254,6 +2437,9 @@ void load()
             }
             if (tmp.version < 14) {
                 upgradeBackfillShift360LearnHud_(tmp);
+            }
+            if (tmp.version < 15) {
+                upgradeBackfillUf1Buttons_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
