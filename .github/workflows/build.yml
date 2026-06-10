@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Compile-check on all three target platforms so a green PR means "builds
+# everywhere" without firing up a Windows or Linux box. Runtime testing against
+# the SSL UF8/UC1 hardware still needs a machine with the device attached.
+#
+# reaper-sdk + WDL are pulled by the project's own FetchContent. libusb/hidapi:
+# pkg-config on Unix (apt/brew), prebuilt MSVC drops on Windows.
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            artifact: reaper_rea-sixty.so
+            artifact_path: extension/build/reaper_rea-sixty.so
+          - name: macos-arm64
+            os: macos-latest
+            artifact: reaper_rea-sixty.dylib
+            artifact_path: extension/build/reaper_rea-sixty.dylib
+          - name: windows-x64
+            os: windows-latest
+            artifact: reaper_rea-sixty.dll
+            artifact_path: extension/build/Release/reaper_rea-sixty.dll
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe --tags drives version + codename
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev libhidapi-dev pkg-config
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libusb hidapi pkg-config
+
+      - name: Fetch libusb + hidapi (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -L -o libusb.7z https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z
+          7z x libusb.7z -o"${{ github.workspace }}/libusb"
+          curl.exe -L -o hidapi.zip https://github.com/libusb/hidapi/releases/download/hidapi-0.15.0/hidapi-win.zip
+          Expand-Archive -Path hidapi.zip -DestinationPath "${{ github.workspace }}/hidapi"
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -S extension -B extension/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -S extension -B extension/build
+          -DLIBUSB_ROOT="${{ github.workspace }}/libusb"
+          -DHIDAPI_ROOT="${{ github.workspace }}/hidapi"
+
+      - name: Build
+        run: cmake --build extension/build --config Release --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
