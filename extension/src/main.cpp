@@ -6107,7 +6107,14 @@ void drainInputQueue()
                         if (next > maxN) next = maxN;
                     } else {
                         // Continuous param — existing knob-travel path.
-                        double delta = e.value * (sl.inverted ? -1.0 : 1.0);
+                        // kVpotBoost lifts the base per-detent step: the bare
+                        // 1/128 felt sluggish and didn't compensate for the
+                        // firmware dropping detents on fast spins (velocity accel
+                        // proved unworkable — see onUf8Input). Shift-fine still
+                        // quarters it for precision. Tunable; larger = faster.
+                        constexpr double kVpotBoost = 1.25;
+                        double delta = e.value * kVpotBoost
+                                     * (sl.inverted ? -1.0 : 1.0);
                         if (vpotFineActive_())
                             delta *= 0.25;
                         if (usl) {
@@ -7505,18 +7512,21 @@ constexpr long kParkedQuietMs = 600;
 static std::vector<uint8_t> g_inputResidual;
 constexpr size_t kInputResidualMax = 64;
 
+// UF8 wire tracing is OFF unless REASIXTY_UF8_TRACE is set. The per-packet
+// /tmp logs below run on the libusb input / motor threads; an unconditional
+// fopen per event throttles fast input and grows unbounded /tmp files (the
+// old in_dispatch log hit 438 MB and lagged the V-pots). Gate them all.
+static const bool g_uf8Trace = (std::getenv("REASIXTY_UF8_TRACE") != nullptr);
+
 void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 {
-    // Debug: log every non-trivial IN packet that reaches this handler,
-    // including payloads that might be interesting (anything not a pure
-    // 31 60 / poll pair).
-    if (FILE* f = std::fopen("/tmp/reaper_uf8_in_dispatch.log", "a")) {
-        std::fprintf(f, "[%zu] ", lenIn);
-        for (size_t k = 0; k < lenIn && k < 32; ++k) std::fprintf(f, "%02x ", dataIn[k]);
-        std::fprintf(f, "\n");
-        std::fclose(f);
-    }
-
+    // NOTE: do NOT add per-packet file logging here. This runs on the libusb
+    // input thread for EVERY IN packet; a synchronous fopen/fprintf/fclose per
+    // packet throttles the thread under fast input (V-pot spins) and grows an
+    // unbounded /tmp file. A leftover such log (reaper_uf8_in_dispatch.log) hit
+    // 438 MB and made V-pots lag the faster you turned — removed 2026-06-11.
+    // If you need wire tracing, gate it behind an env flag like UF1's
+    // REASIXTY_UF1_TRACE and buffer, never an unconditional per-packet write.
     if (!g_midi) return;
 
     // Stitch any leftover bytes from the previous URB to the front of
@@ -7589,7 +7599,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             default:   frameSize = 0; break;
         }
         if (frameSize == 0) {
-            // Unknown command — log and skip one byte.
+            // Unknown command — log (trace-gated) and skip one byte.
+            if (g_uf8Trace)
             if (FILE* f = std::fopen("/tmp/reaper_uf8_unknown.log", "a")) {
                 std::fprintf(f, "unknown:");
                 const size_t show = std::min<size_t>(len - i, 12);
@@ -8167,6 +8178,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive
                 // and FF 1D motor commands logged from the worker thread.
+                if (g_uf8Trace)
                 if (FILE* lg = std::fopen("/tmp/reaper_uf8_motor.log", "a")) {
                     const auto t = std::chrono::system_clock::now().time_since_epoch();
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
@@ -8277,6 +8289,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             if (strip < 8) {
+                // Continuous detent fraction = signed6/128. DON'T change this
+                // divisor: the stepped-param path recovers the integer detent
+                // count by multiplying e.value back ×128, so it's load-bearing.
+                // Velocity-based acceleration was tried here and REMOVED
+                // 2026-06-11: calibration captures (vpot_dt.log) proved the UF8
+                // firmware doesn't encode a recoverable rotation speed — each
+                // detent arrives as a burst of 2-3 USB packets and the burst
+                // density is IDENTICAL for medium vs fast spins (both ~vel 7
+                // median / ~16-20 peak), so no threshold can separate them; fast
+                // spins also drop detents upstream, which no multiplier restores.
+                // The responsiveness lift instead lives as a plain per-detent
+                // gain on the CONTINUOUS plug-in-param consumer (kVpotBoost in
+                // drainInputQueue), which leaves the stepped recovery intact.
+                const double panVal = static_cast<double>(signed6) / 128.0;
+
                 // Per-strip V-Pot rotation. Scale: pan keeps signed6/
                 // 128 (1 detent = 0.78% pan); AUTO + Instance need raw
                 // signed6 so their accumulators feel like the channel-
@@ -8326,7 +8353,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                             static_cast<double>(signed6)});
                             } else {
                                 queueInput({PendingInput::PanDelta, strip,
-                                            static_cast<double>(signed6) / 128.0});
+                                            panVal});
                             }
                             break;
                         case SelectionMode::InstanceCycle:
@@ -8336,7 +8363,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                             static_cast<double>(signed6)});
                             } else {
                                 queueInput({PendingInput::PanDelta, strip,
-                                            static_cast<double>(signed6) / 128.0});
+                                            panVal});
                             }
                             break;
                         case SelectionMode::Norm:
@@ -8344,7 +8371,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         case SelectionMode::RecMon:
                         default:
                             queueInput({PendingInput::PanDelta, strip,
-                                        static_cast<double>(signed6) / 128.0});
+                                        panVal});
                             break;
                     }
                 }
