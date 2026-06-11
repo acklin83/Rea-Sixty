@@ -1449,12 +1449,11 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
     }
 
-    // EQ-gain knobs use a finer per-click step than the rest of the
-    // surface. With the global 1/64 the dB-per-click varies by band
-    // because different SSL EQ ranges map differently into the same
-    // normalized sweep — wider-range bands felt ~1 dB/click, narrower
-    // bands ~0.5 dB. Halving for the four gains gives a uniformly
-    // tighter feel and makes the post-snap nudge close to 0.25 dB.
+    // EQ-gain knobs get a mild per-click scaling (kEqGainSpeed below) +
+    // the 0-dB virtual-notch magnet. History: 0.5 felt too fine vs Freq/Q
+    // (Frank 2026-06-10), full speed (1.0) was a touch too fast and made
+    // the 0-dB notch tricky to settle on. 0.8 is the middle ground.
+    constexpr double kEqGainSpeed = 0.8;
     const bool isEqGain = (ev.id == knob::kCSHfGain
                         || ev.id == knob::kCSHmfGain
                         || ev.id == knob::kCSLmfGain
@@ -1546,7 +1545,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // UF8 V-Pot bound to the same param share scaling.
 
         double delta = clickToDelta_(ev.delta);
-        if (isEqGain) delta *= 0.5;
+        if (isEqGain) delta *= kEqGainSpeed;
         delta *= (map->inverted[ev.id] ? -1.0 : 1.0);
         if (usl) {
             // User customised travel — skip the EQ-gain virtual notch
@@ -1563,7 +1562,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         } else {
             next = isEqGain
                 ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
-                                         /*zone*/0.015, 0.0, 1.0)
+                                         /*zone*/0.03, 0.0, 1.0)
                 : std::clamp(cur + delta, 0.0, 1.0);
         }
     }
