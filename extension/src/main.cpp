@@ -1900,6 +1900,15 @@ std::atomic<bool> g_grCombineUc1{false};
 std::atomic<bool> g_insertMarkersEnabled{false};
 std::atomic<int>  g_insertMarkerStyle{0};
 
+// New mechanic (2026-06-12): instead of writing the marker into "renamed_name"
+// (destructive — dirties the project, bakes the glyph when opened without the
+// extension), the active CS/BC instance is published via ExtState and a bundled
+// companion Lua draws a non-destructive JS_Composite highlight on the native
+// Inserts list. The old rename path is kept behind this escape-hatch flag
+// (ExtState "insert_legacy_rename", default off) for emergency revert; default
+// is overlay. See docs/inserts-overlay-spike.md.
+std::atomic<bool> g_insertLegacyRename{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2195,6 +2204,9 @@ void loadBrightness()
         int st = std::atoi(v);
         if (st < 0) st = 0; if (st > 2) st = 2;
         g_insertMarkerStyle.store(st);
+    }
+    if (const char* v = GetExtState("rea_sixty", "insert_legacy_rename"); v && *v) {
+        g_insertLegacyRename.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -4969,13 +4981,67 @@ void clearAllInsertMarkers_()
     g_insertMarkerSaved.clear();
 }
 
+// ── Inserts overlay — non-destructive ExtState publisher ─────────────
+// Publishes the active CS/BC instance per track for the bundled companion
+// Lua overlay (JS_Composite) to read. Value (section "rea_sixty", key
+// "overlay", transient):
+//     "<on>;<rev>;guid,csFx,bcFx;guid,csFx,bcFx;..."
+//   on   1 while the feature is enabled, else 0 (Lua draws nothing)
+//   rev  change counter / heartbeat — bumped only when the active set
+//        actually changes, so the Lua can cheaply detect repaints
+//   one entry per track hosting ≥1 CS or ≥1 BC; csFx / bcFx = FX chain
+//        index of the active instance (= its row in the Inserts list),
+//        -1 when that domain is absent on the track.
+// Diff-guarded: only rewrites ExtState when the meaningful payload changes.
+// Main-thread-only (same path as the marker engine).
+std::string g_overlayPublishedSig;   // last on-flag + entries, sans rev
+int         g_overlayRev = 0;
+
+void buildOverlayEntry_(MediaTrack* tr, std::string& out)
+{
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const int csCount = uc1::csInstanceCount(tr);
+    const int bcCount = uc1::bcInstanceCount(tr);
+    if (csCount <= 0 && bcCount <= 0) return;
+    const int csFx = csCount > 0
+        ? uc1::fxIndexForInstance(tr, false, uc1::csInstanceIndex(tr)) : -1;
+    const int bcFx = bcCount > 0
+        ? uc1::fxIndexForInstance(tr, true,  uc1::bcInstanceIndex(tr)) : -1;
+    if (csFx < 0 && bcFx < 0) return;
+    const std::string guid = uc1::trackGuid(tr);
+    if (guid.empty()) return;
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "%s,%d,%d;", guid.c_str(), csFx, bcFx);
+    out += buf;
+}
+
+void publishOverlayState_()
+{
+    const bool on = g_insertMarkersEnabled.load();
+    std::string body;
+    if (on) {
+        if (MediaTrack* m = GetMasterTrack(0)) buildOverlayEntry_(m, body);
+        const int nt = CountTracks(0);
+        for (int i = 0; i < nt; ++i)
+            if (MediaTrack* tr = GetTrack(0, i)) buildOverlayEntry_(tr, body);
+    }
+    const std::string sig = (on ? "1|" : "0|") + body;
+    if (sig == g_overlayPublishedSig) return;   // nothing changed
+    g_overlayPublishedSig = sig;
+    char head[48];
+    std::snprintf(head, sizeof(head), "%d;%d;", on ? 1 : 0, ++g_overlayRev);
+    SetExtState("rea_sixty", "overlay", (std::string(head) + body).c_str(), false);
+}
+
 // Instance-cursor-changed callback (registered with UC1PluginMap at
 // startup). Fires on the main thread whenever Instance Cycle moves the
-// active CS/BC on a track — repaint just that track's markers.
+// active CS/BC on a track — refresh the overlay (and, in legacy mode, the
+// renamed_name markers for just that track).
 void onInstanceCursorChanged_(void* track)
 {
-    if (!g_insertMarkersEnabled.load()) return;
-    reconcileInsertMarkersForTrack_(static_cast<MediaTrack*>(track));
+    if (g_insertLegacyRename.load() && g_insertMarkersEnabled.load())
+        reconcileInsertMarkersForTrack_(static_cast<MediaTrack*>(track));
+    publishOverlayState_();
 }
 
 // TotalReaper named-action lookup. Returns the REAPER command_id for the
@@ -14504,14 +14570,27 @@ void onTimer()
     {
         static ReaProject* s_insMarkProj = nullptr;
         ReaProject* curProj = EnumProjects(-1, nullptr, 0);
+        const bool legacy = g_insertLegacyRename.load();
         if (curProj != s_insMarkProj) {
             s_insMarkProj = curProj;
+            // Always strip any baked-in prefixes the freshly-loaded project may
+            // carry (legacy marker, or a project saved by an older build).
             clearAllInsertMarkers_();
-            if (g_insertMarkersEnabled.load()) reconcileAllInsertMarkers_();
-        } else if (g_insertMarkersEnabled.load() && g_uc1_surface) {
-            if (auto* ft =
-                    static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
-                reconcileInsertMarkersForTrack_(ft);
+            if (legacy && g_insertMarkersEnabled.load())
+                reconcileAllInsertMarkers_();
+            publishOverlayState_();
+        } else {
+            if (legacy && g_insertMarkersEnabled.load() && g_uc1_surface) {
+                if (auto* ft =
+                        static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
+                    reconcileInsertMarkersForTrack_(ft);
+            }
+            // Overlay safety-net republish (FX add / remove / reorder, track
+            // add / remove). Diff-guarded, so a steady state is a cheap walk +
+            // string compare. Throttled to ~5 Hz; Instance Cycle itself is
+            // handled instantly by onInstanceCursorChanged_.
+            static int s_overlayTick = 0;
+            if (++s_overlayTick >= 6) { s_overlayTick = 0; publishOverlayState_(); }
         }
     }
 
@@ -15481,9 +15560,17 @@ void reasixty_setInsertMarkers(bool on)
 {
     g_insertMarkersEnabled.store(on);
     SetExtState("rea_sixty", "insert_markers", on ? "1" : "0", true);
-    // Apply immediately: enable → mark every track; disable → strip all.
-    if (on) reconcileAllInsertMarkers_();
-    else    clearAllInsertMarkers_();
+    // Apply immediately. Overlay mode: just (re)publish — disabling writes the
+    // "0;" payload so the Lua stops drawing. Legacy rename mode: mark/strip the
+    // renamed_name across all tracks as before. Always clear baked prefixes on
+    // disable so nothing is left behind.
+    if (g_insertLegacyRename.load()) {
+        if (on) reconcileAllInsertMarkers_();
+        else    clearAllInsertMarkers_();
+    } else if (!on) {
+        clearAllInsertMarkers_();   // strip any legacy/baked prefixes
+    }
+    publishOverlayState_();
 }
 
 int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
@@ -15493,11 +15580,12 @@ void reasixty_setInsertMarkerStyle(int style)
     g_insertMarkerStyle.store(style);
     char b[8]; snprintf(b, sizeof(b), "%d", style);
     SetExtState("rea_sixty", "insert_marker_style", b, true);
-    // Restyle in place: strip old-style markers, then re-mark.
-    if (g_insertMarkersEnabled.load()) {
+    // Restyle in place (legacy rename only): strip old-style markers, re-mark.
+    if (g_insertLegacyRename.load() && g_insertMarkersEnabled.load()) {
         clearAllInsertMarkers_();
         reconcileAllInsertMarkers_();
     }
+    publishOverlayState_();
 }
 
 // Per-tick device calibration accessors (Settings → Device).
@@ -19657,6 +19745,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // saved after unload doesn't bake them in (the REAPER track API is
         // still live during this callback). No-op when the feature is off.
         if (g_insertMarkersEnabled.load()) clearAllInsertMarkers_();
+        // Tell the companion overlay to stop drawing (extension going away).
+        SetExtState("rea_sixty", "overlay", "0;0;", false);
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
