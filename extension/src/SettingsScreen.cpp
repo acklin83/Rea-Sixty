@@ -67,6 +67,10 @@ bool reasixty_selFollowsColor();
 void reasixty_setSelFollowsColor(bool follow);
 bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
+bool reasixty_grCombineUf8();
+void reasixty_setGrCombineUf8(bool on);
+bool reasixty_grCombineUc1();
+void reasixty_setGrCombineUc1(bool on);
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -346,8 +350,19 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
 
 void SettingsScreen::drawDevice(ImGui_Context* ctx)
 {
+    // Consistent, roomy section header: a gap above, the title, a rule,
+    // and a little air below. Keeps the panes from feeling cramped — use
+    // for every section after the first. Frank 2026-06-12.
+    auto sectionHeader = [&](const char* title) {
+        ImGui_Dummy(ctx, 0.0, 8.0);
+        ImGui_Text(ctx, title);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+    };
+
     ImGui_Text(ctx, "Connected devices");
     ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
 
     char line[128];
     const bool uf8On = reasixty_uf8Connected();
@@ -385,8 +400,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
 
-    ImGui_Text(ctx, "Brightness");
-    ImGui_Separator(ctx);
+    sectionHeader("Brightness");
 
     // 5 SSL-equivalent steps: dark / dim / half / bright / full. LED step
     // drives buttons + V-Pot rings + UC1 LEDs. Scribble step drives the
@@ -419,8 +433,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Display behaviour");
-    ImGui_Separator(ctx);
+    sectionHeader("Display behaviour");
 
     bool selFollow = reasixty_selFollowsColor();
     if (ImGui_Checkbox(ctx, "SEL LED follows REAPER track colour",
@@ -456,6 +469,23 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             }
         }
         ImGui_EndCombo(ctx);
+    }
+
+    // Combine GR across the channel — with "Show any GR Data", sum the
+    // gain reduction of every compressor on the track (CS + ReaComp + …)
+    // instead of showing a single source. In-series GR adds in dB, so the
+    // meter reads the channel's total reduction. Separate per surface so
+    // e.g. the UF8 strip can show combined while the UC1 shows the CS only.
+    // No effect unless "Show any GR Data" is selected. Frank 2026-06-12.
+    bool cUf8 = reasixty_grCombineUf8();
+    if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UF8 strips)",
+                       &cUf8)) {
+        reasixty_setGrCombineUf8(cUf8);
+    }
+    bool cUc1 = reasixty_grCombineUc1();
+    if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UC1 Comp)",
+                       &cUc1)) {
+        reasixty_setGrCombineUc1(cUc1);
     }
 
     // V-Pot / SC / BC parameter edits on a non-selected track auto-select
@@ -494,8 +524,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // Master track — surface-side handling of the REAPER Master bus.
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Master track");
-    ImGui_Separator(ctx);
+    sectionHeader("Master track");
 
     // CHANNEL encoder scrolls onto the Master track (IP_TRACKNUMBER 0)
     // before track 1, as a virtual "track 0". UC1-only — never appears on
@@ -528,6 +557,147 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             }
         }
         ImGui_EndCombo(ctx);
+    }
+
+    // ── Metering ─────────────────────────────────────────────────────
+    // Peak-meter fall rate, per meter. All meters are peak-hold; this sets how
+    // fast each falls (dB/sec). 26.5 dB/s == REAPER's own meter decay, so the
+    // UC1 input falls in lock-step with the output (Frank 2026-06-03).
+    sectionHeader("Metering — peak fall rate");
+
+    {
+        int tblFlags = 0;
+        if (ImGui_BeginTable(ctx, "##metering_tbl", 2, &tblFlags,
+                             nullptr, nullptr, nullptr)) {
+            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+            double wName = scaleW_(ctx, 130.0);
+            double wFall = scaleW_(ctx, 150.0);
+            ImGui_TableSetupColumn(ctx, "n", &wFlag, &wName, nullptr);
+            ImGui_TableSetupColumn(ctx, "f", &wFlag, &wFall, nullptr);
+
+            auto fallRow = [&](const char* name, int mid) {
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, name);
+                ImGui_TableNextColumn(ctx);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                double v = reasixty_meterFall(mid), st = 1.0, fa = 5.0; int fl = 0;
+                char id[24]; snprintf(id, sizeof(id), "##mf%d", mid);
+                if (ImGui_InputDouble(ctx, id, &v, &st, &fa, "%.1f dB/s", &fl))
+                    reasixty_setMeterFall(mid, v);
+            };
+
+            fallRow("UC1 Input",  0);
+            fallRow("UC1 Output", 1);
+            fallRow("UF8 Strips", 2);
+            ImGui_EndTable(ctx);
+        }
+    }
+
+    if (ImGui_Button(ctx, "Copy Input to Output##meter",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+        reasixty_copyMeter(0, 1);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_Text(ctx, "match both UC1 meters");
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("Tracks");
+
+    // TCP scrolls to keep the UF8-selected track visible. Independent of
+    // the always-on MCP follow (those are separate REAPER scroll surfaces).
+    // Frank 2026-05-20.
+    bool tcpFollow = reasixty_tcpFollowsSelection();
+    if (ImGui_Checkbox(ctx, "TCP follows UF8 selection", &tcpFollow)) {
+        reasixty_setTcpFollowsSelection(tcpFollow);
+    }
+
+    // Visibility follow: the surface mirrors what's visible in either
+    // REAPER's TCP (arrange-view) or MCP (mixer). TCP-mode also hides
+    // children of fully-collapsed folders because REAPER's
+    // "Hide children of collapsed folders" pref clears B_SHOWINTCP on
+    // those children — no separate toggle needed. Frank 2026-05-22.
+    int visFollow = reasixty_visibilityFollow();
+    ImGui_Text(ctx, "Surface mirrors:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "TCP", &visFollow, 0)) {
+        reasixty_setVisibilityFollow(visFollow);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButtonEx(ctx, "MCP", &visFollow, 1)) {
+        reasixty_setVisibilityFollow(visFollow);
+    }
+    ImGui_TextDisabled(ctx,
+        "TCP hides children of collapsed folders when REAPER's "
+        "'Hide children of collapsed folders' preference is on.");
+
+    // Pinned-tracks behaviour. Only effective in TCP-mode (MCP has
+    // no pin concept) — rebuildVisibleTrackList silently skips the
+    // reorder when Surface mirrors MCP, so the checkbox is harmless
+    // in that mode. Hint via TextDisabled instead of greying out.
+    {
+        bool pinSurvives = reasixty_pinnedSurvivesBanking();
+        if (ImGui_Checkbox(ctx, "Pinned tracks survive banking", &pinSurvives)) {
+            reasixty_setPinnedSurvivesBanking(pinSurvives);
+        }
+    }
+
+    // Track names longer than the 7-char scribble-strip slot need shortening.
+    // Truncate keeps the legacy first-7-chars behaviour. Smart Abbreviate
+    // strips spaces / vowels-after-first-letter / repeated consonants so
+    // "Background Vocals" lands as "BckgrV" instead of "Backgro".
+    // BeginCombo + Selectable instead of ImGui_Combo with \0 items —
+    // the Combo overload silently renders empty in ReaImGui v0.10.
+    {
+        const char* kNameModeLabels[2] = { "Truncate", "Smart abbreviate" };
+        int curMode = reasixty_trackNameMode();
+        if (curMode < 0 || curMode > 1) curMode = 0;
+        ImGui_Text(ctx, "Long track-name handling");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, "##long_track_name_handling",
+                             kNameModeLabels[curMode],
+                             /*flags*/ nullptr)) {
+            for (int i = 0; i < 2; ++i) {
+                bool sel = (curMode == i);
+                if (ImGui_Selectable(ctx, kNameModeLabels[i], &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr,
+                                     /*size_h*/ nullptr)) {
+                    reasixty_setTrackNameMode(i);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("Plug-ins");
+
+    // Offline FX are skipped by all four cycle paths (Channel-Encoder
+    // FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle). Frank 2026-05-20.
+    bool hideOffline = reasixty_hideOfflineFx();
+    if (ImGui_Checkbox(ctx, "Don't show offline FX", &hideOffline)) {
+        reasixty_setHideOfflineFx(hideOffline);
+    }
+
+    // Wrap-around at the end of the FX chain. Default on (legacy
+    // behaviour). When off, both ends hard-stop on all four cycle
+    // paths and the UC1 carousel shows no neighbour name past the
+    // first/last FX. Frank 2026-05-22.
+    bool wrapCycle = reasixty_wrapPluginCycle();
+    if (ImGui_Checkbox(ctx, "Wrap Plugin Cycle", &wrapCycle)) {
+        reasixty_setWrapPluginCycle(wrapCycle);
+    }
+
+    // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
+    bool engageUf8 = reasixty_cycleEngagesUf8();
+    if (ImGui_Checkbox(ctx,
+        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
+        &engageUf8))
+    {
+        reasixty_setCycleEngagesUf8(engageUf8);
     }
 
     // Pin plug-in GUI position: drag a plug-in window where you want it,
@@ -602,154 +772,9 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         }
     }
 
-    // ── Metering ─────────────────────────────────────────────────────
-    // Peak-meter fall rate, per meter. All meters are peak-hold; this sets how
-    // fast each falls (dB/sec). 26.5 dB/s == REAPER's own meter decay, so the
-    // UC1 input falls in lock-step with the output (Frank 2026-06-03).
-    ImGui_Text(ctx, "Metering — peak fall rate");
-    ImGui_Separator(ctx);
-
-    {
-        int tblFlags = 0;
-        if (ImGui_BeginTable(ctx, "##metering_tbl", 2, &tblFlags,
-                             nullptr, nullptr, nullptr)) {
-            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
-            double wName = scaleW_(ctx, 130.0);
-            double wFall = scaleW_(ctx, 150.0);
-            ImGui_TableSetupColumn(ctx, "n", &wFlag, &wName, nullptr);
-            ImGui_TableSetupColumn(ctx, "f", &wFlag, &wFall, nullptr);
-
-            auto fallRow = [&](const char* name, int mid) {
-                ImGui_TableNextColumn(ctx);
-                ImGui_Text(ctx, name);
-                ImGui_TableNextColumn(ctx);
-                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
-                double v = reasixty_meterFall(mid), st = 1.0, fa = 5.0; int fl = 0;
-                char id[24]; snprintf(id, sizeof(id), "##mf%d", mid);
-                if (ImGui_InputDouble(ctx, id, &v, &st, &fa, "%.1f dB/s", &fl))
-                    reasixty_setMeterFall(mid, v);
-            };
-
-            fallRow("UC1 Input",  0);
-            fallRow("UC1 Output", 1);
-            fallRow("UF8 Strips", 2);
-            ImGui_EndTable(ctx);
-        }
-    }
-
-    if (ImGui_Button(ctx, "Copy Input to Output##meter",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        reasixty_copyMeter(0, 1);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_Text(ctx, "match both UC1 meters");
-
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Tracks");
-    ImGui_Separator(ctx);
-
-    // TCP scrolls to keep the UF8-selected track visible. Independent of
-    // the always-on MCP follow (those are separate REAPER scroll surfaces).
-    // Frank 2026-05-20.
-    bool tcpFollow = reasixty_tcpFollowsSelection();
-    if (ImGui_Checkbox(ctx, "TCP follows UF8 selection", &tcpFollow)) {
-        reasixty_setTcpFollowsSelection(tcpFollow);
-    }
-
-    // Visibility follow: the surface mirrors what's visible in either
-    // REAPER's TCP (arrange-view) or MCP (mixer). TCP-mode also hides
-    // children of fully-collapsed folders because REAPER's
-    // "Hide children of collapsed folders" pref clears B_SHOWINTCP on
-    // those children — no separate toggle needed. Frank 2026-05-22.
-    int visFollow = reasixty_visibilityFollow();
-    ImGui_Text(ctx, "Surface mirrors:");
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButtonEx(ctx, "TCP", &visFollow, 0)) {
-        reasixty_setVisibilityFollow(visFollow);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButtonEx(ctx, "MCP", &visFollow, 1)) {
-        reasixty_setVisibilityFollow(visFollow);
-    }
-    ImGui_TextDisabled(ctx,
-        "TCP hides children of collapsed folders when REAPER's "
-        "'Hide children of collapsed folders' preference is on.");
-
-    // Pinned-tracks behaviour. Only effective in TCP-mode (MCP has
-    // no pin concept) — rebuildVisibleTrackList silently skips the
-    // reorder when Surface mirrors MCP, so the checkbox is harmless
-    // in that mode. Hint via TextDisabled instead of greying out.
-    {
-        bool pinSurvives = reasixty_pinnedSurvivesBanking();
-        if (ImGui_Checkbox(ctx, "Pinned tracks survive banking", &pinSurvives)) {
-            reasixty_setPinnedSurvivesBanking(pinSurvives);
-        }
-    }
-
-    // Track names longer than the 7-char scribble-strip slot need shortening.
-    // Truncate keeps the legacy first-7-chars behaviour. Smart Abbreviate
-    // strips spaces / vowels-after-first-letter / repeated consonants so
-    // "Background Vocals" lands as "BckgrV" instead of "Backgro".
-    // BeginCombo + Selectable instead of ImGui_Combo with \0 items —
-    // the Combo overload silently renders empty in ReaImGui v0.10.
-    {
-        const char* kNameModeLabels[2] = { "Truncate", "Smart abbreviate" };
-        int curMode = reasixty_trackNameMode();
-        if (curMode < 0 || curMode > 1) curMode = 0;
-        ImGui_Text(ctx, "Long track-name handling");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_BeginCombo(ctx, "##long_track_name_handling",
-                             kNameModeLabels[curMode],
-                             /*flags*/ nullptr)) {
-            for (int i = 0; i < 2; ++i) {
-                bool sel = (curMode == i);
-                if (ImGui_Selectable(ctx, kNameModeLabels[i], &sel,
-                                     /*flags*/ nullptr,
-                                     /*size_w*/ nullptr,
-                                     /*size_h*/ nullptr)) {
-                    reasixty_setTrackNameMode(i);
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Plug-ins");
-    ImGui_Separator(ctx);
-
-    // Offline FX are skipped by all four cycle paths (Channel-Encoder
-    // FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle). Frank 2026-05-20.
-    bool hideOffline = reasixty_hideOfflineFx();
-    if (ImGui_Checkbox(ctx, "Don't show offline FX", &hideOffline)) {
-        reasixty_setHideOfflineFx(hideOffline);
-    }
-
-    // Wrap-around at the end of the FX chain. Default on (legacy
-    // behaviour). When off, both ends hard-stop on all four cycle
-    // paths and the UC1 carousel shows no neighbour name past the
-    // first/last FX. Frank 2026-05-22.
-    bool wrapCycle = reasixty_wrapPluginCycle();
-    if (ImGui_Checkbox(ctx, "Wrap Plugin Cycle", &wrapCycle)) {
-        reasixty_setWrapPluginCycle(wrapCycle);
-    }
-
-    // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
-    bool engageUf8 = reasixty_cycleEngagesUf8();
-    if (ImGui_Checkbox(ctx,
-        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
-        &engageUf8))
-    {
-        reasixty_setCycleEngagesUf8(engageUf8);
-    }
-
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Keyboard Options");
-    ImGui_Separator(ctx);
+    sectionHeader("Keyboard Options");
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
     bool altSnap = reasixty_altDragSnapBack();
@@ -797,8 +822,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // need to be above the common settings.
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "UC1 GR calibration");
-    ImGui_Separator(ctx);
+    sectionHeader("UC1 GR calibration");
     ImGui_TextDisabled(ctx,
         "Hardware-trim — per-tick offsets that nudge the UC1 to match its");
     ImGui_TextDisabled(ctx,
