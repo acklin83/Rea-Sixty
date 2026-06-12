@@ -184,4 +184,19 @@ std::string trackGuid(void* track);
 // snaps the active instance to whichever copy the user just touched.
 int instanceIndexForFx(void* track, int fxIdx);
 
+// Inverse of instanceIndexForFx: resolve the FX index of the
+// `ordinal`-th instance in a domain (bc==true → Bus Comp, false →
+// Channel Strip), using the same per-domain predicate as the
+// instance-count / cursor functions. Returns -1 when `ordinal` is out
+// of range or `track` has no matches. Main-thread-only.
+int fxIndexForInstance(void* track, bool bc, int ordinal);
+
+// Notify hook fired whenever the active CS/BC instance cursor changes
+// (setBcInstanceIndex / setCsInstanceIndex). main.cpp registers this so
+// the on-screen Inserts-list marker can repaint for the affected track.
+// Null by default (no-op). Fires on the calling thread — setters run on
+// the main thread, so the callback may touch REAPER track APIs.
+using InstanceChangedFn = void (*)(void* /*track*/);
+void setInstanceChangedCallback(InstanceChangedFn fn);
+
 } // namespace uc1

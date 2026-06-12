@@ -485,8 +485,8 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | GR meter source (combo) | *Only Show Channel Strip GR* — meter limited to SSL CS / mapped CS plug-ins. *Show any GR Data* — falls back to any FX exposing the PreSonus `GainReduction_dB` host-extension on the focused track (ReaComp, FabFilter, etc.). |
 | Track selection follows parameter change | V-Pot / CS / BC knob edits on a non-selected track auto-select that track. |
 | Touch selects channel | Touching a UF8 fader exclusively selects that strip's track. |
-| SSL Strip Mode follows focused plugin window | When REAPER's last-focused FX is a CS Instance, SSL Strip Mode auto-engages. |
-| Plugin GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. |
+| SSL Strip Mode follows focused plug-in window | When REAPER's last-focused FX is a CS Instance, SSL Strip Mode auto-engages. |
+| Plug-in GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. |
 | Pin plug-in GUI position | Capture an XY coordinate (drag a window, click *Capture current*). Every subsequent managed `TrackFX_Show` snaps the window to that pin. Alternatively *Center on Screen*. |
 | Pin FX-chain GUI position | Same pattern for FX-chain windows. Title matching looks for "FX:" on macOS. |
 
@@ -527,8 +527,8 @@ Default is **26.5 dB/s** — REAPER's own meter decay, so the UC1 input meter fa
 | Toggle | Effect |
 |---|---|
 | Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip TrackFX slots whose `TrackFX_GetOffline` returns true. Offline-only tracks show a `-`. |
-| Wrap Plugin Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
-| Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a `show_focused_plugin_gui` binding lands on a UF8-mapped plug-in, also engage UF8 Plugin Mode with GUI. |
+| Wrap Plug-in Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
+| Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a `show_focused_plugin_gui` binding lands on a UF8-mapped plug-in, also engage UF8 Plug-in Mode with GUI. |
 
 ### Keyboard Options
 
@@ -1018,7 +1018,7 @@ Engage / disengage the on-surface plug-in editing modes.
 
 These act on the FX the cursor currently points at on the focused track (the FX that the last cycle landed on; defaults to the first online Instance after a fresh load).
 
-- **`show_focused_plugin_gui`** — toggle the floating GUI of the cursor FX. With the Device option *Auto-engage UF8 Plugin Mode* on, also engages UF8 Plug-in Mode if the cursor lands on a UF8-mapped plug-in.
+- **`show_focused_plugin_gui`** — toggle the floating GUI of the cursor FX. With the Device option *Auto-engage UF8 Plug-in Mode* on, also engages UF8 Plug-in Mode if the cursor lands on a UF8-mapped plug-in.
 - **`plugin_bypass`** — toggle bypass of the cursor FX.
 - **`plugin_offline`** — toggle offline state of the cursor FX.
 - **`plugin_preset_next`** — load the next preset.
@@ -1028,7 +1028,7 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **`plugin_move_down`** — move the cursor FX down one slot.
 - **`show_fx_chain`** — open / close REAPER's FX chain window for the focused track (pinned per the FX-chain pin settings).
 - **`close_all_fx_guis`** — close every floating FX window in the project.
-- **`fx_param_inc`** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in PluginMap registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to `fx_param_inc` and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
+- **`fx_param_inc`** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in plug-in map registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to `fx_param_inc` and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
 - **`fx_param_dec`** — same as `fx_param_inc` with the sign flipped.
 
 ## Instance navigation
@@ -1160,7 +1160,7 @@ When held, these shift every other binding to its modifier slot. The three match
 
 ## SSL Strip Mode
 
-Engage with the `Plugin` button (default), via the `ssl_strip_mode_toggle` / `_with_gui` builtins, or via "SSL Strip Mode follows focused plugin window" auto-engage on a CS plug-in.
+Engage with the Plug-in button (default), via the `ssl_strip_mode_toggle` / `_with_gui` builtins, or via "SSL Strip Mode follows focused plug-in window" auto-engage on a CS plug-in.
 
 While SSL Strip Mode is on:
 

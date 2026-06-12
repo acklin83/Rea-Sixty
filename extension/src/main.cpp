@@ -1890,6 +1890,16 @@ std::atomic<bool> g_grAnyFx{true};
 std::atomic<bool> g_grCombineUf8{false};
 std::atomic<bool> g_grCombineUc1{false};
 
+// On-screen "active instance" marker (Settings → Device → Inserts). When
+// enabled, the active CS / BC instance on a track that hosts ≥2 of that
+// domain gets a marker prefix in REAPER's TCP/MCP Inserts list — written
+// into the FX "renamed_name" (the only text REAPER draws there). Off by
+// default; markers are auto-stripped on disable, on project switch and on
+// plugin unload so saved projects stay clean. Style picks the prefix glyph
+// (0 Arrow, 1 per-domain tag, 2 bracket). Frank 2026-06-12.
+std::atomic<bool> g_insertMarkersEnabled{false};
+std::atomic<int>  g_insertMarkerStyle{0};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -1953,7 +1963,7 @@ std::atomic<bool> g_pluginGuiFollowsInstance{true};
 std::atomic<bool> g_pluginGuiPinPos{false};
 std::atomic<int>  g_pluginGuiPinX{-1};
 std::atomic<int>  g_pluginGuiPinY{-1};
-// Pending "View active plugin" follow request, set by the UC1 knob
+// Pending "View active plug-in" follow request, set by the UC1 knob
 // handler when a cross-domain touch should swap the focused-FX
 // floating window. Drained from onTimer after focus state has fully
 // settled (chaseLastTouchedFx etc.), so the TrackFX_Show pair doesn't
@@ -2046,7 +2056,7 @@ inline void restoreSelModeAfterUf8PluginMode_()
 // Programmatic UF8 Plugin Mode engage — same effect as the user firing
 // `uf8_plugin_mode_toggle{,_with_gui}` from a button, no-op if already
 // on. Used by the SEL MODE Cycle V-Pot push handler (Settings → Modes →
-// Cycle → "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins").
+// Cycle → "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins").
 // Mutex-with-SSL-Strip-Mode + Sel-Mode parking + snap request match the
 // toggle builtins so the runtime state ends up identical regardless of
 // how the mode was entered.
@@ -2177,6 +2187,14 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uc1"); v && *v) {
         g_grCombineUc1.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "insert_markers"); v && *v) {
+        g_insertMarkersEnabled.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "insert_marker_style"); v && *v) {
+        int st = std::atoi(v);
+        if (st < 0) st = 0; if (st > 2) st = 2;
+        g_insertMarkerStyle.store(st);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -2736,6 +2754,9 @@ enum class EncoderMode : uint8_t {
     // they advance to the adjacent track and continue from its first /
     // last FX (SSL 360°-native feel). Frank 2026-06-12.
     FxScrollAll, InstanceScrollAll,
+    // Rotate to move the active FX up / down within the focused track's
+    // chain (within-chain only; hard-stop at the ends). Frank 2026-06-12.
+    FxMove,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
@@ -3743,7 +3764,7 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
 // Follow the show_focused_plugin_gui floating window across an
 // Instance / FX cycle. Closes the old fxIdx's window, opens the new
 // one, pins it via the macOS-level NSWindow helper. Gated by the
-// Settings → "Plugin GUI follows active Instance" toggle.
+// Settings → "Plug-in GUI follows active Instance" toggle.
 //
 // This is the FLOATING-WINDOW follow (one window per surface), NOT the
 // Plugin-Mode-master-GUI follow (that's triggerPluginModeFollowSync_).
@@ -4423,6 +4444,41 @@ ActiveFxTarget resolveActiveFx_()
     return {nullptr, -1};
 }
 
+// EncoderMode::FxMove — rotate to shuffle the active FX up / down within
+// the focused track's chain. Shares the reorder mechanism with the
+// plugin_move_up / plugin_move_down one-shots (TrackFX_CopyToTrack with
+// is_move=true). `step` is signed detents: CW (>0) moves the FX down /
+// later in the chain, CCW (<0) up / earlier. Hard-stops at the chain ends
+// (no wrap). The FX-cursor follows the moved plug-in to its new index so
+// the carousel + any chained action still target it. Frank 2026-06-12.
+void applyFxMove_(int step)
+{
+    if (step == 0) return;
+    auto t = resolveActiveFx_();
+    if (!t.tr || !ValidatePtr2(nullptr, t.tr, "MediaTrack*")) return;
+    const int n = TrackFX_GetCount(t.tr);
+    if (n < 2 || t.fxIdx < 0 || t.fxIdx >= n) return;
+
+    int dest = t.fxIdx + step;
+    if (dest < 0)     dest = 0;
+    if (dest > n - 1) dest = n - 1;
+    if (dest == t.fxIdx) return;   // already at the chain edge
+
+    TrackFX_CopyToTrack(t.tr, t.fxIdx, t.tr, dest, /*is_move*/ true);
+    setStripInstanceFx_(t.tr, dest);   // re-anchor cursor to the new index
+    g_bankDirty.store(true);
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+    // Carousel feedback at the FX's new slot (mirrors applyFxCycle_).
+    std::vector<int> ring = buildFxRing_(t.tr);
+    int k = 0;
+    for (size_t i = 0; i < ring.size(); ++i)
+        if (ring[i] == dest) { k = static_cast<int>(i); break; }
+    showCycleCarousel_(t.tr, k, ring);
+}
+
 void applyShowFocusedPluginGui_()
 {
     // Toggle-off path for UF8 Plugin Mode. When the button is bound to
@@ -4565,7 +4621,7 @@ void applyShowFocusedPluginGui_()
     g_focusedGuiShownFx = fxIdx;
 }
 
-// Settings → "Plugin GUI follows active Instance" follow-up for the
+// Settings → "Plug-in GUI follows active Instance" follow-up for the
 // show_focused_plugin_gui window. Called when the user selects a
 // different track (the floating window should re-target to the new
 // track's focused FX) and from the per-track FX-cycle drains (window
@@ -4659,6 +4715,49 @@ std::string shortFxName_(MediaTrack* tr, int fxIdx)
     return s;
 }
 
+// ── Insert-list active-instance marker — prefix helpers ──────────────
+// Every marker prefix the extension may write into an FX "renamed_name"
+// (Settings → Device → Inserts). Kept as a fixed list — stripping checks
+// ALL of them regardless of the currently-selected style, so switching
+// style (or opening a project marked under a different style) still
+// cleans up correctly. UTF-8 byte escapes keep the literals encoding-
+// independent across MSVC / clang / gcc (the trailing letters are split
+// off so they aren't swallowed into the \x hex escape). Frank 2026-06-12.
+static const char* const kInsertMarkers_[] = {
+    "\xE2\x96\xB6 ",        // ▶ space  — Arrow style (both domains)
+    "\xE2\x97\x89" "CS ",   // ◉CS      — DomainTag style, Channel Strip
+    "\xE2\x97\x89" "BC ",   // ◉BC      — DomainTag style, Bus Comp
+    "[*] ",                 // [*]      — Bracket style (both domains)
+};
+
+// Active-marker prefix for (style, domain).
+const char* activeInsertMarker_(int style, bool bc)
+{
+    switch (style) {
+        case 1:  return bc ? "\xE2\x97\x89" "BC " : "\xE2\x97\x89" "CS ";
+        case 2:  return "[*] ";
+        default: return "\xE2\x96\xB6 ";
+    }
+}
+
+bool startsWithInsertMarker_(const std::string& s)
+{
+    for (const char* m : kInsertMarkers_)
+        if (s.compare(0, std::strlen(m), m) == 0) return true;
+    return false;
+}
+
+// Strip a leading marker prefix if present (only the first match). Returns
+// the input unchanged when it carries no known marker.
+std::string stripInsertMarker_(const std::string& s)
+{
+    for (const char* m : kInsertMarkers_) {
+        const size_t l = std::strlen(m);
+        if (s.compare(0, l, m) == 0) return s.substr(l);
+    }
+    return s;
+}
+
 // User-given rename of a specific FX instance, or empty if none. Reads
 // REAPER's "renamed_name" named-config parm. Empty string when the user
 // hasn't renamed the FX (i.e. it still shows its factory name in the
@@ -4666,6 +4765,10 @@ std::string shortFxName_(MediaTrack* tr, int fxIdx)
 // e.g. an SSL 360 Link instance the user labelled "Townhouse Comp"
 // shows that name instead of the generic "Link" abbreviation. Frank
 // 2026-05-20.
+//
+// Any Inserts-marker prefix we may have written is stripped here so the
+// marker never leaks onto the hardware label — every "what's running"
+// display path (fxCycleDisplayName_, instanceLabel_) funnels through this.
 std::string fxUserRename_(MediaTrack* tr, int fxIdx)
 {
     if (!tr || fxIdx < 0) return std::string{};
@@ -4674,7 +4777,7 @@ std::string fxUserRename_(MediaTrack* tr, int fxIdx)
                                    buf, sizeof(buf))
         && buf[0] != 0)
     {
-        return std::string(buf);
+        return stripInsertMarker_(std::string(buf));
     }
     return std::string{};
 }
@@ -4714,6 +4817,165 @@ std::string instanceLabel_(MediaTrack* tr, int fxIdx, const char* fallback)
 {
     if (auto rn = fxUserRename_(tr, fxIdx); !rn.empty()) return rn;
     return std::string(fallback ? fallback : "");
+}
+
+// ── Insert-list active-instance marker — engine ──────────────────────
+// Per-FX record of the "renamed_name" as it was BEFORE we prefixed a
+// marker, so clearing restores it exactly (empty → REAPER's factory
+// name). Keyed by FX-GUID (stable across reorder). Main-thread-only;
+// every caller runs on the timer / poll path, so no locking is needed.
+std::unordered_map<std::string, std::string> g_insertMarkerSaved;
+
+std::string readRenamedName_(MediaTrack* tr, int fx)
+{
+    char buf[128] = {0};
+    if (TrackFX_GetNamedConfigParm(tr, fx, "renamed_name", buf, sizeof(buf)))
+        return std::string(buf);
+    return std::string{};
+}
+
+void writeRenamedName_(MediaTrack* tr, int fx, const std::string& name)
+{
+    TrackFX_SetNamedConfigParm(tr, fx, "renamed_name", name.c_str());
+}
+
+// The plug-in's own short label, IGNORING any user rename / our marker
+// (resolved from the factory identity name, so it's stable whatever
+// "renamed_name" currently holds). Used both as the active-marker label
+// when the FX has no user rename, and to recognise our own injected
+// label when restoring after a crash. Empty for FX not in any map.
+std::string fxFactoryShort_(MediaTrack* tr, int fxIdx)
+{
+    char buf[256] = {0};
+    if (!uf8::fxIdentityName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
+    if (const auto* pm = uf8::lookupPluginMapByName(buf)) return pm->displayShort;
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(buf))
+        return um->displayShort;
+    return std::string{};
+}
+
+// Ensure the FX at `fx` carries the active marker for its domain.
+void markInsertActive_(MediaTrack* tr, int fx, const char* marker)
+{
+    const std::string guid = uf8::fxGuidString(tr, fx);
+    if (guid.empty()) return;
+    const std::string cur = readRenamedName_(tr, fx);
+    if (!g_insertMarkerSaved.count(guid)) {
+        // Remember the pre-marker base. A marker already present means a
+        // leftover from a prior session / crash — recover the base by
+        // stripping it.
+        g_insertMarkerSaved[guid] =
+            startsWithInsertMarker_(cur) ? stripInsertMarker_(cur) : cur;
+    }
+    std::string label = g_insertMarkerSaved[guid];
+    if (label.empty()) {
+        label = fxFactoryShort_(tr, fx);
+        if (label.empty()) label = fxCycleDisplayName_(tr, fx);
+    }
+    const std::string desired = std::string(marker) + label;
+    if (desired != cur) writeRenamedName_(tr, fx, desired);
+}
+
+// Ensure the FX at `fx` carries NO marker, restoring its saved base.
+void clearInsertMarker_(MediaTrack* tr, int fx)
+{
+    const std::string guid = uf8::fxGuidString(tr, fx);
+    const std::string cur = readRenamedName_(tr, fx);
+    std::string restore;
+    auto it = guid.empty() ? g_insertMarkerSaved.end()
+                           : g_insertMarkerSaved.find(guid);
+    if (it != g_insertMarkerSaved.end()) {
+        restore = it->second;
+        g_insertMarkerSaved.erase(it);
+    } else if (startsWithInsertMarker_(cur)) {
+        // No saved base (different session / crash). If what's left is
+        // just the plug-in's own short name, it was our injected label →
+        // restore to factory ("") rather than baking it as a user rename.
+        restore = stripInsertMarker_(cur);
+        if (restore == fxFactoryShort_(tr, fx)) restore.clear();
+    } else {
+        return;  // no marker, nothing to do
+    }
+    if (restore != cur) writeRenamedName_(tr, fx, restore);
+}
+
+// Recompute marker state for one track. Marks the active CS / BC instance
+// (only on tracks with ≥2 of that domain) and clears every other instance.
+// When the feature is disabled, activeOrd stays -1 so all instances are
+// cleared — making this a safe "strip this track" call too.
+void reconcileInsertMarkersForTrack_(MediaTrack* tr)
+{
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const bool on    = g_insertMarkersEnabled.load();
+    const int  style = g_insertMarkerStyle.load();
+    for (int d = 0; d < 2; ++d) {
+        const bool bc    = (d == 1);
+        const int  count = bc ? uc1::bcInstanceCount(tr)
+                              : uc1::csInstanceCount(tr);
+        if (count <= 0) continue;
+        // Mark the active CS / BC even when the track hosts only one of that
+        // domain — the cue is "which insert IS the CS / the BC the surface
+        // drives", useful at any instance count (Frank 2026-06-12, after the
+        // ≥2 gate hid the common 1-CS-1-BC track).
+        const int activeOrd = on
+            ? (bc ? uc1::bcInstanceIndex(tr) : uc1::csInstanceIndex(tr))
+            : -1;
+        const char* marker = activeInsertMarker_(style, bc);
+        for (int ord = 0; ord < count; ++ord) {
+            const int fx = uc1::fxIndexForInstance(tr, bc, ord);
+            if (fx < 0) continue;
+            if (ord == activeOrd) markInsertActive_(tr, fx, marker);
+            else                  clearInsertMarker_(tr, fx);
+        }
+    }
+}
+
+// Walk every track (Master + regular) applying `fn`. PreventUIRefresh
+// brackets the whole sweep so a multi-FX change repaints the mixer once.
+template <typename Fn>
+void forEachTrackInsertMarker_(Fn fn)
+{
+    PreventUIRefresh(1);
+    if (MediaTrack* m = GetMasterTrack(0)) fn(m);
+    const int nt = CountTracks(0);
+    for (int i = 0; i < nt; ++i)
+        if (MediaTrack* tr = GetTrack(0, i)) fn(tr);
+    PreventUIRefresh(-1);
+}
+
+void reconcileAllInsertMarkers_()
+{
+    forEachTrackInsertMarker_(
+        [](MediaTrack* tr) { reconcileInsertMarkersForTrack_(tr); });
+}
+
+// Strip every marker the extension may have written, across all tracks,
+// and forget the saved-base map. Used on disable / project switch /
+// unload so no marker is left baked into a project.
+void clearAllInsertMarkers_()
+{
+    forEachTrackInsertMarker_([](MediaTrack* tr) {
+        if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+        for (int d = 0; d < 2; ++d) {
+            const bool bc    = (d == 1);
+            const int  count = bc ? uc1::bcInstanceCount(tr)
+                                  : uc1::csInstanceCount(tr);
+            for (int ord = 0; ord < count; ++ord) {
+                const int fx = uc1::fxIndexForInstance(tr, bc, ord);
+                if (fx >= 0) clearInsertMarker_(tr, fx);
+            }
+        }
+    });
+    g_insertMarkerSaved.clear();
+}
+
+// Instance-cursor-changed callback (registered with UC1PluginMap at
+// startup). Fires on the main thread whenever Instance Cycle moves the
+// active CS/BC on a track — repaint just that track's markers.
+void onInstanceCursorChanged_(void* track)
+{
+    if (!g_insertMarkersEnabled.load()) return;
+    reconcileInsertMarkersForTrack_(static_cast<MediaTrack*>(track));
 }
 
 // TotalReaper named-action lookup. Returns the REAPER command_id for the
@@ -10552,7 +10814,8 @@ void pushZonesForVisibleSlots()
         } else if ((g_encoderMode.load() == EncoderMode::FxCycle
                  || g_encoderMode.load() == EncoderMode::Instance
                  || g_encoderMode.load() == EncoderMode::FxScrollAll
-                 || g_encoderMode.load() == EncoderMode::InstanceScrollAll)
+                 || g_encoderMode.load() == EncoderMode::InstanceScrollAll
+                 || g_encoderMode.load() == EncoderMode::FxMove)
                 && g_uc1_surface
                 && tr == g_uc1_surface->focusedTrack()) {
             // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
@@ -13778,6 +14041,7 @@ void onTimer()
             else if (std::strcmp(m, "FxCycle")     == 0) g_encoderMode.store(EncoderMode::FxCycle);
             else if (std::strcmp(m, "FxScrollAll")       == 0) g_encoderMode.store(EncoderMode::FxScrollAll);
             else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
+            else if (std::strcmp(m, "FxMove")            == 0) g_encoderMode.store(EncoderMode::FxMove);
             else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
             else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
             // 'Focus' (legacy) and 'Mousewheel' (post-2026-05-19 rename)
@@ -13809,7 +14073,7 @@ void onTimer()
         }
         s_revealWasActive = nowActive;
     }
-    // "View active plugin" follow drain TEMPORARILY DISABLED — Frank
+    // "View active plug-in" follow drain TEMPORARILY DISABLED — Frank
     // reported a regression where the inline TrackFX_Show pair (even
     // deferred to next tick) prevented UF8's colour-bar plug-in name
     // from switching to the new domain's plug-in on cross-domain
@@ -14229,6 +14493,27 @@ void onTimer()
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
+
+    // Insert-list active-instance marker upkeep. On project switch, strip
+    // any stale markers carried in the freshly-loaded project, then apply
+    // fresh ones. Otherwise reconcile the focused track each tick as a
+    // safety net for FX add / remove / reorder (Instance Cycle itself is
+    // handled immediately by onInstanceCursorChanged_). All diff-guarded —
+    // no "renamed_name" write unless the active instance actually changed.
+    // Frank 2026-06-12.
+    {
+        static ReaProject* s_insMarkProj = nullptr;
+        ReaProject* curProj = EnumProjects(-1, nullptr, 0);
+        if (curProj != s_insMarkProj) {
+            s_insMarkProj = curProj;
+            clearAllInsertMarkers_();
+            if (g_insertMarkersEnabled.load()) reconcileAllInsertMarkers_();
+        } else if (g_insertMarkersEnabled.load() && g_uc1_surface) {
+            if (auto* ft =
+                    static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
+                reconcileInsertMarkersForTrack_(ft);
+        }
+    }
 
     // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
     // the carousel push happens on the current tick's state (overlay
@@ -15189,6 +15474,30 @@ void reasixty_setGrCombineUc1(bool on)
 {
     g_grCombineUc1.store(on);
     SetExtState("rea_sixty", "gr_combine_uc1", on ? "1" : "0", true);
+}
+
+bool reasixty_insertMarkers() { return g_insertMarkersEnabled.load(); }
+void reasixty_setInsertMarkers(bool on)
+{
+    g_insertMarkersEnabled.store(on);
+    SetExtState("rea_sixty", "insert_markers", on ? "1" : "0", true);
+    // Apply immediately: enable → mark every track; disable → strip all.
+    if (on) reconcileAllInsertMarkers_();
+    else    clearAllInsertMarkers_();
+}
+
+int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
+void reasixty_setInsertMarkerStyle(int style)
+{
+    if (style < 0) style = 0; if (style > 2) style = 2;
+    g_insertMarkerStyle.store(style);
+    char b[8]; snprintf(b, sizeof(b), "%d", style);
+    SetExtState("rea_sixty", "insert_marker_style", b, true);
+    // Restyle in place: strip old-style markers, then re-mark.
+    if (g_insertMarkersEnabled.load()) {
+        clearAllInsertMarkers_();
+        reconcileAllInsertMarkers_();
+    }
 }
 
 // Per-tick device calibration accessors (Settings → Device).
@@ -16252,7 +16561,7 @@ void reasixty_setPluginGuiFollowsInstance(bool follow)
                 follow ? "1" : "0", true);
 }
 
-// Request a "View active plugin" follow — if the focused-FX floating
+// Request a "View active plug-in" follow — if the focused-FX floating
 // window (`show_focused_plugin_gui`) is open on the same track but on
 // a DIFFERENT FX, swap it to (tr, fxIdx) on the next timer tick. The
 // actual TrackFX_Show pair runs in drainFollowGuiRequest_ AFTER focus
@@ -17834,7 +18143,7 @@ void registerBindingHandlers()
         },
         [](int) { return g_uf8PluginMode.load()
                        && !g_uf8PluginModeWithGui.load(); },
-        "Toggle UF8 Plugin Mode", false
+        "Toggle UF8 Plug-in Mode", false
     });
 
     // GUI variant: same as uf8_plugin_mode_toggle but pops the user
@@ -17866,7 +18175,7 @@ void registerBindingHandlers()
         },
         [](int) { return g_uf8PluginMode.load()
                        && g_uf8PluginModeWithGui.load(); },
-        "Toggle UF8 Plugin Mode (with GUI)", false
+        "Toggle UF8 Plug-in Mode (with GUI)", false
     });
 
     registerBuiltin("pan_force", DescBuilder{
@@ -18230,7 +18539,7 @@ void registerBindingHandlers()
             setOrToggleMode(EncoderMode::FxScrollAll, "FxScrollAll");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::FxScrollAll; },
-        "Encoder Mode → Cycle FX (across tracks)", false
+        "Encoder Mode → FX Cycle (across tracks)", false
     });
     registerBuiltin("encoder_instance_scroll_all", DescBuilder{
         [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
@@ -18238,7 +18547,17 @@ void registerBindingHandlers()
             setOrToggleMode(EncoderMode::InstanceScrollAll, "InstanceScrollAll");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::InstanceScrollAll; },
-        "Encoder Mode → Cycle Instance (across tracks)", false
+        "Encoder Mode → Instance Cycle (across tracks)", false
+    });
+    // Move the active FX up / down within the focused track's chain on
+    // rotation (within-chain only; hard-stop at the ends). Frank 2026-06-12.
+    registerBuiltin("encoder_fx_move", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::FxMove, "FxMove");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::FxMove; },
+        "Encoder Mode → FX Move (in chain)", false
     });
     // Selection-Set cycle mode — Channel-Encoder rotation steps through
     // populated Selection-Set slots (off → 1 → 2 → … → last → off).
@@ -18270,6 +18589,7 @@ void registerBindingHandlers()
                 case EncoderMode::FxCycle:     applyFxCycle_(step);        break;
                 case EncoderMode::FxScrollAll:       applyFxScrollAll_(step);       break;
                 case EncoderMode::InstanceScrollAll: applyInstanceScrollAll_(step); break;
+                case EncoderMode::FxMove:      applyFxMove_(step);         break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
                 case EncoderMode::Markers:     applyMarkerStep_(step);     break;
                 case EncoderMode::BankBy1:     applyBankByOne_(step);      break;
@@ -18519,6 +18839,16 @@ void registerBindingHandlers()
             applyInstanceScrollAll_(param);
         },
         nullptr, "Encoder: cycle instance (across tracks)", false
+    });
+    // Direct-rotation counterpart of encoder_fx_move — assign straight to
+    // any encoder/modifier (no mode switch). Rotation moves the active FX
+    // up/down in the focused track's chain. Frank 2026-06-12.
+    registerBuiltin("fx_move", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyFxMove_(param);
+        },
+        nullptr, "Encoder: move active FX up/down in chain", false
     });
     registerBuiltin("bc_track_scroll", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
@@ -18841,7 +19171,7 @@ void registerBindingHandlers()
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank ← (UF8 Plugin Mode: fader-bank; else ±8-strip scroll)", false
+        nullptr, "Bank ← (UF8 Plug-in Mode: fader-bank; else ±8-strip scroll)", false
     });
     registerBuiltin("bank_right", DescBuilder{
         [tryFaderBankNav](bool firing, bool pressed, int /*param*/) {
@@ -18857,7 +19187,7 @@ void registerBindingHandlers()
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank → (UF8 Plugin Mode: fader-bank; else ±8-strip scroll)", false
+        nullptr, "Bank → (UF8 Plug-in Mode: fader-bank; else ±8-strip scroll)", false
     });
     // Bank-by-1 single-strip nudges — paired with the encoder_bank_by_1
     // mode, also bindable to any button so users can wire e.g. PAGE
@@ -19323,6 +19653,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // still exist) via IReaperControlSurface's virtual destructor;
         // those destructors tear down the USB device and timer. Here we
         // just un-register the class so no new instances can be created.
+        // Best-effort: strip any Inserts-list markers we wrote so a project
+        // saved after unload doesn't bake them in (the REAPER track API is
+        // still live during this callback). No-op when the feature is off.
+        if (g_insertMarkersEnabled.load()) clearAllInsertMarkers_();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
@@ -19436,6 +19770,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         if (d == uf8::Domain::ChannelStrip) return uc1::csInstanceIndex(tr);
         return 0;
     });
+
+    // Repaint the on-screen Inserts-list marker the instant Instance Cycle
+    // moves the active CS/BC on a track (covers every cycle path, including
+    // cross-track scroll). Diff-guarded inside; no-op when the feature is off.
+    uc1::setInstanceChangedCallback(&onInstanceCursorChanged_);
 
     initLog("step: ExtState restore start");
     // Restore persisted UI mode flags (Pan override, encoder mode) so

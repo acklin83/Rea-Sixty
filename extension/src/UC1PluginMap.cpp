@@ -965,6 +965,12 @@ void writeInstanceOrdinal_(
 
 } // namespace
 
+namespace {
+InstanceChangedFn g_instanceChangedFn = nullptr;
+} // namespace
+
+void setInstanceChangedCallback(InstanceChangedFn fn) { g_instanceChangedFn = fn; }
+
 int bcInstanceIndex(void* trackRaw)
 {
     return readInstanceOrdinal_(trackRaw, g_bcInstanceFxGuid, /*isBc*/ true);
@@ -977,10 +983,12 @@ int csInstanceIndex(void* trackRaw)
 void setBcInstanceIndex(void* trackRaw, int idx)
 {
     writeInstanceOrdinal_(trackRaw, idx, g_bcInstanceFxGuid, /*isBc*/ true);
+    if (g_instanceChangedFn) g_instanceChangedFn(trackRaw);
 }
 void setCsInstanceIndex(void* trackRaw, int idx)
 {
     writeInstanceOrdinal_(trackRaw, idx, g_csInstanceFxGuid, /*isBc*/ false);
+    if (g_instanceChangedFn) g_instanceChangedFn(trackRaw);
 }
 
 int uf8OnlyInstanceIndex(void* trackRaw)
@@ -1056,6 +1064,24 @@ int instanceIndexForFx(void* trackRaw, int fxIdx)
         if (!b) continue;
         if (isBusCompBinding(b) != isBc) continue;
         if (i == fxIdx) return seen;
+        ++seen;
+    }
+    return -1;
+}
+
+int fxIndexForInstance(void* trackRaw, bool bc, int ordinal)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(trackRaw);
+    if (!tr || ordinal < 0) return -1;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return -1;
+    const int n = TrackFX_GetCount(tr);
+    int seen = 0;
+    char buf[256];
+    for (int i = 0; i < n; ++i) {
+        const bool match = bc ? isBcFx_(tr, i, buf, sizeof(buf))
+                              : isCsFx_(tr, i, buf, sizeof(buf));
+        if (!match) continue;
+        if (seen == ordinal) return i;
         ++seen;
     }
     return -1;

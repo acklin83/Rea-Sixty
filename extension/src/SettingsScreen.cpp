@@ -71,6 +71,10 @@ bool reasixty_grCombineUf8();
 void reasixty_setGrCombineUf8(bool on);
 bool reasixty_grCombineUc1();
 void reasixty_setGrCombineUc1(bool on);
+bool reasixty_insertMarkers();
+void reasixty_setInsertMarkers(bool on);
+int  reasixty_insertMarkerStyle();
+void reasixty_setInsertMarkerStyle(int style);
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -507,7 +511,7 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     }
 
     bool sff = reasixty_stripFollowsFocusedFx();
-    if (ImGui_Checkbox(ctx, "SSL Strip Mode follows focused plugin window",
+    if (ImGui_Checkbox(ctx, "SSL Strip Mode follows focused plug-in window",
                        &sff)) {
         reasixty_setStripFollowsFocusedFx(sff);
     }
@@ -517,8 +521,43 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // the cycle's new target. Off → cycle moves the surface but
     // leaves the floating window pinned to its current FX.
     bool pgfi = reasixty_pluginGuiFollowsInstance();
-    if (ImGui_Checkbox(ctx, "Plugin GUI follows active Instance", &pgfi)) {
+    if (ImGui_Checkbox(ctx, "Plug-in GUI follows active Instance", &pgfi)) {
         reasixty_setPluginGuiFollowsInstance(pgfi);
+    }
+
+    // Mark the active CS / BC plug-in in REAPER's TCP/MCP Inserts list — an
+    // on-screen cue for which insert the surface drives as the Channel Strip
+    // and which as the Bus Comp (and, with multiple, which copy is active).
+    // Writes the FX "renamed_name" (project goes dirty); markers auto-strip
+    // on disable / project switch / unload. Frank 2026-06-12.
+    bool insMark = reasixty_insertMarkers();
+    if (ImGui_Checkbox(ctx, "Mark active CS/BC in Inserts list", &insMark)) {
+        reasixty_setInsertMarkers(insMark);
+    }
+    if (insMark) {
+        static const char* kInsStyle[3] = {
+            "Arrow  \xE2\x96\xB6",
+            "Tag  \xE2\x97\x89" "CS",
+            "Bracket  [*]",
+        };
+        int si = reasixty_insertMarkerStyle();
+        if (si < 0) si = 0; if (si > 2) si = 2;
+        ImGui_Text(ctx, "Marker");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, "##insert_marker_style", kInsStyle[si],
+                             /*flags*/ nullptr)) {
+            for (int i = 0; i < 3; ++i) {
+                bool sel = (si == i);
+                if (ImGui_Selectable(ctx, kInsStyle[i], &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr,
+                                     /*size_h*/ nullptr)) {
+                    reasixty_setInsertMarkerStyle(i);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
     }
 
     // Master track — surface-side handling of the REAPER Master bus.
@@ -687,14 +726,14 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // paths and the UC1 carousel shows no neighbour name past the
     // first/last FX. Frank 2026-05-22.
     bool wrapCycle = reasixty_wrapPluginCycle();
-    if (ImGui_Checkbox(ctx, "Wrap Plugin Cycle", &wrapCycle)) {
+    if (ImGui_Checkbox(ctx, "Wrap Plug-in Cycle", &wrapCycle)) {
         reasixty_setWrapPluginCycle(wrapCycle);
     }
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
     bool engageUf8 = reasixty_cycleEngagesUf8();
     if (ImGui_Checkbox(ctx,
-        "Auto-engage UF8 Plugin Mode for UF8-mapped plug-ins",
+        "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
         &engageUf8))
     {
         reasixty_setCycleEngagesUf8(engageUf8);
@@ -2531,6 +2570,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 // bindings (Frank 2026-05-15).
                 if (n == "instance_cycle" || n == "fx_cycle"
                  || n == "fx_scroll_all"  || n == "instance_scroll_all"
+                 || n == "fx_move"
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
                  || n == "bc_track_scroll_select"
@@ -5222,7 +5262,7 @@ void persistAndReport_()
     g_lastSaveError.clear();
     switch (uf8::user_plugins::save()) {
         case SaveResult::Ok:        break;
-        case SaveResult::Collision: g_lastSaveError = "Save refused: a match collides with a built-in plugin map."; break;
+        case SaveResult::Collision: g_lastSaveError = "Save refused: a match collides with a built-in plug-in map."; break;
         case SaveResult::IoError:   g_lastSaveError = "Save failed: could not write user_plugins.json (see /tmp/rea_sixty.log)."; break;
     }
 }
@@ -9724,7 +9764,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
         g_pickerSelectedIdx = -1;
         if (g_installedFx.empty()) loadInstalledFx_();
-        ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
+        ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup", nullptr);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Delete##fxl_hdr_del", nullptr, nullptr)) {
@@ -11403,7 +11443,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (i) ImGui_SameLine(ctx, nullptr, nullptr);
                 ImGui_BeginGroup(ctx);
                 char hdrLbl[32];
-                snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plugin", bp[i]);
+                snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plug-in", bp[i]);
                 ImGui_Text(ctx, hdrLbl);
                 char inputId[64];
                 snprintf(inputId, sizeof(inputId),
@@ -11749,10 +11789,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     // user has a path to land their first map. The popups below still
     // render so both buttons can open their modals.
     if (cat.maps.empty()) {
-        ImGui_Text(ctx, "FX Learn — User Plugin Maps");
+        ImGui_Text(ctx, "FX Learn — User Plug-in Maps");
         ImGui_Spacing(ctx);
         ImGui_TextWrapped(ctx,
-            "No user plugin maps yet. Teach a third-party plug-in to "
+            "No user plug-in maps yet. Teach a third-party plug-in to "
             "behave as a virtual Channel-Strip or Bus-Comp Instance. "
             "Tick **Default** ( * ) on a map to make it the first-choice "
             "plug-in for SSL Strip Mode.");
@@ -11767,7 +11807,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
             g_pickerSelectedIdx = -1;
             if (g_installedFx.empty()) loadInstalledFx_();
-            ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
+            ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup", nullptr);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Import…##fxl_import_welcome", nullptr, nullptr)) {
@@ -11823,7 +11863,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     // Visible title via "###" so the window bar reads cleanly; the popup ID
     // stays "fxl_new_popup" (text after ###), so the OpenPopup calls above
     // still match. Replaces the old raw-ID title + redundant inner heading.
-    if (ImGui_BeginPopupModal(ctx, "New User Plugin Map###fxl_new_popup",
+    if (ImGui_BeginPopupModal(ctx, "New User Plug-in Map###fxl_new_popup",
                               nullptr, nullptr)) {
         if (g_qlSweepActive) {
             char hdr[320];
@@ -12021,7 +12061,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 return;
             }
             if (user_plugins::collidesWithBuiltin(match)) {
-                g_newError = "That match string collides with a built-in plugin map.";
+                g_newError = "That match string collides with a built-in plug-in map.";
                 return;
             }
             for (const auto& existing : user_plugins::get().maps) {
@@ -12198,7 +12238,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     // The delay lets a same-frame CloseCurrentPopup (skip path) settle
     // before reopening the same popup id — see g_qlOpenNewModalDelay.
     if (g_qlOpenNewModalDelay > 0 && --g_qlOpenNewModalDelay == 0) {
-        ImGui_OpenPopup(ctx, "New User Plugin Map###fxl_new_popup", nullptr);
+        ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup", nullptr);
     }
 
     // ---- Delete confirm popup --------------------------------------------
