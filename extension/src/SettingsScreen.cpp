@@ -2462,6 +2462,15 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // is visible the moment it opens (see SetScrollHereY below).
         int comboFlags = ImGui_ComboFlags_HeightLargest;
         if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), &comboFlags)) {
+            // Pin the popup width by forcing a fixed minimum CONTENT width:
+            // a 0-height invisible spacer of kPopupW px. ReaImGui's combo
+            // popup is AlwaysAutoResize and (unlike desktop ImGui) does not
+            // honour SetNextWindowSizeConstraints here, so without this the
+            // popup tracks the widest visible row and creeps narrower as the
+            // search filters the list down. The spacer makes auto-resize
+            // settle at kPopupW every frame regardless of the match count.
+            // Frank 2026-06-12.
+            ImGui_Dummy(ctx, kPopupW, 0.0);
             // Capture popup-just-opened on the first frame so we can
             // request a scroll-to-selected exactly once per open and
             // reset the search buffer between visits. Reading later in
@@ -9597,6 +9606,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (ImGui_BeginCombo(ctx, "##fxl_map_picker", preview,
                          &mapComboFlags))
     {
+        // Pin popup width via a fixed-width spacer — see drawActionPicker.
+        ImGui_Dummy(ctx, kMapPopupW, 0.0);
         const bool popupJustOpened = ImGui_IsWindowAppearing(ctx);
 
         static char mapSearchBuf[128] = {0};
@@ -10500,6 +10511,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_SetNextWindowSizeConstraints(
                 ctx, kAlComboW, 0.0, kAlComboW, 999999.0);
             if (ImGui_BeginCombo(ctx, comboId, preview, &comboFlags)) {
+                // Pin popup width via a fixed-width spacer — see drawActionPicker.
+                ImGui_Dummy(ctx, kAlComboW, 0.0);
                 const bool justOpened = ImGui_IsWindowAppearing(ctx);
                 static char s_flt[64] = {0};
                 static int  s_fltKey  = -1;
@@ -10712,6 +10725,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         if (ImGui_BeginCombo(ctx, comboId, paramPreview,
                                              &comboFlags))
                         {
+                            // Pin popup width — see drawActionPicker.
+                            ImGui_Dummy(ctx, kAlParamComboW, 0.0);
                             const bool justOpened =
                                 ImGui_IsWindowAppearing(ctx);
                             static char s_paramFilter[64] = {0};
