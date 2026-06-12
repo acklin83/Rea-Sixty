@@ -2549,6 +2549,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "automation_zero_all")
                     return "Tracks";
 
+                if (n.rfind("master_pin_", 0) == 0) return "Master";
+
                 if (n.rfind("brightness_", 0) == 0) return "Brightness";
 
                 if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
@@ -2575,6 +2577,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 "Selection Sets",
                 "Parameter Groups",
                 "Tracks",
+                "Master",
                 "Brightness",
                 "Modifiers",
                 "FX Param",

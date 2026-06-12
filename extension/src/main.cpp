@@ -715,6 +715,14 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 
+// Master-pin: replace one physical UF8 strip with the REAPER Master bus.
+// Driven by the master_pin_strip1 / master_pin_strip8 built-ins and the
+// matching REAPER custom actions. Transient runtime mode (not persisted —
+// cleared on load). A normal-mode feature; masterPinTrack_ yields to
+// Selection Sets / Auto mode / routing / UF8 Plug-in mode. Frank 2026-06-12.
+enum class MasterPin : uint8_t { None = 0, Strip1, Strip8 };
+std::atomic<MasterPin> g_masterPinSlot{MasterPin::None};
+
 inline const char* selectionModeStr(SelectionMode m)
 {
     switch (m) {
@@ -2768,6 +2776,45 @@ struct StripRoute {
     bool        valid        = false;
     bool        active() const { return sendCategory != kRouteNone; }
 };
+
+// True when any V-Pot / Fader send or receive routing mode is engaged.
+inline bool anyRoutingActive_()
+{
+    return g_sendVpotAllIdx.load()  >= 0 || g_sendVpotThisTrack.load()
+        || g_recvVpotAllIdx.load()  >= 0 || g_recvVpotThisTrack.load()
+        || g_sendFaderAllIdx.load() >= 0 || g_sendFaderThisTrack.load()
+        || g_recvFaderAllIdx.load() >= 0 || g_recvFaderThisTrack.load();
+}
+
+// Master-pin override: returns the REAPER Master bus when physical strip
+// `strip` (0..7) is currently Master-pinned, else nullptr. Normal-mode
+// only — yields to Selection Sets, Auto selection mode, routing modes and
+// UF8 Plug-in / FX-Learn mode, all of which repurpose the strips and own
+// the strip layout. Replace semantics: the pinned strip's banked track is
+// hidden (no shift). Frank 2026-06-12.
+inline MediaTrack* masterPinTrack_(int strip)
+{
+    const MasterPin pin = g_masterPinSlot.load();
+    if (pin == MasterPin::None)                      return nullptr;
+    if (g_selsetActive.load() > 0)                   return nullptr;
+    if (g_selectionMode.load() == SelectionMode::Auto) return nullptr;
+    if (g_uf8PluginMode.load())                      return nullptr;
+    if (anyRoutingActive_())                         return nullptr;
+    const int target = (pin == MasterPin::Strip1) ? 0 : 7;
+    return (strip == target) ? GetMasterTrack(nullptr) : nullptr;
+}
+
+// Toggle the Master-pin for strip 1 (which==1) or strip 8 (which==8).
+// Firing the active slot again clears the pin; firing the other slot
+// switches directly. Shared by the built-ins and the REAPER actions.
+void reasixty_toggleMasterPin(int which)
+{
+    const MasterPin want = (which == 1) ? MasterPin::Strip1 : MasterPin::Strip8;
+    const MasterPin cur  = g_masterPinSlot.load();
+    g_masterPinSlot.store(cur == want ? MasterPin::None : want);
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
 
 StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
                       int allIdx, bool thisTrack, int category)
@@ -5512,6 +5559,7 @@ void drainInputQueue()
 
         const int slot = stripToVisibleSlot(e.strip, bankOffset);
         MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
+        if (MediaTrack* mp = masterPinTrack_(e.strip)) tr = mp;  // Master-pin
         // g_visibleTracks caches track pointers between rebuilds. A track
         // deleted since the last rebuild leaves a dangling entry; passing it
         // to TrackFX_GetCount/etc. reads garbage (e.g. a huge FX count that
@@ -8766,6 +8814,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
         }
     }
 
+    if (MediaTrack* mp = masterPinTrack_(slot)) return trackColorRgb(mp);
     if (realSlot < 0 || realSlot >= trackCount) return 0;
     MediaTrack* tr = visibleTrackAt(realSlot);
     if (!tr) return 0;
@@ -8815,6 +8864,12 @@ std::string slotLabelForVisibleSlot(int slot)
 {
     const int trackCount = visibleTrackCount();
     const int realSlot   = stripToVisibleSlot(slot, g_bankOffset.load());
+    if (MediaTrack* mp = masterPinTrack_(slot)) {
+        // CS short name if a Channel Strip is on the Master, else "MASTER"
+        // (Master's P_NAME is empty).
+        if (auto ssl = sslPluginShortName(mp); !ssl.empty()) return ssl;
+        return "MASTER";
+    }
     if (realSlot < 0) {
         // AUTO fill-from-right padding on the left edge — strip shows
         // no track; return empty so the LCD stays blank rather than
@@ -9639,6 +9694,7 @@ void pushZonesForVisibleSlots()
         for (int s = 0; s < 8; ++s) {
             const int rs = stripToVisibleSlot(s, bankOffset);
             MediaTrack* t = visibleTrackAt(rs);
+            if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
             const bool solo = t && GetMediaTrackInfo_Value(t, "I_SOLO")     > 0.5;
             const bool mute = t && GetMediaTrackInfo_Value(t, "B_MUTE")     > 0.5;
             const bool sel  = t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5;
@@ -9665,6 +9721,7 @@ void pushZonesForVisibleSlots()
             for (int s = 0; s < 8; ++s) {
                 const int rs = stripToVisibleSlot(s, bankOffset);
                 MediaTrack* t = visibleTrackAt(rs);
+            if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
                 if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
                     mask |= static_cast<uint16_t>(1u << s);
                 }
@@ -9676,6 +9733,11 @@ void pushZonesForVisibleSlots()
     for (int s = 0; s < 8; ++s) {
         const int realSlot = stripToVisibleSlot(s, bankOffset);
         MediaTrack* tr = visibleTrackAt(realSlot);
+        // Master-pin: this physical strip shows/controls the REAPER Master
+        // bus instead of its banked track (Replace). masterPinTrack_ already
+        // yields in routing / PM / selset / Auto modes, so the routing block
+        // below is naturally inactive whenever this returns non-null.
+        if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;
 
         // Keep the slot→track mapping fresh so GetTouchState can map
         // REAPER's track pointer back to a strip index.
@@ -11517,6 +11579,7 @@ void pushZonesForVisibleSlots()
                 }
             }
             MediaTrack* tr = visibleTrackAt(realSlot);
+            if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;  // Master-pin
             int fxIdx = -1;
             const uf8::LinkSlot* slot = slotForStrip(tr, focused, &fxIdx);
             // Pan-focus is treated as no-V-Pot-focus by the position +
@@ -14533,6 +14596,14 @@ custom_action_register_t g_actionUc1OutGainFader{
     "Rea-Sixty: Toggle UC1 Out-Gain (Mapped \xE2\x86\x94 REAPER Fader)", nullptr,
 };
 int g_cmdUc1OutGainFader = 0;
+custom_action_register_t g_actionMasterPinStrip1{
+    0, "REASIXTY_MASTER_PIN_STRIP1", "Rea-Sixty: Pin Master to UF8 Strip 1", nullptr,
+};
+int g_cmdMasterPinStrip1 = 0;
+custom_action_register_t g_actionMasterPinStrip8{
+    0, "REASIXTY_MASTER_PIN_STRIP8", "Rea-Sixty: Pin Master to UF8 Strip 8", nullptr,
+};
+int g_cmdMasterPinStrip8 = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -14612,6 +14683,8 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
     if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
+    if (command == g_cmdMasterPinStrip1){ reasixty_toggleMasterPin(1); return true; }
+    if (command == g_cmdMasterPinStrip8){ reasixty_toggleMasterPin(8); return true; }
     return false;
 }
 
@@ -17261,6 +17334,25 @@ void registerBindingHandlers()
         "Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)", false
     });
 
+    // Pin the REAPER Master bus to a physical UF8 strip (Replace: hides
+    // that strip's banked track). Toggle: firing the active slot clears it.
+    // Shares reasixty_toggleMasterPin() with the REASIXTY_MASTER_PIN_STRIP1/8
+    // REAPER actions. stateOf drives the bound button's LED.
+    registerBuiltin("master_pin_strip1", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) reasixty_toggleMasterPin(1);
+        },
+        [](int) { return g_masterPinSlot.load() == MasterPin::Strip1; },
+        "Pin Master to UF8 Strip 1", false
+    });
+    registerBuiltin("master_pin_strip8", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) reasixty_toggleMasterPin(8);
+        },
+        [](int) { return g_masterPinSlot.load() == MasterPin::Strip8; },
+        "Pin Master to UF8 Strip 8", false
+    });
+
     // ---- Selection-Mode toggles --------------------------------------
     // Four mutually-exclusive modes; firing a mode while it is already
     // active returns to Norm. Setting a different mode while another is
@@ -19329,6 +19421,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
+    g_cmdMasterPinStrip1 = plugin_register("custom_action", &g_actionMasterPinStrip1);
+    g_cmdMasterPinStrip8 = plugin_register("custom_action", &g_actionMasterPinStrip8);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into
