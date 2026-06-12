@@ -1880,6 +1880,16 @@ std::atomic<bool> g_selFollowsColor{true};
 // behaviour). Controlled via Settings → Device.
 std::atomic<bool> g_grAnyFx{true};
 
+// When true (and g_grAnyFx), the GR meter SUMS the GainReduction_dB of
+// every compressor on the channel (CS + ReaComp + …) — in-series GR adds
+// in dB, so the meter reads the channel's total reduction. When false,
+// a single source is shown (the CS if present, else the first GR-exposing
+// FX). Default off (preserves the single-source behaviour). Separate flags
+// for the UF8 CS-GR strip and the UC1 Comp meter so each surface can be
+// set independently. Frank 2026-06-12. Settings → Device → GR meter source.
+std::atomic<bool> g_grCombineUf8{false};
+std::atomic<bool> g_grCombineUc1{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2161,6 +2171,12 @@ void loadBrightness()
     const char* grAny = GetExtState("rea_sixty", "gr_any_fx");
     if (grAny && *grAny) {
         g_grAnyFx.store(std::atoi(grAny) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "gr_combine_uf8"); v && *v) {
+        g_grCombineUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "gr_combine_uc1"); v && *v) {
+        g_grCombineUc1.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -14070,10 +14086,12 @@ void onTimer()
                     // 2026-05-06: ReaComp / FabFilter Pro-C2 etc.
                     // should still drive the UF8 strip).
                     bool gotIt = false;
-                    double gr = 0.0;
+                    double gr = 0.0;  // accumulated magnitude (dB)
                     const double* ledsCal = nullptr;  // per-breakpoint correction
+                    int csFxIdx = -1;
                     if (b.channelMap && b.channelFxIdx >= 0) {
                         ledsCal  = b.channelGrLedsCal;
+                        csFxIdx  = b.channelFxIdx;
                         if (b.channelGrParam >= 0) {
                             // Read the plug-in's FORMATTED value
                             // ("3.45 dB") rather than the raw param —
@@ -14084,12 +14102,12 @@ void onTimer()
                                     tr, b.channelFxIdx, b.channelGrParam,
                                     fbuf, sizeof(fbuf)) && fbuf[0])
                             {
-                                gr = std::atof(fbuf);
+                                gr = std::fabs(std::atof(fbuf));
                                 gotIt = true;
                             } else {
                                 double mn = 0.0, mx = 0.0;
-                                gr = TrackFX_GetParam(tr, b.channelFxIdx,
-                                                      b.channelGrParam, &mn, &mx);
+                                gr = std::fabs(TrackFX_GetParam(tr, b.channelFxIdx,
+                                                      b.channelGrParam, &mn, &mx));
                                 gotIt = true;
                             }
                         } else {
@@ -14097,29 +14115,45 @@ void onTimer()
                             if (TrackFX_GetNamedConfigParm(
                                     tr, b.channelFxIdx, "GainReduction_dB",
                                     buf, sizeof(buf))) {
-                                gr = std::atof(buf);
+                                gr = std::fabs(std::atof(buf));
                                 gotIt = true;
                             }
                         }
                     }
-                    if (!gotIt && g_grAnyFx.load()) {
+                    if (g_grAnyFx.load()) {
                         const int fxCount = TrackFX_GetCount(tr);
-                        for (int fx = 0; fx < fxCount; ++fx) {
-                            // Never poll an Acustica (Acqua) plug-in we
-                            // weren't explicitly mapped to — its engine
-                            // faults under host config-parm polling from
-                            // this thread (access violation in the .vst3).
-                            // Twin of the guarded walk in UC1Surface; this
-                            // UF8 CS-GR copy was missed by the original
-                            // fix (e95f41a). See fxIsAcustica.
-                            if (uf8::fxIsAcustica(tr, fx)) continue;
-                            char buf[64] = {0};
-                            if (!TrackFX_GetNamedConfigParm(
-                                    tr, fx, "GainReduction_dB",
-                                    buf, sizeof(buf))) continue;
-                            gr = std::atof(buf);
-                            gotIt = true;
-                            break;
+                        if (g_grCombineUf8.load()) {
+                            // Combined channel GR: add every OTHER compressor
+                            // on the chain exposing the PreSonus
+                            // GainReduction_dB convention to the CS reading
+                            // above (csFxIdx already counted). In-series GR
+                            // sums in dB, so [ReaComp → SSL CS] reads the
+                            // total reduction, not just the CS. Frank
+                            // 2026-06-12. Acustica skipped — its engine faults
+                            // under host config-parm polling (see fxIsAcustica).
+                            for (int fx = 0; fx < fxCount; ++fx) {
+                                if (fx == csFxIdx) continue;
+                                if (uf8::fxIsAcustica(tr, fx)) continue;
+                                char buf[64] = {0};
+                                if (!TrackFX_GetNamedConfigParm(
+                                        tr, fx, "GainReduction_dB",
+                                        buf, sizeof(buf))) continue;
+                                gr += std::fabs(std::atof(buf));
+                                gotIt = true;
+                            }
+                        } else if (!gotIt) {
+                            // Single source: first FX on the chain exposing
+                            // GainReduction_dB (legacy behaviour when no CS).
+                            for (int fx = 0; fx < fxCount; ++fx) {
+                                if (uf8::fxIsAcustica(tr, fx)) continue;
+                                char buf[64] = {0};
+                                if (!TrackFX_GetNamedConfigParm(
+                                        tr, fx, "GainReduction_dB",
+                                        buf, sizeof(buf))) continue;
+                                gr = std::fabs(std::atof(buf));
+                                gotIt = true;
+                                break;
+                            }
                         }
                     }
                     if (gotIt) {
@@ -15141,6 +15175,20 @@ void reasixty_setGrAnyFx(bool enabled)
 {
     g_grAnyFx.store(enabled);
     SetExtState("rea_sixty", "gr_any_fx", enabled ? "1" : "0", true);
+}
+
+bool reasixty_grCombineUf8() { return g_grCombineUf8.load(); }
+void reasixty_setGrCombineUf8(bool on)
+{
+    g_grCombineUf8.store(on);
+    SetExtState("rea_sixty", "gr_combine_uf8", on ? "1" : "0", true);
+}
+
+bool reasixty_grCombineUc1() { return g_grCombineUc1.load(); }
+void reasixty_setGrCombineUc1(bool on)
+{
+    g_grCombineUc1.store(on);
+    SetExtState("rea_sixty", "gr_combine_uc1", on ? "1" : "0", true);
 }
 
 // Per-tick device calibration accessors (Settings → Device).

@@ -71,6 +71,7 @@ int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+bool reasixty_grCombineUc1();  // UC1 combined-GR toggle (Settings → Device)
 bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Device)
 // UC1 Out-Gain → REAPER fader toggle (main.cpp). When on, the Out-Gain
 // pot drives REAPER track volume instead of the SSL CS Fader Level param.
@@ -3715,25 +3716,43 @@ void UC1Surface::pollGainReduction_()
     MediaTrack* csTr = static_cast<MediaTrack*>(focusedTrack_);
     if (csTr) {
         UC1Bindings b = lookupBindingsOnTrack(csTr);
+        int csFxIdx = -1;
         if (b.channelMap) {
             csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
                               b.channelGrLedsCal, uf8::kLedsBpDb, uf8::kLedsBpCount);
-        } else if (::reasixty_grAnyFx()) {
+            csFxIdx = b.channelFxIdx;
+        }
+        if (::reasixty_grAnyFx()) {
             const int fxCount = TrackFX_GetCount(csTr);
-            for (int fx = 0; fx < fxCount; ++fx) {
-                // Never poll an Acustica (Acqua) plug-in we weren't
-                // explicitly mapped to — its engine faults under host
-                // config-parm polling from this thread. See fxIsAcustica.
-                if (uf8::fxIsAcustica(csTr, fx)) continue;
-                char buf[64] = {0};
-                if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
-                                                buf, sizeof(buf))) {
-                    continue;
+            // Never poll an Acustica (Acqua) plug-in we weren't explicitly
+            // mapped to — its engine faults under host config-parm polling
+            // from this thread. See fxIsAcustica.
+            if (::reasixty_grCombineUc1()) {
+                // Combined channel GR: add every OTHER compressor exposing
+                // GainReduction_dB to the CS reading (csFxIdx already
+                // counted). In-series GR sums in dB. Frank 2026-06-12.
+                for (int fx = 0; fx < fxCount; ++fx) {
+                    if (fx == csFxIdx) continue;
+                    if (uf8::fxIsAcustica(csTr, fx)) continue;
+                    char buf[64] = {0};
+                    if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
+                                                    buf, sizeof(buf))) continue;
+                    double v = std::atof(buf);
+                    if (v < 0) v = -v;
+                    csCompGr += static_cast<float>(v);
                 }
-                double v = std::atof(buf);
-                if (v < 0) v = -v;
-                csCompGr = static_cast<float>(v);
-                break;
+            } else if (!b.channelMap) {
+                // Single source: first GR-exposing FX (legacy, no CS).
+                for (int fx = 0; fx < fxCount; ++fx) {
+                    if (uf8::fxIsAcustica(csTr, fx)) continue;
+                    char buf[64] = {0};
+                    if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
+                                                    buf, sizeof(buf))) continue;
+                    double v = std::atof(buf);
+                    if (v < 0) v = -v;
+                    csCompGr = static_cast<float>(v);
+                    break;
+                }
             }
         }
     }
