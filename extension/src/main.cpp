@@ -18692,8 +18692,8 @@ void registerBindingHandlers()
             nullptr, label, false
         };
     };
-    registerBuiltin("zoom_up",     zoomBuiltin(uf8::Uf8GlobalLed::ZoomUp,     40112, "Zoom in vertically"));
-    registerBuiltin("zoom_down",   zoomBuiltin(uf8::Uf8GlobalLed::ZoomDown,   40111, "Zoom out vertically"));
+    registerBuiltin("zoom_up",     zoomBuiltin(uf8::Uf8GlobalLed::ZoomUp,     40111, "Zoom in vertically"));
+    registerBuiltin("zoom_down",   zoomBuiltin(uf8::Uf8GlobalLed::ZoomDown,   40112, "Zoom out vertically"));
     registerBuiltin("zoom_left",   zoomBuiltin(uf8::Uf8GlobalLed::ZoomLeft,   1011,  "Zoom out horizontally"));
     registerBuiltin("zoom_right",  zoomBuiltin(uf8::Uf8GlobalLed::ZoomRight,  1012,  "Zoom in horizontally"));
     registerBuiltin("zoom_center", zoomBuiltin(uf8::Uf8GlobalLed::ZoomCenter, 40295, "Zoom to fit project"));
