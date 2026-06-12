@@ -1076,6 +1076,16 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
         uf8::bindings::setBinding(
             layer, s_bindingCtxBtn, s_bindingClipboard);
     }
+
+    ImGui_Separator(ctx);
+
+    // Reset only the right-clicked binding to its factory default.
+    bool resetEnabled = s_bindingCtxBtn != uf8::bindings::ButtonId::None;
+    if (ImGui_MenuItem(ctx, "Reset binding to factory default", nullptr,
+                       nullptr, &resetEnabled))
+    {
+        uf8::bindings::resetBindingToDefault(layer, s_bindingCtxBtn);
+    }
     ImGui_EndPopup(ctx);
 }
 

@@ -2923,6 +2923,29 @@ void clearBinding(int layer, ButtonId id)
     persistLocked_();
 }
 
+void resetBindingToDefault(int layer, ButtonId id)
+{
+    if (layer < 0 || layer > 2 || id == ButtonId::None) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    // Seed a throwaway factory config and copy out just this one
+    // button's default. Heap-allocate — see load() for the
+    // sizeof(Config) stack-overflow rationale (Windows).
+    auto tmpPtr = std::make_unique<Config>();
+    Config& tmp = *tmpPtr;
+    seedFactoryDefaults_(tmp);
+    auto& defMap = tmp.layers[layer].bindings;
+    auto it = defMap.find(id);
+    if (it != defMap.end()) {
+        g_cfg.layers[layer].bindings[id] = it->second;
+    } else {
+        // No factory entry for this button → erase so it returns to
+        // the "untouched" state (legacy MCU passthrough / table
+        // default look), matching clearBinding.
+        g_cfg.layers[layer].bindings.erase(id);
+    }
+    persistLocked_();
+}
+
 bool dispatchEncoder(ButtonId id, int stepDelta)
 {
     if (id == ButtonId::None || stepDelta == 0) return false;

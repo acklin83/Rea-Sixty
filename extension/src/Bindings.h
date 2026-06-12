@@ -583,6 +583,12 @@ void setBinding(int layer, ButtonId id, const Binding& bd);
 // of that button falls through to legacy MCU passthrough on that layer.
 void clearBinding(int layer, ButtonId id);
 
+// Reset a single binding to its factory default and persist. If the
+// button has a factory entry on this layer it is restored verbatim;
+// if it has none, the binding is erased (returns to the untouched
+// passthrough state). Scope is exactly this one (layer, id).
+void resetBindingToDefault(int layer, ButtonId id);
+
 // Per-layer settings.
 void setLayerName(int layer, const std::string& name);
 void setLayerVpotDefaultMode(int layer, const std::string& mode);
