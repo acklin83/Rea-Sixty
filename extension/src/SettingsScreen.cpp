@@ -80,6 +80,8 @@ bool reasixty_touchSelectsChannel();
 void reasixty_setTouchSelectsChannel(bool on);
 bool reasixty_uc1ShowMasterAsTrack0();
 void reasixty_setUc1ShowMasterAsTrack0(bool on);
+bool reasixty_masterPinShift();
+void reasixty_setMasterPinShift(bool shift);
 bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_autoFillFromRight();
@@ -499,6 +501,27 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool showMaster = reasixty_uc1ShowMasterAsTrack0();
     if (ImGui_Checkbox(ctx, "Show Master as Track 0 on UC1", &showMaster)) {
         reasixty_setUc1ShowMasterAsTrack0(showMaster);
+    }
+
+    // "Pin Master to UF8 Strip 1/8" (bindable built-ins / REAPER actions)
+    // behaviour. Replace: the pinned strip hides its banked track. Shift:
+    // the regular tracks bank over the remaining 7 strips so none is hidden
+    // (bank step + clamp drop to 7 while a pin is live). BeginCombo, never
+    // ImGui_Combo with \0-items (renders empty in ReaImGui v0.10).
+    static const char* kPinLabels[2] = { "Replace strip", "Shift banking" };
+    int pinIdx = reasixty_masterPinShift() ? 1 : 0;
+    if (ImGui_BeginCombo(ctx, "Pinned Master", kPinLabels[pinIdx],
+                         /*flags*/ nullptr)) {
+        for (int i = 0; i < 2; ++i) {
+            bool sel = (pinIdx == i);
+            if (ImGui_Selectable(ctx, kPinLabels[i], &sel,
+                                 /*flags*/ nullptr,
+                                 /*size_w*/ nullptr,
+                                 /*size_h*/ nullptr)) {
+                reasixty_setMasterPinShift(i == 1);
+            }
+        }
+        ImGui_EndCombo(ctx);
     }
 
     // Pin plug-in GUI position: drag a plug-in window where you want it,

@@ -722,6 +722,15 @@ std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 // Selection Sets / Auto mode / routing / UF8 Plug-in mode. Frank 2026-06-12.
 enum class MasterPin : uint8_t { None = 0, Strip1, Strip8 };
 std::atomic<MasterPin> g_masterPinSlot{MasterPin::None};
+// Master-pin Replace vs Shift (Settings → Device → Master track). false =
+// Replace (pinned strip hides its banked track). true = Shift (regular
+// tracks bank over the remaining 7 strips, no track hidden). Persisted.
+std::atomic<bool> g_masterPinShift{false};
+// Forward decls — defined alongside masterPinTrack_ (needs routing atomics
+// declared further down), but used earlier by stripToVisibleSlot + the
+// bank-offset clamp in rebuildVisibleTrackList.
+int masterPinnedStrip_();
+int effectiveStripCount_();
 
 inline const char* selectionModeStr(SelectionMode m)
 {
@@ -844,6 +853,22 @@ inline MediaTrack* visibleTrackAt(int idx) {
 // negative slots, so existing null-check callers stay correct without
 // extra guards.
 inline int stripToVisibleSlot(int strip, int bankOffset) {
+    // Master-pin Shift: the pinned strip is reserved for the Master bus and
+    // the regular tracks bank over the remaining 7 strips so none is hidden.
+    // Master wins over TCP-pin, so this is checked first. The pinned strip
+    // itself returns -1 (its index is unused — masterPinTrack_ overrides the
+    // track at every call site); the others compact one slot toward the
+    // reserved end. Strip1 (mps=0): strips 1..7 → bankOffset+(strip-1).
+    // Strip8 (mps=7): strips 0..6 → bankOffset+strip (unchanged). Replace
+    // mode skips this (Shift off) and relies on masterPinTrack_ alone.
+    if (g_masterPinShift.load()) {
+        const int mps = masterPinnedStrip_();
+        if (mps >= 0) {
+            if (strip == mps) return -1;
+            const int eff = (mps == 0) ? (strip - 1) : strip;
+            return eff + bankOffset;
+        }
+    }
     // Pinned-sticky: the first g_pinnedCount entries of g_visibleTracks
     // are the TCP-pinned tracks (rebuildVisibleTrackList sorts them to
     // the front). When sticky is active they occupy strips 0..(P-1)
@@ -1063,7 +1088,8 @@ void rebuildVisibleTrackList() {
     // user-intended positions and stay untouched. Frank 2026-05-16.
     const int vc     = static_cast<int>(g_visibleTracks.size());
     const int curOff = g_bankOffset.load();
-    const int maxOff = (vc > 8) ? vc - 8 : 0;
+    const int esc    = effectiveStripCount_();
+    const int maxOff = (vc > esc) ? vc - esc : 0;
     if (curOff >= vc && curOff > maxOff) {
         g_bankOffset.store(maxOff);
         g_bankDirty.store(true);
@@ -2188,6 +2214,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "uc1_master_track0"); v && *v) {
         g_uc1ShowMasterAsTrack0.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "master_pin_shift"); v && *v) {
+        g_masterPinShift.store(std::atoi(v) != 0);
+    }
     const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
     if (autoHide && *autoHide) {
         g_autoHideReadTrim.store(std::atoi(autoHide) != 0);
@@ -2786,22 +2815,36 @@ inline bool anyRoutingActive_()
         || g_recvFaderAllIdx.load() >= 0 || g_recvFaderThisTrack.load();
 }
 
-// Master-pin override: returns the REAPER Master bus when physical strip
-// `strip` (0..7) is currently Master-pinned, else nullptr. Normal-mode
-// only — yields to Selection Sets, Auto selection mode, routing modes and
-// UF8 Plug-in / FX-Learn mode, all of which repurpose the strips and own
-// the strip layout. Replace semantics: the pinned strip's banked track is
-// hidden (no shift). Frank 2026-06-12.
-inline MediaTrack* masterPinTrack_(int strip)
+// Physical strip (0 or 7) the Master is currently pinned to, or -1 when no
+// pin is live. Normal-mode only — yields to Selection Sets, Auto selection
+// mode, routing modes and UF8 Plug-in / FX-Learn mode, all of which
+// repurpose the strips and own the strip layout. Frank 2026-06-12.
+int masterPinnedStrip_()
 {
     const MasterPin pin = g_masterPinSlot.load();
-    if (pin == MasterPin::None)                      return nullptr;
-    if (g_selsetActive.load() > 0)                   return nullptr;
-    if (g_selectionMode.load() == SelectionMode::Auto) return nullptr;
-    if (g_uf8PluginMode.load())                      return nullptr;
-    if (anyRoutingActive_())                         return nullptr;
-    const int target = (pin == MasterPin::Strip1) ? 0 : 7;
-    return (strip == target) ? GetMasterTrack(nullptr) : nullptr;
+    if (pin == MasterPin::None)                        return -1;
+    if (g_selsetActive.load() > 0)                     return -1;
+    if (g_selectionMode.load() == SelectionMode::Auto) return -1;
+    if (g_uf8PluginMode.load())                        return -1;
+    if (anyRoutingActive_())                           return -1;
+    return (pin == MasterPin::Strip1) ? 0 : 7;
+}
+
+// Master-pin override: the REAPER Master bus when physical strip `strip`
+// is the pinned strip, else nullptr. Drives BOTH Replace and Shift — in
+// both modes the pinned strip shows/controls the Master.
+inline MediaTrack* masterPinTrack_(int strip)
+{
+    return (strip == masterPinnedStrip_()) ? GetMasterTrack(nullptr) : nullptr;
+}
+
+// Number of physical strips available for banked (regular) tracks: 7 when
+// a Master-pin is live AND Shift is on (one strip reserved for Master),
+// else 8. Drives the bank step + clamp; == 8 in every non-Shift scenario,
+// so existing banking maths is byte-identical when the feature is off.
+int effectiveStripCount_()
+{
+    return (masterPinnedStrip_() >= 0 && g_masterPinShift.load()) ? 7 : 8;
 }
 
 // Toggle the Master-pin for strip 1 (which==1) or strip 8 (which==8).
@@ -3380,7 +3423,8 @@ void applyBankByOne_(int step)
 {
     if (step == 0) return;
     const int trackCount = visibleTrackCount();
-    const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
+    const int esc        = effectiveStripCount_();
+    const int maxStart   = trackCount > esc ? trackCount - esc : 0;
     int next = g_bankOffset.load() + step;
     if (next < 0)        next = 0;
     if (next > maxStart) next = maxStart;
@@ -4801,7 +4845,8 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
     } else {
         // Bucket snap: only shift if the selection fell outside the
         // current 8-wide window.
-        if (idx < bank || idx >= bank + 8) bank = (idx / 8) * 8;
+        const int esc = effectiveStripCount_();
+        if (idx < bank || idx >= bank + esc) bank = (idx / esc) * esc;
     }
     if (bank != g_bankOffset.exchange(bank)) g_bankDirty.store(true);
 }
@@ -15192,6 +15237,19 @@ void reasixty_setUc1ShowMasterAsTrack0(bool on)
     SetExtState("rea_sixty", "uc1_master_track0", on ? "1" : "0", true);
 }
 
+bool reasixty_masterPinShift()
+{
+    return g_masterPinShift.load();
+}
+
+void reasixty_setMasterPinShift(bool shift)
+{
+    g_masterPinShift.store(shift);
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+    SetExtState("rea_sixty", "master_pin_shift", shift ? "1" : "0", true);
+}
+
 bool reasixty_autoHideReadTrim()
 {
     return g_autoHideReadTrim.load();
@@ -18719,8 +18777,9 @@ void registerBindingHandlers()
             if (tryFaderBankNav(-1)) return;   // UF8 Plugin Mode fader-bank
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
-            const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
-            int next = g_bankOffset.load() - 8;
+            const int esc        = effectiveStripCount_();
+            const int maxStart   = trackCount > esc ? trackCount - esc : 0;
+            int next = g_bankOffset.load() - esc;
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
@@ -18734,8 +18793,9 @@ void registerBindingHandlers()
             if (tryFaderBankNav(+1)) return;
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
-            const int maxStart   = trackCount > 8 ? trackCount - 8 : 0;
-            int next = g_bankOffset.load() + 8;
+            const int esc        = effectiveStripCount_();
+            const int maxStart   = trackCount > esc ? trackCount - esc : 0;
+            int next = g_bankOffset.load() + esc;
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
