@@ -10731,6 +10731,8 @@ void pushZonesForVisibleSlots()
                  || userBoundSel   >= 0);
             if (userStripActive && !stripHasUserFunction) {
                 chan = "  ";
+            } else if (tr == GetMasterTrack(nullptr)) {
+                chan = "  ";   // Master has no channel number
             } else {
                 const int trkNo = static_cast<int>(
                     GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
@@ -10983,6 +10985,13 @@ void pushZonesForVisibleSlots()
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
                 n = name;
+            }
+            if (n.empty() && !blankInUserStripMode
+                && tr == GetMasterTrack(nullptr)) {
+                // Master-pin strip: Master's P_NAME is empty and its
+                // IP_TRACKNUMBER is -1, which would fall through to the
+                // "CH <realSlot+1>" path below. Show "MASTER" instead.
+                n = "MASTER";
             }
             if (n.empty() && !blankInUserStripMode) {
                 // Fallback name for unnamed tracks — use REAPER's
