@@ -174,7 +174,7 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of nine modes. Switch with the corresponding `encoder_*` builtin. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of eleven modes. Switch with the corresponding `encoder_*` builtin. The current mode persists across REAPER restarts.
 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
@@ -186,6 +186,8 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | Last Touched Param | Step the last-touched REAPER param ± | Fine increments |
 | Instance (Instance Cycle) | Walk Instances on the focused track | Same dispatch as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
 | FX Cycle | Walk every FX on the focused track | Focused-track scope |
+| Cycle Instance (across tracks) | Walk Instances on the focused track, then cross to the next track | One detent per track boundary; lands on the neighbour's first (fwd) / last (back) Instance. Empty neighbour is still selected (dead detent). Hard-stops at the project edge, no within-track wrap. |
+| Cycle FX (across tracks) | Walk every FX on the focused track, then cross to the next track | Same cross-track behaviour as above, for all FX. SSL 360°-native feel. |
 | Selset Cycle | Step through populated Selection Set slots (off → 1 → 2 … → off) | Skips empty slots |
 
 `Shift` + rotation re-banks ±1 strip in every mode (alias for Bank by 1ch).
@@ -399,7 +401,7 @@ Channel section (lowest row of buttons):
 
 When SSL Strip Mode is engaged on the UF8, the **Channel Fader Level** parameter is what the UF8 motorised faders drive.
 
-The Output Gain knob can be flipped to drive **REAPER's track volume fader** instead of the CS Fader Level parameter — see *Native actions → Surface-state toggles → UC1 Out-Gain to REAPER fader*. Handy when the track has no SSL channel strip but you still want a hardware volume knob; the LED ring and readout follow the track fader while engaged.
+The Output Gain knob can be flipped to drive **REAPER's track volume fader** instead of the CS Fader Level parameter — see *Native actions → Surface-state toggles → UC1 Out-Gain to REAPER fader*. Handy when the track has no SSL channel strip but you still want a hardware volume knob; the LED ring and readout follow the track fader while engaged. When the UC1 is focused on the **Master** track and there is no Channel Strip on it, the knob drives the Master fader automatically — no toggle needed (see *Master track*).
 
 ## Bus Compressor section (7 knobs + 1 button)
 
@@ -487,6 +489,15 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | Plugin GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. |
 | Pin plug-in GUI position | Capture an XY coordinate (drag a window, click *Capture current*). Every subsequent managed `TrackFX_Show` snaps the window to that pin. Alternatively *Center on Screen*. |
 | Pin FX-chain GUI position | Same pattern for FX-chain windows. Title matching looks for "FX:" on macOS. |
+
+### Master track
+
+Surface-side handling of the REAPER Master bus. See **Master track** (own chapter) for the full behaviour.
+
+| Control | Effect |
+|---|---|
+| Show Master as Track 0 on UC1 | The UC1 CHANNEL encoder can scroll left past track 1 onto the Master as a virtual "track 0". UC1-only — the Master never appears on the UF8 strips through this toggle. Default off. |
+| Pinned Master (combo) | How the *Pin Master to UF8 Strip 1 / 8* actions lay the strip out. *Replace strip* (default) — the pinned strip becomes the Master and hides whatever track was banked there. *Shift banking* — the regular tracks bank over the remaining 7 strips so none is hidden (the bank step + clamp drop to 7 while a pin is live). |
 
 ### Metering
 
@@ -584,7 +595,7 @@ For a regular button, the editor exposes:
 
 ### Right-click context menu
 
-Right-clicking a button in the schematic opens Copy / Paste / Clear options for that binding.
+Right-clicking a button in the schematic opens Copy / Paste / Clear options for that binding, plus **Reset binding to factory default** — restores just that one control's baked-in factory binding, leaving every other binding untouched (unlike the *Reset to factory defaults* in the About pane, which wipes everything).
 
 ### Export / Import / Reset
 
@@ -973,6 +984,8 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **`encoder_last_param`** — step the last-touched REAPER parameter ±.
 - **`encoder_instance`** — Instance Cycle on the focused track.
 - **`encoder_fx_cycle`** — FX Cycle (every FX) on the focused track.
+- **`encoder_instance_scroll_all`** — Cycle Instance across tracks: Instances on the focused track, then one detent per track boundary onto the neighbour's first/last Instance. Hard-stop at the project edge.
+- **`encoder_fx_scroll_all`** — Cycle FX across tracks: same cross-track behaviour for every FX.
 - **`encoder_selset_cycle`** — step through populated Selection Set slots (off → 1 → 2 → … → off).
 - **`encoder_mode_dispatch`** — rotation handler that routes to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
@@ -982,6 +995,8 @@ Bind these to a non-CHANNEL rotation (UC1 Encoder 2, footswitches with rotation,
 
 - **`instance_cycle`** — Instance Cycle on focused track (rotation = step ±).
 - **`fx_cycle`** — FX Cycle on focused track.
+- **`instance_scroll_all`** — Cycle Instance across tracks (direct): Instances on the focused track, then cross to the adjacent track at the edge.
+- **`fx_scroll_all`** — Cycle FX across tracks (direct): every FX, crossing to the adjacent track at the edge.
 - **`select_relative`** — step REAPER track selection ±1.
 - **`track_scroll`** — visible-track scroll + select + UC1 focused-track follow + force CS-domain focus. Like `select_relative` but UC1-aware. Default binding on UC1 Encoder 1.
 - **`playhead_nudge`** — playhead nudge ±.
@@ -1093,6 +1108,11 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 - **`tracks_arm_all`** — toggle arm on every track in the project. State is "all armed" ↔ "all unarmed"; mixed state arms everything first, then needs a second press to unarm all.
 
+## Master track
+
+- **`master_pin_strip1`** — pin the REAPER Master bus onto UF8 strip 1 (toggle). Bindings category **Master**; also the REAPER action *Rea-Sixty: Pin Master to UF8 Strip 1*.
+- **`master_pin_strip8`** — pin the Master onto UF8 strip 8 (toggle). REAPER action *Rea-Sixty: Pin Master to UF8 Strip 8*. See *Master track* for Replace vs Shift layout and the mode interactions.
+
 ## Brightness
 
 Each press steps one level (Dark → Dim → Half → Bright → Full). The "Both" variants step LEDs + LCDs in lockstep.
@@ -1198,6 +1218,34 @@ Strip colour bar shows the input channel name ("Mic 1", "Line 3") instead of the
 Hardware inputs only — MIDI / multichannel inputs leave the original colour-bar label intact.
 
 The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalReaper isn't installed the integration silently no-ops.
+
+\newpage
+
+# Master track
+
+The REAPER Master bus isn't a normal track — it's excluded from banking and has no track number. Rea-Sixty surfaces it in four places. A Channel Strip on the Master is treated exactly like one on any track (it drops into SSL Strip Mode automatically), and its scribble reads **MASTER**.
+
+## On the UC1
+
+- **Bus Compressor on the Master** — a BC plug-in inserted on the Master always shows in the UC1's Bus Comp context, sitting at the **far left** of the BC carousel (the Master is "track 0"). It also becomes the default BC anchor when no other track carries a BC. This is always on; it does not depend on the *Show Master as Track 0* toggle.
+- **Show Master as Track 0 on UC1** (Settings → Device → Master track) — with this on, rotating the CHANNEL encoder left past track 1 lands on the Master, so the channel-strip section drives the Master bus. Rotate right to return to track 1. UC1-only.
+- **Out-Gain → Master fader** — when the UC1 is focused on the Master and there is **no** Channel Strip on it, the **Out-Gain** knob automatically drives REAPER's Master fader (readout reads *Mst Vol*). No toggle needed — if there's no CS Fader-Level parameter to ride, the knob falls back to master volume. (With a CS on the Master, Out-Gain rides the CS Fader Level as usual; the global *UC1 Out-Gain → REAPER fader* toggle still forces track volume on any track.)
+
+## On the UF8
+
+Two bindable actions pin the Master onto a physical UF8 strip — fader, V-Pot (pan), Solo/Cut/Sel LEDs, colour bar and the **MASTER** scribble all follow the Master bus:
+
+- **Pin Master to UF8 Strip 1** (`master_pin_strip1`)
+- **Pin Master to UF8 Strip 8** (`master_pin_strip8`)
+
+Each is a toggle (press again to un-pin; pinning the other strip switches directly). Both are bindable from the Bindings picker (category **Master**) **and** exposed as REAPER actions *Rea-Sixty: Pin Master to UF8 Strip 1 / 8* for the keyboard / toolbar — handy on the UC1, which has no spare buttons.
+
+The **Pinned Master** combo (Settings → Device → Master track) chooses the layout:
+
+- **Replace strip** (default) — the pinned strip becomes the Master and hides the track that was banked there.
+- **Shift banking** — the regular tracks bank over the remaining 7 strips so none is hidden; the bank step and clamp drop to 7 while a pin is live.
+
+The pin is a **normal-mode** feature: it steps aside automatically when a Selection Set, AUTO selection mode, a Send/Receive routing mode, or UF8 Plug-in Mode is active (all of which repurpose the strips), and resumes when you leave them. The Master wins over a TCP-pinned track on the same strip. The pin is not persisted across REAPER restarts.
 
 \newpage
 
