@@ -78,6 +78,8 @@ bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
 bool reasixty_touchSelectsChannel();
 void reasixty_setTouchSelectsChannel(bool on);
+bool reasixty_uc1ShowMasterAsTrack0();
+void reasixty_setUc1ShowMasterAsTrack0(bool on);
 bool reasixty_autoHideReadTrim();
 void reasixty_setAutoHideReadTrim(bool hide);
 bool reasixty_autoFillFromRight();
@@ -482,6 +484,21 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool pgfi = reasixty_pluginGuiFollowsInstance();
     if (ImGui_Checkbox(ctx, "Plugin GUI follows active Instance", &pgfi)) {
         reasixty_setPluginGuiFollowsInstance(pgfi);
+    }
+
+    // Master track — surface-side handling of the REAPER Master bus.
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Master track");
+    ImGui_Separator(ctx);
+
+    // CHANNEL encoder scrolls onto the Master track (IP_TRACKNUMBER 0)
+    // before track 1, as a virtual "track 0". UC1-only — never appears on
+    // the UF8 strips. A Bus Compressor on the Master shows in the BC
+    // context independently of this toggle.
+    bool showMaster = reasixty_uc1ShowMasterAsTrack0();
+    if (ImGui_Checkbox(ctx, "Show Master as Track 0 on UC1", &showMaster)) {
+        reasixty_setUc1ShowMasterAsTrack0(showMaster);
     }
 
     // Pin plug-in GUI position: drag a plug-in window where you want it,

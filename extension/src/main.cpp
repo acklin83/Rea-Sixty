@@ -1887,6 +1887,11 @@ std::atomic<bool> g_trackSelFollowsParam{false};
 // the channel selects so UC1 follows.
 std::atomic<bool> g_touchSelectsChannel{false};
 
+// When true, the UC1 CHANNEL encoder can scroll onto the REAPER Master
+// track as a virtual "track 0", left of the first project track. UC1-only;
+// never injected into the shared visibleTrack list. Frank 2026-06-12.
+std::atomic<bool> g_uc1ShowMasterAsTrack0{false};
+
 // When true AND SSL Strip Mode is active, the strips follow whichever
 // plugin window the user focuses in REAPER (GetFocusedFX2 poll).
 std::atomic<bool> g_stripFollowsFocusedFx{false};
@@ -2171,6 +2176,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "touch_selects_channel"); v && *v) {
         g_touchSelectsChannel.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uc1_master_track0"); v && *v) {
+        g_uc1ShowMasterAsTrack0.store(std::atoi(v) != 0);
     }
     const char* autoHide = GetExtState("rea_sixty", "auto_hide_read_trim");
     if (autoHide && *autoHide) {
@@ -3145,7 +3153,15 @@ void applyTrackScroll_(int step)
     if (step == 0) return;
     const int vc = visibleTrackCount();
     if (vc == 0) return;
+    // UC1 "Show Master as Track 0": Master is a virtual slot at index -1,
+    // left of the first visible track, scrollable via the CHANNEL encoder.
+    // UC1-local — we never inject Master into the shared visibleTrack list
+    // (that would leak it onto the UF8 strips). Frank 2026-06-12.
+    const bool masterAsT0 = g_uc1ShowMasterAsTrack0.load();
+    MediaTrack* master = GetMasterTrack(nullptr);
+
     int cur = -1;
+    bool onMaster = false;
     if (g_uc1_surface) {
         // Prefer UC1's own focused-track when present — keeps the
         // CHANNEL encoder grounded on the channel UC1 is showing, even
@@ -3153,13 +3169,15 @@ void applyTrackScroll_(int step)
         // action. Falls through to REAPER selection if UC1 focus isn't
         // on a visible track.
         MediaTrack* uf = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-        if (uf) {
+        if (masterAsT0 && uf && uf == master) {
+            onMaster = true;  // currently on the virtual Master slot (-1)
+        } else if (uf) {
             for (int t = 0; t < vc; ++t) {
                 if (visibleTrackAt(t) == uf) { cur = t; break; }
             }
         }
     }
-    if (cur < 0) {
+    if (cur < 0 && !onMaster) {
         for (int t = 0; t < vc; ++t) {
             MediaTrack* tr = visibleTrackAt(t);
             if (tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) {
@@ -3168,10 +3186,14 @@ void applyTrackScroll_(int step)
             }
         }
     }
-    int next = (cur >= 0 ? cur : (step >= 0 ? 0 : vc - 1)) + step;
-    if (next < 0)        next = 0;
-    if (next > vc - 1)   next = vc - 1;
-    MediaTrack* tgt = visibleTrackAt(next);
+    // Virtual index space: Master = -1 (when enabled), tracks = 0..vc-1.
+    const int curVirt = onMaster ? -1
+        : (cur >= 0 ? cur : (step >= 0 ? 0 : vc - 1));
+    const int lo = masterAsT0 ? -1 : 0;
+    int next = curVirt + step;
+    if (next < lo)      next = lo;
+    if (next > vc - 1)  next = vc - 1;
+    MediaTrack* tgt = (next < 0) ? master : visibleTrackAt(next);
     if (!tgt) return;
     SetOnlyTrackSelected(tgt);
     followSelectedInMixer(tgt);
@@ -15084,6 +15106,17 @@ void reasixty_setTouchSelectsChannel(bool on)
 {
     g_touchSelectsChannel.store(on);
     SetExtState("rea_sixty", "touch_selects_channel", on ? "1" : "0", true);
+}
+
+bool reasixty_uc1ShowMasterAsTrack0()
+{
+    return g_uc1ShowMasterAsTrack0.load();
+}
+
+void reasixty_setUc1ShowMasterAsTrack0(bool on)
+{
+    g_uc1ShowMasterAsTrack0.store(on);
+    SetExtState("rea_sixty", "uc1_master_track0", on ? "1" : "0", true);
 }
 
 bool reasixty_autoHideReadTrim()

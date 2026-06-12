@@ -71,6 +71,7 @@ int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
+bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Device)
 // UC1 Out-Gain → REAPER fader toggle (main.cpp). When on, the Out-Gain
 // pot drives REAPER track volume instead of the SSL CS Fader Level param.
 // trackVolNorm/setTrackVolNorm use the shared vol↔pb fader law so the
@@ -1357,7 +1358,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // the generic path suppresses the event when no map / param exists.
     // The early return also skips the focused-param → UF8 projection block,
     // which is keyed on a vst3Param we deliberately don't resolve here.
-    if (ev.id == knob::kCSFaderLevel && reasixty_uc1OutGainFaderMode()) {
+    // Auto-fallback: when focused on the Master track and there is NO SSL
+    // Channel Strip on it, the Out-Gain knob has nothing to drive (the
+    // generic path below would suppress the event). Repurpose it as the
+    // REAPER Master fader so the UC1 can ride master level out of the box.
+    // Short-circuits so the FX scan only runs when actually on Master.
+    // Frank 2026-06-12. Scoped to Master (not every CS-less track) to keep
+    // regular-track Out-Gain behaviour unchanged.
+    const bool outGainMasterFader =
+        ev.id == knob::kCSFaderLevel
+        && focusedTrack_ == GetMasterTrack(nullptr)
+        && !lookupBindingsOnTrack(focusedTrack_).channelMap;
+    if (ev.id == knob::kCSFaderLevel
+        && (reasixty_uc1OutGainFaderMode() || outGainMasterFader)) {
         MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
         const double cur   = reasixty_trackVolNorm(tr);
         const double delta = clickToDelta_(ev.delta);   // honours fine mode
@@ -1373,7 +1386,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             char vbuf[24];
             if (db <= -149.9) snprintf(vbuf, sizeof(vbuf), "-inf");
             else              snprintf(vbuf, sizeof(vbuf), "%.1fdB", db);
-            auto readout = formatReadout("Trk Vol", vbuf);
+            const char* lbl =
+                (tr == GetMasterTrack(nullptr)) ? "Mst Vol" : "Trk Vol";
+            auto readout = formatReadout(lbl, vbuf);
             device_->send(buildDisplayText(
                 zone::kBusCompReadout, readout, readout.size()));
         }
@@ -3798,7 +3813,11 @@ void UC1Surface::pollKnobRings_()
     // of the CS Fader Level param — plugin-independent, so it must skip the
     // channelMap pushOne for kCSFaderLevel below (which would overwrite it)
     // and still paint even when the track has no CS plug-in at all.
-    const bool outGainFader = reasixty_uc1OutGainFaderMode() && tr;
+    // Out-Gain ring tracks REAPER volume when the manual toggle is on, OR
+    // (auto) when focused on the Master track with no CS plug-in — mirrors
+    // the knob-handler fallback so the ring paints the Master fader level.
+    const bool outGainFader = (reasixty_uc1OutGainFaderMode() && tr)
+        || (tr && tr == GetMasterTrack(nullptr) && !bindings.channelMap);
     if (tr && bindings.channelMap) {
         for (uint8_t knobId = 0; knobId < 0x20; ++knobId) {
             if (outGainFader && knobId == knob::kCSFaderLevel) continue;
@@ -3950,8 +3969,13 @@ void UC1Surface::refresh()
     // Track-name carousel — 3 slots [prev, current, next].
     // REAPER track index is 0-based; focused track is the middle slot.
     // Empty slot strings leave the slot's zero-pad intact so edge cases
-    // (first/last track) don't show stale names.
-    auto nameOfIdx = [](int idx) -> std::string {
+    // (first/last track) don't show stale names. Virtual index -1 = Master
+    // ("track 0") when the "Show Master as Track 0" toggle is on; the BC
+    // carousel handles -1 itself (bcNameAtRank), so this only affects the
+    // CS carousel.
+    const bool masterAsT0 = reasixty_uc1ShowMasterAsTrack0();
+    auto nameOfIdx = [&](int idx) -> std::string {
+        if (idx == -1 && masterAsT0) return "MASTER";
         const int n = CountTracks(nullptr);
         if (idx < 0 || idx >= n) return "";
         MediaTrack* t = GetTrack(nullptr, idx);
@@ -4003,7 +4027,11 @@ void UC1Surface::refresh()
     };
     int curIdx = -1;
     if (focusedTrack_) {
-        curIdx = static_cast<int>(GetMediaTrackInfo_Value(
+        // Master focus → virtual index -1 (IP_TRACKNUMBER is -1 for master,
+        // which would give -2 and blank the CS carousel centre).
+        curIdx = (focusedTrack_ == GetMasterTrack(nullptr))
+            ? -1
+            : static_cast<int>(GetMediaTrackInfo_Value(
             static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
     }
     // UC1 CS carousel slot fits 12 chars; UC1 BC carousel slot fits 14
@@ -4424,7 +4452,11 @@ void UC1Surface::refresh()
     // Link, or learned via UC1PluginMap); otherwise clear every CS ring
     // fully dark — Frank 2026-05-07: "wenn kein CS Plugin auf selected
     // channel sollen die LEDs von EQ und DYN Section komplett aus sein".
-    const bool outGainFader = reasixty_uc1OutGainFaderMode() && tr;
+    // Out-Gain ring tracks REAPER volume when the manual toggle is on, OR
+    // (auto) when focused on the Master track with no CS plug-in — mirrors
+    // the knob-handler fallback so the ring paints the Master fader level.
+    const bool outGainFader = (reasixty_uc1OutGainFaderMode() && tr)
+        || (tr && tr == GetMasterTrack(nullptr) && !bindings.channelMap);
     for (uint8_t knobId = 0; knobId < 0x20; ++knobId) {
         if (classifyKnob(knobId) != ControlDomain::ChannelStrip) continue;
         // Out-Gain fader mode: ring tracks REAPER volume, plugin-independent
