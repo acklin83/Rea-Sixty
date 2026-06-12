@@ -2449,6 +2449,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 // the picker because these are the most-asked-for
                 // bindings (Frank 2026-05-15).
                 if (n == "instance_cycle" || n == "fx_cycle"
+                 || n == "fx_scroll_all"  || n == "instance_scroll_all"
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
                  || n == "bc_track_scroll_select"

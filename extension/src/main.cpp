@@ -2671,6 +2671,10 @@ struct PendingInput {
 enum class EncoderMode : uint8_t {
     ChSelect, Nudge, Mousewheel, Instance, FxCycle, SelsetCycle,
     Markers, BankBy1, LastParam,
+    // Cross-track variants: like FxCycle / Instance but at a track edge
+    // they advance to the adjacent track and continue from its first /
+    // last FX (SSL 360°-native feel). Frank 2026-06-12.
+    FxScrollAll, InstanceScrollAll,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
@@ -3681,6 +3685,128 @@ void triggerPluginModeFollowSync_()
     if (sslGui || uf8Gui) g_pluginGuiSyncRequest.store(true);
 }
 
+// One learned-Instance hit on a track: FX index + its SSL domain + the
+// per-domain rank ("Nth CS / BC / UF8-only on this track"). File-scope so
+// the cross-track scroll helpers can share buildInstanceHits_ /
+// landInstanceHit_ with applyInstanceCycle_.
+struct InstanceHit { int fxIdx; uf8::Domain dom; int instIdx; };
+
+// Build the Instance-Cycle hit list for a track: learned CS / BC plug-ins
+// plus UF8-Mode user maps (Domain::None + uf8Mode). Mirrors the per-domain
+// rank semantics used by downstream Instance-index lookups — the hide-
+// offline filter skips the hit but still advances the rank counter so
+// online Instances keep their "Nth CS / BC" index (Frank 2026-05-20).
+// Optional out-params return the raw per-domain counts (including offline-
+// skipped FX) for the focused-domain fallback in applyInstanceCycle_.
+std::vector<InstanceHit> buildInstanceHits_(MediaTrack* tr,
+                                            int* csCountOut = nullptr,
+                                            int* bcCountOut = nullptr,
+                                            int* uf8OnlyCountOut = nullptr)
+{
+    std::vector<InstanceHit> hits;
+    int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
+    if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+        const int n = TrackFX_GetCount(tr);
+        const bool hideOffline = g_hideOfflineFx.load();
+        char fxName[256];
+        for (int i = 0; i < n; ++i) {
+            if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName))) continue;
+            const auto* pm = uf8::lookupPluginMapByName(fxName);
+            const bool skip = hideOffline && TrackFX_GetOffline(tr, i);
+            if (pm && pm->domain == uf8::Domain::ChannelStrip) {
+                if (!skip) hits.push_back({i, uf8::Domain::ChannelStrip, csCount});
+                ++csCount;
+                continue;
+            }
+            if (pm && pm->domain == uf8::Domain::BusComp) {
+                if (!skip) hits.push_back({i, uf8::Domain::BusComp, bcCount});
+                ++bcCount;
+                continue;
+            }
+            // UF8-only user maps DO surface via lookupPluginMapByName, but
+            // with Domain::None — which the CS / BC checks above already
+            // rejected. We still want to include them in the cycle, so
+            // pull the owned record for the uf8Mode flag (Frank 2026-05-12).
+            const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+            if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+                if (!skip) hits.push_back({i, uf8::Domain::None, uf8OnlyCount});
+                ++uf8OnlyCount;
+            }
+        }
+    }
+    if (csCountOut)      *csCountOut      = csCount;
+    if (bcCountOut)      *bcCountOut      = bcCount;
+    if (uf8OnlyCountOut) *uf8OnlyCountOut = uf8OnlyCount;
+    return hits;
+}
+
+// Land the Instance selection on hits[k] for `tr`: move the per-strip FX
+// cursor, set the focused domain (preserving the user's focused slot when
+// the target offers the same LinkSlot), update the per-domain Instance
+// index, pin the BC anchor on BC hits, fire the carousel + UC1 refresh +
+// GUI-follow. Shared by applyInstanceCycle_ (within-track) and
+// applyInstanceScrollAll_ (cross-track). `tr` is explicit so the cross-
+// track caller can land on a freshly-selected neighbour track. Assumes
+// g_uc1_surface is valid (both callers gate on it).
+void landInstanceHit_(MediaTrack* tr, const std::vector<InstanceHit>& hits, int k)
+{
+    if (!tr || !g_uc1_surface) return;
+    if (k < 0 || k >= static_cast<int>(hits.size())) return;
+    const auto fp = uf8::getFocusedParam();
+    const InstanceHit& target = hits[k];
+    // Sync the per-strip Instance index on the focused track so the
+    // Selection-Mode Instance colour-bar readout (stripInstanceActiveFx_)
+    // moves with the cycle on the focused/selected strip.
+    setStripInstanceFx_(tr, target.fxIdx);
+    // Preserve the user's focused slot across the cycle when the new
+    // instance offers the same LinkSlot (Frank 2026-05-26 "wenn instance
+    // gewechselt wird, gehen die params default auf Bypass"). Domain match
+    // required; Domain::None doesn't share the SSL LinkSlot table.
+    auto preservedSlot = [&](uf8::Domain newDom) -> int {
+        if (newDom != fp.domain) return 0;
+        if (fp.slotIdx <= 0) return 0;
+        char fxName[256];
+        if (!uf8::fxIdentityName(tr, target.fxIdx, fxName, sizeof(fxName)))
+            return 0;
+        const auto* pm = uf8::lookupPluginMapByName(fxName);
+        if (!pm) return 0;
+        if (!uf8::findSlotByLinkIdx(*pm, fp.slotIdx)) return 0;
+        return fp.slotIdx;
+    };
+    if (target.dom == uf8::Domain::ChannelStrip) {
+        uf8::setFocus({target.dom,
+                       preservedSlot(uf8::Domain::ChannelStrip)});
+        uc1::setCsInstanceIndex(tr, target.instIdx);
+        triggerPluginModeFollowSync_();
+    } else if (target.dom == uf8::Domain::BusComp) {
+        uf8::setFocus({target.dom,
+                       preservedSlot(uf8::Domain::BusComp)});
+        uc1::setBcInstanceIndex(tr, target.instIdx);
+        // Pin the BC anchor to the focused track so Encoder 2 + the
+        // BC carousel agree with the cycle's selection.
+        g_uc1_surface->setBcAnchorTrack(tr);
+        triggerPluginModeFollowSync_();
+    } else {
+        uf8::setFocus({uf8::Domain::None, 0});
+        uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
+        triggerPluginModeFollowSync_();
+    }
+    // Show the carousel BEFORE refresh() so the central LCD goes straight
+    // into carousel layout instead of flashing track-name → plug-in-name
+    // on every detent (Frank 2026-05-22).
+    std::vector<int> ring;
+    ring.reserve(hits.size());
+    for (const auto& h : hits) ring.push_back(h.fxIdx);
+    showCycleCarousel_(tr, k, ring);
+
+    g_uc1_surface->invalidateCache();
+    g_uc1_surface->refresh();
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+
+    followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
+}
+
 void applyInstanceCycle_(int step)
 {
     if (step == 0) return;
@@ -3698,41 +3824,9 @@ void applyInstanceCycle_(int step)
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
-    struct Hit { int fxIdx; uf8::Domain dom; int instIdx; };
-    std::vector<Hit> hits;
     int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
-    const int n = TrackFX_GetCount(tr);
-    // Hide-offline filter: skip the hit but still advance the per-domain
-    // rank counter so the rank we assign to online Instances matches the
-    // existing "Nth CS / BC on this track" semantics used by downstream
-    // lookups. Otherwise hiding would shift Instance indices and route
-    // knobs to the wrong plug-in. Frank 2026-05-20.
-    const bool hideOffline = g_hideOfflineFx.load();
-    char fxName[256];
-    for (int i = 0; i < n; ++i) {
-        if (!uf8::fxIdentityName(tr, i, fxName, sizeof(fxName))) continue;
-        const auto* pm = uf8::lookupPluginMapByName(fxName);
-        const bool skip = hideOffline && TrackFX_GetOffline(tr, i);
-        if (pm && pm->domain == uf8::Domain::ChannelStrip) {
-            if (!skip) hits.push_back({i, uf8::Domain::ChannelStrip, csCount});
-            ++csCount;
-            continue;
-        }
-        if (pm && pm->domain == uf8::Domain::BusComp) {
-            if (!skip) hits.push_back({i, uf8::Domain::BusComp, bcCount});
-            ++bcCount;
-            continue;
-        }
-        // UF8-only user maps DO surface via lookupPluginMapByName, but
-        // with Domain::None — which the CS / BC checks above already
-        // rejected. We still want to include them in the cycle, so
-        // pull the owned record for the uf8Mode flag (Frank 2026-05-12).
-        const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
-        if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
-            if (!skip) hits.push_back({i, uf8::Domain::None, uf8OnlyCount});
-            ++uf8OnlyCount;
-        }
-    }
+    std::vector<InstanceHit> hits =
+        buildInstanceHits_(tr, &csCount, &bcCount, &uf8OnlyCount);
     // hits.size() == 1 keeps the cycle step a no-op but still feeds
     // showCycleCarousel_ below so the UC1 displays the lone Instance's
     // name. Frank 2026-05-21.
@@ -3788,75 +3882,7 @@ void applyInstanceCycle_(int step)
         showCycleCarousel_(tr, curK, ring);
         return;
     }
-    const Hit& target = hits[nextK];
-    // Sync the per-strip Instance index on the focused track so the
-    // Selection-Mode Instance colour-bar readout (stripInstanceActiveFx_)
-    // moves with the Encoder cycle on the focused/selected strip. Other
-    // strips keep their own per-strip g_stripInstanceFxGuid, so the
-    // Encoder Cycle only visibly affects the selected channel (Frank
-    // 2026-05-14 "soll nur beim selected channel wie vorher"). The
-    // per-strip V-Pot path in StripInstanceDelta still updates this
-    // map independently for non-focused strips.
-    setStripInstanceFx_(tr, target.fxIdx);
-    // Preserve the user's focused slot across the cycle when the new
-    // instance offers the same LinkSlot. Without this, cycling jumped
-    // every UC1/UF8 focused-param surface back to slotIdx=0, which for
-    // many plug-ins is the bypass / "FX In" toggle — Frank 2026-05-26
-    // "wenn instance gewechselt wird, gehen die params default auf
-    // Bypass." Domain match is required (a BC→CS cycle's slotIdx isn't
-    // meaningful) and the slot must exist on the target plug-in
-    // (different plug-in families on the same domain may have a
-    // narrower Link map). Domain::None (UF8-only user maps) doesn't
-    // share the SSL LinkSlot table — keep the legacy slot=0 reset
-    // there.
-    auto preservedSlot = [&](uf8::Domain newDom) -> int {
-        if (newDom != fp.domain) return 0;
-        if (fp.slotIdx <= 0) return 0;
-        char fxName[256];
-        if (!uf8::fxIdentityName(tr, target.fxIdx, fxName, sizeof(fxName)))
-            return 0;
-        const auto* pm = uf8::lookupPluginMapByName(fxName);
-        if (!pm) return 0;
-        if (!uf8::findSlotByLinkIdx(*pm, fp.slotIdx)) return 0;
-        return fp.slotIdx;
-    };
-    if (target.dom == uf8::Domain::ChannelStrip) {
-        uf8::setFocus({target.dom,
-                       preservedSlot(uf8::Domain::ChannelStrip)});
-        uc1::setCsInstanceIndex(tr, target.instIdx);
-        triggerPluginModeFollowSync_();
-    } else if (target.dom == uf8::Domain::BusComp) {
-        uf8::setFocus({target.dom,
-                       preservedSlot(uf8::Domain::BusComp)});
-        uc1::setBcInstanceIndex(tr, target.instIdx);
-        // Pin the BC anchor to the focused track so Encoder 2 + the
-        // BC carousel agree with the cycle's selection. Idempotent
-        // when tr already == bcAnchor.
-        g_uc1_surface->setBcAnchorTrack(tr);
-        triggerPluginModeFollowSync_();
-    } else {
-        uf8::setFocus({uf8::Domain::None, 0});
-        uc1::setUf8OnlyInstanceIndex(tr, target.instIdx);
-        triggerPluginModeFollowSync_();
-    }
-    // Show the carousel BEFORE refresh() so the central LCD goes
-    // straight into carousel layout (sub=0x02) and refresh()'s central-
-    // label branch sees instanceCarouselActive_ and re-emits the
-    // carousel frames instead of briefly rendering the post-cycle
-    // central label (track name fallback / plug-in shortName) and then
-    // having the carousel overwrite it. Without this reorder the LCD
-    // flashed track-name → plug-in-name on every detent. Frank 2026-05-22.
-    std::vector<int> ring;
-    ring.reserve(hits.size());
-    for (const auto& h : hits) ring.push_back(h.fxIdx);
-    showCycleCarousel_(tr, nextK, ring);
-
-    g_uc1_surface->invalidateCache();
-    g_uc1_surface->refresh();
-    g_pageDirty.store(true);
-    g_bankDirty.store(true);
-
-    followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
+    landInstanceHit_(tr, hits, nextK);
 }
 
 // When the FX-Cursor lands on an FX that happens to be a learned Instance
@@ -3943,6 +3969,51 @@ bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
 // When the cursor lands on a learned Instance, syncInstanceFromFxIdx_
 // promotes the move into an Instance selection so SSL Strip Mode / UF8
 // Plugin Mode follow the cycle.
+// Build the FX-Cycle ring for a track — every FX index, optionally
+// filtering offline FX (Frank 2026-05-20 "Don't show offline FX"
+// Device setting). Returns empty for an invalid track / no FX.
+std::vector<int> buildFxRing_(MediaTrack* tr)
+{
+    std::vector<int> ring;
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return ring;
+    const int n = TrackFX_GetCount(tr);
+    if (n < 1) return ring;
+    const bool hideOffline = g_hideOfflineFx.load();
+    ring.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        if (hideOffline && TrackFX_GetOffline(tr, i)) continue;
+        ring.push_back(i);
+    }
+    return ring;
+}
+
+// Land the FX-Cursor on ring[k] for `tr`: move the cursor, promote an
+// Instance landing, fire the carousel + UC1 refresh + GUI-follow. Shared
+// by applyFxCycle_ (within-track) and applyFxScrollAll_ (cross-track), so
+// both produce identical landing behaviour. `tr` is explicit so the
+// cross-track caller can land on the freshly-selected neighbour track
+// before the onTimer focus-drain updates focusedTrack().
+void landFxCursor_(MediaTrack* tr, const std::vector<int>& ring, int k)
+{
+    if (!tr || k < 0 || k >= static_cast<int>(ring.size())) return;
+    const int nextIdx = ring[k];
+    setStripInstanceFx_(tr, nextIdx);
+    syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
+                                       /*setBcAnchor*/ true);
+    g_bankDirty.store(true);
+
+    // Carousel before refresh so the LCD doesn't flash track-name on
+    // intermediate central-label render — see applyInstanceCycle_.
+    showCycleCarousel_(tr, k, ring);
+
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
+
+    followFocusedPluginGuiAcrossCycle_(tr, nextIdx);
+}
+
 void applyFxCycle_(int step)
 {
     if (step == 0) return;
@@ -3951,18 +4022,7 @@ void applyFxCycle_(int step)
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
-    const int n = TrackFX_GetCount(tr);
-    if (n < 1) return;
-
-    // Build the ring — every FX index, optionally filtering offline FX.
-    // Frank 2026-05-20 "Don't show offline FX" Device setting.
-    const bool hideOffline = g_hideOfflineFx.load();
-    std::vector<int> ring;
-    ring.reserve(n);
-    for (int i = 0; i < n; ++i) {
-        if (hideOffline && TrackFX_GetOffline(tr, i)) continue;
-        ring.push_back(i);
-    }
+    std::vector<int> ring = buildFxRing_(tr);
     // ring.size() == 1 keeps the cycle step a no-op (modular math on
     // size 1 returns the same index) but still fires showCycleCarousel_
     // below so the UC1 displays the lone plugin's name. Frank 2026-05-21.
@@ -3988,22 +4048,148 @@ void applyFxCycle_(int step)
             return;
         }
     }
-    const int nextIdx = ring[nextK];
-    setStripInstanceFx_(tr, nextIdx);
-    syncInstanceFromFxIdx_(tr, nextIdx, /*setFocusedDomain*/ true,
-                                       /*setBcAnchor*/ true);
-    g_bankDirty.store(true);
+    landFxCursor_(tr, ring, nextK);
+}
 
-    // Carousel before refresh so the LCD doesn't flash track-name on
-    // intermediate central-label render — see applyInstanceCycle_.
-    showCycleCarousel_(tr, nextK, ring);
+// ---- Cross-track FX / Instance scroll --------------------------------------
+// Like applyFxCycle_ / applyInstanceCycle_, but at a track edge the cursor
+// crosses to the adjacent visible track and continues from its first /
+// last FX — SSL 360°-native feel (Frank 2026-06-12). Exactly one detent
+// per track boundary: a neighbour track with no eligible FX is still
+// selected (a "dead" detent with no FX cursor); the next detent moves on.
+// Hard-stop at the project edge (no whole-project wrap).
 
-    if (g_uc1_surface) {
-        g_uc1_surface->invalidateCache();
-        g_uc1_surface->refresh();
+// Move selection to the immediately adjacent visible track in `dir`
+// (+1 forward / -1 back), follow it in the mixer, and land the cursor on
+// its first (dir>0) or last (dir<0) eligible FX. instancesOnly chooses the
+// eligible filter: learned Instances (buildInstanceHits_) vs all FX
+// (buildFxRing_). `fromTr` is the track the scroll started on (used only
+// to locate the starting position + for the project-edge carousel).
+void scrollToAdjacentTrack_(MediaTrack* fromTr, int dir, bool instancesOnly)
+{
+    if (dir == 0) return;
+    const int vc = visibleTrackCount();
+    if (vc == 0) return;
+
+    // Locate the starting visible-track index — fromTr first, else the
+    // REAPER-selected visible track, else strip 0 (mirrors the fallback
+    // chain in applySelectRelative_).
+    int fromIdx = -1;
+    for (int t = 0; t < vc; ++t) {
+        if (visibleTrackAt(t) == fromTr) { fromIdx = t; break; }
+    }
+    if (fromIdx < 0) {
+        for (int t = 0; t < vc; ++t) {
+            MediaTrack* tr = visibleTrackAt(t);
+            if (tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5) {
+                fromIdx = t; break;
+            }
+        }
+        if (fromIdx < 0) fromIdx = 0;
     }
 
-    followFocusedPluginGuiAcrossCycle_(tr, nextIdx);
+    const int nextIdx = fromIdx + (dir > 0 ? 1 : -1);
+    if (nextIdx < 0 || nextIdx >= vc) {
+        // Hard-stop at the project edge: keep state, re-show the carousel
+        // on the current edge FX so CCW/CW past the end still gives the
+        // same visual feedback as a normal step (matches the within-track
+        // edge behaviour in applyFxCycle_ / applyInstanceCycle_).
+        if (fromTr && ValidatePtr2(nullptr, fromTr, "MediaTrack*")) {
+            const int cur = stripInstanceActiveFx_(fromTr);
+            if (cur >= 0) {
+                std::vector<int> ring{cur};
+                showCycleCarousel_(fromTr, 0, ring);
+            }
+        }
+        return;
+    }
+
+    MediaTrack* nt = visibleTrackAt(nextIdx);
+    if (!nt || !ValidatePtr2(nullptr, nt, "MediaTrack*")) return;
+
+    // Select the neighbour + follow it in the mixer (same primitive as
+    // applySelectRelative_). The onTimer focus-drain then updates UC1's
+    // focusedTrack(); the land* helpers below operate on `nt` explicitly
+    // so they don't depend on that having happened yet.
+    SetOnlyTrackSelected(nt);
+    followSelectedInMixer(nt);
+
+    if (instancesOnly) {
+        std::vector<InstanceHit> hits = buildInstanceHits_(nt);
+        if (hits.empty()) return;   // dead detent: track selected, no cursor
+        landInstanceHit_(nt, hits, dir > 0 ? 0 : (int)hits.size() - 1);
+    } else {
+        std::vector<int> ring = buildFxRing_(nt);
+        if (ring.empty()) return;   // dead detent: track selected, no cursor
+        landFxCursor_(nt, ring, dir > 0 ? 0 : (int)ring.size() - 1);
+    }
+}
+
+// EncoderMode::FxScrollAll — walk every FX on the focused track; at the
+// edge cross to the adjacent track (see scrollToAdjacentTrack_).
+void applyFxScrollAll_(int step)
+{
+    if (step == 0) return;
+    if (!g_uc1_surface) return;
+    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+
+    std::vector<int> ring = buildFxRing_(tr);
+    if (!ring.empty()) {
+        const int sz = (int)ring.size();
+        const int cur = stripInstanceActiveFx_(tr);
+        int curK = -1;
+        for (size_t k = 0; k < ring.size(); ++k)
+            if (ring[k] == cur) { curK = (int)k; break; }
+        if (curK < 0) {
+            // Cursor not on any FX of this track yet — land on the near
+            // edge of this track first, don't skip it.
+            landFxCursor_(tr, ring, step > 0 ? 0 : sz - 1);
+            return;
+        }
+        const int nextK = curK + step;
+        if (nextK >= 0 && nextK < sz) {   // within-track move (no wrap)
+            landFxCursor_(tr, ring, nextK);
+            return;
+        }
+        // else fall through: stepped past the first/last FX → cross.
+    }
+    scrollToAdjacentTrack_(tr, step > 0 ? +1 : -1, /*instancesOnly*/ false);
+}
+
+// EncoderMode::InstanceScrollAll — like applyFxScrollAll_ but only walks
+// learned CS / BC / UF8-Mode Instances.
+void applyInstanceScrollAll_(int step)
+{
+    if (step == 0) return;
+    if (!g_uc1_surface) return;
+    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+
+    std::vector<InstanceHit> hits = buildInstanceHits_(tr);
+    if (!hits.empty()) {
+        const int sz = (int)hits.size();
+        // Current position = the per-strip cursor's index within `hits`.
+        const int cur = stripInstanceActiveFx_(tr);
+        int curK = -1;
+        for (size_t k = 0; k < hits.size(); ++k)
+            if (hits[k].fxIdx == cur) { curK = (int)k; break; }
+        if (curK < 0) {
+            // Cursor not on any learned Instance of this track yet — land
+            // on the near edge of this track first, don't skip it.
+            landInstanceHit_(tr, hits, step > 0 ? 0 : sz - 1);
+            return;
+        }
+        const int nextK = curK + step;
+        if (nextK >= 0 && nextK < sz) {   // within-track move (no wrap)
+            landInstanceHit_(tr, hits, nextK);
+            return;
+        }
+        // else fall through: stepped past the first/last Instance → cross.
+    }
+    scrollToAdjacentTrack_(tr, step > 0 ? +1 : -1, /*instancesOnly*/ true);
 }
 
 // Walk through populated Selection-Set slots (skipping empty ones),
@@ -10219,7 +10405,9 @@ void pushZonesForVisibleSlots()
             if (instFxIdx >= 0) csType = fxCycleDisplayName_(tr, instFxIdx);
             // Empty when no FX — blank slot reads cleaner than "-".
         } else if ((g_encoderMode.load() == EncoderMode::FxCycle
-                 || g_encoderMode.load() == EncoderMode::Instance)
+                 || g_encoderMode.load() == EncoderMode::Instance
+                 || g_encoderMode.load() == EncoderMode::FxScrollAll
+                 || g_encoderMode.load() == EncoderMode::InstanceScrollAll)
                 && g_uc1_surface
                 && tr == g_uc1_surface->focusedTrack()) {
             // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
@@ -10240,7 +10428,8 @@ void pushZonesForVisibleSlots()
             // non-focused strips already render.
             const int instFxIdx = stripInstanceActiveFx_(tr);
             bool cursorIsMapped = false;
-            if (g_encoderMode.load() == EncoderMode::Instance
+            if ((g_encoderMode.load() == EncoderMode::Instance
+                 || g_encoderMode.load() == EncoderMode::InstanceScrollAll)
                 && instFxIdx >= 0)
             {
                 char fxName[256];
@@ -10258,7 +10447,8 @@ void pushZonesForVisibleSlots()
                 }
             }
             const bool instanceModeStaleCursor =
-                (g_encoderMode.load() == EncoderMode::Instance)
+                (g_encoderMode.load() == EncoderMode::Instance
+                 || g_encoderMode.load() == EncoderMode::InstanceScrollAll)
                 && instFxIdx >= 0 && !cursorIsMapped;
             if (instanceModeStaleCursor && map) {
                 csType = instanceLabel_(tr, mapFxIdx, map->displayShort);
@@ -13431,6 +13621,8 @@ void onTimer()
         if (const char* m = GetExtState("ReaSixty", "encoderMode"); m && *m) {
             if      (std::strcmp(m, "Instance")    == 0) g_encoderMode.store(EncoderMode::Instance);
             else if (std::strcmp(m, "FxCycle")     == 0) g_encoderMode.store(EncoderMode::FxCycle);
+            else if (std::strcmp(m, "FxScrollAll")       == 0) g_encoderMode.store(EncoderMode::FxScrollAll);
+            else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
             else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
             else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
             // 'Focus' (legacy) and 'Mousewheel' (post-2026-05-19 rename)
@@ -17789,6 +17981,25 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::FxCycle; },
         "Encoder Mode → FX Cycle", false
     });
+    // Cross-track variants of FX Cycle / Instance Cycle: at a track edge
+    // the cursor advances to the adjacent track and continues from its
+    // first / last FX (SSL 360°-native feel). Frank 2026-06-12.
+    registerBuiltin("encoder_fx_scroll_all", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::FxScrollAll, "FxScrollAll");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::FxScrollAll; },
+        "Encoder Mode → Cycle FX (across tracks)", false
+    });
+    registerBuiltin("encoder_instance_scroll_all", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::InstanceScrollAll, "InstanceScrollAll");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::InstanceScrollAll; },
+        "Encoder Mode → Cycle Instance (across tracks)", false
+    });
     // Selection-Set cycle mode — Channel-Encoder rotation steps through
     // populated Selection-Set slots (off → 1 → 2 → … → last → off).
     // Pairs with the bindable selset_cycle builtin further down so the
@@ -17817,6 +18028,8 @@ void registerBindingHandlers()
                 case EncoderMode::Mousewheel:  applyMouseScroll_(step);    break;
                 case EncoderMode::Instance:    applyInstanceCycle_(step);  break;
                 case EncoderMode::FxCycle:     applyFxCycle_(step);        break;
+                case EncoderMode::FxScrollAll:       applyFxScrollAll_(step);       break;
+                case EncoderMode::InstanceScrollAll: applyInstanceScrollAll_(step); break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
                 case EncoderMode::Markers:     applyMarkerStep_(step);     break;
                 case EncoderMode::BankBy1:     applyBankByOne_(step);      break;
@@ -18048,6 +18261,24 @@ void registerBindingHandlers()
             applyFxCycle_(param);
         },
         nullptr, "Encoder: cycle FX (all on focused track)", false
+    });
+    // Cross-track direct-rotation counterparts — assign straight to any
+    // encoder/modifier (no mode switch). At a track edge they advance to
+    // the adjacent track and continue from its first / last FX. Frank
+    // 2026-06-12.
+    registerBuiltin("fx_scroll_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyFxScrollAll_(param);
+        },
+        nullptr, "Encoder: cycle FX (across tracks)", false
+    });
+    registerBuiltin("instance_scroll_all", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            applyInstanceScrollAll_(param);
+        },
+        nullptr, "Encoder: cycle instance (across tracks)", false
     });
     registerBuiltin("bc_track_scroll", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
@@ -18990,6 +19221,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
               || std::strcmp(m, "Mousewheel") == 0)    g_encoderMode.store(EncoderMode::Mousewheel);
         else if (std::strcmp(m, "Instance") == 0)      g_encoderMode.store(EncoderMode::Instance);
         else if (std::strcmp(m, "FxCycle") == 0)       g_encoderMode.store(EncoderMode::FxCycle);
+        else if (std::strcmp(m, "FxScrollAll") == 0)       g_encoderMode.store(EncoderMode::FxScrollAll);
+        else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
         else if (std::strcmp(m, "SelsetCycle") == 0)   g_encoderMode.store(EncoderMode::SelsetCycle);
         else if (std::strcmp(m, "Markers") == 0)       g_encoderMode.store(EncoderMode::Markers);
         else if (std::strcmp(m, "BankBy1") == 0)       g_encoderMode.store(EncoderMode::BankBy1);
