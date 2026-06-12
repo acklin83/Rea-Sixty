@@ -421,38 +421,60 @@ void UC1Surface::applyBcTrackScrollImpl_(int step, bool selectAlso)
     const int n = CountTracks(nullptr);
     if (n <= 0) return;
 
+    // Master track participates in the carousel as virtual index -1 — the
+    // left-most position, consistent with treating Master as "track 0".
+    // CAUTION: IP_TRACKNUMBER returns -1 for the master (NOT 0 — the SDK
+    // and the comment near line 3865 are misleading), so master must be
+    // mapped explicitly to -1 here; using IP_TRACKNUMBER-1 would give -2,
+    // and the forward scan would then re-find master at -1 instead of
+    // stepping onto track 0 ("can't smoothly scroll off master", Frank
+    // 2026-06-12). idxFor maps a carousel index back to a MediaTrack*:
+    // -1 → master, >=0 → GetTrack. Ungated: a BC on the Master bus always
+    // shows here, independent of the UC1 "Show Master as Track 0" toggle.
+    MediaTrack* masterTrk = GetMasterTrack(nullptr);
+    auto idxOf = [&](void* t) -> int {
+        if (!t || t == masterTrk) return -1;
+        return static_cast<int>(GetMediaTrackInfo_Value(
+            static_cast<MediaTrack*>(t), "IP_TRACKNUMBER")) - 1;
+    };
     int curIdx = -1;
     if (void* anchor = effectiveBcTrack_()) {
-        curIdx = static_cast<int>(GetMediaTrackInfo_Value(
-            static_cast<MediaTrack*>(anchor), "IP_TRACKNUMBER")) - 1;
+        curIdx = idxOf(anchor);
     } else if (focusedTrack_) {
-        curIdx = static_cast<int>(GetMediaTrackInfo_Value(
-            static_cast<MediaTrack*>(focusedTrack_), "IP_TRACKNUMBER")) - 1;
+        curIdx = idxOf(focusedTrack_);
     }
-
+    auto idxFor = [](int idx) -> MediaTrack* {
+        return idx < 0 ? GetMasterTrack(nullptr) : GetTrack(nullptr, idx);
+    };
+    auto idxHasBc = [&](int idx) -> bool {
+        MediaTrack* t = idxFor(idx);
+        return t && lookupBindingsOnTrack(t).busCompMap;
+    };
     const bool forward = step > 0;
     const int stepsAbs = forward ? step : -step;
     int probe = curIdx;
-    int found = -1;
+    bool haveFound = false;
+    int found = curIdx;
     for (int k = 0; k < stepsAbs; ++k) {
-        int next = -1;
+        bool gotNext = false;
+        int next = probe;
         if (forward) {
             for (int i = probe + 1; i < n; ++i) {
-                auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
-                if (b.busCompMap) { next = i; break; }
+                if (idxHasBc(i)) { next = i; gotNext = true; break; }
             }
         } else {
-            for (int i = probe - 1; i >= 0; --i) {
-                auto b = lookupBindingsOnTrack(GetTrack(nullptr, i));
-                if (b.busCompMap) { next = i; break; }
+            // i >= -1 so the backward scan can land on Master (index -1).
+            for (int i = probe - 1; i >= -1; --i) {
+                if (idxHasBc(i)) { next = i; gotNext = true; break; }
             }
         }
-        if (next < 0) break;  // no more BC tracks in this direction
+        if (!gotNext) break;  // no more BC tracks in this direction
+        haveFound = true;
         found = next;
         probe = next;
     }
-    if (found < 0) return;
-    MediaTrack* tr = GetTrack(nullptr, found);
+    if (!haveFound) return;
+    MediaTrack* tr = idxFor(found);
     if (!tr) return;
     setBcAnchorTrack(tr);
     if (selectAlso) {
@@ -2475,7 +2497,11 @@ void* UC1Surface::effectiveBcTrack_() const
     }
     // Lazy fallback: first BC-bearing track in the project. Means the
     // BC carousel shows something useful even before the user touches
-    // the BC encoder.
+    // the BC encoder. Master is "track 0" → checked first, so a BC on the
+    // Master bus becomes the default anchor over any regular-track BC.
+    if (MediaTrack* m = GetMasterTrack(nullptr)) {
+        if (lookupBindingsOnTrack(m).busCompMap) return m;
+    }
     const int n = CountTracks(nullptr);
     for (int i = 0; i < n; ++i) {
         MediaTrack* t = GetTrack(nullptr, i);
@@ -3863,19 +3889,27 @@ void UC1Surface::refresh()
     // Empty string → device keeps the last state; we explicitly reset
     // the slot to all-zeros when empty so the stale track name from a
     // previous focus doesn't linger.
-    auto resolveTrackName = [&]() -> std::string {
-        if (!focusedTrack_) return {};
-        MediaTrack* tr = static_cast<MediaTrack*>(focusedTrack_);
+    // Master track (IP_TRACKNUMBER 0) returns an empty P_NAME — show
+    // "MASTER" so the CS/BC slots and carousels read legibly when a CS/BC
+    // is on the master bus. Frank 2026-06-12.
+    auto trackDisplayName = [](MediaTrack* t) -> std::string {
+        if (!t) return {};
+        if (t == GetMasterTrack(nullptr)) return "MASTER";
         char nameBuf[128] = {0};
-        if (GetSetMediaTrackInfo_String(tr, "P_NAME", nameBuf, false)
+        if (GetSetMediaTrackInfo_String(t, "P_NAME", nameBuf, false)
             && nameBuf[0] != '\0')
         {
             return nameBuf;
         }
-        int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+        int idx = static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "Track %d", idx);
         return fallback;
+    };
+    auto resolveTrackName = [&]() -> std::string {
+        return focusedTrack_
+            ? trackDisplayName(static_cast<MediaTrack*>(focusedTrack_))
+            : std::string{};
     };
 
     // CS slot always shows the focused track's name — Rea-Sixty uses
@@ -3894,18 +3928,7 @@ void UC1Surface::refresh()
     }
     std::string bcName;
     if (bcAnchor) {
-        MediaTrack* bcTr = static_cast<MediaTrack*>(bcAnchor);
-        char nameBuf[128] = {0};
-        if (GetSetMediaTrackInfo_String(bcTr, "P_NAME", nameBuf, false)
-            && nameBuf[0])
-        {
-            bcName = nameBuf;
-        } else {
-            int idx = static_cast<int>(GetMediaTrackInfo_Value(bcTr, "IP_TRACKNUMBER"));
-            char fallback[32];
-            snprintf(fallback, sizeof(fallback), "Track %d", idx);
-            bcName = fallback;
-        }
+        bcName = trackDisplayName(static_cast<MediaTrack*>(bcAnchor));
     }
 
     // Diag — first 8 refreshes only. Routed through a file log instead
@@ -3947,16 +3970,26 @@ void UC1Surface::refresh()
     std::vector<int> bcIndices;
     {
         const int n = CountTracks(nullptr);
-        bcIndices.reserve(n);
+        bcIndices.reserve(n + 1);
+        // Master = virtual index -1, left-most (track 0). Mirrors the BC
+        // carousel scroll so a BC on the master bus shows in the triple.
+        if (MediaTrack* m = GetMasterTrack(nullptr)) {
+            if (lookupBindingsOnTrack(m).busCompMap) bcIndices.push_back(-1);
+        }
         for (int i = 0; i < n; ++i) {
             MediaTrack* t = GetTrack(nullptr, i);
             if (lookupBindingsOnTrack(t).busCompMap) bcIndices.push_back(i);
         }
     }
+    // Master → carousel index -1 (IP_TRACKNUMBER returns -1 for master,
+    // which would give -2 here and miss the bcIndices[-1] entry, blanking
+    // the BC carousel centre when the anchor is the master bus).
     int bcAnchorProjIdx = -1;
     if (bcAnchor) {
-        bcAnchorProjIdx = static_cast<int>(GetMediaTrackInfo_Value(
-            static_cast<MediaTrack*>(bcAnchor), "IP_TRACKNUMBER")) - 1;
+        bcAnchorProjIdx = (bcAnchor == GetMasterTrack(nullptr))
+            ? -1
+            : static_cast<int>(GetMediaTrackInfo_Value(
+                static_cast<MediaTrack*>(bcAnchor), "IP_TRACKNUMBER")) - 1;
     }
     int bcRank = -1;
     for (size_t i = 0; i < bcIndices.size(); ++i) {
@@ -3964,7 +3997,9 @@ void UC1Surface::refresh()
     }
     auto bcNameAtRank = [&](int rank) -> std::string {
         if (rank < 0 || rank >= static_cast<int>(bcIndices.size())) return "";
-        return nameOfIdx(bcIndices[rank]);
+        int idx = bcIndices[rank];
+        if (idx < 0) return "MASTER";  // master = virtual index -1
+        return nameOfIdx(idx);
     };
     int curIdx = -1;
     if (focusedTrack_) {
