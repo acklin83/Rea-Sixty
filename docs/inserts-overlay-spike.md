@@ -56,10 +56,50 @@ Er prüft die zwei offenen Fragen:
 - **`JS_Composite` fehlt** (kein js_ReaScriptAPI) → Abhängigkeit dokumentieren
   oder Compositing nativ aus der Extension (LICE) erwägen.
 
-## Bitte beim Testen notieren
+## Ergebnis (2026-06-12, REAPER 7.74 macOS)
 
-- REAPER-Version + Capability-Report (Console-Kopf).
-- Für MCP **und** TCP je eine Zeile: `win` / `seg` / `det` und ob das Rect
-  pro Insert wandert.
-- Sitzt das Highlight deckungsgleich auf der Zeile? Bleibt es beim Scrollen /
-  Mixer-Resize korrekt? Wird es beim Verlassen sauber entfernt?
+Capture: `analysis/captures/gtfp-info-strings-reaper774.md` (+ Roh-Log
+`gtfp-raw-reaper774.log`).
+
+- **Caps: alle OK** — `JS_Composite`, `JS_Window_FromPoint`,
+  `JS_Window_GetClientRect`, `JS_LICE_*`, `GetThingFromPoint`,
+  `GetTrackFromPoint`. Der Overlay-Weg ist auf Frank's System voll verfügbar,
+  kein Compositing-Fallback nötig. Overlay rendert ("das ist gold").
+- **Frage 1 (Zeilen-Granularität): NEIN.** `GetThingFromPoint` liefert die
+  Insert-Liste als **einen Block** `mcp.fxlist` (rect = ganze Liste, z.B.
+  84×228), **ohne FX-Index**. Die `fx_1`-Hits waren offene Plugin-Fenster, nicht
+  die Liste. TCP zeigt bei Frank keine FX-Namensliste (nur `tcp.fx`/`tcp.fxparm`
+  Knöpfe + eingebettete Params).
+- **Frage 2 (Compositing): JA** — Highlight legt sich via `JS_Composite` auf das
+  native Mixer-Fenster.
+
+→ **Entscheidung: FALLBACK-Pfad bauen.** GetThingFromPoint findet den
+**fxlist-Block**, die einzelne **Zeile rechnen wir selbst**.
+
+## Vollausbau-Plan (beschlossen)
+
+1. **State, nicht Rename:** Extension publiziert die aktive CS/BC-Instanz via
+   `ExtState` (TrackGUID + fxIdx) statt `renamed_name` zu schreiben. Quelle:
+   `onInstanceCursorChanged_` (kennt CS/BC-Instanz schon). Kein dirty-Projekt.
+2. **Companion-Lua** (gebündelt, ReaPack-`@provides`) liest den State im
+   `defer`-Loop und zeichnet via `JS_Composite`.
+3. **Strip-Rect mausfrei:** `GetMediaTrackInfo_Value(tr, "I_MCPX/Y/W/H")` bzw.
+   `I_TCPY/H` → Position jedes Track-Strips ohne Maus. fxlist-Offset im Strip
+   einmalig per Scan-Technik (aus dem Spike) kalibrieren — Theme-konstant.
+4. **Zeile N** = fxlist-Top + N · Zeilenhöhe. Zeilenhöhe pro Theme/Zoom
+   kalibrieren (≈ `tcp.fxparm`-Höhe 21px bei diesem Theme), nicht hartkodieren.
+5. **Ziel-HWND** via `JS_Window_FromPoint` am Zeilenpunkt — es gibt zwei
+   Mixer-Fenster (angedockt `0x108…` + separat `0x138…`), nicht raten.
+6. **Altpfad (FX-Rename) ablösen:** das `renamed_name`-Marking aus
+   `reconcileInsertMarkersForTrack_` raus, sobald das Overlay steht. Setting
+   bleibt ("Mark active CS/BC in Inserts list"), nur die Mechanik wechselt.
+
+## Offen / Risiken für den Vollausbau
+
+- **Scrolling der fxlist** (lange Chains): Zeile kann aus dem Block scrollen →
+  Overlay clippen oder ausblenden.
+- **Mixer sichtbar?** Wenn der Mixer zu/Track ausgeblendet ist, kein Rect →
+  no-op.
+- **Theme-Abhängigkeit** der Zeilenhöhe → Kalibrier-Routine statt Konstante.
+- **defer-Companion-Lifecycle:** mit der Extension koppeln (auto-start/stop),
+  damit der User nichts manuell starten muss.

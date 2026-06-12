@@ -49,6 +49,7 @@ local CAP = {
   JS_GetClientRect  = has('JS_Window_GetClientRect'),
   JS_LICE_Create    = has('JS_LICE_CreateBitmap'),
   JS_LICE_FillRect  = has('JS_LICE_FillRect'),
+  JS_LICE_Line      = has('JS_LICE_Line'),
   JS_Invalidate     = has('JS_Window_InvalidateRect'),
 }
 
@@ -80,9 +81,12 @@ local CAN_OVERLAY = CAP.JS_Composite and CAP.JS_WindowFromPoint
 local SCAN_MAX = 400  -- Sicherheitsgrenze in px pro Richtung
 
 local function thing(x, y)
-  -- normalisiert die Rückgabe auf "window|details" für den Vergleich
-  local win, seg, det = reaper.GetThingFromPoint(x, y)
-  return win or "", seg or "", det or ""
+  -- GetThingFromPoint liefert (HWND window, string info) — NICHT drei Strings.
+  -- HWND ist ein userdata-Handle; wir normalisieren es auf seine String-
+  -- Adresse, damit es vergleich- und loggbar ist.
+  local hwnd, info = reaper.GetThingFromPoint(x, y)
+  local win = hwnd and tostring(hwnd) or ""
+  return win, info or ""
 end
 
 local function isFxDetail(det)
@@ -92,15 +96,16 @@ end
 
 local function findRowRect(mx, my)
   if not CAP.GetThingFromPoint then return nil end
-  local win0, seg0, det0 = thing(mx, my)
-  if win0 == "" then return nil end
-  -- Schlüssel der aktuellen Zeile: bei FX-Zeilen die Detail-Kennung, sonst
-  -- segment+details (so sehen wir auch, wenn alles als ein Block kommt).
-  local key0 = win0 .. "|" .. seg0 .. "|" .. det0
+  local win0, info0 = thing(mx, my)
+  if win0 == "" and info0 == "" then return nil end
+  -- Schlüssel der aktuellen Zeile = Fenster + info-String. Bleibt der konstant,
+  -- sind wir in derselben Zeile. Ändert er sich nie pro FX-Zeile, ist
+  -- GetThingFromPoint für Zeilen zu grob (wichtige Erkenntnis).
+  local key0 = win0 .. "|" .. info0
 
   local function same(x, y)
-    local w, s, d = thing(x, y)
-    return (w .. "|" .. s .. "|" .. d) == key0
+    local w, i = thing(x, y)
+    return (w .. "|" .. i) == key0
   end
 
   local top, bot, left, right = my, my, mx, mx
@@ -111,7 +116,7 @@ local function findRowRect(mx, my)
   for d = 1, SCAN_MAX do if same(mx + d, cy) then right = mx + d else break end end
 
   return { l = left, t = top, r = right + 1, b = bot + 1,
-           win = win0, seg = seg0, det = det0, isFx = isFxDetail(det0) }
+           win = win0, info = info0, isFx = isFxDetail(info0) }
 end
 
 ------------------------------------------------------------------------
@@ -139,9 +144,16 @@ local function drawOverlay(rect)
   if not g_bitmap then g_bitmap = reaper.JS_LICE_CreateBitmap(true, w, h) end
   reaper.JS_LICE_Resize(g_bitmap, w, h)
   reaper.JS_LICE_Clear(g_bitmap, 0)                       -- voll transparent
-  -- halbtransparente Füllung + heller Rahmen = "aktive Instanz"-Look
+  -- halbtransparente Füllung + heller Rahmen = "aktive Instanz"-Look.
+  -- JS_LICE_DrawRect existiert nicht -> Rahmen aus 4 Linien (JS_LICE_Line).
   reaper.JS_LICE_FillRect(g_bitmap, 0, 0, w, h, 0x00C8FF, 0.22, "COPY")
-  reaper.JS_LICE_DrawRect(g_bitmap, 0, 0, w - 1, h - 1, 0x00C8FF, 0.85, "COPY")
+  if CAP.JS_LICE_Line then
+    local C, A, M, AA = 0x00C8FF, 0.85, "COPY", false
+    reaper.JS_LICE_Line(g_bitmap, 0,     0,     w - 1, 0,     C, A, M, AA)
+    reaper.JS_LICE_Line(g_bitmap, 0,     h - 1, w - 1, h - 1, C, A, M, AA)
+    reaper.JS_LICE_Line(g_bitmap, 0,     0,     0,     h - 1, C, A, M, AA)
+    reaper.JS_LICE_Line(g_bitmap, w - 1, 0,     w - 1, h - 1, C, A, M, AA)
+  end
 
   -- screen -> client des Ziel-hwnd
   local dstx = rect.l - cl
@@ -177,7 +189,8 @@ local function draw()
   ln("")
   ln("GetThingFromPoint:")
   if r then
-    ln(string.format("   win=%s  seg=%s  det=%s", r.win, r.seg, r.det))
+    ln(string.format("   win=%s", r.win))
+    ln(string.format("   info=%s", r.info))
     ln(string.format("   Zeilen-Rect: %s   FX-Zeile erkannt: %s",
         fmtRect(r), r.isFx and "JA" or "nein"))
   else
@@ -195,12 +208,12 @@ local function loop()
   local rect = findRowRect(mx, my)
 
   if rect then
-    local key = rect.win .. "|" .. rect.seg .. "|" .. rect.det
+    local key = rect.win .. "|" .. rect.info
     if key ~= last.key then
       -- nur bei Änderung loggen (Console nicht fluten)
       reaper.ShowConsoleMsg(string.format(
-        "[hit] win=%-16s seg=%-10s det=%-10s rect=%s isFx=%s\n",
-        rect.win, rect.seg, rect.det, fmtRect(rect), tostring(rect.isFx)))
+        "[hit] win=%s info=%-14s rect=%s isFx=%s\n",
+        rect.win, rect.info, fmtRect(rect), tostring(rect.isFx)))
       last.key = key
     end
     last.rect = rect

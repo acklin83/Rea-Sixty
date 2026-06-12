@@ -1,0 +1,80 @@
+=== Rea-Sixty Inserts-Overlay Spike ===
+REAPER 7.74
+  JS_WindowFromPoint   OK
+  JS_GetClientRect     OK
+  GetThingFromPoint    OK
+  GetTrackFromPoint    OK
+  JS_Composite         OK
+  JS_LICE_Line         OK
+  JS_Invalidate        OK
+  JS_LICE_Create       OK
+  JS_LICE_FillRect     OK
+
+# Raw [hit] capture, REAPER 7.74 macOS, 2026-06-12. win=HWND addr, info=element key,
+# rect=screen coords (reverse-scan), isFx=info contains "fx".
+
+[hit] win=0x108008000 info=tcp.fxparm     rect=x=420 y=742  w=90 h=21 isFx=true
+[hit] win=0x108008000 info=tcp            rect=x=110 y=741  w=467 h=1 isFx=false
+[hit] win=0x108008000 info=fx_1           rect=x=600 y=577  w=419 h=311 isFx=true
+[hit] win=0x108008000 info=fx_1           rect=x=688 y=691  w=632 h=197 isFx=true
+[hit] win=0x138028000 info=tcp            rect=x=332 y=794  w=205 h=34 isFx=false
+[hit] win=0x138028000 info=tcp.label      rect=x=93 y=801  w=50 h=20 isFx=false
+[hit] win=0x108008000 info=mcp.fxlist     rect=x=0 y=749  w=84 h=228 isFx=true
+[hit] win=0x138028000 info=tcp.io         rect=x=150 y=801  w=28 h=20 isFx=false
+[hit] win=0x138028000 info=tcp.volume     rect=x=93 y=774  w=435 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.label      rect=x=139 y=744  w=110 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.volume     rect=x=249 y=744  w=20 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.pan        rect=x=276 y=744  w=20 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.env        rect=x=381 y=744  w=20 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.fxbyp      rect=x=358 y=744  w=16 h=20 isFx=true
+[hit] win=0x108008000 info=tcp.fx         rect=x=338 y=744  w=20 h=20 isFx=true
+[hit] win=0x138028000 info=tcp.pan        rect=x=255 y=801  w=20 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.recarm     rect=x=119 y=744  w=20 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.trackidx   rect=x=92 y=741  w=18 h=26 isFx=false
+[hit] win=0x108008000 info=tcp.io         rect=x=303 y=744  w=28 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.meter      rect=x=519 y=744  w=11 h=21 isFx=false
+[hit] win=0x108008000 info=tcp.mute       rect=x=533 y=744  w=21 h=20 isFx=false
+[hit] win=0x108008000 info=tcp.solo       rect=x=554 y=744  w=20 h=20 isFx=false
+[hit] win=0x138028000 info=tcp.solo       rect=x=552 y=782  w=21 h=20 isFx=false
+[hit] win=0x138028000 info=tcp.mute       rect=x=552 y=804  w=21 h=20 isFx=false
+[hit] win=0x138028000 info=master.tcp.mono rect=x=282 y=801  w=50 h=20 isFx=false
+[hit] win=0x138028000 info=tcp.env        rect=x=228 y=801  w=20 h=20 isFx=false
+[hit] win=0x138028000 info=tcp.fxbyp      rect=x=205 y=801  w=16 h=20 isFx=true
+[hit] win=0x138028000 info=tcp.fx         rect=x=185 y=801  w=20 h=20 isFx=true
+[hit] win=0x108008000 info=mcp            rect=x=55 y=437  w=30 h=55 isFx=false
+[hit] win=0x108008000 info=mcp.recinput   rect=x=6 y=421  w=75 h=16 isFx=false
+[hit] win=0x108008000 info=mcp.fxin       rect=x=6 y=409  w=75 h=12 isFx=true
+[hit] win=0x108008000 info=mcp.recmode    rect=x=6 y=389  w=42 h=16 isFx=false
+[hit] win=0x108008000 info=mcp.recarm     rect=x=51 y=376  w=34 h=24 isFx=false
+[hit] win=0x108008000 info=mcp.recmon     rect=x=58 y=357  w=21 h=20 isFx=false
+[hit] win=0x108008000 info=mcp.mute       rect=x=58 y=335  w=21 h=20 isFx=false
+[hit] win=0x108008000 info=mcp.solo       rect=x=58 y=311  w=21 h=20 isFx=false
+[hit] win=0x108008000 info=mcp.io         rect=x=57 y=275  w=23 h=30 isFx=false
+[hit] win=0x108008000 info=mcp.volume     rect=x=30 y=106  w=21 h=254 isFx=false
+[hit] win=0x108008000 info=mcp.meter      rect=x=4 y=108  w=25 h=252 isFx=false
+[hit] win=0x108008000 info=mcp.phase      rect=x=61 y=139  w=16 h=18 isFx=false
+[hit] win=0x108008000 info=mcp.env        rect=x=58 y=106  w=21 h=30 isFx=false
+[hit] win=0x108008000 info=mcp.label      rect=x=0 y=80  w=85 h=26 isFx=false
+[hit] win=0x108008000 info=mcp.trackidx   rect=x=0 y=59  w=85 h=21 isFx=false
+[hit] win=0x108008000 info=mcp.pan.label  rect=x=26 y=443  w=35 h=10 isFx=false
+[hit] win=0x108008000 info=mcp.sendlist   rect=x=0 y=520  w=84 h=225 isFx=false
+[hit] win=0x108008000 info=mcp.fxlist     rect=x=0 y=749  w=84 h=228 isFx=true
+[hit] win=0x138028000 info=mcp            rect=x=1885 y=103  w=35 h=223 isFx=false
+[hit] win=0x138028000 info=mcp.volume     rect=x=1864 y=66  w=21 h=325 isFx=false
+[hit] win=0x138028000 info=master.mcp.label rect=x=1815 y=43  w=105 h=23 isFx=false
+[hit] win= info=trans          rect=x=1420 y=31  w=500 h=6 isFx=false
+[hit] win=0x138028000 info=mcp.meter      rect=x=1799 y=72  w=59 h=319 isFx=false
+[hit] win=0x138028000 info=mcp.sendlist   rect=x=1795 y=491  w=123 h=164 isFx=false
+[hit] win=0x138028000 info=mcp.fxlist     rect=x=1795 y=659  w=123 h=318 isFx=true
+[hit] win=0x138028000 info=master.mcp.mono rect=x=1888 y=423  w=25 h=33 isFx=false
+[hit] win=0x138028000 info=mcp.pan        rect=x=1824 y=434  w=24 h=24 isFx=false
+[hit] win=0x138028000 info=mcp.mute       rect=x=1890 y=388  w=21 h=20 isFx=false
+[hit] win=0x138028000 info=mcp.solo       rect=x=1890 y=363  w=21 h=20 isFx=false
+[hit] win=0x138028000 info=mcp.io         rect=x=1889 y=326  w=23 h=30 isFx=false
+[hit] win=0x138028000 info=mcp.env        rect=x=1890 y=73  w=21 h=30 isFx=false
+[hit] win=0x138028000 info=master.mcp.label rect=x=1795 y=64  w=125 h=2 isFx=false
+[hit] win=0x138028000 info=master.mcp.menubutton rect=x=1795 y=44  w=20 h=20 isFx=false
+[hit] win= info=trans          rect=x=1835 y=7  w=28 h=21 isFx=false
+[hit] win= info=trans.automode rect=x=1870 y=9  w=50 h=18 isFx=false
+[hit] win=0x138028000 info=mcp.volume.label rect=x=1795 y=391  w=91 h=23 isFx=false
+</content>
