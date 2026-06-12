@@ -441,7 +441,10 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         "Only Show Channel Strip GR", "Show any GR Data"
     };
     int grIdx = reasixty_grAnyFx() ? 1 : 0;
-    if (ImGui_BeginCombo(ctx, "GR meter source", kGrLabels[grIdx],
+    ImGui_Text(ctx, "GR meter source");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_SetNextItemWidth(ctx, 220.0);
+    if (ImGui_BeginCombo(ctx, "##gr_meter_source", kGrLabels[grIdx],
                          /*flags*/ nullptr)) {
         for (int i = 0; i < 2; ++i) {
             bool sel = (grIdx == i);
@@ -510,7 +513,10 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // ImGui_Combo with \0-items (renders empty in ReaImGui v0.10).
     static const char* kPinLabels[2] = { "Replace strip", "Shift banking" };
     int pinIdx = reasixty_masterPinShift() ? 1 : 0;
-    if (ImGui_BeginCombo(ctx, "Pinned Master", kPinLabels[pinIdx],
+    ImGui_Text(ctx, "Pinned Master");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_SetNextItemWidth(ctx, 220.0);
+    if (ImGui_BeginCombo(ctx, "##pinned_master", kPinLabels[pinIdx],
                          /*flags*/ nullptr)) {
         for (int i = 0; i < 2; ++i) {
             bool sel = (pinIdx == i);
@@ -691,8 +697,10 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         const char* kNameModeLabels[2] = { "Truncate", "Smart abbreviate" };
         int curMode = reasixty_trackNameMode();
         if (curMode < 0 || curMode > 1) curMode = 0;
+        ImGui_Text(ctx, "Long track-name handling");
+        ImGui_SameLine(ctx, nullptr, nullptr);
         ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_BeginCombo(ctx, "Long track-name handling",
+        if (ImGui_BeginCombo(ctx, "##long_track_name_handling",
                              kNameModeLabels[curMode],
                              /*flags*/ nullptr)) {
             for (int i = 0; i < 2; ++i) {
