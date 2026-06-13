@@ -1,0 +1,99 @@
+{
+  "_doc": "Rea-Sixty surface coordinate map — SHARED source of truth for the on-screen HUD (gfx/Lua) AND the future click-to-assign mockup editor (ReaImGui/C++). See surface_maps.README.md. Coords are NORMALISED 0..1 relative to each device's PNG (origin top-left); the renderer multiplies by the drawn image rect, so it is resolution- and scale-independent. Control ids match uf8::bindings::toName() (Bindings.cpp kNames) for global buttons; per-strip controls follow the strip-template below. geom is null until calibrated against the artwork.",
+  "version": 1,
+  "coord_space": "normalized-0-1-topleft",
+  "devices": {
+    "uf8": {
+      "image": "uf8.png",
+      "aspect": null,
+      "_doc": "8 channel strips share one geometry template (evenly spaced): a control's x = strips.x0 + (n-1)*strips.pitch (+ the control's own dx), its y/size from the per-control row. Calibrate x0 + pitch + each row once instead of 56 cells.",
+      "strips": {
+        "count": 8,
+        "x0": null,
+        "pitch": null,
+        "controls": {
+          "fader":     { "shape": "vfader", "dx": null, "y": null, "w": null, "h": null },
+          "vpot":      { "shape": "ring",   "dx": null, "y": null, "r": null },
+          "vpot_push": { "shape": "button", "dx": null, "y": null, "r": null },
+          "select":    { "shape": "led",    "dx": null, "y": null, "w": null, "h": null },
+          "solo":      { "shape": "led",    "dx": null, "y": null, "w": null, "h": null },
+          "mute":      { "shape": "led",    "dx": null, "y": null, "w": null, "h": null },
+          "rec":       { "shape": "led",    "dx": null, "y": null, "w": null, "h": null },
+          "scribble":  { "shape": "lcd",    "dx": null, "y": null, "w": null, "h": null },
+          "top_soft":  { "shape": "button", "dx": null, "y": null, "w": null, "h": null }
+        }
+      },
+      "globals": [
+        { "id": "bank_left",      "shape": "button", "geom": null },
+        { "id": "bank_right",     "shape": "button", "geom": null },
+        { "id": "page_left",      "shape": "button", "geom": null },
+        { "id": "page_right",     "shape": "button", "geom": null },
+        { "id": "layer_1",        "shape": "button", "geom": null },
+        { "id": "layer_2",        "shape": "button", "geom": null },
+        { "id": "layer_3",        "shape": "button", "geom": null },
+        { "id": "quick_1",        "shape": "button", "geom": null },
+        { "id": "quick_2",        "shape": "button", "geom": null },
+        { "id": "quick_3",        "shape": "button", "geom": null },
+        { "id": "plugin_btn",     "shape": "button", "geom": null },
+        { "id": "flip",           "shape": "button", "geom": null },
+        { "id": "pan",            "shape": "button", "geom": null },
+        { "id": "fine",           "shape": "button", "geom": null },
+        { "id": "btn_360",        "shape": "button", "geom": null },
+        { "id": "auto_off",       "shape": "button", "geom": null },
+        { "id": "auto_read",      "shape": "button", "geom": null },
+        { "id": "auto_write",     "shape": "button", "geom": null },
+        { "id": "auto_trim",      "shape": "button", "geom": null },
+        { "id": "auto_latch",     "shape": "button", "geom": null },
+        { "id": "auto_touch",     "shape": "button", "geom": null },
+        { "id": "zoom_up",        "shape": "button", "geom": null },
+        { "id": "zoom_down",      "shape": "button", "geom": null },
+        { "id": "zoom_left",      "shape": "button", "geom": null },
+        { "id": "zoom_right",     "shape": "button", "geom": null },
+        { "id": "zoom_center",    "shape": "button", "geom": null },
+        { "id": "nav",            "shape": "button", "geom": null },
+        { "id": "nudge",          "shape": "button", "geom": null },
+        { "id": "focus",          "shape": "button", "geom": null },
+        { "id": "channel_push",   "shape": "button", "geom": null },
+        { "id": "channel",        "shape": "button", "geom": null },
+        { "id": "vpot_bank",      "shape": "button", "geom": null },
+        { "id": "softkey_bank_1", "shape": "button", "geom": null },
+        { "id": "softkey_bank_2", "shape": "button", "geom": null },
+        { "id": "softkey_bank_3", "shape": "button", "geom": null },
+        { "id": "softkey_bank_4", "shape": "button", "geom": null },
+        { "id": "softkey_bank_5", "shape": "button", "geom": null },
+        { "id": "selection_norm", "shape": "button", "geom": null },
+        { "id": "selection_rec",  "shape": "button", "geom": null },
+        { "id": "selection_auto", "shape": "button", "geom": null },
+        { "id": "channel_encoder","shape": "ring",   "geom": null },
+        { "id": "foot_1",         "shape": "button", "geom": null },
+        { "id": "foot_2",         "shape": "button", "geom": null }
+      ]
+    },
+    "uc1": {
+      "image": "uc1.png",
+      "aspect": null,
+      "_doc": "BC2 (centre bus-comp) + CS2 (channel-strip, around it) knobs are SSL plug-in param controls, not ButtonId entries — enumerate their ids + geom from the SSL Link map (kCsLinkToUc1 / kBcLinkToUc1) + the UC1 panel photo during calibration. Known ButtonId controls listed now.",
+      "strips": null,
+      "knobs": [],
+      "globals": [
+        { "id": "uc1_encoder_1",      "shape": "ring",   "geom": null },
+        { "id": "uc1_encoder_2",      "shape": "ring",   "geom": null },
+        { "id": "uc1_encoder_2_push", "shape": "button", "geom": null },
+        { "id": "uc1_magnifier",      "shape": "button", "geom": null },
+        { "id": "uc1_btn_360",        "shape": "button", "geom": null },
+        { "id": "lcd",                "shape": "lcd",    "geom": null }
+      ]
+    },
+    "uf1": {
+      "image": "uf1.png",
+      "aspect": null,
+      "_doc": "UF1 control inventory still being decoded (fader, jog wheel, transport, colour screen). Stub — populate ids + geom when the layout + PNG are ready. See uf1-control-functionality / uf1-decode-plan memories.",
+      "strips": null,
+      "globals": [
+        { "id": "fader",  "shape": "vfader", "geom": null },
+        { "id": "jog",    "shape": "ring",   "geom": null },
+        { "id": "screen", "shape": "lcd",    "geom": null }
+      ]
+    }
+  }
+}
