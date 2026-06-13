@@ -257,8 +257,8 @@ local function panelMetrics()
   if fs < 8 then fs = 8 end
   local pad = math.max(6, math.floor(fs * 0.5))
   local lh  = fs + math.floor(fs * 0.5)
-  local w   = math.max(232, fs * 13)
-  local h   = pad * 2 + lh * 3 + 6   -- CS-row + BC-row + last-param
+  local w   = math.max(300, fs * 18)   -- room for "track  TAG fx  param val"
+  local h   = pad * 2 + lh * 2 + 6      -- CS row + BC row (each with its param)
   return fs, pad, lh, w, h
 end
 
@@ -304,6 +304,15 @@ local function findActiveBc(byGuid)
   return nil
 end
 
+-- "name<tab>value" ExtState -> name, value (nil if unset).
+local function paramStr(key)
+  local raw = reaper.GetExtState(SECT, key)
+  if not raw or raw == "" then return nil, nil end
+  local n, v = raw:match("^(.-)\t(.*)$")
+  if not n then n = raw end
+  return n, v
+end
+
 local function drawPanel(byGuid)
   local fs, pad, lh = panelMetrics()
   gfx.set(0.11, 0.11, 0.12, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
@@ -311,7 +320,7 @@ local function drawPanel(byGuid)
 
   -- CS = focused track's active instance. BC = the SURFACE BC, on whatever
   -- track it's anchored to (not necessarily the focused one). Each row shows
-  -- its OWN track name, since CS and BC can live on different tracks.
+  -- its OWN track name + the last param changed on THAT plugin.
   local fGuid = reaper.GetExtState(SECT, "overlay_focus")
   local ftr, fMaster = findTrackByGuid(fGuid)
   local fa = byGuid and byGuid[fGuid] or nil
@@ -324,8 +333,12 @@ local function drawPanel(byGuid)
   local bcTrk  = btr and trackLabel(btr, bMaster) or nil
   local bcName = btr and fxLabel(btr, bcIdx) or nil
 
-  -- "<track>  <TAG> <fx>" — track dim, tag in domain colour, fx bright.
-  local function row(y, trk, tag, col, name)
+  local csPN, csPV = paramStr("overlay_param_cs")
+  local bcPN, bcPV = paramStr("overlay_param_bc")
+
+  -- "<track>  <TAG> <fx>   <param> <val>" — track dim, tag in domain colour,
+  -- fx bright, param blue + value dim.
+  local function row(y, trk, tag, col, name, pn, pv)
     local lit = name ~= nil
     gfx.x, gfx.y = pad, y
     gfx.set(0.62, 0.62, 0.70, lit and 1 or 0.35)
@@ -333,24 +346,15 @@ local function drawPanel(byGuid)
     gset(col, lit and 1 or 0.35); gfx.drawstr(tag .. " ")
     gfx.set(0.93, 0.93, 0.96, lit and 1 or 0.35)
     gfx.drawstr(name or "\xE2\x80\x94")
-  end
-  row(pad,          csTrk, "CS", csRgb(), csName)
-  row(pad + lh,     bcTrk, "BC", bcRgb(), bcName)
-
-  -- Last-changed parameter: "name<tab>value" (name reflects a user-defined
-  -- alias when the param has been renamed). Persists until the next change.
-  local praw = reaper.GetExtState(SECT, "overlay_param")
-  gfx.x, gfx.y = pad, pad + lh * 2
-  if praw == nil or praw == "" then
-    gfx.set(0.5, 0.5, 0.55, 0.5); gfx.drawstr("\xE2\x80\x94")
-  else
-    local pname, pval = praw:match("^(.-)\t(.*)$")
-    if not pname then pname = praw end
-    gfx.set(0.66, 0.78, 0.96, 1); gfx.drawstr(pname)
-    if pval and pval ~= "" then
-      gfx.set(0.6, 0.6, 0.66, 1); gfx.drawstr("  " .. pval)
+    if pn and pn ~= "" then
+      gfx.set(0.66, 0.78, 0.96, 1); gfx.drawstr("   " .. pn)
+      if pv and pv ~= "" then
+        gfx.set(0.6, 0.6, 0.66, 1); gfx.drawstr(" " .. pv)
+      end
     end
   end
+  row(pad,        csTrk, "CS", csRgb(), csName, csPN, csPV)
+  row(pad + lh,   bcTrk, "BC", bcRgb(), bcName, bcPN, bcPV)
 end
 
 local function panelClose(persistOff)

@@ -5039,39 +5039,81 @@ void publishOverlayFocus_()
     SetExtState("rea_sixty", "overlay_focus", guid.c_str(), false);
 }
 
-// Publishes the LAST-CHANGED FX parameter for the docker panel (section
-// "rea_sixty", key "overlay_param", transient) as "name\tvalue". Source:
-// GetLastTouchedFX (global — surface OR mouse). The name is REAPER's parameter
-// name, which already reflects a user-defined alias when the user has renamed
-// the param. Diff-guarded; empty while neither feature is on. Main-thread-only.
-std::string g_overlayParamPublished;
-void publishOverlayParam_()
+// Resolve the surface's active CS / BC instances (track + FX chain index).
+// CS = focused track, BC = BC-anchor track (effectiveBcTrack_). fx = -1 when
+// that domain is absent. The track ptr may be non-null with fx == -1.
+void activeCsBcTargets_(MediaTrack*& csTr, int& csFx, MediaTrack*& bcTr, int& bcFx)
 {
-    std::string out;
+    csTr = bcTr = nullptr; csFx = bcFx = -1;
+    if (!g_uc1_surface) return;
+    csTr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    bcTr = static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic());
+    if (csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")
+        && uc1::csInstanceCount(csTr) > 0)
+        csFx = uc1::fxIndexForInstance(csTr, false, uc1::csInstanceIndex(csTr));
+    if (bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*")
+        && uc1::bcInstanceCount(bcTr) > 0)
+        bcFx = uc1::fxIndexForInstance(bcTr, true, uc1::bcInstanceIndex(bcTr));
+}
+
+static void resolveLastTouched_(MediaTrack*& tr, int& fx, int& param)
+{
+    tr = nullptr; fx = -1; param = -1;
+    int trW = -1, fxW = -1, p = -1;
+    if (!GetLastTouchedFX(&trW, &fxW, &p)) return;
+    if ((trW & 0xFFFF0000) != 0 || p < 0) return;          // take-FX / invalid
+    const int trLow = trW & 0xFFFF;
+    tr = (trLow == 0) ? GetMasterTrack(0) : GetTrack(nullptr, trLow - 1);
+    fx = fxW & 0x00FFFFFF;
+    if ((fxW >> 24) & 0x01) fx += 0x1000000;               // input/rec-FX
+    param = p;
+}
+
+static std::string fmtParam_(MediaTrack* tr, int fx, int param)
+{
+    if (!tr || fx < 0 || param < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*"))
+        return {};
+    char nm[256] = {0}, val[128] = {0};
+    TrackFX_GetParamName(tr, fx, param, nm, sizeof(nm));
+    TrackFX_GetFormattedParamValue(tr, fx, param, val, sizeof(val));
+    if (!nm[0]) return {};
+    std::string s = nm;
+    if (val[0]) { s += '\t'; s += val; }
+    return s;
+}
+
+// Per-domain last-changed parameter for the docker (keys "overlay_param_cs" /
+// "overlay_param_bc", "name\tvalue"). Remembers the last param touched on the
+// CS instance and on the BC instance INDEPENDENTLY, so each plugin shows its
+// own — reset when that domain's target instance changes. Name reflects a user
+// alias when the param was renamed. Diff-guarded; main-thread-only.
+std::string g_csParamPublished, g_bcParamPublished;
+void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcFx)
+{
+    static MediaTrack* sCsTr = nullptr; static int sCsFx = -1, sCsParam = -1;
+    static MediaTrack* sBcTr = nullptr; static int sBcFx = -1, sBcParam = -1;
+    if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; }
+    if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; }
+
     const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
     if (feat) {
-        int trWord = -1, fxWord = -1, paramIdx = -1;
-        if (GetLastTouchedFX(&trWord, &fxWord, &paramIdx)
-            && (trWord & 0xFFFF0000) == 0 && paramIdx >= 0) {     // not take-FX
-            const int trLow = trWord & 0xFFFF;
-            MediaTrack* tr = (trLow == 0) ? GetMasterTrack(0)
-                                          : GetTrack(nullptr, trLow - 1);
-            int fxIdx = fxWord & 0x00FFFFFF;
-            if ((fxWord >> 24) & 0x01) fxIdx += 0x1000000;        // input/rec-FX
-            if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
-                char nm[256] = {0}, val[128] = {0};
-                TrackFX_GetParamName(tr, fxIdx, paramIdx, nm, sizeof(nm));
-                TrackFX_GetFormattedParamValue(tr, fxIdx, paramIdx, val, sizeof(val));
-                if (nm[0]) {
-                    out = nm;
-                    if (val[0]) { out += '\t'; out += val; }
-                }
-            }
+        MediaTrack* ltTr; int ltFx, ltP;
+        resolveLastTouched_(ltTr, ltFx, ltP);
+        if (ltTr) {
+            if (ltTr == csTr && ltFx == csFx && csFx >= 0) sCsParam = ltP;
+            if (ltTr == bcTr && ltFx == bcFx && bcFx >= 0) sBcParam = ltP;
         }
     }
-    if (out == g_overlayParamPublished) return;
-    g_overlayParamPublished = out;
-    SetExtState("rea_sixty", "overlay_param", out.c_str(), false);
+    const std::string cs = feat ? fmtParam_(csTr, csFx, sCsParam) : std::string();
+    const std::string bc = feat ? fmtParam_(bcTr, bcFx, sBcParam) : std::string();
+    if (cs != g_csParamPublished) {
+        g_csParamPublished = cs;
+        SetExtState("rea_sixty", "overlay_param_cs", cs.c_str(), false);
+    }
+    if (bc != g_bcParamPublished) {
+        g_bcParamPublished = bc;
+        SetExtState("rea_sixty", "overlay_param_bc", bc.c_str(), false);
+    }
 }
 
 void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
@@ -5087,27 +5129,19 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
 void publishOverlayState_()
 {
     publishOverlayFocus_();   // refresh focused-track GUID for the readout panel
-    publishOverlayParam_();   // refresh last-changed param for the readout panel
     // `on` drives the MCP highlight (markers feature). The per-track CS/BC body
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.
     const bool on   = g_insertMarkersEnabled.load();
     const bool body_on = on || g_insertPanelEnabled.load();
+    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+    int csFx = -1, bcFx = -1;
+    if (body_on) activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+    publishOverlayParams_(csTr, csFx, bcTr, bcFx);   // per-domain last param
     std::string body;
-    if (body_on && g_uc1_surface) {
+    if (body_on) {
         // Mark ONLY the surface's active CS/BC, not every track that merely
-        // hosts one: CS lives on the focused track, BC on the BC-anchor track
-        // (effectiveBcTrack_ — the pinned anchor, else the first BC-bearing
-        // track). So a second track with its own BC is NOT shown as active.
-        MediaTrack* csTr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-        MediaTrack* bcTr = static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic());
-        int csFx = -1, bcFx = -1;
-        if (csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")
-            && uc1::csInstanceCount(csTr) > 0)
-            csFx = uc1::fxIndexForInstance(csTr, false, uc1::csInstanceIndex(csTr));
-        if (bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*")
-            && uc1::bcInstanceCount(bcTr) > 0)
-            bcFx = uc1::fxIndexForInstance(bcTr, true, uc1::bcInstanceIndex(bcTr));
+        // hosts one: CS on the focused track, BC on the BC-anchor track.
         if (csTr && csTr == bcTr) {
             appendOverlayEntry_(csTr, csFx, bcFx, body);     // both on one track
         } else {
