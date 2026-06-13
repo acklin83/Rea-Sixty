@@ -766,6 +766,21 @@ int UC1Surface::poll()
         refresh();
     }
 
+    // EXT FUNCS active: mirror EXTERNAL edits (UF8 V-Pot / plugin GUI /
+    // automation) of the live param back onto the UC1 value. The subscreen
+    // otherwise only redraws on the UC1's own encoder, so a UF8 edit wouldn't
+    // show. Cheap: one param read + compare while in this transient mode.
+    if (mode_ == Uc1Mode::ExtFuncs && extFuncsActive_ && focusedTrack_
+        && extFuncsCurFx_ >= 0 && extFuncsCurParam_ >= 0)
+    {
+        auto* tr = static_cast<MediaTrack*>(focusedTrack_);
+        if (ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            const double v = TrackFX_GetParamNormalized(
+                tr, extFuncsCurFx_, extFuncsCurParam_);
+            if (std::abs(v - extFuncsLastVal_) > 1e-6) renderExtFuncsSubscreen_();
+        }
+    }
+
     // Per-tick value poll. Catches every cause of focused-param change:
     //   - UF8 Page <-/-> shifted slotIdx (text changes)
     //   - UF8 V-Pot rotation on the focused track (value changes)
@@ -2730,10 +2745,22 @@ std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
         for (const auto& e : um->extFuncs) {
             if (e.vst3Param < 0) continue;        // skip empty/unassigned slots
             ExtFuncItem it;
-            it.longLabel  = e.name;
+            // Prefer a meaningful label: the user's curated name, UNLESS it's the
+            // generic "Quick N" auto-learn artefact (or empty) — then fall back
+            // to the real plug-in param name (which also reflects a REAPER param
+            // alias). Fixes "Quick 2" showing instead of the param name.
+            std::string nm = e.name;
+            const bool generic = nm.empty() || nm.rfind("Quick ", 0) == 0;
+            if (generic && match.fxIndex >= 0) {
+                char pn[128] = {0};
+                if (TrackFX_GetParamName(tr, match.fxIndex, e.vst3Param,
+                                         pn, sizeof(pn)) && pn[0])
+                    nm = pn;
+            }
+            it.longLabel  = nm;
             // Carousel fits 11 chars on the UC1 LCD (Frank, empirical
             // 2026-06-02). Header (longLabel) keeps the full name.
-            it.shortLabel = e.name.size() > 11 ? e.name.substr(0, 11) : e.name;
+            it.shortLabel = nm.size() > 11 ? nm.substr(0, 11) : nm;
             it.vst3Param  = e.vst3Param;
             it.linkIdx    = -1;                    // free param: no usl/broadcast
             out.push_back(std::move(it));
@@ -2797,6 +2824,7 @@ void UC1Surface::renderExtFuncsSubscreen_()
     // commit/repaint trigger for the bottom LCD region. Without it,
     // the value text caches and stops updating on subsequent encoder
     // detents (only the very first value-frame paints).
+    extFuncsCurFx_ = -1; extFuncsCurParam_ = -1;   // refreshed below if resolved
     if (focusedTrack_ && cur.vst3Param >= 0) {
         auto match = uf8::lookupPluginOnTrack(focusedTrack_,
                                               uf8::Domain::ChannelStrip);
@@ -2805,6 +2833,9 @@ void UC1Surface::renderExtFuncsSubscreen_()
             char buf[64] = {};
             const double v = TrackFX_GetParamNormalized(
                 tr, match.fxIndex, cur.vst3Param);
+            extFuncsCurFx_    = match.fxIndex;       // for poll()'s external-edit
+            extFuncsCurParam_ = cur.vst3Param;       // mirror check
+            extFuncsLastVal_  = v;
             TrackFX_FormatParamValueNormalized(
                 tr, match.fxIndex, cur.vst3Param, v, buf, sizeof(buf));
             std::string val{buf};
