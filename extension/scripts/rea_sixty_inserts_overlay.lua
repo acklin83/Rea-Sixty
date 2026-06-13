@@ -196,20 +196,13 @@ end
 
 local function drawBlockRow(block, fxIdx, col)
   if block.kind == "mcp" then
-    -- Row height: manual override (overlay_rowh > 0) else DERIVED from the
-    -- list height / FX count, which tracks the theme + strip height for free.
-    local manual = num("overlay_rowh", 0)
-    local rowH
-    if manual > 0 then
-      rowH = manual
-    elseif block.count and block.count > 0 then
-      rowH = block.ch / block.count
-    else
-      rowH = 14
-    end
-    local topPad = num("overlay_toppad", 0)
+    -- Row height is a THEME/UI-scale font constant (mcp.fxlist.font = 16/24/32 px
+    -- @ scale 1/1.5/2), NOT derivable from the box (the inserts area is a fixed
+    -- height that does NOT grow to fit — ch/count fails on short chains). So a
+    -- tuned constant + a Settings slider. topPad nudges the first row.
+    local rowH   = num("overlay_rowh", 17)
+    local topPad = num("overlay_toppad", 1)
     local y = topPad + fxIdx * rowH
-    -- +1 slack so the LAST row (y+rowH == ch) isn't dropped by float rounding.
     if y < -1 or y + rowH > block.ch + 1 then return end
     composite(block.hwnd, 0, math.floor(y + 0.5), block.cw, math.floor(rowH + 0.5), col)
   else  -- tcp: shared track-panel window
@@ -408,7 +401,7 @@ local function drawSig(byGuid, blocks)
     parts[#parts + 1] = string.format("%s:%s:%s:%s", guid, tostring(a.cs), tostring(a.bc), bs)
   end
   table.sort(parts)
-  return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 0) .. "," .. num("overlay_toppad", 0)
+  return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 17) .. "," .. num("overlay_toppad", 1)
     .. "," .. num("overlay_rowh_tcp", 14) .. "," .. num("overlay_toppad_tcp", 0)
     .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. fillA() .. "," .. lineA()
 end

@@ -89,6 +89,8 @@ int    reasixty_overlayPanelFont();
 void   reasixty_setOverlayPanelFont(int px);
 int    reasixty_overlayRowHeight();
 void   reasixty_setOverlayRowHeight(int px);
+int    reasixty_overlayTopPad();
+void   reasixty_setOverlayTopPad(int px);
 bool   reasixty_toggleInsertsOverlay();
 bool   reasixty_insertsOverlayRunning();
 int    reasixty_uc1CalCount(int section);
@@ -591,13 +593,20 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
                                    "%.2f", nullptr)) {
                 reasixty_setOverlayLineAlpha(lineA);
             }
-            // Row height: 0 = auto (derived from the fxlist height / FX count;
-            // exact when the list is fully visible). Override for scrolled lists.
+            // Row height + first-row offset. The insert-row height is a theme/
+            // UI-scale font constant (16/24/32px @ scale 1/1.5/2); dial it until
+            // the highlight sits on the right rows.
             int rh = reasixty_overlayRowHeight();
             ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Row height (0 = auto)", &rh, 0, 48,
+            if (ImGui_SliderInt(ctx, "Inserts row height", &rh, 8, 48,
                                 nullptr, nullptr)) {
                 reasixty_setOverlayRowHeight(rh);
+            }
+            int tp = reasixty_overlayTopPad();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_SliderInt(ctx, "Inserts top offset", &tp, -20, 40,
+                                nullptr, nullptr)) {
+                reasixty_setOverlayTopPad(tp);
             }
         }
 

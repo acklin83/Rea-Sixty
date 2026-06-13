@@ -15714,23 +15714,36 @@ void reasixty_setOverlayPanelFont(int px)
     SetExtState("rea_sixty", "overlay_panel_font", b, true);
 }
 
-// MCP overlay row height. 0 = auto (the Lua derives it from the fxlist window
-// height / FX count — exact when the list is fully visible). >0 overrides for
-// scrolled / clipped lists where auto can't see the true row height. The MCP
-// insert-row height is font-driven in the theme (mcp.fxlist.font 16/24/32 px @
-// UI-scale 1/1.5/2), so there is no single value to read — auto + override.
+// MCP overlay geometry. The insert-row height is a THEME / UI-scale font
+// constant (mcp.fxlist.font = 16/24/32 px @ scale 1/1.5/2) and the inserts box
+// is a FIXED height that does not grow to fit — so it can't be derived from the
+// window; it's a tuned constant the user fine-tunes here. Row height + a
+// top-offset that nudges the first row to line up with the list.
 int  reasixty_overlayRowHeight()
 {
     const char* v = GetExtState("rea_sixty", "overlay_rowh");
-    int px = (v && *v) ? std::atoi(v) : 0;
-    if (px < 0) px = 0; if (px > 48) px = 48;
+    int px = (v && *v) ? std::atoi(v) : 17;
+    if (px < 8) px = 8; if (px > 48) px = 48;
     return px;
 }
 void reasixty_setOverlayRowHeight(int px)
 {
-    if (px < 0) px = 0; if (px > 48) px = 48;
+    if (px < 8) px = 8; if (px > 48) px = 48;
     char b[8]; snprintf(b, sizeof(b), "%d", px);
     SetExtState("rea_sixty", "overlay_rowh", b, true);
+}
+int  reasixty_overlayTopPad()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_toppad");
+    int px = (v && *v) ? std::atoi(v) : 1;
+    if (px < -20) px = -20; if (px > 40) px = 40;
+    return px;
+}
+void reasixty_setOverlayTopPad(int px)
+{
+    if (px < -20) px = -20; if (px > 40) px = 40;
+    char b[8]; snprintf(b, sizeof(b), "%d", px);
+    SetExtState("rea_sixty", "overlay_toppad", b, true);
 }
 
 // Per-tick device calibration accessors (Settings → Device).
