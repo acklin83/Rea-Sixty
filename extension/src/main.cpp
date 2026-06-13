@@ -5039,6 +5039,41 @@ void publishOverlayFocus_()
     SetExtState("rea_sixty", "overlay_focus", guid.c_str(), false);
 }
 
+// Publishes the LAST-CHANGED FX parameter for the docker panel (section
+// "rea_sixty", key "overlay_param", transient) as "name\tvalue". Source:
+// GetLastTouchedFX (global — surface OR mouse). The name is REAPER's parameter
+// name, which already reflects a user-defined alias when the user has renamed
+// the param. Diff-guarded; empty while neither feature is on. Main-thread-only.
+std::string g_overlayParamPublished;
+void publishOverlayParam_()
+{
+    std::string out;
+    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    if (feat) {
+        int trWord = -1, fxWord = -1, paramIdx = -1;
+        if (GetLastTouchedFX(&trWord, &fxWord, &paramIdx)
+            && (trWord & 0xFFFF0000) == 0 && paramIdx >= 0) {     // not take-FX
+            const int trLow = trWord & 0xFFFF;
+            MediaTrack* tr = (trLow == 0) ? GetMasterTrack(0)
+                                          : GetTrack(nullptr, trLow - 1);
+            int fxIdx = fxWord & 0x00FFFFFF;
+            if ((fxWord >> 24) & 0x01) fxIdx += 0x1000000;        // input/rec-FX
+            if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+                char nm[256] = {0}, val[128] = {0};
+                TrackFX_GetParamName(tr, fxIdx, paramIdx, nm, sizeof(nm));
+                TrackFX_GetFormattedParamValue(tr, fxIdx, paramIdx, val, sizeof(val));
+                if (nm[0]) {
+                    out = nm;
+                    if (val[0]) { out += '\t'; out += val; }
+                }
+            }
+        }
+    }
+    if (out == g_overlayParamPublished) return;
+    g_overlayParamPublished = out;
+    SetExtState("rea_sixty", "overlay_param", out.c_str(), false);
+}
+
 void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
 {
     if (!tr || (csFx < 0 && bcFx < 0)) return;
@@ -5052,6 +5087,7 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
 void publishOverlayState_()
 {
     publishOverlayFocus_();   // refresh focused-track GUID for the readout panel
+    publishOverlayParam_();   // refresh last-changed param for the readout panel
     // `on` drives the MCP highlight (markers feature). The per-track CS/BC body
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.

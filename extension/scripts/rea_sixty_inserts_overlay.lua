@@ -259,7 +259,7 @@ local function panelMetrics()
   local pad = math.max(6, math.floor(fs * 0.5))
   local lh  = fs + math.floor(fs * 0.5)
   local w   = math.max(232, fs * 13)
-  local h   = pad * 2 + lh * 3 + 6
+  local h   = pad * 2 + lh * 4 + 6   -- track + CS + BC + last-param
   return fs, pad, lh, w, h
 end
 
@@ -295,30 +295,58 @@ local function gset(rgb, a)
   gfx.set(((rgb >> 16) & 0xFF) / 255, ((rgb >> 8) & 0xFF) / 255, (rgb & 0xFF) / 255, a or 1)
 end
 
+-- The surface BC lives on whatever track it's anchored to — find the (single)
+-- published entry carrying a bc index, regardless of the focused track.
+local function findActiveBc(byGuid)
+  if not byGuid then return nil end
+  for guid, a in pairs(byGuid) do
+    if a.bc and a.bc >= 0 then return guid, a.bc end
+  end
+  return nil
+end
+
 local function drawPanel(byGuid)
   local fs, pad, lh = panelMetrics()
   gfx.set(0.11, 0.11, 0.12, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
   gfx.setfont(1, "Arial", fs)
-  local guid = reaper.GetExtState(SECT, "overlay_focus")
-  local tr, isMaster = findTrackByGuid(guid)
-  if not tr then
-    gfx.set(0.5, 0.5, 0.5, 1); gfx.x, gfx.y = pad, pad
-    gfx.drawstr("No focused track")
-    return
-  end
+
+  -- Header = surface-focused track.
+  local fGuid = reaper.GetExtState(SECT, "overlay_focus")
+  local ftr, isMaster = findTrackByGuid(fGuid)
   gfx.set(0.82, 0.82, 0.88, 1); gfx.x, gfx.y = pad, pad
-  gfx.drawstr(trackLabel(tr, isMaster))
-  local a = byGuid and byGuid[guid] or nil
-  local csName = a and fxLabel(tr, a.cs) or nil
-  local bcName = a and fxLabel(tr, a.bc) or nil
+  gfx.drawstr(ftr and trackLabel(ftr, isMaster) or "No focused track")
+
+  -- CS = focused track's active instance. BC = the SURFACE BC, on whatever
+  -- track it's anchored to (not necessarily the focused one).
+  local fa = byGuid and byGuid[fGuid] or nil
+  local csName = (ftr and fa) and fxLabel(ftr, fa.cs) or nil
+  local bcGuid, bcIdx = findActiveBc(byGuid)
+  local btr = bcGuid and findTrackByGuid(bcGuid) or nil
+  local bcName = btr and fxLabel(btr, bcIdx) or nil
+
   local function row(y, tag, col, name)
     gfx.x, gfx.y = pad, y
     gset(col, name and 1 or 0.30); gfx.drawstr(tag .. "  ")
     gfx.set(0.93, 0.93, 0.96, name and 1 or 0.30)
     gfx.drawstr(name or "\xE2\x80\x94")
   end
-  row(pad + lh,      "CS", csRgb(), csName)
-  row(pad + lh * 2,  "BC", bcRgb(), bcName)
+  row(pad + lh,     "CS", csRgb(), csName)
+  row(pad + lh * 2, "BC", bcRgb(), bcName)
+
+  -- Last-changed parameter: "name<tab>value" (name reflects a user-defined
+  -- alias when the param has been renamed). Persists until the next change.
+  local praw = reaper.GetExtState(SECT, "overlay_param")
+  gfx.x, gfx.y = pad, pad + lh * 3
+  if praw == nil or praw == "" then
+    gfx.set(0.5, 0.5, 0.55, 0.5); gfx.drawstr("\xE2\x80\x94")
+  else
+    local pname, pval = praw:match("^(.-)\t(.*)$")
+    if not pname then pname = praw end
+    gfx.set(0.66, 0.78, 0.96, 1); gfx.drawstr(pname)
+    if pval and pval ~= "" then
+      gfx.set(0.6, 0.6, 0.66, 1); gfx.drawstr("  " .. pval)
+    end
+  end
 end
 
 local function panelClose(persistOff)
