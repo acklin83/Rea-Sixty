@@ -62,15 +62,21 @@ local is_windows = reaper.GetOS():find("Win") ~= nil
 ------------------------------------------------------------------------
 local SECT  = "rea_sixty"
 local ALPHA = 0xFF000000
-local CS_COL = 0x33C0FF | ALPHA   -- cyan
-local BC_COL = 0xFFB000 | ALPHA   -- amber
-local FILL_A, LINE_A = 0.32, 0.9
 
 local function num(key, def)
   local v = tonumber(reaper.GetExtState(SECT, key))
   if v == nil then return def end
   return v
 end
+
+-- Design tunables, read live from ExtState (set in Settings → Inserts). Colours
+-- are stored as 0xRRGGBB ints; drive BOTH the MCP highlight and the dock panel.
+local function csRgb()  return math.floor(num("overlay_cs_col", 0x33C0FF)) & 0xFFFFFF end
+local function bcRgb()  return math.floor(num("overlay_bc_col", 0xFFB000)) & 0xFFFFFF end
+local function csCol()  return csRgb() | ALPHA end
+local function bcCol()  return bcRgb() | ALPHA end
+local function fillA()  return num("overlay_fill_a", 0.32) end
+local function lineA()  return num("overlay_line_a", 0.90) end
 
 local STEP = 16
 local RESCAN_FRAMES = 18
@@ -176,8 +182,8 @@ local function composite(hwnd, dx, dy, w, h, col)
   local bmp = reaper.JS_LICE_CreateBitmap(true, w, h)
   if is_windows then reaper.JS_LICE_Clear(bmp, 0x00000000)
   else                reaper.JS_LICE_Clear(bmp, col & 0x00FFFFFF) end
-  reaper.JS_LICE_FillRect(bmp, 0, 0, w, h, col, FILL_A, 0)
-  reaper.JS_LICE_RoundRect(bmp, 0, 0, w - 1, h - 1, 0, col, LINE_A, 0, true)
+  reaper.JS_LICE_FillRect(bmp, 0, 0, w, h, col, fillA(), 0)
+  reaper.JS_LICE_RoundRect(bmp, 0, 0, w - 1, h - 1, 0, col, lineA(), 0, true)
   reaper.JS_Composite_Delay(hwnd, 0.03, 0.05, 8)
   reaper.JS_Composite(hwnd, dx, dy, w, h, bmp, 0, 0, w, h)
   reaper.JS_Window_InvalidateRect(hwnd, dx, dy, dx + w, dy + h, false)
@@ -213,8 +219,8 @@ local function rebuildDraw(byGuid, blocks)
     local list = blocks[guid]
     if list then
       for _, block in ipairs(list) do
-        if a.cs and a.cs >= 0 then drawBlockRow(block, a.cs, CS_COL) end
-        if a.bc and a.bc >= 0 then drawBlockRow(block, a.bc, BC_COL) end
+        if a.cs and a.cs >= 0 then drawBlockRow(block, a.cs, csCol()) end
+        if a.bc and a.bc >= 0 then drawBlockRow(block, a.bc, bcCol()) end
       end
     end
   end
@@ -289,8 +295,8 @@ local function drawPanel(byGuid)
     gfx.set(0.93, 0.93, 0.96, name and 1 or 0.30)
     gfx.drawstr(name or "\xE2\x80\x94")
   end
-  row(pad + lh,      "CS", CS_COL & 0x00FFFFFF, csName)
-  row(pad + lh * 2,  "BC", BC_COL & 0x00FFFFFF, bcName)
+  row(pad + lh,      "CS", csRgb(), csName)
+  row(pad + lh * 2,  "BC", bcRgb(), bcName)
 end
 
 local function panelClose(persistOff)
@@ -345,6 +351,7 @@ local function drawSig(byGuid, blocks)
   table.sort(parts)
   return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 14) .. "," .. num("overlay_toppad", 2)
     .. "," .. num("overlay_rowh_tcp", 14) .. "," .. num("overlay_toppad_tcp", 0)
+    .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. fillA() .. "," .. lineA()
 end
 
 local shutdown

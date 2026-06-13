@@ -15628,6 +15628,52 @@ void reasixty_setInsertMarkerStyle(int style)
     publishOverlayState_();
 }
 
+// Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /
+// border opacity for the MCP highlight AND the dock panel. Stored as ExtState
+// (persistent), read live by the companion Lua; no in-memory mirror needed.
+int  reasixty_overlayCsColor()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_cs_col");
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0x33C0FF;
+}
+void reasixty_setOverlayCsColor(int rgb)
+{
+    char b[16]; snprintf(b, sizeof(b), "%d", rgb & 0xFFFFFF);
+    SetExtState("rea_sixty", "overlay_cs_col", b, true);
+}
+int  reasixty_overlayBcColor()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_bc_col");
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFFB000;
+}
+void reasixty_setOverlayBcColor(int rgb)
+{
+    char b[16]; snprintf(b, sizeof(b), "%d", rgb & 0xFFFFFF);
+    SetExtState("rea_sixty", "overlay_bc_col", b, true);
+}
+double reasixty_overlayFillAlpha()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_fill_a");
+    return (v && *v) ? std::atof(v) : 0.32;
+}
+void reasixty_setOverlayFillAlpha(double a)
+{
+    if (a < 0.0) a = 0.0; if (a > 1.0) a = 1.0;
+    char b[24]; snprintf(b, sizeof(b), "%.3f", a);
+    SetExtState("rea_sixty", "overlay_fill_a", b, true);
+}
+double reasixty_overlayLineAlpha()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_line_a");
+    return (v && *v) ? std::atof(v) : 0.90;
+}
+void reasixty_setOverlayLineAlpha(double a)
+{
+    if (a < 0.0) a = 0.0; if (a > 1.0) a = 1.0;
+    char b[24]; snprintf(b, sizeof(b), "%.3f", a);
+    SetExtState("rea_sixty", "overlay_line_a", b, true);
+}
+
 // Per-tick device calibration accessors (Settings → Device).
 // Section: 0 = BC VU motor (6 ticks 0/4/8/12/16/20 dB),
 //          1 = CS DYN GR LEDs (5 ticks 3/6/10/14/20 dB).

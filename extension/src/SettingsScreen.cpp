@@ -77,6 +77,14 @@ int  reasixty_insertMarkerStyle();
 void reasixty_setInsertMarkerStyle(int style);
 bool reasixty_insertPanel();
 void reasixty_setInsertPanel(bool on);
+int    reasixty_overlayCsColor();
+void   reasixty_setOverlayCsColor(int rgb);
+int    reasixty_overlayBcColor();
+void   reasixty_setOverlayBcColor(int rgb);
+double reasixty_overlayFillAlpha();
+void   reasixty_setOverlayFillAlpha(double a);
+double reasixty_overlayLineAlpha();
+void   reasixty_setOverlayLineAlpha(double a);
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -559,6 +567,34 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
                 }
             }
             ImGui_EndCombo(ctx);
+        }
+
+        // Highlight design — CS / BC colours (shared by the list highlight and
+        // the dock panel) plus the MCP fill / border opacity. Live: the
+        // companion Lua re-reads these from ExtState on every repaint.
+        // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
+        int ceFlags = ImGui_ColorEditFlags_NoInputs;
+        int csCol = reasixty_overlayCsColor();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_ColorEdit3(ctx, "CS colour", &csCol, &ceFlags)) {
+            reasixty_setOverlayCsColor(csCol);
+        }
+        int bcCol = reasixty_overlayBcColor();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
+            reasixty_setOverlayBcColor(bcCol);
+        }
+        double fillA = reasixty_overlayFillAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayFillAlpha(fillA);
+        }
+        double lineA = reasixty_overlayLineAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayLineAlpha(lineA);
         }
 
         // Optional dockable readout panel — a small companion-Lua window
