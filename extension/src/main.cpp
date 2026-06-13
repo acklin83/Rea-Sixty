@@ -5069,15 +5069,39 @@ static void resolveLastTouched_(MediaTrack*& tr, int& fx, int& param)
     param = p;
 }
 
+// Rea-Sixty mapping label for a VST3 param: fxName -> PluginMap -> linkIdx ->
+// LinkSlot.name ("Input Trim", "Comp Thr", …). Empty when the plugin isn't
+// mapped or the param has no slot. Covers built-in SSL maps AND user FX-Learn
+// maps (lookupPluginMapByName checks both).
+static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param)
+{
+    char fxName[512] = {0};
+    if (!uf8::fxIdentityName(tr, fx, fxName, sizeof(fxName))) return {};
+    const uf8::PluginMap* map = uf8::lookupPluginMapByName(fxName);
+    if (!map) return {};
+    const int linkIdx = uf8::slotIdxForVst3Param(*map, param);
+    if (linkIdx < 0) return {};
+    const uf8::LinkSlot* slot = uf8::findSlotByLinkIdx(*map, linkIdx);
+    if (slot && slot->name && slot->name[0]) return slot->name;
+    return {};
+}
+
 static std::string fmtParam_(MediaTrack* tr, int fx, int param)
 {
     if (!tr || fx < 0 || param < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*"))
         return {};
-    char nm[256] = {0}, val[128] = {0};
-    TrackFX_GetParamName(tr, fx, param, nm, sizeof(nm));
+    // Rea-Sixty mapping name first; fall back to REAPER's own param name only
+    // for unmapped plug-ins so something still shows.
+    std::string name = reaSixtyParamName_(tr, fx, param);
+    if (name.empty()) {
+        char nm[256] = {0};
+        TrackFX_GetParamName(tr, fx, param, nm, sizeof(nm));
+        if (nm[0]) name = nm;
+    }
+    if (name.empty()) return {};
+    char val[128] = {0};
     TrackFX_GetFormattedParamValue(tr, fx, param, val, sizeof(val));
-    if (!nm[0]) return {};
-    std::string s = nm;
+    std::string s = name;
     if (val[0]) { s += '\t'; s += val; }
     return s;
 }
