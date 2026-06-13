@@ -15673,6 +15673,19 @@ void reasixty_setOverlayLineAlpha(double a)
     char b[24]; snprintf(b, sizeof(b), "%.3f", a);
     SetExtState("rea_sixty", "overlay_line_a", b, true);
 }
+int  reasixty_overlayPanelFont()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_panel_font");
+    int px = (v && *v) ? std::atoi(v) : 18;
+    if (px < 10) px = 10; if (px > 40) px = 40;
+    return px;
+}
+void reasixty_setOverlayPanelFont(int px)
+{
+    if (px < 10) px = 10; if (px > 40) px = 40;
+    char b[8]; snprintf(b, sizeof(b), "%d", px);
+    SetExtState("rea_sixty", "overlay_panel_font", b, true);
+}
 
 // Per-tick device calibration accessors (Settings → Device).
 // Section: 0 = BC VU motor (6 ticks 0/4/8/12/16/20 dB),

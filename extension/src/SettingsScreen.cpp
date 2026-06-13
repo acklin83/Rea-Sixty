@@ -85,6 +85,8 @@ double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
 void   reasixty_setOverlayLineAlpha(double a);
+int    reasixty_overlayPanelFont();
+void   reasixty_setOverlayPanelFont(int px);
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -545,30 +547,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         reasixty_setInsertMarkers(insMark);
     }
     if (insMark) {
-        static const char* kInsStyle[3] = {
-            "Arrow  \xE2\x96\xB6",
-            "Tag  \xE2\x97\x89" "CS",
-            "Bracket  [*]",
-        };
-        int si = reasixty_insertMarkerStyle();
-        if (si < 0) si = 0; if (si > 2) si = 2;
-        ImGui_Text(ctx, "Marker");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_BeginCombo(ctx, "##insert_marker_style", kInsStyle[si],
-                             /*flags*/ nullptr)) {
-            for (int i = 0; i < 3; ++i) {
-                bool sel = (si == i);
-                if (ImGui_Selectable(ctx, kInsStyle[i], &sel,
-                                     /*flags*/ nullptr,
-                                     /*size_w*/ nullptr,
-                                     /*size_h*/ nullptr)) {
-                    reasixty_setInsertMarkerStyle(i);
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-
         // Highlight design — CS / BC colours (shared by the list highlight and
         // the dock panel) plus the MCP fill / border opacity. Live: the
         // companion Lua re-reads these from ExtState on every repaint.
@@ -609,6 +587,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (insPanel) {
             ImGui_TextDisabled(ctx,
                 "Run the \"Rea-Sixty Inserts overlay\" action to show it.");
+            int pf = reasixty_overlayPanelFont();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_SliderInt(ctx, "Panel font size", &pf, 10, 40,
+                                nullptr, nullptr)) {
+                reasixty_setOverlayPanelFont(pf);
+            }
         }
     }
 

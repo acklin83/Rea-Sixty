@@ -235,11 +235,24 @@ end
 -- "overlay_focus". Active CS/BC chain indices come from the same "overlay"
 -- payload the list highlight reads (byGuid[guid] = {cs, bc}).
 ------------------------------------------------------------------------
-local PANEL_W, PANEL_H = 232, 96
 local panelOpen   = false
 local panelDock   = nil
+local panelFs     = nil   -- last applied font size (detect change -> resize float)
 
 local function panelWanted() return reaper.GetExtState(SECT, "overlay_panel") == "1" end
+
+-- Font size is user-set (Settings → Inserts, ExtState "overlay_panel_font").
+-- Everything else (padding, line height, window size) scales off it so the
+-- panel stays legible at any size.
+local function panelMetrics()
+  local fs = math.floor(num("overlay_panel_font", 18))
+  if fs < 8 then fs = 8 end
+  local pad = math.max(6, math.floor(fs * 0.5))
+  local lh  = fs + math.floor(fs * 0.5)
+  local w   = math.max(232, fs * 13)
+  local h   = pad * 2 + lh * 3 + 6
+  return fs, pad, lh, w, h
+end
 
 local function findTrackByGuid(guid)
   if not guid or guid == "" then return nil end
@@ -274,9 +287,9 @@ local function gset(rgb, a)
 end
 
 local function drawPanel(byGuid)
+  local fs, pad, lh = panelMetrics()
   gfx.set(0.11, 0.11, 0.12, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
-  gfx.setfont(1, "Arial", 15)
-  local pad, lh = 9, 22
+  gfx.setfont(1, "Arial", fs)
   local guid = reaper.GetExtState(SECT, "overlay_focus")
   local tr, isMaster = findTrackByGuid(guid)
   if not tr then
@@ -313,15 +326,23 @@ local function panelTick(byGuid)
   local want = panelWanted()
   if want and not panelOpen then
     local dock = math.floor(num("overlay_panel_dock", 1))
+    local fs, _, _, w, h = panelMetrics()
     gfx.ext_retina = 1
-    gfx.init("Rea-Sixty Inserts", PANEL_W, PANEL_H, dock, 200, 200)
-    panelOpen = true
+    gfx.init("Rea-Sixty Inserts", w, h, dock, 200, 200)
+    panelOpen = true; panelFs = fs
   elseif not want and panelOpen then
     panelClose(false)
     return
   end
   if not panelOpen then return end
   if gfx.getchar() < 0 then return panelClose(true) end   -- user closed window
+  -- Live-resize a FLOATING window when the font size changed (a docked panel
+  -- is sized by its docker — there the bigger font just fills the space).
+  local fs, _, _, w, h = panelMetrics()
+  if fs ~= panelFs and gfx.dock(-1) == 0 then
+    gfx.init("Rea-Sixty Inserts", w, h, 0, 200, 200)
+    panelFs = fs
+  end
   drawPanel(byGuid)
   gfx.update()
 end
