@@ -238,6 +238,7 @@ end
 local panelOpen   = false
 local panelDock   = nil
 local panelFs     = nil   -- last applied font size (detect change -> resize float)
+local panelRcPrev = 0     -- previous right-button state (context-menu edge detect)
 
 local function panelWanted() return reaper.GetExtState(SECT, "overlay_panel") == "1" end
 
@@ -322,10 +323,27 @@ local function panelClose(persistOff)
   if persistOff then reaper.SetExtState(SECT, "overlay_panel", "0", true) end
 end
 
+-- Right-click context menu: gfx windows don't reliably expose a native
+-- "Dock window" entry on macOS, so we provide our own. Dock state is persisted
+-- (overlay_panel_dock) so the panel reopens where the user left it.
+local function panelContextMenu()
+  local docked = (gfx.dock(-1) & 1) == 1
+  gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+  local menu = (docked and "!" or "") .. "Dock window in Docker|Close panel"
+  local sel = gfx.showmenu(menu)
+  if sel == 1 then
+    if docked then gfx.dock(0) else gfx.dock(1) end
+    panelDock = gfx.dock(-1)
+    reaper.SetExtState(SECT, "overlay_panel_dock", tostring(panelDock or 0), true)
+  elseif sel == 2 then
+    panelClose(true)
+  end
+end
+
 local function panelTick(byGuid)
   local want = panelWanted()
   if want and not panelOpen then
-    local dock = math.floor(num("overlay_panel_dock", 1))
+    local dock = math.floor(num("overlay_panel_dock", 0))
     local fs, _, _, w, h = panelMetrics()
     gfx.ext_retina = 1
     gfx.init("Rea-Sixty Inserts", w, h, dock, 200, 200)
@@ -336,6 +354,11 @@ local function panelTick(byGuid)
   end
   if not panelOpen then return end
   if gfx.getchar() < 0 then return panelClose(true) end   -- user closed window
+  -- Right-click anywhere in the panel → dock / undock / close menu.
+  local rc = gfx.mouse_cap & 2
+  if rc == 2 and panelRcPrev ~= 2 then panelContextMenu() end
+  panelRcPrev = rc
+  if not panelOpen then return end   -- menu may have closed it
   -- Live-resize a FLOATING window when the font size changed (a docked panel
   -- is sized by its docker — there the bigger font just fills the space).
   local fs, _, _, w, h = panelMetrics()
