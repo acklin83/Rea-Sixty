@@ -75,6 +75,8 @@ bool reasixty_insertMarkers();
 void reasixty_setInsertMarkers(bool on);
 int  reasixty_insertMarkerStyle();
 void reasixty_setInsertMarkerStyle(int style);
+bool reasixty_insertPanel();
+void reasixty_setInsertPanel(bool on);
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -557,6 +559,20 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
                 }
             }
             ImGui_EndCombo(ctx);
+        }
+
+        // Optional dockable readout panel — a small companion-Lua window
+        // (gfx, dockable into any toolbar/docker) showing the surface-focused
+        // track and its active CS / BC instance names. Independent of the
+        // on-list highlight; needs the "Rea-Sixty Inserts overlay" action
+        // running. Pure Lua-side — this just persists the flag.
+        bool insPanel = reasixty_insertPanel();
+        if (ImGui_Checkbox(ctx, "Show focused-track panel (dockable)", &insPanel)) {
+            reasixty_setInsertPanel(insPanel);
+        }
+        if (insPanel) {
+            ImGui_TextDisabled(ctx,
+                "Run the \"Rea-Sixty Inserts overlay\" action to show it.");
         }
     }
 

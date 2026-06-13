@@ -1,15 +1,17 @@
 -- @description Rea-Sixty — Inserts active CS/BC overlay (companion)
 -- @author Störsender
--- @version 0.4.0
+-- @version 0.5.0
 -- @provides [main] .
 -- @about
 --   Non-destructive highlight of the **active CS / BC instance** in REAPER's
---   Mixer (MCP) AND Track-panel (TCP) Inserts lists. Reads the active instance
---   per track from the Rea-Sixty extension (ExtState "rea_sixty"/"overlay") and
---   draws a JS_Composite overlay directly on the native fxlist windows — no FX
---   rename, no dirty project. Run once to start (background defer action); run
---   again to stop. Requires js_ReaScriptAPI + the Rea-Sixty extension with
---   "Mark active CS/BC in Inserts list" enabled.
+--   Mixer (MCP) Inserts list, PLUS an optional dockable readout panel showing
+--   the surface-focused track and its active CS / BC instance names. Reads the
+--   active instance per track from the Rea-Sixty extension (ExtState
+--   "rea_sixty"/"overlay" + "overlay_focus") and draws a JS_Composite overlay
+--   directly on the native fxlist windows — no FX rename, no dirty project.
+--   Run once to start (background defer action); run again to stop. Requires
+--   js_ReaScriptAPI + the Rea-Sixty extension with "Mark active CS/BC in
+--   Inserts list" enabled. The dock panel is toggled in Settings.
 --
 --   Two surfaces, two geometries:
 --     • MCP — each track strip's FX list is its OWN child window (mcp.fxlist).
@@ -219,6 +221,106 @@ local function rebuildDraw(byGuid, blocks)
 end
 
 ------------------------------------------------------------------------
+-- Optional dockable readout panel (WT-style standalone gfx window).
+-- Shows the surface-focused track + its active CS / BC instance NAMES —
+-- no track-Y alignment, dockable into any toolbar/docker. Independent of
+-- the JS_Composite list highlight. Toggled from Settings via ExtState
+-- "overlay_panel"; focused track GUID published by the extension as
+-- "overlay_focus". Active CS/BC chain indices come from the same "overlay"
+-- payload the list highlight reads (byGuid[guid] = {cs, bc}).
+------------------------------------------------------------------------
+local PANEL_W, PANEL_H = 232, 96
+local panelOpen   = false
+local panelDock   = nil
+
+local function panelWanted() return reaper.GetExtState(SECT, "overlay_panel") == "1" end
+
+local function findTrackByGuid(guid)
+  if not guid or guid == "" then return nil end
+  local m = reaper.GetMasterTrack(0)
+  if m and reaper.GetTrackGUID(m) == guid then return m, true end
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if tr and reaper.GetTrackGUID(tr) == guid then return tr, false end
+  end
+  return nil
+end
+
+local function trackLabel(tr, isMaster)
+  if isMaster then return "Master" end
+  local _, nm = reaper.GetTrackName(tr)
+  if not nm or nm == "" then return "Track" end
+  return nm
+end
+
+-- "VST3: SSL Native Channel Strip 2 (Solid State Logic)" -> "SSL Native Channel Strip 2"
+local function fxLabel(tr, fxIdx)
+  if not tr or not fxIdx or fxIdx < 0 then return nil end
+  local _, nm = reaper.TrackFX_GetFXName(tr, fxIdx, "")
+  if not nm or nm == "" then return nil end
+  nm = nm:gsub("^%u%u+%d*i?:%s*", "")    -- strip "VST3: " / "AU: " / "JS: " / "CLAP: "
+  nm = nm:gsub("%s*%([^()]-%)%s*$", "")   -- strip trailing " (vendor)"
+  return nm
+end
+
+local function gset(rgb, a)
+  gfx.set(((rgb >> 16) & 0xFF) / 255, ((rgb >> 8) & 0xFF) / 255, (rgb & 0xFF) / 255, a or 1)
+end
+
+local function drawPanel(byGuid)
+  gfx.set(0.11, 0.11, 0.12, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
+  gfx.setfont(1, "Arial", 15)
+  local pad, lh = 9, 22
+  local guid = reaper.GetExtState(SECT, "overlay_focus")
+  local tr, isMaster = findTrackByGuid(guid)
+  if not tr then
+    gfx.set(0.5, 0.5, 0.5, 1); gfx.x, gfx.y = pad, pad
+    gfx.drawstr("No focused track")
+    return
+  end
+  gfx.set(0.82, 0.82, 0.88, 1); gfx.x, gfx.y = pad, pad
+  gfx.drawstr(trackLabel(tr, isMaster))
+  local a = byGuid and byGuid[guid] or nil
+  local csName = a and fxLabel(tr, a.cs) or nil
+  local bcName = a and fxLabel(tr, a.bc) or nil
+  local function row(y, tag, col, name)
+    gfx.x, gfx.y = pad, y
+    gset(col, name and 1 or 0.30); gfx.drawstr(tag .. "  ")
+    gfx.set(0.93, 0.93, 0.96, name and 1 or 0.30)
+    gfx.drawstr(name or "\xE2\x80\x94")
+  end
+  row(pad + lh,      "CS", CS_COL & 0x00FFFFFF, csName)
+  row(pad + lh * 2,  "BC", BC_COL & 0x00FFFFFF, bcName)
+end
+
+local function panelClose(persistOff)
+  if panelOpen then
+    panelDock = gfx.dock(-1)
+    reaper.SetExtState(SECT, "overlay_panel_dock", tostring(panelDock or 1), true)
+    gfx.quit()
+    panelOpen = false
+  end
+  if persistOff then reaper.SetExtState(SECT, "overlay_panel", "0", true) end
+end
+
+local function panelTick(byGuid)
+  local want = panelWanted()
+  if want and not panelOpen then
+    local dock = math.floor(num("overlay_panel_dock", 1))
+    gfx.ext_retina = 1
+    gfx.init("Rea-Sixty Inserts", PANEL_W, PANEL_H, dock, 200, 200)
+    panelOpen = true
+  elseif not want and panelOpen then
+    panelClose(false)
+    return
+  end
+  if not panelOpen then return end
+  if gfx.getchar() < 0 then return panelClose(true) end   -- user closed window
+  drawPanel(byGuid)
+  gfx.update()
+end
+
+------------------------------------------------------------------------
 -- Main defer loop
 ------------------------------------------------------------------------
 local g_lastSig, g_blocks, g_frame, g_lastRev = nil, {}, 0, -1
@@ -260,11 +362,13 @@ local function loop()
     local sig = drawSig(byGuid, g_blocks)
     if sig ~= g_lastSig then rebuildDraw(byGuid, g_blocks); g_lastSig = sig end
   end
+  panelTick(byGuid)   -- dockable readout panel (independent of the list highlight)
   reaper.defer(loop)
 end
 
 shutdown = function()
   clearDrawn()
+  panelClose(false)
   reaper.SetExtState("rea_sixty", RUNKEY, "0", false)
   setToggle(false)
 end

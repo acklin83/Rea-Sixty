@@ -1909,6 +1909,13 @@ std::atomic<int>  g_insertMarkerStyle{0};
 // is overlay. See docs/inserts-overlay-spike.md.
 std::atomic<bool> g_insertLegacyRename{false};
 
+// Optional dockable readout panel (Settings → Device → Inserts). When on, the
+// bundled companion Lua opens a small gfx dock showing the surface-focused
+// track + its active CS / BC instance names. Pure Lua-side feature — the
+// extension only persists the flag (ExtState "overlay_panel") and publishes the
+// focused-track GUID ("overlay_focus") for the panel to read. Default off.
+std::atomic<bool> g_insertPanelEnabled{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2207,6 +2214,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "insert_legacy_rename"); v && *v) {
         g_insertLegacyRename.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "overlay_panel"); v && *v) {
+        g_insertPanelEnabled.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -4997,6 +5007,25 @@ void clearAllInsertMarkers_()
 std::string g_overlayPublishedSig;   // last on-flag + entries, sans rev
 int         g_overlayRev = 0;
 
+// Separate, lightweight publisher for the dockable readout panel: the GUID of
+// the surface-focused track (section "rea_sixty", key "overlay_focus",
+// transient). Diff-guarded; empty while the marker feature is off. Decoupled
+// from the CS/BC-set rev above so a focus change refreshes the panel even when
+// the active-instance set is unchanged. Main-thread-only.
+std::string g_overlayFocusPublished;
+void publishOverlayFocus_()
+{
+    std::string guid;
+    if (g_insertMarkersEnabled.load() && g_uc1_surface) {
+        auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+            guid = uc1::trackGuid(tr);
+    }
+    if (guid == g_overlayFocusPublished) return;
+    g_overlayFocusPublished = guid;
+    SetExtState("rea_sixty", "overlay_focus", guid.c_str(), false);
+}
+
 void buildOverlayEntry_(MediaTrack* tr, std::string& out)
 {
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
@@ -5017,6 +5046,7 @@ void buildOverlayEntry_(MediaTrack* tr, std::string& out)
 
 void publishOverlayState_()
 {
+    publishOverlayFocus_();   // refresh focused-track GUID for the readout panel
     const bool on = g_insertMarkersEnabled.load();
     std::string body;
     if (on) {
@@ -15570,6 +15600,16 @@ void reasixty_setInsertMarkers(bool on)
     } else if (!on) {
         clearAllInsertMarkers_();   // strip any legacy/baked prefixes
     }
+    publishOverlayState_();
+}
+
+bool reasixty_insertPanel() { return g_insertPanelEnabled.load(); }
+void reasixty_setInsertPanel(bool on)
+{
+    g_insertPanelEnabled.store(on);
+    SetExtState("rea_sixty", "overlay_panel", on ? "1" : "0", true);
+    // Pure Lua-side: the running companion polls this key and opens/closes its
+    // dock. Republish so the focused-track GUID is fresh the moment it opens.
     publishOverlayState_();
 }
 
