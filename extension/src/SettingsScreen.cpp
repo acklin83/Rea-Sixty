@@ -2442,6 +2442,14 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         ImGui_Spacing(ctx);
     }
 
+    // ---- None (disabled) ----
+    // Explicitly unbind this slot. Picking it sets ActionType::Noop and clears
+    // the payload (via sectionRadio's type-switch reset), so nothing fires for
+    // this modifier/step — distinct from "Reset to factory default" (which
+    // restores the default action). The default for an un-set modifier slot is
+    // already Noop, so this just makes "turn it off" reachable from the editor.
+    sectionRadio("rd_none", "None (disabled)", ActionType::Noop);
+
     // ---- REAPER Action ----
     sectionRadio("rd_reaper", "REAPER Action", ActionType::Reaper);
     if (*f.type == ActionType::Reaper) {
