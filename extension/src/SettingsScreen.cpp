@@ -87,6 +87,8 @@ double reasixty_overlayLineAlpha();
 void   reasixty_setOverlayLineAlpha(double a);
 int    reasixty_overlayPanelFont();
 void   reasixty_setOverlayPanelFont(int px);
+bool   reasixty_toggleInsertsOverlay();
+bool   reasixty_insertsOverlayRunning();
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
@@ -547,6 +549,19 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         reasixty_setInsertMarkers(insMark);
     }
     if (insMark) {
+        // Start / stop the companion overlay + dock panel straight from here.
+        // The extension self-installed the bundled Lua under Scripts/rea-sixty/
+        // on load; this registers + runs it (the script toggles on relaunch),
+        // so the user never has to hunt for the action.
+        const bool ovRunning = reasixty_insertsOverlayRunning();
+        if (ImGui_Button(ctx, ovRunning ? "Stop overlay & panel##ins_ov"
+                                        : "Start overlay & panel##ins_ov",
+                         nullptr, nullptr)) {
+            reasixty_toggleInsertsOverlay();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx, ovRunning ? "running" : "stopped");
+
         // Highlight design — CS / BC colours (shared by the list highlight and
         // the dock panel) plus the MCP fill / border opacity. Live: the
         // companion Lua re-reads these from ExtState on every repaint.
@@ -585,8 +600,6 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             reasixty_setInsertPanel(insPanel);
         }
         if (insPanel) {
-            ImGui_TextDisabled(ctx,
-                "Run the \"Rea-Sixty Inserts overlay\" action to show it.");
             int pf = reasixty_overlayPanelFont();
             ImGui_SetNextItemWidth(ctx, 220.0);
             if (ImGui_SliderInt(ctx, "Panel font size", &pf, 10, 40,

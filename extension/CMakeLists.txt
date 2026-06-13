@@ -171,6 +171,30 @@ add_custom_command(
 add_custom_target(reasixty_input_level_jsfx_gen ALL
     DEPENDS ${REASIXTY_INPUT_LEVEL_JSFX_HEADER})
 
+# Same embedding pattern for the Inserts overlay / dock-panel companion Lua.
+# The extension writes this into <ResourcePath>/Scripts/rea-sixty/ on load and
+# can run it straight from Settings via AddRemoveReaScript + Main_OnCommand —
+# no ReaPack step, no manual action hunt.
+set(REASIXTY_INSERTS_OVERLAY_LUA_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_inserts_overlay.lua")
+set(REASIXTY_INSERTS_OVERLAY_LUA_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/inserts_overlay_lua.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_INSERTS_OVERLAY_LUA_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRCFILE=${REASIXTY_INSERTS_OVERLAY_LUA_SRC}
+        -DOUTFILE=${REASIXTY_INSERTS_OVERLAY_LUA_HEADER}
+        -DSYMBOL=kInsertsOverlayLua
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    DEPENDS
+        ${REASIXTY_INSERTS_OVERLAY_LUA_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    COMMENT "Embedding rea_sixty_inserts_overlay.lua"
+    VERBATIM
+)
+add_custom_target(reasixty_inserts_overlay_lua_gen ALL
+    DEPENDS ${REASIXTY_INSERTS_OVERLAY_LUA_HEADER})
+
 # Bake the canonical user manual (docs/user-manual.md) into a header so the
 # Settings → Manual tab renders it offline, always in lockstep with the repo
 # doc — no second copy to maintain, no runtime file to ship.
@@ -309,6 +333,7 @@ endif()
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)
 add_dependencies(reaper_uf8 reasixty_factory_bundle_gen)
 add_dependencies(reaper_uf8 reasixty_input_level_jsfx_gen)
+add_dependencies(reaper_uf8 reasixty_inserts_overlay_lua_gen)
 add_dependencies(reaper_uf8 reasixty_user_manual_gen)
 # Recompile the manual renderer whenever the embedded header changes so a
 # fresh docs/user-manual.md propagates into the binary.

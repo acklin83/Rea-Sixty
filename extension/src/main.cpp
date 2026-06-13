@@ -73,6 +73,7 @@
 #include "Protocol.h"
 #include "SetupBundle.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
+#include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -19832,6 +19833,76 @@ static void reasixty_deployInputLevelJsfx()
     }
 }
 
+// Path the inserts-overlay companion Lua self-installs to (and the Settings
+// launcher registers via AddRemoveReaScript).
+static std::string insertsOverlayLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_inserts_overlay.lua";
+}
+
+// Write the embedded companion Lua into <ResourcePath>/Scripts/rea-sixty/ on
+// load. Idempotent byte-compare like the JSFX deploy, so a user's manual edit
+// survives a reload but a freshly shipped revision propagates.
+static void reasixty_deployInsertsOverlayLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_inserts_overlay.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kInsertsOverlayLuaBytes);
+    const size_t len  = uf8::setup_bundle::kInsertsOverlayLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+// Settings launcher: register the deployed companion Lua as an action
+// (idempotent) and run it. The script toggles itself on relaunch, so this
+// starts OR stops the overlay + panel. False if it can't be found/registered.
+bool reasixty_toggleInsertsOverlay()
+{
+    reasixty_deployInsertsOverlayLua();     // ensure it's on disk + current
+    const std::string path = insertsOverlayLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+// True while the companion defer loop is running (it owns this ExtState flag).
+bool reasixty_insertsOverlayRunning()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_running");
+    return v && v[0] == '1';
+}
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
@@ -19937,6 +20008,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     initLog("step: deploy input-level JSFX");
     // Make the "Rea-Sixty Input Level" probe available in the FX browser.
     reasixty_deployInputLevelJsfx();
+    reasixty_deployInsertsOverlayLua();
 
     initLog("step: capture g_reaperGetFunc");
     // Capture rec->GetFunc for SWELL APIs not in the plug-in SDK
