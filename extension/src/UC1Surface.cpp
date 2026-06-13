@@ -1079,9 +1079,15 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             TrackFX_SetParamNormalized(tr, match.fxIndex, vst3Param, next);
             // Param-group broadcast only for SSL slots (stable linkIdx);
             // free params aren't part of the cross-surface slot graph.
-            if (linkIdx >= 0)
+            if (linkIdx >= 0) {
                 uf8::param_groups::broadcastBuiltinSlot(
                     tr, uf8::Domain::ChannelStrip, linkIdx, next);
+                // Mirror the edit to the UF8 focused-param projection so the
+                // strip readout updates immediately (don't wait for / rely on
+                // chaseLastTouchedFx). Without this the first ext param shows
+                // nothing on the UF8. Mirrors the BC-knob handler pattern.
+                uf8::setFocus({uf8::Domain::ChannelStrip, linkIdx});
+            }
             reasixty_bumpFolderReveal(tr);
         }
         renderExtFuncsSubscreen_();

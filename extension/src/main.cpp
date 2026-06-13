@@ -11993,7 +11993,18 @@ void pushZonesForVisibleSlots()
                 }
                 break;
             }
-            valLine = composeValueLine(slot->name, valStr);
+            // Quick Access link slots (38-43) carry a generic wrapper label
+            // ("Quick N"); for those show the actual plug-in param name —
+            // which also reflects a user-defined alias when the param was
+            // renamed — instead of the meaningless slot label. Frank 2026-06-13.
+            const char* label = slot->name;
+            char qbuf[64] = {0};
+            if (slot->linkIdx >= 38 && slot->linkIdx <= 43) {
+                TrackFX_GetParamName(tr, fxIdx, slot->vst3Param,
+                                     qbuf, sizeof(qbuf));
+                if (qbuf[0]) label = qbuf;
+            }
+            valLine = composeValueLine(label, valStr);
         } else if (focused.slotIdx != -1 && !isVPotPanFocus(focused)) {
             // Param is focused but unavailable on this strip's plug-in
             // — leave the Value Line blank instead of falling back to
