@@ -5039,17 +5039,9 @@ void publishOverlayFocus_()
     SetExtState("rea_sixty", "overlay_focus", guid.c_str(), false);
 }
 
-void buildOverlayEntry_(MediaTrack* tr, std::string& out)
+void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
 {
-    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
-    const int csCount = uc1::csInstanceCount(tr);
-    const int bcCount = uc1::bcInstanceCount(tr);
-    if (csCount <= 0 && bcCount <= 0) return;
-    const int csFx = csCount > 0
-        ? uc1::fxIndexForInstance(tr, false, uc1::csInstanceIndex(tr)) : -1;
-    const int bcFx = bcCount > 0
-        ? uc1::fxIndexForInstance(tr, true,  uc1::bcInstanceIndex(tr)) : -1;
-    if (csFx < 0 && bcFx < 0) return;
+    if (!tr || (csFx < 0 && bcFx < 0)) return;
     const std::string guid = uc1::trackGuid(tr);
     if (guid.empty()) return;
     char buf[128];
@@ -5066,11 +5058,26 @@ void publishOverlayState_()
     const bool on   = g_insertMarkersEnabled.load();
     const bool body_on = on || g_insertPanelEnabled.load();
     std::string body;
-    if (body_on) {
-        if (MediaTrack* m = GetMasterTrack(0)) buildOverlayEntry_(m, body);
-        const int nt = CountTracks(0);
-        for (int i = 0; i < nt; ++i)
-            if (MediaTrack* tr = GetTrack(0, i)) buildOverlayEntry_(tr, body);
+    if (body_on && g_uc1_surface) {
+        // Mark ONLY the surface's active CS/BC, not every track that merely
+        // hosts one: CS lives on the focused track, BC on the BC-anchor track
+        // (effectiveBcTrack_ — the pinned anchor, else the first BC-bearing
+        // track). So a second track with its own BC is NOT shown as active.
+        MediaTrack* csTr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        MediaTrack* bcTr = static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic());
+        int csFx = -1, bcFx = -1;
+        if (csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")
+            && uc1::csInstanceCount(csTr) > 0)
+            csFx = uc1::fxIndexForInstance(csTr, false, uc1::csInstanceIndex(csTr));
+        if (bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*")
+            && uc1::bcInstanceCount(bcTr) > 0)
+            bcFx = uc1::fxIndexForInstance(bcTr, true, uc1::bcInstanceIndex(bcTr));
+        if (csTr && csTr == bcTr) {
+            appendOverlayEntry_(csTr, csFx, bcFx, body);     // both on one track
+        } else {
+            appendOverlayEntry_(csTr, csFx, -1, body);
+            appendOverlayEntry_(bcTr, -1, bcFx, body);
+        }
     }
     const std::string sig = (on ? "1|" : "0|") + body;
     if (sig == g_overlayPublishedSig) return;   // nothing changed
