@@ -15714,6 +15714,25 @@ void reasixty_setOverlayPanelFont(int px)
     SetExtState("rea_sixty", "overlay_panel_font", b, true);
 }
 
+// MCP overlay row height. 0 = auto (the Lua derives it from the fxlist window
+// height / FX count — exact when the list is fully visible). >0 overrides for
+// scrolled / clipped lists where auto can't see the true row height. The MCP
+// insert-row height is font-driven in the theme (mcp.fxlist.font 16/24/32 px @
+// UI-scale 1/1.5/2), so there is no single value to read — auto + override.
+int  reasixty_overlayRowHeight()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_rowh");
+    int px = (v && *v) ? std::atoi(v) : 0;
+    if (px < 0) px = 0; if (px > 48) px = 48;
+    return px;
+}
+void reasixty_setOverlayRowHeight(int px)
+{
+    if (px < 0) px = 0; if (px > 48) px = 48;
+    char b[8]; snprintf(b, sizeof(b), "%d", px);
+    SetExtState("rea_sixty", "overlay_rowh", b, true);
+}
+
 // Per-tick device calibration accessors (Settings → Device).
 // Section: 0 = BC VU motor (6 ticks 0/4/8/12/16/20 dB),
 //          1 = CS DYN GR LEDs (5 ticks 3/6/10/14/20 dB).

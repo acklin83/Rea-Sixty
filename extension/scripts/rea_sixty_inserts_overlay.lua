@@ -147,7 +147,11 @@ local function scanFxBlocks()
             if kind == "mcp" then
               local _, cw, ch = reaper.JS_Window_GetClientSize(h)
               if cw and ch and cw > 0 and ch > 0 then
-                byGuid[g][#byGuid[g] + 1] = { kind = "mcp", hwnd = h, cw = cw, ch = ch }
+                -- FX count lets us DERIVE the row height (ch / count) instead of
+                -- guessing — adapts to theme + strip height automatically.
+                local cnt = reaper.TrackFX_GetCount(tr)
+                byGuid[g][#byGuid[g] + 1] =
+                  { kind = "mcp", hwnd = h, cw = cw, ch = ch, count = cnt }
               end
             else
               local l, t, r = refineTcp(x, y, tr)
@@ -192,11 +196,22 @@ end
 
 local function drawBlockRow(block, fxIdx, col)
   if block.kind == "mcp" then
-    local rowH   = num("overlay_rowh", 14)
-    local topPad = num("overlay_toppad", 2)
+    -- Row height: manual override (overlay_rowh > 0) else DERIVED from the
+    -- list height / FX count, which tracks the theme + strip height for free.
+    local manual = num("overlay_rowh", 0)
+    local rowH
+    if manual > 0 then
+      rowH = manual
+    elseif block.count and block.count > 0 then
+      rowH = block.ch / block.count
+    else
+      rowH = 14
+    end
+    local topPad = num("overlay_toppad", 0)
     local y = topPad + fxIdx * rowH
-    if y < 0 or y + rowH > block.ch then return end
-    composite(block.hwnd, 0, y, block.cw, rowH, col)
+    -- +1 slack so the LAST row (y+rowH == ch) isn't dropped by float rounding.
+    if y < -1 or y + rowH > block.ch + 1 then return end
+    composite(block.hwnd, 0, math.floor(y + 0.5), block.cw, math.floor(rowH + 0.5), col)
   else  -- tcp: shared track-panel window
     local rowH   = num("overlay_rowh_tcp", 14)
     local topPad = num("overlay_toppad_tcp", 0)
@@ -376,7 +391,7 @@ end
 local g_lastSig, g_blocks, g_frame, g_lastRev = nil, {}, 0, -1
 
 local function blockSig(b)
-  if b.kind == "mcp" then return string.format("m%s,%d,%d", tostring(b.hwnd), b.cw, b.ch)
+  if b.kind == "mcp" then return string.format("m%s,%d,%d,%d", tostring(b.hwnd), b.cw, b.ch, b.count or 0)
   else return string.format("t%s,%d,%d,%d", tostring(b.hwnd), b.sl, b.st, b.sw) end
 end
 
@@ -393,7 +408,7 @@ local function drawSig(byGuid, blocks)
     parts[#parts + 1] = string.format("%s:%s:%s:%s", guid, tostring(a.cs), tostring(a.bc), bs)
   end
   table.sort(parts)
-  return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 14) .. "," .. num("overlay_toppad", 2)
+  return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 0) .. "," .. num("overlay_toppad", 0)
     .. "," .. num("overlay_rowh_tcp", 14) .. "," .. num("overlay_toppad_tcp", 0)
     .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. fillA() .. "," .. lineA()
 end

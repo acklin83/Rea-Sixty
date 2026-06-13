@@ -87,6 +87,8 @@ double reasixty_overlayLineAlpha();
 void   reasixty_setOverlayLineAlpha(double a);
 int    reasixty_overlayPanelFont();
 void   reasixty_setOverlayPanelFont(int px);
+int    reasixty_overlayRowHeight();
+void   reasixty_setOverlayRowHeight(int px);
 bool   reasixty_toggleInsertsOverlay();
 bool   reasixty_insertsOverlayRunning();
 int    reasixty_uc1CalCount(int section);
@@ -588,6 +590,14 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
                                    "%.2f", nullptr)) {
                 reasixty_setOverlayLineAlpha(lineA);
+            }
+            // Row height: 0 = auto (derived from the fxlist height / FX count;
+            // exact when the list is fully visible). Override for scrolled lists.
+            int rh = reasixty_overlayRowHeight();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_SliderInt(ctx, "Row height (0 = auto)", &rh, 0, 48,
+                                nullptr, nullptr)) {
+                reasixty_setOverlayRowHeight(rh);
             }
         }
 
