@@ -74,6 +74,11 @@
 #include "SetupBundle.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
+
+// File-global so both onTimer() and the insert setters (which live in an
+// anonymous namespace) bind to the SAME global symbol defined near the
+// launcher — avoids an anon-vs-global ambiguity.
+void reasixty_syncInsertsOverlayRun();
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -1916,6 +1921,10 @@ std::atomic<bool> g_insertLegacyRename{false};
 // extension only persists the flag (ExtState "overlay_panel") and publishes the
 // focused-track GUID ("overlay_focus") for the panel to read. Default off.
 std::atomic<bool> g_insertPanelEnabled{false};
+
+// Auto-start the companion overlay/panel on the first main-thread tick after
+// load when either feature was persisted on — so it comes back with REAPER.
+std::atomic<bool> g_overlayAutoStartDone{false};
 
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
@@ -5017,7 +5026,10 @@ std::string g_overlayFocusPublished;
 void publishOverlayFocus_()
 {
     std::string guid;
-    if (g_insertMarkersEnabled.load() && g_uc1_surface) {
+    // Published whenever EITHER feature is on — the docker needs the focus GUID
+    // independently of the MCP highlight.
+    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    if (feat && g_uc1_surface) {
         auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
             guid = uc1::trackGuid(tr);
@@ -5048,9 +5060,13 @@ void buildOverlayEntry_(MediaTrack* tr, std::string& out)
 void publishOverlayState_()
 {
     publishOverlayFocus_();   // refresh focused-track GUID for the readout panel
-    const bool on = g_insertMarkersEnabled.load();
+    // `on` drives the MCP highlight (markers feature). The per-track CS/BC body
+    // is published whenever EITHER feature is on, because the docker panel needs
+    // it to show the active instance names even when the MCP highlight is off.
+    const bool on   = g_insertMarkersEnabled.load();
+    const bool body_on = on || g_insertPanelEnabled.load();
     std::string body;
-    if (on) {
+    if (body_on) {
         if (MediaTrack* m = GetMasterTrack(0)) buildOverlayEntry_(m, body);
         const int nt = CountTracks(0);
         for (int i = 0; i < nt; ++i)
@@ -13954,6 +13970,14 @@ void onTimer()
 {
     ++g_tickCounter;
 
+    // One-shot: bring the inserts overlay / docker back if either feature was
+    // persisted on. Deferred ~1 s (≈30 ticks @30 Hz) so REAPER's script + gfx
+    // subsystems are fully up before we register and run the companion action.
+    if (!g_overlayAutoStartDone.load() && g_tickCounter >= 30) {
+        g_overlayAutoStartDone.store(true);
+        reasixty_syncInsertsOverlayRun();
+    }
+
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
     // would. OR'd inside the bindings layer (see Bindings.cpp
@@ -15602,6 +15626,7 @@ void reasixty_setInsertMarkers(bool on)
         clearAllInsertMarkers_();   // strip any legacy/baked prefixes
     }
     publishOverlayState_();
+    reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
 }
 
 bool reasixty_insertPanel() { return g_insertPanelEnabled.load(); }
@@ -15612,6 +15637,7 @@ void reasixty_setInsertPanel(bool on)
     // Pure Lua-side: the running companion polls this key and opens/closes its
     // dock. Republish so the focused-track GUID is fresh the moment it opens.
     publishOverlayState_();
+    reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
 }
 
 int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
@@ -19901,6 +19927,20 @@ bool reasixty_insertsOverlayRunning()
 {
     const char* v = GetExtState("rea_sixty", "overlay_running");
     return v && v[0] == '1';
+}
+
+// Keep the companion's run-state in step with the two feature flags: start it
+// when either is enabled, stop it when both are off. Start-only / stop-only —
+// it never accidentally toggles a running instance off. Stop is done by writing
+// the run flag the Lua loop polls (it shuts itself down + closes the dock on the
+// next tick). Main-thread only (registers/runs an action).
+void reasixty_syncInsertsOverlayRun()
+{
+    const bool want = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool running = reasixty_insertsOverlayRunning();
+    if (want && !running)      reasixty_toggleInsertsOverlay();        // starts it
+    else if (!want && running) SetExtState("rea_sixty", "overlay_running",
+                                           "0", false);                // stops it
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

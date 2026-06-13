@@ -539,32 +539,29 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         reasixty_setPluginGuiFollowsInstance(pgfi);
     }
 
-    // Mark the active CS / BC plug-in in REAPER's TCP/MCP Inserts list — an
-    // on-screen cue for which insert the surface drives as the Channel Strip
-    // and which as the Bus Comp (and, with multiple, which copy is active).
-    // Writes the FX "renamed_name" (project goes dirty); markers auto-strip
-    // on disable / project switch / unload. Frank 2026-06-12.
+    // Two independent, persistent cues for the active CS / BC instance, both
+    // drawn by the bundled companion Lua (non-destructive — no FX rename, no
+    // dirty project). Each toggle auto-starts / stops the companion as needed
+    // and is restored on the next REAPER launch.
+    //   • MCP overlay — JS_Composite highlight on the native Mixer Inserts row.
+    //   • Focused-track docker — a small dockable gfx panel showing the
+    //     surface-focused track + its active CS / BC instance names.
     bool insMark = reasixty_insertMarkers();
-    if (ImGui_Checkbox(ctx, "Mark active CS/BC in Inserts list", &insMark)) {
+    if (ImGui_Checkbox(ctx, "Show MCP Inserts overlay", &insMark)) {
         reasixty_setInsertMarkers(insMark);
     }
-    if (insMark) {
-        // Start / stop the companion overlay + dock panel straight from here.
-        // The extension self-installed the bundled Lua under Scripts/rea-sixty/
-        // on load; this registers + runs it (the script toggles on relaunch),
-        // so the user never has to hunt for the action.
-        const bool ovRunning = reasixty_insertsOverlayRunning();
-        if (ImGui_Button(ctx, ovRunning ? "Stop overlay & panel##ins_ov"
-                                        : "Start overlay & panel##ins_ov",
-                         nullptr, nullptr)) {
-            reasixty_toggleInsertsOverlay();
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_TextDisabled(ctx, ovRunning ? "running" : "stopped");
+    bool insPanel = reasixty_insertPanel();
+    if (ImGui_Checkbox(ctx, "Show focused-track docker", &insPanel)) {
+        reasixty_setInsertPanel(insPanel);
+    }
 
-        // Highlight design — CS / BC colours (shared by the list highlight and
-        // the dock panel) plus the MCP fill / border opacity. Live: the
-        // companion Lua re-reads these from ExtState on every repaint.
+    if (insMark || insPanel) {
+        ImGui_TextDisabled(ctx, reasixty_insertsOverlayRunning()
+                                ? "Companion running"
+                                : "Companion starting\xE2\x80\xA6");
+
+        // CS / BC colours — shared by BOTH the overlay and the docker. Live:
+        // the companion re-reads these from ExtState on every repaint.
         // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
         int ceFlags = ImGui_ColorEditFlags_NoInputs;
         int csCol = reasixty_overlayCsColor();
@@ -577,28 +574,25 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
             reasixty_setOverlayBcColor(bcCol);
         }
-        double fillA = reasixty_overlayFillAlpha();
-        ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
-                               "%.2f", nullptr)) {
-            reasixty_setOverlayFillAlpha(fillA);
-        }
-        double lineA = reasixty_overlayLineAlpha();
-        ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
-                               "%.2f", nullptr)) {
-            reasixty_setOverlayLineAlpha(lineA);
+
+        // Fill / border opacity apply to the MCP overlay only.
+        if (insMark) {
+            double fillA = reasixty_overlayFillAlpha();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
+                                   "%.2f", nullptr)) {
+                reasixty_setOverlayFillAlpha(fillA);
+            }
+            double lineA = reasixty_overlayLineAlpha();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
+                                   "%.2f", nullptr)) {
+                reasixty_setOverlayLineAlpha(lineA);
+            }
         }
 
-        // Optional dockable readout panel — a small companion-Lua window
-        // (gfx, dockable into any toolbar/docker) showing the surface-focused
-        // track and its active CS / BC instance names. Independent of the
-        // on-list highlight; needs the "Rea-Sixty Inserts overlay" action
-        // running. Pure Lua-side — this just persists the flag.
-        bool insPanel = reasixty_insertPanel();
-        if (ImGui_Checkbox(ctx, "Show focused-track panel (dockable)", &insPanel)) {
-            reasixty_setInsertPanel(insPanel);
-        }
+        // Font size applies to the docker only (right-click the panel to
+        // dock / undock / close it).
         if (insPanel) {
             int pf = reasixty_overlayPanelFont();
             ImGui_SetNextItemWidth(ctx, 220.0);
