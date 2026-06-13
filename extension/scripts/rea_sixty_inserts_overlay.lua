@@ -79,7 +79,6 @@ local function fillA()  return num("overlay_fill_a", 0.32) end
 local function lineA()  return num("overlay_line_a", 0.90) end
 
 local STEP = 16
-local RESCAN_FRAMES = 18
 
 ------------------------------------------------------------------------
 -- ExtState: active CS/BC per track GUID
@@ -414,7 +413,9 @@ end
 ------------------------------------------------------------------------
 -- Main defer loop
 ------------------------------------------------------------------------
-local g_lastSig, g_blocks, g_frame, g_lastRev = nil, {}, 0, -1
+local g_lastSig, g_blocks, g_lastRev = nil, {}, -1
+local g_lastScroll, g_lastCount = nil, -1   -- cheap rescan triggers
+local g_emptyTick = 0                       -- slow retry while no target found
 
 local function blockSig(b)
   if b.kind == "mcp" then return string.format("m%s,%d,%d,%d", tostring(b.hwnd), b.cw, b.ch, b.count or 0)
@@ -447,9 +448,25 @@ local function loop()
   if not on or next(byGuid) == nil then
     if g_lastSig ~= "off" then clearDrawn(); g_lastSig = "off" end
   else
-    g_frame = g_frame + 1
-    if rev ~= g_lastRev or g_frame >= RESCAN_FRAMES then
-      g_blocks = scanFxBlocks(); g_lastRev = rev; g_frame = 0
+    -- Event-driven rescan only — the full-window GetThingFromPoint scan is
+    -- expensive (main thread), so NEVER run it on a timer. Re-acquire the
+    -- fxlist windows only when the active set changed (rev), the mixer
+    -- scrolled/banked (GetMixerScroll), or tracks were added/removed. Steady
+    -- typing triggers none of these, so the overlay is idle and cheap.
+    local scroll = reaper.GetMixerScroll()
+    local ntrk   = reaper.CountTracks(0)
+    local need = rev ~= g_lastRev or scroll ~= g_lastScroll or ntrk ~= g_lastCount
+    -- If we have NO target yet (mixer hidden / strip scrolled off), retry at a
+    -- slow ~1 Hz — never per-tick — so a closed mixer can't re-introduce lag.
+    if next(g_blocks) == nil then
+      g_emptyTick = g_emptyTick + 1
+      if g_emptyTick >= 30 then need = true; g_emptyTick = 0 end
+    else
+      g_emptyTick = 0
+    end
+    if need then
+      g_blocks = scanFxBlocks()
+      g_lastRev, g_lastScroll, g_lastCount = rev, scroll, ntrk
     end
     local sig = drawSig(byGuid, g_blocks)
     if sig ~= g_lastSig then rebuildDraw(byGuid, g_blocks); g_lastSig = sig end
