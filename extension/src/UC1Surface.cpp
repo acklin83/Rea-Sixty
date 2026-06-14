@@ -33,6 +33,9 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
+// Active FX-Learn modifier layer (0=Normal,1=Option,2=Control), defined in
+// main.cpp. Selects which SlotLayer's knob-travel a learned control uses.
+int reasixty_fxLearnActiveLayer();
 // Publish UC1 Fine state so UF8 V-Pot rotation honours UC1 Fine too.
 void reasixty_setUc1Fine(bool on);
 
@@ -1019,8 +1022,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // → plain linear/stepped behaviour (range/curve/reset deferred).
             char fxBuf[256] = {0};
             TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf));
-            const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+            const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
                 ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+                : nullptr;
+            // Effective layer's knob-travel (Option/Control overlay, else
+            // Normal). The EXT_FUNCS param itself is resolved independently.
+            const uf8::SlotLayer* usl = uslRaw
+                ? &uf8::fxEffectiveLayer(*uslRaw, reasixty_fxLearnActiveLayer())
                 : nullptr;
             if (haveStepInfo && isToggle) {
                 // 1 detent (in either direction) flips the toggle.
@@ -1545,8 +1553,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
         }
     }
-    const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+    const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
         ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+        : nullptr;
+    // Knob-travel comes from the SlotLayer that's active under the held
+    // modifier (Option/Control), falling back to Normal when that control has
+    // no overlay. The param itself was already layer-resolved via map above.
+    const uf8::SlotLayer* usl = uslRaw
+        ? &uf8::fxEffectiveLayer(*uslRaw, reasixty_fxLearnActiveLayer())
         : nullptr;
 
     double next;
@@ -2810,6 +2824,34 @@ void UC1Surface::renderExtFuncsSubscreen_()
     if (idx >= n) idx = n - 1;
     extFuncsIdx_ = idx;
     const auto& cur  = items[idx];
+
+    // --- TEMP DIAGNOSTIC (ext-funcs name/focus) — remove after diagnosing ---
+    if (FILE* lf = std::fopen("/tmp/reasixty_extfuncs.log", "a")) {
+        auto* dtr = static_cast<MediaTrack*>(focusedTrack_);
+        char fxn[256] = {0}; int dfx = -1;
+        if (dtr) {
+            auto m = uf8::lookupPluginOnTrack(focusedTrack_, uf8::Domain::ChannelStrip);
+            dfx = m.fxIndex;
+            if (dfx >= 0) TrackFX_GetFXName(dtr, dfx, fxn, sizeof(fxn));
+        }
+        const uf8::UserPluginMap* um =
+            fxn[0] ? uf8::user_plugins::lookupOwnedByName(fxn) : nullptr;
+        auto fp = uf8::getFocusedParam();
+        std::fprintf(lf,
+            "[extf] active=%d fx='%s' userMapped=%d n=%d idx=%d focus{dom=%d slot=%d}\n",
+            extFuncsActive_ ? 1 : 0, fxn, um ? 1 : 0, n, idx,
+            static_cast<int>(fp.domain), fp.slotIdx);
+        for (int i = 0; i < n; ++i) {
+            const auto& di = items[i];
+            char pn[128] = {0};
+            if (dtr && dfx >= 0 && di.vst3Param >= 0)
+                TrackFX_GetParamName(dtr, dfx, di.vst3Param, pn, sizeof(pn));
+            std::fprintf(lf, "   item%d long='%s' vst3=%d link=%d paramName='%s'\n",
+                         i, di.longLabel.c_str(), di.vst3Param, di.linkIdx, pn);
+        }
+        std::fclose(lf);
+    }
+    // --- end diagnostic ---
     const auto& prev = items[(idx - 1 + n) % n];
     const auto& next = items[(idx + 1) % n];
     device_->send(buildLcdHeader(cur.longLabel.c_str()));

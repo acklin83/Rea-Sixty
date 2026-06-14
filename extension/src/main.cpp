@@ -74,11 +74,20 @@
 #include "SetupBundle.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
+#include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
 
 // File-global so both onTimer() and the insert setters (which live in an
 // anonymous namespace) bind to the SAME global symbol defined near the
 // launcher — avoids an anon-vs-global ambiguity.
 void reasixty_syncInsertsOverlayRun();
+void reasixty_syncAssignmentHudRun();
+void reasixty_setAssignmentHud(bool on);
+// Assignment-HUD payload builders (defined in SettingsScreen.cpp, which owns
+// the UC1 control geometry table).
+std::string reasixty_hudGeometryUc1();
+void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
+                                   int focusDom,
+                                   std::string& stateOut, std::string& assignOut);
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -606,6 +615,15 @@ std::atomic<bool>         g_keyboardCtrlModifier {true};
 std::atomic<bool>         g_shiftFineMode        {false}; // Shift = fine mode for V-Pots/encoders
 std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button held/latched
                                                           // (published from UC1Surface)
+// FX-Learn modifier layers (Normal / Option / Control). The enables gate
+// whether held Option / Control switch the active FX-Learn layer; default on
+// so user-mapped overlays work out of the box (a control with no overlay just
+// falls back to Normal). g_fxActiveLayer is the resolved current layer
+// (uf8::FxLayer 0/1/2), recomputed once per onTimer tick and read by the
+// dispatch + LED paths via reasixty_fxLearnActiveLayer().
+std::atomic<bool>         g_fxLayerOptEnable     {true};
+std::atomic<bool>         g_fxLayerCtrlEnable    {true};
+std::atomic<int>          g_fxActiveLayer        {0};
 // Forward declarations — defined later but called from drainInputQueue.
 bool hostShiftHeld_();
 bool shiftFineActive_();
@@ -1926,6 +1944,16 @@ std::atomic<bool> g_insertPanelEnabled{false};
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
 
+// Assignment HUD (read-only milestone): a dockable gfx companion that draws the
+// focused plug-in's UC1 surface mockup with mapped controls ringed + their
+// param names. Flag persisted as ExtState "hud_on"; the running companion polls
+// "hud_running". Default off.
+std::atomic<bool> g_hudEnabled{false};
+std::atomic<bool> g_hudAutoStartDone{false};
+// Set from the assignment_hud_toggle builtin (may fire on the libusb input
+// thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
+std::atomic<bool> g_hudToggleRequest{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2228,6 +2256,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "overlay_panel"); v && *v) {
         g_insertPanelEnabled.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "hud_on"); v && *v) {
+        g_hudEnabled.store(std::atoi(v) != 0);
+    }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
     // delta beyond the factory baseline).
@@ -2399,6 +2430,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "kb_ctrl_modifier"); v && *v) {
         g_keyboardCtrlModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fx_layer_opt_enable"); v && *v) {
+        g_fxLayerOptEnable.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fx_layer_ctrl_enable"); v && *v) {
+        g_fxLayerCtrlEnable.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "shift_fine_mode"); v && *v) {
         g_shiftFineMode.store(std::atoi(v) != 0);
@@ -5181,6 +5218,37 @@ void publishOverlayState_()
     SetExtState("rea_sixty", "overlay", (std::string(head) + body).c_str(), false);
 }
 
+// ---- Assignment HUD publishers ---------------------------------------------
+// Static geometry is published once per enable; state + per-control assignments
+// are diff-guarded like the overlay. Main-thread-only (walks FX chains + reads
+// the user catalog). No-op when the HUD is off, so it costs nothing disabled.
+std::string g_hudStatePublished, g_hudAssignPublished;
+bool        g_hudGeomPublished = false;
+void publishHud_()
+{
+    if (!g_hudEnabled.load()) return;
+    if (!g_hudGeomPublished) {
+        const std::string geom = reasixty_hudGeometryUc1();
+        SetExtState("rea_sixty", "hud_geom_uc1", geom.c_str(), false);
+        g_hudGeomPublished = true;
+    }
+    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+    int csFx = -1, bcFx = -1;
+    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+    const int focusDom =
+        static_cast<int>(uf8::g_focusedParam.load(std::memory_order_relaxed).domain);
+    std::string state, assign;
+    reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
+    if (state != g_hudStatePublished) {
+        g_hudStatePublished = state;
+        SetExtState("rea_sixty", "hud_state", state.c_str(), false);
+    }
+    if (assign != g_hudAssignPublished) {
+        g_hudAssignPublished = assign;
+        SetExtState("rea_sixty", "hud_assign", assign.c_str(), false);
+    }
+}
+
 // Instance-cursor-changed callback (registered with UC1PluginMap at
 // startup). Fires on the main thread whenever Instance Cycle moves the
 // active CS/BC on a track — refresh the overlay (and, in legacy mode, the
@@ -5782,7 +5850,9 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
     }
     if (g_uf8PluginMode.load()) {
         if (auto uctx = userStripCtxFocused_(); uctx.map) {
-            const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+            const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                g_fxActiveLayer.load(std::memory_order_relaxed));
             if (sb.faderVst3Param >= 0) {
                 double n = TrackFX_GetParamNormalized(
                     uctx.tr, uctx.fxIdx, sb.faderVst3Param);
@@ -6276,8 +6346,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.soloVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.soloVst3Param);
@@ -6320,8 +6392,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.cutVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.cutVst3Param);
@@ -6347,8 +6421,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
@@ -6371,8 +6447,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
@@ -6500,7 +6578,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.faderVst3Param >= 0) {
                             const uint16_t pbU = linearVolumeToPb(e.value);
                             double n = static_cast<double>(pbU) /
@@ -6681,8 +6761,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
-                        const auto& bs =
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                        const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (bs.vst3Param >= 0
                             && bs.vpotMode == uf8::VPotMode::Value)
                         {
@@ -7031,8 +7112,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
-                        const auto& bs =
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                        const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (bs.vst3Param >= 0) {
                             double pushNext;
                             if (bs.vpotMode == uf8::VPotMode::Toggle) {
@@ -11264,7 +11346,9 @@ void pushZonesForVisibleSlots()
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const int bank = std::clamp(g_softKeyBank.load(),
                     0, uf8::kUserUf8BankCount - 1);
-                const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                    uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                    g_fxActiveLayer.load(std::memory_order_relaxed));
                 if (sb.faderVst3Param >= 0) {
                     userF = { uctx.tr, uctx.fxIdx,
                               sb.faderVst3Param, sb.faderInverted,
@@ -12122,8 +12206,9 @@ void pushZonesForVisibleSlots()
             if (g_uf8PluginMode.load() && !g_flip.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-                    const auto& bs =
-                        uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                    const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                        uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                        g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (bs.vst3Param < 0
                         || bs.vpotMode == uf8::VPotMode::Toggle)
                     {
@@ -12681,6 +12766,21 @@ bool vpotFineActive_()
     return shiftFineActive_() || g_uc1Fine.load();
 }
 
+// Recompute the active FX-Learn modifier layer from host-keyboard state.
+// Called once per onTimer tick (main thread) so the per-track lookup loops
+// don't each hit CGEventSourceFlagsState, and so every read within a frame is
+// consistent. Both modifiers held is treated as ambiguous → Normal.
+void refreshFxActiveLayer_()
+{
+    const bool ctrl = g_fxLayerCtrlEnable.load() && hostCtrlHeld_();
+    const bool opt  = g_fxLayerOptEnable.load()  && hostAltHeld_();
+    int L = uf8::FxLayer::Normal;
+    if (ctrl && opt)      L = uf8::FxLayer::Normal;
+    else if (ctrl)        L = uf8::FxLayer::Control;
+    else if (opt)         L = uf8::FxLayer::Option;
+    g_fxActiveLayer.store(L, std::memory_order_relaxed);
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -12863,7 +12963,9 @@ void commitDebouncedTouchReleases()
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(),
                         0, uf8::kUserUf8BankCount - 1);
-                    const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                    const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                        uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                        g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (sb.faderVst3Param >= 0) {
                         double norm = TrackFX_GetParamNormalized(
                             uctx.tr, uctx.fxIdx, sb.faderVst3Param);
@@ -14089,6 +14191,13 @@ void onTimer()
         g_overlayAutoStartDone.store(true);
         reasixty_syncInsertsOverlayRun();
     }
+    if (!g_hudAutoStartDone.load() && g_tickCounter >= 30) {
+        g_hudAutoStartDone.store(true);
+        reasixty_syncAssignmentHudRun();
+    }
+    if (g_hudToggleRequest.exchange(false)) {
+        reasixty_setAssignmentHud(!g_hudEnabled.load());
+    }
 
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
@@ -14101,6 +14210,11 @@ void onTimer()
         g_keyboardCmdModifier.load()   && hostCmdHeld_());
     uf8::bindings::setKeyboardCtrlHeld(
         g_keyboardCtrlModifier.load()  && hostCtrlHeld_());
+
+    // Resolve the active FX-Learn modifier layer for this frame (Option /
+    // Control overlays on UC1/UF8 controls). Read by lookupBindingsByName +
+    // the dispatch/LED paths via reasixty_fxLearnActiveLayer().
+    refreshFxActiveLayer_();
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
@@ -14759,6 +14873,14 @@ void onTimer()
             static int s_overlayTick = 0;
             if (++s_overlayTick >= 6) { s_overlayTick = 0; publishOverlayState_(); }
         }
+    }
+
+    // Assignment-HUD republish — diff-guarded + a no-op while the HUD is off,
+    // so the FX-chain walk only runs when the window is up. ~5 Hz, independent
+    // of the project-change branch above.
+    {
+        static int s_hudTick = 0;
+        if (++s_hudTick >= 6) { s_hudTick = 0; publishHud_(); }
     }
 
     // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
@@ -15752,6 +15874,16 @@ void reasixty_setInsertPanel(bool on)
     reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
 }
 
+bool reasixty_assignmentHud() { return g_hudEnabled.load(); }
+void reasixty_setAssignmentHud(bool on)
+{
+    g_hudEnabled.store(on);
+    SetExtState("rea_sixty", "hud_on", on ? "1" : "0", true);
+    if (on) g_hudGeomPublished = false;   // re-emit geometry for a fresh window
+    publishHud_();
+    reasixty_syncAssignmentHudRun();      // start/stop the companion to match
+}
+
 int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
 void reasixty_setInsertMarkerStyle(int style)
 {
@@ -16496,6 +16628,22 @@ void reasixty_setKeyboardCtrlModifier(bool on)
     g_keyboardCtrlModifier.store(on);
     SetExtState("rea_sixty", "kb_ctrl_modifier", on ? "1" : "0", true);
     if (!on) uf8::bindings::setKeyboardCtrlHeld(false);
+}
+// FX-Learn modifier-layer enables + active-layer read. The active layer is
+// recomputed once per onTimer tick (refreshFxActiveLayer_); this just returns
+// the cached value so dispatch/LED reads are cheap and frame-consistent.
+int  reasixty_fxLearnActiveLayer()    { return g_fxActiveLayer.load(std::memory_order_relaxed); }
+bool reasixty_fxLayerOptionEnable()   { return g_fxLayerOptEnable.load(); }
+void reasixty_setFxLayerOptionEnable(bool on)
+{
+    g_fxLayerOptEnable.store(on);
+    SetExtState("rea_sixty", "fx_layer_opt_enable", on ? "1" : "0", true);
+}
+bool reasixty_fxLayerControlEnable()  { return g_fxLayerCtrlEnable.load(); }
+void reasixty_setFxLayerControlEnable(bool on)
+{
+    g_fxLayerCtrlEnable.store(on);
+    SetExtState("rea_sixty", "fx_layer_ctrl_enable", on ? "1" : "0", true);
 }
 bool reasixty_shiftFineMode()         { return g_shiftFineMode.load(); }
 void reasixty_setShiftFineMode(bool on)
@@ -18463,6 +18611,17 @@ void registerBindingHandlers()
         "Nav Mode: Regions only (no drill)", false
     });
 
+    registerBuiltin("assignment_hud_toggle", DescBuilder{
+        // Firing may arrive on the libusb input thread; defer the actual
+        // toggle (registers + runs a ReaScript, walks the FX chain — all
+        // main-thread-only) to onTimer via an atomic request.
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_hudToggleRequest.store(true);
+        },
+        [](int) -> bool { return g_hudEnabled.load(); },
+        "Assignment HUD: show / hide (focused plug-in surface map)", false
+    });
+
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
         [](bool firing,
            bool /*pressed*/,
@@ -20085,6 +20244,76 @@ void reasixty_syncInsertsOverlayRun()
     if (want && !running)      reasixty_toggleInsertsOverlay();        // starts it
     else if (!want && running) SetExtState("rea_sixty", "overlay_running",
                                            "0", false);                // stops it
+}
+
+// ---- Assignment-HUD companion lifecycle (clones the inserts-overlay trio) ---
+static std::string assignmentHudLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_assignment_hud.lua";
+}
+
+static void reasixty_deployAssignmentHudLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_assignment_hud.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kAssignmentHudLuaBytes);
+    const size_t len  = uf8::setup_bundle::kAssignmentHudLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+bool reasixty_toggleAssignmentHud()
+{
+    reasixty_deployAssignmentHudLua();
+    const std::string path = assignmentHudLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+bool reasixty_assignmentHudRunning()
+{
+    const char* v = GetExtState("rea_sixty", "hud_running");
+    return v && v[0] == '1';
+}
+
+void reasixty_syncAssignmentHudRun()
+{
+    const bool want    = g_hudEnabled.load();
+    const bool running = reasixty_assignmentHudRunning();
+    if (want && !running)      reasixty_toggleAssignmentHud();
+    else if (!want && running) SetExtState("rea_sixty", "hud_running", "0", false);
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

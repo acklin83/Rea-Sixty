@@ -44,14 +44,28 @@ struct PushStep {
     bool  enabled   = true;
 };
 
-struct UserLinkSlot {
-    int  linkIdx;     // SSL 360 Link virtual-strip slot. 0..46 + 100..119.
-    int  vst3Param;   // VST3 parameter index on this user plugin.
+// FX-Learn modifier layers. The Normal layer is the base, always-active
+// mapping; Option and Control are held-modifier overrides chosen at runtime
+// by reasixty_fxLearnActiveLayer(). Shift stays reserved for Fine mode and is
+// NOT a layer. Index values matter: UserLinkSlot::modLayers stores Option at
+// [0] and Control at [1] (i.e. FxLayer value minus 1).
+enum FxLayer { Normal = 0, Option = 1, Control = 2 };
+constexpr int kNumFxLayers = 3;
+
+// One layer's worth of a control→param mapping. The Normal layer of every
+// UserLinkSlot IS a SlotLayer (via inheritance below); the Option/Control
+// modifier layers are extra SlotLayer instances. Splitting these mutable
+// fields out lets the same physical control carry an independent param +
+// invert + knob-travel + push-cycle per held modifier.
+struct SlotLayer {
+    // VST3 parameter index on this user plugin. -1 = unmapped on this layer
+    // (a modifier layer left at -1 with no pushSteps falls back to Normal at
+    // runtime). The base/Normal layer uses -1 for a macro-only slot.
+    int  vst3Param = -1;
     bool inverted = false;
     // Per-slot display override — shown on scribble strips instead of the
     // default name (VST3 param name or canonical SSL slot name). Empty
-    // string means "use default". Additive field — old readers silently
-    // ignore it, no format-version bump needed.
+    // string means "use default".
     std::string customLabel;
 
     // Knob-travel customisation (additive; defaults are byte-identical
@@ -100,6 +114,53 @@ struct UserLinkSlot {
     std::vector<PushStep> pushSteps;
 };
 
+struct UserLinkSlot : SlotLayer {
+    int  linkIdx;     // SSL 360 Link virtual-strip slot. 0..46 + 100..119.
+    // Modifier overlays: [0]=Option, [1]=Control. The base SlotLayer above
+    // is the Normal layer. A modifier layer is "mapped" when it carries a
+    // bound param or a push-cycle (see fxLayerMapped); an unmapped modifier
+    // layer makes runtime fall back to the Normal layer for that control.
+    SlotLayer modLayers[kNumFxLayers - 1];
+};
+
+// Reference to the SlotLayer backing FX-Learn layer L: 0=Normal returns the
+// slot itself (the base), 1=Option -> modLayers[0], 2=Control -> modLayers[1].
+inline SlotLayer& fxLayerOf(UserLinkSlot& s, int L) {
+    return (L <= FxLayer::Normal) ? static_cast<SlotLayer&>(s)
+                                  : s.modLayers[L - 1];
+}
+inline const SlotLayer& fxLayerOf(const UserLinkSlot& s, int L) {
+    return (L <= FxLayer::Normal) ? static_cast<const SlotLayer&>(s)
+                                  : s.modLayers[L - 1];
+}
+// True when a layer carries a real mapping (a bound param or a push-cycle).
+inline bool fxLayerMapped(const SlotLayer& sl) {
+    return sl.vst3Param >= 0 || !sl.pushSteps.empty();
+}
+// The SlotLayer that actually drives a control under FX-Learn layer L: the
+// requested layer if it carries a mapping, otherwise the Normal/base layer.
+// This is the single source of the "modifier overlay falls back to Normal
+// for controls you didn't remap" rule — used by both synthesis and dispatch.
+inline const SlotLayer& fxEffectiveLayer(const UserLinkSlot& s, int L) {
+    const SlotLayer& lay = fxLayerOf(s, L);
+    return fxLayerMapped(lay) ? lay : fxLayerOf(s, FxLayer::Normal);
+}
+// True when a layer differs from a freshly-constructed default — i.e. it is
+// worth serialising. Used to keep JSON diffs minimal.
+inline bool fxLayerNonDefault(const SlotLayer& sl) {
+    return fxLayerMapped(sl) || sl.inverted || !sl.customLabel.empty()
+        || sl.rangeMin != 0.0f || sl.rangeMax != 1.0f
+        || sl.sensitivity != 1.0f || !sl.curvePoints.empty()
+        || sl.polarity != VPotPolarity::Unipolar || sl.defaultNorm != 0.5;
+}
+// True when slot s has ANY modifier-layer override populated — used to keep
+// JSON diffs minimal (only emit modLayers when present).
+inline bool hasAnyModLayer(const UserLinkSlot& s) {
+    for (const auto& ml : s.modLayers)
+        if (fxLayerNonDefault(ml)) return true;
+    return false;
+}
+
 // Knob-travel evaluators. `applyCurve(sl, t)` maps the encoder's
 // virtual position t∈[0..1] to a normalised FX param value v∈[0..1],
 // honouring rangeMin/rangeMax and any user-defined curve breakpoints.
@@ -123,10 +184,12 @@ float applyCurve(float t, float rangeMin, float rangeMax,
                  const std::vector<std::pair<float, float>>& curvePoints);
 float inverseCurve(float v, float rangeMin, float rangeMax,
                    const std::vector<std::pair<float, float>>& curvePoints);
-inline float applyCurve(const UserLinkSlot& sl, float t) {
+// Take SlotLayer (the base of UserLinkSlot) so both the Normal layer and the
+// Option/Control modifier layers evaluate with the same math.
+inline float applyCurve(const SlotLayer& sl, float t) {
     return applyCurve(t, sl.rangeMin, sl.rangeMax, sl.curvePoints);
 }
-inline float inverseCurve(const UserLinkSlot& sl, float v) {
+inline float inverseCurve(const SlotLayer& sl, float v) {
     return inverseCurve(v, sl.rangeMin, sl.rangeMax, sl.curvePoints);
 }
 
@@ -203,6 +266,18 @@ struct KnobTravel {
     }
 };
 
+// FX-Learn modifier overlay for a UF8 V-Pot (Option / Control). Carries the
+// dispatch-relevant fields; an overlay with vst3Param < 0 is "unmapped" and
+// the runtime falls back to the V-Pot's Normal mapping. Colour/label stay
+// Normal-only (cosmetics don't change per modifier).
+struct Uf8VpotLayer {
+    int          vst3Param   = -1;
+    bool         inverted    = false;
+    VPotMode     vpotMode    = VPotMode::Value;
+    double       defaultNorm = 0.5;
+    KnobTravel   travel{};
+};
+
 // One slot in one of eight UF8 banks. vst3Param=-1 => empty slot
 // (top-soft-key blank, V-Pot no-op).
 struct UserUf8BankSlot {
@@ -221,6 +296,8 @@ struct UserUf8BankSlot {
     uint32_t     stripColour = 0;
     KnobTravel   travel{};                    // per V-Pot range/curve
     VPotPolarity polarity = VPotPolarity::Unipolar;
+    // FX-Learn modifier overlays: [0]=Option, [1]=Control.
+    Uf8VpotLayer modLayers[kNumFxLayers - 1];
 };
 
 // TopSoftKey LED appearance — bank-scoped (Frank 2026-05-13:
@@ -271,6 +348,16 @@ struct UserUf8BankSet {
 // each channel's fader independently. (v6 had strips[topSoftKey][slot]
 // — that per-top-soft-key dimension is dropped, migration takes
 // strips[0][slot] only.)
+// FX-Learn modifier overlay for a UF8 strip's fader + Solo/Cut/Sel buttons.
+// Per sub-control fallback: a field left at -1 inherits that sub-control's
+// Normal mapping. Colours/labels stay Normal-only.
+struct Uf8StripLayer {
+    int  faderVst3Param = -1; bool faderInverted = false;
+    int  soloVst3Param  = -1; bool soloInvert    = false;
+    int  cutVst3Param   = -1; bool cutInvert     = false;
+    int  selVst3Param   = -1; bool selInvert     = false;
+};
+
 struct UserUf8StripBinding {
     int          faderVst3Param = -1;         // -1 = fall through to track vol
     bool         faderInverted  = false;
@@ -299,7 +386,55 @@ struct UserUf8StripBinding {
     bool soloInvert = false;
     bool cutInvert  = false;
     bool selInvert  = false;
+    // FX-Learn modifier overlays: [0]=Option, [1]=Control.
+    Uf8StripLayer modLayers[kNumFxLayers - 1];
 };
+
+// Effective UF8 V-Pot binding under FX-Learn layer L: the Option/Control
+// overlay when it carries a bound param, else the Normal/base slot. Returns a
+// merged copy (cheap; called at user-input rate, not per-sample).
+inline UserUf8BankSlot fxEffectiveVpot(const UserUf8BankSlot& base, int L) {
+    if (L <= FxLayer::Normal) return base;
+    const Uf8VpotLayer& ov = base.modLayers[L - 1];
+    if (ov.vst3Param < 0) return base;
+    UserUf8BankSlot eff = base;
+    eff.vst3Param   = ov.vst3Param;
+    eff.inverted    = ov.inverted;
+    eff.vpotMode    = ov.vpotMode;
+    eff.defaultNorm = ov.defaultNorm;
+    eff.travel      = ov.travel;
+    return eff;
+}
+// Effective UF8 strip binding under FX-Learn layer L. Per sub-control fallback:
+// each of fader/solo/cut/sel uses its overlay when mapped, else Normal.
+inline UserUf8StripBinding fxEffectiveStrip(const UserUf8StripBinding& base, int L) {
+    if (L <= FxLayer::Normal) return base;
+    const Uf8StripLayer& ov = base.modLayers[L - 1];
+    UserUf8StripBinding eff = base;
+    if (ov.faderVst3Param >= 0) { eff.faderVst3Param = ov.faderVst3Param; eff.faderInverted = ov.faderInverted; }
+    if (ov.soloVst3Param  >= 0) { eff.soloVst3Param  = ov.soloVst3Param;  eff.soloInvert    = ov.soloInvert; }
+    if (ov.cutVst3Param   >= 0) { eff.cutVst3Param   = ov.cutVst3Param;   eff.cutInvert     = ov.cutInvert; }
+    if (ov.selVst3Param   >= 0) { eff.selVst3Param   = ov.selVst3Param;   eff.selInvert     = ov.selInvert; }
+    return eff;
+}
+// JSON-diff predicates — only serialise an overlay when it carries content.
+inline bool uf8VpotLayerNonDefault(const Uf8VpotLayer& l) {
+    return l.vst3Param >= 0 || l.inverted || l.vpotMode != VPotMode::Value
+        || l.defaultNorm != 0.5 || l.travel.isCustom();
+}
+inline bool uf8StripLayerNonDefault(const Uf8StripLayer& l) {
+    return l.faderVst3Param >= 0 || l.soloVst3Param >= 0 || l.cutVst3Param >= 0
+        || l.selVst3Param >= 0 || l.faderInverted || l.soloInvert
+        || l.cutInvert || l.selInvert;
+}
+inline bool hasAnyVpotModLayer(const UserUf8BankSlot& s) {
+    for (const auto& l : s.modLayers) if (uf8VpotLayerNonDefault(l)) return true;
+    return false;
+}
+inline bool hasAnyStripModLayer(const UserUf8StripBinding& s) {
+    for (const auto& l : s.modLayers) if (uf8StripLayerNonDefault(l)) return true;
+    return false;
+}
 
 // Bank Left / Bank Right buttons are reserved for fader-bank switching
 // inside UF8 Plugin Mode (Frank 2026-05-17 reversal of the 2026-05-16
@@ -428,7 +563,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 8;
+constexpr int kCurrentFormatVersion = 9;   // v9: per-control FX-Learn modifier layers (modLayers)
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
