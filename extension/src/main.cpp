@@ -75,6 +75,7 @@
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
+#include "focused_panel_lua.h"    // generated: uf8::setup_bundle::kFocusedPanelLua{Bytes,Size}
 
 // File-global so both onTimer() and the insert setters (which live in an
 // anonymous namespace) bind to the SAME global symbol defined near the
@@ -82,6 +83,8 @@
 void reasixty_syncInsertsOverlayRun();
 void reasixty_syncAssignmentHudRun();
 void reasixty_setAssignmentHud(bool on);
+void reasixty_syncFocusedPanelRun();
+void reasixty_setFocusedPanel(bool on);
 // Assignment-HUD payload builders (defined in SettingsScreen.cpp, which owns
 // the UC1 control geometry table).
 std::string reasixty_hudGeometryUc1();
@@ -1954,6 +1957,14 @@ std::atomic<bool> g_hudAutoStartDone{false};
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
 
+// Frameless focused-track panel (Gridbox-style box composited on the main
+// window). Flag persisted as ExtState "focused_panel_on"; companion polls
+// "focused_panel_running". Default off. Shares the overlay_focus / overlay /
+// overlay_param_* publishers (its gate is OR'd into them below).
+std::atomic<bool> g_focusedPanel{false};
+std::atomic<bool> g_focusedPanelAutoStartDone{false};
+std::atomic<bool> g_focusedPanelToggleRequest{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2258,6 +2269,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "hud_on"); v && *v) {
         g_hudEnabled.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "focused_panel_on"); v && *v) {
+        g_focusedPanel.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -5065,7 +5079,8 @@ void publishOverlayFocus_()
     std::string guid;
     // Published whenever EITHER feature is on — the docker needs the focus GUID
     // independently of the MCP highlight.
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load()
+                   || g_focusedPanel.load();
     if (feat && g_uc1_surface) {
         auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
@@ -5156,7 +5171,8 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
     if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; }
     if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; }
 
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load()
+                   || g_focusedPanel.load();
     if (feat) {
         MediaTrack* ltTr; int ltFx, ltP;
         resolveLastTouched_(ltTr, ltFx, ltP);
@@ -5194,7 +5210,7 @@ void publishOverlayState_()
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.
     const bool on   = g_insertMarkersEnabled.load();
-    const bool body_on = on || g_insertPanelEnabled.load();
+    const bool body_on = on || g_insertPanelEnabled.load() || g_focusedPanel.load();
     MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
     int csFx = -1, bcFx = -1;
     if (body_on) activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
@@ -14198,6 +14214,13 @@ void onTimer()
     if (g_hudToggleRequest.exchange(false)) {
         reasixty_setAssignmentHud(!g_hudEnabled.load());
     }
+    if (!g_focusedPanelAutoStartDone.load() && g_tickCounter >= 30) {
+        g_focusedPanelAutoStartDone.store(true);
+        reasixty_syncFocusedPanelRun();
+    }
+    if (g_focusedPanelToggleRequest.exchange(false)) {
+        reasixty_setFocusedPanel(!g_focusedPanel.load());
+    }
 
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
@@ -15882,6 +15905,15 @@ void reasixty_setAssignmentHud(bool on)
     if (on) g_hudGeomPublished = false;   // re-emit geometry for a fresh window
     publishHud_();
     reasixty_syncAssignmentHudRun();      // start/stop the companion to match
+}
+
+bool reasixty_focusedPanel() { return g_focusedPanel.load(); }
+void reasixty_setFocusedPanel(bool on)
+{
+    g_focusedPanel.store(on);
+    SetExtState("rea_sixty", "focused_panel_on", on ? "1" : "0", true);
+    publishOverlayState_();              // push focus/data so it shows immediately
+    reasixty_syncFocusedPanelRun();      // start/stop the companion to match
 }
 
 int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
@@ -18622,6 +18654,14 @@ void registerBindingHandlers()
         "Assignment HUD: show / hide (focused plug-in surface map)", false
     });
 
+    registerBuiltin("focused_panel_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_focusedPanelToggleRequest.store(true);
+        },
+        [](int) -> bool { return g_focusedPanel.load(); },
+        "Focused-track panel: show / hide (frameless, on Arrange)", false
+    });
+
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
         [](bool firing,
            bool /*pressed*/,
@@ -20314,6 +20354,76 @@ void reasixty_syncAssignmentHudRun()
     const bool running = reasixty_assignmentHudRunning();
     if (want && !running)      reasixty_toggleAssignmentHud();
     else if (!want && running) SetExtState("rea_sixty", "hud_running", "0", false);
+}
+
+// ---- Frameless focused-track panel companion lifecycle (same clone) --------
+static std::string focusedPanelLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_focused_panel.lua";
+}
+
+static void reasixty_deployFocusedPanelLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_focused_panel.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kFocusedPanelLuaBytes);
+    const size_t len  = uf8::setup_bundle::kFocusedPanelLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+bool reasixty_toggleFocusedPanel()
+{
+    reasixty_deployFocusedPanelLua();
+    const std::string path = focusedPanelLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+bool reasixty_focusedPanelRunning()
+{
+    const char* v = GetExtState("rea_sixty", "focused_panel_running");
+    return v && v[0] == '1';
+}
+
+void reasixty_syncFocusedPanelRun()
+{
+    const bool want    = g_focusedPanel.load();
+    const bool running = reasixty_focusedPanelRunning();
+    if (want && !running)      reasixty_toggleFocusedPanel();
+    else if (!want && running) SetExtState("rea_sixty", "focused_panel_running", "0", false);
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

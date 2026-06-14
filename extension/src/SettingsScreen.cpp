@@ -81,6 +81,9 @@ void reasixty_setInsertPanel(bool on);
 bool reasixty_assignmentHud();
 void reasixty_setAssignmentHud(bool on);
 bool reasixty_assignmentHudRunning();
+bool reasixty_focusedPanel();
+void reasixty_setFocusedPanel(bool on);
+bool reasixty_focusedPanelRunning();
 int    reasixty_overlayCsColor();
 void   reasixty_setOverlayCsColor(int rgb);
 int    reasixty_overlayBcColor();
@@ -576,6 +579,17 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx, reasixty_assignmentHudRunning()
                                 ? "  HUD companion running"
                                 : "  HUD companion starting\xE2\x80\xA6");
+    }
+    // Frameless focused-track panel (Gridbox-style, floats on the Arrange,
+    // drag-to-move / drag-edges-to-resize / right-click menu).
+    bool fpanel = reasixty_focusedPanel();
+    if (ImGui_Checkbox(ctx, "Show focused-track panel (frameless, on Arrange)", &fpanel)) {
+        reasixty_setFocusedPanel(fpanel);
+    }
+    if (fpanel) {
+        ImGui_TextDisabled(ctx, reasixty_focusedPanelRunning()
+                                ? "  Panel companion running"
+                                : "  Panel companion starting\xE2\x80\xA6");
     }
 
     if (insMark || insPanel) {
@@ -2710,6 +2724,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("uf8_plugin_mode_", 0) == 0
                  || n == "uc1_outgain_fader_toggle"
                  || n == "assignment_hud_toggle"
+                 || n == "focused_panel_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
