@@ -9709,7 +9709,9 @@ bool                       g_vpotBarInit{false};
 // the CS plug-in and miss).
 const uf8::LinkSlot* slotForStrip(MediaTrack* tr,
                                   const uf8::FocusedParam& focused,
-                                  int* outFxIdx)
+                                  int* outFxIdx,
+                                  int* outParam = nullptr,
+                                  std::string* outName = nullptr)
 {
     if (!tr) return nullptr;
     if (g_forcePan.load()) return nullptr;
@@ -9722,6 +9724,41 @@ const uf8::LinkSlot* slotForStrip(MediaTrack* tr,
                                                        focused.slotIdx);
     if (!slot) return nullptr;
     if (outFxIdx) *outFxIdx = match.fxIndex;
+    // Default = the Normal slot's param + name.
+    if (outParam) *outParam = slot->vst3Param;
+    if (outName)  *outName  = (slot->name ? slot->name : "");
+    // Active Option/Control FX-Learn layer: on a user-mapped plug-in the
+    // focused control may drive a DIFFERENT param. Resolve the effective
+    // layer param + name so the UF8 readout (name + value + bar fill)
+    // follows the held modifier, mirroring UC1's pushFocusedParamReadout_.
+    // Safe-by-construction: Normal layer / built-in / no overlay → the slot
+    // defaults above stand, so no-modifier rendering is byte-identical.
+    // (Limitation: a control mapped ONLY on an overlay — Normal unmapped —
+    // has no Normal slot here, so it still won't show; the Normal layer must
+    // carry a base mapping for the focus/readout to resolve.) Frank 2026-06-15.
+    const int L = reasixty_fxLearnActiveLayer();
+    if (L != uf8::FxLayer::Normal && (outParam || outName)) {
+        char fxn[512] = {};
+        if (uf8::fxIdentityName(tr, match.fxIndex, fxn, sizeof(fxn))) {
+            const uf8::UserLinkSlot* us =
+                uf8::user_plugins::lookupOwnedSlot(fxn, slot->linkIdx);
+            if (us) {
+                const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(*us, L);
+                if (eff.vst3Param >= 0) {
+                    if (outParam) *outParam = eff.vst3Param;
+                    if (outName) {
+                        if (!eff.customLabel.empty()) *outName = eff.customLabel;
+                        else {
+                            char pn[256] = {};
+                            TrackFX_GetParamName(tr, match.fxIndex,
+                                                 eff.vst3Param, pn, sizeof(pn));
+                            if (pn[0]) *outName = pn;
+                        }
+                    }
+                }
+            }
+        }
+    }
     return slot;
 }
 
@@ -10997,7 +11034,10 @@ void pushZonesForVisibleSlots()
         // cases we fall back to the REAPER-native display (track name +
         // volume).
         int fxIdx = -1;
-        const uf8::LinkSlot* slot = slotForStrip(tr, focused, &fxIdx);
+        int effParam = -1;            // active-layer effective param (display)
+        std::string effName;          // active-layer effective name  (display)
+        const uf8::LinkSlot* slot = slotForStrip(tr, focused, &fxIdx,
+                                                 &effParam, &effName);
         // Plug-in map for the CS Type zone — derived from track presence
         // alone (NOT gated on `slot`). The Type zone should reflect what
         // SSL plug-in is on the strip's track regardless of whether a
@@ -11509,7 +11549,10 @@ void pushZonesForVisibleSlots()
             const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
             vpotBar[s] = vpotPosFromPan(pan);
         } else if (slot && fxIdx >= 0 && !isVPotPanFocus(focused)) {
-            const double norm = TrackFX_GetParamNormalized(tr, fxIdx, slot->vst3Param);
+            // Value read follows the active layer's effective param; the bar
+            // SHAPE (binary/bipolar/unipolar) + invert stay the Normal slot's.
+            const int rp = (effParam >= 0) ? effParam : slot->vst3Param;
+            const double norm = TrackFX_GetParamNormalized(tr, fxIdx, rp);
             const double visual = slot->inverted ? 1.0 - norm : norm;
             if (isBinarySlot(*slot)) {
                 // ON = max positive (0x7F in signed). OFF = 0x00 +
@@ -12048,9 +12091,12 @@ void pushZonesForVisibleSlots()
                 }
             }
         } else if (slot && fxIdx >= 0 && !isVPotPanFocus(focused)) {
+            // Name + value follow the active FX-Learn layer's effective param
+            // (effParam/effName default to the Normal slot when no overlay).
+            const int rp = (effParam >= 0) ? effParam : slot->vst3Param;
             char paramBuf[64] = {0};
-            const double norm = TrackFX_GetParamNormalized(tr, fxIdx, slot->vst3Param);
-            TrackFX_FormatParamValueNormalized(tr, fxIdx, slot->vst3Param,
+            const double norm = TrackFX_GetParamNormalized(tr, fxIdx, rp);
+            TrackFX_FormatParamValueNormalized(tr, fxIdx, rp,
                                                norm, paramBuf, sizeof(paramBuf));
             std::string valStr(paramBuf);
             // Replace UTF-8 ∞ (E2 88 9E) with "INF" before the non-ASCII
@@ -12103,11 +12149,10 @@ void pushZonesForVisibleSlots()
             // ("Quick N"); for those show the actual plug-in param name —
             // which also reflects a user-defined alias when the param was
             // renamed — instead of the meaningless slot label. Frank 2026-06-13.
-            const char* label = slot->name;
+            const char* label = !effName.empty() ? effName.c_str() : slot->name;
             char qbuf[64] = {0};
             if (slot->linkIdx >= 38 && slot->linkIdx <= 43) {
-                TrackFX_GetParamName(tr, fxIdx, slot->vst3Param,
-                                     qbuf, sizeof(qbuf));
+                TrackFX_GetParamName(tr, fxIdx, rp, qbuf, sizeof(qbuf));
                 if (qbuf[0]) label = qbuf;
             }
             valLine = composeValueLine(label, valStr);

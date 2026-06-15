@@ -137,6 +137,13 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName);
 int hudParamForControl(const PluginBindings* b, bool busComp,
                        int linkIdx, bool isButton, bool* outInverted);
 
+// Reverse of kCsLinkToUc1 / kBcLinkToUc1: the SSL-Link `linkIdx` a given UC1
+// hardware control drives. Used to focus the control's OWN slot when an
+// Option/Control FX-Learn layer remaps it to a param outside the Normal slot
+// list (so the focused-param readout still lands on the correct row).
+// Returns -1 when the control isn't in the table.
+int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
+
 // True when this binding belongs to the Bus Comp domain (BC 2 / 4K B /
 // user-mapped BC). False covers Channel Strip and unrelated bindings;
 // callers should null-check the input first.

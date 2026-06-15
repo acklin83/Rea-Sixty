@@ -700,6 +700,19 @@ int hudParamForControl(const PluginBindings* b, bool busComp,
     return kParamNone;
 }
 
+int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)
+{
+    const LinkToUc1* table = busComp ? kBcLinkToUc1 : kCsLinkToUc1;
+    const int n = busComp
+        ? static_cast<int>(sizeof(kBcLinkToUc1) / sizeof(kBcLinkToUc1[0]))
+        : static_cast<int>(sizeof(kCsLinkToUc1) / sizeof(kCsLinkToUc1[0]));
+    for (int i = 0; i < n; ++i) {
+        const uint8_t id = isButton ? table[i].buttonId : table[i].knobId;
+        if (id != kNoUc1 && id == controlId) return table[i].linkIdx;
+    }
+    return -1;
+}
+
 ControlDomain classifyKnob(uint8_t knobId)
 {
     // Top V-Pots live in 0x0C..0x16. By physical layout on the SSL UC1:

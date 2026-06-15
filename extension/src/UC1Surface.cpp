@@ -1684,11 +1684,25 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     auto uf8Match = uf8::lookupPluginOnTrack(writeTrackRaw, uf8Domain);
     bool focusedParamRendered = false;
     if (uf8Match.map) {
-        const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
+        int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
+        // Normal-slot resolution found the param in the slot list → group
+        // broadcast is valid (param groups are Normal-keyed). When an active
+        // Option/Control layer remapped this knob to a param OUTSIDE the Normal
+        // list, slotIdx is -1; resolve the control's OWN linkIdx so the
+        // focused-param readout (now layer-aware) lands on the right row with
+        // the right name, instead of the old hardcoded BC fallback. Don't
+        // group-broadcast a layer remap (would write the wrong param on grouped
+        // tracks). Frank 2026-06-15.
+        const bool normalSlot = (slotIdx >= 0);
+        if (slotIdx < 0) {
+            slotIdx = uc1::linkIdxForControl(ev.id, busCompContext, false);
+        }
         if (slotIdx >= 0) {
-            uf8::param_groups::broadcastBuiltinSlot(
-                static_cast<MediaTrack*>(writeTrackRaw),
-                uf8Domain, slotIdx, next);
+            if (normalSlot) {
+                uf8::param_groups::broadcastBuiltinSlot(
+                    static_cast<MediaTrack*>(writeTrackRaw),
+                    uf8Domain, slotIdx, next);
+            }
             // Cross-domain knob touch flips the focused-param domain.
             // The central LCD's plug-in shortName label is computed off
             // this domain in refresh(), so a BC↔CS shift on the same
@@ -1712,14 +1726,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
     }
     if (!focusedParamRendered) {
-        // Knob wrote a vst3Param outside UF8's slot list (or the track
-        // has no UF8-recognised plugin for this domain). Fall back to a
-        // direct per-knob readout so the user still sees their edit;
-        // skips the dedup cache (next poll-tick will re-render the
-        // focused param's text, overwriting this transient).
+        // Knob wrote a vst3Param outside UF8's slot list AND the control
+        // isn't in kCsLinkToUc1/kBcLinkToUc1 (or no plugin for this domain).
+        // Direct per-knob readout — in the knob's OWN domain zone (was a
+        // hardcoded BC zone, which put CS knobs in the wrong row), and show
+        // the REAL plug-in param name (was a static label that ignored the
+        // active layer). Mirrors fmtParam_ in main.cpp.
+        char pname[256] = {0};
+        TrackFX_GetParamName(tr, fxIdx, vst3Param, pname, sizeof(pname));
         pushKnobReadout_(ev.id, tr, fxIdx, vst3Param,
-                         zone::kBusCompReadout,
-                         labelForKnob(ev.id, busCompContext));
+                         busCompContext ? zone::kBusCompReadout
+                                        : zone::kChannelStripReadout,
+                         pname[0] ? pname : labelForKnob(ev.id, busCompContext));
     }
     // "View active plugin" follow — queue a deferred swap so the
     // floating FX window switches to the touched FX on the next timer
@@ -2663,13 +2681,45 @@ void UC1Surface::pushFocusedParamReadout_()
     // dropping the LCD line removes the false-positive idle display.
     if (slot.linkIdx == 0) return;
     MediaTrack* tr = static_cast<MediaTrack*>(lookupTrack);
+
+    // Active Option/Control FX-Learn layer: the focused control may drive a
+    // DIFFERENT param than its Normal slot. Resolve the effective param + name
+    // for the active layer (user-mapped plug-ins only — built-ins are factory
+    // fixed). Safe-by-construction: Normal layer / no overlay → base slot, so
+    // the no-modifier readout is byte-identical. Frank 2026-06-15.
+    int         pParam = slot.vst3Param;
+    const char* pName  = slot.name;
+    std::string pNameOwned;   // backs pName when it comes from the layer
+    const int activeLayer = reasixty_fxLearnActiveLayer();
+    if (activeLayer != uf8::FxLayer::Normal) {
+        char fxn[512] = {};
+        if (uf8::fxIdentityName(tr, match.fxIndex, fxn, sizeof(fxn))) {
+            const uf8::UserLinkSlot* us =
+                uf8::user_plugins::lookupOwnedSlot(fxn, slot.linkIdx);
+            if (us) {
+                const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(*us, activeLayer);
+                if (eff.vst3Param >= 0) {
+                    pParam = eff.vst3Param;
+                    if (!eff.customLabel.empty()) {
+                        pNameOwned = eff.customLabel;
+                    } else {
+                        char pn[256] = {};
+                        TrackFX_GetParamName(tr, match.fxIndex, eff.vst3Param,
+                                             pn, sizeof(pn));
+                        if (pn[0]) pNameOwned = pn;
+                    }
+                    if (!pNameOwned.empty()) pName = pNameOwned.c_str();
+                }
+            }
+        }
+    }
+
     char formatted[64] = {};
-    const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex,
-                                                  slot.vst3Param);
-    TrackFX_FormatParamValueNormalized(tr, match.fxIndex, slot.vst3Param,
+    const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex, pParam);
+    TrackFX_FormatParamValueNormalized(tr, match.fxIndex, pParam,
                                        cur, formatted, sizeof(formatted));
     std::string value = stripUnitIfNonNumeric(compactUnit(formatted));
-    auto readout = formatReadout(slot.name, value);
+    auto readout = formatReadout(pName, value);
 
     // Per-domain LCD zone routing. CS → zone 0x03 (Channel Strip
     // readout area), BC → zone 0x05 (Bus Comp readout area). Per
