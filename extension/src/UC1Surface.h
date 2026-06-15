@@ -352,6 +352,12 @@ private:
     // changes the param value via TrackFX_SetParamNormalized). Toggled
     // by Sec-Encoder push.
     bool           extFuncsActive_ = false;
+    // Current live ext-func target + its last-rendered value, so poll() can
+    // re-render the subscreen when the param moves from OUTSIDE the UC1 (UF8
+    // V-Pot, plugin GUI, automation) — keeps the UC1 value mirroring the edit.
+    int            extFuncsCurFx_    = -1;
+    int            extFuncsCurParam_ = -1;
+    double         extFuncsLastVal_  = -999.0;
 
     // MAIN-mode BC-scroll overlay (decoded uc1_41 2026-05-01). On every
     // BC-encoder detent in MAIN, SSL360 puts the central LCD into a

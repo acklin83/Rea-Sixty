@@ -126,6 +126,24 @@ UC1Bindings lookupBindingsOnTrack(void* track /*MediaTrack**/);
 // Lookup by raw FX name (substring). Exposed for tests.
 const PluginBindings* lookupBindingsByName(std::string_view fxName);
 
+// Resolve the VST3 param that a UC1-schematic control drives on `b`. The
+// schematic identifies controls by SSL-Link `linkIdx` + domain; this joins
+// that to the hardware knob/button ID (kCsLinkToUc1 / kBcLinkToUc1) and reads
+// the binding's knobParam[] / buttonParam[]. `busComp` picks the table,
+// `isButton` the knob-vs-button column. Returns kParamNone when the control
+// isn't reachable from UC1 or the binding leaves it unmapped. When non-null,
+// *outInverted receives the per-control invert flag. Read-only, FX-name based —
+// used by the Assignment-HUD publisher independent of the Settings editor.
+int hudParamForControl(const PluginBindings* b, bool busComp,
+                       int linkIdx, bool isButton, bool* outInverted);
+
+// Reverse of kCsLinkToUc1 / kBcLinkToUc1: the SSL-Link `linkIdx` a given UC1
+// hardware control drives. Used to focus the control's OWN slot when an
+// Option/Control FX-Learn layer remaps it to a param outside the Normal slot
+// list (so the focused-param readout still lands on the correct row).
+// Returns -1 when the control isn't in the table.
+int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
+
 // True when this binding belongs to the Bus Comp domain (BC 2 / 4K B /
 // user-mapped BC). False covers Channel Strip and unrelated bindings;
 // callers should null-check the input first.

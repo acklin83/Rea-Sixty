@@ -74,11 +74,28 @@
 #include "SetupBundle.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
+#include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
+#include "focused_panel_lua.h"    // generated: uf8::setup_bundle::kFocusedPanelLua{Bytes,Size}
 
 // File-global so both onTimer() and the insert setters (which live in an
 // anonymous namespace) bind to the SAME global symbol defined near the
 // launcher — avoids an anon-vs-global ambiguity.
 void reasixty_syncInsertsOverlayRun();
+void reasixty_syncAssignmentHudRun();
+void reasixty_setAssignmentHud(bool on);
+void reasixty_syncFocusedPanelRun();
+void reasixty_setFocusedPanel(bool on);
+// Assignment-HUD payload builders (defined in SettingsScreen.cpp, which owns
+// the UC1 control geometry table).
+std::string reasixty_hudGeometryUc1();
+void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
+                                   int focusDom,
+                                   std::string& stateOut, std::string& assignOut);
+void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudLearnTick(int activeLayer);
+int         reasixty_hudLearnArmed();
+void        reasixty_hudCancelLearn();
+int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -606,6 +623,15 @@ std::atomic<bool>         g_keyboardCtrlModifier {true};
 std::atomic<bool>         g_shiftFineMode        {false}; // Shift = fine mode for V-Pots/encoders
 std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button held/latched
                                                           // (published from UC1Surface)
+// FX-Learn modifier layers (Normal / Option / Control). The enables gate
+// whether held Option / Control switch the active FX-Learn layer; default on
+// so user-mapped overlays work out of the box (a control with no overlay just
+// falls back to Normal). g_fxActiveLayer is the resolved current layer
+// (uf8::FxLayer 0/1/2), recomputed once per onTimer tick and read by the
+// dispatch + LED paths via reasixty_fxLearnActiveLayer().
+std::atomic<bool>         g_fxLayerOptEnable     {true};
+std::atomic<bool>         g_fxLayerCtrlEnable    {true};
+std::atomic<int>          g_fxActiveLayer        {0};
 // Forward declarations — defined later but called from drainInputQueue.
 bool hostShiftHeld_();
 bool shiftFineActive_();
@@ -1915,16 +1941,27 @@ std::atomic<int>  g_insertMarkerStyle{0};
 // is overlay. See docs/inserts-overlay-spike.md.
 std::atomic<bool> g_insertLegacyRename{false};
 
-// Optional dockable readout panel (Settings → Device → Inserts). When on, the
-// bundled companion Lua opens a small gfx dock showing the surface-focused
-// track + its active CS / BC instance names. Pure Lua-side feature — the
-// extension only persists the flag (ExtState "overlay_panel") and publishes the
-// focused-track GUID ("overlay_focus") for the panel to read. Default off.
-std::atomic<bool> g_insertPanelEnabled{false};
-
 // Auto-start the companion overlay/panel on the first main-thread tick after
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
+
+// Assignment HUD (read-only milestone): a dockable gfx companion that draws the
+// focused plug-in's UC1 surface mockup with mapped controls ringed + their
+// param names. Flag persisted as ExtState "hud_on"; the running companion polls
+// "hud_running". Default off.
+std::atomic<bool> g_hudEnabled{false};
+std::atomic<bool> g_hudAutoStartDone{false};
+// Set from the assignment_hud_toggle builtin (may fire on the libusb input
+// thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
+std::atomic<bool> g_hudToggleRequest{false};
+
+// Frameless focused-track panel (Gridbox-style box composited on the main
+// window). Flag persisted as ExtState "focused_panel_on"; companion polls
+// "focused_panel_running". Default off. Shares the overlay_focus / overlay /
+// overlay_param_* publishers (its gate is OR'd into them below).
+std::atomic<bool> g_focusedPanel{false};
+std::atomic<bool> g_focusedPanelAutoStartDone{false};
+std::atomic<bool> g_focusedPanelToggleRequest{false};
 
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
@@ -2225,8 +2262,11 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "insert_legacy_rename"); v && *v) {
         g_insertLegacyRename.store(std::atoi(v) != 0);
     }
-    if (const char* v = GetExtState("rea_sixty", "overlay_panel"); v && *v) {
-        g_insertPanelEnabled.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "hud_on"); v && *v) {
+        g_hudEnabled.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "focused_panel_on"); v && *v) {
+        g_focusedPanel.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -2399,6 +2439,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "kb_ctrl_modifier"); v && *v) {
         g_keyboardCtrlModifier.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fx_layer_opt_enable"); v && *v) {
+        g_fxLayerOptEnable.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fx_layer_ctrl_enable"); v && *v) {
+        g_fxLayerCtrlEnable.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "shift_fine_mode"); v && *v) {
         g_shiftFineMode.store(std::atoi(v) != 0);
@@ -5028,7 +5074,7 @@ void publishOverlayFocus_()
     std::string guid;
     // Published whenever EITHER feature is on — the docker needs the focus GUID
     // independently of the MCP highlight.
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
     if (feat && g_uc1_surface) {
         auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
@@ -5072,27 +5118,50 @@ static void resolveLastTouched_(MediaTrack*& tr, int& fx, int& param)
 // Rea-Sixty mapping label for a VST3 param: fxName -> PluginMap -> linkIdx ->
 // LinkSlot.name ("Input Trim", "Comp Thr", …). Empty when the plugin isn't
 // mapped or the param has no slot. Covers built-in SSL maps AND user FX-Learn
-// maps (lookupPluginMapByName checks both).
-static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param)
+// maps (lookupPluginMapByName checks both). A user's custom Display label wins —
+// for the active modifier layer (Option/Control) when one is held, else Normal —
+// so the focused-track panel shows the same user-defined name as the surface.
+static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param, int layer)
 {
     char fxName[512] = {0};
     if (!uf8::fxIdentityName(tr, fx, fxName, sizeof(fxName))) return {};
     const uf8::PluginMap* map = uf8::lookupPluginMapByName(fxName);
     if (!map) return {};
-    const int linkIdx = uf8::slotIdxForVst3Param(*map, param);
+    int L = layer;
+    if (L < 0 || L >= uf8::kNumFxLayers) L = uf8::FxLayer::Normal;
+    // Layer-aware reverse lookup over the owning user map: find the slot whose
+    // ACTIVE-layer effective param is the one that was touched, then prefer its
+    // custom Display label. The view cache is Normal-only, so a turned/pressed
+    // OVERLAY control (Option/Control param ≠ its Normal param) would otherwise
+    // miss and fall back to the default name. Frank 2026-06-15.
+    int linkIdx = -1;
+    if (const uf8::UserPluginMap* um = uf8::user_plugins::lookupOwnedByName(fxName)) {
+        for (const auto& s : um->slots) {
+            const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(s, L);
+            if (eff.vst3Param == param) {
+                if (!eff.customLabel.empty()) return eff.customLabel;
+                linkIdx = s.linkIdx;   // matched but unlabelled → canonical below
+                break;
+            }
+        }
+    }
+    if (linkIdx < 0) linkIdx = uf8::slotIdxForVst3Param(*map, param);
     if (linkIdx < 0) return {};
     const uf8::LinkSlot* slot = uf8::findSlotByLinkIdx(*map, linkIdx);
     if (slot && slot->name && slot->name[0]) return slot->name;
     return {};
 }
 
-static std::string fmtParam_(MediaTrack* tr, int fx, int param)
+static std::string fmtParam_(MediaTrack* tr, int fx, int param, int layer)
 {
     if (!tr || fx < 0 || param < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*"))
         return {};
     // Rea-Sixty mapping name first; fall back to REAPER's own param name only
-    // for unmapped plug-ins so something still shows.
-    std::string name = reaSixtyParamName_(tr, fx, param);
+    // for unmapped plug-ins so something still shows. `layer` is the FX-Learn
+    // layer that was active WHEN the param was touched (latched by the caller),
+    // not the live held modifier — so the name keeps the user's overlay label
+    // after the modifier is released, until a different param is manipulated.
+    std::string name = reaSixtyParamName_(tr, fx, param, layer);
     if (name.empty()) {
         char nm[256] = {0};
         TrackFX_GetParamName(tr, fx, param, nm, sizeof(nm));
@@ -5116,20 +5185,34 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
 {
     static MediaTrack* sCsTr = nullptr; static int sCsFx = -1, sCsParam = -1;
     static MediaTrack* sBcTr = nullptr; static int sBcFx = -1, sBcParam = -1;
-    if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; }
-    if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; }
+    // Latch the FX-Learn layer that was active WHEN each param was last touched,
+    // so the panel keeps the overlay's user name after the modifier is released
+    // (until a different param is manipulated). Frank 2026-06-15.
+    static int sCsLayer = uf8::FxLayer::Normal, sBcLayer = uf8::FxLayer::Normal;
+    if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; sCsLayer = uf8::FxLayer::Normal; }
+    if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; sBcLayer = uf8::FxLayer::Normal; }
 
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
     if (feat) {
         MediaTrack* ltTr; int ltFx, ltP;
         resolveLastTouched_(ltTr, ltFx, ltP);
         if (ltTr) {
-            if (ltTr == csTr && ltFx == csFx && csFx >= 0) sCsParam = ltP;
-            if (ltTr == bcTr && ltFx == bcFx && bcFx >= 0) sBcParam = ltP;
+            const int L = reasixty_fxLearnActiveLayer();
+            // Only re-latch the param + its layer when a DIFFERENT param is
+            // touched. GetLastTouchedFX keeps reporting the same param after the
+            // modifier is released, so latching every tick would overwrite the
+            // layer back to Normal — the name must stay until another param is
+            // manipulated (Frank 2026-06-15).
+            if (ltTr == csTr && ltFx == csFx && csFx >= 0 && ltP != sCsParam) {
+                sCsParam = ltP; sCsLayer = L;
+            }
+            if (ltTr == bcTr && ltFx == bcFx && bcFx >= 0 && ltP != sBcParam) {
+                sBcParam = ltP; sBcLayer = L;
+            }
         }
     }
-    const std::string cs = feat ? fmtParam_(csTr, csFx, sCsParam) : std::string();
-    const std::string bc = feat ? fmtParam_(bcTr, bcFx, sBcParam) : std::string();
+    const std::string cs = feat ? fmtParam_(csTr, csFx, sCsParam, sCsLayer) : std::string();
+    const std::string bc = feat ? fmtParam_(bcTr, bcFx, sBcParam, sBcLayer) : std::string();
     if (cs != g_csParamPublished) {
         g_csParamPublished = cs;
         SetExtState("rea_sixty", "overlay_param_cs", cs.c_str(), false);
@@ -5157,7 +5240,7 @@ void publishOverlayState_()
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.
     const bool on   = g_insertMarkersEnabled.load();
-    const bool body_on = on || g_insertPanelEnabled.load();
+    const bool body_on = on || g_focusedPanel.load();
     MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
     int csFx = -1, bcFx = -1;
     if (body_on) activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
@@ -5179,6 +5262,38 @@ void publishOverlayState_()
     char head[48];
     std::snprintf(head, sizeof(head), "%d;%d;", on ? 1 : 0, ++g_overlayRev);
     SetExtState("rea_sixty", "overlay", (std::string(head) + body).c_str(), false);
+}
+
+// ---- Assignment HUD publishers ---------------------------------------------
+// Static geometry is published once per enable; state + per-control assignments
+// are diff-guarded like the overlay. Main-thread-only (walks FX chains + reads
+// the user catalog). No-op when the HUD is off, so it costs nothing disabled.
+std::string g_hudStatePublished, g_hudAssignPublished;
+std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
+bool        g_hudGeomPublished = false;
+void publishHud_()
+{
+    if (!g_hudEnabled.load()) return;
+    if (!g_hudGeomPublished) {
+        const std::string geom = reasixty_hudGeometryUc1();
+        SetExtState("rea_sixty", "hud_geom_uc1", geom.c_str(), false);
+        g_hudGeomPublished = true;
+    }
+    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+    int csFx = -1, bcFx = -1;
+    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+    const int focusDom =
+        static_cast<int>(uf8::g_focusedParam.load(std::memory_order_relaxed).domain);
+    std::string state, assign;
+    reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
+    if (state != g_hudStatePublished) {
+        g_hudStatePublished = state;
+        SetExtState("rea_sixty", "hud_state", state.c_str(), false);
+    }
+    if (assign != g_hudAssignPublished) {
+        g_hudAssignPublished = assign;
+        SetExtState("rea_sixty", "hud_assign", assign.c_str(), false);
+    }
 }
 
 // Instance-cursor-changed callback (registered with UC1PluginMap at
@@ -5782,7 +5897,9 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
     }
     if (g_uf8PluginMode.load()) {
         if (auto uctx = userStripCtxFocused_(); uctx.map) {
-            const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+            const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                g_fxActiveLayer.load(std::memory_order_relaxed));
             if (sb.faderVst3Param >= 0) {
                 double n = TrackFX_GetParamNormalized(
                     uctx.tr, uctx.fxIdx, sb.faderVst3Param);
@@ -6276,8 +6393,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.soloVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.soloVst3Param);
@@ -6320,8 +6439,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.cutVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.cutVst3Param);
@@ -6347,8 +6468,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
@@ -6371,8 +6494,10 @@ void drainInputQueue()
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(e.strip)];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
+                                static_cast<int>(e.strip)],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
                                 uctx.tr, uctx.fxIdx, sb.selVst3Param);
@@ -6500,7 +6625,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                        const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                            uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.faderVst3Param >= 0) {
                             const uint16_t pbU = linearVolumeToPb(e.value);
                             double n = static_cast<double>(pbU) /
@@ -6681,8 +6808,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
-                        const auto& bs =
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                        const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (bs.vst3Param >= 0
                             && bs.vpotMode == uf8::VPotMode::Value)
                         {
@@ -7031,8 +7159,9 @@ void drainInputQueue()
                         const int s = static_cast<int>(e.strip);
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
-                        const auto& bs =
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                        const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (bs.vst3Param >= 0) {
                             double pushNext;
                             if (bs.vpotMode == uf8::VPotMode::Toggle) {
@@ -9614,6 +9743,9 @@ const uf8::LinkSlot* slotForStrip(MediaTrack* tr,
     // Resolve the Link slot index against THIS track's plugin map —
     // different tracks may host different CS variants (CS 2 vs 4K E
     // vs 4K G vs 4K B), each with its own slot ordering.
+    // UF8 is layer-agnostic (modifier layers are UC1-only): the readout shows
+    // the Normal param the UF8 V-Pot actually drives — NOT a held-modifier
+    // remap the V-Pot can't reach.
     const uf8::LinkSlot* slot = uf8::findSlotByLinkIdx(*match.map,
                                                        focused.slotIdx);
     if (!slot) return nullptr;
@@ -11264,7 +11396,9 @@ void pushZonesForVisibleSlots()
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const int bank = std::clamp(g_softKeyBank.load(),
                     0, uf8::kUserUf8BankCount - 1);
-                const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                    uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                    g_fxActiveLayer.load(std::memory_order_relaxed));
                 if (sb.faderVst3Param >= 0) {
                     userF = { uctx.tr, uctx.fxIdx,
                               sb.faderVst3Param, sb.faderInverted,
@@ -11993,7 +12127,18 @@ void pushZonesForVisibleSlots()
                 }
                 break;
             }
-            valLine = composeValueLine(slot->name, valStr);
+            // Quick Access link slots (38-43) carry a generic wrapper label
+            // ("Quick N"); for those show the actual plug-in param name —
+            // which also reflects a user-defined alias when the param was
+            // renamed — instead of the meaningless slot label. Frank 2026-06-13.
+            const char* label = slot->name;
+            char qbuf[64] = {0};
+            if (slot->linkIdx >= 38 && slot->linkIdx <= 43) {
+                TrackFX_GetParamName(tr, fxIdx, slot->vst3Param,
+                                     qbuf, sizeof(qbuf));
+                if (qbuf[0]) label = qbuf;
+            }
+            valLine = composeValueLine(label, valStr);
         } else if (focused.slotIdx != -1 && !isVPotPanFocus(focused)) {
             // Param is focused but unavailable on this strip's plug-in
             // — leave the Value Line blank instead of falling back to
@@ -12111,8 +12256,9 @@ void pushZonesForVisibleSlots()
             if (g_uf8PluginMode.load() && !g_flip.load()) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-                    const auto& bs =
-                        uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+                    const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
+                        uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                        g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (bs.vst3Param < 0
                         || bs.vpotMode == uf8::VPotMode::Toggle)
                     {
@@ -12670,6 +12816,21 @@ bool vpotFineActive_()
     return shiftFineActive_() || g_uc1Fine.load();
 }
 
+// Recompute the active FX-Learn modifier layer from host-keyboard state.
+// Called once per onTimer tick (main thread) so the per-track lookup loops
+// don't each hit CGEventSourceFlagsState, and so every read within a frame is
+// consistent. Both modifiers held is treated as ambiguous → Normal.
+void refreshFxActiveLayer_()
+{
+    const bool ctrl = g_fxLayerCtrlEnable.load() && hostCtrlHeld_();
+    const bool opt  = g_fxLayerOptEnable.load()  && hostAltHeld_();
+    int L = uf8::FxLayer::Normal;
+    if (ctrl && opt)      L = uf8::FxLayer::Normal;
+    else if (ctrl)        L = uf8::FxLayer::Control;
+    else if (opt)         L = uf8::FxLayer::Option;
+    g_fxActiveLayer.store(L, std::memory_order_relaxed);
+}
+
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -12852,7 +13013,9 @@ void commitDebouncedTouchReleases()
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(),
                         0, uf8::kUserUf8BankCount - 1);
-                    const auto& sb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                    const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
+                        uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                        g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (sb.faderVst3Param >= 0) {
                         double norm = TrackFX_GetParamNormalized(
                             uctx.tr, uctx.fxIdx, sb.faderVst3Param);
@@ -14078,6 +14241,20 @@ void onTimer()
         g_overlayAutoStartDone.store(true);
         reasixty_syncInsertsOverlayRun();
     }
+    if (!g_hudAutoStartDone.load() && g_tickCounter >= 30) {
+        g_hudAutoStartDone.store(true);
+        reasixty_syncAssignmentHudRun();
+    }
+    if (g_hudToggleRequest.exchange(false)) {
+        reasixty_setAssignmentHud(!g_hudEnabled.load());
+    }
+    if (!g_focusedPanelAutoStartDone.load() && g_tickCounter >= 30) {
+        g_focusedPanelAutoStartDone.store(true);
+        reasixty_syncFocusedPanelRun();
+    }
+    if (g_focusedPanelToggleRequest.exchange(false)) {
+        reasixty_setFocusedPanel(!g_focusedPanel.load());
+    }
 
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
@@ -14090,6 +14267,42 @@ void onTimer()
         g_keyboardCmdModifier.load()   && hostCmdHeld_());
     uf8::bindings::setKeyboardCtrlHeld(
         g_keyboardCtrlModifier.load()  && hostCtrlHeld_());
+
+    // Resolve the active FX-Learn modifier layer for this frame (Option /
+    // Control overlays on UC1/UF8 controls). Read by lookupBindingsByName +
+    // the dispatch/LED paths via reasixty_fxLearnActiveLayer().
+    refreshFxActiveLayer_();
+
+    // Assignment-HUD interactivity (only while the HUD is on → zero cost off).
+    // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
+    // the wiggled param to the armed control on the active modifier layer.
+    if (g_hudEnabled.load()) {
+        if (const char* cmd = GetExtState("rea_sixty", "hud_cmd"); cmd && *cmd) {
+            const std::string s = cmd;
+            SetExtState("rea_sixty", "hud_cmd", "", false);   // consume
+            if (s.rfind("learn;", 0) == 0) {
+                const int idx = std::atoi(s.c_str() + 6);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+            } else if (s.rfind("cancel", 0) == 0) {
+                reasixty_hudCancelLearn();
+            }
+        }
+        // Poll for the wiggle; refresh published assignments the tick it lands.
+        if (reasixty_hudLearnTick(reasixty_fxLearnActiveLayer())) {
+            g_hudAssignPublished.clear();   // force the diff-guarded re-publish
+            publishHud_();
+        }
+        // Publish the armed control idx so the companion can highlight it.
+        const int armed = reasixty_hudLearnArmed();
+        std::string pub = (armed >= 0) ? std::to_string(armed) : std::string();
+        if (pub != g_hudLearnPublished) {
+            g_hudLearnPublished = pub;
+            SetExtState("rea_sixty", "hud_learn", pub.c_str(), false);
+        }
+    }
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /
@@ -14750,6 +14963,14 @@ void onTimer()
         }
     }
 
+    // Assignment-HUD republish — diff-guarded + a no-op while the HUD is off,
+    // so the FX-chain walk only runs when the window is up. ~5 Hz, independent
+    // of the project-change branch above.
+    {
+        static int s_hudTick = 0;
+        if (++s_hudTick >= 6) { s_hudTick = 0; publishHud_(); }
+    }
+
     // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
     // the carousel push happens on the current tick's state (overlay
     // changes, cursor moves, etc. all settled). Internal dedup means
@@ -15212,6 +15433,12 @@ custom_action_register_t g_actionMasterPinStrip8{
     0, "REASIXTY_MASTER_PIN_STRIP8", "Rea-Sixty: Pin Master to UF8 Strip 8", nullptr,
 };
 int g_cmdMasterPinStrip8 = 0;
+// Learn-HUD show/hide — same toggle as the learn_hud_toggle built-in, exposed
+// as a REAPER-native action so it can be bound to a key / toolbar in REAPER.
+custom_action_register_t g_actionLearnHud{
+    0, "REASIXTY_LEARN_HUD_TOGGLE", "Rea-Sixty: Toggle Learn-HUD", nullptr,
+};
+int g_cmdLearnHud = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -15293,6 +15520,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
     if (command == g_cmdMasterPinStrip1){ reasixty_toggleMasterPin(1); return true; }
     if (command == g_cmdMasterPinStrip8){ reasixty_toggleMasterPin(8); return true; }
+    if (command == g_cmdLearnHud)       { g_hudToggleRequest.store(true); return true; }
     return false;
 }
 
@@ -15730,15 +15958,23 @@ void reasixty_setInsertMarkers(bool on)
     reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
 }
 
-bool reasixty_insertPanel() { return g_insertPanelEnabled.load(); }
-void reasixty_setInsertPanel(bool on)
+bool reasixty_assignmentHud() { return g_hudEnabled.load(); }
+void reasixty_setAssignmentHud(bool on)
 {
-    g_insertPanelEnabled.store(on);
-    SetExtState("rea_sixty", "overlay_panel", on ? "1" : "0", true);
-    // Pure Lua-side: the running companion polls this key and opens/closes its
-    // dock. Republish so the focused-track GUID is fresh the moment it opens.
-    publishOverlayState_();
-    reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
+    g_hudEnabled.store(on);
+    SetExtState("rea_sixty", "hud_on", on ? "1" : "0", true);
+    if (on) g_hudGeomPublished = false;   // re-emit geometry for a fresh window
+    publishHud_();
+    reasixty_syncAssignmentHudRun();      // start/stop the companion to match
+}
+
+bool reasixty_focusedPanel() { return g_focusedPanel.load(); }
+void reasixty_setFocusedPanel(bool on)
+{
+    g_focusedPanel.store(on);
+    SetExtState("rea_sixty", "focused_panel_on", on ? "1" : "0", true);
+    publishOverlayState_();              // push focus/data so it shows immediately
+    reasixty_syncFocusedPanelRun();      // start/stop the companion to match
 }
 
 int  reasixty_insertMarkerStyle() { return g_insertMarkerStyle.load(); }
@@ -15762,7 +15998,7 @@ void reasixty_setInsertMarkerStyle(int style)
 int  reasixty_overlayCsColor()
 {
     const char* v = GetExtState("rea_sixty", "overlay_cs_col");
-    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0x33C0FF;
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFFFF00;   // default: yellow
 }
 void reasixty_setOverlayCsColor(int rgb)
 {
@@ -15772,7 +16008,7 @@ void reasixty_setOverlayCsColor(int rgb)
 int  reasixty_overlayBcColor()
 {
     const char* v = GetExtState("rea_sixty", "overlay_bc_col");
-    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFFB000;
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFF0000;   // default: red
 }
 void reasixty_setOverlayBcColor(int rgb)
 {
@@ -15782,7 +16018,7 @@ void reasixty_setOverlayBcColor(int rgb)
 double reasixty_overlayFillAlpha()
 {
     const char* v = GetExtState("rea_sixty", "overlay_fill_a");
-    return (v && *v) ? std::atof(v) : 0.32;
+    return (v && *v) ? std::atof(v) : 0.0;   // default: no fill (outline only)
 }
 void reasixty_setOverlayFillAlpha(double a)
 {
@@ -15801,20 +16037,6 @@ void reasixty_setOverlayLineAlpha(double a)
     char b[24]; snprintf(b, sizeof(b), "%.3f", a);
     SetExtState("rea_sixty", "overlay_line_a", b, true);
 }
-int  reasixty_overlayPanelFont()
-{
-    const char* v = GetExtState("rea_sixty", "overlay_panel_font");
-    int px = (v && *v) ? std::atoi(v) : 18;
-    if (px < 10) px = 10; if (px > 40) px = 40;
-    return px;
-}
-void reasixty_setOverlayPanelFont(int px)
-{
-    if (px < 10) px = 10; if (px > 40) px = 40;
-    char b[8]; snprintf(b, sizeof(b), "%d", px);
-    SetExtState("rea_sixty", "overlay_panel_font", b, true);
-}
-
 // MCP overlay geometry. The insert-row height is a THEME / UI-scale font
 // constant (mcp.fxlist.font = 16/24/32 px @ scale 1/1.5/2) and the inserts box
 // is a FIXED height that does not grow to fit — so it can't be derived from the
@@ -16485,6 +16707,22 @@ void reasixty_setKeyboardCtrlModifier(bool on)
     g_keyboardCtrlModifier.store(on);
     SetExtState("rea_sixty", "kb_ctrl_modifier", on ? "1" : "0", true);
     if (!on) uf8::bindings::setKeyboardCtrlHeld(false);
+}
+// FX-Learn modifier-layer enables + active-layer read. The active layer is
+// recomputed once per onTimer tick (refreshFxActiveLayer_); this just returns
+// the cached value so dispatch/LED reads are cheap and frame-consistent.
+int  reasixty_fxLearnActiveLayer()    { return g_fxActiveLayer.load(std::memory_order_relaxed); }
+bool reasixty_fxLayerOptionEnable()   { return g_fxLayerOptEnable.load(); }
+void reasixty_setFxLayerOptionEnable(bool on)
+{
+    g_fxLayerOptEnable.store(on);
+    SetExtState("rea_sixty", "fx_layer_opt_enable", on ? "1" : "0", true);
+}
+bool reasixty_fxLayerControlEnable()  { return g_fxLayerCtrlEnable.load(); }
+void reasixty_setFxLayerControlEnable(bool on)
+{
+    g_fxLayerCtrlEnable.store(on);
+    SetExtState("rea_sixty", "fx_layer_ctrl_enable", on ? "1" : "0", true);
 }
 bool reasixty_shiftFineMode()         { return g_shiftFineMode.load(); }
 void reasixty_setShiftFineMode(bool on)
@@ -18452,6 +18690,25 @@ void registerBindingHandlers()
         "Nav Mode: Regions only (no drill)", false
     });
 
+    registerBuiltin("learn_hud_toggle", DescBuilder{
+        // Firing may arrive on the libusb input thread; defer the actual
+        // toggle (registers + runs a ReaScript, walks the FX chain — all
+        // main-thread-only) to onTimer via an atomic request.
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_hudToggleRequest.store(true);
+        },
+        [](int) -> bool { return g_hudEnabled.load(); },
+        "Learn-HUD: show / hide (focused plug-in assignments)", false
+    });
+
+    registerBuiltin("focused_panel_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_focusedPanelToggleRequest.store(true);
+        },
+        [](int) -> bool { return g_focusedPanel.load(); },
+        "Focused-track panel: show / hide (frameless, on Arrange)", false
+    });
+
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
         [](bool firing,
            bool /*pressed*/,
@@ -20069,11 +20326,151 @@ bool reasixty_insertsOverlayRunning()
 // next tick). Main-thread only (registers/runs an action).
 void reasixty_syncInsertsOverlayRun()
 {
-    const bool want = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool want = g_insertMarkersEnabled.load();
     const bool running = reasixty_insertsOverlayRunning();
     if (want && !running)      reasixty_toggleInsertsOverlay();        // starts it
     else if (!want && running) SetExtState("rea_sixty", "overlay_running",
                                            "0", false);                // stops it
+}
+
+// ---- Assignment-HUD companion lifecycle (clones the inserts-overlay trio) ---
+static std::string assignmentHudLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_assignment_hud.lua";
+}
+
+static void reasixty_deployAssignmentHudLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_assignment_hud.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kAssignmentHudLuaBytes);
+    const size_t len  = uf8::setup_bundle::kAssignmentHudLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+bool reasixty_toggleAssignmentHud()
+{
+    reasixty_deployAssignmentHudLua();
+    const std::string path = assignmentHudLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+bool reasixty_assignmentHudRunning()
+{
+    const char* v = GetExtState("rea_sixty", "hud_running");
+    return v && v[0] == '1';
+}
+
+void reasixty_syncAssignmentHudRun()
+{
+    const bool want    = g_hudEnabled.load();
+    const bool running = reasixty_assignmentHudRunning();
+    if (want && !running)      reasixty_toggleAssignmentHud();
+    else if (!want && running) SetExtState("rea_sixty", "hud_running", "0", false);
+}
+
+// ---- Frameless focused-track panel companion lifecycle (same clone) --------
+static std::string focusedPanelLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_focused_panel.lua";
+}
+
+static void reasixty_deployFocusedPanelLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_focused_panel.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kFocusedPanelLuaBytes);
+    const size_t len  = uf8::setup_bundle::kFocusedPanelLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+bool reasixty_toggleFocusedPanel()
+{
+    reasixty_deployFocusedPanelLua();
+    const std::string path = focusedPanelLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+bool reasixty_focusedPanelRunning()
+{
+    const char* v = GetExtState("rea_sixty", "focused_panel_running");
+    return v && v[0] == '1';
+}
+
+void reasixty_syncFocusedPanelRun()
+{
+    const bool want    = g_focusedPanel.load();
+    const bool running = reasixty_focusedPanelRunning();
+    if (want && !running)      reasixty_toggleFocusedPanel();
+    else if (!want && running) SetExtState("rea_sixty", "focused_panel_running", "0", false);
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
@@ -20313,6 +20710,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
     g_cmdMasterPinStrip1 = plugin_register("custom_action", &g_actionMasterPinStrip1);
     g_cmdMasterPinStrip8 = plugin_register("custom_action", &g_actionMasterPinStrip8);
+    g_cmdLearnHud        = plugin_register("custom_action", &g_actionLearnHud);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

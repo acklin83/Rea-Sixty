@@ -19,6 +19,7 @@
 #include "ParameterGroups.h"
 #include "AutoLearnEngine.h"
 #include "PluginMap.h"
+#include "UC1PluginMap.h"   // uc1::lookupBindingsByName / hudParamForControl (Assignment HUD)
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
 #include "reaper_imgui_functions.h"
@@ -75,8 +76,12 @@ bool reasixty_insertMarkers();
 void reasixty_setInsertMarkers(bool on);
 int  reasixty_insertMarkerStyle();
 void reasixty_setInsertMarkerStyle(int style);
-bool reasixty_insertPanel();
-void reasixty_setInsertPanel(bool on);
+bool reasixty_assignmentHud();
+void reasixty_setAssignmentHud(bool on);
+bool reasixty_assignmentHudRunning();
+bool reasixty_focusedPanel();
+void reasixty_setFocusedPanel(bool on);
+bool reasixty_focusedPanelRunning();
 int    reasixty_overlayCsColor();
 void   reasixty_setOverlayCsColor(int rgb);
 int    reasixty_overlayBcColor();
@@ -85,8 +90,6 @@ double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
 void   reasixty_setOverlayLineAlpha(double a);
-int    reasixty_overlayPanelFont();
-void   reasixty_setOverlayPanelFont(int px);
 int    reasixty_overlayRowHeight();
 void   reasixty_setOverlayRowHeight(int px);
 int    reasixty_overlayTopPad();
@@ -155,6 +158,11 @@ bool reasixty_keyboardCmdModifier();
 void reasixty_setKeyboardCmdModifier(bool on);
 bool reasixty_keyboardCtrlModifier();
 void reasixty_setKeyboardCtrlModifier(bool on);
+bool reasixty_fxLayerOptionEnable();
+void reasixty_setFxLayerOptionEnable(bool on);
+bool reasixty_fxLayerControlEnable();
+void reasixty_setFxLayerControlEnable(bool on);
+int  reasixty_fxLearnActiveLayer();   // current held-modifier layer (HUD badge)
 bool reasixty_shiftFineMode();
 void reasixty_setShiftFineMode(bool on);
 int  reasixty_theme();
@@ -548,25 +556,37 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // dirty project). Each toggle auto-starts / stops the companion as needed
     // and is restored on the next REAPER launch.
     //   • MCP overlay — JS_Composite highlight on the native Mixer Inserts row.
-    //   • Focused-track docker — a small dockable gfx panel showing the
-    //     surface-focused track + its active CS / BC instance names.
+    // (The old dockable focused-track docker was retired — the frameless
+    // focused-track panel below replaces it.)
     bool insMark = reasixty_insertMarkers();
     if (ImGui_Checkbox(ctx, "Show MCP Inserts overlay", &insMark)) {
         reasixty_setInsertMarkers(insMark);
     }
-    bool insPanel = reasixty_insertPanel();
-    if (ImGui_Checkbox(ctx, "Show focused-track docker", &insPanel)) {
-        reasixty_setInsertPanel(insPanel);
+    // Learn-HUD has no checkbox — it is toggled via the "learn_hud_toggle"
+    // built-in (bindable to hardware) and the REASIXTY_LEARN_HUD_TOGGLE REAPER
+    // action. Frank 2026-06-15.
+    // Frameless focused-track panel (Gridbox-style, floats on the Arrange,
+    // drag-to-move / drag-edges-to-resize / right-click menu).
+    bool fpanel = reasixty_focusedPanel();
+    if (ImGui_Checkbox(ctx, "Show focused-track panel", &fpanel)) {
+        reasixty_setFocusedPanel(fpanel);
+    }
+    if (fpanel) {
+        ImGui_TextDisabled(ctx, reasixty_focusedPanelRunning()
+                                ? "  Panel companion running"
+                                : "  Panel companion starting\xE2\x80\xA6");
     }
 
-    if (insMark || insPanel) {
+    if (insMark) {
         ImGui_TextDisabled(ctx, reasixty_insertsOverlayRunning()
                                 ? "Companion running"
                                 : "Companion starting\xE2\x80\xA6");
+    }
 
-        // CS / BC colours — shared by BOTH the overlay and the docker. Live:
-        // the companion re-reads these from ExtState on every repaint.
-        // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
+    // CS / BC colours — shared by the MCP overlay and the frameless panel.
+    // Live: each companion re-reads these from ExtState on every repaint.
+    // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
+    if (insMark || fpanel) {
         int ceFlags = ImGui_ColorEditFlags_NoInputs;
         int csCol = reasixty_overlayCsColor();
         ImGui_SetNextItemWidth(ctx, 220.0);
@@ -578,47 +598,36 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
             reasixty_setOverlayBcColor(bcCol);
         }
+    }
 
-        // Fill / border opacity apply to the MCP overlay only.
-        if (insMark) {
-            double fillA = reasixty_overlayFillAlpha();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
-                                   "%.2f", nullptr)) {
-                reasixty_setOverlayFillAlpha(fillA);
-            }
-            double lineA = reasixty_overlayLineAlpha();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
-                                   "%.2f", nullptr)) {
-                reasixty_setOverlayLineAlpha(lineA);
-            }
-            // Row height + first-row offset. The insert-row height is a theme/
-            // UI-scale font constant (16/24/32px @ scale 1/1.5/2); dial it until
-            // the highlight sits on the right rows.
-            int rh = reasixty_overlayRowHeight();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Inserts row height", &rh, 8, 48,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayRowHeight(rh);
-            }
-            int tp = reasixty_overlayTopPad();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Inserts top offset", &tp, -20, 40,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayTopPad(tp);
-            }
+    // Fill / border opacity + row geometry apply to the MCP overlay only.
+    if (insMark) {
+        double fillA = reasixty_overlayFillAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayFillAlpha(fillA);
         }
-
-        // Font size applies to the docker only (right-click the panel to
-        // dock / undock / close it).
-        if (insPanel) {
-            int pf = reasixty_overlayPanelFont();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Panel font size", &pf, 10, 40,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayPanelFont(pf);
-            }
+        double lineA = reasixty_overlayLineAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayLineAlpha(lineA);
+        }
+        // Row height + first-row offset. The insert-row height is a theme/
+        // UI-scale font constant (16/24/32px @ scale 1/1.5/2); dial it until
+        // the highlight sits on the right rows.
+        int rh = reasixty_overlayRowHeight();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderInt(ctx, "Inserts row height", &rh, 8, 48,
+                            nullptr, nullptr)) {
+            reasixty_setOverlayRowHeight(rh);
+        }
+        int tp = reasixty_overlayTopPad();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderInt(ctx, "Inserts top offset", &tp, -20, 40,
+                            nullptr, nullptr)) {
+            reasixty_setOverlayTopPad(tp);
         }
     }
 
@@ -908,6 +917,25 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         &kbCtrl))
     {
         reasixty_setKeyboardCtrlModifier(kbCtrl);
+    }
+    ImGui_Spacing(ctx);
+    // FX-Learn modifier layers. When on, holding Option / Control switches the
+    // surface to that control's overlay mapping (set up per-control in the FX
+    // Learn schematic's Layer tabs). Turn one off if its key collides with
+    // another workflow (e.g. Option = fader Alt-drag snap-back).
+    bool fxOpt = reasixty_fxLayerOptionEnable();
+    if (ImGui_Checkbox(ctx,
+        "Hold Option for the FX-Learn Option layer",
+        &fxOpt))
+    {
+        reasixty_setFxLayerOptionEnable(fxOpt);
+    }
+    bool fxCtrl = reasixty_fxLayerControlEnable();
+    if (ImGui_Checkbox(ctx,
+        "Hold Control for the FX-Learn Control layer",
+        &fxCtrl))
+    {
+        reasixty_setFxLayerControlEnable(fxCtrl);
     }
     ImGui_Spacing(ctx);
     bool shiftFine = reasixty_shiftFineMode();
@@ -2671,6 +2699,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("ssl_strip_mode_", 0) == 0
                  || n.rfind("uf8_plugin_mode_", 0) == 0
                  || n == "uc1_outgain_fader_toggle"
+                 || n == "learn_hud_toggle"
+                 || n == "focused_panel_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
@@ -5212,6 +5242,21 @@ void qlAdvance_()
 std::string g_editingMatch;
 int         g_listeningLinkIdx = -1;
 char        g_paramFilter[64]  = {};
+// FX-Learn modifier-layer being EDITED in the schematic (uf8::FxLayer:
+// 0=Normal, 1=Option, 2=Control). Driven by the modifier tab-bar above the
+// schematic. All the per-slot mutators/readers below operate on this layer of
+// the slot, so binding a param while the Option tab is active writes the
+// Option overlay, not the Normal mapping. Independent of the runtime active
+// layer (which follows the held keyboard modifier).
+int         g_fxLearnEditLayer = 0;
+
+// The SlotLayer of `s` for the layer currently being edited.
+inline uf8::SlotLayer& editLayerRef_(uf8::UserLinkSlot& s) {
+    return uf8::fxLayerOf(s, g_fxLearnEditLayer);
+}
+inline const uf8::SlotLayer& editLayerRef_(const uf8::UserLinkSlot& s) {
+    return uf8::fxLayerOf(s, g_fxLearnEditLayer);
+}
 
 // Curve-editor popup target abstraction. The per-slot / per-binding
 // context menus build a CurveEditorTarget and call openCurveEditor_();
@@ -5438,7 +5483,23 @@ int mappedVst3For_(int linkIdx)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         for (const auto& s : m.slots) {
-            if (s.linkIdx == linkIdx) return s.vst3Param;
+            if (s.linkIdx == linkIdx) return editLayerRef_(s).vst3Param;
+        }
+        break;
+    }
+    return -1;
+}
+
+// vst3Param bound to `linkIdx` on the NORMAL layer specifically (regardless of
+// the layer being edited). Used by the schematic to show the inherited mapping
+// as a ghost when an Option/Control tab is active but that control has no
+// overlay of its own.
+int mappedVst3Normal_(int linkIdx)
+{
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots) {
+            if (s.linkIdx == linkIdx) return s.vst3Param;   // base == Normal
         }
         break;
     }
@@ -5454,6 +5515,7 @@ int mappedVst3For_(int linkIdx)
 // 2026-06-02.
 char g_fxlLabelBuf[64] = {};
 int  g_fxlLabelLinkIdx = -1;
+int  g_fxlLabelLayer   = -1;   // edit-layer the buffer was seeded for (re-seed on change)
 
 // "Push cycle → + Add step" picker state. Only one context popup is open at
 // a time, so a single set of globals suffices; reset when the active button
@@ -5476,14 +5538,15 @@ void bindSlot_(int linkIdx, int vst3Param)
         bool replaced = false;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
+                uf8::SlotLayer& lay = editLayerRef_(s);
                 // Binding to a different param invalidates a custom label
                 // (it named the old param) — clear it so the display falls
                 // back to the new param's name and the editor field matches.
-                if (s.vst3Param != vst3Param && !s.customLabel.empty()) {
-                    s.customLabel.clear();
+                if (lay.vst3Param != vst3Param && !lay.customLabel.empty()) {
+                    lay.customLabel.clear();
                     g_fxlLabelLinkIdx = -1;  // force the editor field re-seed
                 }
-                s.vst3Param = vst3Param;
+                lay.vst3Param = vst3Param;
                 replaced = true;
                 break;
             }
@@ -5491,8 +5554,11 @@ void bindSlot_(int linkIdx, int vst3Param)
         if (!replaced) {
             uf8::UserLinkSlot s{};
             s.linkIdx   = linkIdx;
-            s.vst3Param = vst3Param;
-            s.inverted  = false;
+            // Write the param into whichever layer is being edited (the base
+            // is the Normal layer). editLayerRef_ resolves that.
+            uf8::SlotLayer& lay = editLayerRef_(s);
+            lay.vst3Param = vst3Param;
+            lay.inverted  = false;
             m.slots.push_back(s);
         }
         uf8::user_plugins::upsert(m);
@@ -5694,19 +5760,46 @@ int paramCountFor_(const UserPluginMap& map, const EditingFx& fx)
     return static_cast<int>(map.paramSnapshot.size());
 }
 
-// Remove a slot binding from the editing map.
+// Remove a slot binding from the editing map. When a modifier layer is being
+// edited, this clears only that layer's overlay (resetting it to default), and
+// erases the whole slot only if nothing — neither the Normal mapping nor any
+// other overlay — remains. On the Normal layer it removes the entire slot, as
+// before (which also drops any overlays — clearing the base mapping retires
+// the control entirely).
 void unbindSlot_(int linkIdx)
 {
     if (g_editingMatch.empty() || linkIdx < 0) return;
     auto cat = uf8::user_plugins::get();
     for (auto& m : cat.maps) {
         if (m.match != g_editingMatch) continue;
-        auto before = m.slots.size();
-        m.slots.erase(
-            std::remove_if(m.slots.begin(), m.slots.end(),
-                [&](const uf8::UserLinkSlot& s) { return s.linkIdx == linkIdx; }),
-            m.slots.end());
-        if (m.slots.size() != before) {
+        bool changed = false;
+        if (g_fxLearnEditLayer != uf8::FxLayer::Normal) {
+            for (auto& s : m.slots) {
+                if (s.linkIdx != linkIdx) continue;
+                editLayerRef_(s) = uf8::SlotLayer{};   // reset this overlay
+                changed = true;
+                break;
+            }
+            // Drop the slot if it now carries no mapping on any layer.
+            auto before = m.slots.size();
+            m.slots.erase(
+                std::remove_if(m.slots.begin(), m.slots.end(),
+                    [&](const uf8::UserLinkSlot& s) {
+                        return s.linkIdx == linkIdx
+                            && !uf8::fxLayerMapped(s)
+                            && !uf8::hasAnyModLayer(s);
+                    }),
+                m.slots.end());
+            if (m.slots.size() != before) changed = true;
+        } else {
+            auto before = m.slots.size();
+            m.slots.erase(
+                std::remove_if(m.slots.begin(), m.slots.end(),
+                    [&](const uf8::UserLinkSlot& s) { return s.linkIdx == linkIdx; }),
+                m.slots.end());
+            if (m.slots.size() != before) changed = true;
+        }
+        if (changed) {
             uf8::user_plugins::upsert(m);
             persistAndReport_();
         }
@@ -5743,7 +5836,7 @@ void setCustomLabel_(int linkIdx, const std::string& label)
         if (m.match != g_editingMatch) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
-                s.customLabel = label;
+                editLayerRef_(s).customLabel = label;
                 uf8::user_plugins::upsert(m);
                 persistAndReport_();
                 return;
@@ -5785,7 +5878,8 @@ void toggleInverted_(int linkIdx)
         if (m.match != g_editingMatch) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
-                s.inverted = !s.inverted;
+                uf8::SlotLayer& lay = editLayerRef_(s);
+                lay.inverted = !lay.inverted;
                 uf8::user_plugins::upsert(m);
                 persistAndReport_();
                 return;
@@ -5798,7 +5892,8 @@ void toggleInverted_(int linkIdx)
 // Knob-travel mutators. All four share the same find-slot-and-write
 // pattern as setCustomLabel_ / toggleInverted_ above. Persist on every
 // change so the user's edits survive an unexpected close — same UX
-// contract as the label editor.
+// contract as the label editor. The mutator runs against the layer being
+// edited (Normal/Option/Control), so curves are per-layer.
 template <class Mut>
 void mutateSlot_(int linkIdx, Mut&& mut)
 {
@@ -5808,7 +5903,7 @@ void mutateSlot_(int linkIdx, Mut&& mut)
         if (m.match != g_editingMatch) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
-                mut(s);
+                mut(editLayerRef_(s));
                 uf8::user_plugins::upsert(m);
                 persistAndReport_();
                 return;
@@ -5821,7 +5916,7 @@ void mutateSlot_(int linkIdx, Mut&& mut)
 void setSlotRangeMin_(int linkIdx, float v)
 {
     if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
-    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+    mutateSlot_(linkIdx, [v](uf8::SlotLayer& s) {
         s.rangeMin = v;
         if (s.rangeMax < v) s.rangeMax = v;
     });
@@ -5830,7 +5925,7 @@ void setSlotRangeMin_(int linkIdx, float v)
 void setSlotRangeMax_(int linkIdx, float v)
 {
     if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
-    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+    mutateSlot_(linkIdx, [v](uf8::SlotLayer& s) {
         s.rangeMax = v;
         if (s.rangeMin > v) s.rangeMin = v;
     });
@@ -5839,7 +5934,7 @@ void setSlotRangeMax_(int linkIdx, float v)
 void setSlotSensitivity_(int linkIdx, float v)
 {
     if (v < 0.1f) v = 0.1f; else if (v > 4.0f) v = 4.0f;
-    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+    mutateSlot_(linkIdx, [v](uf8::SlotLayer& s) {
         s.sensitivity = v;
     });
 }
@@ -5848,7 +5943,7 @@ void setSlotCurvePoints_(int linkIdx,
                          std::vector<std::pair<float, float>> pts)
 {
     mutateSlot_(linkIdx,
-        [pts = std::move(pts)](uf8::UserLinkSlot& s) {
+        [pts = std::move(pts)](uf8::SlotLayer& s) {
             s.curvePoints = pts;
         });
 }
@@ -5858,7 +5953,7 @@ void setSlotCurvePoints_(int linkIdx,
 // UC1 LED ring has no bipolar mode so it stays L→R on the hardware.
 void setSlotPolarity_(int linkIdx, uf8::VPotPolarity p)
 {
-    mutateSlot_(linkIdx, [p](uf8::UserLinkSlot& s) {
+    mutateSlot_(linkIdx, [p](uf8::SlotLayer& s) {
         s.polarity = p;
     });
 }
@@ -5870,7 +5965,7 @@ uf8::VPotPolarity getSlotPolarity_(int linkIdx)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         for (const auto& s : m.slots) {
-            if (s.linkIdx == linkIdx) return s.polarity;
+            if (s.linkIdx == linkIdx) return editLayerRef_(s).polarity;
         }
         break;
     }
@@ -5883,7 +5978,7 @@ uf8::VPotPolarity getSlotPolarity_(int linkIdx)
 void setSlotDefaultNorm_(int linkIdx, double v)
 {
     if (v < 0.0) v = 0.0; else if (v > 1.0) v = 1.0;
-    mutateSlot_(linkIdx, [v](uf8::UserLinkSlot& s) {
+    mutateSlot_(linkIdx, [v](uf8::SlotLayer& s) {
         s.defaultNorm = v;
     });
 }
@@ -5903,7 +5998,7 @@ std::vector<uf8::PushStep> slotPushSteps_(int linkIdx)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         for (const auto& s : m.slots)
-            if (s.linkIdx == linkIdx) return s.pushSteps;
+            if (s.linkIdx == linkIdx) return editLayerRef_(s).pushSteps;
         break;
     }
     return {};
@@ -5919,7 +6014,7 @@ bool slotHasBoundParam_(int linkIdx)
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != g_editingMatch) continue;
         for (const auto& s : m.slots)
-            if (s.linkIdx == linkIdx) return s.vst3Param >= 0;
+            if (s.linkIdx == linkIdx) return editLayerRef_(s).vst3Param >= 0;
         break;
     }
     return false;
@@ -5944,7 +6039,7 @@ void mutateOrCreateSlot_(int linkIdx, Mut&& mut)
             m.slots.push_back(ns);
             slot = &m.slots.back();
         }
-        mut(*slot);
+        mut(editLayerRef_(*slot));
         uf8::user_plugins::upsert(m);
         persistAndReport_();
         return;
@@ -5962,7 +6057,7 @@ void setSlotPushSteps_(int linkIdx, std::vector<uf8::PushStep> steps)
         return;
     }
     mutateOrCreateSlot_(linkIdx,
-        [steps = std::move(steps)](uf8::UserLinkSlot& s) {
+        [steps = std::move(steps)](uf8::SlotLayer& s) {
             s.pushSteps = steps;
         });
 }
@@ -6024,10 +6119,11 @@ CurveEditorTarget curveTargetForSlot_(int linkIdx, const char* displayName)
     t.read = [linkIdx](uf8::KnobTravel& out) -> bool {
         uf8::UserLinkSlot sl{};
         if (!fetchSlotSnapshot_(linkIdx, sl)) return false;
-        out.rangeMin    = sl.rangeMin;
-        out.rangeMax    = sl.rangeMax;
-        out.sensitivity = sl.sensitivity;
-        out.curvePoints = sl.curvePoints;
+        const uf8::SlotLayer& lay = editLayerRef_(sl);
+        out.rangeMin    = lay.rangeMin;
+        out.rangeMax    = lay.rangeMax;
+        out.sensitivity = lay.sensitivity;
+        out.curvePoints = lay.curvePoints;
         return true;
     };
     t.setRangeMin    = [linkIdx](float v) { setSlotRangeMin_(linkIdx, v); };
@@ -6527,59 +6623,73 @@ void mutateUf8_(F&& fn)
     }
 }
 
-// Read the current vst3Param for any UF8 control. Returns -1 if unmapped
-// or editing map missing.
-int mappedVst3ForUf8_(int kind, int strip, int bank)
+// Resolve mutable pointers to the {param, invert} fields of a UF8 control for
+// the UF8 control's base binding. (UF8 FX-Learn modifier layers were removed —
+// UC1-only feature — so this always targets the Normal/base struct.)
+struct Uf8EditFieldPtrs { int* param = nullptr; bool* invert = nullptr; };
+inline Uf8EditFieldPtrs uf8EditFieldPtrs_(uf8::UserUf8Map& u, int kind,
+                                          int strip, int bank)
 {
-    using uf8::user_plugins::get;
-    if (g_editingMatch.empty()) return -1;
-    for (const auto& m : get().maps) {
-        if (m.match != g_editingMatch) continue;
-        const auto& u = m.uf8;
-        switch (kind) {
-            case 0 /*Fader*/:      return u.strips[g_uf8EditingFaderBank][strip].faderVst3Param;
-            case 3 /*SoloBtn*/:    return u.strips[g_uf8EditingFaderBank][strip].soloVst3Param;
-            case 4 /*CutBtn*/:     return u.strips[g_uf8EditingFaderBank][strip].cutVst3Param;
-            case 5 /*SelBtn*/:     return u.strips[g_uf8EditingFaderBank][strip].selVst3Param;
-            case 1 /*VPot*/:
-            case 2 /*TopSoftKey*/: return u.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param;
-            // Cases 6/7 (BankLeft/BankRight) removed 2026-05-17 — Bank
-            // ←/→ buttons no longer carry per-plug-in overrides.
-            default: return -1;
-        }
+    if (kind == 1 || kind == 2) {                 // V-Pot / TopSoftKey
+        auto& s = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
+        return { &s.vst3Param, &s.inverted };
     }
-    return -1;
+    auto& st = u.strips[g_uf8EditingFaderBank][strip];
+    switch (kind) {
+        case 0: return { &st.faderVst3Param, &st.faderInverted };
+        case 3: return { &st.soloVst3Param,  &st.soloInvert };
+        case 4: return { &st.cutVst3Param,   &st.cutInvert };
+        case 5: return { &st.selVst3Param,   &st.selInvert };
+    }
+    return {};
+}
+// Read-only {param, invert} for the edited layer of a UF8 control. Returns
+// param=-1 / invert=false for an unknown kind or missing map.
+struct Uf8EditFieldVals { int param = -1; bool invert = false; };
+inline Uf8EditFieldVals uf8EditFieldVals_(int kind, int strip, int bank)
+{
+    if (g_editingMatch.empty()) return {};
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        // const_cast is safe — uf8EditFieldPtrs_ only dereferences for reads
+        // here and we copy the values out immediately.
+        auto p = uf8EditFieldPtrs_(const_cast<uf8::UserUf8Map&>(m.uf8),
+                                   kind, strip, bank);
+        Uf8EditFieldVals v;
+        if (p.param)  v.param  = *p.param;
+        if (p.invert) v.invert = *p.invert;
+        return v;
+    }
+    return {};
 }
 
+// Read the current vst3Param for any UF8 control on the edited layer. Returns
+// -1 if unmapped or editing map missing.
+int mappedVst3ForUf8_(int kind, int strip, int bank)
+{
+    return uf8EditFieldVals_(kind, strip, bank).param;
+}
 void bindUf8_(int kind, int strip, int bank, int vst3Param)
 {
     if (vst3Param < 0) return;
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        switch (kind) {
-            case 0: u.strips[g_uf8EditingFaderBank][strip].faderVst3Param = vst3Param; break;
-            case 3: u.strips[g_uf8EditingFaderBank][strip].soloVst3Param  = vst3Param; break;
-            case 4: u.strips[g_uf8EditingFaderBank][strip].cutVst3Param   = vst3Param; break;
-            case 5: u.strips[g_uf8EditingFaderBank][strip].selVst3Param   = vst3Param; break;
-            case 1:
-            case 2:
-                u.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param = vst3Param;
-                break;
-        }
+        auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
+        if (p.param) *p.param = vst3Param;
     });
 }
 
 void unbindUf8_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        switch (kind) {
-            case 0: u.strips[g_uf8EditingFaderBank][strip].faderVst3Param = -1;
-                    u.strips[g_uf8EditingFaderBank][strip].faderInverted  = false; break;
-            case 3: u.strips[g_uf8EditingFaderBank][strip].soloVst3Param  = -1; break;
-            case 4: u.strips[g_uf8EditingFaderBank][strip].cutVst3Param   = -1; break;
-            case 5: u.strips[g_uf8EditingFaderBank][strip].selVst3Param   = -1; break;
-            case 1:
-            case 2: u.banks.banks[g_uf8EditingFaderBank][bank][strip] = uf8::UserUf8BankSlot{}; break;
+        // V-Pot: clear the whole slot so label/colour/travel reset with the
+        // binding, matching the pre-layer behaviour.
+        if (kind == 1 || kind == 2) {
+            u.banks.banks[g_uf8EditingFaderBank][bank][strip] = uf8::UserUf8BankSlot{};
+            return;
         }
+        auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
+        if (p.param)  *p.param  = -1;
+        if (p.invert) *p.invert = false;
     });
 }
 
@@ -6726,44 +6836,14 @@ int fillSequentialUf8_(int kind, int strip, int bank,
 
 bool uf8Inverted_(int kind, int strip, int bank)
 {
-    if (g_editingMatch.empty()) return false;
-    for (const auto& m : uf8::user_plugins::get().maps) {
-        if (m.match != g_editingMatch) continue;
-        const auto& u = m.uf8;
-        if (kind == 0) return u.strips[g_uf8EditingFaderBank][strip].faderInverted;
-        if (kind == 1 || kind == 2)
-            return u.banks.banks[g_uf8EditingFaderBank][bank][strip].inverted;
-        // Solo / Cut / Sel — "Reverse LED" toggle (bank-independent: the
-        // strip-button record is faderBank-scoped only).
-        if (kind == 3 /*SoloBtn*/) return u.strips[g_uf8EditingFaderBank][strip].soloInvert;
-        if (kind == 4 /*CutBtn*/)  return u.strips[g_uf8EditingFaderBank][strip].cutInvert;
-        if (kind == 5 /*SelBtn*/)  return u.strips[g_uf8EditingFaderBank][strip].selInvert;
-        return false;
-    }
-    return false;
+    return uf8EditFieldVals_(kind, strip, bank).invert;
 }
 
 void toggleUf8Inverted_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        if (kind == 0)
-            u.strips[g_uf8EditingFaderBank][strip].faderInverted = !u.strips[g_uf8EditingFaderBank][strip].faderInverted;
-        else if (kind == 1 || kind == 2) {
-            auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
-            bs.inverted = !bs.inverted;
-        }
-        else if (kind == 3) {
-            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
-            sb.soloInvert = !sb.soloInvert;
-        }
-        else if (kind == 4) {
-            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
-            sb.cutInvert = !sb.cutInvert;
-        }
-        else if (kind == 5) {
-            auto& sb = u.strips[g_uf8EditingFaderBank][strip];
-            sb.selInvert = !sb.selInvert;
-        }
+        auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
+        if (p.invert) *p.invert = !*p.invert;
     });
 }
 
@@ -6881,13 +6961,14 @@ feel_presets::KnobFeel feelFromLinkSlot_(int linkIdx)
     feel_presets::KnobFeel f;
     uf8::UserLinkSlot s{};
     if (fetchSlotSnapshot_(linkIdx, s)) {
-        f.inverted    = s.inverted;
-        f.rangeMin    = s.rangeMin;
-        f.rangeMax    = s.rangeMax;
-        f.sensitivity = s.sensitivity;
-        f.curvePoints = s.curvePoints;
-        f.polarity    = s.polarity;
-        f.defaultNorm = s.defaultNorm;
+        const uf8::SlotLayer& lay = editLayerRef_(s);
+        f.inverted    = lay.inverted;
+        f.rangeMin    = lay.rangeMin;
+        f.rangeMax    = lay.rangeMax;
+        f.sensitivity = lay.sensitivity;
+        f.curvePoints = lay.curvePoints;
+        f.polarity    = lay.polarity;
+        f.defaultNorm = lay.defaultNorm;
     }
     return f;
 }
@@ -6900,18 +6981,39 @@ void applyFeelToLinkSlot_(int linkIdx, const feel_presets::KnobFeel& f)
         if (m.match != g_editingMatch) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
-                s.inverted    = f.inverted;
-                s.rangeMin    = f.rangeMin;
-                s.rangeMax    = f.rangeMax;
-                s.sensitivity = f.sensitivity;
-                s.curvePoints = f.curvePoints;
-                s.polarity    = f.polarity;
-                s.defaultNorm = f.defaultNorm;
+                uf8::SlotLayer& lay = editLayerRef_(s);
+                lay.inverted    = f.inverted;
+                lay.rangeMin    = f.rangeMin;
+                lay.rangeMax    = f.rangeMax;
+                lay.sensitivity = f.sensitivity;
+                lay.curvePoints = f.curvePoints;
+                lay.polarity    = f.polarity;
+                lay.defaultNorm = f.defaultNorm;
                 uf8::user_plugins::upsert(m);
                 persistAndReport_();
                 return;
             }
         }
+        break;
+    }
+}
+
+// Copy the Normal-layer mapping of every slot into the layer currently being
+// edited (Option/Control). Lets the user seed an overlay from the Normal set
+// and then tweak only the controls that differ. No-op on the Normal tab.
+void copyNormalToEditLayer_()
+{
+    if (g_editingMatch.empty() || g_fxLearnEditLayer == uf8::FxLayer::Normal)
+        return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        for (auto& s : m.slots) {
+            uf8::SlotLayer base = s;   // slice-copy the Normal/base layer
+            editLayerRef_(s) = base;
+        }
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
         break;
     }
 }
@@ -7391,6 +7493,273 @@ constexpr Uc1Control kUc1Controls[] = {
 constexpr int kUc1ControlsCount =
     sizeof(kUc1Controls) / sizeof(kUc1Controls[0]);
 
+// ---- Assignment-HUD publishers (read-only milestone) -----------------------
+// Section a UC1 control belongs to — used by the HUD's grouped text list. The
+// schematic groups controls by source order + comment banners; this mirrors
+// those banners by silk label so the grouping is a single, compact source of
+// truth (no per-row struct field to keep in sync). BusComp is one group.
+const char* hudSectionFor_(const Uc1Control& c)
+{
+    if (c.domain == uf8::Domain::BusComp) return "Bus Comp";
+    const char* L = c.label ? c.label : "";
+    auto eq = [&](const char* s) { return std::strcmp(L, s) == 0; };
+    if (eq("LPF") || eq("HPF")) return "Filter";
+    if (eq("C ATK") || eq("C PK") || eq("C RAT") || eq("C THR") ||
+        eq("C REL") || eq("DYN")) return "Dynamics";
+    if (eq("G RNG") || eq("G THR") || eq("G REL") || eq("G HLD") ||
+        eq("G/E")   || eq("G ATK")) return "Gate";
+    if (eq("IN G") || eq("OUT G") || eq("POL") || eq("S/C L") || eq("IN"))
+        return "I/O & Channel";
+    return "EQ";   // all remaining CS controls are EQ bands / Type / EQ-In
+}
+
+// Build the static UC1 control geometry the companion HUD renders. Header line
+// "UC1;<W>;<H>" then one line per control:
+//   "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>;<section>"
+// Coords are pixels in the schematic's WxH space; the Lua normalises by W/H so
+// it scales to any window size. shape 0=knob 1=toggle 2=dynbtn; dom 'c'=Channel
+// Strip 'b'=Bus Comp; section groups controls for the HUD's text list. Static —
+// published once when the HUD turns on; reads kUc1Controls so the HUD geometry
+// never drifts from the Settings schematic.
+// Internal helper (lives in the anon namespace beside kUc1Controls); exported
+// through the reasixty_hudGeometryUc1 trampoline at file end.
+std::string hudGeometryUc1_()
+{
+    std::string s = "UC1;860;660\n";
+    // Left-column label = the canonical SSL 360 Link slot name ("HF Gain",
+    // "Comp Ratio", "Gate Range") — exactly what the mockup / FX-Learn param
+    // list show. The kUc1Controls `.label` field carries terse silk-style
+    // abbreviations that don't appear anywhere on the real surface, so we
+    // resolve the proper name from the canonical topology and fall back to the
+    // control's own label only if a slot is missing.
+    const uf8::PluginMap* csTopo = canonicalTopology_(uf8::Domain::ChannelStrip);
+    const uf8::PluginMap* bcTopo = canonicalTopology_(uf8::Domain::BusComp);
+    char buf[200];
+    for (int i = 0; i < kUc1ControlsCount; ++i) {
+        const Uc1Control& c = kUc1Controls[i];
+        const int shape = (c.kind == Uc1Control::Knob)   ? 0
+                        : (c.kind == Uc1Control::Toggle) ? 1 : 2;
+        const bool isBc = (c.domain == uf8::Domain::BusComp);
+        const char dom = isBc ? 'b' : 'c';
+        const char* lbl = c.label ? c.label : "";
+        if (const uf8::PluginMap* topo = isBc ? bcTopo : csTopo) {
+            if (const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*topo, c.linkIdx))
+                if (sl->name && sl->name[0]) lbl = sl->name;
+        }
+        std::snprintf(buf, sizeof(buf),
+                      "%d;%d;%.1f;%.1f;%.1f;%.1f;%.1f;%c;%s;%s\n",
+                      i, shape, c.cx, c.cy, c.r, c.w, c.h, dom,
+                      lbl, hudSectionFor_(c));
+        s += buf;
+    }
+    return s;
+}
+
+// Display name for a HUD control — IDENTICAL to what the FX-Learn editor shows
+// (its paramNameFor_ → TrackFX_GetParamName), so the two windows never disagree:
+//   1. the per-layer user custom label ("Display label"), if set, else
+//   2. the plug-in's own VST3 parameter name for the bound param.
+// `layer` (0/1/2) makes both follow the held modifier — the custom label is read
+// from the layer that actually drives the control (overlay, or Normal fallback),
+// and `vst3Param` is already that layer's effective param. Main-thread-only.
+std::string hudDisplayName_(MediaTrack* tr, int fx, const char* fxName,
+                            int linkIdx, int layer, int vst3Param)
+{
+    if (fxName && fxName[0]) {
+        if (const UserLinkSlot* us =
+                user_plugins::lookupOwnedSlot(fxName, linkIdx)) {
+            const SlotLayer& eff = fxEffectiveLayer(*us, layer);
+            if (!eff.customLabel.empty()) return eff.customLabel;
+        }
+    }
+    char pn[256] = {0};
+    if (tr && vst3Param >= 0) TrackFX_GetParamName(tr, fx, vst3Param, pn, sizeof(pn));
+    return pn[0] ? std::string(pn) : std::string();
+}
+
+// Fill the dynamic HUD payloads for the active CS/BC plug-ins on the surface.
+//   stateOut : "UC1;<csPresent>;<bcPresent>;<fdom>;<layer>;<csShort>;<bcShort>"
+//   assignOut: one line per MAPPED control "<idx>;<paramName>;<inv>"
+// Resolves params by FX identity name via uc1::lookupBindingsByName (covers
+// built-in SSL maps AND user FX-Learn maps, on the active modifier layer) +
+// uc1::hudParamForControl — independent of the Settings g_editingMatch editor.
+// Internal helper; exported through the reasixty_hudPublishUc1 trampoline.
+// focusDom: 0=none 1=CS 2=BC — the surface's focused-param domain, so the HUD
+// can auto-switch its active tab to follow focus.
+void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
+                    std::string& stateOut, std::string& assignOut)
+{
+    auto* csTr = static_cast<MediaTrack*>(csTrV);
+    auto* bcTr = static_cast<MediaTrack*>(bcTrV);
+    const bool csOk = csTr && csFx >= 0 && ValidatePtr2(nullptr, csTr, "MediaTrack*");
+    const bool bcOk = bcTr && bcFx >= 0 && ValidatePtr2(nullptr, bcTr, "MediaTrack*");
+
+    char csName[512] = {0}, bcName[512] = {0};
+    if (csOk) uf8::fxIdentityName(csTr, csFx, csName, sizeof(csName));
+    if (bcOk) uf8::fxIdentityName(bcTr, bcFx, bcName, sizeof(bcName));
+    const uc1::PluginBindings* csB = csName[0] ? uc1::lookupBindingsByName(csName) : nullptr;
+    const uc1::PluginBindings* bcB = bcName[0] ? uc1::lookupBindingsByName(bcName) : nullptr;
+
+    const char* csShort = (csB && csB->shortName) ? csB->shortName : "";
+    const char* bcShort = (bcB && bcB->shortName) ? bcB->shortName : "";
+    const char  fdom = (focusDom == 2) ? 'b' : (focusDom == 1) ? 'c' : 'n';
+    // Held-modifier layer (0=Normal 1=Option 2=Control) — the HUD shows it as a
+    // badge so a changed param list reads as "this is the Option overlay", not
+    // as the plug-in's own mapping. Same source the display/learn resolve with.
+    int layer = reasixty_fxLearnActiveLayer();
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    char head[160];
+    std::snprintf(head, sizeof(head), "UC1;%d;%d;%c;%d;%s;%s",
+                  csB ? 1 : 0, bcB ? 1 : 0, fdom, layer, csShort, bcShort);
+    stateOut = head;
+
+    assignOut.clear();
+    char line[256];
+    for (int i = 0; i < kUc1ControlsCount; ++i) {
+        const Uc1Control& c = kUc1Controls[i];
+        const bool isBc = (c.domain == uf8::Domain::BusComp);
+        const uc1::PluginBindings* b = isBc ? bcB : csB;
+        if (!b) continue;
+        MediaTrack* tr = isBc ? bcTr : csTr;
+        const int   fx = isBc ? bcFx : csFx;
+        const bool  isButton = (c.kind != Uc1Control::Knob);
+        bool inv = false;
+        const int p = uc1::hudParamForControl(b, isBc, c.linkIdx, isButton, &inv);
+        if (p < 0) continue;
+        char pname[128] = {0};
+        if (c.linkIdx == 0 && isButton) {
+            std::snprintf(pname, sizeof(pname), "In / Bypass");
+        } else {
+            const char* fxn = isBc ? bcName : csName;
+            const std::string nm = hudDisplayName_(tr, fx, fxn, c.linkIdx, layer, p);
+            std::snprintf(pname, sizeof(pname), "%s", nm.c_str());
+        }
+        // Sanitise the field separators out of the param name.
+        for (char* q = pname; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
+        std::snprintf(line, sizeof(line), "%d;%s;%d\n", i, pname, inv ? 1 : 0);
+        assignOut += line;
+    }
+}
+
+// ---- Assignment-HUD interactivity: click-a-control + wiggle-to-learn -----
+//
+// The companion HUD (rea_sixty_assignment_hud.lua) arms a control by writing
+// "rea_sixty"/"hud_cmd" = "learn;<controlIdx>"; main.cpp's onTimer drains that
+// and calls reasixty_hudArmLearn() with the *active* CS/BC targets resolved by
+// activeCsBcTargets_. We then poll GetLastTouchedFX (reasixty_hudLearnTick,
+// called every tick from onTimer) and, when the user wiggles a param of the
+// active plug-in, bind it to that control on the active modifier layer.
+//
+// Crucially this is decoupled from g_editingMatch / g_fxLearnEditLayer (the
+// Settings editor state): it targets the live focused plug-in by FX-identity
+// name, so it works with Settings closed and won't hijack an open editor.
+// Only USER maps are mutable — built-in SSL CS/BC maps are factory-fixed, so
+// arming on one is refused (a hint is published instead).
+int         g_hudLearnIdx     = -1;   // armed HUD control idx (-1 = none)
+std::string g_hudLearnMatch;          // owning user-map match to bind into
+int         g_hudLearnLinkIdx = -1;   // SSL 360 Link slot of the armed control
+int         g_hudLearnTicks   = 0;    // arm timeout countdown (onTimer ticks)
+int         g_hudLearnTr      = -2;   // GetLastTouchedFX baseline
+int         g_hudLearnFx      = -1;
+int         g_hudLearnParam   = -1;
+
+void hudCancelLearn_()
+{
+    g_hudLearnIdx = -1;
+    g_hudLearnMatch.clear();
+    g_hudLearnLinkIdx = -1;
+    g_hudLearnTicks = 0;
+}
+
+// Find the user map that owns the active plug-in and write vst3Param onto the
+// armed control's slot at `layer` (create the slot if absent). upsert + save
+// so the binding sticks + the runtime cache reloads it. Returns true on apply.
+bool hudLearnBindMatch_(const std::string& match, int linkIdx, int layer,
+                        int vst3Param)
+{
+    if (match.empty() || linkIdx < 0 || vst3Param < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    auto cat = user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        bool replaced = false;
+        for (auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            // Re-binding to a different param invalidates a custom label.
+            if (lay.vst3Param != vst3Param && !lay.customLabel.empty())
+                lay.customLabel.clear();
+            lay.vst3Param = vst3Param;
+            lay.inverted  = false;
+            replaced = true;
+            break;
+        }
+        if (!replaced) {
+            UserLinkSlot s{};
+            s.linkIdx = linkIdx;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            lay.vst3Param = vst3Param;
+            lay.inverted  = false;
+            m.slots.push_back(s);
+        }
+        user_plugins::upsert(m);
+        user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Arm learn for HUD control `idx`. csTr/bcTr + fx are the active targets the
+// caller (onTimer) resolved via activeCsBcTargets_; we pick the one matching
+// the control's domain, confirm it's a USER-mapped plug-in, and arm.
+void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    hudCancelLearn_();
+    if (idx < 0 || idx >= kUc1ControlsCount) return;
+    const Uc1Control& c = kUc1Controls[idx];
+    const bool   isBc = (c.domain == Domain::BusComp);
+    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
+    const int    fx   = isBc ? bcFx : csFx;
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name))) return;
+    const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
+    if (!um) {   // built-in SSL / no user map → factory-fixed, not editable
+        SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
+        return;
+    }
+    g_hudLearnIdx     = idx;
+    g_hudLearnMatch   = um->match;
+    g_hudLearnLinkIdx = c.linkIdx;
+    g_hudLearnTicks   = 600;   // ~20 s at the 30 Hz onTimer rate
+    int t = -1, f = -1, p = -1;
+    if (GetLastTouchedFX(&t, &f, &p)) { g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p; }
+    else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
+}
+
+// Poll for the wiggle. Returns true the tick a bind lands (caller refreshes
+// the published assignments). `activeLayer` = reasixty_fxLearnActiveLayer().
+bool hudLearnTick_(int activeLayer)
+{
+    if (g_hudLearnIdx < 0) return false;
+    if (--g_hudLearnTicks <= 0) { hudCancelLearn_(); return false; }
+    int t = -1, f = -1, p = -1;
+    if (!GetLastTouchedFX(&t, &f, &p)) return false;
+    if (t == g_hudLearnTr && f == g_hudLearnFx && p == g_hudLearnParam) return false;
+    g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    if (!tr) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    if (std::string(name).find(g_hudLearnMatch) == std::string::npos) return false;
+    if (hudLearnBindMatch_(g_hudLearnMatch, g_hudLearnLinkIdx, activeLayer, p)) {
+        hudCancelLearn_();
+        return true;
+    }
+    return false;
+}
+
 // Render the FX-Learn interactive overlay on top of one already-painted
 // UC1 control (drawUc1Face_ has already drawn the cap, ring, indicator,
 // and silk-screen label). Adds:
@@ -7428,6 +7797,13 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const bool isPushCycleBtn = isButtonCtrl && ctrl.linkIdx != 0;
     const bool hasPushSteps   = isPushCycleBtn
                               && !slotPushSteps_(ctrl.linkIdx).empty();
+    // When an Option/Control tab is active and this control has no overlay of
+    // its own, it inherits its Normal mapping at runtime — show that as a
+    // dim "ghost" ring so the user can tell which controls they've actually
+    // remapped on this layer vs. which pass through.
+    const bool editingOverlay = (g_fxLearnEditLayer != uf8::FxLayer::Normal);
+    const bool inheritsNormal = editingOverlay && !isMapped && !hasPushSteps
+                              && mappedVst3Normal_(ctrl.linkIdx) >= 0;
 
     // Bounding box — knob = (cx-r, cy-r, 2r, 2r); toggle/btn = (cx, cy, w, h).
     float bx, by, bw, bh;
@@ -7452,6 +7828,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
     else if (isMapped)  ringCol = 0x60C060FF;
     else if (hasPushSteps) ringCol = 0x60C060FF;  // macro: customised
+    else if (inheritsNormal) ringCol = 0x5878A0AA; // ghost: inherits Normal
     else                ringCol = 0x808890FF;
 
     // Ring overlay on top of drawUc1Face_'s already-painted control.
@@ -7672,14 +8049,21 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (m.match != g_editingMatch) continue;
                 for (const auto& s : m.slots) {
                     if (s.linkIdx == ctrl.linkIdx) {
-                        inverted        = s.inverted;
-                        curLabel        = s.customLabel;
-                        curRangeMin     = s.rangeMin;
-                        curRangeMax     = s.rangeMax;
-                        curSensitivity  = s.sensitivity;
-                        curHasCurve     = !s.curvePoints.empty();
-                        curPolarity     = s.polarity;
-                        curDefaultNorm  = s.defaultNorm;
+                        // Read the layer currently being edited (Normal /
+                        // Option / Control), matching the mutators which all
+                        // write editLayerRef_. Reading base `s` showed the
+                        // Normal values even on an overlay tab, so the Display
+                        // label (and invert / range / curve) didn't follow a
+                        // layer switch — Frank 2026-06-15.
+                        const uf8::SlotLayer& lay = editLayerRef_(s);
+                        inverted        = lay.inverted;
+                        curLabel        = lay.customLabel;
+                        curRangeMin     = lay.rangeMin;
+                        curRangeMax     = lay.rangeMax;
+                        curSensitivity  = lay.sensitivity;
+                        curHasCurve     = !lay.curvePoints.empty();
+                        curPolarity     = lay.polarity;
+                        curDefaultNorm  = lay.defaultNorm;
                         break;
                     }
                 }
@@ -8181,11 +8565,14 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "Display label:");
-            // Seed the buffer when opening for a new slot, or when bindSlot_
+            // Seed the buffer when opening for a new slot, when the edit layer
+            // changes (each layer has its own label), or when bindSlot_
             // invalidated the seed (g_fxlLabelLinkIdx = -1) after a re-bind
             // cleared the custom label.
-            if (g_fxlLabelLinkIdx != ctrl.linkIdx) {
+            if (g_fxlLabelLinkIdx != ctrl.linkIdx
+                || g_fxlLabelLayer != g_fxLearnEditLayer) {
                 g_fxlLabelLinkIdx = ctrl.linkIdx;
+                g_fxlLabelLayer   = g_fxLearnEditLayer;
                 std::strncpy(g_fxlLabelBuf, curLabel.c_str(),
                              sizeof(g_fxlLabelBuf) - 1);
                 g_fxlLabelBuf[sizeof(g_fxlLabelBuf) - 1] = '\0';
@@ -8469,6 +8856,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const int  mapped    = mappedVst3ForUf8_(ctrl.kind, ctrl.strip, bank);
     const bool isMapped  = (mapped >= 0);
     const bool isListen  = g_listeningUf8.matches(ctrl.kind, ctrl.strip, bank);
+    // UF8 has no modifier-layer overlays (UC1-only feature) → no inherited-
+    // Normal ghost ring on the UF8 schematic.
+    const bool inheritsNormal = false;
 
     const float bx = ctrl.cx, by = ctrl.cy;
     const float bw = ctrl.w,  bh = ctrl.h;
@@ -8483,6 +8873,8 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         ringCol = (0xFFE040u << 8) | bA;
     } else if (isMapped) {
         ringCol = 0x60C060FF;
+    } else if (inheritsNormal) {
+        ringCol = 0x5878A0AA;   // ghost: inherits Normal
     } else {
         ringCol = 0x808890FF;
     }
@@ -11162,9 +11554,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             return us.linkIdx == s.linkIdx;
                         }),
                     copy.slots.end());
-                copy.slots.push_back({s.linkIdx, s.vst3Param,
-                                      /*inverted*/ false,
-                                      s.customLabel});
+                uf8::UserLinkSlot ns{};
+                ns.linkIdx    = s.linkIdx;
+                ns.vst3Param  = s.vst3Param;
+                ns.inverted   = false;
+                ns.customLabel = s.customLabel;
+                copy.slots.push_back(std::move(ns));
             }
             // Write accepted UF8 V-Pot bank suggestions.
             for (const auto& u : g_autoLearnUf8) {
@@ -11374,6 +11769,44 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (rightW < kRightMin) {
             rightW = kRightMin;
             leftW  = avX - rightW - kPaneGap;
+        }
+    }
+
+    // Modifier-layer tab-bar — selects which FX-Learn layer the schematic
+    // edits. Normal is the always-on base; Option / Control are held-modifier
+    // overlays (Shift stays reserved for Fine). A control with no overlay on
+    // the active layer inherits its Normal mapping (shown as a ghost ring),
+    // so you only need to remap the controls that should differ.
+    // UC1-ONLY: the modifier layers were removed from UF8, so the UF8 editor
+    // (s_mockup == 1) shows no tabs and edits the base mapping only. Force the
+    // edit layer back to Normal there so a layer left selected from a prior UC1
+    // edit doesn't leak into the (now base-only) UF8 mutators.
+    if (s_mockup == 1) {
+        g_fxLearnEditLayer = uf8::FxLayer::Normal;
+    } else {
+        ImGui_TextDisabled(ctx, "Layer:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Normal##fxl_layer_norm",
+                              g_fxLearnEditLayer == uf8::FxLayer::Normal))
+            g_fxLearnEditLayer = uf8::FxLayer::Normal;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Option##fxl_layer_opt",
+                              g_fxLearnEditLayer == uf8::FxLayer::Option))
+            g_fxLearnEditLayer = uf8::FxLayer::Option;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Control##fxl_layer_ctrl",
+                              g_fxLearnEditLayer == uf8::FxLayer::Control))
+            g_fxLearnEditLayer = uf8::FxLayer::Control;
+        if (g_fxLearnEditLayer != uf8::FxLayer::Normal) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Copy from Normal##fxl_layer_copy",
+                             nullptr, nullptr))
+                copyNormalToEditLayer_();
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextDisabled(ctx,
+                g_fxLearnEditLayer == uf8::FxLayer::Option
+                    ? "(hold Option on the keyboard)"
+                    : "(hold Control on the keyboard)");
         }
     }
 
@@ -13581,3 +14014,27 @@ bool reasixty_quickLearnHasTarget()
 {
     return uf8::qlProjectHasTarget_();
 }
+
+// Assignment-HUD payload exports — thin trampolines onto the helpers that live
+// beside kUc1Controls in the anonymous namespace (same-TU access). main.cpp's
+// publishers call these.
+std::string reasixty_hudGeometryUc1()
+{
+    return uf8::hudGeometryUc1_();
+}
+void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
+                            int focusDom,
+                            std::string& stateOut, std::string& assignOut)
+{
+    uf8::hudPublishUc1_(csTr, csFx, bcTr, bcFx, focusDom, stateOut, assignOut);
+}
+
+// Assignment-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
+// main.cpp's onTimer: arm with the active CS/BC targets, tick every frame.
+void reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    uf8::hudArmLearn_(idx, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLayer); }
+int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
+void reasixty_hudCancelLearn()              { uf8::hudCancelLearn_(); }

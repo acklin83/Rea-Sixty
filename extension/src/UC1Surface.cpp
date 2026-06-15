@@ -33,6 +33,9 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
+// Active FX-Learn modifier layer (0=Normal,1=Option,2=Control), defined in
+// main.cpp. Selects which SlotLayer's knob-travel a learned control uses.
+int reasixty_fxLearnActiveLayer();
 // Publish UC1 Fine state so UF8 V-Pot rotation honours UC1 Fine too.
 void reasixty_setUc1Fine(bool on);
 
@@ -766,6 +769,21 @@ int UC1Surface::poll()
         refresh();
     }
 
+    // EXT FUNCS active: mirror EXTERNAL edits (UF8 V-Pot / plugin GUI /
+    // automation) of the live param back onto the UC1 value. The subscreen
+    // otherwise only redraws on the UC1's own encoder, so a UF8 edit wouldn't
+    // show. Cheap: one param read + compare while in this transient mode.
+    if (mode_ == Uc1Mode::ExtFuncs && extFuncsActive_ && focusedTrack_
+        && extFuncsCurFx_ >= 0 && extFuncsCurParam_ >= 0)
+    {
+        auto* tr = static_cast<MediaTrack*>(focusedTrack_);
+        if (ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            const double v = TrackFX_GetParamNormalized(
+                tr, extFuncsCurFx_, extFuncsCurParam_);
+            if (std::abs(v - extFuncsLastVal_) > 1e-6) renderExtFuncsSubscreen_();
+        }
+    }
+
     // Per-tick value poll. Catches every cause of focused-param change:
     //   - UF8 Page <-/-> shifted slotIdx (text changes)
     //   - UF8 V-Pot rotation on the focused track (value changes)
@@ -1004,8 +1022,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // → plain linear/stepped behaviour (range/curve/reset deferred).
             char fxBuf[256] = {0};
             TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf));
-            const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+            const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
                 ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+                : nullptr;
+            // Effective layer's knob-travel (Option/Control overlay, else
+            // Normal). The EXT_FUNCS param itself is resolved independently.
+            const uf8::SlotLayer* usl = uslRaw
+                ? &uf8::fxEffectiveLayer(*uslRaw, reasixty_fxLearnActiveLayer())
                 : nullptr;
             if (haveStepInfo && isToggle) {
                 // 1 detent (in either direction) flips the toggle.
@@ -1079,9 +1102,15 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             TrackFX_SetParamNormalized(tr, match.fxIndex, vst3Param, next);
             // Param-group broadcast only for SSL slots (stable linkIdx);
             // free params aren't part of the cross-surface slot graph.
-            if (linkIdx >= 0)
+            if (linkIdx >= 0) {
                 uf8::param_groups::broadcastBuiltinSlot(
                     tr, uf8::Domain::ChannelStrip, linkIdx, next);
+                // Mirror the edit to the UF8 focused-param projection so the
+                // strip readout updates immediately (don't wait for / rely on
+                // chaseLastTouchedFx). Without this the first ext param shows
+                // nothing on the UF8. Mirrors the BC-knob handler pattern.
+                uf8::setFocus({uf8::Domain::ChannelStrip, linkIdx});
+            }
             reasixty_bumpFolderReveal(tr);
         }
         renderExtFuncsSubscreen_();
@@ -1524,8 +1553,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
         }
     }
-    const uf8::UserLinkSlot* usl = (linkIdx >= 0)
+    const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
         ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
+        : nullptr;
+    // Knob-travel comes from the SlotLayer that's active under the held
+    // modifier (Option/Control), falling back to Normal when that control has
+    // no overlay. The param itself was already layer-resolved via map above.
+    const uf8::SlotLayer* usl = uslRaw
+        ? &uf8::fxEffectiveLayer(*uslRaw, reasixty_fxLearnActiveLayer())
         : nullptr;
 
     double next;
@@ -1649,11 +1684,25 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     auto uf8Match = uf8::lookupPluginOnTrack(writeTrackRaw, uf8Domain);
     bool focusedParamRendered = false;
     if (uf8Match.map) {
-        const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
+        int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
+        // Normal-slot resolution found the param in the slot list → group
+        // broadcast is valid (param groups are Normal-keyed). When an active
+        // Option/Control layer remapped this knob to a param OUTSIDE the Normal
+        // list, slotIdx is -1; resolve the control's OWN linkIdx so the
+        // focused-param readout (now layer-aware) lands on the right row with
+        // the right name, instead of the old hardcoded BC fallback. Don't
+        // group-broadcast a layer remap (would write the wrong param on grouped
+        // tracks). Frank 2026-06-15.
+        const bool normalSlot = (slotIdx >= 0);
+        if (slotIdx < 0) {
+            slotIdx = uc1::linkIdxForControl(ev.id, busCompContext, false);
+        }
         if (slotIdx >= 0) {
-            uf8::param_groups::broadcastBuiltinSlot(
-                static_cast<MediaTrack*>(writeTrackRaw),
-                uf8Domain, slotIdx, next);
+            if (normalSlot) {
+                uf8::param_groups::broadcastBuiltinSlot(
+                    static_cast<MediaTrack*>(writeTrackRaw),
+                    uf8Domain, slotIdx, next);
+            }
             // Cross-domain knob touch flips the focused-param domain.
             // The central LCD's plug-in shortName label is computed off
             // this domain in refresh(), so a BC↔CS shift on the same
@@ -1677,14 +1726,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
     }
     if (!focusedParamRendered) {
-        // Knob wrote a vst3Param outside UF8's slot list (or the track
-        // has no UF8-recognised plugin for this domain). Fall back to a
-        // direct per-knob readout so the user still sees their edit;
-        // skips the dedup cache (next poll-tick will re-render the
-        // focused param's text, overwriting this transient).
+        // Knob wrote a vst3Param outside UF8's slot list AND the control
+        // isn't in kCsLinkToUc1/kBcLinkToUc1 (or no plugin for this domain).
+        // Direct per-knob readout — in the knob's OWN domain zone (was a
+        // hardcoded BC zone, which put CS knobs in the wrong row), and show
+        // the REAL plug-in param name (was a static label that ignored the
+        // active layer). Mirrors fmtParam_ in main.cpp.
+        char pname[256] = {0};
+        TrackFX_GetParamName(tr, fxIdx, vst3Param, pname, sizeof(pname));
         pushKnobReadout_(ev.id, tr, fxIdx, vst3Param,
-                         zone::kBusCompReadout,
-                         labelForKnob(ev.id, busCompContext));
+                         busCompContext ? zone::kBusCompReadout
+                                        : zone::kChannelStripReadout,
+                         pname[0] ? pname : labelForKnob(ev.id, busCompContext));
     }
     // "View active plugin" follow — queue a deferred swap so the
     // floating FX window switches to the touched FX on the next timer
@@ -2359,12 +2412,49 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     auto uf8Match = uf8::lookupPluginOnTrack(focusedTrack_,
                                              uf8::Domain::ChannelStrip);
     if (uf8Match.map) {
-        const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
-        if (slotIdx >= 0) {
-            if (const uf8::LinkSlot* sp =
-                    uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx);
-                sp && sp->name && sp->name[0]) {
-                btnLabel = sp->name;
+        // Resolve the slot from the BUTTON's own canonical linkIdx — NOT by
+        // reverse-looking-up vst3Param in the Normal view cache. On a remapped
+        // Option/Control layer the latter lands on a FOREIGN slot (Frank
+        // 2026-06-15: HF Type Option "hihi" snapped to DYN's old "YoMama" after
+        // a push, because that slot's Normal param matched). A button always
+        // owns the same physical slot, so this is correct on every layer and
+        // also fixes the focus/readout that the per-tick refresh derives from.
+        const int slotIdx =
+            uc1::linkIdxForControl(ev.id, /*busComp*/false, /*isButton*/true);
+        if (slotIdx >= 0 && uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx)) {
+            // Layer-aware label: the active modifier layer's custom name wins,
+            // so a pressed button keeps the user's Option/Control label instead
+            // of snapping back to the Normal/canonical view-cache name. Mirrors
+            // pushFocusedParamReadout_'s resolution. Frank 2026-06-15.
+            const int L = reasixty_fxLearnActiveLayer();
+            if (L != uf8::FxLayer::Normal) {
+                char fxn[512] = {};
+                if (uf8::fxIdentityName(tr, bindings.channelFxIdx,
+                                        fxn, sizeof(fxn))) {
+                    if (const uf8::UserLinkSlot* us =
+                            uf8::user_plugins::lookupOwnedSlot(fxn, slotIdx)) {
+                        const uf8::SlotLayer& eff =
+                            uf8::fxEffectiveLayer(*us, L);
+                        if (!eff.customLabel.empty()) btnLabel = eff.customLabel;
+                    }
+                }
+            }
+            if (btnLabel.empty() && L != uf8::FxLayer::Normal) {
+                // Overlay layer with no custom label → the OVERLAID param's own
+                // name (vst3Param is already the active-layer param), NOT the
+                // Normal/canonical slot name (= the "no modifier" name, which is
+                // exactly what was wrongly showing after a push).
+                char pn[256] = {};
+                TrackFX_GetParamName(tr, bindings.channelFxIdx, vst3Param,
+                                     pn, sizeof(pn));
+                if (pn[0]) btnLabel = pn;
+            }
+            if (btnLabel.empty()) {
+                if (const uf8::LinkSlot* sp =
+                        uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx);
+                    sp && sp->name && sp->name[0]) {
+                    btnLabel = sp->name;
+                }
             }
             uf8::param_groups::broadcastBuiltinSlot(
                 static_cast<MediaTrack*>(focusedTrack_),
@@ -2532,6 +2622,11 @@ void UC1Surface::pushButtonReadout_(uint8_t /*buttonId*/, std::string_view label
     if (!device_) return;
     auto readout = formatReadout(label, value);
     device_->send(buildDisplayText(zone, readout, readout.size()));
+    // Keep the focused-readout dedup in sync with what's actually on the LCD,
+    // so the next per-tick pushFocusedParamReadout_ re-pushes when (and only
+    // when) its layer-aware text differs — never freezes on a stale string.
+    if (zone == zone::kChannelStripReadout) lastZone03Text_ = readout;
+    else if (zone == zone::kBusCompReadout) lastZone05Text_ = readout;
 }
 
 void UC1Surface::pushFocusedParamReadout_()
@@ -2628,13 +2723,45 @@ void UC1Surface::pushFocusedParamReadout_()
     // dropping the LCD line removes the false-positive idle display.
     if (slot.linkIdx == 0) return;
     MediaTrack* tr = static_cast<MediaTrack*>(lookupTrack);
+
+    // Active Option/Control FX-Learn layer: the focused control may drive a
+    // DIFFERENT param than its Normal slot. Resolve the effective param + name
+    // for the active layer (user-mapped plug-ins only — built-ins are factory
+    // fixed). Safe-by-construction: Normal layer / no overlay → base slot, so
+    // the no-modifier readout is byte-identical. Frank 2026-06-15.
+    int         pParam = slot.vst3Param;
+    const char* pName  = slot.name;
+    std::string pNameOwned;   // backs pName when it comes from the layer
+    const int activeLayer = reasixty_fxLearnActiveLayer();
+    if (activeLayer != uf8::FxLayer::Normal) {
+        char fxn[512] = {};
+        if (uf8::fxIdentityName(tr, match.fxIndex, fxn, sizeof(fxn))) {
+            const uf8::UserLinkSlot* us =
+                uf8::user_plugins::lookupOwnedSlot(fxn, slot.linkIdx);
+            if (us) {
+                const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(*us, activeLayer);
+                if (eff.vst3Param >= 0) {
+                    pParam = eff.vst3Param;
+                    if (!eff.customLabel.empty()) {
+                        pNameOwned = eff.customLabel;
+                    } else {
+                        char pn[256] = {};
+                        TrackFX_GetParamName(tr, match.fxIndex, eff.vst3Param,
+                                             pn, sizeof(pn));
+                        if (pn[0]) pNameOwned = pn;
+                    }
+                    if (!pNameOwned.empty()) pName = pNameOwned.c_str();
+                }
+            }
+        }
+    }
+
     char formatted[64] = {};
-    const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex,
-                                                  slot.vst3Param);
-    TrackFX_FormatParamValueNormalized(tr, match.fxIndex, slot.vst3Param,
+    const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex, pParam);
+    TrackFX_FormatParamValueNormalized(tr, match.fxIndex, pParam,
                                        cur, formatted, sizeof(formatted));
     std::string value = stripUnitIfNonNumeric(compactUnit(formatted));
-    auto readout = formatReadout(slot.name, value);
+    auto readout = formatReadout(pName, value);
 
     // Per-domain LCD zone routing. CS → zone 0x03 (Channel Strip
     // readout area), BC → zone 0x05 (Bus Comp readout area). Per
@@ -2724,10 +2851,22 @@ std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
         for (const auto& e : um->extFuncs) {
             if (e.vst3Param < 0) continue;        // skip empty/unassigned slots
             ExtFuncItem it;
-            it.longLabel  = e.name;
+            // Prefer a meaningful label: the user's curated name, UNLESS it's the
+            // generic "Quick N" auto-learn artefact (or empty) — then fall back
+            // to the real plug-in param name (which also reflects a REAPER param
+            // alias). Fixes "Quick 2" showing instead of the param name.
+            std::string nm = e.name;
+            const bool generic = nm.empty() || nm.rfind("Quick ", 0) == 0;
+            if (generic && match.fxIndex >= 0) {
+                char pn[128] = {0};
+                if (TrackFX_GetParamName(tr, match.fxIndex, e.vst3Param,
+                                         pn, sizeof(pn)) && pn[0])
+                    nm = pn;
+            }
+            it.longLabel  = nm;
             // Carousel fits 11 chars on the UC1 LCD (Frank, empirical
             // 2026-06-02). Header (longLabel) keeps the full name.
-            it.shortLabel = e.name.size() > 11 ? e.name.substr(0, 11) : e.name;
+            it.shortLabel = nm.size() > 11 ? nm.substr(0, 11) : nm;
             it.vst3Param  = e.vst3Param;
             it.linkIdx    = -1;                    // free param: no usl/broadcast
             out.push_back(std::move(it));
@@ -2777,6 +2916,34 @@ void UC1Surface::renderExtFuncsSubscreen_()
     if (idx >= n) idx = n - 1;
     extFuncsIdx_ = idx;
     const auto& cur  = items[idx];
+
+    // --- TEMP DIAGNOSTIC (ext-funcs name/focus) — remove after diagnosing ---
+    if (FILE* lf = std::fopen("/tmp/reasixty_extfuncs.log", "a")) {
+        auto* dtr = static_cast<MediaTrack*>(focusedTrack_);
+        char fxn[256] = {0}; int dfx = -1;
+        if (dtr) {
+            auto m = uf8::lookupPluginOnTrack(focusedTrack_, uf8::Domain::ChannelStrip);
+            dfx = m.fxIndex;
+            if (dfx >= 0) TrackFX_GetFXName(dtr, dfx, fxn, sizeof(fxn));
+        }
+        const uf8::UserPluginMap* um =
+            fxn[0] ? uf8::user_plugins::lookupOwnedByName(fxn) : nullptr;
+        auto fp = uf8::getFocusedParam();
+        std::fprintf(lf,
+            "[extf] active=%d fx='%s' userMapped=%d n=%d idx=%d focus{dom=%d slot=%d}\n",
+            extFuncsActive_ ? 1 : 0, fxn, um ? 1 : 0, n, idx,
+            static_cast<int>(fp.domain), fp.slotIdx);
+        for (int i = 0; i < n; ++i) {
+            const auto& di = items[i];
+            char pn[128] = {0};
+            if (dtr && dfx >= 0 && di.vst3Param >= 0)
+                TrackFX_GetParamName(dtr, dfx, di.vst3Param, pn, sizeof(pn));
+            std::fprintf(lf, "   item%d long='%s' vst3=%d link=%d paramName='%s'\n",
+                         i, di.longLabel.c_str(), di.vst3Param, di.linkIdx, pn);
+        }
+        std::fclose(lf);
+    }
+    // --- end diagnostic ---
     const auto& prev = items[(idx - 1 + n) % n];
     const auto& next = items[(idx + 1) % n];
     device_->send(buildLcdHeader(cur.longLabel.c_str()));
@@ -2791,6 +2958,7 @@ void UC1Surface::renderExtFuncsSubscreen_()
     // commit/repaint trigger for the bottom LCD region. Without it,
     // the value text caches and stops updating on subsequent encoder
     // detents (only the very first value-frame paints).
+    extFuncsCurFx_ = -1; extFuncsCurParam_ = -1;   // refreshed below if resolved
     if (focusedTrack_ && cur.vst3Param >= 0) {
         auto match = uf8::lookupPluginOnTrack(focusedTrack_,
                                               uf8::Domain::ChannelStrip);
@@ -2799,6 +2967,9 @@ void UC1Surface::renderExtFuncsSubscreen_()
             char buf[64] = {};
             const double v = TrackFX_GetParamNormalized(
                 tr, match.fxIndex, cur.vst3Param);
+            extFuncsCurFx_    = match.fxIndex;       // for poll()'s external-edit
+            extFuncsCurParam_ = cur.vst3Param;       // mirror check
+            extFuncsLastVal_  = v;
             TrackFX_FormatParamValueNormalized(
                 tr, match.fxIndex, cur.vst3Param, v, buf, sizeof(buf));
             std::string val{buf};

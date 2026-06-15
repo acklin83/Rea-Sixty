@@ -302,7 +302,7 @@ std::string serialize_(const UserPluginCatalog& c)
         // existing files stay byte-identical until the user actually
         // customises a slot. Used for both `slots` and the per-domain
         // caches below.
-        auto emitSlotKnobTravel = [&](const UserLinkSlot& s) {
+        auto emitSlotKnobTravel = [&](const SlotLayer& s) {
             if (s.rangeMin != 0.0f) os << ", \"rangeMin\": " << s.rangeMin;
             if (s.rangeMax != 1.0f) os << ", \"rangeMax\": " << s.rangeMax;
             if (s.sensitivity != 1.0f)
@@ -375,20 +375,54 @@ std::string serialize_(const UserPluginCatalog& c)
             }
             os << " }";
         };
-        os << "      \"slots\": [";
-        bool firstSlot = true;
-        for (const auto& s : m.slots) {
-            if (!firstSlot) os << ",";
-            firstSlot = false;
-            os << "\n        { \"linkIdx\": " << s.linkIdx
-               << ", \"vst3Param\": "         << s.vst3Param
-               << ", \"inverted\": "          << (s.inverted ? "true" : "false");
+        // Emit the mutable mapping fields of one SlotLayer (vst3Param +
+        // inverted + optional customLabel + knob-travel + push-cycle),
+        // starting with vst3Param (no leading comma). Shared by the slot
+        // body and the per-modifier overlay objects below.
+        auto emitLayerBody = [&](const SlotLayer& s) {
+            os << "\"vst3Param\": "    << s.vst3Param
+               << ", \"inverted\": "   << (s.inverted ? "true" : "false");
             if (!s.customLabel.empty()) {
                 os << ", \"customLabel\": ";
                 appendEscaped_(os, s.customLabel);
             }
             emitSlotKnobTravel(s);
+        };
+        // Emit one full slot object: linkIdx + Normal-layer body + the optional
+        // FX-Learn modifier overlays (v9). Additive: "modLayers" only appears
+        // when an Option/Control overlay is populated, so v8-era catalogs round-
+        // trip byte-identically and older readers ignore the key. Shared by the
+        // active `slots` array AND the per-domain cs/bcSlotCache below — the
+        // cache MUST carry modLayers too, else switching the edit domain (which
+        // round-trips slots through the cache) silently drops every overlay's
+        // param + custom label. Frank 2026-06-15.
+        auto emitSlotObject = [&](const UserLinkSlot& s) {
+            os << "{ \"linkIdx\": " << s.linkIdx << ", ";
+            emitLayerBody(s);
+            if (hasAnyModLayer(s)) {
+                os << ", \"modLayers\": {";
+                bool firstML = true;
+                auto emitML = [&](const char* key, const SlotLayer& ml) {
+                    if (!fxLayerNonDefault(ml)) return;
+                    if (!firstML) os << ",";
+                    firstML = false;
+                    os << " \"" << key << "\": { ";
+                    emitLayerBody(ml);
+                    os << " }";
+                };
+                emitML("option",  s.modLayers[0]);
+                emitML("control", s.modLayers[1]);
+                os << " }";
+            }
             os << " }";
+        };
+        os << "      \"slots\": [";
+        bool firstSlot = true;
+        for (const auto& s : m.slots) {
+            if (!firstSlot) os << ",";
+            firstSlot = false;
+            os << "\n        ";
+            emitSlotObject(s);
         }
         os << "\n      ]";
         // Metering block — emit when any field is non-default. Older
@@ -438,15 +472,8 @@ std::string serialize_(const UserPluginCatalog& c)
             for (const auto& s : vs) {
                 if (!first) os << ",";
                 first = false;
-                os << "\n        { \"linkIdx\": " << s.linkIdx
-                   << ", \"vst3Param\": "         << s.vst3Param
-                   << ", \"inverted\": "          << (s.inverted ? "true" : "false");
-                if (!s.customLabel.empty()) {
-                    os << ", \"customLabel\": ";
-                    appendEscaped_(os, s.customLabel);
-                }
-                emitSlotKnobTravel(s);
-                os << " }";
+                os << "\n        ";
+                emitSlotObject(s);   // same body as `slots` — INCLUDING modLayers
             }
             os << "\n      ]";
         };
@@ -485,6 +512,7 @@ std::string serialize_(const UserPluginCatalog& c)
                             appendEscaped_(os, vpotPolarityName_(bs.polarity));
                         }
                         emitKnobTravelObj("travel", bs.travel);
+                        // (UF8 FX-Learn modifier overlays removed — UC1-only.)
                         os << " }";
                     }
                     os << "\n            ]";
@@ -521,8 +549,9 @@ std::string serialize_(const UserPluginCatalog& c)
                        << "\"sel\": { \"vst3Param\": "  << sb.selVst3Param
                        << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
                        << ", \"invert\": " << (sb.selInvert ? "true" : "false")
-                       << " }"
                        << " }";
+                    // (UF8 FX-Learn modifier overlays removed — UC1-only.)
+                    os << " }";
                 }
                 os << "\n          ]";
             }
@@ -664,6 +693,65 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         if (getIntI_(po, "snapshotTakenAt", snapTs))
             m.snapshotTakenAt = snapTs;
 
+        // Parse the mutable mapping fields of one SlotLayer from object `so`.
+        // Shared by the base slot (Normal layer) and the per-modifier overlay
+        // objects. All fields additive — missing keys keep struct defaults.
+        auto parseLayerBody = [&](wdl_json_element* so, SlotLayer& sl) {
+            getIntI_(so, "vst3Param", sl.vst3Param);
+            getBoolI_(so, "inverted", sl.inverted);
+            getStrI_(so, "customLabel", sl.customLabel);
+            double tmp = 0.0;
+            if (getDoubleI_(so, "rangeMin",    tmp)) sl.rangeMin    = (float)tmp;
+            if (getDoubleI_(so, "rangeMax",    tmp)) sl.rangeMax    = (float)tmp;
+            if (getDoubleI_(so, "sensitivity", tmp)) sl.sensitivity = (float)tmp;
+            if (auto* cpa = so->get_item_by_name("curvePoints");
+                cpa && cpa->is_array() && cpa->m_array)
+            {
+                const int pn = cpa->m_array->GetSize();
+                sl.curvePoints.reserve(pn);
+                for (int pi = 0; pi < pn; ++pi) {
+                    wdl_json_element* pe = cpa->enum_item(pi);
+                    if (!pe || !pe->is_array() || !pe->m_array) continue;
+                    if (pe->m_array->GetSize() < 2) continue;
+                    wdl_json_element* xe = pe->enum_item(0);
+                    wdl_json_element* ye = pe->enum_item(1);
+                    if (!xe || !ye) continue;
+                    const char* xs = xe->get_string_value(true);
+                    const char* ys = ye->get_string_value(true);
+                    if (!xs || !ys) continue;
+                    sl.curvePoints.emplace_back((float)std::atof(xs),
+                                                (float)std::atof(ys));
+                }
+            }
+            // Polarity / defaultNorm (Frank 2026-05-26). Both additive.
+            std::string polStr;
+            if (getStrI_(so, "polarity", polStr)) {
+                sl.polarity = vpotPolarityFromName_(polStr.c_str());
+            }
+            getDoubleI_(so, "defaultNorm", sl.defaultNorm);
+            // Per-button push-cycle steps (additive). Each entry is an
+            // object { "vst3Param", "norm" }. Absent => empty => legacy
+            // auto-cycle.
+            if (auto* psa = so->get_item_by_name("pushSteps");
+                psa && psa->is_array() && psa->m_array)
+            {
+                const int pn = psa->m_array->GetSize();
+                sl.pushSteps.reserve(pn);
+                for (int pi = 0; pi < pn; ++pi) {
+                    wdl_json_element* pe = psa->enum_item(pi);
+                    if (!pe || !pe->is_object()) continue;
+                    PushStep st{};
+                    getIntI_(pe, "vst3Param", st.vst3Param);
+                    double nv = 0.0;
+                    if (getDoubleI_(pe, "norm", nv)) st.norm = (float)nv;
+                    // Additive; absent => enabled (default true).
+                    getBoolI_(pe, "enabled", st.enabled);
+                    if (st.vst3Param < 0) continue;
+                    sl.pushSteps.push_back(st);
+                }
+            }
+        };
+
         auto readSlotArr = [&](const char* key,
                                std::vector<UserLinkSlot>& dest) {
             auto* slotsArr = po->get_item_by_name(key);
@@ -674,68 +762,25 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 if (!so || !so->is_object()) continue;
                 UserLinkSlot us{};
                 getIntI_(so, "linkIdx", us.linkIdx);
-                getIntI_(so, "vst3Param", us.vst3Param);
-                getBoolI_(so, "inverted", us.inverted);
-                getStrI_(so, "customLabel", us.customLabel);
-                // Knob-travel fields (additive, see UserLinkSlot). Missing
-                // keys leave the struct defaults — byte-identical no-op
-                // behaviour for pre-feature files.
-                double tmp = 0.0;
-                if (getDoubleI_(so, "rangeMin",    tmp)) us.rangeMin    = (float)tmp;
-                if (getDoubleI_(so, "rangeMax",    tmp)) us.rangeMax    = (float)tmp;
-                if (getDoubleI_(so, "sensitivity", tmp)) us.sensitivity = (float)tmp;
-                if (auto* cpa = so->get_item_by_name("curvePoints");
-                    cpa && cpa->is_array() && cpa->m_array)
+                parseLayerBody(so, us);   // base object == Normal layer
+                // FX-Learn modifier layers (v9). Additive — absent on v8 files,
+                // leaving both overlays at struct defaults (= Normal-only).
+                if (auto* ml = so->get_item_by_name("modLayers");
+                    ml && ml->is_object())
                 {
-                    const int pn = cpa->m_array->GetSize();
-                    us.curvePoints.reserve(pn);
-                    for (int pi = 0; pi < pn; ++pi) {
-                        wdl_json_element* pe = cpa->enum_item(pi);
-                        if (!pe || !pe->is_array() || !pe->m_array) continue;
-                        if (pe->m_array->GetSize() < 2) continue;
-                        wdl_json_element* xe = pe->enum_item(0);
-                        wdl_json_element* ye = pe->enum_item(1);
-                        if (!xe || !ye) continue;
-                        const char* xs = xe->get_string_value(true);
-                        const char* ys = ye->get_string_value(true);
-                        if (!xs || !ys) continue;
-                        us.curvePoints.emplace_back((float)std::atof(xs),
-                                                    (float)std::atof(ys));
-                    }
-                }
-                // Polarity / defaultNorm (Frank 2026-05-26). Both
-                // additive — missing keys leave struct defaults.
-                std::string polStr;
-                if (getStrI_(so, "polarity", polStr)) {
-                    us.polarity = vpotPolarityFromName_(polStr.c_str());
-                }
-                getDoubleI_(so, "defaultNorm", us.defaultNorm);
-                // Per-button push-cycle steps (additive). Each entry is an
-                // object { "vst3Param", "norm" }. Absent => empty => legacy
-                // auto-cycle.
-                if (auto* psa = so->get_item_by_name("pushSteps");
-                    psa && psa->is_array() && psa->m_array)
-                {
-                    const int pn = psa->m_array->GetSize();
-                    us.pushSteps.reserve(pn);
-                    for (int pi = 0; pi < pn; ++pi) {
-                        wdl_json_element* pe = psa->enum_item(pi);
-                        if (!pe || !pe->is_object()) continue;
-                        PushStep st{};
-                        getIntI_(pe, "vst3Param", st.vst3Param);
-                        double nv = 0.0;
-                        if (getDoubleI_(pe, "norm", nv)) st.norm = (float)nv;
-                        // Additive; absent => enabled (default true).
-                        getBoolI_(pe, "enabled", st.enabled);
-                        if (st.vst3Param < 0) continue;
-                        us.pushSteps.push_back(st);
-                    }
+                    if (auto* opt = ml->get_item_by_name("option");
+                        opt && opt->is_object())
+                        parseLayerBody(opt, us.modLayers[0]);
+                    if (auto* ctl = ml->get_item_by_name("control");
+                        ctl && ctl->is_object())
+                        parseLayerBody(ctl, us.modLayers[1]);
                 }
                 if (us.linkIdx < 0) continue;
-                // A macro slot has no primary param (vst3Param < 0) but is
-                // still valid as long as it carries push-cycle steps. Only
-                // drop the slot when it has neither.
-                if (us.vst3Param < 0 && us.pushSteps.empty()) continue;
+                // A slot is valid when the Normal layer carries a mapping
+                // (param or push-cycle) OR any modifier overlay does — the
+                // latter supports a control that's inert normally but active
+                // under a held modifier.
+                if (!fxLayerMapped(us) && !hasAnyModLayer(us)) continue;
                 dest.push_back(us);
             }
         };
@@ -833,6 +878,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     bs.polarity = vpotPolarityFromName_(pol.c_str());
                 }
                 parseKnobTravel(so, bs.travel);
+                // (UF8 FX-Learn V-Pot modifier overlays removed — UC1-only.
+                // Any "modLayers" key in an old v9 file is silently ignored.)
             };
             // v7: banksByFaderBank [fb][vpotBank][slot]. v6 had a flat
             // `banks` [vpotBank][slot] — migrate into faderBank=0.
@@ -916,6 +963,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     getBoolI_(selo, "invert", sb.selInvert);
                 }
+                // (UF8 FX-Learn strip modifier overlays removed — UC1-only.
+                // Any "modLayers" key in an old v9 file is silently ignored.)
             };
             // v7 path: stripsByFaderBank [faderBank][slot].
             if (auto* sfbArr = uo->get_item_by_name("stripsByFaderBank");

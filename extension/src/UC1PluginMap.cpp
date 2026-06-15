@@ -15,6 +15,10 @@
 #include "PluginMap.h"           // uf8::fxIdentityName
 #include "UserPluginCatalog.h"   // uf8::user_plugins
 
+// Active FX-Learn modifier layer (0=Normal,1=Option,2=Control), resolved from
+// held keyboard modifiers once per onTimer tick. Defined in main.cpp.
+int reasixty_fxLearnActiveLayer();
+
 namespace uc1 {
 
 namespace {
@@ -439,6 +443,7 @@ constexpr LinkToUc1 kBcLinkToUc1[] = {
 // constexpr makeEmpty), so the std::vector-backed steps live on the cache
 // entry rather than inside PluginBindings.
 void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
+                            int layer,
                             std::array<std::vector<uf8::PushStep>, 0x20>* buttonSteps = nullptr)
 {
     if (buttonSteps) for (auto& v : *buttonSteps) v.clear();
@@ -463,11 +468,16 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
     }
 
     for (const auto& slot : um.slots) {
-        const bool hasSteps = !slot.pushSteps.empty();
+        // Resolve which layer actually drives this control: the requested
+        // FX-Learn layer if it carries a mapping, else fall back to Normal.
+        // (Holding Option/Control only remaps the controls you've explicitly
+        // overlaid; everything else keeps its Normal mapping.)
+        const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(slot, layer);
+        const bool hasSteps = !eff.pushSteps.empty();
         // A macro slot may carry no primary param (vst3Param < 0) yet still
         // drive a button via its push-cycle steps. Keep processing such a
         // slot; skip only when it has neither a param nor steps.
-        if (slot.vst3Param < 0 && !hasSteps) continue;
+        if (eff.vst3Param < 0 && !hasSteps) continue;
         // SSL Link slot 0 = plug-in bypass on both CS and BC. Persist
         // the bound vst3Param into bypassParam so the IN button toggles
         // the plug-in's own bypass param rather than REAPER's
@@ -477,23 +487,23 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
         // expose "Comp In" (1=on, LED ON on 1). The FX-Learn UI's
         // inverted toggle on this slot drives bypassInverted, which
         // the IN-button + LED render paths consume.
-        if (slot.linkIdx == 0 && slot.vst3Param >= 0) {
-            out.bypassParam    = slot.vst3Param;
-            out.bypassInverted = slot.inverted;
+        if (slot.linkIdx == 0 && eff.vst3Param >= 0) {
+            out.bypassParam    = eff.vst3Param;
+            out.bypassInverted = eff.inverted;
         }
         for (int i = 0; i < tableSize; ++i) {
             if (table[i].linkIdx != slot.linkIdx) continue;
-            if (table[i].knobId != kNoUc1 && slot.vst3Param >= 0) {
-                out.knobParam[table[i].knobId] = slot.vst3Param;
-                out.inverted[table[i].knobId]  = slot.inverted;
+            if (table[i].knobId != kNoUc1 && eff.vst3Param >= 0) {
+                out.knobParam[table[i].knobId] = eff.vst3Param;
+                out.inverted[table[i].knobId]  = eff.inverted;
             }
             if (table[i].buttonId != kNoUc1) {
-                if (slot.vst3Param >= 0) {
-                    out.buttonParam[table[i].buttonId]    = slot.vst3Param;
-                    out.buttonInverted[table[i].buttonId] = slot.inverted;
+                if (eff.vst3Param >= 0) {
+                    out.buttonParam[table[i].buttonId]    = eff.vst3Param;
+                    out.buttonInverted[table[i].buttonId] = eff.inverted;
                 }
                 if (buttonSteps && hasSteps)
-                    (*buttonSteps)[table[i].buttonId] = slot.pushSteps;
+                    (*buttonSteps)[table[i].buttonId] = eff.pushSteps;
             }
             break;
         }
@@ -505,7 +515,11 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
 struct UserBindingEntry {
     std::string    matchOwned;
     std::string    shortNameOwned;
-    PluginBindings bindings{};
+    // One synthesized PluginBindings per FX-Learn layer (Normal/Option/
+    // Control). lookupBindingsByName returns the active layer's; identity
+    // checks (owns / layerIndexOf) scan all layers so a BC plug-in stays
+    // classified as BC regardless of which modifier is held.
+    PluginBindings bindings[uf8::kNumFxLayers]{};
     uf8::Domain    domain = uf8::Domain::None;
     // Metering passthrough — copied from the source UserPluginMap so the
     // GR poll can read an explicit VST3 param when the plug-in doesn't
@@ -523,7 +537,15 @@ struct UserBindingEntry {
     // type. Lifetime = cache entry lifetime; pushStepsForButton() returns
     // pointers into this, consumed on the same main thread before any
     // rebuild.
-    std::array<std::vector<uf8::PushStep>, 0x20> buttonSteps;
+    std::array<std::vector<uf8::PushStep>, 0x20> buttonSteps[uf8::kNumFxLayers];
+
+    // Identity helpers — `b` may point at any layer's PluginBindings.
+    int layerIndexOf(const PluginBindings* b) const {
+        for (int l = 0; l < uf8::kNumFxLayers; ++l)
+            if (&bindings[l] == b) return l;
+        return -1;
+    }
+    bool owns(const PluginBindings* b) const { return layerIndexOf(b) >= 0; }
 };
 
 std::mutex                                       g_userCacheMutex;
@@ -560,9 +582,11 @@ void rebuildUserCache_locked_()
         e->grOffsetDb     = um.metering.grOffsetDb;
         for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
         for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];
-        e->bindings.match     = e->matchOwned.c_str();
-        e->bindings.shortName = e->shortNameOwned.c_str();
-        synthesizeUserBinding_(um, e->bindings, &e->buttonSteps);
+        for (int l = 0; l < uf8::kNumFxLayers; ++l) {
+            e->bindings[l].match     = e->matchOwned.c_str();
+            e->bindings[l].shortName = e->shortNameOwned.c_str();
+            synthesizeUserBinding_(um, e->bindings[l], l, &e->buttonSteps[l]);
+        }
         g_userCache.push_back(std::move(e));
     }
     g_userCacheGeneration =
@@ -592,7 +616,7 @@ bool isBusCompBinding(const PluginBindings* b)
     // User-synthesized BC bindings: walk the cache and check ownership.
     std::lock_guard<std::mutex> lk(g_userCacheMutex);
     for (const auto& e : g_userCache) {
-        if (&e->bindings == b) return e->domain == uf8::Domain::BusComp;
+        if (e->owns(b)) return e->domain == uf8::Domain::BusComp;
     }
     return false;
 }
@@ -608,8 +632,9 @@ pushStepsForButton(const PluginBindings* channelMap, uint8_t buttonId)
     // cache, so no rebuild can intervene between this call and its use.
     std::lock_guard<std::mutex> lk(g_userCacheMutex);
     for (const auto& e : g_userCache) {
-        if (&e->bindings != channelMap) continue;
-        const auto& v = e->buttonSteps[buttonId];
+        const int l = e->layerIndexOf(channelMap);
+        if (l < 0) continue;
+        const auto& v = e->buttonSteps[l][buttonId];
         return v.empty() ? nullptr : &v;
     }
     return nullptr;
@@ -628,15 +653,64 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName)
     }
 
     // User catalog fallback — synthesize a UC1 PluginBindings on first
-    // touch, cache it, return the stable pointer.
+    // touch, cache it, return the active FX-Learn layer's stable pointer.
+    // The active layer is resolved from held Option/Control (recomputed once
+    // per onTimer tick); a control with no overlay on that layer was
+    // synthesized to fall back to its Normal mapping, so the returned binding
+    // is correct for every control.
+    int L = reasixty_fxLearnActiveLayer();
+    if (L < 0 || L >= uf8::kNumFxLayers) L = uf8::FxLayer::Normal;
     refreshUserCache_();
     std::lock_guard<std::mutex> lk(g_userCacheMutex);
     for (const auto& e : g_userCache) {
         if (fxName.find(e->matchOwned) != std::string_view::npos) {
-            return &e->bindings;
+            return &e->bindings[L];
         }
     }
     return nullptr;
+}
+
+int hudParamForControl(const PluginBindings* b, bool busComp,
+                       int linkIdx, bool isButton, bool* outInverted)
+{
+    if (outInverted) *outInverted = false;
+    if (!b) return kParamNone;
+    const LinkToUc1* table = busComp ? kBcLinkToUc1 : kCsLinkToUc1;
+    const int n = busComp
+        ? static_cast<int>(sizeof(kBcLinkToUc1) / sizeof(kBcLinkToUc1[0]))
+        : static_cast<int>(sizeof(kCsLinkToUc1) / sizeof(kCsLinkToUc1[0]));
+    for (int i = 0; i < n; ++i) {
+        if (table[i].linkIdx != linkIdx) continue;
+        if (isButton) {
+            const uint8_t bid = table[i].buttonId;
+            if (bid == kNoUc1) return kParamNone;
+            if (outInverted) *outInverted = b->buttonInverted[bid];
+            // Bypass buttons (linkIdx 0) drive plugin enable, not a mapped
+            // param — buttonParam is -1 but the binding still owns the control
+            // via bypassParam. Report that so the HUD shows it as "mapped".
+            int p = b->buttonParam[bid];
+            if (p < 0 && linkIdx == 0) p = b->bypassParam;
+            return p;
+        }
+        const uint8_t kid = table[i].knobId;
+        if (kid == kNoUc1) return kParamNone;
+        if (outInverted) *outInverted = b->inverted[kid];
+        return b->knobParam[kid];
+    }
+    return kParamNone;
+}
+
+int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)
+{
+    const LinkToUc1* table = busComp ? kBcLinkToUc1 : kCsLinkToUc1;
+    const int n = busComp
+        ? static_cast<int>(sizeof(kBcLinkToUc1) / sizeof(kBcLinkToUc1[0]))
+        : static_cast<int>(sizeof(kCsLinkToUc1) / sizeof(kCsLinkToUc1[0]));
+    for (int i = 0; i < n; ++i) {
+        const uint8_t id = isButton ? table[i].buttonId : table[i].knobId;
+        if (id != kNoUc1 && id == controlId) return table[i].linkIdx;
+    }
+    return -1;
 }
 
 ControlDomain classifyKnob(uint8_t knobId)
@@ -734,7 +808,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
         {
             std::lock_guard<std::mutex> lk(g_userCacheMutex);
             for (const auto& e : g_userCache) {
-                if (&e->bindings == b) {
+                if (e->owns(b)) {
                     grParam = e->grVst3Param;
                     grOff   = e->grOffsetDb;
                     bcVuCal = e->bcVuCalDb;
@@ -793,7 +867,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                 {
                     std::lock_guard<std::mutex> lk(g_userCacheMutex);
                     for (const auto& e : g_userCache) {
-                        if (&e->bindings == bb) {
+                        if (e->owns(bb)) {
                             grParam = e->grVst3Param;
                             grOff   = e->grOffsetDb;
                             bcVuCal = e->bcVuCalDb;
