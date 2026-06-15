@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.15
+date: v0.1.27
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.15. Earlier manuals (anything dated before 2026-05-27) are superseded.
+This manual documents Rea-Sixty v0.1.27. Earlier manuals (anything dated before 2026-06-15) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.1.7.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.1.7.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.1.7.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.1.27.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.1.27.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.1.27.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
 
 ## Enabling the surface
 
@@ -539,6 +539,8 @@ Default is **26.5 dB/s** — REAPER's own meter decay, so the UC1 input meter fa
 | Keyboard Cmd acts as Cmd modifier | Same, for Cmd on macOS. |
 | Keyboard Ctrl acts as Ctrl modifier | Same, for Ctrl on Windows / Linux. |
 | Shift activates Fine mode (V-Pots / encoders, not faders) | When on, holding the Shift modifier (keyboard Shift, UF8 `FINE` key, or UC1 `Fine` button) drops V-Pot + encoder step size to ×0.25 for momentary fine resolution. Faders are deliberately excluded (they already have Alt-drag for fine control). Stacks with the UC1 `Fine` toggle. Off by default. |
+| Hold Option for the FX-Learn Option layer | Enables the **Option** FX-Learn modifier layer (UC1). When on, holding **Option/Alt** on the host keyboard switches the active layer so a control drives its Option-overlay parameter / value instead of its Normal mapping. See FX Learn pane → Modifier layers. Off by default. |
+| Hold Control for the FX-Learn Control layer | Same, for the **Control** layer (hold **Control**). Holding both, or neither, resolves to Normal. Off by default. |
 
 ### Pending
 
@@ -565,6 +567,10 @@ Re-themes every Settings panel + the FX Learn schematic. Hardware-face colours (
 ### Font Size
 
 Three-way radio: **Small** / **Normal** / **Large**. Drives every Settings widget except the UF8 / UC1 mockup schematic labels — those stay locked at 12 px so the schematics don't reflow when the picker changes. Numeric inputs (GR-cal table, FX Learn binding column) scale with the font picker so layouts stay aligned across sizes.
+
+### Spelling
+
+Two-way radio: **British (Colour, Grey)** / **American (Color, Gray)**. Switches the spelling of every user-facing string that differs between the two (Settings labels, the focused-track panel's right-click menu, etc.). British is the default.
 
 \newpage
 
@@ -762,6 +768,15 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 - **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump. Re-binding a slot to a *different* parameter clears its custom label (the label named the old param), so the field and the readout stay in agreement.
 - **Save feel to** / **Apply feel from** / **Clear preset** (UC1 knobs + UF8 V-Pots only) — reusable tuning presets; see *Feel presets* below.
 
+### Modifier layers (Normal / Option / Control)
+
+A user-mapped UC1 control can carry **three independent overlays** — *Normal*, *Option*, *Control* — so the same physical knob or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on a held keyboard modifier.
+
+- **Editing:** the editor's layer tab strip selects which layer you're editing; every per-control edit (bind, invert, Display label, knob travel, push-cycle) applies to the selected layer. Controls with no overlay on the active layer show a dim "ghost" ring — at runtime they inherit their Normal mapping.
+- **Enabling at runtime:** tick *Settings → Device → Keyboard Options → "Hold Option / Control for the FX-Learn layer"*. Then holding **Option/Alt** selects the Option layer and **Control** the Control layer; both-or-neither resolves to Normal. The held modifier drives dispatch, the UC1 LCD readout, and the Learn-HUD's layer badge live.
+- **Fallback:** an overlay left unmapped passes through to the Normal mapping for that control, so you only override the controls you want different under a modifier.
+- **Scope:** UC1 only. The Display label (custom name) is **per layer** — each layer can show its own name on the UC1 readout / Learn-HUD.
+
 ### Knob travel + curve editor
 
 Every user-learned FX-Learn slot and every UF8 V-Pot binding can carry a custom range, response curve, and encoder sensitivity. Defaults (Min=0, Max=1, sensitivity=1, no curve) make the maths byte-identical to a plain linear mapping, so untouched bindings behave exactly as if the feature wasn't there.
@@ -953,6 +968,44 @@ Section appears only when the build is Linux.
 
 - Lists the diagnostic log paths (`/tmp/reaper_uf8_frames.log`, `/tmp/reaper_uf8_colors.log`, etc.).
 - **Reveal /tmp in Finder** button (macOS only — equivalent on other platforms TBD).
+
+\newpage
+
+# On-Screen Display
+
+Rea-Sixty draws several optional helpers on REAPER's own screen. Each is rendered by a companion script that auto-installs and auto-starts with the extension — no manual ReaScript setup. Enable the overlay + panel in the Settings window; the Learn-HUD is toggled by an action.
+
+## MCP Inserts overlay
+
+A highlight drawn directly on the Mixer's track Inserts (FX) list, marking the **active Channel-Strip** plug-in (default **yellow**) and **active Bus-Comp** plug-in (default **red**) on the surface-focused track / BC anchor. The default is an **outline only** (Fill opacity 0).
+
+Enable via *Settings → "Show MCP Inserts overlay"*. Controls (the CS / BC colours are shared with the focused-track panel):
+
+- **CS colour / BC colour** pickers.
+- **Fill opacity** (0 = outline only) and **Border opacity**.
+- **Inserts row height** and **Inserts top offset** — fine-tune the box to line up with your theme's FX-list rows.
+
+## Focused-track panel
+
+A frameless, Gridbox-style box that floats on the Arrange (or any window you drag it onto), showing the surface-focused track's **name**, its active **CS / BC plug-in names**, and the last-touched parameter per domain. A touched parameter shows your custom **Display label** when one is set (for the held FX-Learn layer), matching the surface readout.
+
+Enable via *Settings → "Show focused-track panel"*. Drag the body to move, drag the edges to resize; position + size persist. Right-click menu:
+
+- **Layout** — Two lines (CS / BC) or One line.
+- **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*.
+- **Customize** — Font size, Corner radius, Background / Border / CS / BC colour.
+- **Move to Transport**, **Close panel**.
+
+## Learn-HUD
+
+A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each knob / button does without opening Settings.
+
+- Toggle with the **`learn_hud_toggle`** built-in (bind it to a surface button) or the REAPER action **"Rea-Sixty: Toggle Learn-HUD"** (`REASIXTY_LEARN_HUD_TOGGLE`). There is no Settings checkbox.
+- **CS / BC tabs** at the top, auto-following the focused domain (click to pin one).
+- Each row = the SSL slot name + the bound parameter's name (or your custom Display label). Rows are grouped by section (Filter / EQ / Dynamics / Gate / I-O for CS; the Bus-Comp knobs for BC), with Dynamics + Gate in a right-hand column to mirror the hardware.
+- A **layer badge** (NORM / OPT / CTRL) shows the held FX-Learn modifier layer; the list and the badge follow it live.
+- **Right-click → Text size** (Small … Huge). The window size persists globally.
+- **Click a row, then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
 
 \newpage
 
@@ -1148,6 +1201,8 @@ When held, these shift every other binding to its modifier slot. The three match
 
 - **`flip`** — swap fader and V-Pot values for the active routing target (e.g. swap send level and send pan between V-Pot ring and motorised fader).
 - **`pan_force`** — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO when you need pan back quickly.
+- **`learn_hud_toggle`** — show / hide the **Learn-HUD** (focused plug-in's assignments). Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle Learn-HUD* (`REASIXTY_LEARN_HUD_TOGGLE`). See *On-Screen Display → Learn-HUD*.
+- **`focused_panel_toggle`** — show / hide the frameless **focused-track panel**. See *On-Screen Display → Focused-track panel*.
 - **`uc1_outgain_fader_toggle`** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 
 ## Internal (not user-bindable)
@@ -1414,16 +1469,6 @@ ReaImGui isn't installed. Install it via ReaPack. Hardware control still works w
 - `/tmp/rea_sixty_uc1_stale.log` — UC1 device-handle diagnostics
 - `/tmp/rea_sixty_uf8_stale.log` — UF8 device-handle diagnostics
 - macOS Console / Windows Event Viewer / Linux journal for in-process errors
-
-\newpage
-
-# Known limitations
-
-- **Multi-UF8 support deferred.** Single-device assumption in bank-shift / colour-sync / VU-meter paths. The Connected devices list shows multi-UF8 setups but drag-to-reorder is greyed out.
-- **No SSL Plug-in Mixer side panel** (the on-screen Mixer view alongside the Settings tabs) — Phase 2.6 on the roadmap, not in this build.
-- **macOS: pre-built binaries are Apple Silicon only.** Intel Macs are supported by building from source — the CMake build auto-detects the Homebrew prefix (`brew --prefix`) and works on both architectures without flags.
-- **Layer 3 LED hardware quirk** on certain UF8 units — confirmed not fixable from code; layer functionality still works.
-- **Firmware update breakage** is on the project to chase. Protocol is self-decoded; SSL gives no compatibility guarantees.
 
 \newpage
 

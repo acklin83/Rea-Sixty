@@ -70,11 +70,11 @@ end
 
 -- Design tunables, read live from ExtState (set in Settings → Inserts). Colours
 -- are stored as 0xRRGGBB ints; drive BOTH the MCP highlight and the dock panel.
-local function csRgb()  return math.floor(num("overlay_cs_col", 0x33C0FF)) & 0xFFFFFF end
-local function bcRgb()  return math.floor(num("overlay_bc_col", 0xFFB000)) & 0xFFFFFF end
+local function csRgb()  return math.floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
+local function bcRgb()  return math.floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
 local function csCol()  return csRgb() | ALPHA end
 local function bcCol()  return bcRgb() | ALPHA end
-local function fillA()  return num("overlay_fill_a", 0.32) end
+local function fillA()  return num("overlay_fill_a", 0.0) end
 local function lineA()  return num("overlay_line_a", 0.90) end
 
 local STEP = 16

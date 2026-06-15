@@ -1,4 +1,4 @@
--- @description Rea-Sixty — Assignment HUD (companion)
+-- @description Rea-Sixty — Learn-HUD (companion)
 -- @author Störsender
 -- @version 0.1.0
 -- @provides [main] .
@@ -17,7 +17,7 @@
 --     • "rea_sixty"/"hud_assign"   — one line per mapped control "<idx>;<name>;<inv>"
 --   Run once to start (background defer); run again (or untick the Settings
 --   checkbox) to stop. Dock state persists. Requires the Rea-Sixty extension
---   with "Assignment HUD" enabled.
+--   the Learn-HUD toggled on (learn_hud_toggle built-in / REASIXTY_LEARN_HUD_TOGGLE).
 
 local _, _, sectionID, cmdID = reaper.get_action_context()
 
@@ -46,8 +46,16 @@ local function num(key, def)
   if v == nil then return def end
   return v
 end
-local function csRgb() return math.floor(num("overlay_cs_col", 0x33C0FF)) & 0xFFFFFF end
-local function bcRgb() return math.floor(num("overlay_bc_col", 0xFFB000)) & 0xFFFFFF end
+local function csRgb() return math.floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
+local function bcRgb() return math.floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
+
+-- User-adjustable text size (right-click menu). Multiplies all font sizes +
+-- the column geometry so the layout scales as one. Persisted in ExtState.
+local function fontScale()
+  local v = num("hud_font", 1.5)
+  if v < 0.8 then v = 0.8 elseif v > 2.6 then v = 2.6 end
+  return v
+end
 
 local function gset(rgb, a)
   gfx.set(((rgb >> 16) & 0xFF) / 255, ((rgb >> 8) & 0xFF) / 255,
@@ -57,8 +65,9 @@ end
 ------------------------------------------------------------------------
 -- Geometry: parse "hud_geom_uc1" once (cache by raw string).
 --   header: "UC1;<W>;<H>"
---   control: "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>"
+--   control: "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>;<section>"
 --            shape 0=knob 1=toggle 2=dynbtn ; dom 'c'=CS 'b'=BC
+-- NB the device token is "UC1" (letters + a digit) — match it with %w, not %a.
 ------------------------------------------------------------------------
 local geomRaw = nil
 local geom    = { w = 860, h = 660, ctrl = {} }
@@ -68,17 +77,17 @@ local function parseGeom(raw)
   local first = true
   for line in raw:gmatch("[^\n]+") do
     if first then
-      local dev, w, h = line:match("^(%a+);(%d+);(%d+)")
+      local dev, w, h = line:match("^(%w+);(%d+);(%d+)")
       if w then g.w = tonumber(w); g.h = tonumber(h) end
       first = false
     else
-      local idx, shape, cx, cy, r, w, h, dom, label =
-        line:match("^(%d+);(%d+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);(%a);(.*)$")
+      local idx, shape, cx, cy, r, w, h, dom, label, sec =
+        line:match("^(%d+);(%d+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);(%a);([^;]*);(.*)$")
       if idx then
         g.ctrl[tonumber(idx)] = {
           shape = tonumber(shape), cx = tonumber(cx), cy = tonumber(cy),
           r = tonumber(r), w = tonumber(w), h = tonumber(h),
-          dom = dom, label = label or "",
+          dom = dom, label = label or "", sec = sec or "",
         }
       end
     end
@@ -100,13 +109,18 @@ end
 local function readState()
   local raw = reaper.GetExtState(SECT, "hud_state")
   -- "UC1;<csPresent>;<bcPresent>;<focusDom c/b/n>;<csShort>;<bcShort>"
-  local dev, cs, bc, fdom, csN, bcN =
-    raw:match("^(%a+);(%d);(%d);(%a);([^;]*);(.*)$")
+  -- "UC1;<cs>;<bc>;<fdom>;<layer>;<csShort>;<bcShort>"
+  -- device token is "UC1" (has a digit) → %w, not %a (the old %a broke the
+  -- whole match, so csPresent/bcPresent/focusDom silently defaulted to off).
+  -- layer = held-modifier FX-Learn layer (0=Normal 1=Option 2=Control).
+  local dev, cs, bc, fdom, layer, csN, bcN =
+    raw:match("^(%w+);(%d);(%d);(%a);(%d);([^;]*);(.*)$")
   return {
     dev = dev or "UC1",
     csPresent = (cs == "1"),
     bcPresent = (bc == "1"),
     focusDom = fdom or "n",
+    layer = tonumber(layer) or 0,
     csShort = csN or "",
     bcShort = bcN or "",
   }
@@ -122,11 +136,13 @@ local tabRects     = {}   -- {dom,x,y,w,h} filled by drawTabs for hit-testing
 -- owns the bind logic; this script only hit-tests + sends commands via
 -- ExtState "hud_cmd" ("learn;<idx>" / "cancel") and reads back the armed
 -- control idx from "hud_state"-sibling key "hud_learn".
-local ctrlRects = {}      -- {idx,shape,x,y,r,w,h} filled by drawControl
+local ctrlRects = {}      -- {idx,shape,x,y,w,h} row hit-rects (rebuilt each frame)
 local learnIdx  = -1      -- armed control idx (authoritative, from extension)
 local frame     = 0       -- frame counter for the learn pulse
 local hintText  = ""      -- transient hint ("Factory map — not editable")
 local hintFrames = 0
+local scrollY    = 0      -- text-list vertical scroll (mouse wheel)
+local maxScroll  = 0      -- clamp, recomputed each layout
 
 local function sendCmd(s) reaper.SetExtState(SECT, "hud_cmd", s, false) end
 
@@ -148,14 +164,34 @@ end
 local winOpen   = false
 local rcPrev    = 0     -- previous right-button state (context-menu edge detect)
 local lcPrev    = 0     -- previous left-button state (tab-click edge detect)
--- Default close to the native 860×660 aspect (+ header + footer) so controls
--- aren't crushed; fonts scale with the draw size, and the user can resize.
-local DEF_W, DEF_H = 820, 690
+local DEF_W, DEF_H = 500, 500    -- default floating size
+local savedW, savedH = DEF_W, DEF_H   -- last persisted floating size
 
 local function winWanted() return reaper.GetExtState(SECT, "hud_on") == "1" end
 
+-- Persist the floating window size GLOBALLY (across projects) so a resize
+-- sticks. Only while floating (docked size is the docker's business) and only
+-- on change, to avoid spamming ExtState every frame.
+-- CRITICAL: with gfx.ext_retina on, gfx.w/h report PHYSICAL pixels (2× on a
+-- Retina display) but gfx.init expects LOGICAL points — so storing gfx.w raw
+-- and feeding it back DOUBLES the window every session (runaway → huge). Divide
+-- by the live retina scale and store logical points.
+local function saveSizeIfChanged()
+  if not winOpen then return end
+  if (gfx.dock(-1) & 1) == 1 then return end          -- docked → don't capture
+  local sc = gfx.ext_retina; if not sc or sc < 1 then sc = 1 end
+  local w = math.floor(gfx.w / sc + 0.5)
+  local h = math.floor(gfx.h / sc + 0.5)
+  if w > 50 and h > 50 and (w ~= savedW or h ~= savedH) then
+    savedW, savedH = w, h
+    reaper.SetExtState(SECT, "hud_w", tostring(w), true)
+    reaper.SetExtState(SECT, "hud_h", tostring(h), true)
+  end
+end
+
 local function winClose(persistOff)
   if winOpen then
+    saveSizeIfChanged()
     local dock = gfx.dock(-1)
     reaper.SetExtState(SECT, "hud_dock", tostring(dock or 0), true)
     gfx.quit()
@@ -164,15 +200,46 @@ local function winClose(persistOff)
   if persistOff then reaper.SetExtState(SECT, "hud_on", "0", true) end
 end
 
+-- Text-size presets offered in the right-click menu.
+local FONT_PRESETS = {
+  { l = "Small",       v = 1.0 },
+  { l = "Medium",      v = 1.25 },
+  { l = "Large",       v = 1.5 },
+  { l = "Extra Large", v = 1.9 },
+  { l = "Huge",        v = 2.3 },
+}
+
 local function contextMenu()
   local docked = (gfx.dock(-1) & 1) == 1
   gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
-  local menu = (docked and "!" or "") .. "Dock window in Docker|Close HUD"
+  local fs = fontScale()
+  -- "Text size" submenu with a tick on the current preset.
+  local sub = {}
+  for _, p in ipairs(FONT_PRESETS) do
+    sub[#sub + 1] = (math.abs(fs - p.v) < 0.01 and "!" or "") .. p.l
+  end
+  sub[#sub] = "<" .. sub[#sub]      -- mark the last submenu item
+  -- "Text colour" submenu — list text in the CS/BC domain colour or plain white.
+  local white = (reaper.GetExtState(SECT, "hud_text_white") == "1")
+  local colSub = (white and "" or "!") .. "CS / BC colour|<" .. (white and "!" or "") .. "White"
+  local menu = (docked and "!" or "") .. "Dock window in Docker|>Text size|"
+             .. table.concat(sub, "|")
+             .. "|>Text colour|" .. colSub
+             .. "|Close HUD"
   local sel = gfx.showmenu(menu)
+  -- Item order: 1=Dock, 2..(1+N)=font presets, (2+N)=CS/BC colour,
+  -- (3+N)=White, (4+N)=Close.  N = #FONT_PRESETS.
+  local N = #FONT_PRESETS
   if sel == 1 then
     if docked then gfx.dock(0) else gfx.dock(1) end
     reaper.SetExtState(SECT, "hud_dock", tostring(gfx.dock(-1) or 0), true)
-  elseif sel == 2 then
+  elseif sel >= 2 and sel <= 1 + N then
+    reaper.SetExtState(SECT, "hud_font", tostring(FONT_PRESETS[sel - 1].v), true)
+  elseif sel == 2 + N then
+    reaper.SetExtState(SECT, "hud_text_white", "0", true)
+  elseif sel == 3 + N then
+    reaper.SetExtState(SECT, "hud_text_white", "1", true)
+  elseif sel == 4 + N then
     winClose(true)
   end
 end
@@ -180,7 +247,7 @@ end
 ------------------------------------------------------------------------
 -- Render.
 ------------------------------------------------------------------------
-local TAB_H = 30
+local TAB_H = 36
 
 -- Truncate a string to fit `maxw` px (current font), adding an ellipsis.
 local function fit(s, maxw)
@@ -202,8 +269,8 @@ local function drawTabs(st)
   local function tab(dom, present, short, x)
     local name = (dom == "cs") and "CS" or "BC"
     local label = name .. ((present and short ~= "") and ("  " .. short) or "")
-    gfx.setfont(1, "Arial", 16)
-    local w = gfx.measurestr(label) + 24
+    gfx.setfont(2, "Arial", math.floor(17 * fontScale() + 0.5))
+    local w = gfx.measurestr(label) + 28
     local active = (activeTab == dom)
     local rgb = (dom == "cs") and csRgb() or bcRgb()
     if active then gset(rgb, present and 0.30 or 0.16)
@@ -219,6 +286,28 @@ local function drawTabs(st)
   local x = 8
   x = tab("cs", st.csPresent, st.csShort, x)
   x = tab("bc", st.bcPresent, st.bcShort, x)
+
+  -- Active modifier-layer badge (far right). NORM = dim (no overlay); OPT/CTRL
+  -- light up so a changed param list reads as "this is that overlay layer".
+  -- Layers apply to UC1 user maps only — built-ins ignore the held modifier.
+  local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL") or "NORM"
+  gfx.setfont(2, "Arial", math.floor(13 * fontScale() + 0.5))
+  local bw = gfx.measurestr(name) + 20
+  local bh = TAB_H - 12
+  local bx = gfx.w - bw - 8
+  local by = 6
+  if st.layer == 0 then
+    gfx.set(0.16, 0.16, 0.18, 1); gfx.rect(bx, by, bw, bh, 1)
+    gset(0x8890A0, 0.7)
+    gfx.x, gfx.y = bx + 10, by + math.floor((bh - gfx.texth) / 2)
+    gfx.drawstr(name)
+  else
+    local lc = (st.layer == 1) and 0x30C8A0 or 0xC878FF   -- OPT teal / CTRL purple
+    gset(lc, 0.92); gfx.rect(bx, by, bw, bh, 1)
+    gfx.set(0.07, 0.07, 0.08, 1)                          -- dark text on bright
+    gfx.x, gfx.y = bx + 10, by + math.floor((bh - gfx.texth) / 2)
+    gfx.drawstr(name)
+  end
 end
 
 -- Click a tab (called from the loop on a left-button edge). Returns true if a
@@ -253,82 +342,193 @@ local function handleControlClick(mx, my)
   return false
 end
 
-local function drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
-  local x  = ox + c.cx * sc
-  local y  = oy + c.cy * sc
-  local isBc = (c.dom == "b")
-  local present = isBc and st.bcPresent or st.csPresent
-  local a = asn[c.idx]
-  local mapped = (a ~= nil)
-  local rgb = isBc and bcRgb() or csRgb()
+------------------------------------------------------------------------
+-- Grouped text list (replaces the hardware-faithful scatter, which wasted
+-- space + truncated names). Each row = silk label + the FULL bound param
+-- name, grouped under section headers, flowed into columns.
+------------------------------------------------------------------------
+-- Section display order per domain. Controls bucket into these; any unlisted
+-- section is appended in first-seen order. (Sections come from the geometry's
+-- ;<section> field, sourced from kUc1Controls in the extension.)
+local SECTION_ORDER = {
+  cs = { "Filter", "EQ", "Dynamics", "Gate", "I/O & Channel" },
+  bc = { "Bus Comp" },
+}
 
-  -- Ring colour conveys state; the base shape stays clearly visible in ALL
-  -- states (mapped / present-unmapped / absent) so the device always reads as
-  -- a device even with nothing focused. Thick ring for contrast.
-  local col, alpha
-  if mapped       then col, alpha = rgb,      1.0
-  elseif present  then col, alpha = 0xC6CDD6, 0.95
-  else                 col, alpha = 0x808892, 0.55 end
-  local fillRgb = present and 0x3C4654 or 0x2C333D
+-- Fixed column assignment per domain — mirrors the UC1 hardware: filters + EQ
+-- (and I/O) on the LEFT, the Dynamics + Gate sections on the RIGHT. Sections
+-- not listed here get appended to the last column.
+local COLUMN_SECTIONS = {
+  cs = { { "Filter", "EQ", "I/O & Channel" }, { "Dynamics", "Gate" } },
+  bc = { { "Bus Comp" } },
+}
 
+-- Bucket the active domain's controls by section name (each list sorted by idx).
+local function groupControls(domChar)
+  local by = {}
+  for idx, c in pairs(geom.ctrl) do
+    if c.dom == domChar then
+      c.idx = idx
+      local s = (c.sec ~= "" and c.sec) or "Other"
+      local list = by[s]; if not list then list = {}; by[s] = list end
+      list[#list + 1] = c
+    end
+  end
+  for _, list in pairs(by) do
+    table.sort(list, function(a, b) return a.idx < b.idx end)
+  end
+  return by
+end
+
+-- Draw one control row at (x,y); records a hit-rect for learn.
+local function drawRow(c, x, y, rowW, labelW, lineH, rowFont, present, rgb, asn)
+  local a        = asn[c.idx]
+  local mapped   = (a ~= nil)
   local learning = (c.idx == learnIdx)
-  -- Learn-mode pulse (triangle wave) applied to the ring.
-  local pulse = 0.45 + 0.45 * math.abs((frame % 50) / 25 - 1)
 
-  local lx, ly = x, y     -- label centre
-  if c.shape == 0 then
-    -- knob — filled cap + a ring 2 px thick.
-    local r = math.max(5, c.r * sc)
-    gset(fillRgb, 1); gfx.circle(x, y, r, 1, 1)
-    gset(col, alpha)
-    gfx.circle(x, y, r, 0, 1); gfx.circle(x, y, r - 1, 0, 1)
-    if mapped then gfx.circle(x, y, r + 1, 0, 1) end
-    if learning then
-      gset(0xFFFFFF, pulse)
-      gfx.circle(x, y, r + 2, 0, 1); gfx.circle(x, y, r + 3, 0, 1)
-    end
-    ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = 0, x = x, y = y, r = r }
-  else
-    -- toggle / dyn button — filled box + a 2 px border.
-    local w = math.max(10, c.w * sc)
-    local h = math.max(10, c.h * sc)
-    gset(fillRgb, 1); gfx.rect(x, y, w, h, 1)
-    gset(col, alpha)
-    gfx.rect(x, y, w, h, 0)
-    if w > 2 and h > 2 then gfx.rect(x + 1, y + 1, w - 2, h - 2, 0) end
-    if learning then
-      gset(0xFFFFFF, pulse)
-      gfx.rect(x - 2, y - 2, w + 4, h + 4, 0); gfx.rect(x - 3, y - 3, w + 6, h + 6, 0)
-    end
-    ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = 1, x = x, y = y, w = w, h = h }
-    lx, ly = x + w / 2, y + h / 2     -- centre for the label
+  if learning then
+    local pulse = 0.22 + 0.22 * math.abs((frame % 50) / 25 - 1)
+    gset(0xFFFFFF, pulse); gfx.rect(x - 3, y - 1, rowW + 6, lineH, 1)
   end
 
-  -- Silk label (4-char) centred on the control.
-  if c.label ~= "" then
-    gfx.setfont(1, "Arial", silkFont)
-    gset(0xE2E6EC, present and 1.0 or 0.7)
-    local lw = gfx.measurestr(c.label)
-    gfx.x, gfx.y = lx - lw / 2, ly - gfx.texth / 2
-    gfx.drawstr(c.label)
+  -- Silk label (left), state-coloured.
+  local labCol, labA
+  if mapped       then labCol, labA = rgb,      1.0
+  elseif present  then labCol, labA = 0xC6CDD6, 0.95
+  else                 labCol, labA = 0x808892, 0.5 end
+  gfx.setfont(1, "Arial", rowFont)
+  gset(labCol, labA)
+  gfx.x, gfx.y = x, y + 1
+  gfx.drawstr(c.label)
+
+  -- Param name (right of the label), full — fit() is only a last-ditch guard.
+  local txt, pCol, pA
+  if mapped then
+    txt = a.name; if a.inv then txt = txt .. "  inv" end
+    pCol, pA = rgb, 1.0
+  elseif present then txt, pCol, pA = "\xE2\x80\x94", 0x9097A0, 0.7   -- em dash
+  else                txt, pCol, pA = "\xE2\x80\x94", 0x707880, 0.45 end
+  gset(pCol, pA)
+  gfx.x, gfx.y = x + labelW, y + 1
+  gfx.drawstr(fit(txt, rowW - labelW))
+
+  ctrlRects[#ctrlRects + 1] =
+    { idx = c.idx, shape = 1, x = x - 3, y = y - 1, w = rowW + 6, h = lineH }
+end
+
+-- Lay out + draw the grouped text list for the active domain. Fixed columns
+-- (hardware-ish), font scaled by the user's text-size preset. Updates ctrlRects
+-- + maxScroll.
+local function renderList(st, asn)
+  local domChar = (activeTab == "cs") and "c" or "b"
+  local present = (activeTab == "cs") and st.csPresent or st.bcPresent
+  -- List text in the domain colour (CS/BC) or plain white (right-click → Text
+  -- colour). Tabs keep their domain colour as the key. Headers + mapped rows +
+  -- param names all read this `rgb`.
+  local rgb     = (activeTab == "cs") and csRgb() or bcRgb()
+  if reaper.GetExtState(SECT, "hud_text_white") == "1" then rgb = 0xFFFFFF end
+  local by      = groupControls(domChar)
+
+  local fs       = fontScale()
+  local rowFont  = math.floor(16 * fs + 0.5)
+  local headFont = math.floor(15 * fs + 0.5)
+
+  local M      = 14
+  local top    = TAB_H + 10
+  local bottom = gfx.h - 8
+  if gfx.w - 2 * M < 60 or bottom - top < 40 then return end
+
+  -- Row metrics from the (scaled) row font. Column widths come from the ACTUAL
+  -- content — left = widest control (SSL slot) label in this domain, right =
+  -- widest param name — so the two name columns never overlap or truncate
+  -- whatever the names turn out to be.
+  gfx.setfont(1, "Arial", rowFont)
+  local lineH  = gfx.texth + math.floor(5 * fs + 0.5)
+  local labelW = 0
+  for _, list in pairs(by) do
+    for _, c in ipairs(list) do
+      local w = gfx.measurestr(c.label)
+      if w > labelW then labelW = w end
+    end
+  end
+  labelW = labelW + math.floor(18 * fs + 0.5)
+  local paramW = gfx.measurestr("Threshold")
+  for _, a in pairs(asn) do
+    local w = gfx.measurestr(a.name or "")
+    if w > paramW then paramW = w end
+  end
+  local colW = labelW + paramW + math.floor(20 * fs + 0.5)
+  gfx.setfont(1, "Arial", headFont)
+  local headH  = gfx.texth + math.floor(11 * fs + 0.5)
+  local gap    = math.floor(8 * fs + 0.5)
+  local colGap = math.floor(16 * fs + 0.5)
+
+  -- Column section assignment (fall back to one column = display order).
+  local cols = COLUMN_SECTIONS[activeTab] or { SECTION_ORDER[activeTab] or {} }
+  local assigned = {}
+  for _, cset in ipairs(cols) do for _, s in ipairs(cset) do assigned[s] = true end end
+  local leftover = {}
+  for _, s in ipairs(SECTION_ORDER[activeTab] or {}) do
+    if by[s] and not assigned[s] then leftover[#leftover + 1] = s; assigned[s] = true end
+  end
+  for s in pairs(by) do
+    if not assigned[s] then leftover[#leftover + 1] = s; assigned[s] = true end
   end
 
-  -- Param name under mapped controls, in the domain colour.
-  if mapped and a.name ~= "" then
-    gfx.setfont(1, "Arial", paramFont)
-    local r = (c.shape == 0) and (c.r * sc) or (c.h * sc / 2)
-    local txt = fit(a.name, 120)
-    if a.inv then txt = txt .. " inv" end
-    local tw = gfx.measurestr(txt)
-    gset(rgb, 1)
-    gfx.x, gfx.y = lx - tw / 2, ly + r + 2
-    gfx.drawstr(txt)
+  -- LAYOUT pass.
+  local items, peakY = {}, top
+  for ci, cset in ipairs(cols) do
+    local x = M + (ci - 1) * (colW + colGap)
+    local y = top
+    local secList = cset
+    if ci == #cols and #leftover > 0 then
+      secList = {}
+      for _, s in ipairs(cset)     do secList[#secList + 1] = s end
+      for _, s in ipairs(leftover) do secList[#secList + 1] = s end
+    end
+    for _, s in ipairs(secList) do
+      local ctrls = by[s]
+      if ctrls and #ctrls > 0 then
+        items[#items + 1] = { kind = "head", x = x, y = y, text = s }
+        y = y + headH
+        for _, c in ipairs(ctrls) do
+          items[#items + 1] = { kind = "row", x = x, y = y, c = c }
+          y = y + lineH
+        end
+        y = y + gap
+      end
+    end
+    if y > peakY then peakY = y end
+  end
+
+  maxScroll = math.max(0, peakY - bottom)
+  scrollY = math.max(0, math.min(scrollY, maxScroll))
+
+  -- DRAW pass — apply scroll, cull off-screen, build hit-rects.
+  ctrlRects = {}
+  for _, it in ipairs(items) do
+    local yy = it.y - scrollY
+    if yy + lineH >= top and yy <= bottom then
+      if it.kind == "head" then
+        gfx.setfont(1, "Arial", headFont)
+        gset(rgb, present and 0.9 or 0.5)
+        gfx.x, gfx.y = it.x, yy
+        gfx.drawstr(it.text)
+        gset(rgb, present and 0.30 or 0.18)
+        gfx.rect(it.x, yy + gfx.texth + 2, colW, 1, 1)
+      else
+        drawRow(it.c, it.x, yy, colW, labelW, lineH, rowFont, present, rgb, asn)
+      end
+    end
   end
 end
 
 local function render()
   -- Background.
   gfx.set(0.12, 0.12, 0.13, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
+
+  -- Tab-strip height scales with the text size so the tabs never clip.
+  TAB_H = math.floor(22 * fontScale() + 0.5) + 16
 
   local st  = readState()
   local asn = readAssign()
@@ -356,86 +556,35 @@ local function render()
 
   drawTabs(st)
 
-  -- Diagnostic footer (dim).
   local nCtrl = 0; for _ in pairs(geom.ctrl) do nCtrl = nCtrl + 1 end
-  local nAsn  = 0; for _ in pairs(asn)       do nAsn  = nAsn  + 1 end
-  local FOOTER_H = 16
-  gfx.setfont(1, "Arial", 11)
-  gset(0x707880, 0.75)
-  gfx.x, gfx.y = 6, gfx.h - gfx.texth - 3
-  gfx.drawstr(string.format("geom:%d  cs:%s  bc:%s  mapped:%d  tab:%s",
-    nCtrl, st.csPresent and "on" or "off", st.bcPresent and "on" or "off",
-    nAsn, activeTab))
 
   if not geom or nCtrl == 0 then
-    gfx.setfont(1, "Arial", 15)
+    gfx.setfont(1, "Arial", math.floor(15 * fontScale() + 0.5))
     gset(0x808890, 0.9)
     gfx.x, gfx.y = 10, TAB_H + 12
     gfx.drawstr("Waiting for surface geometry\xE2\x80\xA6")
     return
   end
 
-  -- Collect the active domain's controls + their bounding box.
-  local domChar = (activeTab == "cs") and "c" or "b"
-  local list = {}
-  local minx, miny, maxx, maxy = 1e9, 1e9, -1e9, -1e9
-  for idx, c in pairs(geom.ctrl) do
-    if c.dom == domChar then
-      c.idx = idx
-      list[#list + 1] = c
-      local x0, y0, x1, y1
-      if c.shape == 0 then
-        x0 = c.cx - c.r; y0 = c.cy - c.r; x1 = c.cx + c.r; y1 = c.cy + c.r
-      else
-        x0 = c.cx; y0 = c.cy; x1 = c.cx + c.w; y1 = c.cy + c.h
-      end
-      if x0 < minx then minx = x0 end
-      if y0 < miny then miny = y0 end
-      if x1 > maxx then maxx = x1 end
-      if y1 > maxy then maxy = y1 end
-    end
-  end
-  if #list == 0 then return end
-
   local present = (activeTab == "cs") and st.csPresent or st.bcPresent
 
-  -- SHARED scale for BOTH tabs = fit the full 860×660 device into the window.
-  -- A knob is therefore the same physical size on CS and BC (like the real
-  -- hardware) — no 4× jump when switching tabs. The active domain is just
-  -- translated so its bbox centre sits at the window centre; the smaller
-  -- domain (BC) shows centred with margins rather than being blown up.
-  local m = 10
-  local availW = gfx.w - 2 * m
-  local availH = gfx.h - TAB_H - FOOTER_H - 2 * m
-  if availW < 20 or availH < 20 then return end
-  local sc = math.min(availW / geom.w, availH / geom.h)
-  local cx = (minx + maxx) / 2
-  local cy = (miny + maxy) / 2
-  local ox = m + availW / 2 - cx * sc
-  local oy = TAB_H + m + availH / 2 - cy * sc
-
-  local silkFont  = math.max(9,  math.floor(sc * 16 + 0.5))
-  local paramFont = math.max(10, math.floor(sc * 17 + 0.5))
-
-  ctrlRects = {}   -- rebuilt this frame for next-frame hit-testing
-  for _, c in ipairs(list) do
-    drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
-  end
-
-  -- "No plug-in" hint when the active domain isn't on the focused track.
   if not present then
-    gfx.setfont(1, "Arial", 14)
-    gset(0x9097A0, 0.85)
+    -- Nothing focused in this domain → clear centred message (no list).
+    ctrlRects = {}
+    gfx.setfont(2, "Arial", math.floor(17 * fontScale() + 0.5))
+    gset(0x9097A0, 0.9)
     local msg = (activeTab == "cs" and "No Channel-Strip" or "No Bus-Comp")
               .. " plug-in on the focused track"
     local tw = gfx.measurestr(msg)
-    gfx.x, gfx.y = (gfx.w - tw) / 2, TAB_H + 6
+    gfx.x, gfx.y = (gfx.w - tw) / 2, (gfx.h - gfx.texth) / 2
     gfx.drawstr(msg)
+  else
+    renderList(st, asn)
   end
 
   -- Centred banner just under the tab strip (bg box + coloured text).
   local function banner(msg, bgRgb, bgA, fgRgb)
-    gfx.setfont(1, "Arial", 15)
+    gfx.setfont(1, "Arial", math.floor(14 * fontScale() + 0.5))
     local tw = gfx.measurestr(msg)
     local bw, bh = tw + 20, gfx.texth + 8
     local bx, by = (gfx.w - bw) / 2, TAB_H + 4
@@ -468,8 +617,18 @@ local function loop()
   local want = winWanted()
   if want and not winOpen then
     local dock = math.floor(num("hud_dock", 0))
+    savedW = math.floor(num("hud_w", DEF_W))
+    savedH = math.floor(num("hud_h", DEF_H))
+    -- Heal sizes corrupted by the old retina-doubling bug (and any absurd value)
+    -- back to the 500×500 default; clamp to a sane floating range.
+    if savedW < 200 or savedW > 1600 then savedW = DEF_W end
+    if savedH < 200 or savedH > 1600 then savedH = DEF_H end
     gfx.ext_retina = 1
-    gfx.init("Rea-Sixty Assignment HUD", DEF_W, DEF_H, dock, 200, 200)
+    gfx.init("Rea-Sixty Learn-HUD", savedW, savedH, dock, 200, 200)
+    -- Persist the (possibly healed) logical size so a corrupted old value is
+    -- overwritten cleanly even before the user next resizes.
+    reaper.SetExtState(SECT, "hud_w", tostring(savedW), true)
+    reaper.SetExtState(SECT, "hud_h", tostring(savedH), true)
     winOpen = true
   elseif not want and winOpen then
     winClose(false)
@@ -492,6 +651,13 @@ local function loop()
         end
       end
       lcPrev = lc
+      saveSizeIfChanged()   -- persist a floating resize (global, on change)
+      -- Mouse wheel scrolls the list (only bites when content overflows; render
+      -- clamps to [0, maxScroll]).
+      if gfx.mouse_wheel ~= 0 then
+        scrollY = scrollY - gfx.mouse_wheel / 4
+        gfx.mouse_wheel = 0
+      end
       refreshGeom()
       render()
       gfx.update()

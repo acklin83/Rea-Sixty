@@ -2412,12 +2412,49 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
     auto uf8Match = uf8::lookupPluginOnTrack(focusedTrack_,
                                              uf8::Domain::ChannelStrip);
     if (uf8Match.map) {
-        const int slotIdx = uf8::slotIdxForVst3Param(*uf8Match.map, vst3Param);
-        if (slotIdx >= 0) {
-            if (const uf8::LinkSlot* sp =
-                    uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx);
-                sp && sp->name && sp->name[0]) {
-                btnLabel = sp->name;
+        // Resolve the slot from the BUTTON's own canonical linkIdx — NOT by
+        // reverse-looking-up vst3Param in the Normal view cache. On a remapped
+        // Option/Control layer the latter lands on a FOREIGN slot (Frank
+        // 2026-06-15: HF Type Option "hihi" snapped to DYN's old "YoMama" after
+        // a push, because that slot's Normal param matched). A button always
+        // owns the same physical slot, so this is correct on every layer and
+        // also fixes the focus/readout that the per-tick refresh derives from.
+        const int slotIdx =
+            uc1::linkIdxForControl(ev.id, /*busComp*/false, /*isButton*/true);
+        if (slotIdx >= 0 && uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx)) {
+            // Layer-aware label: the active modifier layer's custom name wins,
+            // so a pressed button keeps the user's Option/Control label instead
+            // of snapping back to the Normal/canonical view-cache name. Mirrors
+            // pushFocusedParamReadout_'s resolution. Frank 2026-06-15.
+            const int L = reasixty_fxLearnActiveLayer();
+            if (L != uf8::FxLayer::Normal) {
+                char fxn[512] = {};
+                if (uf8::fxIdentityName(tr, bindings.channelFxIdx,
+                                        fxn, sizeof(fxn))) {
+                    if (const uf8::UserLinkSlot* us =
+                            uf8::user_plugins::lookupOwnedSlot(fxn, slotIdx)) {
+                        const uf8::SlotLayer& eff =
+                            uf8::fxEffectiveLayer(*us, L);
+                        if (!eff.customLabel.empty()) btnLabel = eff.customLabel;
+                    }
+                }
+            }
+            if (btnLabel.empty() && L != uf8::FxLayer::Normal) {
+                // Overlay layer with no custom label → the OVERLAID param's own
+                // name (vst3Param is already the active-layer param), NOT the
+                // Normal/canonical slot name (= the "no modifier" name, which is
+                // exactly what was wrongly showing after a push).
+                char pn[256] = {};
+                TrackFX_GetParamName(tr, bindings.channelFxIdx, vst3Param,
+                                     pn, sizeof(pn));
+                if (pn[0]) btnLabel = pn;
+            }
+            if (btnLabel.empty()) {
+                if (const uf8::LinkSlot* sp =
+                        uf8::findSlotByLinkIdx(*uf8Match.map, slotIdx);
+                    sp && sp->name && sp->name[0]) {
+                    btnLabel = sp->name;
+                }
             }
             uf8::param_groups::broadcastBuiltinSlot(
                 static_cast<MediaTrack*>(focusedTrack_),
@@ -2585,6 +2622,11 @@ void UC1Surface::pushButtonReadout_(uint8_t /*buttonId*/, std::string_view label
     if (!device_) return;
     auto readout = formatReadout(label, value);
     device_->send(buildDisplayText(zone, readout, readout.size()));
+    // Keep the focused-readout dedup in sync with what's actually on the LCD,
+    // so the next per-tick pushFocusedParamReadout_ re-pushes when (and only
+    // when) its layer-aware text differs — never freezes on a stale string.
+    if (zone == zone::kChannelStripReadout) lastZone03Text_ = readout;
+    else if (zone == zone::kBusCompReadout) lastZone05Text_ = readout;
 }
 
 void UC1Surface::pushFocusedParamReadout_()

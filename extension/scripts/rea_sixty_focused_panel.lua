@@ -57,8 +57,14 @@ local function num(key, def)
   if v == nil then return def end
   return v
 end
-local function csRgb() return math.floor(num("overlay_cs_col", 0x33C0FF)) & 0xFFFFFF end
-local function bcRgb() return math.floor(num("overlay_bc_col", 0xFFB000)) & 0xFFFFFF end
+local function csRgb() return math.floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
+local function bcRgb() return math.floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
+-- British/American spelling — mirrors the extension's reasixty_sp() / the
+-- Settings → Appearance radio (ExtState "ui_spelling": "1" = American "color",
+-- anything else = British "colour").
+local function sp(uk, us)
+  return (reaper.GetExtState(SECT, "ui_spelling") == "1") and us or uk
+end
 local function oneLine() return reaper.GetExtState(SECT, "focused_panel_oneline") == "1" end
 local function hostPref()
   local p = reaper.GetExtState(SECT, "focused_panel_host")
@@ -258,6 +264,17 @@ local function trackDisplay(name)
   return name
 end
 
+-- Track-colour for the track name, when "Use track colour" is on and the track
+-- carries a custom colour. Returns 0xRRGGBB or nil (→ default dim grey).
+local function trackNameRgb(tr)
+  if not tr then return nil end
+  if reaper.GetExtState(SECT, "focused_panel_track_color") ~= "1" then return nil end
+  local nat = reaper.GetTrackColor(tr)
+  if not nat or nat == 0 then return nil end     -- no custom colour assigned
+  local rr, gg, bb = reaper.ColorFromNative(nat)
+  return ((rr & 0xFF) << 16) | ((gg & 0xFF) << 8) | (bb & 0xFF)
+end
+
 local function fxLabel(tr, fxIdx)
   if not tr or not fxIdx or fxIdx < 0 then return nil end
   local _, nm = reaper.TrackFX_GetFXName(tr, fxIdx, "")
@@ -300,12 +317,14 @@ local function drawContent()
   local fa = byGuid[fGuid]
   local csTrk  = ftr and trackDisplay(trackLabel(ftr, fMaster)) or nil
   local csName = (ftr and fa) and fxLabel(ftr, fa.cs) or nil
+  local csTrkCol = trackNameRgb(ftr)
 
   local bcGuid, bcIdx = findActiveBc(byGuid)
   local btr, bMaster = nil, false
   if bcGuid then btr, bMaster = findTrackByGuid(bcGuid) end
   local bcTrk  = btr and trackDisplay(trackLabel(btr, bMaster)) or nil
   local bcName = btr and fxLabel(btr, bcIdx) or nil
+  local bcTrkCol = trackNameRgb(btr)
 
   local csPN, csPV = paramStr("overlay_param_cs")
   local bcPN, bcPV = paramStr("overlay_param_bc")
@@ -316,10 +335,10 @@ local function drawContent()
 
   -- One segment at (x,y); returns advanced x. Track name shown per trackDisplay
   -- (independent of layout — passed in both one- and two-line modes).
-  local function seg(x, y, tag, col, name, pn, pv, trk)
+  local function seg(x, y, tag, col, name, pn, pv, trk, trkCol)
     local lit = name ~= nil
     local dim = lit and 0xB0B0BC or 0x6A6A74
-    if trk ~= nil then x = liceText((trk or "") .. "  ", x, y, dim) end
+    if trk ~= nil then x = liceText((trk or "") .. "  ", x, y, trkCol or dim) end
     x = liceText(tag .. " ", x, y, col)
     x = liceText(name or "\xE2\x80\x94", x, y, lit and 0xEDEDF2 or 0x6A6A74)
     if pn and pn ~= "" then
@@ -335,11 +354,11 @@ local function drawContent()
   local top    = math.max(2, (bm_h - blockH) // 2)
   local ty0    = top + (lh - fs) // 2     -- centre each line within its slot
   if oneLine() then
-    local x = seg(pad, ty0, "CS", csRgb(), csName, csPN, csPV, csTrk)
-    seg(x + measure("     "), ty0, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
+    local x = seg(pad, ty0, "CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
+    seg(x + measure("     "), ty0, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol)
   else
-    seg(pad, ty0,      "CS", csRgb(), csName, csPN, csPV, csTrk)
-    seg(pad, ty0 + lh, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
+    seg(pad, ty0,      "CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
+    seg(pad, ty0 + lh, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol)
   end
 
   reaper.JS_Window_InvalidateRect(host, bm_x, bm_y, bm_x + bm_w, bm_y + bm_h, false)
@@ -489,6 +508,13 @@ local function showContextMenu(mx, my)
           reaper.SetExtState(SECT, "focused_panel_trackname", on and "0" or "1", true)
           is_redraw = true
         end },
+      { title = sp("Use track colour", "Use track color"),
+        checked = (reaper.GetExtState(SECT, "focused_panel_track_color") == "1"),
+        OnReturn = function()
+          local on = reaper.GetExtState(SECT, "focused_panel_track_color") == "1"
+          reaper.SetExtState(SECT, "focused_panel_track_color", on and "0" or "1", true)
+          is_redraw = true
+        end },
       { separator = true },
       { title = "Full name",
         checked = (reaper.GetExtState(SECT, "focused_panel_track_abbr") ~= "1"),
@@ -502,10 +528,10 @@ local function showContextMenu(mx, my)
       { title = "Font size\xE2\x80\xA6",       OnReturn = setFontSize },
       { title = "Corner radius\xE2\x80\xA6",   OnReturn = setCorner },
       { separator = true },
-      { title = "Background colour\xE2\x80\xA6", OnReturn = function() chooseColor("focused_panel_bg") end },
-      { title = "Border colour\xE2\x80\xA6",     OnReturn = function() chooseColor("focused_panel_border") end },
-      { title = "CS colour\xE2\x80\xA6",         OnReturn = function() chooseColor("overlay_cs_col") end },
-      { title = "BC colour\xE2\x80\xA6",         OnReturn = function() chooseColor("overlay_bc_col") end },
+      { title = sp("Background colour\xE2\x80\xA6", "Background color\xE2\x80\xA6"), OnReturn = function() chooseColor("focused_panel_bg") end },
+      { title = sp("Border colour\xE2\x80\xA6", "Border color\xE2\x80\xA6"),     OnReturn = function() chooseColor("focused_panel_border") end },
+      { title = sp("CS colour\xE2\x80\xA6", "CS color\xE2\x80\xA6"),         OnReturn = function() chooseColor("overlay_cs_col") end },
+      { title = sp("BC colour\xE2\x80\xA6", "BC color\xE2\x80\xA6"),         OnReturn = function() chooseColor("overlay_bc_col") end },
     },
     { separator = true },
     { title = "Drag the box onto any window to move it there", grayed = true },

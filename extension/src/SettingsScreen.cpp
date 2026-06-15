@@ -162,6 +162,7 @@ bool reasixty_fxLayerOptionEnable();
 void reasixty_setFxLayerOptionEnable(bool on);
 bool reasixty_fxLayerControlEnable();
 void reasixty_setFxLayerControlEnable(bool on);
+int  reasixty_fxLearnActiveLayer();   // current held-modifier layer (HUD badge)
 bool reasixty_shiftFineMode();
 void reasixty_setShiftFineMode(bool on);
 int  reasixty_theme();
@@ -561,21 +562,13 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Show MCP Inserts overlay", &insMark)) {
         reasixty_setInsertMarkers(insMark);
     }
-    // Assignment HUD — dockable surface mockup of the focused plug-in's UC1
-    // control assignments (read-only). Its own companion + run flag.
-    bool hud = reasixty_assignmentHud();
-    if (ImGui_Checkbox(ctx, "Show Assignment HUD (UC1 surface map)", &hud)) {
-        reasixty_setAssignmentHud(hud);
-    }
-    if (hud) {
-        ImGui_TextDisabled(ctx, reasixty_assignmentHudRunning()
-                                ? "  HUD companion running"
-                                : "  HUD companion starting\xE2\x80\xA6");
-    }
+    // Learn-HUD has no checkbox — it is toggled via the "learn_hud_toggle"
+    // built-in (bindable to hardware) and the REASIXTY_LEARN_HUD_TOGGLE REAPER
+    // action. Frank 2026-06-15.
     // Frameless focused-track panel (Gridbox-style, floats on the Arrange,
     // drag-to-move / drag-edges-to-resize / right-click menu).
     bool fpanel = reasixty_focusedPanel();
-    if (ImGui_Checkbox(ctx, "Show focused-track panel (frameless, on Arrange)", &fpanel)) {
+    if (ImGui_Checkbox(ctx, "Show focused-track panel", &fpanel)) {
         reasixty_setFocusedPanel(fpanel);
     }
     if (fpanel) {
@@ -2706,7 +2699,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("ssl_strip_mode_", 0) == 0
                  || n.rfind("uf8_plugin_mode_", 0) == 0
                  || n == "uc1_outgain_fader_toggle"
-                 || n == "assignment_hud_toggle"
+                 || n == "learn_hud_toggle"
                  || n == "focused_panel_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
@@ -5522,6 +5515,7 @@ int mappedVst3Normal_(int linkIdx)
 // 2026-06-02.
 char g_fxlLabelBuf[64] = {};
 int  g_fxlLabelLinkIdx = -1;
+int  g_fxlLabelLayer   = -1;   // edit-layer the buffer was seeded for (re-seed on change)
 
 // "Push cycle → + Add step" picker state. Only one context popup is open at
 // a time, so a single set of globals suffices; reset when the active button
@@ -7500,34 +7494,91 @@ constexpr int kUc1ControlsCount =
     sizeof(kUc1Controls) / sizeof(kUc1Controls[0]);
 
 // ---- Assignment-HUD publishers (read-only milestone) -----------------------
+// Section a UC1 control belongs to — used by the HUD's grouped text list. The
+// schematic groups controls by source order + comment banners; this mirrors
+// those banners by silk label so the grouping is a single, compact source of
+// truth (no per-row struct field to keep in sync). BusComp is one group.
+const char* hudSectionFor_(const Uc1Control& c)
+{
+    if (c.domain == uf8::Domain::BusComp) return "Bus Comp";
+    const char* L = c.label ? c.label : "";
+    auto eq = [&](const char* s) { return std::strcmp(L, s) == 0; };
+    if (eq("LPF") || eq("HPF")) return "Filter";
+    if (eq("C ATK") || eq("C PK") || eq("C RAT") || eq("C THR") ||
+        eq("C REL") || eq("DYN")) return "Dynamics";
+    if (eq("G RNG") || eq("G THR") || eq("G REL") || eq("G HLD") ||
+        eq("G/E")   || eq("G ATK")) return "Gate";
+    if (eq("IN G") || eq("OUT G") || eq("POL") || eq("S/C L") || eq("IN"))
+        return "I/O & Channel";
+    return "EQ";   // all remaining CS controls are EQ bands / Type / EQ-In
+}
+
 // Build the static UC1 control geometry the companion HUD renders. Header line
 // "UC1;<W>;<H>" then one line per control:
-//   "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>"
+//   "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>;<section>"
 // Coords are pixels in the schematic's WxH space; the Lua normalises by W/H so
 // it scales to any window size. shape 0=knob 1=toggle 2=dynbtn; dom 'c'=Channel
-// Strip 'b'=Bus Comp. Static — published once when the HUD turns on; reads
-// kUc1Controls so the HUD geometry never drifts from the Settings schematic.
+// Strip 'b'=Bus Comp; section groups controls for the HUD's text list. Static —
+// published once when the HUD turns on; reads kUc1Controls so the HUD geometry
+// never drifts from the Settings schematic.
 // Internal helper (lives in the anon namespace beside kUc1Controls); exported
 // through the reasixty_hudGeometryUc1 trampoline at file end.
 std::string hudGeometryUc1_()
 {
     std::string s = "UC1;860;660\n";
-    char buf[160];
+    // Left-column label = the canonical SSL 360 Link slot name ("HF Gain",
+    // "Comp Ratio", "Gate Range") — exactly what the mockup / FX-Learn param
+    // list show. The kUc1Controls `.label` field carries terse silk-style
+    // abbreviations that don't appear anywhere on the real surface, so we
+    // resolve the proper name from the canonical topology and fall back to the
+    // control's own label only if a slot is missing.
+    const uf8::PluginMap* csTopo = canonicalTopology_(uf8::Domain::ChannelStrip);
+    const uf8::PluginMap* bcTopo = canonicalTopology_(uf8::Domain::BusComp);
+    char buf[200];
     for (int i = 0; i < kUc1ControlsCount; ++i) {
         const Uc1Control& c = kUc1Controls[i];
         const int shape = (c.kind == Uc1Control::Knob)   ? 0
                         : (c.kind == Uc1Control::Toggle) ? 1 : 2;
-        const char dom = (c.domain == uf8::Domain::BusComp) ? 'b' : 'c';
-        std::snprintf(buf, sizeof(buf), "%d;%d;%.1f;%.1f;%.1f;%.1f;%.1f;%c;%s\n",
+        const bool isBc = (c.domain == uf8::Domain::BusComp);
+        const char dom = isBc ? 'b' : 'c';
+        const char* lbl = c.label ? c.label : "";
+        if (const uf8::PluginMap* topo = isBc ? bcTopo : csTopo) {
+            if (const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*topo, c.linkIdx))
+                if (sl->name && sl->name[0]) lbl = sl->name;
+        }
+        std::snprintf(buf, sizeof(buf),
+                      "%d;%d;%.1f;%.1f;%.1f;%.1f;%.1f;%c;%s;%s\n",
                       i, shape, c.cx, c.cy, c.r, c.w, c.h, dom,
-                      c.label ? c.label : "");
+                      lbl, hudSectionFor_(c));
         s += buf;
     }
     return s;
 }
 
+// Display name for a HUD control — IDENTICAL to what the FX-Learn editor shows
+// (its paramNameFor_ → TrackFX_GetParamName), so the two windows never disagree:
+//   1. the per-layer user custom label ("Display label"), if set, else
+//   2. the plug-in's own VST3 parameter name for the bound param.
+// `layer` (0/1/2) makes both follow the held modifier — the custom label is read
+// from the layer that actually drives the control (overlay, or Normal fallback),
+// and `vst3Param` is already that layer's effective param. Main-thread-only.
+std::string hudDisplayName_(MediaTrack* tr, int fx, const char* fxName,
+                            int linkIdx, int layer, int vst3Param)
+{
+    if (fxName && fxName[0]) {
+        if (const UserLinkSlot* us =
+                user_plugins::lookupOwnedSlot(fxName, linkIdx)) {
+            const SlotLayer& eff = fxEffectiveLayer(*us, layer);
+            if (!eff.customLabel.empty()) return eff.customLabel;
+        }
+    }
+    char pn[256] = {0};
+    if (tr && vst3Param >= 0) TrackFX_GetParamName(tr, fx, vst3Param, pn, sizeof(pn));
+    return pn[0] ? std::string(pn) : std::string();
+}
+
 // Fill the dynamic HUD payloads for the active CS/BC plug-ins on the surface.
-//   stateOut : "UC1;<csPresent>;<bcPresent>;<csShort>;<bcShort>"
+//   stateOut : "UC1;<csPresent>;<bcPresent>;<fdom>;<layer>;<csShort>;<bcShort>"
 //   assignOut: one line per MAPPED control "<idx>;<paramName>;<inv>"
 // Resolves params by FX identity name via uc1::lookupBindingsByName (covers
 // built-in SSL maps AND user FX-Learn maps, on the active modifier layer) +
@@ -7552,9 +7603,14 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
     const char* csShort = (csB && csB->shortName) ? csB->shortName : "";
     const char* bcShort = (bcB && bcB->shortName) ? bcB->shortName : "";
     const char  fdom = (focusDom == 2) ? 'b' : (focusDom == 1) ? 'c' : 'n';
+    // Held-modifier layer (0=Normal 1=Option 2=Control) — the HUD shows it as a
+    // badge so a changed param list reads as "this is the Option overlay", not
+    // as the plug-in's own mapping. Same source the display/learn resolve with.
+    int layer = reasixty_fxLearnActiveLayer();
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
     char head[160];
-    std::snprintf(head, sizeof(head), "UC1;%d;%d;%c;%s;%s",
-                  csB ? 1 : 0, bcB ? 1 : 0, fdom, csShort, bcShort);
+    std::snprintf(head, sizeof(head), "UC1;%d;%d;%c;%d;%s;%s",
+                  csB ? 1 : 0, bcB ? 1 : 0, fdom, layer, csShort, bcShort);
     stateOut = head;
 
     assignOut.clear();
@@ -7574,7 +7630,9 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
         if (c.linkIdx == 0 && isButton) {
             std::snprintf(pname, sizeof(pname), "In / Bypass");
         } else {
-            TrackFX_GetParamName(tr, fx, p, pname, sizeof(pname));
+            const char* fxn = isBc ? bcName : csName;
+            const std::string nm = hudDisplayName_(tr, fx, fxn, c.linkIdx, layer, p);
+            std::snprintf(pname, sizeof(pname), "%s", nm.c_str());
         }
         // Sanitise the field separators out of the param name.
         for (char* q = pname; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
@@ -7991,14 +8049,21 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (m.match != g_editingMatch) continue;
                 for (const auto& s : m.slots) {
                     if (s.linkIdx == ctrl.linkIdx) {
-                        inverted        = s.inverted;
-                        curLabel        = s.customLabel;
-                        curRangeMin     = s.rangeMin;
-                        curRangeMax     = s.rangeMax;
-                        curSensitivity  = s.sensitivity;
-                        curHasCurve     = !s.curvePoints.empty();
-                        curPolarity     = s.polarity;
-                        curDefaultNorm  = s.defaultNorm;
+                        // Read the layer currently being edited (Normal /
+                        // Option / Control), matching the mutators which all
+                        // write editLayerRef_. Reading base `s` showed the
+                        // Normal values even on an overlay tab, so the Display
+                        // label (and invert / range / curve) didn't follow a
+                        // layer switch — Frank 2026-06-15.
+                        const uf8::SlotLayer& lay = editLayerRef_(s);
+                        inverted        = lay.inverted;
+                        curLabel        = lay.customLabel;
+                        curRangeMin     = lay.rangeMin;
+                        curRangeMax     = lay.rangeMax;
+                        curSensitivity  = lay.sensitivity;
+                        curHasCurve     = !lay.curvePoints.empty();
+                        curPolarity     = lay.polarity;
+                        curDefaultNorm  = lay.defaultNorm;
                         break;
                     }
                 }
@@ -8500,11 +8565,14 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "Display label:");
-            // Seed the buffer when opening for a new slot, or when bindSlot_
+            // Seed the buffer when opening for a new slot, when the edit layer
+            // changes (each layer has its own label), or when bindSlot_
             // invalidated the seed (g_fxlLabelLinkIdx = -1) after a re-bind
             // cleared the custom label.
-            if (g_fxlLabelLinkIdx != ctrl.linkIdx) {
+            if (g_fxlLabelLinkIdx != ctrl.linkIdx
+                || g_fxlLabelLayer != g_fxLearnEditLayer) {
                 g_fxlLabelLinkIdx = ctrl.linkIdx;
+                g_fxlLabelLayer   = g_fxLearnEditLayer;
                 std::strncpy(g_fxlLabelBuf, curLabel.c_str(),
                              sizeof(g_fxlLabelBuf) - 1);
                 g_fxlLabelBuf[sizeof(g_fxlLabelBuf) - 1] = '\0';

@@ -388,17 +388,17 @@ std::string serialize_(const UserPluginCatalog& c)
             }
             emitSlotKnobTravel(s);
         };
-        os << "      \"slots\": [";
-        bool firstSlot = true;
-        for (const auto& s : m.slots) {
-            if (!firstSlot) os << ",";
-            firstSlot = false;
-            os << "\n        { \"linkIdx\": " << s.linkIdx << ", ";
+        // Emit one full slot object: linkIdx + Normal-layer body + the optional
+        // FX-Learn modifier overlays (v9). Additive: "modLayers" only appears
+        // when an Option/Control overlay is populated, so v8-era catalogs round-
+        // trip byte-identically and older readers ignore the key. Shared by the
+        // active `slots` array AND the per-domain cs/bcSlotCache below — the
+        // cache MUST carry modLayers too, else switching the edit domain (which
+        // round-trips slots through the cache) silently drops every overlay's
+        // param + custom label. Frank 2026-06-15.
+        auto emitSlotObject = [&](const UserLinkSlot& s) {
+            os << "{ \"linkIdx\": " << s.linkIdx << ", ";
             emitLayerBody(s);
-            // FX-Learn modifier layers (v9). Additive: only emitted when the
-            // user has populated an Option/Control overlay, so v8-era catalogs
-            // round-trip byte-identically. Older readers ignore the unknown
-            // "modLayers" key; pre-v9 us are loaded with empty overlays.
             if (hasAnyModLayer(s)) {
                 os << ", \"modLayers\": {";
                 bool firstML = true;
@@ -415,6 +415,14 @@ std::string serialize_(const UserPluginCatalog& c)
                 os << " }";
             }
             os << " }";
+        };
+        os << "      \"slots\": [";
+        bool firstSlot = true;
+        for (const auto& s : m.slots) {
+            if (!firstSlot) os << ",";
+            firstSlot = false;
+            os << "\n        ";
+            emitSlotObject(s);
         }
         os << "\n      ]";
         // Metering block — emit when any field is non-default. Older
@@ -464,15 +472,8 @@ std::string serialize_(const UserPluginCatalog& c)
             for (const auto& s : vs) {
                 if (!first) os << ",";
                 first = false;
-                os << "\n        { \"linkIdx\": " << s.linkIdx
-                   << ", \"vst3Param\": "         << s.vst3Param
-                   << ", \"inverted\": "          << (s.inverted ? "true" : "false");
-                if (!s.customLabel.empty()) {
-                    os << ", \"customLabel\": ";
-                    appendEscaped_(os, s.customLabel);
-                }
-                emitSlotKnobTravel(s);
-                os << " }";
+                os << "\n        ";
+                emitSlotObject(s);   // same body as `slots` — INCLUDING modLayers
             }
             os << "\n      ]";
         };

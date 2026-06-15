@@ -5118,27 +5118,50 @@ static void resolveLastTouched_(MediaTrack*& tr, int& fx, int& param)
 // Rea-Sixty mapping label for a VST3 param: fxName -> PluginMap -> linkIdx ->
 // LinkSlot.name ("Input Trim", "Comp Thr", …). Empty when the plugin isn't
 // mapped or the param has no slot. Covers built-in SSL maps AND user FX-Learn
-// maps (lookupPluginMapByName checks both).
-static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param)
+// maps (lookupPluginMapByName checks both). A user's custom Display label wins —
+// for the active modifier layer (Option/Control) when one is held, else Normal —
+// so the focused-track panel shows the same user-defined name as the surface.
+static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param, int layer)
 {
     char fxName[512] = {0};
     if (!uf8::fxIdentityName(tr, fx, fxName, sizeof(fxName))) return {};
     const uf8::PluginMap* map = uf8::lookupPluginMapByName(fxName);
     if (!map) return {};
-    const int linkIdx = uf8::slotIdxForVst3Param(*map, param);
+    int L = layer;
+    if (L < 0 || L >= uf8::kNumFxLayers) L = uf8::FxLayer::Normal;
+    // Layer-aware reverse lookup over the owning user map: find the slot whose
+    // ACTIVE-layer effective param is the one that was touched, then prefer its
+    // custom Display label. The view cache is Normal-only, so a turned/pressed
+    // OVERLAY control (Option/Control param ≠ its Normal param) would otherwise
+    // miss and fall back to the default name. Frank 2026-06-15.
+    int linkIdx = -1;
+    if (const uf8::UserPluginMap* um = uf8::user_plugins::lookupOwnedByName(fxName)) {
+        for (const auto& s : um->slots) {
+            const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(s, L);
+            if (eff.vst3Param == param) {
+                if (!eff.customLabel.empty()) return eff.customLabel;
+                linkIdx = s.linkIdx;   // matched but unlabelled → canonical below
+                break;
+            }
+        }
+    }
+    if (linkIdx < 0) linkIdx = uf8::slotIdxForVst3Param(*map, param);
     if (linkIdx < 0) return {};
     const uf8::LinkSlot* slot = uf8::findSlotByLinkIdx(*map, linkIdx);
     if (slot && slot->name && slot->name[0]) return slot->name;
     return {};
 }
 
-static std::string fmtParam_(MediaTrack* tr, int fx, int param)
+static std::string fmtParam_(MediaTrack* tr, int fx, int param, int layer)
 {
     if (!tr || fx < 0 || param < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*"))
         return {};
     // Rea-Sixty mapping name first; fall back to REAPER's own param name only
-    // for unmapped plug-ins so something still shows.
-    std::string name = reaSixtyParamName_(tr, fx, param);
+    // for unmapped plug-ins so something still shows. `layer` is the FX-Learn
+    // layer that was active WHEN the param was touched (latched by the caller),
+    // not the live held modifier — so the name keeps the user's overlay label
+    // after the modifier is released, until a different param is manipulated.
+    std::string name = reaSixtyParamName_(tr, fx, param, layer);
     if (name.empty()) {
         char nm[256] = {0};
         TrackFX_GetParamName(tr, fx, param, nm, sizeof(nm));
@@ -5162,20 +5185,34 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
 {
     static MediaTrack* sCsTr = nullptr; static int sCsFx = -1, sCsParam = -1;
     static MediaTrack* sBcTr = nullptr; static int sBcFx = -1, sBcParam = -1;
-    if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; }
-    if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; }
+    // Latch the FX-Learn layer that was active WHEN each param was last touched,
+    // so the panel keeps the overlay's user name after the modifier is released
+    // (until a different param is manipulated). Frank 2026-06-15.
+    static int sCsLayer = uf8::FxLayer::Normal, sBcLayer = uf8::FxLayer::Normal;
+    if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; sCsLayer = uf8::FxLayer::Normal; }
+    if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; sBcLayer = uf8::FxLayer::Normal; }
 
     const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
     if (feat) {
         MediaTrack* ltTr; int ltFx, ltP;
         resolveLastTouched_(ltTr, ltFx, ltP);
         if (ltTr) {
-            if (ltTr == csTr && ltFx == csFx && csFx >= 0) sCsParam = ltP;
-            if (ltTr == bcTr && ltFx == bcFx && bcFx >= 0) sBcParam = ltP;
+            const int L = reasixty_fxLearnActiveLayer();
+            // Only re-latch the param + its layer when a DIFFERENT param is
+            // touched. GetLastTouchedFX keeps reporting the same param after the
+            // modifier is released, so latching every tick would overwrite the
+            // layer back to Normal — the name must stay until another param is
+            // manipulated (Frank 2026-06-15).
+            if (ltTr == csTr && ltFx == csFx && csFx >= 0 && ltP != sCsParam) {
+                sCsParam = ltP; sCsLayer = L;
+            }
+            if (ltTr == bcTr && ltFx == bcFx && bcFx >= 0 && ltP != sBcParam) {
+                sBcParam = ltP; sBcLayer = L;
+            }
         }
     }
-    const std::string cs = feat ? fmtParam_(csTr, csFx, sCsParam) : std::string();
-    const std::string bc = feat ? fmtParam_(bcTr, bcFx, sBcParam) : std::string();
+    const std::string cs = feat ? fmtParam_(csTr, csFx, sCsParam, sCsLayer) : std::string();
+    const std::string bc = feat ? fmtParam_(bcTr, bcFx, sBcParam, sBcLayer) : std::string();
     if (cs != g_csParamPublished) {
         g_csParamPublished = cs;
         SetExtState("rea_sixty", "overlay_param_cs", cs.c_str(), false);
@@ -15396,6 +15433,12 @@ custom_action_register_t g_actionMasterPinStrip8{
     0, "REASIXTY_MASTER_PIN_STRIP8", "Rea-Sixty: Pin Master to UF8 Strip 8", nullptr,
 };
 int g_cmdMasterPinStrip8 = 0;
+// Learn-HUD show/hide — same toggle as the learn_hud_toggle built-in, exposed
+// as a REAPER-native action so it can be bound to a key / toolbar in REAPER.
+custom_action_register_t g_actionLearnHud{
+    0, "REASIXTY_LEARN_HUD_TOGGLE", "Rea-Sixty: Toggle Learn-HUD", nullptr,
+};
+int g_cmdLearnHud = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -15477,6 +15520,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
     if (command == g_cmdMasterPinStrip1){ reasixty_toggleMasterPin(1); return true; }
     if (command == g_cmdMasterPinStrip8){ reasixty_toggleMasterPin(8); return true; }
+    if (command == g_cmdLearnHud)       { g_hudToggleRequest.store(true); return true; }
     return false;
 }
 
@@ -15954,7 +15998,7 @@ void reasixty_setInsertMarkerStyle(int style)
 int  reasixty_overlayCsColor()
 {
     const char* v = GetExtState("rea_sixty", "overlay_cs_col");
-    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0x33C0FF;
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFFFF00;   // default: yellow
 }
 void reasixty_setOverlayCsColor(int rgb)
 {
@@ -15964,7 +16008,7 @@ void reasixty_setOverlayCsColor(int rgb)
 int  reasixty_overlayBcColor()
 {
     const char* v = GetExtState("rea_sixty", "overlay_bc_col");
-    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFFB000;
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0xFF0000;   // default: red
 }
 void reasixty_setOverlayBcColor(int rgb)
 {
@@ -15974,7 +16018,7 @@ void reasixty_setOverlayBcColor(int rgb)
 double reasixty_overlayFillAlpha()
 {
     const char* v = GetExtState("rea_sixty", "overlay_fill_a");
-    return (v && *v) ? std::atof(v) : 0.32;
+    return (v && *v) ? std::atof(v) : 0.0;   // default: no fill (outline only)
 }
 void reasixty_setOverlayFillAlpha(double a)
 {
@@ -18646,7 +18690,7 @@ void registerBindingHandlers()
         "Nav Mode: Regions only (no drill)", false
     });
 
-    registerBuiltin("assignment_hud_toggle", DescBuilder{
+    registerBuiltin("learn_hud_toggle", DescBuilder{
         // Firing may arrive on the libusb input thread; defer the actual
         // toggle (registers + runs a ReaScript, walks the FX chain — all
         // main-thread-only) to onTimer via an atomic request.
@@ -18654,7 +18698,7 @@ void registerBindingHandlers()
             if (firing) g_hudToggleRequest.store(true);
         },
         [](int) -> bool { return g_hudEnabled.load(); },
-        "Assignment HUD: show / hide (focused plug-in surface map)", false
+        "Learn-HUD: show / hide (focused plug-in assignments)", false
     });
 
     registerBuiltin("focused_panel_toggle", DescBuilder{
@@ -20666,6 +20710,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
     g_cmdMasterPinStrip1 = plugin_register("custom_action", &g_actionMasterPinStrip1);
     g_cmdMasterPinStrip8 = plugin_register("custom_action", &g_actionMasterPinStrip8);
+    g_cmdLearnHud        = plugin_register("custom_action", &g_actionLearnHud);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into
