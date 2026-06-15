@@ -113,12 +113,36 @@ local function refineTcp(px, py, track)
   return l, t, r + 1, b + 1
 end
 
+-- The mcp.fxlist on macOS (this theme) is ONE window spanning ALL strips, not a
+-- per-strip child — so compositing at the window's full client width painted the
+-- highlight across every channel (Frank 2026-06-15, 5-track project). Walk left /
+-- right from the hit point along the same row while still over THIS track's
+-- mcp.fxlist to find the strip's own x-column [l, r) in screen coords; the draw
+-- then confines the highlight to that column only.
+local function refineMcpColumn(px, py, track)
+  local function ok(x)
+    local _, info = reaper.GetThingFromPoint(x, py)
+    return info == "mcp.fxlist" and reaper.GetTrackFromPoint(x, py) == track
+  end
+  local l = px; while ok(l - 1) do l = l - 1 end
+  local r = px; while ok(r + 1) do r = r + 1 end
+  return l, r + 1
+end
+
 ------------------------------------------------------------------------
 -- Locate FX-list targets per track: MCP per-strip child windows and the
 -- TCP names column (shared window). byGuid[guid] = list of blocks.
 ------------------------------------------------------------------------
-local function scanFxBlocks()
+-- `want` = set of active track GUIDs (the only ones the overlay ever draws).
+-- We skip every track that's not in it and STOP the whole-window grid scan as
+-- soon as all wanted tracks' fxlist windows are located — so locating the
+-- overlay targets no longer walks the entire mixer for strips we never draw.
+-- Frank 2026-06-14 (MCP scroll lag).
+local function scanFxBlocks(want)
   local byGuid, seen = {}, {}
+  local wantN = 0
+  if want then for _ in pairs(want) do wantN = wantN + 1 end end
+  local foundGuids, foundN = {}, 0
   -- TCP overlay is experimental (shared track-panel window + Retina coordinate
   -- mismatch causes glitches) — opt-in via ExtState overlay_tcp=1. MCP always on.
   local tcpOn = num("overlay_tcp", 0) ~= 0
@@ -126,8 +150,9 @@ local function scanFxBlocks()
   local _, ml, mt, mr, mb = reaper.JS_Window_GetRect(main)
   local x0, x1 = math.min(ml, mr), math.max(ml, mr)
   local y0, y1 = math.min(mt, mb), math.max(mt, mb)
+  local done = false
   local y = y0
-  while y <= y1 do
+  while y <= y1 and not done do
     local x = x0
     while x <= x1 do
       local _, info = reaper.GetThingFromPoint(x, y)
@@ -139,26 +164,38 @@ local function scanFxBlocks()
         local h  = reaper.JS_Window_FromPoint(x, y)
         if tr and h then
           local g = reaper.GetTrackGUID(tr)
-          local key = g .. "|" .. tostring(h) .. "|" .. kind
-          if g and g ~= "" and not seen[key] then
-            seen[key] = true
-            byGuid[g] = byGuid[g] or {}
-            if kind == "mcp" then
-              local _, cw, ch = reaper.JS_Window_GetClientSize(h)
-              if cw and ch and cw > 0 and ch > 0 then
-                -- FX count lets us DERIVE the row height (ch / count) instead of
-                -- guessing — adapts to theme + strip height automatically.
-                local cnt = reaper.TrackFX_GetCount(tr)
-                byGuid[g][#byGuid[g] + 1] =
-                  { kind = "mcp", hwnd = h, cw = cw, ch = ch, count = cnt }
+          -- Only the active CS/BC tracks are ever drawn — ignore the rest.
+          if g and g ~= "" and (not want or want[g]) then
+            local key = g .. "|" .. tostring(h) .. "|" .. kind
+            if not seen[key] then
+              seen[key] = true
+              byGuid[g] = byGuid[g] or {}
+              if kind == "mcp" then
+                local _, cw, ch = reaper.JS_Window_GetClientSize(h)
+                if cw and ch and cw > 0 and ch > 0 then
+                  -- Confine to THIS strip's x-column (the fxlist window spans all
+                  -- strips on macOS — see refineMcpColumn). sl/sw in screen x;
+                  -- converted to client x at draw time. sy = a screen y inside
+                  -- the window for the ScreenToClient call.
+                  local sl, sr = refineMcpColumn(x, y, tr)
+                  local cnt = reaper.TrackFX_GetCount(tr)
+                  byGuid[g][#byGuid[g] + 1] =
+                    { kind = "mcp", hwnd = h, ch = ch, count = cnt,
+                      sl = sl, sw = sr - sl, sy = y }
+                end
+              else
+                local l, t, r = refineTcp(x, y, tr)
+                byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
               end
-            else
-              local l, t, r = refineTcp(x, y, tr)
-              byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
+              -- Track how many wanted tracks we've located so we can bail early.
+              if not foundGuids[g] then foundGuids[g] = true; foundN = foundN + 1 end
             end
           end
         end
       end
+      -- Early-out once every active target is found (MCP-only path; the
+      -- experimental TCP refine needs the full sweep, so skip the shortcut).
+      if wantN > 0 and foundN >= wantN and not tcpOn then done = true; break end
       x = x + STEP
     end
     y = y + STEP
@@ -180,15 +217,29 @@ local function clearDrawn()
   g_drawn = {}
 end
 
+-- Supersample factor for crisp compositing on Retina. dst stays in logical
+-- points (w,h) but the bitmap is rendered SS× bigger and composited
+-- src(w*SS,h*SS)→dst(w,h): on a 2× display that maps 1:1 to physical pixels
+-- (crisp), on 1× it's harmlessly supersampled-then-downscaled. Live-tunable
+-- via ExtState overlay_ss (default 2 on macOS, 1 on Windows). Frank 2026-06-15.
+local function ssFactor()
+  return math.max(1, math.floor(num("overlay_ss", is_windows and 1 or 2)))
+end
+
 local function composite(hwnd, dx, dy, w, h, col)
   if w <= 0 or h <= 0 then return end
-  local bmp = reaper.JS_LICE_CreateBitmap(true, w, h)
+  local ss = ssFactor()
+  local bw, bh = w * ss, h * ss
+  local bmp = reaper.JS_LICE_CreateBitmap(true, bw, bh)
   if is_windows then reaper.JS_LICE_Clear(bmp, 0x00000000)
   else                reaper.JS_LICE_Clear(bmp, col & 0x00FFFFFF) end
-  reaper.JS_LICE_FillRect(bmp, 0, 0, w, h, col, fillA(), 0)
-  reaper.JS_LICE_RoundRect(bmp, 0, 0, w - 1, h - 1, 0, col, lineA(), 0, true)
+  reaper.JS_LICE_FillRect(bmp, 0, 0, bw, bh, col, fillA(), 0)
+  -- Border ~1 logical px thick = SS nested source-pixel outlines.
+  for i = 0, ss - 1 do
+    reaper.JS_LICE_RoundRect(bmp, i, i, bw - 1 - 2 * i, bh - 1 - 2 * i, 0, col, lineA(), 0, true)
+  end
   reaper.JS_Composite_Delay(hwnd, 0.03, 0.05, 8)
-  reaper.JS_Composite(hwnd, dx, dy, w, h, bmp, 0, 0, w, h)
+  reaper.JS_Composite(hwnd, dx, dy, w, h, bmp, 0, 0, bw, bh)
   reaper.JS_Window_InvalidateRect(hwnd, dx, dy, dx + w, dy + h, false)
   g_drawn[#g_drawn + 1] = { hwnd = hwnd, bmp = bmp, x = dx, y = dy, w = w, h = h }
 end
@@ -203,7 +254,11 @@ local function drawBlockRow(block, fxIdx, col)
     local topPad = num("overlay_toppad", 1)
     local y = topPad + fxIdx * rowH
     if y < -1 or y + rowH > block.ch + 1 then return end
-    composite(block.hwnd, 0, math.floor(y + 0.5), block.cw, math.floor(rowH + 0.5), col)
+    -- Confine to this strip's column: screen-left → client x (x isn't flipped on
+    -- macOS; only y is, handled in the tcp path). Width = the strip's own width.
+    local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
+    composite(block.hwnd, math.floor(cx + 0.5), math.floor(y + 0.5),
+              math.floor(block.sw + 0.5), math.floor(rowH + 0.5), col)
   else  -- tcp: shared track-panel window
     local rowH   = num("overlay_rowh_tcp", 14)
     local topPad = num("overlay_toppad_tcp", 0)
@@ -249,17 +304,24 @@ local panelRcPrev = 0     -- previous right-button state (context-menu edge dete
 
 local function panelWanted() return reaper.GetExtState(SECT, "overlay_panel") == "1" end
 
--- Font size is user-set (Settings → Inserts, ExtState "overlay_panel_font").
--- Everything else (padding, line height, window size) scales off it so the
--- panel stays legible at any size.
+local function panelOneLine()
+  return reaper.GetExtState(SECT, "overlay_panel_oneline") == "1"
+end
+
+-- Font size is user-set (right-click menu / Settings, ExtState
+-- "overlay_panel_font"). Everything else (padding, line height, window size)
+-- scales off it. Layout is one or two rows ("overlay_panel_oneline").
 local function panelMetrics()
   local fs = math.floor(num("overlay_panel_font", 18))
   if fs < 8 then fs = 8 end
-  local pad = math.max(6, math.floor(fs * 0.5))
-  local lh  = fs + math.floor(fs * 0.5)
-  local w   = math.max(300, fs * 18)   -- room for "track  TAG fx  param val"
-  local h   = pad * 2 + lh * 2 + 6      -- CS row + BC row (each with its param)
-  return fs, pad, lh, w, h
+  local oneLine = panelOneLine()
+  local pad  = math.max(6, math.floor(fs * 0.5))
+  local lh   = fs + math.floor(fs * 0.5)
+  local rows = oneLine and 1 or 2
+  -- One line packs CS + BC side by side → needs more width.
+  local w    = math.max(300, fs * (oneLine and 30 or 18))
+  local h    = pad * 2 + lh * rows + 6
+  return fs, pad, lh, w, h, oneLine
 end
 
 local function findTrackByGuid(guid)
@@ -278,6 +340,73 @@ local function trackLabel(tr, isMaster)
   local _, nm = reaper.GetTrackName(tr)
   if not nm or nm == "" then return "Track" end
   return nm
+end
+
+-- Smart track-name abbreviation — a Lua port of the extension's
+-- abbreviateTrackName_ (TrackName.cpp), so the panel reads like the UF8 / UC1
+-- scribble. Passes: 1) strip separators; 2) per-token drop later vowels
+-- (all-caps 2-4-char acronyms like DI/EQ/FX survive); 3) collapse repeated
+-- consonants; 4) hard-truncate the result. `maxLen` is user-set (different
+-- lengths for different tastes). Returns src unchanged if it already fits.
+local function isVowel(c)
+  c = c:lower()
+  return c == "a" or c == "e" or c == "i" or c == "o" or c == "u"
+end
+
+local function smartAbbrev(src, maxLen)
+  if not src or maxLen <= 0 or #src <= maxLen then return src end
+  local tokens = {}
+  for tok in src:gmatch("[^%s%-_/]+") do tokens[#tokens + 1] = tok end
+  if #tokens == 0 then return src:sub(1, maxLen) end
+  -- Pass 1: just strip separators.
+  local joined = table.concat(tokens)
+  if #joined <= maxLen then return joined end
+  -- Pass 2: per-token vowel drop (keep first char + consonants).
+  local abbr = {}
+  for _, t in ipairs(tokens) do
+    if #t >= 2 and #t <= 4 and t:match("^%u+$") then
+      abbr[#abbr + 1] = t                      -- acronym token survives
+    else
+      local a = {}
+      for i = 1, #t do
+        local c = t:sub(i, i)
+        if i == 1 or not isVowel(c) then a[#a + 1] = c end
+      end
+      if #a == 0 then a[1] = t:sub(1, 1) end
+      abbr[#abbr + 1] = table.concat(a)
+    end
+  end
+  joined = table.concat(abbr)
+  if #joined <= maxLen then return joined end
+  -- Pass 3: collapse repeated consonants (letters only).
+  for k, a in ipairs(abbr) do
+    local c = {}
+    for i = 1, #a do
+      local ch = a:sub(i, i)
+      local letter = ch:match("%a") ~= nil
+      if not (#c > 0 and c[#c] == ch and letter and not isVowel(ch)) then
+        c[#c + 1] = ch
+      end
+    end
+    abbr[k] = table.concat(c)
+  end
+  joined = table.concat(abbr)
+  if #joined <= maxLen then return joined end
+  -- Pass 4: hard truncate.
+  return joined:sub(1, maxLen)
+end
+
+-- Format a track name for the panel per the user's options:
+--   overlay_panel_trackname  "0" hide / else show (default show)
+--   overlay_panel_track_abbr "1" smart / else full  (default full)
+--   overlay_panel_track_len  smart-abbrev length     (default 8)
+local function panelTrackDisplay(name)
+  if not name then return nil end
+  if reaper.GetExtState(SECT, "overlay_panel_trackname") == "0" then return nil end
+  if reaper.GetExtState(SECT, "overlay_panel_track_abbr") == "1" then
+    return smartAbbrev(name, math.max(1, math.floor(num("overlay_panel_track_len", 8))))
+  end
+  return name
 end
 
 -- "VST3: SSL Native Channel Strip 2 (Solid State Logic)" -> "SSL Native Channel Strip 2"
@@ -314,7 +443,7 @@ local function paramStr(key)
 end
 
 local function drawPanel(byGuid)
-  local fs, pad, lh = panelMetrics()
+  local fs, pad, lh, _, _, oneLine = panelMetrics()
   gfx.set(0.11, 0.11, 0.12, 1); gfx.rect(0, 0, gfx.w, gfx.h, 1)
   gfx.setfont(1, "Arial", fs)
 
@@ -324,25 +453,28 @@ local function drawPanel(byGuid)
   local fGuid = reaper.GetExtState(SECT, "overlay_focus")
   local ftr, fMaster = findTrackByGuid(fGuid)
   local fa = byGuid and byGuid[fGuid] or nil
-  local csTrk  = ftr and trackLabel(ftr, fMaster) or nil
+  local csTrk  = ftr and panelTrackDisplay(trackLabel(ftr, fMaster)) or nil
   local csName = (ftr and fa) and fxLabel(ftr, fa.cs) or nil
 
   local bcGuid, bcIdx = findActiveBc(byGuid)
   local btr, bMaster = nil, false
   if bcGuid then btr, bMaster = findTrackByGuid(bcGuid) end
-  local bcTrk  = btr and trackLabel(btr, bMaster) or nil
+  local bcTrk  = btr and panelTrackDisplay(trackLabel(btr, bMaster)) or nil
   local bcName = btr and fxLabel(btr, bcIdx) or nil
 
   local csPN, csPV = paramStr("overlay_param_cs")
   local bcPN, bcPV = paramStr("overlay_param_bc")
 
-  -- "<track>  <TAG> <fx>   <param> <val>" — track dim, tag in domain colour,
-  -- fx bright, param blue + value dim.
-  local function row(y, trk, tag, col, name, pn, pv)
+  -- One segment, drawn at the current gfx.x/gfx.y (drawstr advances x):
+  -- "[<track>  ]<TAG> <fx>   <param> <val>" — track dim, tag in domain colour,
+  -- fx bright, param blue + value dim. Track name only in two-line mode (one
+  -- line is tight; CS + BC share the row there).
+  local function seg(tag, col, name, pn, pv, trk)
     local lit = name ~= nil
-    gfx.x, gfx.y = pad, y
-    gfx.set(0.62, 0.62, 0.70, lit and 1 or 0.35)
-    gfx.drawstr((trk or "") .. "  ")
+    if trk ~= nil then
+      gfx.set(0.62, 0.62, 0.70, lit and 1 or 0.35)
+      gfx.drawstr((trk or "") .. "  ")
+    end
     gset(col, lit and 1 or 0.35); gfx.drawstr(tag .. " ")
     gfx.set(0.93, 0.93, 0.96, lit and 1 or 0.35)
     gfx.drawstr(name or "\xE2\x80\x94")
@@ -353,8 +485,16 @@ local function drawPanel(byGuid)
       end
     end
   end
-  row(pad,        csTrk, "CS", csRgb(), csName, csPN, csPV)
-  row(pad + lh,   bcTrk, "BC", bcRgb(), bcName, bcPN, bcPV)
+
+  if oneLine then
+    gfx.x, gfx.y = pad, pad
+    seg("CS", csRgb(), csName, csPN, csPV, csTrk)
+    gfx.drawstr("     ")
+    seg("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
+  else
+    gfx.x, gfx.y = pad, pad;      seg("CS", csRgb(), csName, csPN, csPV, csTrk)
+    gfx.x, gfx.y = pad, pad + lh; seg("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
+  end
 end
 
 local function panelClose(persistOff)
@@ -367,31 +507,142 @@ local function panelClose(persistOff)
   if persistOff then reaper.SetExtState(SECT, "overlay_panel", "0", true) end
 end
 
--- Right-click context menu: gfx windows don't reliably expose a native
--- "Dock window" entry on macOS, so we provide our own. Dock state is persisted
--- (overlay_panel_dock) so the panel reopens where the user left it.
-local function panelContextMenu()
-  local docked = (gfx.dock(-1) & 1) == 1
-  gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
-  local menu = (docked and "!" or "") .. "Dock window in Docker|Close panel"
-  local sel = gfx.showmenu(menu)
-  if sel == 1 then
-    if docked then gfx.dock(0) else gfx.dock(1) end
-    panelDock = gfx.dock(-1)
-    reaper.SetExtState(SECT, "overlay_panel_dock", tostring(panelDock or 0), true)
-  elseif sel == 2 then
-    panelClose(true)
+-- Declarative menu builder (compact port of FeedTheCat's Gridbox menu system).
+-- A menu is an array of entries; an entry is one of:
+--   { title=..., OnReturn=fn, checked=bool, grayed=bool }   -- leaf
+--   { separator = true }                                    -- divider
+--   { title=..., <nested entries...> }                      -- submenu
+-- buildMenu → gfx.showmenu string; runMenu dispatches the clicked entry's
+-- OnReturn (separators/submenu headers don't count as selectable indices, so
+-- the index walk matches gfx.showmenu's numbering).
+local function buildMenu(menu)
+  local str = menu.title and (">" .. menu.title .. "|") or ""
+  for _, e in ipairs(menu) do
+    if e.separator then
+      str = str .. "|"
+    elseif #e > 0 then
+      str = str .. buildMenu(e) .. "|"
+    elseif e.title then
+      if e.checked then str = str .. "!" end
+      if e.grayed  then str = str .. "#" end
+      str = str .. e.title .. "|"
+    end
   end
+  if menu.title then str = str .. "<" end
+  return str
+end
+
+local function runMenu(menu, idx, i)
+  i = i or 1
+  for _, e in ipairs(menu) do
+    if #e > 0 then
+      i = runMenu(e, idx, i)
+      if i < 0 then return i end
+    elseif e.title and not e.separator then
+      if i == idx then
+        if e.OnReturn then e.OnReturn() end
+        return -1
+      end
+      i = i + 1
+    end
+  end
+  return i
+end
+
+local function panelSetFontSize()
+  local cur = math.floor(num("overlay_panel_font", 18))
+  local ret, input = reaper.GetUserInputs("Panel font", 1,
+    "Font size: (e.g. 18),extrawidth=40", tostring(cur))
+  if not ret then return end
+  local fs = tonumber(input)
+  if fs then
+    reaper.SetExtState(SECT, "overlay_panel_font",
+      tostring(math.max(8, math.floor(fs))), true)
+  end
+end
+
+local function panelSetTrackLen()
+  local cur = math.floor(num("overlay_panel_track_len", 8))
+  local ret, input = reaper.GetUserInputs("Track name length", 1,
+    "Smart-abbrev length: (e.g. 8),extrawidth=40", tostring(cur))
+  if not ret then return end
+  local v = tonumber(input)
+  if v then
+    reaper.SetExtState(SECT, "overlay_panel_track_len",
+      tostring(math.max(1, math.floor(v))), true)
+  end
+end
+
+-- Native colour picker → store as a 0xRRGGBB int string (same key the Settings
+-- ColorEdit + the csRgb/bcRgb readers use). ColorFromNative handles the
+-- platform byte order.
+local function panelChooseColor(key)
+  local ret, color = reaper.GR_SelectColor(reaper.GetMainHwnd())
+  if ret ~= 0 then
+    local r, g, b = reaper.ColorFromNative(color)
+    reaper.SetExtState(SECT, key, tostring(r * 65536 + g * 256 + b), true)
+  end
+end
+
+-- Right-click context menu: gfx windows don't reliably expose a native "Dock
+-- window" entry on macOS, so we provide our own + layout / font / colour. Dock
+-- state is persisted (overlay_panel_dock) so the panel reopens where it was.
+local function panelContextMenu()
+  local docked  = (gfx.dock(-1) & 1) == 1
+  local oneLine = panelOneLine()
+  local menu = {
+    { title = "Layout",
+      { title = "Two lines (CS / BC)", checked = not oneLine,
+        OnReturn = function()
+          reaper.SetExtState(SECT, "overlay_panel_oneline", "0", true)
+        end },
+      { title = "One line", checked = oneLine,
+        OnReturn = function()
+          reaper.SetExtState(SECT, "overlay_panel_oneline", "1", true)
+        end },
+    },
+    { title = "Track name",
+      { title = "Show track name",
+        checked = (reaper.GetExtState(SECT, "overlay_panel_trackname") ~= "0"),
+        OnReturn = function()
+          local on = reaper.GetExtState(SECT, "overlay_panel_trackname") ~= "0"
+          reaper.SetExtState(SECT, "overlay_panel_trackname", on and "0" or "1", true)
+        end },
+      { separator = true },
+      { title = "Full name",
+        checked = (reaper.GetExtState(SECT, "overlay_panel_track_abbr") ~= "1"),
+        OnReturn = function() reaper.SetExtState(SECT, "overlay_panel_track_abbr", "0", true) end },
+      { title = "Smart abbreviate",
+        checked = (reaper.GetExtState(SECT, "overlay_panel_track_abbr") == "1"),
+        OnReturn = function() reaper.SetExtState(SECT, "overlay_panel_track_abbr", "1", true) end },
+      { title = "Abbreviation length\xE2\x80\xA6", OnReturn = panelSetTrackLen },
+    },
+    { title = "Font size\xE2\x80\xA6", OnReturn = panelSetFontSize },
+    { title = "CS colour\xE2\x80\xA6", OnReturn = function() panelChooseColor("overlay_cs_col") end },
+    { title = "BC colour\xE2\x80\xA6", OnReturn = function() panelChooseColor("overlay_bc_col") end },
+    { separator = true },
+    { title = "Dock in Docker", checked = docked,
+      OnReturn = function()
+        if docked then gfx.dock(0) else gfx.dock(1) end
+        panelDock = gfx.dock(-1)
+        reaper.SetExtState(SECT, "overlay_panel_dock", tostring(panelDock or 0), true)
+      end },
+    { separator = true },
+    { title = "Close panel", OnReturn = function() panelClose(true) end },
+  }
+  gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+  local sel = gfx.showmenu(buildMenu(menu))
+  if sel and sel > 0 then runMenu(menu, sel) end
 end
 
 local function panelTick(byGuid)
   local want = panelWanted()
   if want and not panelOpen then
     local dock = math.floor(num("overlay_panel_dock", 0))
-    local fs, _, _, w, h = panelMetrics()
+    local fs, _, _, w, h, oneLine = panelMetrics()
     gfx.ext_retina = 1
     gfx.init("Rea-Sixty Inserts", w, h, dock, 200, 200)
-    panelOpen = true; panelFs = fs
+    panelOpen = true; panelFs = fs .. "|" .. (oneLine and "1" or "0")
   elseif not want and panelOpen then
     panelClose(false)
     return
@@ -403,12 +654,13 @@ local function panelTick(byGuid)
   if rc == 2 and panelRcPrev ~= 2 then panelContextMenu() end
   panelRcPrev = rc
   if not panelOpen then return end   -- menu may have closed it
-  -- Live-resize a FLOATING window when the font size changed (a docked panel
-  -- is sized by its docker — there the bigger font just fills the space).
-  local fs, _, _, w, h = panelMetrics()
-  if fs ~= panelFs and gfx.dock(-1) == 0 then
+  -- Live-resize a FLOATING window when the font size OR layout changed (a
+  -- docked panel is sized by its docker — there it just fills the space).
+  local fs, _, _, w, h, oneLine = panelMetrics()
+  local sig = fs .. "|" .. (oneLine and "1" or "0")
+  if sig ~= panelFs and gfx.dock(-1) == 0 then
     gfx.init("Rea-Sixty Inserts", w, h, 0, 200, 200)
-    panelFs = fs
+    panelFs = sig
   end
   drawPanel(byGuid)
   gfx.update()
@@ -420,9 +672,11 @@ end
 local g_lastSig, g_blocks, g_lastRev = nil, {}, -1
 local g_lastScroll, g_lastCount = nil, -1   -- cheap rescan triggers
 local g_emptyTick = 0                       -- slow retry while no target found
+local g_scrollPending = false               -- rescan owed once scrolling settles
+local g_stableTicks = 0                     -- ticks since the mixer scroll last moved
 
 local function blockSig(b)
-  if b.kind == "mcp" then return string.format("m%s,%d,%d,%d", tostring(b.hwnd), b.cw, b.ch, b.count or 0)
+  if b.kind == "mcp" then return string.format("m%s,%d,%d,%d,%d", tostring(b.hwnd), b.sl, b.sw, b.ch, b.count or 0)
   else return string.format("t%s,%d,%d,%d", tostring(b.hwnd), b.sl, b.st, b.sw) end
 end
 
@@ -442,6 +696,26 @@ local function drawSig(byGuid, blocks)
   return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 17) .. "," .. num("overlay_toppad", 1)
     .. "," .. num("overlay_rowh_tcp", 14) .. "," .. num("overlay_toppad_tcp", 0)
     .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. fillA() .. "," .. lineA()
+    .. "," .. num("overlay_ss", is_windows and 1 or 2)
+end
+
+-- Motion fingerprint for "is the mixer mid-scroll". GetMixerScroll alone is
+-- quantised to whole tracks, so it stays constant for many ticks during a
+-- smooth/pixel scroll → the settle counter fired while the user was still
+-- scrolling. I_MCPX is the strip's live pixel-x in the mixer and moves
+-- continuously, so folding it in makes the fingerprint change every tick the
+-- strips actually move. Cheap (a getter per active track). Frank 2026-06-15.
+local function scrollFp(byGuid)
+  local parts = { tostring(reaper.GetMixerScroll()) }
+  for guid in pairs(byGuid) do
+    local tr = findTrackByGuid(guid)
+    if tr then
+      parts[#parts + 1] =
+        string.format("%d", math.floor((reaper.GetMediaTrackInfo_Value(tr, "I_MCPX") or 0) + 0.5))
+    end
+  end
+  table.sort(parts)
+  return table.concat(parts, ",")
 end
 
 local shutdown
@@ -457,23 +731,54 @@ local function loop()
     -- fxlist windows only when the active set changed (rev), the mixer
     -- scrolled/banked (GetMixerScroll), or tracks were added/removed. Steady
     -- typing triggers none of these, so the overlay is idle and cheap.
-    local scroll = reaper.GetMixerScroll()
+    local scroll = scrollFp(byGuid)
     local ntrk   = reaper.CountTracks(0)
-    local need = rev ~= g_lastRev or scroll ~= g_lastScroll or ntrk ~= g_lastCount
-    -- If we have NO target yet (mixer hidden / strip scrolled off), retry at a
-    -- slow ~1 Hz — never per-tick — so a closed mixer can't re-introduce lag.
-    if next(g_blocks) == nil then
-      g_emptyTick = g_emptyTick + 1
-      if g_emptyTick >= 30 then need = true; g_emptyTick = 0 end
+    if scroll ~= g_lastScroll then
+      -- Mixer is scrolling/banking: the active strips' positions are in flux.
+      -- Running the window scan AND keeping a live composite on a continuously
+      -- repainting mixer is what makes scrolling feel sluggish, so HIDE the
+      -- overlay and owe a rescan for once scrolling has settled. Reset the
+      -- stable-tick counter each time the scroll moves. Frank 2026-06-14/15.
+      g_lastScroll = scroll
+      g_scrollPending = true
+      g_stableTicks = 0
+      if g_lastSig ~= "scrolling" then clearDrawn(); g_lastSig = "scrolling" end
     else
-      g_emptyTick = 0
+      g_stableTicks = g_stableTicks + 1
+      -- Settle delay before re-acquiring after a scroll: stay hidden until the
+      -- scroll has been still for `overlay_settle` defer ticks (~30 Hz; default
+      -- 8 ≈ 0.25 s, set 30 for ~1 s). Keeps the scan off the mixer while the
+      -- user is still flinging it.
+      local settle = math.max(1, math.floor(num("overlay_settle", 8)))
+      local need
+      if g_scrollPending then
+        need = (g_stableTicks >= settle)      -- wait out the settle, stay hidden
+      else
+        need = rev ~= g_lastRev or ntrk ~= g_lastCount
+        -- No target yet (mixer hidden / strip scrolled off) → slow ~1 Hz retry,
+        -- never per-tick, so a closed mixer can't re-introduce lag.
+        if next(g_blocks) == nil then
+          g_emptyTick = g_emptyTick + 1
+          if g_emptyTick >= 30 then need = true; g_emptyTick = 0 end
+        else
+          g_emptyTick = 0
+        end
+      end
+      if need then
+        -- Only the active CS/BC tracks are ever drawn — scan for just those and
+        -- bail as soon as they're located (see scanFxBlocks).
+        local want = {}
+        for guid in pairs(byGuid) do want[guid] = true end
+        g_blocks = scanFxBlocks(want)
+        g_lastRev, g_lastCount = rev, ntrk
+        g_scrollPending = false
+      end
+      -- Stay hidden while a post-scroll rescan is still owed (settling).
+      if not g_scrollPending then
+        local sig = drawSig(byGuid, g_blocks)
+        if sig ~= g_lastSig then rebuildDraw(byGuid, g_blocks); g_lastSig = sig end
+      end
     end
-    if need then
-      g_blocks = scanFxBlocks()
-      g_lastRev, g_lastScroll, g_lastCount = rev, scroll, ntrk
-    end
-    local sig = drawSig(byGuid, g_blocks)
-    if sig ~= g_lastSig then rebuildDraw(byGuid, g_blocks); g_lastSig = sig end
   end
   panelTick(byGuid)   -- dockable readout panel (independent of the list highlight)
   reaper.defer(loop)
