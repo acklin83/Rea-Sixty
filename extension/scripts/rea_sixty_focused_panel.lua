@@ -79,7 +79,11 @@ local bm_x, bm_y, bm_w, bm_h
 local bitmap
 local lice_font, font_px
 local is_resize, is_redraw = true, true
-local fit_height = true     -- auto-fit height to content ONCE (font/layout change)
+-- Auto-fit height to content ONCE. Only on a font/layout change (menu) or a
+-- fresh install with no saved rect — NOT on every load, or the user's saved
+-- height got clobbered by metrics() each restart. loadRect arms it when there
+-- is no persisted size yet.
+local fit_height = false
 local drag_x, drag_y       -- drag anchor (client coords)
 local resize_flags = 0     -- 1=L 2=T 4=R 8=B (combine for corners)
 local last_sig             -- content signature → redraw only on change
@@ -97,6 +101,7 @@ local function loadRect()
     bm_x, bm_y, bm_w, bm_h = tonumber(x), tonumber(y), tonumber(w), tonumber(h)
   else
     bm_x, bm_y, bm_w, bm_h = 60, 80, 360, 56
+    fit_height = true   -- no saved size yet → auto-size the default height once
   end
 end
 
@@ -190,6 +195,69 @@ local function trackLabel(tr, isMaster)
   return nm
 end
 
+-- Smart track-name abbreviation — Lua port of the extension's
+-- abbreviateTrackName_ (TrackName.cpp), so the box reads like the UF8 / UC1
+-- scribble. Passes: 1) strip separators; 2) per-token drop later vowels
+-- (all-caps 2-4-char acronyms like DI/EQ/FX survive); 3) collapse repeated
+-- consonants; 4) hard-truncate. `maxLen` is user-set. Returns src unchanged
+-- if it already fits.
+local function isVowel(c)
+  c = c:lower()
+  return c == "a" or c == "e" or c == "i" or c == "o" or c == "u"
+end
+
+local function smartAbbrev(src, maxLen)
+  if not src or maxLen <= 0 or #src <= maxLen then return src end
+  local tokens = {}
+  for tok in src:gmatch("[^%s%-_/]+") do tokens[#tokens + 1] = tok end
+  if #tokens == 0 then return src:sub(1, maxLen) end
+  local joined = table.concat(tokens)
+  if #joined <= maxLen then return joined end
+  local abbr = {}
+  for _, t in ipairs(tokens) do
+    if #t >= 2 and #t <= 4 and t:match("^%u+$") then
+      abbr[#abbr + 1] = t
+    else
+      local a = {}
+      for i = 1, #t do
+        local c = t:sub(i, i)
+        if i == 1 or not isVowel(c) then a[#a + 1] = c end
+      end
+      if #a == 0 then a[1] = t:sub(1, 1) end
+      abbr[#abbr + 1] = table.concat(a)
+    end
+  end
+  joined = table.concat(abbr)
+  if #joined <= maxLen then return joined end
+  for k, a in ipairs(abbr) do
+    local c = {}
+    for i = 1, #a do
+      local ch = a:sub(i, i)
+      local letter = ch:match("%a") ~= nil
+      if not (#c > 0 and c[#c] == ch and letter and not isVowel(ch)) then
+        c[#c + 1] = ch
+      end
+    end
+    abbr[k] = table.concat(c)
+  end
+  joined = table.concat(abbr)
+  if #joined <= maxLen then return joined end
+  return joined:sub(1, maxLen)
+end
+
+-- Format a track name per the user's options (own keys, independent of layout):
+--   focused_panel_trackname  "0" hide / else show (default show)
+--   focused_panel_track_abbr "1" smart / else full (default full)
+--   focused_panel_track_len  smart-abbrev length    (default 8)
+local function trackDisplay(name)
+  if not name then return nil end
+  if reaper.GetExtState(SECT, "focused_panel_trackname") == "0" then return nil end
+  if reaper.GetExtState(SECT, "focused_panel_track_abbr") == "1" then
+    return smartAbbrev(name, math.max(1, math.floor(num("focused_panel_track_len", 8))))
+  end
+  return name
+end
+
 local function fxLabel(tr, fxIdx)
   if not tr or not fxIdx or fxIdx < 0 then return nil end
   local _, nm = reaper.TrackFX_GetFXName(tr, fxIdx, "")
@@ -230,13 +298,13 @@ local function drawContent()
   local fGuid  = reaper.GetExtState(SECT, "overlay_focus")
   local ftr, fMaster = findTrackByGuid(fGuid)
   local fa = byGuid[fGuid]
-  local csTrk  = ftr and trackLabel(ftr, fMaster) or nil
+  local csTrk  = ftr and trackDisplay(trackLabel(ftr, fMaster)) or nil
   local csName = (ftr and fa) and fxLabel(ftr, fa.cs) or nil
 
   local bcGuid, bcIdx = findActiveBc(byGuid)
   local btr, bMaster = nil, false
   if bcGuid then btr, bMaster = findTrackByGuid(bcGuid) end
-  local bcTrk  = btr and trackLabel(btr, bMaster) or nil
+  local bcTrk  = btr and trackDisplay(trackLabel(btr, bMaster)) or nil
   local bcName = btr and fxLabel(btr, bcIdx) or nil
 
   local csPN, csPV = paramStr("overlay_param_cs")
@@ -246,7 +314,8 @@ local function drawContent()
   local pad = math.max(6, math.floor(fs * 0.5))
   local lh  = fs + math.floor(fs * 0.5)
 
-  -- One segment at (x,y); returns advanced x. Track name only in two-line mode.
+  -- One segment at (x,y); returns advanced x. Track name shown per trackDisplay
+  -- (independent of layout — passed in both one- and two-line modes).
   local function seg(x, y, tag, col, name, pn, pv, trk)
     local lit = name ~= nil
     local dim = lit and 0xB0B0BC or 0x6A6A74
@@ -266,8 +335,8 @@ local function drawContent()
   local top    = math.max(2, (bm_h - blockH) // 2)
   local ty0    = top + (lh - fs) // 2     -- centre each line within its slot
   if oneLine() then
-    local x = seg(pad, ty0, "CS", csRgb(), csName, csPN, csPV, nil)
-    seg(x + measure("     "), ty0, "BC", bcRgb(), bcName, bcPN, bcPV, nil)
+    local x = seg(pad, ty0, "CS", csRgb(), csName, csPN, csPV, csTrk)
+    seg(x + measure("     "), ty0, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
   else
     seg(pad, ty0,      "CS", csRgb(), csName, csPN, csPV, csTrk)
     seg(pad, ty0 + lh, "BC", bcRgb(), bcName, bcPN, bcPV, bcTrk)
@@ -384,6 +453,18 @@ local function setCorner()
   end
 end
 
+local function setTrackLen()
+  local cur = math.floor(num("focused_panel_track_len", 8))
+  local ret, input = reaper.GetUserInputs("Track name length", 1,
+    "Smart-abbrev length: (e.g. 8),extrawidth=40", tostring(cur))
+  if not ret then return end
+  local v = tonumber(input)
+  if v then
+    reaper.SetExtState(SECT, "focused_panel_track_len", tostring(math.max(1, math.floor(v))), true)
+    is_redraw = true
+  end
+end
+
 local function setHost(p)
   reaper.SetExtState(SECT, "focused_panel_host", p, true)
   g_rehost = true
@@ -399,6 +480,23 @@ local function showContextMenu(mx, my)
         OnReturn = function() reaper.SetExtState(SECT, "focused_panel_oneline", "0", true); is_resize = true; fit_height = true end },
       { title = "One line", checked = one,
         OnReturn = function() reaper.SetExtState(SECT, "focused_panel_oneline", "1", true); is_resize = true; fit_height = true end },
+    },
+    { title = "Track name",
+      { title = "Show track name",
+        checked = (reaper.GetExtState(SECT, "focused_panel_trackname") ~= "0"),
+        OnReturn = function()
+          local on = reaper.GetExtState(SECT, "focused_panel_trackname") ~= "0"
+          reaper.SetExtState(SECT, "focused_panel_trackname", on and "0" or "1", true)
+          is_redraw = true
+        end },
+      { separator = true },
+      { title = "Full name",
+        checked = (reaper.GetExtState(SECT, "focused_panel_track_abbr") ~= "1"),
+        OnReturn = function() reaper.SetExtState(SECT, "focused_panel_track_abbr", "0", true); is_redraw = true end },
+      { title = "Smart abbreviate",
+        checked = (reaper.GetExtState(SECT, "focused_panel_track_abbr") == "1"),
+        OnReturn = function() reaper.SetExtState(SECT, "focused_panel_track_abbr", "1", true); is_redraw = true end },
+      { title = "Abbreviation length\xE2\x80\xA6", OnReturn = setTrackLen },
     },
     { title = "Customize",
       { title = "Font size\xE2\x80\xA6",       OnReturn = setFontSize },
@@ -734,6 +832,9 @@ local function loop()
     csRgb(), bcRgb(), font_px or 0, oneLine() and 1 or 0,
     num("focused_panel_corner", 6), num("focused_panel_bg", 0),
     num("focused_panel_border", 0),
+    reaper.GetExtState(SECT, "focused_panel_trackname"),
+    reaper.GetExtState(SECT, "focused_panel_track_abbr"),
+    num("focused_panel_track_len", 8),
     bm_x, bm_y, bm_w, bm_h, resize_flags,
   }, "|")
   if is_redraw or sig ~= last_sig then
