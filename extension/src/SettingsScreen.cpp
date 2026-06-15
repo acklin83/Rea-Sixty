@@ -76,8 +76,6 @@ bool reasixty_insertMarkers();
 void reasixty_setInsertMarkers(bool on);
 int  reasixty_insertMarkerStyle();
 void reasixty_setInsertMarkerStyle(int style);
-bool reasixty_insertPanel();
-void reasixty_setInsertPanel(bool on);
 bool reasixty_assignmentHud();
 void reasixty_setAssignmentHud(bool on);
 bool reasixty_assignmentHudRunning();
@@ -92,8 +90,6 @@ double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
 void   reasixty_setOverlayLineAlpha(double a);
-int    reasixty_overlayPanelFont();
-void   reasixty_setOverlayPanelFont(int px);
 int    reasixty_overlayRowHeight();
 void   reasixty_setOverlayRowHeight(int px);
 int    reasixty_overlayTopPad();
@@ -559,15 +555,11 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     // dirty project). Each toggle auto-starts / stops the companion as needed
     // and is restored on the next REAPER launch.
     //   • MCP overlay — JS_Composite highlight on the native Mixer Inserts row.
-    //   • Focused-track docker — a small dockable gfx panel showing the
-    //     surface-focused track + its active CS / BC instance names.
+    // (The old dockable focused-track docker was retired — the frameless
+    // focused-track panel below replaces it.)
     bool insMark = reasixty_insertMarkers();
     if (ImGui_Checkbox(ctx, "Show MCP Inserts overlay", &insMark)) {
         reasixty_setInsertMarkers(insMark);
-    }
-    bool insPanel = reasixty_insertPanel();
-    if (ImGui_Checkbox(ctx, "Show focused-track docker", &insPanel)) {
-        reasixty_setInsertPanel(insPanel);
     }
     // Assignment HUD — dockable surface mockup of the focused plug-in's UC1
     // control assignments (read-only). Its own companion + run flag.
@@ -592,14 +584,16 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
                                 : "  Panel companion starting\xE2\x80\xA6");
     }
 
-    if (insMark || insPanel) {
+    if (insMark) {
         ImGui_TextDisabled(ctx, reasixty_insertsOverlayRunning()
                                 ? "Companion running"
                                 : "Companion starting\xE2\x80\xA6");
+    }
 
-        // CS / BC colours — shared by BOTH the overlay and the docker. Live:
-        // the companion re-reads these from ExtState on every repaint.
-        // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
+    // CS / BC colours — shared by the MCP overlay and the frameless panel.
+    // Live: each companion re-reads these from ExtState on every repaint.
+    // ColorEdit3 uses 0xRRGGBB order — matches the Lua's colour packing.
+    if (insMark || fpanel) {
         int ceFlags = ImGui_ColorEditFlags_NoInputs;
         int csCol = reasixty_overlayCsColor();
         ImGui_SetNextItemWidth(ctx, 220.0);
@@ -611,47 +605,36 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
             reasixty_setOverlayBcColor(bcCol);
         }
+    }
 
-        // Fill / border opacity apply to the MCP overlay only.
-        if (insMark) {
-            double fillA = reasixty_overlayFillAlpha();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
-                                   "%.2f", nullptr)) {
-                reasixty_setOverlayFillAlpha(fillA);
-            }
-            double lineA = reasixty_overlayLineAlpha();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
-                                   "%.2f", nullptr)) {
-                reasixty_setOverlayLineAlpha(lineA);
-            }
-            // Row height + first-row offset. The insert-row height is a theme/
-            // UI-scale font constant (16/24/32px @ scale 1/1.5/2); dial it until
-            // the highlight sits on the right rows.
-            int rh = reasixty_overlayRowHeight();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Inserts row height", &rh, 8, 48,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayRowHeight(rh);
-            }
-            int tp = reasixty_overlayTopPad();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Inserts top offset", &tp, -20, 40,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayTopPad(tp);
-            }
+    // Fill / border opacity + row geometry apply to the MCP overlay only.
+    if (insMark) {
+        double fillA = reasixty_overlayFillAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Fill opacity", &fillA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayFillAlpha(fillA);
         }
-
-        // Font size applies to the docker only (right-click the panel to
-        // dock / undock / close it).
-        if (insPanel) {
-            int pf = reasixty_overlayPanelFont();
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_SliderInt(ctx, "Panel font size", &pf, 10, 40,
-                                nullptr, nullptr)) {
-                reasixty_setOverlayPanelFont(pf);
-            }
+        double lineA = reasixty_overlayLineAlpha();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderDouble(ctx, "Border opacity", &lineA, 0.0, 1.0,
+                               "%.2f", nullptr)) {
+            reasixty_setOverlayLineAlpha(lineA);
+        }
+        // Row height + first-row offset. The insert-row height is a theme/
+        // UI-scale font constant (16/24/32px @ scale 1/1.5/2); dial it until
+        // the highlight sits on the right rows.
+        int rh = reasixty_overlayRowHeight();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderInt(ctx, "Inserts row height", &rh, 8, 48,
+                            nullptr, nullptr)) {
+            reasixty_setOverlayRowHeight(rh);
+        }
+        int tp = reasixty_overlayTopPad();
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_SliderInt(ctx, "Inserts top offset", &tp, -20, 40,
+                            nullptr, nullptr)) {
+            reasixty_setOverlayTopPad(tp);
         }
     }
 

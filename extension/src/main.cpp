@@ -1941,13 +1941,6 @@ std::atomic<int>  g_insertMarkerStyle{0};
 // is overlay. See docs/inserts-overlay-spike.md.
 std::atomic<bool> g_insertLegacyRename{false};
 
-// Optional dockable readout panel (Settings → Device → Inserts). When on, the
-// bundled companion Lua opens a small gfx dock showing the surface-focused
-// track + its active CS / BC instance names. Pure Lua-side feature — the
-// extension only persists the flag (ExtState "overlay_panel") and publishes the
-// focused-track GUID ("overlay_focus") for the panel to read. Default off.
-std::atomic<bool> g_insertPanelEnabled{false};
-
 // Auto-start the companion overlay/panel on the first main-thread tick after
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
@@ -2268,9 +2261,6 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "insert_legacy_rename"); v && *v) {
         g_insertLegacyRename.store(std::atoi(v) != 0);
-    }
-    if (const char* v = GetExtState("rea_sixty", "overlay_panel"); v && *v) {
-        g_insertPanelEnabled.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "hud_on"); v && *v) {
         g_hudEnabled.store(std::atoi(v) != 0);
@@ -5084,8 +5074,7 @@ void publishOverlayFocus_()
     std::string guid;
     // Published whenever EITHER feature is on — the docker needs the focus GUID
     // independently of the MCP highlight.
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load()
-                   || g_focusedPanel.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
     if (feat && g_uc1_surface) {
         auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
@@ -5176,8 +5165,7 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
     if (csTr != sCsTr || csFx != sCsFx) { sCsTr = csTr; sCsFx = csFx; sCsParam = -1; }
     if (bcTr != sBcTr || bcFx != sBcFx) { sBcTr = bcTr; sBcFx = bcFx; sBcParam = -1; }
 
-    const bool feat = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load()
-                   || g_focusedPanel.load();
+    const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
     if (feat) {
         MediaTrack* ltTr; int ltFx, ltP;
         resolveLastTouched_(ltTr, ltFx, ltP);
@@ -5215,7 +5203,7 @@ void publishOverlayState_()
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.
     const bool on   = g_insertMarkersEnabled.load();
-    const bool body_on = on || g_insertPanelEnabled.load() || g_focusedPanel.load();
+    const bool body_on = on || g_focusedPanel.load();
     MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
     int csFx = -1, bcFx = -1;
     if (body_on) activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
@@ -15926,17 +15914,6 @@ void reasixty_setInsertMarkers(bool on)
     reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
 }
 
-bool reasixty_insertPanel() { return g_insertPanelEnabled.load(); }
-void reasixty_setInsertPanel(bool on)
-{
-    g_insertPanelEnabled.store(on);
-    SetExtState("rea_sixty", "overlay_panel", on ? "1" : "0", true);
-    // Pure Lua-side: the running companion polls this key and opens/closes its
-    // dock. Republish so the focused-track GUID is fresh the moment it opens.
-    publishOverlayState_();
-    reasixty_syncInsertsOverlayRun();   // start/stop the companion to match
-}
-
 bool reasixty_assignmentHud() { return g_hudEnabled.load(); }
 void reasixty_setAssignmentHud(bool on)
 {
@@ -16016,20 +15993,6 @@ void reasixty_setOverlayLineAlpha(double a)
     char b[24]; snprintf(b, sizeof(b), "%.3f", a);
     SetExtState("rea_sixty", "overlay_line_a", b, true);
 }
-int  reasixty_overlayPanelFont()
-{
-    const char* v = GetExtState("rea_sixty", "overlay_panel_font");
-    int px = (v && *v) ? std::atoi(v) : 18;
-    if (px < 10) px = 10; if (px > 40) px = 40;
-    return px;
-}
-void reasixty_setOverlayPanelFont(int px)
-{
-    if (px < 10) px = 10; if (px > 40) px = 40;
-    char b[8]; snprintf(b, sizeof(b), "%d", px);
-    SetExtState("rea_sixty", "overlay_panel_font", b, true);
-}
-
 // MCP overlay geometry. The insert-row height is a THEME / UI-scale font
 // constant (mcp.fxlist.font = 16/24/32 px @ scale 1/1.5/2) and the inserts box
 // is a FIXED height that does not grow to fit — so it can't be derived from the
@@ -20319,7 +20282,7 @@ bool reasixty_insertsOverlayRunning()
 // next tick). Main-thread only (registers/runs an action).
 void reasixty_syncInsertsOverlayRun()
 {
-    const bool want = g_insertMarkersEnabled.load() || g_insertPanelEnabled.load();
+    const bool want = g_insertMarkersEnabled.load();
     const bool running = reasixty_insertsOverlayRunning();
     if (want && !running)      reasixty_toggleInsertsOverlay();        // starts it
     else if (!want && running) SetExtState("rea_sixty", "overlay_running",
