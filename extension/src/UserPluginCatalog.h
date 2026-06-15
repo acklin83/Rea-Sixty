@@ -266,18 +266,6 @@ struct KnobTravel {
     }
 };
 
-// FX-Learn modifier overlay for a UF8 V-Pot (Option / Control). Carries the
-// dispatch-relevant fields; an overlay with vst3Param < 0 is "unmapped" and
-// the runtime falls back to the V-Pot's Normal mapping. Colour/label stay
-// Normal-only (cosmetics don't change per modifier).
-struct Uf8VpotLayer {
-    int          vst3Param   = -1;
-    bool         inverted    = false;
-    VPotMode     vpotMode    = VPotMode::Value;
-    double       defaultNorm = 0.5;
-    KnobTravel   travel{};
-};
-
 // One slot in one of eight UF8 banks. vst3Param=-1 => empty slot
 // (top-soft-key blank, V-Pot no-op).
 struct UserUf8BankSlot {
@@ -296,8 +284,6 @@ struct UserUf8BankSlot {
     uint32_t     stripColour = 0;
     KnobTravel   travel{};                    // per V-Pot range/curve
     VPotPolarity polarity = VPotPolarity::Unipolar;
-    // FX-Learn modifier overlays: [0]=Option, [1]=Control.
-    Uf8VpotLayer modLayers[kNumFxLayers - 1];
 };
 
 // TopSoftKey LED appearance — bank-scoped (Frank 2026-05-13:
@@ -348,16 +334,6 @@ struct UserUf8BankSet {
 // each channel's fader independently. (v6 had strips[topSoftKey][slot]
 // — that per-top-soft-key dimension is dropped, migration takes
 // strips[0][slot] only.)
-// FX-Learn modifier overlay for a UF8 strip's fader + Solo/Cut/Sel buttons.
-// Per sub-control fallback: a field left at -1 inherits that sub-control's
-// Normal mapping. Colours/labels stay Normal-only.
-struct Uf8StripLayer {
-    int  faderVst3Param = -1; bool faderInverted = false;
-    int  soloVst3Param  = -1; bool soloInvert    = false;
-    int  cutVst3Param   = -1; bool cutInvert     = false;
-    int  selVst3Param   = -1; bool selInvert     = false;
-};
-
 struct UserUf8StripBinding {
     int          faderVst3Param = -1;         // -1 = fall through to track vol
     bool         faderInverted  = false;
@@ -386,54 +362,18 @@ struct UserUf8StripBinding {
     bool soloInvert = false;
     bool cutInvert  = false;
     bool selInvert  = false;
-    // FX-Learn modifier overlays: [0]=Option, [1]=Control.
-    Uf8StripLayer modLayers[kNumFxLayers - 1];
 };
 
-// Effective UF8 V-Pot binding under FX-Learn layer L: the Option/Control
-// overlay when it carries a bound param, else the Normal/base slot. Returns a
-// merged copy (cheap; called at user-input rate, not per-sample).
-inline UserUf8BankSlot fxEffectiveVpot(const UserUf8BankSlot& base, int L) {
-    if (L <= FxLayer::Normal) return base;
-    const Uf8VpotLayer& ov = base.modLayers[L - 1];
-    if (ov.vst3Param < 0) return base;
-    UserUf8BankSlot eff = base;
-    eff.vst3Param   = ov.vst3Param;
-    eff.inverted    = ov.inverted;
-    eff.vpotMode    = ov.vpotMode;
-    eff.defaultNorm = ov.defaultNorm;
-    eff.travel      = ov.travel;
-    return eff;
+// FX-Learn modifier layers (Option/Control) were removed from UF8 — they remain
+// a UC1-only feature (Option on UF8 collided with fader Alt-drag, and the
+// overlay coverage was partial). These identity shims keep the V-Pot/strip
+// dispatch + render call sites unchanged; the layer argument is ignored and the
+// Normal/base binding is always returned. Frank 2026-06-15.
+inline const UserUf8BankSlot& fxEffectiveVpot(const UserUf8BankSlot& base, int) {
+    return base;
 }
-// Effective UF8 strip binding under FX-Learn layer L. Per sub-control fallback:
-// each of fader/solo/cut/sel uses its overlay when mapped, else Normal.
-inline UserUf8StripBinding fxEffectiveStrip(const UserUf8StripBinding& base, int L) {
-    if (L <= FxLayer::Normal) return base;
-    const Uf8StripLayer& ov = base.modLayers[L - 1];
-    UserUf8StripBinding eff = base;
-    if (ov.faderVst3Param >= 0) { eff.faderVst3Param = ov.faderVst3Param; eff.faderInverted = ov.faderInverted; }
-    if (ov.soloVst3Param  >= 0) { eff.soloVst3Param  = ov.soloVst3Param;  eff.soloInvert    = ov.soloInvert; }
-    if (ov.cutVst3Param   >= 0) { eff.cutVst3Param   = ov.cutVst3Param;   eff.cutInvert     = ov.cutInvert; }
-    if (ov.selVst3Param   >= 0) { eff.selVst3Param   = ov.selVst3Param;   eff.selInvert     = ov.selInvert; }
-    return eff;
-}
-// JSON-diff predicates — only serialise an overlay when it carries content.
-inline bool uf8VpotLayerNonDefault(const Uf8VpotLayer& l) {
-    return l.vst3Param >= 0 || l.inverted || l.vpotMode != VPotMode::Value
-        || l.defaultNorm != 0.5 || l.travel.isCustom();
-}
-inline bool uf8StripLayerNonDefault(const Uf8StripLayer& l) {
-    return l.faderVst3Param >= 0 || l.soloVst3Param >= 0 || l.cutVst3Param >= 0
-        || l.selVst3Param >= 0 || l.faderInverted || l.soloInvert
-        || l.cutInvert || l.selInvert;
-}
-inline bool hasAnyVpotModLayer(const UserUf8BankSlot& s) {
-    for (const auto& l : s.modLayers) if (uf8VpotLayerNonDefault(l)) return true;
-    return false;
-}
-inline bool hasAnyStripModLayer(const UserUf8StripBinding& s) {
-    for (const auto& l : s.modLayers) if (uf8StripLayerNonDefault(l)) return true;
-    return false;
+inline const UserUf8StripBinding& fxEffectiveStrip(const UserUf8StripBinding& base, int) {
+    return base;
 }
 
 // Bank Left / Bank Right buttons are reserved for fader-bank switching

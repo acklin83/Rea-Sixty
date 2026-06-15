@@ -6647,38 +6647,22 @@ void mutateUf8_(F&& fn)
 }
 
 // Resolve mutable pointers to the {param, invert} fields of a UF8 control for
-// the FX-Learn layer currently being EDITED (g_fxLearnEditLayer): the base
-// struct on Normal, the modLayers[] overlay on Option/Control. Lets the
-// editor's bind/clear/invert mutators write the active layer's overlay. (Per-
-// layer travel / V-Pot mode / colour are NOT routed here — they stay Normal-
-// only in this cut; the headline per-layer param + invert do switch.)
+// the UF8 control's base binding. (UF8 FX-Learn modifier layers were removed —
+// UC1-only feature — so this always targets the Normal/base struct.)
 struct Uf8EditFieldPtrs { int* param = nullptr; bool* invert = nullptr; };
 inline Uf8EditFieldPtrs uf8EditFieldPtrs_(uf8::UserUf8Map& u, int kind,
                                           int strip, int bank)
 {
-    const int L = g_fxLearnEditLayer;
     if (kind == 1 || kind == 2) {                 // V-Pot / TopSoftKey
         auto& s = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
-        if (L == uf8::FxLayer::Normal) return { &s.vst3Param, &s.inverted };
-        auto& o = s.modLayers[L - 1];
-        return { &o.vst3Param, &o.inverted };
+        return { &s.vst3Param, &s.inverted };
     }
     auto& st = u.strips[g_uf8EditingFaderBank][strip];
-    if (L == uf8::FxLayer::Normal) {
-        switch (kind) {
-            case 0: return { &st.faderVst3Param, &st.faderInverted };
-            case 3: return { &st.soloVst3Param,  &st.soloInvert };
-            case 4: return { &st.cutVst3Param,   &st.cutInvert };
-            case 5: return { &st.selVst3Param,   &st.selInvert };
-        }
-    } else {
-        auto& o = st.modLayers[L - 1];
-        switch (kind) {
-            case 0: return { &o.faderVst3Param, &o.faderInverted };
-            case 3: return { &o.soloVst3Param,  &o.soloInvert };
-            case 4: return { &o.cutVst3Param,   &o.cutInvert };
-            case 5: return { &o.selVst3Param,   &o.selInvert };
-        }
+    switch (kind) {
+        case 0: return { &st.faderVst3Param, &st.faderInverted };
+        case 3: return { &st.soloVst3Param,  &st.soloInvert };
+        case 4: return { &st.cutVst3Param,   &st.cutInvert };
+        case 5: return { &st.selVst3Param,   &st.selInvert };
     }
     return {};
 }
@@ -6708,27 +6692,6 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
 {
     return uf8EditFieldVals_(kind, strip, bank).param;
 }
-// vst3Param bound on the NORMAL layer specifically — for the schematic's
-// inherited-mapping ghost when an overlay tab is active.
-int mappedVst3NormalUf8_(int kind, int strip, int bank)
-{
-    if (g_editingMatch.empty()) return -1;
-    for (const auto& m : uf8::user_plugins::get().maps) {
-        if (m.match != g_editingMatch) continue;
-        const auto& u = m.uf8;
-        switch (kind) {
-            case 0: return u.strips[g_uf8EditingFaderBank][strip].faderVst3Param;
-            case 3: return u.strips[g_uf8EditingFaderBank][strip].soloVst3Param;
-            case 4: return u.strips[g_uf8EditingFaderBank][strip].cutVst3Param;
-            case 5: return u.strips[g_uf8EditingFaderBank][strip].selVst3Param;
-            case 1:
-            case 2: return u.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param;
-            default: return -1;
-        }
-    }
-    return -1;
-}
-
 void bindUf8_(int kind, int strip, int bank, int vst3Param)
 {
     if (vst3Param < 0) return;
@@ -6741,14 +6704,10 @@ void bindUf8_(int kind, int strip, int bank, int vst3Param)
 void unbindUf8_(int kind, int strip, int bank)
 {
     mutateUf8_([&](uf8::UserUf8Map& u) {
-        const int L = g_fxLearnEditLayer;
-        // V-Pot: clear the whole slot (Normal) or the whole overlay (Option/
-        // Control) so label/colour/travel reset with the binding, matching
-        // the pre-layer behaviour.
+        // V-Pot: clear the whole slot so label/colour/travel reset with the
+        // binding, matching the pre-layer behaviour.
         if (kind == 1 || kind == 2) {
-            auto& s = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
-            if (L == uf8::FxLayer::Normal) s = uf8::UserUf8BankSlot{};
-            else s.modLayers[L - 1] = uf8::Uf8VpotLayer{};
+            u.banks.banks[g_uf8EditingFaderBank][bank][strip] = uf8::UserUf8BankSlot{};
             return;
         }
         auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
@@ -8846,11 +8805,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const int  mapped    = mappedVst3ForUf8_(ctrl.kind, ctrl.strip, bank);
     const bool isMapped  = (mapped >= 0);
     const bool isListen  = g_listeningUf8.matches(ctrl.kind, ctrl.strip, bank);
-    // Overlay tab + this control has no overlay but a Normal mapping → it
-    // inherits Normal at runtime; show a dim ghost ring (mirrors UC1).
-    const bool inheritsNormal =
-        (g_fxLearnEditLayer != uf8::FxLayer::Normal) && !isMapped
-        && mappedVst3NormalUf8_(ctrl.kind, ctrl.strip, bank) >= 0;
+    // UF8 has no modifier-layer overlays (UC1-only feature) → no inherited-
+    // Normal ghost ring on the UF8 schematic.
+    const bool inheritsNormal = false;
 
     const float bx = ctrl.cx, by = ctrl.cy;
     const float bw = ctrl.w,  bh = ctrl.h;
@@ -11769,29 +11726,37 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // overlays (Shift stays reserved for Fine). A control with no overlay on
     // the active layer inherits its Normal mapping (shown as a ghost ring),
     // so you only need to remap the controls that should differ.
-    ImGui_TextDisabled(ctx, "Layer:");
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Normal##fxl_layer_norm",
-                          g_fxLearnEditLayer == uf8::FxLayer::Normal))
+    // UC1-ONLY: the modifier layers were removed from UF8, so the UF8 editor
+    // (s_mockup == 1) shows no tabs and edits the base mapping only. Force the
+    // edit layer back to Normal there so a layer left selected from a prior UC1
+    // edit doesn't leak into the (now base-only) UF8 mutators.
+    if (s_mockup == 1) {
         g_fxLearnEditLayer = uf8::FxLayer::Normal;
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Option##fxl_layer_opt",
-                          g_fxLearnEditLayer == uf8::FxLayer::Option))
-        g_fxLearnEditLayer = uf8::FxLayer::Option;
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_RadioButton(ctx, "Control##fxl_layer_ctrl",
-                          g_fxLearnEditLayer == uf8::FxLayer::Control))
-        g_fxLearnEditLayer = uf8::FxLayer::Control;
-    if (g_fxLearnEditLayer != uf8::FxLayer::Normal) {
+    } else {
+        ImGui_TextDisabled(ctx, "Layer:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Copy from Normal##fxl_layer_copy",
-                         nullptr, nullptr))
-            copyNormalToEditLayer_();
+        if (ImGui_RadioButton(ctx, "Normal##fxl_layer_norm",
+                              g_fxLearnEditLayer == uf8::FxLayer::Normal))
+            g_fxLearnEditLayer = uf8::FxLayer::Normal;
         ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_TextDisabled(ctx,
-            g_fxLearnEditLayer == uf8::FxLayer::Option
-                ? "(hold Option on the keyboard)"
-                : "(hold Control on the keyboard)");
+        if (ImGui_RadioButton(ctx, "Option##fxl_layer_opt",
+                              g_fxLearnEditLayer == uf8::FxLayer::Option))
+            g_fxLearnEditLayer = uf8::FxLayer::Option;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Control##fxl_layer_ctrl",
+                              g_fxLearnEditLayer == uf8::FxLayer::Control))
+            g_fxLearnEditLayer = uf8::FxLayer::Control;
+        if (g_fxLearnEditLayer != uf8::FxLayer::Normal) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Copy from Normal##fxl_layer_copy",
+                             nullptr, nullptr))
+                copyNormalToEditLayer_();
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextDisabled(ctx,
+                g_fxLearnEditLayer == uf8::FxLayer::Option
+                    ? "(hold Option on the keyboard)"
+                    : "(hold Control on the keyboard)");
+        }
     }
 
     // Left pane — hardware face mockup. UC1 / UF8 selected via the radio

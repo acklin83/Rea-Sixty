@@ -511,28 +511,7 @@ std::string serialize_(const UserPluginCatalog& c)
                             appendEscaped_(os, vpotPolarityName_(bs.polarity));
                         }
                         emitKnobTravelObj("travel", bs.travel);
-                        // FX-Learn V-Pot modifier overlays (v9, additive).
-                        if (uf8::hasAnyVpotModLayer(bs)) {
-                            os << ", \"modLayers\": {";
-                            bool firstVL = true;
-                            auto emitVL = [&](const char* key,
-                                              const uf8::Uf8VpotLayer& l) {
-                                if (!uf8::uf8VpotLayerNonDefault(l)) return;
-                                if (!firstVL) os << ",";
-                                firstVL = false;
-                                os << " \"" << key << "\": { \"vst3Param\": "
-                                   << l.vst3Param << ", \"inverted\": "
-                                   << (l.inverted ? "true" : "false")
-                                   << ", \"vpotMode\": ";
-                                appendEscaped_(os, vpotModeName_(l.vpotMode));
-                                os << ", \"defaultNorm\": " << l.defaultNorm;
-                                emitKnobTravelObj("travel", l.travel);
-                                os << " }";
-                            };
-                            emitVL("option",  bs.modLayers[0]);
-                            emitVL("control", bs.modLayers[1]);
-                            os << " }";
-                        }
+                        // (UF8 FX-Learn modifier overlays removed — UC1-only.)
                         os << " }";
                     }
                     os << "\n            ]";
@@ -570,29 +549,7 @@ std::string serialize_(const UserPluginCatalog& c)
                        << ", \"colour\": " << static_cast<unsigned>(sb.selColour)
                        << ", \"invert\": " << (sb.selInvert ? "true" : "false")
                        << " }";
-                    // FX-Learn strip modifier overlays (v9, additive).
-                    if (uf8::hasAnyStripModLayer(sb)) {
-                        os << ", \"modLayers\": {";
-                        bool firstSL = true;
-                        auto emitSL = [&](const char* key,
-                                          const uf8::Uf8StripLayer& l) {
-                            if (!uf8::uf8StripLayerNonDefault(l)) return;
-                            if (!firstSL) os << ",";
-                            firstSL = false;
-                            os << " \"" << key << "\": {"
-                               << " \"fader\": { \"vst3Param\": " << l.faderVst3Param
-                               << ", \"invert\": " << (l.faderInverted ? "true" : "false") << " },"
-                               << " \"solo\": { \"vst3Param\": " << l.soloVst3Param
-                               << ", \"invert\": " << (l.soloInvert ? "true" : "false") << " },"
-                               << " \"cut\": { \"vst3Param\": " << l.cutVst3Param
-                               << ", \"invert\": " << (l.cutInvert ? "true" : "false") << " },"
-                               << " \"sel\": { \"vst3Param\": " << l.selVst3Param
-                               << ", \"invert\": " << (l.selInvert ? "true" : "false") << " } }";
-                        };
-                        emitSL("option",  sb.modLayers[0]);
-                        emitSL("control", sb.modLayers[1]);
-                        os << " }";
-                    }
+                    // (UF8 FX-Learn modifier overlays removed — UC1-only.)
                     os << " }";
                 }
                 os << "\n          ]";
@@ -920,24 +877,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     bs.polarity = vpotPolarityFromName_(pol.c_str());
                 }
                 parseKnobTravel(so, bs.travel);
-                // FX-Learn V-Pot modifier overlays (v9, additive).
-                if (auto* ml = so->get_item_by_name("modLayers");
-                    ml && ml->is_object())
-                {
-                    auto parseVL = [&](const char* key, uf8::Uf8VpotLayer& l) {
-                        auto* lo = ml->get_item_by_name(key);
-                        if (!lo || !lo->is_object()) return;
-                        getIntI_(lo, "vst3Param", l.vst3Param);
-                        getBoolI_(lo, "inverted", l.inverted);
-                        std::string m2;
-                        if (getStrI_(lo, "vpotMode", m2))
-                            l.vpotMode = vpotModeFromName_(m2.c_str());
-                        getDoubleI_(lo, "defaultNorm", l.defaultNorm);
-                        parseKnobTravel(lo, l.travel);
-                    };
-                    parseVL("option",  bs.modLayers[0]);
-                    parseVL("control", bs.modLayers[1]);
-                }
+                // (UF8 FX-Learn V-Pot modifier overlays removed — UC1-only.
+                // Any "modLayers" key in an old v9 file is silently ignored.)
             };
             // v7: banksByFaderBank [fb][vpotBank][slot]. v6 had a flat
             // `banks` [vpotBank][slot] — migrate into faderBank=0.
@@ -1021,28 +962,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                         sb.selColour = static_cast<uint32_t>(colTmp) & 0x00FFFFFFu;
                     getBoolI_(selo, "invert", sb.selInvert);
                 }
-                // FX-Learn strip modifier overlays (v9, additive).
-                if (auto* ml = so->get_item_by_name("modLayers");
-                    ml && ml->is_object())
-                {
-                    auto sub = [&](wdl_json_element* lo, const char* key,
-                                   int& param, bool& inv) {
-                        auto* o = lo->get_item_by_name(key);
-                        if (!o || !o->is_object()) return;
-                        getIntI_(o, "vst3Param", param);
-                        getBoolI_(o, "invert", inv);
-                    };
-                    auto parseSL = [&](const char* key, uf8::Uf8StripLayer& l) {
-                        auto* lo = ml->get_item_by_name(key);
-                        if (!lo || !lo->is_object()) return;
-                        sub(lo, "fader", l.faderVst3Param, l.faderInverted);
-                        sub(lo, "solo",  l.soloVst3Param,  l.soloInvert);
-                        sub(lo, "cut",   l.cutVst3Param,   l.cutInvert);
-                        sub(lo, "sel",   l.selVst3Param,   l.selInvert);
-                    };
-                    parseSL("option",  sb.modLayers[0]);
-                    parseSL("control", sb.modLayers[1]);
-                }
+                // (UF8 FX-Learn strip modifier overlays removed — UC1-only.
+                // Any "modLayers" key in an old v9 file is silently ignored.)
             };
             // v7 path: stripsByFaderBank [faderBank][slot].
             if (auto* sfbArr = uo->get_item_by_name("stripsByFaderBank");
