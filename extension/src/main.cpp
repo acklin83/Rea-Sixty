@@ -91,6 +91,11 @@ std::string reasixty_hudGeometryUc1();
 void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                                    int focusDom,
                                    std::string& stateOut, std::string& assignOut);
+void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudLearnTick(int activeLayer);
+int         reasixty_hudLearnArmed();
+void        reasixty_hudCancelLearn();
+int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
 #include "UC1PluginMap.h"
@@ -5239,6 +5244,7 @@ void publishOverlayState_()
 // are diff-guarded like the overlay. Main-thread-only (walks FX chains + reads
 // the user catalog). No-op when the HUD is off, so it costs nothing disabled.
 std::string g_hudStatePublished, g_hudAssignPublished;
+std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
 bool        g_hudGeomPublished = false;
 void publishHud_()
 {
@@ -14238,6 +14244,37 @@ void onTimer()
     // Control overlays on UC1/UF8 controls). Read by lookupBindingsByName +
     // the dispatch/LED paths via reasixty_fxLearnActiveLayer().
     refreshFxActiveLayer_();
+
+    // Assignment-HUD interactivity (only while the HUD is on → zero cost off).
+    // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
+    // the wiggled param to the armed control on the active modifier layer.
+    if (g_hudEnabled.load()) {
+        if (const char* cmd = GetExtState("rea_sixty", "hud_cmd"); cmd && *cmd) {
+            const std::string s = cmd;
+            SetExtState("rea_sixty", "hud_cmd", "", false);   // consume
+            if (s.rfind("learn;", 0) == 0) {
+                const int idx = std::atoi(s.c_str() + 6);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+            } else if (s.rfind("cancel", 0) == 0) {
+                reasixty_hudCancelLearn();
+            }
+        }
+        // Poll for the wiggle; refresh published assignments the tick it lands.
+        if (reasixty_hudLearnTick(reasixty_fxLearnActiveLayer())) {
+            g_hudAssignPublished.clear();   // force the diff-guarded re-publish
+            publishHud_();
+        }
+        // Publish the armed control idx so the companion can highlight it.
+        const int armed = reasixty_hudLearnArmed();
+        std::string pub = (armed >= 0) ? std::to_string(armed) : std::string();
+        if (pub != g_hudLearnPublished) {
+            g_hudLearnPublished = pub;
+            SetExtState("rea_sixty", "hud_learn", pub.c_str(), false);
+        }
+    }
 
     // Mid-session stale-handle recovery. Triggered when a device's
     // worker has seen ~1 s of consecutive LIBUSB_ERROR_NO_DEVICE /

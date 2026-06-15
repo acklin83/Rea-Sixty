@@ -7641,6 +7641,125 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
     }
 }
 
+// ---- Assignment-HUD interactivity: click-a-control + wiggle-to-learn -----
+//
+// The companion HUD (rea_sixty_assignment_hud.lua) arms a control by writing
+// "rea_sixty"/"hud_cmd" = "learn;<controlIdx>"; main.cpp's onTimer drains that
+// and calls reasixty_hudArmLearn() with the *active* CS/BC targets resolved by
+// activeCsBcTargets_. We then poll GetLastTouchedFX (reasixty_hudLearnTick,
+// called every tick from onTimer) and, when the user wiggles a param of the
+// active plug-in, bind it to that control on the active modifier layer.
+//
+// Crucially this is decoupled from g_editingMatch / g_fxLearnEditLayer (the
+// Settings editor state): it targets the live focused plug-in by FX-identity
+// name, so it works with Settings closed and won't hijack an open editor.
+// Only USER maps are mutable — built-in SSL CS/BC maps are factory-fixed, so
+// arming on one is refused (a hint is published instead).
+int         g_hudLearnIdx     = -1;   // armed HUD control idx (-1 = none)
+std::string g_hudLearnMatch;          // owning user-map match to bind into
+int         g_hudLearnLinkIdx = -1;   // SSL 360 Link slot of the armed control
+int         g_hudLearnTicks   = 0;    // arm timeout countdown (onTimer ticks)
+int         g_hudLearnTr      = -2;   // GetLastTouchedFX baseline
+int         g_hudLearnFx      = -1;
+int         g_hudLearnParam   = -1;
+
+void hudCancelLearn_()
+{
+    g_hudLearnIdx = -1;
+    g_hudLearnMatch.clear();
+    g_hudLearnLinkIdx = -1;
+    g_hudLearnTicks = 0;
+}
+
+// Find the user map that owns the active plug-in and write vst3Param onto the
+// armed control's slot at `layer` (create the slot if absent). upsert + save
+// so the binding sticks + the runtime cache reloads it. Returns true on apply.
+bool hudLearnBindMatch_(const std::string& match, int linkIdx, int layer,
+                        int vst3Param)
+{
+    if (match.empty() || linkIdx < 0 || vst3Param < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    auto cat = user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        bool replaced = false;
+        for (auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            // Re-binding to a different param invalidates a custom label.
+            if (lay.vst3Param != vst3Param && !lay.customLabel.empty())
+                lay.customLabel.clear();
+            lay.vst3Param = vst3Param;
+            lay.inverted  = false;
+            replaced = true;
+            break;
+        }
+        if (!replaced) {
+            UserLinkSlot s{};
+            s.linkIdx = linkIdx;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            lay.vst3Param = vst3Param;
+            lay.inverted  = false;
+            m.slots.push_back(s);
+        }
+        user_plugins::upsert(m);
+        user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Arm learn for HUD control `idx`. csTr/bcTr + fx are the active targets the
+// caller (onTimer) resolved via activeCsBcTargets_; we pick the one matching
+// the control's domain, confirm it's a USER-mapped plug-in, and arm.
+void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    hudCancelLearn_();
+    if (idx < 0 || idx >= kUc1ControlsCount) return;
+    const Uc1Control& c = kUc1Controls[idx];
+    const bool   isBc = (c.domain == Domain::BusComp);
+    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
+    const int    fx   = isBc ? bcFx : csFx;
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name))) return;
+    const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
+    if (!um) {   // built-in SSL / no user map → factory-fixed, not editable
+        SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
+        return;
+    }
+    g_hudLearnIdx     = idx;
+    g_hudLearnMatch   = um->match;
+    g_hudLearnLinkIdx = c.linkIdx;
+    g_hudLearnTicks   = 600;   // ~20 s at the 30 Hz onTimer rate
+    int t = -1, f = -1, p = -1;
+    if (GetLastTouchedFX(&t, &f, &p)) { g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p; }
+    else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
+}
+
+// Poll for the wiggle. Returns true the tick a bind lands (caller refreshes
+// the published assignments). `activeLayer` = reasixty_fxLearnActiveLayer().
+bool hudLearnTick_(int activeLayer)
+{
+    if (g_hudLearnIdx < 0) return false;
+    if (--g_hudLearnTicks <= 0) { hudCancelLearn_(); return false; }
+    int t = -1, f = -1, p = -1;
+    if (!GetLastTouchedFX(&t, &f, &p)) return false;
+    if (t == g_hudLearnTr && f == g_hudLearnFx && p == g_hudLearnParam) return false;
+    g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    if (!tr) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    if (std::string(name).find(g_hudLearnMatch) == std::string::npos) return false;
+    if (hudLearnBindMatch_(g_hudLearnMatch, g_hudLearnLinkIdx, activeLayer, p)) {
+        hudCancelLearn_();
+        return true;
+    }
+    return false;
+}
+
 // Render the FX-Learn interactive overlay on top of one already-painted
 // UC1 control (drawUc1Face_ has already drawn the cap, ring, indicator,
 // and silk-screen label). Adds:
@@ -13893,3 +14012,13 @@ void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
 {
     uf8::hudPublishUc1_(csTr, csFx, bcTr, bcFx, focusDom, stateOut, assignOut);
 }
+
+// Assignment-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
+// main.cpp's onTimer: arm with the active CS/BC targets, tick every frame.
+void reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    uf8::hudArmLearn_(idx, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLayer); }
+int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
+void reasixty_hudCancelLearn()              { uf8::hudCancelLearn_(); }

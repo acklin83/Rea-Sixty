@@ -118,6 +118,18 @@ local activeTab    = "cs"
 local lastFocusDom = "n"
 local tabRects     = {}   -- {dom,x,y,w,h} filled by drawTabs for hit-testing
 
+-- Interactivity (Phase 1: click-a-control + wiggle-to-learn). The extension
+-- owns the bind logic; this script only hit-tests + sends commands via
+-- ExtState "hud_cmd" ("learn;<idx>" / "cancel") and reads back the armed
+-- control idx from "hud_state"-sibling key "hud_learn".
+local ctrlRects = {}      -- {idx,shape,x,y,r,w,h} filled by drawControl
+local learnIdx  = -1      -- armed control idx (authoritative, from extension)
+local frame     = 0       -- frame counter for the learn pulse
+local hintText  = ""      -- transient hint ("Factory map — not editable")
+local hintFrames = 0
+
+local function sendCmd(s) reaper.SetExtState(SECT, "hud_cmd", s, false) end
+
 local function readAssign()
   local raw = reaper.GetExtState(SECT, "hud_assign")
   local map = {}
@@ -209,14 +221,36 @@ local function drawTabs(st)
   x = tab("bc", st.bcPresent, st.bcShort, x)
 end
 
--- Click a tab (called from the loop on a left-button edge).
+-- Click a tab (called from the loop on a left-button edge). Returns true if a
+-- tab was hit (so the caller skips control hit-testing).
 local function handleTabClick(mx, my)
   for _, t in ipairs(tabRects) do
     if mx >= t.x and mx <= t.x + t.w and my >= t.y and my <= t.y + t.h then
       activeTab = t.dom
-      return
+      return true
     end
   end
+  return false
+end
+
+-- Click a control: arm learn for it (or cancel if it's already armed). Uses
+-- last frame's ctrlRects. Returns true if a control was hit.
+local function handleControlClick(mx, my)
+  for _, h in ipairs(ctrlRects) do
+    local hit
+    if h.shape == 0 then
+      local dx, dy = mx - h.x, my - h.y
+      hit = (dx * dx + dy * dy) <= (h.r + 3) * (h.r + 3)
+    else
+      hit = mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h
+    end
+    if hit then
+      if learnIdx == h.idx then sendCmd("cancel")
+      else                      sendCmd("learn;" .. h.idx) end
+      return true
+    end
+  end
+  return false
 end
 
 local function drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
@@ -237,6 +271,10 @@ local function drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
   else                 col, alpha = 0x808892, 0.55 end
   local fillRgb = present and 0x3C4654 or 0x2C333D
 
+  local learning = (c.idx == learnIdx)
+  -- Learn-mode pulse (triangle wave) applied to the ring.
+  local pulse = 0.45 + 0.45 * math.abs((frame % 50) / 25 - 1)
+
   local lx, ly = x, y     -- label centre
   if c.shape == 0 then
     -- knob — filled cap + a ring 2 px thick.
@@ -245,6 +283,11 @@ local function drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
     gset(col, alpha)
     gfx.circle(x, y, r, 0, 1); gfx.circle(x, y, r - 1, 0, 1)
     if mapped then gfx.circle(x, y, r + 1, 0, 1) end
+    if learning then
+      gset(0xFFFFFF, pulse)
+      gfx.circle(x, y, r + 2, 0, 1); gfx.circle(x, y, r + 3, 0, 1)
+    end
+    ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = 0, x = x, y = y, r = r }
   else
     -- toggle / dyn button — filled box + a 2 px border.
     local w = math.max(10, c.w * sc)
@@ -253,6 +296,11 @@ local function drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
     gset(col, alpha)
     gfx.rect(x, y, w, h, 0)
     if w > 2 and h > 2 then gfx.rect(x + 1, y + 1, w - 2, h - 2, 0) end
+    if learning then
+      gset(0xFFFFFF, pulse)
+      gfx.rect(x - 2, y - 2, w + 4, h + 4, 0); gfx.rect(x - 3, y - 3, w + 6, h + 6, 0)
+    end
+    ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = 1, x = x, y = y, w = w, h = h }
     lx, ly = x + w / 2, y + h / 2     -- centre for the label
   end
 
@@ -284,6 +332,16 @@ local function render()
 
   local st  = readState()
   local asn = readAssign()
+
+  frame = frame + 1
+  -- Armed control is owned by the extension (it refuses factory maps, times
+  -- out, and clears on bind) — read it back as the source of truth.
+  local hl = reaper.GetExtState(SECT, "hud_learn")
+  learnIdx = (hl ~= "" and tonumber(hl)) or -1
+  -- Transient hint from the extension (e.g. "Factory map — not editable").
+  local hint = reaper.GetExtState(SECT, "hud_hint")
+  if hint ~= "" then hintText = hint; hintFrames = 90
+    reaper.SetExtState(SECT, "hud_hint", "", false) end
 
   -- Auto-follow focus: when the surface's focused domain changes, switch the
   -- active tab to it. A manual tab click sticks until the next focus change.
@@ -359,6 +417,7 @@ local function render()
   local silkFont  = math.max(9,  math.floor(sc * 16 + 0.5))
   local paramFont = math.max(10, math.floor(sc * 17 + 0.5))
 
+  ctrlRects = {}   -- rebuilt this frame for next-frame hit-testing
   for _, c in ipairs(list) do
     drawControl(c, ox, oy, sc, silkFont, paramFont, st, asn)
   end
@@ -372,6 +431,29 @@ local function render()
     local tw = gfx.measurestr(msg)
     gfx.x, gfx.y = (gfx.w - tw) / 2, TAB_H + 6
     gfx.drawstr(msg)
+  end
+
+  -- Centred banner just under the tab strip (bg box + coloured text).
+  local function banner(msg, bgRgb, bgA, fgRgb)
+    gfx.setfont(1, "Arial", 15)
+    local tw = gfx.measurestr(msg)
+    local bw, bh = tw + 20, gfx.texth + 8
+    local bx, by = (gfx.w - bw) / 2, TAB_H + 4
+    gset(bgRgb, bgA); gfx.rect(bx, by, bw, bh, 1)
+    gset(fgRgb, 1);   gfx.x, gfx.y = bx + 10, by + 4; gfx.drawstr(msg)
+  end
+
+  -- Learn-mode banner (overrides the transient hint while armed).
+  if learnIdx >= 0 then
+    local c   = geom.ctrl[learnIdx]
+    local lbl = (c and c.label ~= "" and c.label) or ("#" .. learnIdx)
+    banner("Learning " .. lbl ..
+           "  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
+           .. "   (click again or Esc to cancel)",
+           0x101418, 0.88, 0xFFD060)
+  elseif hintFrames > 0 then
+    hintFrames = hintFrames - 1
+    banner(hintText, 0x301014, 0.92, 0xFF8888)
   end
 end
 
@@ -394,14 +476,21 @@ local function loop()
   end
 
   if winOpen then
-    if gfx.getchar() < 0 then return winClose(true) end   -- user closed window
+    local ch = gfx.getchar()
+    if ch < 0 then return winClose(true) end               -- user closed window
+    if ch == 27 and learnIdx >= 0 then sendCmd("cancel") end  -- Esc cancels learn
     local rc = gfx.mouse_cap & 2
     if rc == 2 and rcPrev ~= 2 then contextMenu() end
     rcPrev = rc
     if winOpen then
-      -- Left-click edge → tab switch (uses last frame's tab rects).
+      -- Left-click edge → tab switch, else arm/cancel learn on a control
+      -- (both use last frame's hit-rects).
       local lc = gfx.mouse_cap & 1
-      if lc == 1 and lcPrev ~= 1 then handleTabClick(gfx.mouse_x, gfx.mouse_y) end
+      if lc == 1 and lcPrev ~= 1 then
+        if not handleTabClick(gfx.mouse_x, gfx.mouse_y) then
+          handleControlClick(gfx.mouse_x, gfx.mouse_y)
+        end
+      end
       lcPrev = lc
       refreshGeom()
       render()
