@@ -2867,6 +2867,14 @@ std::atomic<bool> g_recvVpotThisTrack  {false};
 std::atomic<int>  g_recvFaderAllIdx    {-1};
 std::atomic<bool> g_recvFaderThisTrack {false};
 
+// Send/receive paging for the "of focused track" modes. The 8 strips
+// show a window of 8 routes starting at this offset (in single-send
+// units). Bank ←/→ pages by 8; bank-by-1 / the BankBy1 encoder nudges
+// by 1. Reset to 0 when the routing mode is left or the focused track
+// changes (a 3-send track must never linger on an all-blank page 2 —
+// see maintainSendBankWindow_).
+std::atomic<int>  g_sendBankOffset     {0};
+
 // Set by the routing-mode handlers; consumed by pushZonesForVisibleSlots
 // to force a full re-push of the strip caches when the routing source
 // changes (otherwise the previous mode's last-sent values pin the
@@ -2896,6 +2904,7 @@ void clearVpotRouting_()
     g_sendVpotThisTrack.store(false);
     g_recvVpotAllIdx.store(-1);
     g_recvVpotThisTrack.store(false);
+    g_sendBankOffset.store(0);
     g_routingDirty.store(true);
 }
 void clearFaderRouting_()
@@ -2904,6 +2913,7 @@ void clearFaderRouting_()
     g_sendFaderThisTrack.store(false);
     g_recvFaderAllIdx.store(-1);
     g_recvFaderThisTrack.store(false);
+    g_sendBankOffset.store(0);
     g_routingDirty.store(true);
 }
 
@@ -3008,7 +3018,10 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         }
         r.track        = lt;
         r.sendCategory = category;
-        r.sendIndex    = strip;
+        // Paged send window: strip 0..7 maps onto sends N..N+7 where N is
+        // the current send-bank offset. Out-of-range slots fail the
+        // GetTrackNumSends bound below and blank as before.
+        r.sendIndex    = strip + g_sendBankOffset.load();
     } else {
         return r;  // not in this routing mode
     }
@@ -3544,6 +3557,75 @@ void applyBankByOne_(int step)
     if (next < 0)        next = 0;
     if (next > maxStart) next = maxStart;
     if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
+}
+
+// Send-window count for the active "of focused track" route(s). Returns
+// 0 when no such mode is engaged. When both a send-mode (one output) and
+// a receive-mode (the other) run together we size the shared window to
+// the larger list so neither tail gets clipped. Main-thread only
+// (GetTrackNumSends).
+int focusedRouteCount_()
+{
+    const bool sendThis = g_sendFaderThisTrack.load() || g_sendVpotThisTrack.load();
+    const bool recvThis = g_recvFaderThisTrack.load() || g_recvVpotThisTrack.load();
+    if (!sendThis && !recvThis) return 0;
+    MediaTrack* tr = GetLastTouchedTrack();
+    if (!tr) return 0;
+    int n = 0;
+    if (sendThis) { int s = GetTrackNumSends(tr, 0);  if (s > n) n = s; }
+    if (recvThis) { int r = GetTrackNumSends(tr, -1); if (r > n) n = r; }
+    return n;
+}
+
+// Page the focused-track send/receive window by `step` single-send units
+// (Bank ←/→ pass ±8, bank-by-1 / the BankBy1 encoder pass ±1). Returns
+// false — and changes nothing — when no "of focused track" mode is
+// active, so the caller falls through to ordinary track banking. Clamped
+// so the last route can't scroll left of strip 8.
+bool applySendBankStep_(int step)
+{
+    const int count = focusedRouteCount_();
+    if (count == 0) {
+        // Mode not engaged → not ours to handle.
+        const bool engaged = g_sendFaderThisTrack.load() || g_sendVpotThisTrack.load()
+                          || g_recvFaderThisTrack.load() || g_recvVpotThisTrack.load();
+        if (!engaged) return false;
+        // Engaged but the focused track has no routes — consume the press
+        // (keep us out of track-banking) and stay at 0.
+        if (g_sendBankOffset.exchange(0) != 0) g_bankDirty.store(true);
+        return true;
+    }
+    const int maxOff = count > 8 ? count - 8 : 0;
+    const int next   = std::clamp(g_sendBankOffset.load() + step, 0, maxOff);
+    if (next != g_sendBankOffset.exchange(next)) g_bankDirty.store(true);
+    return true;
+}
+
+// Once-per-tick guard (main thread): keep g_sendBankOffset valid as the
+// session changes underneath it. Clamp to the focused track's route
+// count, and snap back to page 0 whenever the focused track changes — a
+// 3-send track must never inherit a previous 16-send track's page 2.
+void maintainSendBankWindow_()
+{
+    static MediaTrack* s_lastRouteFocus = nullptr;
+    const bool engaged = g_sendFaderThisTrack.load() || g_sendVpotThisTrack.load()
+                      || g_recvFaderThisTrack.load() || g_recvVpotThisTrack.load();
+    if (!engaged) { s_lastRouteFocus = nullptr; return; }
+    MediaTrack* focus = GetLastTouchedTrack();
+    // GetLastTouchedTrack briefly returns null mid send-write (SetSurface-
+    // Selected re-broadcast). Ignore those ticks so a send adjustment never
+    // looks like a focus change and snaps the page back to 0.
+    if (!focus) return;
+    if (focus != s_lastRouteFocus) {
+        s_lastRouteFocus = focus;
+        if (g_sendBankOffset.exchange(0) != 0) g_bankDirty.store(true);
+        return;
+    }
+    const int count  = focusedRouteCount_();
+    const int maxOff = count > 8 ? count - 8 : 0;
+    const int cur    = g_sendBankOffset.load();
+    if (cur > maxOff && g_sendBankOffset.exchange(maxOff) != maxOff)
+        g_bankDirty.store(true);
 }
 
 // Adjust the value of REAPER's last-touched FX parameter by `step *
@@ -14406,6 +14488,10 @@ void onTimer()
     // mapping (Bug 2 fix: Folder Collapse / Show Only Selected).
     rebuildVisibleTrackList();
 
+    // Keep the focused-track send/receive paging window valid: clamp to
+    // the current route count and snap to page 0 on focus-track change.
+    maintainSendBankWindow_();
+
     // Deferred follow-selected after rebuild — consumed here so the
     // scroll target is computed against the just-rebuilt visible list
     // (which may have widened after Auto-exit / selset-deactivate).
@@ -19196,7 +19282,12 @@ void registerBindingHandlers()
                 case EncoderMode::FxMove:      applyFxMove_(step);         break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
                 case EncoderMode::Markers:     applyMarkerStep_(step);     break;
-                case EncoderMode::BankBy1:     applyBankByOne_(step);      break;
+                case EncoderMode::BankBy1:
+                    // In an "of focused track" route mode the encoder pages
+                    // the send window one send at a time; otherwise it nudges
+                    // the track bank by one strip.
+                    if (!applySendBankStep_(step)) applyBankByOne_(step);
+                    break;
                 case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
             }
         },
@@ -19766,6 +19857,9 @@ void registerBindingHandlers()
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft, pressed);
             if (!firing) return;
             if (tryFaderBankNav(-1)) return;   // UF8 Plugin Mode fader-bank
+            // "Of focused track" send/receive mode: page the 8-send
+            // window instead of scrolling tracks (Frank 2026-06-15).
+            if (applySendBankStep_(-8)) return;
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
             const int esc        = effectiveStripCount_();
@@ -19782,6 +19876,9 @@ void registerBindingHandlers()
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, pressed);
             if (!firing) return;
             if (tryFaderBankNav(+1)) return;
+            // "Of focused track" send/receive mode: page the 8-send
+            // window instead of scrolling tracks (Frank 2026-06-15).
+            if (applySendBankStep_(+8)) return;
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
             const int esc        = effectiveStripCount_();
@@ -19799,6 +19896,7 @@ void registerBindingHandlers()
     registerBuiltin("bank_by_1_left", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
+            if (applySendBankStep_(-1)) return;   // page one send in route mode
             applyBankByOne_(-1);
         },
         nullptr, "Bank by 1ch ← (one strip)", false
@@ -19806,6 +19904,7 @@ void registerBindingHandlers()
     registerBuiltin("bank_by_1_right", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
+            if (applySendBankStep_(+1)) return;   // page one send in route mode
             applyBankByOne_(+1);
         },
         nullptr, "Bank by 1ch → (one strip)", false
