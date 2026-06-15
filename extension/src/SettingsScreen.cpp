@@ -7515,10 +7515,11 @@ const char* hudSectionFor_(const Uc1Control& c)
 
 // Build the static UC1 control geometry the companion HUD renders. Header line
 // "UC1;<W>;<H>" then one line per control:
-//   "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>;<section>"
+//   "<idx>;<shape>;<cx>;<cy>;<r>;<w>;<h>;<dom>;<label>;<section>;<cap>;<legend>"
 // Coords are pixels in the schematic's WxH space; the Lua normalises by W/H so
 // it scales to any window size. shape 0=knob 1=toggle 2=dynbtn; dom 'c'=Channel
-// Strip 'b'=Bus Comp; section groups controls for the HUD's text list. Static —
+// Strip 'b'=Bus Comp; section groups controls for the HUD's text list; cap = SSL
+// accent colour RGBA (0 for toggles/btns); legend = short scribble label. Static —
 // published once when the HUD turns on; reads kUc1Controls so the HUD geometry
 // never drifts from the Settings schematic.
 // Internal helper (lives in the anon namespace beside kUc1Controls); exported
@@ -7542,14 +7543,23 @@ std::string hudGeometryUc1_()
         const bool isBc = (c.domain == uf8::Domain::BusComp);
         const char dom = isBc ? 'b' : 'c';
         const char* lbl = c.label ? c.label : "";
+        const char* leg = c.label ? c.label : "";   // short scribble legend
         if (const uf8::PluginMap* topo = isBc ? bcTopo : csTopo) {
-            if (const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*topo, c.linkIdx))
-                if (sl->name && sl->name[0]) lbl = sl->name;
+            if (const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*topo, c.linkIdx)) {
+                if (sl->name   && sl->name[0])   lbl = sl->name;
+                if (sl->legend && sl->legend[0]) leg = sl->legend;
+            }
         }
+        // Trailing ;<cap>;<legend> (cap = SSL accent RGBA, 0 for toggles/btns;
+        // legend = short scribble label "GAIN"/"FREQ"/"Q"). Appended AFTER
+        // section so older parsers that read section greedily still work if they
+        // stop at the first ';' — the HUD mockup reads cap (knob colour) + legend
+        // (compact fixed label) to mirror the colour-coded hardware face.
         std::snprintf(buf, sizeof(buf),
-                      "%d;%d;%.1f;%.1f;%.1f;%.1f;%.1f;%c;%s;%s\n",
+                      "%d;%d;%.1f;%.1f;%.1f;%.1f;%.1f;%c;%s;%s;%u;%s\n",
                       i, shape, c.cx, c.cy, c.r, c.w, c.h, dom,
-                      lbl, hudSectionFor_(c));
+                      lbl, hudSectionFor_(c),
+                      static_cast<unsigned>(c.cap), leg);
         s += buf;
     }
     return s;

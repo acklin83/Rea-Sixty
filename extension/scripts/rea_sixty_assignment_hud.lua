@@ -81,8 +81,10 @@ local function parseGeom(raw)
       if w then g.w = tonumber(w); g.h = tonumber(h) end
       first = false
     else
+      -- section is [^;]* (not greedy .*) so the appended ;<cap>;<legend> fields
+      -- the mockup HUD uses are ignored here — this list HUD doesn't need them.
       local idx, shape, cx, cy, r, w, h, dom, label, sec =
-        line:match("^(%d+);(%d+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);(%a);([^;]*);(.*)$")
+        line:match("^(%d+);(%d+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);([%d%.]+);(%a);([^;]*);([^;]*)")
       if idx then
         g.ctrl[tonumber(idx)] = {
           shape = tonumber(shape), cx = tonumber(cx), cy = tonumber(cy),
