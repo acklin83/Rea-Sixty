@@ -65,10 +65,15 @@ end
 local function csRgb() return floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
 local function bcRgb() return floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
 
--- Fixed text scale. The old user-facing "Text size" option only visibly
--- affected the CS/BC tab titles (the face/list scale to the window), and even
--- its smallest step was too large, so it was removed (Frank 2026-06-16).
-local function fontScale() return 1.0 end
+-- Text-size scale for the LIST + parameter-panel body (XS … XL, Medium = 1.0 =
+-- the default). The chrome (tab titles, modifier badge, top buttons, TAB_H)
+-- stays a FIXED size on purpose — scaling it made the titles balloon. The face
+-- view scales to the window and ignores this entirely.
+local function fontScale()
+  local v = num("hud_imgui_font", 1.0)
+  if v < 0.7 then v = 0.7 elseif v > 1.5 then v = 1.5 end
+  return v
+end
 
 ------------------------------------------------------------------------
 -- Geometry: parse "hud_geom_uc1" once (cache by raw string). [verbatim]
@@ -292,7 +297,7 @@ local function drawTabs(st)
   tabRects = {}
   local function tab(dom, present, short, x)
     local label = (dom == "cs") and "Channel Strip" or "Bus Compressor"
-    local px    = floor(9 * fontScale() + 0.5)   -- ~half the old title size
+    local px    = 9   -- fixed chrome (independent of the list text-size option)
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
     local rgb    = (dom == "cs") and csRgb() or bcRgb()
@@ -309,7 +314,7 @@ local function drawTabs(st)
 
   -- Active modifier-layer badge (far right).
   local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL") or "NORM"
-  local px   = floor(10 * fontScale() + 0.5)
+  local px   = 10   -- fixed chrome (badge + the top toggle buttons)
   local bwm, bhm = measure(name, px)
   local bw = bwm + 20
   local bh = TAB_H - 12
@@ -911,7 +916,7 @@ local function renderParamPanel(st, asn)
 end
 
 local function render()
-  TAB_H = floor(22 * fontScale() + 0.5) + 16
+  TAB_H = 38   -- fixed chrome height (text-size option only affects list/param body)
 
   local st  = readState()
   local asn = readAssign()
@@ -1007,6 +1012,16 @@ end
 ------------------------------------------------------------------------
 local POPUP = "##hud_ctx"
 
+-- List / parameter-panel body text size (Medium = current default). Chrome
+-- (titles, badge, buttons) is unaffected.
+local FONT_PRESETS = {
+  { l = "XS",     v = 0.75 },
+  { l = "S",      v = 0.88 },
+  { l = "Medium", v = 1.0  },
+  { l = "L",      v = 1.2  },
+  { l = "XL",     v = 1.45 },
+}
+
 local function drawContextMenu()
   -- Roomier popup — WindowPadding read at BeginPopup, so push first; pop always.
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
@@ -1039,6 +1054,16 @@ local function drawContextMenu()
   local touchLearn = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
   if reaper.ImGui_MenuItem(ctx, "Touch to Learn (UC1)", nil, touchLearn) then
     reaper.SetExtState(SECT, "hud_touch_learn", touchLearn and "0" or "1", false)
+  end
+
+  if reaper.ImGui_BeginMenu(ctx, "Text size (list)") then
+    local fs = fontScale()
+    for _, p in ipairs(FONT_PRESETS) do
+      if reaper.ImGui_MenuItem(ctx, p.l, nil, math.abs(fs - p.v) < 0.01) then
+        reaper.SetExtState(SECT, "hud_imgui_font", tostring(p.v), true)
+      end
+    end
+    reaper.ImGui_EndMenu(ctx)
   end
 
   local white = (reaper.GetExtState(SECT, "hud_text_white") == "1")
