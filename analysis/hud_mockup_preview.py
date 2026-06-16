@@ -37,7 +37,7 @@ CTRLS = [
     (20,0,"b","Attack","Bus Comp",370,240,20,0,0,BC,"ATK"),
     (21,0,"b","Release","Bus Comp",490,240,20,0,0,BC,"REL"),
     (22,0,"b","Ratio","Bus Comp",370,308,20,0,0,BC,"RATIO"),
-    (23,1,"b","Bypass","Bus Comp",476,294,0,28,28,NC,"BYP"),
+    (23,1,"b","Bypass","Bus Comp",476,294,0,28,28,NC,"IN"),
     (24,0,"b","S/C HPF","Bus Comp",370,376,20,0,0,BC,"HPF"),
     (25,0,"b","Mix","Bus Comp",490,376,20,0,0,BC,"MIX"),
     (26,2,"c","Comp F.Atk","Dynamics",772,24,0,66,22,NC,"F.ATK"),
@@ -54,7 +54,7 @@ CTRLS = [
     (37,2,"c","Gate F.Atk","Gate",632,456,0,66,22,NC,"F.ATK"),
     (38,2,"c","Polarity","I/O & Channel",632,510,0,66,22,NC,"POL"),
     (39,2,"c","S/C Listen","I/O & Channel",632,536,0,66,22,NC,"LST"),
-    (40,1,"c","Bypass","I/O & Channel",793,523,0,40,40,NC,"BYP"),
+    (40,1,"c","Bypass","I/O & Channel",793,523,0,40,40,NC,"IN"),
 ]
 ASSIGN = {0:("LPF",0),3:("HF Gain",0),4:("HF Freq",0),5:("HMF Gain",0),
           28:("Comp Ratio",0),29:("Threshold",0),31:("Dynamics In",0),32:("Gate Range",1),
@@ -100,7 +100,10 @@ def render(dom, W=900, H=700, fontScale=1.0):
         if c[3]=="Input Trim": x+=28      # IN/FDR nudged toward the centre
         elif c[3]=="Fader Level": x-=28
         return x
-    items=[(c[0],c[1],c[2],c[3],c[4],ecx(c),c[6],c[7],c[8],c[9],c[10],c[11]) for c in items]
+    def ecy(c):                            # IN/FDR pushed down, clear of EQ toggles
+        if c[3] in ("Input Trim","Fader Level"): return c[6]+70
+        return c[6]
+    items=[(c[0],c[1],c[2],c[3],c[4],ecx(c),ecy(c),c[7],c[8],c[9],c[10],c[11]) for c in items]
     TAB_H = int(22*fontScale)+16
     d.rectangle([0,0,W,TAB_H], fill=blend(0x171719,1))
     d.text((12,8), "CS" if dom=="c" else "BC", fill=blend(domrgb,1), font=font(int(17*fontScale)))
@@ -207,10 +210,8 @@ def render(dom, W=900, H=700, fontScale=1.0):
         else:
             sw,sh=w*scale,h*scale
             d.rectangle([sx,sy,sx+sw,sy+sh], fill=fillc, outline=blend(ringcol,ringA), width=1)
-            if name.endswith("Type"): glyph("bell", sx+sw+3, sy+sh*0.2, sh*0.7, blend(0x9DA2AC,0.8))
-            pass
-        # fixed label = legend. Knobs: below (room there). Buttons/toggles:
-        # to the RIGHT (stacked buttons would collide if labelled below).
+        # fixed label = legend. Knobs: centred below. Buttons/toggles: centred
+        # INSIDE the box (settings-schematic style).
         if mapped: tcol=blend(capc,1.0)
         elif present: tcol=blend(0xC6CDD6,0.85)
         else: tcol=blend(0x707880,0.5)
@@ -218,9 +219,7 @@ def render(dom, W=900, H=700, fontScale=1.0):
         if shape==0:
             tx=max(2,min(sx-lw/2, W-2-lw)); ty=sy+rr*1.28+max(0.7,rr*0.10)+2
         else:
-            gx_extra = 16 if name.endswith("Type") else 0  # room for the bell glyph
-            tx=sx+sw+5+gx_extra; ty=sy+sh/2-lh/2
-            if tx+lw>W-2: tx=sx-lw-5
+            tx=sx+sw/2-lw/2; ty=sy+sh/2-lh/2
         d.text((tx,ty), legend, fill=tcol, font=pf)
     return img
 

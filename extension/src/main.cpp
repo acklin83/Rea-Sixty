@@ -5352,7 +5352,36 @@ void publishOverlayState_()
 // the user catalog). No-op when the HUD is off, so it costs nothing disabled.
 std::string g_hudStatePublished, g_hudAssignPublished;
 std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
+std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 bool        g_hudGeomPublished = false;
+
+// Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
+// 7-seg = track number, line2 = track name, line3 = stereo/mono. The companion
+// HUD shows this in the Central-Control LCD so it mirrors the real surface.
+static std::string hudLcdString_(MediaTrack* tr)
+{
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return "";
+    const int num = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    char nm[256] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", nm, false);
+    for (char* q = nm; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
+    const int nch = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_NCHAN"));
+    char seg[8], line1[16], name[256];
+    if (num == -1) {                       // master track
+        std::snprintf(seg, sizeof(seg), "M");
+        std::snprintf(line1, sizeof(line1), "MASTER");
+        std::snprintf(name, sizeof(name), "%s", nm[0] ? nm : "Master");
+    } else {
+        std::snprintf(seg, sizeof(seg), "%03d", num);
+        std::snprintf(line1, sizeof(line1), "TRACK");
+        if (nm[0]) std::snprintf(name, sizeof(name), "%s", nm);
+        else       std::snprintf(name, sizeof(name), "Track %d", num);
+    }
+    char out[320];
+    std::snprintf(out, sizeof(out), "%s;%s;%s;%s",
+                  seg, line1, name, (nch >= 2) ? "Stereo" : "Mono");
+    return out;
+}
 void publishHud_()
 {
     if (!g_hudEnabled.load()) return;
@@ -5375,6 +5404,13 @@ void publishHud_()
     if (assign != g_hudAssignPublished) {
         g_hudAssignPublished = assign;
         SetExtState("rea_sixty", "hud_assign", assign.c_str(), false);
+    }
+    // LCD = focused track (CS track preferred, else BC anchor). Empty when
+    // neither is resolved → the HUD falls back to GetLastTouchedTrack().
+    const std::string lcd = hudLcdString_(csTr ? csTr : bcTr);
+    if (lcd != g_hudLcdPublished) {
+        g_hudLcdPublished = lcd;
+        SetExtState("rea_sixty", "hud_lcd", lcd.c_str(), false);
     }
 }
 

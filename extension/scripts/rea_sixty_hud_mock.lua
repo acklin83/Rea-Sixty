@@ -61,7 +61,7 @@ local CTRLS = {
   { 20, 0, "b", "Attack",     "Bus Comp",      370, 240, 20, 0,  0,  BC, "ATK"  },
   { 21, 0, "b", "Release",    "Bus Comp",      490, 240, 20, 0,  0,  BC, "REL"  },
   { 22, 0, "b", "Ratio",      "Bus Comp",      370, 308, 20, 0,  0,  BC, "RATIO"},
-  { 23, 1, "b", "Bypass",     "Bus Comp",      476, 294, 0,  28, 28, NC, "BYP"  },
+  { 23, 1, "b", "Bypass",     "Bus Comp",      476, 294, 0,  28, 28, NC, "IN"   },
   { 24, 0, "b", "S/C HPF",    "Bus Comp",      370, 376, 20, 0,  0,  BC, "HPF"  },
   { 25, 0, "b", "Mix",        "Bus Comp",      490, 376, 20, 0,  0,  BC, "MIX"  },
   -- ---- RIGHT COLUMN — CS Comp + Gate + Channel ----
@@ -79,7 +79,7 @@ local CTRLS = {
   { 37, 2, "c", "Gate F.Atk", "Gate",          632, 456, 0,  66, 22, NC, "F.ATK"},
   { 38, 2, "c", "Polarity",   "I/O & Channel", 632, 510, 0,  66, 22, NC, "POL"  },
   { 39, 2, "c", "S/C Listen", "I/O & Channel", 632, 536, 0,  66, 22, NC, "LST"  },
-  { 40, 1, "c", "Bypass",     "I/O & Channel", 793, 523, 0,  40, 40, NC, "BYP"  },
+  { 40, 1, "c", "Bypass",     "I/O & Channel", 793, 523, 0,  40, 40, NC, "IN"   },
 }
 
 -- Mapped controls → param name + invert. A couple use param names that DIFFER

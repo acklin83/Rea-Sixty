@@ -426,280 +426,262 @@ local function renderList(st, asn)
   end
 end
 
--- Tiny SSL silk glyphs: filter slope (lpf/hpf) or EQ bell, drawn with line
--- segments beside a control. Uses the module draw-list + window origin.
-local function eqGlyph(kind, gx, gy, sz, c)
-  local function L(x1, y1, x2, y2)
-    reaper.ImGui_DrawList_AddLine(dl, OX + x1, OY + y1, OX + x2, OY + y2, c, 1.3)
+-- ===================================================================
+-- Settings-schematic face (unified UC1 mockup) — mirrors drawUc1Face_
+-- (SettingsScreen.cpp) 1:1: landscape 860×660, BOTH domains at once with the
+-- inactive one dimmed, full silk labels + chassis / GR-meter / LCD decoration.
+-- Bindable controls come from the published geometry (cap + mapped state via
+-- the live assignments); click-to-learn + tooltip ride on top. Non-bindable
+-- hardware keys (SOLO/CUT/FINE/SOLO CLR) are intentionally omitted so the
+-- bottom breathes. Layout numbers track analysis/settings_face_reference.py.
+-- ===================================================================
+
+-- idx → on-face silk label (the settings face uses full words, not the short
+-- HUD legends). idx = kUc1Controls array order = the published geometry key.
+local FACE_LABEL = {
+  [0]="LO-PASS",[1]="HI-PASS",[2]="BELL",[3]="GAIN",[4]="FREQ",[5]="GAIN",
+  [6]="FREQ",[7]="Q",[8]="TYPE",[9]="IN",[10]="GAIN",[11]="FREQ",[12]="Q",
+  [13]="FREQ",[14]="GAIN",[15]="BELL",[16]="INPUT",[17]="OUTPUT",
+  [18]="THR",[19]="MAKE-UP",[20]="ATTACK",[21]="RELEASE",[22]="RATIO",
+  [23]="IN",[24]="S/C HPF",[25]="MIX",[26]="FAST ATK",[27]="PEAK",
+  [28]="RATIO",[29]="THRESHOLD",[30]="RELEASE",[31]="IN",[32]="RANGE",
+  [33]="THRESHOLD",[34]="RELEASE",[35]="HOLD",[36]="EXPAND",[37]="FAST ATK",
+  [38]="\xC3\x98",[39]="S/C LISTEN",[40]="IN",
+}
+-- De-crowd overrides for the gate/channel cluster (top-left x,y + size in the
+-- 860×660 design space). Every other control uses the published geometry, which
+-- already matches the settings positions. Mirrors the de-crowded reference.
+local FACE_OV = {
+  [36]={x=632,y=466,w=96,h=22}, [37]={x=736,y=466,w=96,h=22},
+  [38]={x=632,y=540,w=96,h=26}, [39]={x=632,y=574,w=96,h=26},
+  [40]={x=776,y=547,w=40,h=40},
+}
+-- Light (white, dark-text) toggle keys like the settings face's IN buttons.
+local FACE_LIGHT = { [23]=true, [40]=true }
+
+-- LCD content: real focused-track data. Prefer the extension's "hud_lcd"
+-- publish ("seg;line1;line2;line3"); fall back to the last-touched track so it
+-- shows real data even before the C++ side ships.
+local function lcdLines()
+  local raw = reaper.GetExtState(SECT, "hud_lcd")
+  if raw ~= "" then
+    local s, a, b, c = raw:match("^([^;]*);([^;]*);([^;]*);(.*)$")
+    if s then return s, a, b, c end
   end
-  if kind == "lpf" then       -- flat, then slope down-right
-    L(gx, gy, gx + sz * 0.55, gy); L(gx + sz * 0.55, gy, gx + sz, gy + sz * 0.6)
-  elseif kind == "hpf" then   -- slope up, then flat
-    L(gx, gy + sz * 0.6, gx + sz * 0.45, gy); L(gx + sz * 0.45, gy, gx + sz, gy)
-  else                        -- bell hump
-    L(gx, gy + sz * 0.5, gx + sz * 0.35, gy)
-    L(gx + sz * 0.35, gy, gx + sz * 0.65, gy)
-    L(gx + sz * 0.65, gy, gx + sz, gy + sz * 0.5)
+  local tr = reaper.GetLastTouchedTrack()
+  if not tr then return "--", "TRACK", "(no track)", "" end
+  local num = reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER")
+  local _, name = reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", "", false)
+  local nch = reaper.GetMediaTrackInfo_Value(tr, "I_NCHAN")
+  local seg, top
+  if num == -1 then
+    seg, top = "M", "MASTER"; if name == "" then name = "Master" end
+  else
+    seg, top = string.format("%03d", floor(num)), "TRACK"
+    if name == "" then name = "Track " .. floor(num) end
   end
+  return seg, top, name, (nch and nch >= 2) and "Stereo" or "Mono"
 end
 
--- Physical UC1 mockup for the active domain. SHARED scale for CS + BC (from the
--- full 860×660 face) so a knob is the same size in either view — BC just uses
--- less of the window. Param name fixed under each control (asn name = bound
--- param, custom-label aware, like the list); canonical slot name (c.label) in
--- the hover tooltip. Unmapped → slot name shown fixed (dimmed).
-local function renderMockup(st, asn)
-  local domChar = (activeTab == "cs") and "c" or "b"
-  local present = (activeTab == "cs") and st.csPresent or st.bcPresent
-  local rgb     = (activeTab == "cs") and csRgb() or bcRgb()
-  if reaper.GetExtState(SECT, "hud_text_white") == "1" then rgb = 0xFFFFFF end
+local function renderFace(st, asn)
+  local DW, DH = geom.w or 860, geom.h or 660
+  local M, top = 8, TAB_H + 6
+  local availW, availH = WW - 2 * M, WH - top - M
+  if availW < 60 or availH < 60 then return end
+  local scale = math.min(availW / DW, availH / DH)
+  local ox = M + (availW - DW * scale) / 2
+  local oy = top + (availH - DH * scale) / 2
+  local function X(v) return ox + v * scale end
+  local function Y(v) return oy + v * scale end
 
-  -- This domain's controls (shallow copies). CS: compress the dead centre band
-  -- (where the BC + meters sit on the hardware) so the strip fills a portrait
-  -- window — left cluster stays, the gap incl. IN/FDR is squeezed, the right
-  -- cluster shifts left. cxmap is identity for BC.
-  local function cxmap(cx)
-    if domChar ~= "c" then return cx end
-    local L, Rs, NG = 250, 600, 150
-    if cx <= L then return cx end
-    if cx >= Rs then return cx - (Rs - L - NG) end
-    return L + (cx - L) / (Rs - L) * NG
+  local whiteTxt = (reaper.GetExtState(SECT, "hud_text_white") == "1")
+  local capCS, capBC = csRgb(), bcRgb()
+  local brightDom = (activeTab == "cs") and "c" or "b"
+  local function da(dom)              -- dim alpha: inactive domain fades back
+    if dom == nil then return 1.0 end
+    return (dom == brightDom) and 1.0 or 0.30
   end
-  local function ecx(c)   -- nudge IN/FDR toward the centre
-    local x = cxmap(c.cx)
-    if c.label == "Input Trim" then x = x + 28
-    elseif c.label == "Fader Level" then x = x - 28 end
-    return x
-  end
-  local items = {}
-  for _, c in pairs(geom.ctrl) do
-    if c.dom == domChar then
-      items[#items + 1] = { idx = c.idx, shape = c.shape, cx = ecx(c), cy = c.cy,
-        r = c.r, w = c.w, h = c.h, dom = c.dom, label = c.label, sec = c.sec,
-        cap = c.cap, legend = c.legend }
-    end
-  end
-  if #items == 0 then return end
-  local minX, minY, maxX, maxY = 1e9, 1e9, -1e9, -1e9
-  for _, c in ipairs(items) do
-    local x0, y0, x1, y1
-    if c.shape == 0 then x0, y0, x1, y1 = c.cx - c.r, c.cy - c.r, c.cx + c.r, c.cy + c.r
-    else                 x0, y0, x1, y1 = c.cx, c.cy, c.cx + c.w, c.cy + c.h end
-    if x0 < minX then minX = x0 end
-    if y0 < minY then minY = y0 end
-    if x1 > maxX then maxX = x1 end
-    if y1 > maxY then maxY = y1 end
+  local function presentOf(dom)
+    if dom == "c" then return st.csPresent elseif dom == "b" then return st.bcPresent end
+    return true
   end
 
-  local M    = 10
-  local bpf  = floor(11 * fontScale() + 0.5)        -- band/section label font
-  -- Gutter (CS only) sized to the widest gutter label via REAL ImGui metrics →
-  -- never clips regardless of the on-screen font size (DPI/retina). BC: none.
-  local GUT  = (domChar == "c") and math.max(56, math.min(120, (measure("FILTERS", bpf)) + 14)) or 8
-  local top  = TAB_H + 10
-  local availW = WW - 2 * M - GUT
-  local availH = WH - top - 8
-  if availW < 40 or availH < 40 then return end
-
-  -- Per-domain scale: fill the window with THIS domain's bbox (BC fills big, CS
-  -- uses its own width). Capped so BC knobs don't get absurd.
-  local domW, domH = (maxX - minX), (maxY - minY)
-  local scale = math.min(math.min(availW / domW, availH / domH), 2.6)
-  if scale <= 0 then return end
-  local originX = M + GUT + (availW - domW * scale) / 2 - minX * scale
-  local originY = top + (availH - domH * scale) / 2 - minY * scale
-
-  local pf = floor(9 * fontScale() + 0.5)
-  local whiteText = (reaper.GetExtState(SECT, "hud_text_white") == "1")
-  ctrlRects = {}
+  local lf = math.max(7, floor(11 * scale + 0.5))   -- control / label font
+  local sf = math.max(8, floor(12 * scale + 0.5))   -- section-header font
   local mx, my = reaper.ImGui_GetMousePos(ctx)
   local lmx, lmy = mx - OX, my - OY
   local tipSlot, tipParam
+  ctrlRects = {}
 
-  -- Band connectors (drawn FIRST, behind the controls): a line through each EQ
-  -- band's knob centres — data-driven from the control NAMES (prefix), no
-  -- authored pixel art. The knobs paint over the connector's mid-sections.
-  local function bandOf(nm)
-    local p = nm:match("^(%u+) ")
-    if p == "HF" or p == "HMF" or p == "LMF" or p == "LF" then return p end
-    return nil
+  -- design-space draw helpers ------------------------------------------
+  local function dRect(x, y, w, h, fill, outl, rounding)
+    local rd = (rounding or 3) * scale
+    reaper.ImGui_DrawList_AddRectFilled(dl, OX + X(x), OY + Y(y), OX + X(x + w), OY + Y(y + h), fill, rd)
+    if outl then reaper.ImGui_DrawList_AddRect(dl, OX + X(x), OY + Y(y), OX + X(x + w), OY + Y(y + h), outl, rd, 0, math.max(1, scale)) end
   end
-  local bands = {}
-  for _, c in ipairs(items) do
-    if c.shape == 0 then
-      local b = bandOf(c.label)
-      if b then
-        local t = bands[b]; if not t then t = {}; bands[b] = t end
-        t[#t + 1] = { sx = originX + c.cx * scale, sy = originY + c.cy * scale,
-                      rr = math.max(3, c.r * scale) }
+  local function dLine(x1, y1, x2, y2, c, w)
+    reaper.ImGui_DrawList_AddLine(dl, OX + X(x1), OY + Y(y1), OX + X(x2), OY + Y(y2), c, math.max(1, (w or 1) * scale))
+  end
+  local function dTextC(cx, cy, c, s, px)
+    local tw, th = measure(s, px); dtext(X(cx) - tw / 2, Y(cy) - th / 2, c, s, px)
+  end
+  local function dTextL(x, y, c, s, px) dtext(X(x), Y(y), c, s, px) end
+
+  -- bindable knob ------------------------------------------------------
+  local function knob(idx, cx, cy, rD, cap, dom)
+    local f = da(dom); local present = presentOf(dom)
+    local mapped = idx and asn[idx] ~= nil
+    local learning = idx and idx == learnIdx
+    local capCol = (cap and cap > 0) and ((cap >> 8) & 0xFFFFFF) or ((dom == "b") and capBC or capCS)
+    local r = rD * scale; local sx, sy = X(cx), Y(cy)
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy, r, col(0x14181E, f))
+    reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, r, col(0x4A5060, f), 0, math.max(1, r * 0.10))
+    local capA = mapped and 1.0 or (present and 0.7 or 0.4)
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy, r * 0.78, col(capCol, capA * f))
+    if mapped then reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, r + 2 * scale, col(capCol, 0.9 * f), 0, math.max(1, r * 0.12)) end
+    if learning then
+      local p = 0.4 + 0.4 * math.abs((frame % 50) / 25 - 1)
+      reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, r + 3 * scale, col(0xFFFFFF, p), 0, math.max(1, r * 0.14))
+    end
+    reaper.ImGui_DrawList_AddLine(dl, OX + sx, OY + sy - r * 0.85, OX + sx, OY + sy - r * 0.45, col(0xE8E8E8, (present and 0.9 or 0.5) * f), math.max(1, r * 0.13))
+    local lbl = idx and FACE_LABEL[idx]
+    if lbl then dTextC(cx, cy + rD + 12, col(0xB8BCC4, (present and 0.95 or 0.6) * f), lbl, lf) end
+    if idx then
+      ctrlRects[#ctrlRects + 1] = { idx = idx, shape = 0, x = sx, y = sy, r = r }
+      local dx, dy = lmx - sx, lmy - sy
+      if dx * dx + dy * dy <= (r + 3) * (r + 3) then
+        local g = geom.ctrl[idx]; tipSlot = (g and g.label) or lbl
+        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "")) or nil
       end
     end
   end
-  for _, list in pairs(bands) do
-    table.sort(list, function(a, b)
-      if math.abs(a.sy - b.sy) > 2 then return a.sy < b.sy end
-      return a.sx < b.sx
-    end)
-    for i = 1, #list - 1 do
-      reaper.ImGui_DrawList_AddLine(dl, OX + list[i].sx, OY + list[i].sy,
-        OX + list[i + 1].sx, OY + list[i + 1].sy,
-        col(0x6A6E78, present and 0.5 or 0.25), math.max(1, list[i].rr * 0.10))
-    end
-  end
 
-  -- LEFT gutter labels (CS): FILTERS / HF / HMF / EQ / LMF / LF, right-aligned,
-  -- each at its band/section vertical centre (distinct y's → no overlap), like
-  -- the silk-screen column on the hardware. (bpf computed up top.)
-  if domChar == "c" then
-    local function avgCY(pred)
-      local s, n = 0, 0
-      for _, c in ipairs(items) do if pred(c) then s = s + c.cy; n = n + 1 end end
-      if n > 0 then return s / n end
-      return nil
-    end
-    local rows = {}
-    local fy = avgCY(function(c) return c.label == "LPF" or c.label == "HPF" end)
-    if fy then rows[#rows + 1] = { "FILTERS", fy } end
-    for _, bn in ipairs({ "HF", "HMF", "LMF", "LF" }) do
-      local cy = avgCY(function(c) return c.label:match("^" .. bn .. " ") ~= nil end)
-      if cy then rows[#rows + 1] = { bn, cy } end
-    end
-    for _, c in ipairs(items) do if c.label == "EQ In" then rows[#rows + 1] = { "EQ", c.cy } end end
-    local xR = M + GUT - 8
-    for _, r in ipairs(rows) do
-      local w, h = measure(r[1], bpf)
-      dtext(xR - w, originY + r[2] * scale - h / 2,
-        col(present and 0xB8BCC4 or 0x70747C, present and 0.9 or 0.5), r[1], bpf)
-    end
-  end
-
-  -- Section headers: COMPRESSOR / GATE-EXP above their right clusters (with a
-  -- rule); CHANNEL to the LEFT of its cluster (no room above); BUS COMP for BC.
-  local spf = floor(11 * fontScale() + 0.5)
-  local function secHeader(pred, label, side)
-    local cs = {}
-    for _, c in ipairs(items) do if pred(c) then cs[#cs + 1] = c end end
-    if #cs == 0 then return end
-    local x0, x1, y0 = 1e9, -1e9, 1e9
-    for _, c in ipairs(cs) do
-      local cxs = originX + c.cx * scale
-      local a = (c.shape == 0) and (cxs - c.r * scale) or cxs
-      local b = (c.shape == 0) and (cxs + c.r * scale) or (cxs + c.w * scale)
-      local yy = (c.shape == 0) and (originY + c.cy * scale - c.r * 1.3 * scale) or (originY + c.cy * scale)
-      if a < x0 then x0 = a end; if b > x1 then x1 = b end; if yy < y0 then y0 = yy end
-    end
-    local w, h = measure(label, spf)
-    local hcol = col(present and 0xCED2DA or 0x808691, present and 0.95 or 0.5)
-    if side == "left" then
-      local yc = 0; for _, c in ipairs(cs) do yc = yc + originY + c.cy * scale end; yc = yc / #cs
-      dtext(math.max(2, x0 - w - 10), yc - h / 2, hcol, label, spf)
-      return
-    end
-    local hy = math.max(TAB_H + 2, y0 - h - 6)
-    local hx = math.min(math.max(2, x0), WW - 2 - w)
-    dtext(hx, hy, hcol, label, spf)
-    local ry, rx0, rx1 = hy + h / 2, hx + w + 6, math.min(WW - 2, x1)
-    if rx1 > rx0 then
-      reaper.ImGui_DrawList_AddLine(dl, OX + rx0, OY + ry, OX + rx1, OY + ry,
-        col(present and 0x4A4E58 or 0x33363D, 1), 1.0)
-    end
-  end
-  if domChar == "c" then
-    secHeader(function(c) return c.sec == "Dynamics" end, "COMPRESSOR")
-    secHeader(function(c) return c.sec == "Gate" end, "GATE/EXP")
-    secHeader(function(c) return c.sec == "I/O & Channel" and c.shape ~= 0 end, "CHANNEL", "left")
-  else
-    secHeader(function() return true end, "BUS COMP")
-  end
-
-  for _, c in ipairs(items) do
-    local a        = asn[c.idx]
-    local mapped   = (a ~= nil)
-    local learning = (c.idx == learnIdx)
-    -- Ring = the SSL accent cap colour (per EQ band: red/green/blue/black, BC
-    -- blue). Toggles/btns publish cap 0 → fall back to the domain colour.
-    local capCol = (c.cap and c.cap > 0) and ((c.cap >> 8) & 0xFFFFFF) or rgb
-    -- State by brightness (caps are physically always coloured on the hardware).
-    local ringA = mapped and 1.0 or (present and 0.55 or 0.30)
-    local ringCol = present and capCol or 0x707880
-    local fillCol = mapped and col(capCol, 0.20) or col(0x202227, 1)
-
-    local cell
-    if c.shape == 0 then
-      local sx, sy = originX + c.cx * scale, originY + c.cy * scale
-      local rr = math.max(3, c.r * scale)
-      reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy, rr, fillCol)
-      if learning then
-        local p = 0.4 + 0.4 * math.abs((frame % 50) / 25 - 1)
-        reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, rr + 2, col(0xFFFFFF, p), 0, 2)
-      end
-      reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, rr, col(ringCol, ringA), 0, math.max(1, rr * 0.12))
-      -- SSL smart-LED ring: ~270° arc of dots around the knob (gap at the
-      -- bottom), like the hardware surface. Static (no live value) — dim, in the
-      -- cap colour when the plug-in is present, grey otherwise.
-      local ringR = rr * 1.28
-      local dotR  = math.max(0.7, rr * 0.10)
-      local dotCol = col(present and capCol or 0x60646E, present and 0.55 or 0.3)
-      local A0, A1, N = 2.356, 7.069, 11   -- 135°..405° → 270° arc, gap at 6 o'clock
-      for di = 0, N - 1 do
-        local ang = A0 + (A1 - A0) * (di / (N - 1))
-        reaper.ImGui_DrawList_AddCircleFilled(dl,
-          OX + sx + math.cos(ang) * ringR, OY + sy + math.sin(ang) * ringR, dotR, dotCol)
-      end
-      -- Pointer notch at 12 o'clock.
-      reaper.ImGui_DrawList_AddLine(dl, OX + sx, OY + sy - rr * 0.82,
-        OX + sx, OY + sy - rr * 0.34, col(0xE8E8E8, present and 0.9 or 0.4), math.max(1, rr * 0.12))
-      local gk = (c.label == "LPF" and "lpf") or (c.label == "HPF" and "hpf") or nil
-      if gk then eqGlyph(gk, sx + rr + 3, sy - rr * 0.3, rr * 0.7,
-        col(0x9DA2AC, present and 0.8 or 0.4)) end
-      ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = 0, x = sx, y = sy, r = rr }
-      cell = { knob = true, cx = sx, top = sy + ringR + dotR + 2, w = math.max(60, rr * 4) }
+  -- bindable / labelled button ----------------------------------------
+  local function btn(idx, x, y, wD, hD, label, dom, light)
+    local f = da(dom); local present = presentOf(dom)
+    local mapped = idx and asn[idx] ~= nil
+    local learning = idx and idx == learnIdx
+    local sx, sy = X(x), Y(y); local sw, sh = wD * scale, hD * scale
+    local capCol = (dom == "b") and capBC or capCS
+    local fill, txtC, outl
+    if light then
+      fill = col(0xE0E0E0, (present and 1 or 0.6) * f)
+      txtC = col(0x303338, f)
+      outl = col(mapped and capCol or 0x808088, f)
     else
-      local sx, sy = originX + c.cx * scale, originY + c.cy * scale
-      local sw, sh = c.w * scale, c.h * scale
-      reaper.ImGui_DrawList_AddRectFilled(dl, OX + sx, OY + sy, OX + sx + sw, OY + sy + sh, fillCol, 3)
-      if learning then
-        local p = 0.4 + 0.4 * math.abs((frame % 50) / 25 - 1)
-        reaper.ImGui_DrawList_AddRect(dl, OX + sx - 2, OY + sy - 2, OX + sx + sw + 2, OY + sy + sh + 2, col(0xFFFFFF, p), 3, 0, 2)
+      fill = mapped and col(capCol, 0.30 * f) or col(0x252A33, f)
+      local tc = mapped and (whiteTxt and 0xFFFFFF or capCol) or (present and 0xC0C4CC or 0x707880)
+      txtC = col(tc, (present and 1 or 0.6) * f)
+      outl = col(mapped and capCol or 0x4A5060, f)
+    end
+    reaper.ImGui_DrawList_AddRectFilled(dl, OX + sx, OY + sy, OX + sx + sw, OY + sy + sh, fill, 3 * scale)
+    reaper.ImGui_DrawList_AddRect(dl, OX + sx, OY + sy, OX + sx + sw, OY + sy + sh, outl, 3 * scale, 0, math.max(1, scale))
+    if learning then
+      local p = 0.4 + 0.4 * math.abs((frame % 50) / 25 - 1)
+      reaper.ImGui_DrawList_AddRect(dl, OX + sx - 2, OY + sy - 2, OX + sx + sw + 2, OY + sy + sh + 2, col(0xFFFFFF, p), 3 * scale, 0, math.max(1, 2 * scale))
+    end
+    local shown = fit(label, sw - 4, lf)
+    local tw, th = measure(shown, lf)
+    dtext(sx + (sw - tw) / 2, sy + (sh - th) / 2, txtC, shown, lf)
+    if idx then
+      ctrlRects[#ctrlRects + 1] = { idx = idx, shape = 1, x = sx, y = sy, w = sw, h = sh }
+      if lmx >= sx and lmx <= sx + sw and lmy >= sy and lmy <= sy + sh then
+        local g = geom.ctrl[idx]; tipSlot = (g and g.label) or label
+        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "")) or nil
       end
-      reaper.ImGui_DrawList_AddRect(dl, OX + sx, OY + sy, OX + sx + sw, OY + sy + sh, col(ringCol, ringA), 3, 0, 1)
-      if c.label:match("Type$") then eqGlyph("bell", sx + sw + 3, sy + sh * 0.2,
-        sh * 0.7, col(0x9DA2AC, present and 0.8 or 0.4)) end
-      ctrlRects[#ctrlRects + 1] = { idx = c.idx, shape = c.shape, x = sx, y = sy, w = sw, h = sh }
-      cell = { knob = false, rx = sx + sw, cy = sy + sh / 2,
-               isType = (c.label:match("Type$") ~= nil), w = math.max(60, sw + 16) }
     end
+  end
 
-    -- Compact fixed label = the short scribble legend (like the hardware face).
-    -- The full slot name + bound param name go in the hover tooltip below.
-    local tcol, ta
-    if mapped      then tcol, ta = (whiteText and 0xFFFFFF or capCol), 1.0
-    elseif present then tcol, ta = 0xC6CDD6, 0.85
-    else                tcol, ta = 0x707880, 0.5 end
-    local shown = fit(c.legend, cell.w, pf)
-    local tw, th = measure(shown, pf)
-    local tx, ty
-    if cell.knob then          -- knob: label centred below
-      tx = cell.cx - tw / 2; ty = cell.top
-      if tx < 2 then tx = 2 elseif tx + tw > WW - 2 then tx = WW - 2 - tw end
-    else                       -- button/toggle: label to the RIGHT (stacked buttons
-      local extra = cell.isType and 16 or 0   -- would collide if labelled below; +glyph room
-      tx = cell.rx + 5 + extra; ty = cell.cy - th / 2
-      if tx + tw > WW - 2 then tx = cell.rx - tw - 5 end   -- flip left if no room
-    end
-    dtext(tx, ty, col(tcol, ta), shown, pf)
+  local function section(x, y, text, dom) dTextL(x, y, col(0x9CA0AA, da(dom)), text, sf) end
+  local function decoKnob(cx, cy, rD, label)
+    local r = rD * scale; local sx, sy = X(cx), Y(cy)
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy, r, col(0x14181E, 1))
+    reaper.ImGui_DrawList_AddCircle(dl, OX + sx, OY + sy, r, col(0x4A5060, 1), 0, math.max(1, r * 0.10))
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy, r * 0.78, col(0x6A707C, 0.85))
+    reaper.ImGui_DrawList_AddLine(dl, OX + sx, OY + sy - r * 0.85, OX + sx, OY + sy - r * 0.45, col(0xE8E8E8, 0.8), math.max(1, r * 0.13))
+    dTextC(cx, cy + rD + 12, col(0xB8BCC4, 0.85), label, lf)
+  end
+  local function decoBtn(x, y, wD, hD, label)
+    dRect(x, y, wD, hD, col(0x252A33, 1), col(0x4A5060, 1), 3)
+    local tw, th = measure(label, lf)
+    dtext(X(x) + (wD * scale - tw) / 2, Y(y) + (hD * scale - th) / 2, col(0xC0C4CC, 1), label, lf)
+  end
 
-    local h = ctrlRects[#ctrlRects]
-    local over
-    if h.shape == 0 then
-      local dx, dy = lmx - h.x, lmy - h.y
-      over = (dx * dx + dy * dy) <= (h.r + 3) * (h.r + 3)
+  -- ===== Chassis + column frames =====
+  dRect(4, 4, DW - 8, DH - 8, col(0x14181E, 0.0), col(0x2A3038, 1), 8)
+  dRect(12, 12, 230, DH - 24, col(0x1A1E24, da("c")), col(0x2A3038, da("c")), 6)         -- left (EQ)
+  dRect(250, 12, 360, 420, col(0x1A1E24, da("b")), col(0x2A4870, da("b")), 6)            -- centre BC
+  dRect(618, 12, 230, DH - 24, col(0x1A1E24, da("c")), col(0x2A3038, da("c")), 6)        -- right (Dyn/Chan)
+  dRect(250, 440, 360, 208, col(0x1A1E24, 1), col(0x903030, 1), 6)                       -- CCP (neutral)
+
+  -- ===== Section + side labels =====
+  local fC = da("c")
+  section(26, 104, "FILTERS", "c")
+  dLine(70, 122, 234, 122, col(0x383C44, fC), 1.0)
+  dTextL(26, 146, col(0xB8BCC4, fC), "HF", lf)
+  dTextL(26, 224, col(0xB8BCC4, fC), "HMF", lf)
+  dTextL(26, 422, col(0xB8BCC4, fC), "LMF", lf)
+  dTextL(26, 550, col(0xB8BCC4, fC), "LF", lf)
+  section(632, 26, "COMPRESSOR", "c")
+  section(632, 446, "GATE / EXPANDER", "c")
+  section(632, 518, "CHANNEL", "c")
+  dTextC(430, 22, col(0x9CA0AA, da("b")), "BUS COMPRESSOR", sf)
+
+  -- ===== BC GR meter (BC domain) =====
+  local fB = da("b")
+  local mw, mh = 196, 80
+  local mxg, myg = 250 + (360 - mw) / 2, 44
+  dRect(mxg, myg, mw, mh, col(0x141416, fB), col(0x282A2E, fB), 4)
+  dRect(mxg + 4, myg + 4, mw - 8, mh - 8, col(0x080C12, fB), col(0x444A55, fB), 2)
+  local mcx, mcy, ra = mxg + mw / 2, myg + mh - 3, 70
+  local a0, a1 = math.rad(-130), math.rad(-50)
+  local function dBtoA(dbv) return a0 + (dbv / 20) * (a1 - a0) end
+  for _, t in ipairs({ { 0, "0" }, { 5, "5" }, { 10, "10" }, { 15, "15" }, { 20, "20" } }) do
+    local a = dBtoA(t[1])
+    dLine(mcx + math.cos(a) * ra, mcy + math.sin(a) * ra, mcx + math.cos(a) * (ra - 8), mcy + math.sin(a) * (ra - 8), col(0x4499DD, fB), 1.6)
+    dTextC(mcx + math.cos(a) * (ra - 16), mcy + math.sin(a) * (ra - 16), col(0x4499DD, fB), t[2], lf)
+  end
+  local aN = dBtoA(7)
+  dLine(mcx, mcy, mcx + math.cos(aN) * (ra - 4), mcy + math.sin(aN) * (ra - 4), col(0x4499DD, fB), 2.0)
+  dTextC(mcx, myg + mh - 12, col(0x4499DD, fB), "GR", lf)
+
+  -- ===== Comp GR ladder (right col, CS) =====
+  for i, s in ipairs({ "20", "14", "9", "6", "3" }) do
+    local ly = 208 + (i - 1) * 12
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + X(822), OY + Y(ly), math.max(1, 2 * scale), col(0x404448, fC))
+    dTextL(804, ly - 5, col(0x808088, fC), s, lf)
+  end
+
+  -- ===== Central Control Panel: 7-seg + LCD (real data) + buttons =====
+  local seg, l1, l2, l3 = lcdLines()
+  local kCcpY = 440
+  dRect(264, kCcpY + 14, 56, 30, col(0x1A0408, 1), col(0x401818, 1), 3)
+  dTextC(292, kCcpY + 28, col(0xFF3030, 1), seg, math.max(9, floor(18 * scale + 0.5)))
+  local lcdX, lcdW = 328, 222; local lcdCx = lcdX + lcdW / 2
+  dRect(lcdX, kCcpY + 12, lcdW, 76, col(0x05080C, 1), col(0x444A55, 1), 3)
+  dTextC(lcdCx, kCcpY + 26, col(0x808088, 1), l1, lf)
+  dTextC(lcdCx, kCcpY + 46, col(0xE0E0E0, 1), fit(l2, lcdW * scale - 8, math.max(9, floor(13 * scale + 0.5))), math.max(9, floor(13 * scale + 0.5)))
+  dTextC(lcdCx, kCcpY + 66, col(0x4488DD, 1), l3, lf)
+  do
+    local bw, bh, gap = 80, 22, 20; local total = 2 * bw + gap
+    local x0, y0 = 250 + (360 - total) / 2, kCcpY + 100
+    decoBtn(x0, y0, bw, bh, "360"); decoBtn(x0 + bw + gap, y0, bw, bh, "MAGNIFY")
+  end
+  decoKnob(390, kCcpY + 145, 18, "CS Encoder")
+  decoKnob(470, kCcpY + 145, 18, "BC Encoder")
+  dTextC(430, kCcpY + 208 - 14, col(0x707880, 1), "Rea-Sixty", lf)
+
+  -- ===== Bindable controls from the published geometry =====
+  for idx, g in pairs(geom.ctrl) do
+    if g.shape == 0 then
+      knob(idx, g.cx, g.cy, g.r, g.cap, g.dom)
     else
-      over = lmx >= h.x and lmx <= h.x + h.w and lmy >= h.y and lmy <= h.y + h.h
-    end
-    if over then
-      tipSlot  = c.label
-      tipParam = mapped and (a.name .. (a.inv and "  (inverted)" or "")) or nil
+      local ov = FACE_OV[idx]
+      local x = (ov and ov.x) or g.cx
+      local y = (ov and ov.y) or g.cy
+      local w = (ov and ov.w) or g.w
+      local h = (ov and ov.h) or g.h
+      btn(idx, x, y, w, h, FACE_LABEL[idx] or g.legend, g.dom, FACE_LIGHT[idx])
     end
   end
 
@@ -744,15 +726,17 @@ local function render()
 
   local present = (activeTab == "cs") and st.csPresent or st.bcPresent
 
-  if not present then
+  if reaper.GetExtState(SECT, "hud_imgui_view") == "mockup" then
+    -- Unified face draws the whole surface (both domains, inactive dimmed) —
+    -- always shown; absent plug-ins just render greyed, no "no plug-in" gate.
+    renderFace(st, asn)
+  elseif not present then
     ctrlRects = {}
     local px = floor(17 * fontScale() + 0.5)
     local msg = (activeTab == "cs" and "No Channel-Strip" or "No Bus-Comp")
               .. " plug-in on the focused track"
     local tw, th = measure(msg, px)
     dtext((WW - tw) / 2, (WH - th) / 2, col(0x9097A0, 0.9), msg, px)
-  elseif reaper.GetExtState(SECT, "hud_imgui_view") == "mockup" then
-    renderMockup(st, asn)
   else
     renderList(st, asn)
   end
@@ -845,7 +829,7 @@ end
 ------------------------------------------------------------------------
 -- Geometry persistence (own keys → coexists with gfx HUD).
 ------------------------------------------------------------------------
-local DEF_W, DEF_H = 500, 500
+local DEF_W, DEF_H = 920, 720
 local function loadRect()
   local raw = reaper.GetExtState(SECT, "hud_imgui_rect")
   local x, y, w, h = raw:match("^(%-?%d+),(%-?%d+),(%d+),(%d+)$")
