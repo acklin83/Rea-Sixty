@@ -539,6 +539,12 @@ struct UserBindingEntry {
     // rebuild.
     std::array<std::vector<uf8::PushStep>, 0x20> buttonSteps[uf8::kNumFxLayers];
 
+    // Learn-HUD: per-layer set of SSL-Link linkIdx that carry their OWN
+    // overlay on that layer (vs inheriting Normal). Normal's entry holds every
+    // mapped linkIdx; a modifier layer holds only the explicitly-overlaid ones.
+    // Populated in rebuildUserCache_locked_ alongside the synthesized bindings.
+    std::vector<int> explicitLinks[uf8::kNumFxLayers];
+
     // Identity helpers — `b` may point at any layer's PluginBindings.
     int layerIndexOf(const PluginBindings* b) const {
         for (int l = 0; l < uf8::kNumFxLayers; ++l)
@@ -586,6 +592,14 @@ void rebuildUserCache_locked_()
             e->bindings[l].match     = e->matchOwned.c_str();
             e->bindings[l].shortName = e->shortNameOwned.c_str();
             synthesizeUserBinding_(um, e->bindings[l], l, &e->buttonSteps[l]);
+            // Record which linkIdx own an overlay on THIS layer (no Normal
+            // fallback) — the Learn-HUD uses it to render modifier layers with
+            // only their real overlays. Normal collects every mapped linkIdx.
+            e->explicitLinks[l].clear();
+            for (const auto& slot : um.slots) {
+                if (uf8::fxLayerMapped(uf8::fxLayerOf(slot, l)))
+                    e->explicitLinks[l].push_back(slot.linkIdx);
+            }
         }
         g_userCache.push_back(std::move(e));
     }
@@ -698,6 +712,20 @@ int hudParamForControl(const PluginBindings* b, bool busComp,
         return b->knobParam[kid];
     }
     return kParamNone;
+}
+
+bool hudControlExplicitOnLayer(const PluginBindings* b, int linkIdx)
+{
+    if (!b) return true;
+    std::lock_guard<std::mutex> lk(g_userCacheMutex);
+    for (const auto& e : g_userCache) {
+        const int L = e->layerIndexOf(b);
+        if (L < 0) continue;                       // not this entry's binding
+        if (L == uf8::FxLayer::Normal) return true; // Normal: never inherited
+        for (int li : e->explicitLinks[L]) if (li == linkIdx) return true;
+        return false;                               // inherits Normal here
+    }
+    return true;  // built-in / unknown binding → no layers → always shown
 }
 
 int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)

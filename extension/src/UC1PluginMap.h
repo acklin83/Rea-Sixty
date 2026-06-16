@@ -137,6 +137,16 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName);
 int hudParamForControl(const PluginBindings* b, bool busComp,
                        int linkIdx, bool isButton, bool* outInverted);
 
+// True when the SSL-Link `linkIdx` carries its OWN overlay on the FX-Learn
+// layer that `b` represents (b = a user-map layer binding from
+// lookupBindingsByName). Normal layer → always true. A modifier layer
+// (Option/Control) → true only when the control was explicitly FX-Learned on
+// that layer, false when it merely inherits the Normal mapping. Built-in /
+// unknown bindings have no layers → always true. Lets the Learn-HUD show a
+// modifier layer with ONLY its real overlays (inherited controls render
+// unmapped) instead of the full inherited set lighting up. Frank 2026-06-16.
+bool hudControlExplicitOnLayer(const PluginBindings* b, int linkIdx);
+
 // Reverse of kCsLinkToUc1 / kBcLinkToUc1: the SSL-Link `linkIdx` a given UC1
 // hardware control drives. Used to focus the control's OWN slot when an
 // Option/Control FX-Learn layer remaps it to a param outside the Normal slot

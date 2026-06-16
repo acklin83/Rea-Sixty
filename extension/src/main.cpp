@@ -5393,7 +5393,10 @@ static std::string hudActiveFxName_(MediaTrack* tr)
     return shortFxName_(tr, fxIdx);
 }
 
-static std::string hudLcdString_(MediaTrack* tr)
+// line3Fx >= 0 pins LCD line 3 to that FX (the HUD's active-domain plug-in) so
+// the name follows the focused domain. -1 falls back to the globally-focused FX
+// window (hudActiveFxName_) for the no-domain-target case.
+static std::string hudLcdString_(MediaTrack* tr, int line3Fx)
 {
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return "";
     const int num = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
@@ -5416,7 +5419,9 @@ static std::string hudLcdString_(MediaTrack* tr)
     const std::string name = abbreviateTrackName_(raw, 12, TNM_SmartAbbrev);
     // Line 3 = active FX (open window or FX-scroll cursor) — replaces the old
     // Stereo/Mono, which carried no useful info here.
-    std::string fx = hudActiveFxName_(tr);
+    std::string fx = (line3Fx >= 0 && line3Fx < TrackFX_GetCount(tr))
+                       ? shortFxName_(tr, line3Fx)
+                       : hudActiveFxName_(tr);
     for (char& c : fx) if (c == ';' || c == '\n') c = ' ';
     char out[384];
     std::snprintf(out, sizeof(out), "%s;%s;%s;%s",
@@ -5446,9 +5451,19 @@ void publishHud_()
         g_hudAssignPublished = assign;
         SetExtState("rea_sixty", "hud_assign", assign.c_str(), false);
     }
-    // LCD = focused track (CS track preferred, else BC anchor). Empty when
-    // neither is resolved → the HUD falls back to GetLastTouchedTrack().
-    const std::string lcd = hudLcdString_(csTr ? csTr : bcTr);
+    // LCD follows the HUD's ACTIVE domain (focusDom), not the globally-focused
+    // FX window — so the plug-in NAME on line 3 switches with the domain instead
+    // of lingering on the BC you came from after focusing a CS. focusDom: 1=CS,
+    // 2=BC. Falls back to CS-then-BC when focus is None / the domain has no
+    // target. Empty when neither resolves → HUD falls back to GetLastTouchedTrack.
+    MediaTrack* lcdTr = nullptr; int lcdFx = -1;
+    if (focusDom == 2 && bcTr)      { lcdTr = bcTr; lcdFx = bcFx; }
+    else if (focusDom == 1 && csTr) { lcdTr = csTr; lcdFx = csFx; }
+    if (!lcdTr) {
+        if (csTr)      { lcdTr = csTr; lcdFx = csFx; }
+        else if (bcTr) { lcdTr = bcTr; lcdFx = bcFx; }
+    }
+    const std::string lcd = hudLcdString_(lcdTr, lcdFx);
     if (lcd != g_hudLcdPublished) {
         g_hudLcdPublished = lcd;
         SetExtState("rea_sixty", "hud_lcd", lcd.c_str(), false);

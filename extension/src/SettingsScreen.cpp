@@ -7553,14 +7553,29 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
 {
     auto* csTr = static_cast<MediaTrack*>(csTrV);
     auto* bcTr = static_cast<MediaTrack*>(bcTrV);
-    const bool csOk = csTr && csFx >= 0 && ValidatePtr2(nullptr, csTr, "MediaTrack*");
-    const bool bcOk = bcTr && bcFx >= 0 && ValidatePtr2(nullptr, bcTr, "MediaTrack*");
-
+    // Domain-correct resolution — mirror the UC1 surface / colour field exactly:
+    // lookupBindingsOnTrack returns the CS plug-in via channelMap and the BC
+    // plug-in via busCompMap (each respecting its own instance-cycle ordinal),
+    // and NEVER crosses domains. The previous name-based lookupBindingsByName
+    // was domain-BLIND: for the BC target it could return a CS-mapped binding
+    // (a CS user-map whose match substring also hit, or the first cache match),
+    // so every BC control resolved to kParamNone → the BC the user picked with
+    // the BC-encoder vanished from the mockup, and CS params bled onto BC and
+    // vice versa. Resolve per-domain instead. Frank 2026-06-16.
+    const bool csValid = csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*");
+    const bool bcValid = bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*");
+    const uc1::UC1Bindings csBind = csValid ? uc1::lookupBindingsOnTrack(csTr)
+                                            : uc1::UC1Bindings{};
+    const uc1::UC1Bindings bcBind = bcValid ? uc1::lookupBindingsOnTrack(bcTr)
+                                            : uc1::UC1Bindings{};
+    const uc1::PluginBindings* csB = csBind.channelMap;
+    const uc1::PluginBindings* bcB = bcBind.busCompMap;
+    const int csFxR = csBind.channelFxIdx;   // domain-correct CS fx index
+    const int bcFxR = bcBind.busCompFxIdx;   // domain-correct BC fx index
+    (void)csFx; (void)bcFx;                  // superseded by the per-domain idx
     char csName[512] = {0}, bcName[512] = {0};
-    if (csOk) uf8::fxIdentityName(csTr, csFx, csName, sizeof(csName));
-    if (bcOk) uf8::fxIdentityName(bcTr, bcFx, bcName, sizeof(bcName));
-    const uc1::PluginBindings* csB = csName[0] ? uc1::lookupBindingsByName(csName) : nullptr;
-    const uc1::PluginBindings* bcB = bcName[0] ? uc1::lookupBindingsByName(bcName) : nullptr;
+    if (csB && csFxR >= 0) uf8::fxIdentityName(csTr, csFxR, csName, sizeof(csName));
+    if (bcB && bcFxR >= 0) uf8::fxIdentityName(bcTr, bcFxR, bcName, sizeof(bcName));
 
     const char* csShort = (csB && csB->shortName) ? csB->shortName : "";
     const char* bcShort = (bcB && bcB->shortName) ? bcB->shortName : "";
@@ -7583,11 +7598,16 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
         const uc1::PluginBindings* b = isBc ? bcB : csB;
         if (!b) continue;
         MediaTrack* tr = isBc ? bcTr : csTr;
-        const int   fx = isBc ? bcFx : csFx;
+        const int   fx = isBc ? bcFxR : csFxR;
         const bool  isButton = (c.kind != Uc1Control::Knob);
         bool inv = false;
         const int p = uc1::hudParamForControl(b, isBc, c.linkIdx, isButton, &inv);
         if (p < 0) continue;
+        // On a modifier layer (Option/Control) show ONLY controls explicitly
+        // overlaid on that layer — inherited fall-through-to-Normal controls
+        // render unmapped, so the HUD distinguishes layer overlays from the
+        // base map instead of lighting everything (b carries the active layer).
+        if (!uc1::hudControlExplicitOnLayer(b, c.linkIdx)) continue;
         char pname[128] = {0};
         if (c.linkIdx == 0 && isButton) {
             std::snprintf(pname, sizeof(pname), "In / Bypass");
