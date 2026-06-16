@@ -167,13 +167,81 @@ local function trackNameRgb(tr)
   return ((rr & 0xFF) << 16) | ((gg & 0xFF) << 8) | (bb & 0xFF)
 end
 
+------------------------------------------------------------------------
+-- FX short-name resolution. Order of preference:
+--   (1) user_plugins.json  — the FX-Learn short-name source of truth:
+--       match-substring → displayShort. Cached; re-read on size change
+--       (throttled to ~1 s) so edits in the FX-Learn editor show up live.
+--   (2) SSL factory map    — SSL plug-ins are constexpr in the (un-readable)
+--       extension and are NOT in user_plugins.json, so a small built-in
+--       substring map gives "Bus Compressor 2" → "BC2", "Channel Strip 2"
+--       → "CS2", etc.  (hud_state ExtState ALSO carries shorts but is only
+--       published while the Learn-HUD runs — g_hudEnabled gate, main.cpp —
+--       so we deliberately don't depend on it here: this stays always-on.)
+--   (3) generic cleanup    — strip "VST3:"/"AU:" prefix + "(vendor)" suffix.
+------------------------------------------------------------------------
+-- Longest substring first so the most specific name wins ("…2" before "…").
+local SSL_SHORTS = {
+  { "Bus Compressor 2", "BC2" },
+  { "Channel Strip 2",  "CS2" },
+  { "BusCompressor 2",  "BC2" },
+  { "ChannelStrip 2",   "CS2" },
+  { "Bus Compressor",   "BC"  },
+  { "Channel Strip",    "CS"  },
+}
+
+local userShorts      = nil   -- { {match=, short=}, ... }, longest match first
+local userShorts_size = nil   -- byte size of the JSON when last parsed
+local userShorts_next = 0     -- next time_precise() at which we re-check size
+
+local function userPluginsPath()
+  return reaper.GetResourcePath() .. "/rea_sixty/user_plugins.json"
+end
+
+local function loadUserShorts()
+  local now = reaper.time_precise()
+  if userShorts and now < userShorts_next then return end   -- throttle re-check
+  userShorts_next = now + 1.0
+
+  local path = userPluginsPath()
+  local f = io.open(path, "rb")
+  if not f then userShorts = userShorts or {}; return end
+  local size = f:seek("end")
+  if userShorts and size == userShorts_size then f:close(); return end
+  f:seek("set", 0)
+  local data = f:read("*a"); f:close()
+  userShorts_size = size
+
+  local list = {}
+  -- `match` always precedes `displayShort` in each plugin object, and both keys
+  -- are top-level-only (verified — never nested in slots/paramSnapshot), so a
+  -- non-greedy paired gmatch reliably zips each match→short.
+  for m, s in data:gmatch('"match"%s*:%s*"(.-)".-"displayShort"%s*:%s*"(.-)"') do
+    if m ~= "" and s ~= "" then list[#list + 1] = { match = m, short = s } end
+  end
+  table.sort(list, function(a, b) return #a.match > #b.match end)
+  userShorts = list
+end
+
+local function shortName(raw)
+  if not raw or raw == "" then return raw end
+  loadUserShorts()
+  for _, e in ipairs(userShorts) do
+    if raw:find(e.match, 1, true) then return e.short end
+  end
+  for _, e in ipairs(SSL_SHORTS) do
+    if raw:find(e[1], 1, true) then return e[2] end
+  end
+  local nm = raw:gsub("^%u%u+%d*i?:%s*", "")
+  nm = nm:gsub("%s*%([^()]-%)%s*$", "")
+  return nm
+end
+
 local function fxLabel(tr, fxIdx)
   if not tr or not fxIdx or fxIdx < 0 then return nil end
   local _, nm = reaper.TrackFX_GetFXName(tr, fxIdx, "")
   if not nm or nm == "" then return nil end
-  nm = nm:gsub("^%u%u+%d*i?:%s*", "")
-  nm = nm:gsub("%s*%([^()]-%)%s*$", "")
-  return nm
+  return shortName(nm)
 end
 
 local function findActiveBc(byGuid)
@@ -228,7 +296,10 @@ local last_save_x, last_save_y, last_save_w, last_save_h
 local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb)
   local lit = name ~= nil
   local dim = lit and 0xB0B0BC or 0x6A6A74
-  if trk ~= nil then
+  -- Track name position: before (default) or after the CS/BC tag+name+param.
+  local after = reaper.GetExtState(SECT, "focused_panel_track_after") == "1"
+
+  if trk ~= nil and not after then
     reaper.ImGui_TextColored(ctx, rgba(trkRgb or dim), (trk or "") .. "  ")
     reaper.ImGui_SameLine(ctx, 0, 0)
   end
@@ -243,6 +314,10 @@ local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb)
       reaper.ImGui_SameLine(ctx, 0, 0)
       reaper.ImGui_TextColored(ctx, rgba(0x9A9AA2), " " .. pv)
     end
+  end
+  if trk ~= nil and after then
+    reaper.ImGui_SameLine(ctx, 0, 0)
+    reaper.ImGui_TextColored(ctx, rgba(trkRgb or dim), "  " .. (trk or ""))
   end
 end
 
@@ -322,6 +397,65 @@ local function toggleKey(key, def_on)
   reaper.SetExtState(SECT, key, on and "0" or "1", true)
 end
 
+------------------------------------------------------------------------
+-- "Load on startup" — this is a standalone ReaScript, so autostart = adding a
+-- one-liner to REAPER's Scripts/__startup.lua shim. Our line is bracketed with
+-- markers so any other __startup.lua content is preserved. The file itself is
+-- the source of truth (no ExtState mirror to desync).
+------------------------------------------------------------------------
+local STARTUP_BEGIN = "-- >>> rea_sixty_focused_panel_imgui (auto)"
+local STARTUP_END   = "-- <<< rea_sixty_focused_panel_imgui (auto)"
+
+local function startupPath() return reaper.GetResourcePath() .. "/Scripts/__startup.lua" end
+
+-- This script's command id as a "_RS..." string usable by NamedCommandLookup.
+local function selfCommandName()
+  if not cmdID then return nil end
+  local nm = reaper.ReverseNamedCommandLookup(cmdID)
+  if not nm or nm == "" then return nil end
+  return "_" .. nm
+end
+
+local function readFileAll(path)
+  local f = io.open(path, "rb"); if not f then return nil end
+  local s = f:read("*a"); f:close(); return s
+end
+
+local function litPat(s) return (s:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")) end
+
+-- Remove our marker block (BEGIN…END inclusive + trailing newline) from content.
+local function stripStartupBlock(content)
+  if not content then return "" end
+  local pat = litPat(STARTUP_BEGIN) .. ".-" .. litPat(STARTUP_END) .. "%s*\n?"
+  return (content:gsub(pat, ""))
+end
+
+local function startupEnabled()
+  local content = readFileAll(startupPath())
+  return content ~= nil and content:find(STARTUP_BEGIN, 1, true) ~= nil
+end
+
+local function setStartup(on)
+  local cmd = selfCommandName()
+  if not cmd then
+    reaper.MB("Could not resolve this script's command id for autostart.\n"
+      .. "(Run it once from the Action List so REAPER assigns one.)",
+      "Rea-Sixty Focused Panel", 0)
+    return
+  end
+  local content = stripStartupBlock(readFileAll(startupPath()) or "")
+  if on then
+    if content ~= "" and not content:match("\n$") then content = content .. "\n" end
+    content = content
+      .. STARTUP_BEGIN .. "\n"
+      .. "reaper.Main_OnCommand(reaper.NamedCommandLookup('" .. cmd .. "'), 0)\n"
+      .. STARTUP_END .. "\n"
+  end
+  local f = io.open(startupPath(), "wb")
+  if not f then reaper.MB("Could not write:\n" .. startupPath(), "Rea-Sixty Focused Panel", 0); return end
+  f:write(content); f:close()
+end
+
 local POPUP_ID = "##fp_ctx"
 
 -- Build the popup body. Mirrors the composite panel's menu tree.
@@ -357,6 +491,14 @@ local function drawContextMenu()
       reaper.SetExtState(SECT, "focused_panel_track_abbr", "1", true)
     end
     if reaper.ImGui_MenuItem(ctx, "Abbreviation length\xE2\x80\xA6") then setTrackLen() end
+    reaper.ImGui_Separator(ctx)
+    local after = reaper.GetExtState(SECT, "focused_panel_track_after") == "1"
+    if reaper.ImGui_MenuItem(ctx, "Before CS/BC", nil, not after) then
+      reaper.SetExtState(SECT, "focused_panel_track_after", "0", true)
+    end
+    if reaper.ImGui_MenuItem(ctx, "After CS/BC", nil, after) then
+      reaper.SetExtState(SECT, "focused_panel_track_after", "1", true)
+    end
     reaper.ImGui_EndMenu(ctx)
   end
 
@@ -377,6 +519,10 @@ local function drawContextMenu()
   reaper.ImGui_EndDisabled(ctx)
 
   reaper.ImGui_Separator(ctx)
+  local startOn = startupEnabled()
+  if reaper.ImGui_MenuItem(ctx, "Load on startup", nil, startOn) then
+    setStartup(not startOn)
+  end
   if reaper.ImGui_MenuItem(ctx, "Close panel") then
     reaper.SetExtState(SECT, RUNKEY, "0", false)
   end
@@ -424,8 +570,11 @@ local function loop()
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 1)
 
   reaper.ImGui_PushFont(ctx, font, font_px)   -- v0.10: size at push time
-  -- Top-level Begin: End is UNCONDITIONAL — must run even when visible is false,
-  -- or it kills the context (see memory: reaimgui_v010_pairing_rules).
+  -- ReaImGui 0.10 / Dear ImGui 1.92 rule: End() is PAIRED with the `visible`
+  -- branch — call it ONLY when Begin returns true. Calling End unconditionally
+  -- (the old <=0.9 convention) raises "Calling End() too many times!" whenever the
+  -- window is collapsed / clipped / fully off-screen (visible == false). The
+  -- official ReaImGui_Demo does exactly this: `if not rv then return` / End inside.
   local visible, open = reaper.ImGui_Begin(ctx, 'Rea-Sixty Focused##fp', true, WFLAGS)
   if visible then
     drawContent()
@@ -445,10 +594,11 @@ local function loop()
       last_save_x, last_save_y, last_save_w, last_save_h = px, py, pw, ph
       saveRect(px, py, pw, ph)
     end
+    reaper.ImGui_End(ctx)   -- only when visible (see note at Begin)
   end
-  reaper.ImGui_End(ctx)
+  -- Pop* are UNCONDITIONAL: they balance the pushes made BEFORE Begin (font +
+  -- style stacks are independent of the window stack).
   reaper.ImGui_PopFont(ctx)
-
   reaper.ImGui_PopStyleVar(ctx, 2)
   reaper.ImGui_PopStyleColor(ctx, 2)
 
