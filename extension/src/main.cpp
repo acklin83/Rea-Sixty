@@ -1945,19 +1945,19 @@ std::atomic<bool> g_insertLegacyRename{false};
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
 
-// Assignment HUD (read-only milestone): a dockable gfx companion that draws the
-// focused plug-in's UC1 surface mockup with mapped controls ringed + their
-// param names. Flag persisted as ExtState "hud_on"; the running companion polls
-// "hud_running". Default off.
+// Assignment HUD: a ReaImGui place-anywhere companion that draws the focused
+// plug-in's UC1 surface mockup (SSL-style face) with mapped controls ringed +
+// their param names, click-to-learn. Flag persisted as ExtState "hud_on"; the
+// running companion polls "hud_imgui_running". Default off.
 std::atomic<bool> g_hudEnabled{false};
 std::atomic<bool> g_hudAutoStartDone{false};
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
 
-// Frameless focused-track panel (Gridbox-style box composited on the main
-// window). Flag persisted as ExtState "focused_panel_on"; companion polls
-// "focused_panel_running". Default off. Shares the overlay_focus / overlay /
+// Frameless focused-track panel (ReaImGui place-anywhere companion). Flag
+// persisted as ExtState "focused_panel_on"; companion polls
+// "focused_panel_imgui_running". Default off. Shares the overlay_focus / overlay /
 // overlay_param_* publishers (its gate is OR'd into them below).
 std::atomic<bool> g_focusedPanel{false};
 std::atomic<bool> g_focusedPanelAutoStartDone{false};
@@ -20476,7 +20476,7 @@ static std::string assignmentHudLuaPath_()
 {
     const char* base = GetResourcePath ? GetResourcePath() : nullptr;
     if (!base || !*base) return {};
-    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_assignment_hud.lua";
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_assignment_hud_imgui.lua";
 }
 
 static void reasixty_deployAssignmentHudLua()
@@ -20492,7 +20492,7 @@ static void reasixty_deployAssignmentHudLua()
     mkdir(scriptsRoot.c_str(), 0755);
     mkdir(dir.c_str(), 0755);
 #endif
-    const std::string path = dir + "/rea_sixty_assignment_hud.lua";
+    const std::string path = dir + "/rea_sixty_assignment_hud_imgui.lua";
     const char*  data = reinterpret_cast<const char*>(
         uf8::setup_bundle::kAssignmentHudLuaBytes);
     const size_t len  = uf8::setup_bundle::kAssignmentHudLuaSize;
@@ -20529,7 +20529,7 @@ bool reasixty_toggleAssignmentHud()
 
 bool reasixty_assignmentHudRunning()
 {
-    const char* v = GetExtState("rea_sixty", "hud_running");
+    const char* v = GetExtState("rea_sixty", "hud_imgui_running");
     return v && v[0] == '1';
 }
 
@@ -20538,7 +20538,7 @@ void reasixty_syncAssignmentHudRun()
     const bool want    = g_hudEnabled.load();
     const bool running = reasixty_assignmentHudRunning();
     if (want && !running)      reasixty_toggleAssignmentHud();
-    else if (!want && running) SetExtState("rea_sixty", "hud_running", "0", false);
+    else if (!want && running) SetExtState("rea_sixty", "hud_imgui_running", "0", false);
 }
 
 // ---- Frameless focused-track panel companion lifecycle (same clone) --------
@@ -20546,7 +20546,7 @@ static std::string focusedPanelLuaPath_()
 {
     const char* base = GetResourcePath ? GetResourcePath() : nullptr;
     if (!base || !*base) return {};
-    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_focused_panel.lua";
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_focused_panel_imgui.lua";
 }
 
 static void reasixty_deployFocusedPanelLua()
@@ -20562,7 +20562,7 @@ static void reasixty_deployFocusedPanelLua()
     mkdir(scriptsRoot.c_str(), 0755);
     mkdir(dir.c_str(), 0755);
 #endif
-    const std::string path = dir + "/rea_sixty_focused_panel.lua";
+    const std::string path = dir + "/rea_sixty_focused_panel_imgui.lua";
     const char*  data = reinterpret_cast<const char*>(
         uf8::setup_bundle::kFocusedPanelLuaBytes);
     const size_t len  = uf8::setup_bundle::kFocusedPanelLuaSize;
@@ -20599,7 +20599,7 @@ bool reasixty_toggleFocusedPanel()
 
 bool reasixty_focusedPanelRunning()
 {
-    const char* v = GetExtState("rea_sixty", "focused_panel_running");
+    const char* v = GetExtState("rea_sixty", "focused_panel_imgui_running");
     return v && v[0] == '1';
 }
 
@@ -20608,7 +20608,7 @@ void reasixty_syncFocusedPanelRun()
     const bool want    = g_focusedPanel.load();
     const bool running = reasixty_focusedPanelRunning();
     if (want && !running)      reasixty_toggleFocusedPanel();
-    else if (!want && running) SetExtState("rea_sixty", "focused_panel_running", "0", false);
+    else if (!want && running) SetExtState("rea_sixty", "focused_panel_imgui_running", "0", false);
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

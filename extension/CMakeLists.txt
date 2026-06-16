@@ -195,10 +195,11 @@ add_custom_command(
 add_custom_target(reasixty_inserts_overlay_lua_gen ALL
     DEPENDS ${REASIXTY_INSERTS_OVERLAY_LUA_HEADER})
 
-# Same embedding pattern for the Assignment-HUD companion Lua (dockable gfx
-# surface-mockup that mirrors the focused plug-in's UC1 control assignments).
+# Same embedding pattern for the Assignment-HUD companion Lua (ReaImGui
+# place-anywhere surface-mockup that mirrors the focused plug-in's UC1 control
+# assignments). 2026-06-16: replaced the legacy gfx HUD with the ReaImGui one.
 set(REASIXTY_ASSIGNMENT_HUD_LUA_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_assignment_hud.lua")
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_assignment_hud_imgui.lua")
 set(REASIXTY_ASSIGNMENT_HUD_LUA_HEADER
     "${CMAKE_CURRENT_BINARY_DIR}/generated/assignment_hud_lua.h")
 add_custom_command(
@@ -211,15 +212,16 @@ add_custom_command(
     DEPENDS
         ${REASIXTY_ASSIGNMENT_HUD_LUA_SRC}
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
-    COMMENT "Embedding rea_sixty_assignment_hud.lua"
+    COMMENT "Embedding rea_sixty_assignment_hud_imgui.lua"
     VERBATIM
 )
 add_custom_target(reasixty_assignment_hud_lua_gen ALL
     DEPENDS ${REASIXTY_ASSIGNMENT_HUD_LUA_HEADER})
 
 # Same embedding pattern for the frameless focused-track panel companion Lua.
+# 2026-06-16: replaced the legacy JS_Composite panel with the ReaImGui one.
 set(REASIXTY_FOCUSED_PANEL_LUA_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_focused_panel.lua")
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_focused_panel_imgui.lua")
 set(REASIXTY_FOCUSED_PANEL_LUA_HEADER
     "${CMAKE_CURRENT_BINARY_DIR}/generated/focused_panel_lua.h")
 add_custom_command(
@@ -232,7 +234,7 @@ add_custom_command(
     DEPENDS
         ${REASIXTY_FOCUSED_PANEL_LUA_SRC}
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
-    COMMENT "Embedding rea_sixty_focused_panel.lua"
+    COMMENT "Embedding rea_sixty_focused_panel_imgui.lua"
     VERBATIM
 )
 add_custom_target(reasixty_focused_panel_lua_gen ALL
