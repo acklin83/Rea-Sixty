@@ -1,5 +1,15 @@
 # Bindings — Button, V-Pot, Softkey and Layer Configuration
 
+> ⚠️ **HISTORICAL DESIGN DOC — superseded.** This describes an early,
+> pre-implementation binding model (e.g. `track_target` / `fx_param`
+> JSON types, a two-layer DAW/FX model, builtin names like
+> `bank_ch_left` / `vpot_reset`) that the shipped product does **not**
+> use. For the real, current binding system — the 3-layer model,
+> per-modifier slots, actual builtin names, and the in-app editor — see
+> **`docs/user-manual.md` (§ Bindings)**, which is the single source of
+> truth and is rendered verbatim as the in-app Manual. Kept only for
+> design history; do not configure anything from this file.
+
 Design doc for the user-configurable mapping system. Paired with
 `architecture-decision.md` — that document says *we are a standalone
 `csurf_inst`*; this one says *how users tell it what each control

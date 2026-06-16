@@ -46,7 +46,19 @@ Restart REAPER. Open Action List (`?`) → "Rea-Sixty". You should see
 6. Unplug + replug UF8 and UC1.
 7. Restart REAPER.
 
-Surface should come up.
+(The "Publisher unknown" warning is expected — the WinUSB INF is
+unsigned. It installs the standard Windows WinUSB driver and is fully
+reversible by reinstalling SSL 360°.)
+
+## 3. Add the control surface
+
+Loading the DLL is not enough — add Rea-Sixty as a control surface or
+the hardware stays dark:
+
+REAPER → **Preferences → Control/OSC/Web → Add → "Rea-Sixty" → OK.**
+
+The faders should jump to the current track levels and the scribble
+strips light up. (You only do this once; REAPER remembers the surface.)
 
 ## Uninstall
 

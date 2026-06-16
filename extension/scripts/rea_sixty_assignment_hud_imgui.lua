@@ -995,11 +995,13 @@ local function renderParamPanel(st, asn)
   end
 end
 
--- UF8 device tab — read-only strip-grid. 8 strip columns × 5 control rows
+-- UF8 device tab — interactive strip-grid. 8 strip columns × 5 control rows
 -- (V-Pot / Fader / Solo / Cut / Sel), left gutter carries the row labels, top
 -- row the strip numbers. Cells show the bound plug-in param name (em-dash when
 -- unmapped, "i" when inverted). Follows the live hardware banks via the state
--- header. No interactivity yet (Phase 2 = learn/invert/rename/unbind).
+-- header. Phase 2 (interactive): left-click a cell to learn (wiggle a param);
+-- right-click for Invert / Fill sequential / Unbind; virgin plug-ins bootstrap
+-- a UF8-only map. See handleUf8CellClick / drawUf8ControlContextMenu.
 local UF8_KINDS = {
   { k = 0, l = "V-Pot" }, { k = 1, l = "Fader" }, { k = 2, l = "Solo" },
   { k = 3, l = "Cut"   }, { k = 4, l = "Sel"   },

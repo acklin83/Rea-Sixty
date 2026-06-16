@@ -31,6 +31,16 @@ REAPER → Action List (`?`) → "Rea-Sixty: Open / Close Rea-Sixty
 Settings". If the action is missing, the dylib didn't load — check
 that all three files are in UserPlugins.
 
+## Activate the control surface
+Loading the dylib is not enough — you must add Rea-Sixty as a control
+surface, or the hardware stays dark:
+
+REAPER → **Settings → Control/OSC/Web → Add → "Rea-Sixty" → OK.**
+
+The motorised faders should jump to the current track levels and the
+scribble strips light up — that confirms two-way communication. (You
+only do this once; REAPER remembers the surface.)
+
 ## Uninstall
 Remove the three files from UserPlugins, restart REAPER.
 
