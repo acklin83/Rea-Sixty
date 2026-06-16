@@ -144,6 +144,7 @@ local tabRects     = {}
 local learnBtnRect = nil
 local ctrlRects    = {}
 local learnIdx     = -1
+local ctxCtrlIdx   = -1   -- control under a right-click → control context menu
 local frame        = 0
 local hintText     = ""
 local hintFrames   = 0
@@ -388,7 +389,9 @@ local function handleTabClick(mx, my)
   return false
 end
 
-local function handleControlClick(mx, my)
+-- Control idx under (mx,my) using the last frame's hit-rects (knob = circle,
+-- toggle/btn/list-row = box). Returns nil when the point is over no control.
+local function controlAt(mx, my)
   for _, h in ipairs(ctrlRects) do
     local hit
     if h.shape == 0 then
@@ -397,17 +400,21 @@ local function handleControlClick(mx, my)
     else
       hit = mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h
     end
-    if hit then
-      if selectedParam >= 0 then
-        -- Param picked in the list → assign it straight to this control.
-        sendCmd("bind;" .. h.idx .. ";" .. selectedParam)
-        selectedParam = -1
-      elseif learnIdx == h.idx then sendCmd("cancel")
-      else                          sendCmd("learn;" .. h.idx) end
-      return true
-    end
+    if hit then return h.idx end
   end
-  return false
+  return nil
+end
+
+local function handleControlClick(mx, my)
+  local idx = controlAt(mx, my)
+  if not idx then return false end
+  if selectedParam >= 0 then
+    -- Param picked in the list → assign it straight to this control.
+    sendCmd("bind;" .. idx .. ";" .. selectedParam)
+    selectedParam = -1
+  elseif learnIdx == idx then sendCmd("cancel")
+  else                        sendCmd("learn;" .. idx) end
+  return true
 end
 
 local function handleParamClick(mx, my)
@@ -1011,7 +1018,8 @@ end
 -- Right-click menu (ImGui popup). Dock is handled by ReaImGui's built-in
 -- title-bar context menu, so it's no longer in here.
 ------------------------------------------------------------------------
-local POPUP = "##hud_ctx"
+local POPUP      = "##hud_ctx"
+local CTRL_POPUP = "##hud_ctrl_ctx"
 
 -- List / parameter-panel body text size (Medium = current default). Chrome
 -- (titles, badge, buttons) is unaffected.
@@ -1086,6 +1094,61 @@ local function drawContextMenu()
   reaper.ImGui_PopStyleVar(ctx, 3)   -- matches the 3 pushes before BeginPopup
 end
 
+-- Per-control context menu (right-click a control): Learn / Invert / Unbind.
+-- Acts on ctxCtrlIdx (captured at right-click) via the hud_cmd channel; the
+-- extension resolves the active modifier layer + domain target. Invert/Unbind
+-- are disabled on an unmapped control (nothing to act on). State (mapped/inv) is
+-- read fresh from hud_assign so the tick + name reflect the current binding.
+local function drawControlContextMenu()
+  if ctxCtrlIdx < 0 then return end
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 10, 7)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
+  if not reaper.ImGui_BeginPopup(ctx, CTRL_POPUP) then
+    reaper.ImGui_PopStyleVar(ctx, 3)
+    return
+  end
+
+  local asn    = readAssign()
+  local a      = asn[ctxCtrlIdx]
+  local mapped = a ~= nil
+  local g      = geom.ctrl[ctxCtrlIdx]
+
+  -- Header: SSL slot label + bound param name (disabled, informational).
+  reaper.ImGui_BeginDisabled(ctx)
+  local hdr = (g and g.label) or ("Control " .. ctxCtrlIdx)
+  if mapped then hdr = hdr .. "  \xE2\x86\x92  " .. a.name end
+  reaper.ImGui_MenuItem(ctx, hdr)
+  reaper.ImGui_EndDisabled(ctx)
+  reaper.ImGui_Separator(ctx)
+
+  if reaper.ImGui_MenuItem(ctx, "Learn (wiggle a parameter)") then
+    sendCmd("learn;" .. ctxCtrlIdx)
+  end
+  if not mapped then reaper.ImGui_BeginDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Invert", nil, mapped and a.inv or false) then
+    sendCmd("invert;" .. ctxCtrlIdx)
+  end
+  if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6") then
+    -- Native modal (works from a defer/ImGui frame, same as the gfx panel menus).
+    -- Strip commas from the prefill (GetUserInputs splits the default on commas)
+    -- and the ';'/newline hud_cmd delimiters from the result.
+    local cur = ((mapped and a.name) or ""):gsub(",", " ")
+    local ok, val = reaper.GetUserInputs("Rename control", 1,
+      "Display name (empty = default):,extrawidth=180", cur)
+    if ok then
+      sendCmd("rename;" .. ctxCtrlIdx .. ";" .. (val:gsub("[;\n]", " ")))
+    end
+  end
+  if reaper.ImGui_MenuItem(ctx, "Unbind") then
+    sendCmd("unbind;" .. ctxCtrlIdx)
+  end
+  if not mapped then reaper.ImGui_EndDisabled(ctx) end
+
+  reaper.ImGui_EndPopup(ctx)
+  reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
 ------------------------------------------------------------------------
 -- Geometry persistence (own keys → coexists with gfx HUD).
 ------------------------------------------------------------------------
@@ -1154,7 +1217,15 @@ local function loop()
       if reaper.ImGui_IsMouseClicked(ctx, 1) and ly >= 0 then
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
-        reaper.ImGui_OpenPopup(ctx, POPUP)
+        -- Over a control → per-control menu (Learn/Invert/Unbind); else the
+        -- main HUD menu.
+        local cidx = controlAt(lx, ly)
+        if cidx then
+          ctxCtrlIdx = cidx
+          reaper.ImGui_OpenPopup(ctx, CTRL_POPUP)
+        else
+          reaper.ImGui_OpenPopup(ctx, POPUP)
+        end
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
         -- Top toggle buttons first, then param-panel row, then tab, then control.
         if handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
@@ -1200,6 +1271,7 @@ local function loop()
     refreshGeom()
     render()
     drawContextMenu()
+    drawControlContextMenu()
 
     -- Persist geometry on change.
     local px, py = reaper.ImGui_GetWindowPos(ctx)

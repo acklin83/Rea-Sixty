@@ -98,6 +98,10 @@ bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
 bool        reasixty_hudLearnTick(int activeLayer);
 int         reasixty_hudLearnArmed();
 void        reasixty_hudCancelLearn();
+bool        reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudInvert(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudRename(int idx, int layer, const char* label,
+                               void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
@@ -13012,8 +13016,18 @@ bool vpotFineActive_()
 // consistent. Both modifiers held is treated as ambiguous → Normal.
 void refreshFxActiveLayer_()
 {
-    const bool ctrl = g_fxLayerCtrlEnable.load() && hostCtrlHeld_();
-    const bool opt  = g_fxLayerOptEnable.load()  && hostAltHeld_();
+    bool ctrl = g_fxLayerCtrlEnable.load() && hostCtrlHeld_();
+    bool opt  = g_fxLayerOptEnable.load()  && hostAltHeld_();
+#if defined(_WIN32)
+    // AltGr (right Alt, ubiquitous on European keyboard layouts) is reported by
+    // Windows as Ctrl+Alt (synthetic left-Ctrl + right-Alt). Without this, the
+    // ctrl&&opt rule below would cancel it to Normal, so the Option layer never
+    // engaged from AltGr — "the Alt layer doesn't work, Ctrl does" on Windows.
+    // When right-Alt is down, drop the synthetic Ctrl so AltGr resolves to the
+    // Option modifier alone. Plain left-Ctrl+left-Alt (RMENU up) is unaffected
+    // and still resolves to Normal. Frank 2026-06-16.
+    if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrl = false;
+#endif
     int L = uf8::FxLayer::Normal;
     if (ctrl && opt)      L = uf8::FxLayer::Normal;
     else if (ctrl)        L = uf8::FxLayer::Control;
@@ -14493,6 +14507,44 @@ void onTimer()
                     if (reasixty_hudBindParam(idx, param,
                                               reasixty_fxLearnActiveLayer(),
                                               csTr, csFx, bcTr, bcFx)) {
+                        g_hudAssignPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("unbind;", 0) == 0) {
+                // "unbind;<idx>" — clear the control's mapping on the active layer.
+                const int idx = std::atoi(s.c_str() + 7);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                if (reasixty_hudUnbind(idx, reasixty_fxLearnActiveLayer(),
+                                       csTr, csFx, bcTr, bcFx)) {
+                    g_hudAssignPublished.clear();   // force re-publish
+                    publishHud_();
+                }
+            } else if (s.rfind("invert;", 0) == 0) {
+                // "invert;<idx>" — toggle the control's invert flag on the layer.
+                const int idx = std::atoi(s.c_str() + 7);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                if (reasixty_hudInvert(idx, reasixty_fxLearnActiveLayer(),
+                                       csTr, csFx, bcTr, bcFx)) {
+                    g_hudAssignPublished.clear();   // force re-publish
+                    publishHud_();
+                }
+            } else if (s.rfind("rename;", 0) == 0) {
+                // "rename;<idx>;<label>" — set the control's display override on
+                // the active layer (empty label reverts to the default name).
+                const auto semi = s.find(';', 7);
+                if (semi != std::string::npos) {
+                    const int idx = std::atoi(s.c_str() + 7);
+                    const std::string label = s.substr(semi + 1);
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudRename(idx, reasixty_fxLearnActiveLayer(),
+                                           label.c_str(), csTr, csFx, bcTr, bcFx)) {
                         g_hudAssignPublished.clear();   // force re-publish
                         publishHud_();
                     }
@@ -17839,6 +17891,47 @@ static BrowseForSaveFile_t loadBrowseForSaveFile_()
 }
 #endif
 
+// Cross-platform "Save As" dialog → chosen path, or "" on cancel / unavailable.
+//   macOS   → NSSavePanel (SWELL BrowseForSaveFile is unreachable under the
+//             hardened runtime — see macos_save_dialog.mm).
+//   Windows → Win32 GetSaveFileName. REAPER's native Windows build has NO
+//             BrowseForSaveFile (it is a SWELL-only symbol), so the old
+//             g_reaperGetFunc / dlsym lookup returned null → every export died
+//             with "save dialog unavailable". Use the OS dialog directly.
+//   Linux   → SWELL BrowseForSaveFile via dlsym (unchanged).
+// `winFilter` is a double-NUL-terminated "desc\0pattern\0…\0\0" filter, shared
+// by the Win32 and SWELL backends. `extNoDot` is the default extension (no dot).
+// Frank 2026-06-16.
+static std::string reasixtySaveDialog_(const char* title, const char* defaultName,
+                                       const char* extNoDot, const char* winFilter)
+{
+#if defined(__APPLE__)
+    (void)winFilter;
+    return uf8::macosSaveDialog(title, defaultName, extNoDot);
+#elif defined(_WIN32)
+    char fn[4096] = {0};
+    if (defaultName) std::strncpy(fn, defaultName, sizeof(fn) - 1);
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = GetMainHwnd ? GetMainHwnd() : nullptr;
+    ofn.lpstrFilter = winFilter;
+    ofn.lpstrFile   = fn;
+    ofn.nMaxFile    = sizeof(fn);
+    ofn.lpstrTitle  = title;
+    ofn.lpstrDefExt = extNoDot;
+    ofn.Flags       = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameA(&ofn)) return "";   // user cancel or dialog error
+    return fn;
+#else
+    (void)extNoDot;
+    auto* browse = loadBrowseForSaveFile_();
+    if (!browse) return "";
+    char fn[4096] = {0};
+    if (!browse(title, nullptr, defaultName, winFilter, fn, sizeof(fn))) return "";
+    return fn;
+#endif
+}
+
 // Invalidate the LED dedup so the next pushLayerLeds actually emits,
 // then push immediately. Called when the editor switches the active
 // layer — the 30 Hz tick would catch up eventually but at the cost of
@@ -17864,28 +17957,13 @@ bool reasixty_exportLayerViaDialog(int layer)
     snprintf(title, sizeof(title),
                   "Export Rea-Sixty layer %d", layer + 1);
 
-    std::string chosen;
-#ifdef __APPLE__
-    chosen = uf8::macosSaveDialog(title, defName, "json");
+    std::string chosen = reasixtySaveDialog_(
+        title, defName, "json",
+        "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0");
     if (chosen.empty()) {
-        if (lg) { std::fprintf(lg, "[exportLayer] NSSavePanel cancel/empty\n"); std::fclose(lg); }
+        if (lg) { std::fprintf(lg, "[exportLayer] dialog cancel/empty/unavailable\n"); std::fclose(lg); }
         return false;
     }
-#else
-    auto* browse = loadBrowseForSaveFile_();
-    if (!browse) {
-        if (lg) { std::fprintf(lg, "[exportLayer] BrowseForSaveFile not loaded\n"); std::fclose(lg); }
-        return false;
-    }
-    char fn[4096] = {0};
-    if (!browse(title, nullptr, defName,
-                "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0",
-                fn, sizeof(fn))) {
-        if (lg) { std::fprintf(lg, "[exportLayer] browse() returned 0 (cancel or OS issue), fn='%s'\n", fn); std::fclose(lg); }
-        return false;
-    }
-    chosen = fn;
-#endif
     if (lg) std::fprintf(lg, "[exportLayer] dialog OK, path='%s'\n", chosen.c_str());
     const bool ok = uf8::bindings::exportLayerTo(layer, chosen);
     if (lg) { std::fprintf(lg, "[exportLayer] exportLayerTo => %s\n", ok ? "true" : "false"); std::fclose(lg); }
@@ -17896,27 +17974,10 @@ bool reasixty_exportLayerViaDialog(int layer)
 // on success, "" on cancel / error.
 std::string reasixty_setupExportViaDialog(std::string* errOut)
 {
-    std::string chosen;
-#ifdef __APPLE__
-    chosen = uf8::macosSaveDialog("Export Rea-Sixty Setup",
-                                  "rea-sixty-setup.rea60config",
-                                  "rea60config");
-#else
-    auto* browse = loadBrowseForSaveFile_();
-    if (!browse) {
-        if (errOut) *errOut = "save dialog unavailable";
-        return "";
-    }
-    char fn[4096] = {0};
-    if (!browse("Export Rea-Sixty Setup", nullptr,
-                "rea-sixty-setup.rea60config",
-                "Rea-Sixty setup (*.rea60config)\0*.rea60config\0\0",
-                fn, sizeof(fn))) {
-        return "";
-    }
-    chosen = fn;
-#endif
-    if (chosen.empty()) return "";
+    std::string chosen = reasixtySaveDialog_(
+        "Export Rea-Sixty Setup", "rea-sixty-setup.rea60config", "rea60config",
+        "Rea-Sixty setup (*.rea60config)\0*.rea60config\0\0");
+    if (chosen.empty()) return "";   // user cancel → no error message
     if (!uf8::setup_bundle::exportToFile(chosen, errOut)) return "";
     return chosen;
 }
@@ -18235,24 +18296,10 @@ bool reasixty_setupImportViaDialog(std::string* errOut)
 // the chosen path on success, "" on cancel/error.
 std::string reasixty_fxLearnExportViaDialog(std::string* errOut)
 {
-    std::string chosen;
-#ifdef __APPLE__
-    chosen = uf8::macosSaveDialog("Export User Plug-in Maps",
-                                  "user_plugins.json", "json");
-#else
-    auto* browse = loadBrowseForSaveFile_();
-    if (!browse) {
-        if (errOut) *errOut = "save dialog unavailable";
-        return "";
-    }
-    char fn[4096] = {0};
-    if (!browse("Export User Plug-in Maps", nullptr, "user_plugins.json",
-                "JSON files (*.json)\0*.json\0\0", fn, sizeof(fn))) {
-        return "";
-    }
-    chosen = fn;
-#endif
-    if (chosen.empty()) return "";
+    std::string chosen = reasixtySaveDialog_(
+        "Export User Plug-in Maps", "user_plugins.json", "json",
+        "JSON files (*.json)\0*.json\0\0");
+    if (chosen.empty()) return "";   // user cancel → no error message
     if (!uf8::user_plugins::exportToFile(chosen, errOut)) return "";
     return chosen;
 }

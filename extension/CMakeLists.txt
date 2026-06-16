@@ -372,7 +372,9 @@ if(WIN32)
     target_link_options(reaper_uf8 PRIVATE
         "/DELAYLOAD:libusb-1.0.dll"
         "/DELAYLOAD:hidapi.dll")
-    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib)
+    # comdlg32 = Win32 GetSaveFileName (native Save-As; REAPER has no
+    # BrowseForSaveFile on Windows — that is a SWELL-only symbol).
+    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib)
 endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)

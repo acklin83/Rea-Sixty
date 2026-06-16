@@ -7742,6 +7742,133 @@ bool hudBindParam_(int idx, int vst3Param, int layer,
     return hudLearnBindMatch_(um->match, c.linkIdx, layer, vst3Param);
 }
 
+// Resolve HUD control `idx` → owning USER-map match + its SSL linkIdx using the
+// active CS/BC targets (same domain pick as hudArmLearn_/hudBindParam_). Returns
+// false for built-in / unmapped plug-ins (publishes the factory-fixed hint).
+bool hudResolveControlMatch_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx,
+                             std::string& outMatch, int& outLinkIdx)
+{
+    if (idx < 0 || idx >= kUc1ControlsCount) return false;
+    const Uc1Control& c = kUc1Controls[idx];
+    const bool   isBc = (c.domain == Domain::BusComp);
+    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
+    const int    fx   = isBc ? bcFx : csFx;
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name))) return false;
+    const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
+    if (!um) {
+        SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
+        return false;
+    }
+    outMatch = um->match; outLinkIdx = c.linkIdx;
+    return true;
+}
+
+// Clear the control's mapping on `layer`. Normal → the base param is removed;
+// a modifier layer → the overlay is removed and the control reverts to
+// inheriting Normal. upsert+save. Returns true when something changed.
+bool hudUnbindMatch_(const std::string& match, int linkIdx, int layer)
+{
+    if (match.empty() || linkIdx < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    auto cat = user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        bool changed = false;
+        for (auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            if (lay.vst3Param >= 0 || !lay.pushSteps.empty()
+                || !lay.customLabel.empty() || lay.inverted) {
+                lay.vst3Param = -1;
+                lay.inverted  = false;
+                lay.pushSteps.clear();
+                lay.customLabel.clear();
+                changed = true;
+            }
+            break;
+        }
+        if (!changed) return false;
+        user_plugins::upsert(m);
+        user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Toggle the invert flag for the control on `layer`. Operates on the slot's
+// layer-specific SlotLayer; no-op when the control isn't mapped on that layer.
+bool hudInvertMatch_(const std::string& match, int linkIdx, int layer)
+{
+    if (match.empty() || linkIdx < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    auto cat = user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        for (auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            if (lay.vst3Param < 0 && lay.pushSteps.empty()) return false;
+            lay.inverted = !lay.inverted;
+            user_plugins::upsert(m);
+            user_plugins::save();
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// Set the per-control display override (customLabel) on `layer`. Empty label
+// reverts to the default name. No-op when the control isn't mapped on the layer.
+bool hudRenameMatch_(const std::string& match, int linkIdx, int layer,
+                     const std::string& label)
+{
+    if (match.empty() || linkIdx < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    auto cat = user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        for (auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            SlotLayer& lay = fxLayerOf(s, layer);
+            if (lay.vst3Param < 0 && lay.pushSteps.empty()) return false;
+            lay.customLabel = label;   // empty → default name
+            user_plugins::upsert(m);
+            user_plugins::save();
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// Unbind / invert / rename the HUD control `idx` on `layer`. Resolve the owning
+// user map from the active CS/BC targets, then mutate. Returns true on apply.
+bool hudUnbind_(int idx, int layer, void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    std::string match; int linkIdx = -1;
+    if (!hudResolveControlMatch_(idx, csTrV, csFx, bcTrV, bcFx, match, linkIdx))
+        return false;
+    return hudUnbindMatch_(match, linkIdx, layer);
+}
+bool hudInvert_(int idx, int layer, void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    std::string match; int linkIdx = -1;
+    if (!hudResolveControlMatch_(idx, csTrV, csFx, bcTrV, bcFx, match, linkIdx))
+        return false;
+    return hudInvertMatch_(match, linkIdx, layer);
+}
+bool hudRename_(int idx, int layer, const char* label,
+                void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    std::string match; int linkIdx = -1;
+    if (!hudResolveControlMatch_(idx, csTrV, csFx, bcTrV, bcFx, match, linkIdx))
+        return false;
+    return hudRenameMatch_(match, linkIdx, layer, label ? label : "");
+}
+
 // Poll for the wiggle. Returns true the tick a bind lands (caller refreshes
 // the published assignments). `activeLayer` = reasixty_fxLearnActiveLayer().
 bool hudLearnTick_(int activeLayer)
@@ -14048,6 +14175,19 @@ bool reasixty_hudBindParam(int idx, int vst3Param, int layer,
 bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLayer); }
 int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
 void reasixty_hudCancelLearn()              { uf8::hudCancelLearn_(); }
+bool reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudUnbind_(idx, layer, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudInvert(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudInvert_(idx, layer, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudRename(int idx, int layer, const char* label,
+                        void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudRename_(idx, layer, label, csTr, csFx, bcTr, bcFx);
+}
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its
 // HUD control index in kUc1Controls, so Touch-to-Learn can arm it. -1 = none.
