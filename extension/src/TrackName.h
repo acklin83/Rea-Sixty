@@ -14,4 +14,7 @@ enum TrackNameMode : int {
 
 extern std::atomic<int> g_trackNameMode;
 
-std::string abbreviateTrackName_(const std::string& src, int maxLen);
+// forceMode < 0 → use the global g_trackNameMode; otherwise force that
+// TrackNameMode for this call only (e.g. the HUD LCD always wants Smart).
+std::string abbreviateTrackName_(const std::string& src, int maxLen,
+                                 int forceMode = -1);

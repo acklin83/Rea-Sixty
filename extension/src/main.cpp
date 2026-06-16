@@ -5370,6 +5370,29 @@ bool        g_hudGeomPublished = false;
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
 // 7-seg = track number, line2 = track name, line3 = stereo/mono. The companion
 // HUD shows this in the Central-Control LCD so it mirrors the real surface.
+// LCD line 3 = the FX the user is working on for this track: prefer the
+// open/focused FX window when it's on THIS track, else the FX-scroll / cycle
+// cursor (stripInstanceFxRaw_). Empty when the track has no FX.
+static std::string hudActiveFxName_(MediaTrack* tr)
+{
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return {};
+    const int n = TrackFX_GetCount(tr);
+    if (n <= 0) return {};
+    int fxIdx = -1;
+    int trNum = -1, itemNum = -1, fxNum = -1;
+    if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0
+        && GetTrack(nullptr, trNum - 1) == tr) {
+        const int cand = fxNum & 0x00FFFFFF;
+        if (cand >= 0 && cand < n) fxIdx = cand;
+    }
+    if (fxIdx < 0) {
+        const int raw = stripInstanceFxRaw_(tr);
+        if (raw >= 0 && raw < n) fxIdx = raw;
+    }
+    if (fxIdx < 0) return {};
+    return shortFxName_(tr, fxIdx);
+}
+
 static std::string hudLcdString_(MediaTrack* tr)
 {
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return "";
@@ -5377,7 +5400,6 @@ static std::string hudLcdString_(MediaTrack* tr)
     char nm[256] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", nm, false);
     for (char* q = nm; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
-    const int nch = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_NCHAN"));
     char seg[8], line1[16];
     std::string raw;
     if (num == -1) {                       // master track
@@ -5389,12 +5411,16 @@ static std::string hudLcdString_(MediaTrack* tr)
         std::snprintf(line1, sizeof(line1), "TRACK");
         raw = nm[0] ? std::string(nm) : ("Track " + std::to_string(num));
     }
-    // Abbreviate exactly like the UC1 CS carousel — honours Settings →
-    // Track-name mode (Truncate vs Smart Abbreviate), 12-char budget.
-    const std::string name = abbreviateTrackName_(raw, 12);
-    char out[320];
+    // Track name: always Smart-Abbreviate on the LCD (12-char budget), so it
+    // stays legible regardless of the global Truncate/Smart setting.
+    const std::string name = abbreviateTrackName_(raw, 12, TNM_SmartAbbrev);
+    // Line 3 = active FX (open window or FX-scroll cursor) — replaces the old
+    // Stereo/Mono, which carried no useful info here.
+    std::string fx = hudActiveFxName_(tr);
+    for (char& c : fx) if (c == ';' || c == '\n') c = ' ';
+    char out[384];
     std::snprintf(out, sizeof(out), "%s;%s;%s;%s",
-                  seg, line1, name.c_str(), (nch >= 2) ? "Stereo" : "Mono");
+                  seg, line1, name.c_str(), fx.c_str());
     return out;
 }
 void publishHud_()

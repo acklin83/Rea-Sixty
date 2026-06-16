@@ -16,11 +16,13 @@ std::atomic<int> g_trackNameMode{TNM_Truncate};
 //      least one char per token so "Background Vocals" lands as
 //      "BckgrV" or similar instead of "Bckgrnd" (which loses the V).
 // All-uppercase short tokens (DI, FX, EQ, …) survive untouched.
-std::string abbreviateTrackName_(const std::string& src, int maxLen)
+std::string abbreviateTrackName_(const std::string& src, int maxLen,
+                                 int forceMode)
 {
     if (maxLen <= 0) return src;
     if (static_cast<int>(src.size()) <= maxLen) return src;
-    if (g_trackNameMode.load() != TNM_SmartAbbrev) {
+    const int mode = (forceMode >= 0) ? forceMode : g_trackNameMode.load();
+    if (mode != TNM_SmartAbbrev) {
         std::string out = src;
         out.resize(maxLen);
         return out;

@@ -297,7 +297,7 @@ local function drawTabs(st)
   tabRects = {}
   local function tab(dom, present, short, x)
     local label = (dom == "cs") and "Channel Strip" or "Bus Compressor"
-    local px    = 9   -- fixed chrome (independent of the list text-size option)
+    local px    = 10   -- fixed chrome, matches the top-right toggle buttons
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
     local rgb    = (dom == "cs") and csRgb() or bcRgb()
@@ -583,11 +583,12 @@ local function lcdLines()
     local s, a, b, c = raw:match("^([^;]*);([^;]*);([^;]*);(.*)$")
     if s then return s, a, b, c end
   end
+  -- Fallback (extension hasn't published yet): no active-FX info here, so
+  -- line 3 stays blank rather than showing the old Stereo/Mono.
   local tr = reaper.GetLastTouchedTrack()
   if not tr then return "--", "TRACK", "(no track)", "" end
   local num = reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER")
   local _, name = reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", "", false)
-  local nch = reaper.GetMediaTrackInfo_Value(tr, "I_NCHAN")
   local seg, top
   if num == -1 then
     seg, top = "M", "MASTER"; if name == "" then name = "Master" end
@@ -595,7 +596,7 @@ local function lcdLines()
     seg, top = string.format("%03d", floor(num)), "TRACK"
     if name == "" then name = "Track " .. floor(num) end
   end
-  return seg, top, name, (nch and nch >= 2) and "Stereo" or "Mono"
+  return seg, top, name, ""
 end
 
 local function renderFace(st, asn)
@@ -787,7 +788,7 @@ local function renderFace(st, asn)
   dRect(lcdX, kCcpY + 12, lcdW, 76, col(0x05080C, 1), col(0x444A55, 1), 3)
   dTextC(lcdCx, kCcpY + 26, col(0x808088, 1), l1, lf)
   dTextC(lcdCx, kCcpY + 46, col(0xE0E0E0, 1), fit(l2, lcdW * scale - 8, math.max(9, floor(13 * scale + 0.5))), math.max(9, floor(13 * scale + 0.5)))
-  dTextC(lcdCx, kCcpY + 66, col(0x4488DD, 1), l3, lf)
+  dTextC(lcdCx, kCcpY + 66, col(0x4488DD, 1), fit(l3, lcdW * scale - 8, lf), lf)
   do
     local bw, bh, gap = 80, 22, 20; local total = 2 * bw + gap
     local x0, y0 = 250 + (360 - total) / 2, kCcpY + 100
