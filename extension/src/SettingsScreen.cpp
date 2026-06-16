@@ -7633,6 +7633,65 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
     }
 }
 
+// ---- UF8 strip-grid HUD publisher (read-only) ------------------------------
+// Fills the HUD's UF8 device tab. UF8 is eight uniform strips, so the HUD draws
+// a strip-grid (8 columns × {V-Pot, Fader, Solo, Cut, Sel} rows) rather than an
+// irregular schematic — no static geometry export needed; the Lua lays the grid
+// out itself. Unlike UC1 there are NO modifier layers (removed from UF8), so no
+// layer field / explicit-overlay filtering.
+//
+// Resolution mirrors the runtime strip dispatch (userVpotSlot_/userStripBinding_
+// in main.cpp): it reads the UserUf8Map straight off the active plug-in's map —
+// NOT the g_editingMatch Settings-editor state — so it works with Settings
+// closed and won't hijack an open editor. faderBank/vpotBank are the live
+// hardware banks the caller read from g_uf8FaderBank / g_softKeyBank. Param
+// names come from TrackFX_GetParamName (identical to what the FX-Learn face +
+// editor show, so the two windows never disagree). Main-thread-only.
+//   stateOut : "UF8;<present>;<faderBank>;<vpotBank>;<short>"
+//   assignOut: one line per MAPPED control "<strip>;<kind>;<paramName>;<inv>"
+//              kind 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel; strip 0..7.
+void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
+                    int faderBank, int vpotBank,
+                    std::string& stateOut, std::string& assignOut)
+{
+    auto*       tr = static_cast<MediaTrack*>(trV);
+    const auto* um = static_cast<const uf8::UserPluginMap*>(mapV);
+    const bool valid = um && tr && fxIdx >= 0
+                     && ValidatePtr2(nullptr, tr, "MediaTrack*");
+    const int fb = std::clamp(faderBank, 0, uf8::kUserUf8FaderBankCount - 1);
+    const int vb = std::clamp(vpotBank,  0, uf8::kUserUf8VpotBankCount  - 1);
+    const char* shortNm = (valid && !um->displayShort.empty())
+                        ? um->displayShort.c_str() : "";
+    char head[160];
+    std::snprintf(head, sizeof(head), "UF8;%d;%d;%d;%s",
+                  valid ? 1 : 0, fb, vb, shortNm);
+    stateOut = head;
+
+    assignOut.clear();
+    if (!valid) return;
+
+    auto emit = [&](int strip, int kind, int vst3Param, bool inv) {
+        if (vst3Param < 0) return;
+        char pn[256] = {0};
+        TrackFX_GetParamName(tr, fxIdx, vst3Param, pn, sizeof(pn));
+        for (char* q = pn; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
+        char line[320];
+        std::snprintf(line, sizeof(line), "%d;%d;%s;%d\n",
+                      strip, kind, pn, inv ? 1 : 0);
+        assignOut += line;
+    };
+
+    for (int s = 0; s < 8; ++s) {
+        const uf8::UserUf8BankSlot&     vp = um->uf8.banks.banks[fb][vb][s];
+        const uf8::UserUf8StripBinding& st = um->uf8.strips[fb][s];
+        emit(s, 0, vp.vst3Param,      vp.inverted);
+        emit(s, 1, st.faderVst3Param, st.faderInverted);
+        emit(s, 2, st.soloVst3Param,  st.soloInvert);
+        emit(s, 3, st.cutVst3Param,   st.cutInvert);
+        emit(s, 4, st.selVst3Param,   st.selInvert);
+    }
+}
+
 // ---- Assignment-HUD interactivity: click-a-control + wiggle-to-learn -----
 //
 // The companion HUD (rea_sixty_assignment_hud.lua) arms a control by writing
@@ -7654,6 +7713,19 @@ int         g_hudLearnTicks   = 0;    // arm timeout countdown (onTimer ticks)
 int         g_hudLearnTr      = -2;   // GetLastTouchedFX baseline
 int         g_hudLearnFx      = -1;
 int         g_hudLearnParam   = -1;
+// CREATE-NEW mode: armed on an EMPTY CS/BC tab where no plug-in is recognised
+// for the domain. -1 = bind into the existing g_hudLearnMatch; else the Domain
+// value (ChannelStrip/BusComp) — the wiggled FX defines the plug-in and a fresh
+// user map with this domain is created on bind (see hudLearnCreateAndBind_).
+int         g_hudLearnCreateDom = -1;
+// FX-Learn layer (Normal/Option/Control) captured AT ARM TIME — the modifier
+// held when the control was touched/clicked, NOT when the param is wiggled.
+// The wiggle needs the mouse on the plug-in GUI, which forces the modifier to
+// be released (on macOS Control+mouse is even a right-click), so reading the
+// live layer at bind always collapsed to Normal. You pick the layer by holding
+// the modifier as you select the control; then release and wiggle freely.
+// Frank 2026-06-16 (log-confirmed: arm layer=2 ctrlHeld=1 → bind layer=0).
+int         g_hudLearnLayer = FxLayer::Normal;
 
 void hudCancelLearn_()
 {
@@ -7661,6 +7733,8 @@ void hudCancelLearn_()
     g_hudLearnMatch.clear();
     g_hudLearnLinkIdx = -1;
     g_hudLearnTicks = 0;
+    g_hudLearnCreateDom = -1;
+    g_hudLearnLayer = FxLayer::Normal;
 }
 
 // Find the user map that owns the active plug-in and write vst3Param onto the
@@ -7712,21 +7786,50 @@ void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
     const bool   isBc = (c.domain == Domain::BusComp);
     MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
     const int    fx   = isBc ? bcFx : csFx;
-    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
-    char name[512] = {0};
-    if (!fxIdentityName(tr, fx, name, sizeof(name))) return;
-    const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
-    if (!um) {   // built-in SSL / no user map → factory-fixed, not editable
-        SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
-        return;
+
+    // Capture the held-modifier layer NOW (arm time). The bind later reads this,
+    // not the live layer, so releasing the modifier to wiggle the plug-in keeps
+    // the chosen layer. (See g_hudLearnLayer.)
+    g_hudLearnLayer = reasixty_fxLearnActiveLayer();
+    if (g_hudLearnLayer < 0 || g_hudLearnLayer >= kNumFxLayers)
+        g_hudLearnLayer = FxLayer::Normal;
+
+    auto seedBaseline = [&] {
+        int t = -1, f = -1, p = -1;
+        if (GetLastTouchedFX(&t, &f, &p)) { g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p; }
+        else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
+    };
+
+    // Existing-plug-in path: a CS/BC plug-in IS recognised on the focused track.
+    if (tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+        char name[512] = {0};
+        if (fxIdentityName(tr, fx, name, sizeof(name))) {
+            if (const UserPluginMap* um = user_plugins::lookupOwnedByName(name)) {
+                g_hudLearnIdx       = idx;
+                g_hudLearnMatch     = um->match;
+                g_hudLearnLinkIdx   = c.linkIdx;
+                g_hudLearnCreateDom = -1;          // bind into the existing map
+                g_hudLearnTicks     = 600;         // ~20 s at the 30 Hz onTimer rate
+                seedBaseline();
+                return;
+            }
+            // Recognised but no USER map = SSL built-in → factory-fixed.
+            SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
+            return;
+        }
     }
-    g_hudLearnIdx     = idx;
-    g_hudLearnMatch   = um->match;
-    g_hudLearnLinkIdx = c.linkIdx;
-    g_hudLearnTicks   = 600;   // ~20 s at the 30 Hz onTimer rate
-    int t = -1, f = -1, p = -1;
-    if (GetLastTouchedFX(&t, &f, &p)) { g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p; }
-    else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
+
+    // No plug-in recognised for this domain (empty CS/BC tab) → CREATE-NEW mode:
+    // the plug-in is unknown until the wiggle. We arm with an empty match and the
+    // control's domain; on the wiggle hudLearnCreateAndBind_ builds a fresh user
+    // map for the touched FX and binds. Lets the HUD bootstrap a virgin plug-in
+    // without a Settings detour.
+    g_hudLearnIdx       = idx;
+    g_hudLearnMatch.clear();
+    g_hudLearnLinkIdx   = c.linkIdx;
+    g_hudLearnCreateDom = static_cast<int>(c.domain);
+    g_hudLearnTicks     = 600;
+    seedBaseline();
 }
 
 // Direct param assign from the HUD param list (no wiggle). `idx` is the armed
@@ -7879,10 +7982,97 @@ bool hudRename_(int idx, int layer, const char* label,
     return hudRenameMatch_(match, linkIdx, layer, label ? label : "");
 }
 
+// Short (<=7 ASCII) zone label derived from an FX identity name — seeds a new
+// user map's displayShort (editable later in Settings). Strips a leading
+// "VST3:"/"VST:"/"AU:"/"JS:" source prefix, then takes the first printable run.
+std::string hudShortLabel_(const char* name)
+{
+    const char* q = name ? name : "";
+    for (const char* pfx : { "VST3:", "VST2:", "VST:", "AU:", "JS:", "CLAP:" }) {
+        const size_t n = std::strlen(pfx);
+        if (std::strncmp(q, pfx, n) == 0) { q += n; break; }
+    }
+    while (*q == ' ') ++q;
+    std::string s;
+    for (; *q && s.size() < 7; ++q)
+        if (static_cast<unsigned char>(*q) > 32 &&
+            static_cast<unsigned char>(*q) < 127) s += *q;
+    if (s.empty()) s = "FX";
+    return s;
+}
+
+// CREATE-NEW bind: the user armed a control on an empty CS/BC tab and then
+// wiggled a param on a not-yet-mapped plug-in. Build a fresh user map for the
+// wiggled FX (match = its full identity name, domain = the armed control's
+// domain) with a param snapshot, bind the param onto the control's slot, then
+// upsert + save. Mirrors the Settings "+New" create path + snapshotParamsFor_.
+// Refuses SSL/built-in collisions and Acustica (whose engine faults under
+// param enumeration — [[acustica-crash-setdefaultdlldirectories]]).
+bool hudLearnCreateAndBind_(MediaTrack* tr, int fx, uf8::Domain domain,
+                            int linkIdx, int layer, int vst3Param)
+{
+    if (!tr || fx < 0 || linkIdx < 0 || vst3Param < 0) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return false;
+    const std::string match = name;   // full identity → unique, plug-in-specific
+    if (user_plugins::collidesWithBuiltin(match)) return false;   // SSL built-in
+    // Race / double-fire: a map for this plug-in already exists → just bind.
+    for (const auto& ex : user_plugins::get().maps)
+        if (ex.match == match)
+            return hudLearnBindMatch_(match, linkIdx, layer, vst3Param);
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+
+    UserPluginMap m;
+    m.match        = match;
+    m.displayShort = hudShortLabel_(name);
+    m.domain       = domain;
+    m.uf8Mode      = false;        // CS/BC map; UF8 strip mode opt-in stays off
+    m.isDefault    = false;
+
+    // Param snapshot (so the param list works later) — skipped for Acustica.
+    if (!uf8::fxIsAcustica(tr, fx)) {
+        const int n = TrackFX_GetNumParams(tr, fx);
+        m.paramSnapshot.reserve(static_cast<size_t>(n));
+        char pn[256];
+        for (int p = 0; p < n; ++p) {
+            UserParamInfo pi{};
+            pi.vst3Param = p;
+            if (TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn))) pi.name = pn;
+            if (isReaperMidiParam_(pi.name.c_str())) continue;
+            double mn = 0, mx = 1, def = 0;
+            TrackFX_GetParamEx(tr, fx, p, &mn, &mx, &def);
+            const double range = mx - mn;
+            pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
+            double step = 0, smallStep = 0, largeStep = 0; bool isToggle = false;
+            TrackFX_GetParameterStepSizes(tr, fx, p, &step, &smallStep,
+                                          &largeStep, &isToggle);
+            pi.wasEnum = isToggle || step >= 0.5;
+            m.paramSnapshot.push_back(std::move(pi));
+        }
+        m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
+    }
+
+    // Bind the wiggled param onto the armed control's slot.
+    UserLinkSlot sl{};
+    sl.linkIdx = linkIdx;
+    SlotLayer& lay = fxLayerOf(sl, layer);
+    lay.vst3Param = vst3Param;
+    lay.inverted  = false;
+    m.slots.push_back(std::move(sl));
+
+    user_plugins::upsert(std::move(m));
+    user_plugins::save();
+    return true;
+}
+
 // Poll for the wiggle. Returns true the tick a bind lands (caller refreshes
-// the published assignments). `activeLayer` = reasixty_fxLearnActiveLayer().
+// the published assignments). The bind uses g_hudLearnLayer (captured at ARM
+// time), NOT the live `activeLayer` — see g_hudLearnLayer. `activeLayer` is
+// kept in the signature for the caller but deliberately unused here.
 bool hudLearnTick_(int activeLayer)
 {
+    (void)activeLayer;
     if (g_hudLearnIdx < 0) return false;
     if (--g_hudLearnTicks <= 0) { hudCancelLearn_(); return false; }
     int t = -1, f = -1, p = -1;
@@ -7894,8 +8084,18 @@ bool hudLearnTick_(int activeLayer)
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
+    // fresh map for it in the armed domain, no match filter.
+    if (g_hudLearnCreateDom >= 0) {
+        const auto dom = static_cast<uf8::Domain>(g_hudLearnCreateDom);
+        if (hudLearnCreateAndBind_(tr, f, dom, g_hudLearnLinkIdx, g_hudLearnLayer, p)) {
+            hudCancelLearn_();
+            return true;
+        }
+        return false;
+    }
     if (std::string(name).find(g_hudLearnMatch) == std::string::npos) return false;
-    if (hudLearnBindMatch_(g_hudLearnMatch, g_hudLearnLinkIdx, activeLayer, p)) {
+    if (hudLearnBindMatch_(g_hudLearnMatch, g_hudLearnLinkIdx, g_hudLearnLayer, p)) {
         hudCancelLearn_();
         return true;
     }
@@ -14204,6 +14404,12 @@ void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                             std::string& stateOut, std::string& assignOut)
 {
     uf8::hudPublishUc1_(csTr, csFx, bcTr, bcFx, focusDom, stateOut, assignOut);
+}
+void reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
+                            int faderBank, int vpotBank,
+                            std::string& stateOut, std::string& assignOut)
+{
+    uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, stateOut, assignOut);
 }
 
 // Assignment-HUD interactivity (click-a-control + wiggle-to-learn). Driven by

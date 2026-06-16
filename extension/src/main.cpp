@@ -91,6 +91,9 @@ std::string reasixty_hudGeometryUc1();
 void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                                    int focusDom,
                                    std::string& stateOut, std::string& assignOut);
+void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
+                                   int faderBank, int vpotBank,
+                                   std::string& stateOut, std::string& assignOut);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
 bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
@@ -5237,6 +5240,15 @@ static std::string reaSixtyParamName_(MediaTrack* tr, int fx, int param, int lay
             const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(s, L);
             if (eff.vst3Param == param) {
                 if (!eff.customLabel.empty()) return eff.customLabel;
+                // On a MODIFIER overlay (param explicitly mapped on layer L≠Normal),
+                // the canonical SSL slot name describes the control's NORMAL role
+                // ("Out Gain"), so it reads identical with/without the modifier —
+                // Frank: "kommt der Name vom Parameter ohne Modifier". Defer to the
+                // plug-in's own param name instead (caller falls back to
+                // TrackFX_GetParamName on empty). Normal layer keeps the SSL name.
+                if (L != uf8::FxLayer::Normal
+                    && uf8::fxLayerMapped(uf8::fxLayerOf(s, L)))
+                    return {};
                 linkIdx = s.linkIdx;   // matched but unlabelled → canonical below
                 break;
             }
@@ -5369,6 +5381,8 @@ std::string g_hudStatePublished, g_hudAssignPublished;
 std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
+std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
+std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 bool        g_hudGeomPublished = false;
 
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
@@ -5395,6 +5409,38 @@ static std::string hudActiveFxName_(MediaTrack* tr)
     }
     if (fxIdx < 0) return {};
     return shortFxName_(tr, fxIdx);
+}
+
+// HUD bootstrap detector. True when the surface is pointed at an UNLEARNED FX —
+// the FX whose window is focused (GetFocusedFX2), else the Encoder FX-cycle
+// cursor (stripInstanceFxRaw_) — on the focused track. "Unlearned" = no built-in
+// AND no user map (uf8::lookupPluginMapByName == null). Fills tr/fx. Lets the HUD
+// FOLLOW the cursor onto a virgin plug-in (show it empty + named so it can be
+// bootstrapped) instead of lingering on the last classified CS/BC plug-in.
+static bool hudCursorUnlearnedFx_(MediaTrack*& trOut, int& fxOut)
+{
+    trOut = nullptr; fxOut = -1;
+    MediaTrack* tr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    const int n = TrackFX_GetCount(tr);
+    if (n <= 0) return false;
+    int fx = -1, trNum = -1, itemNum = -1, fxNum = -1;
+    if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0
+        && GetTrack(nullptr, trNum - 1) == tr) {
+        const int cand = fxNum & 0x00FFFFFF;
+        if (cand >= 0 && cand < n) fx = cand;
+    }
+    if (fx < 0) {
+        const int raw = stripInstanceFxRaw_(tr);
+        if (raw >= 0 && raw < n) fx = raw;
+    }
+    if (fx < 0) return false;
+    char nm[512] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return false;
+    if (uf8::lookupPluginMapByName(nm)) return false;   // built-in or user → not virgin
+    trOut = tr; fxOut = fx;
+    return true;
 }
 
 // line3Fx >= 0 pins LCD line 3 to that FX (the HUD's active-domain plug-in) so
@@ -5432,6 +5478,11 @@ static std::string hudLcdString_(MediaTrack* tr, int line3Fx)
                   seg, line1, name.c_str(), fx.c_str());
     return out;
 }
+// Resolve the active UF8-mapped plug-in for the HUD's UF8 tab. Defined below
+// (needs UserPluginCtx + findUserPluginOnTrack_, which live further down). Fills
+// {tr, fxIdx, map}; map==nullptr when the focused track has no UF8 map.
+void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut);
+
 void publishHud_()
 {
     if (!g_hudEnabled.load()) return;
@@ -5445,8 +5496,17 @@ void publishHud_()
     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
     const int focusDom =
         static_cast<int>(uf8::g_focusedParam.load(std::memory_order_relaxed).domain);
+    // Bootstrap: when the surface is pointed at an UNLEARNED FX (cursor / focused
+    // window), publish an EMPTY CS/BC state — both tabs blank, no assignments — so
+    // the HUD follows onto the virgin plug-in (shown empty + named via the LCD
+    // override below) instead of lingering on the last classified plug-in. A
+    // control click then learn-creates a map for it (the learn handler arms
+    // create-mode the same way).
+    MediaTrack* bootTr = nullptr; int bootFx = -1;
+    const bool boot = hudCursorUnlearnedFx_(bootTr, bootFx);
     std::string state, assign;
-    reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
+    if (boot) reasixty_hudPublishUc1(nullptr, -1, nullptr, -1, focusDom, state, assign);
+    else      reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
     if (state != g_hudStatePublished) {
         g_hudStatePublished = state;
         SetExtState("rea_sixty", "hud_state", state.c_str(), false);
@@ -5461,16 +5521,27 @@ void publishHud_()
     // 2=BC. Falls back to CS-then-BC when focus is None / the domain has no
     // target. Empty when neither resolves → HUD falls back to GetLastTouchedTrack.
     MediaTrack* lcdTr = nullptr; int lcdFx = -1;
-    if (focusDom == 2 && bcTr)      { lcdTr = bcTr; lcdFx = bcFx; }
-    else if (focusDom == 1 && csTr) { lcdTr = csTr; lcdFx = csFx; }
-    if (!lcdTr) {
-        if (csTr)      { lcdTr = csTr; lcdFx = csFx; }
-        else if (bcTr) { lcdTr = bcTr; lcdFx = bcFx; }
+    if (boot) { lcdTr = bootTr; lcdFx = bootFx; }   // name follows the virgin FX
+    else {
+        if (focusDom == 2 && bcTr)      { lcdTr = bcTr; lcdFx = bcFx; }
+        else if (focusDom == 1 && csTr) { lcdTr = csTr; lcdFx = csFx; }
+        if (!lcdTr) {
+            if (csTr)      { lcdTr = csTr; lcdFx = csFx; }
+            else if (bcTr) { lcdTr = bcTr; lcdFx = bcFx; }
+        }
     }
     const std::string lcd = hudLcdString_(lcdTr, lcdFx);
     if (lcd != g_hudLcdPublished) {
         g_hudLcdPublished = lcd;
         SetExtState("rea_sixty", "hud_lcd", lcd.c_str(), false);
+    }
+    // Bootstrap banner signal for the companion: "1;<short>" when a virgin FX is
+    // under the cursor, else "0;". Drives the "Map <name> — click + wiggle" hint.
+    const std::string hudBoot =
+        boot ? ("1;" + shortFxName_(bootTr, bootFx)) : std::string("0;");
+    if (hudBoot != g_hudBootPublished) {
+        g_hudBootPublished = hudBoot;
+        SetExtState("rea_sixty", "hud_boot", hudBoot.c_str(), false);
     }
     // Active CS/BC FX target so the companion can enumerate the focused plug-in's
     // parameters for the param-list "pick-a-param → click-a-control" assign flow.
@@ -5482,11 +5553,39 @@ void publishHud_()
         return (n < 0) ? 0 : static_cast<int>(n);
     };
     char tgt[64];
-    snprintf(tgt, sizeof(tgt), "%d;%d;%d;%d",
-             hudTrNum_(csTr), csFx, hudTrNum_(bcTr), bcFx);
+    if (boot) std::snprintf(tgt, sizeof(tgt), "-1;-1;-1;-1");   // no param-list target
+    else      std::snprintf(tgt, sizeof(tgt), "%d;%d;%d;%d",
+                            hudTrNum_(csTr), csFx, hudTrNum_(bcTr), bcFx);
     if (tgt != g_hudTargetPublished) {
         g_hudTargetPublished = tgt;
         SetExtState("rea_sixty", "hud_target", tgt, false);
+    }
+
+    // UF8 device tab — strip-grid of the active UF8-mapped plug-in on the
+    // focused track. Resolved independent of g_uf8PluginMode (mirrors how the
+    // UC1 tab resolves CS/BC regardless of any surface mode): the resolver gates
+    // on uf8Mode==true, so present=1 means "focused track carries a UF8 map".
+    // Banks read live from the hardware (g_uf8FaderBank / g_softKeyBank) so the
+    // grid follows Bank ←/→ and Top-Soft-Key just like the surface. The resolver
+    // is forward-declared (its definition + UserPluginCtx live further down).
+    {
+        MediaTrack* uf8Tr = nullptr; int uf8Fx = -1; const void* uf8Map = nullptr;
+        resolveFocusedUf8Target_(uf8Tr, uf8Fx, uf8Map);
+        const int faderBank = std::clamp(g_uf8FaderBank.load(),
+                                         0, uf8::kUserUf8FaderBankCount - 1);
+        const int vpotBank  = std::clamp(g_softKeyBank.load(),
+                                         0, uf8::kUserUf8VpotBankCount - 1);
+        std::string uf8State, uf8Assign;
+        reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
+                               uf8State, uf8Assign);
+        if (uf8State != g_hudUf8StatePublished) {
+            g_hudUf8StatePublished = uf8State;
+            SetExtState("rea_sixty", "hud_uf8_state", uf8State.c_str(), false);
+        }
+        if (uf8Assign != g_hudUf8AssignPublished) {
+            g_hudUf8AssignPublished = uf8Assign;
+            SetExtState("rea_sixty", "hud_uf8_assign", uf8Assign.c_str(), false);
+        }
     }
 }
 
@@ -5842,6 +5941,22 @@ UserPluginCtx userStripCtxFocused_()
     s_cacheUf8Inst = curUf8Inst;
     s_cacheDomain  = wantDom;
     return s_cache;
+}
+
+// HUD UF8-tab target resolver (forward-declared above publishHud_). Picks the
+// focused track (UC1 surface focus → first selected) and finds its UF8-mode
+// user map via findUserPluginOnTrack_ — which gates on uf8Mode==true but, unlike
+// userStripCtxFocused_, is NOT gated on g_uf8PluginMode, so the HUD shows UF8
+// assignments whenever the focused track carries a UF8 map.
+void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut)
+{
+    trOut = nullptr; fxOut = -1; mapOut = nullptr;
+    MediaTrack* tr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr) return;
+    const UserPluginCtx c = findUserPluginOnTrack_(tr, uf8::getFocusedParam().domain);
+    if (c.map) { trOut = c.tr; fxOut = c.fxIdx; mapOut = c.map; }
 }
 
 // SSL Strip Mode's per-track CS resolver. Walks all FX on the track
@@ -14489,10 +14604,18 @@ void onTimer()
             SetExtState("rea_sixty", "hud_cmd", "", false);   // consume
             if (s.rfind("learn;", 0) == 0) {
                 const int idx = std::atoi(s.c_str() + 6);
-                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
-                int csFx = -1, bcFx = -1;
-                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+                MediaTrack* bootTr = nullptr; int bootFx = -1;
+                if (hudCursorUnlearnedFx_(bootTr, bootFx)) {
+                    // Surface is pointed at a virgin FX → arm CREATE-NEW (null
+                    // targets ⇒ create-mode); the wiggle on that FX builds a
+                    // fresh map in the clicked control's domain.
+                    reasixty_hudArmLearn(idx, nullptr, -1, nullptr, -1);
+                } else {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+                }
             } else if (s.rfind("bind;", 0) == 0) {
                 // "bind;<idx>;<param>" — direct assign from the param list
                 // (no wiggle). Resolves the domain target from the control idx
@@ -14559,14 +14682,25 @@ void onTimer()
         if (const int reqLink = g_hudHwLearnReqLink.exchange(-1);
             g_hudTouchLearn.load() && reqLink >= 0) {
             const int idx = reasixty_hudIdxForLinkIdx(reqLink, g_hudHwLearnReqDom.load());
+            MediaTrack* bootTr = nullptr; int bootFx = -1;
+            const bool boot = hudCursorUnlearnedFx_(bootTr, bootFx);
             if (idx >= 0) {
-                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
-                int csFx = -1, bcFx = -1;
-                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+                if (boot) {
+                    // Virgin FX under the cursor → create-mode (null targets), the
+                    // same path the HUD-click learn uses. Previously this HW path
+                    // only passed activeCsBcTargets_, so a virgin plug-in armed
+                    // inconsistently. Frank 2026-06-16.
+                    reasixty_hudArmLearn(idx, nullptr, -1, nullptr, -1);
+                } else {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+                }
             }
         }
         // Poll for the wiggle; refresh published assignments the tick it lands.
+        // (The bind uses the layer captured at ARM time, not this live one.)
         if (reasixty_hudLearnTick(reasixty_fxLearnActiveLayer())) {
             g_hudAssignPublished.clear();   // force the diff-guarded re-publish
             publishHud_();

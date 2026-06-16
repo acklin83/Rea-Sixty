@@ -215,6 +215,36 @@ local function readAssign()
   return map
 end
 
+-- UF8 device tab (read-only strip-grid). State + per-control assignments come on
+-- their own ExtState keys (hud_uf8_state / hud_uf8_assign) so they coexist with
+-- the UC1 CS/BC payloads. UF8 has no modifier layers.
+--   state : "UF8;<present>;<faderBank>;<vpotBank>;<short>"
+--   assign: "<strip>;<kind>;<paramName>;<inv>"  kind 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel
+local function readUf8State()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_state")
+  local dev, present, fb, vb, short = raw:match("^(%w+);(%d);(%d);(%d);(.*)$")
+  return {
+    present   = (present == "1"),
+    faderBank = tonumber(fb) or 0,
+    vpotBank  = tonumber(vb) or 0,
+    short     = short or "",
+  }
+end
+
+local function readUf8Assign()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_assign")
+  local m = {}   -- m[strip][kind] = { name, inv }
+  for line in raw:gmatch("[^\n]+") do
+    local strip, kind, name, inv = line:match("^(%d+);(%d+);([^;]*);(%d)$")
+    if strip then
+      local s, k = tonumber(strip), tonumber(kind)
+      m[s] = m[s] or {}
+      m[s][k] = { name = name or "", inv = (inv == "1") }
+    end
+  end
+  return m
+end
+
 local SECTION_ORDER = {
   cs = { "Filter", "EQ", "Dynamics", "Gate", "I/O & Channel" },
   bc = { "Bus Comp" },
@@ -293,15 +323,19 @@ local function fit(s, maxw, px)
   return s
 end
 
-local function drawTabs(st)
+local function drawTabs(st, ust)
   rect(0, 0, WW, TAB_H, col(0x171719, 1))
   tabRects = {}
-  local function tab(dom, present, short, x)
-    local label = (dom == "cs") and "Channel Strip" or "Bus Compressor"
+  local function tab(dom, present, x)
+    local label = (dom == "cs") and "Channel Strip"
+              or  (dom == "bc") and "Bus Compressor"
+              or  "UF8"
     local px    = 10   -- fixed chrome, matches the top-right toggle buttons
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
-    local rgb    = (dom == "cs") and csRgb() or bcRgb()
+    local rgb    = (dom == "cs") and csRgb()
+               or  (dom == "bc") and bcRgb()
+               or  0x4A90D8                          -- UF8 accent (blue)
     if active then rect(x, 4, w, TAB_H - 6, col(rgb, present and 0.30 or 0.16))
     else           rect(x, 4, w, TAB_H - 6, col(0x242429, 1)) end
     if active then rect(x, 4, w, 3, col(rgb, present and 1 or 0.5)) end
@@ -310,8 +344,16 @@ local function drawTabs(st)
     return x + w + 4
   end
   local x = 8
-  x = tab("cs", st.csPresent, st.csShort, x)
-  x = tab("bc", st.bcPresent, st.bcShort, x)
+  x = tab("cs",  st.csPresent,            x)
+  x = tab("bc",  st.bcPresent,            x)
+  x = tab("uf8", ust and ust.present,     x)
+
+  -- The modifier badge + Touch-to-Learn / Parameter-List toggles are UC1-only
+  -- (UF8 has no layers and the device tab is read-only), so skip them on UF8.
+  if activeTab == "uf8" then
+    learnBtnRect, paramBtnRect = nil, nil
+    return
+  end
 
   -- Active modifier-layer badge (far right).
   local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL") or "NORM"
@@ -923,11 +965,85 @@ local function renderParamPanel(st, asn)
   end
 end
 
+-- UF8 device tab — read-only strip-grid. 8 strip columns × 5 control rows
+-- (V-Pot / Fader / Solo / Cut / Sel), left gutter carries the row labels, top
+-- row the strip numbers. Cells show the bound plug-in param name (em-dash when
+-- unmapped, "i" when inverted). Follows the live hardware banks via the state
+-- header. No interactivity yet (Phase 2 = learn/invert/rename/unbind).
+local UF8_KINDS = {
+  { k = 0, l = "V-Pot" }, { k = 1, l = "Fader" }, { k = 2, l = "Solo" },
+  { k = 3, l = "Cut"   }, { k = 4, l = "Sel"   },
+}
+local UF8_ACCENT = 0x4A90D8
+
+local function renderUf8Grid(ust, uasn)
+  ctrlRects = {}                                  -- no UC1 hit-rects on this tab
+  local availW = WW - RW
+  local top    = TAB_H
+  local hpx    = floor(13 * fontScale() + 0.5)
+
+  local sub
+  if ust.present then
+    sub = (ust.short ~= "" and ust.short or "UF8 plug-in")
+        .. "      V-Pot Bank " .. (ust.vpotBank + 1) .. " / 8"
+        .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2"
+  else
+    sub = "No UF8-mapped plug-in on the focused track"
+  end
+  local _, subH = measure(sub, hpx)
+  dtext(10, top + 6, col(0x9098A4, 0.95), sub, hpx)
+  if not ust.present then return end
+
+  local gridTop = top + 6 + subH + 12
+  local px      = floor(12 * fontScale() + 0.5)
+  local lblPx   = floor(11 * fontScale() + 0.5)
+  local rowH    = floor(px + 15 * fontScale() + 0.5)
+  local Lw      = floor(58 * fontScale() + 0.5)
+  local colW    = (availW - Lw - 6) / 8
+
+  -- header row: strip numbers 1..8
+  for s = 0, 7 do
+    local cx = Lw + s * colW
+    local hs = tostring(s + 1)
+    local tw, th = measure(hs, lblPx)
+    dtext(cx + (colW - tw) / 2, gridTop + (rowH - th) / 2,
+          col(UF8_ACCENT, 0.9), hs, lblPx)
+  end
+  rect(0, gridTop + rowH - 1, availW, 1, col(0x303036, 1))
+
+  for r, kd in ipairs(UF8_KINDS) do
+    local ry = gridTop + r * rowH
+    if r % 2 == 0 then rect(0, ry, availW, rowH, col(0xFFFFFF, 0.025)) end
+    local _, lh = measure(kd.l, lblPx)
+    dtext(6, ry + (rowH - lh) / 2, col(0xC0C6D0, 0.85), kd.l, lblPx)
+    for s = 0, 7 do
+      local cx = Lw + s * colW
+      if s > 0 then rect(cx, ry, 1, rowH, col(0x2A2A30, 0.8)) end
+      local a = uasn[s] and uasn[s][kd.k]
+      if a and a.name ~= "" then
+        local nm    = fit(a.name, colW - (a.inv and 18 or 10), px)
+        local _, nh = measure(nm, px)
+        dtext(cx + 6, ry + (rowH - nh) / 2, col(0xE8ECF2, 0.96), nm, px)
+        if a.inv then
+          local _, ih = measure("i", lblPx)
+          dtext(cx + colW - 11, ry + (rowH - ih) / 2, col(UF8_ACCENT, 0.9), "i", lblPx)
+        end
+      else
+        local em = "\xE2\x80\x94"
+        local _, eh = measure(em, px)
+        dtext(cx + 6, ry + (rowH - eh) / 2, col(0x60656E, 0.7), em, px)
+      end
+    end
+  end
+end
+
 local function render()
   TAB_H = 38   -- fixed chrome height (text-size option only affects list/param body)
 
-  local st  = readState()
-  local asn = readAssign()
+  local st   = readState()
+  local asn  = readAssign()
+  local ust  = readUf8State()
+  local uasn = readUf8Assign()
 
   -- Param-list drawer: reserve a fixed right strip. The window itself grows by
   -- PARAM_PW when the drawer opens (loop()), so the mockup keeps its size.
@@ -945,6 +1061,12 @@ local function render()
   if hint ~= "" then hintText = hint; hintFrames = 90
     reaper.SetExtState(SECT, "hud_hint", "", false) end
 
+  -- Bootstrap: surface is pointed at an unlearned FX ("1;<name>") → the tabs are
+  -- published empty + the LCD shows <name>; surface a "Map <name>" hint.
+  local bootRaw    = reaper.GetExtState(SECT, "hud_boot")
+  local bootActive = (bootRaw:sub(1, 2) == "1;")
+  local bootName   = bootActive and bootRaw:sub(3) or ""
+
   if st.focusDom == "c" or st.focusDom == "b" then
     if st.focusDom ~= lastFocusDom then
       local newTab = (st.focusDom == "c") and "cs" or "bc"
@@ -956,7 +1078,13 @@ local function render()
     lastFocusDom = "n"
   end
 
-  drawTabs(st)
+  drawTabs(st, ust)
+
+  -- UF8 device tab: own strip-grid renderer, independent of the UC1 geometry.
+  if activeTab == "uf8" then
+    renderUf8Grid(ust, uasn)
+    return
+  end
 
   local nCtrl = 0; for _ in pairs(geom.ctrl) do nCtrl = nCtrl + 1 end
 
@@ -972,14 +1100,10 @@ local function render()
     -- Unified face draws the whole surface (both domains, inactive dimmed) —
     -- always shown; absent plug-ins just render greyed, no "no plug-in" gate.
     renderFace(st, asn)
-  elseif not present then
-    ctrlRects = {}
-    local px = floor(17 * fontScale() + 0.5)
-    local msg = (activeTab == "cs" and "No Channel-Strip" or "No Bus-Comp")
-              .. " plug-in on the focused track"
-    local tw, th = measure(msg, px)
-    dtext((WW - tw) / 2, (WH - th) / 2, col(0x9097A0, 0.9), msg, px)
   else
+    -- Always render the list — even with no plug-in the rows draw as em-dash
+    -- and stay click-armable, so an EMPTY tab can bootstrap a virgin plug-in:
+    -- click a control → wiggle its param → the extension creates a new map.
     renderList(st, asn)
   end
 
@@ -1011,6 +1135,14 @@ local function render()
   elseif hintFrames > 0 then
     hintFrames = hintFrames - 1
     banner(hintText, 0x301014, 0.92, 0xFF8888)
+  elseif bootActive then
+    banner("Map " .. bootName .. "  \xE2\x80\x94  click a control, then wiggle "
+           .. "its parameter (binds to " .. (activeTab == "cs" and "Channel Strip"
+           or "Bus Comp") .. ")", 0x10201A, 0.90, 0x84E0A8)
+  elseif not present then
+    banner((activeTab == "cs" and "No Channel-Strip" or "No Bus-Comp")
+           .. " plug-in  \xE2\x80\x94  click a control, then wiggle a parameter "
+           .. "to create a map", 0x101A20, 0.88, 0x80B8E0)
   end
 end
 
