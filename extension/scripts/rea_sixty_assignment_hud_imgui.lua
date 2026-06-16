@@ -146,10 +146,13 @@ local scrollY      = 0
 local maxScroll    = 0
 
 -- Parameter-list drawer (right-hand panel): pick a param → click a control to
--- assign it (no wiggle). RW = reserved right-strip width (0 when closed) so the
--- face/list render into the remaining area instead of under the panel.
+-- assign it (no wiggle). The window GROWS outward by PARAM_PW when the drawer
+-- opens (see loop()) so the mockup keeps its size; RW reserves that strip on the
+-- right. PARAM_PW is fixed so the grow delta and the reserve match exactly.
+local PARAM_PW         = 240
 local paramPanelOpen   = false
 local RW               = 0
+local paramBtnRect     = nil
 local paramRects       = {}
 local selectedParam    = -1
 local selectedParamNm  = ""
@@ -322,32 +325,49 @@ local function drawTabs(st)
     dtext(bx + 10, by + floor((bh - bhm) / 2), col(0x121214, 1), name, px)
   end
 
-  -- Touch-to-Learn toggle — clickable button left of the modifier badge.
-  -- Applies to whichever domain (CS/BC) you then touch on the UC1.
-  do
-    local on   = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
-    local lbl  = "LEARN"
+  -- Toggle buttons walking LEFT from the modifier badge: Touch-to-Learn, then
+  -- Parameter List. Both also have a right-click-menu entry.
+  local rx = bx
+  local function rightToggle(lbl, on, onRgb)
     local lw, lh = measure(lbl, px)
-    local w    = lw + 20
-    local lx   = bx - w - 6
+    local w = lw + 20
+    local tx = rx - w - 6
     if on then
-      rect(lx, by, w, bh, col(0xE0A838, 0.95))                       -- amber = armed-by-touch
-      dtext(lx + 10, by + floor((bh - lh) / 2), col(0x161208, 1), lbl, px)
+      rect(tx, by, w, bh, col(onRgb, 0.95))
+      dtext(tx + 10, by + floor((bh - lh) / 2), col(0x161208, 1), lbl, px)
     else
-      rect(lx, by, w, bh, col(0x29292E, 1))
-      reaper.ImGui_DrawList_AddRect(dl, OX + lx, OY + by, OX + lx + w, OY + by + bh,
+      rect(tx, by, w, bh, col(0x29292E, 1))
+      reaper.ImGui_DrawList_AddRect(dl, OX + tx, OY + by, OX + tx + w, OY + by + bh,
         col(0x4A5060, 1), 0, 0, 1)
-      dtext(lx + 10, by + floor((bh - lh) / 2), col(0x9098A4, 0.85), lbl, px)
+      dtext(tx + 10, by + floor((bh - lh) / 2), col(0x9098A4, 0.85), lbl, px)
     end
-    learnBtnRect = { x = lx, y = by, w = w, h = bh }
+    rx = tx
+    return { x = tx, y = by, w = w, h = bh }
   end
+
+  learnBtnRect = rightToggle("Touch to Learn",
+    reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
+  paramBtnRect = rightToggle("Parameter List",
+    reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
+end
+
+local function hitRect(r, mx, my)
+  return r and mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
 end
 
 local function handleLearnBtnClick(mx, my)
-  local r = learnBtnRect
-  if r and mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+  if hitRect(learnBtnRect, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
     reaper.SetExtState(SECT, "hud_touch_learn", on and "0" or "1", false)
+    return true
+  end
+  return false
+end
+
+local function handleParamBtnClick(mx, my)
+  if hitRect(paramBtnRect, mx, my) then
+    local on = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
+    reaper.SetExtState(SECT, "hud_imgui_params", on and "0" or "1", true)
     return true
   end
   return false
@@ -897,10 +917,11 @@ local function render()
   local st  = readState()
   local asn = readAssign()
 
-  -- Param-list drawer: reserve a right strip so the face/list shrink left of it.
+  -- Param-list drawer: reserve a fixed right strip. The window itself grows by
+  -- PARAM_PW when the drawer opens (loop()), so the mockup keeps its size.
   paramPanelOpen = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
   if paramPanelOpen then
-    RW = math.min(floor(210 * fontScale() + 0.5), floor(WW * 0.45))
+    RW = PARAM_PW
   else
     RW, paramRects, selectedParam = 0, {}, -1
   end
@@ -1053,6 +1074,7 @@ end
 local restore_x, restore_y, restore_w, restore_h = loadRect()
 local first_frame = true
 local last_x, last_y, last_w, last_h
+local lastParamPanelOpen = nil   -- edge-detect drawer toggle → grow/shrink window
 
 ------------------------------------------------------------------------
 -- Main loop.
@@ -1074,6 +1096,22 @@ local function loop()
     first_frame = false
   end
 
+  -- Grow the window outward when the param drawer opens (and shrink back when it
+  -- closes) so the mockup keeps its size instead of being squeezed. Edge-detect
+  -- the toggle from any source (button or menu). On startup adopt the current
+  -- state without resizing — the saved rect already matches it.
+  local paramOpenNow = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
+  if lastParamPanelOpen == nil then
+    lastParamPanelOpen = paramOpenNow
+  elseif paramOpenNow ~= lastParamPanelOpen then
+    if last_w and last_h then
+      local nw = paramOpenNow and (last_w + PARAM_PW)
+                              or  math.max(200, last_w - PARAM_PW)
+      reaper.ImGui_SetNextWindowSize(ctx, nw, last_h)
+    end
+    lastParamPanelOpen = paramOpenNow
+  end
+
   -- Edge-to-edge content (we draw our own margins, like the gfx HUD).
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 0, 0)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), col(0x1F1F21, 1))
@@ -1093,8 +1131,8 @@ local function loop()
         -- dock menu (negative ly = title bar, since OY is the content origin).
         reaper.ImGui_OpenPopup(ctx, POPUP)
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
-        -- LEARN button first, then param-panel row, then tab, then a control.
-        if handleLearnBtnClick(lx, ly) then
+        -- Top toggle buttons first, then param-panel row, then tab, then control.
+        if handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
         elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
           handleParamClick(lx, ly)
         elseif not handleTabClick(lx, ly) then
