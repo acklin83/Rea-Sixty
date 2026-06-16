@@ -33,6 +33,7 @@ if reaper.GetExtState(SECT, RUNKEY) == "1" then
   return
 end
 reaper.SetExtState(SECT, RUNKEY, "1", false)
+reaper.SetExtState(SECT, "hud_touch_learn", "0", false)   -- start with HW-learn off
 
 local function setToggle(on)
   if sectionID and cmdID and sectionID >= 0 then
@@ -64,15 +65,10 @@ end
 local function csRgb() return floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
 local function bcRgb() return floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
 
--- Own text-size key (hud_imgui_font) with a smaller default than the gfx HUD:
--- ImGui renders crisper/larger at the same nominal px, so the gfx HUD's 1.5
--- came out way too big. 1.0 ≈ the focused panel's feel. Decoupled from the gfx
--- HUD's shared hud_font on purpose.
-local function fontScale()
-  local v = num("hud_imgui_font", 1.0)
-  if v < 0.8 then v = 0.8 elseif v > 2.6 then v = 2.6 end
-  return v
-end
+-- Fixed text scale. The old user-facing "Text size" option only visibly
+-- affected the CS/BC tab titles (the face/list scale to the window), and even
+-- its smallest step was too large, so it was removed (Frank 2026-06-16).
+local function fontScale() return 1.0 end
 
 ------------------------------------------------------------------------
 -- Geometry: parse "hud_geom_uc1" once (cache by raw string). [verbatim]
@@ -140,6 +136,7 @@ end
 local activeTab    = "cs"
 local lastFocusDom = "n"
 local tabRects     = {}
+local learnBtnRect = nil
 local ctrlRects    = {}
 local learnIdx     = -1
 local frame        = 0
@@ -148,7 +145,54 @@ local hintFrames   = 0
 local scrollY      = 0
 local maxScroll    = 0
 
+-- Parameter-list drawer (right-hand panel): pick a param → click a control to
+-- assign it (no wiggle). RW = reserved right-strip width (0 when closed) so the
+-- face/list render into the remaining area instead of under the panel.
+local paramPanelOpen   = false
+local RW               = 0
+local paramRects       = {}
+local selectedParam    = -1
+local selectedParamNm  = ""
+local paramFilter      = ""
+local paramScroll      = 0
+local paramMaxScroll   = 0
+local paramCacheKey    = nil
+local paramList        = {}
+
 local function sendCmd(s) reaper.SetExtState(SECT, "hud_cmd", s, false) end
+
+local function clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
+
+-- Resolve the active domain's plug-in target from the extension's "hud_target"
+-- publish ("csTrNum;csFx;bcTrNum;bcFx"; trNum 0 = master, 1-based track, -1 none).
+local function resolveTarget()
+  local raw = reaper.GetExtState(SECT, "hud_target")
+  local csN, csFx, bcN, bcFx = raw:match("^(%-?%d+);(%-?%d+);(%-?%d+);(%-?%d+)$")
+  if not csN then return nil end
+  local trN, fx
+  if activeTab == "cs" then trN, fx = tonumber(csN), tonumber(csFx)
+  else                      trN, fx = tonumber(bcN), tonumber(bcFx) end
+  if trN < 0 or fx < 0 then return nil end
+  local tr = (trN == 0) and reaper.GetMasterTrack(0) or reaper.GetTrack(0, trN - 1)
+  if not tr then return nil end
+  return tr, fx
+end
+
+-- Enumerate the target plug-in's params (cached; names are static per plug-in).
+local function getParams(tr, fx)
+  local key = tostring(tr) .. ";" .. fx
+  if key ~= paramCacheKey then
+    paramCacheKey = key
+    paramList = {}
+    local n = reaper.TrackFX_GetNumParams(tr, fx)
+    for p = 0, n - 1 do
+      local _, nm = reaper.TrackFX_GetParamName(tr, fx, p, "")
+      if nm == nil or nm == "" then nm = "Param " .. p end
+      paramList[#paramList + 1] = { p = p, name = nm }
+    end
+  end
+  return paramList
+end
 
 local function readAssign()
   local raw = reaper.GetExtState(SECT, "hud_assign")
@@ -244,9 +288,9 @@ local function drawTabs(st)
   rect(0, 0, WW, TAB_H, col(0x171719, 1))
   tabRects = {}
   local function tab(dom, present, short, x)
-    local name  = (dom == "cs") and "CS" or "BC"
+    local name  = (dom == "cs") and "Channel Strip" or "Bus Compressor"
     local label = name .. ((present and short ~= "") and ("  " .. short) or "")
-    local px    = floor(17 * fontScale() + 0.5)
+    local px    = floor(9 * fontScale() + 0.5)   -- ~half the old title size
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
     local rgb    = (dom == "cs") and csRgb() or bcRgb()
@@ -263,7 +307,7 @@ local function drawTabs(st)
 
   -- Active modifier-layer badge (far right).
   local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL") or "NORM"
-  local px   = floor(13 * fontScale() + 0.5)
+  local px   = floor(10 * fontScale() + 0.5)
   local bwm, bhm = measure(name, px)
   local bw = bwm + 20
   local bh = TAB_H - 12
@@ -277,11 +321,42 @@ local function drawTabs(st)
     rect(bx, by, bw, bh, col(lc, 0.92))
     dtext(bx + 10, by + floor((bh - bhm) / 2), col(0x121214, 1), name, px)
   end
+
+  -- Touch-to-Learn toggle — clickable button left of the modifier badge.
+  -- Applies to whichever domain (CS/BC) you then touch on the UC1.
+  do
+    local on   = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
+    local lbl  = "LEARN"
+    local lw, lh = measure(lbl, px)
+    local w    = lw + 20
+    local lx   = bx - w - 6
+    if on then
+      rect(lx, by, w, bh, col(0xE0A838, 0.95))                       -- amber = armed-by-touch
+      dtext(lx + 10, by + floor((bh - lh) / 2), col(0x161208, 1), lbl, px)
+    else
+      rect(lx, by, w, bh, col(0x29292E, 1))
+      reaper.ImGui_DrawList_AddRect(dl, OX + lx, OY + by, OX + lx + w, OY + by + bh,
+        col(0x4A5060, 1), 0, 0, 1)
+      dtext(lx + 10, by + floor((bh - lh) / 2), col(0x9098A4, 0.85), lbl, px)
+    end
+    learnBtnRect = { x = lx, y = by, w = w, h = bh }
+  end
+end
+
+local function handleLearnBtnClick(mx, my)
+  local r = learnBtnRect
+  if r and mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+    local on = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
+    reaper.SetExtState(SECT, "hud_touch_learn", on and "0" or "1", false)
+    return true
+  end
+  return false
 end
 
 local function handleTabClick(mx, my)
   for _, t in ipairs(tabRects) do
     if mx >= t.x and mx <= t.x + t.w and my >= t.y and my <= t.y + t.h then
+      if t.dom ~= activeTab then selectedParam = -1 end   -- param idx is per-FX
       activeTab = t.dom
       return true
     end
@@ -299,8 +374,26 @@ local function handleControlClick(mx, my)
       hit = mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h
     end
     if hit then
-      if learnIdx == h.idx then sendCmd("cancel")
-      else                      sendCmd("learn;" .. h.idx) end
+      if selectedParam >= 0 then
+        -- Param picked in the list → assign it straight to this control.
+        sendCmd("bind;" .. h.idx .. ";" .. selectedParam)
+        selectedParam = -1
+      elseif learnIdx == h.idx then sendCmd("cancel")
+      else                          sendCmd("learn;" .. h.idx) end
+      return true
+    end
+  end
+  return false
+end
+
+local function handleParamClick(mx, my)
+  for _, h in ipairs(paramRects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      if selectedParam == h.p then
+        selectedParam = -1
+      else
+        selectedParam, selectedParamNm = h.p, h.name
+      end
       return true
     end
   end
@@ -349,7 +442,7 @@ local function renderList(st, asn)
   local M      = 14
   local top    = TAB_H + 10
   local bottom = WH - 8
-  if WW - 2 * M < 60 or bottom - top < 40 then return end
+  if (WW - RW) - 2 * M < 60 or bottom - top < 40 then return end
 
   local _, rowTH = measure("Ag", rowFont)
   local lineH  = rowTH + floor(5 * fs + 0.5)
@@ -484,7 +577,7 @@ end
 local function renderFace(st, asn)
   local DW, DH = geom.w or 860, geom.h or 660
   local M, top = 8, TAB_H + 6
-  local availW, availH = WW - 2 * M, WH - top - M
+  local availW, availH = (WW - RW) - 2 * M, WH - top - M
   if availW < 60 or availH < 60 then return end
   local scale = math.min(availW / DW, availH / DH)
   local ox = M + (availW - DW * scale) / 2
@@ -718,11 +811,99 @@ local function renderFace(st, asn)
   end
 end
 
+-- ===================================================================
+-- Parameter-list drawer. Right-hand panel listing every param of the active
+-- domain's plug-in; click a row to arm it, then click a control to bind it.
+-- Type-to-filter (no InputText widget — fits the DrawList draw model + dodges
+-- the standalone-focus InputText trap). Mapped params get a green dot.
+-- ===================================================================
+local function renderParamPanel(st, asn)
+  local PW = RW
+  local x0  = WW - PW
+  local top = TAB_H
+  local fs  = fontScale()
+  local hf  = floor(13 * fs + 0.5)
+  local rf  = floor(14 * fs + 0.5)
+  local pad = floor(8 * fs + 0.5)
+
+  rect(x0, top, PW, WH - top, col(0x16171A, 0.97))
+  rect(x0, top, 2, WH - top, col(0x303440, 1))    -- left edge seam
+
+  paramRects = {}
+  local tr, fx = resolveTarget()
+  if not tr then
+    dtext(x0 + pad, top + pad, col(0x808890, 0.9),
+      fit("No editable plug-in on the focused track", PW - 2 * pad, hf), hf)
+    return
+  end
+
+  local rgb = (activeTab == "cs") and csRgb() or bcRgb()
+  local _, fxname = reaper.TrackFX_GetFXName(tr, fx, "")
+  dtext(x0 + pad, top + pad, col(0xC8CCD4, 1), fit(fxname or "", PW - 2 * pad, hf), hf)
+
+  -- Filter line (type to filter, Backspace to delete — handled in loop()).
+  local fy = top + pad + floor(19 * fs + 0.5)
+  local ftxt = (paramFilter ~= "") and ("Filter: " .. paramFilter)
+                                    or  "Type to filter\xE2\x80\xA6"
+  dtext(x0 + pad, fy, col(0x8890A0, paramFilter ~= "" and 1 or 0.6),
+    fit(ftxt, PW - 2 * pad, hf), hf)
+
+  -- Active-domain mapped param NAMES (for the green-dot tint). hud_assign only
+  -- carries names, so we match on name — exact enough for a visual hint.
+  local mappedNames = {}
+  for idx, a in pairs(asn) do
+    local g = geom.ctrl[idx]
+    if g and ((activeTab == "cs" and g.dom == "c")
+           or (activeTab == "bc" and g.dom == "b")) then
+      mappedNames[a.name] = true
+    end
+  end
+
+  local params = getParams(tr, fx)
+  local flo    = paramFilter:lower()
+  local rows   = {}
+  for _, pr in ipairs(params) do
+    if flo == "" or pr.name:lower():find(flo, 1, true) then rows[#rows + 1] = pr end
+  end
+
+  local _, rowTH  = measure("Ag", rf)
+  local lineH     = rowTH + floor(5 * fs + 0.5)
+  local listTop   = fy + floor(20 * fs + 0.5)
+  local listBot   = WH - pad
+  paramMaxScroll  = math.max(0, #rows * lineH - (listBot - listTop))
+  paramScroll     = clamp(paramScroll, 0, paramMaxScroll)
+
+  local y = listTop - paramScroll
+  for _, pr in ipairs(rows) do
+    if y + lineH >= listTop and y <= listBot then
+      local sel    = (pr.p == selectedParam)
+      local mapped = mappedNames[pr.name]
+      if sel then rect(x0 + 2, y - 1, PW - 4, lineH, col(rgb, 0.34)) end
+      local tc = sel and 0xFFFFFF or (mapped and 0x78C898 or 0xC0C4CC)
+      dtext(x0 + pad, y + 1, col(tc, 1), fit(pr.name, PW - 2 * pad - 12, rf), rf)
+      if mapped then
+        dtext(x0 + PW - pad - 8, y + 1, col(0x78C898, 1), "\xE2\x97\x8F", rf)
+      end
+      paramRects[#paramRects + 1] =
+        { p = pr.p, name = pr.name, x = x0, y = y, w = PW, h = lineH }
+    end
+    y = y + lineH
+  end
+end
+
 local function render()
   TAB_H = floor(22 * fontScale() + 0.5) + 16
 
   local st  = readState()
   local asn = readAssign()
+
+  -- Param-list drawer: reserve a right strip so the face/list shrink left of it.
+  paramPanelOpen = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
+  if paramPanelOpen then
+    RW = math.min(floor(210 * fontScale() + 0.5), floor(WW * 0.45))
+  else
+    RW, paramRects, selectedParam = 0, {}, -1
+  end
 
   frame = frame + 1
   local hl = reaper.GetExtState(SECT, "hud_learn")
@@ -733,7 +914,9 @@ local function render()
 
   if st.focusDom == "c" or st.focusDom == "b" then
     if st.focusDom ~= lastFocusDom then
-      activeTab = (st.focusDom == "c") and "cs" or "bc"
+      local newTab = (st.focusDom == "c") and "cs" or "bc"
+      if newTab ~= activeTab then selectedParam = -1 end   -- param idx is per-FX
+      activeTab = newTab
       lastFocusDom = st.focusDom
     end
   else
@@ -767,16 +950,25 @@ local function render()
     renderList(st, asn)
   end
 
+  if paramPanelOpen then renderParamPanel(st, asn) end
+
   local function banner(msg, bgRgb, bgA, fgRgb)
     local px = floor(14 * fontScale() + 0.5)
     local tw, th = measure(msg, px)
     local bw, bh = tw + 20, th + 8
-    local bx, by = (WW - bw) / 2, TAB_H + 4
+    local bx, by = (WW - RW - bw) / 2, TAB_H + 4
     rect(bx, by, bw, bh, col(bgRgb, bgA))
     dtext(bx + 10, by + 4, col(fgRgb, 1), msg, px)
   end
 
-  if learnIdx >= 0 then
+  if selectedParam >= 0 then
+    banner("Assigning " .. selectedParamNm ..
+           "  \xE2\x80\x94  click a control to bind it   (Esc to cancel)",
+           0x10202C, 0.9, 0x70C0FF)
+  elseif learnIdx < 0 and reaper.GetExtState(SECT, "hud_touch_learn") == "1" then
+    banner("Touch-to-Learn  \xE2\x80\x94  move a UC1 control to arm it, "
+           .. "then wiggle a plug-in parameter", 0x101A14, 0.88, 0x70D0A0)
+  elseif learnIdx >= 0 then
     local c   = geom.ctrl[learnIdx]
     local lbl = (c and c.label ~= "" and c.label) or ("#" .. learnIdx)
     banner("Learning " .. lbl ..
@@ -793,13 +985,6 @@ end
 -- Right-click menu (ImGui popup). Dock is handled by ReaImGui's built-in
 -- title-bar context menu, so it's no longer in here.
 ------------------------------------------------------------------------
-local FONT_PRESETS = {
-  { l = "Small",       v = 1.0 },
-  { l = "Medium",      v = 1.25 },
-  { l = "Large",       v = 1.5 },
-  { l = "Extra Large", v = 1.9 },
-  { l = "Huge",        v = 2.3 },
-}
 local POPUP = "##hud_ctx"
 
 local function drawContextMenu()
@@ -811,7 +996,6 @@ local function drawContextMenu()
     reaper.ImGui_PopStyleVar(ctx, 3)
     return
   end
-  local fs = fontScale()
 
   local mockup = (reaper.GetExtState(SECT, "hud_imgui_view") == "mockup")
   if reaper.ImGui_BeginMenu(ctx, "View") then
@@ -824,13 +1008,17 @@ local function drawContextMenu()
     reaper.ImGui_EndMenu(ctx)
   end
 
-  if reaper.ImGui_BeginMenu(ctx, "Text size") then
-    for _, p in ipairs(FONT_PRESETS) do
-      if reaper.ImGui_MenuItem(ctx, p.l, nil, math.abs(fs - p.v) < 0.01) then
-        reaper.SetExtState(SECT, "hud_imgui_font", tostring(p.v), true)
-      end
-    end
-    reaper.ImGui_EndMenu(ctx)
+  local pPanel = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
+  if reaper.ImGui_MenuItem(ctx, "Parameter list", nil, pPanel) then
+    reaper.SetExtState(SECT, "hud_imgui_params", pPanel and "0" or "1", true)
+  end
+
+  -- Touch-to-Learn: move a UC1 control to arm it (instead of clicking the
+  -- mockup). Session-only (persist=false) so it never leaves the surface inert
+  -- across restarts; also cleared on HUD shutdown.
+  local touchLearn = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
+  if reaper.ImGui_MenuItem(ctx, "Touch to Learn (UC1)", nil, touchLearn) then
+    reaper.SetExtState(SECT, "hud_touch_learn", touchLearn and "0" or "1", false)
   end
 
   local white = (reaper.GetExtState(SECT, "hud_text_white") == "1")
@@ -905,14 +1093,45 @@ local function loop()
         -- dock menu (negative ly = title bar, since OY is the content origin).
         reaper.ImGui_OpenPopup(ctx, POPUP)
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
-        -- Tab switch first, else arm/cancel learn (last frame's hit-rects).
-        if not handleTabClick(lx, ly) then handleControlClick(lx, ly) end
+        -- LEARN button first, then param-panel row, then tab, then a control.
+        if handleLearnBtnClick(lx, ly) then
+        elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
+          handleParamClick(lx, ly)
+        elseif not handleTabClick(lx, ly) then
+          handleControlClick(lx, ly)
+        end
       end
       local wheel = reaper.ImGui_GetMouseWheel(ctx)
-      if wheel ~= 0 then scrollY = scrollY - wheel * 40 end
+      if wheel ~= 0 then
+        if paramPanelOpen and lx >= WW - RW then
+          paramScroll = clamp(paramScroll - wheel * 40, 0, paramMaxScroll)
+        else
+          scrollY = scrollY - wheel * 40
+        end
+      end
     end
-    if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) and learnIdx >= 0 then
-      sendCmd("cancel")
+
+    -- Type-to-filter the param list (no InputText widget). Drains the ImGui
+    -- char queue + Backspace while the drawer is open and the window focused.
+    if paramPanelOpen and reaper.ImGui_IsWindowFocused(ctx)
+       and reaper.ImGui_GetInputQueueCharacter then
+      local i = 0
+      while true do
+        local ok, ch = reaper.ImGui_GetInputQueueCharacter(ctx, i)
+        if not ok then break end
+        if ch >= 32 and ch < 127 then paramFilter = paramFilter .. string.char(ch) end
+        i = i + 1
+      end
+      if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Backspace())
+         and #paramFilter > 0 then
+        paramFilter = paramFilter:sub(1, #paramFilter - 1)
+      end
+    end
+
+    if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
+      if selectedParam >= 0 then selectedParam = -1
+      elseif paramFilter ~= "" then paramFilter = ""
+      elseif learnIdx >= 0 then sendCmd("cancel") end
     end
 
     refreshGeom()
@@ -938,6 +1157,7 @@ end
 
 shutdown = function()
   reaper.SetExtState(SECT, RUNKEY, "0", false)
+  reaper.SetExtState(SECT, "hud_touch_learn", "0", false)   -- don't leave UC1 inert
   setToggle(false)
 end
 

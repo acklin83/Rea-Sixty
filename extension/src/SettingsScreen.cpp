@@ -7699,6 +7699,29 @@ void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
     else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
 }
 
+// Direct param assign from the HUD param list (no wiggle). `idx` is the armed
+// HUD control, `vst3Param` the param picked in the list. Resolves the domain
+// target exactly like hudArmLearn_, confirms a USER map owns it, and binds the
+// param onto `layer` straight away. Returns true on apply.
+bool hudBindParam_(int idx, int vst3Param, int layer,
+                   void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    if (idx < 0 || idx >= kUc1ControlsCount || vst3Param < 0) return false;
+    const Uc1Control& c = kUc1Controls[idx];
+    const bool   isBc = (c.domain == Domain::BusComp);
+    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
+    const int    fx   = isBc ? bcFx : csFx;
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name))) return false;
+    const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
+    if (!um) {   // built-in SSL / no user map → factory-fixed, not editable
+        SetExtState("rea_sixty", "hud_hint", "Factory map \xE2\x80\x94 not editable", false);
+        return false;
+    }
+    return hudLearnBindMatch_(um->match, c.linkIdx, layer, vst3Param);
+}
+
 // Poll for the wiggle. Returns true the tick a bind lands (caller refreshes
 // the published assignments). `activeLayer` = reasixty_fxLearnActiveLayer().
 bool hudLearnTick_(int activeLayer)
@@ -13997,6 +14020,25 @@ void reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx)
 {
     uf8::hudArmLearn_(idx, csTr, csFx, bcTr, bcFx);
 }
+bool reasixty_hudBindParam(int idx, int vst3Param, int layer,
+                           void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudBindParam_(idx, vst3Param, layer, csTr, csFx, bcTr, bcFx);
+}
 bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLayer); }
 int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
 void reasixty_hudCancelLearn()              { uf8::hudCancelLearn_(); }
+
+// Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its
+// HUD control index in kUc1Controls, so Touch-to-Learn can arm it. -1 = none.
+int reasixty_hudIdxForLinkIdx(int linkIdx, int domain)
+{
+    const uf8::Domain want =
+        (domain == 1) ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+    for (int i = 0; i < uf8::kUc1ControlsCount; ++i) {
+        if (uf8::kUc1Controls[i].linkIdx == linkIdx
+            && uf8::kUc1Controls[i].domain == want)
+            return i;
+    }
+    return -1;
+}

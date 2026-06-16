@@ -38,6 +38,10 @@ bool reasixty_shiftFineActive();
 int reasixty_fxLearnActiveLayer();
 // Publish UC1 Fine state so UF8 V-Pot rotation honours UC1 Fine too.
 void reasixty_setUc1Fine(bool on);
+// HUD Touch-to-Learn (defined in main.cpp): active = HUD on + mode toggle set.
+// Moving a bindable UC1 control then arms a HUD learn for it instead of acting.
+bool reasixty_hudTouchLearnActive();
+void reasixty_hudHwLearnRequest(int linkIdx, int domain);
 
 // Platform-normalised track-colour reader (defined in main.cpp).
 // GetTrackColor returns 0xBBGGRR on Windows, 0xRRGGBB on macOS/Linux.
@@ -824,6 +828,19 @@ double UC1Surface::clickToDelta_(int8_t delta) const
 
 void UC1Surface::handleKnob_(const KnobEvent& ev)
 {
+    // Touch-to-Learn: while the HUD's hardware-learn mode is on, moving a
+    // bindable knob arms a learn for it instead of writing its param (parity
+    // with clicking the control in the HUD mockup). Non-bindable nav/menu
+    // encoders have no linkIdx → fall through to normal handling.
+    if (reasixty_hudTouchLearnActive()) {
+        const bool busComp = (classifyKnob(ev.id) == ControlDomain::BusComp);
+        const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/false);
+        if (linkIdx >= 0) {
+            reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+            return;
+        }
+    }
+
     // Diag-first: log every knob event before any suppression, so
     // unmapped IDs (Attack TBD, any knob we haven't attributed) show
     // up in the console. Per-ID budget of 3 keeps volume sane.
@@ -1774,6 +1791,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
 
 void UC1Surface::handleButton_(const ButtonEvent& ev)
 {
+    // Touch-to-Learn (see handleKnob_): while the mode is on, a bindable button
+    // arms a learn on its press edge and swallows both edges, instead of acting.
+    // Non-bindable system keys (360 / Presets / Routing / Fine / …) have no
+    // linkIdx and pass through untouched.
+    if (reasixty_hudTouchLearnActive()) {
+        const bool busComp = (classifyButton(ev.id) == ControlDomain::BusComp);
+        const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/true);
+        if (linkIdx >= 0) {
+            if (ev.pressed) reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+            return;
+        }
+    }
+
     // Fine is a latching toggle — press flips the mode, release is a
     // no-op. LED reflects the latched state. User preference
     // 2026-04-23: momentary "hold to fine-tune" was awkward for long

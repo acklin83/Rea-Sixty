@@ -92,6 +92,9 @@ void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                                    int focusDom,
                                    std::string& stateOut, std::string& assignOut);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
+int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
+bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
+                                  void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudLearnTick(int activeLayer);
 int         reasixty_hudLearnArmed();
 void        reasixty_hudCancelLearn();
@@ -1951,6 +1954,14 @@ std::atomic<bool> g_overlayAutoStartDone{false};
 // running companion polls "hud_imgui_running". Default off.
 std::atomic<bool> g_hudEnabled{false};
 std::atomic<bool> g_hudAutoStartDone{false};
+// HUD "Touch-to-Learn" (UC1): when on, moving a bindable UC1 control arms a HUD
+// learn for it (instead of performing its action) — hardware parity with
+// clicking the control in the mockup. Mirror of the ExtState "hud_touch_learn",
+// refreshed in onTimer. The pending request is set from the UC1 input drain
+// (main thread, in UC1Surface::poll) and consumed in onTimer's HUD block.
+std::atomic<bool> g_hudTouchLearn{false};
+std::atomic<int>  g_hudHwLearnReqLink{-1};   // armed control's linkIdx (-1 = none)
+std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
@@ -5353,6 +5364,7 @@ void publishOverlayState_()
 std::string g_hudStatePublished, g_hudAssignPublished;
 std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
+std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 bool        g_hudGeomPublished = false;
 
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
@@ -5414,6 +5426,22 @@ void publishHud_()
     if (lcd != g_hudLcdPublished) {
         g_hudLcdPublished = lcd;
         SetExtState("rea_sixty", "hud_lcd", lcd.c_str(), false);
+    }
+    // Active CS/BC FX target so the companion can enumerate the focused plug-in's
+    // parameters for the param-list "pick-a-param → click-a-control" assign flow.
+    // Encoding "csTrNum;csFx;bcTrNum;bcFx": trNum = IP_TRACKNUMBER (master → 0,
+    // track → 1-based), or -1 when that domain has no resolved target.
+    auto hudTrNum_ = [](MediaTrack* tr) -> int {
+        if (!tr) return -1;
+        const double n = GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER");
+        return (n < 0) ? 0 : static_cast<int>(n);
+    };
+    char tgt[64];
+    snprintf(tgt, sizeof(tgt), "%d;%d;%d;%d",
+             hudTrNum_(csTr), csFx, hudTrNum_(bcTr), bcFx);
+    if (tgt != g_hudTargetPublished) {
+        g_hudTargetPublished = tgt;
+        SetExtState("rea_sixty", "hud_target", tgt, false);
     }
 }
 
@@ -14398,6 +14426,9 @@ void onTimer()
     // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
     // the wiggled param to the armed control on the active modifier layer.
     if (g_hudEnabled.load()) {
+        // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
+        if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))
+            g_hudTouchLearn.store(tl[0] == '1');
         if (const char* cmd = GetExtState("rea_sixty", "hud_cmd"); cmd && *cmd) {
             const std::string s = cmd;
             SetExtState("rea_sixty", "hud_cmd", "", false);   // consume
@@ -14407,8 +14438,39 @@ void onTimer()
                 int csFx = -1, bcFx = -1;
                 activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
                 reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+            } else if (s.rfind("bind;", 0) == 0) {
+                // "bind;<idx>;<param>" — direct assign from the param list
+                // (no wiggle). Resolves the domain target from the control idx
+                // and writes the param onto the active modifier layer.
+                const auto semi = s.find(';', 5);
+                if (semi != std::string::npos) {
+                    const int idx   = std::atoi(s.c_str() + 5);
+                    const int param = std::atoi(s.c_str() + semi + 1);
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudBindParam(idx, param,
+                                              reasixty_fxLearnActiveLayer(),
+                                              csTr, csFx, bcTr, bcFx)) {
+                        g_hudAssignPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("cancel", 0) == 0) {
                 reasixty_hudCancelLearn();
+            }
+        }
+        // Touch-to-Learn: a bindable UC1 control was moved while the mode is on
+        // → arm a learn for it (same path as a mockup click), so the next
+        // plug-in-param wiggle binds it. Re-arming on each touch is intended.
+        if (const int reqLink = g_hudHwLearnReqLink.exchange(-1);
+            g_hudTouchLearn.load() && reqLink >= 0) {
+            const int idx = reasixty_hudIdxForLinkIdx(reqLink, g_hudHwLearnReqDom.load());
+            if (idx >= 0) {
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
             }
         }
         // Poll for the wiggle; refresh published assignments the tick it lands.
@@ -16091,6 +16153,18 @@ void reasixty_setAssignmentHud(bool on)
     if (on) g_hudGeomPublished = false;   // re-emit geometry for a fresh window
     publishHud_();
     reasixty_syncAssignmentHudRun();      // start/stop the companion to match
+}
+
+// Touch-to-Learn hooks called from the UC1 input drain (UC1Surface::poll, main
+// thread). Active only while the HUD is on AND the mode toggle is set.
+bool reasixty_hudTouchLearnActive()
+{
+    return g_hudEnabled.load() && g_hudTouchLearn.load();
+}
+void reasixty_hudHwLearnRequest(int linkIdx, int domain)
+{
+    g_hudHwLearnReqLink.store(linkIdx);
+    g_hudHwLearnReqDom.store(domain);
 }
 
 bool reasixty_focusedPanel() { return g_focusedPanel.load(); }
