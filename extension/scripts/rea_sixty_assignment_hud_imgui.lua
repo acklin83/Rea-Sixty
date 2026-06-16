@@ -291,8 +291,7 @@ local function drawTabs(st)
   rect(0, 0, WW, TAB_H, col(0x171719, 1))
   tabRects = {}
   local function tab(dom, present, short, x)
-    local name  = (dom == "cs") and "Channel Strip" or "Bus Compressor"
-    local label = name .. ((present and short ~= "") and ("  " .. short) or "")
+    local label = (dom == "cs") and "Channel Strip" or "Bus Compressor"
     local px    = floor(9 * fontScale() + 0.5)   -- ~half the old title size
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
