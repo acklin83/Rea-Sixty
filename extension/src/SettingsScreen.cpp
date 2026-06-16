@@ -19,7 +19,7 @@
 #include "ParameterGroups.h"
 #include "AutoLearnEngine.h"
 #include "PluginMap.h"
-#include "UC1PluginMap.h"   // uc1::lookupBindingsByName / hudParamForControl (Assignment HUD)
+#include "UC1PluginMap.h"   // uc1::lookupBindingsByName / hudParamForControl (Learn-HUD)
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
 #include "reaper_imgui_functions.h"
@@ -7455,7 +7455,7 @@ constexpr Uc1Control kUc1Controls[] = {
 constexpr int kUc1ControlsCount =
     sizeof(kUc1Controls) / sizeof(kUc1Controls[0]);
 
-// ---- Assignment-HUD publishers (read-only milestone) -----------------------
+// ---- Learn-HUD publishers (read-only milestone) -----------------------
 // Section a UC1 control belongs to — used by the HUD's grouped text list. The
 // schematic groups controls by source order + comment banners; this mirrors
 // those banners by silk label so the grouping is a single, compact source of
@@ -8067,7 +8067,7 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
     return filled;
 }
 
-// ---- Assignment-HUD interactivity: click-a-control + wiggle-to-learn -----
+// ---- Learn-HUD interactivity: click-a-control + wiggle-to-learn -----
 //
 // The companion HUD (rea_sixty_assignment_hud.lua) arms a control by writing
 // "rea_sixty"/"hud_cmd" = "learn;<controlIdx>"; main.cpp's onTimer drains that
@@ -11449,10 +11449,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     {
         ImGui_Text(ctx, "AutoLearn for:");
         ImGui_Spacing(ctx);
-        if (ImGui_RadioButton(ctx, "Channel-Strip slots (CS)##als_cs",
+        if (ImGui_RadioButton(ctx, "Channel Strip slots (CS)##als_cs",
                               g_autoLearnSetupPrimary == 1))
             g_autoLearnSetupPrimary = 1;
-        if (ImGui_RadioButton(ctx, "Bus-Comp slots (BC)##als_bc",
+        if (ImGui_RadioButton(ctx, "Bus Comp slots (BC)##als_bc",
                               g_autoLearnSetupPrimary == 2))
             g_autoLearnSetupPrimary = 2;
         if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
@@ -13048,7 +13048,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         ImGui_TextWrapped(ctx,
             "No user plug-in maps yet. Teach a third-party plug-in to "
-            "behave as a virtual Channel-Strip or Bus-Comp Instance. "
+            "behave as a virtual Channel Strip or Bus Comp Instance. "
             "Tick **Default** ( * ) on a map to make it the first-choice "
             "plug-in for SSL Strip Mode.");
         ImGui_Spacing(ctx);
@@ -13250,11 +13250,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         ImGui_Text(ctx, "Mode:");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Channel-Strip##fxl_new_cs",
+        if (ImGui_RadioButton(ctx, "Channel Strip##fxl_new_cs",
                               g_newPrimaryMode == 1))
             g_newPrimaryMode = 1;
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Bus-Comp##fxl_new_bc",
+        if (ImGui_RadioButton(ctx, "Bus Comp##fxl_new_bc",
                               g_newPrimaryMode == 2))
             g_newPrimaryMode = 2;
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -14767,7 +14767,7 @@ bool reasixty_quickLearnHasTarget()
     return uf8::qlProjectHasTarget_();
 }
 
-// Assignment-HUD payload exports — thin trampolines onto the helpers that live
+// Learn-HUD payload exports — thin trampolines onto the helpers that live
 // beside kUc1Controls in the anonymous namespace (same-TU access). main.cpp's
 // publishers call these.
 std::string reasixty_hudGeometryUc1()
@@ -14788,7 +14788,7 @@ void reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                         stateOut, assignOut);
 }
 
-// Assignment-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
+// Learn-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
 // main.cpp's onTimer: arm with the active CS/BC targets, tick every frame.
 void reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx)
 {

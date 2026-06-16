@@ -85,7 +85,7 @@ void reasixty_syncAssignmentHudRun();
 void reasixty_setAssignmentHud(bool on);
 void reasixty_syncFocusedPanelRun();
 void reasixty_setFocusedPanel(bool on);
-// Assignment-HUD payload builders (defined in SettingsScreen.cpp, which owns
+// Learn-HUD payload builders (defined in SettingsScreen.cpp, which owns
 // the UC1 control geometry table).
 std::string reasixty_hudGeometryUc1();
 void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
@@ -1964,7 +1964,7 @@ std::atomic<bool> g_insertLegacyRename{false};
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
 
-// Assignment HUD: a ReaImGui place-anywhere companion that draws the focused
+// Learn-HUD: a ReaImGui place-anywhere companion that draws the focused
 // plug-in's UC1 surface mockup (SSL-style face) with mapped controls ringed +
 // their param names, click-to-learn. Flag persisted as ExtState "hud_on"; the
 // running companion polls "hud_imgui_running". Default off.
@@ -5400,7 +5400,7 @@ void publishOverlayState_()
     SetExtState("rea_sixty", "overlay", (std::string(head) + body).c_str(), false);
 }
 
-// ---- Assignment HUD publishers ---------------------------------------------
+// ---- Learn-HUD publishers ---------------------------------------------
 // Static geometry is published once per enable; state + per-control assignments
 // are diff-guarded like the overlay. Main-thread-only (walks FX chains + reads
 // the user catalog). No-op when the HUD is off, so it costs nothing disabled.
@@ -14634,7 +14634,7 @@ void onTimer()
     // the dispatch/LED paths via reasixty_fxLearnActiveLayer().
     refreshFxActiveLayer_();
 
-    // Assignment-HUD interactivity (only while the HUD is on → zero cost off).
+    // Learn-HUD interactivity (only while the HUD is on → zero cost off).
     // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
     // the wiggled param to the armed control on the active modifier layer.
     if (g_hudEnabled.load()) {
@@ -15510,7 +15510,7 @@ void onTimer()
         }
     }
 
-    // Assignment-HUD republish — diff-guarded + a no-op while the HUD is off,
+    // Learn-HUD republish — diff-guarded + a no-op while the HUD is off,
     // so the FX-chain walk only runs when the window is up. ~5 Hz, independent
     // of the project-change branch above.
     {
@@ -20900,7 +20900,7 @@ void reasixty_syncInsertsOverlayRun()
                                            "0", false);                // stops it
 }
 
-// ---- Assignment-HUD companion lifecycle (clones the inserts-overlay trio) ---
+// ---- Learn-HUD companion lifecycle (clones the inserts-overlay trio) ---
 static std::string assignmentHudLuaPath_()
 {
     const char* base = GetResourcePath ? GetResourcePath() : nullptr;

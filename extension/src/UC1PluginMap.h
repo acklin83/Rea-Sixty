@@ -133,7 +133,7 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName);
 // `isButton` the knob-vs-button column. Returns kParamNone when the control
 // isn't reachable from UC1 or the binding leaves it unmapped. When non-null,
 // *outInverted receives the per-control invert flag. Read-only, FX-name based —
-// used by the Assignment-HUD publisher independent of the Settings editor.
+// used by the Learn-HUD publisher independent of the Settings editor.
 int hudParamForControl(const PluginBindings* b, bool busComp,
                        int linkIdx, bool isButton, bool* outInverted);
 

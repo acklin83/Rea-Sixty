@@ -338,7 +338,7 @@ local function drawTabs(st, ust)
   tabRects = {}
   local function tab(dom, present, x)
     local label = (dom == "cs") and "Channel Strip"
-              or  (dom == "bc") and "Bus Compressor"
+              or  (dom == "bc") and "Bus Comp"
               or  "UF8"
     local px    = 10   -- fixed chrome, matches the top-right toggle buttons
     local w, h  = measure(label, px); w = w + 28
@@ -830,7 +830,7 @@ local function renderFace(st, asn)
   dTextRB(834, 492, col(0x9CA0AA, fC), "GATE /", sf)
   dTextRB(834, 510, col(0x9CA0AA, fC), "EXPANDER", sf)
   section(632, 518, "CHANNEL", "c")
-  dTextC(430, 22, col(0x9CA0AA, da("b")), "BUS COMPRESSOR", sf)
+  dTextC(430, 22, col(0x9CA0AA, da("b")), "BUS COMP", sf)
 
   -- ===== BC GR meter (BC domain) =====
   local fB = da("b")
@@ -1216,7 +1216,7 @@ local function render()
            "  \xE2\x80\x94  click a control to bind it   (Esc to cancel)",
            0x10202C, 0.9, 0x70C0FF)
   elseif learnIdx < 0 and reaper.GetExtState(SECT, "hud_touch_learn") == "1" then
-    banner("Touch-to-Learn  \xE2\x80\x94  move a UC1 control to arm it, "
+    banner("Touch to Learn  \xE2\x80\x94  move a UC1 control to arm it, "
            .. "then wiggle a plug-in parameter", 0x101A14, 0.88, 0x70D0A0)
   elseif learnIdx >= 0 then
     local c   = geom.ctrl[learnIdx]
@@ -1233,7 +1233,7 @@ local function render()
            .. "its parameter (binds to " .. (activeTab == "cs" and "Channel Strip"
            or "Bus Comp") .. ")", 0x10201A, 0.90, 0x84E0A8)
   elseif not present then
-    banner((activeTab == "cs" and "No Channel-Strip" or "No Bus-Comp")
+    banner((activeTab == "cs" and "No Channel Strip" or "No Bus Comp")
            .. " plug-in  \xE2\x80\x94  click a control, then wiggle a parameter "
            .. "to create a map", 0x101A20, 0.88, 0x80B8E0)
   end
@@ -1279,7 +1279,7 @@ local function drawContextMenu()
   end
 
   local pPanel = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
-  if reaper.ImGui_MenuItem(ctx, "Parameter list", nil, pPanel) then
+  if reaper.ImGui_MenuItem(ctx, "Parameter List", nil, pPanel) then
     reaper.SetExtState(SECT, "hud_imgui_params", pPanel and "0" or "1", true)
   end
 
@@ -1287,7 +1287,7 @@ local function drawContextMenu()
   -- mockup). Session-only (persist=false) so it never leaves the surface inert
   -- across restarts; also cleared on HUD shutdown.
   local touchLearn = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
-  if reaper.ImGui_MenuItem(ctx, "Touch to Learn (UC1)", nil, touchLearn) then
+  if reaper.ImGui_MenuItem(ctx, "Touch to Learn", nil, touchLearn) then
     reaper.SetExtState(SECT, "hud_touch_learn", touchLearn and "0" or "1", false)
   end
 
