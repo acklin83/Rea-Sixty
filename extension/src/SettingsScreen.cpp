@@ -1852,53 +1852,62 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     // unified cross-domain schematic, not in the Bindings UC1 mockup.
     constexpr float kColLx = 12, kColLw = 230;
     if (!ccpOnly) {
-        // 2-column layout: Gain & Q live in column 1 (cx=60), Freq in
-        // column 2 (cx=170). Lo-Pass and Hi-Pass (no IN buttons!) sit at
-        // the top, diagonal to each other. EQ Type + EQ In are two small
-        // toggles stacked in column 2 between HMF and LMF; HF/LF Bell
-        // toggles sit diagonally next to their band's Gain knob.
+        // Two clean EQ columns (matching the Learn-HUD face): col1 = GAIN/Q
+        // (dB) at cx=82, col2 = FREQ + Hi-Pass + BELL + IN/TYPE at cx=162 —
+        // everything in col2 on one vertical centre. HF/HMF spread so the
+        // HF↔HMF band gap matches LMF↔LF. Stepped divider lines follow the
+        // staggered columns like the SSL 4000E silk.
         rect_(c, kColLx, 12, kColLw, H - 24, 0x1A1E24FF, 0x2A3038FF, 6.0);
 
-        // Filters: Lo-Pass column 1 (top-left), Hi-Pass column 2 diagonal
-        // below it. NO IN buttons — they don't exist on UC1.
-        // 2026-05-22: EQ knobs shifted inward — GAIN/Q col 60→70, FREQ
-        // col 170→162 — so the side labels (HF / HMF / LMF / LF) breathe.
-        knob(kColLx + 70,  44, 20, kGreyCap, "LO-PASS");
-        knob(kColLx + 162, 70, 20, kGreyCap, "HI-PASS");
-        sectionLabel(kColLx + 14, 110, "FILTERS");
-        line_(c, kColLx + 70, 122, kColLx + kColLw - 8, 122, 0x383C44FF, 1.0);
+        constexpr float c1 = kColLx + 70, c2 = kColLx + 150;   // 82 / 162
+        constexpr float bx = c2 - 17;                          // 145 (BELL/IN/TYPE, w=34)
+        constexpr float gxR = c1 + 20, fxR = c2 + 20;          // 102 / 182
+        constexpr uint32_t divCol = 0x9DA2AC99;                // silk grey, ~0.6 alpha
+        auto bandLabel = [&](float cy, const char* t) {        // left, vert-centred on cy
+            double tw = 0, th = 0;
+            ImGui_CalcTextSize(c.ctx, t, &tw, &th, nullptr, nullptr);
+            drawText_(c, kColLx + 14, cy - float(th) / 2.0f, 0xB8BCC4FF, t);
+        };
 
-        // HF band — Gain in col 1, Freq in col 2 diagonal, HF Bell toggle
-        // beside the Freq knob.
-        drawText_(c, kColLx + 14, 152, 0xB8BCC4FF, "HF");
-        knob(kColLx + 70,  154, 20, kRedCap, "GAIN");
-        knob(kColLx + 162, 182, 20, kRedCap, "FREQ");
-        smallToggle(kColLx + 192, 146, "BELL");
+        // Band divider lines (stepped: horizontal · 45° · horizontal).
+        line_(c, kColLx+50, 210, gxR, 210, divCol, 1.0);
+        line_(c, gxR, 210, gxR+28, 238, divCol, 1.0);
+        line_(c, gxR+28, 238, fxR, 238, divCol, 1.0);          // HF | HMF (down)
+        line_(c, kColLx+50, 379, bx-2, 379, divCol, 1.0);      // HMF | LMF → IN/TYPE
+        line_(c, kColLx+50, 548, gxR, 548, divCol, 1.0);
+        line_(c, gxR, 548, gxR+40, 508, divCol, 1.0);
+        line_(c, gxR+40, 508, fxR, 508, divCol, 1.0);          // LMF | LF (up)
 
-        // HMF band — Gain + Q in col 1, Freq in col 2.
-        drawText_(c, kColLx + 14, 230, 0xB8BCC4FF, "HMF");
-        knob(kColLx + 70,  232, 20, kGreenCap, "GAIN");
-        knob(kColLx + 162, 260, 20, kGreenCap, "FREQ");
-        knob(kColLx + 70,  300, 20, kGreenCap, "Q");
+        // Filters
+        knob(c1, 44, 20, kGreyCap, "LO-PASS");
+        knob(c2, 70, 20, kGreyCap, "HI-PASS");
+        sectionLabel(kColLx + 14, 104, "FILTERS");
+        line_(c, c1, 122, kColLx + kColLw - 8, 122, divCol, 1.0);
 
-        // EQ Type + EQ In: stacked in column 2 deep in the gap between
-        // HMF and LMF. Spacing bumped to 22 px for the larger 34×18
-        // toggle footprint.
-        smallToggle(kColLx + 192, 356, "TYPE");
-        smallToggle(kColLx + 192, 380, "IN");
-
-        // LMF band — Gain + Q in col 1, Freq in col 2.
-        drawText_(c, kColLx + 14, 428, 0xB8BCC4FF, "LMF");
-        knob(kColLx + 70,  430, 20, kBlueCap, "GAIN");
-        knob(kColLx + 162, 458, 20, kBlueCap, "FREQ");
-        knob(kColLx + 70,  498, 20, kBlueCap, "Q");
-
-        // LF band — both controls in black per silk-screen. LF Bell
-        // dropped to y=600 so the FREQ label (cy+r+13 = 591) clears.
-        drawText_(c, kColLx + 14, 556, 0xB8BCC4FF, "LF");
-        knob(kColLx + 162, 558, 20, kBlackCap, "FREQ");
-        knob(kColLx + 70,  598, 20, kBlackCap, "GAIN");
-        smallToggle(kColLx + 192, 600, "BELL");
+        // HF — labels at the FREQ knob height; BELL top flush w/ GAIN top.
+        bandLabel(188, "HF");
+        knob(c1, 160, 20, kRedCap, "GAIN");
+        knob(c2, 188, 20, kRedCap, "FREQ");
+        smallToggle(bx, 140, "BELL");
+        // HMF
+        bandLabel(288, "HMF");
+        knob(c1, 260, 20, kGreenCap, "GAIN");
+        knob(c2, 288, 20, kGreenCap, "FREQ");
+        knob(c1, 328, 20, kGreenCap, "Q");
+        // EQ divider label + IN / TYPE side by side (IN on the col2 centre).
+        bandLabel(379, "EQ");
+        smallToggle(bx, 370, "IN");
+        smallToggle(bx + 38, 370, "TYPE");
+        // LMF
+        bandLabel(458, "LMF");
+        knob(c1, 430, 20, kBlueCap, "GAIN");
+        knob(c2, 458, 20, kBlueCap, "FREQ");
+        knob(c1, 498, 20, kBlueCap, "Q");
+        // LF — BELL bottom flush w/ GAIN label.
+        bandLabel(558, "LF");
+        knob(c2, 558, 20, kBlackCap, "FREQ");
+        knob(c1, 598, 20, kBlackCap, "GAIN");
+        smallToggle(bx, 620, "BELL");
     }
 
     // ---- Centre column: Bus Comp (top) + Central Control (bottom) ------
@@ -1987,11 +1996,10 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
         knob(c1x, ry[1], 20, kAccentBC, "ATTACK");
         knob(c2x, ry[1], 20, kAccentBC, "RELEASE");
         knob(c1x, ry[2], 20, kAccentBC, "RATIO");
-        // BC IN — toggle button instead of a knob (per UC1 hardware).
-        // Label sits 8 px below the button bottom so the text top
-        // doesn't bump the box edge.
-        rect_(c, c2x - 14, ry[2] - 14, 28, 28, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, c2x, ry[2] + 26, 0x9CA0AAFF, "IN");
+        // BC IN — 40×40 like the CS channel IN, centred on c2x at the RATIO
+        // row (flush with RELEASE / RATIO / MIX), "IN" centred inside.
+        rect_(c, c2x - 20, ry[2] - 20, 40, 40, 0xE0E0E0FF, 0x808088FF, 3.0);
+        drawTextCentered_(c, c2x, ry[2], 0x303338FF, "IN");
         knob(c1x,  ry[3], 20, kAccentBC, "S/C HPF");
         knob(c2x,  ry[3], 20, kAccentBC, "MIX");
     }
@@ -2068,108 +2076,52 @@ void drawUc1Face_(VCanvas& c, uf8::Domain dimDomain, bool ccpOnly = false)
     if (!ccpOnly) {
     rect_(c, kColRx, 12, kColRw, H - 24, 0x1A1E24FF, 0x2A3038FF, 6.0);
 
-    // Compressor section. Fast Attack + Peak in the top-right corner;
-    // 2-column knob layout below: Ratio + Release in col 1, Threshold
-    // in col 2 (mid-row). Y-positions chosen so Compressor + Gate are
-    // VERTICALLY CENTRED in the column, with Channel section pinned to
-    // the bottom (per Frank's note).
-    sectionLabel(kColRx + 14, 32, "COMPRESSOR");
+    // Two columns like the EQ: col1 (rc1=678) Ratio/Release/IN/Range/Release/
+    // Expand/Fast, col2 (rc2=774) Threshold/Threshold/Hold + GR LEDs. FAST ATK
+    // + PEAK top-right; DYN(IN) + LEDs centred between Comp Release & Gate Range.
+    sectionLabel(kColRx + 14, 26, "COMPRESSOR");
     dynBtn(kColRx + kColRw - 76, 24, "FAST ATK");
     dynBtn(kColRx + kColRw - 76, 50, "PEAK");
     {
-        const float c1x = kColRx + 60, c2x = kColRx + 156;
-        knob(c1x, 96,  20, kGreyCap, "RATIO");
-        knob(c2x, 124, 20, kGreyCap, "THRESHOLD");
-        knob(c1x, 158, 20, kGreyCap, "RELEASE");
-    }
-    // Dyn IN toggle (left) + GR meter (right) — vertically centred
-    // in the gap between the Compressor knob block (ends ~y=194 incl.
-    // RELEASE label) and the Gate section label (y=270). Mid-point
-    // y=232. GR row spacing 12 px (was 8) so values + LEDs breathe.
-    rect_(c, kColRx + 14, 221, 22, 22, 0xE0E0E0FF, 0x808088FF, 3.0);
-    drawTextCentered_(c, kColRx + 25, 251, 0x9CA0AAFF, "IN");
-    {
-        const float gx = kColRx + kColRw - 26, gy = 208;
-        const char* steps[] = { "20", "14", "9", "6", "3" };
+        const float rc1 = kColRx + 60, rc2 = kColRx + 156;   // 678 / 774
+        knob(rc1, 100, 20, kGreyCap, "RATIO");
+        knob(rc2, 128, 20, kGreyCap, "THRESHOLD");
+        knob(rc1, 168, 20, kGreyCap, "RELEASE");
+        // DYN / Comp In — dark toggle in col1, centred y=246.
+        btn(rc1 - 17, 235, 34, 22, "IN");
+        // GR LED meter — 2 dot columns + dB number, in col2 at the IN height.
+        const char* steps[] = { "20", "14", "10", "6", "3" };
         for (int i = 0; i < 5; ++i) {
-            const float ly = gy + i * 12;
-            circle_(c, gx, ly, 2.5, 0x404448FF, 0);
-            drawText_(c, gx - 18, ly - 5, 0x808088FF, steps[i]);
+            const float ly = 220 + i * 13;
+            drawTextCentered_(c, rc2 - 14, ly, 0x808088FF, steps[i]);
+            circle_(c, rc2 + 6,  ly, 3, 0x9A5A2AFF, 0);
+            circle_(c, rc2 + 20, ly, 3, 0x2E8040FF, 0);
         }
+        // Gate
+        knob(rc1, 324, 20, kGreyCap, "RANGE");
+        knob(rc2, 352, 20, kGreyCap, "THRESHOLD");
+        knob(rc1, 392, 20, kGreyCap, "RELEASE");
+        knob(rc2, 420, 20, kGreyCap, "HOLD");
+        dynBtn(rc1 - 33, 462, "EXPAND");
+        dynBtn(rc1 - 33, 488, "FAST ATK");
+        // GATE / EXPANDER — right-aligned, bottom flush w/ the FAST ATK button.
+        auto labelRB = [&](float xr, float yb, const char* t) {
+            double tw = 0, th = 0;
+            ImGui_CalcTextSize(c.ctx, t, &tw, &th, nullptr, nullptr);
+            drawText_(c, xr - float(tw), yb - float(th), 0x9CA0AAFF, t);
+        };
+        labelRB(kColRx + kColRw - 14, 492, "GATE /");
+        labelRB(kColRx + kColRw - 14, 510, "EXPANDER");
     }
 
-    // Gate / Expander section. Staggered layout matching the Comp
-    // section above — Threshold sits below Range diagonally, Hold
-    // sits below Release diagonally. Same visual rhythm as the EQ
-    // bands' Gain/Freq pairs in the left column.
-    // 2026-05-22 (Frank): section label moved from the section top
-    // to the FAST ATK row, right-aligned to the column edge.
-    {
-        const float c1x = kColRx + 60, c2x = kColRx + 156;
-        knob(c1x, 308, 20, kGreyCap, "RANGE");
-        knob(c2x, 332, 20, kGreyCap, "THRESHOLD");
-        knob(c1x, 374, 20, kGreyCap, "RELEASE");
-        knob(c2x, 398, 20, kGreyCap, "HOLD");
-    }
-    dynBtn(kColRx + 14, 430, "EXPAND");
-    dynBtn(kColRx + 14, 456, "FAST ATK");
-    {
-        // Right-aligned label at the FAST ATK row. Use ImGui_CalcTextSize
-        // to measure the actual rendered width (12 px font lock applies
-        // here because callers wrap the schematic in PushFont(nil,12)).
-        double tw = 0, th = 0;
-        ImGui_CalcTextSize(c.ctx, "GATE / EXPANDER", &tw, &th,
-                           nullptr, nullptr);
-        const float labelX = kColRx + kColRw - 14 - static_cast<float>(tw);
-        const float labelY = 456 + (22 - static_cast<float>(th)) / 2.0f;
-        drawText_(c, labelX, labelY, 0x9CA0AAFF, "GATE / EXPANDER");
-    }
-
-    // Channel section — pinned to the bottom of the column. Three
-    // columns; small toggles keep their full width so "S/C LISTEN"
-    // fits, while IN / SOLO / CUT / FINE are half-size per Frank's
-    // note (those four buttons are physically smaller on the UC1).
-    sectionLabel(kColRx + 14, 488, "CHANNEL");
-    {
-        constexpr float bw = 66;          // small-toggle width — fits "S/C LISTEN"
-        constexpr float bh = 22;          // small toggle height
-        // 2026-05-22 (Frank): IN / SOLO / CUT / FINE all square + larger
-        // (40×40, up from 33×28 rect for SOLO/CUT/FINE and 33×37 for IN).
-        constexpr float bigSq = 40.0f;
-        // Column 1 left edge (kColRx+14) flush with the dynBtn left
-        // edge above (EXPAND / FAST ATK), so Polarity / S/C LISTEN /
-        // SOLO CLR sit in the same vertical line as the dynamics
-        // toggles. Columns 2/3 shift the same +6 to keep equal gaps.
-        const float c1x = kColRx + 14;
-        const float c2x = kColRx + 88;
-        const float c3x = kColRx + 162;
-        // Column 1 — three small toggles + SOLO large at the bottom.
-        rect_(c, c1x, 510, bw, bh, 0x252A33FF, 0x4A5060FF, 3.0);
-        drawTextCentered_(c, c1x + bw / 2.0f, 521, 0xC0C4CCFF, "Ø");
-        rect_(c, c1x, 536, bw, bh, 0x252A33FF, 0x4A5060FF, 3.0);
-        drawTextCentered_(c, c1x + bw / 2.0f, 547, 0xC0C4CCFF, "S/C LISTEN");
-        rect_(c, c1x, 562, bw, bh, 0x252A33FF, 0x4A5060FF, 3.0);
-        drawTextCentered_(c, c1x + bw / 2.0f, 573, 0xC0C4CCFF, "SOLO CLR");
-        // Large bottom row — SOLO / CUT / FINE share one Y-line, all
-        // square 40×40 and centred in their column slot.
-        const float largeY = 595;
-        const float soloX = c1x + (bw - bigSq) / 2.0f;
-        const float cutX  = c2x + (bw - bigSq) / 2.0f;
-        const float fineX = c3x + (bw - bigSq) / 2.0f;
-        rect_(c, soloX, largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, soloX + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "SOLO");
-        rect_(c, cutX,  largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, cutX  + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "CUT");
-        // Column 3 — Channel-IN spans the small-toggle rows (centred
-        // vertically over the three of them); FINE in the large bottom
-        // row, same 40×40 footprint.
-        const float inX = c3x + (bw - bigSq) / 2.0f;
-        const float inY = 510 + (3 * bh - bigSq) / 2.0f;
-        rect_(c, inX, inY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, inX + bigSq / 2.0f, inY + bigSq / 2.0f, 0x303338FF, "IN");
-        rect_(c, fineX, largeY, bigSq, bigSq, 0xE0E0E0FF, 0x808088FF, 3.0);
-        drawTextCentered_(c, fineX + bigSq / 2.0f, largeY + bigSq / 2.0f, 0x303338FF, "FINE");
-    }
+    // Channel section — only the bindable controls (Ø / S/C LISTEN / IN); the
+    // non-bindable hardware keys (SOLO / CUT / FINE / SOLO CLR) are dropped so
+    // the bottom breathes, matching the Learn-HUD face.
+    sectionLabel(kColRx + 14, 518, "CHANNEL");
+    btn(kColRx + 14, 540, 96, 26, "\xC3\x98");           // Polarity (Ø)
+    btn(kColRx + 14, 574, 96, 26, "S/C LISTEN");
+    rect_(c, kColRx + 158, 547, 40, 40, 0xE0E0E0FF, 0x808088FF, 3.0);   // Channel IN
+    drawTextCentered_(c, kColRx + 158 + 20, 547 + 20, 0x303338FF, "IN");
     } // end if (!ccpOnly) — Right column
 
     // Brand line — pinned to the bottom of the CCP chassis so it stays
@@ -7363,49 +7315,52 @@ constexpr Uc1Control kUc1Controls[] = {
     // BELL/TYPE/IN toggles enlarged (28×14 → 34×18); coordinates here
     // mirror drawUc1Face_'s new layout so the green overlay rings line
     // up with the painted controls.
+    // 2026-06-16: two clean EQ columns matching the Learn-HUD face — col1
+    // (GAIN/Q) cx=82, col2 (FREQ+Hi-Pass+BELL+IN/TYPE) cx=162. Toggles 34×18
+    // centred on col2 (bx=145). Upper EQ (HF/HMF) spread so HF↔HMF = LMF↔LF.
     // Filters
     { Uc1Control::Knob,    6, uf8::Domain::ChannelStrip,
       82, 44,  20, 0, 0, kCapGrey,  "LPF" },
     { Uc1Control::Knob,    7, uf8::Domain::ChannelStrip,
-      174, 70, 20, 0, 0, kCapGrey,  "HPF" },
+      162, 70, 20, 0, 0, kCapGrey,  "HPF" },
 
     // HF band (red caps)
     { Uc1Control::Toggle,  8, uf8::Domain::ChannelStrip,
-      204, 146, 0, 34, 18, 0, "HFBL" },
+      145, 140, 0, 34, 18, 0, "HFBL" },
     { Uc1Control::Knob,    9, uf8::Domain::ChannelStrip,
-      82,  154, 20, 0, 0, kCapRed,  "HFGN" },
+      82,  160, 20, 0, 0, kCapRed,  "HFGN" },
     { Uc1Control::Knob,   10, uf8::Domain::ChannelStrip,
-      174, 182, 20, 0, 0, kCapRed,  "HFFQ" },
+      162, 188, 20, 0, 0, kCapRed,  "HFFQ" },
 
     // HMF band (green caps)
     { Uc1Control::Knob,   11, uf8::Domain::ChannelStrip,
-      82,  232, 20, 0, 0, kCapGreen, "HMFG" },
+      82,  260, 20, 0, 0, kCapGreen, "HMFG" },
     { Uc1Control::Knob,   12, uf8::Domain::ChannelStrip,
-      174, 260, 20, 0, 0, kCapGreen, "HMFF" },
+      162, 288, 20, 0, 0, kCapGreen, "HMFF" },
     { Uc1Control::Knob,   13, uf8::Domain::ChannelStrip,
-      82,  300, 20, 0, 0, kCapGreen, "HMFQ" },
+      82,  328, 20, 0, 0, kCapGreen, "HMFQ" },
 
-    // EQ Type / EQ In toggles
+    // EQ Type / EQ In toggles (side by side at the HMF|LMF divider; IN on col2)
     { Uc1Control::Toggle, 14, uf8::Domain::ChannelStrip,
-      204, 356, 0, 34, 18, 0, "EQTY" },
+      183, 370, 0, 34, 18, 0, "EQTY" },
     { Uc1Control::Toggle, 15, uf8::Domain::ChannelStrip,
-      204, 380, 0, 34, 18, 0, "EQIN" },
+      145, 370, 0, 34, 18, 0, "EQIN" },
 
     // LMF band (blue caps)
     { Uc1Control::Knob,   16, uf8::Domain::ChannelStrip,
       82,  430, 20, 0, 0, kCapBlue,  "LMFG" },
     { Uc1Control::Knob,   17, uf8::Domain::ChannelStrip,
-      174, 458, 20, 0, 0, kCapBlue,  "LMFF" },
+      162, 458, 20, 0, 0, kCapBlue,  "LMFF" },
     { Uc1Control::Knob,   18, uf8::Domain::ChannelStrip,
       82,  498, 20, 0, 0, kCapBlue,  "LMFQ" },
 
     // LF band (black caps)
     { Uc1Control::Knob,   19, uf8::Domain::ChannelStrip,
-      174, 558, 20, 0, 0, kCapBlack, "LFFQ" },
+      162, 558, 20, 0, 0, kCapBlack, "LFFQ" },
     { Uc1Control::Knob,   20, uf8::Domain::ChannelStrip,
       82,  598, 20, 0, 0, kCapBlack, "LFGN" },
     { Uc1Control::Toggle, 21, uf8::Domain::ChannelStrip,
-      204, 600, 0, 34, 18, 0, "LFBL" },
+      145, 620, 0, 34, 18, 0, "LFBL" },
 
     // ---- CENTRE COLUMN — Input/Output Gain (CS, physically on BC strip) -
     // Input-Gain knob (UC1 0x0C) → CS Input Trim slot (linkIdx 4). Same
@@ -7434,9 +7389,10 @@ constexpr Uc1Control kUc1Controls[] = {
       490, 240, 20, 0, 0, kCapBC, "REL" },
     { Uc1Control::Knob,    5, uf8::Domain::BusComp,
       370, 308, 20, 0, 0, kCapBC, "RAT" },
-    // BC IN = compressor in/out toggle = BC linkIdx 0 (Bypass).
+    // BC IN = compressor in/out toggle = BC linkIdx 0 (Bypass). 40×40 like the
+    // CS channel IN, centred on c2x (490) at the RATIO row.
     { Uc1Control::Toggle,  0, uf8::Domain::BusComp,
-      476, 294, 0, 28, 28, 0, "IN" },
+      470, 288, 0, 40, 40, 0, "IN" },
     { Uc1Control::Knob,    6, uf8::Domain::BusComp,
       370, 376, 20, 0, 0, kCapBC, "S/C" },
     { Uc1Control::Knob,    7, uf8::Domain::BusComp,
@@ -7448,46 +7404,42 @@ constexpr Uc1Control kUc1Controls[] = {
       772, 24,  0, 66, 22, 0, "C ATK" },     // FAST ATK
     { Uc1Control::DynBtn, 25, uf8::Domain::ChannelStrip,
       772, 50,  0, 66, 22, 0, "C PK" },      // PEAK
+    // 2026-06-16: two columns like the EQ — col1 (rc1=678) Ratio/Release/IN/
+    // Range/Release/Expand/Fast, col2 (rc2=774) Threshold/Threshold/Hold + GR
+    // LEDs. DYN(IN) + LEDs centred between Comp Release and Gate Range.
     { Uc1Control::Knob,   26, uf8::Domain::ChannelStrip,
-      678, 96,  20, 0, 0, kCapGrey, "C RAT" },
+      678, 100, 20, 0, 0, kCapGrey, "C RAT" },
     { Uc1Control::Knob,   27, uf8::Domain::ChannelStrip,
-      774, 124, 20, 0, 0, kCapGrey, "C THR" },
+      774, 128, 20, 0, 0, kCapGrey, "C THR" },
     { Uc1Control::Knob,   28, uf8::Domain::ChannelStrip,
-      678, 158, 20, 0, 0, kCapGrey, "C REL" },
+      678, 168, 20, 0, 0, kCapGrey, "C REL" },
 
-    // DYN IN toggle (square button left of GR meter)
+    // DYN IN toggle → col1 (34×22, centred y=246)
     { Uc1Control::Toggle, 22, uf8::Domain::ChannelStrip,
-      632, 221, 0, 22, 22, 0, "DYN" },
+      661, 235, 0, 34, 22, 0, "DYN" },
 
     // Gate section
     { Uc1Control::Knob,   29, uf8::Domain::ChannelStrip,
-      678, 308, 20, 0, 0, kCapGrey, "G RNG" },
+      678, 324, 20, 0, 0, kCapGrey, "G RNG" },
     { Uc1Control::Knob,   30, uf8::Domain::ChannelStrip,
-      774, 332, 20, 0, 0, kCapGrey, "G THR" },
+      774, 352, 20, 0, 0, kCapGrey, "G THR" },
     { Uc1Control::Knob,   31, uf8::Domain::ChannelStrip,
-      678, 374, 20, 0, 0, kCapGrey, "G REL" },
+      678, 392, 20, 0, 0, kCapGrey, "G REL" },
     { Uc1Control::Knob,   32, uf8::Domain::ChannelStrip,
-      774, 398, 20, 0, 0, kCapGrey, "G HLD" },
+      774, 420, 20, 0, 0, kCapGrey, "G HLD" },
     { Uc1Control::DynBtn, 33, uf8::Domain::ChannelStrip,
-      632, 430, 0, 66, 22, 0, "G/E" },       // EXPAND
+      645, 462, 0, 66, 22, 0, "G/E" },       // EXPAND → col1
     { Uc1Control::DynBtn, 34, uf8::Domain::ChannelStrip,
-      632, 456, 0, 66, 22, 0, "G ATK" },     // GATE FAST ATK
+      645, 488, 0, 66, 22, 0, "G ATK" },     // GATE FAST ATK → col1
 
-    // Channel section — Polarity, S/C Listen, Channel-IN
+    // Channel section — Polarity, S/C Listen, Channel-IN (de-crowded, 96×26)
     { Uc1Control::DynBtn,  5, uf8::Domain::ChannelStrip,
-      632, 510, 0, 66, 22, 0, "POL" },        // Polarity (Ø)
+      632, 540, 0, 96, 26, 0, "POL" },        // Polarity (Ø)
     { Uc1Control::DynBtn, 36, uf8::Domain::ChannelStrip,
-      632, 536, 0, 66, 22, 0, "S/C L" },     // S/C Listen
-    // Channel-IN — square 40×40 per Frank 2026-05-22. Coords mirror
-    // drawUc1Face_: inX = kColRx+162 + (66-40)/2 = 793,
-    //               inY = 510 + (3*22 - 40)/2   = 523.
-    // Channel-IN = CS in/out toggle = CS Bypass slot (linkIdx 0), mirroring
-    // BC IN → BusComp linkIdx 0. Previously linkIdx 4 (Input Trim) — wrong:
-    // it collided with the IN-Gain knob's slot, mislabelled the button
-    // "Input Trim" (clashing with the Input Level meter), and disagreed with
-    // the runtime which toggles the CS bypass. Frank 2026-06-02.
+      632, 574, 0, 96, 26, 0, "S/C L" },     // S/C Listen
+    // Channel-IN = CS in/out toggle = CS Bypass slot (linkIdx 0). 40×40.
     { Uc1Control::Toggle,  0, uf8::Domain::ChannelStrip,
-      793.0f, 523.0f, 0, 40, 40, 0, "IN" },  // Channel In → Bypass
+      776.0f, 547.0f, 0, 40, 40, 0, "IN" },  // Channel In → Bypass
 };
 
 constexpr int kUc1ControlsCount =

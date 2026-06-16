@@ -448,31 +448,12 @@ local FACE_LABEL = {
   [33]="THRESHOLD",[34]="RELEASE",[35]="HOLD",[36]="EXPAND",[37]="FAST ATK",
   [38]="\xC3\x98",[39]="S/C LISTEN",[40]="IN",
 }
--- De-crowd overrides for the gate/channel cluster (top-left x,y + size in the
--- 860×660 design space). Every other control uses the published geometry, which
--- already matches the settings positions. Mirrors the de-crowded reference.
-local FACE_OV = {
-  -- EQ column 2 (FREQ + Hi-Pass + BELL + IN/TYPE) all share one vertical centre
-  -- (cx=162), nudged closer to column 1 (cx=82) than the published geometry.
-  -- Upper EQ (HF/HMF + IN/TYPE) shifted +6 so HMF-Q→divider == divider→LMF-GAIN.
-  [1]={cx=162,cy=70},
-  [3]={cy=160}, [4]={cx=162,cy=188},                -- HF GAIN / FREQ
-  [5]={cy=260}, [6]={cx=162,cy=288}, [7]={cy=328},  -- HMF GAIN / FREQ / Q (HF↔HMF = LMF↔LF = 100)
-  [11]={cx=162,cy=458},[13]={cx=162,cy=558},        -- LMF / LF FREQ
-  -- HF BELL top flush w/ HF GAIN top; LF BELL bottom flush w/ LF GAIN label.
-  [2]={x=145,y=140,w=34,h=18},  [15]={x=145,y=620,w=34,h=18},
-  -- EQ IN centred on col2; TYPE just to its right.
-  [9]={x=145,y=370,w=34,h=18},  [8]={x=183,y=370,w=34,h=18},
-  -- Dyn/Gate as two columns like the EQ. col1 (cx=678): Ratio/Release/IN/
-  -- Range/Release/Expand/Fast. col2 (cx=774): Threshold/Threshold/Hold (+GR LEDs).
-  [28]={cy=100}, [29]={cy=128}, [30]={cy=168},      -- Comp Ratio / Thr / Release
-  [31]={x=661,y=235,w=34,h=22},                     -- DYN / Comp In → col1 (centred y=246)
-  [32]={cy=324}, [33]={cy=352}, [34]={cy=392}, [35]={cy=420},  -- Gate Range/Thr/Rel/Hold
-  [36]={x=645,y=462,w=66,h=22}, [37]={x=645,y=488,w=66,h=22},  -- Expand / Fast → col1
-  [38]={x=632,y=540,w=96,h=26}, [39]={x=632,y=574,w=96,h=26},
-  [40]={x=776,y=547,w=40,h=40},
-  [23]={x=470,y=288,w=40,h=40},   -- BC IN: 40×40 like CS, centred on c2 (490,308)
-}
+-- Per-control position overrides. As of 2026-06-16 the SSL-style layout is
+-- baked into the extension's kUc1Controls (single source for the published
+-- geometry + the settings schematic), so the HUD draws straight from the
+-- published positions — no overrides needed. Kept (empty) as the hook for any
+-- future HUD-only nudge.
+local FACE_OV = {}
 -- Light (white, dark-text) toggle keys like the settings face's IN buttons.
 local FACE_LIGHT = { [23]=true, [40]=true }
 
