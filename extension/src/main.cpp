@@ -92,7 +92,7 @@ void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                                    int focusDom,
                                    std::string& stateOut, std::string& assignOut);
 void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
-                                   int faderBank, int vpotBank,
+                                   int faderBank, int vpotBank, const char* bootShort,
                                    std::string& stateOut, std::string& assignOut);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
@@ -105,6 +105,15 @@ bool        reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* b
 bool        reasixty_hudInvert(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudRename(int idx, int layer, const char* label,
                                void* csTr, int csFx, void* bcTr, int bcFx);
+// UF8 device-tab interactivity (Phase 2). kind = HUD encoding
+// (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel); fb/vb = live fader/V-Pot banks.
+void        reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr, int fx, bool create);
+bool        reasixty_hudUf8LearnTick();
+int         reasixty_hudUf8LearnArmed();
+void        reasixty_hudUf8CancelLearn();
+bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
+int         reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx);
 int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
@@ -2157,6 +2166,24 @@ inline void engageUf8PluginMode_(bool withGui)
     g_bankDirty.store(true);
     SetExtState("ReaSixty", "uf8PluginMode", "1", true);
     if (withGui) g_pluginGuiSyncRequest.store(true);
+}
+
+// Programmatic UF8 Plugin Mode disengage — inverse of engageUf8PluginMode_,
+// no-op if already off. Restores the parked Sel-Mode + repaints the surface.
+// Used by the Learn-HUD's UF8-tab auto-engage (engage on tab-enter, revert on
+// leave/close — only what we engaged ourselves). We always engage withGui=false
+// so no floating GUI was opened; g_pluginGuiSyncRequest just re-syncs the
+// (now-off) GUI state, harmless.
+inline void disengageUf8PluginMode_()
+{
+    if (!g_uf8PluginMode.load()) return;
+    g_uf8PluginMode.store(false);
+    g_uf8PluginModeWithGui.store(false);
+    restoreSelModeAfterUf8PluginMode_();
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    SetExtState("ReaSixty", "uf8PluginMode", "0", true);
+    g_pluginGuiSyncRequest.store(true);
 }
 
 // ── Meter ballistics ────────────────────────────────────────────────
@@ -5382,8 +5409,15 @@ std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx strin
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
+std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 bool        g_hudGeomPublished = false;
+// UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
+// drive V-Pot banks while the user maps from the HUD). Edge-triggered on tab
+// enter/leave; we only disengage what WE engaged. g_hudUf8TabActive tracks the
+// last-seen "hud_uf8_tab" flag; g_hudUf8AutoEngaged marks our own engage.
+bool        g_hudUf8TabActive   = false;
+bool        g_hudUf8AutoEngaged = false;
 
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
 // 7-seg = track number, line2 = track name, line3 = stereo/mono. The companion
@@ -5575,9 +5609,17 @@ void publishHud_()
                                          0, uf8::kUserUf8FaderBankCount - 1);
         const int vpotBank  = std::clamp(g_softKeyBank.load(),
                                          0, uf8::kUserUf8VpotBankCount - 1);
+        // No uf8Mode map but a virgin FX under the cursor → publish its short
+        // name so the UF8 tab can bootstrap it (click a cell + wiggle → create a
+        // UF8-only map), mirroring the CS/BC empty-tab learn-create.
+        std::string uf8Boot;
+        if (!uf8Map) {
+            MediaTrack* vTr = nullptr; int vFx = -1;
+            if (hudCursorUnlearnedFx_(vTr, vFx)) uf8Boot = shortFxName_(vTr, vFx);
+        }
         std::string uf8State, uf8Assign;
         reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
-                               uf8State, uf8Assign);
+                               uf8Boot.c_str(), uf8State, uf8Assign);
         if (uf8State != g_hudUf8StatePublished) {
             g_hudUf8StatePublished = uf8State;
             SetExtState("rea_sixty", "hud_uf8_state", uf8State.c_str(), false);
@@ -14599,6 +14641,27 @@ void onTimer()
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
         if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))
             g_hudTouchLearn.store(tl[0] == '1');
+
+        // UF8 tab auto-engages UF8 Plugin Mode so the hardware Top-Soft-Keys
+        // navigate V-Pot banks while the user maps from the HUD. Edge-triggered:
+        // engage on tab-enter (only if not already on, marking it ours), revert
+        // on tab-leave (only what we engaged). The HUD writes "hud_uf8_tab".
+        {
+            const char* utp = GetExtState("rea_sixty", "hud_uf8_tab");
+            const bool uf8Tab = (utp && utp[0] == '1');
+            if (uf8Tab && !g_hudUf8TabActive) {
+                if (!g_uf8PluginMode.load()) {
+                    engageUf8PluginMode_(false);
+                    g_hudUf8AutoEngaged = true;
+                }
+            } else if (!uf8Tab && g_hudUf8TabActive) {
+                if (g_hudUf8AutoEngaged) {
+                    disengageUf8PluginMode_();   // no-op if already off
+                    g_hudUf8AutoEngaged = false;
+                }
+            }
+            g_hudUf8TabActive = uf8Tab;
+        }
         if (const char* cmd = GetExtState("rea_sixty", "hud_cmd"); cmd && *cmd) {
             const std::string s = cmd;
             SetExtState("rea_sixty", "hud_cmd", "", false);   // consume
@@ -14672,6 +14735,57 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("uf8learn;", 0) == 0) {
+                // "uf8learn;<kind>;<strip>" — arm a UF8 cell learn. kind = HUD
+                // encoding (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel). Banks live.
+                const auto semi = s.find(';', 9);
+                if (semi != std::string::npos) {
+                    const int kind  = std::atoi(s.c_str() + 9);
+                    const int strip = std::atoi(s.c_str() + semi + 1);
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (mp) {
+                        reasixty_hudUf8ArmLearn(kind, strip, fb, vb, tr, fx, false);
+                    } else {
+                        // No uf8Mode map → bootstrap: arm CREATE-NEW if a virgin
+                        // FX is under the cursor (the wiggle defines the plug-in).
+                        MediaTrack* vTr = nullptr; int vFx = -1;
+                        const bool boot = hudCursorUnlearnedFx_(vTr, vFx);
+                        reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
+                    }
+                }
+            } else if (s.rfind("uf8cancel", 0) == 0) {
+                reasixty_hudUf8CancelLearn();
+            } else if (s.rfind("uf8unbind;", 0) == 0
+                    || s.rfind("uf8invert;", 0) == 0
+                    || s.rfind("uf8fill;",   0) == 0) {
+                // "uf8unbind;<kind>;<strip>" / "uf8invert;…" / "uf8fill;…"
+                const bool isUnbind = (s.rfind("uf8unbind;", 0) == 0);
+                const bool isInvert = (s.rfind("uf8invert;", 0) == 0);
+                const auto col1 = s.find(';');                 // after the verb
+                const auto col2 = s.find(';', col1 + 1);
+                if (col1 != std::string::npos && col2 != std::string::npos) {
+                    const int kind  = std::atoi(s.c_str() + col1 + 1);
+                    const int strip = std::atoi(s.c_str() + col2 + 1);
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    bool changed = false;
+                    if (isUnbind)      changed = reasixty_hudUf8Unbind(kind, strip, fb, vb, tr, fx);
+                    else if (isInvert) changed = reasixty_hudUf8Invert(kind, strip, fb, vb, tr, fx);
+                    else               changed = reasixty_hudUf8FillSeq(kind, strip, fb, vb, tr, fx) > 0;
+                    if (changed) {
+                        g_hudUf8AssignPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("cancel", 0) == 0) {
                 reasixty_hudCancelLearn();
             }
@@ -14712,6 +14826,25 @@ void onTimer()
             g_hudLearnPublished = pub;
             SetExtState("rea_sixty", "hud_learn", pub.c_str(), false);
         }
+
+        // UF8 device-tab learn: poll the wiggle + publish the armed cell
+        // (encoded kind*8+strip) so the grid can pulse it.
+        if (reasixty_hudUf8LearnTick()) {
+            g_hudUf8AssignPublished.clear();   // force the diff-guarded re-publish
+            publishHud_();
+        }
+        const int uf8Armed = reasixty_hudUf8LearnArmed();
+        std::string uf8Pub = (uf8Armed >= 0) ? std::to_string(uf8Armed) : std::string();
+        if (uf8Pub != g_hudUf8LearnPublished) {
+            g_hudUf8LearnPublished = uf8Pub;
+            SetExtState("rea_sixty", "hud_uf8_learn", uf8Pub.c_str(), false);
+        }
+    } else if (g_hudUf8AutoEngaged) {
+        // HUD closed (or disabled) while it had auto-engaged UF8 Plugin Mode →
+        // revert so the surface doesn't stay parked in Plugin Mode unexpectedly.
+        disengageUf8PluginMode_();
+        g_hudUf8AutoEngaged = false;
+        g_hudUf8TabActive   = false;
     }
 
     // Mid-session stale-handle recovery. Triggered when a device's

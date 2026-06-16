@@ -145,6 +145,12 @@ local learnBtnRect = nil
 local ctrlRects    = {}
 local learnIdx     = -1
 local ctxCtrlIdx   = -1   -- control under a right-click → control context menu
+-- UF8 device tab (Phase 2): interactive strip-grid.
+local uf8Rects     = {}   -- per-cell hit-rects {kind, strip, x, y, w, h}
+local uf8Learn     = -1   -- armed cell, encoded kind*8+strip (hud_uf8_learn), -1 none
+local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
+local ctxUf8Strip  = -1
+local lastUf8Tab   = nil  -- edge-write "hud_uf8_tab" so C++ auto-engages Plugin Mode
 local frame        = 0
 local hintText     = ""
 local hintFrames   = 0
@@ -218,13 +224,17 @@ end
 -- UF8 device tab (read-only strip-grid). State + per-control assignments come on
 -- their own ExtState keys (hud_uf8_state / hud_uf8_assign) so they coexist with
 -- the UC1 CS/BC payloads. UF8 has no modifier layers.
---   state : "UF8;<present>;<faderBank>;<vpotBank>;<short>"
+--   state : "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<short>"
 --   assign: "<strip>;<kind>;<paramName>;<inv>"  kind 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel
+-- boot=1 (present=0): no UF8 map but a virgin FX is under the cursor → the grid
+-- renders armable em-dash cells so a click + wiggle bootstraps a UF8-only map.
 local function readUf8State()
   local raw = reaper.GetExtState(SECT, "hud_uf8_state")
-  local dev, present, fb, vb, short = raw:match("^(%w+);(%d);(%d);(%d);(.*)$")
+  local dev, present, fb, vb, boot, short =
+    raw:match("^(%w+);(%d);(%d);(%d);(%d);(.*)$")
   return {
     present   = (present == "1"),
+    boot      = (boot == "1"),
     faderBank = tonumber(fb) or 0,
     vpotBank  = tonumber(vb) or 0,
     short     = short or "",
@@ -447,6 +457,16 @@ local function controlAt(mx, my)
   return nil
 end
 
+-- UF8 grid cell under (mx,my) → {kind, strip}, or nil. Uses last frame's rects.
+local function uf8CellAt(mx, my)
+  for _, h in ipairs(uf8Rects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      return h.kind, h.strip
+    end
+  end
+  return nil
+end
+
 local function handleControlClick(mx, my)
   local idx = controlAt(mx, my)
   if not idx then return false end
@@ -456,6 +476,16 @@ local function handleControlClick(mx, my)
     selectedParam = -1
   elseif learnIdx == idx then sendCmd("cancel")
   else                        sendCmd("learn;" .. idx) end
+  return true
+end
+
+-- UF8 grid: left-click a cell → arm a learn (click the armed cell again to
+-- cancel). The wiggle then binds via the extension. Banks are resolved C++-side.
+local function handleUf8CellClick(mx, my)
+  local kind, strip = uf8CellAt(mx, my)
+  if not kind then return false end
+  if uf8Learn == (kind * 8 + strip) then sendCmd("uf8cancel")
+  else                                   sendCmd("uf8learn;" .. kind .. ";" .. strip) end
   return true
 end
 
@@ -978,6 +1008,7 @@ local UF8_ACCENT = 0x4A90D8
 
 local function renderUf8Grid(ust, uasn)
   ctrlRects = {}                                  -- no UC1 hit-rects on this tab
+  uf8Rects  = {}
   local availW = WW - RW
   local top    = TAB_H
   local hpx    = floor(13 * fontScale() + 0.5)
@@ -985,16 +1016,41 @@ local function renderUf8Grid(ust, uasn)
   local sub
   if ust.present then
     sub = (ust.short ~= "" and ust.short or "UF8 plug-in")
-        .. "      V-Pot Bank " .. (ust.vpotBank + 1) .. " / 8"
         .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2"
+  elseif ust.boot then
+    sub = "Map " .. (ust.short ~= "" and ust.short or "plug-in")
+        .. "  \xE2\x80\x94  click a cell, then wiggle a parameter to create a UF8 map"
   else
-    sub = "No UF8-mapped plug-in on the focused track"
+    sub = "No UF8 plug-in on the focused track"
   end
   local _, subH = measure(sub, hpx)
   dtext(10, top + 6, col(0x9098A4, 0.95), sub, hpx)
-  if not ust.present then return end
+  -- Nothing to map (no UF8 map AND no virgin FX) → no grid.
+  if not ust.present and not ust.boot then return end
 
-  local gridTop = top + 6 + subH + 12
+  -- V-Pot bank selector row: the 8 Top-Soft-Key banks, current one bright. The
+  -- hardware Top-Soft-Keys drive this (auto-engaged Plugin Mode), so it's a
+  -- read-only indicator that the V-Pot row below follows.
+  local bankPx = floor(11 * fontScale() + 0.5)
+  local bankY  = top + 6 + subH + 6
+  local bankH  = floor(bankPx + 8 * fontScale() + 0.5)
+  do
+    local _, glh = measure("V-Pot Bank", bankPx)
+    dtext(10, bankY + (bankH - glh) / 2, col(0x8890A0, 0.85), "V-Pot Bank", bankPx)
+    local bx0 = 10 + measure("V-Pot Bank", bankPx) + 10
+    local bw  = floor(22 * fontScale() + 0.5)
+    for b = 0, 7 do
+      local bx  = bx0 + b * (bw + 4)
+      local on  = (b == ust.vpotBank)
+      rect(bx, bankY, bw, bankH, col(on and UF8_ACCENT or 0x2A2A30, on and 0.9 or 1))
+      local hs = tostring(b + 1)
+      local tw, th = measure(hs, bankPx)
+      dtext(bx + (bw - tw) / 2, bankY + (bankH - th) / 2,
+            col(on and 0x121214 or 0x9098A4, on and 1 or 0.8), hs, bankPx)
+    end
+  end
+
+  local gridTop = bankY + bankH + 10
   local px      = floor(12 * fontScale() + 0.5)
   local lblPx   = floor(11 * fontScale() + 0.5)
   local rowH    = floor(px + 15 * fontScale() + 0.5)
@@ -1019,6 +1075,13 @@ local function renderUf8Grid(ust, uasn)
     for s = 0, 7 do
       local cx = Lw + s * colW
       if s > 0 then rect(cx, ry, 1, rowH, col(0x2A2A30, 0.8)) end
+
+      -- Armed-learn pulse on the cell.
+      if uf8Learn == (kd.k * 8 + s) then
+        local pulse = 0.22 + 0.22 * math.abs((frame % 50) / 25 - 1)
+        rect(cx + 1, ry + 1, colW - 2, rowH - 2, col(0xFFFFFF, pulse))
+      end
+
       local a = uasn[s] and uasn[s][kd.k]
       if a and a.name ~= "" then
         local nm    = fit(a.name, colW - (a.inv and 18 or 10), px)
@@ -1033,7 +1096,25 @@ local function renderUf8Grid(ust, uasn)
         local _, eh = measure(em, px)
         dtext(cx + 6, ry + (rowH - eh) / 2, col(0x60656E, 0.7), em, px)
       end
+
+      uf8Rects[#uf8Rects + 1] =
+        { kind = kd.k, strip = s, x = cx, y = ry, w = colW, h = rowH }
     end
+  end
+
+  -- Learn banner (transient; UF8 has no param panel / Touch-to-Learn here). The
+  -- boot hint lives in the subheader so it doesn't permanently cover anything.
+  if uf8Learn >= 0 then
+    local kd  = UF8_KINDS[floor(uf8Learn / 8) + 1]
+    local stp = (uf8Learn % 8) + 1
+    local msg = "Learning " .. ((kd and kd.l) or "?") .. " " .. stp
+             .. "  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
+             .. "   (click again or Esc to cancel)"
+    local mpx = floor(13 * fontScale() + 0.5)
+    local tw, th = measure(msg, mpx)
+    local bx, by = 8, top + 4
+    rect(bx, by, tw + 20, th + 8, col(0x101418, 0.9))
+    dtext(bx + 10, by + 4, col(0xFFD060, 1), msg, mpx)
   end
 end
 
@@ -1057,6 +1138,8 @@ local function render()
   frame = frame + 1
   local hl = reaper.GetExtState(SECT, "hud_learn")
   learnIdx = (hl ~= "" and tonumber(hl)) or -1
+  local ul = reaper.GetExtState(SECT, "hud_uf8_learn")
+  uf8Learn = (ul ~= "" and tonumber(ul)) or -1
   local hint = reaper.GetExtState(SECT, "hud_hint")
   if hint ~= "" then hintText = hint; hintFrames = 90
     reaper.SetExtState(SECT, "hud_hint", "", false) end
@@ -1080,8 +1163,16 @@ local function render()
 
   drawTabs(st, ust)
 
+  -- Tell the extension when the UF8 tab is showing so it auto-engages UF8
+  -- Plugin Mode (hardware Top-Soft-Keys drive V-Pot banks). Edge-write only.
+  local onUf8 = (activeTab == "uf8")
+  if lastUf8Tab ~= onUf8 then
+    lastUf8Tab = onUf8
+    reaper.SetExtState(SECT, "hud_uf8_tab", onUf8 and "1" or "0", false)
+  end
+
   -- UF8 device tab: own strip-grid renderer, independent of the UC1 geometry.
-  if activeTab == "uf8" then
+  if onUf8 then
     renderUf8Grid(ust, uasn)
     return
   end
@@ -1150,8 +1241,9 @@ end
 -- Right-click menu (ImGui popup). Dock is handled by ReaImGui's built-in
 -- title-bar context menu, so it's no longer in here.
 ------------------------------------------------------------------------
-local POPUP      = "##hud_ctx"
-local CTRL_POPUP = "##hud_ctrl_ctx"
+local POPUP          = "##hud_ctx"
+local CTRL_POPUP     = "##hud_ctrl_ctx"
+local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 
 -- List / parameter-panel body text size (Medium = current default). Chrome
 -- (titles, badge, buttons) is unaffected.
@@ -1281,6 +1373,55 @@ local function drawControlContextMenu()
   reaper.ImGui_PopStyleVar(ctx, 3)
 end
 
+-- UF8 grid cell right-click menu: Learn / Invert / Fill sequential / Unbind.
+-- Acts on (ctxUf8Kind, ctxUf8Strip) at the live banks (resolved C++-side) via
+-- the hud_cmd channel. UF8 has no modifier layers and no rename (the grid shows
+-- the plug-in's own param name, not a per-control label).
+local function drawUf8ControlContextMenu()
+  if ctxUf8Kind < 0 then return end
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 10, 7)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
+  if not reaper.ImGui_BeginPopup(ctx, UF8_CTRL_POPUP) then
+    reaper.ImGui_PopStyleVar(ctx, 3)
+    return
+  end
+
+  local uasn   = readUf8Assign()
+  local a      = uasn[ctxUf8Strip] and uasn[ctxUf8Strip][ctxUf8Kind]
+  local mapped = (a ~= nil and a.name ~= "")
+  local kd     = UF8_KINDS[ctxUf8Kind + 1]
+
+  -- Header (disabled, informational): "<kind> <strip>  →  <param>".
+  reaper.ImGui_BeginDisabled(ctx)
+  local hdr = ((kd and kd.l) or "Cell") .. " " .. (ctxUf8Strip + 1)
+  if mapped then hdr = hdr .. "  \xE2\x86\x92  " .. a.name end
+  reaper.ImGui_MenuItem(ctx, hdr)
+  reaper.ImGui_EndDisabled(ctx)
+  reaper.ImGui_Separator(ctx)
+
+  if reaper.ImGui_MenuItem(ctx, "Learn (wiggle a parameter)") then
+    sendCmd("uf8learn;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
+  end
+  if not mapped then reaper.ImGui_BeginDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Invert", nil, mapped and a.inv or false) then
+    sendCmd("uf8invert;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
+  end
+  -- Fill sequential: only for strips 1..7 (binds strips to the right).
+  if ctxUf8Strip >= 7 then reaper.ImGui_BeginDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Fill sequential \xE2\x86\x92") then
+    sendCmd("uf8fill;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
+  end
+  if ctxUf8Strip >= 7 then reaper.ImGui_EndDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Unbind") then
+    sendCmd("uf8unbind;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
+  end
+  if not mapped then reaper.ImGui_EndDisabled(ctx) end
+
+  reaper.ImGui_EndPopup(ctx)
+  reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
 ------------------------------------------------------------------------
 -- Geometry persistence (own keys → coexists with gfx HUD).
 ------------------------------------------------------------------------
@@ -1349,18 +1490,32 @@ local function loop()
       if reaper.ImGui_IsMouseClicked(ctx, 1) and ly >= 0 then
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
-        -- Over a control → per-control menu (Learn/Invert/Unbind); else the
-        -- main HUD menu.
-        local cidx = controlAt(lx, ly)
-        if cidx then
-          ctxCtrlIdx = cidx
-          reaper.ImGui_OpenPopup(ctx, CTRL_POPUP)
+        if activeTab == "uf8" then
+          -- Over a grid cell → per-cell menu (Learn/Invert/Fill/Unbind).
+          local k, s = uf8CellAt(lx, ly)
+          if k then
+            ctxUf8Kind, ctxUf8Strip = k, s
+            reaper.ImGui_OpenPopup(ctx, UF8_CTRL_POPUP)
+          else
+            reaper.ImGui_OpenPopup(ctx, POPUP)
+          end
         else
-          reaper.ImGui_OpenPopup(ctx, POPUP)
+          -- Over a control → per-control menu (Learn/Invert/Unbind); else the
+          -- main HUD menu.
+          local cidx = controlAt(lx, ly)
+          if cidx then
+            ctxCtrlIdx = cidx
+            reaper.ImGui_OpenPopup(ctx, CTRL_POPUP)
+          else
+            reaper.ImGui_OpenPopup(ctx, POPUP)
+          end
         end
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
+        if activeTab == "uf8" then
+          -- Tab strip first (to switch away), then grid cell arm/cancel.
+          if not handleTabClick(lx, ly) then handleUf8CellClick(lx, ly) end
         -- Top toggle buttons first, then param-panel row, then tab, then control.
-        if handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+        elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
         elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
           handleParamClick(lx, ly)
         elseif not handleTabClick(lx, ly) then
@@ -1397,6 +1552,7 @@ local function loop()
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
       if selectedParam >= 0 then selectedParam = -1
       elseif paramFilter ~= "" then paramFilter = ""
+      elseif uf8Learn >= 0 then sendCmd("uf8cancel")
       elseif learnIdx >= 0 then sendCmd("cancel") end
     end
 
@@ -1404,6 +1560,7 @@ local function loop()
     render()
     drawContextMenu()
     drawControlContextMenu()
+    drawUf8ControlContextMenu()
 
     -- Persist geometry on change.
     local px, py = reaper.ImGui_GetWindowPos(ctx)
@@ -1425,6 +1582,7 @@ end
 shutdown = function()
   reaper.SetExtState(SECT, RUNKEY, "0", false)
   reaper.SetExtState(SECT, "hud_touch_learn", "0", false)   -- don't leave UC1 inert
+  reaper.SetExtState(SECT, "hud_uf8_tab", "0", false)       -- let C++ revert Plugin Mode
   setToggle(false)
 end
 

@@ -7650,8 +7650,12 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
 //   stateOut : "UF8;<present>;<faderBank>;<vpotBank>;<short>"
 //   assignOut: one line per MAPPED control "<strip>;<kind>;<paramName>;<inv>"
 //              kind 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel; strip 0..7.
+// bootShort: when no uf8Mode map is present but a virgin FX is under the cursor,
+// the caller passes its short name so the grid renders armable em-dash cells +
+// a "Map <name>" banner (the CS/BC-style bootstrap). Empty = nothing to map.
+// State: "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<short>".
 void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
-                    int faderBank, int vpotBank,
+                    int faderBank, int vpotBank, const char* bootShort,
                     std::string& stateOut, std::string& assignOut)
 {
     auto*       tr = static_cast<MediaTrack*>(trV);
@@ -7660,11 +7664,13 @@ void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
                      && ValidatePtr2(nullptr, tr, "MediaTrack*");
     const int fb = std::clamp(faderBank, 0, uf8::kUserUf8FaderBankCount - 1);
     const int vb = std::clamp(vpotBank,  0, uf8::kUserUf8VpotBankCount  - 1);
-    const char* shortNm = (valid && !um->displayShort.empty())
-                        ? um->displayShort.c_str() : "";
-    char head[160];
-    std::snprintf(head, sizeof(head), "UF8;%d;%d;%d;%s",
-                  valid ? 1 : 0, fb, vb, shortNm);
+    const bool  boot = !valid && bootShort && bootShort[0];
+    const char* shortNm = valid
+                        ? (um->displayShort.empty() ? "" : um->displayShort.c_str())
+                        : (boot ? bootShort : "");
+    char head[224];
+    std::snprintf(head, sizeof(head), "UF8;%d;%d;%d;%d;%s",
+                  valid ? 1 : 0, fb, vb, boot ? 1 : 0, shortNm);
     stateOut = head;
 
     assignOut.clear();
@@ -7690,6 +7696,375 @@ void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
         emit(s, 3, st.cutVst3Param,   st.cutInvert);
         emit(s, 4, st.selVst3Param,   st.selInvert);
     }
+}
+
+// ===== UF8 device-tab interactivity (Phase 2) ============================
+// Learn / unbind / invert / fill-sequential against the LIVE UF8 plug-in map
+// on the focused track, decoupled from g_editingMatch (Settings state) —
+// mirrors the UC1 hud* family but targets UserUf8Map. UF8 has NO modifier
+// layers (fxEffectiveVpot/Strip are identity shims).
+//
+// IMPORTANT: `kind` here is the HUD / publisher encoding (the same one
+// hudPublishUf8_ emits + the Lua grid rows use), NOT the Settings
+// Uf8Control::Kind enum:  0 = V-Pot  1 = Fader  2 = Solo  3 = Cut  4 = Sel.
+//
+// Banks: V-Pot is (faderBank, vpotBank, strip); Fader/Solo/Cut/Sel are only
+// (faderBank, strip). The caller (onTimer) reads fb/vb live from
+// g_uf8FaderBank / g_softKeyBank so the target follows Bank ←/→ + Top-Soft-Key.
+// Only EXISTING UF8 (uf8Mode) maps are mutable — there is no virgin-create
+// bootstrap here (the publisher only marks present=1 when a UF8 map exists).
+struct Uf8HudFieldPtrs { int* param = nullptr; bool* invert = nullptr; };
+static Uf8HudFieldPtrs uf8HudFieldPtrs_(uf8::UserUf8Map& u, int kind,
+                                        int fb, int vb, int strip)
+{
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount) return {};
+    if (strip < 0 || strip >= 8) return {};
+    if (kind == 0) {                                  // V-Pot — bank-scoped
+        if (vb < 0 || vb >= uf8::kUserUf8VpotBankCount) return {};
+        auto& s = u.banks.banks[fb][vb][strip];
+        return { &s.vst3Param, &s.inverted };
+    }
+    auto& st = u.strips[fb][strip];
+    switch (kind) {
+        case 1: return { &st.faderVst3Param, &st.faderInverted };
+        case 2: return { &st.soloVst3Param,  &st.soloInvert };
+        case 3: return { &st.cutVst3Param,   &st.cutInvert };
+        case 4: return { &st.selVst3Param,   &st.selInvert };
+    }
+    return {};
+}
+
+std::string hudShortLabel_(const char* name);   // defined later in namespace uf8
+
+// Armed UF8 learn — independent of the UC1 g_hudLearn* set (only one tab is
+// active at a time, but keeping them separate avoids cross-talk).
+bool        g_hudUf8LearnActive = false;
+int         g_hudUf8LearnKind   = -1;
+int         g_hudUf8LearnStrip  = -1;
+int         g_hudUf8LearnFb     = 0;
+int         g_hudUf8LearnVb     = 0;
+std::string g_hudUf8LearnMatch;
+int         g_hudUf8LearnTicks  = 0;
+int         g_hudUf8LearnTr     = -2;
+int         g_hudUf8LearnFx     = -1;
+int         g_hudUf8LearnParam  = -1;
+// CREATE-NEW mode: armed on a UF8 tab where no uf8Mode map exists for the
+// focused track but a virgin FX is under the cursor. The wiggled FX defines the
+// plug-in; a fresh UF8-only map (domain=None, uf8Mode=true) is created + bound.
+// Mirrors the CS/BC g_hudLearnCreateDom bootstrap.
+bool        g_hudUf8LearnCreate = false;
+
+void hudUf8CancelLearn_()
+{
+    g_hudUf8LearnActive = false;
+    g_hudUf8LearnKind = -1; g_hudUf8LearnStrip = -1;
+    g_hudUf8LearnFb = 0;    g_hudUf8LearnVb = 0;
+    g_hudUf8LearnMatch.clear();
+    g_hudUf8LearnTicks = 0;
+    g_hudUf8LearnCreate = false;
+}
+
+// Resolve the live UF8 target (tr+fx) to the owning USER-map match. UF8 maps
+// are always user maps (uf8Mode opt-in), so a missing map = nothing to do.
+static bool hudUf8ResolveMatch_(void* trV, int fx, std::string& outMatch)
+{
+    auto* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name))) return false;
+    const uf8::UserPluginMap* um = uf8::user_plugins::lookupOwnedByName(name);
+    if (!um) return false;
+    outMatch = um->match;
+    return true;
+}
+
+// Write vst3Param onto the (kind, fb, vb, strip) field of the user map `match`.
+// upsert + save so the binding sticks + the runtime cache reloads. Apply=true.
+bool hudUf8BindMatch_(const std::string& match, int kind, int fb, int vb,
+                      int strip, int vst3Param)
+{
+    if (match.empty() || vst3Param < 0) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto p = uf8HudFieldPtrs_(m.uf8, kind, fb, vb, strip);
+        if (!p.param) return false;
+        *p.param = vst3Param;
+        if (p.invert) *p.invert = false;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Arm a UF8 learn for cell (kind, strip) at the live banks (fb, vb). trV/fx are
+// the active UF8 target the caller resolved via resolveFocusedUf8Target_. When
+// `create` is true the focused track has no uf8Mode map and the wiggle will
+// bootstrap one (the FX is defined by the wiggle, like the CS/BC create path).
+void hudUf8ArmLearn_(int kind, int strip, int fb, int vb, void* trV, int fx,
+                     bool create)
+{
+    hudUf8CancelLearn_();
+    if (create) {
+        g_hudUf8LearnActive = true;
+        g_hudUf8LearnCreate = true;
+        g_hudUf8LearnKind   = kind;
+        g_hudUf8LearnStrip  = strip;
+        g_hudUf8LearnFb     = fb;
+        g_hudUf8LearnVb     = vb;
+        g_hudUf8LearnMatch.clear();
+        g_hudUf8LearnTicks  = 600;
+        int t = -1, f = -1, p = -1;
+        if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p; }
+        else                              { g_hudUf8LearnTr = -1; g_hudUf8LearnFx = -1; g_hudUf8LearnParam = -1; }
+        return;
+    }
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return;   // no UF8 map → no-op
+    g_hudUf8LearnActive = true;
+    g_hudUf8LearnKind   = kind;
+    g_hudUf8LearnStrip  = strip;
+    g_hudUf8LearnFb     = fb;
+    g_hudUf8LearnVb     = vb;
+    g_hudUf8LearnMatch  = match;
+    g_hudUf8LearnTicks  = 600;          // ~20 s at the 30 Hz onTimer rate
+    int t = -1, f = -1, p = -1;
+    if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p; }
+    else                              { g_hudUf8LearnTr = -1; g_hudUf8LearnFx = -1; g_hudUf8LearnParam = -1; }
+}
+
+// CREATE-NEW bind for the UF8 tab: the user armed a cell on a track with no
+// uf8Mode map and wiggled a param on a virgin plug-in. Build a fresh UF8-only
+// map (domain=None, uf8Mode=true) for the wiggled FX with a param snapshot, bind
+// the param onto the cell, upsert + save. Mirrors hudLearnCreateAndBind_ (CS/BC)
+// but writes the UserUf8Map field instead of a Link slot.
+bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
+                          int strip, int vst3Param)
+{
+    if (!tr || fx < 0 || vst3Param < 0) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return false;
+    const std::string match = name;
+    if (user_plugins::collidesWithBuiltin(match)) return false;   // SSL built-in
+    // Race / double-fire: a map for this plug-in already exists → just bind.
+    for (const auto& ex : user_plugins::get().maps)
+        if (ex.match == match)
+            return hudUf8BindMatch_(match, kind, fb, vb, strip, vst3Param);
+
+    UserPluginMap m;
+    m.match        = match;
+    m.displayShort = hudShortLabel_(name);
+    m.domain       = uf8::Domain::None;   // UF8-only strip-mode map
+    m.uf8Mode      = true;
+    m.isDefault    = false;
+
+    if (!uf8::fxIsAcustica(tr, fx)) {
+        const int n = TrackFX_GetNumParams(tr, fx);
+        m.paramSnapshot.reserve(static_cast<size_t>(n));
+        char pn[256];
+        for (int p = 0; p < n; ++p) {
+            UserParamInfo pi{};
+            pi.vst3Param = p;
+            if (TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn))) pi.name = pn;
+            if (isReaperMidiParam_(pi.name.c_str())) continue;
+            double mn = 0, mx = 1, def = 0;
+            TrackFX_GetParamEx(tr, fx, p, &mn, &mx, &def);
+            const double range = mx - mn;
+            pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
+            double step = 0, smallStep = 0, largeStep = 0; bool isToggle = false;
+            TrackFX_GetParameterStepSizes(tr, fx, p, &step, &smallStep,
+                                          &largeStep, &isToggle);
+            pi.wasEnum = isToggle || step >= 0.5;
+            m.paramSnapshot.push_back(std::move(pi));
+        }
+        m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
+    }
+
+    auto fp = uf8HudFieldPtrs_(m.uf8, kind, fb, vb, strip);
+    if (!fp.param) return false;
+    *fp.param = vst3Param;
+    if (fp.invert) *fp.invert = false;
+
+    user_plugins::upsert(std::move(m));
+    user_plugins::save();
+    return true;
+}
+
+// Poll for the wiggle. Returns true the tick a bind lands. Mirrors hudLearnTick_
+// but for the UF8 cell. The wiggled FX must match the armed plug-in identity.
+bool hudUf8LearnTick_()
+{
+    if (!g_hudUf8LearnActive) return false;
+    if (--g_hudUf8LearnTicks <= 0) { hudUf8CancelLearn_(); return false; }
+    int t = -1, f = -1, p = -1;
+    if (!GetLastTouchedFX(&t, &f, &p)) return false;
+    if (t == g_hudUf8LearnTr && f == g_hudUf8LearnFx && p == g_hudUf8LearnParam) return false;
+    g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    if (!tr) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
+    // fresh UF8-only map for it, no match filter.
+    if (g_hudUf8LearnCreate) {
+        if (hudUf8CreateAndBind_(tr, f, g_hudUf8LearnKind, g_hudUf8LearnFb,
+                                 g_hudUf8LearnVb, g_hudUf8LearnStrip, p)) {
+            hudUf8CancelLearn_();
+            return true;
+        }
+        return false;
+    }
+    if (std::string(name).find(g_hudUf8LearnMatch) == std::string::npos) return false;
+    if (hudUf8BindMatch_(g_hudUf8LearnMatch, g_hudUf8LearnKind, g_hudUf8LearnFb,
+                         g_hudUf8LearnVb, g_hudUf8LearnStrip, p)) {
+        hudUf8CancelLearn_();
+        return true;
+    }
+    return false;
+}
+
+// Armed cell encoded for the companion highlight (kind*8 + strip), -1 = none.
+int hudUf8LearnArmed_()
+{
+    if (!g_hudUf8LearnActive) return -1;
+    return g_hudUf8LearnKind * 8 + g_hudUf8LearnStrip;
+}
+
+// Clear the cell's mapping. V-Pot clears the whole slot (label/colour/travel
+// reset with the binding, matching the Settings unbindUf8_); the strip kinds
+// clear just {param, invert}. upsert + save. Returns true when changed.
+bool hudUf8UnbindMatch_(const std::string& match, int kind, int fb, int vb, int strip)
+{
+    if (match.empty()) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        if (kind == 0) {
+            if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount
+             || vb < 0 || vb >= uf8::kUserUf8VpotBankCount
+             || strip < 0 || strip >= 8) return false;
+            m.uf8.banks.banks[fb][vb][strip] = uf8::UserUf8BankSlot{};
+            uf8::user_plugins::upsert(m);
+            uf8::user_plugins::save();
+            return true;
+        }
+        auto p = uf8HudFieldPtrs_(m.uf8, kind, fb, vb, strip);
+        if (!p.param) return false;
+        *p.param = -1;
+        if (p.invert) *p.invert = false;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Toggle the cell's invert flag. No-op when the cell isn't mapped.
+bool hudUf8InvertMatch_(const std::string& match, int kind, int fb, int vb, int strip)
+{
+    if (match.empty()) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto p = uf8HudFieldPtrs_(m.uf8, kind, fb, vb, strip);
+        if (!p.param || !p.invert || *p.param < 0) return false;
+        *p.invert = !*p.invert;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+bool hudUf8Unbind_(int kind, int strip, int fb, int vb, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    return hudUf8UnbindMatch_(match, kind, fb, vb, strip);
+}
+bool hudUf8Invert_(int kind, int strip, int fb, int vb, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    return hudUf8InvertMatch_(match, kind, fb, vb, strip);
+}
+
+// "Fill sequential" for a UF8 row — when cell (kind, strip) is mapped to a
+// param whose name carries a digit run ("CH1 Volume"), bind strips to the right
+// to "CH2 Volume", "CH3 Volume", … (width-preserving). Decoupled from the
+// Settings fillSequentialUf8_ + g_editingMatch: param names come live from
+// TrackFX_GetParamName on the resolved target. Propagates the source cell's
+// invert flag (the simpler subset of the Settings version, which also carried
+// colour/travel — those aren't surfaced in the HUD). Returns strips bound.
+int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || strip < 0 || strip >= 7) return 0;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return 0;
+
+    int curParam = -1;
+    bool srcInv = false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != match) continue;
+        auto p = uf8HudFieldPtrs_(const_cast<uf8::UserUf8Map&>(m.uf8),
+                                  kind, fb, vb, strip);
+        if (p.param)  curParam = *p.param;
+        if (p.invert) srcInv   = *p.invert;
+        break;
+    }
+    if (curParam < 0) return 0;
+
+    char curName[256] = {0};
+    if (!TrackFX_GetParamName(tr, fx, curParam, curName, sizeof(curName))) return 0;
+    const std::string base(curName);
+
+    size_t ds = std::string::npos, de = 0;
+    for (size_t i = 0; i < base.size(); ++i) {
+        if (std::isdigit(static_cast<unsigned char>(base[i]))) {
+            ds = i; de = i + 1;
+            while (de < base.size() &&
+                   std::isdigit(static_cast<unsigned char>(base[de]))) ++de;
+            break;
+        }
+    }
+    if (ds == std::string::npos) return 0;
+    const int curNum = std::atoi(base.substr(ds, de - ds).c_str());
+    const int width  = static_cast<int>(de - ds);
+    const std::string prefix = base.substr(0, ds);
+    const std::string suffix = base.substr(de);
+
+    const int total = TrackFX_GetNumParams(tr, fx);
+    if (total <= 0) return 0;
+
+    auto cat = uf8::user_plugins::get();   // copy
+    uf8::UserPluginMap* editing = nullptr;
+    for (auto& m : cat.maps) if (m.match == match) { editing = &m; break; }
+    if (!editing) return 0;
+
+    int  filled = 0;
+    char nm[256];
+    for (int s = strip + 1; s < 8; ++s) {
+        const int targetNum = curNum + (s - strip);
+        char numBuf[16];
+        snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
+        const std::string target = prefix + numBuf + suffix;
+        int found = -1;
+        for (int p = 0; p < total; ++p)
+            if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) && target == nm) { found = p; break; }
+        if (found < 0) continue;
+        auto dp = uf8HudFieldPtrs_(editing->uf8, kind, fb, vb, s);
+        if (dp.param) { *dp.param = found; if (dp.invert) *dp.invert = srcInv; ++filled; }
+    }
+    if (filled > 0) {
+        uf8::user_plugins::upsert(*editing);
+        uf8::user_plugins::save();
+    }
+    return filled;
 }
 
 // ---- Assignment-HUD interactivity: click-a-control + wiggle-to-learn -----
@@ -14406,10 +14781,11 @@ void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
     uf8::hudPublishUc1_(csTr, csFx, bcTr, bcFx, focusDom, stateOut, assignOut);
 }
 void reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
-                            int faderBank, int vpotBank,
+                            int faderBank, int vpotBank, const char* bootShort,
                             std::string& stateOut, std::string& assignOut)
 {
-    uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, stateOut, assignOut);
+    uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, bootShort,
+                        stateOut, assignOut);
 }
 
 // Assignment-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
@@ -14438,6 +14814,30 @@ bool reasixty_hudRename(int idx, int layer, const char* label,
                         void* csTr, int csFx, void* bcTr, int bcFx)
 {
     return uf8::hudRename_(idx, layer, label, csTr, csFx, bcTr, bcFx);
+}
+
+// UF8 device-tab interactivity (Phase 2). kind = HUD encoding
+// (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel); fb/vb = live fader/V-Pot banks; tr/fx =
+// the active UF8 target resolved via resolveFocusedUf8Target_.
+void reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr,
+                             int fx, bool create)
+{
+    uf8::hudUf8ArmLearn_(kind, strip, fb, vb, tr, fx, create);
+}
+bool reasixty_hudUf8LearnTick()   { return uf8::hudUf8LearnTick_(); }
+int  reasixty_hudUf8LearnArmed()  { return uf8::hudUf8LearnArmed_(); }
+void reasixty_hudUf8CancelLearn() { uf8::hudUf8CancelLearn_(); }
+bool reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx)
+{
+    return uf8::hudUf8Unbind_(kind, strip, fb, vb, tr, fx);
+}
+bool reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx)
+{
+    return uf8::hudUf8Invert_(kind, strip, fb, vb, tr, fx);
+}
+int reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx)
+{
+    return uf8::hudUf8FillSeq_(kind, strip, fb, vb, tr, fx);
 }
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its
