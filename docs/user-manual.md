@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.27
+date: v0.1.28
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.27. Earlier manuals (anything dated before 2026-06-15) are superseded.
+This manual documents Rea-Sixty v0.1.28. Earlier manuals (anything dated before 2026-06-16) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.1.27.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.1.27.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.1.27.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.1.28.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.1.28.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.1.28.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
 
 ## Enabling the surface
 
@@ -773,7 +773,7 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 A user-mapped UC1 control can carry **three independent overlays** — *Normal*, *Option*, *Control* — so the same physical knob or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on a held keyboard modifier.
 
 - **Editing:** the editor's layer tab strip selects which layer you're editing; every per-control edit (bind, invert, Display label, knob travel, push-cycle) applies to the selected layer. Controls with no overlay on the active layer show a dim "ghost" ring — at runtime they inherit their Normal mapping.
-- **Enabling at runtime:** tick *Settings → Device → Keyboard Options → "Hold Option / Control for the FX-Learn layer"*. Then holding **Option/Alt** selects the Option layer and **Control** the Control layer; both-or-neither resolves to Normal. The held modifier drives dispatch, the UC1 LCD readout, and the Learn-HUD's layer badge live.
+- **Enabling at runtime:** tick *Settings → Device → Keyboard Options → "Hold Option / Control for the FX-Learn layer"*. Then holding **Option/Alt** selects the Option layer and **Control** the Control layer; both-or-neither resolves to Normal. The held modifier drives dispatch, the UC1 LCD readout, and the Learn-HUD's layer badge live. *(Windows: **AltGr** — the right Alt on European layouts — engages the Option layer, even though Windows reports it as Ctrl+Alt.)*
 - **Fallback:** an overlay left unmapped passes through to the Normal mapping for that control, so you only override the controls you want different under a modifier.
 - **Scope:** UC1 only. The Display label (custom name) is **per layer** — each layer can show its own name on the UC1 readout / Learn-HUD.
 
@@ -987,25 +987,27 @@ Enable via *Settings → "Show MCP Inserts overlay"*. Controls (the CS / BC colo
 
 ## Focused-track panel
 
-A frameless, Gridbox-style box that floats on the Arrange (or any window you drag it onto), showing the surface-focused track's **name**, its active **CS / BC plug-in names**, and the last-touched parameter per domain. A touched parameter shows your custom **Display label** when one is set (for the held FX-Learn layer), matching the surface readout.
+A frameless, Gridbox-style box that floats on the Arrange (or any window you drag it onto), showing the surface-focused track's **name**, its active **CS / BC plug-in** (as **short names** — your FX-Learn `displayShort`, with the SSL factory plug-ins shown as **CS2** / **BC2**), and the last-touched parameter per domain. A touched parameter shows your custom **Display label** when one is set (for the held FX-Learn layer), matching the surface readout.
 
 Enable via *Settings → "Show focused-track panel"*. Drag the body to move, drag the edges to resize; position + size persist. Right-click menu:
 
 - **Layout** — Two lines (CS / BC) or One line.
-- **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*.
+- **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*; **Before / After CS/BC** (whether the track name sits before or after the plug-in tag).
 - **Customize** — Font size, Corner radius, Background / Border / CS / BC colour.
-- **Move to Transport**, **Close panel**.
+- **Load on startup** — auto-launch the panel when REAPER starts (writes a marked one-liner into `Scripts/__startup.lua`; untick to remove it).
+- **Close panel**.
 
 ## Learn-HUD
 
 A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each knob / button does without opening Settings.
 
 - Toggle with the **`learn_hud_toggle`** built-in (bind it to a surface button) or the REAPER action **"Rea-Sixty: Toggle Learn-HUD"** (`REASIXTY_LEARN_HUD_TOGGLE`). There is no Settings checkbox.
-- **CS / BC tabs** at the top, auto-following the focused domain (click to pin one).
+- **CS / BC tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross.
 - Each row = the SSL slot name + the bound parameter's name (or your custom Display label). Rows are grouped by section (Filter / EQ / Dynamics / Gate / I-O for CS; the Bus-Comp knobs for BC), with Dynamics + Gate in a right-hand column to mirror the hardware.
-- A **layer badge** (NORM / OPT / CTRL) shows the held FX-Learn modifier layer; the list and the badge follow it live.
-- **Right-click → Text size** (Small … Huge). The window size persists globally.
-- **Click a row, then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
+- A **layer badge** (NORM / OPT / CTRL) shows the held FX-Learn modifier layer; the list follows it live. On a modifier layer the list shows **only the controls you actually overlaid on that layer** — controls that fall through to their Normal mapping read as unmapped, so you can see at a glance what's layer-specific.
+- **Right-click → View** switches between the grouped text **List** and a hardware **Mockup** (the UC1/UF8 face). **Right-click → Text size** (Small … Huge); the menus themselves honour your *Appearance → Font Size*. The window size persists globally.
+- **Click a row (or mockup control), then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
+- **Right-click a control** (list row or mockup knob/button) for a per-control menu: **Learn** (wiggle a parameter), **Invert** (flip the control's polarity), **Rename…** (set a custom Display label; empty reverts to the default name), **Unbind**. All act on the active modifier layer; Invert / Rename / Unbind are disabled on an unmapped control, and built-in SSL maps show the factory-fixed hint.
 
 \newpage
 

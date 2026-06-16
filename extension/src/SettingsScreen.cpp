@@ -1184,11 +1184,15 @@ struct VCanvas {
     ImGui_Context*  ctx;
     ImGui_DrawList* dl;
     float           ox, oy;
+    // Uniform scale for the whole schematic. 1.0 = native (Bindings mockups);
+    // the FX-Learn mockups set <1 to fit a target size. All coords are in
+    // native canvas space and multiplied here, so callers stay unchanged.
+    float           scale = 1.0f;
 };
 
 void drawText_(VCanvas& c, float x, float y, uint32_t col, const char* text)
 {
-    ImGui_DrawList_AddText(c.dl, c.ox + x, c.oy + y, col, text);
+    ImGui_DrawList_AddText(c.dl, c.ox + x * c.scale, c.oy + y * c.scale, col, text);
 }
 
 void drawTextCentered_(VCanvas& c, float cx, float cy, uint32_t col,
@@ -1197,14 +1201,20 @@ void drawTextCentered_(VCanvas& c, float cx, float cy, uint32_t col,
     double tw = 0, th = 0;
     ImGui_CalcTextSize(c.ctx, text, &tw, &th, /*hide_after_##*/ nullptr,
                        /*wrap_width*/ nullptr);
-    drawText_(c, cx - float(tw) / 2.0f, cy - float(th) / 2.0f, col, text);
+    // cx/cy are canvas units (scaled to screen); the text-size half-offset is
+    // already in screen pixels (font scaling is handled by the pushed font), so
+    // it must NOT go through the scale again.
+    ImGui_DrawList_AddText(c.dl,
+        c.ox + cx * c.scale - float(tw) / 2.0f,
+        c.oy + cy * c.scale - float(th) / 2.0f, col, text);
 }
 
 void rect_(VCanvas& c, float x, float y, float w, float h,
            uint32_t fill, uint32_t border, double rounding = 3.0)
 {
-    const float x1 = c.ox + x, y1 = c.oy + y;
-    const float x2 = x1 + w,   y2 = y1 + h;
+    const float x1 = c.ox + x * c.scale, y1 = c.oy + y * c.scale;
+    const float x2 = x1 + w * c.scale,   y2 = y1 + h * c.scale;
+    rounding *= c.scale;
     if (fill) {
         ImGui_DrawList_AddRectFilled(c.dl, x1, y1, x2, y2, fill,
                                      &rounding, /*flags*/ nullptr);
@@ -1220,12 +1230,12 @@ void circle_(VCanvas& c, float cx, float cy, float r,
              uint32_t fill, uint32_t border)
 {
     if (fill) {
-        ImGui_DrawList_AddCircleFilled(c.dl, c.ox + cx, c.oy + cy, r,
-                                       fill, /*num_segments*/ nullptr);
+        ImGui_DrawList_AddCircleFilled(c.dl, c.ox + cx * c.scale, c.oy + cy * c.scale,
+                                       r * c.scale, fill, /*num_segments*/ nullptr);
     }
     if (border) {
-        ImGui_DrawList_AddCircle(c.dl, c.ox + cx, c.oy + cy, r,
-                                 border, /*num_segments*/ nullptr,
+        ImGui_DrawList_AddCircle(c.dl, c.ox + cx * c.scale, c.oy + cy * c.scale,
+                                 r * c.scale, border, /*num_segments*/ nullptr,
                                  /*thickness*/ nullptr);
     }
 }
@@ -1233,8 +1243,8 @@ void circle_(VCanvas& c, float cx, float cy, float r,
 void line_(VCanvas& c, float x1, float y1, float x2, float y2,
            uint32_t col, double thickness = 1.0)
 {
-    ImGui_DrawList_AddLine(c.dl, c.ox + x1, c.oy + y1,
-                           c.ox + x2, c.oy + y2, col, &thickness);
+    ImGui_DrawList_AddLine(c.dl, c.ox + x1 * c.scale, c.oy + y1 * c.scale,
+                           c.ox + x2 * c.scale, c.oy + y2 * c.scale, col, &thickness);
 }
 
 // Right-click "Copy / Paste binding" clipboard, shared between the UF8
@@ -7892,6 +7902,16 @@ bool hudLearnTick_(int activeLayer)
     return false;
 }
 
+// Small helper: the schematic's locked label font, scaled with the mockup.
+// Pushed only tightly around schematic label draws (never across a popup
+// begin/end — pushing/popping a font over a popup boundary tears the Settings
+// window down in ReaImGui). The right-click popups render OUTSIDE this push, so
+// they inherit the Settings window's base font (= the Appearance Font Size).
+static void pushSchematicLabelFont_(ImGui_Context* ctx, float scale)
+{
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0 * scale);
+}
+
 // Render the FX-Learn interactive overlay on top of one already-painted
 // UC1 control (drawUc1Face_ has already drawn the cap, ring, indicator,
 // and silk-screen label). Adds:
@@ -7910,9 +7930,16 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                      float ox, float oy,
                      const Uc1Control& ctrl,
                      const uf8::PluginMap& topo,
-                     const EditingFx& fx)
+                     const EditingFx& fx,
+                     float scale)
 {
     using namespace uf8;
+    // Scaled control geometry (draw + hit-test both flow from these, so they
+    // stay aligned with the scaled face). IDs below keep the NATIVE ctrl.cx/cy
+    // so widget ids stay stable across a scale change.
+    const float kcx = ctrl.cx * scale;
+    const float kcy = ctrl.cy * scale;
+    const float kr  = ctrl.r  * scale;
 
     const LinkSlot* slot = findSlotByLinkIdx(topo, ctrl.linkIdx);
     const int  mapped    = mappedVst3For_(ctrl.linkIdx);
@@ -7937,15 +7964,15 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const bool inheritsNormal = editingOverlay && !isMapped && !hasPushSteps
                               && mappedVst3Normal_(ctrl.linkIdx) >= 0;
 
-    // Bounding box — knob = (cx-r, cy-r, 2r, 2r); toggle/btn = (cx, cy, w, h).
+    // Bounding box (scaled) — knob = (cx-r, cy-r, 2r, 2r); toggle/btn = (cx, cy, w, h).
     float bx, by, bw, bh;
     if (ctrl.kind == Uc1Control::Knob) {
-        bx = ctrl.cx - ctrl.r;
-        by = ctrl.cy - ctrl.r;
-        bw = bh = ctrl.r * 2.0f;
+        bx = kcx - kr;
+        by = kcy - kr;
+        bw = bh = kr * 2.0f;
     } else {
-        bx = ctrl.cx; by = ctrl.cy;
-        bw = ctrl.w;  bh = ctrl.h;
+        bx = ctrl.cx * scale; by = ctrl.cy * scale;
+        bw = ctrl.w  * scale; bh = ctrl.h  * scale;
     }
 
     // State → ring colour.
@@ -7965,8 +7992,8 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
     // Ring overlay on top of drawUc1Face_'s already-painted control.
     if (ctrl.kind == Uc1Control::Knob) {
-        ImGui_DrawList_AddCircle(dl, ox + ctrl.cx, oy + ctrl.cy,
-                                 ctrl.r + 3, ringCol,
+        ImGui_DrawList_AddCircle(dl, ox + kcx, oy + kcy,
+                                 kr + 3 * scale, ringCol,
                                  /*num_segments*/ nullptr,
                                  /*thickness*/ nullptr);
     } else {
@@ -8009,9 +8036,11 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             break;
         }
         if (slotInverted) {
+            pushSchematicLabelFont_(ctx, scale);
             ImGui_DrawList_AddText(dl,
                 ox + bx + bw - 6, oy + by - 4,
                 0xFFC04CFF, "i");
+            ImGui_PopFont(ctx);
         }
     }
 
@@ -8023,10 +8052,10 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     // of the ring. Curve presence is hinted by a small dot in the centre
     // (the full curve editor lives in the right-click "Advanced…" popup).
     if (isMapped && ctrl.kind == Uc1Control::Knob && slotKnobCustom) {
-        const double cxR = ox + ctrl.cx;
-        const double cyR = oy + ctrl.cy;
-        const double rOuter = ctrl.r + 6.0;
-        const double rInner = ctrl.r + 2.0;
+        const double cxR = ox + kcx;
+        const double cyR = oy + kcy;
+        const double rOuter = kr + 6.0 * scale;
+        const double rInner = kr + 2.0 * scale;
         // Standard rotary knob layout: min at 7 o'clock (lower-left),
         // sweep clockwise *over the top* through 12 o'clock to 5 o'clock
         // (lower-right). In ImGui's y-down screen-space angle convention
@@ -8974,7 +9003,8 @@ const Uf8Control* uf8Controls_(int* outCount)
 void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                      float ox, float oy,
                      const Uf8Control& ctrl,
-                     const EditingFx& fx)
+                     const EditingFx& fx,
+                     float scale)
 {
     // Live-follow hardware: bank index is the current g_softKeyBank,
     // so a hardware TopSoftKey press immediately re-renders the mockup
@@ -8992,8 +9022,10 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     // Normal ghost ring on the UF8 schematic.
     const bool inheritsNormal = false;
 
-    const float bx = ctrl.cx, by = ctrl.cy;
-    const float bw = ctrl.w,  bh = ctrl.h;
+    // Scaled bbox — every draw + hit-test below flows from these, so they stay
+    // aligned with the scaled face.
+    const float bx = ctrl.cx * scale, by = ctrl.cy * scale;
+    const float bw = ctrl.w  * scale, bh = ctrl.h  * scale;
 
     // State → ring colour
     uint32_t ringCol;
@@ -9036,8 +9068,10 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         std::string label = getUf8TopSoftKeyLabel_(ctrl.strip);
         if (label.size() > 8) label.resize(8);
         if (!label.empty()) {
+            pushSchematicLabelFont_(ctx, scale);
             ImGui_DrawList_AddText(dl, ox + bx + 4, oy + by + 4,
                                    0x88CCEEFF, label.c_str());
+            ImGui_PopFont(ctx);
         }
 
         // Active-bank ring — Frank 2026-05-13: "anzeigen, welche soft-
@@ -9238,9 +9272,11 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
         (ctrl.kind == Uf8Control::Fader || ctrl.kind == Uf8Control::VPot))
     {
         if (uf8Inverted_(ctrl.kind, ctrl.strip, bank)) {
+            pushSchematicLabelFont_(ctx, scale);
             ImGui_DrawList_AddText(dl,
                 ox + bx + bw - 6, oy + by - 4,
                 0xFFC04CFF, "i");
+            ImGui_PopFont(ctx);
         }
     }
 
@@ -9846,7 +9882,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 // in banks[currentBank][strip].stripColour; 0 = no override (falls
 // back to a dim grey marker so the user can still see the cell).
 void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
-                              float ox, float oy)
+                              float ox, float oy, float scale)
 {
     using uf8::user_plugins::get;
     const int bank = reasixty_softKeyBankRaw();
@@ -9855,10 +9891,11 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
     for (int s = 0; s < 8; ++s) {
         const float cx   = uf8StripCx_(s);
         const float colX = cx - kUf8StripW / 2.0f;
-        const float bx   = colX + 6;
-        const float by   = kUf8ScribbleY + kUf8ScribbleH - kBarH - 2;
-        const float bw   = kUf8StripW - 12;
-        const float bh   = kBarH;
+        // Scaled to match the scaled UF8 face (draw + hit-test flow from these).
+        const float bx   = (colX + 6) * scale;
+        const float by   = (kUf8ScribbleY + kUf8ScribbleH - kBarH - 2) * scale;
+        const float bw   = (kUf8StripW - 12) * scale;
+        const float bh   = kBarH * scale;
 
         const uint32_t rgb = getUf8StripColour_(s, bank);
         // reaimgui's DrawList colours are RGBA-packed (0xRRGGBBAA),
@@ -10064,32 +10101,34 @@ void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
     const float ox = float(oxd), oy = float(oyd);
 
+    // Same width as the UC1 mockup (730), uniformly scaled — native is
+    // kUf8FaceW(860)×kUf8FaceH(520), so 730/860 ≈ 0.849 → ~730×441. Frank 2026-06-16.
+    constexpr float kScale = 730.0f / kUf8FaceW;
+
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
-    VCanvas c { ctx, dl, ox, oy };
+    VCanvas c { ctx, dl, ox, oy, kScale };
 
-    // Lock the schematic font to 12 px so the chassis labels +
-    // per-control overlays (TopSoftKey labels etc.) stay readable
-    // when the global Font Size picker is set higher. Same rationale
-    // as drawUf8Vector / drawUc1*Vector. Frank 2026-05-22.
-    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
-
+    // Face under the locked small label font; pop it before the strip bars +
+    // control overlays so their right-click popups inherit the Settings base
+    // (Appearance) font (font ops across a popup begin/end crash the Settings
+    // window in ReaImGui). Overlays re-push the small font around their labels.
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0 * kScale);
     drawUf8Face_(c);
+    ImGui_PopFont(ctx);
 
     // Strip colour bars first so the per-control overlays paint on
     // top (so the TopSoftKey's invisible-button still receives clicks
     // in its full area).
-    drawFxLearnUf8StripBars_(ctx, dl, ox, oy);
+    drawFxLearnUf8StripBars_(ctx, dl, ox, oy, kScale);
 
     int n = 0;
     const Uf8Control* tbl = uf8Controls_(&n);
     for (int i = 0; i < n; ++i) {
-        drawUf8Control_(ctx, dl, ox, oy, tbl[i], fx);
+        drawUf8Control_(ctx, dl, ox, oy, tbl[i], fx, kScale);
     }
 
-    ImGui_PopFont(ctx);
-
     ImGui_SetCursorScreenPos(ctx, oxd, oyd);
-    ImGui_Dummy(ctx, kUf8FaceW, kUf8FaceH);
+    ImGui_Dummy(ctx, kUf8FaceW * kScale, kUf8FaceH * kScale);
 }
 
 // Render the FX-Learn schematic as the UC1 hardware face. drawUc1Face_
@@ -10104,6 +10143,9 @@ void drawFxLearnSchematic_(ImGui_Context* ctx,
                            const EditingFx& fx)
 {
     constexpr float W = 860, H = 660;
+    // Mockup scaled to 730×560 (Frank 2026-06-16) — native is 860×660, so a
+    // uniform 730/860 ≈ 0.849 (660·0.849 ≈ 560). Same factor as the UF8 mockup.
+    constexpr float kScale = 730.0f / 860.0f;
 
     if (domain != uf8::Domain::ChannelStrip &&
         domain != uf8::Domain::BusComp)
@@ -10119,26 +10161,27 @@ void drawFxLearnSchematic_(ImGui_Context* ctx,
 
     ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
 
-    // Lock the schematic font to 12 px (see drawFxLearnUf8Schematic_).
-    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
-
-    // Paint the full UC1 face including the dim overlay over the
-    // off-domain section.
-    VCanvas c { ctx, dl, ox, oy };
+    // Paint the full UC1 face (incl. the dim overlay over the off-domain
+    // section) under the locked small label font — then POP it before the
+    // interactive overlays so their right-click popups inherit the Settings
+    // window's base font (= the Appearance Font Size). Pushing/popping a font
+    // across a popup begin/end tears the Settings window down in ReaImGui, so
+    // the overlays re-push the small font only tightly around their own labels.
+    VCanvas c { ctx, dl, ox, oy, kScale };
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0 * kScale);
     drawUc1Face_(c, domain);
+    ImGui_PopFont(ctx);
 
     // Interactive overlay on each in-domain control.
     for (int i = 0; i < kUc1ControlsCount; ++i) {
         const Uc1Control& ctrl = kUc1Controls[i];
         if (ctrl.domain != domain) continue;
-        drawUc1Control_(ctx, dl, ox, oy, ctrl, topo, fx);
+        drawUc1Control_(ctx, dl, ox, oy, ctrl, topo, fx, kScale);
     }
 
-    ImGui_PopFont(ctx);
-
-    // Reserve content rect so the parent BeginChild scrolls to fit.
+    // Reserve the SCALED content rect so the parent BeginChild scrolls to fit.
     ImGui_SetCursorScreenPos(ctx, oxd, oyd);
-    ImGui_Dummy(ctx, W, H);
+    ImGui_Dummy(ctx, W * kScale, H * kScale);
 }
 
 // Render the Editor-View. Pre-condition: g_editingMatch is non-empty and
@@ -11972,12 +12015,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 "surface. Carousel shows up to 11 chars of the name.");
             ImGui_Spacing(ctx);
 
-            // Raw pixels (NOT scaleW_) so the grid matches the mockup, which
-            // is a fixed 860 px raw schematic. Row = 4 widgets + 3 inter-item
-            // gaps (~8 px each); budget 145+270 ×2 + 3·~8 ≈ 854 ≤ 860, so it
-            // stays inside the mockup's existing horizontal scroll extent.
-            const double nameW   = 145.0;
-            const double assignW = 270.0;
+            // Raw pixels (NOT scaleW_) so the grid matches the mockup width.
+            // The mockup is now drawn at 730/860 of its native 860 px (Frank
+            // 2026-06-16), so scale the slot widths by the same factor → the
+            // 2×5 grid lines up under the 730 px mockup. Row = 4 widgets + 3
+            // inter-item gaps (~8 px): 2·(123+229) + 3·~8 ≈ 728.
+            constexpr double kScale = 730.0 / 860.0;
+            const double nameW   = 145.0 * kScale;
+            const double assignW = 270.0 * kScale;
 
             auto drawExtSlot = [&](int slot) {
                 ImGui_BeginGroup(ctx);

@@ -525,6 +525,17 @@ void seedFactoryDefaults_(Config& c)
         spShift.label  = "PLUG+UI";
     }
 
+    // Shift+360 → toggle the Learn-HUD (focused plug-in's assignments). Plain
+    // 360 stays the Plug-in Mixer toggle. Mirrored onto the UC1 360 button so
+    // the gesture works from either surface. Frank 2026-06-16.
+    for (ButtonId id : { ButtonId::Btn360, ButtonId::Uc1Btn360 }) {
+        auto& spShift = L1[id].shortPress[static_cast<int>(Modifier::Shift)];
+        spShift.type   = ActionType::Builtin;
+        spShift.action = "learn_hud_toggle";
+        spShift.param  = 0;
+        spShift.label  = "LEARN";
+    }
+
     // Flip long-press routes the focused track's sends/receives onto
     // V-Pots: long alone = sends (LED green when active), long+Shift =
     // receives (LED red). Behavior must be Momentary for long-press to
@@ -1665,7 +1676,7 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 // load with an empty list (no migration needed; presets are an
 // additive feature). The Bindings → Sub-Bank cell editor exposes
 // Save/Recall/Rename/Delete.
-constexpr int kCurrentBindingsVersion = 13;
+constexpr int kCurrentBindingsVersion = 14;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -1799,6 +1810,25 @@ void upgradeBackfillBankSelectorsAllLayers_(Config& c)
                           kBankLabels[i], i);
         }
     }
+}
+
+// v13 → v14: backfill Shift+360 → Learn-HUD on the UF8 + UC1 360 buttons for
+// configs seeded before this default existed. Only fills an EMPTY Shift slot,
+// so a user who already bound Shift+360 to something keeps it. Frank 2026-06-16.
+void upgradeBackfillShift360LearnHud_(Config& c)
+{
+    auto fill = [](Layer& L, ButtonId id) {
+        auto it = L.bindings.find(id);
+        if (it == L.bindings.end()) return;   // button unbound entirely → leave
+        auto& sp = it->second.shortPress[static_cast<int>(Modifier::Shift)];
+        if (!sp.action.empty()) return;        // user already uses Shift+360
+        sp.type   = ActionType::Builtin;
+        sp.action = "learn_hud_toggle";
+        sp.param  = 0;
+        sp.label  = "LEARN";
+    };
+    fill(c.layers[0], ButtonId::Btn360);
+    fill(c.layers[0], ButtonId::Uc1Btn360);
 }
 
 // v9 → v10: scrub the dead builtins out of every binding slot
@@ -2146,6 +2176,9 @@ void load()
             }
             if (tmp.version < 11) {
                 upgradeBackfillBankSelectorsAllLayers_(tmp);
+            }
+            if (tmp.version < 14) {
+                upgradeBackfillShift360LearnHud_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
