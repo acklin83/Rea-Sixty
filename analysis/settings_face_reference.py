@@ -58,6 +58,16 @@ def render(focus=None):              # focus: 'c' / 'b' / None
     def text_l(x, y, col, s, f=1.0, fnt=None):
         fnt = fnt or PF
         d.text((X(x), Y(y)), s, fill=dim(col, f), font=fnt)
+    def text_lv(x, cy, col, s, f=1.0):       # left-aligned, vertically centred on cy
+        b = d.textbbox((0, 0), s, font=PF); th = b[3]-b[1]
+        d.text((X(x), Y(cy)-th/2-b[1]), s, fill=dim(col, f), font=PF)
+    def text_rb(xr, yb, col, s, f=1.0):      # right edge xr, bottom edge yb
+        b = d.textbbox((0, 0), s, font=PF)
+        d.text((X(xr)-(b[2]-b[0]), Y(yb)-b[3]), s, fill=dim(col, f), font=PF)
+    def stepLine(pts, f=1.0):                # polyline through design-space points
+        sp = [(X(px), Y(py)) for px, py in pts]
+        for i in range(len(sp)-1):
+            d.line([sp[i], sp[i+1]], fill=dim(0x9DA2AC, 0.6*f), width=max(1, int(S)))
 
     def knob(cx, cy, r, cap, label=None, f=1.0):
         d.ellipse([X(cx-r), Y(cy-r), X(cx+r), Y(cy+r)], fill=dim(0x14181E, f),
@@ -80,28 +90,45 @@ def render(focus=None):              # focus: 'c' / 'b' / None
     # ===== LEFT column: Filters + EQ (CS) =====
     kColLx, kColLw = 12, 230
     rect(kColLx, 12, kColLw, H-24, 0x1A1E24, 0x2A3038, 6, cE)
-    knob(kColLx+70, 44, 20, kGrey, "LO-PASS", cE)
-    knob(kColLx+162, 70, 20, kGrey, "HI-PASS", cE)
+    # Two clean EQ columns: c1 = GAIN/Q (dB), c2 = FREQ + Hi-Pass + BELL +
+    # IN/TYPE — everything in c2 shares one vertical centre. c2 nudged a touch
+    # closer to c1 than the hardware. r=20.
+    c1, c2 = kColLx+70, kColLx+150
+    bx = c2 - 17                              # BELL / IN button x (centred on c2, w=34)
+    gxR, fxR = c1+20, c2+20                   # GAIN / FREQ column right edges
+    # EQ band divider lines — stepped (horizontal · 45° · horizontal) to follow
+    # the staggered columns, like the SSL 4000E silk. Drawn behind the knobs.
+    # Upper EQ (HF, HMF, IN/TYPE + its dividers) shifted +6 so HMF-Q→divider ==
+    # divider→LMF-GAIN.
+    stepLine([(kColLx+50,210),(gxR,210),(gxR+28,238),(fxR,238)], cE)   # HF | HMF (down)
+    stepLine([(kColLx+50,379),(bx-2,379)], cE)                        # HMF | LMF → IN/TYPE
+    stepLine([(kColLx+50,548),(gxR,548),(gxR+40,508),(fxR,508)], cE)   # LMF | LF (up)
+
+    knob(c1, 44, 20, kGrey, "LO-PASS", cE)
+    knob(c2, 70, 20, kGrey, "HI-PASS", cE)
     section(kColLx+14, 104, "FILTERS", cE)
-    line(kColLx+70, 122, kColLx+kColLw-8, 122, 0x383C44, 1.0, cE)
-    text_l(kColLx+14, 146, 0xB8BCC4, "HF", cE)
-    knob(kColLx+70, 154, 20, kRed, "GAIN", cE)
-    knob(kColLx+162, 182, 20, kRed, "FREQ", cE)
-    btn(kColLx+192, 146, 34, 18, "BELL", 0x252A33, 0xC0C4CC, cE)
-    text_l(kColLx+14, 224, 0xB8BCC4, "HMF", cE)
-    knob(kColLx+70, 232, 20, kGreen, "GAIN", cE)
-    knob(kColLx+162, 260, 20, kGreen, "FREQ", cE)
-    knob(kColLx+70, 300, 20, kGreen, "Q", cE)
-    btn(kColLx+192, 356, 34, 18, "TYPE", 0x252A33, 0xC0C4CC, cE)
-    btn(kColLx+192, 380, 34, 18, "IN", 0x252A33, 0xC0C4CC, cE)
-    text_l(kColLx+14, 422, 0xB8BCC4, "LMF", cE)
-    knob(kColLx+70, 430, 20, kBlue, "GAIN", cE)
-    knob(kColLx+162, 458, 20, kBlue, "FREQ", cE)
-    knob(kColLx+70, 498, 20, kBlue, "Q", cE)
-    text_l(kColLx+14, 550, 0xB8BCC4, "LF", cE)
-    knob(kColLx+162, 558, 20, kBlack, "FREQ", cE)
-    knob(kColLx+70, 598, 20, kBlack, "GAIN", cE)
-    btn(kColLx+192, 600, 34, 18, "BELL", 0x252A33, 0xC0C4CC, cE)
+    line(c1, 122, kColLx+kColLw-8, 122, 0x9DA2AC, 1.0, 0.6*cE)   # match band divider lines
+    # Band labels aligned to each band's FREQ knob height.
+    text_lv(kColLx+14, 188, 0xB8BCC4, "HF", cE)
+    knob(c1, 160, 20, kRed, "GAIN", cE)
+    knob(c2, 188, 20, kRed, "FREQ", cE)
+    btn(bx, 140, 34, 18, "BELL", 0x252A33, 0xC0C4CC, cE)   # top flush w/ HF GAIN top
+    text_lv(kColLx+14, 288, 0xB8BCC4, "HMF", cE)
+    knob(c1, 260, 20, kGreen, "GAIN", cE)
+    knob(c2, 288, 20, kGreen, "FREQ", cE)
+    knob(c1, 328, 20, kGreen, "Q", cE)
+    # EQ IN centred on c2 (like the FREQ/BELL column); TYPE just to its right.
+    btn(bx, 370, 34, 18, "IN",   0x252A33, 0xC0C4CC, cE)
+    btn(bx+38, 370, 34, 18, "TYPE", 0x252A33, 0xC0C4CC, cE)
+    text_lv(kColLx+14, 379, 0xB8BCC4, "EQ", cE)   # left of the HMF|LMF (Type/In) divider
+    text_lv(kColLx+14, 458, 0xB8BCC4, "LMF", cE)
+    knob(c1, 430, 20, kBlue, "GAIN", cE)
+    knob(c2, 458, 20, kBlue, "FREQ", cE)
+    knob(c1, 498, 20, kBlue, "Q", cE)
+    text_lv(kColLx+14, 558, 0xB8BCC4, "LF", cE)
+    knob(c2, 558, 20, kBlack, "FREQ", cE)
+    knob(c1, 598, 20, kBlack, "GAIN", cE)
+    btn(bx, 620, 34, 18, "BELL", 0x252A33, 0xC0C4CC, cE)   # bottom flush w/ LF GAIN label
 
     # ===== CENTRE column: Bus Comp (top) + Central Control (bottom) =====
     kColCx, kColCw = kColLx+kColLw+8, 360
@@ -130,8 +157,10 @@ def render(focus=None):              # focus: 'c' / 'b' / None
     knob(c1x, ry[1], 20, kAccentBC, "ATTACK", cB)
     knob(c2x, ry[1], 20, kAccentBC, "RELEASE", cB)
     knob(c1x, ry[2], 20, kAccentBC, "RATIO", cB)
-    rect(c2x-14, ry[2]-14, 28, 28, 0xE0E0E0, 0x808088, 3, cB)
-    text_c(c2x, ry[2]+26, 0x9CA0AA, "IN", cB)
+    # BC IN — 40×40 like the CS channel IN, centred on c2x at the RATIO row
+    # (flush with RELEASE / RATIO / MIX).
+    rect(c2x-20, ry[2]-20, 40, 40, 0xE0E0E0, 0x808088, 3, cB)
+    text_c(c2x, ry[2], 0x303338, "IN", cB)
     knob(c1x, ry[3], 20, kAccentBC, "S/C HPF", cB)
     knob(c2x, ry[3], 20, kAccentBC, "MIX", cB)
     # CS Input / Output gain (inside BC chassis, but CS domain → dim with CS)
@@ -159,28 +188,33 @@ def render(focus=None):              # focus: 'c' / 'b' / None
     kColRx, kColRw = kColCx+kColCw+8, 230
     rect(kColRx, 12, kColRw, H-24, 0x1A1E24, 0x2A3038, 6, cE)
     section(kColRx+14, 26, "COMPRESSOR", cE)
+    # Two columns like the EQ: col1 = Ratio/Release/IN/Range/Release/Exp/Fast,
+    # col2 = Threshold/GR-LEDs/Threshold/Hold. FAST ATK + PEAK top-right.
+    rc1, rc2 = kColRx+60, kColRx+156
     btn(kColRx+kColRw-76, 24, 66, 22, "FAST ATK", 0x252A33, 0xC0C4CC, cE)
     btn(kColRx+kColRw-76, 50, 66, 22, "PEAK", 0x252A33, 0xC0C4CC, cE)
-    rc1x, rc2x = kColRx+60, kColRx+156
-    knob(rc1x, 96, 20, kGrey, "RATIO", cE)
-    knob(rc2x, 124, 20, kGrey, "THRESHOLD", cE)
-    knob(rc1x, 158, 20, kGrey, "RELEASE", cE)
-    rect(kColRx+14, 221, 22, 22, 0xE0E0E0, 0x808088, 3, cE)
-    text_c(kColRx+25, 251, 0x9CA0AA, "IN", cE)
-    gx, gy = kColRx+kColRw-26, 208
-    for i, st in enumerate(["20", "14", "9", "6", "3"]):
-        ly = gy+i*12
-        d.ellipse([X(gx)-2, Y(ly)-2, X(gx)+2, Y(ly)+2], fill=dim(0x404448, cE))
-        text_l(gx-18, ly-5, 0x808088, st, cE)
-    knob(rc1x, 308, 20, kGrey, "RANGE", cE)
-    knob(rc2x, 332, 20, kGrey, "THRESHOLD", cE)
-    knob(rc1x, 374, 20, kGrey, "RELEASE", cE)
-    knob(rc2x, 398, 20, kGrey, "HOLD", cE)
-    # GATE / EXPANDER — section label above its two dyn buttons (clear of the
-    # HOLD knob label above).
-    section(kColRx+14, 446, "GATE / EXPANDER", cE)
-    btn(kColRx+14, 466, 96, 22, "EXPAND", 0x252A33, 0xC0C4CC, cE)
-    btn(kColRx+118, 466, 96, 22, "FAST ATK", 0x252A33, 0xC0C4CC, cE)
+    # Compressor
+    knob(rc1, 100, 20, kGrey, "RATIO", cE)
+    knob(rc2, 128, 20, kGrey, "THRESHOLD", cE)
+    knob(rc1, 168, 20, kGrey, "RELEASE", cE)
+    # DYN / Comp In + GR LEDs: vertically centred between Comp Release (168) and
+    # Gate Range (324) → y=246.
+    btn(rc1-17, 235, 34, 22, "IN", 0x252A33, 0xC0C4CC, cE)
+    for i, lab in enumerate(["20", "14", "10", "6", "3"]):
+        ly = 220 + i*13
+        text_c(rc2-14, ly, 0x808088, lab, cE)
+        d.ellipse([X(rc2+6)-3, Y(ly)-3, X(rc2+6)+3, Y(ly)+3], fill=dim(0x9A5A2A, cE))
+        d.ellipse([X(rc2+20)-3, Y(ly)-3, X(rc2+20)+3, Y(ly)+3], fill=dim(0x2E8040, cE))
+    # Gate
+    knob(rc1, 324, 20, kGrey, "RANGE", cE)
+    knob(rc2, 352, 20, kGrey, "THRESHOLD", cE)
+    knob(rc1, 392, 20, kGrey, "RELEASE", cE)
+    knob(rc2, 420, 20, kGrey, "HOLD", cE)
+    btn(rc1-33, 462, 66, 22, "EXPAND", 0x252A33, 0xC0C4CC, cE)
+    btn(rc1-33, 488, 66, 22, "FAST ATK", 0x252A33, 0xC0C4CC, cE)
+    # GATE / EXPANDER — right-aligned, bottom flush with the FAST ATK button (510).
+    text_rb(kColRx+kColRw-14, 492, 0x9CA0AA, "GATE /", cE)
+    text_rb(kColRx+kColRw-14, 510, 0x9CA0AA, "EXPANDER", cE)
     # CHANNEL — only the bindable controls (Ø / S/C LISTEN / IN); the
     # non-bindable hardware keys (SOLO / CUT / FINE / SOLO CLR) are dropped so
     # the bottom breathes (Frank 2026-06-16).

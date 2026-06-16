@@ -5366,20 +5366,23 @@ static std::string hudLcdString_(MediaTrack* tr)
     GetSetMediaTrackInfo_String(tr, "P_NAME", nm, false);
     for (char* q = nm; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
     const int nch = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_NCHAN"));
-    char seg[8], line1[16], name[256];
+    char seg[8], line1[16];
+    std::string raw;
     if (num == -1) {                       // master track
         std::snprintf(seg, sizeof(seg), "M");
         std::snprintf(line1, sizeof(line1), "MASTER");
-        std::snprintf(name, sizeof(name), "%s", nm[0] ? nm : "Master");
+        raw = nm[0] ? nm : "Master";
     } else {
         std::snprintf(seg, sizeof(seg), "%03d", num);
         std::snprintf(line1, sizeof(line1), "TRACK");
-        if (nm[0]) std::snprintf(name, sizeof(name), "%s", nm);
-        else       std::snprintf(name, sizeof(name), "Track %d", num);
+        raw = nm[0] ? std::string(nm) : ("Track " + std::to_string(num));
     }
+    // Abbreviate exactly like the UC1 CS carousel — honours Settings →
+    // Track-name mode (Truncate vs Smart Abbreviate), 12-char budget.
+    const std::string name = abbreviateTrackName_(raw, 12);
     char out[320];
     std::snprintf(out, sizeof(out), "%s;%s;%s;%s",
-                  seg, line1, name, (nch >= 2) ? "Stereo" : "Mono");
+                  seg, line1, name.c_str(), (nch >= 2) ? "Stereo" : "Mono");
     return out;
 }
 void publishHud_()

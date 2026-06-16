@@ -452,9 +452,26 @@ local FACE_LABEL = {
 -- 860×660 design space). Every other control uses the published geometry, which
 -- already matches the settings positions. Mirrors the de-crowded reference.
 local FACE_OV = {
-  [36]={x=632,y=466,w=96,h=22}, [37]={x=736,y=466,w=96,h=22},
+  -- EQ column 2 (FREQ + Hi-Pass + BELL + IN/TYPE) all share one vertical centre
+  -- (cx=162), nudged closer to column 1 (cx=82) than the published geometry.
+  -- Upper EQ (HF/HMF + IN/TYPE) shifted +6 so HMF-Q→divider == divider→LMF-GAIN.
+  [1]={cx=162,cy=70},
+  [3]={cy=160}, [4]={cx=162,cy=188},                -- HF GAIN / FREQ
+  [5]={cy=260}, [6]={cx=162,cy=288}, [7]={cy=328},  -- HMF GAIN / FREQ / Q (HF↔HMF = LMF↔LF = 100)
+  [11]={cx=162,cy=458},[13]={cx=162,cy=558},        -- LMF / LF FREQ
+  -- HF BELL top flush w/ HF GAIN top; LF BELL bottom flush w/ LF GAIN label.
+  [2]={x=145,y=140,w=34,h=18},  [15]={x=145,y=620,w=34,h=18},
+  -- EQ IN centred on col2; TYPE just to its right.
+  [9]={x=145,y=370,w=34,h=18},  [8]={x=183,y=370,w=34,h=18},
+  -- Dyn/Gate as two columns like the EQ. col1 (cx=678): Ratio/Release/IN/
+  -- Range/Release/Expand/Fast. col2 (cx=774): Threshold/Threshold/Hold (+GR LEDs).
+  [28]={cy=100}, [29]={cy=128}, [30]={cy=168},      -- Comp Ratio / Thr / Release
+  [31]={x=661,y=235,w=34,h=22},                     -- DYN / Comp In → col1 (centred y=246)
+  [32]={cy=324}, [33]={cy=352}, [34]={cy=392}, [35]={cy=420},  -- Gate Range/Thr/Rel/Hold
+  [36]={x=645,y=462,w=66,h=22}, [37]={x=645,y=488,w=66,h=22},  -- Expand / Fast → col1
   [38]={x=632,y=540,w=96,h=26}, [39]={x=632,y=574,w=96,h=26},
   [40]={x=776,y=547,w=40,h=40},
+  [23]={x=470,y=288,w=40,h=40},   -- BC IN: 40×40 like CS, centred on c2 (490,308)
 }
 -- Light (white, dark-text) toggle keys like the settings face's IN buttons.
 local FACE_LIGHT = { [23]=true, [40]=true }
@@ -526,6 +543,12 @@ local function renderFace(st, asn)
     local tw, th = measure(s, px); dtext(X(cx) - tw / 2, Y(cy) - th / 2, c, s, px)
   end
   local function dTextL(x, y, c, s, px) dtext(X(x), Y(y), c, s, px) end
+  local function dTextLV(x, cy, c, s, px)   -- left-aligned, vertically centred on cy
+    local _, th = measure(s, px); dtext(X(x), Y(cy) - th / 2, c, s, px)
+  end
+  local function dTextRB(xr, yb, c, s, px)  -- right edge xr, bottom edge yb
+    local tw, th = measure(s, px); dtext(X(xr) - tw, Y(yb) - th, c, s, px)
+  end
 
   -- bindable knob ------------------------------------------------------
   local function knob(idx, cx, cy, rD, cap, dom)
@@ -617,13 +640,17 @@ local function renderFace(st, asn)
   -- ===== Section + side labels =====
   local fC = da("c")
   section(26, 104, "FILTERS", "c")
-  dLine(70, 122, 234, 122, col(0x383C44, fC), 1.0)
-  dTextL(26, 146, col(0xB8BCC4, fC), "HF", lf)
-  dTextL(26, 224, col(0xB8BCC4, fC), "HMF", lf)
-  dTextL(26, 422, col(0xB8BCC4, fC), "LMF", lf)
-  dTextL(26, 550, col(0xB8BCC4, fC), "LF", lf)
+  dLine(70, 122, 234, 122, col(0x9DA2AC, 0.6 * fC), 1.0)   -- match band divider lines
+  -- Band labels aligned to each band's FREQ knob height.
+  dTextLV(26, 188, col(0xB8BCC4, fC), "HF", lf)
+  dTextLV(26, 288, col(0xB8BCC4, fC), "HMF", lf)
+  dTextLV(26, 379, col(0xB8BCC4, fC), "EQ", lf)   -- left of the HMF|LMF (Type/In) divider
+  dTextLV(26, 458, col(0xB8BCC4, fC), "LMF", lf)
+  dTextLV(26, 558, col(0xB8BCC4, fC), "LF", lf)
   section(632, 26, "COMPRESSOR", "c")
-  section(632, 446, "GATE / EXPANDER", "c")
+  -- GATE / EXPANDER — right-aligned, bottom flush with the FAST ATK button (510).
+  dTextRB(834, 492, col(0x9CA0AA, fC), "GATE /", sf)
+  dTextRB(834, 510, col(0x9CA0AA, fC), "EXPANDER", sf)
   section(632, 518, "CHANNEL", "c")
   dTextC(430, 22, col(0x9CA0AA, da("b")), "BUS COMPRESSOR", sf)
 
@@ -645,11 +672,12 @@ local function renderFace(st, asn)
   dLine(mcx, mcy, mcx + math.cos(aN) * (ra - 4), mcy + math.sin(aN) * (ra - 4), col(0x4499DD, fB), 2.0)
   dTextC(mcx, myg + mh - 12, col(0x4499DD, fB), "GR", lf)
 
-  -- ===== Comp GR ladder (right col, CS) =====
-  for i, s in ipairs({ "20", "14", "9", "6", "3" }) do
-    local ly = 208 + (i - 1) * 12
-    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + X(822), OY + Y(ly), math.max(1, 2 * scale), col(0x404448, fC))
-    dTextL(804, ly - 5, col(0x808088, fC), s, lf)
+  -- ===== Comp GR LED meter — 2 dot columns + dB number, in col2 (cx=774) =====
+  for i, s in ipairs({ "20", "14", "10", "6", "3" }) do
+    local ly = 220 + (i - 1) * 13
+    dTextC(760, ly, col(0x808088, fC), s, lf)
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + X(780), OY + Y(ly), math.max(1, 3 * scale), col(0x9A5A2A, fC))
+    reaper.ImGui_DrawList_AddCircleFilled(dl, OX + X(794), OY + Y(ly), math.max(1, 3 * scale), col(0x2E8040, fC))
   end
 
   -- ===== Central Control Panel: 7-seg + LCD (real data) + buttons =====
@@ -671,12 +699,29 @@ local function renderFace(st, asn)
   decoKnob(470, kCcpY + 145, 18, "BC Encoder")
   dTextC(430, kCcpY + 208 - 14, col(0x707880, 1), "Rea-Sixty", lf)
 
+  -- ===== EQ band divider lines — stepped (horizontal · 45° · horizontal) to
+  -- follow the staggered 2-column knob layout, like the SSL 4000E silk. =====
+  do
+    local dc = col(0x9DA2AC, 0.6 * da("c"))
+    local th = math.max(1, scale)
+    local function poly(pts)
+      for i = 1, #pts - 1 do
+        reaper.ImGui_DrawList_AddLine(dl, OX + X(pts[i][1]), OY + Y(pts[i][2]),
+          OX + X(pts[i + 1][1]), OY + Y(pts[i + 1][2]), dc, th)
+      end
+    end
+    local gxR, fxR = 102, 182          -- GAIN col right edge / FREQ col right edge (c2=162)
+    poly({ { 62, 210 }, { gxR, 210 }, { gxR + 28, 238 }, { fxR, 238 } })  -- HF | HMF (down)
+    poly({ { 62, 379 }, { 143, 379 } })                                   -- HMF | LMF → IN/TYPE
+    poly({ { 62, 548 }, { gxR, 548 }, { gxR + 40, 508 }, { fxR, 508 } })  -- LMF | LF (up)
+  end
+
   -- ===== Bindable controls from the published geometry =====
   for idx, g in pairs(geom.ctrl) do
+    local ov = FACE_OV[idx]
     if g.shape == 0 then
-      knob(idx, g.cx, g.cy, g.r, g.cap, g.dom)
+      knob(idx, (ov and ov.cx) or g.cx, (ov and ov.cy) or g.cy, g.r, g.cap, g.dom)
     else
-      local ov = FACE_OV[idx]
       local x = (ov and ov.x) or g.cx
       local y = (ov and ov.y) or g.cy
       local w = (ov and ov.w) or g.w
