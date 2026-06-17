@@ -1567,7 +1567,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     {
         auto mm = uf8::lookupPluginOnTrack(tr, dom);
         if (mm.map && mm.fxIndex == fxIdx) {
-            linkIdx = uf8::slotIdxForVst3Param(*mm.map, vst3Param);
+            // Resolve the owning slot from the CONTROL's canonical linkIdx
+            // (LinkToUc1 reverse), NOT via a vst3Param→slot reverse lookup.
+            // The param round-trip is identity ONLY on the Normal layer; under
+            // an Option/Control overlay this knob drives a DIFFERENT param, so
+            // slotIdxForVst3Param lands on a foreign slot (or -1) and the
+            // per-layer range/curve/sensitivity silently falls back to default
+            // — the bug Frank reported ("knob limits/feels respect no modifier;
+            // can be set but not applied"). A UC1 knob always owns the same
+            // physical slot on every layer, so key off the control id. Mirrors
+            // the 2026-06-15 button-readout fix. (linkIdxForControl returns -1
+            // for non-Link-mappable knobs → usl stays null → legacy behaviour.)
+            linkIdx = uc1::linkIdxForControl(
+                ev.id, busCompContext, /*isButton*/false);
         }
     }
     const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
@@ -2769,14 +2781,23 @@ void UC1Surface::pushFocusedParamReadout_()
             const uf8::UserLinkSlot* us =
                 uf8::user_plugins::lookupOwnedSlot(fxn, slot.linkIdx);
             if (us) {
-                const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(*us, activeLayer);
-                if (eff.vst3Param >= 0) {
-                    pParam = eff.vst3Param;
-                    if (!eff.customLabel.empty()) {
-                        pNameOwned = eff.customLabel;
-                    } else {
+                // Only override the param + name when THIS layer carries a
+                // genuine overlay. When it's unmapped the control falls back to
+                // Normal — and so must the displayed name: keep the canonical
+                // slot.name ("Threshold"), NOT TrackFX_GetParamName on the
+                // Normal param (which returns the plug-in's raw abbreviation,
+                // e.g. "Tresh"). Reading fxEffectiveLayer here couldn't tell the
+                // fallback apart from a real overlay, so an unmapped Ctrl layer
+                // showed "Tresh" instead of the Normal "Threshold" (Frank
+                // 2026-06-17). Gate on the RAW layer being mapped.
+                const uf8::SlotLayer& lay = uf8::fxLayerOf(*us, activeLayer);
+                if (uf8::fxLayerMapped(lay)) {
+                    if (lay.vst3Param >= 0) pParam = lay.vst3Param;
+                    if (!lay.customLabel.empty()) {
+                        pNameOwned = lay.customLabel;
+                    } else if (lay.vst3Param >= 0) {
                         char pn[256] = {};
-                        TrackFX_GetParamName(tr, match.fxIndex, eff.vst3Param,
+                        TrackFX_GetParamName(tr, match.fxIndex, lay.vst3Param,
                                              pn, sizeof(pn));
                         if (pn[0]) pNameOwned = pn;
                     }
