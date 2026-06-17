@@ -145,6 +145,10 @@ local learnBtnRect = nil
 local ctrlRects    = {}
 local learnIdx     = -1
 local ctxCtrlIdx   = -1   -- control under a right-click → control context menu
+local ctxCtrlLayer = 0    -- active modifier layer captured AT right-click (the
+                          -- modifier is still held then; renaming opens a native
+                          -- text dialog that releases it, so we must latch here
+                          -- rather than let the extension read the live layer).
 -- UF8 device tab (Phase 2): interactive strip-grid.
 local uf8Rects     = {}   -- per-cell hit-rects {kind, strip, x, y, w, h}
 local uf8BankRects = {}   -- V-Pot bank selector hit-rects {b, x, y, w, h}
@@ -1408,7 +1412,7 @@ local function drawControlContextMenu()
   end
   if not mapped then reaper.ImGui_BeginDisabled(ctx) end
   if reaper.ImGui_MenuItem(ctx, "Invert", nil, mapped and a.inv or false) then
-    sendCmd("invert;" .. ctxCtrlIdx)
+    sendCmd("invert;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer)
   end
   if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6") then
     -- Native modal (works from a defer/ImGui frame, same as the gfx panel menus).
@@ -1418,11 +1422,12 @@ local function drawControlContextMenu()
     local ok, val = reaper.GetUserInputs("Rename control", 1,
       "Display name (empty = default):,extrawidth=180", cur)
     if ok then
-      sendCmd("rename;" .. ctxCtrlIdx .. ";" .. (val:gsub("[;\n]", " ")))
+      sendCmd("rename;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer .. ";"
+              .. (val:gsub("[;\n]", " ")))
     end
   end
   if reaper.ImGui_MenuItem(ctx, "Unbind") then
-    sendCmd("unbind;" .. ctxCtrlIdx)
+    sendCmd("unbind;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer)
   end
   if not mapped then reaper.ImGui_EndDisabled(ctx) end
 
@@ -1618,6 +1623,11 @@ local function loop()
           local cidx = controlAt(lx, ly)
           if cidx then
             ctxCtrlIdx = cidx
+            -- Latch the held-modifier layer NOW (right-click, modifier still
+            -- down). readState() re-parses the live hud_state payload — `st`
+            -- from render() isn't in scope in loop(). The native rename dialog
+            -- later releases the modifier, so we must capture it here.
+            ctxCtrlLayer = readState().layer
             reaper.ImGui_OpenPopup(ctx, CTRL_POPUP)
           else
             reaper.ImGui_OpenPopup(ctx, POPUP)

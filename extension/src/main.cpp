@@ -14806,38 +14806,68 @@ void onTimer()
                     }
                 }
             } else if (s.rfind("unbind;", 0) == 0) {
-                // "unbind;<idx>" — clear the control's mapping on the active layer.
+                // "unbind;<idx>;<layer>" — clear the control's mapping on the
+                // GIVEN modifier layer. Layer captured HUD-side at menu-open
+                // (see rename below for the why). Old "unbind;<idx>" falls back
+                // to the live layer.
                 const int idx = std::atoi(s.c_str() + 7);
+                const auto semi = s.find(';', 7);
+                const int layer = (semi != std::string::npos)
+                    ? std::atoi(s.c_str() + semi + 1)
+                    : reasixty_fxLearnActiveLayer();
                 MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
                 int csFx = -1, bcFx = -1;
                 activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                if (reasixty_hudUnbind(idx, reasixty_fxLearnActiveLayer(),
+                if (reasixty_hudUnbind(idx, layer,
                                        csTr, csFx, bcTr, bcFx)) {
                     g_hudAssignPublished.clear();   // force re-publish
                     publishHud_();
                 }
             } else if (s.rfind("invert;", 0) == 0) {
-                // "invert;<idx>" — toggle the control's invert flag on the layer.
+                // "invert;<idx>;<layer>" — toggle invert on the GIVEN layer.
+                // Layer captured at menu-open (see rename); old "invert;<idx>"
+                // falls back to the live layer.
                 const int idx = std::atoi(s.c_str() + 7);
+                const auto semi = s.find(';', 7);
+                const int layer = (semi != std::string::npos)
+                    ? std::atoi(s.c_str() + semi + 1)
+                    : reasixty_fxLearnActiveLayer();
                 MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
                 int csFx = -1, bcFx = -1;
                 activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                if (reasixty_hudInvert(idx, reasixty_fxLearnActiveLayer(),
+                if (reasixty_hudInvert(idx, layer,
                                        csTr, csFx, bcTr, bcFx)) {
                     g_hudAssignPublished.clear();   // force re-publish
                     publishHud_();
                 }
             } else if (s.rfind("rename;", 0) == 0) {
-                // "rename;<idx>;<label>" — set the control's display override on
-                // the active layer (empty label reverts to the default name).
-                const auto semi = s.find(';', 7);
-                if (semi != std::string::npos) {
+                // "rename;<idx>;<layer>;<label>" — set the control's display
+                // override on the GIVEN modifier layer (empty label reverts to
+                // the default). The layer is captured HUD-side when the context
+                // menu OPENS (right-click, modifier still held): typing the
+                // rename into the native dialog releases the modifier, so
+                // reading the LIVE layer here collapsed to Normal and the rename
+                // landed on the wrong layer (Frank 2026-06-17). Same root cause
+                // + fix shape as the wiggle-learn arm-time latch (g_hudLearnLayer).
+                // Old 2-field "rename;<idx>;<label>" still parses (live-layer
+                // fallback) for forward/backward script-dylib mismatch safety.
+                const auto semi1 = s.find(';', 7);
+                if (semi1 != std::string::npos) {
                     const int idx = std::atoi(s.c_str() + 7);
-                    const std::string label = s.substr(semi + 1);
+                    const auto semi2 = s.find(';', semi1 + 1);
+                    int         layer;
+                    std::string label;
+                    if (semi2 != std::string::npos) {
+                        layer = std::atoi(s.c_str() + semi1 + 1);
+                        label = s.substr(semi2 + 1);
+                    } else {
+                        layer = reasixty_fxLearnActiveLayer();
+                        label = s.substr(semi1 + 1);
+                    }
                     MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
                     int csFx = -1, bcFx = -1;
                     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                    if (reasixty_hudRename(idx, reasixty_fxLearnActiveLayer(),
+                    if (reasixty_hudRename(idx, layer,
                                            label.c_str(), csTr, csFx, bcTr, bcFx)) {
                         g_hudAssignPublished.clear();   // force re-publish
                         publishHud_();
