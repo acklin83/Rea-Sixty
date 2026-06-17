@@ -162,6 +162,8 @@ bool reasixty_fxLayerOptionEnable();
 void reasixty_setFxLayerOptionEnable(bool on);
 bool reasixty_fxLayerControlEnable();
 void reasixty_setFxLayerControlEnable(bool on);
+bool reasixty_fxLayerCtrlOptEnable();
+void reasixty_setFxLayerCtrlOptEnable(bool on);
 int  reasixty_fxLearnActiveLayer();   // current held-modifier layer (HUD badge)
 bool reasixty_shiftFineMode();
 void reasixty_setShiftFineMode(bool on);
@@ -936,6 +938,13 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         &fxCtrl))
     {
         reasixty_setFxLayerControlEnable(fxCtrl);
+    }
+    bool fxCtrlOpt = reasixty_fxLayerCtrlOptEnable();
+    if (ImGui_Checkbox(ctx,
+        "Hold Control+Option for the combined FX-Learn layer",
+        &fxCtrlOpt))
+    {
+        reasixty_setFxLayerCtrlOptEnable(fxCtrlOpt);
     }
     ImGui_Spacing(ctx);
     bool shiftFine = reasixty_shiftFineMode();
@@ -7602,9 +7611,10 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
     const char* csShort = (csB && csB->shortName) ? csB->shortName : "";
     const char* bcShort = (bcB && bcB->shortName) ? bcB->shortName : "";
     const char  fdom = (focusDom == 2) ? 'b' : (focusDom == 1) ? 'c' : 'n';
-    // Held-modifier layer (0=Normal 1=Option 2=Control) — the HUD shows it as a
-    // badge so a changed param list reads as "this is the Option overlay", not
-    // as the plug-in's own mapping. Same source the display/learn resolve with.
+    // Held-modifier layer (0=Normal 1=Option 2=Control 3=Control+Option) — the
+    // HUD shows it as a badge so a changed param list reads as "this is the
+    // Option overlay", not the plug-in's own mapping. Same source the
+    // display/learn resolve with.
     int layer = reasixty_fxLearnActiveLayer();
     if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
     char head[160];
@@ -12629,16 +12639,23 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_RadioButton(ctx, "Control##fxl_layer_ctrl",
                               g_fxLearnEditLayer == uf8::FxLayer::Control))
             g_fxLearnEditLayer = uf8::FxLayer::Control;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Ctrl+Opt##fxl_layer_ctrlopt",
+                              g_fxLearnEditLayer == uf8::FxLayer::ControlOption))
+            g_fxLearnEditLayer = uf8::FxLayer::ControlOption;
         if (g_fxLearnEditLayer != uf8::FxLayer::Normal) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_Button(ctx, "Copy from Normal##fxl_layer_copy",
                              nullptr, nullptr))
                 copyNormalToEditLayer_();
             ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_TextDisabled(ctx,
-                g_fxLearnEditLayer == uf8::FxLayer::Option
+            const char* hint =
+                (g_fxLearnEditLayer == uf8::FxLayer::Option)
                     ? "(hold Option on the keyboard)"
-                    : "(hold Control on the keyboard)");
+                  : (g_fxLearnEditLayer == uf8::FxLayer::Control)
+                    ? "(hold Control on the keyboard)"
+                    : "(hold Control+Option on the keyboard)";
+            ImGui_TextDisabled(ctx, hint);
         }
     }
 

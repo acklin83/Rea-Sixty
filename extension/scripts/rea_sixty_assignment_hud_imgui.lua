@@ -386,7 +386,8 @@ local function drawTabs(st, ust)
   end
 
   -- Active modifier-layer badge (far right).
-  local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL") or "NORM"
+  local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL")
+            or (st.layer == 3 and "C+O") or "NORM"
   local px   = 10   -- fixed chrome (badge + the top toggle buttons)
   local bwm, bhm = measure(name, px)
   local bw = bwm + 20
@@ -397,7 +398,9 @@ local function drawTabs(st, ust)
     rect(bx, by, bw, bh, col(0x29292E, 1))
     dtext(bx + 10, by + floor((bh - bhm) / 2), col(0x8890A0, 0.7), name, px)
   else
-    local lc = (st.layer == 1) and 0x30C8A0 or 0xC878FF
+    local lc = (st.layer == 1 and 0x30C8A0)
+            or (st.layer == 2 and 0xC878FF)
+            or 0xE0A040   -- C+O = amber
     rect(bx, by, bw, bh, col(lc, 0.92))
     dtext(bx + 10, by + floor((bh - bhm) / 2), col(0x121214, 1), name, px)
   end

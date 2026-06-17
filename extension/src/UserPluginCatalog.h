@@ -45,12 +45,14 @@ struct PushStep {
 };
 
 // FX-Learn modifier layers. The Normal layer is the base, always-active
-// mapping; Option and Control are held-modifier overrides chosen at runtime
-// by reasixty_fxLearnActiveLayer(). Shift stays reserved for Fine mode and is
-// NOT a layer. Index values matter: UserLinkSlot::modLayers stores Option at
-// [0] and Control at [1] (i.e. FxLayer value minus 1).
-enum FxLayer { Normal = 0, Option = 1, Control = 2 };
-constexpr int kNumFxLayers = 3;
+// mapping; Option / Control / Control+Option are held-modifier overrides chosen
+// at runtime by reasixty_fxLearnActiveLayer(). Shift stays reserved for Fine
+// mode and is NOT a layer. Index values matter: UserLinkSlot::modLayers stores
+// Option at [0], Control at [1], ControlOption at [2] (i.e. FxLayer value minus
+// 1). ControlOption = both modifiers held together (was previously treated as
+// the neutral Normal state). Frank 2026-06-17.
+enum FxLayer { Normal = 0, Option = 1, Control = 2, ControlOption = 3 };
+constexpr int kNumFxLayers = 4;
 
 // One layer's worth of a control→param mapping. The Normal layer of every
 // UserLinkSlot IS a SlotLayer (via inheritance below); the Option/Control
@@ -124,7 +126,8 @@ struct UserLinkSlot : SlotLayer {
 };
 
 // Reference to the SlotLayer backing FX-Learn layer L: 0=Normal returns the
-// slot itself (the base), 1=Option -> modLayers[0], 2=Control -> modLayers[1].
+// slot itself (the base), 1=Option -> modLayers[0], 2=Control -> modLayers[1],
+// 3=ControlOption -> modLayers[2].
 inline SlotLayer& fxLayerOf(UserLinkSlot& s, int L) {
     return (L <= FxLayer::Normal) ? static_cast<SlotLayer&>(s)
                                   : s.modLayers[L - 1];
@@ -503,7 +506,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 9;   // v9: per-control FX-Learn modifier layers (modLayers)
+constexpr int kCurrentFormatVersion = 10;  // v10: + Control+Option modifier layer (modLayers.ctrlOption). v9 files load byte-identical (key absent = empty overlay).
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

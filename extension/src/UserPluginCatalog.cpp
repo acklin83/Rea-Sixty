@@ -410,8 +410,9 @@ std::string serialize_(const UserPluginCatalog& c)
                     emitLayerBody(ml);
                     os << " }";
                 };
-                emitML("option",  s.modLayers[0]);
-                emitML("control", s.modLayers[1]);
+                emitML("option",     s.modLayers[0]);
+                emitML("control",    s.modLayers[1]);
+                emitML("ctrlOption", s.modLayers[2]);
                 os << " }";
             }
             os << " }";
@@ -774,6 +775,9 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     if (auto* ctl = ml->get_item_by_name("control");
                         ctl && ctl->is_object())
                         parseLayerBody(ctl, us.modLayers[1]);
+                    if (auto* co = ml->get_item_by_name("ctrlOption");
+                        co && co->is_object())
+                        parseLayerBody(co, us.modLayers[2]);
                 }
                 if (us.linkIdx < 0) continue;
                 // A slot is valid when the Normal layer carries a mapping

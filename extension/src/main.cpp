@@ -654,6 +654,7 @@ std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button hel
 // dispatch + LED paths via reasixty_fxLearnActiveLayer().
 std::atomic<bool>         g_fxLayerOptEnable     {true};
 std::atomic<bool>         g_fxLayerCtrlEnable    {true};
+std::atomic<bool>         g_fxLayerCtrlOptEnable {true};
 std::atomic<int>          g_fxActiveLayer        {0};
 // Forward declarations — defined later but called from drainInputQueue.
 bool hostShiftHeld_();
@@ -2497,6 +2498,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "fx_layer_ctrl_enable"); v && *v) {
         g_fxLayerCtrlEnable.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fx_layer_ctrlopt_enable"); v && *v) {
+        g_fxLayerCtrlOptEnable.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "shift_fine_mode"); v && *v) {
         g_shiftFineMode.store(std::atoi(v) != 0);
@@ -13270,7 +13274,13 @@ void refreshFxActiveLayer_()
     if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrl = false;
 #endif
     int L = uf8::FxLayer::Normal;
-    if (ctrl && opt)      L = uf8::FxLayer::Normal;
+    // Both modifiers held = the Control+Option layer (when enabled). With it
+    // disabled, both-held stays the neutral Normal — the pre-2026-06-17
+    // behaviour. NOTE (Windows): the AltGr drop above forces AltGr→Option, so
+    // ControlOption is reachable there only via LEFT-Ctrl + LEFT-Alt (RMENU up).
+    if (ctrl && opt)      L = g_fxLayerCtrlOptEnable.load()
+                                ? uf8::FxLayer::ControlOption
+                                : uf8::FxLayer::Normal;
     else if (ctrl)        L = uf8::FxLayer::Control;
     else if (opt)         L = uf8::FxLayer::Option;
     g_fxActiveLayer.store(L, std::memory_order_relaxed);
@@ -17438,6 +17448,12 @@ void reasixty_setFxLayerControlEnable(bool on)
 {
     g_fxLayerCtrlEnable.store(on);
     SetExtState("rea_sixty", "fx_layer_ctrl_enable", on ? "1" : "0", true);
+}
+bool reasixty_fxLayerCtrlOptEnable()  { return g_fxLayerCtrlOptEnable.load(); }
+void reasixty_setFxLayerCtrlOptEnable(bool on)
+{
+    g_fxLayerCtrlOptEnable.store(on);
+    SetExtState("rea_sixty", "fx_layer_ctrlopt_enable", on ? "1" : "0", true);
 }
 bool reasixty_shiftFineMode()         { return g_shiftFineMode.load(); }
 void reasixty_setShiftFineMode(bool on)
