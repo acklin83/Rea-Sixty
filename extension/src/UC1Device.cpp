@@ -534,10 +534,40 @@ void UC1Device::readCallback_(libusb_transfer* xfer)
             self->rawInputHandler_(xfer->buffer, static_cast<size_t>(xfer->actual_length));
         }
 
-        if (auto ev = parseButtonEvent(data); ev && self->buttonHandler_) {
-            self->buttonHandler_(*ev);
-        } else if (auto kn = parseKnobEvent(data); kn && self->knobHandler_) {
-            self->knobHandler_(*kn);
+        // Walk EVERY frame in the URB — the firmware bundles multiple
+        // control frames into a single bulk transfer when controls move
+        // close together in time. Proven in captures: dual_41_io_gain has
+        // `31 60 FF 24 02 14 .. FF 24 02 16 ..` (two distinct knob ids in
+        // one URB), uc1_07/uc1_28/uc1_29/dual_39 likewise. The old code
+        // parsed only the FIRST frame, so turning two knobs at once (e.g.
+        // In/Out Gain) dropped one knob's deltas every bundled URB — they
+        // appeared to "fight for priority" (Frank 2026-06-17). Mirrors the
+        // UF8 onUf8Input frame-walk (main.cpp) which solved the identical
+        // bundling bug for fader/touch frames. Single-frame URBs parse
+        // byte-identically to before.
+        size_t i = 0;
+        while (i < data.size()) {
+            // Skip the optional "31 <flag>" USB poll wrapper anywhere it
+            // appears (it precedes the first frame; defensively handle it
+            // between frames too).
+            if (data[i] == 0x31 && i + 1 < data.size()) { i += 2; continue; }
+            if (data[i] != 0xFF) { ++i; continue; }
+            const auto rest = data.subspan(i);
+            // Buttons (FF 22 03 .. = 7B) and knobs (FF 24 02 .. = 6B) are the
+            // only actionable inbound frames; both parsers verify the frame
+            // checksum, so a mis-aligned guess never dispatches a bogus event.
+            if (auto ev = parseButtonEvent(rest)) {
+                if (self->buttonHandler_) self->buttonHandler_(*ev);
+                i += 7;
+            } else if (auto kn = parseKnobEvent(rest)) {
+                if (self->knobHandler_) self->knobHandler_(*kn);
+                i += 6;
+            } else {
+                // Unknown / non-event FF frame (poll echo, status, etc.) —
+                // resync to the next byte. Bundled event streams are pure
+                // FF22/FF24 runs, so this only fires on noise.
+                ++i;
+            }
         }
     } else if (xfer->status != LIBUSB_TRANSFER_COMPLETED
                && xfer->status != LIBUSB_TRANSFER_CANCELLED
