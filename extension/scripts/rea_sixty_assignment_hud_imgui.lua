@@ -1748,20 +1748,18 @@ local function drawUf8BankContextMenu()
   end
   if cur == "" then reaper.ImGui_EndDisabled(ctx) end
 
-  -- Colour picker — the 10 hardware-renderable SSL DAW-Colour swatches (same
-  -- palette as FX Learn). Sets the bank's Top-Soft-Key LED colour. The current
-  -- colour is outlined.
+  -- Colour picker — identical packing + flags to the FX-Learn palette
+  -- (ColorButton takes 0xRRGGBBAA, flags 0; the earlier NoAlpha/NoBorder flags
+  -- were the only difference and made the swatches read swapped). A separate
+  -- swatch shows the current colour; the 10 SSL DAW-Colour swatches set it.
   reaper.ImGui_Separator(ctx)
-  reaper.ImGui_TextDisabled(ctx, "Colour")
-  local curCol  = uf8BankCols[ctxUf8Bank]
-  local noAlpha = reaper.ImGui_ColorEditFlags_NoAlpha()
-  local noBord  = reaper.ImGui_ColorEditFlags_NoBorder()
+  local curCol = uf8BankCols[ctxUf8Bank]
+  reaper.ImGui_Text(ctx, "Colour")
+  reaper.ImGui_SameLine(ctx)
+  reaper.ImGui_ColorButton(ctx, "##bankcolcur",
+    curCol and ((curCol << 8) | 0xFF) or 0x40404080, 0, 44, 18)
   for i, rgb in ipairs(UF8_BANK_PALETTE) do
-    local rgba = (rgb << 8) | 0xFF
-    -- The current colour keeps its border so it reads as "selected"; the rest
-    -- drop it.
-    local flags = (curCol == rgb) and noAlpha or (noAlpha | noBord)
-    if reaper.ImGui_ColorButton(ctx, "##bankcol" .. i, rgba, flags, 20, 20) then
+    if reaper.ImGui_ColorButton(ctx, "##bankcol" .. i, (rgb << 8) | 0xFF, 0, 20, 20) then
       sendCmd(string.format("uf8bankcolour;%d;%06X", ctxUf8Bank, rgb))
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
