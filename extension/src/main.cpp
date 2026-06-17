@@ -117,6 +117,7 @@ bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr,
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
 int         reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx);
+bool        reasixty_hudUf8BindParam(int kind, int strip, int fb, int vb, int param, void* tr, int fx);
 bool        reasixty_hudUf8ConsumeBootstrap();
 bool        reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx);
 bool        reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx);
@@ -1985,6 +1986,10 @@ std::atomic<bool> g_hudAutoStartDone{false};
 std::atomic<bool> g_hudTouchLearn{false};
 std::atomic<int>  g_hudHwLearnReqLink{-1};   // armed control's linkIdx (-1 = none)
 std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
+// UF8 Touch-to-Learn request, set from the libusb input thread (onUf8Input) and
+// drained in onTimer. Encodes the armed cell as kind*8+strip (-1 = none); kind =
+// HUD encoding 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel.
+std::atomic<int>  g_hudUf8HwLearnReq{-1};
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
@@ -5431,6 +5436,7 @@ std::string g_hudStatePublished, g_hudAssignPublished;
 std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx string
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
+std::string g_hudUf8TargetPublished;  // last-published "hud_uf8_target" (UF8 param-list FX)
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
 std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
@@ -5666,9 +5672,24 @@ void publishHud_()
         // name so the UF8 tab can bootstrap it (click a cell + wiggle → create a
         // UF8-only map), mirroring the CS/BC empty-tab learn-create.
         std::string uf8Boot;
+        MediaTrack* uf8TgtTr = uf8Tr; int uf8TgtFx = uf8Fx;
         if (!uf8Map) {
             MediaTrack* vTr = nullptr; int vFx = -1;
-            if (hudCursorUnlearnedFx_(vTr, vFx)) uf8Boot = shortFxName_(vTr, vFx);
+            if (hudCursorUnlearnedFx_(vTr, vFx)) {
+                uf8Boot   = shortFxName_(vTr, vFx);
+                uf8TgtTr  = vTr;   // param-list enumerates the virgin FX so it can
+                uf8TgtFx  = vFx;   // bootstrap a UF8 map on bind
+            }
+        }
+        // Param-list target ("trNum;fx") — the UF8-mapped FX, else the virgin
+        // cursor FX. Lets the companion's Parameter List enumerate + software-bind.
+        {
+            char ut[48];
+            std::snprintf(ut, sizeof(ut), "%d;%d", hudTrNum_(uf8TgtTr), uf8TgtFx);
+            if (ut != g_hudUf8TargetPublished) {
+                g_hudUf8TargetPublished = ut;
+                SetExtState("rea_sixty", "hud_uf8_target", ut, false);
+            }
         }
         std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;
         reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
@@ -8880,6 +8901,23 @@ constexpr size_t kInputResidualMax = 64;
 // old in_dispatch log hit 438 MB and lagged the V-pots). Gate them all.
 static const bool g_uf8Trace = (std::getenv("REASIXTY_UF8_TRACE") != nullptr);
 
+// UF8 Touch-to-Learn: while the HUD's hardware-learn mode is on AND the UF8 tab
+// is active, the first touch/turn/press of a UF8 control arms a learn for that
+// cell instead of performing its normal action (parity with the UC1 surface +
+// the HUD click). Runs on the libusb input thread → it ONLY stores an atomic
+// request (drained in onTimer, where the REAPER API is safe); it must never
+// touch the REAPER API here ([[feedback-reaper-api-input-thread]]). Returns true
+// when the control was consumed for learn (the caller suppresses normal action).
+// kind = HUD encoding (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel).
+static bool uf8TouchLearnArm_(int kind, int strip)
+{
+    if (!(g_hudEnabled.load() && g_hudTouchLearn.load() && g_hudUf8TabActive))
+        return false;
+    if (strip < 0 || strip > 7) return false;
+    g_hudUf8HwLearnReq.store(kind * 8 + strip);
+    return true;
+}
+
 void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 {
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
@@ -9429,7 +9467,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 } else if (id >= 0x20 && id <= 0x37) {
                     const uint8_t strip = static_cast<uint8_t>((id - 0x20) / 3);
                     const int which     = (id - 0x20) % 3;   // 0=SOLO 1=CUT 2=SEL
-                    if (pressed) {
+                    if (pressed && uf8TouchLearnArm_(which + 2, strip)) {
+                        // Touch-to-Learn armed this Solo/Cut/Sel cell (kind 2/3/4)
+                        // → suppress the normal press.
+                    } else if (pressed) {
                         PendingInput::Kind k = PendingInput::SoloToggle;
                         double value = 0.0;
                         // REC + RME override for SOLO / CUT — fire the
@@ -9541,6 +9582,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 continue;
             }
             const uint8_t strip = rawStrip;
+            // Touch-to-Learn: touching the fader cap (ON edge) arms its cell
+            // (kind 1) instead of grabbing the fader — suppress the rest.
+            if (state != 0 && uf8TouchLearnArm_(1, strip)) {
+                i += frameSize;
+                continue;
+            }
             if (strip < 8) {
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive
@@ -9655,6 +9702,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             const uint8_t raw   = data[i + 4];
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
+            // Touch-to-Learn: turning a V-Pot arms its cell (kind 0) instead of
+            // writing pan/param — suppress the rest of this frame.
+            if (strip < 8 && uf8TouchLearnArm_(0, strip)) {
+                i += frameSize;
+                continue;
+            }
             if (strip < 8) {
                 // Continuous detent fraction = signed6/128. DON'T change this
                 // divisor: the stepped-param path recovers the integer detent
@@ -14904,6 +14957,34 @@ void onTimer()
                         reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
                     }
                 }
+            } else if (s.rfind("uf8bind;", 0) == 0) {
+                // "uf8bind;<kind>;<strip>;<param>" — software bind from the UF8
+                // Parameter List (pick a param → click a cell, no wiggle). Binds
+                // into the focused track's UF8 map, or bootstraps one if virgin.
+                const auto c1 = s.find(';', 8);
+                const auto c2 = (c1 == std::string::npos)
+                                    ? std::string::npos : s.find(';', c1 + 1);
+                if (c1 != std::string::npos && c2 != std::string::npos) {
+                    const int kind  = std::atoi(s.c_str() + 8);
+                    const int strip = std::atoi(s.c_str() + c1 + 1);
+                    const int param = std::atoi(s.c_str() + c2 + 1);
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    MediaTrack* bindTr = tr; int bindFx = fx;
+                    if (!mp) {   // virgin → the cursor FX defines the new UF8 map
+                        MediaTrack* vTr = nullptr; int vFx = -1;
+                        if (hudCursorUnlearnedFx_(vTr, vFx)) { bindTr = vTr; bindFx = vFx; }
+                    }
+                    if (reasixty_hudUf8BindParam(kind, strip, fb, vb, param,
+                                                 bindTr, bindFx)) {
+                        g_hudUf8AssignPublished.clear();
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("uf8vmode;", 0) == 0) {
                 // "uf8vmode;<strip>;<mode>" — set a V-Pot cell's mode
                 // (0 = Value, 1 = Toggle). Banks live.
@@ -15033,6 +15114,27 @@ void onTimer()
                     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
                     reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
                 }
+            }
+        }
+        // UF8 Touch-to-Learn: a UF8 control was touched/turned/pressed while the
+        // mode is on and the UF8 tab is active → arm that cell's learn (the next
+        // plug-in-param wiggle binds it). Mirrors the "uf8learn;" HUD-click drain.
+        if (const int req = g_hudUf8HwLearnReq.exchange(-1);
+            g_hudTouchLearn.load() && req >= 0) {
+            const int kind  = req / 8;
+            const int strip = req % 8;
+            MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+            resolveFocusedUf8Target_(tr, fx, mp);
+            const int fb = std::clamp(g_uf8FaderBank.load(),
+                                      0, uf8::kUserUf8FaderBankCount - 1);
+            const int vb = std::clamp(g_softKeyBank.load(),
+                                      0, uf8::kUserUf8VpotBankCount - 1);
+            if (mp) {
+                reasixty_hudUf8ArmLearn(kind, strip, fb, vb, tr, fx, false);
+            } else {
+                MediaTrack* vTr = nullptr; int vFx = -1;
+                const bool boot = hudCursorUnlearnedFx_(vTr, vFx);
+                reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
             }
         }
         // Poll for the wiggle; refresh published assignments the tick it lands.

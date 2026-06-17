@@ -7956,6 +7956,22 @@ bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
     return true;
 }
 
+// Software bind for the UF8 Parameter List: the user picked a param in the
+// drawer, then clicked a cell — no wiggle. Bind it straight onto (kind, fb, vb,
+// strip). If the focused track already carries a UF8 map → write into it;
+// otherwise bootstrap a fresh UF8-only map for the target FX (like the wiggle
+// create path). Returns true when the binding changed.
+bool hudUf8BindParam_(int kind, int strip, int fb, int vb, int vst3Param,
+                      void* trV, int fx)
+{
+    if (vst3Param < 0) return false;
+    std::string match;
+    if (hudUf8ResolveMatch_(trV, fx, match))
+        return hudUf8BindMatch_(match, kind, fb, vb, strip, vst3Param);
+    return hudUf8CreateAndBind_(static_cast<MediaTrack*>(trV), fx,
+                                kind, fb, vb, strip, vst3Param);
+}
+
 // Poll for the wiggle. Returns true the tick a bind lands. Mirrors hudLearnTick_
 // but for the UF8 cell. The wiggled FX must match the armed plug-in identity.
 bool hudUf8LearnTick_()
@@ -15005,6 +15021,11 @@ int reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx
 bool reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx)
 {
     return uf8::hudUf8VpotMode_(strip, fb, vb, mode, tr, fx);
+}
+bool reasixty_hudUf8BindParam(int kind, int strip, int fb, int vb, int param,
+                              void* tr, int fx)
+{
+    return uf8::hudUf8BindParam_(kind, strip, fb, vb, param, tr, fx);
 }
 // True (once) right after a fresh UF8-only map was bootstrapped — main.cpp
 // focuses the None domain so the hardware shows it without an FX-cycle.

@@ -196,13 +196,22 @@ local function clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
 
 -- Resolve the active domain's plug-in target from the extension's "hud_target"
 -- publish ("csTrNum;csFx;bcTrNum;bcFx"; trNum 0 = master, 1-based track, -1 none).
+-- On the UF8 tab the target comes from "hud_uf8_target" ("trNum;fx") instead — the
+-- UF8-mapped FX, or the virgin cursor FX so its params can be picked + bound.
 local function resolveTarget()
-  local raw = reaper.GetExtState(SECT, "hud_target")
-  local csN, csFx, bcN, bcFx = raw:match("^(%-?%d+);(%-?%d+);(%-?%d+);(%-?%d+)$")
-  if not csN then return nil end
   local trN, fx
-  if activeTab == "cs" then trN, fx = tonumber(csN), tonumber(csFx)
-  else                      trN, fx = tonumber(bcN), tonumber(bcFx) end
+  if activeTab == "uf8" then
+    local raw = reaper.GetExtState(SECT, "hud_uf8_target")
+    local uN, uFx = raw:match("^(%-?%d+);(%-?%d+)$")
+    if not uN then return nil end
+    trN, fx = tonumber(uN), tonumber(uFx)
+  else
+    local raw = reaper.GetExtState(SECT, "hud_target")
+    local csN, csFx, bcN, bcFx = raw:match("^(%-?%d+);(%-?%d+);(%-?%d+);(%-?%d+)$")
+    if not csN then return nil end
+    if activeTab == "cs" then trN, fx = tonumber(csN), tonumber(csFx)
+    else                      trN, fx = tonumber(bcN), tonumber(bcFx) end
+  end
   if trN < 0 or fx < 0 then return nil end
   local tr = (trN == 0) and reaper.GetMasterTrack(0) or reaper.GetTrack(0, trN - 1)
   if not tr then return nil end
@@ -407,17 +416,40 @@ local function drawTabs(st, ust)
   x = tab("bc",  st.bcPresent,            x)
   x = tab("uf8", ust and ust.present,     x)
 
-  -- The modifier badge + Touch-to-Learn / Parameter-List toggles are UC1-only
-  -- (UF8 has no layers and the device tab is read-only), so skip them on UF8.
+  -- UF8 has no modifier layers, so skip the badge. Both toggles ARE supported on
+  -- UF8: Touch-to-Learn (move a UF8 control to arm it, then wiggle a param) and
+  -- the Parameter List drawer (software pick-a-param → click-a-cell bind). They
+  -- walk LEFT from the right edge, mirroring the UC1 layout.
+  local px = 10   -- fixed chrome (badge + the top toggle buttons)
   if activeTab == "uf8" then
-    learnBtnRect, paramBtnRect = nil, nil
+    local by, bh = 6, TAB_H - 12
+    local rx = WW - 8
+    local function uf8Toggle(lbl, on, onRgb)
+      local lw, lh = measure(lbl, px)
+      local w = lw + 20
+      local tx = rx - w
+      if on then
+        rect(tx, by, w, bh, col(onRgb, 0.95))
+        dtext(tx + 10, by + floor((bh - lh) / 2), col(0x161208, 1), lbl, px)
+      else
+        rect(tx, by, w, bh, col(0x29292E, 1))
+        reaper.ImGui_DrawList_AddRect(dl, OX + tx, OY + by, OX + tx + w, OY + by + bh,
+          col(0x4A5060, 1), 0, 0, 1)
+        dtext(tx + 10, by + floor((bh - lh) / 2), col(0x9098A4, 0.85), lbl, px)
+      end
+      rx = tx - 6
+      return { x = tx, y = by, w = w, h = bh }
+    end
+    learnBtnRect = uf8Toggle("Touch to Learn",
+      reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
+    paramBtnRect = uf8Toggle("Parameter List",
+      reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
     return
   end
 
   -- Active modifier-layer badge (far right).
   local name = (st.layer == 1 and "OPT") or (st.layer == 2 and "CTRL")
             or (st.layer == 3 and "C+O") or "NORM"
-  local px   = 10   -- fixed chrome (badge + the top toggle buttons)
   local bwm, bhm = measure(name, px)
   local bw = bwm + 20
   local bh = TAB_H - 12
@@ -550,6 +582,12 @@ end
 local function handleUf8CellClick(mx, my)
   local kind, strip = uf8CellAt(mx, my)
   if not kind then return false end
+  -- A param picked in the drawer → software-bind it onto this cell (no wiggle).
+  if selectedParam >= 0 then
+    sendCmd("uf8bind;" .. kind .. ";" .. strip .. ";" .. selectedParam)
+    selectedParam = -1
+    return true
+  end
   if uf8Learn == (kind * 8 + strip) then sendCmd("uf8cancel")
   else                                   sendCmd("uf8learn;" .. kind .. ";" .. strip) end
   return true
@@ -1007,7 +1045,9 @@ local function renderParamPanel(st, asn)
     return
   end
 
-  local rgb = (activeTab == "cs") and csRgb() or bcRgb()
+  local rgb = (activeTab == "cs") and csRgb()
+           or (activeTab == "bc") and bcRgb()
+           or 0x4A90D8                                   -- UF8 accent (blue)
   local _, fxname = reaper.TrackFX_GetFXName(tr, fx, "")
   dtext(x0 + pad, top + pad, col(0xC8CCD4, 1), fit(fxname or "", PW - 2 * pad, hf), hf)
 
@@ -1021,11 +1061,20 @@ local function renderParamPanel(st, asn)
   -- Active-domain mapped param NAMES (for the green-dot tint). hud_assign only
   -- carries names, so we match on name — exact enough for a visual hint.
   local mappedNames = {}
-  for idx, a in pairs(asn) do
-    local g = geom.ctrl[idx]
-    if g and ((activeTab == "cs" and g.dom == "c")
-           or (activeTab == "bc" and g.dom == "b")) then
-      mappedNames[a.name] = true
+  if activeTab == "uf8" then
+    -- UF8 assign is uasn[strip][kind] = { name, ... } — dot every bound param.
+    for _, kinds in pairs(asn) do
+      for _, a in pairs(kinds) do
+        if a.name and a.name ~= "" then mappedNames[a.name] = true end
+      end
+    end
+  else
+    for idx, a in pairs(asn) do
+      local g = geom.ctrl[idx]
+      if g and ((activeTab == "cs" and g.dom == "c")
+             or (activeTab == "bc" and g.dom == "b")) then
+        mappedNames[a.name] = true
+      end
     end
   end
 
@@ -1478,6 +1527,28 @@ local function render()
     else
       renderUf8Grid(ust, uasn)
     end
+    if paramPanelOpen then renderParamPanel(st, uasn) end
+    -- Status banner (mutually exclusive): assigning a picked param → touch-learn
+    -- armed → touch-learn mode idle. Mirrors the UC1 banner stack below.
+    local function uf8Banner(msg, bgRgb, bgA, fgRgb)
+      local px = floor(14 * fontScale() + 0.5)
+      local tw, th = measure(msg, px)
+      local bw, bh = tw + 20, th + 8
+      local bx, by = (WW - RW - bw) / 2, TAB_H + 4
+      rect(bx, by, bw, bh, col(bgRgb, bgA))
+      dtext(bx + 10, by + 4, col(fgRgb, 1), msg, px)
+    end
+    if selectedParam >= 0 then
+      uf8Banner("Assigning " .. selectedParamNm
+        .. "  \xE2\x80\x94  click a UF8 control to bind it   (Esc to cancel)",
+        0x10202C, 0.9, 0x70C0FF)
+    elseif uf8Learn < 0 and reaper.GetExtState(SECT, "hud_touch_learn") == "1" then
+      uf8Banner("Touch to Learn  \xE2\x80\x94  move a UF8 control to arm it, "
+        .. "then wiggle a plug-in parameter", 0x101A14, 0.88, 0x70D0A0)
+    elseif uf8Learn >= 0 then
+      uf8Banner("Learning  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
+        .. "   (click the cell again or Esc to cancel)", 0x101418, 0.88, 0xFFD060)
+    end
     return
   end
 
@@ -1914,9 +1985,13 @@ local function loop()
         end
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
         if activeTab == "uf8" then
-          -- Tab strip → bank row → grid cell. A click that misses everything
-          -- cancels any armed learn (an easy mouse "escape").
+          -- Tab → toggles (Touch-to-Learn / Parameter List) → param row → bank
+          -- row → grid cell. A click that misses everything cancels any armed
+          -- learn (an easy mouse "escape").
           if handleTabClick(lx, ly) then
+          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+          elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
+            handleParamClick(lx, ly)
           else
             local b = uf8BankAt(lx, ly)
             if b then sendCmd("uf8bank;" .. b)
