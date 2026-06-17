@@ -6524,7 +6524,19 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         "Click empty canvas: add point. Drag: move. Right-click: remove.");
 
     ImGui_Separator(ctx);
-    if (ImGui_Button(ctx, "Close##fxl_curve_close", nullptr, nullptr)) {
+    // ESC closes the editor (Frank 2026-06-17). ReaImGui's modal popups
+    // don't auto-dismiss on Escape inside the docked Settings ctx, so handle
+    // it explicitly — mirrors the listen-cancel ESC path below. Guarded by
+    // !IsAnyItemActive so pressing ESC while typing in the Min/Max/Sensitivity
+    // input fields reverts the field (native ImGui behaviour) instead of
+    // tearing down the whole popup on the same keystroke.
+    bool escClose = false;
+    if (!ImGui_IsAnyItemActive(ctx)) {
+        bool escRepeat = false;
+        escClose = ImGui_IsKeyPressed(ctx, ImGui_Key_Escape, &escRepeat);
+    }
+    if (escClose
+        || ImGui_Button(ctx, "Close##fxl_curve_close", nullptr, nullptr)) {
         s_dragIdx = -1;
         g_curveEditorActive = false;
         ImGui_CloseCurrentPopup(ctx);
