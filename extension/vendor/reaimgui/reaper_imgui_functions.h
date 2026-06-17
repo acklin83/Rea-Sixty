@@ -218,7 +218,11 @@ REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ColorEditFlags_Uint8 REAIMGUIAPI_INIT("ImG
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ColorEditFlags__OptionsDefault REAIMGUIAPI_INIT("ImGui_ColorEditFlags__OptionsDefault");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* col_rgbInOut, int* flagsInOptional)> ImGui_ColorPicker3 REAIMGUIAPI_INIT("ImGui_ColorPicker3");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* col_rgbaInOut, int* flagsInOptional, int* ref_colInOptional)> ImGui_ColorPicker4 REAIMGUIAPI_INIT("ImGui_ColorPicker4");
-REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* current_itemInOut, char* items, int* popup_max_height_in_itemsInOptional)> ImGui_Combo REAIMGUIAPI_INIT("ImGui_Combo");
+// Patched 2026-06-17 (full header audit): dylib has a trailing items_sz int
+// after the char* items buffer (REAPER char*-buffer ABI). Vendored was missing
+// it, so a call would land popup_max_height in the items_sz slot. No call sites
+// today (we use BeginCombo — see reaimgui-combo-trap), patched for safety.
+REAIMGUIAPI_EXTERN ReaImGuiFunc<bool(ImGui_Context* ctx, const char* label, int* current_itemInOut, char* items, int items_sz, int* popup_max_height_in_itemsInOptional)> ImGui_Combo REAIMGUIAPI_INIT("ImGui_Combo");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ComboFlags_HeightLarge REAIMGUIAPI_INIT("ImGui_ComboFlags_HeightLarge");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ComboFlags_HeightLargest REAIMGUIAPI_INIT("ImGui_ComboFlags_HeightLargest");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ComboFlags_HeightRegular REAIMGUIAPI_INIT("ImGui_ComboFlags_HeightRegular");
@@ -236,12 +240,16 @@ REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ConfigFlags_NavEnableSetMousePos REAIMGUIA
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ConfigFlags_NoMouse REAIMGUIAPI_INIT("ImGui_ConfigFlags_NoMouse");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ConfigFlags_NoMouseCursorChange REAIMGUIAPI_INIT("ImGui_ConfigFlags_NoMouseCursorChange");
 REAIMGUIAPI_EXTERN ReaImGuiEnum ImGui_ConfigFlags_None REAIMGUIAPI_INIT("ImGui_ConfigFlags_None");
-// Patched 2026-05-01: installed ReaImGui (v0.10+) makes size_w/size_h
-// optional int pointers — passing literal ints crashed because the
-// dylib's CallConv::Safe trampoline dereferenced them as int*.
-// Crash symbol confirms: Tag<int*, (unsigned char)9>. Call sites must
-// pass nullptr (defaults) or &int.
-REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_Context*(const char* title, int* size_wInOptional, int* size_hInOptional, int* pos_xInOptional, int* pos_yInOptional)> ImGui_CreateContext REAIMGUIAPI_INIT("ImGui_CreateContext");
+// Patched 2026-06-17 (full header audit): the installed dylib dropped the
+// size/pos args entirely — CreateContext is now (label, config_flagsInOptional),
+// 2 args. dylib metadata: ret=ImGui_Context*, types=const char*,int*, names=
+// label,config_flagsInOptional. The old 5-arg sig (2026-05-01 patch below) was
+// stale after a ReaPack ReaImGui update: our call passed &sizeW where the dylib
+// reads config_flags, so the context got garbage flags (=1280). Window size is
+// set via SetNextWindowSize, not here. Call sites: pass nullptr for config_flags.
+//   (Prior note kept for history: literal ints once crashed via int* deref —
+//    Tag<int*,(unsigned char)9>; see learnings #17.)
+REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_Context*(const char* label, int* config_flagsInOptional)> ImGui_CreateContext REAIMGUIAPI_INIT("ImGui_CreateContext");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<ImGui_ListClipper*(ImGui_Context* ctx)> ImGui_CreateListClipper REAIMGUIAPI_INIT("ImGui_CreateListClipper");
 // Disabled 2026-05-01: ImGui_DestroyContext is NOT exported by ReaImGui
 // v0.10+ (verified via `strings reaper_imgui-arm64.dylib | grep -i destroy`
@@ -589,7 +597,13 @@ REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double size_w, double s
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx)> ImGui_SetNextWindowFocus REAIMGUIAPI_INIT("ImGui_SetNextWindowFocus");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double pos_x, double pos_y, int* condInOptional, double* pivot_xInOptional, double* pivot_yInOptional)> ImGui_SetNextWindowPos REAIMGUIAPI_INIT("ImGui_SetNextWindowPos");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double size_w, double size_h, int* condInOptional)> ImGui_SetNextWindowSize REAIMGUIAPI_INIT("ImGui_SetNextWindowSize");
-REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double size_min_w, double size_min_h, double size_max_w, double size_max_h)> ImGui_SetNextWindowSizeConstraints REAIMGUIAPI_INIT("ImGui_SetNextWindowSizeConstraints");
+// Patched 2026-06-17: v0.10 added a trailing optional ImGui_Function* (custom
+// size-constraint callback). The vendored v0.1.1 sig had only the 4 doubles, so
+// the dylib trampoline read a 6th arg off the stack and logged "!ImGui_SetNext-
+// WindowSizeConstraints: expected a valid ImGui_Function*, got 0x..." on every
+// call (surfaced via the UF8 mockup param-combo / action-picker). Add the
+// optional arg; pass nullptr at all call sites. See learnings #21.
+REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double size_min_w, double size_min_h, double size_max_w, double size_max_h, ImGui_Function* custom_callbackInOptional)> ImGui_SetNextWindowSizeConstraints REAIMGUIAPI_INIT("ImGui_SetNextWindowSizeConstraints");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double local_x, double* center_x_ratioInOptional)> ImGui_SetScrollFromPosX REAIMGUIAPI_INIT("ImGui_SetScrollFromPosX");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double local_y, double* center_y_ratioInOptional)> ImGui_SetScrollFromPosY REAIMGUIAPI_INIT("ImGui_SetScrollFromPosY");
 REAIMGUIAPI_EXTERN ReaImGuiFunc<void(ImGui_Context* ctx, double* center_x_ratioInOptional)> ImGui_SetScrollHereX REAIMGUIAPI_INIT("ImGui_SetScrollHereX");

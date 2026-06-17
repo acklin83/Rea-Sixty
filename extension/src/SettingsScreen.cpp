@@ -2553,7 +2553,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // indent + scrollbar.
         constexpr double kPopupW = 360.0;
         ImGui_SetNextWindowSizeConstraints(
-            ctx, kPopupW, 0.0, kPopupW, 999999.0);
+            ctx, kPopupW, 0.0, kPopupW, 999999.0, nullptr);
 
         // HeightLargest = ~20 rows visible — short popup forced two
         // page-scrolls to find anything past the first category. We
@@ -10923,7 +10923,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     }
     constexpr double kMapPopupW = 420.0;
     ImGui_SetNextWindowSizeConstraints(
-        ctx, kMapPopupW, 0.0, kMapPopupW, 999999.0);
+        ctx, kMapPopupW, 0.0, kMapPopupW, 999999.0, nullptr);
     int mapComboFlags = ImGui_ComboFlags_HeightLargest;
     if (ImGui_BeginCombo(ctx, "##fxl_map_picker", preview,
                          &mapComboFlags))
@@ -11831,7 +11831,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // width (same fix the action picker uses). Frank 2026-06-03.
             const double kAlComboW = scaleW_(ctx, 320.0);
             ImGui_SetNextWindowSizeConstraints(
-                ctx, kAlComboW, 0.0, kAlComboW, 999999.0);
+                ctx, kAlComboW, 0.0, kAlComboW, 999999.0, nullptr);
             if (ImGui_BeginCombo(ctx, comboId, preview, &comboFlags)) {
                 // Pin popup width via a fixed-width spacer — see drawActionPicker.
                 ImGui_Dummy(ctx, kAlComboW, 0.0);
@@ -12043,7 +12043,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         const double kAlParamComboW = scaleW_(ctx, 320.0);
                         ImGui_SetNextWindowSizeConstraints(
                             ctx, kAlParamComboW, 0.0,
-                            kAlParamComboW, 999999.0);
+                            kAlParamComboW, 999999.0, nullptr);
                         if (ImGui_BeginCombo(ctx, comboId, paramPreview,
                                              &comboFlags))
                         {

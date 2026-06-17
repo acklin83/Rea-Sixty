@@ -162,10 +162,12 @@ struct MixerWindow::Impl {
     void ensureCtx()
     {
         if (ctx) return;
-        // v0.10+ ImGui_CreateContext takes optional int* for all four
-        // dimension args — passing raw ints (1280, 720) crashed because
-        // the dylib's trampoline dereferenced them as pointers (= addr
-        // 0x500). Must pass &int or nullptr. See learnings.md rule 17.
+        // The installed ReaImGui dropped CreateContext's size/pos args — the
+        // current dylib sig is (label, config_flagsInOptional). We previously
+        // passed &sizeW/&sizeH, which the dylib reinterpreted as config_flags
+        // (= garbage flags). Pass nullptr for config_flags; the window size is
+        // applied via SetNextWindowSize in onRunTick. Found in the 2026-06-17
+        // full-header sig audit (learnings #21 / reaimgui-sig-audit).
         //
         // Context name carries a version suffix so a fresh ReaImGui
         // state file is allocated. Stale persisted state under the bare
@@ -173,12 +175,7 @@ struct MixerWindow::Impl {
         // recent debugging sessions — bumping the suffix forces v0.10
         // to treat us as a brand-new context with no carried-over
         // collapsed / off-screen / closed pose.
-        int sizeW = 1280;
-        int sizeH = 720;
-        ctx = ImGui_CreateContext(
-            "Rea-Sixty v2",
-            &sizeW, &sizeH,
-            /*pos_x*/ nullptr, /*pos_y*/ nullptr);
+        ctx = ImGui_CreateContext("Rea-Sixty v2", /*config_flags*/ nullptr);
 
         // Load a generic sans-serif font and attach to the freshly
         // created context. CreateFont in v0.10 returns a sizeless
