@@ -1183,6 +1183,189 @@ local function renderUf8Grid(ust, uasn)
   end
 end
 
+-- UF8 device tab — hardware MOCKUP view (mirrors the CS/BC mockup; the strip-
+-- grid above is the list view). Draws the 8 strips as a hardware face (V-Pot
+-- ring, Solo/Cut, fader, Sel) + the Top-Soft-Key bank row with bank colours,
+-- and registers the SAME uf8Rects / uf8BankRects the grid does so learn / colour
+-- / bank-switch / context menus all work unchanged. Frank 2026-06-17.
+local function renderUf8Face(ust, uasn)
+  ctrlRects = {}
+  uf8Rects  = {}
+  local availW = WW - RW
+  local top    = TAB_H
+  local hpx    = floor(13 * fontScale() + 0.5)
+
+  local sub
+  if ust.present then
+    sub = (ust.short ~= "" and ust.short or "UF8 plug-in")
+        .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2"
+  elseif ust.boot then
+    sub = "Map " .. (ust.short ~= "" and ust.short or "plug-in")
+        .. "  \xE2\x80\x94  click a control, then wiggle a parameter to create a UF8 map"
+  else
+    sub = "No UF8 plug-in on the focused track"
+  end
+  local _, subH = measure(sub, hpx)
+  dtext(10, top + 6, col(0x9098A4, 0.95), sub, hpx)
+  if not ust.present and not ust.boot then return end
+
+  -- Top-Soft-Key bank row (with per-bank colour accent strip).
+  uf8BankRects = {}
+  uf8Banks, uf8BankCols = readUf8Banks()
+  local bankPx = floor(11 * fontScale() + 0.5)
+  local bankY  = top + 6 + subH + 6
+  local bankH  = floor(bankPx + 10 * fontScale() + 0.5)
+  do
+    local gl = "V-Pot Bank"
+    local _, glh = measure(gl, bankPx)
+    dtext(10, bankY + (bankH - glh) / 2, col(0x8890A0, 0.85), gl, bankPx)
+    local minW = floor(22 * fontScale() + 0.5)
+    local maxW = floor(96 * fontScale() + 0.5)
+    local bx   = 10 + measure(gl, bankPx) + 10
+    for b = 0, 7 do
+      local lbl  = uf8Banks[b]
+      local txt  = (lbl and lbl ~= "") and lbl or tostring(b + 1)
+      local tw   = measure(txt, bankPx)
+      local cw   = math.max(minW, math.min(maxW, tw + 12))
+      local disp = fit(txt, cw - 8, bankPx)
+      local on   = (b == ust.vpotBank)
+      rect(bx, bankY, cw, bankH, col(on and UF8_ACCENT or 0x2A2A30, on and 0.9 or 1))
+      local bc = uf8BankCols[b]
+      if bc then rect(bx, bankY + bankH - 3, cw, 3, col(bc, 1)) end
+      local dw, dh = measure(disp, bankPx)
+      dtext(bx + (cw - dw) / 2, bankY + (bankH - dh) / 2 - 1,
+            col(on and 0x121214 or 0x9098A4, on and 1 or 0.8), disp, bankPx)
+      uf8BankRects[#uf8BankRects + 1] = { b = b, x = bx, y = bankY, w = cw, h = bankH }
+      bx = bx + cw + 4
+    end
+  end
+
+  -- Strip area geometry.
+  local stripsTop = bankY + bankH + 14
+  local H = WH - stripsTop - 8
+  if H < 90 then return end
+  local colW = availW / 8
+  local spx  = floor(10 * fontScale() + 0.5)
+  local vpotH = H * 0.26
+  local btnH  = math.min(H * 0.10, 22)
+  local gap   = 6
+  local selH  = btnH
+  local faderTop = stripsTop + vpotH + btnH + gap * 2
+  local faderBot = stripsTop + H - selH - gap - 4
+  local faderH   = faderBot - faderTop
+
+  -- Mapped-aware rectangular cell (Solo / Cut / Sel) + hit-rect.
+  local function faceCell(kind, strip, x, y, w, h, deflbl)
+    local a        = uasn[strip] and uasn[strip][kind]
+    local mapped   = a and a.name ~= ""
+    local learning = uf8Learn == (kind * 8 + strip)
+    rect(x, y, w, h, mapped and col(UF8_ACCENT, 0.28) or col(0x252A33, 1))
+    reaper.ImGui_DrawList_AddRect(dl, OX + x, OY + y, OX + x + w, OY + y + h,
+      col(mapped and UF8_ACCENT or 0x444A56, 1), 3, 0, 1)
+    if learning then
+      local p = 0.3 + 0.3 * math.abs((frame % 50) / 25 - 1)
+      reaper.ImGui_DrawList_AddRect(dl, OX + x - 1, OY + y - 1, OX + x + w + 1,
+        OY + y + h + 1, col(0xFFFFFF, p), 3, 0, 2)
+    end
+    local disp   = fit(mapped and a.name or deflbl, w - 6, spx)
+    local tw, th = measure(disp, spx)
+    dtext(x + (w - tw) / 2, y + (h - th) / 2,
+      col(mapped and 0xFFFFFF or 0x808890, mapped and 1 or 0.75), disp, spx)
+    uf8Rects[#uf8Rects + 1] = { kind = kind, strip = strip, x = x, y = y, w = w, h = h }
+  end
+
+  for s = 0, 7 do
+    local colX   = s * colW
+    local cxC    = colX + colW / 2
+    local padX   = math.max(4, colW * 0.10)
+    local innerX = colX + padX
+    local innerW = colW - 2 * padX
+
+    -- strip number
+    local hs = tostring(s + 1)
+    local nw = measure(hs, spx)
+    dtext(cxC - nw / 2, stripsTop - 2, col(UF8_ACCENT, 0.85), hs, spx)
+
+    -- V-Pot ring (kind 0)
+    do
+      local rV = math.min(innerW * 0.5, vpotH * 0.42)
+      local vcx, vcy = cxC, stripsTop + 12 + rV
+      local a        = uasn[s] and uasn[s][0]
+      local mapped   = a and a.name ~= ""
+      local learning = uf8Learn == s   -- kind 0
+      reaper.ImGui_DrawList_AddCircleFilled(dl, OX + vcx, OY + vcy, rV, col(0x14181E, 1))
+      reaper.ImGui_DrawList_AddCircle(dl, OX + vcx, OY + vcy, rV, col(0x4A5060, 1), 0, math.max(1, rV * 0.10))
+      reaper.ImGui_DrawList_AddCircleFilled(dl, OX + vcx, OY + vcy, rV * 0.74,
+        col(mapped and UF8_ACCENT or 0x2A3340, mapped and 0.9 or 1))
+      if mapped then
+        reaper.ImGui_DrawList_AddCircle(dl, OX + vcx, OY + vcy, rV + 2, col(UF8_ACCENT, 0.9), 0, math.max(1, rV * 0.12))
+      end
+      if learning then
+        local p = 0.4 + 0.4 * math.abs((frame % 50) / 25 - 1)
+        reaper.ImGui_DrawList_AddCircle(dl, OX + vcx, OY + vcy, rV + 3, col(0xFFFFFF, p), 0, math.max(1, rV * 0.14))
+      end
+      reaper.ImGui_DrawList_AddLine(dl, OX + vcx, OY + vcy - rV * 0.82,
+        OX + vcx, OY + vcy - rV * 0.42, col(0xE8E8E8, 0.9), math.max(1, rV * 0.13))
+      if mapped then
+        local nm = fit(a.name, innerW, spx)
+        local tw2, th2 = measure(nm, spx)
+        dtext(cxC - tw2 / 2, vcy + rV + 3, col(0xC0C6D0, 0.95), nm, spx)
+      end
+      uf8Rects[#uf8Rects + 1] = { kind = 0, strip = s, x = vcx - rV, y = vcy - rV, w = 2 * rV, h = 2 * rV }
+    end
+
+    -- Solo (kind 2) + Cut (kind 3)
+    do
+      local by    = stripsTop + vpotH + gap
+      local halfW = (innerW - 4) / 2
+      faceCell(2, s, innerX, by, halfW, btnH, "S")
+      faceCell(3, s, innerX + halfW + 4, by, halfW, btnH, "C")
+    end
+
+    -- Fader (kind 1) — track + cap (no live value → centred cap).
+    do
+      local trackW   = math.max(6, innerW * 0.16)
+      local tx       = cxC - trackW / 2
+      rect(tx, faderTop, trackW, faderH, col(0x1A1E26, 1))
+      reaper.ImGui_DrawList_AddRect(dl, OX + tx, OY + faderTop, OX + tx + trackW,
+        OY + faderTop + faderH, col(0x3A4250, 1), 2, 0, 1)
+      local a        = uasn[s] and uasn[s][1]
+      local mapped   = a and a.name ~= ""
+      local learning = uf8Learn == (8 + s)   -- kind 1
+      local capW = innerW * 0.62
+      local capH = math.max(8, faderH * 0.05)
+      local capY = faderTop + faderH * 0.45
+      rect(cxC - capW / 2, capY, capW, capH, mapped and col(UF8_ACCENT, 0.95) or col(0xC0C6D0, 0.9))
+      if learning then
+        local p = 0.3 + 0.3 * math.abs((frame % 50) / 25 - 1)
+        reaper.ImGui_DrawList_AddRect(dl, OX + cxC - capW / 2 - 1, OY + capY - 1,
+          OX + cxC + capW / 2 + 1, OY + capY + capH + 1, col(0xFFFFFF, p), 2, 0, 2)
+      end
+      if mapped then
+        local nm = fit(a.name, innerW, spx)
+        local tw2, th2 = measure(nm, spx)
+        dtext(cxC - tw2 / 2, faderTop - th2 - 1, col(0xC0C6D0, 0.95), nm, spx)
+      end
+      uf8Rects[#uf8Rects + 1] = { kind = 1, strip = s, x = tx - 6, y = faderTop, w = trackW + 12, h = faderH }
+    end
+
+    -- Sel (kind 4)
+    faceCell(4, s, innerX, faderBot + gap, innerW, selH, "Sel")
+  end
+
+  if uf8Learn >= 0 then
+    local kd  = UF8_KINDS[floor(uf8Learn / 8) + 1]
+    local stp = (uf8Learn % 8) + 1
+    local msg = "Learning " .. ((kd and kd.l) or "?") .. " " .. stp
+             .. "  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
+             .. "   (click again or Esc to cancel)"
+    local mpx = floor(13 * fontScale() + 0.5)
+    local tw, th = measure(msg, mpx)
+    rect(8, top + 4, tw + 20, th + 8, col(0x101418, 0.9))
+    dtext(18, top + 8, col(0xFFD060, 1), msg, mpx)
+  end
+end
+
 local function render()
   TAB_H = 38   -- fixed chrome height (text-size option only affects list/param body)
 
@@ -1242,9 +1425,15 @@ local function render()
     reaper.SetExtState(SECT, "hud_uf8_tab", onUf8 and "1" or "0", false)
   end
 
-  -- UF8 device tab: own strip-grid renderer, independent of the UC1 geometry.
+  -- UF8 device tab: list view = strip-grid, mockup view = hardware face. Mirrors
+  -- the CS/BC list/mockup toggle (shared hud_imgui_view). Independent of the UC1
+  -- geometry.
   if onUf8 then
-    renderUf8Grid(ust, uasn)
+    if reaper.GetExtState(SECT, "hud_imgui_view") == "mockup" then
+      renderUf8Face(ust, uasn)
+    else
+      renderUf8Grid(ust, uasn)
+    end
     return
   end
 
