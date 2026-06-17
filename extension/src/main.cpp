@@ -9582,12 +9582,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 continue;
             }
             const uint8_t strip = rawStrip;
-            // Touch-to-Learn: touching the fader cap (ON edge) arms its cell
-            // (kind 1) instead of grabbing the fader — suppress the rest.
-            if (state != 0 && uf8TouchLearnArm_(1, strip)) {
-                i += frameSize;
-                continue;
-            }
+            // Touch-to-Learn: touching the fader cap arms its cell (kind 1). We
+            // do NOT suppress the normal touch handling below — that limps the
+            // motor (so the fader stays loose under the finger) and merely
+            // re-seeds the current volume; the fader only writes a value if it's
+            // physically moved, which a learn-touch doesn't.
+            if (state != 0) uf8TouchLearnArm_(1, strip);
             if (strip < 8) {
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive

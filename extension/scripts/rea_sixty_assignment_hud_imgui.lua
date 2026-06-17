@@ -189,6 +189,7 @@ local paramScroll      = 0
 local paramMaxScroll   = 0
 local paramCacheKey    = nil
 local paramList        = {}
+local escDownPrev      = false   -- global-Escape rising-edge tracker (js API)
 
 local function sendCmd(s) reaper.SetExtState(SECT, "hud_cmd", s, false) end
 
@@ -1229,21 +1230,8 @@ local function renderUf8Grid(ust, uasn)
         { kind = kd.k, strip = s, x = cx, y = ry, w = colW, h = rowH }
     end
   end
-
-  -- Learn banner (transient; UF8 has no param panel / Touch-to-Learn here). The
-  -- boot hint lives in the subheader so it doesn't permanently cover anything.
-  if uf8Learn >= 0 then
-    local kd  = UF8_KINDS[floor(uf8Learn / 8) + 1]
-    local stp = (uf8Learn % 8) + 1
-    local msg = "Learning " .. ((kd and kd.l) or "?") .. " " .. stp
-             .. "  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
-             .. "   (click again or Esc to cancel)"
-    local mpx = floor(13 * fontScale() + 0.5)
-    local tw, th = measure(msg, mpx)
-    local bx, by = 8, top + 4
-    rect(bx, by, tw + 20, th + 8, col(0x101418, 0.9))
-    dtext(bx + 10, by + 4, col(0xFFD060, 1), msg, mpx)
-  end
+  -- (The learn / touch-learn / assigning banner is drawn once in render(), after
+  -- the view dispatch, so it covers both the grid and mockup views.)
 end
 
 -- UF8 device tab — hardware MOCKUP view, faithful to the FX-Learn UF8 face
@@ -1529,12 +1517,13 @@ local function render()
     end
     if paramPanelOpen then renderParamPanel(st, uasn) end
     -- Status banner (mutually exclusive): assigning a picked param → touch-learn
-    -- armed → touch-learn mode idle. Mirrors the UC1 banner stack below.
+    -- armed → touch-learn mode idle. Pinned to the BOTTOM of the window so it
+    -- never covers the plug-in name / bank row at the top (Frank 2026-06-17).
     local function uf8Banner(msg, bgRgb, bgA, fgRgb)
       local px = floor(14 * fontScale() + 0.5)
       local tw, th = measure(msg, px)
       local bw, bh = tw + 20, th + 8
-      local bx, by = (WW - RW - bw) / 2, TAB_H + 4
+      local bx, by = (WW - RW - bw) / 2, WH - bh - 8
       rect(bx, by, bw, bh, col(bgRgb, bgA))
       dtext(bx + 10, by + 4, col(fgRgb, 1), msg, px)
     end
@@ -2034,7 +2023,17 @@ local function loop()
       end
     end
 
-    if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
+    -- Escape cancels the current assign / learn. ImGui only sees the key while
+    -- the HUD window is focused, but the usual flow arms a control then clicks
+    -- into the plug-in GUI to wiggle — which defocuses the HUD — so also read
+    -- Escape globally (rising edge) via js_ReaScriptAPI when it's installed.
+    local escPressed = reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape())
+    if reaper.JS_VKeys_GetState then
+      local down = (reaper.JS_VKeys_GetState(0):byte(27) == 1)   -- VK_ESCAPE = 27
+      if down and not escDownPrev then escPressed = true end
+      escDownPrev = down
+    end
+    if escPressed then
       if selectedParam >= 0 then selectedParam = -1
       elseif paramFilter ~= "" then paramFilter = ""
       elseif uf8Learn >= 0 then sendCmd("uf8cancel")
