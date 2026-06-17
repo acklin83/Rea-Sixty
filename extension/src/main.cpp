@@ -94,7 +94,8 @@ void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
 void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                                    int faderBank, int vpotBank, const char* bootShort,
                                    bool focus, std::string& stateOut, std::string& assignOut,
-                                   std::string& banksOut);
+                                   std::string& banksOut, std::string& stripColsOut);
+bool        reasixty_hudUf8FillStripColours(unsigned int rgb, int fb, int vb, void* tr, int fx);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
 bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
@@ -5431,6 +5432,7 @@ std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx strin
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
+std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
@@ -5668,12 +5670,17 @@ void publishHud_()
             MediaTrack* vTr = nullptr; int vFx = -1;
             if (hudCursorUnlearnedFx_(vTr, vFx)) uf8Boot = shortFxName_(vTr, vFx);
         }
-        std::string uf8State, uf8Assign, uf8Banks;
+        std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;
         reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
-                               uf8Boot.c_str(), uf8Focus, uf8State, uf8Assign, uf8Banks);
+                               uf8Boot.c_str(), uf8Focus, uf8State, uf8Assign,
+                               uf8Banks, uf8StripCols);
         if (uf8Banks != g_hudUf8BanksPublished) {
             g_hudUf8BanksPublished = uf8Banks;
             SetExtState("rea_sixty", "hud_uf8_banks", uf8Banks.c_str(), false);
+        }
+        if (uf8StripCols != g_hudUf8StripColsPublished) {
+            g_hudUf8StripColsPublished = uf8StripCols;
+            SetExtState("rea_sixty", "hud_uf8_stripcols", uf8StripCols.c_str(), false);
         }
         if (uf8State != g_hudUf8StatePublished) {
             g_hudUf8StatePublished = uf8State;
@@ -14943,6 +14950,21 @@ void onTimer()
                         g_hudUf8BanksPublished.clear();
                         publishHud_();
                     }
+                }
+            } else if (s.rfind("uf8stripcolfill;", 0) == 0) {
+                // "uf8stripcolfill;<RRGGBB>" — one display colour-bar colour for
+                // all 8 strips of the active bank (FX-Learn "Fill all"). 0=clear.
+                const unsigned int rgb = static_cast<unsigned int>(
+                    std::strtoul(s.c_str() + 16, nullptr, 16)) & 0x00FFFFFFu;
+                MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                resolveFocusedUf8Target_(tr, fx, mp);
+                const int fb = std::clamp(g_uf8FaderBank.load(),
+                                          0, uf8::kUserUf8FaderBankCount - 1);
+                const int vb = std::clamp(g_softKeyBank.load(),
+                                          0, uf8::kUserUf8VpotBankCount - 1);
+                if (reasixty_hudUf8FillStripColours(rgb, fb, vb, tr, fx)) {
+                    g_hudUf8StripColsPublished.clear();
+                    publishHud_();
                 }
             } else if (s.rfind("uf8cancel", 0) == 0) {
                 reasixty_hudUf8CancelLearn();

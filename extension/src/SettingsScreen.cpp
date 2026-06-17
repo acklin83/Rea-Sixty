@@ -7679,7 +7679,8 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
 // tab. State: "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<focus>;<short>".
 void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
                     int faderBank, int vpotBank, const char* bootShort, bool focus,
-                    std::string& stateOut, std::string& assignOut, std::string& banksOut)
+                    std::string& stateOut, std::string& assignOut, std::string& banksOut,
+                    std::string& stripColsOut)
 {
     auto*       tr = static_cast<MediaTrack*>(trV);
     const auto* um = static_cast<const uf8::UserPluginMap*>(mapV);
@@ -7687,6 +7688,18 @@ void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
                      && ValidatePtr2(nullptr, tr, "MediaTrack*");
     const int fb = std::clamp(faderBank, 0, uf8::kUserUf8FaderBankCount - 1);
     const int vb = std::clamp(vpotBank,  0, uf8::kUserUf8VpotBankCount  - 1);
+    // Display colour-bar colours for the active (fb,vb) bank's 8 strips —
+    // "RRGGBB;..." so the HUD mockup can paint the bars (Frank 2026-06-17).
+    stripColsOut.clear();
+    if (valid) {
+        for (int s = 0; s < 8; ++s) {
+            char c[8];
+            std::snprintf(c, sizeof(c), "%06X",
+                          um->uf8.banks.banks[fb][vb][s].stripColour & 0x00FFFFFFu);
+            stripColsOut += c;
+            if (s < 7) stripColsOut += ';';
+        }
+    }
     const bool  boot = !valid && bootShort && bootShort[0];
     const char* shortNm = valid
                         ? (um->displayShort.empty() ? "" : um->displayShort.c_str())
@@ -8111,6 +8124,27 @@ bool hudUf8BankColour_(int bank, uint32_t rgb, void* trV, int fx)
     std::string match;
     if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
     return hudUf8SetBankColourMatch_(match, bank, rgb);
+}
+// Display colour-bar "fill all" — one colour for all 8 strips of the active
+// (fb,vb) bank. Mirrors FX-Learn fillAllStripColours_ but targets the focused
+// map (not g_editingMatch). rgb 0 = clear (back to track-colour fallback).
+bool hudUf8FillStripColours_(uint32_t rgb, int fb, int vb, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount) return false;
+    if (vb < 0 || vb >= uf8::kUserUf8VpotBankCount)  return false;
+    rgb &= 0x00FFFFFFu;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        for (int s = 0; s < 8; ++s)
+            m.uf8.banks.banks[fb][vb][s].stripColour = rgb;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
 }
 
 // "Fill sequential" for a UF8 row — when cell (kind, strip) is mapped to a
@@ -14911,10 +14945,10 @@ void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
 void reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                             int faderBank, int vpotBank, const char* bootShort,
                             bool focus, std::string& stateOut, std::string& assignOut,
-                            std::string& banksOut)
+                            std::string& banksOut, std::string& stripColsOut)
 {
     uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, bootShort, focus,
-                        stateOut, assignOut, banksOut);
+                        stateOut, assignOut, banksOut, stripColsOut);
 }
 
 // Learn-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
@@ -14987,6 +15021,10 @@ bool reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx)
 bool reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx)
 {
     return uf8::hudUf8BankColour_(bank, rgb, tr, fx);
+}
+bool reasixty_hudUf8FillStripColours(unsigned int rgb, int fb, int vb, void* tr, int fx)
+{
+    return uf8::hudUf8FillStripColours_(rgb, fb, vb, tr, fx);
 }
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its

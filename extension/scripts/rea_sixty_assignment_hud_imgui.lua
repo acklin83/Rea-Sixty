@@ -158,6 +158,7 @@ local ctxUf8Strip  = -1
 local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
 local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
 local uf8BankCols  = {}   -- [0..7] = V-Pot bank colour (0xRRGGBB or nil)
+local uf8StripCols = {}   -- [0..7] = display colour-bar colour for the active bank
 -- The 10 hardware-renderable SSL DAW-Colour swatches (must match
 -- selPaletteRgb in Protocol.cpp): red, orange, yellow, green, cyan, blue,
 -- purple, magenta, pink, white.
@@ -288,6 +289,19 @@ local function readUf8Banks()
     cols[b]   = tonumber(fields[b * 2 + 2] or "", 16)
   end
   return labels, cols
+end
+
+-- Display colour-bar colours for the ACTIVE V-Pot bank's 8 strips.
+-- "RRGGBB;RRGGBB;…" (8 fields; "0" / empty = unset).
+local function readUf8StripCols()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_stripcols")
+  local t = {}
+  local i = 0
+  for field in (raw .. ";"):gmatch("([^;]*);") do
+    t[i] = tonumber(field, 16); i = i + 1
+    if i >= 8 then break end
+  end
+  return t
 end
 
 local SECTION_ORDER = {
@@ -1193,32 +1207,37 @@ local function renderUf8Face(ust, uasn)
   ctrlRects    = {}
   uf8Rects     = {}
   uf8BankRects = {}
-  local availW = WW - RW
-  local top    = TAB_H
-  local hpx    = floor(13 * fontScale() + 0.5)
-
-  local sub
-  if ust.present then
-    sub = (ust.short ~= "" and ust.short or "UF8 plug-in")
-        .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2"
-  elseif ust.boot then
-    sub = "Map " .. (ust.short ~= "" and ust.short or "plug-in")
-        .. "  \xE2\x80\x94  click a control, then wiggle a parameter to create a UF8 map"
-  else
-    sub = "No UF8 plug-in on the focused track"
-  end
-  local _, subH = measure(sub, hpx)
-  dtext(10, top + 6, col(0x9098A4, 0.95), sub, hpx)
   uf8Banks, uf8BankCols = readUf8Banks()
-  if not ust.present and not ust.boot then return end
+  uf8StripCols = readUf8StripCols()
 
-  -- Design-space face (860x520) scaled to fill width, clamped to height.
-  local FW, FH  = 860, 520
-  local faceTop = top + 6 + subH + 8
-  local availH  = WH - faceTop - 6
-  if availH < 120 then return end
-  local sc    = math.min((availW - 8) / FW, availH / FH)
-  local faceX = math.max(4, (availW - FW * sc) / 2)
+  -- Same sizing as the CS/BC mockup (renderFace): design face centred in the
+  -- full content area, scaled to fit, accounting for the param-list strip (RW).
+  local FW, FH = 860, 520
+  local M, top = 8, TAB_H + 6
+  local availW, availH = (WW - RW) - 2 * M, WH - top - M
+  if availW < 60 or availH < 60 then return end
+
+  if not ust.present and not ust.boot then
+    local msg = "No UF8 plug-in on the focused track"
+    local mpx = floor(14 * fontScale() + 0.5)
+    local tw, th = measure(msg, mpx)
+    dtext(M + (availW - tw) / 2, top + (availH - th) / 2, col(0x808890, 0.9), msg, mpx)
+    return
+  end
+
+  local sc      = math.min(availW / FW, availH / FH)
+  local faceX   = M + (availW - FW * sc) / 2
+  local faceTop = top + (availH - FH * sc) / 2
+
+  -- Compact context line in the top centring margin (plugin + fader bank).
+  do
+    local info = ust.boot
+      and ("Map " .. (ust.short ~= "" and ust.short or "plug-in")
+           .. "  \xE2\x80\x94  click a control, then wiggle a parameter")
+      or  ((ust.short ~= "" and ust.short or "UF8")
+           .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2")
+    dtext(M + 2, top, col(0x9098A4, 0.9), info, floor(12 * fontScale() + 0.5))
+  end
 
   local function px(dx) return faceX + dx * sc end
   local function py(dy) return faceTop + dy * sc end
@@ -1243,7 +1262,10 @@ local function renderUf8Face(ust, uasn)
   local BAR_H        = 16
   local VP_CY, VP_R  = 124, 18
   local SOLO_Y, CUT_Y, SEL_Y, SCS_H = 152, 172, 192, 16
-  local RAIL_Y, RAIL_H, RAIL_W = 216, 240, 22
+  -- Fader name band sits between SEL (ends 208) and the rail so a long fader
+  -- param name ("Volume A") has room and never overlaps SEL (Frank 2026-06-17).
+  local NAME_Y = 214
+  local RAIL_Y, RAIL_H, RAIL_W = 234, 222, 22
 
   local fLbl = math.max(7, floor(12 * sc + 0.5))
   local fSm  = math.max(7, floor(11 * sc + 0.5))
@@ -1292,8 +1314,13 @@ local function renderUf8Face(ust, uasn)
         sctext(cx, SCR_Y + 14, col(0xE8ECF2, 0.96), fit(a.name, (STRIPW - 12) * sc, fSm), fSm)
       end
     end
-    -- colour bar (per-strip stripColour not in the HUD payload yet → neutral).
-    sr(colX + 6, SCR_Y + SCR_H - BAR_H - 2, STRIPW - 12, BAR_H, col(0x404040, 0.5), nil, 0)
+    -- Display colour bar — per-strip stripColour (RGBA 0xRRGGBBAA), dim grey
+    -- when unset. Right-click the bank menu → "Bar colour (all)" to set them.
+    do
+      local bar = uf8StripCols and uf8StripCols[s]
+      local bfill = (bar and bar ~= 0) and ((bar << 8) | 0xFF) or col(0x404040, 0.5)
+      sr(colX + 6, SCR_Y + SCR_H - BAR_H - 2, STRIPW - 12, BAR_H, bfill, nil, 0)
+    end
 
     -- V-Pot ring (kind 0)
     do
@@ -1350,7 +1377,7 @@ local function renderUf8Face(ust, uasn)
         sr(cx - RAIL_W / 2 - 2, thumbY - 1, RAIL_W + 4, 12, 0, col(0xFFFFFF, p), 2)
       end
       if mapped then
-        sctext(cx, RAIL_Y - 8, col(0xC0C6D0, 0.95), fit(a.name, STRIPW * sc, fSm), fSm)
+        sctext(cx, NAME_Y + 6, col(0xC0C6D0, 0.95), fit(a.name, STRIPW * sc, fSm), fSm)
       end
       uf8Rects[#uf8Rects + 1] =
         { kind = 1, strip = s, x = px(cx - RAIL_W / 2 - 4), y = py(RAIL_Y),
@@ -1761,6 +1788,23 @@ local function drawUf8BankContextMenu()
   for i, rgb in ipairs(UF8_BANK_PALETTE) do
     if reaper.ImGui_ColorButton(ctx, "##bankcol" .. i, (rgb << 8) | 0xFF, 0, 20, 20) then
       sendCmd(string.format("uf8bankcolour;%d;%06X", ctxUf8Bank, rgb))
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    if i % 5 ~= 0 then reaper.ImGui_SameLine(ctx) end
+  end
+
+  -- Display colour-bar colour — ONE colour for all 8 strips of the active bank
+  -- (like FX-Learn "Fill all"). Sets the per-strip stripColour, not the LED.
+  reaper.ImGui_Separator(ctx)
+  reaper.ImGui_Text(ctx, "Bar colour (all)")
+  reaper.ImGui_SameLine(ctx)
+  if reaper.ImGui_SmallButton(ctx, "Default##barcoldef") then
+    sendCmd("uf8stripcolfill;000000")
+    reaper.ImGui_CloseCurrentPopup(ctx)
+  end
+  for i, rgb in ipairs(UF8_BANK_PALETTE) do
+    if reaper.ImGui_ColorButton(ctx, "##barcol" .. i, (rgb << 8) | 0xFF, 0, 20, 20) then
+      sendCmd(string.format("uf8stripcolfill;%06X", rgb))
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     if i % 5 ~= 0 then reaper.ImGui_SameLine(ctx) end
