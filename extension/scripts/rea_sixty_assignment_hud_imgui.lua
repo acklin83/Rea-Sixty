@@ -157,6 +157,14 @@ local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
 local ctxUf8Strip  = -1
 local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
 local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
+local uf8BankCols  = {}   -- [0..7] = V-Pot bank colour (0xRRGGBB or nil)
+-- The 10 hardware-renderable SSL DAW-Colour swatches (must match
+-- selPaletteRgb in Protocol.cpp): red, orange, yellow, green, cyan, blue,
+-- purple, magenta, pink, white.
+local UF8_BANK_PALETTE = {
+  0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00, 0x00FFFF,
+  0x0000FF, 0x8000FF, 0xFF00FF, 0xFF0080, 0xFFFFFF,
+}
 local lastUf8Tab   = nil  -- edge-write "hud_uf8_tab" so C++ auto-engages Plugin Mode
 local frame        = 0
 local hintText     = ""
@@ -267,16 +275,19 @@ local function readUf8Assign()
   return m
 end
 
--- V-Pot bank labels (per Top-Soft-Key bank). "label0;label1;…;label7" (8 fields).
+-- V-Pot bank labels + colours (per Top-Soft-Key bank). Interleaved
+-- "label0;RRGGBB0;label1;RRGGBB1;…" (16 fields). Returns label table + colour
+-- table; labels stay plain strings so existing consumers are unchanged.
 local function readUf8Banks()
   local raw = reaper.GetExtState(SECT, "hud_uf8_banks")
-  local t = {}
-  local i = 0
-  for field in (raw .. ";"):gmatch("([^;]*);") do
-    t[i] = field; i = i + 1
-    if i >= 8 then break end
+  local fields = {}
+  for field in (raw .. ";"):gmatch("([^;]*);") do fields[#fields + 1] = field end
+  local labels, cols = {}, {}
+  for b = 0, 7 do
+    labels[b] = fields[b * 2 + 1] or ""
+    cols[b]   = tonumber(fields[b * 2 + 2] or "", 16)
   end
-  return t
+  return labels, cols
 end
 
 local SECTION_ORDER = {
@@ -1076,7 +1087,7 @@ local function renderUf8Grid(ust, uasn)
   -- the extension), so you can reach + map empty banks from the HUD without
   -- needing the hardware soft-keys. The hardware Top-Soft-Keys drive it too.
   uf8BankRects = {}
-  uf8Banks = readUf8Banks()
+  uf8Banks, uf8BankCols = readUf8Banks()
   local bankPx = floor(11 * fontScale() + 0.5)
   local bankY  = top + 6 + subH + 6
   local bankH  = floor(bankPx + 8 * fontScale() + 0.5)
@@ -1530,6 +1541,26 @@ local function drawUf8BankContextMenu()
     sendCmd("uf8bankname;" .. ctxUf8Bank .. ";")
   end
   if cur == "" then reaper.ImGui_EndDisabled(ctx) end
+
+  -- Colour picker — the 10 hardware-renderable SSL DAW-Colour swatches (same
+  -- palette as FX Learn). Sets the bank's Top-Soft-Key LED colour. The current
+  -- colour is outlined.
+  reaper.ImGui_Separator(ctx)
+  reaper.ImGui_TextDisabled(ctx, "Colour")
+  local curCol  = uf8BankCols[ctxUf8Bank]
+  local noAlpha = reaper.ImGui_ColorEditFlags_NoAlpha()
+  local noBord  = reaper.ImGui_ColorEditFlags_NoBorder()
+  for i, rgb in ipairs(UF8_BANK_PALETTE) do
+    local rgba = (rgb << 8) | 0xFF
+    -- The current colour keeps its border so it reads as "selected"; the rest
+    -- drop it.
+    local flags = (curCol == rgb) and noAlpha or (noAlpha | noBord)
+    if reaper.ImGui_ColorButton(ctx, "##bankcol" .. i, rgba, flags, 20, 20) then
+      sendCmd(string.format("uf8bankcolour;%d;%06X", ctxUf8Bank, rgb))
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    if i % 5 ~= 0 then reaper.ImGui_SameLine(ctx) end
+  end
 
   reaper.ImGui_EndPopup(ctx)
   reaper.ImGui_PopStyleVar(ctx, 3)

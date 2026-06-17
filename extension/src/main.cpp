@@ -118,6 +118,7 @@ int         reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr
 bool        reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx);
 bool        reasixty_hudUf8ConsumeBootstrap();
 bool        reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx);
+bool        reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx);
 int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
@@ -14924,6 +14925,21 @@ void onTimer()
                     MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
                     resolveFocusedUf8Target_(tr, fx, mp);
                     if (reasixty_hudUf8BankLabel(bank, label.c_str(), tr, fx)) {
+                        g_hudUf8BanksPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8bankcolour;", 0) == 0) {
+                // "uf8bankcolour;<bank>;<RRGGBB>" — set the V-Pot bank's
+                // Top-Soft-Key LED colour (hex). Per V-Pot bank, like the label.
+                const auto semi = s.find(';', 14);
+                if (semi != std::string::npos) {
+                    const int bank = std::atoi(s.c_str() + 14);
+                    const unsigned int rgb = static_cast<unsigned int>(
+                        std::strtoul(s.c_str() + semi + 1, nullptr, 16)) & 0x00FFFFFFu;
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    if (reasixty_hudUf8BankColour(bank, rgb, tr, fx)) {
                         g_hudUf8BanksPublished.clear();
                         publishHud_();
                     }

@@ -7726,11 +7726,20 @@ void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
 
     // V-Pot bank labels (per Top-Soft-Key bank; NOT fader-bank-scoped). 8 fields,
     // ';'-separated, sanitized — empty where no name was given.
+    // Interleaved "label;RRGGBB" per bank so the HUD can show the bank colour
+    // swatch (right-click → colour picker) alongside the name. The Lua splits
+    // it back into label + colour tables; the label consumers still read a
+    // plain string. Frank 2026-06-17.
     banksOut.clear();
     for (int b = 0; b < uf8::kUserUf8VpotBankCount; ++b) {
         std::string lbl = um->uf8.topSoftKeyLeds[b].label;
         for (char& c : lbl) if (c == ';' || c == '\n') c = ' ';
+        char col[8];
+        std::snprintf(col, sizeof(col), "%06X",
+                      um->uf8.topSoftKeyLeds[b].colour & 0x00FFFFFFu);
         banksOut += lbl;
+        banksOut += ';';
+        banksOut += col;
         if (b + 1 < uf8::kUserUf8VpotBankCount) banksOut += ';';
     }
 }
@@ -8082,6 +8091,26 @@ bool hudUf8BankLabel_(int bank, const char* label, void* trV, int fx)
     std::string match;
     if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
     return hudUf8SetBankLabelMatch_(match, bank, label ? label : "");
+}
+bool hudUf8SetBankColourMatch_(const std::string& match, int bank, uint32_t rgb)
+{
+    if (match.empty() || bank < 0 || bank >= uf8::kUserUf8VpotBankCount) return false;
+    rgb &= 0x00FFFFFFu;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        m.uf8.topSoftKeyLeds[bank].colour = rgb;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+bool hudUf8BankColour_(int bank, uint32_t rgb, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    return hudUf8SetBankColourMatch_(match, bank, rgb);
 }
 
 // "Fill sequential" for a UF8 row — when cell (kind, strip) is mapped to a
@@ -14954,6 +14983,10 @@ bool reasixty_hudUf8ConsumeBootstrap()
 bool reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx)
 {
     return uf8::hudUf8BankLabel_(bank, label, tr, fx);
+}
+bool reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx)
+{
+    return uf8::hudUf8BankColour_(bank, rgb, tr, fx);
 }
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its
