@@ -796,7 +796,7 @@ The Curve editor popup:
 
 ### Feel presets
 
-A tuned "feel" — the bundle of per-control tuning values, independent of which parameter the control is bound to — can be saved into one of **five named preset slots** and re-applied to any other knob or V-Pot, on any plug-in. Useful for reusing, say, a Log frequency sweep or a slow stepped-detent across many controls without re-dialling each one.
+A tuned "feel" — the bundle of per-control tuning values, independent of which parameter the control is bound to — can be saved into one of **ten named preset slots** and re-applied to any other knob or V-Pot, on any plug-in. Useful for reusing, say, a Log frequency sweep or a slow stepped-detent across many controls without re-dialling each one.
 
 The preset carries: **invert · Min/Max range · sensitivity · curve · polarity · push-reset**. It deliberately does **not** carry the binding (which parameter) or the display label (which names a specific parameter).
 
@@ -806,7 +806,7 @@ At the bottom of the right-click menu on a **UC1 knob** or **UF8 V-Pot**:
 - **Apply feel from ▸** — lists the saved presets by name; picking one writes its feel onto the right-clicked control.
 - **Clear preset ▸** — lists the saved presets; picking one empties that slot.
 
-The five slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 knob can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on knobs and V-Pots.
+The ten slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 knob can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on knobs and V-Pots.
 
 ### Stepped parameters
 

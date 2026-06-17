@@ -1,6 +1,6 @@
 #pragma once
 
-// Knob "feel" presets — five named, globally-persisted bundles of the
+// Knob "feel" presets — ten named, globally-persisted bundles of the
 // per-slot tuning fields (invert / range / sensitivity / curve / polarity /
 // push-reset), independent of which param a knob is bound to. Saved + applied
 // from the FX-Learn right-click menu on UC1 knobs and UF8 V-Pots so a tuned
@@ -30,7 +30,10 @@ struct KnobFeel {
     double       defaultNorm = 0.5;
 };
 
-constexpr int kCount = 5;
+// Slot count. Bumped 5 → 10 (Frank 2026-06-17). The store + menu iterate
+// over kCount generically and the JSON loader caps reads at min(saved, kCount),
+// so older 5-slot saves load unchanged (extra slots come up unused).
+constexpr int kCount = 10;
 
 // Lazy-loaded global cache. The returned array is always kCount long;
 // inspect each entry's `used` flag.
