@@ -93,7 +93,8 @@ void        reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
                                    std::string& stateOut, std::string& assignOut);
 void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                                    int faderBank, int vpotBank, const char* bootShort,
-                                   std::string& stateOut, std::string& assignOut);
+                                   bool focus, std::string& stateOut, std::string& assignOut,
+                                   std::string& banksOut);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
 bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
@@ -114,6 +115,9 @@ void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
 int         reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx);
+bool        reasixty_hudUf8ConsumeBootstrap();
+bool        reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx);
 int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "TrackName.h"
 #include "UC1Device.h"
@@ -2307,9 +2311,12 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "insert_legacy_rename"); v && *v) {
         g_insertLegacyRename.store(std::atoi(v) != 0);
     }
-    if (const char* v = GetExtState("rea_sixty", "hud_on"); v && *v) {
-        g_hudEnabled.store(std::atoi(v) != 0);
-    }
+    // Learn-HUD is a transient tool — it must NOT reopen on a fresh REAPER start
+    // (Frank 2026-06-17). g_hudEnabled stays false at boot; the open-state flag is
+    // session-only (see reasixty_setAssignmentHud). Wipe any stale PERSISTED
+    // hud_on from older builds (which wrote it persist=true) so it can't re-trigger
+    // the tick-30 auto-start. DeleteExtState(persist=true) clears the .ini entry.
+    DeleteExtState("rea_sixty", "hud_on", true);
     if (const char* v = GetExtState("rea_sixty", "focused_panel_on"); v && *v) {
         g_focusedPanel.store(std::atoi(v) != 0);
     }
@@ -3232,6 +3239,15 @@ double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 // track-GUID + fx-GUID string.
 std::unordered_map<std::string, std::string> g_stripInstanceFxGuid;
 
+// Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
+// touched LAST — the FX-cycle cursor or the focused plug-in window (Frank
+// 2026-06-17: "plugin sichtbar vs. fx cycle: neuester soll gewinnen"). The cycle
+// time is stamped here; the window time is polled in onTimer (g_lastFxWindowMs).
+int64_t g_lastFxCycleMs  = 0;
+int64_t g_lastFxWindowMs = 0;
+int     g_lastFocusedFxTrNum  = -2;   // GetFocusedFX2 change-detect
+int     g_lastFocusedFxFxNum  = -2;
+
 void setStripInstanceFx_(MediaTrack* tr, int idx)
 {
     if (!tr) return;
@@ -3250,6 +3266,7 @@ void setStripInstanceFx_(MediaTrack* tr, int idx)
         return;
     }
     g_stripInstanceFxGuid[g] = fxg;
+    g_lastFxCycleMs = nowMs_();   // an FX-cycle landed → cursor is the newest signal
 }
 
 // Look up the raw stored cursor for `tr` (no clamping). Returns -1
@@ -5409,6 +5426,7 @@ std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx strin
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
+std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 bool        g_hudGeomPublished = false;
@@ -5451,7 +5469,11 @@ static std::string hudActiveFxName_(MediaTrack* tr)
 // AND no user map (uf8::lookupPluginMapByName == null). Fills tr/fx. Lets the HUD
 // FOLLOW the cursor onto a virgin plug-in (show it empty + named so it can be
 // bootstrapped) instead of lingering on the last classified CS/BC plug-in.
-static bool hudCursorUnlearnedFx_(MediaTrack*& trOut, int& fxOut)
+// The FX the surface is "pointed at" on the focused track — the FX whose window
+// is focused (GetFocusedFX2), else the Encoder FX-cycle cursor
+// (stripInstanceFxRaw_). Fills tr/fx regardless of whether it's mapped. Shared
+// by the bootstrap detector + the cursor-first UF8 HUD resolver.
+static bool cursorFxOnFocusedTrack_(MediaTrack*& trOut, int& fxOut)
 {
     trOut = nullptr; fxOut = -1;
     MediaTrack* tr = g_uc1_surface
@@ -5459,17 +5481,39 @@ static bool hudCursorUnlearnedFx_(MediaTrack*& trOut, int& fxOut)
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
     const int n = TrackFX_GetCount(tr);
     if (n <= 0) return false;
-    int fx = -1, trNum = -1, itemNum = -1, fxNum = -1;
+
+    // Two candidates: the focused/open plug-in WINDOW and the FX-cycle CURSOR.
+    int winFx = -1, trNum = -1, itemNum = -1, fxNum = -1;
     if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0
         && GetTrack(nullptr, trNum - 1) == tr) {
         const int cand = fxNum & 0x00FFFFFF;
-        if (cand >= 0 && cand < n) fx = cand;
+        if (cand >= 0 && cand < n) winFx = cand;
     }
-    if (fx < 0) {
-        const int raw = stripInstanceFxRaw_(tr);
-        if (raw >= 0 && raw < n) fx = raw;
-    }
+    int cycFx = stripInstanceFxRaw_(tr);
+    if (cycFx >= n) cycFx = -1;
+
+    // Newest wins: if both exist, pick whichever the user touched last (the FX
+    // cycle stamps g_lastFxCycleMs, the window-focus change stamps
+    // g_lastFxWindowMs). Otherwise take whichever exists.
+    int fx;
+    if (winFx >= 0 && cycFx >= 0)
+        fx = (g_lastFxCycleMs > g_lastFxWindowMs) ? cycFx : winFx;
+    else if (winFx >= 0) fx = winFx;
+    else                 fx = cycFx;
+
     if (fx < 0) return false;
+    trOut = tr; fxOut = fx;
+    return true;
+}
+
+// HUD bootstrap detector. True when the cursor FX is UNLEARNED — no built-in AND
+// no user map (uf8::lookupPluginMapByName == null) — so the HUD can follow onto
+// a virgin plug-in (show it empty + named) for bootstrapping.
+static bool hudCursorUnlearnedFx_(MediaTrack*& trOut, int& fxOut)
+{
+    trOut = nullptr; fxOut = -1;
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (!cursorFxOnFocusedTrack_(tr, fx)) return false;
     char nm[512] = {0};
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return false;
     if (uf8::lookupPluginMapByName(nm)) return false;   // built-in or user → not virgin
@@ -5515,7 +5559,8 @@ static std::string hudLcdString_(MediaTrack* tr, int line3Fx)
 // Resolve the active UF8-mapped plug-in for the HUD's UF8 tab. Defined below
 // (needs UserPluginCtx + findUserPluginOnTrack_, which live further down). Fills
 // {tr, fxIdx, map}; map==nullptr when the focused track has no UF8 map.
-void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut);
+void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut,
+                              bool* focusOut = nullptr);
 
 void publishHud_()
 {
@@ -5604,7 +5649,8 @@ void publishHud_()
     // is forward-declared (its definition + UserPluginCtx live further down).
     {
         MediaTrack* uf8Tr = nullptr; int uf8Fx = -1; const void* uf8Map = nullptr;
-        resolveFocusedUf8Target_(uf8Tr, uf8Fx, uf8Map);
+        bool uf8Focus = false;
+        resolveFocusedUf8Target_(uf8Tr, uf8Fx, uf8Map, &uf8Focus);
         const int faderBank = std::clamp(g_uf8FaderBank.load(),
                                          0, uf8::kUserUf8FaderBankCount - 1);
         const int vpotBank  = std::clamp(g_softKeyBank.load(),
@@ -5617,9 +5663,13 @@ void publishHud_()
             MediaTrack* vTr = nullptr; int vFx = -1;
             if (hudCursorUnlearnedFx_(vTr, vFx)) uf8Boot = shortFxName_(vTr, vFx);
         }
-        std::string uf8State, uf8Assign;
+        std::string uf8State, uf8Assign, uf8Banks;
         reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
-                               uf8Boot.c_str(), uf8State, uf8Assign);
+                               uf8Boot.c_str(), uf8Focus, uf8State, uf8Assign, uf8Banks);
+        if (uf8Banks != g_hudUf8BanksPublished) {
+            g_hudUf8BanksPublished = uf8Banks;
+            SetExtState("rea_sixty", "hud_uf8_banks", uf8Banks.c_str(), false);
+        }
         if (uf8State != g_hudUf8StatePublished) {
             g_hudUf8StatePublished = uf8State;
             SetExtState("rea_sixty", "hud_uf8_state", uf8State.c_str(), false);
@@ -5985,14 +6035,41 @@ UserPluginCtx userStripCtxFocused_()
     return s_cache;
 }
 
-// HUD UF8-tab target resolver (forward-declared above publishHud_). Picks the
-// focused track (UC1 surface focus → first selected) and finds its UF8-mode
-// user map via findUserPluginOnTrack_ — which gates on uf8Mode==true but, unlike
-// userStripCtxFocused_, is NOT gated on g_uf8PluginMode, so the HUD shows UF8
-// assignments whenever the focused track carries a UF8 map.
-void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut)
+// HUD UF8-tab target resolver (forward-declared above publishHud_). CURSOR-FIRST
+// (Frank 2026-06-17): follow the FX the user is pointed at (focused window or
+// FX-cycle cursor) so the tab tracks context like the CS/BC tabs do.
+//   * cursor FX carries a UF8 map → show it + set focusOut (HUD auto-switches to
+//     the UF8 tab).
+//   * cursor FX is a VIRGIN (unmapped, non-built-in) plug-in → return empty so
+//     the bootstrap path offers to map THAT plug-in — do NOT fall through to a
+//     different UF8 map elsewhere in the chain (that was the "tab jumps to a
+//     plug-in higher up" regression).
+//   * cursor FX is an SSL built-in / non-UF8 user map, or no cursor FX → fall
+//     back to the instance-resolved UF8 map so a UF8-mapped track still shows.
+// Gates on uf8Mode (not g_uf8PluginMode), so the tab shows whenever the focused
+// track carries a UF8 map. focusOut (optional) = "the cursor IS the UF8 plug-in".
+void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut,
+                              bool* focusOut)
 {
     trOut = nullptr; fxOut = -1; mapOut = nullptr;
+    if (focusOut) *focusOut = false;
+
+    MediaTrack* cTr = nullptr; int cFx = -1;
+    if (cursorFxOnFocusedTrack_(cTr, cFx)) {
+        char name[512] = {0};
+        if (uf8::fxIdentityName(cTr, cFx, name, sizeof(name)) && name[0]) {
+            const auto* um = uf8::user_plugins::lookupOwnedByName(name);
+            if (um && um->uf8Mode) {
+                trOut = cTr; fxOut = cFx; mapOut = um;
+                if (focusOut) *focusOut = true;
+                return;
+            }
+            // Virgin (no built-in + no user map) → leave empty for bootstrap.
+            if (!uf8::lookupPluginMapByName(name)) return;
+            // else built-in / non-UF8 → fall through to the instance resolver.
+        }
+    }
+
     MediaTrack* tr = g_uc1_surface
         ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
@@ -9087,7 +9164,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             }
                         }
                     }
-                    if (anyAssigned
+                    // Empty (unassigned) banks are normally no-function. But
+                    // while the Learn-HUD is open the user is mapping, so let the
+                    // soft-keys navigate to empty banks too — otherwise you can't
+                    // reach an empty bank on the hardware to fill it. Frank
+                    // 2026-06-17 (HUD UF8 Phase 2). HUD-off behaviour unchanged.
+                    if ((anyAssigned || g_hudEnabled.load())
                         && g_softKeyBank.exchange(target) != target) {
                         g_softKeyDirty.store(true);
                         g_bankDirty.store(true);
@@ -11871,7 +11953,9 @@ void pushZonesForVisibleSlots()
                                 kt.rangeMin, kt.rangeMax,
                                 kt.curvePoints));
                     }
-                    const double v = bs.inverted ? 1.0 - norm : norm;
+                    // Ring shows the TRUE param value; invert reverses the
+                    // V-Pot's input direction only, never the displayed value.
+                    const double v = norm;
                     // Bipolar params render centre-out — same encoding
                     // pattern as SSL Pan / Gain / Trim slots. Map our
                     // [0..1] norm to the [-1..+1] signed input the
@@ -12016,9 +12100,9 @@ void pushZonesForVisibleSlots()
             char paramBuf[64] = {0};
             const double norm = TrackFX_GetParamNormalized(
                 userF.tr, userF.fxIdx, userF.vst3Param);
-            const double v = userF.inverted ? 1.0 - norm : norm;
+            // Readout shows the TRUE value — invert only reverses input.
             TrackFX_FormatParamValueNormalized(userF.tr, userF.fxIdx,
-                userF.vst3Param, v, paramBuf, sizeof(paramBuf));
+                userF.vst3Param, norm, paramBuf, sizeof(paramBuf));
             // Same sanitisation as the flipActive/csFaderActive branch
             // below — fall through to the same post-processing block.
             std::string s2(paramBuf);
@@ -12336,9 +12420,9 @@ void pushZonesForVisibleSlots()
                             bs.vst3Param, pn, sizeof(pn));
                     const double norm = TrackFX_GetParamNormalized(
                         uctx.tr, uctx.fxIdx, bs.vst3Param);
-                    const double v = bs.inverted ? 1.0 - norm : norm;
+                    // Readout shows the TRUE value — invert only reverses input.
                     TrackFX_FormatParamValueNormalized(uctx.tr,
-                        uctx.fxIdx, bs.vst3Param, v, vbuf, sizeof(vbuf));
+                        uctx.fxIdx, bs.vst3Param, norm, vbuf, sizeof(vbuf));
                     valLine = composeValueLine(pn,
                         sanitizeFormattedValue(vbuf, sizeof(vbuf)));
                 } else if (fb.faderVst3Param >= 0) {
@@ -12354,9 +12438,9 @@ void pushZonesForVisibleSlots()
                             fb.faderVst3Param, pn, sizeof(pn));
                     const double norm = TrackFX_GetParamNormalized(
                         uctx.tr, uctx.fxIdx, fb.faderVst3Param);
-                    const double v = fb.faderInverted ? 1.0 - norm : norm;
+                    // Readout shows the TRUE value — invert only reverses input.
                     TrackFX_FormatParamValueNormalized(uctx.tr,
-                        uctx.fxIdx, fb.faderVst3Param, v, vbuf, sizeof(vbuf));
+                        uctx.fxIdx, fb.faderVst3Param, norm, vbuf, sizeof(vbuf));
                     valLine = composeValueLine(pn,
                         sanitizeFormattedValue(vbuf, sizeof(vbuf)));
                 } else {
@@ -14634,6 +14718,20 @@ void onTimer()
     // the dispatch/LED paths via reasixty_fxLearnActiveLayer().
     refreshFxActiveLayer_();
 
+    // Track focused-plug-in-WINDOW changes so the HUD's cursor resolver can pick
+    // "newest wins" against the FX-cycle cursor (see cursorFxOnFocusedTrack_).
+    {
+        int tNum = -1, iNum = -1, fNum = -1;
+        const bool has = (GetFocusedFX2(&tNum, &iNum, &fNum) & 1) != 0;
+        const int curTr  = has ? tNum : -1;
+        const int curFx  = has ? fNum : -1;
+        if (curTr != g_lastFocusedFxTrNum || curFx != g_lastFocusedFxFxNum) {
+            g_lastFocusedFxTrNum = curTr;
+            g_lastFocusedFxFxNum = curFx;
+            if (has) g_lastFxWindowMs = nowMs_();   // a window came to focus → newest
+        }
+    }
+
     // Learn-HUD interactivity (only while the HUD is on → zero cost off).
     // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
     // the wiggled param to the armed control on the active modifier layer.
@@ -14758,8 +14856,54 @@ void onTimer()
                         reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
                     }
                 }
+            } else if (s.rfind("uf8vmode;", 0) == 0) {
+                // "uf8vmode;<strip>;<mode>" — set a V-Pot cell's mode
+                // (0 = Value, 1 = Toggle). Banks live.
+                const auto semi = s.find(';', 9);
+                if (semi != std::string::npos) {
+                    const int strip = std::atoi(s.c_str() + 9);
+                    const int mode  = std::atoi(s.c_str() + semi + 1);
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8VpotMode(strip, fb, vb, mode, tr, fx)) {
+                        g_hudUf8AssignPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8bankname;", 0) == 0) {
+                // "uf8bankname;<bank>;<label>" — rename a V-Pot bank (empty
+                // label clears it). Per V-Pot bank, not fader-bank-scoped.
+                const auto semi = s.find(';', 12);
+                if (semi != std::string::npos) {
+                    const int bank = std::atoi(s.c_str() + 12);
+                    const std::string label = s.substr(semi + 1);
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    if (reasixty_hudUf8BankLabel(bank, label.c_str(), tr, fx)) {
+                        g_hudUf8BanksPublished.clear();
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("uf8cancel", 0) == 0) {
                 reasixty_hudUf8CancelLearn();
+            } else if (s.rfind("uf8bank;", 0) == 0) {
+                // "uf8bank;<N>" — HUD clicked the V-Pot bank row → switch the
+                // live Top-Soft-Key bank (mirrors the hardware soft-key press,
+                // but unconditional so empty banks are reachable for mapping).
+                const int b = std::clamp(std::atoi(s.c_str() + 8),
+                                         0, uf8::kUserUf8VpotBankCount - 1);
+                if (g_softKeyBank.exchange(b) != b) {
+                    g_softKeyDirty.store(true);
+                    g_bankDirty.store(true);
+                    char buf[8]; snprintf(buf, sizeof(buf), "%d", b);
+                    SetExtState("ReaSixty", "softKeyBank", buf, true);
+                    g_hudUf8AssignPublished.clear();   // grid follows the new bank
+                    publishHud_();
+                }
             } else if (s.rfind("uf8unbind;", 0) == 0
                     || s.rfind("uf8invert;", 0) == 0
                     || s.rfind("uf8fill;",   0) == 0) {
@@ -14830,6 +14974,14 @@ void onTimer()
         // UF8 device-tab learn: poll the wiggle + publish the armed cell
         // (encoded kind*8+strip) so the grid can pulse it.
         if (reasixty_hudUf8LearnTick()) {
+            if (reasixty_hudUf8ConsumeBootstrap()) {
+                // First UF8 map just created for the cursor plug-in → focus the
+                // UF8-only domain so userStripCtxFocused_ resolves it this tick
+                // and the hardware drives it immediately (no FX-cycle needed).
+                uf8::setFocus({uf8::Domain::None, 0});
+                g_pageDirty.store(true);
+                g_bankDirty.store(true);
+            }
             g_hudUf8AssignPublished.clear();   // force the diff-guarded re-publish
             publishHud_();
         }
@@ -16509,7 +16661,11 @@ bool reasixty_assignmentHud() { return g_hudEnabled.load(); }
 void reasixty_setAssignmentHud(bool on)
 {
     g_hudEnabled.store(on);
-    SetExtState("rea_sixty", "hud_on", on ? "1" : "0", true);
+    // Session-only (persist=false): the Learn-HUD is a transient tool — it must
+    // NOT reopen itself on a fresh REAPER restart. Within a session the flag
+    // still survives a script reload so the companion-sync stays consistent.
+    // (Frank 2026-06-17: "hud ist immer offen bei reaper restart".)
+    SetExtState("rea_sixty", "hud_on", on ? "1" : "0", false);
     if (on) g_hudGeomPublished = false;   // re-emit geometry for a fresh window
     publishHud_();
     reasixty_syncAssignmentHudRun();      // start/stop the companion to match

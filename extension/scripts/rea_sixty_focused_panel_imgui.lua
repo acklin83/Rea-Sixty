@@ -446,14 +446,29 @@ local function setStartup(on)
   local content = stripStartupBlock(readFileAll(startupPath()) or "")
   if on then
     if content ~= "" and not content:match("\n$") then content = content .. "\n" end
+    -- Guard the launch: the extension also auto-restores the panel at boot
+    -- (from the persisted focused_panel_on flag). Without this guard, whichever
+    -- runs second fires Main_OnCommand on the already-running script and REAPER
+    -- pops its "script is running — terminate / new instance?" dialog every
+    -- start (Frank 2026-06-17). The RUNKEY check makes both launchers cooperate.
     content = content
       .. STARTUP_BEGIN .. "\n"
-      .. "reaper.Main_OnCommand(reaper.NamedCommandLookup('" .. cmd .. "'), 0)\n"
+      .. "if reaper.GetExtState('rea_sixty','focused_panel_imgui_running') ~= '1' then "
+      .. "reaper.Main_OnCommand(reaper.NamedCommandLookup('" .. cmd .. "'), 0) end\n"
       .. STARTUP_END .. "\n"
   end
   local f = io.open(startupPath(), "wb")
   if not f then reaper.MB("Could not write:\n" .. startupPath(), "Rea-Sixty Focused Panel", 0); return end
   f:write(content); f:close()
+end
+
+-- One-time upgrade: builds before 2026-06-17 wrote an UNguarded startup line
+-- that popped REAPER's re-entry dialog every boot. If our block exists but
+-- lacks the running guard, rewrite it in the new guarded form (self-heals on
+-- the next start; runs only on the real first instance, past the RUNKEY guard).
+if startupEnabled() then
+  local c = readFileAll(startupPath()) or ""
+  if not c:find("focused_panel_imgui_running", 1, true) then setStartup(true) end
 end
 
 local POPUP_ID = "##fp_ctx"

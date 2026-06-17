@@ -7653,10 +7653,11 @@ void hudPublishUc1_(void* csTrV, int csFx, void* bcTrV, int bcFx, int focusDom,
 // bootShort: when no uf8Mode map is present but a virgin FX is under the cursor,
 // the caller passes its short name so the grid renders armable em-dash cells +
 // a "Map <name>" banner (the CS/BC-style bootstrap). Empty = nothing to map.
-// State: "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<short>".
+// focus: the cursor IS the shown UF8 plug-in → the HUD auto-switches to the UF8
+// tab. State: "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<focus>;<short>".
 void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
-                    int faderBank, int vpotBank, const char* bootShort,
-                    std::string& stateOut, std::string& assignOut)
+                    int faderBank, int vpotBank, const char* bootShort, bool focus,
+                    std::string& stateOut, std::string& assignOut, std::string& banksOut)
 {
     auto*       tr = static_cast<MediaTrack*>(trV);
     const auto* um = static_cast<const uf8::UserPluginMap*>(mapV);
@@ -7669,32 +7670,46 @@ void hudPublishUf8_(void* trV, int fxIdx, const void* mapV,
                         ? (um->displayShort.empty() ? "" : um->displayShort.c_str())
                         : (boot ? bootShort : "");
     char head[224];
-    std::snprintf(head, sizeof(head), "UF8;%d;%d;%d;%d;%s",
-                  valid ? 1 : 0, fb, vb, boot ? 1 : 0, shortNm);
+    std::snprintf(head, sizeof(head), "UF8;%d;%d;%d;%d;%d;%s",
+                  valid ? 1 : 0, fb, vb, boot ? 1 : 0,
+                  (valid && focus) ? 1 : 0, shortNm);
     stateOut = head;
 
     assignOut.clear();
     if (!valid) return;
 
-    auto emit = [&](int strip, int kind, int vst3Param, bool inv) {
+    // line: "<strip>;<kind>;<paramName>;<inv>;<mode>"  (mode: V-Pot only —
+    // 0=Value 1=Toggle; 0 for the strip kinds).
+    auto emit = [&](int strip, int kind, int vst3Param, bool inv, int mode) {
         if (vst3Param < 0) return;
         char pn[256] = {0};
         TrackFX_GetParamName(tr, fxIdx, vst3Param, pn, sizeof(pn));
         for (char* q = pn; *q; ++q) if (*q == ';' || *q == '\n') *q = ' ';
         char line[320];
-        std::snprintf(line, sizeof(line), "%d;%d;%s;%d\n",
-                      strip, kind, pn, inv ? 1 : 0);
+        std::snprintf(line, sizeof(line), "%d;%d;%s;%d;%d\n",
+                      strip, kind, pn, inv ? 1 : 0, mode);
         assignOut += line;
     };
 
     for (int s = 0; s < 8; ++s) {
         const uf8::UserUf8BankSlot&     vp = um->uf8.banks.banks[fb][vb][s];
         const uf8::UserUf8StripBinding& st = um->uf8.strips[fb][s];
-        emit(s, 0, vp.vst3Param,      vp.inverted);
-        emit(s, 1, st.faderVst3Param, st.faderInverted);
-        emit(s, 2, st.soloVst3Param,  st.soloInvert);
-        emit(s, 3, st.cutVst3Param,   st.cutInvert);
-        emit(s, 4, st.selVst3Param,   st.selInvert);
+        emit(s, 0, vp.vst3Param,      vp.inverted,
+             vp.vpotMode == uf8::VPotMode::Toggle ? 1 : 0);
+        emit(s, 1, st.faderVst3Param, st.faderInverted, 0);
+        emit(s, 2, st.soloVst3Param,  st.soloInvert,    0);
+        emit(s, 3, st.cutVst3Param,   st.cutInvert,     0);
+        emit(s, 4, st.selVst3Param,   st.selInvert,     0);
+    }
+
+    // V-Pot bank labels (per Top-Soft-Key bank; NOT fader-bank-scoped). 8 fields,
+    // ';'-separated, sanitized — empty where no name was given.
+    banksOut.clear();
+    for (int b = 0; b < uf8::kUserUf8VpotBankCount; ++b) {
+        std::string lbl = um->uf8.topSoftKeyLeds[b].label;
+        for (char& c : lbl) if (c == ';' || c == '\n') c = ' ';
+        banksOut += lbl;
+        if (b + 1 < uf8::kUserUf8VpotBankCount) banksOut += ';';
     }
 }
 
@@ -7753,6 +7768,10 @@ int         g_hudUf8LearnParam  = -1;
 // plug-in; a fresh UF8-only map (domain=None, uf8Mode=true) is created + bound.
 // Mirrors the CS/BC g_hudLearnCreateDom bootstrap.
 bool        g_hudUf8LearnCreate = false;
+// Set when a fresh UF8-only map is bootstrapped (hudUf8CreateAndBind_). main.cpp
+// consumes it to focus the None domain so the hardware surfaces the new map
+// immediately — without it the user had to FX-cycle first (Frank 2026-06-17).
+bool        g_hudUf8DidBootstrap = false;
 
 void hudUf8CancelLearn_()
 {
@@ -7889,6 +7908,7 @@ bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
 
     user_plugins::upsert(std::move(m));
     user_plugins::save();
+    g_hudUf8DidBootstrap = true;   // tell main.cpp to focus the new UF8-only domain
     return true;
 }
 
@@ -7990,6 +8010,56 @@ bool hudUf8Invert_(int kind, int strip, int fb, int vb, void* trV, int fx)
     std::string match;
     if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
     return hudUf8InvertMatch_(match, kind, fb, vb, strip);
+}
+
+// Set a V-Pot cell's mode (0 = Value/continuous, 1 = Toggle/binary push). No-op
+// for an unmapped cell or out-of-range banks. V-Pot only (kind 0).
+bool hudUf8SetVpotModeMatch_(const std::string& match, int fb, int vb, int strip, int mode)
+{
+    if (match.empty()) return false;
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount
+     || vb < 0 || vb >= uf8::kUserUf8VpotBankCount
+     || strip < 0 || strip >= 8) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& s = m.uf8.banks.banks[fb][vb][strip];
+        if (s.vst3Param < 0) return false;   // unmapped V-Pot → nothing to set
+        s.vpotMode = (mode != 0) ? uf8::VPotMode::Toggle : uf8::VPotMode::Value;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+bool hudUf8VpotMode_(int strip, int fb, int vb, int mode, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    return hudUf8SetVpotModeMatch_(match, fb, vb, strip, mode);
+}
+
+// Set a V-Pot bank's display name (Top-Soft-Key label). Per V-Pot bank (0..7),
+// NOT fader-bank-scoped. Empty label clears it. Shown on the hardware Top-Soft-
+// Key LCD + in the HUD bank row.
+bool hudUf8SetBankLabelMatch_(const std::string& match, int bank, const std::string& label)
+{
+    if (match.empty() || bank < 0 || bank >= uf8::kUserUf8VpotBankCount) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        m.uf8.topSoftKeyLeds[bank].label = label;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+bool hudUf8BankLabel_(int bank, const char* label, void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    return hudUf8SetBankLabelMatch_(match, bank, label ? label : "");
 }
 
 // "Fill sequential" for a UF8 row — when cell (kind, strip) is mapped to a
@@ -14782,10 +14852,11 @@ void reasixty_hudPublishUc1(void* csTr, int csFx, void* bcTr, int bcFx,
 }
 void reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                             int faderBank, int vpotBank, const char* bootShort,
-                            std::string& stateOut, std::string& assignOut)
+                            bool focus, std::string& stateOut, std::string& assignOut,
+                            std::string& banksOut)
 {
-    uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, bootShort,
-                        stateOut, assignOut);
+    uf8::hudPublishUf8_(tr, fxIdx, map, faderBank, vpotBank, bootShort, focus,
+                        stateOut, assignOut, banksOut);
 }
 
 // Learn-HUD interactivity (click-a-control + wiggle-to-learn). Driven by
@@ -14838,6 +14909,22 @@ bool reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx
 int reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx)
 {
     return uf8::hudUf8FillSeq_(kind, strip, fb, vb, tr, fx);
+}
+bool reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx)
+{
+    return uf8::hudUf8VpotMode_(strip, fb, vb, mode, tr, fx);
+}
+// True (once) right after a fresh UF8-only map was bootstrapped — main.cpp
+// focuses the None domain so the hardware shows it without an FX-cycle.
+bool reasixty_hudUf8ConsumeBootstrap()
+{
+    const bool v = uf8::g_hudUf8DidBootstrap;
+    uf8::g_hudUf8DidBootstrap = false;
+    return v;
+}
+bool reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx)
+{
+    return uf8::hudUf8BankLabel_(bank, label, tr, fx);
 }
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its

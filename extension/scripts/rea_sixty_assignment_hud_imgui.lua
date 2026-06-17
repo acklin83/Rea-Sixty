@@ -147,9 +147,12 @@ local learnIdx     = -1
 local ctxCtrlIdx   = -1   -- control under a right-click → control context menu
 -- UF8 device tab (Phase 2): interactive strip-grid.
 local uf8Rects     = {}   -- per-cell hit-rects {kind, strip, x, y, w, h}
+local uf8BankRects = {}   -- V-Pot bank selector hit-rects {b, x, y, w, h}
 local uf8Learn     = -1   -- armed cell, encoded kind*8+strip (hud_uf8_learn), -1 none
 local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
 local ctxUf8Strip  = -1
+local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
+local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
 local lastUf8Tab   = nil  -- edge-write "hud_uf8_tab" so C++ auto-engages Plugin Mode
 local frame        = 0
 local hintText     = ""
@@ -224,17 +227,19 @@ end
 -- UF8 device tab (read-only strip-grid). State + per-control assignments come on
 -- their own ExtState keys (hud_uf8_state / hud_uf8_assign) so they coexist with
 -- the UC1 CS/BC payloads. UF8 has no modifier layers.
---   state : "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<short>"
+--   state : "UF8;<present>;<faderBank>;<vpotBank>;<boot>;<focus>;<short>"
 --   assign: "<strip>;<kind>;<paramName>;<inv>"  kind 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel
 -- boot=1 (present=0): no UF8 map but a virgin FX is under the cursor → the grid
 -- renders armable em-dash cells so a click + wiggle bootstraps a UF8-only map.
+-- focus=1: the cursor IS the shown UF8 plug-in → auto-switch to the UF8 tab.
 local function readUf8State()
   local raw = reaper.GetExtState(SECT, "hud_uf8_state")
-  local dev, present, fb, vb, boot, short =
-    raw:match("^(%w+);(%d);(%d);(%d);(%d);(.*)$")
+  local dev, present, fb, vb, boot, focus, short =
+    raw:match("^(%w+);(%d);(%d);(%d);(%d);(%d);(.*)$")
   return {
     present   = (present == "1"),
     boot      = (boot == "1"),
+    focus     = (focus == "1"),
     faderBank = tonumber(fb) or 0,
     vpotBank  = tonumber(vb) or 0,
     short     = short or "",
@@ -243,16 +248,31 @@ end
 
 local function readUf8Assign()
   local raw = reaper.GetExtState(SECT, "hud_uf8_assign")
-  local m = {}   -- m[strip][kind] = { name, inv }
+  local m = {}   -- m[strip][kind] = { name, inv, mode }  (mode: V-Pot 0/1)
   for line in raw:gmatch("[^\n]+") do
-    local strip, kind, name, inv = line:match("^(%d+);(%d+);([^;]*);(%d)$")
+    local strip, kind, name, inv, mode = line:match("^(%d+);(%d+);([^;]*);(%d);(%d)$")
+    if not strip then   -- tolerate the old 4-field form (no mode)
+      strip, kind, name, inv = line:match("^(%d+);(%d+);([^;]*);(%d)$"); mode = "0"
+    end
     if strip then
       local s, k = tonumber(strip), tonumber(kind)
       m[s] = m[s] or {}
-      m[s][k] = { name = name or "", inv = (inv == "1") }
+      m[s][k] = { name = name or "", inv = (inv == "1"), mode = tonumber(mode) or 0 }
     end
   end
   return m
+end
+
+-- V-Pot bank labels (per Top-Soft-Key bank). "label0;label1;…;label7" (8 fields).
+local function readUf8Banks()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_banks")
+  local t = {}
+  local i = 0
+  for field in (raw .. ";"):gmatch("([^;]*);") do
+    t[i] = field; i = i + 1
+    if i >= 8 then break end
+  end
+  return t
 end
 
 local SECTION_ORDER = {
@@ -467,9 +487,23 @@ local function uf8CellAt(mx, my)
   return nil
 end
 
+-- V-Pot bank cell under (mx,my) → bank index 0..7, or nil.
+local function uf8BankAt(mx, my)
+  for _, h in ipairs(uf8BankRects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      return h.b
+    end
+  end
+  return nil
+end
+
 local function handleControlClick(mx, my)
   local idx = controlAt(mx, my)
-  if not idx then return false end
+  if not idx then
+    -- Click on empty content area → cancel any armed learn (easy mouse escape).
+    if learnIdx >= 0 and selectedParam < 0 then sendCmd("cancel") end
+    return false
+  end
   if selectedParam >= 0 then
     -- Param picked in the list → assign it straight to this control.
     sendCmd("bind;" .. idx .. ";" .. selectedParam)
@@ -1030,25 +1064,36 @@ local function renderUf8Grid(ust, uasn)
   -- Nothing to map (no UF8 map AND no virgin FX) → no grid.
   if not ust.present and not ust.boot then return end
 
-  -- V-Pot bank selector row: the 8 Top-Soft-Key banks, current one bright. The
-  -- hardware Top-Soft-Keys drive this (auto-engaged Plugin Mode), so it's a
-  -- read-only indicator that the V-Pot row below follows.
+  -- V-Pot bank selector row: the 8 Top-Soft-Key banks, current one bright.
+  -- Clickable — click a bank to switch it (sets the live Top-Soft-Key bank via
+  -- the extension), so you can reach + map empty banks from the HUD without
+  -- needing the hardware soft-keys. The hardware Top-Soft-Keys drive it too.
+  uf8BankRects = {}
+  uf8Banks = readUf8Banks()
   local bankPx = floor(11 * fontScale() + 0.5)
   local bankY  = top + 6 + subH + 6
   local bankH  = floor(bankPx + 8 * fontScale() + 0.5)
   do
     local _, glh = measure("V-Pot Bank", bankPx)
     dtext(10, bankY + (bankH - glh) / 2, col(0x8890A0, 0.85), "V-Pot Bank", bankPx)
-    local bx0 = 10 + measure("V-Pot Bank", bankPx) + 10
-    local bw  = floor(22 * fontScale() + 0.5)
+    local minW = floor(22 * fontScale() + 0.5)
+    local maxW = floor(96 * fontScale() + 0.5)
+    local bx   = 10 + measure("V-Pot Bank", bankPx) + 10
+    -- Named banks show their label (right-click to rename); else the number.
+    -- Cells auto-size to the label so names stay legible.
     for b = 0, 7 do
-      local bx  = bx0 + b * (bw + 4)
-      local on  = (b == ust.vpotBank)
-      rect(bx, bankY, bw, bankH, col(on and UF8_ACCENT or 0x2A2A30, on and 0.9 or 1))
-      local hs = tostring(b + 1)
-      local tw, th = measure(hs, bankPx)
-      dtext(bx + (bw - tw) / 2, bankY + (bankH - th) / 2,
-            col(on and 0x121214 or 0x9098A4, on and 1 or 0.8), hs, bankPx)
+      local lbl  = uf8Banks[b]
+      local txt  = (lbl and lbl ~= "") and lbl or tostring(b + 1)
+      local tw   = measure(txt, bankPx)
+      local cw   = math.max(minW, math.min(maxW, tw + 12))
+      local disp = fit(txt, cw - 8, bankPx)
+      local on   = (b == ust.vpotBank)
+      rect(bx, bankY, cw, bankH, col(on and UF8_ACCENT or 0x2A2A30, on and 0.9 or 1))
+      local dw, dh = measure(disp, bankPx)
+      dtext(bx + (cw - dw) / 2, bankY + (bankH - dh) / 2,
+            col(on and 0x121214 or 0x9098A4, on and 1 or 0.8), disp, bankPx)
+      uf8BankRects[#uf8BankRects + 1] = { b = b, x = bx, y = bankY, w = cw, h = bankH }
+      bx = bx + cw + 4
     end
   end
 
@@ -1152,15 +1197,21 @@ local function render()
   local bootActive = (bootRaw:sub(1, 2) == "1;")
   local bootName   = bootActive and bootRaw:sub(3) or ""
 
-  if st.focusDom == "c" or st.focusDom == "b" then
-    if st.focusDom ~= lastFocusDom then
-      local newTab = (st.focusDom == "c") and "cs" or "bc"
-      if newTab ~= activeTab then selectedParam = -1 end   -- param idx is per-FX
+  -- Auto-follow focus to the matching tab. CS/BC win (focusDom c/b); otherwise a
+  -- UF8-mapped plug-in under the cursor (ust.focus) switches to the UF8 tab.
+  -- Manual tab clicks stick until the focus context next CHANGES (lastFocusDom
+  -- doubles as the focus-key tracker: "c"/"b"/"u"/"n").
+  local focusKey = st.focusDom
+  if focusKey ~= "c" and focusKey ~= "b" and ust and ust.focus then focusKey = "u" end
+  if focusKey ~= lastFocusDom then
+    local newTab = (focusKey == "c") and "cs"
+               or  (focusKey == "b") and "bc"
+               or  (focusKey == "u") and "uf8" or nil
+    if newTab and newTab ~= activeTab then
+      selectedParam = -1   -- param idx is per-FX
       activeTab = newTab
-      lastFocusDom = st.focusDom
     end
-  else
-    lastFocusDom = "n"
+    lastFocusDom = focusKey
   end
 
   drawTabs(st, ust)
@@ -1246,6 +1297,7 @@ end
 local POPUP          = "##hud_ctx"
 local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
+local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
 
 -- List / parameter-panel body text size (Medium = current default). Chrome
 -- (titles, badge, buttons) is unaffected.
@@ -1409,6 +1461,18 @@ local function drawUf8ControlContextMenu()
   if reaper.ImGui_MenuItem(ctx, "Invert", nil, mapped and a.inv or false) then
     sendCmd("uf8invert;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
   end
+  -- V-Pot only: Value (continuous) vs Toggle (push = on/off).
+  if ctxUf8Kind == 0 then
+    if reaper.ImGui_BeginMenu(ctx, "V-Pot mode") then
+      if reaper.ImGui_MenuItem(ctx, "Value (continuous)", nil, a and a.mode == 0) then
+        sendCmd("uf8vmode;" .. ctxUf8Strip .. ";0")
+      end
+      if reaper.ImGui_MenuItem(ctx, "Toggle (push on/off)", nil, a and a.mode == 1) then
+        sendCmd("uf8vmode;" .. ctxUf8Strip .. ";1")
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
   -- Fill sequential: only for strips 1..7 (binds strips to the right).
   if ctxUf8Strip >= 7 then reaper.ImGui_BeginDisabled(ctx) end
   if reaper.ImGui_MenuItem(ctx, "Fill sequential \xE2\x86\x92") then
@@ -1419,6 +1483,45 @@ local function drawUf8ControlContextMenu()
     sendCmd("uf8unbind;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
   end
   if not mapped then reaper.ImGui_EndDisabled(ctx) end
+
+  reaper.ImGui_EndPopup(ctx)
+  reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
+-- V-Pot bank right-click menu: rename / clear the bank's display name (the
+-- hardware Top-Soft-Key label). Acts on ctxUf8Bank via the hud_cmd channel.
+local function drawUf8BankContextMenu()
+  if ctxUf8Bank < 0 then return end
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 10, 7)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
+  if not reaper.ImGui_BeginPopup(ctx, UF8_BANK_POPUP) then
+    reaper.ImGui_PopStyleVar(ctx, 3)
+    return
+  end
+
+  local cur = uf8Banks[ctxUf8Bank] or ""
+
+  reaper.ImGui_BeginDisabled(ctx)
+  local hdr = "V-Pot Bank " .. (ctxUf8Bank + 1)
+  if cur ~= "" then hdr = hdr .. "  \xE2\x86\x92  " .. cur end
+  reaper.ImGui_MenuItem(ctx, hdr)
+  reaper.ImGui_EndDisabled(ctx)
+  reaper.ImGui_Separator(ctx)
+
+  if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6") then
+    local prefill = cur:gsub(",", " ")
+    local ok, val = reaper.GetUserInputs("Rename V-Pot bank", 1,
+      "Bank name (empty = number):,extrawidth=160", prefill)
+    if ok then
+      sendCmd("uf8bankname;" .. ctxUf8Bank .. ";" .. (val:gsub("[;\n]", " ")))
+    end
+  end
+  if cur == "" then reaper.ImGui_BeginDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Clear name") then
+    sendCmd("uf8bankname;" .. ctxUf8Bank .. ";")
+  end
+  if cur == "" then reaper.ImGui_EndDisabled(ctx) end
 
   reaper.ImGui_EndPopup(ctx)
   reaper.ImGui_PopStyleVar(ctx, 3)
@@ -1493,9 +1596,14 @@ local function loop()
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
         if activeTab == "uf8" then
-          -- Over a grid cell → per-cell menu (Learn/Invert/Fill/Unbind).
+          -- Over a V-Pot bank → rename menu; over a grid cell → per-cell menu;
+          -- else the main HUD menu.
+          local bk = uf8BankAt(lx, ly)
           local k, s = uf8CellAt(lx, ly)
-          if k then
+          if bk then
+            ctxUf8Bank = bk
+            reaper.ImGui_OpenPopup(ctx, UF8_BANK_POPUP)
+          elseif k then
             ctxUf8Kind, ctxUf8Strip = k, s
             reaper.ImGui_OpenPopup(ctx, UF8_CTRL_POPUP)
           else
@@ -1514,8 +1622,16 @@ local function loop()
         end
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
         if activeTab == "uf8" then
-          -- Tab strip first (to switch away), then grid cell arm/cancel.
-          if not handleTabClick(lx, ly) then handleUf8CellClick(lx, ly) end
+          -- Tab strip → bank row → grid cell. A click that misses everything
+          -- cancels any armed learn (an easy mouse "escape").
+          if handleTabClick(lx, ly) then
+          else
+            local b = uf8BankAt(lx, ly)
+            if b then sendCmd("uf8bank;" .. b)
+            elseif not handleUf8CellClick(lx, ly) then
+              if uf8Learn >= 0 then sendCmd("uf8cancel") end
+            end
+          end
         -- Top toggle buttons first, then param-panel row, then tab, then control.
         elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
         elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
@@ -1563,6 +1679,7 @@ local function loop()
     drawContextMenu()
     drawControlContextMenu()
     drawUf8ControlContextMenu()
+    drawUf8BankContextMenu()
 
     -- Persist geometry on change.
     local px, py = reaper.ImGui_GetWindowPos(ctx)
