@@ -167,6 +167,20 @@ void reasixty_setFxLayerCtrlOptEnable(bool on);
 int  reasixty_fxLearnActiveLayer();   // current held-modifier layer (HUD badge)
 bool reasixty_shiftFineMode();
 void reasixty_setShiftFineMode(bool on);
+double reasixty_knobSpeedUf8();
+void   reasixty_setKnobSpeedUf8(double v);
+double reasixty_knobSpeedUc1();
+void   reasixty_setKnobSpeedUc1(double v);
+double reasixty_fineFactorUf8();
+void   reasixty_setFineFactorUf8(double v);
+double reasixty_fineFactorUc1();
+void   reasixty_setFineFactorUc1(double v);
+double reasixty_notchZone();
+void   reasixty_setNotchZone(double v);
+double reasixty_notchFineStep();
+void   reasixty_setNotchFineStep(double v);
+double reasixty_notchHold();
+void   reasixty_setNotchHold(double v);
 int  reasixty_theme();
 void reasixty_setTheme(int t);
 int  reasixty_fontScale();
@@ -953,6 +967,61 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         &shiftFine))
     {
         reasixty_setShiftFineMode(shiftFine);
+    }
+
+    // V-Pot / encoder resolution. Speed scales every rotation delta (1.00 =
+    // default feel, higher = faster / coarser). Fine factor is how much the
+    // delta shrinks while Fine is engaged (lower = finer). Per-surface so
+    // UF8 and UC1 can be tuned independently. Faders are unaffected.
+    sectionHeader("V-Pot / encoder resolution");
+    {
+        // Plain typeable value field per setting — no slider, no +/- steps.
+        // `dispScale` lets a field show different units than it stores (the
+        // notch zone stores 0..0.05 normalised but shows 0..5 %). Values are
+        // clamped to [lo,hi] (in stored units) on entry.
+        auto field = [&](const char* label, double cur,
+                         double lo, double hi, double dispScale,
+                         const char* fmt, void (*setFn)(double)) {
+            double disp = cur * dispScale;
+            char iid[64];
+            snprintf(iid, sizeof(iid), "##in_%s", label);
+            ImGui_SetNextItemWidth(ctx, 90.0);
+            if (ImGui_InputDouble(ctx, iid, &disp,
+                                  nullptr, nullptr, fmt, nullptr)) {
+                double v = disp / dispScale;
+                if (v < lo) v = lo;
+                if (v > hi) v = hi;
+                setFn(v);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_Text(ctx, label);
+        };
+        field("UF8 V-Pot speed", reasixty_knobSpeedUf8(),
+              0.25, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
+        field("UF8 Fine factor", reasixty_fineFactorUf8(),
+              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf8);
+        ImGui_Spacing(ctx);
+        field("UC1 encoder speed", reasixty_knobSpeedUc1(),
+              0.25, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
+        field("UC1 Fine factor", reasixty_fineFactorUc1(),
+              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
+        ImGui_Spacing(ctx);
+        // Virtual-notch zone: how close to the neutral point (0 dB / centre
+        // pan) a V-Pot must land for the magnet to snap. 0 % disables the
+        // slow-approach snap (crossing the centre still snaps). Stored as a
+        // normalised 0..0.05 fraction, shown as 0..5 %.
+        field("Virtual notch zone", reasixty_notchZone(),
+              0.0, 0.05, 100.0, "%.1f%%", reasixty_setNotchZone);
+        // Fine step near the notch: V-Pot moves this much slower while the
+        // value sits within 2x the zone of centre, for precise 0 dB nudges.
+        // 1.00x = off (normal speed everywhere).
+        field("Notch fine step", reasixty_notchFineStep(),
+              0.1, 1.0, 1.0, "%.2fx", reasixty_setNotchFineStep);
+        // Soft-detent hold: the value parks on 0 dB and absorbs this much
+        // rotation before releasing — stops an endless encoder sailing past
+        // 0. 0% = off (pure magnet, can overshoot). Higher = stickier 0.
+        field("Notch hold", reasixty_notchHold(),
+              0.0, 0.10, 100.0, "%.1f%%", reasixty_setNotchHold);
     }
 
     // UC1 GR calibration sits at the very bottom of the Device pane per

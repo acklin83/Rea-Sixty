@@ -33,6 +33,14 @@ jobs:
             os: macos-latest
             artifact: reaper_rea-sixty.dylib
             artifact_path: extension/build/reaper_rea-sixty.dylib
+          # Intel macOS: macos-13 is the last x86_64 GitHub runner (macos-14+
+          # are arm64). A plain build there yields an x86_64 dylib + x86_64
+          # Homebrew deps for the darwin-x86_64 ReaPack package, so Intel-Mac
+          # users get updates via ReaPack instead of building from source.
+          - name: macos-x86_64
+            os: macos-13
+            artifact: reaper_rea-sixty-x86_64.dylib
+            artifact_path: extension/build/reaper_rea-sixty.dylib
           - name: windows-x64
             os: windows-latest
             artifact: reaper_rea-sixty.dll
@@ -82,4 +90,18 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+      # The Intel-Mac ReaPack package also needs the x86_64 libusb / hidapi
+      # the build bundled into extension/build/. The arm64 release picks these
+      # up locally on Frank's Mac; the x86_64 ones only exist on the CI runner,
+      # so ship them as a separate artifact the release runbook downloads.
+      - name: Upload macOS x86_64 bundled libs
+        if: matrix.name == 'macos-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64-libs
+          path: |
+            extension/build/libusb-1.0.0.dylib
+            extension/build/libhidapi.0.dylib
           if-no-files-found: error

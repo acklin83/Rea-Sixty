@@ -649,6 +649,32 @@ std::atomic<bool>         g_keyboardCtrlModifier {true};
 std::atomic<bool>         g_shiftFineMode        {false}; // Shift = fine mode for V-Pots/encoders
 std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button held/latched
                                                           // (published from UC1Surface)
+// Global V-Pot / encoder resolution. Per-surface so UF8 and UC1 can be
+// tuned independently (their base laws differ — kVpotBoost vs 1/64). Speed
+// is a linear multiplier applied on top of every base delta (default 1.0 =
+// byte-identical to the historic hard-coded behaviour). FineFactor replaces
+// the formerly hard-coded fine multiplier (was 0.25 everywhere except UC1
+// FX-param at 0.1); it scales the delta further while Fine is engaged.
+// Read live each tick (atomics) so changes apply without a reload.
+std::atomic<double>       g_knobSpeedUf8         {1.0};
+std::atomic<double>       g_knobSpeedUc1         {1.0};
+std::atomic<double>       g_fineFactorUf8        {0.25};
+std::atomic<double>       g_fineFactorUc1        {0.25};
+// Virtual-notch zone half-width in normalised (0..1) units. The SSL-style
+// centre magnet snaps to the neutral point when a rotation lands within this
+// zone (or crosses the centre — crossing always snaps regardless of zone).
+// Pan paths operate in -1..1 space so they use 2x this. Default 0.012 keeps
+// the historic feel. 0 disables slow-approach snap (crossing still snaps).
+std::atomic<double>       g_notchZone            {0.02};
+// Fine-step factor applied to a bipolar V-Pot delta while the value sits
+// near the notch (within 2x the zone of centre). 1.0 = off (no change);
+// 0.5 = half-speed near 0 dB for precise small moves + a more reliable
+// magnet catch. SSL "halved step near the detent". Default 0.5.
+std::atomic<double>       g_notchFineStep        {0.5};
+// Soft-detent "hold" at the notch centre, in normalised units. Once the
+// value snaps to 0, this much rotation is absorbed before it releases —
+// stops an endless encoder from sailing past 0 dB. 0 = off (pure magnet).
+std::atomic<double>       g_notchHold            {0.01};
 // FX-Learn modifier layers (Normal / Option / Control). The enables gate
 // whether held Option / Control switch the active FX-Learn layer; default on
 // so user-mapped overlays work out of the box (a control with no overlay just
@@ -667,6 +693,19 @@ bool shiftFineActive_();
 // Fine button. The UC1 source was missing — holding Fine on the UC1 left
 // UF8 V-Pots coarse (Frank 2026-05-29).
 bool vpotFineActive_();
+// Combined per-surface scale for a single rotation delta: global speed,
+// times the fine factor when Fine is engaged. At defaults (speed 1.0,
+// fine 0.25) this is byte-identical to the old `if (fine) x *= 0.25;`.
+inline double reasixty_uf8KnobScale(bool fine)
+{
+    return g_knobSpeedUf8.load()
+         * (fine ? g_fineFactorUf8.load() : 1.0);
+}
+inline double reasixty_uc1KnobScale(bool fine)
+{
+    return g_knobSpeedUc1.load()
+         * (fine ? g_fineFactorUc1.load() : 1.0);
+}
 // Settings-window appearance. `g_themeSelection` maps to uf8::Theme
 // (0 = Vanilla / default, 1 = Mixnote). `g_fontScale` maps to font
 // presets (0 = Small 12px, 1 = Normal 14px, 2 = Large 18px). Both
@@ -2511,6 +2550,27 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "shift_fine_mode"); v && *v) {
         g_shiftFineMode.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "knob_speed_uf8"); v && *v) {
+        g_knobSpeedUf8.store(std::clamp(std::atof(v), 0.1, 8.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "knob_speed_uc1"); v && *v) {
+        g_knobSpeedUc1.store(std::clamp(std::atof(v), 0.1, 8.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "fine_factor_uf8"); v && *v) {
+        g_fineFactorUf8.store(std::clamp(std::atof(v), 0.02, 1.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "fine_factor_uc1"); v && *v) {
+        g_fineFactorUc1.store(std::clamp(std::atof(v), 0.02, 1.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "notch_zone"); v && *v) {
+        g_notchZone.store(std::clamp(std::atof(v), 0.0, 0.05));
+    }
+    if (const char* v = GetExtState("rea_sixty", "notch_fine_step"); v && *v) {
+        g_notchFineStep.store(std::clamp(std::atof(v), 0.1, 1.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "notch_hold"); v && *v) {
+        g_notchHold.store(std::clamp(std::atof(v), 0.0, 0.10));
     }
     if (const char* v = GetExtState("rea_sixty", "theme"); v && *v) {
         g_themeSelection.store(std::atoi(v));
@@ -7201,7 +7261,8 @@ void drainInputQueue()
                         const double cur = GetTrackSendInfo_Value(
                             r.track, r.sendCategory, r.sendIndex, "D_PAN");
                         const double next = uf8::applyVirtualNotch(
-                            cur, dv, /*center*/0.0, /*zone*/0.025,
+                            cur, dv, /*center*/0.0,
+                            /*zone*/g_notchZone.load() * 2.0,
                             -1.0, 1.0);
                         SetTrackSendInfo_Value(r.track, r.sendCategory,
                                                r.sendIndex, "D_PAN", next);
@@ -7226,13 +7287,14 @@ void drainInputQueue()
                     if (fr.active()) {
                         if (fr.valid) {
                             double delta = e.value;
-                            if (vpotFineActive_()) delta *= 0.25;
+                            delta *= reasixty_uf8KnobScale(vpotFineActive_());
                             if (g_flip.load() && g_forcePan.load() && tr) {
                                 // FLIP+PAN held → V-Pot drives the strip
                                 // track's own pan (P_PAN), not the send.
                                 const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
                                 const double next = uf8::applyVirtualNotch(
-                                    cur, delta, /*center*/0.0, /*zone*/0.025,
+                                    cur, delta, /*center*/0.0,
+                                    /*zone*/g_notchZone.load() * 2.0,
                                     -1.0, 1.0);
                                 SetMediaTrackInfo_Value(tr, "D_PAN", next);
                             } else if (g_flip.load()) {
@@ -7247,7 +7309,7 @@ void drainInputQueue()
                         if (vr.valid) {
                             if (g_forcePan.load()) {
                                 double delta = e.value;
-                                if (vpotFineActive_()) delta *= 0.25;
+                                delta *= reasixty_uf8KnobScale(vpotFineActive_());
                                 writePan(vr, delta, e.strip);
                             } else {
                                 double dPb = e.value;
@@ -7317,8 +7379,8 @@ void drainInputQueue()
                                 const int signedDet = rawDet
                                     * (bs.inverted ? -1 : 1);
                                 float sens = kt.sensitivity;
-                                if (vpotFineActive_())
-                                    sens *= 0.25f;
+                                sens *= static_cast<float>(
+                                    reasixty_uf8KnobScale(vpotFineActive_()));
                                 const auto r = uf8::tickStepped(
                                     acc, signedDet, sens);
                                 acc = r.newAccum;
@@ -7337,8 +7399,13 @@ void drainInputQueue()
                                 // bindings keep byte-identical behaviour.
                                 double delta = e.value
                                     * (bs.inverted ? -1.0 : 1.0);
-                                if (vpotFineActive_())
-                                    delta *= 0.25;
+                                delta *= reasixty_uf8KnobScale(vpotFineActive_());
+                                const bool bipU =
+                                    bs.polarity == uf8::VPotPolarity::Bipolar;
+                                // Finer step near the notch (within 2x zone).
+                                if (bipU && std::abs(cur - 0.5)
+                                            <= 2.0 * g_notchZone.load())
+                                    delta *= g_notchFineStep.load();
                                 if (kt.isCustom()) {
                                     delta *= static_cast<double>(kt.sensitivity);
                                     double t = static_cast<double>(
@@ -7358,6 +7425,14 @@ void drainInputQueue()
                                     next = cur + delta;
                                     if (next < 0.0) next = 0.0;
                                     if (next > 1.0) next = 1.0;
+                                }
+                                // SSL centre magnet for bipolar user params.
+                                if (bipU) {
+                                    next = uf8::applyNotchHold(
+                                        static_cast<int>(e.strip),
+                                        cur, next - cur, 0.5,
+                                        g_notchZone.load(),
+                                        g_notchHold.load(), 0.0, 1.0);
                                 }
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
@@ -7471,8 +7546,8 @@ void drainInputQueue()
                         const int signedDet = rawDet
                             * (sl.inverted ? -1 : 1);
                         float sens = usl ? usl->sensitivity : 1.0f;
-                        if (vpotFineActive_())
-                            sens *= 0.25f;
+                        sens *= static_cast<float>(
+                            reasixty_uf8KnobScale(vpotFineActive_()));
                         const auto r = uf8::tickStepped(
                             acc, signedDet, sens);
                         acc = r.newAccum;
@@ -7497,8 +7572,16 @@ void drainInputQueue()
                         constexpr double kVpotBoost = 1.25;
                         double delta = e.value * kVpotBoost
                                      * (sl.inverted ? -1.0 : 1.0);
-                        if (vpotFineActive_())
-                            delta *= 0.25;
+                        delta *= reasixty_uf8KnobScale(vpotFineActive_());
+                        const bool bip =
+                            (usl ? usl->polarity == uf8::VPotPolarity::Bipolar
+                                 : isBipolarSlot(sl));
+                        // Finer step near the notch (within 2x the zone of
+                        // centre) → precise moves around 0 dB + a more
+                        // reliable magnet catch. 1.0 = off.
+                        if (bip && std::abs(cur - 0.5)
+                                   <= 2.0 * g_notchZone.load())
+                            delta *= g_notchFineStep.load();
                         if (usl) {
                             delta *= static_cast<double>(usl->sensitivity);
                             double t = static_cast<double>(
@@ -7512,6 +7595,19 @@ void drainInputQueue()
                             next = cur + delta;
                             if (next < 0.0) next = 0.0;
                             if (next > 1.0) next = 1.0;
+                        }
+                        // SSL-style centre magnet for bipolar params (EQ
+                        // gain, trim, fader level) — snap to 0 dB (norm 0.5)
+                        // on cross / slow approach, same feel as pan. Applied
+                        // over the net cur→next move so it wraps both the
+                        // curve and the linear result. Unipolar params
+                        // (freq / Q / threshold) have no neutral → no notch.
+                        if (bip) {
+                            next = uf8::applyNotchHold(
+                                static_cast<int>(e.strip),
+                                cur, next - cur, 0.5,
+                                g_notchZone.load(), g_notchHold.load(),
+                                0.0, 1.0);
                         }
                     }
                     const bool slOk = TrackFX_SetParamNormalized(
@@ -7532,9 +7628,10 @@ void drainInputQueue()
                         const double cur = TrackFX_GetParamNormalized(
                             tr, pn.fxIndex, pn.vst3Param);
                         double delta = e.value * 0.5;  // pan range 0..1, half-scale of REAPER's -1..+1
-                        if (vpotFineActive_()) delta *= 0.25;
+                        delta *= reasixty_uf8KnobScale(vpotFineActive_());
                         const double next = uf8::applyVirtualNotch(
-                            cur, delta, /*center*/0.5, /*zone*/0.012,
+                            cur, delta, /*center*/0.5,
+                            /*zone*/g_notchZone.load(),
                             0.0, 1.0);
                         TrackFX_SetParamNormalized(tr, pn.fxIndex,
                             pn.vst3Param, next);
@@ -7545,14 +7642,20 @@ void drainInputQueue()
                     }
                     // Fall through to REAPER pan if no CS plug-in.
                     const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
+                    const double panDelta = e.value
+                        * reasixty_uf8KnobScale(vpotFineActive_());
                     const double next = uf8::applyVirtualNotch(
-                        cur, e.value, /*center*/0.0, /*zone*/0.025,
+                        cur, panDelta, /*center*/0.0,
+                        /*zone*/g_notchZone.load() * 2.0,
                         -1.0, 1.0);
                     SetMediaTrackInfo_Value(tr, "D_PAN", next);
                 } else {
                     const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
+                    const double panDelta = e.value
+                        * reasixty_uf8KnobScale(vpotFineActive_());
                     const double next = uf8::applyVirtualNotch(
-                        cur, e.value, /*center*/0.0, /*zone*/0.025,
+                        cur, panDelta, /*center*/0.0,
+                        /*zone*/g_notchZone.load() * 2.0,
                         -1.0, 1.0);
                     SetMediaTrackInfo_Value(tr, "D_PAN", next);
                 }
@@ -17632,6 +17735,62 @@ void reasixty_setShiftFineMode(bool on)
     SetExtState("rea_sixty", "shift_fine_mode", on ? "1" : "0", true);
 }
 bool reasixty_shiftFineActive()       { return shiftFineActive_(); }
+double reasixty_knobSpeedUf8()        { return g_knobSpeedUf8.load(); }
+double reasixty_knobSpeedUc1()        { return g_knobSpeedUc1.load(); }
+double reasixty_fineFactorUf8()       { return g_fineFactorUf8.load(); }
+double reasixty_fineFactorUc1()       { return g_fineFactorUc1.load(); }
+void reasixty_setKnobSpeedUf8(double v)
+{
+    v = std::clamp(v, 0.1, 8.0);
+    g_knobSpeedUf8.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "knob_speed_uf8", b, true);
+}
+void reasixty_setKnobSpeedUc1(double v)
+{
+    v = std::clamp(v, 0.1, 8.0);
+    g_knobSpeedUc1.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "knob_speed_uc1", b, true);
+}
+void reasixty_setFineFactorUf8(double v)
+{
+    v = std::clamp(v, 0.02, 1.0);
+    g_fineFactorUf8.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "fine_factor_uf8", b, true);
+}
+void reasixty_setFineFactorUc1(double v)
+{
+    v = std::clamp(v, 0.02, 1.0);
+    g_fineFactorUc1.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "fine_factor_uc1", b, true);
+}
+double reasixty_notchZone()           { return g_notchZone.load(); }
+void reasixty_setNotchZone(double v)
+{
+    v = std::clamp(v, 0.0, 0.05);
+    g_notchZone.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "notch_zone", b, true);
+}
+double reasixty_notchFineStep()       { return g_notchFineStep.load(); }
+void reasixty_setNotchFineStep(double v)
+{
+    v = std::clamp(v, 0.1, 1.0);
+    g_notchFineStep.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "notch_fine_step", b, true);
+}
+double reasixty_notchHold()           { return g_notchHold.load(); }
+void reasixty_setNotchHold(double v)
+{
+    v = std::clamp(v, 0.0, 0.10);
+    g_notchHold.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "notch_hold", b, true);
+}
 // Published by UC1Surface when its Fine button toggles/holds, so UF8
 // V-Pot rotation honours UC1 Fine too. Session-only (not persisted).
 void reasixty_setUc1Fine(bool on)     { g_uc1Fine.store(on); }
@@ -21206,6 +21365,29 @@ static void reasixty_deployInsertsOverlayLua()
     }
 }
 
+// Delete legacy companion Lua scripts that older builds wrote into
+// <ResourcePath>/Scripts/rea-sixty/ but which we no longer ship. The gfx
+// HUD + focused panel were replaced by the ReaImGui versions in a52b6c1;
+// the old files lingered on users' disks, and a stale Action / toolbar
+// button kept running them (→ the "End() too many times" / unusable-HUD
+// reports). Removing the files makes those dead actions fail cleanly instead
+// of launching broken code; Shift+360 always drives the current embedded
+// script. Idempotent — std::remove on a missing file is a harmless no-op.
+static void reasixty_cleanupLegacyLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string dir = std::string(base) + "/Scripts/rea-sixty/";
+    static const char* kLegacy[] = {
+        "rea_sixty_assignment_hud.lua",   // pre-ReaImGui gfx HUD
+        "rea_sixty_focused_panel.lua",    // pre-ReaImGui gfx panel
+    };
+    for (const char* name : kLegacy) {
+        const std::string path = dir + name;
+        std::remove(path.c_str());   // no-op if already gone
+    }
+}
+
 // Settings launcher: register the deployed companion Lua as an action
 // (idempotent) and run it. The script toggles itself on relaunch, so this
 // starts OR stops the overlay + panel. False if it can't be found/registered.
@@ -21488,6 +21670,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Make the "Rea-Sixty Input Level" probe available in the FX browser.
     reasixty_deployInputLevelJsfx();
     reasixty_deployInsertsOverlayLua();
+    reasixty_cleanupLegacyLua();   // purge pre-ReaImGui gfx HUD/panel scripts
 
     initLog("step: capture g_reaperGetFunc");
     // Capture rec->GetFunc for SWELL APIs not in the plug-in SDK

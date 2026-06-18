@@ -33,6 +33,20 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
+// Global UC1 encoder resolution (defined in main.cpp). Speed = linear
+// multiplier on every base delta (default 1.0); fineFactor scales further
+// while Fine is engaged (default 0.25). uc1KnobScale_ folds both.
+double reasixty_knobSpeedUc1();
+double reasixty_fineFactorUc1();
+// Virtual-notch tuning (defined in main.cpp) — shared UF8/UC1 so the EQ-gain
+// magnet + soft-detent feel identical on both surfaces.
+double reasixty_notchZone();
+double reasixty_notchHold();
+double reasixty_notchFineStep();
+static inline double uc1KnobScale_(bool fine)
+{
+    return reasixty_knobSpeedUc1() * (fine ? reasixty_fineFactorUc1() : 1.0);
+}
 // Active FX-Learn modifier layer (0=Normal,1=Option,2=Control), defined in
 // main.cpp. Selects which SlotLayer's knob-travel a learned control uses.
 int reasixty_fxLearnActiveLayer();
@@ -821,8 +835,9 @@ double UC1Surface::clickToDelta_(int8_t delta) const
     // per click — slightly snappier but responsive).
     constexpr double kStepPerClick = 1.0 / 64.0;
     double d = delta * kStepPerClick;
-    if (fineMode_.load(std::memory_order_relaxed)
-        || reasixty_shiftFineActive()) d *= 0.25;
+    const bool fine = fineMode_.load(std::memory_order_relaxed)
+                   || reasixty_shiftFineActive();
+    d *= uc1KnobScale_(fine);
     return d;
 }
 
@@ -1099,7 +1114,10 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 // and a UF8 V-Pot bound to the same slot stay in sync.
                 const bool fine = fineMode_.load(std::memory_order_relaxed)
                                  || reasixty_shiftFineActive();
-                const double scale = fine ? 0.001 : 0.01;
+                // Base 1% per step, scaled by the global UC1 speed + fine
+                // factor. (Was a hard-coded 0.001 fine = 0.1x; now follows
+                // the configurable per-surface fine factor, default 0.25.)
+                const double scale = 0.01 * uc1KnobScale_(fine);
                 double delta = step * scale;
                 if (usl) {
                     delta *= static_cast<double>(usl->sensitivity);
@@ -1661,11 +1679,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             if (t > 1.0) t = 1.0;
             next = static_cast<double>(
                 uf8::applyCurve(*usl, static_cast<float>(t)));
+        } else if (isEqGain) {
+            // Finer step near the notch (within 2x the zone) → precise 0 dB
+            // nudges + reliable magnet catch, then the stateful soft-detent
+            // (applyNotchHold). Identical feel to the UF8 V-Pot path. UC1
+            // uses notch state slots 16+ so it can't collide with UF8's
+            // strip-indexed slots (0..7).
+            if (std::abs(cur - 0.5) <= 2.0 * reasixty_notchZone())
+                delta *= reasixty_notchFineStep();
+            next = uf8::applyNotchHold(
+                16 + (ev.id & 0x0F), cur, delta, /*center*/0.5,
+                reasixty_notchZone(), reasixty_notchHold(), 0.0, 1.0);
         } else {
-            next = isEqGain
-                ? uf8::applyVirtualNotch(cur, delta, /*center*/0.5,
-                                         /*zone*/0.03, 0.0, 1.0)
-                : std::clamp(cur + delta, 0.0, 1.0);
+            next = std::clamp(cur + delta, 0.0, 1.0);
         }
     }
     const bool uc1SetOk = TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);

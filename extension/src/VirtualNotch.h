@@ -21,4 +21,15 @@ namespace uf8 {
 double applyVirtualNotch(double cur, double delta, double center,
                          double zone, double lo, double hi);
 
+// Stateful variant with a soft-detent "hold" at the centre. Once the value
+// snaps to centre (cross or inward-into-zone), rotation is absorbed — the
+// value stays parked at centre — until the accumulated rotation exceeds
+// `hold` (in normalised units), at which point it releases outward carrying
+// the overshoot. This is what stops an endless encoder from sailing past 0
+// dB. `hold` == 0 → behaves exactly like applyVirtualNotch. State is keyed
+// by `slot` (0..15); callers pass the strip index. Not thread-safe — call
+// only from the single input-drain path.
+double applyNotchHold(int slot, double cur, double delta, double center,
+                      double zone, double hold, double lo, double hi);
+
 } // namespace uf8

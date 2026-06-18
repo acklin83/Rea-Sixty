@@ -538,9 +538,32 @@ Default is **26.5 dB/s** — REAPER's own meter decay, so the UC1 input meter fa
 | Keyboard Shift acts as Shift modifier | When on, holding **Shift** on the host keyboard counts as the Shift modifier for any binding's Plain/Shift/Cmd/Ctrl modifier slot — in addition to the hardware `mod_*` bindings. |
 | Keyboard Cmd acts as Cmd modifier | Same, for Cmd on macOS. |
 | Keyboard Ctrl acts as Ctrl modifier | Same, for Ctrl on Windows / Linux. |
-| Shift activates Fine mode (V-Pots / encoders, not faders) | When on, holding the Shift modifier (keyboard Shift, UF8 `FINE` key, or UC1 `Fine` button) drops V-Pot + encoder step size to ×0.25 for momentary fine resolution. Faders are deliberately excluded (they already have Alt-drag for fine control). Stacks with the UC1 `Fine` toggle. Off by default. |
+| Shift activates Fine mode (V-Pots / encoders, not faders) | When on, holding the Shift modifier (keyboard Shift, UF8 `FINE` key, or UC1 `Fine` button) drops V-Pot + encoder step size by the configurable **Fine factor** (default ×0.25 — see *V-Pot / encoder resolution* below) for momentary fine resolution. Faders are deliberately excluded (they already have Alt-drag for fine control). Stacks with the UC1 `Fine` toggle. Off by default. |
 | Hold Option for the FX-Learn Option layer | Enables the **Option** FX-Learn modifier layer (UC1). When on, holding **Option/Alt** on the host keyboard switches the active layer so a control drives its Option-overlay parameter / value instead of its Normal mapping. See FX Learn pane → Modifier layers. Off by default. |
 | Hold Control for the FX-Learn Control layer | Same, for the **Control** layer (hold **Control**). Holding both, or neither, resolves to Normal. Off by default. |
+
+### V-Pot / encoder resolution
+
+Per-surface speed and 0 dB / centre-pan detent feel for **all** V-Pots and pots. Each field is a typeable value box (no slider). Faders are unaffected. Live — changes apply immediately, no reload.
+
+| Field | Default | Effect |
+|---|---|---|
+| UF8 V-Pot speed | 1.00× | Linear multiplier on every UF8 V-Pot rotation delta. Higher = faster / coarser, lower = slower / finer. 1.00× = the historic feel. |
+| UF8 Fine factor | 0.25× | How much the UF8 step shrinks while Fine is engaged (Shift / `FINE` / UC1 `Fine`). Lower = finer. |
+| UC1 encoder speed | 1.00× | Same as UF8 V-Pot speed, for the UC1 knobs / encoders. Independent so the two surfaces can be tuned separately. |
+| UC1 Fine factor | 0.25× | UC1 equivalent of the UF8 Fine factor. |
+
+**Effective step** = base × per-control sensitivity (FX-Learn) × surface speed × (Fine factor while Fine held).
+
+The same section also tunes the **virtual notch** — the SSL-style magnet that lands bipolar V-Pot params (EQ gains, trims, fader level, pan) on their neutral point (0 dB / centre):
+
+| Field | Default | Effect |
+|---|---|---|
+| Virtual notch zone | 2.0 % | Catch band half-width around the neutral point (% of the param's full range). Any inward move that lands inside snaps to centre; turning **away** from centre stays free. 0 % = no slow-approach snap (crossing the centre still snaps). |
+| Notch fine step | 0.50× | Step multiplier applied while the value sits within 2× the zone of centre — finer moves around 0 dB plus a more reliable catch. 1.00× = off. |
+| Notch hold | 1.0 % | Soft-detent: once the value snaps to 0 dB it **parks** there and absorbs this much rotation before releasing — stops an endless encoder sailing past 0. 0 % = off (pure magnet, can overshoot). A mouse / automation move larger than the zone releases the hold. |
+
+Applies identically to UF8 V-Pots and UC1 knobs. Unipolar params (frequency, Q, threshold) have no neutral point and get no notch.
 
 ### Pending
 
