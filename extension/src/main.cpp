@@ -5175,6 +5175,10 @@ std::atomic<bool>    g_shiftDoubleClickArmed{false};
 double g_selectAccum   = 0.0;
 double g_nudgeAccum    = 0.0;
 double g_instanceAccum = 0.0;
+double g_uf1ChanEncAccum = 0.0; // UF1 channel-encoder track-nav accumulator: the
+                                // encoder emits ~4 fine counts per physical click
+                                // (cap58: ±1/frame), so divide by kChannelEncoderScale
+                                // → 1 track per click (Frank: "+4 tracks bei 1 click").
 double g_encoderAccum  = 0.0;   // unified accumulator for the bindings-routed
                                 // EncoderRotation pipeline (Plain / Shift / Cmd /
                                 // Ctrl all share so the user can change
@@ -11099,9 +11103,16 @@ void drainInputQueue()
             const uint8_t id   = e.strip;
             const int     step = static_cast<int>(e.value);
             switch (id) {
-                case uf1::enc::kChannel:        // channel encoder → track nav
-                    applySelectRelative_(step);
+                case uf1::enc::kChannel: {      // channel encoder → track nav
+                    // Accumulate the fine counts (~4 per click) into whole track
+                    // steps, like the UF8/UC1 channel encoder (kChannelEncoderScale).
+                    g_uf1ChanEncAccum += step / kChannelEncoderScale;
+                    int tracks = 0;
+                    if (g_uf1ChanEncAccum >=  1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
+                    if (g_uf1ChanEncAccum <= -1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
+                    if (tracks != 0) applySelectRelative_(tracks);
                     break;
+                }
                 case uf1::enc::kJog:            // jog wheel → playhead / edit cursor
                     applyPlayheadNudge_(step);
                     break;
