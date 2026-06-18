@@ -15488,8 +15488,32 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     if (sFxTr != eqTr || sFx != eqFx || force) {
         sFxTr = eqTr;
         sFx = eqFx;
-        if (sFx >= 0)
+        if (sFx >= 0) {
             for (int k = 0; k < 15; ++k) ix[k] = uf1ParamByName_(eqTr, sFx, names[k]);
+            // LPF/HPF (ix 12/13): the SSL CS params are named "Low Pass" / "High
+            // Pass" (UF1 UG p188 V-Pot tables), NOT "LPF"/"HPF" — the literal
+            // lookup missed them so the filter curves never drew (Frank 2026-06-18).
+            // Resolve by the documented name, preferring the param whose value
+            // reads as a frequency (so a "...Pass In" toggle isn't grabbed first).
+            auto passFreq = [&](const char* want) -> int {
+                const int pc = TrackFX_GetNumParams(eqTr, sFx);
+                const std::string w = uf1Lower_(want);
+                char nm[128], val[64];
+                int first = -1;
+                for (int p = 0; p < pc; ++p) {
+                    if (!TrackFX_GetParamName(eqTr, sFx, p, nm, sizeof(nm))) continue;
+                    if (uf1Lower_(nm).find(w) == std::string::npos) continue;
+                    if (first < 0) first = p;
+                    if (TrackFX_GetFormattedParamValue(eqTr, sFx, p, val, sizeof(val)) &&
+                        (std::strchr(val, 'H') || std::strchr(val, 'z') ||
+                         std::strchr(val, 'k') || std::strchr(val, 'K')))
+                        return p;     // a Hz/kHz value → this is the freq param
+                }
+                return first;
+            };
+            if (ix[12] < 0) ix[12] = passFreq("Low Pass");
+            if (ix[13] < 0) ix[13] = passFreq("High Pass");
+        }
     }
 
     std::array<uint8_t, 251> col{};
