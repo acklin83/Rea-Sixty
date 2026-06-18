@@ -15427,7 +15427,7 @@ double uf1HighShelfDb_(double f, double f0, double g)
 // 2nd-order filter roll-offs (≈12 dB/oct) — only meaningful away from the rail.
 double uf1HpfDb_(double f, double fc)
 {
-    if (fc <= 21.0) return 0.0;                       // at/under the bottom rail = off
+    if (fc <= 9.0) return 0.0;                        // below the control min (10 Hz) = off
     const double r = fc / f;
     return -10.0 * std::log10(1.0 + r * r * r * r);
 }
@@ -15551,8 +15551,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         // whole graph (the 2026-06-18 regression). Outside the sane HPF/LPF freq
         // ranges, force the filter "off" (HPF≤21 / LPF≥19000 are the render rails).
         // Worst case LP/HP just don't draw — exactly the pre-fix behaviour.
-        if (hpF < 15.0 || hpF > 2000.0)    hpF = 20.0;
-        if (lpF < 1000.0 || lpF > 30000.0) lpF = 20000.0;
+        if (hpF < 9.0 || hpF > 2000.0)     hpF = 5.0;       // off (≤9 rail), HP min 10 Hz
+        if (lpF < 1000.0 || lpF > 30000.0) lpF = 20000.0;   // off (≥19000 rail)
         // Columns live at payload indices 2..250 (249 columns); 0..1 = the
         // "00 01" format header below.
         for (int x = 2; x < 251; ++x) {
