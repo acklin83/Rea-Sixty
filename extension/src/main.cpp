@@ -15233,8 +15233,12 @@ void openUf1BringUp_()
 
 // UF1 fader position (15-bit, 0..0x7FFF) <-> linear volume, using REAPER's
 // native fader taper (DB2SLIDER/SLIDER2DB) with the full travel mapped to a
-// +12 dB top — same law as the UF8 path but without the UF8 motor-echo
-// calibration (interpFaderCal) and on the UF1's clean 15-bit scale.
+// +12 dB top — same law as the UF8 path. The printed dB marks on the UF1
+// fader cap are the same SSL print as the UF8, so we reuse the UF8
+// calibration table 1:1 (interpFaderCal over kFaderCal): the bare slider-law
+// reading is pushed onto the printed dB value so the marks line up with
+// REAPER's volume display. Only the bit-scale differs (UF1's clean 15-bit
+// kUf1FaderMax vs UF8's 14-bit kUf8FaderPbMax).
 constexpr uint16_t kUf1FaderMax   = 0x7FFF;
 constexpr double   kUf1FaderTopDb = 12.0;
 
@@ -15244,7 +15248,9 @@ double uf1PosToVol_(uint16_t pos)
     if (pos > kUf1FaderMax) pos = kUf1FaderMax;
     const double topSlider = DB2SLIDER(kUf1FaderTopDb);
     const double slider = static_cast<double>(pos) / static_cast<double>(kUf1FaderMax) * topSlider;
-    return std::pow(10.0, SLIDER2DB(slider) / 20.0);
+    const double db_raw = SLIDER2DB(slider);
+    const double db_cal = interpFaderCal(db_raw, /*current_to_target=*/true);
+    return std::pow(10.0, db_cal / 20.0);
 }
 
 uint16_t uf1VolToPos_(double linear)
@@ -15252,7 +15258,9 @@ uint16_t uf1VolToPos_(double linear)
     if (!(linear > 0.0)) return 0;
     const double topSlider = DB2SLIDER(kUf1FaderTopDb);
     if (!(topSlider > 0.0)) return 0;
-    const double slider = DB2SLIDER(20.0 * std::log10(linear));
+    const double db_target = 20.0 * std::log10(linear);
+    const double db_raw    = interpFaderCal(db_target, /*current_to_target=*/false);
+    const double slider    = DB2SLIDER(db_raw);
     double pos = slider / topSlider * static_cast<double>(kUf1FaderMax);
     if (pos < 0) pos = 0;
     if (pos > static_cast<double>(kUf1FaderMax)) pos = kUf1FaderMax;
