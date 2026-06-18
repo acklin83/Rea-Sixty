@@ -15546,6 +15546,7 @@ void uf1PaintChannel_()
 
     static MediaTrack* sTr = nullptr;
     static std::string sName, sDb, sPan, sCh;
+    static int         sPanBar = INT_MIN;   // encoded pos*2+centreFlag (−1 = unset)
     static uint32_t    sColor = 0xFFFFFFFFu;
     static bool        sMeterView = false;
 
@@ -15635,6 +15636,20 @@ void uf1PaintChannel_()
     const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
     const std::string panLine = composeValueLine("Pan", formatPanReadout(pan));
     if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
+
+    // Pan readout bar (0x000f): 2-byte payload [position, centre-flag] (cap77
+    // ground truth). position = round((pan+1)*50): 0 = full L, 50 = centre,
+    // 100 = full R. Second byte = 0x80 only at exact centre (pan == 0), else 0x00
+    // — the firmware's centre-detent marker. The label (0x000e) alone left the
+    // bar blank (Frank 2026-06-18: "Wert da, aber keine Linie wie auf UF8").
+    const int     panPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
+    const uint8_t panCentre = (pan == 0.0) ? 0x80 : 0x00;
+    const int     panBarKey = panPos * 2 + (panCentre ? 1 : 0);
+    if (changed || panBarKey != sPanBar) {
+        sPanBar = panBarKey;
+        const std::vector<uint8_t> pb = { static_cast<uint8_t>(panPos), panCentre };
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kPanBar, pb));
+    }
 
     // Channel number (0x0014)
     const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
