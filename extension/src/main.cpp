@@ -10946,6 +10946,32 @@ MediaTrack* uf1FocusedTrack_()
     return tr;
 }
 
+// What the UF1 above-fader V-Pot (enc id 0x00) drives. Today: Pan of the focused
+// track. The enum + dispatch is the extension seam Frank asked for — later modes
+// (a bound FX param, a send level, etc.) slot in as new cases without touching
+// the encoder-routing foundation. g_uf1AboveFaderMode would become a setting.
+enum class Uf1AboveFaderMode : uint8_t { Pan /*, Param, SendLevel, … */ };
+std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Pan};
+
+// One detent ≈ 1/64 of the full pan sweep (−1..+1). Conservative; HW-tunable.
+constexpr double kUf1AboveFaderPanPerDetent = 1.0 / 64.0;
+
+// Apply an above-fader V-Pot detent delta to the focused track. Main-thread only
+// (drained from the input queue). Mode-dispatched so it's trivially extensible.
+void applyUf1AboveFaderVpot_(int step)
+{
+    if (step == 0) return;
+    MediaTrack* tr = uf1FocusedTrack_();
+    if (!tr) return;
+    switch (g_uf1AboveFaderMode.load()) {
+        case Uf1AboveFaderMode::Pan:
+            // Relative pan write — canonical surface path (applies + automation +
+            // notifies the painter, which repaints the Pan label/bar).
+            CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent, /*relative*/true);
+            break;
+    }
+}
+
 // Forward decls: diag helpers live OUTSIDE this anonymous namespace
 // (after the closing `} // anonymous`) so UC1Surface.cpp can call
 // them via extern. Defined just below the namespace close.
@@ -11079,11 +11105,13 @@ void drainInputQueue()
                 case uf1::enc::kJog:            // jog wheel → playhead / edit cursor
                     applyPlayheadNudge_(step);
                     break;
-                case uf1::enc::kVpotAboveFader: // V-pots → focused-plugin params
-                case uf1::enc::kVpot1:          // (SSL page-table mapping wired in
-                case uf1::enc::kVpot2:          //  step 3b; routed but inert here)
-                case uf1::enc::kVpot3:
-                case uf1::enc::kVpot4:
+                case uf1::enc::kVpotAboveFader: // above-fader V-pot → Pan (extensible)
+                    applyUf1AboveFaderVpot_(step);
+                    break;
+                case uf1::enc::kVpot1:          // 4 plugin V-pots → focused-plugin
+                case uf1::enc::kVpot2:          // params via the SSL page tables —
+                case uf1::enc::kVpot3:          // wired in step 3b; routed but inert
+                case uf1::enc::kVpot4:          // here.
                 default:
                     break;
             }
