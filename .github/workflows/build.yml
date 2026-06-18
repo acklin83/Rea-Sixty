@@ -33,12 +33,14 @@ jobs:
             os: macos-latest
             artifact: reaper_rea-sixty.dylib
             artifact_path: extension/build/reaper_rea-sixty.dylib
-          # Intel macOS: macos-13 is the last x86_64 GitHub runner (macos-14+
-          # are arm64). A plain build there yields an x86_64 dylib + x86_64
-          # Homebrew deps for the darwin-x86_64 ReaPack package, so Intel-Mac
-          # users get updates via ReaPack instead of building from source.
+          # Intel macOS: macos-13 was deprecated (fully removed Dec 2025), which
+          # left this job stuck queued forever. macos-15-intel is the current —
+          # and last — x86_64 GitHub runner (supported until Aug 2027). A plain
+          # build there yields an x86_64 dylib + x86_64 Homebrew deps for the
+          # darwin-x86_64 ReaPack package, so Intel-Mac users get updates via
+          # ReaPack instead of building from source.
           - name: macos-x86_64
-            os: macos-13
+            os: macos-15-intel
             artifact: reaper_rea-sixty-x86_64.dylib
             artifact_path: extension/build/reaper_rea-sixty.dylib
           - name: windows-x64
