@@ -15488,8 +15488,42 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     if (sFxTr != eqTr || sFx != eqFx || force) {
         sFxTr = eqTr;
         sFx = eqFx;
-        if (sFx >= 0)
+        if (sFx >= 0) {
             for (int k = 0; k < 15; ++k) ix[k] = uf1ParamByName_(eqTr, sFx, names[k]);
+            // LPF/HPF: the SSL CS params are "Low Pass" (kHz) / "High Pass" (Hz),
+            // not "LPF"/"HPF" — resolve by the documented names, preferring the
+            // param whose value reads as a frequency (skip a "...Pass In" toggle).
+            auto passFreq = [&](const char* want) -> int {
+                const int pc = TrackFX_GetNumParams(eqTr, sFx);
+                const std::string w = uf1Lower_(want);
+                char nm[128], val[64]; int first = -1;
+                for (int p = 0; p < pc; ++p) {
+                    if (!TrackFX_GetParamName(eqTr, sFx, p, nm, sizeof(nm))) continue;
+                    if (uf1Lower_(nm).find(w) == std::string::npos) continue;
+                    if (first < 0) first = p;
+                    if (TrackFX_GetFormattedParamValue(eqTr, sFx, p, val, sizeof(val)) &&
+                        (std::strchr(val, 'H') || std::strchr(val, 'z') ||
+                         std::strchr(val, 'k') || std::strchr(val, 'K')))
+                        return p;
+                }
+                return first;
+            };
+            ix[12] = passFreq("Low Pass");
+            ix[13] = passFreq("High Pass");
+            // Diagnostic (OFF unless REASIXTY_UF1_TRACE): dump exactly what
+            // resolved so a wrong grab is visible instead of guessed.
+            if (g_uf1Trace)
+            if (FILE* lg = std::fopen("/tmp/reaper_uf1_input.log", "a")) {
+                char hn[128]={0}, ln[128]={0}, hv[64]={0}, lv[64]={0};
+                if (ix[13]>=0){ TrackFX_GetParamName(eqTr,sFx,ix[13],hn,sizeof(hn));
+                                TrackFX_GetFormattedParamValue(eqTr,sFx,ix[13],hv,sizeof(hv)); }
+                if (ix[12]>=0){ TrackFX_GetParamName(eqTr,sFx,ix[12],ln,sizeof(ln));
+                                TrackFX_GetFormattedParamValue(eqTr,sFx,ix[12],lv,sizeof(lv)); }
+                std::fprintf(lg,"EQ HPF ix=%d name='%s' val='%s' | LPF ix=%d name='%s' val='%s'\n",
+                             ix[13],hn,hv, ix[12],ln,lv);
+                std::fclose(lg);
+            }
+        }
     }
 
     std::array<uint8_t, 251> col{};
@@ -15512,7 +15546,13 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         const double lmG=uf1ParamFmt_(sFxTr,sFx,ix[6],0),  lmF=uf1ParamFreq_(sFxTr,sFx,ix[7],1000),  lmQ=uf1ParamFmt_(sFxTr,sFx,ix[8],1.0);
         const double lfF=uf1ParamFreq_(sFxTr,sFx,ix[9],200), lfG=uf1ParamFmt_(sFxTr,sFx,ix[10],0);
         const bool   lfBell = ix[11]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[11])>=0.5;
-        const double lpF=uf1ParamFmt_(sFxTr,sFx,ix[12],20000), hpF=uf1ParamFmt_(sFxTr,sFx,ix[13],20);
+        double lpF=uf1ParamFmt_(sFxTr,sFx,ix[12],20000), hpF=uf1ParamFmt_(sFxTr,sFx,ix[13],20);
+        // HARD SAFETY: a wrong param grab or mis-scaled unit must NEVER slam the
+        // whole graph (the 2026-06-18 regression). Outside the sane HPF/LPF freq
+        // ranges, force the filter "off" (HPF≤21 / LPF≥19000 are the render rails).
+        // Worst case LP/HP just don't draw — exactly the pre-fix behaviour.
+        if (hpF < 15.0 || hpF > 2000.0)    hpF = 20.0;
+        if (lpF < 1000.0 || lpF > 30000.0) lpF = 20000.0;
         // Columns live at payload indices 2..250 (249 columns); 0..1 = the
         // "00 01" format header below.
         for (int x = 2; x < 251; ++x) {
