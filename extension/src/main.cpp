@@ -3836,6 +3836,7 @@ struct PendingInput {
         Uf1SoloToggle,   // toggle solo on the focused track
         Uf1MuteToggle,   // toggle mute (CUT) on the focused track
         Uf1SelectFocused,// exclusive-select the focused track
+        Uf1Encoder,      // strip = uf1::enc id, value = signed detent delta
     };
     Kind    kind;
     uint8_t strip;
@@ -11067,6 +11068,27 @@ void drainInputQueue()
             }
             continue;
         }
+        if (e.kind == PendingInput::Uf1Encoder) {
+            // step 3a foundation: dispatch encoder rotation by id (main thread).
+            const uint8_t id   = e.strip;
+            const int     step = static_cast<int>(e.value);
+            switch (id) {
+                case uf1::enc::kChannel:        // channel encoder → track nav
+                    applySelectRelative_(step);
+                    break;
+                case uf1::enc::kJog:            // jog wheel → playhead / edit cursor
+                    applyPlayheadNudge_(step);
+                    break;
+                case uf1::enc::kVpotAboveFader: // V-pots → focused-plugin params
+                case uf1::enc::kVpot1:          // (SSL page-table mapping wired in
+                case uf1::enc::kVpot2:          //  step 3b; routed but inert here)
+                case uf1::enc::kVpot3:
+                case uf1::enc::kVpot4:
+                default:
+                    break;
+            }
+            continue;
+        }
         if (e.kind == PendingInput::NavJumpStrip) {
             // Phase 2.8: top-soft-key press on the marker/region overlay.
             // Map strip → window item. Regions jump the playhead AND
@@ -15073,9 +15095,19 @@ void onUf1Event(const uf1::InputEvent& ev)
             break;
         case uf1::InputKind::EncoderRotate:
             if (f) std::fprintf(f, "ENC 0x%02x rotate %+d\n", ev.id, ev.delta);
+            // Foundation (step 3a): hand every encoder detent to the main thread
+            // via the shared queue — REAPER-API work is illegal on this worker
+            // thread (threading rule feedback-reaper-api-input-thread). The drain
+            // dispatches by encoder id: channel-enc → track nav, jog → playhead,
+            // V-pots → focused-plugin params (wired in step 3b). Mirrors the UF1
+            // button path which routes through Bindings::dispatch.
+            queueInput({PendingInput::Uf1Encoder, ev.id,
+                        static_cast<double>(ev.delta)});
             break;
         case uf1::InputKind::EncoderTouch:
             if (f) std::fprintf(f, "ENC 0x%02x touch %s\n", ev.id, ev.pressed ? "down" : "up");
+            // V-pot / channel-enc capacitive touch — not acted on yet (step 3b
+            // may use it to seed a fine-mode anchor). Logged only for now.
             break;
         case uf1::InputKind::Button:
             if (f) std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
