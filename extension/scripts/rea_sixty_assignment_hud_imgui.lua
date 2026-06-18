@@ -98,6 +98,12 @@ local function parseGeom(raw)
         local sec, cap, legend = rest, 0, ""
         local s2, c2, l2 = rest:match("^([^;]*);(%d+);(.*)$")
         if s2 then sec, cap, legend = s2, tonumber(c2) or 0, l2 end
+        -- Belt-and-suspenders: the section is the group key AND the column header,
+        -- so it must never contain a ';'. If the cap/legend split ever fails
+        -- (newer geometry format meeting an older line, or a non-numeric cap), the
+        -- raw "section;cap;legend" triple would otherwise render as a wacky header
+        -- row. Keep only the part before the first ';'.
+        sec = sec:match("^[^;]*") or sec
         local cid = tonumber(idx)
         g.ctrl[cid] = {
           idx = cid,   -- stored as a field too (mockup hit-rects + learn need it)
@@ -2056,8 +2062,14 @@ local function loop()
       reaper.SetExtState(SECT, "hud_imgui_rect",
         string.format("%d,%d,%d,%d", px, py, pw, ph), true)
     end
+    -- ReaImGui 0.10: call End ONLY when Begin returned true (visible). Calling it
+    -- unconditionally raises "ImGui_End: Calling End() too many times!" every
+    -- frame the window is collapsed / clipped / fully off-screen (visible=false)
+    -- — which then spams the console and can wedge the instance. See the memory
+    -- note reaimgui-v010-begin-end-pairing. Pop* below stay UNCONDITIONAL: they
+    -- balance the pushes made BEFORE Begin (window stack only is conditional).
+    reaper.ImGui_End(ctx)
   end
-  reaper.ImGui_End(ctx)            -- UNCONDITIONAL (see reaimgui_v010_pairing_rules)
   reaper.ImGui_PopStyleColor(ctx, 1)
   reaper.ImGui_PopStyleVar(ctx, 1)
 
