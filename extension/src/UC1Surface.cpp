@@ -743,8 +743,16 @@ int UC1Surface::poll()
     }
 
     int handled = 0;
+    // Coalesce refresh() across the whole event drain: a fast CHANNEL-encoder
+    // flick queues many events, each landing a track-step → setFocusedTrack →
+    // refresh(). Collapsing those into one final repaint stops the 7-seg/LCD
+    // from counting up after the turn (device frame-queue backlog).
+    refreshCoalescing_ = true;
+    refreshDirty_ = false;
     for (const auto& e : knobs)   { handleKnob_(e);   ++handled; }
     for (const auto& e : buttons) { handleButton_(e); ++handled; }
+    refreshCoalescing_ = false;
+    if (refreshDirty_) refresh();
 
     // BC-scroll overlay revert. uc1_41 capture: SSL360 reverts the
     // central LCD from "BC scroll" sub-mode (banner 0x01 sub=0x02 +
@@ -1048,6 +1056,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             const bool haveStepInfo = TrackFX_GetParameterStepSizes(
                 tr, match.fxIndex, vst3Param,
                 &pStep, &pSmallStep, &pLargeStep, &isToggle);
+            // JSFX sliders report a bogus pStep=1.0 (full range) for what
+            // are really continuous params — trusting it slams the param to
+            // an extreme. Route ONLY the JSFX case to the continuous branch
+            // (with softened acceleration); VST3/AU keep their real pStep.
+            const bool jsfxBogusStep =
+                haveStepInfo && pStep >= 1.0 && !isToggle
+                && uf8::fxIsJsfx(tr, match.fxIndex);
             double next = curN;
             // usl knob-travel customisation only applies to SSL slots (which
             // carry a stable linkIdx). Free user EXT FUNCS params have no usl
@@ -1065,7 +1080,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             if (haveStepInfo && isToggle) {
                 // 1 detent (in either direction) flips the toggle.
                 next = (curN >= 0.5) ? 0.0 : 1.0;
-            } else if (haveStepInfo && pStep > 0.0) {
+            } else if (haveStepInfo && pStep > 0.0 && !jsfxBogusStep) {
                 // Stepped enum — input `step` is already pre-accumulated
                 // upstream (3 raw detents → 1 step via extAcc). At sens=1.0
                 // we keep the legacy "1 step per detent" feel; sens>1 fires
@@ -1075,7 +1090,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 const bool fineSt = fineMode_.load(std::memory_order_relaxed)
                                    || reasixty_shiftFineActive();
                 float sens = usl ? usl->sensitivity : 1.0f;
-                if (sens < 0.1f) sens = 0.1f;
+                if (sens < 0.01f) sens = 0.01f;
                 else if (sens > 8.0f) sens = 8.0f;
                 if (fineSt) sens *= 0.25f;
                 static float s_accExt[0x40]{};
@@ -1118,7 +1133,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 // factor. (Was a hard-coded 0.001 fine = 0.1x; now follows
                 // the configurable per-surface fine factor, default 0.25.)
                 const double scale = 0.01 * uc1KnobScale_(fine);
-                double delta = step * scale;
+                // JSFX bogus-step params: shared floor-lifted sub-linear
+                // curve (same as the main knob / UF8 V-Pot) so slow turns
+                // aren't sluggish and fast flicks don't overshoot. Global
+                // speed + fine fold in via uc1KnobScale_.
+                double delta = jsfxBogusStep
+                    ? uf8::jsfxContinuousStep(step) * uc1KnobScale_(fine)
+                    : step * scale;
                 if (usl) {
                     delta *= static_cast<double>(usl->sensitivity);
                     double t = static_cast<double>(
@@ -1131,6 +1152,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 } else {
                     next = curN + delta;
                 }
+            }
+            // JSFX coarse-quantisation accumulator (see handleKnob_): keep
+            // sub-quantum fine-mode moves until they cross the slider grid.
+            if (jsfxBogusStep) {
+                static double s_jsfxWantExt[0x40]{};
+                const int wk = (linkIdx >= 0 ? linkIdx : vst3Param) & 0x3F;
+                next = uf8::jsfxAccumulate(s_jsfxWantExt[wk], curN, next);
             }
             if (next < 0.0) next = 0.0;
             if (next > 1.0) next = 1.0;
@@ -1571,6 +1599,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     bool   isToggle = false;
     const bool haveStepInfo = TrackFX_GetParameterStepSizes(
         tr, fxIdx, vst3Param, &pStep, &pSmall, &pLarge, &isToggle);
+    // JSFX sliders report a bogus pStep=1.0 (= full range) for what are
+    // really continuous params. Trusting it dumped the encoder into the
+    // stepped branch → next = cur ± 1.0 → slam to an extreme. Detect JSFX
+    // so we can route ONLY this case to the continuous path (with softened
+    // acceleration below). VST3 / AU stepped params keep their real pStep
+    // and byte-identical behaviour.
+    const bool jsfxBogusStep =
+        haveStepInfo && pStep >= 1.0 && !isToggle && uf8::fxIsJsfx(tr, fxIdx);
 
     // Hoist the user-slot lookup so both the stepped + continuous
     // branches can honour per-binding sensitivity / range. Built-in
@@ -1614,7 +1650,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     if (haveStepInfo && isToggle) {
         // Any detent flips the toggle. Sign of delta is irrelevant.
         next = (cur >= 0.5) ? 0.0 : 1.0;
-    } else if (haveStepInfo && pStep > 0.0) {
+    } else if (haveStepInfo && pStep > 0.0 && !jsfxBogusStep) {
         // Discrete-stepped — accumulate raw detents into logical steps
         // so a fast hardware scroll doesn't slam through 8 stops. The
         // detents-per-step threshold derives from user sensitivity:
@@ -1664,7 +1700,20 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // Mirrors the UF8 V-Pot branch in main.cpp so a UC1 knob and a
         // UF8 V-Pot bound to the same param share scaling.
 
-        double delta = clickToDelta_(ev.delta);
+        // JSFX bogus-step params land here (continuous). The firmware
+        // sends velocity-scaled detents (1 slow … 14 fast). jsfxContinuousStep
+        // maps that to a floor-lifted sub-linear step (shared with the UF8
+        // V-Pot path so both surfaces feel identical), then the global UC1
+        // speed + fine factor scale it. JSFX-only — genuine continuous
+        // VST3/AU params keep the legacy 1/64-per-click clickToDelta_ path.
+        double delta;
+        if (jsfxBogusStep) {
+            const bool fine = fineMode_.load(std::memory_order_relaxed)
+                            || reasixty_shiftFineActive();
+            delta = uf8::jsfxContinuousStep(ev.delta) * uc1KnobScale_(fine);
+        } else {
+            delta = clickToDelta_(ev.delta);
+        }
         if (isEqGain) delta *= kEqGainSpeed;
         delta *= (map->inverted[ev.id] ? -1.0 : 1.0);
         if (usl) {
@@ -1693,6 +1742,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         } else {
             next = std::clamp(cur + delta, 0.0, 1.0);
         }
+    }
+    // JSFX sliders are coarsely quantised: in fine mode the per-event step
+    // (~0.008) rounds straight back to the stored value, so accumulate the
+    // intended move in a per-control virtual position until it crosses the
+    // slider's grid. JSFX-only — VST3/AU write `next` directly.
+    if (jsfxBogusStep) {
+        static double s_jsfxWant[0x20]{};
+        next = uf8::jsfxAccumulate(s_jsfxWant[ev.id & 0x1F], cur, next);
     }
     const bool uc1SetOk = TrackFX_SetParamNormalized(tr, fxIdx, vst3Param, next);
     const double uc1After = TrackFX_GetParamNormalized(tr, fxIdx, vst3Param);
@@ -4104,6 +4161,9 @@ void UC1Surface::pollKnobRings_()
 void UC1Surface::refresh()
 {
     if (!device_) return;
+    // Coalescing window (poll() event drain): defer to the single repaint
+    // poll() runs after the loop, so a burst of track-steps repaints once.
+    if (refreshCoalescing_) { refreshDirty_ = true; return; }
     // Menu modes (PRESETS / ROUTING / EXT_FUNCS / TRANSPORT) own the
     // LCD content. refresh() repaints the MAIN-mode carousel + central
     // label which would clobber the menu rendering on track focus

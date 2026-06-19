@@ -216,6 +216,30 @@ SteppedTickResult tickStepped(float accum, int rawDetents, float sensitivity);
 float snapToStep(float v, float pStep);
 int   numStepsFor(float pStep);
 
+// JSFX sliders mis-report pStep=1.0 (full range) for what are really
+// continuous params, so the encoder handlers drive them as continuous.
+// The firmware applies its own velocity acceleration (≈1 detent on a slow
+// turn … up to ~14 on a fast flick); passing that through linearly makes a
+// fast flick overshoot ~20 % of range while slow turns crawl. This maps a
+// signed raw-detent count to a SIGNED normalised step magnitude with a
+// floor-lifted sub-linear curve: a slow detent gets a usable base step
+// (~1/33 of range, vs the old sluggish 1/64) and fast flicks are capped
+// near ~1/16 so no single event overshoots. Identical on UC1 + UF8 so both
+// surfaces feel the same; the per-surface global speed + fine factor scale
+// the result downstream. Returns 0 for a zero detent count.
+double jsfxContinuousStep(int rawDetents);
+
+// JSFX sliders are often coarsely quantised, so a small fine-mode nudge
+// (~0.008 normalised) rounds straight back to the stored value and the
+// param never moves. This accumulates the intended move against a caller-
+// owned per-control virtual position `wantN`: `curN` is the live value,
+// `intendedNext` what this event computed. Returns the un-rounded target
+// to write — REAPER rounds it for storage but the residual persists in
+// `wantN`, so sub-quantum moves add up until they cross the grid. Re-syncs
+// `wantN` to `curN` when they diverge past a few quanta (external edit, or
+// first use) so the encoder never fights a stale virtual position.
+double jsfxAccumulate(double& wantN, double curN, double intendedNext);
+
 struct UserMetering {
     // Set vst3Param ≥ 0 to enable; -1 means "not learned" (fall back to
     // REAPER's GainReduction_dB named-config-parm).

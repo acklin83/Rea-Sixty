@@ -717,6 +717,10 @@ std::atomic<int>          g_fontScale{1};
 // the TCP and MCP are separate scroll surfaces in REAPER. Default off.
 // Frank 2026-05-20.
 std::atomic<bool>         g_tcpFollowsSelection{false};
+// Selection scrolls past the surface edge: false = jump to the next 8-strip
+// bank (bucket snap, default), true = slide the bank by one channel so the
+// selection sits on the edge strip. UF8 Bindings setting. Frank 2026-06-19.
+std::atomic<bool>         g_bankScrollByOne{false};
 // Which REAPER view the UF8 mirrors for track visibility: 0 = TCP
 // (arrange-view panel), 1 = MCP (mixer). A track hidden in the
 // selected view drops from g_visibleTracks so the surface matches
@@ -2580,6 +2584,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "tcp_follows_selection"); v && *v) {
         g_tcpFollowsSelection.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "bank_scroll_by_one"); v && *v) {
+        g_bankScrollByOne.store(std::atoi(v) != 0);
     }
     // Visibility-follow mode (0 = TCP, 1 = MCP). Falls back to the
     // three legacy keys when the new key is absent, so 0.1.4 users keep
@@ -5928,10 +5935,20 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
         bank = idx;
         if (bank > trackCount - 1) bank = trackCount > 0 ? trackCount - 1 : 0;
     } else {
-        // Bucket snap: only shift if the selection fell outside the
-        // current 8-wide window.
+        // Only shift when the selection fell outside the current window.
         const int esc = effectiveStripCount_();
-        if (idx < bank || idx >= bank + esc) bank = (idx / esc) * esc;
+        if (idx < bank || idx >= bank + esc) {
+            if (g_bankScrollByOne.load()) {
+                // Slide by one channel: bring the selection onto the edge
+                // strip it crossed (right edge → last strip, left → strip 0)
+                // so a single channel-step banks by exactly one.
+                bank = (idx < bank) ? idx : (idx - esc + 1);
+            } else {
+                // Bucket snap: jump to the start of the 8-strip bank that
+                // contains the selection.
+                bank = (idx / esc) * esc;
+            }
+        }
     }
     if (bank != g_bankOffset.exchange(bank)) g_bankDirty.store(true);
 }
@@ -7349,13 +7366,21 @@ void drainInputQueue()
                                 TrackFX_GetParameterStepSizes(uctx.tr,
                                     uctx.fxIdx, bs.vst3Param,
                                     &pStep, &pSmall, &pLarge, &isToggle);
+                            // JSFX sliders mis-report pStep=1.0 (full range)
+                            // for continuous params → the stepped branch would
+                            // slam to an extreme. Route ONLY this case to the
+                            // continuous path (softened below); VST3/AU keep
+                            // their real pStep + byte-identical behaviour.
+                            const bool jsfxBogusStep =
+                                stepped && pStep >= 1.0 && !isToggle
+                                && uf8::fxIsJsfx(uctx.tr, uctx.fxIdx);
                             const auto& kt = bs.travel;
                             double next;
                             if (stepped && isToggle) {
                                 // Any detent flips the toggle. Sens /
                                 // range / curve don't apply.
                                 next = (cur >= 0.5) ? 0.0 : 1.0;
-                            } else if (stepped && pStep > 0.0) {
+                            } else if (stepped && pStep > 0.0 && !jsfxBogusStep) {
                                 // Per-(strip,bank) accumulator with idle
                                 // reset — mirrors UC1Surface.cpp:1241-1250
                                 // pattern so a fast hardware scroll
@@ -7397,8 +7422,19 @@ void drainInputQueue()
                                 // Continuous param — existing knob-travel
                                 // path. Defaults are linear so untouched
                                 // bindings keep byte-identical behaviour.
-                                double delta = e.value
-                                    * (bs.inverted ? -1.0 : 1.0);
+                                // JSFX bogus-step params use the shared
+                                // floor-lifted curve (same as UC1) so slow
+                                // turns aren't sluggish, fast don't overshoot,
+                                // and UF8 ≡ UC1 feel.
+                                double delta;
+                                if (jsfxBogusStep) {
+                                    const int rawDet = static_cast<int>(
+                                        std::round(e.value * 128.0));
+                                    delta = uf8::jsfxContinuousStep(rawDet)
+                                        * (bs.inverted ? -1.0 : 1.0);
+                                } else {
+                                    delta = e.value * (bs.inverted ? -1.0 : 1.0);
+                                }
                                 delta *= reasixty_uf8KnobScale(vpotFineActive_());
                                 const bool bipU =
                                     bs.polarity == uf8::VPotPolarity::Bipolar;
@@ -7434,6 +7470,14 @@ void drainInputQueue()
                                         g_notchZone.load(),
                                         g_notchHold.load(), 0.0, 1.0);
                                 }
+                            }
+                            // JSFX coarse-quantisation accumulator: keep
+                            // sub-quantum fine-mode moves until they cross
+                            // the slider grid (else the param sticks in fine).
+                            if (jsfxBogusStep) {
+                                static double s_jsfxWant[8][6]{};
+                                next = uf8::jsfxAccumulate(
+                                    s_jsfxWant[s & 7][bank % 6], cur, next);
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, next);
@@ -7520,10 +7564,15 @@ void drainInputQueue()
                     const bool stepped = TrackFX_GetParameterStepSizes(
                         tr, mm.fxIndex, sl.vst3Param,
                         &pStep, &pSmall, &pLarge, &isToggle);
+                    // JSFX sliders mis-report pStep=1.0 for continuous params
+                    // → stepped branch slams to an extreme. JSFX-only reroute.
+                    const bool jsfxBogusStep =
+                        stepped && pStep >= 1.0 && !isToggle
+                        && uf8::fxIsJsfx(tr, mm.fxIndex);
                     double next;
                     if (stepped && isToggle) {
                         next = (cur >= 0.5) ? 0.0 : 1.0;
-                    } else if (stepped && pStep > 0.0) {
+                    } else if (stepped && pStep > 0.0 && !jsfxBogusStep) {
                         // Per-strip accumulator. Built-in CS/BC slots use
                         // sens=1.0 (2 detents per step) → same baseline
                         // as the UC1 stepped path; user-learned slots
@@ -7570,8 +7619,19 @@ void drainInputQueue()
                         // proved unworkable — see onUf8Input). Shift-fine still
                         // quarters it for precision. Tunable; larger = faster.
                         constexpr double kVpotBoost = 1.25;
-                        double delta = e.value * kVpotBoost
-                                     * (sl.inverted ? -1.0 : 1.0);
+                        // JSFX bogus-step params use the shared floor-lifted
+                        // curve (same as UC1) — no kVpotBoost, the curve's own
+                        // base sets the slow-turn speed. Keeps UF8 ≡ UC1.
+                        double delta;
+                        if (jsfxBogusStep) {
+                            const int rawDet = static_cast<int>(
+                                std::round(e.value * 128.0));
+                            delta = uf8::jsfxContinuousStep(rawDet)
+                                * (sl.inverted ? -1.0 : 1.0);
+                        } else {
+                            delta = e.value * kVpotBoost
+                                  * (sl.inverted ? -1.0 : 1.0);
+                        }
                         delta *= reasixty_uf8KnobScale(vpotFineActive_());
                         const bool bip =
                             (usl ? usl->polarity == uf8::VPotPolarity::Bipolar
@@ -7609,6 +7669,14 @@ void drainInputQueue()
                                 g_notchZone.load(), g_notchHold.load(),
                                 0.0, 1.0);
                         }
+                    }
+                    // JSFX coarse-quantisation accumulator: keep sub-quantum
+                    // fine-mode moves until they cross the slider grid.
+                    if (jsfxBogusStep) {
+                        static double s_jsfxWant[8]{};
+                        next = uf8::jsfxAccumulate(
+                            s_jsfxWant[static_cast<int>(e.strip) & 7],
+                            cur, next);
                     }
                     const bool slOk = TrackFX_SetParamNormalized(
                         tr, mm.fxIndex, sl.vst3Param, next);
@@ -7742,10 +7810,15 @@ void drainInputQueue()
                                 // value, not between steps.
                                 double pStep=0.0, pSmall=0.0, pLarge=0.0;
                                 bool isToggle = false;
+                                // Skip the grid-snap only for JSFX's bogus
+                                // pStep=1.0 (would force the default to 0/1);
+                                // VST3/AU snap exactly as before.
                                 if (TrackFX_GetParameterStepSizes(uctx.tr,
                                         uctx.fxIdx, bs.vst3Param,
                                         &pStep, &pSmall, &pLarge, &isToggle)
-                                    && !isToggle && pStep > 0.0)
+                                    && !isToggle && pStep > 0.0
+                                    && !(pStep >= 1.0
+                                         && uf8::fxIsJsfx(uctx.tr, uctx.fxIdx)))
                                 {
                                     pushNext = static_cast<double>(
                                         uf8::snapToStep(
@@ -7847,10 +7920,14 @@ void drainInputQueue()
                         // Stepped param → snap to nearest step grid.
                         double pStep=0.0, pSmall=0.0, pLarge=0.0;
                         bool isToggle = false;
+                        // JSFX bogus pStep=1.0 → skip snap (else default
+                        // forced to 0/1); VST3/AU snap exactly as before.
                         if (TrackFX_GetParameterStepSizes(tr, mm.fxIndex,
                                 slPtr->vst3Param,
                                 &pStep, &pSmall, &pLarge, &isToggle)
-                            && !isToggle && pStep > 0.0)
+                            && !isToggle && pStep > 0.0
+                            && !(pStep >= 1.0
+                                 && uf8::fxIsJsfx(tr, mm.fxIndex)))
                         {
                             pushNext = static_cast<double>(uf8::snapToStep(
                                 static_cast<float>(pushNext),
@@ -17817,6 +17894,12 @@ void reasixty_setTcpFollowsSelection(bool on)
 {
     g_tcpFollowsSelection.store(on);
     SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
+}
+bool reasixty_bankScrollByOne()       { return g_bankScrollByOne.load(); }
+void reasixty_setBankScrollByOne(bool on)
+{
+    g_bankScrollByOne.store(on);
+    SetExtState("rea_sixty", "bank_scroll_by_one", on ? "1" : "0", true);
 }
 // Bridges for UC1Surface so the LCD CS-branch fallback can name the
 // channel's active FX (cursor default-to-FX[0]) without a layering

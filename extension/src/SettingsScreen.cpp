@@ -187,6 +187,8 @@ int  reasixty_fontScale();
 void reasixty_setFontScale(int s);
 bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
+bool reasixty_bankScrollByOne();
+void reasixty_setBankScrollByOne(bool on);
 int  reasixty_visibilityFollow();
 void reasixty_setVisibilityFollow(int v);
 bool reasixty_pinnedSurvivesBanking();
@@ -997,12 +999,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             ImGui_Text(ctx, label);
         };
         field("UF8 V-Pot speed", reasixty_knobSpeedUf8(),
-              0.25, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
+              0.10, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
         field("UF8 Fine factor", reasixty_fineFactorUf8(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf8);
         ImGui_Spacing(ctx);
         field("UC1 encoder speed", reasixty_knobSpeedUc1(),
-              0.25, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
+              0.10, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
         field("UC1 Fine factor", reasixty_fineFactorUc1(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
         ImGui_Spacing(ctx);
@@ -4752,6 +4754,22 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
         if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
             drawUf8Vector(ctx, s_selected);
+            // Bank-scroll stride: when a selection scrolls past the surface
+            // edge, jump a whole 8-strip bank or slide by one channel.
+            ImGui_Spacing(ctx);
+            int byOne = reasixty_bankScrollByOne() ? 1 : 0;
+            ImGui_Text(ctx, "Scroll banks:");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButtonEx(ctx, "by 8", &byOne, 0)) {
+                reasixty_setBankScrollByOne(false);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButtonEx(ctx, "by 1", &byOne, 1)) {
+                reasixty_setBankScrollByOne(true);
+            }
+            ImGui_TextDisabled(ctx,
+                "When the selection scrolls past the surface edge: "
+                "by 8 = jump to the next bank, by 1 = slide one channel.");
             ImGui_EndTabItem(ctx);
         }
         if (ImGui_BeginTabItem(ctx, "UC1", nullptr, nullptr)) {
@@ -5973,7 +5991,7 @@ void setSlotRangeMax_(int linkIdx, float v)
 
 void setSlotSensitivity_(int linkIdx, float v)
 {
-    if (v < 0.1f) v = 0.1f; else if (v > 4.0f) v = 4.0f;
+    if (v < 0.01f) v = 0.01f; else if (v > 4.0f) v = 4.0f;
     mutateSlot_(linkIdx, [v](uf8::SlotLayer& s) {
         s.sensitivity = v;
     });
@@ -6289,27 +6307,17 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     // there; we hide the row entirely rather than disable, to keep the
     // popup compact for the fader case.
     if (g_curveEditorTarget.supportsSensitivity) {
+        // Plain typeable value box — same style as Settings → Device
+        // (V-Pot / encoder resolution). No slider; range 0.01..4.0 so a
+        // JSFX param can be dialled right down for ultra-fine control.
         double sens = static_cast<double>(sl.sensitivity);
-        int flags = 0;
         ImGui_Text(ctx, isStepped ? "Detent speed:" : "Sensitivity:");
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 150.0));
-        if (ImGui_SliderDouble(ctx,
-                "##fxl_curve_sens_s",
-                &sens, 0.1, 4.0, "%.2fx", &flags))
-        {
-            g_curveEditorTarget.setSensitivity(static_cast<float>(sens));
-            sl.sensitivity = static_cast<float>(sens);
-        }
-        // InputDouble next to the slider so the user can type an exact
-        // sensitivity (Frank 2026-05-26). Clamped inside the setter so
-        // out-of-range typed values land at 0.1..4.0.
         ImGui_SameLine(ctx, nullptr, nullptr);
-        double sStep = 0.0, sFast = 0.0;
-        int sInFlags = 0;
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 90.0));
         if (ImGui_InputDouble(ctx, "##fxl_curve_sens_i",
-                &sens, &sStep, &sFast, "%.2fx", &sInFlags))
+                &sens, nullptr, nullptr, "%.2fx", nullptr))
         {
+            if (sens < 0.01) sens = 0.01; else if (sens > 4.0) sens = 4.0;
             g_curveEditorTarget.setSensitivity(static_cast<float>(sens));
             sl.sensitivity = static_cast<float>(sens);
         }
@@ -6320,7 +6328,7 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         }
         ImGui_TextDisabled(ctx, isStepped
             ? "1.0 = 1 step per 2 detents. Higher = faster. Shift = Fine."
-            : "Encoder speed. Shift still applies Fine on top.");
+            : "Encoder speed (0.01–4.0). Shift still applies Fine on top.");
         ImGui_Separator(ctx);
     }
 
@@ -6974,7 +6982,7 @@ void setUf8VPotRangeMax_(int strip, int bank, float v)
 
 void setUf8VPotSensitivity_(int strip, int bank, float v)
 {
-    if (v < 0.1f) v = 0.1f; else if (v > 4.0f) v = 4.0f;
+    if (v < 0.01f) v = 0.01f; else if (v > 4.0f) v = 4.0f;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][strip];
         bs.travel.sensitivity = v;

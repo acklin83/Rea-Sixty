@@ -153,6 +153,15 @@ public:
     // Refresh derived state: re-read all plugin params, push current
     // display text and LED states to the UC1. Call after setFocusedTrack
     // or after the user edits plugin params in REAPER.
+    //
+    // Coalescing: while `refreshCoalescing_` is set (during poll()'s knob/
+    // button drain), refresh() only marks `refreshDirty_` and returns —
+    // poll() runs ONE real refresh afterwards. A fast CHANNEL-encoder flick
+    // queues many events, each landing a track-step → setFocusedTrack →
+    // refresh(); without coalescing those N heavy frame-bursts back up in
+    // the device's firmware queue and the 7-seg / LCD visibly count up for
+    // a second after the turn stops. One final refresh jumps straight to
+    // the landed track (matching the UF8 strips). Frank 2026-06-19.
     void refresh();
 
     // Push GR values (positive dB of reduction) to the UC1's three GR
@@ -369,6 +378,11 @@ private:
     // don't spam it on every poll.
     bool                                  bcScrollOverlayActive_ = false;
     std::chrono::steady_clock::time_point bcScrollOverlayUntil_{};
+    // refresh() coalescing across a single poll() drain — see refresh()
+    // doc. Set/cleared by poll() around the event loop; refresh() honours
+    // them to collapse N per-event repaints into one final repaint.
+    bool                                  refreshCoalescing_ = false;
+    bool                                  refreshDirty_ = false;
     // Mirror for CS / channel-encoder scrolling. While active,
     // pushFocusedParamReadout_ suppresses zone 0x03 (CS readout) so
     // the SMALL track-name carousel has the upper LCD area to itself.

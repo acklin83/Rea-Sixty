@@ -132,6 +132,13 @@ bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize)
 // FX in the GR "Any FX" poll walk and in the auto-GUI window-chase.
 bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
 
+// True when the FX slot is a JSFX (REAPER "fx_type" == "JS"). JSFX
+// numeric sliders mis-report their step size as 1.0 (= full range)
+// via TrackFX_GetParameterStepSizes, so the knob/encoder handlers
+// special-case their feel (continuous + softened acceleration) while
+// leaving VST3 / AU stepped behaviour byte-identical.
+bool fxIsJsfx(void* track /*MediaTrack**/, int fx);
+
 // FX-GUID stringification — wraps TrackFX_GetFXGUID + guidToString.
 // Stable identity for an FX slot across reorder. Empty string when
 // the FX is gone or REAPER returns no GUID (e.g. record-FX bit set

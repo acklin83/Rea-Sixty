@@ -481,6 +481,20 @@ bool fxIsAcustica(void* trackOpaque, int fx)
     return false;
 }
 
+bool fxIsJsfx(void* trackOpaque, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return false;
+    // "fx_type" returns "JS" for JSFX, "VST"/"VST3"/"AU"/"CLAP"/… for the
+    // rest. Reading it is a pure REAPER-registration lookup (no call into
+    // the plug-in), so it's safe on the same thread as the surrounding
+    // TrackFX_Get* probes.
+    char buf[16] = {0};
+    if (TrackFX_GetNamedConfigParm(tr, fx, "fx_type", buf, sizeof(buf)))
+        return buf[0] == 'J' && buf[1] == 'S';
+    return false;
+}
+
 std::string fxGuidString(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);

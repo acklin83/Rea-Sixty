@@ -1561,4 +1561,36 @@ SteppedTickResult tickStepped(float accum, int rawDetents, float sensitivity)
     return SteppedTickResult{ logical, accum };
 }
 
+double jsfxContinuousStep(int rawDetents)
+{
+    const int d = std::abs(rawDetents);
+    if (d <= 0) return 0.0;
+    // kBase = slow-detent step (d=1) ≈ 1/33 of range — ~2× the old
+    // sluggish 1/64. kGain shapes the sqrt accel so a fast flick (d≈14)
+    // lands near 1/16 (≈ the speed Frank confirmed "passt"), without the
+    // raw-linear ~1/5 overshoot. Tunable; raise kBase for faster slow
+    // turns, lower kGain to flatten the fast end.
+    constexpr double kBase = 1.0 / 33.0;
+    constexpr double kGain = 0.30;
+    const double mag = kBase
+        * (1.0 + kGain * std::sqrt(static_cast<double>(d - 1)));
+    return rawDetents < 0 ? -mag : mag;
+}
+
+double jsfxAccumulate(double& wantN, double curN, double intendedNext)
+{
+    // Re-sync when the virtual position has drifted past a few slider
+    // quanta from the live value — means the param was changed elsewhere
+    // (mouse) or this is the first use, so don't fight a stale target.
+    // Within that band, keep accumulating: writing the un-rounded `want`
+    // lets the JSFX slider step once the residual crosses its grid.
+    constexpr double kResync = 0.05;
+    if (std::abs(wantN - curN) > kResync) wantN = curN;
+    double want = wantN + (intendedNext - curN);
+    if (want < 0.0) want = 0.0;
+    else if (want > 1.0) want = 1.0;
+    wantN = want;
+    return want;
+}
+
 } // namespace uf8
