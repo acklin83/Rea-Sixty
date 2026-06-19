@@ -2556,10 +2556,10 @@ void loadBrightness()
         g_shiftFineMode.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "knob_speed_uf8"); v && *v) {
-        g_knobSpeedUf8.store(std::clamp(std::atof(v), 0.1, 8.0));
+        g_knobSpeedUf8.store(std::clamp(std::atof(v), 0.01, 8.0));
     }
     if (const char* v = GetExtState("rea_sixty", "knob_speed_uc1"); v && *v) {
-        g_knobSpeedUc1.store(std::clamp(std::atof(v), 0.1, 8.0));
+        g_knobSpeedUc1.store(std::clamp(std::atof(v), 0.01, 8.0));
     }
     if (const char* v = GetExtState("rea_sixty", "fine_factor_uf8"); v && *v) {
         g_fineFactorUf8.store(std::clamp(std::atof(v), 0.02, 1.0));
@@ -17818,14 +17818,14 @@ double reasixty_fineFactorUf8()       { return g_fineFactorUf8.load(); }
 double reasixty_fineFactorUc1()       { return g_fineFactorUc1.load(); }
 void reasixty_setKnobSpeedUf8(double v)
 {
-    v = std::clamp(v, 0.1, 8.0);
+    v = std::clamp(v, 0.01, 8.0);
     g_knobSpeedUf8.store(v);
     char b[32]; snprintf(b, sizeof(b), "%.4f", v);
     SetExtState("rea_sixty", "knob_speed_uf8", b, true);
 }
 void reasixty_setKnobSpeedUc1(double v)
 {
-    v = std::clamp(v, 0.1, 8.0);
+    v = std::clamp(v, 0.01, 8.0);
     g_knobSpeedUc1.store(v);
     char b[32]; snprintf(b, sizeof(b), "%.4f", v);
     SetExtState("rea_sixty", "knob_speed_uc1", b, true);
