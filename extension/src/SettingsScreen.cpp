@@ -6207,6 +6207,13 @@ CurveEditorTarget curveTargetForSlot_(int linkIdx, const char* displayName)
         if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped,
                 &pS, &pSm, &pL, &isT)) return false;
         if (isT || pS <= 0.0) return false;
+        // JSFX value-unit steps: continuous → not stepped; small enum → use
+        // the normalised step so the editor count matches the live grid.
+        double jn = 0.0; bool jc = false;
+        if (uf8::jsfxStepClassify(fx.tr, fx.fxIdx, mapped, pS, jn, jc)) {
+            if (jc) return false;
+            pS = jn;
+        }
         pStep    = pS;
         numSteps = uf8::numStepsFor(static_cast<float>(pS));
         return true;
@@ -6250,6 +6257,13 @@ CurveEditorTarget curveTargetForUf8VPot_(int strip, int bank,
         if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped,
                 &pS, &pSm, &pL, &isT)) return false;
         if (isT || pS <= 0.0) return false;
+        // JSFX value-unit steps: continuous → not stepped; small enum → use
+        // the normalised step so the editor count matches the live grid.
+        double jn = 0.0; bool jc = false;
+        if (uf8::jsfxStepClassify(fx.tr, fx.fxIdx, mapped, pS, jn, jc)) {
+            if (jc) return false;
+            pS = jn;
+        }
         pStep    = pS;
         numSteps = uf8::numStepsFor(static_cast<float>(pS));
         return true;

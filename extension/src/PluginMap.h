@@ -139,6 +139,20 @@ bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
 // leaving VST3 / AU stepped behaviour byte-identical.
 bool fxIsJsfx(void* track /*MediaTrack**/, int fx);
 
+// Classify a JSFX param's step size. REAPER reports JSFX step sizes in the
+// slider's VALUE units, NOT the normalised [0..1] space the encoder math
+// assumes — so a `<-12,12,0.1>` fader returns rawStep=0.1, which used as a
+// normalised grid is a 2.4 dB quantum (11 stops over the 24 dB range). This
+// reads the param's value range, normalises the step (÷ range) into
+// `normStepOut`, and decides via `continuousOut` whether the param is
+// effectively continuous (stop count > a small enum threshold → drive it
+// through the analog jsfxContinuousStep path) or a genuine small enum (drive
+// the discrete branch with `normStepOut`). Returns false and leaves the
+// outputs untouched for non-JSFX FX — those report already-normalised steps,
+// so callers keep REAPER's `rawStep` as-is.
+bool jsfxStepClassify(void* track /*MediaTrack**/, int fx, int param,
+                      double rawStep, double& normStepOut, bool& continuousOut);
+
 // FX-GUID stringification — wraps TrackFX_GetFXGUID + guidToString.
 // Stable identity for an FX slot across reorder. Empty string when
 // the FX is gone or REAPER returns no GUID (e.g. record-FX bit set

@@ -495,6 +495,35 @@ bool fxIsJsfx(void* trackOpaque, int fx)
     return false;
 }
 
+bool jsfxStepClassify(void* trackOpaque, int fx, int param,
+                      double rawStep, double& normStepOut, bool& continuousOut)
+{
+    if (!fxIsJsfx(trackOpaque, fx)) return false;
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    // TrackFX_GetParam hands back the slider's value-space min/max; rawStep is
+    // in those same value units, so range = max - min normalises it.
+    double mn = 0.0, mx = 0.0;
+    TrackFX_GetParam(tr, fx, param, &mn, &mx);
+    const double range = mx - mn;
+    if (range <= 0.0 || rawStep <= 0.0) {
+        // Degenerate grid (no usable range / step) — never trust it as a
+        // discrete quantum, drive continuous so the encoder can't slam.
+        normStepOut   = 0.0;
+        continuousOut = true;
+        return true;
+    }
+    normStepOut = rawStep / range;
+    // Stop count = range/rawStep + 1. Above this many stops the slider is a
+    // continuous fader (Output Gain, EQ gain, frequency …) — route it through
+    // the analog acceleration path so fine moves resolve and fast flicks still
+    // cover ground. At or below it the slider is a genuine small enum (EQ
+    // model, shelf/bell …) the discrete branch can step with normStepOut.
+    constexpr double kMaxDiscreteSteps = 32.0;
+    const double stops = range / rawStep + 1.0;
+    continuousOut = stops > kMaxDiscreteSteps;
+    return true;
+}
+
 std::string fxGuidString(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);

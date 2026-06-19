@@ -1056,13 +1056,21 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             const bool haveStepInfo = TrackFX_GetParameterStepSizes(
                 tr, match.fxIndex, vst3Param,
                 &pStep, &pSmallStep, &pLargeStep, &isToggle);
-            // JSFX sliders report a bogus pStep=1.0 (full range) for what
-            // are really continuous params — trusting it slams the param to
-            // an extreme. Route ONLY the JSFX case to the continuous branch
-            // (with softened acceleration); VST3/AU keep their real pStep.
-            const bool jsfxBogusStep =
-                haveStepInfo && pStep >= 1.0 && !isToggle
-                && uf8::fxIsJsfx(tr, match.fxIndex);
+            // JSFX reports step sizes in slider VALUE units, not normalised
+            // [0..1] — a continuous fader (-12..12,0.1) returns a coarse
+            // 2.4 dB quantum that slams/coarsens the param. Classify:
+            // continuous JSFX → softened branch; small enums use the
+            // normalised step. VST3/AU keep their real pStep, byte-identical.
+            double effStep = pStep;
+            bool jsfxBogusStep = false;
+            if (haveStepInfo && !isToggle) {
+                double nrm = 0.0; bool cont = false;
+                if (uf8::jsfxStepClassify(tr, match.fxIndex, vst3Param,
+                        pStep, nrm, cont)) {
+                    jsfxBogusStep = cont;
+                    if (!cont) effStep = nrm;
+                }
+            }
             double next = curN;
             // usl knob-travel customisation only applies to SSL slots (which
             // carry a stable linkIdx). Free user EXT FUNCS params have no usl
@@ -1113,12 +1121,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                     ++stats_.knobEventsHandled;
                     return;
                 }
-                const float pStepF = static_cast<float>(pStep);
+                const float pStepF = static_cast<float>(effStep);
                 const double minN = static_cast<double>(uf8::snapToStep(
                     usl ? usl->rangeMin : 0.0f, pStepF));
                 const double maxN = static_cast<double>(uf8::snapToStep(
                     usl ? usl->rangeMax : 1.0f, pStepF));
-                next = curN + logical * pStep;
+                next = curN + logical * effStep;
                 if (next < minN) next = minN;
                 if (next > maxN) next = maxN;
             } else {
@@ -1605,8 +1613,15 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // so we can route ONLY this case to the continuous path (with softened
     // acceleration below). VST3 / AU stepped params keep their real pStep
     // and byte-identical behaviour.
-    const bool jsfxBogusStep =
-        haveStepInfo && pStep >= 1.0 && !isToggle && uf8::fxIsJsfx(tr, fxIdx);
+    double effStep = pStep;
+    bool jsfxBogusStep = false;
+    if (haveStepInfo && !isToggle) {
+        double nrm = 0.0; bool cont = false;
+        if (uf8::jsfxStepClassify(tr, fxIdx, vst3Param, pStep, nrm, cont)) {
+            jsfxBogusStep = cont;
+            if (!cont) effStep = nrm;
+        }
+    }
 
     // Hoist the user-slot lookup so both the stepped + continuous
     // branches can honour per-binding sensitivity / range. Built-in
@@ -1683,12 +1698,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             ++stats_.knobEventsHandled;
             return;
         }
-        const float pStepF = static_cast<float>(pStep);
+        const float pStepF = static_cast<float>(effStep);
         const double minN = static_cast<double>(uf8::snapToStep(
             usl ? usl->rangeMin : 0.0f, pStepF));
         const double maxN = static_cast<double>(uf8::snapToStep(
             usl ? usl->rangeMax : 1.0f, pStepF));
-        next = cur + r.logicalSteps * pStep;
+        next = cur + r.logicalSteps * effStep;
         if (next < minN) next = minN;
         if (next > maxN) next = maxN;
     } else {

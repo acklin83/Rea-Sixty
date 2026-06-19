@@ -7366,14 +7366,22 @@ void drainInputQueue()
                                 TrackFX_GetParameterStepSizes(uctx.tr,
                                     uctx.fxIdx, bs.vst3Param,
                                     &pStep, &pSmall, &pLarge, &isToggle);
-                            // JSFX sliders mis-report pStep=1.0 (full range)
-                            // for continuous params → the stepped branch would
-                            // slam to an extreme. Route ONLY this case to the
-                            // continuous path (softened below); VST3/AU keep
-                            // their real pStep + byte-identical behaviour.
-                            const bool jsfxBogusStep =
-                                stepped && pStep >= 1.0 && !isToggle
-                                && uf8::fxIsJsfx(uctx.tr, uctx.fxIdx);
+                            // JSFX reports step sizes in slider VALUE units,
+                            // not normalised [0..1] — so a continuous fader
+                            // (e.g. -12..12,0.1) comes back as a coarse 2.4 dB
+                            // quantum. Classify: continuous JSFX → softened
+                            // path below; small JSFX enums use the normalised
+                            // step. VST3/AU keep their real pStep, byte-identical.
+                            double effStep = pStep;
+                            bool jsfxBogusStep = false;
+                            if (stepped && !isToggle) {
+                                double nrm = 0.0; bool cont = false;
+                                if (uf8::jsfxStepClassify(uctx.tr, uctx.fxIdx,
+                                        bs.vst3Param, pStep, nrm, cont)) {
+                                    jsfxBogusStep = cont;
+                                    if (!cont) effStep = nrm;
+                                }
+                            }
                             const auto& kt = bs.travel;
                             double next;
                             if (stepped && isToggle) {
@@ -7410,12 +7418,12 @@ void drainInputQueue()
                                     acc, signedDet, sens);
                                 acc = r.newAccum;
                                 if (r.logicalSteps == 0) break;
-                                const float pStepF = static_cast<float>(pStep);
+                                const float pStepF = static_cast<float>(effStep);
                                 const double minN = static_cast<double>(
                                     uf8::snapToStep(kt.rangeMin, pStepF));
                                 const double maxN = static_cast<double>(
                                     uf8::snapToStep(kt.rangeMax, pStepF));
-                                next = cur + r.logicalSteps * pStep;
+                                next = cur + r.logicalSteps * effStep;
                                 if (next < minN) next = minN;
                                 if (next > maxN) next = maxN;
                             } else {
@@ -7564,11 +7572,21 @@ void drainInputQueue()
                     const bool stepped = TrackFX_GetParameterStepSizes(
                         tr, mm.fxIndex, sl.vst3Param,
                         &pStep, &pSmall, &pLarge, &isToggle);
-                    // JSFX sliders mis-report pStep=1.0 for continuous params
-                    // → stepped branch slams to an extreme. JSFX-only reroute.
-                    const bool jsfxBogusStep =
-                        stepped && pStep >= 1.0 && !isToggle
-                        && uf8::fxIsJsfx(tr, mm.fxIndex);
+                    // JSFX reports step sizes in slider VALUE units, not
+                    // normalised [0..1] — a continuous fader (-12..12,0.1)
+                    // returns a coarse 2.4 dB quantum. Classify: continuous
+                    // JSFX → softened path; small enums use the normalised
+                    // step. VST3/AU keep their real pStep, byte-identical.
+                    double effStep = pStep;
+                    bool jsfxBogusStep = false;
+                    if (stepped && !isToggle) {
+                        double nrm = 0.0; bool cont = false;
+                        if (uf8::jsfxStepClassify(tr, mm.fxIndex, sl.vst3Param,
+                                pStep, nrm, cont)) {
+                            jsfxBogusStep = cont;
+                            if (!cont) effStep = nrm;
+                        }
+                    }
                     double next;
                     if (stepped && isToggle) {
                         next = (cur >= 0.5) ? 0.0 : 1.0;
@@ -7601,14 +7619,14 @@ void drainInputQueue()
                             acc, signedDet, sens);
                         acc = r.newAccum;
                         if (r.logicalSteps == 0) break;
-                        const float pStepF = static_cast<float>(pStep);
+                        const float pStepF = static_cast<float>(effStep);
                         const double minN = static_cast<double>(
                             uf8::snapToStep(usl ? usl->rangeMin : 0.0f,
                                             pStepF));
                         const double maxN = static_cast<double>(
                             uf8::snapToStep(usl ? usl->rangeMax : 1.0f,
                                             pStepF));
-                        next = cur + r.logicalSteps * pStep;
+                        next = cur + r.logicalSteps * effStep;
                         if (next < minN) next = minN;
                         if (next > maxN) next = maxN;
                     } else {
@@ -7810,20 +7828,27 @@ void drainInputQueue()
                                 // value, not between steps.
                                 double pStep=0.0, pSmall=0.0, pLarge=0.0;
                                 bool isToggle = false;
-                                // Skip the grid-snap only for JSFX's bogus
-                                // pStep=1.0 (would force the default to 0/1);
-                                // VST3/AU snap exactly as before.
+                                // Skip the grid-snap for continuous JSFX
+                                // params (their value-unit step isn't a real
+                                // normalised grid); small JSFX enums snap to
+                                // the normalised step, VST3/AU to pStep.
                                 if (TrackFX_GetParameterStepSizes(uctx.tr,
                                         uctx.fxIdx, bs.vst3Param,
                                         &pStep, &pSmall, &pLarge, &isToggle)
-                                    && !isToggle && pStep > 0.0
-                                    && !(pStep >= 1.0
-                                         && uf8::fxIsJsfx(uctx.tr, uctx.fxIdx)))
+                                    && !isToggle && pStep > 0.0)
                                 {
-                                    pushNext = static_cast<double>(
-                                        uf8::snapToStep(
-                                            static_cast<float>(pushNext),
-                                            static_cast<float>(pStep)));
+                                    double snapStep = pStep, jn = 0.0;
+                                    bool jc = false;
+                                    const bool isJ = uf8::jsfxStepClassify(
+                                        uctx.tr, uctx.fxIdx, bs.vst3Param,
+                                        pStep, jn, jc);
+                                    if (!isJ || !jc) {
+                                        if (isJ) snapStep = jn;
+                                        pushNext = static_cast<double>(
+                                            uf8::snapToStep(
+                                                static_cast<float>(pushNext),
+                                                static_cast<float>(snapStep)));
+                                    }
                                 }
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
@@ -7920,18 +7945,24 @@ void drainInputQueue()
                         // Stepped param → snap to nearest step grid.
                         double pStep=0.0, pSmall=0.0, pLarge=0.0;
                         bool isToggle = false;
-                        // JSFX bogus pStep=1.0 → skip snap (else default
-                        // forced to 0/1); VST3/AU snap exactly as before.
+                        // Skip snap for continuous JSFX params; small JSFX
+                        // enums snap to the normalised step, VST3/AU to pStep.
                         if (TrackFX_GetParameterStepSizes(tr, mm.fxIndex,
                                 slPtr->vst3Param,
                                 &pStep, &pSmall, &pLarge, &isToggle)
-                            && !isToggle && pStep > 0.0
-                            && !(pStep >= 1.0
-                                 && uf8::fxIsJsfx(tr, mm.fxIndex)))
+                            && !isToggle && pStep > 0.0)
                         {
-                            pushNext = static_cast<double>(uf8::snapToStep(
-                                static_cast<float>(pushNext),
-                                static_cast<float>(pStep)));
+                            double snapStep = pStep, jn = 0.0;
+                            bool jc = false;
+                            const bool isJ = uf8::jsfxStepClassify(
+                                tr, mm.fxIndex, slPtr->vst3Param,
+                                pStep, jn, jc);
+                            if (!isJ || !jc) {
+                                if (isJ) snapStep = jn;
+                                pushNext = static_cast<double>(uf8::snapToStep(
+                                    static_cast<float>(pushNext),
+                                    static_cast<float>(snapStep)));
+                            }
                         }
                     }
                     TrackFX_SetParamNormalized(tr, mm.fxIndex,
