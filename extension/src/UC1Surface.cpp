@@ -3980,7 +3980,7 @@ void UC1Surface::pollGainReduction_()
     // matches what the user sees. We atof the leading number and let
     // anything trailing (" dB", " %", anything else) drop. PreSonus
     // GainReduction_dB fallback is unchanged — it always returns dB.
-    auto readGr = [](MediaTrack* tr, int fxIdx, int grParam,
+    auto readGr = [](MediaTrack* tr, int fxIdx, int grParam, double offsetDb,
                      const double* cal, const double* bp, int nBp) -> float {
         if (!tr || fxIdx < 0) return 0.0f;
         double v = 0.0;
@@ -4003,6 +4003,7 @@ void UC1Surface::pollGainReduction_()
             }
             v = std::atof(buf);
         }
+        v += offsetDb;   // pre-abs additive shift (user FX-Learn calibration)
         if (v < 0) v = -v;
         if (cal) v = uf8::applyGrCalibration(v, bp, cal, nBp);
         return static_cast<float>(v);
@@ -4016,6 +4017,7 @@ void UC1Surface::pollGainReduction_()
         UC1Bindings b = lookupBindingsOnTrack(bcTr);
         if (b.busCompMap) {
             bcGr = readGr(bcTr, b.busCompFxIdx, b.busCompGrParam,
+                          b.busCompGrOffsetDb,
                           b.busCompGrBcVuCal, uf8::kBcVuBpDb, uf8::kBcVuBpCount);
         }
     }
@@ -4039,6 +4041,7 @@ void UC1Surface::pollGainReduction_()
         int csFxIdx = -1;
         if (b.channelMap) {
             csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
+                              b.channelGrOffsetDb,
                               b.channelGrLedsCal, uf8::kLedsBpDb, uf8::kLedsBpCount);
             csFxIdx = b.channelFxIdx;
         }

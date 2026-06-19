@@ -15881,6 +15881,11 @@ void onTimer()
                     if (b.channelMap && b.channelFxIdx >= 0) {
                         ledsCal  = b.channelGrLedsCal;
                         csFxIdx  = b.channelFxIdx;
+                        // Pre-abs additive shift (user FX-Learn calibration),
+                        // applied to the mapped-channel read only — mirrors
+                        // UC1Surface readGr. The combine/walk paths below add
+                        // other compressors' magnitudes offset-free.
+                        const double grOff = b.channelGrOffsetDb;
                         if (b.channelGrParam >= 0) {
                             // Read the plug-in's FORMATTED value
                             // ("3.45 dB") rather than the raw param —
@@ -15891,12 +15896,13 @@ void onTimer()
                                     tr, b.channelFxIdx, b.channelGrParam,
                                     fbuf, sizeof(fbuf)) && fbuf[0])
                             {
-                                gr = std::fabs(std::atof(fbuf));
+                                gr = std::fabs(std::atof(fbuf) + grOff);
                                 gotIt = true;
                             } else {
                                 double mn = 0.0, mx = 0.0;
                                 gr = std::fabs(TrackFX_GetParam(tr, b.channelFxIdx,
-                                                      b.channelGrParam, &mn, &mx));
+                                                      b.channelGrParam, &mn, &mx)
+                                               + grOff);
                                 gotIt = true;
                             }
                         } else {
@@ -15904,7 +15910,7 @@ void onTimer()
                             if (TrackFX_GetNamedConfigParm(
                                     tr, b.channelFxIdx, "GainReduction_dB",
                                     buf, sizeof(buf))) {
-                                gr = std::fabs(std::atof(buf));
+                                gr = std::fabs(std::atof(buf) + grOff);
                                 gotIt = true;
                             }
                         }
