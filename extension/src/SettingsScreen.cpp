@@ -999,12 +999,12 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
             ImGui_Text(ctx, label);
         };
         field("UF8 V-Pot speed", reasixty_knobSpeedUf8(),
-              0.10, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
+              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
         field("UF8 Fine factor", reasixty_fineFactorUf8(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf8);
         ImGui_Spacing(ctx);
         field("UC1 encoder speed", reasixty_knobSpeedUc1(),
-              0.10, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
+              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
         field("UC1 Fine factor", reasixty_fineFactorUc1(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
         ImGui_Spacing(ctx);
