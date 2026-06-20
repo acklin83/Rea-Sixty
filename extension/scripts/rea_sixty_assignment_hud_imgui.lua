@@ -253,6 +253,119 @@ local function readAssign()
   return map
 end
 
+-- Per-knob tuning detail (full-parity menu). One line per mapped UC1 knob on
+-- the active layer: "idx;pol;rmin;rmax;sens;dn;stepped;nsteps;t0:v0,t1:v1,…".
+-- Presence of a row means the control is an editable knob; absence => button /
+-- unmapped / factory map (the menu falls back to the basic Learn/Rename/Unbind).
+local function readDetail()
+  local raw = reaper.GetExtState(SECT, "hud_detail")
+  local map = {}
+  for line in raw:gmatch("[^\n]+") do
+    local idx, pol, rmin, rmax, sens, dn, st, ns, curve =
+      line:match("^(%d+);(%d+);([%-%d%.]+);([%-%d%.]+);([%-%d%.]+);([%-%d%.]+);(%d+);(%d+);(.*)$")
+    if idx then
+      local pts = {}
+      for t, v in curve:gmatch("([%-%d%.]+):([%-%d%.]+)") do
+        pts[#pts + 1] = { tonumber(t), tonumber(v) }
+      end
+      map[tonumber(idx)] = {
+        pol = tonumber(pol) or 0,
+        rmin = tonumber(rmin) or 0, rmax = tonumber(rmax) or 1,
+        sens = tonumber(sens) or 1, dn = tonumber(dn) or 0.5,
+        stepped = (st == "1"), nsteps = tonumber(ns) or 0,
+        curve = pts,
+      }
+    end
+  end
+  return map
+end
+
+-- Push-cycle button index set (which controls offer the "Push cycle" submenu).
+local pushBtnSet  = {}
+local pushBtnsRaw = nil
+local function refreshPushBtns()
+  local raw = reaper.GetExtState(SECT, "hud_pushbtns")
+  if raw == pushBtnsRaw then return end
+  pushBtnsRaw = raw
+  pushBtnSet = {}
+  for n in raw:gmatch("(%d+)") do pushBtnSet[tonumber(n)] = true end
+end
+
+-- Push-cycle editor data for the requested button (request/response via
+-- "hud_push_req" → "hud_push"). Lines: "<idx>", then "S;param;norm;en;foreign;
+-- label" per step, then "P;param;name;norm0~label0|norm1~label1|…" per discrete
+-- param (the "+ Add step" catalog).
+local function readPush()
+  local raw = reaper.GetExtState(SECT, "hud_push")
+  if raw == "" then return nil end
+  local first = true
+  local pd = { idx = -1, steps = {}, params = {} }
+  for ln in raw:gmatch("[^\n]+") do
+    if first then pd.idx = tonumber(ln) or -1; first = false
+    elseif ln:sub(1, 2) == "S;" then
+      local param, norm, en, foreign, label =
+        ln:match("^S;(%-?%d+);([%-%d%.]+);(%d);(%d);(.*)$")
+      if param then
+        pd.steps[#pd.steps + 1] = {
+          param = tonumber(param), norm = tonumber(norm),
+          en = (en == "1"), foreign = (foreign == "1"), label = label or "" }
+      end
+    elseif ln:sub(1, 2) == "P;" then
+      local param, name, opts = ln:match("^P;(%-?%d+);([^;]*);(.*)$")
+      if param then
+        local olist = {}
+        for o in (opts .. "|"):gmatch("([^|]*)|") do
+          local n, l = o:match("^([%-%d%.]+)~(.*)$")
+          if n then olist[#olist + 1] = { norm = tonumber(n), label = l or "" } end
+        end
+        pd.params[#pd.params + 1] =
+          { param = tonumber(param), name = name or "", opts = olist }
+      end
+    end
+  end
+  if pd.idx < 0 then return nil end
+  return pd
+end
+
+-- Global feel-preset list: "slot;used;name" per line (10 slots).
+local function readFeel()
+  local raw = reaper.GetExtState(SECT, "hud_feel")
+  local arr = {}
+  for line in raw:gmatch("[^\n]+") do
+    local slot, used, name = line:match("^(%d+);(%d);(.*)$")
+    if slot then
+      arr[tonumber(slot)] = { used = (used == "1"), name = name or "" }
+    end
+  end
+  return arr
+end
+
+-- Per-V-Pot tuning detail for the UF8 tab's full-parity menu. One line per
+-- mapped V-Pot on the live banks:
+--   strip;pol;rmin;rmax;sens;dn;stepped;nsteps;vpotMode;t0:v0,…
+local function readUf8Detail()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_detail")
+  local map = {}
+  for line in raw:gmatch("[^\n]+") do
+    local strip, pol, rmin, rmax, sens, dn, st, ns, mode, curve =
+      line:match("^(%d+);(%d+);([%-%d%.]+);([%-%d%.]+);([%-%d%.]+);([%-%d%.]+);(%d+);(%d+);(%d+);(.*)$")
+    if strip then
+      local pts = {}
+      for t, v in curve:gmatch("([%-%d%.]+):([%-%d%.]+)") do
+        pts[#pts + 1] = { tonumber(t), tonumber(v) }
+      end
+      map[tonumber(strip)] = {
+        pol = tonumber(pol) or 0,
+        rmin = tonumber(rmin) or 0, rmax = tonumber(rmax) or 1,
+        sens = tonumber(sens) or 1, dn = tonumber(dn) or 0.5,
+        stepped = (st == "1"), nsteps = tonumber(ns) or 0,
+        mode = tonumber(mode) or 0, curve = pts,
+      }
+    end
+  end
+  return map
+end
+
 -- UF8 device tab (read-only strip-grid). State + per-control assignments come on
 -- their own ExtState keys (hud_uf8_state / hud_uf8_assign) so they coexist with
 -- the UC1 CS/BC payloads. UF8 has no modifier layers.
@@ -818,6 +931,7 @@ local function renderFace(st, asn)
   local lmx, lmy = mx - OX, my - OY
   local tipSlot, tipParam
   ctrlRects = {}
+  local det = readDetail()   -- per-knob invert/range/curve for the indicators
 
   -- design-space draw helpers ------------------------------------------
   local function dRect(x, y, w, h, fill, outl, rounding)
@@ -858,6 +972,30 @@ local function renderFace(st, asn)
     reaper.ImGui_DrawList_AddLine(dl, OX + sx, OY + sy - r * 0.85, OX + sx, OY + sy - r * 0.45, col(0xE8E8E8, (present and 0.9 or 0.5) * f), math.max(1, r * 0.13))
     local lbl = idx and FACE_LABEL[idx]
     if lbl then dTextC(cx, cy + rD + 12, col(0xB8BCC4, (present and 0.95 or 0.6) * f), lbl, lf) end
+    -- Invert "i" badge + range-limit ticks on the ring — parity with the
+    -- FX-Learn schematic. Min tick green, Max tick red; centre dot = curve set.
+    if idx and mapped then
+      if asn[idx].inv then
+        dtext(sx + r * 0.5, sy - r * 1.45, col(0xFFC04C, f), "i", lf)
+      end
+      local d = det[idx]
+      if d and (d.rmin > 0.001 or d.rmax < 0.999 or #d.curve > 0) then
+        local function tickAt(v, c)
+          local a  = 2.0944 + v * 5.236   -- 7 o'clock start, 300° CW sweep
+          local ca, sa = math.cos(a), math.sin(a)
+          reaper.ImGui_DrawList_AddLine(dl,
+            OX + sx + (r + 2) * ca, OY + sy + (r + 2) * sa,
+            OX + sx + (r + 7) * ca, OY + sy + (r + 7) * sa,
+            c, math.max(1, r * 0.12))
+        end
+        tickAt(d.rmin, col(0x8FE3A8, f))
+        tickAt(d.rmax, col(0xE38F8F, f))
+        if #d.curve > 0 then
+          reaper.ImGui_DrawList_AddCircleFilled(dl, OX + sx, OY + sy,
+            math.max(1.5, r * 0.12), col(0xFFC080, f))
+        end
+      end
+    end
     if idx then
       ctrlRects[#ctrlRects + 1] = { idx = idx, shape = 0, x = sx, y = sy, r = r }
       local dx, dy = lmx - sx, lmy - sy
@@ -1615,6 +1753,26 @@ local POPUP          = "##hud_ctx"
 local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
+local CURVE_POPUP    = "Curve editor###hud_curve_editor"
+
+-- Full-parity control-menu working state (Frank 2026-06-20). `cedit` holds the
+-- live slider values for the right-click menu — reloaded from hud_detail each
+-- frame UNLESS a widget is active (so a drag holds its value). The curve editor
+-- is a nested popup with its own draggable-point working copy.
+local cedit       = { rmin = 0, rmax = 1, sens = 1, dn = 0.5 }
+local curveOpen   = false
+local curveNeedsOpen = false  -- defer ImGui_OpenPopup to top-level (a popup
+                              -- opened from inside the closing menu is dropped)
+local curveUf8    = false   -- false = UC1 (idx,layer); true = UF8 V-Pot (strip)
+local curveIdx    = -1
+local curveLayer  = 0
+local curveStrip  = -1
+local curvePts    = {}      -- working copy {{t,v},…} (absolute param-space v)
+local curveDrag   = -1
+local curveSens   = 1.0
+-- Feel-preset rename prompt: which slot is being saved (-1 = none). The name is
+-- gathered via a native GetUserInputs (works from a defer frame).
+local feelTarget  = -1
 
 -- List / parameter-panel body text size (Medium = current default). Chrome
 -- (titles, badge, buttons) is unaffected.
@@ -1694,55 +1852,478 @@ end
 -- extension resolves the active modifier layer + domain target. Invert/Unbind
 -- are disabled on an unmapped control (nothing to act on). State (mapped/inv) is
 -- read fresh from hud_assign so the tick + name reflect the current binding.
+-- Send one "field;idx;layer;field;value" tuning command for the right-clicked
+-- control (full-parity menu — fields match hudSetField_ in SettingsScreen.cpp).
+local function sendField(field, value)
+  sendCmd(string.format("field;%d;%d;%d;%.6f",
+                        ctxCtrlIdx, ctxCtrlLayer, field, value))
+end
+
+-- Push-cycle editor (button right-click → "Push cycle"). Reorder via ▲▼ (the
+-- FX-Learn page uses drag-drop, impractical in a Lua menu), untick to exclude,
+-- x removes a macro step, "+ Add step" picks a discrete param + value. Data
+-- comes via the request/response readPush() channel.
+local function drawPushCycle(idx)
+  local pd = readPush()
+  if not pd or pd.idx ~= idx then
+    reaper.ImGui_TextDisabled(ctx, "Loading\xE2\x80\xA6")
+    return
+  end
+  if #pd.steps == 0 and #pd.params == 0 then
+    reaper.ImGui_TextDisabled(ctx, "No discrete options on this plug-in")
+    return
+  end
+  if #pd.steps > 0 then
+    reaper.ImGui_TextDisabled(ctx, "Steps \xC2\xB7 untick to exclude:")
+    for i, st in ipairs(pd.steps) do
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xB2##pu_up" .. i) then
+        sendCmd(string.format("pushmove;%d;%d;%d;-1", idx, ctxCtrlLayer, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xBC##pu_dn" .. i) then
+        sendCmd(string.format("pushmove;%d;%d;%d;1", idx, ctxCtrlLayer, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      local rv = reaper.ImGui_Checkbox(ctx, st.label .. "##pu_cb" .. i, st.en)
+      if rv then
+        sendCmd(string.format("pushtoggle;%d;%d;%d", idx, ctxCtrlLayer, i - 1))
+      end
+      if st.foreign then
+        reaper.ImGui_SameLine(ctx)
+        if reaper.ImGui_SmallButton(ctx, "x##pu_rm" .. i) then
+          sendCmd(string.format("pushremove;%d;%d;%d", idx, ctxCtrlLayer, i - 1))
+        end
+      end
+    end
+    if reaper.ImGui_SmallButton(ctx, "Reset (cycle all)##pu_reset") then
+      sendCmd(string.format("pushreset;%d;%d", idx, ctxCtrlLayer))
+    end
+  end
+  if #pd.params > 0 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "+ Add step") then
+      for _, p in ipairs(pd.params) do
+        if reaper.ImGui_BeginMenu(ctx, p.name .. "##pu_p" .. p.param) then
+          for oi, o in ipairs(p.opts) do
+            if reaper.ImGui_MenuItem(ctx,
+                o.label .. "##pu_o" .. p.param .. "_" .. oi) then
+              sendCmd(string.format("pushadd;%d;%d;%d;%.6f",
+                idx, ctxCtrlLayer, p.param, o.norm))
+            end
+          end
+          reaper.ImGui_EndMenu(ctx)
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+end
+
 local function drawControlContextMenu()
-  if ctxCtrlIdx < 0 then return end
+  if ctxCtrlIdx < 0 then
+    reaper.SetExtState(SECT, "hud_push_req", "", false)
+    return
+  end
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 10, 7)
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
   if not reaper.ImGui_BeginPopup(ctx, CTRL_POPUP) then
+    reaper.SetExtState(SECT, "hud_push_req", "", false)
     reaper.ImGui_PopStyleVar(ctx, 3)
     return
   end
 
+  local idx, layer = ctxCtrlIdx, ctxCtrlLayer
   local asn    = readAssign()
-  local a      = asn[ctxCtrlIdx]
+  local a      = asn[idx]
   local mapped = a ~= nil
-  local g      = geom.ctrl[ctxCtrlIdx]
+  local det    = readDetail()[idx]   -- present => editable knob, mapped on layer
+  local g      = geom.ctrl[idx]
 
   -- Header: SSL slot label + bound param name (disabled, informational).
   reaper.ImGui_BeginDisabled(ctx)
-  local hdr = (g and g.label) or ("Control " .. ctxCtrlIdx)
+  local hdr = (g and g.label) or ("Control " .. idx)
   if mapped then hdr = hdr .. "  \xE2\x86\x92  " .. a.name end
   reaper.ImGui_MenuItem(ctx, hdr)
   reaper.ImGui_EndDisabled(ctx)
   reaper.ImGui_Separator(ctx)
 
   if reaper.ImGui_MenuItem(ctx, "Learn (wiggle a parameter)") then
-    sendCmd("learn;" .. ctxCtrlIdx)
+    sendCmd("learn;" .. idx)
   end
+
   if not mapped then reaper.ImGui_BeginDisabled(ctx) end
   if reaper.ImGui_MenuItem(ctx, "Invert", nil, mapped and a.inv or false) then
-    sendCmd("invert;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer)
+    sendCmd("invert;" .. idx .. ";" .. layer)
   end
-  if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6") then
-    -- Native modal (works from a defer/ImGui frame, same as the gfx panel menus).
-    -- Strip commas from the prefill (GetUserInputs splits the default on commas)
-    -- and the ';'/newline hud_cmd delimiters from the result.
+
+  -- Knob-only tuning block — only when the control is an editable knob mapped
+  -- on this layer (det present). Mirrors the FX-Learn page right-click menu.
+  if det then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Polarity: Unipolar (0 \xE2\x86\x92 1)",
+                             nil, det.pol == 0) then
+      sendField(0, 0)
+    end
+    if reaper.ImGui_MenuItem(ctx, "Polarity: Bipolar (\xE2\x88\x92 0.5 +)",
+                             nil, det.pol == 1) then
+      sendField(0, 1)
+    end
+
+    -- Knob travel (Min / Max). Held value while a slider is active so a drag
+    -- isn't yanked back by the every-frame hud_detail readback.
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Text(ctx, "Knob travel:")
+    if not reaper.ImGui_IsAnyItemActive(ctx) then
+      cedit.rmin, cedit.rmax, cedit.dn = det.rmin, det.rmax, det.dn
+    end
+    reaper.ImGui_SetNextItemWidth(ctx, 150)
+    local ch, v = reaper.ImGui_SliderDouble(ctx, "Min##fxlmin",
+                                            cedit.rmin, 0, 1, "%.3f")
+    if ch then cedit.rmin = v; sendField(1, v) end
+    reaper.ImGui_SameLine(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Set##capmin") then sendField(5, 0) end
+    reaper.ImGui_SetNextItemWidth(ctx, 150)
+    ch, v = reaper.ImGui_SliderDouble(ctx, "Max##fxlmax",
+                                      cedit.rmax, 0, 1, "%.3f")
+    if ch then cedit.rmax = v; sendField(2, v) end
+    reaper.ImGui_SameLine(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Set##capmax") then sendField(6, 0) end
+    if reaper.ImGui_SmallButton(ctx, "Reset range##rr") then sendField(8, 0) end
+    if det.stepped then
+      reaper.ImGui_SameLine(ctx)
+      reaper.ImGui_TextDisabled(ctx,
+        string.format("stepped \xE2\x80\xA2 %d values", det.nsteps))
+    end
+
+    -- Push reset value (UF8 V-Pot mirror).
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Text(ctx, "Push reset value (UF8 mirror):")
+    reaper.ImGui_SetNextItemWidth(ctx, 150)
+    ch, v = reaper.ImGui_SliderDouble(ctx, "##fxldn", cedit.dn, 0, 1, "%.3f")
+    if ch then cedit.dn = v; sendField(4, v) end
+    reaper.ImGui_SameLine(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Capture##capdn") then sendField(7, 0) end
+    if det.pol == 1 then
+      reaper.ImGui_SameLine(ctx)
+      if reaper.ImGui_SmallButton(ctx, "0.5##dncentre") then sendField(4, 0.5) end
+    end
+
+    -- Advanced — curve editor + sensitivity (nested popup, full canvas).
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Advanced\xE2\x80\xA6 (curve + sensitivity)") then
+      curveOpen, curveNeedsOpen, curveUf8 = true, true, false
+      curveIdx, curveLayer = idx, layer
+      curveSens, curveDrag = det.sens, -1
+      curvePts = {}
+      for _, p in ipairs(det.curve) do curvePts[#curvePts + 1] = { p[1], p[2] } end
+    end
+  end
+
+  -- Display label — native rename (any mapped control).
+  reaper.ImGui_Separator(ctx)
+  if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6 (display label)") then
     local cur = ((mapped and a.name) or ""):gsub(",", " ")
     local ok, val = reaper.GetUserInputs("Rename control", 1,
       "Display name (empty = default):,extrawidth=180", cur)
     if ok then
-      sendCmd("rename;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer .. ";"
+      sendCmd("rename;" .. idx .. ";" .. layer .. ";"
               .. (val:gsub("[;\n]", " ")))
     end
   end
+
+  -- Feel presets — save / apply / clear the tuning bundle (knobs only).
+  if det then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "Feel presets") then
+      local feel = readFeel()
+      if reaper.ImGui_BeginMenu(ctx, "Save feel to") then
+        for s = 0, 9 do
+          local fp  = feel[s]
+          local lbl = string.format("Slot %d%s", s + 1,
+            (fp and fp.used) and ("  \xE2\x80\xA2  " .. fp.name) or "  (empty)")
+          if reaper.ImGui_MenuItem(ctx, lbl .. "##fsave" .. s) then
+            local pre = ((fp and fp.used and fp.name) or ""):gsub(",", " ")
+            local ok, val = reaper.GetUserInputs("Save feel preset", 1,
+              "Name:,extrawidth=160", pre)
+            if ok then
+              sendCmd(string.format("feelsave;%d;%d;%d;%s",
+                idx, layer, s, (val:gsub("[;\n]", " "))))
+            end
+          end
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_BeginMenu(ctx, "Apply feel from") then
+        local any = false
+        for s = 0, 9 do
+          local fp = feel[s]
+          if fp and fp.used then
+            any = true
+            if reaper.ImGui_MenuItem(ctx,
+                string.format("Slot %d: %s##fapp%d", s + 1, fp.name, s)) then
+              sendCmd(string.format("feelapply;%d;%d;%d", idx, layer, s))
+            end
+          end
+        end
+        if not any then
+          reaper.ImGui_BeginDisabled(ctx)
+          reaper.ImGui_MenuItem(ctx, "(no saved presets)")
+          reaper.ImGui_EndDisabled(ctx)
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_BeginMenu(ctx, "Clear preset") then
+        local any = false
+        for s = 0, 9 do
+          local fp = feel[s]
+          if fp and fp.used then
+            any = true
+            if reaper.ImGui_MenuItem(ctx,
+                string.format("Slot %d: %s##fclr%d", s + 1, fp.name, s)) then
+              sendCmd("feelclear;" .. s)
+            end
+          end
+        end
+        if not any then
+          reaper.ImGui_BeginDisabled(ctx)
+          reaper.ImGui_MenuItem(ctx, "(none)")
+          reaper.ImGui_EndDisabled(ctx)
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_MenuItem(ctx, "Reset feel to default") then
+        sendField(9, 0)
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+
+  reaper.ImGui_Separator(ctx)
   if reaper.ImGui_MenuItem(ctx, "Unbind") then
-    sendCmd("unbind;" .. ctxCtrlIdx .. ";" .. ctxCtrlLayer)
+    sendCmd("unbind;" .. idx .. ";" .. layer)
   end
   if not mapped then reaper.ImGui_EndDisabled(ctx) end
 
+  -- Push-cycle editor (discrete buttons) — outside the unmapped-disabled guard
+  -- so a macro can be built on an as-yet-unmapped button. Writes hud_push_req
+  -- only while the submenu is open so the extension publishes just this button.
+  local pushReq = ""
+  if pushBtnSet[idx] then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "Push cycle") then
+      pushReq = tostring(idx)
+      drawPushCycle(idx)
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+  reaper.SetExtState(SECT, "hud_push_req", pushReq, false)
+
   reaper.ImGui_EndPopup(ctx)
   reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
+-- Curve editor — nested popup opened from the control menu's "Advanced…".
+-- Replicates the FX-Learn page canvas: sensitivity box, draggable breakpoints
+-- (left-click empty = add, drag = move, right-click = remove), Linear/Log/Exp/
+-- Reset presets. Points are absolute param-space v, displayed normalised within
+-- [rangeMin..rangeMax]. curvePts is the authoritative working copy (loaded on
+-- open); each mutation pushes a "curve;…" command. Frank 2026-06-20.
+local function curveCsv()
+  local t = {}
+  for _, p in ipairs(curvePts) do
+    t[#t + 1] = string.format("%.4f:%.4f", p[1], p[2])
+  end
+  return table.concat(t, ",")
+end
+-- Source-agnostic command emitters: route to the UC1 ("curve"/"field") or the
+-- UF8 V-Pot ("uf8curve"/"uf8field") channel depending on what opened the editor.
+local function sendCurve()
+  if curveUf8 then
+    sendCmd(string.format("uf8curve;%d;%s", curveStrip, curveCsv()))
+  else
+    sendCmd(string.format("curve;%d;%d;%s", curveIdx, curveLayer, curveCsv()))
+  end
+end
+local function sendCurveSens(v)
+  if curveUf8 then
+    sendCmd(string.format("uf8field;%d;3;%.6f", curveStrip, v))
+  else
+    sendCmd(string.format("field;%d;%d;3;%.6f", curveIdx, curveLayer, v))
+  end
+end
+
+local function drawCurveEditor()
+  if not curveOpen then return end
+  -- Open here (top-level), not from the menu item — a popup opened while the
+  -- triggering menu popup is closing gets dropped by ImGui.
+  if curveNeedsOpen then
+    reaper.ImGui_OpenPopup(ctx, CURVE_POPUP)
+    curveNeedsOpen = false
+  end
+  -- Centre on the Learn-HUD window (OX/OY = content origin, WW/WH = content
+  -- size, set each frame). Pivot 0.5,0.5 so the popup centre lands there.
+  reaper.ImGui_SetNextWindowPos(ctx,
+    (OX or 0) + (WW or 420) / 2, (OY or 0) + (WH or 380) / 2,
+    reaper.ImGui_Cond_Appearing(), 0.5, 0.5)
+  reaper.ImGui_SetNextWindowSize(ctx, 420, 380, reaper.ImGui_Cond_Appearing())
+  if not reaper.ImGui_BeginPopup(ctx, CURVE_POPUP) then
+    -- Still waiting for the deferred open to take effect → keep curveOpen.
+    if not curveNeedsOpen then curveOpen = false end
+    return
+  end
+  local det = curveUf8 and readUf8Detail()[curveStrip] or readDetail()[curveIdx]
+  if not det then
+    curveOpen = false
+    reaper.ImGui_CloseCurrentPopup(ctx)
+    reaper.ImGui_EndPopup(ctx)
+    return
+  end
+
+  -- Sensitivity (held while the input is active, like the menu sliders).
+  if not reaper.ImGui_IsAnyItemActive(ctx) then curveSens = det.sens end
+  reaper.ImGui_Text(ctx, det.stepped and "Detent speed:" or "Sensitivity:")
+  reaper.ImGui_SameLine(ctx)
+  reaper.ImGui_SetNextItemWidth(ctx, 90)
+  local ch, v = reaper.ImGui_InputDouble(ctx, "##csens", curveSens, 0, 0, "%.2fx")
+  if ch then
+    v = clamp(v, 0.01, 4.0)
+    curveSens = v
+    sendCurveSens(v)
+  end
+  reaper.ImGui_SameLine(ctx)
+  if reaper.ImGui_SmallButton(ctx, "1x##csensr") then
+    curveSens = 1.0
+    sendCurveSens(1.0)
+  end
+  reaper.ImGui_Separator(ctx)
+
+  if det.stepped then
+    reaper.ImGui_TextWrapped(ctx, string.format(
+      "Stepped parameter \xE2\x80\x94 %d values. Curve disabled; "
+      .. "Min/Max snap to the step grid.", det.nsteps))
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_Button(ctx, "Close##ccls") then
+      curveOpen = false
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    reaper.ImGui_EndPopup(ctx)
+    return
+  end
+
+  local rmin, rmax = det.rmin, det.rmax
+  local span   = rmax - rmin
+  local spanOk = span > 1e-6
+  local function normToV(n) if not spanOk then return rmin end return rmin + n * span end
+  local function vToNorm(vv) if not spanOk then return 0.5 end return (vv - rmin) / span end
+  reaper.ImGui_Text(ctx, "Knob travel curve:")
+
+  local W, H = 340, 180
+  local cx, cy = reaper.ImGui_GetCursorScreenPos(ctx)
+  reaper.ImGui_InvisibleButton(ctx, "##ccanvas", W, H)
+  local hovered = reaper.ImGui_IsItemHovered(ctx)
+  local dl = reaper.ImGui_GetWindowDrawList(ctx)
+  local function toC(t, vv) return cx + t * W, cy + (1 - vToNorm(vv)) * H end
+
+  -- Backing + linear reference diagonal.
+  reaper.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + W, cy + H, 0x1A1A1AFF, 4)
+  reaper.ImGui_DrawList_AddLine(dl, cx, cy + H, cx + W, cy, 0xFFFFFF44, 1)
+
+  -- Curve polyline (implicit endpoints at rangeMin / rangeMax).
+  local poly = { { 0, rmin } }
+  for _, p in ipairs(curvePts) do poly[#poly + 1] = p end
+  poly[#poly + 1] = { 1, rmax }
+  for i = 2, #poly do
+    local ax, ay = toC(poly[i - 1][1], poly[i - 1][2])
+    local bx, by = toC(poly[i][1], poly[i][2])
+    reaper.ImGui_DrawList_AddLine(dl, ax, ay, bx, by, 0xFFC080FF, 2)
+  end
+
+  -- Points + hit-test.
+  local mx, my = reaper.ImGui_GetMousePos(ctx)
+  local R, nearest, best = 6, -1, 8
+  for i, p in ipairs(curvePts) do
+    local px, py = toC(p[1], p[2])
+    reaper.ImGui_DrawList_AddCircleFilled(dl, px, py, R, 0xFFC080FF)
+    reaper.ImGui_DrawList_AddCircle(dl, px, py, R, 0x202020FF, 0, 1)
+    local d = math.sqrt((mx - px) ^ 2 + (my - py) ^ 2)
+    if d < best then best = d; nearest = i end
+  end
+  local eax, eay = toC(0, rmin)
+  local ebx, eby = toC(1, rmax)
+  reaper.ImGui_DrawList_AddCircleFilled(dl, eax, eay, R, 0x6090FFFF)
+  reaper.ImGui_DrawList_AddCircleFilled(dl, ebx, eby, R, 0x6090FFFF)
+
+  -- Interaction.
+  if hovered and reaper.ImGui_IsMouseClicked(ctx, 0) then
+    if nearest > 0 then
+      curveDrag = nearest
+    else
+      local t = clamp((mx - cx) / W, 0.01, 0.99)
+      local n = clamp(1 - (my - cy) / H, 0, 1)
+      curvePts[#curvePts + 1] = { t, normToV(n) }
+      table.sort(curvePts, function(a, b) return a[1] < b[1] end)
+      sendCurve()
+    end
+  end
+  if hovered and reaper.ImGui_IsMouseClicked(ctx, 1) and nearest > 0 then
+    table.remove(curvePts, nearest)
+    sendCurve()
+  end
+  if reaper.ImGui_IsMouseReleased(ctx, 0) then curveDrag = -1 end
+  if curveDrag > 0 and curveDrag <= #curvePts then
+    local t = clamp((mx - cx) / W, 0.01, 0.99)
+    local n = clamp(1 - (my - cy) / H, 0, 1)
+    local vv = normToV(n)
+    curvePts[curveDrag] = { t, vv }
+    table.sort(curvePts, function(a, b) return a[1] < b[1] end)
+    for i, p in ipairs(curvePts) do
+      if p[1] == t and p[2] == vv then curveDrag = i; break end
+    end
+    sendCurve()
+  end
+
+  -- Presets.
+  reaper.ImGui_Separator(ctx)
+  local a, b = rmin, rmax
+  local c = a + (b - a) * 0.5
+  local bipolar = (det.pol == 1)
+  if reaper.ImGui_SmallButton(ctx, "Linear##cpl") then
+    curvePts = {}; sendCurve()
+  end
+  reaper.ImGui_SameLine(ctx)
+  if reaper.ImGui_SmallButton(ctx, "Log##cplog") then
+    if bipolar then
+      curvePts = { {0.25, a + (b-a)*0.30}, {0.50, c}, {0.75, a + (b-a)*0.70} }
+    else
+      curvePts = { {0.25, a + (b-a)*0.55}, {0.50, a + (b-a)*0.80}, {0.75, a + (b-a)*0.93} }
+    end
+    sendCurve()
+  end
+  reaper.ImGui_SameLine(ctx)
+  if reaper.ImGui_SmallButton(ctx, "Exp##cpexp") then
+    if bipolar then
+      curvePts = { {0.25, a + (b-a)*0.10}, {0.50, c}, {0.75, a + (b-a)*0.90} }
+    else
+      curvePts = { {0.25, a + (b-a)*0.07}, {0.50, a + (b-a)*0.20}, {0.75, a + (b-a)*0.45} }
+    end
+    sendCurve()
+  end
+  reaper.ImGui_SameLine(ctx)
+  if reaper.ImGui_SmallButton(ctx, "Reset all##cprst") then
+    curvePts = {}; sendCurve()
+    sendCurveSens(1.0)
+  end
+  reaper.ImGui_TextDisabled(ctx,
+    "Click empty: add point. Drag: move. Right-click: remove.")
+
+  reaper.ImGui_Separator(ctx)
+  if reaper.ImGui_Button(ctx, "Close##ccls2") then
+    curveDrag = -1
+    curveOpen = false
+    reaper.ImGui_CloseCurrentPopup(ctx)
+  end
+  reaper.ImGui_EndPopup(ctx)
 end
 
 -- UF8 grid cell right-click menu: Learn / Invert / Fill sequential / Unbind.
@@ -1791,6 +2372,132 @@ local function drawUf8ControlContextMenu()
       reaper.ImGui_EndMenu(ctx)
     end
   end
+
+  -- V-Pot full tuning (mapped V-Pot only) — parity with the FX-Learn UF8 V-Pot
+  -- menu: polarity / travel / push-reset (Value mode) + curve + feel presets.
+  -- Faders are deliberately excluded (same as FX-Learn — motor faders fight the
+  -- inverse-curve echo). Commands send strip only; C++ resolves banks live.
+  local det = (ctxUf8Kind == 0) and readUf8Detail()[ctxUf8Strip] or nil
+  if det then
+    local function uf8Field(f, val)
+      sendCmd(string.format("uf8field;%d;%d;%.6f", ctxUf8Strip, f, val))
+    end
+    if det.mode == 0 then
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_MenuItem(ctx, "Polarity: Unipolar (0 \xE2\x86\x92 1)",
+                               nil, det.pol == 0) then uf8Field(0, 0) end
+      if reaper.ImGui_MenuItem(ctx, "Polarity: Bipolar (\xE2\x88\x92 0.5 +)",
+                               nil, det.pol == 1) then uf8Field(0, 1) end
+    end
+
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Text(ctx, "Knob travel:")
+    if not reaper.ImGui_IsAnyItemActive(ctx) then
+      cedit.rmin, cedit.rmax, cedit.dn = det.rmin, det.rmax, det.dn
+    end
+    reaper.ImGui_SetNextItemWidth(ctx, 150)
+    local ch, v = reaper.ImGui_SliderDouble(ctx, "Min##uf8min", cedit.rmin, 0, 1, "%.3f")
+    if ch then cedit.rmin = v; uf8Field(1, v) end
+    reaper.ImGui_SameLine(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Set##ucapmin") then uf8Field(5, 0) end
+    reaper.ImGui_SetNextItemWidth(ctx, 150)
+    ch, v = reaper.ImGui_SliderDouble(ctx, "Max##uf8max", cedit.rmax, 0, 1, "%.3f")
+    if ch then cedit.rmax = v; uf8Field(2, v) end
+    reaper.ImGui_SameLine(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Set##ucapmax") then uf8Field(6, 0) end
+    if reaper.ImGui_SmallButton(ctx, "Reset range##urr") then uf8Field(8, 0) end
+    if det.stepped then
+      reaper.ImGui_SameLine(ctx)
+      reaper.ImGui_TextDisabled(ctx,
+        string.format("stepped \xE2\x80\xA2 %d values", det.nsteps))
+    end
+
+    if det.mode == 0 then
+      reaper.ImGui_Separator(ctx)
+      reaper.ImGui_Text(ctx, "Push reset value:")
+      reaper.ImGui_SetNextItemWidth(ctx, 150)
+      ch, v = reaper.ImGui_SliderDouble(ctx, "##uf8dn", cedit.dn, 0, 1, "%.3f")
+      if ch then cedit.dn = v; uf8Field(4, v) end
+      reaper.ImGui_SameLine(ctx)
+      if reaper.ImGui_SmallButton(ctx, "Capture##ucapdn") then uf8Field(7, 0) end
+      if det.pol == 1 then
+        reaper.ImGui_SameLine(ctx)
+        if reaper.ImGui_SmallButton(ctx, "0.5##udncentre") then uf8Field(4, 0.5) end
+      end
+    end
+
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Advanced\xE2\x80\xA6 (curve + sensitivity)") then
+      curveOpen, curveNeedsOpen, curveUf8 = true, true, true
+      curveStrip = ctxUf8Strip
+      curveSens, curveDrag = det.sens, -1
+      curvePts = {}
+      for _, p in ipairs(det.curve) do curvePts[#curvePts + 1] = { p[1], p[2] } end
+    end
+
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "Feel presets") then
+      local feel = readFeel()
+      if reaper.ImGui_BeginMenu(ctx, "Save feel to") then
+        for sslot = 0, 9 do
+          local fp  = feel[sslot]
+          local lbl = string.format("Slot %d%s", sslot + 1,
+            (fp and fp.used) and ("  \xE2\x80\xA2  " .. fp.name) or "  (empty)")
+          if reaper.ImGui_MenuItem(ctx, lbl .. "##ufsave" .. sslot) then
+            local pre = ((fp and fp.used and fp.name) or ""):gsub(",", " ")
+            local ok, val = reaper.GetUserInputs("Save feel preset", 1,
+              "Name:,extrawidth=160", pre)
+            if ok then
+              sendCmd(string.format("uf8feelsave;%d;%d;%s",
+                ctxUf8Strip, sslot, (val:gsub("[;\n]", " "))))
+            end
+          end
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_BeginMenu(ctx, "Apply feel from") then
+        local any = false
+        for sslot = 0, 9 do
+          local fp = feel[sslot]
+          if fp and fp.used then
+            any = true
+            if reaper.ImGui_MenuItem(ctx,
+                string.format("Slot %d: %s##ufapp%d", sslot + 1, fp.name, sslot)) then
+              sendCmd(string.format("uf8feelapply;%d;%d", ctxUf8Strip, sslot))
+            end
+          end
+        end
+        if not any then
+          reaper.ImGui_BeginDisabled(ctx)
+          reaper.ImGui_MenuItem(ctx, "(no saved presets)")
+          reaper.ImGui_EndDisabled(ctx)
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_BeginMenu(ctx, "Clear preset") then
+        local any = false
+        for sslot = 0, 9 do
+          local fp = feel[sslot]
+          if fp and fp.used then
+            any = true
+            if reaper.ImGui_MenuItem(ctx,
+                string.format("Slot %d: %s##ufclr%d", sslot + 1, fp.name, sslot)) then
+              sendCmd("feelclear;" .. sslot)
+            end
+          end
+        end
+        if not any then
+          reaper.ImGui_BeginDisabled(ctx)
+          reaper.ImGui_MenuItem(ctx, "(none)")
+          reaper.ImGui_EndDisabled(ctx)
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+      if reaper.ImGui_MenuItem(ctx, "Reset feel to default") then uf8Field(9, 0) end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+
   -- Fill sequential: only for strips 1..7 (binds strips to the right).
   if ctxUf8Strip >= 7 then reaper.ImGui_BeginDisabled(ctx) end
   if reaper.ImGui_MenuItem(ctx, "Fill sequential \xE2\x86\x92") then
@@ -2047,9 +2754,11 @@ local function loop()
     end
 
     refreshGeom()
+    refreshPushBtns()
     render()
     drawContextMenu()
     drawControlContextMenu()
+    drawCurveEditor()
     drawUf8ControlContextMenu()
     drawUf8BankContextMenu()
 

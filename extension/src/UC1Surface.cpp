@@ -1076,7 +1076,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // carry a stable linkIdx). Free user EXT FUNCS params have no usl
             // → plain linear/stepped behaviour (range/curve/reset deferred).
             char fxBuf[256] = {0};
-            TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf));
+            // Identity (original) name — survives REAPER's "Rename FX" so the
+            // per-slot feel still resolves for renamed instances (Frank
+            // 2026-06-20). GetFXName returns the renamed display name, which the
+            // substring map-match misses when the rename drops the original
+            // name → usl null → sensitivity/range/curve silently lost.
+            uf8::fxIdentityName(tr, match.fxIndex, fxBuf, sizeof(fxBuf));
             const uf8::UserLinkSlot* uslRaw = (linkIdx >= 0)
                 ? uf8::user_plugins::lookupOwnedSlot(fxBuf, linkIdx)
                 : nullptr;
@@ -1627,8 +1632,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // branches can honour per-binding sensitivity / range. Built-in
     // SSL CS/BC params have no UserLinkSlot — usl stays null and the
     // defaults (sens=1, range 0..1) preserve byte-identical behaviour.
+    // Identity (original) name, NOT the renamed display name — the per-slot
+    // feel below resolves via a substring map-match, which misses when the user
+    // renamed the instance to a name without the original (Frank 2026-06-20:
+    // "renamed N-console → fine/0.01x sensitivity stopped working").
     char fxBuf[256] = {0};
-    TrackFX_GetFXName(tr, fxIdx, fxBuf, sizeof(fxBuf));
+    uf8::fxIdentityName(tr, fxIdx, fxBuf, sizeof(fxBuf));
     const uf8::Domain dom = busCompContext
         ? uf8::Domain::BusComp
         : uf8::Domain::ChannelStrip;
@@ -2992,8 +3001,8 @@ std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
     const uf8::UserPluginMap* um = nullptr;
     char fxBuf[256] = {0};
     if (match.map && match.fxIndex >= 0
-        && TrackFX_GetFXName(tr, match.fxIndex, fxBuf, sizeof(fxBuf)))
-    {
+        && uf8::fxIdentityName(tr, match.fxIndex, fxBuf, sizeof(fxBuf)))
+    {   // identity name → rename-proof EXT FUNCS resolution (Frank 2026-06-20)
         um = uf8::user_plugins::lookupOwnedByName(fxBuf);
     }
     if (um) {
@@ -3073,7 +3082,7 @@ void UC1Surface::renderExtFuncsSubscreen_()
         if (dtr) {
             auto m = uf8::lookupPluginOnTrack(focusedTrack_, uf8::Domain::ChannelStrip);
             dfx = m.fxIndex;
-            if (dfx >= 0) TrackFX_GetFXName(dtr, dfx, fxn, sizeof(fxn));
+            if (dfx >= 0) uf8::fxIdentityName(dtr, dfx, fxn, sizeof(fxn));
         }
         const uf8::UserPluginMap* um =
             fxn[0] ? uf8::user_plugins::lookupOwnedByName(fxn) : nullptr;

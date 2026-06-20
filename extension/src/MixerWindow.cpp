@@ -143,6 +143,30 @@ struct MixerWindow::Impl {
     double         saveW = 1500.0, saveH = 1080.0;
     bool           poseLoaded = false;
 
+    // Persist the active tab so "Reopen on last tab" (Settings → Appearance)
+    // can restore it across REAPER restarts. Written on every selection
+    // change; read only when the setting is enabled.
+    void persistSelected()
+    {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", selected);
+        SetExtState("rea_sixty", "settings_last_tab", buf, /*persist*/ true);
+    }
+    // On open: if the user opted in, jump to the last tab they viewed; if NOT,
+    // reset to the default Device tab. The reset matters because `selected` is
+    // a member that survives a close/open within a session — without it the
+    // window would always reopen on the last tab even with the setting off
+    // (Frank 2026-06-20).
+    void applyReopenLastTab()
+    {
+        const char* en = GetExtState("rea_sixty", "settings_reopen_last_tab");
+        const bool on  = en && *en && std::atoi(en) != 0;
+        if (!on) { selected = kSecDevice; return; }
+        const char* v = GetExtState("rea_sixty", "settings_last_tab");
+        const int t = (v && *v) ? std::atoi(v) : -1;
+        selected = (t >= 0 && t < kSecCount) ? t : kSecDevice;
+    }
+
     void loadPose()
     {
         if (poseLoaded) return;
@@ -218,16 +242,20 @@ void MixerWindow::toggle()
         impl_->font = nullptr;
         impl_->fontBold = nullptr;
         impl_->fontMono = nullptr;
+        // Restore the last-viewed tab when the user opted in (Appearance →
+        // "Reopen on last tab"); otherwise selected keeps its prior value.
+        impl_->applyReopenLastTab();
     }
 }
 
 void MixerWindow::openToFxLearn()
 {
-    // Select the FX Learn rail entry first, then open if needed. toggle()
-    // only resets the ImGui ctx/font — it leaves impl_->selected intact —
-    // so setting the section before opening survives the context refresh.
-    impl_->selected = kSecFxLearn;
+    // Open first (which may restore the last tab if that setting is on),
+    // then force the FX Learn rail entry — the explicit target always wins
+    // over the reopen-last-tab restore.
     if (!impl_->visible) toggle();
+    impl_->selected = kSecFxLearn;
+    impl_->persistSelected();
 }
 
 bool MixerWindow::isOpen() const { return impl_->visible; }
@@ -336,6 +364,7 @@ void MixerWindow::onRunTick()
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
                         impl_->selected = e.section;
+                        impl_->persistSelected();
                     }
                 }
             }

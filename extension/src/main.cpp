@@ -107,6 +107,20 @@ bool        reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* b
 bool        reasixty_hudInvert(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudRename(int idx, int layer, const char* label,
                                void* csTr, int csFx, void* bcTr, int bcFx);
+// Learn-HUD full-parity bridge (knob tuning + feel presets) — hud_detail /
+// hud_feel publishers + the mutating command handlers (Frank 2026-06-20).
+std::string reasixty_hudBuildDetail(void* csTr, int csFx, void* bcTr, int bcFx,
+                                    int layer);
+std::string reasixty_hudBuildFeel();
+bool        reasixty_hudSetField(int idx, int layer, int field, double v,
+                                 void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudSetCurve(int idx, int layer, const char* csv,
+                                 void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudFeelSave(int idx, int layer, int slot, const char* name,
+                                 void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudFeelApply(int idx, int layer, int slot,
+                                  void* csTr, int csFx, void* bcTr, int bcFx);
+bool        reasixty_hudFeelClear(int slot);
 // UF8 device-tab interactivity (Phase 2). kind = HUD encoding
 // (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel); fb/vb = live fader/V-Pot banks.
 void        reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr, int fx, bool create);
@@ -118,6 +132,21 @@ bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr,
 int         reasixty_hudUf8FillSeq(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8VpotMode(int strip, int fb, int vb, int mode, void* tr, int fx);
 bool        reasixty_hudUf8BindParam(int kind, int strip, int fb, int vb, int param, void* tr, int fx);
+// UF8-tab full-parity bridge (V-Pot tuning + feel) — hud_uf8_detail publisher +
+// mutating command handlers (Frank 2026-06-20).
+std::string reasixty_hudBuildUf8Detail(void* tr, int fx, int fb, int vb);
+bool        reasixty_hudUf8SetField(int strip, int fb, int vb, int field, double v, void* tr, int fx);
+bool        reasixty_hudUf8SetCurve(int strip, int fb, int vb, const char* csv, void* tr, int fx);
+bool        reasixty_hudUf8FeelSave(int strip, int fb, int vb, int slot, const char* name, void* tr, int fx);
+bool        reasixty_hudUf8FeelApply(int strip, int fb, int vb, int slot, void* tr, int fx);
+// HUD button push-cycle editor (Frank 2026-06-20).
+std::string reasixty_hudBuildPushBtns();
+std::string reasixty_hudBuildPush(int idx, void* csTr, void* bcTr, int layer);
+bool        reasixty_hudPushToggle(int idx, int layer, int stepIdx, void* csTr, void* bcTr);
+bool        reasixty_hudPushMove(int idx, int layer, int stepIdx, int dir, void* csTr, void* bcTr);
+bool        reasixty_hudPushRemove(int idx, int layer, int stepIdx, void* csTr, void* bcTr);
+bool        reasixty_hudPushReset(int idx, int layer, void* csTr, void* bcTr);
+bool        reasixty_hudPushAdd(int idx, int layer, int param, double norm, void* csTr, void* bcTr);
 bool        reasixty_hudUf8ConsumeBootstrap();
 bool        reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx);
 bool        reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx);
@@ -248,6 +277,13 @@ std::atomic<bool> g_closeAllFxGuisRequest{false};
 // aufgerufen wird und ein UF8-gemappter Plug-in-Fenster offen ist, direkt
 // Instance auf dieses Plugin setzen").
 std::atomic<bool> g_uf8PluginModeSnapRequest{false};
+// Set true alongside the snap request ONLY when the mode was just entered
+// via a user toggle (the two uf8_plugin_mode_toggle builtins). When the
+// main-thread snap drain then finds no active UF8-mapped plug-in to drive,
+// it reverts the mode — "do nothing" rather than sit on with nothing under
+// it (Frank 2026-06-20). Not set by the programmatic engage path (Learn-HUD
+// auto-engage), which is allowed to arm the mode regardless.
+std::atomic<bool> g_uf8PluginModeGuardEntry{false};
 
 // Last (track, fx) shown by the SSL Strip GUI handler. Read/written
 // only on the main thread (inside the g_pluginGuiSyncRequest drain),
@@ -5509,6 +5545,11 @@ std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
+std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
+std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
+std::string g_hudUf8DetailPublished;  // last-published "hud_uf8_detail" (V-Pot tuning)
+std::string g_hudPushPublished;    // last-published "hud_push" (button push-cycle)
+std::string g_hudPushBtnsPublished;// last-published "hud_pushbtns" (push-cycle idx set)
 bool        g_hudGeomPublished = false;
 // UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
 // drive V-Pot banks while the user maps from the HUD). Edge-triggered on tab
@@ -5674,6 +5715,41 @@ void publishHud_()
         g_hudAssignPublished = assign;
         SetExtState("rea_sixty", "hud_assign", assign.c_str(), false);
     }
+    // Per-knob tuning detail (polarity / range / sensitivity / push-reset /
+    // curve / stepped) for the active layer + the global feel-preset list —
+    // feed the HUD's full-parity right-click menu (Frank 2026-06-20). Empty
+    // detail while bootstrapping a virgin FX (no editable map yet).
+    {
+        const int curLayer = reasixty_fxLearnActiveLayer();
+        const std::string detail = boot ? std::string()
+            : reasixty_hudBuildDetail(csTr, csFx, bcTr, bcFx, curLayer);
+        if (detail != g_hudDetailPublished) {
+            g_hudDetailPublished = detail;
+            SetExtState("rea_sixty", "hud_detail", detail.c_str(), false);
+        }
+        const std::string feel = reasixty_hudBuildFeel();
+        if (feel != g_hudFeelPublished) {
+            g_hudFeelPublished = feel;
+            SetExtState("rea_sixty", "hud_feel", feel.c_str(), false);
+        }
+        // Push-cycle button index set (static — for the HUD to offer the
+        // submenu) + the requested button's data (request/response via
+        // "hud_push_req", kept light: only one button's catalog per tick).
+        const std::string pbtns = reasixty_hudBuildPushBtns();
+        if (pbtns != g_hudPushBtnsPublished) {
+            g_hudPushBtnsPublished = pbtns;
+            SetExtState("rea_sixty", "hud_pushbtns", pbtns.c_str(), false);
+        }
+        const char* pr = GetExtState("rea_sixty", "hud_push_req");
+        const int pReqIdx = (pr && *pr) ? std::atoi(pr) : -1;
+        const std::string push = (pReqIdx >= 0 && !boot)
+            ? reasixty_hudBuildPush(pReqIdx, csTr, bcTr, curLayer)
+            : std::string();
+        if (push != g_hudPushPublished) {
+            g_hudPushPublished = push;
+            SetExtState("rea_sixty", "hud_push", push.c_str(), false);
+        }
+    }
     // LCD follows the HUD's ACTIVE domain (focusDom), not the globally-focused
     // FX window — so the plug-in NAME on line 3 switches with the domain instead
     // of lingering on the BC you came from after focusing a CS. focusDom: 1=CS,
@@ -5777,6 +5853,15 @@ void publishHud_()
         if (uf8Assign != g_hudUf8AssignPublished) {
             g_hudUf8AssignPublished = uf8Assign;
             SetExtState("rea_sixty", "hud_uf8_assign", uf8Assign.c_str(), false);
+        }
+        // Per-V-Pot tuning detail for the UF8 tab's full-parity menu (only
+        // when a real UF8 map is present; bootstrap/virgin tabs carry none).
+        const std::string uf8Detail = uf8Map
+            ? reasixty_hudBuildUf8Detail(uf8Tr, uf8Fx, faderBank, vpotBank)
+            : std::string();
+        if (uf8Detail != g_hudUf8DetailPublished) {
+            g_hudUf8DetailPublished = uf8Detail;
+            SetExtState("rea_sixty", "hud_uf8_detail", uf8Detail.c_str(), false);
         }
     }
 }
@@ -6708,7 +6793,7 @@ void drainInputQueue()
             const auto* sl = uf8::findSlotByLinkIdx(*mm.map, linkIdx);
             if (!sl) continue;
             char fxBuf[256] = {0};
-            TrackFX_GetFXName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));
+            uf8::fxIdentityName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));  // rename-proof
             const uf8::UserLinkSlot* usl =
                 uf8::user_plugins::lookupOwnedSlot(fxBuf, sl->linkIdx);
             const double cur = TrackFX_GetParamNormalized(
@@ -7561,7 +7646,7 @@ void drainInputQueue()
                     const double cur = TrackFX_GetParamNormalized(tr, mm.fxIndex,
                                                                   sl.vst3Param);
                     char fxBuf[256] = {0};
-                    TrackFX_GetFXName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));
+                    uf8::fxIdentityName(tr, mm.fxIndex, fxBuf, sizeof(fxBuf));  // rename-proof
                     const uf8::UserLinkSlot* usl =
                         uf8::user_plugins::lookupOwnedSlot(fxBuf, sl.linkIdx);
                     // Detect stepped param up front. pStep is REAPER's
@@ -7930,8 +8015,8 @@ void drainInputQueue()
                         // canonical deflt when no UserLinkSlot is owned,
                         // and to 0.5 when neither exists (ext::* slots).
                         char fxBuf[256] = {0};
-                        TrackFX_GetFXName(tr, mm.fxIndex,
-                                          fxBuf, sizeof(fxBuf));
+                        uf8::fxIdentityName(tr, mm.fxIndex,   // rename-proof
+                                            fxBuf, sizeof(fxBuf));
                         const uf8::UserLinkSlot* usl =
                             uf8::user_plugins::lookupOwnedSlot(
                                 fxBuf, focused.slotIdx);
@@ -14852,15 +14937,16 @@ void pushUf8GlobalLeds()
         }
 
         // Bank ←/→ LEDs follow the active fader-bank inside UF8 Plugin
-        // Mode (Frank 2026-05-17): the LED of the active bank is on,
-        // the inactive one off. Outside UF8 Plugin Mode they revert to
+        // Mode — INVERTED (Frank 2026-06-20): the LED of the INACTIVE
+        // bank lights up (it shows where you can still go), the active
+        // bank's LED stays off. Outside UF8 Plugin Mode they revert to
         // the regular stateless press-flash so a user-bound momentary
         // (default ±8-strip scroll) shows momentarily on press.
         if (g_uf8PluginMode.load()) {
             const int fb = std::clamp(g_uf8FaderBank.load(),
                                       0, uf8::kUserUf8FaderBankCount - 1);
-            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,  fb == 0);
-            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, fb == 1);
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,  fb != 0);
+            sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, fb != 1);
         } else {
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,
                 boundActionIsActive_(buttonIdForGlobalLed(
@@ -15145,6 +15231,135 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("field;", 0) == 0) {
+                // "field;<idx>;<layer>;<field>;<value>" — set one knob-tuning
+                // field (polarity / range / sensitivity / push-reset / capture
+                // / reset). Layer captured HUD-side at menu-open (like invert).
+                int idx = -1, layer = 0, field = -1; double v = 0.0;
+                if (std::sscanf(s.c_str(), "field;%d;%d;%d;%lf",
+                                &idx, &layer, &field, &v) == 4) {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudSetField(idx, layer, field, v,
+                                             csTr, csFx, bcTr, bcFx)) {
+                        g_hudAssignPublished.clear();
+                        g_hudDetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("curve;", 0) == 0) {
+                // "curve;<idx>;<layer>;<t0:v0,t1:v1,…>" — set the knob's curve
+                // breakpoints (empty CSV = linear).
+                int idx = -1, layer = 0;
+                if (std::sscanf(s.c_str(), "curve;%d;%d", &idx, &layer) == 2) {
+                    const auto c1 = s.find(';', 6);
+                    const auto c2 = (c1 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c1 + 1);
+                    const std::string csv = (c2 != std::string::npos)
+                                              ? s.substr(c2 + 1) : std::string();
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudSetCurve(idx, layer, csv.c_str(),
+                                             csTr, csFx, bcTr, bcFx)) {
+                        g_hudDetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("feelsave;", 0) == 0) {
+                // "feelsave;<idx>;<layer>;<slot>;<name>" — save the control's
+                // current feel into a global preset slot.
+                int idx = -1, layer = 0, slot = -1;
+                if (std::sscanf(s.c_str(), "feelsave;%d;%d;%d",
+                                &idx, &layer, &slot) == 3) {
+                    const auto c1 = s.find(';', 9);
+                    const auto c2 = (c1 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c1 + 1);
+                    const auto c3 = (c2 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c2 + 1);
+                    const std::string name = (c3 != std::string::npos)
+                                               ? s.substr(c3 + 1) : std::string();
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudFeelSave(idx, layer, slot, name.c_str(),
+                                             csTr, csFx, bcTr, bcFx)) {
+                        g_hudFeelPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("feelapply;", 0) == 0) {
+                // "feelapply;<idx>;<layer>;<slot>" — apply a preset onto the
+                // control (overwrites invert/range/sens/curve/polarity/dn).
+                int idx = -1, layer = 0, slot = -1;
+                if (std::sscanf(s.c_str(), "feelapply;%d;%d;%d",
+                                &idx, &layer, &slot) == 3) {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    if (reasixty_hudFeelApply(idx, layer, slot,
+                                              csTr, csFx, bcTr, bcFx)) {
+                        g_hudAssignPublished.clear();
+                        g_hudDetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("feelclear;", 0) == 0) {
+                // "feelclear;<slot>" — mark a global feel-preset slot unused.
+                int slot = -1;
+                if (std::sscanf(s.c_str(), "feelclear;%d", &slot) == 1) {
+                    if (reasixty_hudFeelClear(slot)) {
+                        g_hudFeelPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("push", 0) == 0
+                       && (s.rfind("pushtoggle;", 0) == 0
+                        || s.rfind("pushmove;",   0) == 0
+                        || s.rfind("pushremove;", 0) == 0
+                        || s.rfind("pushreset;",  0) == 0
+                        || s.rfind("pushadd;",    0) == 0)) {
+                // Button push-cycle edits. All carry idx;layer first.
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                bool changed = false;
+                int idx = -1, layer = 0;
+                if (s.rfind("pushtoggle;", 0) == 0) {
+                    int st = -1;
+                    if (std::sscanf(s.c_str(), "pushtoggle;%d;%d;%d",
+                                    &idx, &layer, &st) == 3)
+                        changed = reasixty_hudPushToggle(idx, layer, st,
+                                                         csTr, bcTr);
+                } else if (s.rfind("pushmove;", 0) == 0) {
+                    int st = -1, dir = 0;
+                    if (std::sscanf(s.c_str(), "pushmove;%d;%d;%d;%d",
+                                    &idx, &layer, &st, &dir) == 4)
+                        changed = reasixty_hudPushMove(idx, layer, st, dir,
+                                                       csTr, bcTr);
+                } else if (s.rfind("pushremove;", 0) == 0) {
+                    int st = -1;
+                    if (std::sscanf(s.c_str(), "pushremove;%d;%d;%d",
+                                    &idx, &layer, &st) == 3)
+                        changed = reasixty_hudPushRemove(idx, layer, st,
+                                                         csTr, bcTr);
+                } else if (s.rfind("pushreset;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "pushreset;%d;%d",
+                                    &idx, &layer) == 2)
+                        changed = reasixty_hudPushReset(idx, layer, csTr, bcTr);
+                } else { // pushadd;<idx>;<layer>;<param>;<norm>
+                    int param = -1; double norm = 0.0;
+                    if (std::sscanf(s.c_str(), "pushadd;%d;%d;%d;%lf",
+                                    &idx, &layer, &param, &norm) == 4)
+                        changed = reasixty_hudPushAdd(idx, layer, param, norm,
+                                                      csTr, bcTr);
+                }
+                if (changed) {
+                    g_hudAssignPublished.clear();   // ring/label may change
+                    g_hudPushPublished.clear();     // re-publish the editor data
+                    publishHud_();
+                }
             } else if (s.rfind("uf8learn;", 0) == 0) {
                 // "uf8learn;<kind>;<strip>" — arm a UF8 cell learn. kind = HUD
                 // encoding (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel). Banks live.
@@ -15211,6 +15426,85 @@ void onTimer()
                                               0, uf8::kUserUf8VpotBankCount - 1);
                     if (reasixty_hudUf8VpotMode(strip, fb, vb, mode, tr, fx)) {
                         g_hudUf8AssignPublished.clear();
+                        g_hudUf8DetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8field;", 0) == 0) {
+                // "uf8field;<strip>;<field>;<value>" — V-Pot tuning (same field
+                // ids as the UC1 "field;" verb). Banks + target resolved live.
+                int strip = -1, field = -1; double v = 0.0;
+                if (std::sscanf(s.c_str(), "uf8field;%d;%d;%lf",
+                                &strip, &field, &v) == 3) {
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8SetField(strip, fb, vb, field, v, tr, fx)) {
+                        g_hudUf8AssignPublished.clear();
+                        g_hudUf8DetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8curve;", 0) == 0) {
+                // "uf8curve;<strip>;<t0:v0,…>" — V-Pot curve breakpoints.
+                int strip = -1;
+                if (std::sscanf(s.c_str(), "uf8curve;%d", &strip) == 1) {
+                    const auto c1 = s.find(';', 9);
+                    const auto c2 = (c1 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c1 + 1);
+                    const std::string csv = (c2 != std::string::npos)
+                                              ? s.substr(c2 + 1) : std::string();
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8SetCurve(strip, fb, vb, csv.c_str(),
+                                                tr, fx)) {
+                        g_hudUf8DetailPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8feelsave;", 0) == 0) {
+                // "uf8feelsave;<strip>;<slot>;<name>" — save V-Pot feel.
+                int strip = -1, slot = -1;
+                if (std::sscanf(s.c_str(), "uf8feelsave;%d;%d",
+                                &strip, &slot) == 2) {
+                    const auto c1 = s.find(';', 12);
+                    const auto c2 = (c1 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c1 + 1);
+                    const std::string name = (c2 != std::string::npos)
+                                               ? s.substr(c2 + 1) : std::string();
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8FeelSave(strip, fb, vb, slot,
+                                                name.c_str(), tr, fx)) {
+                        g_hudFeelPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8feelapply;", 0) == 0) {
+                // "uf8feelapply;<strip>;<slot>" — apply feel to V-Pot.
+                int strip = -1, slot = -1;
+                if (std::sscanf(s.c_str(), "uf8feelapply;%d;%d",
+                                &strip, &slot) == 2) {
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8FeelApply(strip, fb, vb, slot, tr, fx)) {
+                        g_hudUf8AssignPublished.clear();
+                        g_hudUf8DetailPublished.clear();
                         publishHud_();
                     }
                 }
@@ -16181,6 +16475,19 @@ void onTimer()
     // then opens the floating window for the just-snapped target.
     if (g_uf8PluginModeSnapRequest.exchange(false)) {
         snapUf8PluginModeToFocusedFx_();
+        // Entry guard (Frank 2026-06-20: "Mode aktivierbar obwohl kein UF8
+        // Plugin aktiv → do nothing"). Revert ONLY when there is genuinely no
+        // UF8-mapped plug-in the mode could drive. snap() alone is too strict
+        // a test — it requires the plug-in WINDOW to be open/focused, so a
+        // mapped plug-in on the selected track (window closed) would wrongly
+        // trip the revert and the mode "geht gar nicht mehr". Use the same
+        // resolver the runtime drives the mode with: if it finds a uf8Mode map
+        // the mode is valid regardless of snap.
+        if (g_uf8PluginModeGuardEntry.exchange(false)) {
+            MediaTrack* gtr = nullptr; int gfx = -1; const void* gmp = nullptr;
+            resolveFocusedUf8Target_(gtr, gfx, gmp);
+            if (!gmp) disengageUf8PluginMode_();
+        }
     }
 
     if (g_pluginGuiSyncRequest.exchange(false)) {
@@ -17824,6 +18131,50 @@ void reasixty_setKeyboardCtrlModifier(bool on)
 // recomputed once per onTimer tick (refreshFxActiveLayer_); this just returns
 // the cached value so dispatch/LED reads are cheap and frame-consistent.
 int  reasixty_fxLearnActiveLayer()    { return g_fxActiveLayer.load(std::memory_order_relaxed); }
+
+// The FX the surface is currently driving = rea-sixty's "active FX": the
+// focused domain's plug-in (BC if the focused domain is Bus Comp, else CS) on
+// the focused track + instance-cycle position. Used by FX Learn (Settings) to
+// live-follow it. outTrIdx: -1 = master, else 0-based track index (matches
+// findEditingFxAll_'s key space). Returns false when nothing is resolved.
+bool reasixty_activeFocusedFx(int* outTrIdx, int* outFxIdx)
+{
+    if (!outTrIdx || !outFxIdx) return false;
+    const int dom = static_cast<int>(
+        uf8::g_focusedParam.load(std::memory_order_relaxed).domain);
+    MediaTrack* tr = nullptr; int fx = -1;
+
+    // The UF8-only target (Domain::None, uf8Mode plug-ins) — same resolver the
+    // HUD's UF8 tab + the surface use. activeCsBcTargets_ only knows CS/BC, so
+    // without this UF8 plug-ins never followed (Frank 2026-06-20).
+    auto tryUf8 = [&]() {
+        if (tr) return;
+        MediaTrack* utr = nullptr; int ufx = -1; const void* ump = nullptr;
+        resolveFocusedUf8Target_(utr, ufx, ump);
+        if (ump && utr && ufx >= 0) { tr = utr; fx = ufx; }
+    };
+    auto tryCsBc = [&]() {
+        if (tr) return;
+        MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+        int csFx = -1, bcFx = -1;
+        activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+        if (dom == 2 && bcTr && bcFx >= 0)      { tr = bcTr; fx = bcFx; }
+        else if (dom == 1 && csTr && csFx >= 0) { tr = csTr; fx = csFx; }
+        else if (csTr && csFx >= 0)             { tr = csTr; fx = csFx; }
+        else if (bcTr && bcFx >= 0)             { tr = bcTr; fx = bcFx; }
+    };
+
+    // Prefer the UF8 target when the surface is on a UF8 plug-in (UF8 Plugin
+    // Mode active, or the focused domain is None); otherwise CS/BC first.
+    if (g_uf8PluginMode.load() || dom == 0) { tryUf8(); tryCsBc(); }
+    else                                    { tryCsBc(); tryUf8(); }
+
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    const double n = GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER");
+    *outTrIdx = (n < 0) ? -1 : (static_cast<int>(n) - 1);   // master → -1
+    *outFxIdx = fx;
+    return true;
+}
 bool reasixty_fxLayerOptionEnable()   { return g_fxLayerOptEnable.load(); }
 void reasixty_setFxLayerOptionEnable(bool on)
 {
@@ -19913,8 +20264,12 @@ void registerBindingHandlers()
             // UF8-mapped plug-in, the next main-thread drain points the
             // mode at it (track + Instance index) so UF8 starts driving
             // the open plug-in instead of whatever the focus/selection
-            // happened to be.
-            if (next) g_uf8PluginModeSnapRequest.store(true);
+            // happened to be. Guard the entry so the drain reverts the
+            // mode if no active UF8 plug-in qualifies.
+            if (next) {
+                g_uf8PluginModeGuardEntry.store(true);
+                g_uf8PluginModeSnapRequest.store(true);
+            }
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",
@@ -19944,8 +20299,11 @@ void registerBindingHandlers()
             // variant above for the rationale.
             if (next) parkSelModeForUf8PluginMode_();
             else      restoreSelModeAfterUf8PluginMode_();
-            // Snap-on-entry: see uf8_plugin_mode_toggle.
-            if (next) g_uf8PluginModeSnapRequest.store(true);
+            // Snap-on-entry + entry guard: see uf8_plugin_mode_toggle.
+            if (next) {
+                g_uf8PluginModeGuardEntry.store(true);
+                g_uf8PluginModeSnapRequest.store(true);
+            }
             g_pageDirty.store(true);
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "uf8PluginMode",

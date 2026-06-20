@@ -165,6 +165,7 @@ void reasixty_setFxLayerControlEnable(bool on);
 bool reasixty_fxLayerCtrlOptEnable();
 void reasixty_setFxLayerCtrlOptEnable(bool on);
 int  reasixty_fxLearnActiveLayer();   // current held-modifier layer (HUD badge)
+bool reasixty_activeFocusedFx(int* outTrIdx, int* outFxIdx);  // surface's active FX
 bool reasixty_shiftFineMode();
 void reasixty_setShiftFineMode(bool on);
 double reasixty_knobSpeedUf8();
@@ -393,6 +394,20 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButtonEx(ctx, "American (Color, Gray)", &sp, 1)) {
         reasixty_setUiSpelling(sp);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Settings window");
+    ImGui_Separator(ctx);
+    bool reopenLast = false;
+    if (const char* v = GetExtState("rea_sixty", "settings_reopen_last_tab");
+        v && *v) {
+        reopenLast = std::atoi(v) != 0;
+    }
+    if (ImGui_Checkbox(ctx, "Reopen on last tab viewed", &reopenLast)) {
+        SetExtState("rea_sixty", "settings_reopen_last_tab",
+                    reopenLast ? "1" : "0", /*persist*/ true);
     }
 }
 
@@ -8412,6 +8427,28 @@ bool hudLearnBindMatch_(const std::string& match, int linkIdx, int layer,
     return false;
 }
 
+// Domain-correct FX index for HUD control `idx`. The csFx/bcFx the onTimer drain
+// passes come from activeCsBcTargets_, whose per-domain FX index is domain-BLIND
+// — it can point CS↔BC at the wrong plug-in (Frank 2026-06-16). The DISPLAY
+// (hudPublishUc1_) already re-resolves via lookupBindingsOnTrack; the EDIT path
+// must do the same or a user-mapped plug-in resolves to the factory map and the
+// HUD reports "Factory map — not editable" (Frank 2026-06-20). Returns the SAME
+// (tr, fx) the display used so edit + display always agree. The passed csFx/bcFx
+// are now ignored — they remain in the signatures only for call-site stability.
+static bool hudDomainTarget_(int idx, void* csTrV, void* bcTrV,
+                             MediaTrack*& trOut, int& fxOut)
+{
+    if (idx < 0 || idx >= kUc1ControlsCount) return false;
+    const bool isBc = (kUc1Controls[idx].domain == Domain::BusComp);
+    MediaTrack* tr = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+    const int fx = isBc ? b.busCompFxIdx : b.channelFxIdx;
+    if (fx < 0) return false;
+    trOut = tr; fxOut = fx;
+    return true;
+}
+
 // Arm learn for HUD control `idx`. csTr/bcTr + fx are the active targets the
 // caller (onTimer) resolved via activeCsBcTargets_; we pick the one matching
 // the control's domain, confirm it's a USER-mapped plug-in, and arm.
@@ -8420,9 +8457,9 @@ void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
     hudCancelLearn_();
     if (idx < 0 || idx >= kUc1ControlsCount) return;
     const Uc1Control& c = kUc1Controls[idx];
-    const bool   isBc = (c.domain == Domain::BusComp);
-    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
-    const int    fx   = isBc ? bcFx : csFx;
+    (void)csFx; (void)bcFx;   // superseded by the domain-correct index
+    MediaTrack*  tr = nullptr; int fx = -1;
+    hudDomainTarget_(idx, csTrV, bcTrV, tr, fx);
 
     // Capture the held-modifier layer NOW (arm time). The bind later reads this,
     // not the live layer, so releasing the modifier to wiggle the plug-in keeps
@@ -8478,10 +8515,9 @@ bool hudBindParam_(int idx, int vst3Param, int layer,
 {
     if (idx < 0 || idx >= kUc1ControlsCount || vst3Param < 0) return false;
     const Uc1Control& c = kUc1Controls[idx];
-    const bool   isBc = (c.domain == Domain::BusComp);
-    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
-    const int    fx   = isBc ? bcFx : csFx;
-    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    (void)csFx; (void)bcFx;   // superseded by the domain-correct index
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (!hudDomainTarget_(idx, csTrV, bcTrV, tr, fx)) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, fx, name, sizeof(name))) return false;
     const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
@@ -8500,10 +8536,9 @@ bool hudResolveControlMatch_(int idx, void* csTrV, int csFx, void* bcTrV, int bc
 {
     if (idx < 0 || idx >= kUc1ControlsCount) return false;
     const Uc1Control& c = kUc1Controls[idx];
-    const bool   isBc = (c.domain == Domain::BusComp);
-    MediaTrack*  tr   = static_cast<MediaTrack*>(isBc ? bcTrV : csTrV);
-    const int    fx   = isBc ? bcFx : csFx;
-    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    (void)csFx; (void)bcFx;   // superseded by the domain-correct index
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (!hudDomainTarget_(idx, csTrV, bcTrV, tr, fx)) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, fx, name, sizeof(name))) return false;
     const UserPluginMap* um = user_plugins::lookupOwnedByName(name);
@@ -9617,6 +9652,595 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             ImGui_EndPopup(ctx);
         }
     }
+}
+
+// ===========================================================================
+// Learn-HUD full-parity bridge (Frank 2026-06-20).
+//
+// The Learn HUD (Lua companion) talks to the extension over ExtState string
+// channels. To give its right-click menu the SAME knob-tuning power as the
+// FX-Learn page — polarity, knob travel (min/max), push-reset, sensitivity,
+// curve editor, and feel presets — we (a) PUBLISH each mapped UC1 knob's
+// per-layer tuning state (hud_detail) + the global feel-preset list
+// (hud_feel), and (b) accept commands that mutate those fields.
+//
+// The mutators reuse the exact FX-Learn setters (setSlot* / feel*) by
+// temporarily pointing g_editingMatch + g_fxLearnEditLayer at the HUD's
+// resolved map + captured layer, then restoring. Safe because the hud_cmd
+// drain (onTimer) and the FX-Learn render never interleave on the main thread.
+// ---------------------------------------------------------------------------
+
+// Read a slot's layer-specific tuning fields straight from the catalog (no
+// dependence on g_editingMatch). Returns false when the slot isn't found.
+bool hudReadSlotLayer_(const std::string& match, int linkIdx, int layer,
+                       uf8::SlotLayer& out)
+{
+    if (match.empty() || linkIdx < 0) return false;
+    if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (const auto& s : m.slots)
+            if (s.linkIdx == linkIdx) { out = uf8::fxLayerOf(s, layer); return true; }
+        break;
+    }
+    return false;
+}
+
+// Build hud_detail: one line per MAPPED UC1 knob on `layer`. Fields:
+//   idx;pol;rmin;rmax;sens;dn;stepped;nsteps;t0:v0,t1:v1,...
+// pol 0=Unipolar 1=Bipolar. Curve CSV omitted (trailing field empty) when
+// the knob has no breakpoints. Only knobs that resolve to an editable USER
+// map are listed (factory maps carry no tuning state).
+std::string hudBuildDetail_(void* csTrV, int csFx, void* bcTrV, int bcFx,
+                            int layer)
+{
+    (void)csFx; (void)bcFx;   // superseded by hudDomainTarget_'s index
+    std::string out;
+    char head[128];
+    for (int i = 0; i < kUc1ControlsCount; ++i) {
+        const Uc1Control& c = kUc1Controls[i];
+        if (c.kind != Uc1Control::Knob) continue;
+        // Resolve WITHOUT hudResolveControlMatch_ — that one publishes the
+        // "Factory map" hint as a side effect, and running it for every knob
+        // each tick spammed the banner permanently (Frank 2026-06-20). Resolve
+        // quietly here; an unresolved / factory control just gets no detail row.
+        MediaTrack* tr = nullptr; int fx = -1;
+        if (!hudDomainTarget_(i, csTrV, bcTrV, tr, fx)) continue;
+        char nm[512] = {0};
+        if (!fxIdentityName(tr, fx, nm, sizeof(nm))) continue;
+        const UserPluginMap* um = user_plugins::lookupOwnedByName(nm);
+        if (!um) continue;
+        const std::string match = um->match;
+        const int linkIdx = c.linkIdx;
+        uf8::SlotLayer lay;
+        if (!hudReadSlotLayer_(match, linkIdx, layer, lay)) continue;
+        if (lay.vst3Param < 0) continue;   // not mapped on this layer
+        // Stepped probe on the live param so the curve editor can disable the
+        // canvas + snap Min/Max — mirrors the FX-Learn page.
+        int stepped = 0, nsteps = 0;
+        {
+            double pS = 0, pSm = 0, pL = 0; bool isT = false;
+            if (TrackFX_GetParameterStepSizes(tr, fx, lay.vst3Param,
+                    &pS, &pSm, &pL, &isT) && !isT && pS > 0.0) {
+                stepped = 1;
+                nsteps  = uf8::numStepsFor(static_cast<float>(pS));
+            }
+        }
+        std::snprintf(head, sizeof(head), "%d;%d;%.4f;%.4f;%.3f;%.4f;%d;%d;",
+            i,
+            (lay.polarity == uf8::VPotPolarity::Bipolar) ? 1 : 0,
+            lay.rangeMin, lay.rangeMax, lay.sensitivity, lay.defaultNorm,
+            stepped, nsteps);
+        out += head;
+        for (size_t k = 0; k < lay.curvePoints.size(); ++k) {
+            char pc[48];
+            std::snprintf(pc, sizeof(pc), "%s%.4f:%.4f",
+                          k ? "," : "",
+                          lay.curvePoints[k].first, lay.curvePoints[k].second);
+            out += pc;
+        }
+        out += '\n';
+    }
+    return out;
+}
+
+// Build hud_feel: the ten global feel-preset slots — "slot;used;name" per line.
+std::string hudBuildFeel_()
+{
+    std::string out;
+    const auto& arr = feel_presets::get();
+    for (int i = 0; i < feel_presets::kCount; ++i) {
+        std::string nm = arr[i].name;
+        for (char& ch : nm) if (ch == ';' || ch == '\n') ch = ' ';
+        char line[160];
+        std::snprintf(line, sizeof(line), "%d;%d;%s\n",
+                      i, arr[i].used ? 1 : 0, nm.c_str());
+        out += line;
+    }
+    return out;
+}
+
+// Run `fn(linkIdx)` with g_editingMatch + g_fxLearnEditLayer pointed at the
+// HUD control's resolved map + layer, then restore. Returns false when the
+// control resolves to no editable user map.
+template <class F>
+bool hudBridgeSlot_(int idx, int layer, void* csTrV, int csFx,
+                    void* bcTrV, int bcFx, F&& fn)
+{
+    std::string match; int linkIdx = -1;
+    if (!hudResolveControlMatch_(idx, csTrV, csFx, bcTrV, bcFx, match, linkIdx))
+        return false;
+    const std::string savedMatch = g_editingMatch;
+    const int         savedLayer = g_fxLearnEditLayer;
+    g_editingMatch     = match;
+    g_fxLearnEditLayer = (layer >= 0 && layer < kNumFxLayers)
+                             ? layer : FxLayer::Normal;
+    fn(linkIdx);
+    g_editingMatch     = savedMatch;
+    g_fxLearnEditLayer = savedLayer;
+    return true;
+}
+
+// Set one tuning field on the HUD control's slot. `field`:
+//   0 polarity (v!=0 => Bipolar)   1 rangeMin     2 rangeMax
+//   3 sensitivity                  4 defaultNorm  5 rangeMin = live value
+//   6 rangeMax = live value        7 defaultNorm = live value
+//   8 reset range (0..1)           9 reset feel to default
+bool hudSetField_(int idx, int layer, int field, double v,
+                  void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    return hudBridgeSlot_(idx, layer, csTrV, csFx, bcTrV, bcFx,
+        [&](int li) {
+            switch (field) {
+                case 0: setSlotPolarity_(li, v != 0.0
+                            ? uf8::VPotPolarity::Bipolar
+                            : uf8::VPotPolarity::Unipolar); break;
+                case 1: setSlotRangeMin_(li, static_cast<float>(v)); break;
+                case 2: setSlotRangeMax_(li, static_cast<float>(v)); break;
+                case 3: setSlotSensitivity_(li, static_cast<float>(v)); break;
+                case 4: setSlotDefaultNorm_(li, v); break;
+                case 8: setSlotRangeMin_(li, 0.0f);
+                        setSlotRangeMax_(li, 1.0f); break;
+                case 9: applyFeelToLinkSlot_(li, feel_presets::KnobFeel{});
+                        break;
+                case 5: case 6: case 7: {
+                    const int p = mappedVst3For_(li);
+                    if (p < 0) break;
+                    const bool isBc = (kUc1Controls[idx].domain
+                                       == Domain::BusComp);
+                    MediaTrack* tr = static_cast<MediaTrack*>(
+                        isBc ? bcTrV : csTrV);
+                    const int fx = isBc ? bcFx : csFx;
+                    if (!tr || fx < 0
+                        || !ValidatePtr2(nullptr, tr, "MediaTrack*")) break;
+                    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+                    if (field == 5)      setSlotRangeMin_(li,
+                                             static_cast<float>(cur));
+                    else if (field == 6) setSlotRangeMax_(li,
+                                             static_cast<float>(cur));
+                    else                 setSlotDefaultNorm_(li, cur);
+                } break;
+            }
+        });
+}
+
+// Parse "t:v,t:v,…" → curve points; set them on the HUD control's slot.
+bool hudSetCurve_(int idx, int layer, const char* csv,
+                  void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    std::vector<std::pair<float, float>> pts;
+    if (csv) {
+        const char* p = csv;
+        while (*p) {
+            float t = 0, vv = 0;
+            if (std::sscanf(p, "%f:%f", &t, &vv) == 2)
+                pts.emplace_back(t, vv);
+            const char* comma = std::strchr(p, ',');
+            if (!comma) break;
+            p = comma + 1;
+        }
+        std::sort(pts.begin(), pts.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+    return hudBridgeSlot_(idx, layer, csTrV, csFx, bcTrV, bcFx,
+        [&](int li) { setSlotCurvePoints_(li, pts); });
+}
+
+// Feel presets — save the control's current feel into slot, apply slot onto
+// the control, or clear a slot.
+bool hudFeelSave_(int idx, int layer, int slot, const char* name,
+                  void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    return hudBridgeSlot_(idx, layer, csTrV, csFx, bcTrV, bcFx,
+        [&](int li) {
+            feel_presets::KnobFeel f = feelFromLinkSlot_(li);
+            f.name = name ? name : "";
+            feel_presets::set(slot, f);
+        });
+}
+bool hudFeelApply_(int idx, int layer, int slot,
+                   void* csTrV, int csFx, void* bcTrV, int bcFx)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    return hudBridgeSlot_(idx, layer, csTrV, csFx, bcTrV, bcFx,
+        [&](int li) {
+            const auto& arr = feel_presets::get();
+            if (arr[slot].used) applyFeelToLinkSlot_(li, arr[slot]);
+        });
+}
+bool hudFeelClear_(int slot)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    feel_presets::clear(slot);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// UF8-tab full-parity bridge — same idea as the UC1 block above, but the rich
+// tuning is V-Pot ONLY (faders are deliberately excluded from curve/travel in
+// the FX-Learn page — absolute motor faders fight the inverse-curve echo). The
+// setters key off g_editingMatch + g_uf8EditingFaderBank, so the bridge points
+// those at the live UF8 target + fader bank, then restores. Frank 2026-06-20.
+// ---------------------------------------------------------------------------
+
+// Build hud_uf8_detail: one line per MAPPED V-Pot on the live (fb, vb) banks —
+//   strip;pol;rmin;rmax;sens;dn;stepped;nsteps;vpotMode;t0:v0,…
+std::string hudBuildUf8Detail_(void* trV, int fx, int fb, int vb)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return {};
+    auto* tr = static_cast<MediaTrack*>(trV);
+    std::string out;
+    char head[160];
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (int strip = 0; strip < 8; ++strip) {
+            const auto& bs = m.uf8.banks.banks[fb][vb][strip];
+            if (bs.vst3Param < 0) continue;   // unmapped V-Pot
+            int stepped = 0, nsteps = 0;
+            if (tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+                double pS = 0, pSm = 0, pL = 0; bool isT = false;
+                if (TrackFX_GetParameterStepSizes(tr, fx, bs.vst3Param,
+                        &pS, &pSm, &pL, &isT) && !isT && pS > 0.0) {
+                    stepped = 1;
+                    nsteps  = uf8::numStepsFor(static_cast<float>(pS));
+                }
+            }
+            std::snprintf(head, sizeof(head),
+                "%d;%d;%.4f;%.4f;%.3f;%.4f;%d;%d;%d;",
+                strip,
+                (bs.polarity == uf8::VPotPolarity::Bipolar) ? 1 : 0,
+                bs.travel.rangeMin, bs.travel.rangeMax, bs.travel.sensitivity,
+                bs.defaultNorm, stepped, nsteps,
+                static_cast<int>(bs.vpotMode));
+            out += head;
+            for (size_t k = 0; k < bs.travel.curvePoints.size(); ++k) {
+                char pc[48];
+                std::snprintf(pc, sizeof(pc), "%s%.4f:%.4f", k ? "," : "",
+                              bs.travel.curvePoints[k].first,
+                              bs.travel.curvePoints[k].second);
+                out += pc;
+            }
+            out += '\n';
+        }
+        break;
+    }
+    return out;
+}
+
+template <class F>
+bool hudUf8BridgeVPot_(int fb, int vb, void* trV, int fx, F&& fn)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    const std::string savedMatch = g_editingMatch;
+    const int         savedFb    = g_uf8EditingFaderBank;
+    g_editingMatch        = match;
+    g_uf8EditingFaderBank = fb;
+    fn(vb);
+    g_editingMatch        = savedMatch;
+    g_uf8EditingFaderBank = savedFb;
+    return true;
+}
+
+// Field ids match hudSetField_ (0 pol, 1 rmin, 2 rmax, 3 sens, 4 dn,
+// 5/6/7 capture-live, 8 reset-range, 9 reset-feel).
+bool hudUf8SetField_(int strip, int fb, int vb, int field, double v,
+                     void* trV, int fx)
+{
+    return hudUf8BridgeVPot_(fb, vb, trV, fx, [&](int bank) {
+        switch (field) {
+            case 0: setUf8VPotPolarity_(strip, bank, v != 0.0
+                        ? uf8::VPotPolarity::Bipolar
+                        : uf8::VPotPolarity::Unipolar); break;
+            case 1: setUf8VPotRangeMin_(strip, bank, static_cast<float>(v)); break;
+            case 2: setUf8VPotRangeMax_(strip, bank, static_cast<float>(v)); break;
+            case 3: setUf8VPotSensitivity_(strip, bank, static_cast<float>(v)); break;
+            case 4: setUf8DefaultNorm_(strip, bank, v); break;
+            case 8: setUf8VPotRangeMin_(strip, bank, 0.0f);
+                    setUf8VPotRangeMax_(strip, bank, 1.0f); break;
+            case 9: applyFeelToUf8VPot_(strip, bank,
+                        feel_presets::KnobFeel{}); break;
+            case 5: case 6: case 7: {
+                int p = -1;
+                for (const auto& m : user_plugins::get().maps)
+                    if (m.match == g_editingMatch) {
+                        p = m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip]
+                                .vst3Param;
+                        break;
+                    }
+                if (p < 0) break;
+                auto* tr = static_cast<MediaTrack*>(trV);
+                if (!tr || fx < 0
+                    || !ValidatePtr2(nullptr, tr, "MediaTrack*")) break;
+                const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+                if (field == 5)      setUf8VPotRangeMin_(strip, bank,
+                                         static_cast<float>(cur));
+                else if (field == 6) setUf8VPotRangeMax_(strip, bank,
+                                         static_cast<float>(cur));
+                else                 setUf8DefaultNorm_(strip, bank, cur);
+            } break;
+        }
+    });
+}
+
+bool hudUf8SetCurve_(int strip, int fb, int vb, const char* csv,
+                     void* trV, int fx)
+{
+    std::vector<std::pair<float, float>> pts;
+    if (csv) {
+        const char* p = csv;
+        while (*p) {
+            float t = 0, vv = 0;
+            if (std::sscanf(p, "%f:%f", &t, &vv) == 2) pts.emplace_back(t, vv);
+            const char* comma = std::strchr(p, ',');
+            if (!comma) break;
+            p = comma + 1;
+        }
+        std::sort(pts.begin(), pts.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+    return hudUf8BridgeVPot_(fb, vb, trV, fx,
+        [&](int bank) { setUf8VPotCurvePoints_(strip, bank, pts); });
+}
+
+bool hudUf8FeelSave_(int strip, int fb, int vb, int slot, const char* name,
+                     void* trV, int fx)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    return hudUf8BridgeVPot_(fb, vb, trV, fx, [&](int bank) {
+        feel_presets::KnobFeel f = feelFromUf8VPot_(strip, bank);
+        f.name = name ? name : "";
+        feel_presets::set(slot, f);
+    });
+}
+bool hudUf8FeelApply_(int strip, int fb, int vb, int slot, void* trV, int fx)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    return hudUf8BridgeVPot_(fb, vb, trV, fx, [&](int bank) {
+        const auto& arr = feel_presets::get();
+        if (arr[slot].used) applyFeelToUf8VPot_(strip, bank, arr[slot]);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// HUD button push-cycle editor (Frank 2026-06-20: "alles machen" — the FX-Learn
+// page's button push-cycle belongs in the HUD too). Curate which discrete
+// options a button steps through, reorder (▲▼ here vs the page's drag-drop),
+// exclude, remove macro steps, build macros via "+ Add step". Request/response:
+// the HUD writes the focused button idx to ExtState "hud_push_req"; we publish
+// that button's data (steps + discrete-param catalog) to "hud_push". Edits come
+// via hud_cmd verbs (pushtoggle / pushmove / pushremove / pushreset / pushadd).
+// ---------------------------------------------------------------------------
+
+bool hudIsPushCycleBtn_(int idx)
+{
+    if (idx < 0 || idx >= kUc1ControlsCount) return false;
+    const Uc1Control& c = kUc1Controls[idx];
+    return (c.kind == Uc1Control::DynBtn || c.kind == Uc1Control::Toggle)
+        && c.linkIdx != 0;
+}
+
+// Discrete option count (>=2) + normalised step for a live param. 0 = not
+// discrete. Mirrors optionCountFor in drawUc1Control_.
+int hudParamOptions_(MediaTrack* tr, int fx, int param, double& stepOut)
+{
+    stepOut = 1.0;
+    if (!tr || fx < 0 || param < 0) return 0;
+    double s = 0, a = 0, b = 0; bool isT = false;
+    if (!TrackFX_GetParameterStepSizes(tr, fx, param, &s, &a, &b, &isT))
+        return 0;
+    if (isT) { stepOut = 1.0; return 2; }
+    if (s > 0.0 && s < 1.0) { stepOut = s; return uf8::numStepsFor((float)s); }
+    return 0;
+}
+
+// Effective push-cycle view: stored steps, or all bound-param options
+// synthesised when empty + discrete (so they're visible/orderable from the
+// start). Mirrors the `view` in drawUc1Control_.
+std::vector<uf8::PushStep> hudComputePushView_(MediaTrack* tr, int fx,
+        const std::string& match, int linkIdx, int layer, int& boundParamOut)
+{
+    boundParamOut = -1;
+    std::vector<uf8::PushStep> view;
+    uf8::SlotLayer lay;
+    if (hudReadSlotLayer_(match, linkIdx, layer, lay)) {
+        view = lay.pushSteps;
+        boundParamOut = lay.vst3Param;
+    }
+    if (view.empty() && boundParamOut >= 0) {
+        double step = 1.0;
+        const int n = hudParamOptions_(tr, fx, boundParamOut, step);
+        for (int i = 0; i < n; ++i) {
+            float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+            view.push_back(uf8::PushStep{boundParamOut, nrm, true});
+        }
+    }
+    return view;
+}
+
+bool hudPushResolve_(int idx, void* csTrV, void* bcTrV, int layer,
+                     MediaTrack*& tr, int& fx, std::string& match,
+                     int& linkIdx, int& boundParam,
+                     std::vector<uf8::PushStep>& view)
+{
+    if (!hudIsPushCycleBtn_(idx)) return false;
+    if (!hudDomainTarget_(idx, csTrV, bcTrV, tr, fx)) return false;
+    char nm[512] = {0};
+    if (!fxIdentityName(tr, fx, nm, sizeof(nm))) return false;
+    const UserPluginMap* um = user_plugins::lookupOwnedByName(nm);
+    if (!um) return false;
+    match = um->match;
+    linkIdx = kUc1Controls[idx].linkIdx;
+    view = hudComputePushView_(tr, fx, match, linkIdx, layer, boundParam);
+    return true;
+}
+
+// Comma-list of control idxs that are push-cycle buttons (static — published
+// once so the HUD knows where to offer the "Push cycle" submenu).
+std::string hudBuildPushBtns_()
+{
+    std::string out;
+    for (int i = 0; i < kUc1ControlsCount; ++i)
+        if (hudIsPushCycleBtn_(i)) {
+            if (!out.empty()) out += ',';
+            out += std::to_string(i);
+        }
+    return out;
+}
+
+std::string hudBuildPush_(int idx, void* csTrV, void* bcTrV, int layer)
+{
+    MediaTrack* tr = nullptr; int fx = -1; std::string match; int linkIdx = -1;
+    int boundParam = -1; std::vector<uf8::PushStep> view;
+    if (!hudPushResolve_(idx, csTrV, bcTrV, layer, tr, fx, match, linkIdx,
+                         boundParam, view))
+        return {};
+    auto sanitize = [](std::string s) {
+        for (char& c : s) if (c == ';' || c == '|' || c == '~' || c == '\n')
+            c = ' ';
+        return s;
+    };
+    std::string out = std::to_string(idx) + "\n";
+    char vb[80], pn[128];
+    for (const auto& st : view) {
+        vb[0] = 0;
+        TrackFX_FormatParamValueNormalized(tr, fx, st.vst3Param, st.norm,
+                                           vb, sizeof(vb));
+        const bool foreign = (st.vst3Param != boundParam);
+        std::string label;
+        if (foreign) {
+            pn[0] = 0;
+            TrackFX_GetParamName(tr, fx, st.vst3Param, pn, sizeof(pn));
+            label = std::string(pn[0] ? pn : "param") + " = "
+                  + (vb[0] ? vb : "?");
+        } else {
+            label = vb[0] ? vb : "(option)";
+        }
+        char line[256];
+        snprintf(line, sizeof(line), "S;%d;%.5f;%d;%d;%s\n",
+            st.vst3Param, st.norm, st.enabled ? 1 : 0, foreign ? 1 : 0,
+            sanitize(label).c_str());
+        out += line;
+    }
+    // Discrete-param catalog for "+ Add step" — skipped for Acustica (param
+    // enumeration faults its engine; [[acustica-crash-setdefaultdlldirectories]]).
+    if (tr && fx >= 0 && !uf8::fxIsAcustica(tr, fx)) {
+        const int pcount = TrackFX_GetNumParams(tr, fx);
+        for (int p = 0; p < pcount; ++p) {
+            double step = 1.0;
+            const int n = hudParamOptions_(tr, fx, p, step);
+            if (n < 2) continue;
+            pn[0] = 0;
+            TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+            if (isReaperMidiParam_(pn)) continue;
+            std::string line = "P;" + std::to_string(p) + ";"
+                             + sanitize(pn[0] ? pn : "param") + ";";
+            for (int i = 0; i < n; ++i) {
+                float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+                vb[0] = 0;
+                TrackFX_FormatParamValueNormalized(tr, fx, p, nrm,
+                                                   vb, sizeof(vb));
+                char opt[112];
+                snprintf(opt, sizeof(opt), "%s%.5f~%s", i ? "|" : "",
+                         nrm, sanitize(vb[0] ? vb : "?").c_str());
+                line += opt;
+            }
+            out += line + "\n";
+        }
+    }
+    return out;
+}
+
+// Apply a freshly-built step list to the button (bridge g_editingMatch + layer).
+void hudPushSet_(const std::string& match, int layer, int linkIdx,
+                 std::vector<uf8::PushStep> v)
+{
+    const std::string sm = g_editingMatch; const int sl = g_fxLearnEditLayer;
+    g_editingMatch     = match;
+    g_fxLearnEditLayer = (layer >= 0 && layer < kNumFxLayers)
+                             ? layer : FxLayer::Normal;
+    setSlotPushSteps_(linkIdx, std::move(v));
+    g_editingMatch     = sm; g_fxLearnEditLayer = sl;
+}
+
+bool hudPushToggle_(int idx, int layer, int stepIdx, void* csTr, void* bcTr)
+{
+    MediaTrack* tr; int fx; std::string match; int linkIdx, boundParam;
+    std::vector<uf8::PushStep> v;
+    if (!hudPushResolve_(idx, csTr, bcTr, layer, tr, fx, match, linkIdx,
+                         boundParam, v)) return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v[stepIdx].enabled = !v[stepIdx].enabled;
+    hudPushSet_(match, layer, linkIdx, v);
+    return true;
+}
+bool hudPushMove_(int idx, int layer, int stepIdx, int dir,
+                  void* csTr, void* bcTr)
+{
+    MediaTrack* tr; int fx; std::string match; int linkIdx, boundParam;
+    std::vector<uf8::PushStep> v;
+    if (!hudPushResolve_(idx, csTr, bcTr, layer, tr, fx, match, linkIdx,
+                         boundParam, v)) return false;
+    const int dst = stepIdx + dir;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()
+        || dst < 0 || dst >= (int)v.size()) return false;
+    std::swap(v[stepIdx], v[dst]);
+    hudPushSet_(match, layer, linkIdx, v);
+    return true;
+}
+bool hudPushRemove_(int idx, int layer, int stepIdx, void* csTr, void* bcTr)
+{
+    MediaTrack* tr; int fx; std::string match; int linkIdx, boundParam;
+    std::vector<uf8::PushStep> v;
+    if (!hudPushResolve_(idx, csTr, bcTr, layer, tr, fx, match, linkIdx,
+                         boundParam, v)) return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v.erase(v.begin() + stepIdx);
+    hudPushSet_(match, layer, linkIdx, v);
+    return true;
+}
+bool hudPushReset_(int idx, int layer, void* csTr, void* bcTr)
+{
+    MediaTrack* tr; int fx; std::string match; int linkIdx, boundParam;
+    std::vector<uf8::PushStep> v;
+    if (!hudPushResolve_(idx, csTr, bcTr, layer, tr, fx, match, linkIdx,
+                         boundParam, v)) return false;
+    hudPushSet_(match, layer, linkIdx, {});
+    return true;
+}
+bool hudPushAdd_(int idx, int layer, int param, double norm,
+                 void* csTr, void* bcTr)
+{
+    MediaTrack* tr; int fx; std::string match; int linkIdx, boundParam;
+    std::vector<uf8::PushStep> v;
+    if (!hudPushResolve_(idx, csTr, bcTr, layer, tr, fx, match, linkIdx,
+                         boundParam, v)) return false;
+    if (param < 0) return false;
+    v.push_back(uf8::PushStep{param, (float)norm, true});
+    hudPushSet_(match, layer, linkIdx, v);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -13348,6 +13972,100 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
         }
     } else {
+        // Live-follow the focused FX (Frank 2026-06-20, "Learn FX soll
+        // immer mit aktivem FX laden"): switch the editor's map + instance to
+        // the plug-in you're looking at. Edge-triggered on the resolved
+        // (track, fx) changing — manual map / instance selection still sticks
+        // between changes instead of snapping back every frame.
+        //
+        // GetFocusedFX2 alone is NOT enough: the moment the Settings/ReaImGui
+        // window takes focus its "focused FX" bit clears, so opening FX Learn
+        // would see nothing. Fall back to GetLastTouchedFX, which persists the
+        // last plug-in the user actually interacted with = the "active FX".
+        {
+            MediaTrack* ftr = nullptr;
+            int fxIdx = -1, trIdxKey = -2;   // -1 = master, >=0 track
+            // Accept only FX that resolve to a USER map (the editable kind).
+            auto tryFx = [&](MediaTrack* tr, int fx, int keyIdx) -> bool {
+                if (!tr || fx < 0) return false;
+                if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+                if (fx >= TrackFX_GetCount(tr)) return false;
+                char nm[512] = {0};
+                if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return false;
+                if (!uf8::user_plugins::lookupOwnedByName(nm)) return false;
+                ftr = tr; fxIdx = fx; trIdxKey = keyIdx; return true;
+            };
+            // 0) The FX the SURFACE is currently driving (rea-sixty's "active
+            //    FX": focused CS/BC domain on the focused track + instance
+            //    cycle). This is what "aktive FX" means here — it's defined even
+            //    with no plug-in window open and no REAPER focus, so it's the
+            //    primary signal. The others below are fallbacks.
+            {
+                int aTr = -2, aFx = -1;
+                if (reasixty_activeFocusedFx(&aTr, &aFx)) {
+                    MediaTrack* tr = (aTr < 0) ? GetMasterTrack(nullptr)
+                                               : GetTrack(nullptr, aTr);
+                    tryFx(tr, aFx, aTr);
+                }
+            }
+            // 1) REAPER's focused FX (covers "still last-focused" too).
+            int trNum = -1, itemNum = -1, fxNum = -1;
+            if (!ftr && (GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1)) {
+                MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
+                               : (trNum > 0)  ? GetTrack(nullptr, trNum - 1)
+                                              : nullptr;
+                tryFx(tr, fxNum & 0x00FFFFFF, trNum == 0 ? -1 : trNum - 1);
+            }
+            // 2) Last-touched FX (persists once a param was moved).
+            if (!ftr) {
+                int t = -1, f = -1, p = -1;
+                if (GetLastTouchedFX(&t, &f, &p)) {
+                    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                                   : (t > 0)  ? GetTrack(nullptr, t - 1)
+                                              : nullptr;
+                    tryFx(tr, f & 0x00FFFFFF, t == 0 ? -1 : t - 1);
+                }
+            }
+            // 3) First OPEN user-mapped FX window (master, then tracks). This is
+            //    the case the earlier versions missed: opening the Settings
+            //    window clears GetFocusedFX2 and the user may not have touched a
+            //    param, so only the open window itself identifies "the FX I'm
+            //    looking at".
+            if (!ftr) {
+                MediaTrack* mtr = GetMasterTrack(nullptr);
+                const int mn = mtr ? TrackFX_GetCount(mtr) : 0;
+                for (int i = 0; i < mn && !ftr; ++i)
+                    if (TrackFX_GetOpen(mtr, i)) tryFx(mtr, i, -1);
+                const int tc = CountTracks(nullptr);
+                for (int ti = 0; ti < tc && !ftr; ++ti) {
+                    MediaTrack* tr = GetTrack(nullptr, ti);
+                    const int n = tr ? TrackFX_GetCount(tr) : 0;
+                    for (int i = 0; i < n && !ftr; ++i)
+                        if (TrackFX_GetOpen(tr, i)) tryFx(tr, i, ti);
+                }
+            }
+            static MediaTrack* s_lastFollowTr = nullptr;
+            static int         s_lastFollowFx = -1;
+            if (ftr && fxIdx >= 0
+                && (ftr != s_lastFollowTr || fxIdx != s_lastFollowFx)) {
+                s_lastFollowTr = ftr;
+                s_lastFollowFx = fxIdx;
+                char fxName[512] = {0};
+                if (uf8::fxIdentityName(ftr, fxIdx, fxName, sizeof(fxName))) {
+                    if (const auto* um =
+                            uf8::user_plugins::lookupOwnedByName(fxName)) {
+                        g_editingMatch = um->match;
+                        SetExtState("ReaSixty", "fxLearnLastMatch",
+                                    g_editingMatch.c_str(), true);
+                        char keybuf[32];
+                        snprintf(keybuf, sizeof(keybuf), "%d:%d",
+                                 trIdxKey, fxIdx);
+                        g_fxSelectorKey = keybuf;
+                    }
+                }
+            }
+        }
+
         // Restore last-edited map from ExtState when no map is active
         // (fresh Settings-open, or user returned from a deleted map).
         // Fall back to the first catalog entry if the persisted match
@@ -15086,6 +15804,42 @@ bool reasixty_hudRename(int idx, int layer, const char* label,
     return uf8::hudRename_(idx, layer, label, csTr, csFx, bcTr, bcFx);
 }
 
+// Learn-HUD full-parity bridge exports — see the bridge block in SettingsScreen
+// (Frank 2026-06-20).
+std::string reasixty_hudBuildDetail(void* csTr, int csFx, void* bcTr, int bcFx,
+                                    int layer)
+{
+    return uf8::hudBuildDetail_(csTr, csFx, bcTr, bcFx, layer);
+}
+std::string reasixty_hudBuildFeel()
+{
+    return uf8::hudBuildFeel_();
+}
+bool reasixty_hudSetField(int idx, int layer, int field, double v,
+                          void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudSetField_(idx, layer, field, v, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudSetCurve(int idx, int layer, const char* csv,
+                          void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudSetCurve_(idx, layer, csv, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudFeelSave(int idx, int layer, int slot, const char* name,
+                          void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudFeelSave_(idx, layer, slot, name, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudFeelApply(int idx, int layer, int slot,
+                           void* csTr, int csFx, void* bcTr, int bcFx)
+{
+    return uf8::hudFeelApply_(idx, layer, slot, csTr, csFx, bcTr, bcFx);
+}
+bool reasixty_hudFeelClear(int slot)
+{
+    return uf8::hudFeelClear_(slot);
+}
+
 // UF8 device-tab interactivity (Phase 2). kind = HUD encoding
 // (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel); fb/vb = live fader/V-Pot banks; tr/fx =
 // the active UF8 target resolved via resolveFocusedUf8Target_.
@@ -15117,6 +15871,64 @@ bool reasixty_hudUf8BindParam(int kind, int strip, int fb, int vb, int param,
                               void* tr, int fx)
 {
     return uf8::hudUf8BindParam_(kind, strip, fb, vb, param, tr, fx);
+}
+// UF8-tab full-parity bridge exports (V-Pot tuning + feel presets).
+std::string reasixty_hudBuildUf8Detail(void* tr, int fx, int fb, int vb)
+{
+    return uf8::hudBuildUf8Detail_(tr, fx, fb, vb);
+}
+bool reasixty_hudUf8SetField(int strip, int fb, int vb, int field, double v,
+                             void* tr, int fx)
+{
+    return uf8::hudUf8SetField_(strip, fb, vb, field, v, tr, fx);
+}
+bool reasixty_hudUf8SetCurve(int strip, int fb, int vb, const char* csv,
+                             void* tr, int fx)
+{
+    return uf8::hudUf8SetCurve_(strip, fb, vb, csv, tr, fx);
+}
+bool reasixty_hudUf8FeelSave(int strip, int fb, int vb, int slot,
+                             const char* name, void* tr, int fx)
+{
+    return uf8::hudUf8FeelSave_(strip, fb, vb, slot, name, tr, fx);
+}
+bool reasixty_hudUf8FeelApply(int strip, int fb, int vb, int slot,
+                             void* tr, int fx)
+{
+    return uf8::hudUf8FeelApply_(strip, fb, vb, slot, tr, fx);
+}
+// HUD button push-cycle editor exports.
+std::string reasixty_hudBuildPushBtns()
+{
+    return uf8::hudBuildPushBtns_();
+}
+std::string reasixty_hudBuildPush(int idx, void* csTr, void* bcTr, int layer)
+{
+    return uf8::hudBuildPush_(idx, csTr, bcTr, layer);
+}
+bool reasixty_hudPushToggle(int idx, int layer, int stepIdx,
+                            void* csTr, void* bcTr)
+{
+    return uf8::hudPushToggle_(idx, layer, stepIdx, csTr, bcTr);
+}
+bool reasixty_hudPushMove(int idx, int layer, int stepIdx, int dir,
+                          void* csTr, void* bcTr)
+{
+    return uf8::hudPushMove_(idx, layer, stepIdx, dir, csTr, bcTr);
+}
+bool reasixty_hudPushRemove(int idx, int layer, int stepIdx,
+                            void* csTr, void* bcTr)
+{
+    return uf8::hudPushRemove_(idx, layer, stepIdx, csTr, bcTr);
+}
+bool reasixty_hudPushReset(int idx, int layer, void* csTr, void* bcTr)
+{
+    return uf8::hudPushReset_(idx, layer, csTr, bcTr);
+}
+bool reasixty_hudPushAdd(int idx, int layer, int param, double norm,
+                         void* csTr, void* bcTr)
+{
+    return uf8::hudPushAdd_(idx, layer, param, norm, csTr, bcTr);
 }
 // True (once) right after a fresh UF8-only map was bootstrapped — main.cpp
 // focuses the None domain so the hardware shows it without an FX-cycle.
