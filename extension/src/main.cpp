@@ -125,6 +125,10 @@ bool        reasixty_hudFeelClear(int slot);
 // (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel); fb/vb = live fader/V-Pot banks.
 void        reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr, int fx, bool create);
 bool        reasixty_hudUf8LearnTick();
+// True while a GUI-armed V-Pot learn/listen is pending (HUD grid-click or
+// FX-Learn page). Mirrored into g_uf8VpotLearnArmed each onTimer tick so the
+// input thread can turn a V-Pot push into the Toggle flag. Frank 2026-06-20.
+bool        reasixty_uf8VpotGuiLearnArmed();
 int         reasixty_hudUf8LearnArmed();
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -2069,6 +2073,19 @@ std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
 // drained in onTimer. Encodes the armed cell as kind*8+strip (-1 = none); kind =
 // HUD encoding 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel.
 std::atomic<int>  g_hudUf8HwLearnReq{-1};
+// V-Pot learn "make it a Toggle" intent (Frank 2026-06-20). A V-Pot PRESS during
+// learn flags the pending bind as VPotMode::Toggle (push flips 0↔1); a TURN flags
+// it continuous (Value). Set on the libusb input thread, read by the bind paths
+// (hudUf8LearnTick_ / FX-Learn listen) on the main thread. g_uf8VpotLearnArmed is
+// a main-thread → input-thread mirror: true while a GUI-armed V-Pot learn/listen
+// is pending (HUD grid-click or FX-Learn page), so the input thread can repurpose
+// a V-Pot push into the Toggle flag instead of its normal push action.
+std::atomic<bool> g_uf8HwLearnAsToggle{false};
+std::atomic<bool> g_uf8VpotLearnArmed{false};
+// Set true when the touch_to_learn_toggle action turns the mode OFF — the next
+// onTimer cancels any armed learn + clears the hardware feedback (restores the
+// armed control's normal LEDs / fader / display). Frank 2026-06-20.
+std::atomic<bool> g_touchLearnOffRequest{false};
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
@@ -9207,8 +9224,10 @@ static const bool g_uf8Trace = (std::getenv("REASIXTY_UF8_TRACE") != nullptr);
 // kind = HUD encoding (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel).
 static bool uf8TouchLearnArm_(int kind, int strip)
 {
-    if (!(g_hudEnabled.load() && g_hudTouchLearn.load() && g_hudUf8TabActive))
-        return false;
+    // Standalone (Frank 2026-06-20): no longer requires the HUD open or its UF8
+    // tab active — touching any UF8 control arms its learn whenever the mode is
+    // on, driven by the bindable touch_to_learn_toggle action.
+    if (!g_hudTouchLearn.load()) return false;
     if (strip < 0 || strip > 7) return false;
     g_hudUf8HwLearnReq.store(kind * 8 + strip);
     return true;
@@ -9497,7 +9516,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // Unassigned banks (no V-Pot bindings on any of 8 strips)
             // are skipped — Frank 2026-05-13: "unzugewiesene Soft-Key
             // V-Pot banks no-function machen".
-            if (id >= 0x18 && id <= 0x1F && g_uf8PluginMode.load()) {
+            // Touch-to-Learn (standalone, HUD may be off) ALSO repurposes the
+            // top-soft-keys as V-Pot bank/layer selectors so the user can map
+            // V-Pots across all layers straight from the hardware — pushing a
+            // soft-key switches the layer for the next V-Pot wiggle-learn (Frank
+            // 2026-06-20). Outside Plugin Mode the keys would otherwise fire
+            // their normal bindings; while learning, layer-select wins. Safe to
+            // hijack: soft-keys aren't touch-learnable (kinds are V-Pot/Fader/
+            // Solo/Cut/Sel), so no learn gesture is stolen.
+            if (id >= 0x18 && id <= 0x1F
+                && (g_uf8PluginMode.load() || g_hudTouchLearn.load())) {
                 if (pressed) {
                     const int target = id - 0x18;
                     bool anyAssigned = false;
@@ -9511,11 +9539,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         }
                     }
                     // Empty (unassigned) banks are normally no-function. But
-                    // while the Learn-HUD is open the user is mapping, so let the
-                    // soft-keys navigate to empty banks too — otherwise you can't
-                    // reach an empty bank on the hardware to fill it. Frank
-                    // 2026-06-17 (HUD UF8 Phase 2). HUD-off behaviour unchanged.
-                    if ((anyAssigned || g_hudEnabled.load())
+                    // while the Learn-HUD is open OR standalone Touch-to-Learn is
+                    // active the user is mapping, so let the soft-keys navigate to
+                    // empty banks too — otherwise you can't reach an empty bank on
+                    // the hardware to fill it. Frank 2026-06-17 (HUD UF8 Phase 2)
+                    // + 2026-06-20 (Touch-to-Learn). HUD-off/learn-off unchanged.
+                    if ((anyAssigned || g_hudEnabled.load() || g_hudTouchLearn.load())
                         && g_softKeyBank.exchange(target) != target) {
                         g_softKeyDirty.store(true);
                         g_bankDirty.store(true);
@@ -9708,13 +9737,30 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     if (pressed) {
                         const uint8_t strip =
                             static_cast<uint8_t>(id - 0x08);
+                        // Learn intercept (Frank 2026-06-20): a V-Pot PRESS
+                        // during learn means "bind this as a Toggle" (push
+                        // flips 0↔1) rather than a continuous fader.
+                        //   * Touch-to-Learn → the press both ARMS the cell's
+                        //     learn (kind 0) and flags it Toggle. (A TURN arms
+                        //     a continuous learn — see the 0x24 handler.)
+                        //   * Normal GUI-armed learn (HUD grid / FX-Learn page,
+                        //     mirrored into g_uf8VpotLearnArmed) → the press
+                        //     just flags the pending bind Toggle.
+                        // Either way the normal push action is suppressed.
+                        bool learnHandled = false;
+                        if (uf8TouchLearnArm_(0, strip)
+                            || g_uf8VpotLearnArmed.load()) {
+                            g_uf8HwLearnAsToggle.store(true);
+                            learnHandled = true;
+                        }
                         const auto selMode = g_selectionMode.load();
                         // REC + RME override: V-Pot push fires the user-
                         // assigned TotalReaper action. None = fall through
                         // to the default (pan-center) wiring.
                         bool handledTr = false;
-                        if ((selMode == SelectionMode::Rec
-                             || selMode == SelectionMode::RecMon)
+                        if (!learnHandled
+                            && (selMode == SelectionMode::Rec
+                                || selMode == SelectionMode::RecMon)
                             && g_recRmeEnabled.load())
                         {
                             const int cmdId = totalReaperCmdId_(g_recVpotPush.load());
@@ -9725,7 +9771,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                 handledTr = true;
                             }
                         }
-                        if (!handledTr) {
+                        if (!learnHandled && !handledTr) {
                             const bool vpotsCycle =
                                 (g_cycleControlMask.load() & kCycleCtrlVpots) != 0;
                             switch (selMode) {
@@ -9999,8 +10045,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             // Touch-to-Learn: turning a V-Pot arms its cell (kind 0) instead of
-            // writing pan/param — suppress the rest of this frame.
+            // writing pan/param — suppress the rest of this frame. A TURN means a
+            // continuous (Value) binding, so clear the Toggle intent the press
+            // path may have set (Frank 2026-06-20).
             if (strip < 8 && uf8TouchLearnArm_(0, strip)) {
+                g_uf8HwLearnAsToggle.store(false);
                 i += frameSize;
                 continue;
             }
@@ -11577,12 +11626,20 @@ void pushZonesForVisibleSlots()
                     }
                 }
                 const bool isActive = (s == activeBank);
-                if (!bankAssigned) {
-                    tssk = uf8::TopSoftKeyState::Off;
-                    ledCacheKey = 11;
-                } else if (isActive) {
+                // During learn the user can switch to an as-yet-empty bank to
+                // fill it (the input-thread soft-key handler allows navigating
+                // to empty banks while learning). Light the ACTIVE selector so
+                // the bank switch is visible even before any param is assigned
+                // (Frank 2026-06-20) — same learn gate as that navigation.
+                // Outside learn, empty banks stay dark.
+                const bool learnActive =
+                    g_hudTouchLearn.load() || g_hudEnabled.load();
+                if (isActive && (bankAssigned || learnActive)) {
                     tssk = uf8::TopSoftKeyState::On;
                     ledCacheKey = 10;
+                } else if (!bankAssigned) {
+                    tssk = uf8::TopSoftKeyState::Off;
+                    ledCacheKey = 11;
                 } else {
                     tssk = uf8::TopSoftKeyState::Dim;
                     ledCacheKey = 9;
@@ -15043,6 +15100,108 @@ void pushUf8GlobalLeds()
 int g_uc1RefireAtTick = 60;
 int g_tickCounter = 0;
 
+// Touch-to-Learn hardware feedback (Frank 2026-06-20). Runs every onTimer tick
+// AFTER the normal surface render, overriding ONLY the armed control: UF8 V-Pot
+// ring pulses + "Waiting" scribble, Solo/Cut/Sel blink, fader oscillates ±6 dB;
+// UC1 ring breathes / button blinks / readout shows "Waiting" (via the surface).
+// Override frames are sent raw (bypassing the render caches), so on disarm we
+// invalidate those caches once to let the normal render repaint. Self-gates on
+// g_hudTouchLearn so it costs nothing when off.
+void pushTouchLearnFeedback_()
+{
+    static bool wasActive = false;
+
+    // Mode turned off via the action → cancel any pending learn so the surface
+    // returns to normal duty.
+    if (g_touchLearnOffRequest.exchange(false)) {
+        reasixty_hudCancelLearn();
+        reasixty_hudUf8CancelLearn();
+    }
+
+    const bool modeOn  = g_hudTouchLearn.load();
+    const int  uf8Armed = modeOn ? reasixty_hudUf8LearnArmed() : -1;
+    const int  uc1Armed = modeOn ? reasixty_hudLearnArmed()    : -1;
+    const bool active   = (uf8Armed >= 0) || (uc1Armed >= 0);
+
+    if (!active) {
+        if (wasActive) {
+            // Restore: invalidate the surface caches so the next normal render
+            // repaints the real rings / bars / faders / LEDs / readouts.
+            g_lastVPotBar.fill(0xFFFF);
+            g_lastVPotMode.fill(0xFF);
+            g_lastFaderPb.fill(0xFFFF);
+            g_bankDirty.store(true);
+            g_pageDirty.store(true);
+            g_softKeyDirty.store(true);
+            if (g_uc1_surface) g_uc1_surface->clearTouchLearnFeedback();
+            wasActive = false;
+        }
+        return;
+    }
+    wasActive = true;
+
+    constexpr double kTwoPi = 6.28318530717958647692;
+    const int64_t ms     = nowMs_();
+    const double  t      = static_cast<double>(ms);
+    const double  breath = 0.5 + 0.5 * std::sin(t * (kTwoPi / 1400.0));
+    const bool    blink  = ((ms / 350) & 1) != 0;
+
+    // ---- UF8 ----
+    if (uf8Armed >= 0 && g_dev) {
+        const int kind  = uf8Armed / 8;
+        const int strip = uf8Armed % 8;
+        if (strip >= 0 && strip < 8) {
+            if (kind == 0) {
+                // V-Pot ring: pulse the bar over the real values of the others.
+                // Force the armed strip's mode to unipolar so the bar shows even
+                // on an as-yet-unmapped control (else "no bar" hides the pulse).
+                auto mode = g_lastVPotMode;
+                if (mode[strip] != 0x01) {
+                    mode[strip] = 0x01;
+                    std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
+                    for (auto m : mode) mf.push_back(m);
+                    uint8_t cks = 0;
+                    for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
+                    mf.push_back(cks);
+                    g_dev->send(std::move(mf));
+                }
+                auto bar = g_lastVPotBar;
+                bar[strip] = vpotPosFromUnipolar(breath);
+                g_dev->send(uf8::buildVPotReadoutBar(bar));
+                g_dev->send(uf8::buildStripTextLower(
+                    static_cast<uint8_t>(strip), "Waiting"));
+            } else if (kind == 1) {
+                // Fader: oscillate ±6 dB around its current motor position.
+                const uint16_t curPb = g_lastFaderPb[strip];
+                const double   lin   = pbToLinearVolume(curPb);
+                double db = (lin > 0.0) ? 20.0 * std::log10(lin) : -60.0;
+                db += 6.0 * std::sin(t * (kTwoPi / 1100.0));
+                const uint16_t pb = linearVolumeToPb(std::pow(10.0, db / 20.0));
+                const uint8_t lsb = pb & 0x7F, msb = (pb >> 7) & 0x7F;
+                g_dev->send(uf8::buildFaderPosition(
+                    static_cast<uint8_t>(strip), lsb, msb));
+                g_dev->send(uf8::buildStripTextLower(
+                    static_cast<uint8_t>(strip), "Waiting"));
+            } else {
+                // Solo / Cut / Sel: blink the LED.
+                const uf8::LedClass cls = (kind == 2) ? uf8::LedClass::Solo
+                                        : (kind == 3) ? uf8::LedClass::Cut
+                                                      : uf8::LedClass::Sel;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(strip), cls, blink));
+            }
+        }
+    }
+
+    // ---- UC1 ----
+    if (uc1Armed >= 0 && g_uc1_surface) {
+        g_uc1_surface->touchLearnFeedback(breath, blink);
+    } else if (g_uc1_surface) {
+        // UF8-only arm while a previous UC1 feedback was up → clear it.
+        g_uc1_surface->clearTouchLearnFeedback();
+    }
+}
+
 void onTimer()
 {
     ++g_tickCounter;
@@ -15068,6 +15227,11 @@ void onTimer()
     if (g_focusedPanelToggleRequest.exchange(false)) {
         reasixty_setFocusedPanel(!g_focusedPanel.load());
     }
+
+    // Mirror "a GUI V-Pot learn/listen is armed" (HUD grid-click or FX-Learn
+    // page) into an atomic so the libusb input thread can turn a V-Pot PRESS
+    // into the Toggle flag instead of its normal push action (Frank 2026-06-20).
+    g_uf8VpotLearnArmed.store(reasixty_uf8VpotGuiLearnArmed());
 
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
@@ -15100,10 +15264,11 @@ void onTimer()
         }
     }
 
-    // Learn-HUD interactivity (only while the HUD is on → zero cost off).
-    // Command channel Lua → extension via ExtState "hud_cmd"; learn-poll binds
-    // the wiggled param to the armed control on the active modifier layer.
-    if (g_hudEnabled.load()) {
+    // Learn-HUD interactivity (only while the HUD is on → zero cost off) AND/OR
+    // standalone Touch-to-Learn (the bindable action runs the arm/bind + the
+    // hardware feedback without the HUD — Frank 2026-06-20). publishHud_ +
+    // the hud_cmd drain self-gate on g_hudEnabled, so they stay HUD-only.
+    if (g_hudEnabled.load() || g_hudTouchLearn.load()) {
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
         if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))
             g_hudTouchLearn.store(tl[0] == '1');
@@ -15373,6 +15538,9 @@ void onTimer()
                                               0, uf8::kUserUf8FaderBankCount - 1);
                     const int vb = std::clamp(g_softKeyBank.load(),
                                               0, uf8::kUserUf8VpotBankCount - 1);
+                    // Fresh GUI grid-click arm → default to continuous (Value);
+                    // a subsequent HW V-Pot PRESS flags Toggle (Frank 2026-06-20).
+                    g_uf8HwLearnAsToggle.store(false);
                     if (mp) {
                         reasixty_hudUf8ArmLearn(kind, strip, fb, vb, tr, fx, false);
                     } else {
@@ -16318,6 +16486,10 @@ void onTimer()
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
+
+    // Touch-to-Learn hardware feedback — after the normal surface render so it
+    // overrides only the armed control (self-gates on g_hudTouchLearn).
+    pushTouchLearnFeedback_();
 
     // Insert-list active-instance marker upkeep. On project switch, strip
     // any stale markers carried in the freshly-loaded project, then apply
@@ -17379,7 +17551,21 @@ void reasixty_setAssignmentHud(bool on)
 // thread). Active only while the HUD is on AND the mode toggle is set.
 bool reasixty_hudTouchLearnActive()
 {
-    return g_hudEnabled.load() && g_hudTouchLearn.load();
+    // Standalone (Frank 2026-06-20): Touch-to-Learn no longer requires the
+    // on-screen HUD — the bindable touch_to_learn_toggle action drives it from
+    // the surface alone. Just the mode flag gates the touch-arm now.
+    return g_hudTouchLearn.load();
+}
+// True when the pending V-Pot learn should bind as a Toggle (set by a V-Pot
+// PRESS during learn; cleared by a TURN / fresh GUI arm). Read by the bind
+// paths on the main thread. Frank 2026-06-20.
+bool reasixty_uf8LearnAsToggle()
+{
+    return g_uf8HwLearnAsToggle.load();
+}
+void reasixty_setUf8LearnAsToggle(bool v)
+{
+    g_uf8HwLearnAsToggle.store(v);
 }
 void reasixty_hudHwLearnRequest(int linkIdx, int domain)
 {
@@ -20225,6 +20411,24 @@ void registerBindingHandlers()
         },
         [](int) -> bool { return g_hudEnabled.load(); },
         "Learn-HUD: show / hide (focused plug-in assignments)", false
+    });
+
+    // Touch-to-Learn (standalone, no HUD needed): arm → touch a surface control
+    // (its feedback "breathes"/blinks, fader wiggles ±6 dB, V-Pot shows
+    // "Waiting") → wiggle a plug-in param to bind → waits for the next control;
+    // toggling again disarms. Just flips the mode flag + ExtState (so the HUD
+    // menu stays in sync); the arm/bind/feedback run in onTimer. SetExtState is
+    // safe on the input thread (not a track/FX API) — see pan_force.
+    registerBuiltin("touch_to_learn_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_hudTouchLearn.load();
+            g_hudTouchLearn.store(next);
+            SetExtState("rea_sixty", "hud_touch_learn", next ? "1" : "0", false);
+            if (!next) g_touchLearnOffRequest.store(true);   // cancel + clear FX
+        },
+        [](int) -> bool { return g_hudTouchLearn.load(); },
+        "Touch-to-Learn: arm / disarm (touch a control, wiggle a param)", false
     });
 
     registerBuiltin("focused_panel_toggle", DescBuilder{

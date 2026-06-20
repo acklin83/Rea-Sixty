@@ -31,6 +31,10 @@
 // runtime state. Called only from the main thread (via onTimer → ImGui).
 bool reasixty_uf8Connected();
 bool reasixty_uc1Connected();
+// True when a V-Pot PRESS during learn flagged the pending bind as Toggle
+// (defined in main.cpp; read by the UF8 bind paths). Frank 2026-06-20.
+bool reasixty_uf8LearnAsToggle();
+void reasixty_setUf8LearnAsToggle(bool v);
 const char* reasixty_uf8Serial();
 const char* reasixty_uc1Serial();
 // REAPER Action picker — Settings → Bindings editor uses these to drive
@@ -2757,6 +2761,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n.rfind("uf8_plugin_mode_", 0) == 0
                  || n == "uc1_outgain_fader_toggle"
                  || n == "learn_hud_toggle"
+                 || n == "touch_to_learn_toggle"
                  || n == "focused_panel_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
@@ -6758,12 +6763,18 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
 {
     return uf8EditFieldVals_(kind, strip, bank).param;
 }
-void bindUf8_(int kind, int strip, int bank, int vst3Param)
+void bindUf8_(int kind, int strip, int bank, int vst3Param, bool asToggle = false)
 {
     if (vst3Param < 0) return;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
         if (p.param) *p.param = vst3Param;
+        // V-Pot PRESS during learn → Toggle (push flips 0↔1). Settings kind
+        // encoding: 1 = VPot, 2 = TopSoftKey (both bank-scoped) — matches
+        // unbindUf8_. p.param being set means the indices are validated.
+        if (asToggle && p.param && (kind == 1 || kind == 2))
+            u.banks.banks[g_uf8EditingFaderBank][bank][strip].vpotMode
+                = uf8::VPotMode::Toggle;
     });
 }
 
@@ -6791,8 +6802,20 @@ void unbindUf8_(int kind, int strip, int bank)
 int fillSequentialUf8_(int kind, int strip, int bank,
                        int curParam, const EditingFx& fx)
 {
-    if (curParam < 0 || strip < 0 || strip >= 7) return 0;
+    if (curParam < 0 || strip < 0 || strip > 7) return 0;
     if (g_editingMatch.empty()) return 0;
+
+    // Fill overflows past strip 7 onto the NEXT FADER bank: with 8 strips per
+    // fader bank and kUserUf8FaderBankCount banks, params 9-16 land on Fader
+    // Bank 2, etc. EVERY control kind (Fader / V-Pot / Solo / Cut / Sel) shares
+    // this fader-bank dimension (strips[faderBank][…] / banks[faderBank][…]),
+    // so all overflow the same way (Frank 2026-06-20 — V-Pots are NOT special;
+    // an earlier cut wrongly overflowed the V-Pot soft-key layer instead). For
+    // V-Pots the V-Pot layer (`bank`) stays fixed; only the fader bank advances.
+    // srcGlobal/lastGlobal flatten (faderBank, strip).
+    const int srcGlobal  = g_uf8EditingFaderBank * 8 + strip;
+    const int lastGlobal = uf8::kUserUf8FaderBankCount * 8 - 1;
+    if (srcGlobal >= lastGlobal) return 0;   // no strip right / no later fader bank
 
     auto cat = uf8::user_plugins::get();
     UserPluginMap* editing = nullptr;
@@ -6865,8 +6888,10 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     }
 
     int filled = 0;
-    for (int s = strip + 1; s < 8; ++s) {
-        const int targetNum = curNum + (s - strip);
+    for (int g = srcGlobal + 1; g <= lastGlobal; ++g) {
+        const int targetNum = curNum + (g - srcGlobal);
+        const int curFb     = g / 8;   // fader bank the overflow position lands on
+        const int s         = g % 8;   // strip within that fader bank
         char numBuf[16];
         snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
         const std::string target = prefix + numBuf + suffix;
@@ -6882,27 +6907,27 @@ int fillSequentialUf8_(int kind, int strip, int bank,
         auto& u = editing->uf8;
         switch (kind) {
             case 0:
-                u.strips[g_uf8EditingFaderBank][s].faderVst3Param = found;
-                u.strips[g_uf8EditingFaderBank][s].faderInverted  = srcFaderInverted;
+                u.strips[curFb][s].faderVst3Param = found;
+                u.strips[curFb][s].faderInverted  = srcFaderInverted;
                 break;
             case 3:
-                u.strips[g_uf8EditingFaderBank][s].soloVst3Param  = found;
-                u.strips[g_uf8EditingFaderBank][s].soloColour     = srcSoloColour;
-                u.strips[g_uf8EditingFaderBank][s].soloInvert     = srcSoloInvert;
+                u.strips[curFb][s].soloVst3Param  = found;
+                u.strips[curFb][s].soloColour     = srcSoloColour;
+                u.strips[curFb][s].soloInvert     = srcSoloInvert;
                 break;
             case 4:
-                u.strips[g_uf8EditingFaderBank][s].cutVst3Param   = found;
-                u.strips[g_uf8EditingFaderBank][s].cutColour      = srcCutColour;
-                u.strips[g_uf8EditingFaderBank][s].cutInvert      = srcCutInvert;
+                u.strips[curFb][s].cutVst3Param   = found;
+                u.strips[curFb][s].cutColour      = srcCutColour;
+                u.strips[curFb][s].cutInvert      = srcCutInvert;
                 break;
             case 5:
-                u.strips[g_uf8EditingFaderBank][s].selVst3Param   = found;
-                u.strips[g_uf8EditingFaderBank][s].selColour      = srcSelColour;
-                u.strips[g_uf8EditingFaderBank][s].selInvert      = srcSelInvert;
+                u.strips[curFb][s].selVst3Param   = found;
+                u.strips[curFb][s].selColour      = srcSelColour;
+                u.strips[curFb][s].selInvert      = srcSelInvert;
                 break;
             case 1:
             case 2: {
-                auto& bs = u.banks.banks[g_uf8EditingFaderBank][bank][s];
+                auto& bs = u.banks.banks[curFb][bank][s];
                 bs.vst3Param   = found;
                 bs.inverted    = srcVpotInverted;
                 bs.vpotMode    = srcVpotMode;
@@ -7950,7 +7975,7 @@ static bool hudUf8ResolveMatch_(void* trV, int fx, std::string& outMatch)
 // Write vst3Param onto the (kind, fb, vb, strip) field of the user map `match`.
 // upsert + save so the binding sticks + the runtime cache reloads. Apply=true.
 bool hudUf8BindMatch_(const std::string& match, int kind, int fb, int vb,
-                      int strip, int vst3Param)
+                      int strip, int vst3Param, bool asToggle = false)
 {
     if (match.empty() || vst3Param < 0) return false;
     auto cat = uf8::user_plugins::get();   // copy
@@ -7960,6 +7985,10 @@ bool hudUf8BindMatch_(const std::string& match, int kind, int fb, int vb,
         if (!p.param) return false;
         *p.param = vst3Param;
         if (p.invert) *p.invert = false;
+        // V-Pot PRESS during learn → bind as Toggle (push flips 0↔1). kind 0 is
+        // the HUD V-Pot encoding; indices are already validated by p.param.
+        if (kind == 0 && asToggle)
+            m.uf8.banks.banks[fb][vb][strip].vpotMode = uf8::VPotMode::Toggle;
         uf8::user_plugins::upsert(m);
         uf8::user_plugins::save();
         return true;
@@ -8009,7 +8038,7 @@ void hudUf8ArmLearn_(int kind, int strip, int fb, int vb, void* trV, int fx,
 // the param onto the cell, upsert + save. Mirrors hudLearnCreateAndBind_ (CS/BC)
 // but writes the UserUf8Map field instead of a Link slot.
 bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
-                          int strip, int vst3Param)
+                          int strip, int vst3Param, bool asToggle = false)
 {
     if (!tr || fx < 0 || vst3Param < 0) return false;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
@@ -8020,7 +8049,7 @@ bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
     // Race / double-fire: a map for this plug-in already exists → just bind.
     for (const auto& ex : user_plugins::get().maps)
         if (ex.match == match)
-            return hudUf8BindMatch_(match, kind, fb, vb, strip, vst3Param);
+            return hudUf8BindMatch_(match, kind, fb, vb, strip, vst3Param, asToggle);
 
     UserPluginMap m;
     m.match        = match;
@@ -8055,6 +8084,9 @@ bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
     if (!fp.param) return false;
     *fp.param = vst3Param;
     if (fp.invert) *fp.invert = false;
+    // V-Pot PRESS during learn → Toggle (HUD V-Pot encoding = kind 0).
+    if (kind == 0 && asToggle)
+        m.uf8.banks.banks[fb][vb][strip].vpotMode = uf8::VPotMode::Toggle;
 
     user_plugins::upsert(std::move(m));
     user_plugins::save();
@@ -8095,9 +8127,10 @@ bool hudUf8LearnTick_()
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
     // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
     // fresh UF8-only map for it, no match filter.
+    const bool asToggle = reasixty_uf8LearnAsToggle();
     if (g_hudUf8LearnCreate) {
         if (hudUf8CreateAndBind_(tr, f, g_hudUf8LearnKind, g_hudUf8LearnFb,
-                                 g_hudUf8LearnVb, g_hudUf8LearnStrip, p)) {
+                                 g_hudUf8LearnVb, g_hudUf8LearnStrip, p, asToggle)) {
             hudUf8CancelLearn_();
             return true;
         }
@@ -8105,7 +8138,7 @@ bool hudUf8LearnTick_()
     }
     if (std::string(name).find(g_hudUf8LearnMatch) == std::string::npos) return false;
     if (hudUf8BindMatch_(g_hudUf8LearnMatch, g_hudUf8LearnKind, g_hudUf8LearnFb,
-                         g_hudUf8LearnVb, g_hudUf8LearnStrip, p)) {
+                         g_hudUf8LearnVb, g_hudUf8LearnStrip, p, asToggle)) {
         hudUf8CancelLearn_();
         return true;
     }
@@ -8279,10 +8312,18 @@ bool hudUf8FillStripColours_(uint32_t rgb, int fb, int vb, void* trV, int fx)
 int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trV);
-    if (!tr || fx < 0 || strip < 0 || strip >= 7) return 0;
+    if (!tr || fx < 0 || strip < 0 || strip > 7) return 0;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
     std::string match;
     if (!hudUf8ResolveMatch_(trV, fx, match)) return 0;
+
+    // Fill overflows past strip 7 onto the NEXT FADER bank (params 9-16 → fader
+    // bank 2, …), mirroring Settings fillSequentialUf8_. EVERY kind shares the
+    // fader-bank dimension; for V-Pots the V-Pot layer (vb) stays fixed and only
+    // the fader bank advances. srcGlobal/lastGlobal flatten (faderBank, strip).
+    const int srcGlobal  = fb * 8 + strip;
+    const int lastGlobal = uf8::kUserUf8FaderBankCount * 8 - 1;
+    if (srcGlobal >= lastGlobal) return 0;
 
     int curParam = -1;
     bool srcInv = false;
@@ -8325,8 +8366,10 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
 
     int  filled = 0;
     char nm[256];
-    for (int s = strip + 1; s < 8; ++s) {
-        const int targetNum = curNum + (s - strip);
+    for (int g = srcGlobal + 1; g <= lastGlobal; ++g) {
+        const int targetNum = curNum + (g - srcGlobal);
+        const int curFb     = g / 8;   // fader bank the overflow lands on
+        const int s         = g % 8;   // strip within that fader bank
         char numBuf[16];
         snprintf(numBuf, sizeof(numBuf), "%0*d", width, targetNum);
         const std::string target = prefix + numBuf + suffix;
@@ -8334,7 +8377,7 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
         for (int p = 0; p < total; ++p)
             if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) && target == nm) { found = p; break; }
         if (found < 0) continue;
-        auto dp = uf8HudFieldPtrs_(editing->uf8, kind, fb, vb, s);
+        auto dp = uf8HudFieldPtrs_(editing->uf8, kind, curFb, vb, s);
         if (dp.param) { *dp.param = found; if (dp.invert) *dp.invert = srcInv; ++filled; }
     }
     if (filled > 0) {
@@ -10683,8 +10726,11 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
 
             if (isMapped) {
                 // Fill sequential (right) — same heuristic as V-Pot:
-                // the bound param's name must carry a digit run.
-                if (ctrl.strip < 7) {
+                // the bound param's name must carry a digit run. Offered while
+                // there's a position to the right OR a later fader bank to
+                // overflow into (Frank 2026-06-20).
+                if (g_uf8EditingFaderBank * 8 + ctrl.strip
+                        < uf8::kUserUf8FaderBankCount * 8 - 1) {
                     const UserPluginMap* editing = nullptr;
                     for (const auto& m : uf8::user_plugins::get().maps) {
                         if (m.match == g_editingMatch) { editing = &m; break; }
@@ -10758,6 +10804,9 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             g_listeningUf8.strip = ctrl.strip;
             g_listeningUf8.bank  = bank;
             g_listeningLinkIdx   = -1;   // mutually exclusive with UC1 listen
+            // Fresh GUI listen → default continuous; a HW V-Pot PRESS while this
+            // slot listens flags the bind Toggle instead (Frank 2026-06-20).
+            reasixty_setUf8LearnAsToggle(false);
         }
     }
 
@@ -11294,8 +11343,11 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // derived from the current mapping's name (e.g. "CH1 Volume"
             // → "CH2 Volume"..."CH8 Volume"). Only shown when the mapped
             // param has a digit run and this isn't already the last strip.
-            // Nav buttons (Bank L/R) are global — no per-strip fill.
-            if (!isNav && ctrl.strip < 7) {
+            // Nav buttons (Bank L/R) are global — no per-strip fill. Offered
+            // while a position to the right OR a later fader bank exists to
+            // overflow into (Frank 2026-06-20).
+            if (!isNav && g_uf8EditingFaderBank * 8 + ctrl.strip
+                              < uf8::kUserUf8FaderBankCount * 8 - 1) {
                 const UserPluginMap* editing = nullptr;
                 for (const auto& m : uf8::user_plugins::get().maps) {
                     if (m.match == g_editingMatch) { editing = &m; break; }
@@ -13362,7 +13414,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     {
                         bindUf8_(g_listeningUf8.kind,
                                  g_listeningUf8.strip,
-                                 g_listeningUf8.bank, p);
+                                 g_listeningUf8.bank, p,
+                                 reasixty_uf8LearnAsToggle());
                         g_listeningUf8.clear();
                     }
                 }
@@ -13831,7 +13884,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     } else if (g_listeningUf8.active()) {
                         bindUf8_(g_listeningUf8.kind,
                                  g_listeningUf8.strip,
-                                 g_listeningUf8.bank, p);
+                                 g_listeningUf8.bank, p,
+                                 reasixty_uf8LearnAsToggle());
                         g_listeningUf8.clear();
                     }
                 }
@@ -15850,6 +15904,18 @@ void reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr,
 }
 bool reasixty_hudUf8LearnTick()   { return uf8::hudUf8LearnTick_(); }
 int  reasixty_hudUf8LearnArmed()  { return uf8::hudUf8LearnArmed_(); }
+bool reasixty_uf8VpotGuiLearnArmed()
+{
+    // HUD grid-click learn armed on a V-Pot cell (HUD kind 0), or the FX-Learn
+    // page's listen slot waiting on a V-Pot (Uf8Control::VPot). Touch-to-Learn
+    // also flips g_hudUf8LearnActive, but its press path arms directly so
+    // reporting true here is harmless (the input thread checks the arm first).
+    if (uf8::g_hudUf8LearnActive && uf8::g_hudUf8LearnKind == 0) return true;
+    if (uf8::g_listeningUf8.active()
+        && uf8::g_listeningUf8.kind == static_cast<int>(uf8::Uf8Control::VPot))
+        return true;
+    return false;
+}
 void reasixty_hudUf8CancelLearn() { uf8::hudUf8CancelLearn_(); }
 bool reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx)
 {

@@ -860,6 +860,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/false);
         if (linkIdx >= 0) {
             reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+            // Remember the touched encoder so poll() can breathe its ring +
+            // show "Waiting" while we wait for the plug-in wiggle.
+            tlKnob_ = ev.id; tlBtn_ = -1; tlDom_ = busComp ? 1 : 0;
             return;
         }
     }
@@ -1918,7 +1921,11 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         const bool busComp = (classifyButton(ev.id) == ControlDomain::BusComp);
         const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/true);
         if (linkIdx >= 0) {
-            if (ev.pressed) reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+            if (ev.pressed) {
+                reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+                // Remember the touched button so poll() can blink its LED.
+                tlBtn_ = ev.id; tlKnob_ = -1; tlDom_ = busComp ? 1 : 0;
+            }
             return;
         }
     }
@@ -3645,6 +3652,58 @@ void UC1Surface::clearKnobRing_(uint8_t knobId)
         device_->send(make(0x01, cell, b5, 0x00));
         device_->send(make(0x02, cell, b5, 0x00));
     }
+}
+
+// Touch-to-Learn feedback for the armed UC1 control. Ring cells are written
+// RAW (bypassing ringCellCache_) so poll()'s normal ring push stays quiet while
+// armed; clearTouchLearnFeedback() invalidates the caches on disarm so the real
+// rings/LEDs/readout repaint. Frank 2026-06-20.
+void UC1Surface::touchLearnFeedback(double breath01, bool blink)
+{
+    if (!device_) return;
+    tlFxActive_ = true;
+    if (tlKnob_ >= 0) {
+        if (const RingDef* def = ringFor(static_cast<uint8_t>(tlKnob_))) {
+            if (breath01 < 0.0) breath01 = 0.0;
+            if (breath01 > 1.0) breath01 = 1.0;
+            // Pulse all cells 0x18..0xFF — never fully dark, so it reads as a
+            // breathing glow rather than a flash.
+            const uint8_t br = static_cast<uint8_t>(
+                0x18 + breath01 * (0xFF - 0x18));
+            const uint8_t b5d = (static_cast<uint8_t>(tlKnob_) == knob::kBCMix
+                || static_cast<uint8_t>(tlKnob_) == knob::kCSFaderLevel
+                || (tlKnob_ >= 0x17 && tlKnob_ <= 0x1D)) ? 0x01 : 0x00;
+            auto make = [](uint8_t bank, uint8_t cell, uint8_t b5, uint8_t st) {
+                std::vector<uint8_t> f{0xFF, 0x13, 0x04, bank, cell, b5, st};
+                uint32_t sum = 0;
+                for (size_t k = 1; k < f.size(); ++k) sum += f[k];
+                f.push_back(static_cast<uint8_t>(sum & 0xFF));
+                return f;
+            };
+            for (int i = 0; i < def->nCells; ++i) {
+                const uint8_t cell = def->cells[i];
+                const uint8_t b5 = def->b5Override ? def->b5Override[i] : b5d;
+                device_->send(make(0x01, cell, b5, 0x01));
+                device_->send(make(0x02, cell, b5, br));
+            }
+        }
+    }
+    if (tlBtn_ >= 0) {
+        // Reuse pushButtonLed_'s tested per-button encoding (self-restoring via
+        // its own cache once the blink stops + poll repaints).
+        pushButtonLed_(static_cast<uint8_t>(tlBtn_),
+                       blink ? LedState::On : LedState::Off);
+    }
+    // "Waiting" on the armed control's section readout (CS zone 0x03 / BC 0x05).
+    device_->send(buildDisplayText(tlDom_ == 1 ? 0x05 : 0x03, "Waiting", 22));
+}
+
+void UC1Surface::clearTouchLearnFeedback()
+{
+    tlKnob_ = -1; tlBtn_ = -1;
+    if (!tlFxActive_) return;
+    tlFxActive_ = false;
+    invalidateCache();   // poll() repaints the real rings / LEDs / readout
 }
 
 void UC1Surface::pushButtonLed_(uint8_t buttonId, LedState state)

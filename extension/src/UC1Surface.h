@@ -223,6 +223,20 @@ private:
         pushButtonLed_(buttonId, on ? LedState::On : LedState::Off);
     }
 
+public:
+    // Touch-to-Learn hardware feedback (Frank 2026-06-20). When a knob/button
+    // is touch-armed, drive its ring "breathing" / LED blink + a "Waiting"
+    // readout while we wait for the plug-in wiggle. `breath01` ∈ [0,1] (ring
+    // brightness), `blink` = button on/off phase. Call each poll while armed;
+    // call clearTouchLearnFeedback() once on disarm to restore normal LEDs.
+    void touchLearnFeedback(double breath01, bool blink);
+    void clearTouchLearnFeedback();
+private:
+    int  tlKnob_ = -1;   // touch-armed encoder id (-1 = none)
+    int  tlBtn_  = -1;   // touch-armed button id  (-1 = none)
+    int  tlDom_  = 0;    // 0 = Channel Strip, 1 = Bus Comp (readout zone)
+    bool tlFxActive_ = false;  // feedback currently painted
+
     // Push a "<label>   <value>" readout to the section LCD after a
     // button toggle, mirroring SSL 360°'s zone-0x03/0x05 transient
     // text. The manual lists this as the "currently selected param
