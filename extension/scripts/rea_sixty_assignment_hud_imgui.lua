@@ -340,6 +340,25 @@ local function readFeel()
   return arr
 end
 
+-- CS-Switch favourites for the CS-Favourite submenu. Line 0 = "<cur>;<hasCs>"
+-- (cur = the slot the focused track's active CS occupies, -1 none; hasCs = 1
+-- when there is an active CS to assign). Lines 1..8 = "<i>;<used>;<label>".
+local function readCsFav()
+  local raw = reaper.GetExtState(SECT, "hud_cs_fav")
+  local cur, hasCs, slots, first = -1, false, {}, true
+  for line in raw:gmatch("[^\n]+") do
+    if first then
+      local c, h = line:match("^(%-?%d+);(%d)$")
+      if c then cur, hasCs = tonumber(c), (h == "1") end
+      first = false
+    else
+      local i, used, label = line:match("^(%d+);(%d);(.*)$")
+      if i then slots[tonumber(i)] = { used = (used == "1"), label = label or "" } end
+    end
+  end
+  return cur, hasCs, slots
+end
+
 -- Per-V-Pot tuning detail for the UF8 tab's full-parity menu. One line per
 -- mapped V-Pot on the live banks:
 --   strip;pol;rmin;rmax;sens;dn;stepped;nsteps;vpotMode;t0:v0,…
@@ -1837,6 +1856,31 @@ local function drawContextMenu()
       reaper.SetExtState(SECT, "hud_text_white", "1", true)
     end
     reaper.ImGui_EndMenu(ctx)
+  end
+
+  -- CS-Switch favourites — assign the focused track's active Channel Strip to
+  -- one of the 8 favourite slots the "Switch to CS N" / "CS Cycle" actions step
+  -- through. Greyed out when no CS is focused; one plug-in occupies one slot, so
+  -- picking a used slot rewrites it to the active CS. The plug-in name shows
+  -- next to each taken number. Frank 2026-06-20.
+  do
+    local cur, hasCs, slots = readCsFav()
+    if reaper.ImGui_BeginMenu(ctx, "CS Favourite", hasCs) then
+      if reaper.ImGui_MenuItem(ctx, "None", nil, cur < 0) then
+        sendCmd("csfav;-1")
+      end
+      reaper.ImGui_Separator(ctx)
+      for i = 0, 7 do
+        local s = slots[i] or { used = false, label = "" }
+        local lbl = s.used
+          and string.format("%d  \xE2\x80\x94  %s", i + 1, s.label)
+          or  string.format("%d  \xE2\x80\x94  (empty)", i + 1)
+        if reaper.ImGui_MenuItem(ctx, lbl .. "##csfav" .. i, nil, cur == i) then
+          sendCmd("csfav;" .. i)
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
   end
 
   reaper.ImGui_Separator(ctx)

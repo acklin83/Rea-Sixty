@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -168,6 +169,15 @@ int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 // reasixty_* helpers; the file-scope linkage means SettingsScreen.cpp can
 // also call reasixty_actionPickerStart / Cancel / etc.
 void reasixty_actionPickerPoll();
+
+// CS-Switch favourites public API — defined further down at file scope (next to
+// the other reasixty_ getters). Declared here, BEFORE the anonymous namespace,
+// so the CS-Switch actions inside it resolve to the external-linkage versions
+// (and so SettingsScreen.cpp / the Learn-HUD bridge can call them too).
+bool reasixty_csFav(int slot, std::string& addName, std::string& label);
+int  reasixty_csFavSlotOf(const char* addName);
+void reasixty_setCsFav(int slot, const char* addName, const char* label);
+void reasixty_clearCsFavByName(const char* addName);
 
 // Quick-Learn sweep entry point. Defined in SettingsScreen.cpp; called from
 // the main-thread drain after the Settings window is opened to FX Learn.
@@ -1120,6 +1130,18 @@ std::atomic<bool> g_pendingFollowSelectedAfterRebuild{false};
 std::atomic<int>  g_selsetActivateRequest{0};
 std::atomic<int>  g_selsetSaveRequest{0};
 
+// CS-Switch requests — the switch builtins fire from the UF8/UC1 input thread
+// (onUf8Input → bindings::dispatch), but TrackFX_AddByName auto-floats the new
+// plug-in's config window and creating that NSWindow off the main thread aborts
+// (see feedback-reaper-api-input-thread). So the builtins only POST here; the
+// main-thread onTimer drain runs the actual swap. Frank 2026-06-20.
+//   switch req: 0..7 = favourite slot to switch to, -1 = none
+//   cycle  req: accumulated signed detents (0 = none)
+std::atomic<int>  g_csSwitchReq{-1};
+std::atomic<int>  g_csCycleReq{0};
+static void applyCsSwitch_(int slot);   // defined with the CS-Switch block
+static void applyCsCycle_(int step);
+
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
     const bool selOnly    = g_showOnlySelected.load();
@@ -1718,6 +1740,12 @@ void drainSelsets_() {
     }
     const int saveReq = g_selsetSaveRequest.exchange(0);
     if (saveReq >= 1 && saveReq <= 8) saveCurrentSelectionToSlot_(saveReq);
+    // CS-Switch: run the posted swap on the main thread (TrackFX_AddByName
+    // floats a window → must not run on the input thread).
+    if (const int csSlot = g_csSwitchReq.exchange(-1); csSlot >= 0)
+        applyCsSwitch_(csSlot);
+    if (const int csSteps = g_csCycleReq.exchange(0); csSteps != 0)
+        applyCsCycle_(csSteps);
     const int actReq = g_selsetActivateRequest.exchange(0);
     // Capture the previously-active slot BEFORE mutating g_selsetActive
     // so the auto-mode revert can walk its tracks (Frank 2026-05-17:
@@ -2054,6 +2082,41 @@ std::atomic<bool> g_insertLegacyRename{false};
 // Auto-start the companion overlay/panel on the first main-thread tick after
 // load when either feature was persisted on — so it comes back with REAPER.
 std::atomic<bool> g_overlayAutoStartDone{false};
+
+// CS-Switch favourites (2026-06-20): up to 8 Channel-Strip plug-in identities
+// the user can jump to ("Switch to CS N") or cycle through ("CS Cycle"). Each
+// switch REPLACES the track's active CS instance with the favourite, carrying
+// over the values of params that share a surface control (matched by linkIdx).
+//   addName = TrackFX_AddByName string — the fxIdentityName / user-map match,
+//             the same string the FX-Learn editor feeds to TrackFX_AddByName.
+//   label   = display name for the Settings + Learn-HUD dropdowns.
+// One plug-in occupies at most one slot (assigning steals it from any other).
+// Persisted globally (survives restart, all projects) as "cs_favourites2" — ONE
+// line, tab-separated add<TAB>label pairs by slot position. NO newline: the
+// reaper-extstate.ini is line-based, so an embedded '\n' only round-trips the
+// first slot (the "forgets favourites" bug). Old "cs_favourites" key abandoned.
+// Touched only on the main thread (Settings UI + the onTimer-drained switch);
+// the mutex guards against a stray Learn-HUD read while the UI rewrites a slot.
+struct CsFav { std::string addName; std::string label; };
+std::array<CsFav, 8> g_csFav;
+std::mutex           g_csFavMutex;
+
+static void saveCsFavourites_locked_()
+{
+    // SINGLE LINE — persistent ExtState lands in the line-based
+    // reaper-extstate.ini, so an embedded '\n' breaks the round-trip and only
+    // the first slot survives a restart (was the "forgets favourites" bug). All
+    // 8 slots are written by position as tab-separated add\tlabel pairs (16
+    // fields + trailing tab); plug-in names never contain a tab or newline.
+    std::string out;
+    for (int i = 0; i < 8; ++i) {
+        out += g_csFav[i].addName;   // empty for unset slots
+        out += '\t';
+        out += g_csFav[i].label;
+        out += '\t';
+    }
+    SetExtState("rea_sixty", "cs_favourites2", out.c_str(), true);
+}
 
 // Learn-HUD: a ReaImGui place-anywhere companion that draws the focused
 // plug-in's UC1 surface mockup (SSL-style face) with mapped controls ringed +
@@ -2400,6 +2463,31 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uf8"); v && *v) {
         g_grCombineUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "cs_favourites2"); v && *v) {
+        std::lock_guard<std::mutex> lk(g_csFavMutex);
+        for (auto& f : g_csFav) { f.addName.clear(); f.label.clear(); }
+        // Single-line format: tab-separated add\tlabel pairs by slot position.
+        // (A leading-digit-then-tab field = the pre-fix newline format; ignore
+        // it so the stale entry doesn't load as garbage — the user re-sets once.)
+        std::string s(v);
+        if (s.find('\n') == std::string::npos) {
+            std::vector<std::string> fields;
+            size_t pos = 0;
+            for (;;) {
+                const size_t t = s.find('\t', pos);
+                if (t == std::string::npos) { fields.push_back(s.substr(pos)); break; }
+                fields.push_back(s.substr(pos, t - pos));
+                pos = t + 1;
+            }
+            for (int i = 0; i < 8; ++i) {
+                const size_t a = static_cast<size_t>(2 * i);
+                const size_t l = a + 1;
+                if (l >= fields.size()) break;
+                g_csFav[i].addName = fields[a];
+                g_csFav[i].label   = fields[l];
+            }
+        }
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uc1"); v && *v) {
         g_grCombineUc1.store(std::atoi(v) != 0);
@@ -3018,6 +3106,10 @@ enum class EncoderMode : uint8_t {
     // Rotate to move the active FX up / down within the focused track's
     // chain (within-chain only; hard-stop at the ends). Frank 2026-06-12.
     FxMove,
+    // Step through the CS-Switch favourites, replacing the active Channel
+    // Strip with the next/previous favourite (carries shared-control values).
+    // Frank 2026-06-20.
+    CsCycle,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
@@ -4832,6 +4924,435 @@ void applyFxMove_(int step)
     showCycleCarousel_(t.tr, k, ring);
 }
 
+// ===================== CS-Switch (2026-06-20) =========================
+// Favourite Channel-Strip swapping. switchCsTo_ replaces a track's active CS
+// instance with a favourite plug-in, carrying over the values of params that
+// sit on a shared surface control. "Shared control" = the SSL-Link slot
+// (linkIdx) a UC1 knob/button drives: hudParamForControl resolves that slot to
+// each plug-in's own VST3 param, so values transfer by musical function
+// (LowPass→LowPass, CompThr→CompThr), not by raw param index. Continuous params
+// transfer by ENGINEERING value (transferParamValue_ reads the src's formatted
+// value and binary-searches the dst's normalised range to match) so the result
+// is correct even when the two plug-ins use different param ranges; buttons /
+// toggles copy raw normalised 0/1. Only UC1-reachable Link slots transfer —
+// per-map ext:: synthetics aren't in kCsLinkToUc1, so hudParamForControl skips
+// them automatically.
+//
+// All of this is main-thread only (TrackFX_* API) — invoked from the builtin
+// dispatch exactly like applyInstanceCycle_ / applyFxMove_.
+
+// Favourite slot (0..7) whose plug-in resolves to the same CS map as `addName`,
+// or -1. Pointer-compares the resolved bindings so a full instance name and a
+// user-map substring still recognise the same plug-in.
+static int csFavSlotForName_(const char* addName)
+{
+    if (!addName || !*addName) return -1;
+    const uc1::PluginBindings* want = uc1::lookupBindingsByName(addName);
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (!reasixty_csFav(i, a, l)) continue;
+        if (a == addName) return i;                              // fast exact
+        if (want && uc1::lookupBindingsByName(a) == want) return i;   // same plug-in
+    }
+    return -1;
+}
+
+// A parsed "<number><unit>" formatted param value, normalised to a base unit so
+// values from differently-formatting plug-ins compare directly: Hz (kHz→Hz),
+// dB, ms (s→ms, µs→ms), Ratio (N:1→N), % , semitone, degree, or a bare number
+// (Q etc.). `dim` lets the transfer refuse a cross-dimension match (dB↔Hz).
+enum class CsUnit { None, Hz, Db, Ms, Ratio, Pct, St, Deg };
+struct CsUnitVal { bool ok = false; double base = 0.0; CsUnit dim = CsUnit::None; };
+
+static CsUnitVal parseUnitValue_(const char* s)
+{
+    CsUnitVal r;
+    if (!s) return r;
+    while (*s == ' ' || *s == '\t') ++s;
+    // Copy the leading numeric token, DROPPING thousands-separator commas
+    // ("8,000 Hz" → 8000) which strtod would otherwise stop at (giving 8).
+    char num[48]; int n = 0;
+    const char* p = s;
+    if (*p == '+' || *p == '-') num[n++] = *p++;
+    bool anyDigit = false;
+    while (*p && n < 46 && ((*p >= '0' && *p <= '9') || *p == '.' || *p == ',')) {
+        if (*p != ',') { num[n] = *p; if (*p >= '0' && *p <= '9') anyDigit = true; ++n; }
+        ++p;
+    }
+    if ((*p == 'e' || *p == 'E') && n < 44) {            // scientific notation
+        num[n++] = *p++;
+        if ((*p == '+' || *p == '-') && n < 46) num[n++] = *p++;
+        while (*p >= '0' && *p <= '9' && n < 46) num[n++] = *p++;
+    }
+    num[n] = 0;
+    if (!anyDigit) return r;                   // no number → discrete/text
+    const double v = std::strtod(num, nullptr);
+    const char* u = p;                         // unit token in the ORIGINAL string
+    while (*u == ' ' || *u == '\t') ++u;
+    // "N:1" ratio — divide by the denominator so "4:1" and "0.25:1" compare.
+    if (*u == ':') {
+        char* e2 = nullptr;
+        const double d = std::strtod(u + 1, &e2);
+        r.ok = true; r.dim = CsUnit::Ratio;
+        r.base = (e2 != u + 1 && d != 0.0) ? v / d : v;
+        return r;
+    }
+    char t[8] = {0};
+    for (int i = 0; i < 7 && u[i]; ++i) { char c = u[i]; if (c >= 'A' && c <= 'Z') c += 32; t[i] = c; }
+    auto pre = [&](const char* p) { for (int i = 0; p[i]; ++i) if (t[i] != p[i]) return false; return true; };
+    double mult = 1.0; CsUnit dim = CsUnit::None;
+    if      (t[0] == 'k')  { mult = 1000.0; dim = pre("khz") ? CsUnit::Hz : CsUnit::None; }
+    else if (pre("hz"))   { dim = CsUnit::Hz; }
+    else if (pre("db"))   { dim = CsUnit::Db; }
+    else if (pre("ms"))   { dim = CsUnit::Ms; }
+    else if (pre("us"))   { dim = CsUnit::Ms; mult = 0.001; }
+    else if (pre("st") || pre("semi")) { dim = CsUnit::St; }
+    else if (pre("deg"))  { dim = CsUnit::Deg; }
+    else if (pre("s"))    { dim = CsUnit::Ms; mult = 1000.0; }   // seconds → ms
+    else if (t[0] == '%') { dim = CsUnit::Pct; }
+    r.ok = true; r.base = v * mult; r.dim = dim;
+    return r;
+}
+
+// Tolerance for "these two engineering values are the same display value" — at
+// or below one display step, so the exact-alignment shortcut and the binary
+// search both stop at display precision rather than chasing rounding noise.
+static double unitTol_(CsUnit u, double v)
+{
+    const double a = std::fabs(v);
+    switch (u) {
+        case CsUnit::Db:    return 0.1;
+        case CsUnit::Hz:    return std::fmax(0.5,  a * 0.01);
+        case CsUnit::Ms:    return std::fmax(0.05, a * 0.02);
+        case CsUnit::Ratio: return std::fmax(0.02, a * 0.02);
+        case CsUnit::Pct:   return 0.5;
+        case CsUnit::St:    return 0.05;
+        case CsUnit::Deg:   return 1.0;
+        default:            return std::fmax(1e-4, a * 0.01);
+    }
+}
+
+// Two units describe the same physical quantity. A bare number (None) is a
+// wildcard: plug-ins that drop the unit on a ratio / dB ("3.5" vs "3.5:1",
+// "-6" vs "-6 dB") still match. Only two DIFFERENT concrete dims (dB vs Hz =
+// mis-mapped control) are rejected.
+static bool dimsCompatible_(CsUnit a, CsUnit b)
+{
+    return a == b || a == CsUnit::None || b == CsUnit::None;
+}
+
+// Round-trip intent: the value we WANTED on a control vs what the plug-in could
+// represent. Keyed per track GUID → control (linkIdx*2 + isBtn). So SSL +3 dB →
+// API (2 dB steps, rounds to +4) → back to SSL restores +3, not the API's +4 —
+// as long as the user didn't hand-tweak the control on the intermediate plug-in.
+struct CsCtrlIntent { double intended = 0.0; double applied = 0.0;
+                      CsUnit dim = CsUnit::None; bool ok = false; };
+std::map<std::string, std::array<CsCtrlIntent, 128>> g_csIntent;   // main-thread only
+
+// Debug: opt-in via ExtState "rea_sixty"/"cs_log" = "1" (Desktop cs_log_on.lua).
+// Appends one line per param transfer to /tmp/rea_sixty_cs.log.
+static void csLog_(const char* s)
+{
+    const char* en = GetExtState("rea_sixty", "cs_log");
+    if (!(en && en[0] == '1')) return;
+    if (FILE* f = std::fopen("/tmp/rea_sixty_cs.log", "a")) {
+        std::fputs(s, f); std::fputc('\n', f); std::fclose(f);
+    }
+}
+
+// Transfer one parameter from (srcFx,srcParam) to (dstFx,dstParam) so the DST
+// reads the same ENGINEERING value as the SRC even when the two plug-ins scale
+// the parameter differently (CS 2 → 4K E, SSL → bx_console / JSFX, …). Robust to
+// inverted / non-monotonic / stepped normalisation curves: parse the src's
+// engineering value, then COARSE-SCAN the dst's normalised range for the closest
+// engineering value and refine locally (binary search alone walks into the wrong
+// branch of an inverted curve → e.g. +3 dB landing on −3 dB). Keeps a normalised
+// copy when the src is non-numeric or the dst can't be read numerically.
+// ctrlKey = linkIdx*2+isBtn (-1 = no intent). Main-thread only.
+static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
+                                int dstFx, int dstParam, int ctrlKey)
+{
+    const double nSrc = TrackFX_GetParamNormalized(tr, srcFx, srcParam);
+    TrackFX_SetParamNormalized(tr, dstFx, dstParam, nSrc);   // default normalised copy
+
+    char sb[64];
+    if (!TrackFX_GetFormattedParamValue(tr, srcFx, srcParam, sb, sizeof(sb))) return;
+    const CsUnitVal src = parseUnitValue_(sb);
+
+    auto dstAt = [&](double n, CsUnitVal& out, char* str, int strN) -> bool {
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, n);
+        if (!TrackFX_GetFormattedParamValue(tr, dstFx, dstParam, str, strN)) { out = {}; return false; }
+        out = parseUnitValue_(str);
+        return out.ok;
+    };
+
+    if (!src.ok) {                                  // discrete/text → keep normalised
+        char lg[256]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d NONNUM src='%s' n=%.5f -> normalised", ctrlKey, sb, nSrc);
+        csLog_(lg);
+        return;
+    }
+
+    // Pass 1 — sample the dst across [0,1]: collect (n, engineering value) and the
+    // dst's engineering range. Reading the range lets us reconcile display SCALE.
+    const int N = 64;
+    double sN[N + 1], sB[N + 1]; int ns = 0;
+    double gMin = 1e300, gMax = -1e300;
+    for (int i = 0; i <= N; ++i) {
+        const double n = static_cast<double>(i) / N;
+        CsUnitVal e; char b[64];
+        if (!dstAt(n, e, b, sizeof(b)) || !dimsCompatible_(e.dim, src.dim)) continue;
+        sN[ns] = n; sB[ns] = e.base; ++ns;
+        if (e.base < gMin) gMin = e.base;
+        if (e.base > gMax) gMax = e.base;
+    }
+    const bool resolvable = ns > 0;
+
+    // SCALE reconcile: two plug-ins may display the same quantity at different
+    // scales (Hz vs kHz: "8265Hz" vs "8.42"; s vs ms). If the src value is FAR
+    // outside the dst's range but a ×1000 / ÷1000 lands inside, rescale to the
+    // dst's scale. Guarded so it NEVER touches dB / ratio / % (no kilo-variant)
+    // and never a mere range clip: only positive-range dims (Hz / time / bare),
+    // and only when the src is off by ≥10× (a genuine scale gap, not +18 dB on a
+    // ±15 dB control which must just clamp). Frank 2026-06-20.
+    double target = src.base;
+    const bool scalable = (src.dim == CsUnit::Hz || src.dim == CsUnit::Ms
+                           || src.dim == CsUnit::None);
+    if (resolvable && scalable && gMin > 0.0 && target > 0.0
+        && (target < gMin || target > gMax)) {
+        const double facs[] = { 1000.0, 0.001, 1e6, 1e-6 };
+        for (double f : facs) {
+            const double t2 = target * f;
+            if (t2 < gMin || t2 > gMax) continue;
+            const double off = (target > gMax) ? target / gMax : gMin / target;
+            if (off >= 10.0) { target = t2; break; }
+        }
+    }
+    const double ttol = std::fmax(1e-4, std::fabs(target) * 0.003);
+
+    // Pass 2 — closest sample to `target`, then local refine.
+    char dstr[64] = {0};
+    double bestN = nSrc, bestErr = 1e300, bestBase = src.base;
+    if (resolvable) {
+        for (int i = 0; i < ns; ++i) {
+            const double err = std::fabs(sB[i] - target);
+            if (err < bestErr) { bestErr = err; bestN = sN[i]; bestBase = sB[i]; }
+        }
+        if (bestErr > ttol) {                       // refine around the best grid cell
+            double lo = std::fmax(0.0, bestN - 1.0 / N), hi = std::fmin(1.0, bestN + 1.0 / N);
+            for (int it = 0; it < 22; ++it) {
+                const double mid = 0.5 * (lo + hi);
+                CsUnitVal e; char b[64];
+                if (!dstAt(mid, e, b, sizeof(b)) || !dimsCompatible_(e.dim, src.dim)) break;
+                const double err = std::fabs(e.base - target);
+                if (err < bestErr) { bestErr = err; bestN = mid; bestBase = e.base; }
+                if (err <= ttol) break;
+                CsUnitVal e2; char b2[64];
+                const double probe = std::fmin(hi, mid + (hi - lo) * 0.02);
+                if (!dstAt(probe, e2, b2, sizeof(b2)) || !dimsCompatible_(e2.dim, src.dim)) break;
+                const bool ascending = e2.base >= e.base;
+                const bool below = ascending ? (e.base < target) : (e.base > target);
+                if (below) lo = mid; else hi = mid;
+            }
+        }
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, bestN);
+    } else {
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, nSrc);   // unreadable → normalised
+        bestN = nSrc;
+    }
+
+    {   // final dst readback (for the log) — also re-asserts bestN
+        CsUnitVal e; char b[64];
+        if (dstAt(bestN, e, b, sizeof(b))) std::snprintf(dstr, sizeof(dstr), "%s", b);
+    }
+
+    // NOTE: round-trip intent (g_csIntent) is intentionally OFF here — it muddied
+    // the scale handling (e.g. "600Hz" mis-restored to 2.3). Re-add once the plain
+    // transfer is proven solid across plug-in families.
+    char lg[320];
+    std::snprintf(lg, sizeof(lg),
+        "[cs] k=%d src='%s'(%.4g d%d) tgt=%.4g -> n=%.5f dst='%s'(%.4g) err=%.4g rng=[%.4g,%.4g] %s",
+        ctrlKey, sb, src.base, (int)src.dim, target, bestN, dstr, bestBase,
+        bestErr, gMin, gMax, resolvable ? "ok" : "UNRESOLVED->norm");
+    csLog_(lg);
+}
+
+// Replace tr's active CS with `addName` (dstMap = its resolved CS bindings, may
+// be null → swap without value carry). No undo / refresh here — the caller
+// wraps the whole gesture. Returns true if a swap happened.
+static bool switchCsTo_(MediaTrack* tr, const char* addName,
+                        const uc1::PluginBindings* dstMap, bool focusResult)
+{
+    if (!tr || !addName || !*addName) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+
+    const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+    const int oldIdx = b.channelFxIdx;
+    const uc1::PluginBindings* oldMap = b.channelMap;
+    if (oldIdx < 0 || !oldMap) return false;   // no CS on track → skip (decision Q2)
+
+    // Already this plug-in? Don't replace a strip with itself.
+    char ident[256];
+    if (uf8::fxIdentityName(tr, oldIdx, ident, sizeof(ident))
+        && (std::strcmp(ident, addName) == 0
+            || (dstMap && uc1::lookupBindingsByName(ident) == dstMap))) {
+        return false;
+    }
+
+    // Record the shared controls (linkIdx + the src param it drives). The old CS
+    // stays alive until after the transfer, so we read its LIVE values during
+    // the copy rather than pre-snapshotting. 0..63 covers the CS Link namespace;
+    // non-existent linkIdx return uc1::kParamNone and are skipped.
+    struct Shared { int srcParam; int linkIdx; bool isBtn; };
+    std::vector<Shared> shared;
+    // linkIdx 0 = the bypass / IN control. Skip it — its normalised value means
+    // opposite things across plug-ins with differing bypassInverted sense, so
+    // carrying it could flip the new strip's enable state. Enable carries via
+    // TrackFX_GetEnabled below instead; param controls start at linkIdx 1.
+    for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
+        for (int btn = 0; btn <= 1; ++btn) {
+            const int sp = uc1::hudParamForControl(oldMap, /*busComp*/ false,
+                                              linkIdx, btn != 0, nullptr);
+            if (sp == uc1::kParamNone) continue;
+            shared.push_back({ sp, linkIdx, btn != 0 });
+        }
+    }
+
+    // Capture the old CS's enable + window state so the new strip lands the
+    // same way: enabled/bypassed as before, and — if its GUI was open — with
+    // the GUI reopened (so a swap while the plug-in window is up keeps it up).
+    const bool  oldEnabled = TrackFX_GetEnabled(tr, oldIdx);
+    void* const oldFloat   = TrackFX_GetFloatingWindow(tr, oldIdx);
+    const bool  oldOpen    = TrackFX_GetOpen(tr, oldIdx);
+
+    const int newIdx = TrackFX_AddByName(tr, addName, false, -1);
+    if (newIdx < 0) return false;   // plug-in not installed → leave chain intact
+    TrackFX_Show(tr, newIdx, 2);    // close the window REAPER auto-floats on add
+
+    // Carry each shared control's value onto the new plug-in via its own param
+    // map. Continuous params transfer by ENGINEERING value so the result is
+    // correct even when the two plug-ins use different param ranges; buttons /
+    // toggles copy the raw normalised 0/1 (no range to reconcile).
+    for (const auto& s : shared) {
+        const int dp = uc1::hudParamForControl(dstMap, /*busComp*/ false,
+                                          s.linkIdx, s.isBtn, nullptr);
+        if (dp == uc1::kParamNone) continue;
+        if (s.isBtn)
+            TrackFX_SetParamNormalized(tr, newIdx, dp,
+                TrackFX_GetParamNormalized(tr, oldIdx, s.srcParam));
+        else
+            transferParamValue_(tr, oldIdx, s.srcParam, newIdx, dp,
+                                /*ctrlKey*/ s.linkIdx * 2);
+    }
+
+    // Move the new plug-in into the old CS's chain slot, then delete the old.
+    // CopyToTrack(move) inserts at oldIdx and shifts the old CS to oldIdx+1.
+    TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
+    TrackFX_Delete(tr, oldIdx + 1);
+
+    // Restore enable + GUI state onto the new CS (now at oldIdx).
+    TrackFX_SetEnabled(tr, oldIdx, oldEnabled);
+    if      (oldFloat) TrackFX_Show(tr, oldIdx, 3);   // was floating → reopen floating
+    else if (oldOpen)  TrackFX_Show(tr, oldIdx, 1);   // was open in chain → reopen in chain
+
+    if (focusResult) {
+        syncInstanceFromFxIdx_(tr, oldIdx, /*setFocusedDomain*/ true,
+                               /*setBcAnchor*/ false);
+        setStripInstanceFx_(tr, oldIdx);
+    }
+    return true;
+}
+
+// Resolve the action's target tracks: every selected track, else the focused
+// track. Mirrors the "switch all selected to N" requirement.
+static std::vector<MediaTrack*> csSwitchTargets_()
+{
+    std::vector<MediaTrack*> targets;
+    const int nSel = CountSelectedTracks(nullptr);
+    if (nSel > 0) {
+        for (int i = 0; i < nSel; ++i)
+            if (MediaTrack* s = GetSelectedTrack(nullptr, i)) targets.push_back(s);
+    } else if (g_uc1_surface) {
+        if (MediaTrack* f = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
+            targets.push_back(f);
+    }
+    return targets;
+}
+
+// "Switch to CS N" (slot 0..7). Replaces the active CS on every target track
+// with favourite N in a single undo step.
+static void applyCsSwitch_(int slot)
+{
+    std::string addName, label;
+    if (!reasixty_csFav(slot, addName, label)) return;   // empty slot → no-op
+    const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+
+    const std::vector<MediaTrack*> targets = csSwitchTargets_();
+    if (targets.empty()) return;
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+
+    PreventUIRefresh(1);
+    Undo_BeginBlock2(nullptr);
+    bool any = false;
+    for (MediaTrack* tr : targets)
+        any |= switchCsTo_(tr, addName.c_str(), dstMap, /*focusResult*/ tr == focusTr);
+    Undo_EndBlock2(nullptr, "Rea-Sixty: Switch Channel Strip", -1);
+    PreventUIRefresh(-1);
+
+    if (any) {
+        g_bankDirty.store(true);
+        if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
+    }
+}
+
+// "CS Cycle" — step through the non-empty favourites, replacing the active CS
+// with the next/previous one. Start point = the slot the focused track's CS
+// already occupies (cycle from a favourited strip moves to its neighbour); if
+// the current CS isn't a favourite, the first forward detent lands on the first
+// favourite. Wrap follows g_wrapPluginCycle, like the other plug-in cycles.
+static void applyCsCycle_(int step)
+{
+    if (step == 0) return;
+    std::vector<int> slots;
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (reasixty_csFav(i, a, l)) slots.push_back(i);
+    }
+    if (slots.empty()) return;
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    if (!focusTr) focusTr = GetSelectedTrack(nullptr, 0);
+    if (!focusTr) return;
+
+    int cur = -1;
+    const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(focusTr);
+    if (b.channelFxIdx >= 0) {
+        char ident[256];
+        if (uf8::fxIdentityName(focusTr, b.channelFxIdx, ident, sizeof(ident))) {
+            const int favSlot = csFavSlotForName_(ident);
+            for (size_t i = 0; i < slots.size(); ++i)
+                if (slots[i] == favSlot) { cur = static_cast<int>(i); break; }
+        }
+    }
+
+    const int m = static_cast<int>(slots.size());
+    int next;
+    if (cur < 0) {
+        next = (step > 0) ? 0 : m - 1;
+    } else {
+        next = cur + (step > 0 ? 1 : -1);
+        if (g_wrapPluginCycle.load()) {
+            next = ((next % m) + m) % m;
+        } else if (next < 0 || next >= m) {
+            return;   // hard-stop at the ends
+        }
+    }
+    applyCsSwitch_(slots[next]);
+}
+
 void applyShowFocusedPluginGui_()
 {
     // Toggle-off path for UF8 Plugin Mode. When the button is bound to
@@ -5567,6 +6088,7 @@ std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset lis
 std::string g_hudUf8DetailPublished;  // last-published "hud_uf8_detail" (V-Pot tuning)
 std::string g_hudPushPublished;    // last-published "hud_push" (button push-cycle)
 std::string g_hudPushBtnsPublished;// last-published "hud_pushbtns" (push-cycle idx set)
+std::string g_hudCsFavPublished;   // last-published "hud_cs_fav" (CS-Switch favourites)
 bool        g_hudGeomPublished = false;
 // UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
 // drive V-Pot banks while the user maps from the HUD). Edge-triggered on tab
@@ -5811,6 +6333,36 @@ void publishHud_()
     if (tgt != g_hudTargetPublished) {
         g_hudTargetPublished = tgt;
         SetExtState("rea_sixty", "hud_target", tgt, false);
+    }
+
+    // CS-Switch favourites for the HUD's CS-page dropdown. Line 0 =
+    // "<curSlot>;<hasCs>" (curSlot = the favourite slot the focused track's
+    // active CS occupies, -1 = none; hasCs = 1 when there is an active CS to
+    // assign). Lines 1..8 = "<i>;<used>;<label>". Re-resolves the CS fx via
+    // lookupBindingsOnTrack (rename-safe) like the rest of the HUD display.
+    // Frank 2026-06-20.
+    {
+        int favCurSlot = -1, favHasCs = 0;
+        if (!boot && csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")) {
+            const uc1::UC1Bindings cb = uc1::lookupBindingsOnTrack(csTr);
+            char ident[256];
+            if (cb.channelFxIdx >= 0
+                && uf8::fxIdentityName(csTr, cb.channelFxIdx, ident, sizeof(ident))) {
+                favHasCs   = 1;
+                favCurSlot = csFavSlotForName_(ident);
+            }
+        }
+        std::string fav = std::to_string(favCurSlot) + ';'
+                        + std::to_string(favHasCs) + '\n';
+        for (int i = 0; i < 8; ++i) {
+            std::string a, l;
+            const bool used = reasixty_csFav(i, a, l);
+            fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + l + '\n';
+        }
+        if (fav != g_hudCsFavPublished) {
+            g_hudCsFavPublished = fav;
+            SetExtState("rea_sixty", "hud_cs_fav", fav.c_str(), false);
+        }
     }
 
     // UF8 device tab — strip-grid of the active UF8-mapped plug-in on the
@@ -12012,7 +12564,8 @@ void pushZonesForVisibleSlots()
                  || g_encoderMode.load() == EncoderMode::Instance
                  || g_encoderMode.load() == EncoderMode::FxScrollAll
                  || g_encoderMode.load() == EncoderMode::InstanceScrollAll
-                 || g_encoderMode.load() == EncoderMode::FxMove)
+                 || g_encoderMode.load() == EncoderMode::FxMove
+                 || g_encoderMode.load() == EncoderMode::CsCycle)
                 && g_uc1_surface
                 && tr == g_uc1_surface->focusedTrack()) {
             // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
@@ -15310,6 +15863,27 @@ void onTimer()
                     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
                     reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
                 }
+            } else if (s.rfind("csfav;", 0) == 0) {
+                // "csfav;<slot>" — assign the focused track's active CS to
+                // favourite slot 0..7, or clear it when slot < 0. Resolves the
+                // live CS identity (rename-safe) so built-in AND user CS strips
+                // can both be favourited from the HUD. Frank 2026-06-20.
+                const int slot = std::atoi(s.c_str() + 6);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                if (csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")) {
+                    const uc1::UC1Bindings cb = uc1::lookupBindingsOnTrack(csTr);
+                    char ident[256];
+                    if (cb.channelFxIdx >= 0
+                        && uf8::fxIdentityName(csTr, cb.channelFxIdx,
+                                               ident, sizeof(ident))) {
+                        if (slot < 0) reasixty_clearCsFavByName(ident);
+                        else          reasixty_setCsFav(slot, ident, ident);
+                        g_hudCsFavPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("bind;", 0) == 0) {
                 // "bind;<idx>;<param>" — direct assign from the param list
                 // (no wiggle). Resolves the domain target from the control idx
@@ -16029,6 +16603,7 @@ void onTimer()
             else if (std::strcmp(m, "FxScrollAll")       == 0) g_encoderMode.store(EncoderMode::FxScrollAll);
             else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
             else if (std::strcmp(m, "FxMove")            == 0) g_encoderMode.store(EncoderMode::FxMove);
+            else if (std::strcmp(m, "CsCycle")           == 0) g_encoderMode.store(EncoderMode::CsCycle);
             else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
             else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
             // 'Focus' (legacy) and 'Mousewheel' (post-2026-05-19 rename)
@@ -17505,6 +18080,75 @@ void reasixty_setGrCombineUf8(bool on)
 {
     g_grCombineUf8.store(on);
     SetExtState("rea_sixty", "gr_combine_uf8", on ? "1" : "0", true);
+}
+
+// --- CS-Switch favourites public API (Settings + Learn-HUD) ---
+// Fills addName/label for slot (0..7); returns false (and empties both) if the
+// slot is unset or out of range.
+bool reasixty_csFav(int slot, std::string& addName, std::string& label)
+{
+    addName.clear();
+    label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    std::lock_guard<std::mutex> lk(g_csFavMutex);
+    addName = g_csFav[slot].addName;
+    label   = g_csFav[slot].label;
+    return !addName.empty();
+}
+
+// Slot (0..7) currently holding addName, or -1 if none.
+int reasixty_csFavSlotOf(const char* addName)
+{
+    if (!addName || !*addName) return -1;
+    std::lock_guard<std::mutex> lk(g_csFavMutex);
+    for (int i = 0; i < 8; ++i)
+        if (g_csFav[i].addName == addName) return i;
+    return -1;
+}
+
+// Assign a CS plug-in to slot (0..7). One plug-in ↔ one slot: the plug-in is
+// first stolen from any other slot it occupied. Pass an empty addName to clear
+// the slot. This is exactly the dropdown's "rewrite N to the active plug-in"
+// behaviour — selecting a taken slot overwrites it and frees the old slot.
+void reasixty_setCsFav(int slot, const char* addName, const char* label)
+{
+    if (slot < 0 || slot >= 8) return;
+    std::lock_guard<std::mutex> lk(g_csFavMutex);
+    const std::string name = addName ? addName : "";
+    if (name.empty()) {
+        g_csFav[slot].addName.clear();
+        g_csFav[slot].label.clear();
+        saveCsFavourites_locked_();
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        if (i != slot && g_csFav[i].addName == name) {
+            g_csFav[i].addName.clear();
+            g_csFav[i].label.clear();
+        }
+    }
+    g_csFav[slot].addName = name;
+    g_csFav[slot].label   = (label && *label) ? label : name;
+    saveCsFavourites_locked_();
+}
+
+// Clear whichever slot currently holds addName (the dropdown's "None" choice).
+void reasixty_clearCsFavByName(const char* addName)
+{
+    if (!addName || !*addName) return;
+    std::lock_guard<std::mutex> lk(g_csFavMutex);
+    bool changed = false;
+    for (auto& f : g_csFav) {
+        if (f.addName == addName) { f.addName.clear(); f.label.clear(); changed = true; }
+    }
+    if (changed) saveCsFavourites_locked_();
+}
+
+// Robust slot lookup for the dropdowns: the favourite slot whose plug-in is the
+// same CS as addName (pointer-compares resolved bindings), or -1.
+int reasixty_csFavSlotMatching(const char* addName)
+{
+    return csFavSlotForName_(addName);
 }
 
 bool reasixty_grCombineUc1() { return g_grCombineUc1.load(); }
@@ -20900,6 +21544,17 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::FxMove; },
         "Encoder Mode → FX Move (in chain)", false
     });
+    // CS-Switch cycle mode — Channel-Encoder rotation steps the active
+    // Channel Strip through the favourite plug-ins, carrying shared-control
+    // values across each swap. Frank 2026-06-20.
+    registerBuiltin("encoder_cs_cycle", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::CsCycle, "CsCycle");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::CsCycle; },
+        "Encoder Mode → CS Cycle (favourites)", false
+    });
     // Selection-Set cycle mode — Channel-Encoder rotation steps through
     // populated Selection-Set slots (off → 1 → 2 → … → last → off).
     // Pairs with the bindable selset_cycle builtin further down so the
@@ -20931,6 +21586,7 @@ void registerBindingHandlers()
                 case EncoderMode::FxScrollAll:       applyFxScrollAll_(step);       break;
                 case EncoderMode::InstanceScrollAll: applyInstanceScrollAll_(step); break;
                 case EncoderMode::FxMove:      applyFxMove_(step);         break;
+                case EncoderMode::CsCycle:     g_csCycleReq.fetch_add(step); break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
                 case EncoderMode::Markers:     applyMarkerStep_(step);     break;
                 case EncoderMode::BankBy1:
@@ -21196,6 +21852,45 @@ void registerBindingHandlers()
         },
         nullptr, "Encoder: move active FX up/down in chain", false
     });
+    // CS-Switch — direct-rotation counterpart of encoder_cs_cycle: assign to
+    // any encoder/modifier to step the active Channel Strip through the
+    // favourites without a mode switch. Frank 2026-06-20.
+    registerBuiltin("cs_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            g_csCycleReq.fetch_add(param);   // run on main thread (onTimer drain)
+        },
+        nullptr, "Encoder: cycle Channel Strip favourites", false
+    });
+    // CS-Switch — "Switch to CS Favourite N" (N = 1..8). One builtin per slot
+    // (button-friendly, mirrors master_pin_strip*). Replaces the active CS on
+    // every selected track — focused track if none selected — with favourite N.
+    // Frank 2026-06-20.
+    for (int slot = 0; slot < 8; ++slot) {
+        char name[24];
+        snprintf(name, sizeof(name), "switch_cs_%d", slot + 1);
+        char label[40];
+        snprintf(label, sizeof(label), "Switch to CS Favourite %d", slot + 1);
+        registerBuiltin(name, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                g_csSwitchReq.store(slot);   // run on main thread (onTimer drain)
+            },
+            // Lit when the focused track's CS already is favourite N.
+            [slot](int) {
+                MediaTrack* tr = g_uc1_surface
+                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+                if (!tr) return false;
+                const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+                if (b.channelFxIdx < 0) return false;
+                char ident[256];
+                if (!uf8::fxIdentityName(tr, b.channelFxIdx, ident, sizeof(ident)))
+                    return false;
+                return csFavSlotForName_(ident) == slot;
+            },
+            label, false
+        });
+    }
     registerBuiltin("bc_track_scroll", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
@@ -22409,6 +23104,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         else if (std::strcmp(m, "FxCycle") == 0)       g_encoderMode.store(EncoderMode::FxCycle);
         else if (std::strcmp(m, "FxScrollAll") == 0)       g_encoderMode.store(EncoderMode::FxScrollAll);
         else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
+        else if (std::strcmp(m, "CsCycle") == 0)       g_encoderMode.store(EncoderMode::CsCycle);
         else if (std::strcmp(m, "SelsetCycle") == 0)   g_encoderMode.store(EncoderMode::SelsetCycle);
         else if (std::strcmp(m, "Markers") == 0)       g_encoderMode.store(EncoderMode::Markers);
         else if (std::strcmp(m, "BankBy1") == 0)       g_encoderMode.store(EncoderMode::BankBy1);

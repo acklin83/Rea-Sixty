@@ -74,6 +74,11 @@ bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
 bool reasixty_grCombineUf8();
 void reasixty_setGrCombineUf8(bool on);
+bool reasixty_csFav(int slot, std::string& addName, std::string& label);
+int  reasixty_csFavSlotOf(const char* addName);
+void reasixty_setCsFav(int slot, const char* addName, const char* label);
+void reasixty_clearCsFavByName(const char* addName);
+int  reasixty_csFavSlotMatching(const char* addName);
 bool reasixty_grCombineUc1();
 void reasixty_setGrCombineUc1(bool on);
 bool reasixty_insertMarkers();
@@ -2730,6 +2735,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (n == "instance_cycle" || n == "fx_cycle"
                  || n == "fx_scroll_all"  || n == "instance_scroll_all"
                  || n == "fx_move"
+                 || n == "cs_cycle"       || n.rfind("switch_cs_", 0) == 0
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
                  || n == "bc_track_scroll_select"
@@ -12020,6 +12026,49 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 uf8::user_plugins::upsert(std::move(copy));
                 persistAndReport_();
             }
+        }
+    }
+
+    // ---- CS-Switch favourite slot (CS maps only) ------------------------
+    // Assign this plug-in to one of the 8 favourite slots that the
+    // "Switch to CS N" / "CS Cycle" actions step through. One plug-in ↔ one
+    // slot: picking a slot already in use rewrites it to this plug-in and
+    // frees the slot this plug-in held. The plug-in name shows next to each
+    // taken slot. Frank 2026-06-20.
+    if (editing->domain == uf8::Domain::ChannelStrip) {
+        const char* favWord = reasixty_sp("Favourite", "Favorite");
+        const int curSlot = reasixty_csFavSlotMatching(editing->match.c_str());
+
+        char preview[64];
+        if (curSlot >= 0) snprintf(preview, sizeof(preview), "%d", curSlot + 1);
+        else              snprintf(preview, sizeof(preview), "None");
+
+        char label[48];
+        snprintf(label, sizeof(label), "CS %s:", favWord);
+        ImGui_Text(ctx, label);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 220.0));
+        if (ImGui_BeginCombo(ctx, "##fxl_cs_fav", preview, nullptr)) {
+            bool selNone = (curSlot < 0);
+            if (ImGui_Selectable(ctx, "None##fxl_cs_fav_none", &selNone,
+                                 nullptr, nullptr, nullptr)) {
+                reasixty_clearCsFavByName(editing->match.c_str());
+            }
+            for (int i = 0; i < 8; ++i) {
+                std::string a, l;
+                const bool taken = reasixty_csFav(i, a, l);
+                char item[128];
+                if (taken) snprintf(item, sizeof(item), "%d  —  %s##fxl_cs_fav_%d",
+                                    i + 1, l.c_str(), i);
+                else       snprintf(item, sizeof(item), "%d  —  (empty)##fxl_cs_fav_%d",
+                                    i + 1, i);
+                bool sel = (curSlot == i);
+                if (ImGui_Selectable(ctx, item, &sel, nullptr, nullptr, nullptr)) {
+                    reasixty_setCsFav(i, editing->match.c_str(),
+                                      editing->match.c_str());
+                }
+            }
+            ImGui_EndCombo(ctx);
         }
     }
 
