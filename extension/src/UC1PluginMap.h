@@ -154,6 +154,14 @@ bool hudControlExplicitOnLayer(const PluginBindings* b, int linkIdx);
 // Returns -1 when the control isn't in the table.
 int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
 
+// Semantic "kind" of the quantity a CS SSL-Link slot controls, derived from the
+// UC1 control the linkIdx drives (kCSHfFreq → Freq, kCSHfGain → Db,
+// kCSCompRatio → Ratio, kCSCompRelease → Time, kCSHmfQ → Q, …). Lets value
+// transfer between different CS plug-ins treat each control by its real meaning
+// instead of guessing from the display string. Generic = no clear musical kind.
+enum class CsQuantityKind { Generic, Db, Freq, Time, Ratio, Q, Pct };
+CsQuantityKind csQuantityKind(int linkIdx);
+
 // True when this binding belongs to the Bus Comp domain (BC 2 / 4K B /
 // user-mapped BC). False covers Channel Strip and unrelated bindings;
 // callers should null-check the input first.

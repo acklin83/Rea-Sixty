@@ -741,6 +741,34 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)
     return -1;
 }
 
+CsQuantityKind csQuantityKind(int linkIdx)
+{
+    uint8_t kid = kNoUc1;
+    for (const auto& e : kCsLinkToUc1)
+        if (e.linkIdx == linkIdx) { kid = e.knobId; break; }
+    switch (kid) {
+        case knob::kCSLowPass:   case knob::kCSHighPass:
+        case knob::kCSHfFreq:    case knob::kCSHmfFreq:
+        case knob::kCSLmfFreq:   case knob::kCSLfFreq:
+            return CsQuantityKind::Freq;
+        case knob::kCSHfGain:    case knob::kCSHmfGain:
+        case knob::kCSLmfGain:   case knob::kCSLfGain:
+        case knob::kCSInputTrim: case knob::kCSFaderLevel:
+        case knob::kCSCompThreshold: case knob::kCSGateThreshold:
+        case knob::kCSGateRange:
+            return CsQuantityKind::Db;
+        case knob::kCSHmfQ:      case knob::kCSLmfQ:
+            return CsQuantityKind::Q;
+        case knob::kCSCompRatio:
+            return CsQuantityKind::Ratio;
+        case knob::kCSCompRelease: case knob::kCSGateRelease:
+        case knob::kCSGateHold:
+            return CsQuantityKind::Time;
+        default:
+            return CsQuantityKind::Generic;
+    }
+}
+
 ControlDomain classifyKnob(uint8_t knobId)
 {
     // Top V-Pots live in 0x0C..0x16. By physical layout on the SSL UC1:

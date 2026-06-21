@@ -5032,22 +5032,26 @@ static double unitTol_(CsUnit u, double v)
     }
 }
 
-// Two units describe the same physical quantity. A bare number (None) is a
-// wildcard: plug-ins that drop the unit on a ratio / dB ("3.5" vs "3.5:1",
-// "-6" vs "-6 dB") still match. Only two DIFFERENT concrete dims (dB vs Hz =
-// mis-mapped control) are rejected.
-static bool dimsCompatible_(CsUnit a, CsUnit b)
-{
-    return a == b || a == CsUnit::None || b == CsUnit::None;
-}
+// A read parameter value for transfer: either a numeric engineering value (with
+// its quantity Kind, for scale-aware matching) or a discrete display string
+// ("Auto" release, "Off", "Bell") matched by name. `norm` is the raw normalised
+// value, the last-resort fallback. Doubles as the per-control round-trip memory.
+struct CsVal {
+    bool   valid   = false;
+    bool   numeric = false;
+    double eng     = 0.0;        // engineering value (numeric)
+    double norm    = 0.0;        // normalised fallback (always set)
+    char   text[24] = {0};       // display string (discrete string-match)
+    uc1::CsQuantityKind kind = uc1::CsQuantityKind::Generic;
+};
 
-// Round-trip intent: the value we WANTED on a control vs what the plug-in could
-// represent. Keyed per track GUID → control (linkIdx*2 + isBtn). So SSL +3 dB →
-// API (2 dB steps, rounds to +4) → back to SSL restores +3, not the API's +4 —
-// as long as the user didn't hand-tweak the control on the intermediate plug-in.
-struct CsCtrlIntent { double intended = 0.0; double applied = 0.0;
-                      CsUnit dim = CsUnit::None; bool ok = false; };
-std::map<std::string, std::array<CsCtrlIntent, 128>> g_csIntent;   // main-thread only
+// Per track GUID → per control (linkIdx*2 + isBtn) last-known value. Used ONLY to
+// fill a control the CURRENT plug-in LACKS (e.g. Q on an API channel that has no
+// adjustable Q), so the intention survives cycling through CS plug-ins with fewer
+// params. A present control always overwrites this with its live value, so the
+// memory never fights the live transfer (that was the old intent's muddle).
+// Main-thread only.
+std::map<std::string, std::array<CsVal, 128>> g_csIntent;
 
 // Debug: opt-in via ExtState "rea_sixty"/"cs_log" = "1" (Desktop cs_log_on.lua).
 // Appends one line per param transfer to /tmp/rea_sixty_cs.log.
@@ -5060,24 +5064,71 @@ static void csLog_(const char* s)
     }
 }
 
-// Transfer one parameter from (srcFx,srcParam) to (dstFx,dstParam) so the DST
-// reads the same ENGINEERING value as the SRC even when the two plug-ins scale
-// the parameter differently (CS 2 → 4K E, SSL → bx_console / JSFX, …). Robust to
-// inverted / non-monotonic / stepped normalisation curves: parse the src's
-// engineering value, then COARSE-SCAN the dst's normalised range for the closest
-// engineering value and refine locally (binary search alone walks into the wrong
-// branch of an inverted curve → e.g. +3 dB landing on −3 dB). Keeps a normalised
-// copy when the src is non-numeric or the dst can't be read numerically.
-// ctrlKey = linkIdx*2+isBtn (-1 = no intent). Main-thread only.
-static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
-                                int dstFx, int dstParam, int ctrlKey)
+// Case-insensitive, trim-tolerant equality of two display strings — so a discrete
+// state transfers by NAME ("Auto"→"Auto", "Off"→"Off", "Bell"→"Bell").
+static bool csTextEq_(const char* a, const char* b)
 {
-    const double nSrc = TrackFX_GetParamNormalized(tr, srcFx, srcParam);
-    TrackFX_SetParamNormalized(tr, dstFx, dstParam, nSrc);   // default normalised copy
+    auto skip = [](const char*& p) { while (*p == ' ' || *p == '\t') ++p; };
+    skip(a); skip(b);
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return false;
+        ++a; ++b;
+    }
+    while (*a == ' ') ++a;
+    while (*b == ' ') ++b;
+    return *a == 0 && *b == 0;
+}
 
-    char sb[64];
-    if (!TrackFX_GetFormattedParamValue(tr, srcFx, srcParam, sb, sizeof(sb))) return;
-    const CsUnitVal src = parseUnitValue_(sb);
+// Read a param's value for transfer. `kind` (from the linkIdx) drives the later
+// scale handling. Numeric when the display parses to a number; otherwise the
+// display string is kept for a by-name match (Auto / Off / Bell …).
+static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityKind kind)
+{
+    CsVal v; v.valid = true; v.kind = kind;
+    v.norm = TrackFX_GetParamNormalized(tr, fx, param);
+    char s[64];
+    if (TrackFX_GetFormattedParamValue(tr, fx, param, s, sizeof(s))) {
+        std::snprintf(v.text, sizeof(v.text), "%s", s);
+        const CsUnitVal u = parseUnitValue_(s);
+        if (u.ok) { v.numeric = true; v.eng = u.base; }
+    }
+    return v;
+}
+
+// Apply a read value onto (dstFx,dstParam). Numeric → kind-aware coarse-scan of
+// the dst's normalised range (robust to inverted / non-monotonic / stepped
+// curves; Hz↔kHz / s↔ms reconciled via the range for Freq/Time only — dB / ratio
+// never rescaled, killing the +3→−3 and +18→0.018 fuck-ups by construction).
+// Discrete → match the dst position whose display equals v.text; else normalised.
+// Main-thread only.
+static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
+                             const CsVal& v, int ctrlKey)
+{
+    TrackFX_SetParamNormalized(tr, dstFx, dstParam, v.norm);   // default
+
+    const int N = 64;
+
+    if (!v.numeric) {                       // discrete state — match by display text
+        double matchN = -1.0;
+        if (v.text[0]) {
+            for (int i = 0; i <= N; ++i) {
+                const double n = static_cast<double>(i) / N;
+                TrackFX_SetParamNormalized(tr, dstFx, dstParam, n);
+                char b[64];
+                if (TrackFX_GetFormattedParamValue(tr, dstFx, dstParam, b, sizeof(b))
+                    && csTextEq_(b, v.text)) { matchN = n; break; }
+            }
+        }
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, matchN >= 0 ? matchN : v.norm);
+        char lg[200]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d DISCRETE src='%s' -> %s", ctrlKey, v.text,
+            matchN >= 0 ? "matched" : "normalised");
+        csLog_(lg);
+        return;
+    }
 
     auto dstAt = [&](double n, CsUnitVal& out, char* str, int strN) -> bool {
         TrackFX_SetParamNormalized(tr, dstFx, dstParam, n);
@@ -5086,38 +5137,23 @@ static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
         return out.ok;
     };
 
-    if (!src.ok) {                                  // discrete/text → keep normalised
-        char lg[256]; std::snprintf(lg, sizeof(lg),
-            "[cs] k=%d NONNUM src='%s' n=%.5f -> normalised", ctrlKey, sb, nSrc);
-        csLog_(lg);
-        return;
-    }
-
-    // Pass 1 — sample the dst across [0,1]: collect (n, engineering value) and the
-    // dst's engineering range. Reading the range lets us reconcile display SCALE.
-    const int N = 64;
+    // Pass 1 — sample the dst, collect numeric values + range.
     double sN[N + 1], sB[N + 1]; int ns = 0;
     double gMin = 1e300, gMax = -1e300;
     for (int i = 0; i <= N; ++i) {
         const double n = static_cast<double>(i) / N;
         CsUnitVal e; char b[64];
-        if (!dstAt(n, e, b, sizeof(b)) || !dimsCompatible_(e.dim, src.dim)) continue;
+        if (!dstAt(n, e, b, sizeof(b))) continue;
         sN[ns] = n; sB[ns] = e.base; ++ns;
         if (e.base < gMin) gMin = e.base;
         if (e.base > gMax) gMax = e.base;
     }
     const bool resolvable = ns > 0;
 
-    // SCALE reconcile: two plug-ins may display the same quantity at different
-    // scales (Hz vs kHz: "8265Hz" vs "8.42"; s vs ms). If the src value is FAR
-    // outside the dst's range but a ×1000 / ÷1000 lands inside, rescale to the
-    // dst's scale. Guarded so it NEVER touches dB / ratio / % (no kilo-variant)
-    // and never a mere range clip: only positive-range dims (Hz / time / bare),
-    // and only when the src is off by ≥10× (a genuine scale gap, not +18 dB on a
-    // ±15 dB control which must just clamp). Frank 2026-06-20.
-    double target = src.base;
-    const bool scalable = (src.dim == CsUnit::Hz || src.dim == CsUnit::Ms
-                           || src.dim == CsUnit::None);
+    // SCALE reconcile (Hz↔kHz, s↔ms) — ONLY Freq / Time kinds, never dB / ratio.
+    double target = v.eng;
+    const bool scalable = (v.kind == uc1::CsQuantityKind::Freq
+                           || v.kind == uc1::CsQuantityKind::Time);
     if (resolvable && scalable && gMin > 0.0 && target > 0.0
         && (target < gMin || target > gMax)) {
         const double facs[] = { 1000.0, 0.001, 1e6, 1e-6 };
@@ -5132,7 +5168,7 @@ static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
 
     // Pass 2 — closest sample to `target`, then local refine.
     char dstr[64] = {0};
-    double bestN = nSrc, bestErr = 1e300, bestBase = src.base;
+    double bestN = v.norm, bestErr = 1e300, bestBase = target;
     if (resolvable) {
         for (int i = 0; i < ns; ++i) {
             const double err = std::fabs(sB[i] - target);
@@ -5143,13 +5179,13 @@ static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
             for (int it = 0; it < 22; ++it) {
                 const double mid = 0.5 * (lo + hi);
                 CsUnitVal e; char b[64];
-                if (!dstAt(mid, e, b, sizeof(b)) || !dimsCompatible_(e.dim, src.dim)) break;
+                if (!dstAt(mid, e, b, sizeof(b))) break;
                 const double err = std::fabs(e.base - target);
                 if (err < bestErr) { bestErr = err; bestN = mid; bestBase = e.base; }
                 if (err <= ttol) break;
                 CsUnitVal e2; char b2[64];
                 const double probe = std::fmin(hi, mid + (hi - lo) * 0.02);
-                if (!dstAt(probe, e2, b2, sizeof(b2)) || !dimsCompatible_(e2.dim, src.dim)) break;
+                if (!dstAt(probe, e2, b2, sizeof(b2))) break;
                 const bool ascending = e2.base >= e.base;
                 const bool below = ascending ? (e.base < target) : (e.base > target);
                 if (below) lo = mid; else hi = mid;
@@ -5157,23 +5193,16 @@ static void transferParamValue_(MediaTrack* tr, int srcFx, int srcParam,
         }
         TrackFX_SetParamNormalized(tr, dstFx, dstParam, bestN);
     } else {
-        TrackFX_SetParamNormalized(tr, dstFx, dstParam, nSrc);   // unreadable → normalised
-        bestN = nSrc;
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, v.norm);   // unreadable → normalised
+        bestN = v.norm;
     }
 
-    {   // final dst readback (for the log) — also re-asserts bestN
-        CsUnitVal e; char b[64];
-        if (dstAt(bestN, e, b, sizeof(b))) std::snprintf(dstr, sizeof(dstr), "%s", b);
-    }
+    { CsUnitVal e; char b[64]; if (dstAt(bestN, e, b, sizeof(b))) std::snprintf(dstr, sizeof(dstr), "%s", b); }
 
-    // NOTE: round-trip intent (g_csIntent) is intentionally OFF here — it muddied
-    // the scale handling (e.g. "600Hz" mis-restored to 2.3). Re-add once the plain
-    // transfer is proven solid across plug-in families.
-    char lg[320];
-    std::snprintf(lg, sizeof(lg),
-        "[cs] k=%d src='%s'(%.4g d%d) tgt=%.4g -> n=%.5f dst='%s'(%.4g) err=%.4g rng=[%.4g,%.4g] %s",
-        ctrlKey, sb, src.base, (int)src.dim, target, bestN, dstr, bestBase,
-        bestErr, gMin, gMax, resolvable ? "ok" : "UNRESOLVED->norm");
+    char lg[320]; std::snprintf(lg, sizeof(lg),
+        "[cs] k=%d kind=%d src=%.4g -> n=%.5f dst='%s'(%.4g) err=%.4g rng=[%.4g,%.4g] %s",
+        ctrlKey, (int)v.kind, v.eng, bestN, dstr, bestBase, bestErr, gMin, gMax,
+        resolvable ? "ok" : "UNRESOLVED->norm");
     csLog_(lg);
 }
 
@@ -5199,25 +5228,6 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         return false;
     }
 
-    // Record the shared controls (linkIdx + the src param it drives). The old CS
-    // stays alive until after the transfer, so we read its LIVE values during
-    // the copy rather than pre-snapshotting. 0..63 covers the CS Link namespace;
-    // non-existent linkIdx return uc1::kParamNone and are skipped.
-    struct Shared { int srcParam; int linkIdx; bool isBtn; };
-    std::vector<Shared> shared;
-    // linkIdx 0 = the bypass / IN control. Skip it — its normalised value means
-    // opposite things across plug-ins with differing bypassInverted sense, so
-    // carrying it could flip the new strip's enable state. Enable carries via
-    // TrackFX_GetEnabled below instead; param controls start at linkIdx 1.
-    for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
-        for (int btn = 0; btn <= 1; ++btn) {
-            const int sp = uc1::hudParamForControl(oldMap, /*busComp*/ false,
-                                              linkIdx, btn != 0, nullptr);
-            if (sp == uc1::kParamNone) continue;
-            shared.push_back({ sp, linkIdx, btn != 0 });
-        }
-    }
-
     // Capture the old CS's enable + window state so the new strip lands the
     // same way: enabled/bypassed as before, and — if its GUI was open — with
     // the GUI reopened (so a swap while the plug-in window is up keeps it up).
@@ -5229,20 +5239,34 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     if (newIdx < 0) return false;   // plug-in not installed → leave chain intact
     TrackFX_Show(tr, newIdx, 2);    // close the window REAPER auto-floats on add
 
-    // Carry each shared control's value onto the new plug-in via its own param
-    // map. Continuous params transfer by ENGINEERING value so the result is
-    // correct even when the two plug-ins use different param ranges; buttons /
-    // toggles copy the raw normalised 0/1 (no range to reconcile).
-    for (const auto& s : shared) {
-        const int dp = uc1::hudParamForControl(dstMap, /*busComp*/ false,
-                                          s.linkIdx, s.isBtn, nullptr);
-        if (dp == uc1::kParamNone) continue;
-        if (s.isBtn)
-            TrackFX_SetParamNormalized(tr, newIdx, dp,
-                TrackFX_GetParamNormalized(tr, oldIdx, s.srcParam));
-        else
-            transferParamValue_(tr, oldIdx, s.srcParam, newIdx, dp,
-                                /*ctrlKey*/ s.linkIdx * 2);
+    // Carry values across every CS control (linkIdx 1..63, knob + button column;
+    // 0 = bypass/IN handled via enable above). Both plug-ins are alive here, so we
+    // read the old LIVE and write the new. Per-control intent memory fills the gap
+    // when the OLD plug-in lacks a control (e.g. Q on an API channel): the value is
+    // restored from the last plug-in that had it, so the intention survives cycling
+    // through strips with fewer params. A present control overwrites the memory.
+    auto& intent = g_csIntent[trackGuidStr_(tr)];
+    for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
+        for (int btn = 0; btn <= 1; ++btn) {
+            const bool isBtn = (btn != 0);
+            const int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, nullptr);
+            const int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, nullptr);
+            if (sp == uc1::kParamNone && dp == uc1::kParamNone) continue;
+            const int key = linkIdx * 2 + (isBtn ? 1 : 0);
+            const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
+                                                   : uc1::csQuantityKind(linkIdx);
+            CsVal val;
+            if (sp != uc1::kParamNone) {            // old has it → live value, remember
+                val = readParamValue_(tr, oldIdx, sp, kind);
+                intent[key] = val;
+            } else if (intent[key].valid) {        // old lacks it → restore remembered
+                val = intent[key];
+            } else {
+                continue;                          // never seen → nothing to carry
+            }
+            if (dp != uc1::kParamNone)
+                applyParamValue_(tr, newIdx, dp, val, key);
+        }
     }
 
     // Move the new plug-in into the old CS's chain slot, then delete the old.
