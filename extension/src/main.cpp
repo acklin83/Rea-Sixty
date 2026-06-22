@@ -5467,6 +5467,12 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     // Diagnostic (cs_log only): dump the new plug-in's param names so the alias
     // table can be built/tuned against the plug-in's REAL naming, not guesses.
     if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
+        char tn[128] = {0}; GetTrackName(tr, tn, sizeof(tn));
+        char oldnm[256] = {0}; TrackFX_GetFXName(tr, oldIdx, oldnm, sizeof(oldnm));
+        char th[480]; std::snprintf(th, sizeof(th),
+            "[cs] === SWITCH track='%s' guid=%s old(fx%d)='%s' ===",
+            tn, trackGuidStr_(tr).c_str(), oldIdx, oldnm);
+        csLog_(th);
         char fxnm[256] = {0}; TrackFX_GetFXName(tr, newIdx, fxnm, sizeof(fxnm));
         char hdr[320]; std::snprintf(hdr, sizeof(hdr), "[cs] DSTPARAMS %s", fxnm); csLog_(hdr);
         const int np = TrackFX_GetNumParams(tr, newIdx);
@@ -5512,6 +5518,13 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                     mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
                     && std::fabs(live.norm - mem.appliedNorm) < 1e-3;
                 val = untouched ? mem : live;
+                if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
+                    char sn[96] = {0}; TrackFX_GetParamName(tr, oldIdx, sp, sn, sizeof(sn));
+                    char lg[260]; std::snprintf(lg, sizeof(lg),
+                        "[cs] k=%d RD sp=p%d'%s' live=%.4g('%s') %s", key, sp, sn,
+                        live.eng, live.text, untouched ? "carry-intent" : "live");
+                    csLog_(lg);
+                }
             } else if (intent[key].valid) {        // old lacks it → restore remembered
                 val = intent[key];
             } else {
@@ -5601,6 +5614,11 @@ static void applyCsSwitch_(int slot)
     MediaTrack* focusTr = g_uc1_surface
         ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
 
+    // BROADCAST GUARD: our own ParameterGroups fan-out (the CSURF_EXT_SETFXPARAM
+    // hook) would re-broadcast every value the switch writes to the other selected
+    // / grouped tracks, so the last track's values bleed onto all of them. Suppress
+    // the fan-out for the whole batch — each track keeps its own carried values.
+    uf8::param_groups::pushBroadcastSuppress();
     PreventUIRefresh(1);
     Undo_BeginBlock2(nullptr);
     bool any = false;
@@ -5608,6 +5626,29 @@ static void applyCsSwitch_(int slot)
         any |= switchCsTo_(tr, addName.c_str(), dstMap, /*focusResult*/ tr == focusTr);
     Undo_EndBlock2(nullptr, "Rea-Sixty: Switch Channel Strip", -1);
     PreventUIRefresh(-1);
+    uf8::param_groups::popBroadcastSuppress();
+
+    // FINAL VERIFY (cs_log): after ALL tracks switched, re-read each target's new
+    // CS HF gain (linkIdx 9). If the per-track writes were correct but the values
+    // ended identical, something AFTER our writes collapsed them (REAPER ganging /
+    // a later overwrite). If still distinct, the transfer is fine and "all same"
+    // is a display artefact.
+    if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
+        for (MediaTrack* tr : targets) {
+            if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) continue;
+            const uc1::UC1Bindings vb = uc1::lookupBindingsOnTrack(tr);
+            const int hp = (vb.channelMap && vb.channelFxIdx >= 0)
+                ? uc1::hudParamForControl(vb.channelMap, false, /*linkIdx HF gain*/ 9, false, nullptr)
+                : uc1::kParamNone;
+            char tn[128] = {0}; GetTrackName(tr, tn, sizeof(tn));
+            char b[64] = {0};
+            if (hp != uc1::kParamNone)
+                TrackFX_GetFormattedParamValue(tr, vb.channelFxIdx, hp, b, sizeof(b));
+            char lg[260]; std::snprintf(lg, sizeof(lg),
+                "[cs] FINAL track='%s' fx%d HFgain(p%d)='%s'", tn, vb.channelFxIdx, hp, b);
+            csLog_(lg);
+        }
+    }
 
     if (any) {
         g_bankDirty.store(true);

@@ -127,6 +127,12 @@ void broadcastSoloMute(MediaTrack* leader, bool isSolo, int absoluteValue);
 // through REAPER's param-change callback.
 bool inBroadcast();
 
+// Raise / lower the broadcast-suppression depth around a batch of programmatic
+// FX-param writes (e.g. CS-Switch value transfer) so the CSURF_EXT_SETFXPARAM
+// hook doesn't fan those writes out to group members. Balanced push/pop.
+void pushBroadcastSuppress();
+void popBroadcastSuppress();
+
 // Wall-clock milliseconds since a broadcast finished writing members.
 // chaseLastTouchedFx uses this to suppress UC1 focus jumps while
 // broadcast member writes are still propagating through REAPER's

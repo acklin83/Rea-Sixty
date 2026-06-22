@@ -431,6 +431,17 @@ bool inBroadcast()
     return g_broadcastDepth.load(std::memory_order_acquire) > 0;
 }
 
+void pushBroadcastSuppress()
+{
+    g_broadcastDepth.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void popBroadcastSuppress()
+{
+    g_broadcastDepth.fetch_sub(1, std::memory_order_acq_rel);
+    g_lastBroadcastEndMs.store(nowMs_(), std::memory_order_release);
+}
+
 int64_t millisSinceLastBroadcast()
 {
     const int64_t end = g_lastBroadcastEndMs.load(std::memory_order_acquire);
