@@ -18000,6 +18000,26 @@ custom_action_register_t g_actionLearnHud{
     0, "REASIXTY_LEARN_HUD_TOGGLE", "Rea-Sixty: Toggle Learn-HUD", nullptr,
 };
 int g_cmdLearnHud = 0;
+// Focus Set — REAPER-action route (keyboard / toolbar) for the four new
+// Focus built-ins. The add / remove / pin-toggle built-ins stay built-in-
+// only (Frank removed their custom actions 2026-05-27). Dispatch just sets
+// the same request atomics the built-ins use → drainSelsets_ on the timer.
+custom_action_register_t g_actionFocusClear{
+    0, "REASIXTY_FOCUS_CLEAR", "Rea-Sixty: Focus Set clear", nullptr,
+};
+int g_cmdFocusClear = 0;
+custom_action_register_t g_actionFocusToggleSel{
+    0, "REASIXTY_FOCUS_TOGGLE_SELECTED", "Rea-Sixty: Focus Set toggle selected", nullptr,
+};
+int g_cmdFocusToggleSel = 0;
+custom_action_register_t g_actionFocusSetFromSel{
+    0, "REASIXTY_FOCUS_SET_FROM_SELECTION", "Rea-Sixty: Focus Set from selection", nullptr,
+};
+int g_cmdFocusSetFromSel = 0;
+custom_action_register_t g_actionFocusPinFocused{
+    0, "REASIXTY_FOCUS_PIN_FOCUSED", "Rea-Sixty: Focus Set pin focused track", nullptr,
+};
+int g_cmdFocusPinFocused = 0;
 
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
@@ -18132,6 +18152,10 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdMasterPinStrip1){ reasixty_toggleMasterPin(1); return true; }
     if (command == g_cmdMasterPinStrip8){ reasixty_toggleMasterPin(8); return true; }
     if (command == g_cmdLearnHud)       { g_hudToggleRequest.store(true); return true; }
+    if (command == g_cmdFocusClear)     { g_tempSelsetClearRequest.store(true); return true; }
+    if (command == g_cmdFocusToggleSel) { g_tempSelsetToggleSelRequest.store(true); return true; }
+    if (command == g_cmdFocusSetFromSel){ g_tempSelsetSetFromSelRequest.store(true); return true; }
+    if (command == g_cmdFocusPinFocused){ g_tempSelsetPinFocusedRequest.store(true); return true; }
     return false;
 }
 
@@ -23685,6 +23709,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdMasterPinStrip1 = plugin_register("custom_action", &g_actionMasterPinStrip1);
     g_cmdMasterPinStrip8 = plugin_register("custom_action", &g_actionMasterPinStrip8);
     g_cmdLearnHud        = plugin_register("custom_action", &g_actionLearnHud);
+    g_cmdFocusClear      = plugin_register("custom_action", &g_actionFocusClear);
+    g_cmdFocusToggleSel  = plugin_register("custom_action", &g_actionFocusToggleSel);
+    g_cmdFocusSetFromSel = plugin_register("custom_action", &g_actionFocusSetFromSel);
+    g_cmdFocusPinFocused = plugin_register("custom_action", &g_actionFocusPinFocused);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

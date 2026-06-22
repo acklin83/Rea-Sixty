@@ -657,6 +657,7 @@ Four sub-tabs: AUTO · FX / Cycle · REC · NAV.
 | Show only tracks armed for automation writing (hide Trim / Read) | While AUTO Selection Mode is engaged, tracks in mode 0 (Trim) or 1 (Read) are hidden from the surface. Touch / Write / Latch / Latch-Preview tracks remain visible. |
 | Fill from left / Fill from right (radio pair) | When fewer visible tracks than the 8 hardware strips, choose which side they collect on. Project order is preserved either way. Active only while AUTO Selection Mode is engaged. |
 | Selection-Set Auto-Mode (combo) | `None` / `Trim/Off` / `Read` / `Touch` / `Write` / `Latch` / `Latch Preview`. When set, recalling a Selection Set in AUTO mode forces its member tracks into this REAPER automation mode. Deactivating the set (or leaving AUTO mode) reverts those tracks to Trim/Read (mode 0). |
+| Focus-Set Auto-Mode (combo) | Same options, for the pinned Focus Set — own knob, decoupled from the slot Selsets. Pinning the Focus Set in AUTO mode arms its members to this mode; unpinning (or leaving AUTO) reverts to Trim/Read. `None` = leave members' modes untouched. |
 
 ### FX / Cycle
 
@@ -1184,12 +1185,10 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## Selection Sets
 
-- **`selset_recall` (param: 1..8)** — toggle slot N: activate if inactive, deactivate if already active. Activation filters the surface to the slot's tracks and snaps the bank to strip 0 = first slot track. Mutually exclusive with the Temporary Selection Set's recall — activating a slot deactivates the temp filter, and vice versa.
+- **`selset_recall` (param: 1..8)** — toggle slot N: activate if inactive, deactivate if already active. Activation filters the surface to the slot's tracks and snaps the bank to strip 0 = first slot track. Coexists with the Focus Set (the slot filters, the Focus Set pins within the filtered list).
 - **`selset_save` (param: 1..8)** — save the current REAPER track selection into slot N.
 - **`selset_cycle`** — encoder-rotation handler that steps off → first populated slot → next → … → off. Skips empty slots.
-- **`temp_selset_add`** — add every currently-selected REAPER track to the Temporary Selection Set.
-- **`temp_selset_remove`** — remove every currently-selected REAPER track from the Temporary Selection Set.
-- **`temp_selset_recall`** — toggle the Temporary Selection Set's surface filter on / off. LED state-of reports the active flag, so a bound button lights up when the filter is engaged.
+- **Focus Set** — pin-source actions (`temp_selset_add` / `_remove` / `_recall` / `_clear` / `_toggle_selected` / `_set_from_selection` / `_pin_focused`, plus the `temp_selset_scroll` encoder). See *Selection Sets → Focus Set* for the full list and behaviour. `_recall` (*Focus Set: pin (toggle)*) lights its bound button via LED state-of while pinning is on.
 
 ## Surface filters / view toggles
 
@@ -1404,16 +1403,26 @@ A Group slot tracks REAPER's track-group membership in real time. Add a track to
 
 Project-scoped Snapshot + Group slots are saved into the project's RPP chunk via REAPER's project-config hook (lines `SELSET_<N>_DATA "..."`). Global-scoped slots ride REAPER's global ExtState (`reaper-extstate.ini`). The per-slot global/project flag itself, plus the `Selection-Set auto-mode` value, also live in global ExtState.
 
-## Temporary Selection Set
+## Focus Set
 
-A ninth, ad-hoc selection set living alongside the 8 numbered slots — no Settings UI, no slot name, just three actions you bind to hardware. Useful when you want to spin up a working set of tracks for a session ("just these 6 drum mics + the 2 talkback mics") without burning one of the named slots.
+A ninth, ad-hoc set living alongside the 8 numbered slots — no Settings UI, no slot name, just actions you bind to hardware. Unlike the slot Selsets (which *filter* the visible list), the Focus Set is a **pin source**: its members stick to the leftmost strips and the rest of the tracks keep banking past them — nothing is hidden. Useful for keeping a working set ("the 6 drum mics + 2 talkbacks") permanently under your hands while you still scroll the rest of the session.
 
-- **`temp_selset_add`** — adds every currently REAPER-selected track to the temp set.
-- **`temp_selset_remove`** — removes every currently REAPER-selected track from the temp set.
-- **`temp_selset_recall`** — toggles the surface filter on / off. While on, only temp-set tracks are visible. Mutually exclusive with the 1..8 slot recall — activating either kind drops the other.
-- **`temp_selset_scroll`** (encoder rotation) — steps REAPER track selection through the temp set in project order. Works regardless of whether the filter is currently recalled.
+- **`temp_selset_add`** (*Focus Set: add selected*) — add every REAPER-selected track to the set.
+- **`temp_selset_remove`** (*Focus Set: remove selected*) — remove every REAPER-selected track.
+- **`temp_selset_recall`** (*Focus Set: pin (toggle)*) — toggle pinning on / off. Coexists with the 1..8 slot recall — a slot filters the list, the Focus Set pins members within it.
+- **`temp_selset_clear`** (*Focus Set: clear*) — empty the set in one shot.
+- **`temp_selset_toggle_selected`** (*Focus Set: toggle selected*) — flip membership of the selected tracks (in → out, out → in).
+- **`temp_selset_set_from_selection`** (*Focus Set: set from selection*) — replace the set contents with the current selection.
+- **`temp_selset_pin_focused`** (*Focus Set: pin focused track*) — add the focused track and turn pinning on in one step.
+- **`temp_selset_scroll`** (encoder, *Encoder: scroll Focus Set members*) — step REAPER track selection through the set in project order.
 
-Persists per-project (saved into the RPP via the same project-config hook the numbered slots use). Cleared on REAPER restart only if you delete it manually; otherwise it survives save → reopen.
+The last four also have REAPER-action equivalents (`REASIXTY_FOCUS_CLEAR` / `_TOGGLE_SELECTED` / `_SET_FROM_SELECTION` / `_PIN_FOCUSED`) for a keyboard shortcut or toolbar button.
+
+**Collisions.** Focus pins, REAPER TCP pins (`B_TCPPIN`) and a Master pin compose left-to-right: `[Master][pin head: TCP ∪ Focus][banked rest]`. Focus pins work in both TCP and MCP surface-mirror modes; TCP pins only in TCP mode, and only while REAPER is honouring them (the *Override/unpin* and *Show/hide all pinned tracks in TCP* actions stand the TCP pins down — Focus pins are unaffected).
+
+**Auto-mode.** A dedicated *Focus-Set Auto-Mode* dropdown (Settings → Modes → AUTO) arms members to a chosen automation mode when pinned in AUTO sel mode — decoupled from the slot Selset auto-mode. Members are exempt from the *Auto-hide Trim/Read* filter, so a pinned member stays visible even when unarmed.
+
+Persists per-project (saved into the RPP via the same project-config hook the numbered slots use).
 
 \newpage
 
@@ -1496,7 +1505,7 @@ Toggle: `show_only_selected` builtin. When on, only currently-selected tracks ap
 
 ## Selection-Set filter
 
-ANDs with Folder Mode / Show Only Selected. When a selset is active, only its tracks appear (further filtered by Folder Mode if also on). The Temporary Selection Set is a separate filter that ANDs in the same way; a 1..8 slot and the temp set are mutually exclusive (only one can be recalled at a time).
+ANDs with Folder Mode / Show Only Selected. When a slot selset is active, only its tracks appear (further filtered by Folder Mode if also on). The Focus Set is **not** a filter — it is a pin source that coexists with the slot filter (see *Selection Sets → Focus Set*); it never hides tracks.
 
 ## Hide-hidden filter
 
