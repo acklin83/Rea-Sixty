@@ -646,6 +646,12 @@ std::atomic<bool> g_autoFillFromRight{false};
 // mode. Persisted in ExtState.
 std::atomic<int>  g_selsetAutoMode{-1};
 
+// Focus-Set Auto-Mode — same idea as g_selsetAutoMode but its OWN knob,
+// decoupled from the slot Selsets. When the Focus Set is pinned (recall on)
+// in Sel Mode Auto, members are forced to this REAPER automation mode;
+// recall off reverts them to Trim/Read. -1 = off (don't touch modes).
+std::atomic<int>  g_focusSetAutoMode{-1};
+
 // Settings → Modes → REC: RME TotalReaper integration. When the master
 // switch is on AND SelectionMode == Rec, the strip's V-Pot push / Cut /
 // Solo buttons dispatch the assigned TotalReaper named action against
@@ -1005,45 +1011,41 @@ inline MediaTrack* visibleTrackAt(int idx) {
 // negative slots, so existing null-check callers stay correct without
 // extra guards.
 inline int stripToVisibleSlot(int strip, int bankOffset) {
-    // Master-pin Shift: the pinned strip is reserved for the Master bus and
-    // the regular tracks bank over the remaining 7 strips so none is hidden.
-    // Master wins over TCP-pin, so this is checked first. The pinned strip
-    // itself returns -1 (its index is unused — masterPinTrack_ overrides the
-    // track at every call site); the others compact one slot toward the
-    // reserved end. Strip1 (mps=0): strips 1..7 → bankOffset+(strip-1).
-    // Strip8 (mps=7): strips 0..6 → bankOffset+strip (unchanged). Replace
-    // mode skips this (Shift off) and relies on masterPinTrack_ alone.
-    if (g_masterPinShift.load()) {
-        const int mps = masterPinnedStrip_();
-        if (mps >= 0) {
-            if (strip == mps) return -1;
-            const int eff = (mps == 0) ? (strip - 1) : strip;
-            return eff + bankOffset;
-        }
-    }
-    // Pinned-sticky: the first g_pinnedCount entries of g_visibleTracks
-    // are the TCP-pinned tracks (rebuildVisibleTrackList sorts them to
-    // the front). When sticky is active they occupy strips 0..(P-1)
-    // unconditionally — bankOffset and auto-fill-from-right only apply
-    // to strips ≥ P, and the existing `strip + bankOffset` math already
-    // hits the right index there because pinned tracks sit at the head
-    // of the list. Sticky disables itself when ≥ 8 tracks are pinned
-    // (surface would otherwise be frozen). See g_pinnedSurvivesBanking
-    // declaration for full rationale.
+    // Unified reservation that composes Master-pin Shift + the sticky pin
+    // head (Focus Set ∪ honoured TCP pins) + banking, left to right:
+    //   Master left (S1):  [ Master ][ head ][ banked rest ]
+    //   Master right (S8):           [ head ][ banked rest ][ Master ]
+    //   no Master shift:    [ head ][ banked rest ]            (8 strips)
+    //
+    // Master-pin Shift reserves one physical strip (mps = 0 left / 7 right);
+    // its own strip returns -1 (masterPinTrack_ overlays the track there).
+    // `pos` = the strip's 0-based position within the USABLE range (all
+    // strips minus the Master strip). Replace mode / modes where Master
+    // yields → mps = -1 → pos = strip → identical to the old default.
+    const int mps = g_masterPinShift.load() ? masterPinnedStrip_() : -1;
+    if (mps >= 0 && strip == mps) return -1;       // Master's own strip
+    const int pos = (mps == 0) ? (strip - 1) : strip;  // left-Master shifts rest right
+    const int usable = (mps >= 0) ? 7 : 8;
+
+    // Pinned-sticky: the first g_pinnedCount entries of g_visibleTracks were
+    // floated to the front by rebuildVisibleTrackList, so they map 1:1 onto
+    // the leftmost usable strips (list index == pos). bankOffset / auto-fill
+    // apply only past the head. Sticky disables itself when the head would
+    // fill the whole usable range (no banking room left) — the spill-across-
+    // banks rule (was ">= 8"). See g_pinnedSurvivesBanking for rationale.
     const int pinnedCount = g_pinnedCount.load();
     const bool sticky = g_pinnedSurvivesBanking.load()
-                     && pinnedCount > 0 && pinnedCount < 8;
-    if (sticky && strip < pinnedCount) return strip;
+                     && pinnedCount > 0 && pinnedCount < usable;
+    if (sticky && pos < pinnedCount) return pos;
 
     if (g_autoFillFromRight.load()
         && g_selectionMode.load() == SelectionMode::Auto)
     {
         const int vis = static_cast<int>(g_visibleTracks.size());
-        constexpr int kSurfaceStrips = 8;
-        const int pad = kSurfaceStrips - vis;
-        if (pad > 0) return strip - pad;
+        const int pad = usable - vis;
+        if (pad > 0) return pos - pad;
     }
-    return strip + bankOffset;
+    return pos + bankOffset;
 }
 
 // Active Selection-Set slot (1..8); 0 = none. selset_recall toggles
@@ -1108,6 +1110,10 @@ std::atomic<bool> g_tempSelsetActive{false};
 std::atomic<bool> g_tempSelsetAddRequest{false};
 std::atomic<bool> g_tempSelsetRemoveRequest{false};
 std::atomic<bool> g_tempSelsetRecallRequest{false};
+std::atomic<bool> g_tempSelsetClearRequest{false};
+std::atomic<bool> g_tempSelsetToggleSelRequest{false};
+std::atomic<bool> g_tempSelsetSetFromSelRequest{false};
+std::atomic<bool> g_tempSelsetPinFocusedRequest{false};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -1141,6 +1147,35 @@ std::atomic<int>  g_csSwitchReq{-1};
 std::atomic<int>  g_csCycleReq{0};
 static void applyCsSwitch_(int slot);   // defined with the CS-Switch block
 static void applyCsCycle_(int step);
+
+// True when REAPER is currently honouring TCP track pins. The two TCP-pin
+// view actions are NON-destructive — they don't clear B_TCPPIN — so to
+// mirror what REAPER actually shows we must read their toggle state:
+//   43573 = Track: Override/unpin all pinned tracks in TCP
+//   43575 = Track: Show/hide all pinned tracks in TCP
+// Either active → pins not honoured → our TCP-pin sticky stands down (the
+// B_TCPPIN tracks bank like normal tracks). IDs from Frank's Action List
+// 2026-06-22. State -1 (unknown) defaults to "respected" so we never
+// regress the baseline. NOTE: the toggle DIRECTION (does state==1 mean
+// shown/hidden, overridden/not?) is HW-verify pending — flip a comparison
+// if a capture shows it inverted. Focus-Set pins are NOT affected by these
+// (own concept, own Recall toggle).
+inline bool tcpPinsRespected_() {
+    const int ov = GetToggleCommandState2(SectionFromUniqueID(0), 43573);
+    const int hd = GetToggleCommandState2(SectionFromUniqueID(0), 43575);
+    return ov != 1 && hd != 1;
+}
+
+// Is this track a member of the active Focus Set? The Focus Set (formerly
+// "Temporary Selection Set") is now a PIN source, not a filter: members
+// stick to the leftmost strips, nothing is hidden. Empty/inactive → false.
+inline bool isFocusMember_(MediaTrack* tr) {
+    if (!tr || !g_tempSelsetActive.load() || g_tempSelsetGuids.empty())
+        return false;
+    char guidBuf[64] = {0};
+    GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
+    return g_tempSelsetGuids.count(guidBuf) != 0;
+}
 
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
@@ -1196,21 +1231,22 @@ void rebuildVisibleTrackList() {
             GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
             if (!g_selsetActiveGuids.count(guidBuf)) continue;
         }
-        // Temporary Selection Set — independent ad-hoc filter ANDed with
-        // the slot filter above. Empty set = pass-through so a freshly-
-        // recalled (but empty) temp set doesn't hide everything; user
-        // builds it up via REASIXTY_TEMP_SELSET_ADD afterwards.
-        if (g_tempSelsetActive.load() && !g_tempSelsetGuids.empty()) {
-            char guidBuf[64] = {0};
-            GetSetMediaTrackInfo_String(tr, "GUID", guidBuf, false);
-            if (!g_tempSelsetGuids.count(guidBuf)) continue;
-        }
+        // Focus Set (formerly "Temporary Selection Set") is NO LONGER a
+        // filter — it's a PIN source now. Members are NOT hidden here;
+        // they get floated to the leftmost strips by the pin partition
+        // below (isFocusMember_) and reserved by stripToVisibleSlot.
+        // Filtering is exclusively the slot-Selset job above.
         // AUTO-mode filter: hide tracks in Trim/Read (0) or Read (1) so
         // the user only sees tracks armed for automation writing. Only
         // active while SelectionMode == Auto AND the Settings toggle is
         // on — otherwise tracks of any automation mode pass through.
+        // Focus-Set members are EXEMPT — an explicit pin is a stronger
+        // intent than the "hide unarmed" convenience filter, so a pinned
+        // member stays visible even in Trim/Read. (Set the Focus-Set
+        // Auto-Mode to Touch/Write if you want them auto-armed instead.)
         if (g_autoHideReadTrim.load()
-            && g_selectionMode.load() == SelectionMode::Auto)
+            && g_selectionMode.load() == SelectionMode::Auto
+            && !isFocusMember_(tr))
         {
             const int am = GetTrackAutomationMode(tr);
             if (am == 0 || am == 1) continue;
@@ -1226,19 +1262,25 @@ void rebuildVisibleTrackList() {
         g_visibleTracks.push_back(tr);
     }
 
-    // TCP-mode only: re-sort the list so B_TCPPIN tracks come first,
-    // matching how REAPER's TCP itself renders them (always at top
-    // regardless of scroll). std::stable_partition preserves the
-    // relative order of pinned vs. non-pinned, so multiple pinned
-    // tracks stay in REAPER track-number order on the surface.
-    // MCP-mode skips this — MCP has no pinning concept. Pinned count
-    // is cached for stripToVisibleSlot's sticky check.
+    // Pin head: float pinned tracks to the front so they occupy the
+    // leftmost strips (stripToVisibleSlot reserves strips 0..P-1 for them).
+    // ONE stable_partition over a combined predicate — relative order is
+    // preserved (pinned tracks stay in REAPER track-number order) and a
+    // track that is BOTH a Focus member and TCP-pinned counts once:
+    //   - Focus-Set members — BOTH TCP and MCP modes (our own concept).
+    //   - REAPER TCP pins (B_TCPPIN) — TCP mode only, and only while REAPER
+    //     is actually honouring pins (tcpPinsRespected_; mirrors the
+    //     Override/Show-Hide view toggles). MCP has no pin region.
     int pinnedCount = 0;
-    if (g_visibilityFollow.load() == 0 && !g_visibleTracks.empty()) {
+    if (!g_visibleTracks.empty()) {
+        const bool tcpPins = (g_visibilityFollow.load() == 0)
+                          && tcpPinsRespected_();
         auto firstNonPinned = std::stable_partition(
             g_visibleTracks.begin(), g_visibleTracks.end(),
-            [](MediaTrack* tr) {
-                return GetMediaTrackInfo_Value(tr, "B_TCPPIN") > 0.5;
+            [tcpPins](MediaTrack* tr) {
+                if (isFocusMember_(tr)) return true;
+                return tcpPins
+                    && GetMediaTrackInfo_Value(tr, "B_TCPPIN") > 0.5;
             });
         pinnedCount = static_cast<int>(firstNonPinned - g_visibleTracks.begin());
     }
@@ -1726,6 +1768,10 @@ void saveCurrentSelectionToSlot_(int slot1to8) {
 void tempSelsetAddSelected_();
 void tempSelsetRemoveSelected_();
 void tempSelsetToggleRecall_();
+void tempSelsetClear_();
+void tempSelsetToggleSelected_();
+void tempSelsetSetFromSelection_();
+void tempSelsetPinFocused_();
 
 // onTimer drain. Detect project switch, then process queued recall /
 // save requests, then refresh the active GUID set for Group slots so
@@ -1841,6 +1887,18 @@ void drainSelsets_() {
     }
     if (g_tempSelsetRecallRequest.exchange(false)) {
         tempSelsetToggleRecall_();
+    }
+    if (g_tempSelsetClearRequest.exchange(false)) {
+        tempSelsetClear_();
+    }
+    if (g_tempSelsetSetFromSelRequest.exchange(false)) {
+        tempSelsetSetFromSelection_();
+    }
+    if (g_tempSelsetToggleSelRequest.exchange(false)) {
+        tempSelsetToggleSelected_();
+    }
+    if (g_tempSelsetPinFocusedRequest.exchange(false)) {
+        tempSelsetPinFocused_();
     }
 }
 
@@ -2574,6 +2632,10 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "selset_auto_mode"); v && *v) {
         const int m = std::atoi(v);
         if (m >= -1 && m <= 5) g_selsetAutoMode.store(m);
+    }
+    if (const char* v = GetExtState("rea_sixty", "focus_set_auto_mode"); v && *v) {
+        const int m = std::atoi(v);
+        if (m >= -1 && m <= 5) g_focusSetAutoMode.store(m);
     }
     if (const char* v = GetExtState("rea_sixty", "auto_fill_from_right"); v && *v) {
         g_autoFillFromRight.store(std::atoi(v) != 0);
@@ -17973,16 +18035,71 @@ void tempSelsetRemoveSelected_()
     g_pageDirty.store(true);
 }
 
+// Empty the whole Focus Set in one shot (no per-track selection needed).
+void tempSelsetClear_()
+{
+    g_tempSelsetGuids.clear();
+    tempSelsetWriteToProject_();
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Toggle membership of the REAPER-selected tracks: a selected track already
+// in the set is removed, the rest are added.
+void tempSelsetToggleSelected_()
+{
+    const int n = CountSelectedTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetSelectedTrack(nullptr, i);
+        if (!tr) continue;
+        char buf[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+        if (!buf[0]) continue;
+        if (g_tempSelsetGuids.count(buf)) g_tempSelsetGuids.erase(buf);
+        else                              g_tempSelsetGuids.insert(buf);
+    }
+    tempSelsetWriteToProject_();
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Replace the set contents with the current selection (clear + add).
+void tempSelsetSetFromSelection_()
+{
+    g_tempSelsetGuids.clear();
+    tempSelsetAddSelected_();   // adds the selection + writes + dirties
+}
+
+// Pin the focused (last-touched, fallback first-selected) track: add it and
+// make sure the Focus Set is pinned. Mirrors the recall path when turning
+// pin on so the Focus-Set Auto-Mode arming fires.
+void tempSelsetPinFocused_()
+{
+    MediaTrack* tr = GetLastTouchedTrack();
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    if (!tr) return;
+    char buf[64] = {0};
+    GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+    if (buf[0]) g_tempSelsetGuids.insert(buf);
+    if (!g_tempSelsetActive.load()) {
+        tempSelsetToggleRecall_();   // pin on (writes + arms members)
+    } else {
+        tempSelsetWriteToProject_();
+    }
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
 void tempSelsetToggleRecall_()
 {
     const bool wasActive = g_tempSelsetActive.load();
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
-    // Selection-Set Auto-Mode applies to the temp set too — same
-    // gating as the 1..8 slots. Recall ON in Sel Mode Auto with a
-    // non-disabled global mode → force every member track to that
-    // mode. Recall OFF → revert to Trim/Read. Frank 2026-05-27.
-    const int autoModeWant = g_selsetAutoMode.load();
+    // Focus-Set Auto-Mode (own knob, g_focusSetAutoMode — decoupled from
+    // the slot Selsets). Recall ON in Sel Mode Auto with a non-disabled
+    // mode → force every member track to that mode. Recall OFF → revert
+    // to Trim/Read.
+    const int autoModeWant = g_focusSetAutoMode.load();
     const bool autoModeGate =
         (g_selectionMode.load() == SelectionMode::Auto)
         && (autoModeWant >= 0);
@@ -17990,15 +18107,10 @@ void tempSelsetToggleRecall_()
         if (!wasActive) tempSelsetApplyAutoMode_(autoModeWant);
         else            tempSelsetApplyAutoMode_(0);
     }
-    // Slot ↔ Temp are mutually exclusive. Turning temp ON requests the
-    // active slot's deactivation through the same drain path that
-    // handles selset_recall (so auto-mode revert + follow-selected hook
-    // fire correctly). Turning temp OFF leaves the slot state alone —
-    // re-pressing temp's button is just a temp toggle, not a slot
-    // restore.
-    if (!wasActive && g_selsetActive.load() >= 1) {
-        g_selsetActivateRequest.store(-1);
-    }
+    // Focus Set (pin) and slot Selsets (filter) now COEXIST independently
+    // — the slot filters the visible list, the Focus Set pins members
+    // within it. (Was mutually exclusive when the Focus Set was itself a
+    // filter; that deactivate-active-slot request is gone.)
     g_bankDirty.store(true);
     g_pageDirty.store(true);
 }
@@ -19176,6 +19288,23 @@ void reasixty_setSelsetAutoMode(int mode)
         // "disabled" implies (no selset-driven automation overrides).
         selsetApplyAutoModeToSlot_(active, 0);
     }
+}
+
+int  reasixty_focusSetAutoMode() { return g_focusSetAutoMode.load(); }
+void reasixty_setFocusSetAutoMode(int mode)
+{
+    if (mode < -1 || mode > 5) return;
+    const int prev = g_focusSetAutoMode.exchange(mode);
+    if (prev == mode) return;
+    SetExtState("rea_sixty", "focus_set_auto_mode",
+                std::to_string(mode).c_str(), true);
+    // Apply/revert only when the Focus Set is currently pinned in Sel Mode
+    // Auto — same trigger rule as the slot Selset knob. Otherwise the new
+    // value is just stored for the next recall.
+    if (g_selectionMode.load() != SelectionMode::Auto) return;
+    if (!g_tempSelsetActive.load()) return;
+    if (mode >= 0)        tempSelsetApplyAutoMode_(mode);
+    else if (prev >= 0)   tempSelsetApplyAutoMode_(0);
 }
 
 int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
@@ -21634,10 +21763,12 @@ void registerBindingHandlers()
         false
     });
 
-    // Temp Selection Set — ad-hoc working set, no Settings slot, lives
-    // in ProjExtState. Three button built-ins (Add / Remove / Recall)
-    // plus the temp_selset_scroll encoder action (registered earlier
-    // alongside select_relative).
+    // Focus Set — ad-hoc working set, no Settings slot, lives in
+    // ProjExtState (internal keys keep the temp_selset_ prefix for
+    // back-compat). A PIN source: members stick to the leftmost strips,
+    // nothing hidden. Button built-ins (Add / Remove / Pin-toggle) plus
+    // the temp_selset_scroll encoder action (registered alongside
+    // select_relative).
     registerBuiltin("temp_selset_add", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -21647,14 +21778,14 @@ void registerBindingHandlers()
             // onTimer tick. Frank 2026-05-27.
             g_tempSelsetAddRequest.store(true);
         },
-        nullptr, "Temp Selection Set: add REAPER-selected tracks", false
+        nullptr, "Focus Set: add selected", false
     });
     registerBuiltin("temp_selset_remove", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
             g_tempSelsetRemoveRequest.store(true);
         },
-        nullptr, "Temp Selection Set: remove REAPER-selected tracks", false
+        nullptr, "Focus Set: remove selected", false
     });
     registerBuiltin("temp_selset_recall", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -21662,7 +21793,31 @@ void registerBindingHandlers()
             g_tempSelsetRecallRequest.store(true);
         },
         [](int) { return g_tempSelsetActive.load(); },
-        "Temp Selection Set: recall (toggle filter)", true
+        "Focus Set: pin (toggle)", true
+    });
+    registerBuiltin("temp_selset_clear", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_tempSelsetClearRequest.store(true);
+        },
+        nullptr, "Focus Set: clear", false
+    });
+    registerBuiltin("temp_selset_toggle_selected", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_tempSelsetToggleSelRequest.store(true);
+        },
+        nullptr, "Focus Set: toggle selected", false
+    });
+    registerBuiltin("temp_selset_set_from_selection", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_tempSelsetSetFromSelRequest.store(true);
+        },
+        nullptr, "Focus Set: set from selection", false
+    });
+    registerBuiltin("temp_selset_pin_focused", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_tempSelsetPinFocusedRequest.store(true);
+        },
+        nullptr, "Focus Set: pin focused track", false
     });
 
     // FX Learn lebt als Settings-Tab im Mixer-Window, nicht als Builtin —
@@ -21984,7 +22139,7 @@ void registerBindingHandlers()
             if (!firing) return;
             applyTempSelsetScroll_(param);
         },
-        nullptr, "Encoder: scroll tracks in Temp Selection Set", false
+        nullptr, "Encoder: scroll Focus Set members", false
     });
     registerBuiltin("playhead_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {

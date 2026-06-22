@@ -146,6 +146,8 @@ void        reasixty_selsetRecallToggle(int slot);
 void        reasixty_selsetClear(int slot);
 int         reasixty_selsetAutoMode();                          // global: -1 = off, 0..5 = REAPER mode
 void        reasixty_setSelsetAutoMode(int mode);
+int         reasixty_focusSetAutoMode();                        // Focus Set: -1 = off, 0..5 = REAPER mode
+void        reasixty_setFocusSetAutoMode(int mode);
 bool reasixty_recRmeEnabled();
 bool reasixty_recVpotRotateGain();
 bool reasixty_recVpotShiftInputCh();
@@ -14739,6 +14741,28 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "  When a Selection Set is recalled, its member tracks are "
         "forced into this REAPER automation mode. Deactivating the set "
         "reverts those tracks to Trim/Read (mode 0). None = disabled.");
+
+    ImGui_Spacing(ctx);
+    // Focus-Set Auto-Mode — own knob, decoupled from the slot Selsets.
+    const int fmCur = reasixty_focusSetAutoMode();
+    const char* fmPreview = (fmCur < 0 || fmCur > 5)
+        ? amLabels[0] : amLabels[fmCur + 1];
+    ImGui_Text(ctx, "Focus-Set Auto-Mode:");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_SetNextItemWidth(ctx, 160);
+    if (ImGui_BeginCombo(ctx, "##focus_set_auto_mode", fmPreview, nullptr)) {
+        for (int opt = -1; opt <= 5; ++opt) {
+            bool sel = (opt == fmCur);
+            if (ImGui_Selectable(ctx, amLabels[opt + 1], &sel,
+                                 nullptr, nullptr, nullptr))
+            {
+                reasixty_setFocusSetAutoMode(opt);
+            }
+        }
+        ImGui_EndCombo(ctx);
+    }
+    ImGui_Text(ctx,
+        "  Same for the pinned Focus Set. None = leave modes untouched.");
 
         ImGui_EndTabItem(ctx);
     }
