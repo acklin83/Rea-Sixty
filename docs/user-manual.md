@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.28
+date: v0.1.33
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.28. Earlier manuals (anything dated before 2026-06-16) are superseded.
+This manual documents Rea-Sixty v0.1.33. Earlier manuals (anything dated before 2026-06-22) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.1.28.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.1.28.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.1.28.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.1.33.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.1.33.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.1.33.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
 
 ## Enabling the surface
 
@@ -174,7 +174,7 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of eleven modes. Switch with the corresponding `encoder_*` builtin. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of twelve modes. Switch with the corresponding `encoder_*` builtin. The current mode persists across REAPER restarts.
 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
@@ -555,6 +555,8 @@ Per-surface speed and 0 dB / centre-pan detent feel for **all** V-Pots and pots.
 
 **Effective step** = base × per-control sensitivity (FX-Learn) × surface speed × (Fine factor while Fine held).
 
+The speed minimum is **0.01×** (UF8 and UC1) — low enough for crawling through long sweeps a single detent at a time.
+
 The same section also tunes the **virtual notch** — the SSL-style magnet that lands bipolar V-Pot params (EQ gains, trims, fader level, pan) on their neutral point (0 dB / centre):
 
 | Field | Default | Effect |
@@ -594,6 +596,10 @@ Three-way radio: **Small** / **Normal** / **Large**. Drives every Settings widge
 ### Spelling
 
 Two-way radio: **British (Colour, Grey)** / **American (Color, Gray)**. Switches the spelling of every user-facing string that differs between the two (Settings labels, the focused-track panel's right-click menu, etc.). British is the default.
+
+### Settings window
+
+- **Reopen on last tab viewed** — when on, the Settings window reopens on whichever pane you last had open instead of the default. Persisted globally.
 
 \newpage
 
@@ -750,11 +756,14 @@ Below the toolbar:
 
 ### Editor view (entered via Edit)
 
+The editor **live-follows the active FX** — open it and it loads the map + instance for the plug-in you're currently looking at (the last-touched FX), so you don't have to find it in the list first. Manually picking a different map / instance still sticks until you touch another plug-in.
+
 Top bar:
 
 - **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
 - **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode dispatch.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
+- **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS-Switch favourite slots, or clear it. See chapter *Channel-Strip Switch (CS-Switch)*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
 - **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
 - Breadcrumb **`← All maps`** to leave the editor.
@@ -841,6 +850,8 @@ When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/r
 - **Push reset** (Value-mode V-Pots) snaps the chosen default to the nearest step.
 
 The runtime accumulator decays after 150 ms of inactivity, so reversing direction at sub-threshold doesn't leave residual fractional steps fighting the new motion.
+
+**JSFX continuous params** are handled specially: a JSFX often reports a coarse step size for a knob that is really continuous, which would otherwise force jumpy 2.4 dB jumps. Rea-Sixty normalises the JSFX step against the parameter's range so such a control resolves finely (continuous), with a fine-control accumulator for sub-step moves.
 
 In the FX-Learn schematic, slots with customised knob travel show:
 
@@ -1025,12 +1036,13 @@ Enable via *Settings → "Show focused-track panel"*. Drag the body to move, dra
 A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each knob / button does without opening Settings.
 
 - Toggle with the **`learn_hud_toggle`** built-in (bind it to a surface button) or the REAPER action **"Rea-Sixty: Toggle Learn-HUD"** (`REASIXTY_LEARN_HUD_TOGGLE`). There is no Settings checkbox.
-- **CS / BC tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross.
+- **CS / BC / UF8 tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross. The **UF8 tab** shows the per-strip UF8 assignments (V-Pot / fader / soft-keys) for the focused plug-in and offers the same learn / tuning controls.
 - Each row = the SSL slot name + the bound parameter's name (or your custom Display label). Rows are grouped by section (Filter / EQ / Dynamics / Gate / I-O for CS; the Bus-Comp knobs for BC), with Dynamics + Gate in a right-hand column to mirror the hardware.
 - A **layer badge** (NORM / OPT / CTRL) shows the held FX-Learn modifier layer; the list follows it live. On a modifier layer the list shows **only the controls you actually overlaid on that layer** — controls that fall through to their Normal mapping read as unmapped, so you can see at a glance what's layer-specific.
 - **Right-click → View** switches between the grouped text **List** and a hardware **Mockup** (the UC1/UF8 face). **Right-click → Text size** (Small … Huge); the menus themselves honour your *Appearance → Font Size*. The window size persists globally.
 - **Click a row (or mockup control), then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
-- **Right-click a control** (list row or mockup knob/button) for a per-control menu: **Learn** (wiggle a parameter), **Invert** (flip the control's polarity), **Rename…** (set a custom Display label; empty reverts to the default name), **Unbind**. All act on the active modifier layer; Invert / Rename / Unbind are disabled on an unmapped control, and built-in SSL maps show the factory-fixed hint.
+- **Right-click a control** (list row or mockup knob/button) for a per-control menu: **Learn** (wiggle a parameter), **Invert** (flip the control's polarity), **Rename…** (set a custom Display label; empty reverts to the default name), **Unbind**, plus the **knob-travel / curve editor**, **feel presets** and **stepped-parameter** controls — full FX-Learn parity without opening Settings. All act on the active modifier layer; Invert / Rename / Unbind are disabled on an unmapped control, and built-in SSL maps show the factory-fixed hint.
+- The window's **☰ menu** carries a **CS Favourite** submenu — favourite the live Channel-Strip into a CS-Switch slot (greyed when no CS is on the focused track). See chapter *Channel-Strip Switch (CS-Switch)*.
 
 \newpage
 
@@ -1065,6 +1077,7 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **`encoder_instance_scroll_all`** — Cycle Instance across tracks: Instances on the focused track, then one detent per track boundary onto the neighbour's first/last Instance. Hard-stop at the project edge.
 - **`encoder_fx_scroll_all`** — Cycle FX across tracks: same cross-track behaviour for every FX.
 - **`encoder_selset_cycle`** — step through populated Selection Set slots (off → 1 → 2 → … → off).
+- **`encoder_cs_cycle`** — Channel-Strip Switch: cycle the active CS through the favourite slots (see chapter *Channel-Strip Switch (CS-Switch)*).
 - **`encoder_mode_dispatch`** — rotation handler that routes to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
@@ -1108,6 +1121,14 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **`close_all_fx_guis`** — close every floating FX window in the project.
 - **`fx_param_inc`** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in plug-in map registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to `fx_param_inc` and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
 - **`fx_param_dec`** — same as `fx_param_inc` with the sign flipped.
+
+## Channel-Strip Switch
+
+Replace the active Channel-Strip plug-in, carrying values across (see chapter *Channel-Strip Switch (CS-Switch)*). Operate on every selected track, else the surface-focused track.
+
+- **`switch_cs_1` … `switch_cs_8`** — switch the active CS to favourite slot N. Lit when the focused CS already is that favourite.
+- **`cs_cycle`** — step to the next favourite (wraps, honours the cycle-wrap setting).
+- **`encoder_cs_cycle`** — Channel-Encoder mode: rotate to cycle favourites (also listed under *Channel Encoder mode toggles*).
 
 ## Instance navigation
 
@@ -1228,6 +1249,7 @@ When held, these shift every other binding to its modifier slot. The three match
 - **`pan_force`** — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO when you need pan back quickly.
 - **`learn_hud_toggle`** — show / hide the **Learn-HUD** (focused plug-in's assignments). Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle Learn-HUD* (`REASIXTY_LEARN_HUD_TOGGLE`). See *On-Screen Display → Learn-HUD*.
 - **`focused_panel_toggle`** — show / hide the frameless **focused-track panel**. See *On-Screen Display → Focused-track panel*.
+- **`touch_to_learn_toggle`** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding.
 - **`uc1_outgain_fader_toggle`** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 
 ## Internal (not user-bindable)
@@ -1275,6 +1297,41 @@ Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Po
 The SSL 360° Link plug-in (a wrapper that mirrors third-party VSTs into the 360° surface) is recognised natively. When the focused track has a 360° Link instance pointing at a learned plug-in, SSL Strip Mode / UF8 Plug-in Mode dispatch through the linked plug-in transparently.
 
 User-renamed 360° Link instances show the rename instead of the generic "Link" / "L-BC" abbreviation.
+
+\newpage
+
+# Channel-Strip Switch (CS-Switch)
+
+Swap the active Channel-Strip plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different channel-strip emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
+
+## Favourites
+
+Define up to **8 favourite** Channel-Strip plug-ins. They are stored globally (all projects), in REAPER's ExtState. Set them in either place:
+
+- **Settings → FX Learn**, with a Channel-Strip plug-in loaded and its editor open: a **CS Favourite** dropdown assigns the current plug-in to a slot (1–8).
+- **Learn-HUD ☰ menu → CS Favourite** submenu: favourite the live Channel-Strip directly (greyed when no CS is on the focused track).
+
+One plug-in occupies one slot — assigning it to a new slot moves it.
+
+## Switching
+
+- **Switch to CS 1 … 8** (`switch_cs_1` … `switch_cs_8`) — replace the active CS with favourite N. The action lights when the focused CS already *is* that favourite.
+- **CS Cycle** (`cs_cycle`) — step to the next favourite, wrapping (honours the global cycle-wrap setting).
+- **Encoder CS Cycle** (`encoder_cs_cycle`) — a Channel-Encoder mode: rotate to cycle favourites.
+
+A track with **no** Channel Strip is skipped. With multiple tracks selected, all selected tracks switch in one undo step (else the surface-focused track). The swap preserves the old plug-in's **bypass state** and, if its GUI was open, **reopens the window**.
+
+## Value transfer
+
+Each control carries its value to the matching control on the new plug-in, matched by the shared SSL-Link control (the same control you would map in FX-Learn) — never by guessing:
+
+- **Numeric values** (gains, frequencies, Q, threshold, ratio, time) transfer by **engineering value**: the search lands the new plug-in on the value whose display matches the source, exactly when achievable. Hz↔kHz and s↔ms scale differences are reconciled automatically; dB / ratio are never rescaled.
+- **Same-family swaps** (e.g. SSL → SSL) stay **bit-exact**.
+- **Discrete states / buttons** (Bell/Shelf, In/Out, Gate/Expander…) transfer by **meaning**: identical label first, else the active/inactive sense (In/On/Engaged/Expander ↔ Out/Off/Bypass/Gate), else the same state position — so a toggle lands correctly even when the two plug-ins label or order it differently.
+- **Unmapped controls** are resolved by parameter **name alias** as a fallback (e.g. a JSFX strip whose high-pass is literally named "High Pass Filter (Hz)"), but a learned mapping always wins.
+- A control the **new** plug-in lacks is remembered, so the value survives a round-trip through a simpler strip and is restored when you cycle back.
+
+If a value genuinely can't be represented (a frequency far outside the target's range), the control is left at its default rather than slammed to a rail.
 
 \newpage
 
