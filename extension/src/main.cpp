@@ -77,6 +77,7 @@
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
 #include "focused_panel_lua.h"    // generated: uf8::setup_bundle::kFocusedPanelLua{Bytes,Size}
+#include "mode_banner_lua.h"      // generated: uf8::setup_bundle::kModeBannerLua{Bytes,Size}
 
 // File-global so both onTimer() and the insert setters (which live in an
 // anonymous namespace) bind to the SAME global symbol defined near the
@@ -86,6 +87,8 @@ void reasixty_syncAssignmentHudRun();
 void reasixty_setAssignmentHud(bool on);
 void reasixty_syncFocusedPanelRun();
 void reasixty_setFocusedPanel(bool on);
+void reasixty_syncModeBannerRun();
+void reasixty_setModeBanner(bool on);
 // Learn-HUD payload builders (defined in SettingsScreen.cpp, which owns
 // the UC1 control geometry table).
 std::string reasixty_hudGeometryUc1();
@@ -900,6 +903,20 @@ inline const char* selectionModeStr(SelectionMode m)
         case SelectionMode::InstanceCycle: return "instance_cycle";
         case SelectionMode::Norm:
         default:                           return "norm";
+    }
+}
+
+// Friendly (display) name for the mode-change banner (Stream B3).
+inline const char* selectionModeFriendly(SelectionMode m)
+{
+    switch (m) {
+        case SelectionMode::Rec:           return "Rec Arm";
+        case SelectionMode::RecMon:        return "Rec / Monitor";
+        case SelectionMode::Auto:          return "Automation";
+        case SelectionMode::Instance:      return "Instance";
+        case SelectionMode::InstanceCycle: return "Instance Cycle";
+        case SelectionMode::Norm:
+        default:                           return "Select";
     }
 }
 
@@ -2219,6 +2236,15 @@ std::atomic<bool> g_focusedPanel{false};
 std::atomic<bool> g_focusedPanelAutoStartDone{false};
 std::atomic<bool> g_focusedPanelToggleRequest{false};
 
+// Transient mode-change banner (ReaImGui place-anywhere companion). Flag
+// persisted as ExtState "mode_banner_on"; companion polls
+// "mode_banner_running". Default off. The extension always publishes the
+// mode-change events (mode_banner ExtState) in onTimer; only this companion
+// renders them. Stream B3, Frank 2026-06-22.
+std::atomic<bool> g_modeBanner{false};
+std::atomic<bool> g_modeBannerAutoStartDone{false};
+std::atomic<bool> g_modeBannerToggleRequest{false};
+
 // Per-tick device calibration for UC1's BC VU motor + CS DYN GR LEDs
 // (Frank 2026-05-15, mirrors SSL 360°'s BC VU calibration tool — the
 // user nudges each marking until the physical needle / LEDs line up
@@ -2569,6 +2595,9 @@ void loadBrightness()
     DeleteExtState("rea_sixty", "hud_on", true);
     if (const char* v = GetExtState("rea_sixty", "focused_panel_on"); v && *v) {
         g_focusedPanel.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "mode_banner_on"); v && *v) {
+        g_modeBanner.store(std::atoi(v) != 0);
     }
     // Per-tick device calibration. Six keys for BC VU, five for CS
     // LEDs. Missing keys leave the in-memory zero default (= no user
@@ -3174,6 +3203,27 @@ enum class EncoderMode : uint8_t {
     CsCycle,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
+
+// Friendly (display) name for the mode-change banner (Stream B3).
+inline const char* encoderModeFriendly(EncoderMode m)
+{
+    switch (m) {
+        case EncoderMode::ChSelect:          return "Channel Select";
+        case EncoderMode::Nudge:             return "Nudge";
+        case EncoderMode::Mousewheel:        return "Mousewheel";
+        case EncoderMode::Instance:          return "Instance";
+        case EncoderMode::FxCycle:           return "FX Cycle";
+        case EncoderMode::SelsetCycle:       return "Selset Cycle";
+        case EncoderMode::Markers:           return "Markers";
+        case EncoderMode::BankBy1:           return "Bank by 1";
+        case EncoderMode::LastParam:         return "Last Param";
+        case EncoderMode::FxScrollAll:       return "FX Scroll (all)";
+        case EncoderMode::InstanceScrollAll: return "Instance Scroll (all)";
+        case EncoderMode::FxMove:            return "FX Move";
+        case EncoderMode::CsCycle:           return "CS Cycle";
+    }
+    return "Encoder";
+}
 
 // Send/Receive-routing modes for the V-Pots and faders. Four
 // independent state pairs (V-Pot vs Fader × Send vs Receive); each
@@ -12479,6 +12529,23 @@ void pushZonesForVisibleSlots()
                     userLabel = sp.action;
                     if (userLabel.size() > 8) userLabel.resize(8);
                 }
+                // Bank-5 dynamic label: a switch_cs_N slot shows the CS
+                // favourite's own name (factory "CS N" is the fallback when
+                // the favourite slot is empty). Frank's curation 2026-06-22.
+                if (userBankSlotPresent
+                    && sp.action.rfind("switch_cs_", 0) == 0) {
+                    const int favSlot =
+                        std::atoi(sp.action.c_str() + 10) - 1;  // 1→0-based
+                    std::string favAdd, favLbl;
+                    if (favSlot >= 0 && favSlot < 8
+                        && reasixty_csFav(favSlot, favAdd, favLbl)) {
+                        std::string dyn = !favLbl.empty() ? favLbl : favAdd;
+                        if (!dyn.empty()) {
+                            if (dyn.size() > 8) dyn.resize(8);
+                            userLabel = dyn;
+                        }
+                    }
+                }
             }
 
             // Per-binding label override — top wins, fall through to
@@ -15569,6 +15636,26 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState callerState)
             if (bid != uf8::bindings::ButtonId::None) {
                 resolveMod   = uf8::bindings::lastFiredModifier(bid);
                 useLongPress = uf8::bindings::lastFiredWasLongPress(bid);
+                // Stream C2 (Frank 2026-06-22): in the base view (no
+                // modifier held) the Plain slot's LED wins. A modifier
+                // slot's LED only bleeds into base when the Plain slot is
+                // genuinely empty (no action AND no per-slot LED) — so a
+                // toggled Shift/Cmd/Ctrl action no longer repaints the
+                // base LED with the modifier slot's colour while Plain has
+                // its own binding.
+                if (mod == uf8::bindings::Modifier::Plain
+                    && resolveMod != uf8::bindings::Modifier::Plain) {
+                    const auto bd = uf8::bindings::getBinding(
+                        uf8::bindings::getActiveLayer(), bid);
+                    const auto& plain = bd.shortPress[
+                        static_cast<int>(uf8::bindings::Modifier::Plain)];
+                    const bool plainHasLed =
+                        plain.led.hasActive || plain.led.hasInactive;
+                    if (!uf8::bindings::slotIsEmpty(plain) || plainHasLed) {
+                        resolveMod   = uf8::bindings::Modifier::Plain;
+                        useLongPress = false;
+                    }
+                }
             }
         }
         r = resolveLed_(cell, callerActive, resolveMod, useLongPress);
@@ -16190,6 +16277,41 @@ void onTimer()
     }
     if (g_focusedPanelToggleRequest.exchange(false)) {
         reasixty_setFocusedPanel(!g_focusedPanel.load());
+    }
+    if (!g_modeBannerAutoStartDone.load() && g_tickCounter >= 30) {
+        g_modeBannerAutoStartDone.store(true);
+        reasixty_syncModeBannerRun();
+    }
+    if (g_modeBannerToggleRequest.exchange(false)) {
+        reasixty_setModeBanner(!g_modeBanner.load());
+    }
+
+    // Mode-change banner (Stream B3). Publish a transient label whenever the
+    // Selection-Mode or Encoder-Mode flips, for the on-screen banner companion
+    // (rea_sixty_mode_banner.lua) to flash for ~2 s. Diff-guarded; the first
+    // tick only syncs the baseline so no banner fires at boot. The seq counter
+    // lets the companion (re)start its hide timer on each fresh change.
+    {
+        static bool          mbInit = false;
+        static SelectionMode mbLastSel = SelectionMode::Norm;
+        static EncoderMode   mbLastEnc = EncoderMode::ChSelect;
+        static unsigned      mbSeq     = 0;
+        const SelectionMode sm = g_selectionMode.load();
+        const EncoderMode   em = g_encoderMode.load();
+        if (!mbInit) {
+            mbInit = true;
+            mbLastSel = sm;
+            mbLastEnc = em;
+        } else if (sm != mbLastSel || em != mbLastEnc) {
+            std::string text = (sm != mbLastSel)
+                ? std::string("Sel \xE2\x80\xA2 ") + selectionModeFriendly(sm)
+                : std::string("Encoder \xE2\x80\xA2 ") + encoderModeFriendly(em);
+            mbLastSel = sm;
+            mbLastEnc = em;
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s\t%u", text.c_str(), ++mbSeq);
+            SetExtState("rea_sixty", "mode_banner", buf, false);
+        }
     }
 
     // Mirror "a GUI V-Pot learn/listen is armed" (HUD grid-click or FX-Learn
@@ -21585,6 +21707,14 @@ void registerBindingHandlers()
         "Focused-track panel: show / hide (frameless, on Arrange)", false
     });
 
+    registerBuiltin("mode_banner_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_modeBannerToggleRequest.store(true);
+        },
+        [](int) -> bool { return g_modeBanner.load(); },
+        "Mode-change banner: show / hide (flashes Sel / Encoder mode)", false
+    });
+
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
         [](bool firing,
            bool /*pressed*/,
@@ -23467,6 +23597,85 @@ void reasixty_syncFocusedPanelRun()
     const bool running = reasixty_focusedPanelRunning();
     if (want && !running)      reasixty_toggleFocusedPanel();
     else if (!want && running) SetExtState("rea_sixty", "focused_panel_imgui_running", "0", false);
+}
+
+// ---- Transient mode-change banner companion lifecycle (same clone) --------
+static std::string modeBannerLuaPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return {};
+    return std::string(base) + "/Scripts/rea-sixty/rea_sixty_mode_banner.lua";
+}
+
+static void reasixty_deployModeBannerLua()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    if (!base || !*base) return;
+    const std::string scriptsRoot = std::string(base) + "/Scripts";
+    const std::string dir         = scriptsRoot + "/rea-sixty";
+#ifdef _WIN32
+    _mkdir(scriptsRoot.c_str());
+    _mkdir(dir.c_str());
+#else
+    mkdir(scriptsRoot.c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+#endif
+    const std::string path = dir + "/rea_sixty_mode_banner.lua";
+    const char*  data = reinterpret_cast<const char*>(
+        uf8::setup_bundle::kModeBannerLuaBytes);
+    const size_t len  = uf8::setup_bundle::kModeBannerLuaSize;
+    if (FILE* rf = std::fopen(path.c_str(), "rb")) {
+        std::fseek(rf, 0, SEEK_END);
+        const long sz = std::ftell(rf);
+        std::fseek(rf, 0, SEEK_SET);
+        bool same = false;
+        if (sz == static_cast<long>(len)) {
+            std::string buf(len, '\0');
+            same = (std::fread(&buf[0], 1, len, rf) == len)
+                && (std::memcmp(buf.data(), data, len) == 0);
+        }
+        std::fclose(rf);
+        if (same) return;
+    }
+    if (FILE* wf = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(data, 1, len, wf);
+        std::fclose(wf);
+    }
+}
+
+bool reasixty_toggleModeBanner()
+{
+    reasixty_deployModeBannerLua();
+    const std::string path = modeBannerLuaPath_();
+    if (path.empty()) return false;
+    const int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+                                         path.c_str(), /*commit*/ true);
+    if (cmdId <= 0) return false;
+    Main_OnCommand(cmdId, 0);
+    return true;
+}
+
+bool reasixty_modeBanner() { return g_modeBanner.load(); }
+
+bool reasixty_modeBannerRunning()
+{
+    const char* v = GetExtState("rea_sixty", "mode_banner_running");
+    return v && v[0] == '1';
+}
+
+void reasixty_setModeBanner(bool on)
+{
+    g_modeBanner.store(on);
+    SetExtState("rea_sixty", "mode_banner_on", on ? "1" : "0", true);
+    reasixty_syncModeBannerRun();
+}
+
+void reasixty_syncModeBannerRun()
+{
+    const bool want    = g_modeBanner.load();
+    const bool running = reasixty_modeBannerRunning();
+    if (want && !running)      reasixty_toggleModeBanner();
+    else if (!want && running) SetExtState("rea_sixty", "mode_banner_running", "0", false);
 }
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(

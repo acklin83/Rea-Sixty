@@ -567,6 +567,21 @@ bool              deleteBankPreset(int idx);
 // overwriting whatever was there. Returns false on out-of-range.
 bool              recallBankPreset(int idx, int layer, int quick, int subBank);
 
+// ---- Factory Rea-Sixty soft-key bank presets ----------------------------
+// Read-only curated banks built ONLY from Rea-Sixty's own built-ins (the
+// many that have no dedicated UF8 key). Six banks of 8 slots each; their
+// intended home is Layer 1 / Quick 3's six sub-banks (V-POT + Soft 1..5).
+// See backlog Stream A 2026-06-22. The CS-Favourites bank's labels are
+// resolved dynamically at render time from the user's CS favourites.
+int               factoryBankPresetCount();
+SoftKeyBankPreset factoryBankPresetAt(int idx);          // copy; OOR = empty
+// Copy factory bank `idx`'s 8 slots into (layer, quick, subBank).
+bool              recallFactoryBankPreset(int idx, int layer, int quick,
+                                          int subBank);
+// Bulk: fill the 6 sub-banks of (layer, quick) with factory banks 0..5 in
+// order (V-POT←0, Soft1←1, … Soft5←5). Returns banks written, -1 on OOR.
+int               loadFactoryReaSixtySet(int layer, int quick);
+
 // Dispatch a press/release through a user-quick slot. Same long-press
 // + modifier-matrix logic as dispatch(ButtonId), but the slot is
 // addressed by (layer, quick, subBank, slot) so press-timer keys stay

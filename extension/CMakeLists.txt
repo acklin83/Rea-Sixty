@@ -240,6 +240,28 @@ add_custom_command(
 add_custom_target(reasixty_focused_panel_lua_gen ALL
     DEPENDS ${REASIXTY_FOCUSED_PANEL_LUA_HEADER})
 
+# Same embedding pattern for the transient mode-change banner companion Lua
+# (Stream B3, 2026-06-22).
+set(REASIXTY_MODE_BANNER_LUA_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rea_sixty_mode_banner.lua")
+set(REASIXTY_MODE_BANNER_LUA_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/mode_banner_lua.h")
+add_custom_command(
+    OUTPUT ${REASIXTY_MODE_BANNER_LUA_HEADER}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRCFILE=${REASIXTY_MODE_BANNER_LUA_SRC}
+        -DOUTFILE=${REASIXTY_MODE_BANNER_LUA_HEADER}
+        -DSYMBOL=kModeBannerLua
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    DEPENDS
+        ${REASIXTY_MODE_BANNER_LUA_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_factory_bundle.cmake
+    COMMENT "Embedding rea_sixty_mode_banner.lua"
+    VERBATIM
+)
+add_custom_target(reasixty_mode_banner_lua_gen ALL
+    DEPENDS ${REASIXTY_MODE_BANNER_LUA_HEADER})
+
 # Bake the canonical user manual (docs/user-manual.md) into a header so the
 # Settings → Manual tab renders it offline, always in lockstep with the repo
 # doc — no second copy to maintain, no runtime file to ship.
@@ -383,6 +405,7 @@ add_dependencies(reaper_uf8 reasixty_input_level_jsfx_gen)
 add_dependencies(reaper_uf8 reasixty_inserts_overlay_lua_gen)
 add_dependencies(reaper_uf8 reasixty_assignment_hud_lua_gen)
 add_dependencies(reaper_uf8 reasixty_focused_panel_lua_gen)
+add_dependencies(reaper_uf8 reasixty_mode_banner_lua_gen)
 add_dependencies(reaper_uf8 reasixty_user_manual_gen)
 # Recompile the manual renderer whenever the embedded header changes so a
 # fresh docs/user-manual.md propagates into the binary.

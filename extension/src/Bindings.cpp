@@ -19,10 +19,12 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <initializer_list>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -3146,6 +3148,143 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank)
     }
     persistLocked_();
     return true;
+}
+
+// ---- Factory Rea-Sixty soft-key bank presets -----------------------------
+// Curated from Rea-Sixty's own built-ins only (Frank's locked curation,
+// backlog 2026-06-22). Labels ≤8 chars (firmware top-soft-key cap). Built
+// once, lazily, into a static table (uses mkBuiltin from this TU).
+
+static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
+{
+    static const std::vector<SoftKeyBankPreset> kBanks = []() {
+        using SlotDef = std::pair<const char*, const char*>;   // action, label
+        auto bank = [](const char* presetName,
+                       std::initializer_list<SlotDef> slots) {
+            SoftKeyBankPreset p;
+            p.name = presetName;
+            int i = 0;
+            for (const auto& s : slots) {
+                if (i >= kSlotsPerSubBank) break;
+                p.slots[i++] = mkBuiltin(s.first, Behavior::Momentary,
+                                         s.second);
+            }
+            return p;
+        };
+        std::vector<SoftKeyBankPreset> v;
+        v.push_back(bank("Encoder Modes", {
+            {"encoder_nav",      "Ch Sel"},
+            {"encoder_instance", "Instance"},
+            {"encoder_fx_cycle", "FX Cycle"},
+            {"encoder_fx_move",  "FX Move"},
+            {"encoder_cs_cycle", "CS Cycle"},
+            {"encoder_markers",  "Markers"},
+            {"encoder_nudge",    "Nudge"},
+            {"encoder_focus",    "Wheel"},
+        }));
+        v.push_back(bank("Focus Set & Selsets", {
+            {"temp_selset_recall",          "Pin FS"},
+            {"temp_selset_add",             "Add FS"},
+            {"temp_selset_remove",          "Rem FS"},
+            {"temp_selset_toggle_selected", "Togl FS"},
+            {"temp_selset_set_from_selection", "Set FS"},
+            {"temp_selset_pin_focused",     "Grab FS"},
+            {"temp_selset_clear",           "Clear FS"},
+            {"selset_cycle",                "Selsets"},
+        }));
+        v.push_back(bank("Plug-in Ops", {
+            {"show_focused_plugin_gui",      "FX GUI"},
+            {"show_fx_chain",                "FX Chain"},
+            {"close_all_fx_guis",            "Close FX"},
+            {"plugin_bypass",                "Bypass"},
+            {"plugin_offline",               "Offline"},
+            {"plugin_preset_prev",           "Preset <"},
+            {"plugin_preset_next",           "Preset >"},
+            {"ssl_strip_mode_toggle_with_gui", "SSL Str"},
+        }));
+        v.push_back(bank("Learn / Master", {
+            {"learn_hud_toggle",        "Lrn HUD"},
+            {"quick_learn",             "QLrn Prj"},
+            {"quick_learn_track",       "QLrn Trk"},
+            {"touch_to_learn_toggle",   "Touch L"},
+            {"master_pin_strip1",       "Mst Left"},
+            {"master_pin_strip8",       "Mst Rght"},
+            {"focused_panel_toggle",    "Panel"},
+            {"uc1_outgain_fader_toggle","Out Gain"},
+        }));
+        // CS Favourites — switch_cs_1..8. Static "CS N" labels here; the
+        // top-soft-key resolver overrides them with the favourite's name
+        // at render time (main.cpp), falling back to "CS N" when empty.
+        v.push_back(bank("CS Favourites", {
+            {"switch_cs_1", "CS 1"},
+            {"switch_cs_2", "CS 2"},
+            {"switch_cs_3", "CS 3"},
+            {"switch_cs_4", "CS 4"},
+            {"switch_cs_5", "CS 5"},
+            {"switch_cs_6", "CS 6"},
+            {"switch_cs_7", "CS 7"},
+            {"switch_cs_8", "CS 8"},
+        }));
+        v.push_back(bank("View / Utility", {
+            {"domain_cs",            "Focus CS"},
+            {"domain_bc",            "Focus BC"},
+            {"brightness_both_up",   "Bright +"},
+            {"brightness_both_down", "Bright -"},
+            {"marker_overlay_toggle","Overlay"},
+            {"selection_clear_all",  "Deselect"},
+            {"tracks_arm_all",       "Arm All"},
+            {"zoom_center",          "Zoom"},
+        }));
+        return v;
+    }();
+    return kBanks;
+}
+
+int factoryBankPresetCount()
+{
+    return static_cast<int>(factoryReaSixtyBanks_().size());
+}
+
+SoftKeyBankPreset factoryBankPresetAt(int idx)
+{
+    const auto& banks = factoryReaSixtyBanks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return {};
+    return banks[idx];
+}
+
+bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    const auto& banks = factoryReaSixtyBanks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
+    const SoftKeyBankPreset p = banks[idx];   // copy before taking the lock
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        g_cfg.userQuicks[layer].quicks[quick]
+            .subBanks[subBank].slots[s] = p.slots[s];
+    }
+    persistLocked_();
+    return true;
+}
+
+int loadFactoryReaSixtySet(int layer, int quick)
+{
+    if (layer < 0 || layer >= 3) return -1;
+    if (quick < 0 || quick >= kQuicksPerLayer) return -1;
+    const auto& banks = factoryReaSixtyBanks_();
+    const int n = std::min(static_cast<int>(banks.size()),
+                           kSubBanksPerQuick);
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        for (int sb = 0; sb < n; ++sb) {
+            for (int s = 0; s < kSlotsPerSubBank; ++s) {
+                g_cfg.userQuicks[layer].quicks[quick]
+                    .subBanks[sb].slots[s] = banks[sb].slots[s];
+            }
+        }
+        persistLocked_();
+    }
+    return n;
 }
 
 bool dispatchUserQuickSlot(int layer, int quick, int subBank,

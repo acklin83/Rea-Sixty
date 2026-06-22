@@ -91,6 +91,9 @@ bool reasixty_assignmentHudRunning();
 bool reasixty_focusedPanel();
 void reasixty_setFocusedPanel(bool on);
 bool reasixty_focusedPanelRunning();
+bool reasixty_modeBanner();
+void reasixty_setModeBanner(bool on);
+bool reasixty_modeBannerRunning();
 int    reasixty_overlayCsColor();
 void   reasixty_setOverlayCsColor(int rgb);
 int    reasixty_overlayBcColor();
@@ -619,6 +622,19 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx, reasixty_focusedPanelRunning()
                                 ? "  Panel companion running"
                                 : "  Panel companion starting\xE2\x80\xA6");
+    }
+
+    // Transient mode-change banner — flashes the new Selection-/Encoder-Mode
+    // on screen for ~2 s then auto-hides. Also bindable via the
+    // "mode_banner_toggle" built-in / REAPER action.
+    bool mbanner = reasixty_modeBanner();
+    if (ImGui_Checkbox(ctx, "Show mode-change banner", &mbanner)) {
+        reasixty_setModeBanner(mbanner);
+    }
+    if (mbanner) {
+        ImGui_TextDisabled(ctx, reasixty_modeBannerRunning()
+                                ? "  Banner companion running"
+                                : "  Banner companion starting\xE2\x80\xA6");
     }
 
     if (insMark) {
@@ -1406,6 +1422,102 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
     ImGui_EndPopup(ctx);
 }
 
+// True when ANY of the binding's slots (any modifier, short or long)
+// carries an action. Used by the schematic to tint bound vs empty tiles.
+bool bindingHasAnyAction_(const uf8::bindings::Binding& bd)
+{
+    using namespace uf8::bindings;
+    for (int m = 0; m < kModifierCount; ++m) {
+        const auto& sp = bd.shortPress[m];
+        if (sp.type != ActionType::Noop || !sp.action.empty()) return true;
+        const auto& lp = bd.longPress[m];
+        if (lp.type != ActionType::Noop || !lp.action.empty())  return true;
+    }
+    return false;
+}
+
+// One-line human description of an action step for the hover tooltip.
+// Empty string = no action (Noop / unbound).
+std::string describeActionStep_(const uf8::bindings::ActionStep& s)
+{
+    using namespace uf8::bindings;
+    switch (s.type) {
+        case ActionType::Noop:    return "";
+        case ActionType::Builtin:
+            return s.action.empty() ? "" : builtinDisplayName(s.action);
+        case ActionType::Reaper:
+            return "REAPER: " + (s.label.empty() ? s.action : s.label);
+        case ActionType::Keyboard:
+            return s.action.empty() ? "" : ("Key: " + s.action);
+        case ActionType::Midi:    return "MIDI";
+    }
+    return "";
+}
+
+// Regular bindable button — one the user assigns actions to via the
+// per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
+// (live labels, userQuicks path) and the structural Layer / Quick /
+// Sub-Bank selectors. Gate for the assigned/empty tint + hover tooltip.
+// Backlog Stream B scope (Frank 2026-06-22).
+bool regularBindable_(ButtonId id)
+{
+    using namespace uf8::bindings;
+    if (id == ButtonId::None) return false;
+    if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8)
+        return false;
+    switch (id) {
+        case ButtonId::Layer1: case ButtonId::Layer2: case ButtonId::Layer3:
+        case ButtonId::Quick1: case ButtonId::Quick2: case ButtonId::Quick3:
+        case ButtonId::VPotBank:
+        case ButtonId::SoftKey1Bank: case ButtonId::SoftKey2Bank:
+        case ButtonId::SoftKey3Bank: case ButtonId::SoftKey4Bank:
+        case ButtonId::SoftKey5Bank:
+            return false;
+        default:
+            return true;
+    }
+}
+
+// Build the multi-line hover tooltip for a bound regular button: its
+// label, the action on Plain / +Shift / +Cmd / +Ctrl (short press),
+// optional long-press, and the behavior. Empty when the button is
+// unbound (caller skips the tooltip).
+std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
+{
+    using namespace uf8::bindings;
+    const Binding bd = getBinding(layer, id);
+    if (!bindingHasAnyAction_(bd)) return "";
+
+    std::string out = (label && *label) ? label : "(button)";
+    const char* modName[kModifierCount] =
+        { "Plain", "+Shift", "+Cmd", "+Ctrl" };
+    for (int m = 0; m < kModifierCount; ++m) {
+        const std::string d = describeActionStep_(bd.shortPress[m]);
+        if (d.empty()) continue;
+        out += "\n  ";
+        out += modName[m];
+        out += ": ";
+        out += d;
+    }
+    if (bd.hasLongPress) {
+        for (int m = 0; m < kModifierCount; ++m) {
+            const std::string d = describeActionStep_(bd.longPress[m]);
+            if (d.empty()) continue;
+            out += "\n  long";
+            if (m > 0) { out += " "; out += modName[m]; }
+            out += ": ";
+            out += d;
+        }
+    }
+    const char* beh = bd.behavior == Behavior::Toggle ? "Toggle"
+                    : bd.behavior == Behavior::Hold   ? "Hold"
+                                                      : "Momentary";
+    out += "\n  [";
+    out += beh;
+    out += "]";
+    return out;
+}
+
 // Render the full UF8 schematic. Click hit-test goes against the
 // canvas-wide InvisibleButton; per-rect hits are computed by comparing
 // the cached mouse-coords against each button's local rectangle.
@@ -1454,6 +1566,10 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
             && my >= y && my <= y + h;
     };
 
+    // Layer whose bindings the schematic reflects (assigned-tint + hover
+    // tooltip read getBinding(bindLayer, id)). Stream B, Frank 2026-06-22.
+    const int bindLayer = uf8::bindings::getActiveLayer();
+
     // Bindable button: hit-tests against the canvas mouse, draws a
     // hardware-face rectangle, highlights on hover/select. Returns
     // true when this tile was clicked this frame so the caller can
@@ -1475,10 +1591,19 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
             s_bindingCtxOpenRequested = true;
         }
 
+        // Assigned vs empty tint (regular bindable buttons only — see
+        // regularBindable_). Bound tiles get a soft green face + border;
+        // empty ones stay neutral grey. Selected / hover override both.
+        const bool reg   = regularBindable_(id);
+        const bool bound = reg && bindingHasAnyAction_(
+                               uf8::bindings::getBinding(bindLayer, id));
         const uint32_t fill   = selected ? 0x4477CCFF
                                 : hot     ? 0x3A4253FF
+                                : bound   ? 0x2C3A2EFF
                                           : 0x252A33FF;
-        const uint32_t border = selected ? 0xAACCFFFF : 0x4A5060FF;
+        const uint32_t border = selected ? 0xAACCFFFF
+                                : bound   ? 0x6FA86FFF
+                                          : 0x4A5060FF;
         const uint32_t txt    = selected ? 0xFFFFFFFF : 0xD0D4DAFF;
         rect_(c, x, y, w, h, fill, border, /*rounding*/ 3.5);
         // Silk-screen label font locked to 10 px so all hardware
@@ -1487,6 +1612,15 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         ImGui_PushFont(ctx, nullptr, 10.0);
         drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
         ImGui_PopFont(ctx);
+
+        // Hover tooltip — what each modifier / long-press fires + the
+        // behavior. Only for bound regular buttons. The schematic uses
+        // manual hit-testing, so we drive the tooltip off our own `hot`
+        // flag rather than item-hover state.
+        if (hot && reg && bound) {
+            const std::string tip = buildBindingTooltip_(bindLayer, id, label);
+            if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
+        }
         return clicked;
     };
 
@@ -2771,6 +2905,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "learn_hud_toggle"
                  || n == "touch_to_learn_toggle"
                  || n == "focused_panel_toggle"
+                 || n == "mode_banner_toggle"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
@@ -3402,9 +3537,18 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
     // Per-slot LED override. Collapsed by default. Active and inactive
     // are independently opt-in; checkbox toggles the override and the
     // colour swatch / brightness radios mutate the slot's LedOverride.
+    //
+    // Stream C1 (Frank 2026-06-22): the plain, single-step, short-press
+    // slot's LED is the common case and is fully covered by the binding-
+    // level Active/Inactive appearance at the bottom of the editor — the
+    // per-slot override there was redundant + confusing. Show it ONLY for
+    // multi-step push-cycles (steps>1), modifier slots (Shift/Cmd/Ctrl),
+    // and long-press slots, which genuinely need a distinct per-slot LED.
+    const bool plainSingleShort = (n == 1 && modIdx == 0 && !isLongPress);
     char ledHdr[80];
     snprintf(ledHdr, sizeof(ledHdr), "LED override##%s_ledhdr", prefix);
-    if (ImGui_CollapsingHeader(ctx, ledHdr, nullptr, nullptr)) {
+    if (!plainSingleShort
+        && ImGui_CollapsingHeader(ctx, ledHdr, nullptr, nullptr)) {
         ImGui_Indent(ctx, nullptr);
         auto drawOverrideRow = [&](const char* rowLabel,
                                    bool& has,
@@ -3908,44 +4052,40 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 namespace {
 
 // ---- User-Quick slot editor (per-slot, driven by TopSoftKey click) ------
-// Edits ONE user-Quick slot at coordinates (editLayer, engaged Quick on
-// editLayer, active Sub-Bank on editLayer, slotIdx). The Quick + Sub-
-// Bank halves of the coordinate come from the live hardware state —
-// the user already switched them by clicking Q1/Q2/Q3 + V-POT/Soft 1-5
-// in the mockup above (those clicks engage on the hardware via the
-// schematic-proxy dispatch). All the user does here is fill the slot.
+// Edits ONE user-Quick slot at coordinates (editLayer, editQuick,
+// editSubBank, slotIdx). The Quick + Sub-Bank halves come from the
+// UI-local edit selector in drawBindings (s_editQuick / s_editSubBank),
+// NOT live hardware — so soft-key slots stay visible & editable offline
+// (no UF8 connected) and regardless of UF8 Plugin Mode (in which a
+// Quick-click is a no-op, so the old live-Quick coupling left the slots
+// unreachable). The green ● in the selector marks what's engaged live.
 //
 // Layer 1 Q1/Q2 = SSL CS/BC are plug-in-driven; their slots are filled
 // by the SSL plug-in's stock soft-key labels and not user-editable.
 // Pop a clear notice instead of pretending an editor.
-void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
+void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
+                              int editQuick, int editSubBank, int slotIdx)
 {
     using namespace uf8::bindings;
     if (editLayer < 0 || editLayer > 2)               return;
+    if (editQuick < 0 || editQuick > 2)               return;
+    if (editSubBank < 0 || editSubBank > 5)           return;
     if (slotIdx < 0 || slotIdx >= kSlotsPerSubBank)   return;
-
-    const int liveQ  = reasixty_activeQuickFor(editLayer);
-    const int liveSB = reasixty_activeSubBankFor(editLayer);
 
     const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
     const char* sbLabels[6] = {
         "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
     };
 
-    // Layer 1 Q1/Q2 = SSL CS/BC. Engaged via domain_cs / domain_bc;
-    // g_activeQuick stays at -1 on press, so we detect this state by
-    // looking at the focused-domain. Slots are filled by the plug-in.
-    const int engagedForDisplay = reasixty_engagedQuickFor(editLayer);
-    const bool isSslCsBc = (editLayer == 0
-                            && engagedForDisplay >= 0
-                            && engagedForDisplay <= 1);
+    // Layer 1 Q1/Q2 = SSL CS/BC focus — their top-soft-key row is
+    // auto-filled from the SSL plug-in's stock labels, not user-editable.
+    const bool isSslCsBc = (editLayer == 0 && editQuick <= 1);
     if (isSslCsBc) {
         char hdr[160];
         snprintf(hdr, sizeof(hdr),
                       "Top Soft-Key %d   (Layer 1, %s)",
                       slotIdx + 1,
-                      engagedForDisplay == 0 ? "Q1 = SSL CS"
-                                             : "Q2 = SSL BC");
+                      editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
         ImGui_Text(ctx, hdr);
         ImGui_TextDisabled(ctx,
             "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) auto-fill the top-soft-"
@@ -3954,18 +4094,9 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer, int slotIdx)
             "for free user-Quick slots.");
         return;
     }
-    if (liveQ < 0) {
-        ImGui_Text(ctx, "(no Quick engaged on this layer)");
-        ImGui_TextDisabled(ctx,
-            "Click Q1, Q2, or Q3 in the mockup above to engage a Quick "
-            "context, then click a top-soft-key tile to edit its slot. "
-            "On Layer 1 you can engage Q1 (SSL CS), Q2 (SSL BC), or Q3 "
-            "(user-fillable).");
-        return;
-    }
 
-    const int  qIdx  = liveQ;
-    const int  sbIdx = (liveSB < 0 || liveSB > 5) ? 0 : liveSB;
+    const int  qIdx  = editQuick;
+    const int  sbIdx = editSubBank;
     const char* qName  = qLabels[qIdx];
     const char* sbName = sbLabels[sbIdx];
 
@@ -4328,7 +4459,7 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
 // stehen: Click Soft-Keys 1-8 to configure Soft-Key Bank N.
 // LED-optionen einblenden für V-POT (oder whatever selected)".
 void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
-                            uf8::bindings::ButtonId id)
+                            int editQuick, uf8::bindings::ButtonId id)
 {
     using namespace uf8::bindings;
     int sbIdx = -1;
@@ -4342,35 +4473,40 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         default: return;
     }
     if (editLayer < 0 || editLayer > 2) return;
+    if (editQuick < 0 || editQuick > 2) return;
 
     const char* sbLabels[6] = {
         "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
     };
-    const int engagedQ = reasixty_activeQuickFor(editLayer);
+    // Quick comes from the UI-local edit selector (drawBindings), not
+    // live hardware — keeps the Sub-Bank preset/LED editor reachable
+    // offline and in UF8 Plugin Mode. See drawUserQuickSlotEditor_.
+    const int engagedQ = editQuick;
+
+    // Layer 1 Q1/Q2 = SSL CS/BC focus — plug-in driven, not a free
+    // user-Quick context. Presets/LED here would be cosmetic garbage.
+    if (editLayer == 0 && editQuick <= 1) {
+        char hdr[160];
+        snprintf(hdr, sizeof(hdr),
+                      "%s   (Layer 1, %s)",
+                      sbLabels[sbIdx],
+                      editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
+        ImGui_Text(ctx, hdr);
+        ImGui_TextDisabled(ctx,
+            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) are plug-in-driven and "
+            "carry no user Sub-Bank slots. Pick Q3 (or Layer 2/3) above "
+            "to edit Sub-Bank presets and LED colours.");
+        return;
+    }
 
     // ---- Header + navigation hint -------------------------------------
     char hdr[160];
-    if (engagedQ >= 0) {
-        snprintf(hdr, sizeof(hdr),
-                      "Editing: %s   (Layer %d, Quick %d)",
-                      sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
-    } else {
-        snprintf(hdr, sizeof(hdr),
-                      "Editing: %s   (Layer %d — no Quick engaged)",
-                      sbLabels[sbIdx], editLayer + 1);
-    }
+    snprintf(hdr, sizeof(hdr),
+                  "Editing: %s   (Layer %d, Quick %d)",
+                  sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, hdr);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
-
-    if (engagedQ < 0) {
-        ImGui_TextDisabled(ctx,
-            "Click Q1, Q2 or Q3 in the mockup above to engage a Quick "
-            "on this Layer first. Then click any of the 8 Top-Soft-Keys "
-            "to configure this Sub-Bank's slots, or stay here to set "
-            "this button's per-Quick LED colours.");
-        return;
-    }
 
     char nav[160];
     snprintf(nav, sizeof(nav),
@@ -4659,6 +4795,125 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
+    // ---- Factory Rea-Sixty banks --------------------------------------
+    // Curated banks of Rea-Sixty's own built-ins. Recall one into THIS
+    // Sub-Bank, or drop the whole 6-bank set into Layer 1 / Quick 3's
+    // six sub-banks at once (their intended home). Backlog A 2026-06-22.
+    {
+        ImGui_Text(ctx, "Rea-Sixty factory banks");
+        ImGui_TextDisabled(ctx,
+            "Curated from Rea-Sixty's own built-ins. Recall one into this "
+            "Sub-Bank, or load the full set into Layer 1 / Quick 3.");
+        ImGui_Spacing(ctx);
+
+        const int nFac = factoryBankPresetCount();
+        static int s_facSel[3][kQuicksPerLayer][kSubBanksPerQuick] = {};
+        int& facRef = s_facSel[editLayer][engagedQ][sbIdx];
+        if (facRef < 0 || facRef >= nFac) facRef = 0;
+
+        std::string facPrev = (nFac > 0)
+            ? factoryBankPresetAt(facRef).name : std::string("(none)");
+        double comboW = 240;
+        ImGui_PushItemWidth(ctx, comboW);
+        if (ImGui_BeginCombo(ctx, "##fac_combo", facPrev.c_str(), nullptr)) {
+            for (int i = 0; i < nFac; ++i) {
+                SoftKeyBankPreset p = factoryBankPresetAt(i);
+                char rowId[160];
+                snprintf(rowId, sizeof(rowId), "%s##fac_row_%d",
+                              p.name.c_str(), i);
+                bool sel = (i == facRef);
+                if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
+                                     nullptr, nullptr)) {
+                    facRef = i;
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_PopItemWidth(ctx);
+
+        enum FacOp { FacNone, FacRecall, FacLoadSet };
+        static int s_facOp = FacNone;
+
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Recall into this Sub-Bank##fac_recall",
+                         nullptr, nullptr)) {
+            s_facOp = FacRecall;
+        }
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Load full set \xE2\x86\x92 Layer 1 / Quick 3"
+                         "##fac_loadset", nullptr, nullptr)) {
+            s_facOp = FacLoadSet;
+        }
+        ImGui_TextDisabled(ctx,
+            "Full set = all 6 banks into L1/Q3's V-POT + Soft 1-5 "
+            "sub-banks (overwrites those 48 slots).");
+
+        if (s_facOp == FacRecall)
+            ImGui_OpenPopup(ctx, "Recall factory bank?###fac_recall_confirm",
+                            nullptr);
+        else if (s_facOp == FacLoadSet)
+            ImGui_OpenPopup(ctx, "Load factory set?###fac_loadset_confirm",
+                            nullptr);
+        s_facOp = FacNone;
+
+        const double kFacPopupW = 440.0;
+        int condAlways2 = ImGui_Cond_Always;
+
+        centerNextPopupOnDisplay_(ctx);
+        ImGui_SetNextWindowSize(ctx, kFacPopupW, 0.0, &condAlways2);
+        if (ImGui_BeginPopupModal(ctx,
+                                  "Recall factory bank?###fac_recall_confirm",
+                                  nullptr, nullptr)) {
+            SoftKeyBankPreset p = factoryBankPresetAt(facRef);
+            char line[256];
+            snprintf(line, sizeof(line),
+                "Overwrite the 8 slots of %s (Layer %d, Quick %d) with "
+                "factory bank '%s'?",
+                sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
+                p.name.c_str());
+            ImGui_TextWrapped(ctx, line);
+            ImGui_Spacing(ctx);
+            if (ImGui_Button(ctx, "Recall##fac_recall_ok",
+                             nullptr, nullptr)) {
+                recallFactoryBankPreset(facRef, editLayer, engagedQ, sbIdx);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##fac_recall_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+
+        centerNextPopupOnDisplay_(ctx);
+        ImGui_SetNextWindowSize(ctx, kFacPopupW, 0.0, &condAlways2);
+        if (ImGui_BeginPopupModal(ctx,
+                                  "Load factory set?###fac_loadset_confirm",
+                                  nullptr, nullptr)) {
+            ImGui_TextWrapped(ctx,
+                "Load the full Rea-Sixty factory set into Layer 1 / "
+                "Quick 3? This overwrites all 48 slots in that Quick's "
+                "V-POT + Soft 1-5 sub-banks. Other layers/quicks are "
+                "untouched.");
+            ImGui_Spacing(ctx);
+            if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
+                             nullptr, nullptr)) {
+                loadFactoryReaSixtySet(/*layer*/ 0, /*quick*/ 2);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##fac_loadset_cancel",
+                             nullptr, nullptr)) {
+                ImGui_CloseCurrentPopup(ctx);
+            }
+            ImGui_EndPopup(ctx);
+        }
+    }
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
     snprintf(ledHdr, sizeof(ledHdr),
@@ -4767,6 +5022,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
+    // UI-local soft-key edit context. Decouples the soft-key / sub-bank
+    // editors from the LIVE engaged Quick/Sub-Bank so they're editable
+    // offline and in UF8 Plugin Mode (where a Quick-click is a no-op, so
+    // the old live coupling left the slots unreachable — see backlog A0).
+    static int s_editQuick   = -1;   // -1 = uninitialised; 0..2 = Q1/Q2/Q3
+    static int s_editSubBank = 0;    // 0..5 = V-POT, Soft 1..5
+    if (s_editQuick < 0) s_editQuick = (s_editLayer == 0) ? 2 : 0;
+
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
     // Sub-Bank tiles, dispatches the binding so the hardware engages
@@ -4811,13 +5074,85 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
+    // WYSIWYG pivot: clicking a Quick or Sub-Bank tile in the schematic
+    // pivots the edit selector to that coordinate. Edge-triggered on the
+    // selection change so the radios below stay user-controllable on
+    // later frames (a level-triggered pivot would pin them).
+    {
+        static ButtonId s_lastPivotSel = ButtonId::None;
+        if (s_selected != s_lastPivotSel) {
+            s_lastPivotSel = s_selected;
+            if      (s_selected == ButtonId::Quick1) s_editQuick = 0;
+            else if (s_selected == ButtonId::Quick2) s_editQuick = 1;
+            else if (s_selected == ButtonId::Quick3) s_editQuick = 2;
+            else switch (s_selected) {
+                case ButtonId::VPotBank:     s_editSubBank = 0; break;
+                case ButtonId::SoftKey1Bank: s_editSubBank = 1; break;
+                case ButtonId::SoftKey2Bank: s_editSubBank = 2; break;
+                case ButtonId::SoftKey3Bank: s_editSubBank = 3; break;
+                case ButtonId::SoftKey4Bank: s_editSubBank = 4; break;
+                case ButtonId::SoftKey5Bank: s_editSubBank = 5; break;
+                default: break;
+            }
+        }
+    }
+
     // ---- Editor — branches on what the user clicked ---------------------
     // A top-soft-key tile pivots to the user-Quick slot editor for the
-    // live (Layer, Quick, Sub-Bank, slot) combination. Everything else
-    // goes through the regular per-button binding editor.
+    // selected (Layer, Quick, Sub-Bank, slot) combination. Everything
+    // else goes through the regular per-button binding editor.
     const bool isTopSoftKey =
         s_selected >= ButtonId::TopSoftKey1
         && s_selected <= ButtonId::TopSoftKey8;
+    const bool isSubBankCell =
+        s_selected == ButtonId::VPotBank
+     || s_selected == ButtonId::SoftKey1Bank
+     || s_selected == ButtonId::SoftKey2Bank
+     || s_selected == ButtonId::SoftKey3Bank
+     || s_selected == ButtonId::SoftKey4Bank
+     || s_selected == ButtonId::SoftKey5Bank;
+
+    // Soft-key edit-context selector. Lets the user choose which Quick
+    // (and, for the slot editor, which Sub-Bank) to edit independent of
+    // the live hardware state. ● marks what's engaged live on this layer.
+    if (isTopSoftKey || isSubBankCell) {
+        const int liveQ  = reasixty_activeQuickFor(s_editLayer);
+        const int liveSB = reasixty_activeSubBankFor(s_editLayer);
+        const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
+        const char* sbLabels[6] = {
+            "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+        };
+        ImGui_Text(ctx, "Edit Quick:");
+        for (int qi = 0; qi < 3; ++qi) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char tag[40];
+            snprintf(tag, sizeof(tag), "%s%s##bind_editq_%d",
+                          qLabels[qi], liveQ == qi ? "  \xE2\x97\x8F" : "",
+                          qi);
+            if (ImGui_RadioButton(ctx, tag, s_editQuick == qi))
+                s_editQuick = qi;
+        }
+        if (isTopSoftKey) {
+            ImGui_Text(ctx, "Edit sub-bank:");
+            for (int bi = 0; bi < 6; ++bi) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                const bool isLive = (liveSB == bi && liveQ == s_editQuick);
+                char tag[48];
+                snprintf(tag, sizeof(tag), "%s%s##bind_editsb_%d",
+                              sbLabels[bi], isLive ? "  \xE2\x97\x8F" : "",
+                              bi);
+                if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi))
+                    s_editSubBank = bi;
+            }
+        }
+        ImGui_TextDisabled(ctx,
+            "Pick which Quick + Sub-Bank to edit. \xE2\x97\x8F = engaged "
+            "live on this layer. Edits work offline / in Plugin Mode.");
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+    }
+
     if (s_selected == ButtonId::None) {
         // Nothing selected — leave the editor area blank. Help text
         // dropped 2026-05-22; the schematic is self-explanatory.
@@ -4825,25 +5160,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         const int slotIdx =
             static_cast<int>(s_selected)
             - static_cast<int>(ButtonId::TopSoftKey1);
-        drawUserQuickSlotEditor_(ctx, s_editLayer, slotIdx);
+        drawUserQuickSlotEditor_(ctx, s_editLayer, s_editQuick,
+                                 s_editSubBank, slotIdx);
+    } else if (isSubBankCell) {
+        // Sub-bank selectors don't carry a user-editable action —
+        // they pick which of the 6 sub-banks renders into the 8
+        // top-soft-key slots. The editor below shows what's
+        // selected + a Per-Quick LED override so the user can
+        // distinguish (L, Q) contexts visually. Frank 2026-05-13.
+        drawSubBankCellEditor_(ctx, s_editLayer, s_editQuick, s_selected);
     } else {
-        const bool isSubBankCell =
-            s_selected == ButtonId::VPotBank
-         || s_selected == ButtonId::SoftKey1Bank
-         || s_selected == ButtonId::SoftKey2Bank
-         || s_selected == ButtonId::SoftKey3Bank
-         || s_selected == ButtonId::SoftKey4Bank
-         || s_selected == ButtonId::SoftKey5Bank;
-        if (isSubBankCell) {
-            // Sub-bank selectors don't carry a user-editable action —
-            // they pick which of the 6 sub-banks renders into the 8
-            // top-soft-key slots. The editor below shows what's
-            // selected + a Per-Quick LED override so the user can
-            // distinguish (L, Q) contexts visually. Frank 2026-05-13.
-            drawSubBankCellEditor_(ctx, s_editLayer, s_selected);
-        } else {
-            drawBindingEditor(ctx, s_editLayer, s_selected);
-        }
+        drawBindingEditor(ctx, s_editLayer, s_selected);
     }
 
     ImGui_Spacing(ctx);
