@@ -162,6 +162,13 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
 enum class CsQuantityKind { Generic, Db, Freq, Time, Ratio, Q, Pct };
 CsQuantityKind csQuantityKind(int linkIdx);
 
+// True when `paramName` matches a known name alias for the UC1 knob that SSL-Link
+// `linkIdx` drives (case-insensitive substring). Lets CS value transfer resolve a
+// control on a plug-in that only NAMES the param differently ("High Pass Filter
+// (Hz)") and never got an explicit FX-Learn mapping. Knob controls only; returns
+// false for buttons / unknown linkIdx. Pure string logic — no REAPER API.
+bool controlAliasMatch(int linkIdx, const char* paramName);
+
 // True when this binding belongs to the Bus Comp domain (BC 2 / 4K B /
 // user-mapped BC). False covers Channel Strip and unrelated bindings;
 // callers should null-check the input first.

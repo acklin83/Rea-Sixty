@@ -5043,7 +5043,40 @@ struct CsVal {
     double norm    = 0.0;        // normalised fallback (always set)
     char   text[24] = {0};       // display string (discrete string-match)
     uc1::CsQuantityKind kind = uc1::CsQuantityKind::Generic;
+    CsUnit dim     = CsUnit::None;   // source display dimension (cross-dim guard)
+    double appliedNorm = -1.0;       // norm last WRITTEN to the dst (round-trip detect)
+    int    stateIdx  = -1;           // discrete: which state position the value sits on
+    int    stateCount = 0;           // discrete: total distinct states on the source
 };
+
+// Scan a param across its normalised range and collect its DISTINCT display
+// states in norm order (rep = midpoint of each run). Lets a discrete control
+// transfer by STATE POSITION across plug-ins that label the same control
+// differently (SSL Expand "In/Out" ↔ bx "Gate/Expander"). Destructive (moves the
+// param) — caller restores it if the param must survive. Main-thread only.
+struct CsState { double loN, hiN, repN; char disp[40]; };
+static int csScanStates_(MediaTrack* tr, int fx, int param, CsState* out, int maxStates)
+{
+    const int N = 64; int cnt = 0; char prev[40] = {0};
+    for (int i = 0; i <= N; ++i) {
+        const double n = static_cast<double>(i) / N;
+        TrackFX_SetParamNormalized(tr, fx, param, n);
+        char b[40];
+        if (!TrackFX_GetFormattedParamValue(tr, fx, param, b, sizeof(b))) continue;
+        if (cnt == 0 || std::strcmp(b, prev) != 0) {
+            if (cnt < maxStates) {
+                out[cnt].loN = out[cnt].hiN = out[cnt].repN = n;
+                std::snprintf(out[cnt].disp, sizeof(out[cnt].disp), "%s", b);
+                ++cnt;
+            }
+            std::snprintf(prev, sizeof(prev), "%s", b);
+        } else if (cnt > 0 && cnt <= maxStates) {
+            out[cnt - 1].hiN = n;
+            out[cnt - 1].repN = 0.5 * (out[cnt - 1].loN + n);
+        }
+    }
+    return cnt;
+}
 
 // Per track GUID → per control (linkIdx*2 + isBtn) last-known value. Used ONLY to
 // fill a control the CURRENT plug-in LACKS (e.g. Q on an API channel that has no
@@ -5062,6 +5095,31 @@ static void csLog_(const char* s)
     if (FILE* f = std::fopen("/tmp/rea_sixty_cs.log", "a")) {
         std::fputs(s, f); std::fputc('\n', f); std::fclose(f);
     }
+}
+
+// Classify a discrete state label on the universal ACTIVE/INACTIVE axis so a
+// toggle transfers by MEANING regardless of how a plug-in labels or orders its
+// two states (SSL "In/Out" ↔ bx "Gate/Expander", "On/Off", "Bypass" …). Returns
+// 1 = active/engaged, 0 = inactive/bypassed, -1 = not on this axis (e.g. a colour
+// or a multi-way mode → caller falls back to label / position). Plug-in-agnostic:
+// it keys off the STATE word, not the plug-in. "Expander" is the engaged dynamics
+// mode (the SSL EXP button "In" selects it), "Gate" the default → so they pair
+// with in/on and out/off respectively.
+static int csStateActive_(const char* t)
+{
+    if (!t) return -1;
+    while (*t == ' ' || *t == '\t' || *t == '+') ++t;
+    char w[24]; int n = 0;
+    for (; *t && n < 23 && *t != ' '; ++t) {
+        char c = *t; if (c >= 'A' && c <= 'Z') c += 32; w[n++] = c;
+    }
+    w[n] = 0;
+    auto eq = [&](const char* k) { return std::strcmp(w, k) == 0; };
+    if (eq("on") || eq("in") || eq("yes") || eq("active") || eq("engaged")
+        || eq("enabled") || eq("exp") || eq("expander")) return 1;
+    if (eq("off") || eq("out") || eq("no") || eq("bypass") || eq("bypassed")
+        || eq("disabled") || eq("gate")) return 0;
+    return -1;
 }
 
 // Case-insensitive, trim-tolerant equality of two display strings — so a discrete
@@ -5093,7 +5151,20 @@ static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityK
     if (TrackFX_GetFormattedParamValue(tr, fx, param, s, sizeof(s))) {
         std::snprintf(v.text, sizeof(v.text), "%s", s);
         const CsUnitVal u = parseUnitValue_(s);
-        if (u.ok) { v.numeric = true; v.eng = u.base; }
+        if (u.ok) { v.numeric = true; v.eng = u.base; v.dim = u.dim; }
+    }
+    if (!v.numeric) {
+        // Discrete control — find its STATE POSITION so it can transfer by index
+        // (not by label) to a plug-in that names the same control differently.
+        CsState st[24];
+        const int sc = csScanStates_(tr, fx, param, st, 24);
+        TrackFX_SetParamNormalized(tr, fx, param, v.norm);   // restore the source
+        v.stateCount = sc;
+        for (int i = 0; i < sc; ++i)
+            if (csTextEq_(st[i].disp, v.text)) { v.stateIdx = i; break; }
+        if (v.stateIdx < 0)
+            for (int i = 0; i < sc; ++i)
+                if (v.norm >= st[i].loN - 1e-9 && v.norm <= st[i].hiN + 1e-9) { v.stateIdx = i; break; }
     }
     return v;
 }
@@ -5104,30 +5175,68 @@ static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityK
 // never rescaled, killing the +3→−3 and +18→0.018 fuck-ups by construction).
 // Discrete → match the dst position whose display equals v.text; else normalised.
 // Main-thread only.
-static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
-                             const CsVal& v, int ctrlKey)
+// Returns the normalised value actually written (for round-trip intent memory).
+static double applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
+                               const CsVal& v, int ctrlKey)
 {
+    const double origN = TrackFX_GetParamNormalized(tr, dstFx, dstParam);  // dst's own default
+    // Which dst param are we actually writing? Logged on every line so we can see
+    // whether a linkIdx resolves to the param the user expects (e.g. linkIdx 9 →
+    // bx 'EQ High Gain') or to a neighbour the learned map points at.
+    char dpName[96] = {0}; TrackFX_GetParamName(tr, dstFx, dstParam, dpName, sizeof(dpName));
     TrackFX_SetParamNormalized(tr, dstFx, dstParam, v.norm);   // default
 
     const int N = 64;
 
-    if (!v.numeric) {                       // discrete state — match by display text
-        double matchN = -1.0;
-        if (v.text[0]) {
-            for (int i = 0; i <= N; ++i) {
-                const double n = static_cast<double>(i) / N;
-                TrackFX_SetParamNormalized(tr, dstFx, dstParam, n);
-                char b[64];
-                if (TrackFX_GetFormattedParamValue(tr, dstFx, dstParam, b, sizeof(b))
-                    && csTextEq_(b, v.text)) { matchN = n; break; }
-            }
+    if (!v.numeric) {                       // discrete state
+        CsState st[24];
+        const int dc = csScanStates_(tr, dstFx, dstParam, st, 24);
+        // 1) exact label match (best — same control, identical labels).
+        int useIdx = -1; const char* how = "NORMALISED";
+        for (int i = 0; i < dc && v.text[0]; ++i)
+            if (csTextEq_(st[i].disp, v.text)) { useIdx = i; how = "label"; break; }
+        // 2) semantic ACTIVE/INACTIVE match — handles toggles whose two states are
+        //    labelled AND ordered differently across plug-ins (SSL "In/Out" ↔ bx
+        //    "Gate/Expander"). Maps active→active regardless of position.
+        if (useIdx < 0) {
+            const int sa = csStateActive_(v.text);
+            if (sa >= 0)
+                for (int i = 0; i < dc; ++i)
+                    if (csStateActive_(st[i].disp) == sa) { useIdx = i; how = "semantic"; break; }
         }
-        TrackFX_SetParamNormalized(tr, dstFx, dstParam, matchN >= 0 ? matchN : v.norm);
-        char lg[200]; std::snprintf(lg, sizeof(lg),
-            "[cs] k=%d DISCRETE src='%s' -> %s", ctrlKey, v.text,
-            matchN >= 0 ? "matched" : "normalised");
+        // 3) else map by STATE POSITION: source is state X of N → dst state X of M.
+        //    The control is the SAME linkIdx on both plug-ins, so position is the
+        //    meaning when neither label nor active/inactive axis applies (multi-way
+        //    modes, colour selectors …).
+        if (useIdx < 0 && v.stateIdx >= 0 && v.stateCount > 0 && dc > 0) {
+            useIdx = (v.stateCount <= 1) ? 0
+                   : static_cast<int>(std::lround(
+                         static_cast<double>(v.stateIdx) / (v.stateCount - 1) * (dc - 1)));
+            if (useIdx < 0) useIdx = 0; else if (useIdx >= dc) useIdx = dc - 1;
+            how = "byIndex";
+        }
+        const double outN = (useIdx >= 0) ? st[useIdx].repN : v.norm;
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, outN);
+        char states[160] = {0}; int sl = 0;
+        for (int i = 0; i < dc && sl < (int)sizeof(states) - 18; ++i)
+            sl += std::snprintf(states + sl, sizeof(states) - sl, "%s|", st[i].disp);
+        char lg[340]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d DISCRETE src='%s'(%d/%d) -> dp=p%d'%s' %s idx=%d n=%.5f states=[%s]",
+            ctrlKey, v.text, v.stateIdx, v.stateCount, dstParam, dpName,
+            how, useIdx, outN, states);
         csLog_(lg);
-        return;
+        return outN;
+    }
+
+    // GENERIC kind = we have no musical model of this control (e.g. a user-map
+    // slot, or a button column that resolves to a numeric param). Blind nearest-
+    // NUMBER matching here is exactly what slams a frequency value into a dB gain
+    // and rails it. Trust the normalised position instead — never garbage.
+    if (v.kind == uc1::CsQuantityKind::Generic) {
+        char lg[200]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d GENERIC src=%.4g -> normalised n=%.5f", ctrlKey, v.eng, v.norm);
+        csLog_(lg);
+        return v.norm;
     }
 
     auto dstAt = [&](double n, CsUnitVal& out, char* str, int strN) -> bool {
@@ -5137,9 +5246,10 @@ static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
         return out.ok;
     };
 
-    // Pass 1 — sample the dst, collect numeric values + range.
+    // Pass 1 — sample the dst, collect numeric values + range + dominant dimension.
     double sN[N + 1], sB[N + 1]; int ns = 0;
     double gMin = 1e300, gMax = -1e300;
+    CsUnit dstDim = CsUnit::None; bool dstDimMixed = false;
     for (int i = 0; i <= N; ++i) {
         const double n = static_cast<double>(i) / N;
         CsUnitVal e; char b[64];
@@ -5147,8 +5257,41 @@ static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
         sN[ns] = n; sB[ns] = e.base; ++ns;
         if (e.base < gMin) gMin = e.base;
         if (e.base > gMax) gMax = e.base;
+        if (e.dim != CsUnit::None) {
+            if (dstDim == CsUnit::None) dstDim = e.dim;
+            else if (dstDim != e.dim)   dstDimMixed = true;
+        }
     }
     const bool resolvable = ns > 0;
+
+    // CROSS-DIMENSION guard — both sides carry a concrete, DIFFERENT unit (dB vs
+    // Hz vs ms…). A user-map can collide a linkIdx onto an unrelated param; a
+    // number match would then write e.g. a frequency into a gain. Keep normalised.
+    if (resolvable && !dstDimMixed && dstDim != CsUnit::None
+        && v.dim != CsUnit::None && v.dim != dstDim) {
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, v.norm);
+        char lg[200]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d DIMX src=%.4g(%d) vs dst(%d) -> normalised n=%.5f",
+            ctrlKey, v.eng, (int)v.dim, (int)dstDim, v.norm);
+        csLog_(lg);
+        return v.norm;
+    }
+
+    // EXACT shortcut — the normalised copy already reads the source engineering
+    // value (same-family / same-plug-in swap). Keep it bit-exact instead of
+    // re-deriving from the rounded readout (which is what drifts 10.0→10.03→…).
+    if (resolvable) {
+        CsUnitVal e0; char b0[64];
+        if (dstAt(v.norm, e0, b0, sizeof(b0))
+            && std::fabs(e0.base - v.eng) <= unitTol_(e0.dim, v.eng)) {
+            TrackFX_SetParamNormalized(tr, dstFx, dstParam, v.norm);
+            char lg[260]; std::snprintf(lg, sizeof(lg),
+                "[cs] k=%d EXACT src=%.4g -> dp=p%d'%s' n=%.5f dst='%s'",
+                ctrlKey, v.eng, dstParam, dpName, v.norm, b0);
+            csLog_(lg);
+            return v.norm;
+        }
+    }
 
     // SCALE reconcile (Hz↔kHz, s↔ms) — ONLY Freq / Time kinds, never dB / ratio.
     double target = v.eng;
@@ -5164,9 +5307,30 @@ static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
             if (off >= 10.0) { target = t2; break; }
         }
     }
-    const double ttol = std::fmax(1e-4, std::fabs(target) * 0.003);
 
-    // Pass 2 — closest sample to `target`, then local refine.
+    // OUT-OF-RANGE guard (Freq/Time only) — the target can't fit the dst even after
+    // scaling, and it's not a near-miss dB rail but a wild mismatch (e.g. a 10.8 kHz
+    // low-pass written onto a [16,350] Hz param the hardware map mis-learned). Don't
+    // slam the knob to a rail — leave it at the dst's own default. dB/Ratio/Q still
+    // clamp (a genuine over-range gain SHOULD pin to the rail).
+    if (resolvable && scalable && gMin > 0.0 && target > 0.0
+        && (target > gMax * 1.5 || target < gMin / 1.5)) {
+        TrackFX_SetParamNormalized(tr, dstFx, dstParam, origN);
+        char lg[220]; std::snprintf(lg, sizeof(lg),
+            "[cs] k=%d kind=%d src=%.4g OUT-OF-RANGE rng=[%.4g,%.4g] -> kept default n=%.5f",
+            ctrlKey, (int)v.kind, target, gMin, gMax, origN);
+        csLog_(lg);
+        return origN;
+    }
+
+    // Pass 2 — find the dst position whose DISPLAYED value is closest to target,
+    // then land in the CENTRE of that value's step. The coarse grid (sN/sB)
+    // localises the cell; a deterministic fine sub-scan of [bestN±1/N] finds the
+    // true display minimum (no early-exit on a loose tolerance — that left 8.5
+    // stuck on '8.51'). On a stepped/non-linear param a whole BAND of norms shows
+    // the same value (bx EQ gain: ~0.018 norm reads '-2.4'); picking the band's
+    // MIDPOINT keeps the plug-in off a step edge it would round the other way
+    // (the -2.4→-2.0 jump). For a continuous param the band is one sample → exact.
     char dstr[64] = {0};
     double bestN = v.norm, bestErr = 1e300, bestBase = target;
     if (resolvable) {
@@ -5174,22 +5338,16 @@ static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
             const double err = std::fabs(sB[i] - target);
             if (err < bestErr) { bestErr = err; bestN = sN[i]; bestBase = sB[i]; }
         }
-        if (bestErr > ttol) {                       // refine around the best grid cell
-            double lo = std::fmax(0.0, bestN - 1.0 / N), hi = std::fmin(1.0, bestN + 1.0 / N);
-            for (int it = 0; it < 22; ++it) {
-                const double mid = 0.5 * (lo + hi);
-                CsUnitVal e; char b[64];
-                if (!dstAt(mid, e, b, sizeof(b))) break;
-                const double err = std::fabs(e.base - target);
-                if (err < bestErr) { bestErr = err; bestN = mid; bestBase = e.base; }
-                if (err <= ttol) break;
-                CsUnitVal e2; char b2[64];
-                const double probe = std::fmin(hi, mid + (hi - lo) * 0.02);
-                if (!dstAt(probe, e2, b2, sizeof(b2))) break;
-                const bool ascending = e2.base >= e.base;
-                const bool below = ascending ? (e.base < target) : (e.base > target);
-                if (below) lo = mid; else hi = mid;
-            }
+        const double span = 1.0 / N;
+        const double lo = std::fmax(0.0, bestN - span), hi = std::fmin(1.0, bestN + span);
+        const int FINE = 200;
+        for (int i = 0; i <= FINE; ++i) {
+            const double n = lo + (hi - lo) * i / FINE;
+            CsUnitVal e; char b[64];
+            if (!dstAt(n, e, b, sizeof(b))) continue;
+            const double err = std::fabs(e.base - target);
+            if (err < bestErr) { bestErr = err; bestN = n; bestBase = e.base; }
+            if (err == 0.0) break;                  // exact display hit — can't do better
         }
         TrackFX_SetParamNormalized(tr, dstFx, dstParam, bestN);
     } else {
@@ -5199,11 +5357,53 @@ static void applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
 
     { CsUnitVal e; char b[64]; if (dstAt(bestN, e, b, sizeof(b))) std::snprintf(dstr, sizeof(dstr), "%s", b); }
 
-    char lg[320]; std::snprintf(lg, sizeof(lg),
-        "[cs] k=%d kind=%d src=%.4g -> n=%.5f dst='%s'(%.4g) err=%.4g rng=[%.4g,%.4g] %s",
-        ctrlKey, (int)v.kind, v.eng, bestN, dstr, bestBase, bestErr, gMin, gMax,
-        resolvable ? "ok" : "UNRESOLVED->norm");
+    // Read-back witness (diagnostic only, NOT used to settle the value): write
+    // bestN, read the committed norm + re-format AT it. If the plug-in snaps or
+    // its readout disagrees, commit_n != bestN / commit != dst — so the next
+    // capture is unambiguous without eyeballing the GUI. dp=p<idx>'<name>' shows
+    // EXACTLY which dst param this control writes (is linkIdx 9 really EQ High Gain?).
+    TrackFX_SetParamNormalized(tr, dstFx, dstParam, bestN);
+    const double cN = TrackFX_GetParamNormalized(tr, dstFx, dstParam);
+    char cb[64] = {0};
+    TrackFX_GetFormattedParamValue(tr, dstFx, dstParam, cb, sizeof(cb));
+
+    char lg[440]; std::snprintf(lg, sizeof(lg),
+        "[cs] k=%d kind=%d src=%.4g -> dp=p%d'%s' n=%.5f dst='%s'(%.4g) err=%.4g "
+        "commit_n=%.5f commit='%s' rng=[%.4g,%.4g] %s",
+        ctrlKey, (int)v.kind, v.eng, dstParam, dpName, bestN, dstr, bestBase, bestErr,
+        cN, cb, gMin, gMax, resolvable ? "ok" : "UNRESOLVED->norm");
     csLog_(lg);
+    return bestN;
+}
+
+// Fallback control resolution by PARAM NAME, for a plug-in whose param the
+// explicit FX-Learn map doesn't cover but which is recognisably the same UC1
+// control (e.g. a JSFX HPF literally named "High Pass Filter (Hz)"). Scans the
+// plug-in's params for the first NAME matching the linkIdx's alias set, skipping
+// any param already claimed (explicit mapping or an earlier alias hit this swap)
+// so two controls can't grab the same param. Knob controls only. Main-thread.
+static int resolveControlByAlias_(MediaTrack* tr, int fx, int linkIdx,
+                                  std::unordered_set<int>& claimed)
+{
+    const int np = TrackFX_GetNumParams(tr, fx);
+    for (int p = 0; p < np; ++p) {
+        if (claimed.count(p)) continue;
+        char nm[128];
+        if (!TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm))) continue;
+        // Skip the control's TOGGLE / auxiliary siblings — "HPF On/Off", "HPF x3",
+        // "LPF /3" all contain "hpf"/"lpf" and would otherwise be grabbed before
+        // the actual "HPF Frequency" knob, leaving the value unresolved.
+        std::string low;
+        for (const char* s = nm; *s; ++s) low.push_back((char)std::tolower((unsigned char)*s));
+        if (low.find("on/off") != std::string::npos || low.find("on / off") != std::string::npos
+            || low.find(" x2") != std::string::npos || low.find(" x3") != std::string::npos
+            || low.find(" /2") != std::string::npos || low.find(" /3") != std::string::npos
+            || low.find("bypass") != std::string::npos)
+            continue;
+        if (uc1::controlAliasMatch(linkIdx, nm))
+            return p;
+    }
+    return uc1::kParamNone;
 }
 
 // Replace tr's active CS with `addName` (dstMap = its resolved CS bindings, may
@@ -5245,27 +5445,89 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     // when the OLD plug-in lacks a control (e.g. Q on an API channel): the value is
     // restored from the last plug-in that had it, so the intention survives cycling
     // through strips with fewer params. A present control overwrites the memory.
+    // Seed the alias-claim sets with every param the explicit maps already own,
+    // so a NAME-based fallback can never steal a param that's explicitly mapped
+    // to some other control (and never double-assign one param to two controls).
+    std::unordered_set<int> srcClaimed, dstClaimed;
+    for (int li = 1; li <= 63; ++li) {
+        const int s = uc1::hudParamForControl(oldMap, false, li, false, nullptr);
+        const int d = uc1::hudParamForControl(dstMap, false, li, false, nullptr);
+        if (s != uc1::kParamNone) srcClaimed.insert(s);
+        if (d != uc1::kParamNone) dstClaimed.insert(d);
+    }
+
+    // Numeric controls to RE-APPLY after the move, once every param (incl. mode
+    // params like EQ Type) is in its final state. bx's norm→value mapping for a
+    // gain DEPENDS on the EQ-Type param: writing HF gain (0.564 = +2.6 in the
+    // default type) and THEN switching type silently re-scales it to +2.0. A
+    // second search pass under the settled state re-lands each value correctly.
+    struct ReApply { int dp; int key; CsVal val; };
+    std::vector<ReApply> reapply;
+
+    // Diagnostic (cs_log only): dump the new plug-in's param names so the alias
+    // table can be built/tuned against the plug-in's REAL naming, not guesses.
+    if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
+        char fxnm[256] = {0}; TrackFX_GetFXName(tr, newIdx, fxnm, sizeof(fxnm));
+        char hdr[320]; std::snprintf(hdr, sizeof(hdr), "[cs] DSTPARAMS %s", fxnm); csLog_(hdr);
+        const int np = TrackFX_GetNumParams(tr, newIdx);
+        for (int p = 0; p < np; ++p) {
+            char nm[128];
+            if (TrackFX_GetParamName(tr, newIdx, p, nm, sizeof(nm))) {
+                char l[200]; std::snprintf(l, sizeof(l), "[cs]   p%d='%s'", p, nm); csLog_(l);
+            }
+        }
+    }
+
     auto& intent = g_csIntent[trackGuidStr_(tr)];
     for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
         for (int btn = 0; btn <= 1; ++btn) {
             const bool isBtn = (btn != 0);
-            const int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, nullptr);
-            const int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, nullptr);
+            // The learned/explicit map is GROUND TRUTH — it's what the user
+            // curated. Name-alias is only a FALLBACK for a control the map leaves
+            // unmapped (e.g. an un-learned JSFX HPF). It must never override an
+            // explicit mapping (that grabbed bx's 'HPF On/Off' over 'HPF Frequency').
+            int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, nullptr);
+            int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, nullptr);
+            if (!isBtn) {
+                if (sp == uc1::kParamNone
+                    && (sp = resolveControlByAlias_(tr, oldIdx, linkIdx, srcClaimed)) != uc1::kParamNone)
+                    srcClaimed.insert(sp);
+                if (dp == uc1::kParamNone
+                    && (dp = resolveControlByAlias_(tr, newIdx, linkIdx, dstClaimed)) != uc1::kParamNone)
+                    dstClaimed.insert(dp);
+            }
             if (sp == uc1::kParamNone && dp == uc1::kParamNone) continue;
             const int key = linkIdx * 2 + (isBtn ? 1 : 0);
             const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
                                                    : uc1::csQuantityKind(linkIdx);
             CsVal val;
-            if (sp != uc1::kParamNone) {            // old has it → live value, remember
-                val = readParamValue_(tr, oldIdx, sp, kind);
-                intent[key] = val;
+            if (sp != uc1::kParamNone) {            // old has it → live value
+                const CsVal live = readParamValue_(tr, oldIdx, sp, kind);
+                const CsVal& mem = intent[key];
+                // Round-trip: if the old control still holds (within rounding) the
+                // value we WROTE there last swap, the user hasn't touched it — carry
+                // the ORIGINAL intent forward instead of the freshly-rounded read,
+                // so a value can't drift 10.0→10.03→10.05→… across a chain of swaps.
+                const bool untouched =
+                    mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
+                    && std::fabs(live.norm - mem.appliedNorm) < 1e-3;
+                val = untouched ? mem : live;
             } else if (intent[key].valid) {        // old lacks it → restore remembered
                 val = intent[key];
             } else {
                 continue;                          // never seen → nothing to carry
             }
-            if (dp != uc1::kParamNone)
+            double appliedN = val.norm;
+            if (dp != uc1::kParamNone) {
                 applyParamValue_(tr, newIdx, dp, val, key);
+                appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
+                // Numeric values get RE-APPLIED after the move (below) under the
+                // final, settled state — bx re-scales gains when a later mode param
+                // (EQ Type) is written, so the first pass alone is not enough.
+                if (val.numeric) reapply.push_back({ dp, key, val });
+            }
+            intent[key] = val;                     // remember intent + where we wrote it
+            intent[key].appliedNorm = appliedN;
         }
     }
 
@@ -5273,6 +5535,28 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     // CopyToTrack(move) inserts at oldIdx and shifts the old CS to oldIdx+1.
     TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
     TrackFX_Delete(tr, oldIdx + 1);
+
+    // SECOND PASS — re-apply numeric values now that all params (incl. EQ Type and
+    // other mode params) are final at oldIdx. applyParamValue_ re-runs the
+    // display-driven search under the SETTLED state, so a gain whose norm→dB
+    // mapping was re-scaled by a later mode write lands on the right dB (the
+    // bx +2.6→+2.0 corruption). Order-independent: modes are fixed, gains are
+    // mutually independent. intent.appliedNorm is refreshed to the final norm.
+    const bool csLogOn = []{ const char* e = GetExtState("rea_sixty","cs_log"); return e && e[0]=='1'; }();
+    for (const auto& r : reapply) {
+        applyParamValue_(tr, oldIdx, r.dp, r.val, r.key);
+        const double finalN = TrackFX_GetParamNormalized(tr, oldIdx, r.dp);
+        intent[r.key].appliedNorm = finalN;
+        if (csLogOn) {
+            char nm[96] = {0}, b[64] = {0};
+            TrackFX_GetParamName(tr, oldIdx, r.dp, nm, sizeof(nm));
+            TrackFX_GetFormattedParamValue(tr, oldIdx, r.dp, b, sizeof(b));
+            char lg[260]; std::snprintf(lg, sizeof(lg),
+                "[cs] REAPPLY p%d'%s' src=%.4g -> n=%.5f now='%s'",
+                r.dp, nm, r.val.eng, finalN, b);
+            csLog_(lg);
+        }
+    }
 
     // Restore enable + GUI state onto the new CS (now at oldIdx).
     TrackFX_SetEnabled(tr, oldIdx, oldEnabled);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -739,6 +740,65 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)
         if (id != kNoUc1 && id == controlId) return table[i].linkIdx;
     }
     return -1;
+}
+
+// Common name aliases per UC1 knob — '|'-separated, lowercase. Lets value
+// transfer resolve a control on a plug-in that only NAMES its param differently
+// (e.g. Analog Molecule's "High Pass Filter (Hz)") and never got an explicit
+// FX-Learn mapping. Tokens are deliberately DISTINCTIVE (multi-word where a bare
+// word like "gain"/"release"/"level" would over-match) so a substring hit is
+// almost certainly the right control. Knobs only — buttons stay explicit.
+namespace {
+struct CtrlAlias { uint8_t knobId; const char* aliases; };
+constexpr CtrlAlias kCtrlAliases[] = {
+    { knob::kCSHighPass,      "high pass|highpass|hi pass|hpf|hp filter|low cut|lo cut|locut|low-cut" },
+    { knob::kCSLowPass,       "low pass|lowpass|lo pass|lpf|lp filter|high cut|hi cut|hicut|high-cut" },
+    { knob::kCSHfGain,        "hf gain|high shelf gain|high frequency gain|treble gain|hf level" },
+    { knob::kCSHfFreq,        "hf freq|hi freq|high shelf freq|treble freq|hf frequency" },
+    { knob::kCSHmfGain,       "hmf gain|high mid gain|high-mid gain|hi mid gain|upper mid gain|himid gain" },
+    { knob::kCSHmfFreq,       "hmf freq|high mid freq|high-mid freq|hi mid freq|upper mid freq|himid freq" },
+    { knob::kCSHmfQ,          "hmf q|high mid q|high-mid q|hi mid q|upper mid q|himid q" },
+    { knob::kCSLmfGain,       "lmf gain|low mid gain|low-mid gain|lo mid gain|lower mid gain|lomid gain" },
+    { knob::kCSLmfFreq,       "lmf freq|low mid freq|low-mid freq|lo mid freq|lower mid freq|lomid freq" },
+    { knob::kCSLmfQ,          "lmf q|low mid q|low-mid q|lo mid q|lower mid q|lomid q" },
+    { knob::kCSLfFreq,        "lf freq|lo freq|low shelf freq|bass freq|lf frequency" },
+    { knob::kCSLfGain,        "lf gain|low shelf gain|low frequency gain|bass gain|lf level" },
+    { knob::kCSInputTrim,     "input trim|input gain|in gain|input level|preamp" },
+    { knob::kCSFaderLevel,    "fader level|output gain|output level|out gain|makeup gain|make-up gain" },
+    { knob::kCSCompThreshold, "comp threshold|compressor threshold|comp thresh" },
+    { knob::kCSCompRatio,     "comp ratio|compressor ratio|compression ratio" },
+    { knob::kCSCompRelease,   "comp release|compressor release|comp rel" },
+    { knob::kCSGateThreshold, "gate threshold|expander threshold|gate thresh|exp threshold" },
+    { knob::kCSGateRange,     "gate range|expander range|gate depth" },
+    { knob::kCSGateRelease,   "gate release|expander release|gate rel" },
+    { knob::kCSGateHold,      "gate hold|expander hold" },
+};
+}  // namespace
+
+bool controlAliasMatch(int linkIdx, const char* paramName)
+{
+    if (!paramName || !*paramName) return false;
+    uint8_t kid = kNoUc1;
+    for (const auto& e : kCsLinkToUc1)
+        if (e.linkIdx == linkIdx) { kid = e.knobId; break; }
+    if (kid == kNoUc1) return false;
+    const char* aliases = nullptr;
+    for (const auto& a : kCtrlAliases)
+        if (a.knobId == kid) { aliases = a.aliases; break; }
+    if (!aliases) return false;
+
+    std::string p;
+    p.reserve(96);
+    for (const char* s = paramName; *s; ++s)
+        p.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*s))));
+
+    for (const char* a = aliases; *a;) {
+        const char* e = a;
+        while (*e && *e != '|') ++e;
+        if (e > a && p.find(std::string(a, e - a)) != std::string::npos) return true;
+        a = (*e == '|') ? e + 1 : e;
+    }
+    return false;
 }
 
 CsQuantityKind csQuantityKind(int linkIdx)
