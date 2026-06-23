@@ -1897,7 +1897,9 @@ local function drawContextMenu()
   -- through. Greyed out when no CS is focused; one plug-in occupies one slot, so
   -- picking a used slot rewrites it to the active CS. The plug-in name shows
   -- next to each taken number. Frank 2026-06-20.
-  do
+  -- Hidden on the UF8 tab — it's a Channel-Strip concept, out of place in the
+  -- UF8 V-Pot context (Frank 2026-06-23).
+  if activeTab ~= "uf8" then
     local cur, hasCs, slots = readCsFav()
     if reaper.ImGui_BeginMenu(ctx, "CS Favourite", hasCs) then
       if reaper.ImGui_MenuItem(ctx, "None", nil, cur < 0) then
