@@ -3190,7 +3190,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_remove",          "Rem from Set"},
             {"temp_selset_toggle_selected", "Toggle Sel"},
             {"temp_selset_set_from_selection", "Set frm Sel"},
-            {"temp_selset_pin_focused",     "Grab Focus"},
+            {"temp_selset_pin_focused",     "Pin Focused"},
             {"temp_selset_clear",           "Clear Set"},
             {"selset_cycle",                "Cycle Sets"},
         }));

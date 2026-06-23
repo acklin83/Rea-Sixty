@@ -3081,11 +3081,24 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             // the user lands on the common stuff. Filtering force-opens
             // every category with matches so hits are visible without
             // an extra click.
+            // Category that holds the currently-bound action — force it
+            // open on the frame the popup appears so the active entry is
+            // actually rendered (and SetScrollHereY can centre it). Without
+            // this, a binding whose action lives outside the three default-
+            // open categories opened to a collapsed tree with nothing
+            // selected/visible (Frank 2026-06-23).
+            const char* activeCat =
+                (f.action && !f.action->empty()) ? categoryFor(*f.action) : "";
+
             for (auto* cat : kCats) {
                 auto it = bucket.find(cat);
                 if (it == bucket.end() || it->second.empty()) continue;
 
                 if (filtering) {
+                    int cond = ImGui_Cond_Always;
+                    ImGui_SetNextItemOpen(ctx, true, &cond);
+                } else if (popupJustOpened && activeCat && *activeCat
+                           && std::strcmp(cat, activeCat) == 0) {
                     int cond = ImGui_Cond_Always;
                     ImGui_SetNextItemOpen(ctx, true, &cond);
                 }
