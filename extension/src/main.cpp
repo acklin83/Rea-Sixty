@@ -12557,7 +12557,7 @@ void pushZonesForVisibleSlots()
                     || !sp.action.empty();
                 if (userLabel.empty() && userBankSlotPresent) {
                     userLabel = sp.action;
-                    if (userLabel.size() > 8) userLabel.resize(8);
+                    if (userLabel.size() > 12) userLabel.resize(12);
                 }
                 // Bank-5 dynamic label: a switch_cs_N slot shows the CS
                 // favourite's own name (factory "CS N" is the fallback when
@@ -12571,7 +12571,7 @@ void pushZonesForVisibleSlots()
                         && reasixty_csFav(favSlot, favAdd, favLbl)) {
                         std::string dyn = !favLbl.empty() ? favLbl : favAdd;
                         if (!dyn.empty()) {
-                            if (dyn.size() > 8) dyn.resize(8);
+                            if (dyn.size() > 12) dyn.resize(12);
                             userLabel = dyn;
                         }
                     }
@@ -12598,7 +12598,7 @@ void pushZonesForVisibleSlots()
                     sslFreeLabel = fslot.label;
                 } else if (sslFreeSlotPresent) {
                     sslFreeLabel = fsp.action;
-                    if (sslFreeLabel.size() > 8) sslFreeLabel.resize(8);
+                    if (sslFreeLabel.size() > 12) sslFreeLabel.resize(12);
                 }
             }
 
@@ -16360,6 +16360,31 @@ void onTimer()
     }
     if (g_modeBannerToggleRequest.exchange(false)) {
         reasixty_setModeBanner(!g_modeBanner.load());
+    }
+
+    // LED refresh on stateful-toggle change (Frank 2026-06-23: "Panel
+    // leuchtet nicht wenn aktiv … erst wenn Shift gedrückt"). These four
+    // builtins toggle their state via deferred/atomic paths that — unlike
+    // auto/flip/etc. — never set the dirty flags, so a button bound to them
+    // (top-soft-key user slot OR global cell) only repainted when an
+    // unrelated event (a modifier press) cleared the LED caches. Signal the
+    // dirtiness ourselves so the active LED lights on the next tick.
+    {
+        static bool s_init = false;
+        static bool s_fp = false, s_hud = false, s_tl = false, s_mb = false;
+        const bool fp  = g_focusedPanel.load();
+        const bool hud = g_hudEnabled.load();
+        const bool tl  = g_hudTouchLearn.load();
+        const bool mb  = g_modeBanner.load();
+        if (!s_init) {
+            s_init = true;
+        } else if (fp != s_fp || hud != s_hud || tl != s_tl || mb != s_mb) {
+            g_softKeyDirty.store(true);
+            g_bankDirty.store(true);
+            g_globalLedsInit = false;
+            invalidateGlobalLedCache_();
+        }
+        s_fp = fp; s_hud = hud; s_tl = tl; s_mb = mb;
     }
 
     // Mode-change banner (Stream B3). Publish a transient label whenever the

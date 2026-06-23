@@ -1774,7 +1774,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                 scribble = sslLabels[i];
             }
         }
-        if (scribble.size() > 10) scribble.resize(10);
+        if (scribble.size() > 12) scribble.resize(12);
         if (!scribble.empty()) {
             drawTextCentered_(c, sx + kStripW / 2.0f, 68,
                               0x4488DDFF, scribble.c_str());

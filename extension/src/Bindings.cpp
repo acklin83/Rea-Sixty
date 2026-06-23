@@ -3171,69 +3171,71 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             }
             return p;
         };
+        // Labels up to 12 chars — the UF8 top-soft-key LCD width
+        // (buildPluginSlotName caps at 12; the resolver centre-pads to 12).
         std::vector<SoftKeyBankPreset> v;
         v.push_back(bank("Encoder Modes", {
-            {"encoder_nav",      "Ch Sel"},
+            {"encoder_nav",      "Ch Select"},
             {"encoder_instance", "Instance"},
             {"encoder_fx_cycle", "FX Cycle"},
             {"encoder_fx_move",  "FX Move"},
             {"encoder_cs_cycle", "CS Cycle"},
             {"encoder_markers",  "Markers"},
             {"encoder_nudge",    "Nudge"},
-            {"encoder_focus",    "Wheel"},
+            {"encoder_focus",    "Focus Wheel"},
         }));
         v.push_back(bank("Focus Set & Selsets", {
-            {"temp_selset_recall",          "Pin FS"},
-            {"temp_selset_add",             "Add FS"},
-            {"temp_selset_remove",          "Rem FS"},
-            {"temp_selset_toggle_selected", "Togl FS"},
-            {"temp_selset_set_from_selection", "Set FS"},
-            {"temp_selset_pin_focused",     "Grab FS"},
-            {"temp_selset_clear",           "Clear FS"},
-            {"selset_cycle",                "Selsets"},
+            {"temp_selset_recall",          "Pin Set"},
+            {"temp_selset_add",             "Add to Set"},
+            {"temp_selset_remove",          "Rem from Set"},
+            {"temp_selset_toggle_selected", "Toggle Sel"},
+            {"temp_selset_set_from_selection", "Set frm Sel"},
+            {"temp_selset_pin_focused",     "Grab Focus"},
+            {"temp_selset_clear",           "Clear Set"},
+            {"selset_cycle",                "Cycle Sets"},
         }));
         v.push_back(bank("Plug-in Ops", {
             {"show_focused_plugin_gui",      "FX GUI"},
             {"show_fx_chain",                "FX Chain"},
-            {"close_all_fx_guis",            "Close FX"},
+            {"close_all_fx_guis",            "Close All FX"},
             {"plugin_bypass",                "Bypass"},
             {"plugin_offline",               "Offline"},
-            {"plugin_preset_prev",           "Preset <"},
-            {"plugin_preset_next",           "Preset >"},
-            {"ssl_strip_mode_toggle_with_gui", "SSL Str"},
+            {"plugin_preset_prev",           "Preset Prev"},
+            {"plugin_preset_next",           "Preset Next"},
+            {"ssl_strip_mode_toggle_with_gui", "SSL Strip"},
         }));
         v.push_back(bank("Learn / Master", {
-            {"learn_hud_toggle",        "Lrn HUD"},
-            {"quick_learn",             "QLrn Prj"},
-            {"quick_learn_track",       "QLrn Trk"},
-            {"touch_to_learn_toggle",   "Touch L"},
-            {"master_pin_strip1",       "Mst Left"},
-            {"master_pin_strip8",       "Mst Rght"},
+            {"learn_hud_toggle",        "Learn HUD"},
+            {"quick_learn",             "Quick Learn"},
+            {"quick_learn_track",       "QLearn Trk"},
+            {"touch_to_learn_toggle",   "Touch Learn"},
+            {"master_pin_strip1",       "Master Left"},
+            {"master_pin_strip8",       "Master Right"},
             {"focused_panel_toggle",    "Panel"},
             {"uc1_outgain_fader_toggle","Out Gain"},
         }));
-        // CS Favourites — switch_cs_1..8. Static "CS N" labels here; the
+        // CS Favourites — switch_cs_1..8. Static "CS Fav N" labels here; the
         // top-soft-key resolver overrides them with the favourite's name
-        // at render time (main.cpp), falling back to "CS N" when empty.
+        // at render time (main.cpp), falling back to "CS Fav N" when empty.
         v.push_back(bank("CS Favourites", {
-            {"switch_cs_1", "CS 1"},
-            {"switch_cs_2", "CS 2"},
-            {"switch_cs_3", "CS 3"},
-            {"switch_cs_4", "CS 4"},
-            {"switch_cs_5", "CS 5"},
-            {"switch_cs_6", "CS 6"},
-            {"switch_cs_7", "CS 7"},
-            {"switch_cs_8", "CS 8"},
+            {"switch_cs_1", "CS Fav 1"},
+            {"switch_cs_2", "CS Fav 2"},
+            {"switch_cs_3", "CS Fav 3"},
+            {"switch_cs_4", "CS Fav 4"},
+            {"switch_cs_5", "CS Fav 5"},
+            {"switch_cs_6", "CS Fav 6"},
+            {"switch_cs_7", "CS Fav 7"},
+            {"switch_cs_8", "CS Fav 8"},
         }));
         v.push_back(bank("View / Utility", {
             {"domain_cs",            "Focus CS"},
             {"domain_bc",            "Focus BC"},
             {"brightness_both_up",   "Bright +"},
             {"brightness_both_down", "Bright -"},
-            {"marker_overlay_toggle","Overlay"},
+            {"marker_overlay_toggle","Mkr Overlay"},
             {"selection_clear_all",  "Deselect"},
             {"tracks_arm_all",       "Arm All"},
-            {"zoom_center",          "Zoom"},
+            {"zoom_center",          "Zoom Fit"},
         }));
         return v;
     }();
