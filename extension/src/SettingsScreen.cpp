@@ -8972,6 +8972,11 @@ bool hudLearnBindMatch_(const std::string& match, int linkIdx, int layer,
                 lay.customLabel.clear();
             lay.vst3Param = vst3Param;
             lay.inverted  = false;
+            // A fresh learn resets the control to a plain continuous/value
+            // binding — clear any step-cycle so re-learning a knob that picked
+            // up stray captured steps makes it a normal pot again (Frank
+            // 2026-06-23). Curate a new cycle via the editor afterwards.
+            lay.pushSteps.clear();
             replaced = true;
             break;
         }

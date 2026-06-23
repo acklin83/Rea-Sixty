@@ -17391,10 +17391,14 @@ void onTimer()
                     int csFx = -1, bcFx = -1;
                     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
                     reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
-                    // A KNOB armed on a mapped CS/BC plug-in → start UC1
-                    // step-capture so the user can press several plug-in
-                    // buttons onto it (parallel to the UF8 V-Pot path).
-                    if (g_hudHwLearnReqIsKnob.load()) {
+                    // UC1 step-capture DISABLED 2026-06-23: the always-on
+                    // capture lingered after a normal bind and caught stray
+                    // discrete clicks, committing bogus step-cycles onto the
+                    // knob's slot → "normale potis snappen auf gelernte Werte".
+                    // UC1 step-cycles are built via the editor instead; the UF8
+                    // path stays. Re-enable only with an explicit, bounded
+                    // capture window (see rotary-stepcycle memory).
+                    if (false && g_hudHwLearnReqIsKnob.load()) {
                         vpotStepCaptureCommit_();   // commit any previous
                         const int dom = g_hudHwLearnReqDom.load();
                         MediaTrack* capTr = (dom == 1) ? bcTr : csTr;
