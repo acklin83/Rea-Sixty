@@ -396,6 +396,35 @@ void broadcastUserParam(MediaTrack* leader,
     }
 }
 
+void broadcastRawParam(MediaTrack* leader,
+                       const char* fxIdentity,
+                       int vst3Param,
+                       double normValue)
+{
+    if (!fxIdentity || !*fxIdentity || vst3Param < 0) return;
+    auto targets = resolveBroadcastTargets(leader);
+    if (targets.empty()) return;
+    ScopedSuppress guard;
+    for (auto* t : targets) {
+        const int nfx = TrackFX_GetCount(t);
+        char fxName[256];
+        for (int i = 0; i < nfx; ++i) {
+            if (!uf8::fxIdentityName(t, i, fxName, sizeof(fxName))) continue;
+            // EXACT identity match only — same plug-in ⇒ same VST3 param
+            // layout, so the raw index is valid. A substring/family match
+            // would risk writing into a differently-laid-out param.
+            if (std::strcmp(fxName, fxIdentity) != 0) continue;
+            const bool ok = TrackFX_SetParamNormalized(t, i, vst3Param, normValue);
+            const double after = TrackFX_GetParamNormalized(t, i, vst3Param);
+            diagSetParamLog_("BROADCAST/raw_target", t, i, vst3Param,
+                             normValue, ok, after);
+            break;
+        }
+    }
+    // The leader already holds normValue (this is called from the param-
+    // change hook AFTER the originating write), so no cement-leader pass.
+}
+
 void broadcastTrackBool(MediaTrack* leader,
                         const char* attrName, double value)
 {

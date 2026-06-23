@@ -958,7 +958,7 @@ Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save c
 
 ## Parameter Groups pane
 
-Parallel parameter control across multiple tracks: while a slot is active, plug-in tweaks on the focused track copy to every member track of the slot.
+Parallel parameter control across multiple tracks: while a slot is active, plug-in tweaks on the focused track copy to every member track of the slot. This works for the SSL Channel Strip / Bus Comp, for learned FX, **and now for any other plug-in with no mapping required** — as long as the member track hosts the exact same plug-in. (See the Parameter Groups reference section for the full rules.)
 
 Top of the pane:
 
@@ -1503,7 +1503,12 @@ Active group switch via the per-slot Active radio.
 
 Temp-group mode: when `Multi-Select acts as Temp Group` is on, the active group is derived live from the current REAPER multi-track selection.
 
-Unmapped FX deferred: if a member track lacks the same FX as the source track, the edit silently drops on that track.
+Which edits travel — and onto which tracks:
+
+- **SSL Channel Strip / Bus Comp (and learned FX):** the edit follows the surface control, so it lands on the matching control even when members run a *different variant* of the plug-in (e.g. one track on Channel Strip 2, another on 4K E).
+- **Any other plug-in — no mapping or FX-Learn required:** the edit copies to members that host the **exact same plug-in**. Tweak a knob (on the hardware *or* with the mouse on the plug-in GUI) and every member track with an identical plug-in follows along. Members without that plug-in are silently skipped.
+
+This deliberately does **not** copy across *different* plug-ins: the same internal value rarely means the same thing on another plug-in, so only identical plug-ins mirror.
 
 Storage: each track's member-of-which-slots state is a bitmask in P_EXT (`P_EXT:rea_sixty:param_groups`). Slot metadata is in a project-scoped JSON sidecar.
 

@@ -12,9 +12,11 @@
 // Group meta (name + active flag) + the global "multi-select as temp
 // group" toggle persist to <REAPER_RESOURCE>/rea_sixty/parameter_groups.json.
 //
-// Phase 1 scope: only PluginMap-recognised plug-ins broadcast (SSL CS /
-// BC built-in maps + user FX-Learn maps). Unmapped third-party plug-ins
-// are silent-skipped; FX-name-match broadcast is a follow-up phase.
+// PluginMap-recognised plug-ins broadcast variant-aware (SSL CS / BC
+// built-in maps via linkIdx + user FX-Learn maps). Plug-ins that NO map
+// recognises broadcast 1:1 by raw VST3 param index onto group members
+// that host the IDENTICAL plug-in (exact fxIdentityName match) — see
+// broadcastRawParam. No map / no learning required for that case.
 //
 
 #include <array>
@@ -102,6 +104,19 @@ void broadcastUserParam(MediaTrack* leader,
                         const UserPluginMap* leaderMap,
                         int vst3Param,
                         double normValue);
+
+// Map-less path: broadcast a raw VST3 param write onto every group member
+// that hosts the IDENTICAL plug-in (exact fxIdentityName equality, so the
+// VST3 param layout is guaranteed the same). `vst3Param` is written 1:1.
+// Used by the CSURF_EXT_SETFXPARAM hook for plug-ins that neither a
+// built-in nor a user map recognises, so unmapped third-party plug-ins
+// still mirror across an active group without any FX-Learn. Restricted to
+// identical plug-ins because mirroring the same value across DIFFERENT
+// plug-ins is meaningless (norm 0.5 ≠ same engineering value).
+void broadcastRawParam(MediaTrack* leader,
+                       const char* fxIdentity,
+                       int vst3Param,
+                       double normValue);
 
 // Track attribute (e.g. "B_PHASE"). Writes the same numeric `value` to
 // every target track via SetMediaTrackInfo_Value.

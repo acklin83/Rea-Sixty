@@ -10016,10 +10016,12 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
     // User-FX-Learn maps first — members matched by FX-name substring,
     // vst3Param transferred 1:1 (same plug-in identity guarantees same
     // VST3 param layout).
+    bool recognised = false;
     if (const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
         um && um->uf8Mode)
     {
         uf8::param_groups::broadcastUserParam(tr, um, vst3Param, value);
+        recognised = true;
     }
 
     // SSL CS / BC built-in (or user view-cached as PluginMap). Translates
@@ -10029,11 +10031,23 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
         pm && (pm->domain == uf8::Domain::ChannelStrip
             || pm->domain == uf8::Domain::BusComp))
     {
+        recognised = true;  // gates the raw path even for un-slotted params:
+                            // members may be a different variant, so a raw
+                            // 1:1 index could miss. The linkIdx path owns it.
         const int slotIdx = uf8::slotIdxForVst3Param(*pm, vst3Param);
         if (slotIdx >= 0)
             uf8::param_groups::broadcastBuiltinSlot(
                 tr, pm->domain, slotIdx, value);
     }
+
+    // Map-less fallback: no built-in or user map recognises this plug-in.
+    // Mirror the raw param 1:1 onto group members hosting the IDENTICAL
+    // plug-in — so unmapped third-party plug-ins still broadcast across a
+    // group without any FX-Learn (Frank 2026-06-23: "Parameter Sets nur
+    // bei genau gleichen Plugins"). Same value across DIFFERENT plug-ins
+    // would be meaningless, hence the exact-identity restriction.
+    if (!recognised)
+        uf8::param_groups::broadcastRawParam(tr, fxName, vst3Param, value);
 
     return 0;
 }
