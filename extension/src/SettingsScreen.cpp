@@ -8623,25 +8623,6 @@ bool hudUf8LearnTick_()
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
-    // Touch-to-Learn step-capture: while a V-Pot is armed for capture, a
-    // DISCRETE (button) param change feeds the capture (main.cpp's Extended
-    // hook) and must NOT bind here — otherwise the first button press would
-    // bind the V-Pot to that one param and disarm, so only one button "took"
-    // (Frank 2026-06-23). Stay armed; the capture accumulates and commits on
-    // the next wiggle / mode-off. Continuous wiggles still bind normally.
-    if (g_uf8CaptureActiveFlag.load() && g_hudUf8LearnKind == 0) {
-        double ps = 0, a2 = 0, b2 = 0; bool isT = false;
-        bool discrete = false;
-        if (TrackFX_GetParameterStepSizes(tr, f, p, &ps, &a2, &b2, &isT)) {
-            discrete = isT;
-            if (!discrete && ps > 0.0) {
-                double jn = 0; bool jc = false;
-                const bool isJ = uf8::jsfxStepClassify(tr, f, p, ps, jn, jc);
-                discrete = !(isJ && jc);   // exclude continuous JSFX sliders
-            }
-        }
-        if (discrete) return false;   // let the capture own it; stay armed
-    }
     // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
     // fresh UF8-only map for it, no match filter.
     const bool asToggle = reasixty_uf8LearnAsToggle();
@@ -9338,22 +9319,6 @@ bool hudLearnTick_(int activeLayer)
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
-    // Touch-to-Learn step-capture (UC1 knob): a DISCRETE button change feeds
-    // the capture, not a single bind — stay armed so several buttons land
-    // (mirror of hudUf8LearnTick_; the flag is only set for a KNOB capture).
-    if (g_uf8CaptureActiveFlag.load()) {
-        double ps = 0, a2 = 0, b2 = 0; bool isT = false;
-        bool discrete = false;
-        if (TrackFX_GetParameterStepSizes(tr, f, p, &ps, &a2, &b2, &isT)) {
-            discrete = isT;
-            if (!discrete && ps > 0.0) {
-                double jn = 0; bool jc = false;
-                const bool isJ = uf8::jsfxStepClassify(tr, f, p, ps, jn, jc);
-                discrete = !(isJ && jc);
-            }
-        }
-        if (discrete) return false;   // capture owns it; stay armed
-    }
     // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
     // fresh map for it in the armed domain, no match filter.
     if (g_hudLearnCreateDom >= 0) {

@@ -16582,7 +16582,16 @@ void pushTouchLearnFeedback_()
     const bool modeOn  = g_hudTouchLearn.load();
     const int  uf8Armed = modeOn ? reasixty_hudUf8LearnArmed() : -1;
     const int  uc1Armed = modeOn ? reasixty_hudLearnArmed()    : -1;
-    const bool active   = (uf8Armed >= 0) || (uc1Armed >= 0);
+    // Keep the control breathing while a step-capture is still accumulating:
+    // the learn may have bound the first press and disarmed, but the user is
+    // pressing more plug-in buttons (Frank 2026-06-23). Gated on modeOn so the
+    // feedback always clears the instant Touch-to-Learn turns off.
+    const bool capActive = modeOn && g_vpotCap.active;
+    int uf8Breathe = uf8Armed;
+    if (uf8Breathe < 0 && capActive && !g_vpotCap.uc1 && g_vpotCap.strip >= 0)
+        uf8Breathe = g_vpotCap.strip;        // V-Pot: armed idx == strip (kind 0)
+    const bool uc1Breathe = (uc1Armed >= 0) || (capActive && g_vpotCap.uc1);
+    const bool active   = (uf8Breathe >= 0) || uc1Breathe;
 
     if (!active) {
         if (wasActive) {
@@ -16608,9 +16617,9 @@ void pushTouchLearnFeedback_()
     const bool    blink  = ((ms / 350) & 1) != 0;
 
     // ---- UF8 ----
-    if (uf8Armed >= 0 && g_dev) {
-        const int kind  = uf8Armed / 8;
-        const int strip = uf8Armed % 8;
+    if (uf8Breathe >= 0 && g_dev) {
+        const int kind  = uf8Breathe / 8;
+        const int strip = uf8Breathe % 8;
         if (strip >= 0 && strip < 8) {
             if (kind == 0) {
                 // V-Pot ring: pulse the bar over the real values of the others.
@@ -16655,7 +16664,7 @@ void pushTouchLearnFeedback_()
     }
 
     // ---- UC1 ----
-    if (uc1Armed >= 0 && g_uc1_surface) {
+    if (uc1Breathe && g_uc1_surface) {
         g_uc1_surface->touchLearnFeedback(breath, blink);
     } else if (g_uc1_surface) {
         // UF8-only arm while a previous UC1 feedback was up → clear it.
