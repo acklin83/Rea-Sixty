@@ -1723,17 +1723,30 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             const int editDomain = (editQuick == 1) ? 1 : 0;   // Q2=BC
             const char* const* el =
                 reasixty_softkeyStockLabels(editDomain, editSubBank);
-            const auto bd =
-                uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
-            const auto& sp = bd.shortPress[
-                static_cast<int>(uf8::bindings::Modifier::Plain)];
-            const bool isSslSoftkey =
-                sp.type == uf8::bindings::ActionType::Builtin &&
-                sp.action == "ssl_softkey";
-            if (!sp.label.empty()) {
-                scribble = sp.label;                       // user override
-            } else if (isSslSoftkey && el && el[i] && *el[i]) {
-                scribble = el[i];                          // SSL stock param
+            const char* stock = (el && el[i]) ? el[i] : "";
+            if (stock && *stock) {
+                // SSL-occupied slot: per-binding override wins, else stock.
+                const auto bd =
+                    uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
+                const auto& sp = bd.shortPress[
+                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                scribble = !sp.label.empty() ? sp.label : std::string(stock);
+            } else {
+                // Free SSL slot → show the user's own action assigned at
+                // (L0, editQuick, editSubBank, i). Matches the runtime
+                // fall-through (Frank 2026-06-23).
+                const auto slot = uf8::bindings::getUserQuickSlot(
+                    0, editQuick, editSubBank, i);
+                const auto& sp = slot.shortPress[
+                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                if (!slot.label.empty()) {
+                    scribble = slot.label;
+                } else if (sp.type != uf8::bindings::ActionType::Noop
+                           || !sp.action.empty()) {
+                    scribble = (sp.type == uf8::bindings::ActionType::Builtin)
+                        ? uf8::bindings::builtinDisplayName(sp.action)
+                        : sp.action;
+                }
             }
         } else {
             const auto bd =
@@ -4139,22 +4152,34 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
     };
 
-    // Layer 1 Q1/Q2 = SSL CS/BC focus — their top-soft-key row is
-    // auto-filled from the SSL plug-in's stock labels, not user-editable.
-    const bool isSslCsBc = (editLayer == 0 && editQuick <= 1);
-    if (isSslCsBc) {
-        char hdr[160];
-        snprintf(hdr, sizeof(hdr),
-                      "Top Soft-Key %d   (Layer 1, %s)",
-                      slotIdx + 1,
-                      editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
-        ImGui_Text(ctx, hdr);
+    // Layer 1 Q1/Q2 = SSL CS/BC focus. Slots the SSL plug-in occupies on
+    // this page are fixed (not user-editable); slots SSL leaves EMPTY
+    // (every BC bank 2-5, plus the gaps in the populated banks) fall
+    // through to the user-Quick store at (L0, Q1/Q2, page, slot) so the
+    // user can assign their own actions there (Frank 2026-06-23).
+    if (editLayer == 0 && editQuick <= 1) {
+        const int domain = (editQuick == 1) ? 1 : 0;        // Q2 = BC
+        const char* const* el = reasixty_softkeyStockLabels(domain, editSubBank);
+        const char* stock = (el && el[slotIdx]) ? el[slotIdx] : "";
+        if (stock && *stock) {
+            char hdr[200];
+            snprintf(hdr, sizeof(hdr),
+                          "Top Soft-Key %d — %s   (Layer 1, %s)",
+                          slotIdx + 1, stock,
+                          editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
+            ImGui_Text(ctx, hdr);
+            ImGui_TextDisabled(ctx,
+                "Fixed by the SSL plug-in on this page — not user-editable. "
+                "Empty slots on this page (and the unused BC banks 2-5) ARE "
+                "editable: pick one to assign your own action.");
+            return;
+        }
+        // Empty SSL slot → editable. Make it clear this is a free slot.
         ImGui_TextDisabled(ctx,
-            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) auto-fill the top-soft-"
-            "key row from the SSL plug-in's stock soft-key labels. "
-            "Nothing to edit here — pick Q3 (or switch to Layer 2/3) "
-            "for free user-Quick slots.");
-        return;
+            "Free SSL slot — unused by the plug-in on this page. Assign any "
+            "action; it fires when this Top Soft-Key is pressed in this "
+            "CS/BC page.");
+        ImGui_Spacing(ctx);
     }
 
     const int  qIdx  = editQuick;

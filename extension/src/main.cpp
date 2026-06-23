@@ -10595,6 +10595,36 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 }
             }
 
+            // SSL CS/BC free-slot fall-through: in the CS (Q1) / BC (Q2)
+            // domain on Layer 1 — where no explicit user-Quick is engaged —
+            // a top-soft-key sitting on a slot the SSL plug-in leaves EMPTY
+            // (kNoSlot) on the current page dispatches the user-Quick slot
+            // at (L0, Q1/Q2, page, slot) instead of no-op'ing. Lets the user
+            // claim the unused BC banks 2-5 (+ the gaps elsewhere) for their
+            // own actions while the occupied slots stay SSL-driven
+            // (Frank 2026-06-23). Occupied slots / empty user slots fall
+            // through to the normal bindings::dispatch (ssl_softkey).
+            if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
+                && !handledNatively
+                && uf8::bindings::getActiveLayer() == 0)
+            {
+                const auto fp     = uf8::getFocusedParam();
+                const bool isBc   = (fp.domain == uf8::Domain::BusComp);
+                const auto domain = isBc ? uf8::Domain::BusComp
+                                         : uf8::Domain::ChannelStrip;
+                const int  bank   = std::clamp(g_softKeyBank.load(),
+                                        0, softkey::maxBankFor(domain));
+                const int  slot   = id - 0x18;
+                const auto v      = softkey::viewFor(domain, bank);
+                if (v.linkIdx[slot] == softkey::kNoSlot) {
+                    const int q = isBc ? 1 : 0;   // Q2 = BC, Q1 = CS
+                    if (uf8::bindings::dispatchUserQuickSlot(
+                            0, q, bank, slot, pressed)) {
+                        handledNatively = true;
+                    }
+                }
+            }
+
             // Phase 2.8 Nav Mode — when the marker/region overlay is
             // active, top-soft-key presses jump to the strip's mapped
             // marker/region instead of firing whatever ssl_softkey /
@@ -12548,6 +12578,30 @@ void pushZonesForVisibleSlots()
                 }
             }
 
+            // SSL CS/BC free-slot label: with no user Quick engaged and
+            // this page-slot empty in the SSL stock table, show the user's
+            // own action assigned there (mirrors the dispatch fall-through;
+            // Frank 2026-06-23). bankSk/domSk reflect the live CS/BC page.
+            std::string sslFreeLabel;
+            bool        sslFreeSlotPresent = false;
+            if (curQuick < 0 && !pluginModeLocal && curLayer == 0
+                && vSk.linkIdx && vSk.linkIdx[s] == softkey::kNoSlot) {
+                const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
+                const auto fslot = uf8::bindings::getUserQuickSlot(
+                    0, qd, bankSk, s);
+                const auto& fsp = fslot.shortPress[
+                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                sslFreeSlotPresent =
+                    fsp.type != uf8::bindings::ActionType::Noop
+                    || !fsp.action.empty();
+                if (!fslot.label.empty()) {
+                    sslFreeLabel = fslot.label;
+                } else if (sslFreeSlotPresent) {
+                    sslFreeLabel = fsp.action;
+                    if (sslFreeLabel.size() > 8) sslFreeLabel.resize(8);
+                }
+            }
+
             // Per-binding label override — top wins, fall through to
             // the user-bank / SSL-plugin default. Resolution order:
             //   1. shortPress[currentModifier].label  (if non-empty)
@@ -12585,8 +12639,9 @@ void pushZonesForVisibleSlots()
                 }
             }
             if (label.empty()) {
-                label = (curQuick >= 0)
-                    ? userLabel : std::string(vSk.labels[s]);
+                if (curQuick >= 0)            label = userLabel;
+                else if (!sslFreeLabel.empty()) label = sslFreeLabel;
+                else                          label = std::string(vSk.labels[s]);
             }
             // Pad to 12 chars centred (leading + trailing spaces) so
             //  - shorter / empty labels actively overwrite any longer
@@ -12605,7 +12660,7 @@ void pushZonesForVisibleSlots()
             }
             const int slotLink = (curQuick >= 0)
                 ? (userBankSlotPresent ? 0 : softkey::kNoSlot)
-                : vSk.linkIdx[s];
+                : (sslFreeSlotPresent ? 0 : vSk.linkIdx[s]);
             // Synthetic toggle columns: read the per-strip state directly
             // (not the focused state) so each column's LED reflects the
             // toggle's actual on/off for THIS strip's track. Only ONE
