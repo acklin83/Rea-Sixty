@@ -182,6 +182,11 @@ bool isBusCompBinding(const PluginBindings* b);
 const std::vector<uf8::PushStep>*
 pushStepsForButton(const PluginBindings* channelMap, uint8_t buttonId);
 
+// Same, for a UC1 KNOB driven as a rotary step-cycle (turn scrubs through
+// the curated PushStep list). nullptr when the knob has no step list.
+const std::vector<uf8::PushStep>*
+pushStepsForKnob(const PluginBindings* channelMap, uint8_t knobId);
+
 // Kind of a control — helps the surface decide which plugin slot to
 // route a knob to when both Bus Comp and Channel Strip are on the track.
 enum class ControlDomain {

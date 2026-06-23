@@ -1557,6 +1557,48 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         ++stats_.knobEventsSuppressed; return;
     }
 
+    // Rotary step-cycle: if this knob carries a curated PushStep list, scrub
+    // through it by the encoder delta (direction-aware, clamps at the ends).
+    // Checked BEFORE the unmapped early-return so a macro knob (no primary
+    // param, steps only) still works. Mirrors the UC1 button push-cycle but
+    // driven by the turn instead of a press.
+    if (const std::vector<uf8::PushStep>* steps =
+            uc1::pushStepsForKnob(map, ev.id);
+        steps && !steps->empty())
+    {
+        MediaTrack* trS = static_cast<MediaTrack*>(writeTrackRaw);
+        static int s_acc[0x20] = {0};
+        static std::chrono::steady_clock::time_point s_last[0x20]{};
+        const int dStep = stepFromAccumulator(
+            s_acc[ev.id & 0x1F], s_last[ev.id & 0x1F], 3);
+        if (dStep == 0) { ++stats_.knobEventsHandled; return; }
+        const auto& v = *steps;
+        const int n = static_cast<int>(v.size());
+        auto liveMatch = [&](int i) {
+            if (i < 0 || i >= n) return false;
+            const uf8::PushStep& st = v[i];
+            if (st.vst3Param < 0) return false;
+            const double cur =
+                TrackFX_GetParamNormalized(trS, fxIdx, st.vst3Param);
+            const double d = cur - static_cast<double>(st.norm);
+            return d < 1e-3 && d > -1e-3;
+        };
+        int curIdx = knobStepIdx_[ev.id & 0x1F];
+        if (!liveMatch(curIdx)) {
+            curIdx = -1;
+            for (int i = 0; i < n; ++i) if (liveMatch(i)) { curIdx = i; break; }
+        }
+        const int signedSteps = dStep * (map->inverted[ev.id] ? -1 : 1);
+        const int nextIdx = uf8::stepCycleAdvance(v, curIdx, signedSteps);
+        if (nextIdx < 0) { ++stats_.knobEventsHandled; return; }
+        knobStepIdx_[ev.id & 0x1F] = nextIdx;
+        const uf8::PushStep& sel = v[nextIdx];
+        if (sel.vst3Param < 0) { ++stats_.knobEventsHandled; return; }
+        TrackFX_SetParamNormalized(trS, fxIdx, sel.vst3Param, sel.norm);
+        ++stats_.knobEventsHandled;
+        return;
+    }
+
     const int vst3Param = map->knobParam[ev.id];
     if (vst3Param == kParamNone) {
         if (logThis) {

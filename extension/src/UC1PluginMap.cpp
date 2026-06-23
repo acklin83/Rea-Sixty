@@ -445,9 +445,11 @@ constexpr LinkToUc1 kBcLinkToUc1[] = {
 // entry rather than inside PluginBindings.
 void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
                             int layer,
-                            std::array<std::vector<uf8::PushStep>, 0x20>* buttonSteps = nullptr)
+                            std::array<std::vector<uf8::PushStep>, 0x20>* buttonSteps = nullptr,
+                            std::array<std::vector<uf8::PushStep>, 0x20>* knobSteps = nullptr)
 {
     if (buttonSteps) for (auto& v : *buttonSteps) v.clear();
+    if (knobSteps)   for (auto& v : *knobSteps)   v.clear();
     for (auto& v : out.knobParam)      v = kParamNone;
     for (auto& v : out.buttonParam)    v = kParamNone;
     for (auto& v : out.inverted)       v = false;
@@ -494,9 +496,15 @@ void synthesizeUserBinding_(const uf8::UserPluginMap& um, PluginBindings& out,
         }
         for (int i = 0; i < tableSize; ++i) {
             if (table[i].linkIdx != slot.linkIdx) continue;
-            if (table[i].knobId != kNoUc1 && eff.vst3Param >= 0) {
-                out.knobParam[table[i].knobId] = eff.vst3Param;
-                out.inverted[table[i].knobId]  = eff.inverted;
+            if (table[i].knobId != kNoUc1) {
+                if (eff.vst3Param >= 0) {
+                    out.knobParam[table[i].knobId] = eff.vst3Param;
+                    out.inverted[table[i].knobId]  = eff.inverted;
+                }
+                // Rotary step-cycle on a UC1 knob: same pushSteps model as a
+                // button, but the knob scrubs through them on turn.
+                if (knobSteps && hasSteps)
+                    (*knobSteps)[table[i].knobId] = eff.pushSteps;
             }
             if (table[i].buttonId != kNoUc1) {
                 if (eff.vst3Param >= 0) {
@@ -539,6 +547,9 @@ struct UserBindingEntry {
     // pointers into this, consumed on the same main thread before any
     // rebuild.
     std::array<std::vector<uf8::PushStep>, 0x20> buttonSteps[uf8::kNumFxLayers];
+    // Per-knob rotary step-cycle lists (keyed by UC1 knob id). Same model /
+    // lifetime as buttonSteps; consumed by pushStepsForKnob().
+    std::array<std::vector<uf8::PushStep>, 0x20> knobSteps[uf8::kNumFxLayers];
 
     // Learn-HUD: per-layer set of SSL-Link linkIdx that carry their OWN
     // overlay on that layer (vs inheriting Normal). Normal's entry holds every
@@ -592,7 +603,8 @@ void rebuildUserCache_locked_()
         for (int l = 0; l < uf8::kNumFxLayers; ++l) {
             e->bindings[l].match     = e->matchOwned.c_str();
             e->bindings[l].shortName = e->shortNameOwned.c_str();
-            synthesizeUserBinding_(um, e->bindings[l], l, &e->buttonSteps[l]);
+            synthesizeUserBinding_(um, e->bindings[l], l, &e->buttonSteps[l],
+                                   &e->knobSteps[l]);
             // Record which linkIdx own an overlay on THIS layer (no Normal
             // fallback) — the Learn-HUD uses it to render modifier layers with
             // only their real overlays. Normal collects every mapped linkIdx.
@@ -650,6 +662,20 @@ pushStepsForButton(const PluginBindings* channelMap, uint8_t buttonId)
         const int l = e->layerIndexOf(channelMap);
         if (l < 0) continue;
         const auto& v = e->buttonSteps[l][buttonId];
+        return v.empty() ? nullptr : &v;
+    }
+    return nullptr;
+}
+
+const std::vector<uf8::PushStep>*
+pushStepsForKnob(const PluginBindings* channelMap, uint8_t knobId)
+{
+    if (!channelMap || knobId >= 0x20) return nullptr;
+    std::lock_guard<std::mutex> lk(g_userCacheMutex);
+    for (const auto& e : g_userCache) {
+        const int l = e->layerIndexOf(channelMap);
+        if (l < 0) continue;
+        const auto& v = e->knobSteps[l][knobId];
         return v.empty() ? nullptr : &v;
     }
     return nullptr;

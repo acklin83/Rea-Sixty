@@ -172,12 +172,17 @@ Domain domainFromName_(const char* s)
 
 const char* vpotModeName_(VPotMode m)
 {
-    return m == VPotMode::Toggle ? "Toggle" : "Value";
+    switch (m) {
+        case VPotMode::Toggle:    return "Toggle";
+        case VPotMode::StepCycle: return "StepCycle";
+        default:                  return "Value";
+    }
 }
 
 VPotMode vpotModeFromName_(const char* s)
 {
-    if (s && std::strcmp(s, "Toggle") == 0) return VPotMode::Toggle;
+    if (s && std::strcmp(s, "Toggle")    == 0) return VPotMode::Toggle;
+    if (s && std::strcmp(s, "StepCycle") == 0) return VPotMode::StepCycle;
     return VPotMode::Value;
 }
 
@@ -513,6 +518,21 @@ std::string serialize_(const UserPluginCatalog& c)
                             appendEscaped_(os, vpotPolarityName_(bs.polarity));
                         }
                         emitKnobTravelObj("travel", bs.travel);
+                        // Rotary step-cycle steps — additive; only written when
+                        // the slot is in StepCycle mode with a curated list.
+                        if (!bs.vpotSteps.empty()) {
+                            os << ", \"vpotSteps\": [";
+                            bool firstStep = true;
+                            for (const auto& st : bs.vpotSteps) {
+                                if (!firstStep) os << ",";
+                                firstStep = false;
+                                os << " { \"vst3Param\": " << st.vst3Param
+                                   << ", \"norm\": " << st.norm;
+                                if (!st.enabled) os << ", \"enabled\": false";
+                                os << " }";
+                            }
+                            os << " ]";
+                        }
                         // (UF8 FX-Learn modifier overlays removed — UC1-only.)
                         os << " }";
                     }
@@ -882,6 +902,25 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     bs.polarity = vpotPolarityFromName_(pol.c_str());
                 }
                 parseKnobTravel(so, bs.travel);
+                // Rotary step-cycle steps (additive). Same shape as the UC1
+                // button pushSteps. Absent => empty => not a step-cycle.
+                if (auto* psa = so->get_item_by_name("vpotSteps");
+                    psa && psa->is_array() && psa->m_array)
+                {
+                    const int pn = psa->m_array->GetSize();
+                    bs.vpotSteps.reserve(pn);
+                    for (int pi = 0; pi < pn; ++pi) {
+                        wdl_json_element* pe = psa->enum_item(pi);
+                        if (!pe || !pe->is_object()) continue;
+                        PushStep st{};
+                        getIntI_(pe, "vst3Param", st.vst3Param);
+                        double nv = 0.0;
+                        if (getDoubleI_(pe, "norm", nv)) st.norm = (float)nv;
+                        getBoolI_(pe, "enabled", st.enabled);
+                        if (st.vst3Param < 0) continue;
+                        bs.vpotSteps.push_back(st);
+                    }
+                }
                 // (UF8 FX-Learn V-Pot modifier overlays removed — UC1-only.
                 // Any "modLayers" key in an old v9 file is silently ignored.)
             };

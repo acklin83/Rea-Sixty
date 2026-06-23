@@ -338,6 +338,11 @@ private:
     int        pushStepIdx_[0x20] = {
         -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
         -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1 };
+    // Same, keyed by UC1 KNOB id — for rotary step-cycle (a knob scrubbing
+    // through a curated PushStep list). See UC1Surface::handleKnob_.
+    int        knobStepIdx_[0x20] = {
+        -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1 };
     // Last-known zero-based project index of focusedTrack_. Updated each
     // poll tick while the pointer is valid; consumed when the pointer
     // goes invalid (track deletion) so the fallback can land on the

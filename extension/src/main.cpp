@@ -182,6 +182,14 @@ int  reasixty_csFavSlotOf(const char* addName);
 void reasixty_setCsFav(int slot, const char* addName, const char* label);
 void reasixty_clearCsFavByName(const char* addName);
 
+// Commit a captured Touch-to-Learn rotary step-cycle onto a UF8 V-Pot slot.
+// Defined in SettingsScreen.cpp; called from the anon-namespace capture helper
+// below. Declared here (after UserPluginCatalog.h, before the anon namespace)
+// so it has external linkage and uf8::PushStep is complete.
+bool reasixty_uf8CommitStepCycle(const std::string& match, int fb, int vb,
+                                 int strip,
+                                 const std::vector<uf8::PushStep>& steps);
+
 // Quick-Learn sweep entry point. Defined in SettingsScreen.cpp; called from
 // the main-thread drain after the Settings window is opened to FX Learn.
 // Resolves the focused / next-unlearned FX in the project, primes the +New
@@ -2224,6 +2232,36 @@ std::atomic<bool> g_uf8VpotLearnArmed{false};
 // onTimer cancels any armed learn + clears the hardware feedback (restores the
 // armed control's normal LEDs / fader / display). Frank 2026-06-20.
 std::atomic<bool> g_touchLearnOffRequest{false};
+
+// ---- V-Pot rotary StepCycle capture (Touch-to-Learn) ----------------------
+// When a V-Pot is armed during Touch-to-Learn, pressing plug-in BUTTONS in
+// sequence builds that V-Pot's StepCycle list: the CSURF_EXT_SETFXPARAM hook
+// records each DISCRETE param change as an ordered PushStep. The next V-Pot
+// arm (or leaving Touch-to-Learn) commits the list. Main-thread only — the
+// hook and the arm drain both run on the main thread. Restricted to plug-ins
+// that already have a UF8 map (do a normal learn first, or it's a built-in).
+struct VpotStepCapture {
+    bool                       active = false;
+    int                        strip = -1, fb = -1, vb = -1;
+    MediaTrack*                tr = nullptr;
+    int                        fx = -1;
+    std::string                match;
+    std::vector<uf8::PushStep> buf;
+};
+VpotStepCapture g_vpotCap;
+// Commit the pending capture (needs ≥2 distinct steps) and reset it.
+// reasixty_uf8CommitStepCycle is declared at external scope near the top.
+void vpotStepCaptureCommit_()
+{
+    if (!g_vpotCap.active) return;
+    if (g_vpotCap.buf.size() >= 2 && !g_vpotCap.match.empty()) {
+        reasixty_uf8CommitStepCycle(g_vpotCap.match, g_vpotCap.fb,
+                                    g_vpotCap.vb, g_vpotCap.strip,
+                                    g_vpotCap.buf);
+    }
+    g_vpotCap = VpotStepCapture{};
+}
+
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
 // thread); drained in onTimer so the REAPER-API-touching toggle runs main-only.
 std::atomic<bool> g_hudToggleRequest{false};
@@ -8516,6 +8554,63 @@ void drainInputQueue()
                         const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
                             uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
                             g_fxActiveLayer.load(std::memory_order_relaxed));
+                        // Rotary step-cycle: scrub through the curated
+                        // PushStep list (a plug-in BUTTON's options or a
+                        // multi-param macro). Direction-aware, clamps at the
+                        // ends. Mirrors the UC1 button push-cycle but driven
+                        // by the encoder delta instead of a press.
+                        if (bs.vpotMode == uf8::VPotMode::StepCycle
+                            && !bs.vpotSteps.empty())
+                        {
+                            static float s_scAcc[8][6]{};
+                            static std::chrono::steady_clock::time_point
+                                s_scLast[8][6]{};
+                            static int s_scIdx[8][6]{};
+                            auto& acc   = s_scAcc[s & 7][bank % 6];
+                            auto& lastT = s_scLast[s & 7][bank % 6];
+                            const auto now = std::chrono::steady_clock::now();
+                            if (lastT.time_since_epoch().count() != 0
+                                && now - lastT > std::chrono::milliseconds(150))
+                                acc = 0.0f;
+                            lastT = now;
+                            const int rawDet = static_cast<int>(
+                                std::round(e.value * 128.0));
+                            const int signedDet = rawDet * (bs.inverted ? -1 : 1);
+                            float sens = bs.travel.sensitivity
+                                * static_cast<float>(
+                                      reasixty_uf8KnobScale(vpotFineActive_()));
+                            const auto r = uf8::tickStepped(acc, signedDet, sens);
+                            acc = r.newAccum;
+                            if (r.logicalSteps == 0) break;
+                            const auto& steps = bs.vpotSteps;
+                            const int n = static_cast<int>(steps.size());
+                            auto stepMatches = [&](int i) {
+                                if (i < 0 || i >= n) return false;
+                                const uf8::PushStep& st = steps[i];
+                                if (st.vst3Param < 0) return false;
+                                const double v = TrackFX_GetParamNormalized(
+                                    uctx.tr, uctx.fxIdx, st.vst3Param);
+                                const double d = v - static_cast<double>(st.norm);
+                                return d < 1e-3 && d > -1e-3;
+                            };
+                            int curIdx = s_scIdx[s & 7][bank % 6];
+                            if (!stepMatches(curIdx)) {
+                                curIdx = -1;
+                                for (int i = 0; i < n; ++i)
+                                    if (stepMatches(i)) { curIdx = i; break; }
+                            }
+                            const int nextIdx = uf8::stepCycleAdvance(
+                                steps, curIdx, r.logicalSteps);
+                            if (nextIdx < 0) break;
+                            s_scIdx[s & 7][bank % 6] = nextIdx;
+                            const uf8::PushStep& sel = steps[nextIdx];
+                            if (sel.vst3Param < 0) break;
+                            TrackFX_SetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sel.vst3Param, sel.norm);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sel.vst3Param, sel.norm);
+                            break;
+                        }
                         if (bs.vst3Param >= 0
                             && bs.vpotMode == uf8::VPotMode::Value)
                         {
@@ -8977,6 +9072,47 @@ void drainInputQueue()
                         const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
                             uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
                             g_fxActiveLayer.load(std::memory_order_relaxed));
+                        // StepCycle: a PRESS advances ONE enabled step and
+                        // WRAPS (button parity — last → first), so the same
+                        // control is both a scrubber (turn) and a tapper.
+                        if (bs.vpotMode == uf8::VPotMode::StepCycle
+                            && !bs.vpotSteps.empty())
+                        {
+                            const auto& steps = bs.vpotSteps;
+                            const int n = static_cast<int>(steps.size());
+                            auto live = [&](int i) {
+                                return i >= 0 && i < n
+                                    && steps[i].vst3Param >= 0 && steps[i].enabled;
+                            };
+                            int firstE = -1;
+                            for (int i = 0; i < n; ++i)
+                                if (live(i)) { firstE = i; break; }
+                            if (firstE < 0) break;
+                            int curIdx = -1;
+                            for (int i = 0; i < n; ++i) {
+                                if (!live(i)) continue;
+                                const double v = TrackFX_GetParamNormalized(
+                                    uctx.tr, uctx.fxIdx, steps[i].vst3Param);
+                                const double d = v - static_cast<double>(steps[i].norm);
+                                if (d < 1e-3 && d > -1e-3) { curIdx = i; break; }
+                            }
+                            int nextIdx;
+                            if (curIdx < 0) nextIdx = firstE;
+                            else {
+                                nextIdx = curIdx;
+                                for (int k = 0; k < n; ++k) {
+                                    nextIdx = (nextIdx + 1) % n;
+                                    if (live(nextIdx)) break;
+                                }
+                            }
+                            const uf8::PushStep& sel = steps[nextIdx];
+                            if (sel.vst3Param < 0) break;
+                            TrackFX_SetParamNormalized(
+                                uctx.tr, uctx.fxIdx, sel.vst3Param, sel.norm);
+                            uf8::param_groups::broadcastUserParam(
+                                uctx.tr, uctx.map, sel.vst3Param, sel.norm);
+                            break;
+                        }
                         if (bs.vst3Param >= 0) {
                             double pushNext;
                             if (bs.vpotMode == uf8::VPotMode::Toggle) {
@@ -9909,6 +10045,12 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     // briefly flip the LED to the wrong state.
     if (cls == LedClass::Mute && recRmeButtonActive(g_recCut.load())) return;
     if (cls == LedClass::Solo && recRmeButtonActive(g_recSolo.load())) return;
+    // Send/Receive routing: a routed strip stands in for a send/receive,
+    // which has no solo concept. The per-tick poll in
+    // pushZonesForVisibleSlots forces the SOLO LED off for routed strips,
+    // so block the event-driven push too — otherwise a solo callback
+    // relights it mid-routing-mode (Frank 2026-06-23).
+    if (cls == LedClass::Solo && anyRoutingActive_()) return;
     for (int s = 0; s < 8; ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
@@ -10012,6 +10154,31 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
 
     char fxName[256];
     if (!uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName))) return 0;
+
+    // Touch-to-Learn rotary StepCycle capture: while a V-Pot is armed, record
+    // each DISCRETE (button-like) param change on the armed plug-in as an
+    // ordered step. Continuous-knob wiggles are NOT captured (left to the
+    // normal continuous bind), so the two learn gestures coexist.
+    if (g_vpotCap.active && tr == g_vpotCap.tr && fxIdx == g_vpotCap.fx) {
+        double pStep = 0.0, a = 0.0, b = 0.0; bool isTog = false;
+        const bool stepped = TrackFX_GetParameterStepSizes(
+            tr, fxIdx, vst3Param, &pStep, &a, &b, &isTog);
+        bool discrete = isTog;
+        if (!discrete && stepped && pStep > 0.0) {
+            double jn = 0.0; bool jc = false;
+            const bool isJ = uf8::jsfxStepClassify(tr, fxIdx, vst3Param,
+                                                   pStep, jn, jc);
+            discrete = !(isJ && jc);   // exclude continuous JSFX sliders
+        }
+        if (discrete) {
+            const float nv = static_cast<float>(value);
+            auto& buf = g_vpotCap.buf;
+            // Skip an identical consecutive re-report of the same step.
+            if (buf.empty() || buf.back().vst3Param != vst3Param
+                || std::abs(buf.back().norm - nv) > 1e-4f)
+                buf.push_back(uf8::PushStep{vst3Param, nv, true});
+        }
+    }
 
     // User-FX-Learn maps first — members matched by FX-name substring,
     // vst3Param transferred 1:1 (same plug-in identity guarantees same
@@ -12525,6 +12692,20 @@ void pushZonesForVisibleSlots()
                 g_lastSoloLed[s] = soloKey;
                 sendLedFrames(uf8::buildLedColourPair(
                     static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                    ledColourFor(LedClass::Solo, tr)));
+            }
+            g_lastSelLed[s] = -1;
+        } else if (routedFader || routedVpot) {
+            // Send/Receive routing: this strip stands in for a send/receive,
+            // which has no solo concept (the CUT LED above already shows the
+            // send's mute). Force the SOLO LED off — otherwise a soloed bank
+            // track keeps its Solo LED lit from the routing re-sync push when
+            // entering the mode (Frank 2026-06-23, "alle Modi"). SEL stays
+            // event-driven.
+            if (g_lastSoloLed[s] != 0) {
+                g_lastSoloLed[s] = 0;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(s), uf8::LedClass::Solo, false,
                     ledColourFor(LedClass::Solo, tr)));
             }
             g_lastSelLed[s] = -1;
@@ -17083,6 +17264,9 @@ void onTimer()
         // UF8 Touch-to-Learn: a UF8 control was touched/turned/pressed while the
         // mode is on and the UF8 tab is active → arm that cell's learn (the next
         // plug-in-param wiggle binds it). Mirrors the "uf8learn;" HUD-click drain.
+        // Leaving Touch-to-Learn (or it turned off) commits a pending capture.
+        if (g_vpotCap.active && !g_hudTouchLearn.load())
+            vpotStepCaptureCommit_();
         if (const int req = g_hudUf8HwLearnReq.exchange(-1);
             g_hudTouchLearn.load() && req >= 0) {
             const int kind  = req / 8;
@@ -17095,6 +17279,24 @@ void onTimer()
                                       0, uf8::kUserUf8VpotBankCount - 1);
             if (mp) {
                 reasixty_hudUf8ArmLearn(kind, strip, fb, vb, tr, fx, false);
+                // V-Pot armed on a mapped plug-in → (re)start StepCycle
+                // capture for it. Commit any previous capture first so each
+                // new wiggle delimits the prior control's step list.
+                if (kind == 0 && tr && fx >= 0
+                    && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+                    vpotStepCaptureCommit_();
+                    char nm[256];
+                    if (uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) && nm[0]) {
+                        g_vpotCap.active = true;
+                        g_vpotCap.strip  = strip;
+                        g_vpotCap.fb     = fb;
+                        g_vpotCap.vb     = vb;
+                        g_vpotCap.tr     = tr;
+                        g_vpotCap.fx     = fx;
+                        g_vpotCap.match  = nm;
+                        g_vpotCap.buf.clear();
+                    }
+                }
             } else {
                 MediaTrack* vTr = nullptr; int vFx = -1;
                 const bool boot = hudCursorUnlearnedFx_(vTr, vFx);

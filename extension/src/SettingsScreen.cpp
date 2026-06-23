@@ -16330,6 +16330,34 @@ void reasixty_startQuickLearn()
     uf8::qlStartSweep_();
 }
 
+// Commit a captured Touch-to-Learn rotary step-cycle onto a UF8 V-Pot slot.
+// Global scope (matches the external-linkage decl in main.cpp). Mirrors
+// hudUf8BindMatch_'s get/upsert/save pattern. Needs ≥2 steps for a usable
+// rotary cycle.
+bool reasixty_uf8CommitStepCycle(const std::string& match, int fb, int vb,
+                                 int strip,
+                                 const std::vector<uf8::PushStep>& steps)
+{
+    if (match.empty() || steps.size() < 2) return false;
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount
+        || vb < 0 || vb >= uf8::kUserUf8VpotBankCount
+        || strip < 0 || strip > 7) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& bs = m.uf8.banks.banks[fb][vb][strip];
+        bs.vpotSteps = steps;
+        bs.vpotMode  = uf8::VPotMode::StepCycle;
+        // Give the slot a primary param (first step) so readout / colour have
+        // something to resolve; a macro keeps whatever was there.
+        if (bs.vst3Param < 0) bs.vst3Param = steps.front().vst3Param;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
 // Track-scoped variant — limits the sweep to the focused/selected track.
 void reasixty_startQuickLearnTrack()
 {

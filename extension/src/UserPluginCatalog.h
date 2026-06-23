@@ -44,6 +44,34 @@ struct PushStep {
     bool  enabled   = true;
 };
 
+// Advance through a PushStep list by `delta` logical steps (signed), skipping
+// !enabled / unbound entries. CLAMPS at the ends — unlike the UC1 button
+// push-cycle (which wraps), a rotary should stop at the last option rather
+// than jump back to the first. `curIdx < 0` means "nothing matched the live
+// state": start at the first enabled step when turning up, the last when
+// turning down. Returns the resulting index, or -1 if no step is live.
+inline int stepCycleAdvance(const std::vector<PushStep>& steps,
+                            int curIdx, int delta) {
+    const int n = static_cast<int>(steps.size());
+    auto live = [&](int i) {
+        return i >= 0 && i < n && steps[i].vst3Param >= 0 && steps[i].enabled;
+    };
+    int firstE = -1, lastE = -1;
+    for (int i = 0; i < n; ++i) if (live(i)) { if (firstE < 0) firstE = i; lastE = i; }
+    if (firstE < 0) return -1;
+    if (curIdx < 0) return delta >= 0 ? firstE : lastE;
+    if (delta == 0) return live(curIdx) ? curIdx : firstE;
+    const int dir = delta > 0 ? 1 : -1;
+    int idx = live(curIdx) ? curIdx : (dir > 0 ? firstE : lastE);
+    for (int remaining = delta > 0 ? delta : -delta; remaining > 0; --remaining) {
+        int probe = idx + dir;
+        while (probe >= 0 && probe < n && !live(probe)) probe += dir;
+        if (probe < 0 || probe >= n) break;   // clamp at the end
+        idx = probe;
+    }
+    return idx;
+}
+
 // FX-Learn modifier layers. The Normal layer is the base, always-active
 // mapping; Option / Control / Control+Option are held-modifier overrides chosen
 // at runtime by reasixty_fxLearnActiveLayer(). Shift stays reserved for Fine
@@ -261,8 +289,13 @@ struct UserMetering {
 // V-Pot push behaviour for a UF8 bank slot. User chooses since user plug-in
 // params don't carry SSL-style step-size hints we trust.
 enum class VPotMode : uint8_t {
-    Value  = 0,   // continuous; rotate scrubs, push resets to defaultNorm
-    Toggle = 1,   // binary; rotate ignored, push flips 0↔1
+    Value     = 0,   // continuous; rotate scrubs, push resets to defaultNorm
+    Toggle    = 1,   // binary; rotate ignored, push flips 0↔1
+    StepCycle = 2,   // discrete; rotate steps through vpotSteps (signed,
+                     // clamps at ends), push advances one step. Reuses the
+                     // PushStep model from the UC1 button push-cycle so a
+                     // rotary can cycle a curated subset / custom order of a
+                     // plug-in BUTTON's options, or a multi-param macro.
 };
 
 // VPotPolarity is declared near the top of the namespace (forward-
@@ -311,6 +344,13 @@ struct UserUf8BankSlot {
     uint32_t     stripColour = 0;
     KnobTravel   travel{};                    // per V-Pot range/curve
     VPotPolarity polarity = VPotPolarity::Unipolar;
+    // Rotary step-cycle (VPotMode::StepCycle). Same PushStep model as the
+    // UC1 button push-cycle (UserLinkSlot::pushSteps): an ordered list of
+    // {vst3Param, norm, enabled} the V-Pot scrubs through. Empty unless the
+    // slot is in StepCycle mode. A macro entry references a different param;
+    // disabled entries stay in the list (editor "untick to exclude") but are
+    // skipped at runtime.
+    std::vector<PushStep> vpotSteps;
 };
 
 // TopSoftKey LED appearance — bank-scoped (Frank 2026-05-13:
