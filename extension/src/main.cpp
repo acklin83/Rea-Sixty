@@ -155,6 +155,13 @@ bool        reasixty_hudPushMove(int idx, int layer, int stepIdx, int dir, void*
 bool        reasixty_hudPushRemove(int idx, int layer, int stepIdx, void* csTr, void* bcTr);
 bool        reasixty_hudPushReset(int idx, int layer, void* csTr, void* bcTr);
 bool        reasixty_hudPushAdd(int idx, int layer, int param, double norm, void* csTr, void* bcTr);
+// UF8 V-Pot rotary step-cycle editor in the HUD (strip-keyed).
+std::string reasixty_hudUf8BuildPush(int strip, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8PushToggle(int strip, int fb, int vb, int stepIdx, void* tr, int fx);
+bool        reasixty_hudUf8PushMove(int strip, int fb, int vb, int stepIdx, int dir, void* tr, int fx);
+bool        reasixty_hudUf8PushRemove(int strip, int fb, int vb, int stepIdx, void* tr, int fx);
+bool        reasixty_hudUf8PushReset(int strip, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8PushAdd(int strip, int fb, int vb, int param, double norm, void* tr, int fx);
 bool        reasixty_hudUf8ConsumeBootstrap();
 bool        reasixty_hudUf8BankLabel(int bank, const char* label, void* tr, int fx);
 bool        reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx);
@@ -6619,6 +6626,7 @@ std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX boots
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
 std::string g_hudUf8DetailPublished;  // last-published "hud_uf8_detail" (V-Pot tuning)
+std::string g_hudUf8PushPublished;    // last-published "hud_uf8_push" (V-Pot step-cycle)
 std::string g_hudPushPublished;    // last-published "hud_push" (button push-cycle)
 std::string g_hudPushBtnsPublished;// last-published "hud_pushbtns" (push-cycle idx set)
 std::string g_hudCsFavPublished;   // last-published "hud_cs_fav" (CS-Switch favourites)
@@ -6964,6 +6972,19 @@ void publishHud_()
         if (uf8Detail != g_hudUf8DetailPublished) {
             g_hudUf8DetailPublished = uf8Detail;
             SetExtState("rea_sixty", "hud_uf8_detail", uf8Detail.c_str(), false);
+        }
+        // UF8 V-Pot step-cycle editor data — request/response like hud_push:
+        // the HUD writes the focused strip to "hud_uf8_push_req" only while the
+        // submenu is open; we publish just that strip's steps + param catalog.
+        const char* upr = GetExtState("rea_sixty", "hud_uf8_push_req");
+        const int upReqStrip = (upr && *upr) ? std::atoi(upr) : -1;
+        const std::string uf8Push = (upReqStrip >= 0 && uf8Map)
+            ? reasixty_hudUf8BuildPush(upReqStrip, faderBank, vpotBank,
+                                       uf8Tr, uf8Fx)
+            : std::string();
+        if (uf8Push != g_hudUf8PushPublished) {
+            g_hudUf8PushPublished = uf8Push;
+            SetExtState("rea_sixty", "hud_uf8_push", uf8Push.c_str(), false);
         }
     }
 }
@@ -17108,6 +17129,52 @@ void onTimer()
                         g_hudUf8DetailPublished.clear();
                         publishHud_();
                     }
+                }
+            } else if (s.rfind("uf8push", 0) == 0) {
+                // UF8 V-Pot step-cycle edits — strip-keyed; fb/vb/tr/fx live.
+                //   uf8pushtoggle;<strip>;<stepIdx>
+                //   uf8pushmove;<strip>;<stepIdx>;<dir>
+                //   uf8pushremove;<strip>;<stepIdx>
+                //   uf8pushreset;<strip>
+                //   uf8pushadd;<strip>;<param>;<norm>
+                MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                resolveFocusedUf8Target_(tr, fx, mp);
+                const int fb = std::clamp(g_uf8FaderBank.load(),
+                                          0, uf8::kUserUf8FaderBankCount - 1);
+                const int vb = std::clamp(g_softKeyBank.load(),
+                                          0, uf8::kUserUf8VpotBankCount - 1);
+                bool changed = false;
+                int strip = -1, stepIdx = -1, dir = 0, param = -1;
+                double norm = 0.0;
+                if (s.rfind("uf8pushtoggle;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "uf8pushtoggle;%d;%d",
+                                    &strip, &stepIdx) == 2)
+                        changed = reasixty_hudUf8PushToggle(strip, fb, vb,
+                                                            stepIdx, tr, fx);
+                } else if (s.rfind("uf8pushmove;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "uf8pushmove;%d;%d;%d",
+                                    &strip, &stepIdx, &dir) == 3)
+                        changed = reasixty_hudUf8PushMove(strip, fb, vb,
+                                                          stepIdx, dir, tr, fx);
+                } else if (s.rfind("uf8pushremove;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "uf8pushremove;%d;%d",
+                                    &strip, &stepIdx) == 2)
+                        changed = reasixty_hudUf8PushRemove(strip, fb, vb,
+                                                            stepIdx, tr, fx);
+                } else if (s.rfind("uf8pushreset;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "uf8pushreset;%d", &strip) == 1)
+                        changed = reasixty_hudUf8PushReset(strip, fb, vb, tr, fx);
+                } else if (s.rfind("uf8pushadd;", 0) == 0) {
+                    if (std::sscanf(s.c_str(), "uf8pushadd;%d;%d;%lf",
+                                    &strip, &param, &norm) == 3)
+                        changed = reasixty_hudUf8PushAdd(strip, fb, vb,
+                                                         param, norm, tr, fx);
+                }
+                if (changed) {
+                    g_hudUf8AssignPublished.clear();
+                    g_hudUf8DetailPublished.clear();
+                    g_hudUf8PushPublished.clear();
+                    publishHud_();
                 }
             } else if (s.rfind("uf8feelsave;", 0) == 0) {
                 // "uf8feelsave;<strip>;<slot>;<name>" — save V-Pot feel.

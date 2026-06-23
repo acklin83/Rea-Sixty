@@ -327,6 +327,40 @@ local function readPush()
   return pd
 end
 
+-- UF8 V-Pot step-cycle data (same wire format as readPush, but the first line
+-- is the STRIP and the channel is "hud_uf8_push"). Request via "hud_uf8_push_req".
+local function readUf8Push()
+  local raw = reaper.GetExtState(SECT, "hud_uf8_push")
+  if raw == "" then return nil end
+  local first = true
+  local pd = { strip = -1, steps = {}, params = {} }
+  for ln in raw:gmatch("[^\n]+") do
+    if first then pd.strip = tonumber(ln) or -1; first = false
+    elseif ln:sub(1, 2) == "S;" then
+      local param, norm, en, foreign, label =
+        ln:match("^S;(%-?%d+);([%-%d%.]+);(%d);(%d);(.*)$")
+      if param then
+        pd.steps[#pd.steps + 1] = {
+          param = tonumber(param), norm = tonumber(norm),
+          en = (en == "1"), foreign = (foreign == "1"), label = label or "" }
+      end
+    elseif ln:sub(1, 2) == "P;" then
+      local param, name, opts = ln:match("^P;(%-?%d+);([^;]*);(.*)$")
+      if param then
+        local olist = {}
+        for o in (opts .. "|"):gmatch("([^|]*)|") do
+          local n, l = o:match("^([%-%d%.]+)~(.*)$")
+          if n then olist[#olist + 1] = { norm = tonumber(n), label = l or "" } end
+        end
+        pd.params[#pd.params + 1] =
+          { param = tonumber(param), name = name or "", opts = olist }
+      end
+    end
+  end
+  if pd.strip < 0 then return nil end
+  return pd
+end
+
 -- Global feel-preset list: "slot;used;name" per line (10 slots).
 local function readFeel()
   local raw = reaper.GetExtState(SECT, "hud_feel")
@@ -1963,6 +1997,65 @@ local function drawPushCycle(idx)
   end
 end
 
+-- UF8 V-Pot rotary step-cycle editor (V-Pot right-click → "Step cycle"). Same
+-- shape as drawPushCycle but strip-keyed and over the uf8push* commands /
+-- readUf8Push() channel. Turning the V-Pot scrubs the list (clamps at the ends).
+local function drawPushCycleUf8(strip)
+  local pd = readUf8Push()
+  if not pd or pd.strip ~= strip then
+    reaper.ImGui_TextDisabled(ctx, "Loading\xE2\x80\xA6")
+    return
+  end
+  if #pd.steps == 0 and #pd.params == 0 then
+    reaper.ImGui_TextDisabled(ctx, "No discrete options on this plug-in")
+    return
+  end
+  if #pd.steps > 0 then
+    reaper.ImGui_TextDisabled(ctx, "Steps \xC2\xB7 untick to exclude:")
+    for i, st in ipairs(pd.steps) do
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xB2##puu_up" .. i) then
+        sendCmd(string.format("uf8pushmove;%d;%d;-1", strip, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xBC##puu_dn" .. i) then
+        sendCmd(string.format("uf8pushmove;%d;%d;1", strip, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      local rv = reaper.ImGui_Checkbox(ctx, st.label .. "##puu_cb" .. i, st.en)
+      if rv then
+        sendCmd(string.format("uf8pushtoggle;%d;%d", strip, i - 1))
+      end
+      if st.foreign then
+        reaper.ImGui_SameLine(ctx)
+        if reaper.ImGui_SmallButton(ctx, "x##puu_rm" .. i) then
+          sendCmd(string.format("uf8pushremove;%d;%d", strip, i - 1))
+        end
+      end
+    end
+    if reaper.ImGui_SmallButton(ctx, "Clear steps##puu_reset") then
+      sendCmd(string.format("uf8pushreset;%d", strip))
+    end
+  end
+  if #pd.params > 0 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "+ Add step") then
+      for _, p in ipairs(pd.params) do
+        if reaper.ImGui_BeginMenu(ctx, p.name .. "##puu_p" .. p.param) then
+          for oi, o in ipairs(p.opts) do
+            if reaper.ImGui_MenuItem(ctx,
+                o.label .. "##puu_o" .. p.param .. "_" .. oi) then
+              sendCmd(string.format("uf8pushadd;%d;%d;%.6f",
+                strip, p.param, o.norm))
+            end
+          end
+          reaper.ImGui_EndMenu(ctx)
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+end
+
 local function drawControlContextMenu()
   if ctxCtrlIdx < 0 then
     reaper.SetExtState(SECT, "hud_push_req", "", false)
@@ -2413,6 +2506,9 @@ local function drawUf8ControlContextMenu()
       if reaper.ImGui_MenuItem(ctx, "Toggle (push on/off)", nil, a and a.mode == 1) then
         sendCmd("uf8vmode;" .. ctxUf8Strip .. ";1")
       end
+      if reaper.ImGui_MenuItem(ctx, "Step cycle (turn)", nil, a and a.mode == 2) then
+        sendCmd("uf8vmode;" .. ctxUf8Strip .. ";2")
+      end
       reaper.ImGui_EndMenu(ctx)
     end
   end
@@ -2552,6 +2648,20 @@ local function drawUf8ControlContextMenu()
     sendCmd("uf8unbind;" .. ctxUf8Kind .. ";" .. ctxUf8Strip)
   end
   if not mapped then reaper.ImGui_EndDisabled(ctx) end
+
+  -- Step-cycle editor (V-Pot only) — outside the unmapped-disabled guard so a
+  -- macro can be built on an as-yet-unmapped V-Pot. Writes hud_uf8_push_req
+  -- only while the submenu is open so the extension publishes just this strip.
+  local uPushReq = ""
+  if ctxUf8Kind == 0 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "Step cycle") then
+      uPushReq = tostring(ctxUf8Strip)
+      drawPushCycleUf8(ctxUf8Strip)
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+  reaper.SetExtState(SECT, "hud_uf8_push_req", uPushReq, false)
 
   reaper.ImGui_EndPopup(ctx)
   reaper.ImGui_PopStyleVar(ctx, 3)

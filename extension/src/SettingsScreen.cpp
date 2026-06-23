@@ -8698,9 +8698,12 @@ bool hudUf8Invert_(int kind, int strip, int fb, int vb, void* trV, int fx)
     return hudUf8InvertMatch_(match, kind, fb, vb, strip);
 }
 
-// Set a V-Pot cell's mode (0 = Value/continuous, 1 = Toggle/binary push). No-op
-// for an unmapped cell or out-of-range banks. V-Pot only (kind 0).
-bool hudUf8SetVpotModeMatch_(const std::string& match, int fb, int vb, int strip, int mode)
+// Set a V-Pot cell's mode (0 = Value/continuous, 1 = Toggle/binary push,
+// 2 = StepCycle/rotary step-cycle). No-op for an unmapped cell or out-of-range
+// banks. V-Pot only (kind 0). For StepCycle, materialise the bound param's
+// discrete options if the list is empty so the V-Pot scrubs immediately.
+bool hudUf8SetVpotModeMatch_(const std::string& match, int fb, int vb,
+                             int strip, int mode, MediaTrack* tr, int fx)
 {
     if (match.empty()) return false;
     if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount
@@ -8711,7 +8714,25 @@ bool hudUf8SetVpotModeMatch_(const std::string& match, int fb, int vb, int strip
         if (m.match != match) continue;
         auto& s = m.uf8.banks.banks[fb][vb][strip];
         if (s.vst3Param < 0) return false;   // unmapped V-Pot → nothing to set
-        s.vpotMode = (mode != 0) ? uf8::VPotMode::Toggle : uf8::VPotMode::Value;
+        s.vpotMode = (mode == 2) ? uf8::VPotMode::StepCycle
+                   : (mode == 1) ? uf8::VPotMode::Toggle
+                                 : uf8::VPotMode::Value;
+        if (mode == 2 && s.vpotSteps.empty()
+            && tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            double ss = 0, aa = 0, bb = 0; bool isT = false;
+            int n = 0; double step = 1.0;
+            if (TrackFX_GetParameterStepSizes(tr, fx, s.vst3Param,
+                    &ss, &aa, &bb, &isT)) {
+                if (isT) { n = 2; step = 1.0; }
+                else if (ss > 0.0 && ss < 1.0) {
+                    n = uf8::numStepsFor((float)ss); step = ss;
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+                s.vpotSteps.push_back(uf8::PushStep{s.vst3Param, nrm, true});
+            }
+        }
         uf8::user_plugins::upsert(m);
         uf8::user_plugins::save();
         return true;
@@ -8722,7 +8743,8 @@ bool hudUf8VpotMode_(int strip, int fb, int vb, int mode, void* trV, int fx)
 {
     std::string match;
     if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
-    return hudUf8SetVpotModeMatch_(match, fb, vb, strip, mode);
+    return hudUf8SetVpotModeMatch_(match, fb, vb, strip, mode,
+                                   static_cast<MediaTrack*>(trV), fx);
 }
 
 // Set a V-Pot bank's display name (Top-Soft-Key label). Per V-Pot bank (0..7),
@@ -10575,7 +10597,12 @@ bool hudIsPushCycleBtn_(int idx)
 {
     if (idx < 0 || idx >= kUc1ControlsCount) return false;
     const Uc1Control& c = kUc1Controls[idx];
-    return (c.kind == Uc1Control::DynBtn || c.kind == Uc1Control::Toggle)
+    // Buttons step the list on PRESS; KNOBS scrub it on TURN (rotary
+    // step-cycle). Both carry the list on UserLinkSlot::pushSteps, so the
+    // entire HUD push-cycle bridge below is linkIdx-generic and works for
+    // either. linkIdx 0 (bypass) excluded.
+    return (c.kind == Uc1Control::DynBtn || c.kind == Uc1Control::Toggle
+            || c.kind == Uc1Control::Knob)
         && c.linkIdx != 0;
 }
 
@@ -10777,6 +10804,181 @@ bool hudPushAdd_(int idx, int layer, int param, double norm,
     if (param < 0) return false;
     v.push_back(uf8::PushStep{param, (float)norm, true});
     hudPushSet_(match, layer, linkIdx, v);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// UF8 V-Pot rotary step-cycle — HUD bridge. Mirror of the UC1 push-cycle above,
+// but on UserUf8BankSlot::vpotSteps. Resolves the live (fb, vb) banks + focused
+// FX like hudUf8SetField_. Commands carry the strip only; fb/vb/tr/fx come from
+// the publish-side resolver. ------------------------------------------------
+
+std::vector<uf8::PushStep> hudUf8ComputePushView_(MediaTrack* tr, int fx,
+        const std::string& match, int fb, int vb, int strip, int& boundParamOut)
+{
+    boundParamOut = -1;
+    std::vector<uf8::PushStep> view;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        const auto& bs = m.uf8.banks.banks[fb][vb][strip];
+        view = bs.vpotSteps;
+        boundParamOut = bs.vst3Param;
+        break;
+    }
+    if (view.empty() && boundParamOut >= 0) {
+        double step = 1.0;
+        const int n = hudParamOptions_(tr, fx, boundParamOut, step);
+        for (int i = 0; i < n; ++i) {
+            float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+            view.push_back(uf8::PushStep{boundParamOut, nrm, true});
+        }
+    }
+    return view;
+}
+
+bool hudUf8PushResolve_(int strip, int fb, int vb, void* trV, int fx,
+                        MediaTrack*& tr, std::string& match, int& boundParam,
+                        std::vector<uf8::PushStep>& view)
+{
+    if (strip < 0 || strip > 7) return false;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    tr = static_cast<MediaTrack*>(trV);
+    view = hudUf8ComputePushView_(tr, fx, match, fb, vb, strip, boundParam);
+    return true;
+}
+
+std::string hudUf8BuildPush_(int strip, int fb, int vb, void* trV, int fx)
+{
+    MediaTrack* tr = nullptr; std::string match; int boundParam = -1;
+    std::vector<uf8::PushStep> view;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, boundParam, view))
+        return {};
+    auto sanitize = [](std::string s) {
+        for (char& c : s) if (c == ';' || c == '|' || c == '~' || c == '\n')
+            c = ' ';
+        return s;
+    };
+    std::string out = std::to_string(strip) + "\n";
+    char vbuf[80], pn[128];
+    for (const auto& st : view) {
+        vbuf[0] = 0;
+        if (tr && fx >= 0)
+            TrackFX_FormatParamValueNormalized(tr, fx, st.vst3Param, st.norm,
+                                               vbuf, sizeof(vbuf));
+        const bool foreign = (st.vst3Param != boundParam);
+        std::string label;
+        if (foreign) {
+            pn[0] = 0;
+            if (tr && fx >= 0)
+                TrackFX_GetParamName(tr, fx, st.vst3Param, pn, sizeof(pn));
+            label = std::string(pn[0] ? pn : "param") + " = "
+                  + (vbuf[0] ? vbuf : "?");
+        } else {
+            label = vbuf[0] ? vbuf : "(option)";
+        }
+        char line[256];
+        snprintf(line, sizeof(line), "S;%d;%.5f;%d;%d;%s\n",
+            st.vst3Param, st.norm, st.enabled ? 1 : 0, foreign ? 1 : 0,
+            sanitize(label).c_str());
+        out += line;
+    }
+    if (tr && fx >= 0 && !uf8::fxIsAcustica(tr, fx)) {
+        const int pcount = TrackFX_GetNumParams(tr, fx);
+        for (int p = 0; p < pcount; ++p) {
+            double step = 1.0;
+            const int n = hudParamOptions_(tr, fx, p, step);
+            if (n < 2) continue;
+            pn[0] = 0;
+            TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+            if (isReaperMidiParam_(pn)) continue;
+            std::string line = "P;" + std::to_string(p) + ";"
+                             + sanitize(pn[0] ? pn : "param") + ";";
+            for (int i = 0; i < n; ++i) {
+                float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+                vbuf[0] = 0;
+                TrackFX_FormatParamValueNormalized(tr, fx, p, nrm,
+                                                   vbuf, sizeof(vbuf));
+                char opt[112];
+                snprintf(opt, sizeof(opt), "%s%.5f~%s", i ? "|" : "",
+                         nrm, sanitize(vbuf[0] ? vbuf : "?").c_str());
+                line += opt;
+            }
+            out += line + "\n";
+        }
+    }
+    return out;
+}
+
+// Apply a step list and keep vpotMode coherent: non-empty list ⇒ StepCycle,
+// empty ⇒ back to Value (so clearing the list restores a normal V-Pot).
+void hudUf8PushSet_(int strip, int fb, int vb, void* trV, int fx,
+                    std::vector<uf8::PushStep> v)
+{
+    const bool empty = v.empty();
+    hudUf8BridgeVPot_(fb, vb, trV, fx, [&](int bank) {
+        setUf8VpotSteps_(strip, bank, v);
+        setUf8VPotMode_(strip, bank,
+            empty ? uf8::VPotMode::Value : uf8::VPotMode::StepCycle);
+    });
+}
+
+bool hudUf8PushToggle_(int strip, int fb, int vb, int stepIdx,
+                       void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, bp, v))
+        return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v[stepIdx].enabled = !v[stepIdx].enabled;
+    hudUf8PushSet_(strip, fb, vb, trV, fx, v);
+    return true;
+}
+bool hudUf8PushMove_(int strip, int fb, int vb, int stepIdx, int dir,
+                     void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, bp, v))
+        return false;
+    const int dst = stepIdx + dir;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()
+        || dst < 0 || dst >= (int)v.size()) return false;
+    std::swap(v[stepIdx], v[dst]);
+    hudUf8PushSet_(strip, fb, vb, trV, fx, v);
+    return true;
+}
+bool hudUf8PushRemove_(int strip, int fb, int vb, int stepIdx,
+                       void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, bp, v))
+        return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v.erase(v.begin() + stepIdx);
+    hudUf8PushSet_(strip, fb, vb, trV, fx, v);
+    return true;
+}
+bool hudUf8PushReset_(int strip, int fb, int vb, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, bp, v))
+        return false;
+    hudUf8PushSet_(strip, fb, vb, trV, fx, {});
+    return true;
+}
+bool hudUf8PushAdd_(int strip, int fb, int vb, int param, double norm,
+                    void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, bp, v))
+        return false;
+    if (param < 0) return false;
+    v.push_back(uf8::PushStep{param, (float)norm, true});
+    hudUf8PushSet_(strip, fb, vb, trV, fx, v);
     return true;
 }
 
@@ -16850,6 +17052,37 @@ bool reasixty_hudPushAdd(int idx, int layer, int param, double norm,
                          void* csTr, void* bcTr)
 {
     return uf8::hudPushAdd_(idx, layer, param, norm, csTr, bcTr);
+}
+// UF8 V-Pot rotary step-cycle HUD bridge (strip-keyed; fb/vb/tr/fx resolved
+// at the publish/drain sites, like the other uf8* HUD commands).
+std::string reasixty_hudUf8BuildPush(int strip, int fb, int vb,
+                                     void* tr, int fx)
+{
+    return uf8::hudUf8BuildPush_(strip, fb, vb, tr, fx);
+}
+bool reasixty_hudUf8PushToggle(int strip, int fb, int vb, int stepIdx,
+                               void* tr, int fx)
+{
+    return uf8::hudUf8PushToggle_(strip, fb, vb, stepIdx, tr, fx);
+}
+bool reasixty_hudUf8PushMove(int strip, int fb, int vb, int stepIdx, int dir,
+                             void* tr, int fx)
+{
+    return uf8::hudUf8PushMove_(strip, fb, vb, stepIdx, dir, tr, fx);
+}
+bool reasixty_hudUf8PushRemove(int strip, int fb, int vb, int stepIdx,
+                               void* tr, int fx)
+{
+    return uf8::hudUf8PushRemove_(strip, fb, vb, stepIdx, tr, fx);
+}
+bool reasixty_hudUf8PushReset(int strip, int fb, int vb, void* tr, int fx)
+{
+    return uf8::hudUf8PushReset_(strip, fb, vb, tr, fx);
+}
+bool reasixty_hudUf8PushAdd(int strip, int fb, int vb, int param, double norm,
+                            void* tr, int fx)
+{
+    return uf8::hudUf8PushAdd_(strip, fb, vb, param, norm, tr, fx);
 }
 // True (once) right after a fresh UF8-only map was bootstrapped — main.cpp
 // focuses the None domain so the hardware shows it without an FX-cycle.
