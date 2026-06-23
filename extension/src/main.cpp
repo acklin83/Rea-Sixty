@@ -3359,6 +3359,17 @@ int effectiveStripCount_()
     return (masterPinnedStrip_() >= 0 && g_masterPinShift.load()) ? 7 : 8;
 }
 
+// Size of the sticky pinned head (Focus Set ∪ honoured TCP pins) that
+// occupies the leftmost strips and does NOT bank — mirrors the `sticky`
+// gate in stripToVisibleSlot. 0 when no pin head is active. The bankable
+// strip count is therefore effectiveStripCount_() - pinnedHeadCount_().
+int pinnedHeadCount_()
+{
+    const int esc = effectiveStripCount_();
+    const int pc  = g_pinnedCount.load();
+    return (g_pinnedSurvivesBanking.load() && pc > 0 && pc < esc) ? pc : 0;
+}
+
 // Toggle the Master-pin for strip 1 (which==1) or strip 8 (which==8).
 // Firing the active slot again clears the pin; firing the other slot
 // switches directly. Shared by the built-ins and the REAPER actions.
@@ -7055,11 +7066,7 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
     // scrolled into the non-pinned strips (Frank 2026-06-23: 3 pinned →
     // off-bank selection never came on-screen). pinned==0 → identical to
     // the old maths.
-    int pinned = 0;
-    {
-        const int pc = g_pinnedCount.load();
-        if (g_pinnedSurvivesBanking.load() && pc > 0 && pc < esc) pinned = pc;
-    }
+    const int pinned = pinnedHeadCount_();
     if (idx < pinned) {
         // Selected track is itself pinned → always visible; nothing to do.
     } else if (g_followMode.load() == FollowMode::LeftmostStrip) {
@@ -22991,15 +22998,19 @@ void registerBindingHandlers()
             // window instead of scrolling tracks (Frank 2026-06-15).
             if (applySendBankStep_(-8)) return;
             const int trackCount = visibleTrackCount();
-            // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
+            // maxStart = trackCount - esc: see applyBankByOne_ for rationale.
+            // Step by the BANKABLE strip count (esc minus the pinned head),
+            // not esc — a pinned head shrinks the banked window, so a full
+            // esc step would skip `pinned` tracks per page (Frank 2026-06-23).
             const int esc        = effectiveStripCount_();
+            const int step       = esc - pinnedHeadCount_();
             const int maxStart   = trackCount > esc ? trackCount - esc : 0;
-            int next = g_bankOffset.load() - esc;
+            int next = g_bankOffset.load() - (step > 0 ? step : esc);
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank ← (UF8 Plug-in Mode: fader-bank; else ±8-strip scroll)", false
+        nullptr, "Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)", false
     });
     registerBuiltin("bank_right", DescBuilder{
         [tryFaderBankNav](bool firing, bool pressed, int /*param*/) {
@@ -23010,15 +23021,18 @@ void registerBindingHandlers()
             // window instead of scrolling tracks (Frank 2026-06-15).
             if (applySendBankStep_(+8)) return;
             const int trackCount = visibleTrackCount();
-            // maxStart = trackCount - 8: see applyBankByOne_ for rationale.
+            // maxStart = trackCount - esc: see applyBankByOne_ for rationale.
+            // Step by the BANKABLE strip count (esc minus the pinned head) —
+            // see bank_left.
             const int esc        = effectiveStripCount_();
+            const int step       = esc - pinnedHeadCount_();
             const int maxStart   = trackCount > esc ? trackCount - esc : 0;
-            int next = g_bankOffset.load() + esc;
+            int next = g_bankOffset.load() + (step > 0 ? step : esc);
             if (next < 0)        next = 0;
             if (next > maxStart) next = maxStart;
             if (next != g_bankOffset.exchange(next)) g_bankDirty.store(true);
         },
-        nullptr, "Bank → (UF8 Plug-in Mode: fader-bank; else ±8-strip scroll)", false
+        nullptr, "Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)", false
     });
     // Bank-by-1 single-strip nudges — paired with the encoder_bank_by_1
     // mode, also bindable to any button so users can wire e.g. PAGE
