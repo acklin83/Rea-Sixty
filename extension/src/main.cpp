@@ -5586,6 +5586,11 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     // second search pass under the settled state re-lands each value correctly.
     struct ReApply { int dp; int key; CsVal val; };
     std::vector<ReApply> reapply;
+    // Dst params actually WRITTEN this switch — distinct from dstClaimed
+    // (which is pre-seeded with the whole map). Guards against a second
+    // control clobbering a param an earlier control already set when the
+    // dst map double-assigns one param to two controls (Frank 2026-06-23).
+    std::unordered_set<int> dstWritten;
 
     // Diagnostic (cs_log only): dump the new plug-in's param names so the alias
     // table can be built/tuned against the plug-in's REAL naming, not guesses.
@@ -5654,7 +5659,25 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 continue;                          // never seen → nothing to carry
             }
             double appliedN = val.norm;
-            if (dp != uc1::kParamNone) {
+            if (dp != uc1::kParamNone && dstWritten.count(dp)) {
+                // Another (earlier, lower-linkIdx) control already wrote this
+                // dst param this switch — do NOT clobber it. Happens when the
+                // dst map points two controls at one param (e.g. The Analog
+                // Molecule mapping both LF-Freq and a btn-slot control onto
+                // 'EQ LF Freq'): without this, the second write (often a
+                // Generic carrying a stale value) overwrote the correct one
+                // (Frank 2026-06-23: LF Freq landed 245 instead of 301). The
+                // semantically-right control (LF Freq = lower linkIdx) wins
+                // because it's reached first. Seeding pre-claims the map, so a
+                // separate "written" set — not dstClaimed — gates this.
+                if (const char* en = GetExtState("rea_sixty", "cs_log");
+                    en && en[0] == '1') {
+                    char lg[160]; std::snprintf(lg, sizeof(lg),
+                        "[cs] k=%d SKIP dp=p%d already written this switch", key, dp);
+                    csLog_(lg);
+                }
+            } else if (dp != uc1::kParamNone) {
+                dstWritten.insert(dp);
                 applyParamValue_(tr, newIdx, dp, val, key);
                 appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
                 // Numeric values get RE-APPLIED after the move (below) under the
