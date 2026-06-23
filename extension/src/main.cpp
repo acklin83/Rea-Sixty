@@ -10240,13 +10240,30 @@ int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
                                                    pStep, jn, jc);
             discrete = !(isJ && jc);   // exclude continuous JSFX sliders
         }
-        if (discrete) {
+        // Only the DIRECTLY-touched param: a single click on a multi-state
+        // control fires the param several times as it settles AND plug-ins
+        // fan dependent-param recalcs through this same hook — both also land
+        // here. GetLastTouchedFX stays on the user's control while those
+        // cascades fire, so `lp == vst3Param` keeps just the real press (one
+        // click on a 3-state control was writing 9 steps — Frank 2026-06-23).
+        int lt = -1, lf = -1, lp = -1;
+        const bool touched = GetLastTouchedFX(&lt, &lf, &lp) && lp == vst3Param;
+        if (discrete && touched) {
             const float nv = static_cast<float>(value);
             auto& buf = g_vpotCap.buf;
-            // Skip an identical consecutive re-report of the same step.
-            if (buf.empty() || buf.back().vst3Param != vst3Param
-                || std::abs(buf.back().norm - nv) > 1e-4f)
+            static int64_t s_lastMs = 0;
+            const int64_t now = nowMs_();
+            // Collapse a rapid burst of the SAME param (settling) into ONE step
+            // at its final value; a deliberate later press (>300 ms) of even the
+            // same param adds a new step, so same-param cycles still work.
+            if (!buf.empty() && buf.back().vst3Param == vst3Param
+                && (now - s_lastMs) < 300) {
+                buf.back().norm = nv;
+            } else if (buf.empty() || buf.back().vst3Param != vst3Param
+                       || std::abs(buf.back().norm - nv) > 1e-4f) {
                 buf.push_back(uf8::PushStep{vst3Param, nv, true});
+            }
+            s_lastMs = now;
         }
     }
 
