@@ -1943,6 +1943,17 @@ end
 -- FX-Learn page uses drag-drop, impractical in a Lua menu), untick to exclude,
 -- x removes a macro step, "+ Add step" picks a discrete param + value. Data
 -- comes via the request/response readPush() channel.
+-- Selectable flag "don't auto-close the popup on click" — renamed across ImGui
+-- versions (DontClosePopups → NoAutoClosePopups in ImGui 1.90+). Resolve once
+-- with a fallback so we never call a nil ReaImGui function (Frank's runtime
+-- error 2026-06-23). 0 if neither exists (degrades to the old close-on-pick).
+local SEL_NOCLOSE =
+     (reaper.ImGui_SelectableFlags_NoAutoClosePopups
+      and reaper.ImGui_SelectableFlags_NoAutoClosePopups())
+  or (reaper.ImGui_SelectableFlags_DontClosePopups
+      and reaper.ImGui_SelectableFlags_DontClosePopups())
+  or 0
+
 local function drawPushCycle(idx)
   local pd = readPush()
   if not pd or pd.idx ~= idx then
@@ -1989,8 +2000,7 @@ local function drawPushCycle(idx)
             -- submenu open instead of collapsing the whole chain each pick
             -- (Frank 2026-06-23).
             if reaper.ImGui_Selectable(ctx,
-                o.label .. "##pu_o" .. p.param .. "_" .. oi, false,
-                reaper.ImGui_SelectableFlags_DontClosePopups()) then
+                o.label .. "##pu_o" .. p.param .. "_" .. oi, false, SEL_NOCLOSE) then
               sendCmd(string.format("pushadd;%d;%d;%d;%.6f",
                 idx, ctxCtrlLayer, p.param, o.norm))
             end
@@ -2050,8 +2060,7 @@ local function drawPushCycleUf8(strip)
           for oi, o in ipairs(p.opts) do
             -- DontClosePopups — keep the submenu open across multiple adds.
             if reaper.ImGui_Selectable(ctx,
-                o.label .. "##puu_o" .. p.param .. "_" .. oi, false,
-                reaper.ImGui_SelectableFlags_DontClosePopups()) then
+                o.label .. "##puu_o" .. p.param .. "_" .. oi, false, SEL_NOCLOSE) then
               sendCmd(string.format("uf8pushadd;%d;%d;%.6f",
                 strip, p.param, o.norm))
             end
