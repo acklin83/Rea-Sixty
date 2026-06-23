@@ -3227,15 +3227,18 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"switch_cs_7", "CS Fav 7"},
             {"switch_cs_8", "CS Fav 8"},
         }));
-        v.push_back(bank("View / Utility", {
-            {"domain_cs",            "Focus CS"},
-            {"domain_bc",            "Focus BC"},
+        // Brightness — replaces the old "View / Utility" filler bank (Focus
+        // CS/BC did nothing, the rest was junk). Only brightness is genuinely
+        // useful here, so make the whole bank coherent: all / LCDs / LEDs ×
+        // up / down (Frank 2026-06-23). Generic DAW actions (deselect, arm,
+        // zoom) the user binds himself to a free Quick.
+        v.push_back(bank("Brightness", {
             {"brightness_both_up",   "Bright +"},
             {"brightness_both_down", "Bright -"},
-            {"marker_overlay_toggle","Mkr Overlay"},
-            {"selection_clear_all",  "Deselect"},
-            {"tracks_arm_all",       "Arm All"},
-            {"zoom_center",          "Zoom Fit"},
+            {"brightness_lcds_up",   "LCDs +"},
+            {"brightness_lcds_down", "LCDs -"},
+            {"brightness_leds_up",   "LEDs +"},
+            {"brightness_leds_down", "LEDs -"},
         }));
         return v;
     }();
