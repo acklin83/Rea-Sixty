@@ -4911,8 +4911,19 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         int& facRef = s_facSel[editLayer][engagedQ][sbIdx];
         if (facRef < 0 || facRef >= nFac) facRef = 0;
 
+        // Honour the British/American spelling toggle on the displayed bank
+        // name ("CS Favourites" → "CS Favorites" in American mode). The
+        // stored preset name stays British so recall identity is stable.
+        auto facDisplay = [](std::string n) -> std::string {
+            if (std::string(reasixty_sp("u", "a")) == "a") {
+                for (size_t p; (p = n.find("Favourite")) != std::string::npos;)
+                    n.replace(p, 9, "Favorite");
+            }
+            return n;
+        };
+
         std::string facPrev = (nFac > 0)
-            ? factoryBankPresetAt(facRef).name : std::string("(none)");
+            ? facDisplay(factoryBankPresetAt(facRef).name) : std::string("(none)");
         double comboW = 240;
         ImGui_PushItemWidth(ctx, comboW);
         if (ImGui_BeginCombo(ctx, "##fac_combo", facPrev.c_str(), nullptr)) {
@@ -4920,7 +4931,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 SoftKeyBankPreset p = factoryBankPresetAt(i);
                 char rowId[160];
                 snprintf(rowId, sizeof(rowId), "%s##fac_row_%d",
-                              p.name.c_str(), i);
+                              facDisplay(p.name).c_str(), i);
                 bool sel = (i == facRef);
                 if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
                                      nullptr, nullptr)) {
@@ -12507,10 +12518,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 std::string a, l;
                 const bool taken = reasixty_csFav(i, a, l);
                 char item[128];
-                if (taken) snprintf(item, sizeof(item), "%d  —  %s##fxl_cs_fav_%d",
-                                    i + 1, l.c_str(), i);
-                else       snprintf(item, sizeof(item), "%d  —  (empty)##fxl_cs_fav_%d",
-                                    i + 1, i);
+                if (taken) {
+                    // Show the plug-in SHORT name, not the raw identity that
+                    // is stored as the favourite's label (Frank 2026-06-23).
+                    std::string disp = l;
+                    if (const auto* pb = uc1::lookupBindingsByName(a);
+                        pb && pb->shortName && *pb->shortName) {
+                        disp = pb->shortName;
+                    }
+                    snprintf(item, sizeof(item), "%d  —  %s##fxl_cs_fav_%d",
+                             i + 1, disp.c_str(), i);
+                } else {
+                    snprintf(item, sizeof(item), "%d  —  (empty)##fxl_cs_fav_%d",
+                             i + 1, i);
+                }
                 bool sel = (curSlot == i);
                 if (ImGui_Selectable(ctx, item, &sel, nullptr, nullptr, nullptr)) {
                     reasixty_setCsFav(i, editing->match.c_str(),

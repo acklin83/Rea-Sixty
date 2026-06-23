@@ -12601,7 +12601,21 @@ void pushZonesForVisibleSlots()
                     std::string favAdd, favLbl;
                     if (favSlot >= 0 && favSlot < 8
                         && reasixty_csFav(favSlot, favAdd, favLbl)) {
-                        std::string dyn = !favLbl.empty() ? favLbl : favAdd;
+                        // Show the plug-in's SHORT name (displayShort: "CS 2",
+                        // user-defined short, …) — same source as the FX-Cycle
+                        // colour-bar — NOT the raw identity. The favourite's
+                        // stored "label" is the identity string, so resolve via
+                        // the plug-in map instead (Frank 2026-06-23).
+                        std::string dyn;
+                        if (const auto* pb =
+                                uc1::lookupBindingsByName(favAdd);
+                            pb && pb->shortName && *pb->shortName) {
+                            dyn = pb->shortName;
+                        } else if (!favLbl.empty()) {
+                            dyn = favLbl;
+                        } else {
+                            dyn = favAdd;
+                        }
                         if (!dyn.empty()) {
                             if (dyn.size() > 12) dyn.resize(12);
                             userLabel = dyn;
