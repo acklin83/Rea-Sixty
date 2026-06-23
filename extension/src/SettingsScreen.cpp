@@ -1523,7 +1523,8 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
 // the cached mouse-coords against each button's local rectangle.
 // `sel` is updated on click. Layout follows SSL UF8 User Guide page 14
 // (numbered controls).
-void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
+void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
+                   int editQuick, int editSubBank)
 {
     constexpr float W = 1000, H = 490;
 
@@ -1691,7 +1692,29 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
         //   3. blank
         rect_(c, sx + 4, 40, kStripW - 8, 58, 0x080C12FF, 0x444A55FF, 2.0);
         std::string scribble;
-        {
+        // Layer 1 Q1/Q2 are SSL CS/BC (plug-in driven); everything else is
+        // a user-fillable Quick. For the user case, mirror the edit-selected
+        // (layer, editQuick, editSubBank) slot so picking Q3 + a sub-bank
+        // previews ITS labels here — works offline / regardless of which
+        // Quick is live (Frank 2026-06-23). For SSL CS/BC keep the live
+        // plug-in / bank resolution.
+        const bool editIsSslCsBc = (activeLayer == 0 && editQuick <= 1);
+        if (!editIsSslCsBc
+            && editQuick >= 0 && editQuick <= 2
+            && editSubBank >= 0 && editSubBank <= 5) {
+            const auto slot = uf8::bindings::getUserQuickSlot(
+                activeLayer, editQuick, editSubBank, i);
+            const auto& sp = slot.shortPress[
+                static_cast<int>(uf8::bindings::Modifier::Plain)];
+            if (!slot.label.empty()) {
+                scribble = slot.label;
+            } else if (sp.type != uf8::bindings::ActionType::Noop
+                       || !sp.action.empty()) {
+                scribble = (sp.type == uf8::bindings::ActionType::Builtin)
+                    ? uf8::bindings::builtinDisplayName(sp.action)
+                    : sp.action;
+            }
+        } else {
             const auto bd =
                 uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
             const auto& sp = bd.shortPress[
@@ -1810,11 +1833,21 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
             uf8::bindings::dispatch(b.id, /*pressed*/ true);
             uf8::bindings::dispatch(b.id, /*pressed*/ false);
         }
+        // Green ring = LIVE engaged Quick on the UF8 (hardware state).
         if (b.idx == activeQuickRing) {
             ImGui_DrawList_AddRect(c.dl,
                 c.ox + b.x - 2, c.oy + b.y - 2,
                 c.ox + b.x + 36 + 2, c.oy + b.y + 22 + 2,
                 0x40C040FF, /*rounding*/ nullptr,
+                /*flags*/ nullptr, /*thickness*/ nullptr);
+        }
+        // Cyan inner ring = the Quick the editor is pointing at (manual /
+        // offline selection). Inset so it reads alongside the live ring.
+        if (b.idx == editQuick) {
+            ImGui_DrawList_AddRect(c.dl,
+                c.ox + b.x, c.oy + b.y,
+                c.ox + b.x + 36, c.oy + b.y + 22,
+                0x33CCEEFF, /*rounding*/ nullptr,
                 /*flags*/ nullptr, /*thickness*/ nullptr);
         }
     }
@@ -1893,12 +1926,20 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel)
                 uf8::bindings::dispatch(b.id, /*pressed*/ false);
             }
             if (b.idx == activeBank) {
-                // Inset green outline to mark the live bank without
-                // fighting the existing select/hover highlight.
+                // Green outline = LIVE active bank (hardware state).
                 ImGui_DrawList_AddRect(c.dl,
                     c.ox + b.x - 2, c.oy + b.y - 2,
                     c.ox + b.x + b.w + 2, c.oy + b.y + 22,
                     0x40C040FF, /*rounding*/ nullptr,
+                    /*flags*/ nullptr, /*thickness*/ nullptr);
+            }
+            // Cyan inner ring = the Sub-Bank the editor is pointing at
+            // (manual / offline). Soft-key labels above follow this.
+            if (b.idx == editSubBank) {
+                ImGui_DrawList_AddRect(c.dl,
+                    c.ox + b.x, c.oy + b.y,
+                    c.ox + b.x + b.w, c.oy + b.y + 20,
+                    0x33CCEEFF, /*rounding*/ nullptr,
                     /*flags*/ nullptr, /*thickness*/ nullptr);
             }
         }
@@ -5030,6 +5071,26 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     static int s_editSubBank = 0;    // 0..5 = V-POT, Soft 1..5
     if (s_editQuick < 0) s_editQuick = (s_editLayer == 0) ? 2 : 0;
 
+    // Follow the LIVE UF8 state by default, while staying manually
+    // overridable + offline-usable (Frank 2026-06-23): when the engaged
+    // Quick / Sub-Bank on the hardware CHANGES, adopt it into the edit
+    // selection so the schematic mirrors the surface. A manual radio /
+    // tile click then re-pins it until the next live change. Offline
+    // (live = -1) nothing is adopted, so the manual pick persists.
+    {
+        const int liveQ  = (s_editLayer >= 0 && s_editLayer <= 2)
+                           ? reasixty_engagedQuickFor(s_editLayer)  : -1;
+        const int liveSB = (s_editLayer >= 0 && s_editLayer <= 2)
+                           ? reasixty_activeSubBankFor(s_editLayer) : -1;
+        static int s_lastLiveQ  = -999;
+        static int s_lastLiveSB = -999;
+        if (liveQ >= 0 && liveQ != s_lastLiveQ)  s_editQuick   = liveQ;
+        if (liveSB >= 0 && liveSB != s_lastLiveSB && liveQ >= 0)
+            s_editSubBank = liveSB;
+        s_lastLiveQ  = liveQ;
+        s_lastLiveSB = liveSB;
+    }
+
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
     // Sub-Bank tiles, dispatches the binding so the hardware engages
@@ -5044,7 +5105,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     int tabBarFlags = 0;
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
         if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
-            drawUf8Vector(ctx, s_selected);
+            drawUf8Vector(ctx, s_selected, s_editQuick, s_editSubBank);
             // Bank-scroll stride: when a selection scrolls past the surface
             // edge, jump a whole 8-strip bank or slide by one channel.
             ImGui_Spacing(ctx);
