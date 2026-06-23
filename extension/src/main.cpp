@@ -199,6 +199,13 @@ bool reasixty_uf8CommitStepCycle(const std::string& match, int fb, int vb,
 // Bind a single captured discrete press as a Toggle V-Pot (1-button capture).
 bool reasixty_uf8CommitSingleToggle(const std::string& match, int fb, int vb,
                                     int strip, int param);
+// UC1 knob equivalents — write UserLinkSlot::pushSteps at (match, layer,
+// linkIdx). ≥2 steps → step-cycle; single → bind the param (clamps as binary).
+bool reasixty_uc1CommitStepCycle(const std::string& match, int layer,
+                                 int linkIdx,
+                                 const std::vector<uf8::PushStep>& steps);
+bool reasixty_uc1CommitSingleParam(const std::string& match, int layer,
+                                   int linkIdx, int param);
 // Tell SettingsScreen's UF8 learn tick whether a V-Pot step-capture is armed,
 // so it routes DISCRETE (button) param changes into the capture instead of
 // binding the first one as a single param. Defined in SettingsScreen.cpp.
@@ -2229,6 +2236,7 @@ std::atomic<bool> g_hudAutoStartDone{false};
 std::atomic<bool> g_hudTouchLearn{false};
 std::atomic<int>  g_hudHwLearnReqLink{-1};   // armed control's linkIdx (-1 = none)
 std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
+std::atomic<bool> g_hudHwLearnReqIsKnob{false}; // true = a KNOB was touched (vs button)
 // UF8 Touch-to-Learn request, set from the libusb input thread (onUf8Input) and
 // drained in onTimer. Encodes the armed cell as kind*8+strip (-1 = none); kind =
 // HUD encoding 0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel.
@@ -2254,6 +2262,9 @@ std::atomic<bool> g_touchLearnOffRequest{false};
 // arm (or leaving Touch-to-Learn) commits the list. Main-thread only — the
 // hook and the arm drain both run on the main thread. Restricted to plug-ins
 // that already have a UF8 map (do a normal learn first, or it's a built-in).
+// Also reused for UC1 knobs (uc1=true): there the target is a UserLinkSlot
+// linkIdx + FX-Learn layer instead of a UF8 strip/bank, and the commit writes
+// UserLinkSlot::pushSteps.
 struct VpotStepCapture {
     bool                       active = false;
     int                        strip = -1, fb = -1, vb = -1;
@@ -2261,6 +2272,9 @@ struct VpotStepCapture {
     int                        fx = -1;
     std::string                match;
     std::vector<uf8::PushStep> buf;
+    bool                       uc1 = false;   // UC1 knob vs UF8 V-Pot
+    int                        linkIdx = -1;  // UC1 target slot
+    int                        layer = 0;     // UC1 FX-Learn layer
 };
 VpotStepCapture g_vpotCap;
 // Commit the pending capture (needs ≥2 distinct steps) and reset it.
@@ -2269,7 +2283,18 @@ void vpotStepCaptureCommit_()
 {
     if (!g_vpotCap.active) return;
     if (!g_vpotCap.match.empty()) {
-        if (g_vpotCap.buf.size() >= 2) {
+        if (g_vpotCap.uc1) {
+            // UC1 knob: write the slot's pushSteps (≥2) or bind the single
+            // param (which now clamps directionally for a binary).
+            if (g_vpotCap.buf.size() >= 2) {
+                reasixty_uc1CommitStepCycle(g_vpotCap.match, g_vpotCap.layer,
+                                            g_vpotCap.linkIdx, g_vpotCap.buf);
+            } else if (g_vpotCap.buf.size() == 1) {
+                reasixty_uc1CommitSingleParam(g_vpotCap.match, g_vpotCap.layer,
+                                              g_vpotCap.linkIdx,
+                                              g_vpotCap.buf[0].vst3Param);
+            }
+        } else if (g_vpotCap.buf.size() >= 2) {
             // Several buttons → a step-cycle the V-Pot scrubs through.
             reasixty_uf8CommitStepCycle(g_vpotCap.match, g_vpotCap.fb,
                                         g_vpotCap.vb, g_vpotCap.strip,
@@ -17349,6 +17374,30 @@ void onTimer()
                     int csFx = -1, bcFx = -1;
                     activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
                     reasixty_hudArmLearn(idx, csTr, csFx, bcTr, bcFx);
+                    // A KNOB armed on a mapped CS/BC plug-in → start UC1
+                    // step-capture so the user can press several plug-in
+                    // buttons onto it (parallel to the UF8 V-Pot path).
+                    if (g_hudHwLearnReqIsKnob.load()) {
+                        vpotStepCaptureCommit_();   // commit any previous
+                        const int dom = g_hudHwLearnReqDom.load();
+                        MediaTrack* capTr = (dom == 1) ? bcTr : csTr;
+                        const int   capFx = (dom == 1) ? bcFx : csFx;
+                        char nm[256];
+                        if (capTr && capFx >= 0
+                            && ValidatePtr2(nullptr, capTr, "MediaTrack*")
+                            && uf8::fxIdentityName(capTr, capFx, nm, sizeof(nm))
+                            && nm[0]) {
+                            g_vpotCap = VpotStepCapture{};
+                            g_vpotCap.active  = true;
+                            g_vpotCap.uc1     = true;
+                            g_vpotCap.linkIdx = reqLink;
+                            g_vpotCap.layer   = reasixty_fxLearnActiveLayer();
+                            g_vpotCap.tr      = capTr;
+                            g_vpotCap.fx      = capFx;
+                            g_vpotCap.match   = nm;
+                            reasixty_setVpotCaptureActive(true);
+                        }
+                    }
                 }
             }
         }
@@ -19296,10 +19345,11 @@ void reasixty_setUf8LearnAsToggle(bool v)
 {
     g_uf8HwLearnAsToggle.store(v);
 }
-void reasixty_hudHwLearnRequest(int linkIdx, int domain)
+void reasixty_hudHwLearnRequest(int linkIdx, int domain, bool isKnob)
 {
     g_hudHwLearnReqLink.store(linkIdx);
     g_hudHwLearnReqDom.store(domain);
+    g_hudHwLearnReqIsKnob.store(isKnob);
 }
 
 bool reasixty_focusedPanel() { return g_focusedPanel.load(); }

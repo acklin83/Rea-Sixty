@@ -9338,6 +9338,22 @@ bool hudLearnTick_(int activeLayer)
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    // Touch-to-Learn step-capture (UC1 knob): a DISCRETE button change feeds
+    // the capture, not a single bind — stay armed so several buttons land
+    // (mirror of hudUf8LearnTick_; the flag is only set for a KNOB capture).
+    if (g_uf8CaptureActiveFlag.load()) {
+        double ps = 0, a2 = 0, b2 = 0; bool isT = false;
+        bool discrete = false;
+        if (TrackFX_GetParameterStepSizes(tr, f, p, &ps, &a2, &b2, &isT)) {
+            discrete = isT;
+            if (!discrete && ps > 0.0) {
+                double jn = 0; bool jc = false;
+                const bool isJ = uf8::jsfxStepClassify(tr, f, p, ps, jn, jc);
+                discrete = !(isJ && jc);
+            }
+        }
+        if (discrete) return false;   // capture owns it; stay armed
+    }
     // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
     // fresh map for it in the armed domain, no match filter.
     if (g_hudLearnCreateDom >= 0) {
@@ -16893,6 +16909,57 @@ bool reasixty_uf8CommitSingleToggle(const std::string& match, int fb, int vb,
         bs.vpotSteps.clear();
         bs.vst3Param = param;
         bs.vpotMode  = uf8::VPotMode::Toggle;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// UC1 knob captures: write the captured steps onto the UserLinkSlot at
+// (match, layer, linkIdx). Creates the slot if the knob wasn't bound yet.
+static uf8::SlotLayer* uc1CaptureLayer_(uf8::UserPluginMap& m, int layer,
+                                        int linkIdx)
+{
+    uf8::UserLinkSlot* slot = nullptr;
+    for (auto& s : m.slots) if (s.linkIdx == linkIdx) { slot = &s; break; }
+    if (!slot) {
+        uf8::UserLinkSlot ns{}; ns.linkIdx = linkIdx;
+        m.slots.push_back(ns);
+        slot = &m.slots.back();
+    }
+    return &uf8::fxLayerOf(*slot, layer);
+}
+
+bool reasixty_uc1CommitStepCycle(const std::string& match, int layer,
+                                 int linkIdx,
+                                 const std::vector<uf8::PushStep>& steps)
+{
+    if (match.empty() || steps.size() < 2 || linkIdx < 0) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        uf8::SlotLayer* lay = uc1CaptureLayer_(m, layer, linkIdx);
+        if (!lay) return false;
+        lay->pushSteps = steps;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+bool reasixty_uc1CommitSingleParam(const std::string& match, int layer,
+                                   int linkIdx, int param)
+{
+    if (match.empty() || linkIdx < 0 || param < 0) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        uf8::SlotLayer* lay = uc1CaptureLayer_(m, layer, linkIdx);
+        if (!lay) return false;
+        lay->pushSteps.clear();
+        lay->vst3Param = param;   // binary now clamps directionally on a knob
         uf8::user_plugins::upsert(m);
         uf8::user_plugins::save();
         return true;

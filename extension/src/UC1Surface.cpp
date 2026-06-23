@@ -55,7 +55,7 @@ void reasixty_setUc1Fine(bool on);
 // HUD Touch-to-Learn (defined in main.cpp): active = HUD on + mode toggle set.
 // Moving a bindable UC1 control then arms a HUD learn for it instead of acting.
 bool reasixty_hudTouchLearnActive();
-void reasixty_hudHwLearnRequest(int linkIdx, int domain);
+void reasixty_hudHwLearnRequest(int linkIdx, int domain, bool isKnob);
 
 // Platform-normalised track-colour reader (defined in main.cpp).
 // GetTrackColor returns 0xBBGGRR on Windows, 0xRRGGBB on macOS/Linux.
@@ -859,7 +859,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         const bool busComp = (classifyKnob(ev.id) == ControlDomain::BusComp);
         const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/false);
         if (linkIdx >= 0) {
-            reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+            reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0, /*isKnob*/true);
             // Remember the touched encoder so poll() can breathe its ring +
             // show "Waiting" while we wait for the plug-in wiggle.
             tlKnob_ = ev.id; tlBtn_ = -1; tlDom_ = busComp ? 1 : 0;
@@ -1967,7 +1967,7 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
         const int  linkIdx = uc1::linkIdxForControl(ev.id, busComp, /*isButton*/true);
         if (linkIdx >= 0) {
             if (ev.pressed) {
-                reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0);
+                reasixty_hudHwLearnRequest(linkIdx, busComp ? 1 : 0, /*isKnob*/false);
                 // Remember the touched button so poll() can blink its LED.
                 tlBtn_ = ev.id; tlKnob_ = -1; tlDom_ = busComp ? 1 : 0;
             }
