@@ -1358,6 +1358,15 @@ User-renamed 360° Link instances show the rename instead of the generic "Link" 
 
 Swap the active Channel-Strip plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different channel-strip emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
 
+## Requirement — the plug-ins must be mapped
+
+CS-Switch works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
+
+- The **built-in maps** (SSL CS 2, 4K B / E / G, BC 2, 360 Link) work out of the box — nothing to set up.
+- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells CS-Switch which parameter shares each control.
+
+Without a map: a track whose active plug-in isn't a recognised Channel Strip is **skipped** (treated as having no CS), and value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
+
 ## Favourites
 
 Define up to **8 favourite** Channel-Strip plug-ins. They are stored globally (all projects), in REAPER's ExtState. Set them in either place:
