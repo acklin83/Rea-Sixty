@@ -7043,26 +7043,46 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
     }
     if (idx < 0) return;
 
-    int bank = g_bankOffset.load();
-    if (g_followMode.load() == FollowMode::LeftmostStrip) {
-        // Selected track always at strip 0. Clamp so we don't scroll
-        // past the last track.
-        bank = idx;
+    int bank      = g_bankOffset.load();
+    const int esc = effectiveStripCount_();          // usable strips (8 or 7)
+    // Pinned head (Focus Set ∪ honoured TCP pins) occupies the leftmost
+    // strips and does NOT bank — exactly as stripToVisibleSlot maps it
+    // (strips 0..pinned-1 show list[pos]; banked strips show list[pos+bank]).
+    // So the bankable window covers visible-list indices [bank+pinned,
+    // bank+esc); a selected member of the pinned head is always on-screen.
+    // Subtracting `pinned` here is what was missing — without it the snap
+    // aimed the selection at a slot the pinned head occupies, so it never
+    // scrolled into the non-pinned strips (Frank 2026-06-23: 3 pinned →
+    // off-bank selection never came on-screen). pinned==0 → identical to
+    // the old maths.
+    int pinned = 0;
+    {
+        const int pc = g_pinnedCount.load();
+        if (g_pinnedSurvivesBanking.load() && pc > 0 && pc < esc) pinned = pc;
+    }
+    if (idx < pinned) {
+        // Selected track is itself pinned → always visible; nothing to do.
+    } else if (g_followMode.load() == FollowMode::LeftmostStrip) {
+        // Put the selection on the first NON-pinned strip.
+        bank = idx - pinned;
+        if (bank < 0) bank = 0;
         if (bank > trackCount - 1) bank = trackCount > 0 ? trackCount - 1 : 0;
     } else {
-        // Only shift when the selection fell outside the current window.
-        const int esc = effectiveStripCount_();
-        if (idx < bank || idx >= bank + esc) {
+        // Only shift when the selection fell outside the bankable window.
+        const int banked = esc - pinned;             // non-pinned strip count
+        if (idx < bank + pinned || idx >= bank + esc) {
             if (g_bankScrollByOne.load()) {
-                // Slide by one channel: bring the selection onto the edge
-                // strip it crossed (right edge → last strip, left → strip 0)
-                // so a single channel-step banks by exactly one.
-                bank = (idx < bank) ? idx : (idx - esc + 1);
+                // Slide by one: bring the selection onto the edge strip it
+                // crossed (left edge = first non-pinned strip, right = last).
+                bank = (idx < bank + pinned) ? (idx - pinned)
+                                             : (idx - esc + 1);
             } else {
-                // Bucket snap: jump to the start of the 8-strip bank that
-                // contains the selection.
-                bank = (idx / esc) * esc;
+                // Bucket snap within the non-pinned space so the selection
+                // lands in the banked region, not behind the pinned head.
+                const int rel = idx - pinned;        // >= 0 in this branch
+                bank = (banked > 0) ? (rel / banked) * banked : 0;
             }
+            if (bank < 0) bank = 0;
         }
     }
     if (bank != g_bankOffset.exchange(bank)) g_bankDirty.store(true);
