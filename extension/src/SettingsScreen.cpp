@@ -1714,6 +1714,27 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                     ? uf8::bindings::builtinDisplayName(sp.action)
                     : sp.action;
             }
+        } else if (editIsSslCsBc) {
+            // SSL CS (Q1) / BC (Q2) preview — derive the param labels from
+            // the EDIT domain + EDIT sub-bank (page), not the live focused
+            // domain / bank. So switching Q1/Q2 + V-POT/Soft 1-5 in the
+            // editor previews every CS/BC page, not just the live one
+            // (Frank 2026-06-23: "funktioniert nur bei CS Bank Page 1").
+            const int editDomain = (editQuick == 1) ? 1 : 0;   // Q2=BC
+            const char* const* el =
+                reasixty_softkeyStockLabels(editDomain, editSubBank);
+            const auto bd =
+                uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
+            const auto& sp = bd.shortPress[
+                static_cast<int>(uf8::bindings::Modifier::Plain)];
+            const bool isSslSoftkey =
+                sp.type == uf8::bindings::ActionType::Builtin &&
+                sp.action == "ssl_softkey";
+            if (!sp.label.empty()) {
+                scribble = sp.label;                       // user override
+            } else if (isSslSoftkey && el && el[i] && *el[i]) {
+                scribble = el[i];                          // SSL stock param
+            }
         } else {
             const auto bd =
                 uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
