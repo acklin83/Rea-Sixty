@@ -12749,6 +12749,18 @@ void pushZonesForVisibleSlots()
                     ? uf8::TopSoftKeyState::On
                     : uf8::TopSoftKeyState::Dim;
                 ledCacheKey = static_cast<int8_t>(slotActive ? 8 : 7);
+            } else if (sslFreeSlotPresent) {
+                // SSL CS/BC free user-slot: light like a user-Quick slot —
+                // On when its action's toggle is active, else Dim. (Frank
+                // 2026-06-23: "LED muss auch sein".)
+                const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
+                const auto fslot = uf8::bindings::getUserQuickSlot(
+                    0, qd, bankSk, s);
+                const bool slotActive = bindingHasActiveSlot_(fslot);
+                tssk = slotActive
+                    ? uf8::TopSoftKeyState::On
+                    : uf8::TopSoftKeyState::Dim;
+                ledCacheKey = static_cast<int8_t>(slotActive ? 14 : 13);
             } else if (isToggleCell) {
                 // Bright when this synthetic-toggle slot is the focused
                 // parameter OR the toggle's own state is "on". Frank
@@ -12814,6 +12826,15 @@ void pushZonesForVisibleSlots()
                 const uint32_t bc = wantActive
                     ? packRgb_(userSlot.color)
                     : packRgb_(userSlot.inactiveColor);
+                ledColRgb = bc;
+                ledClr = uf8::ledColourForTrackRgb(bc);
+            } else if (sslFreeSlotPresent) {
+                const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
+                const auto fslot = uf8::bindings::getUserQuickSlot(
+                    0, qd, bankSk, s);
+                const uint32_t bc = wantActive
+                    ? packRgb_(fslot.color)
+                    : packRgb_(fslot.inactiveColor);
                 ledColRgb = bc;
                 ledClr = uf8::ledColourForTrackRgb(bc);
             } else {
