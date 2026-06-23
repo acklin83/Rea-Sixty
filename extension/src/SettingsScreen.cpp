@@ -31,6 +31,17 @@
 // runtime state. Called only from the main thread (via onTimer → ImGui).
 bool reasixty_uf8Connected();
 bool reasixty_uc1Connected();
+
+// True while a V-Pot is armed for Touch-to-Learn step-capture (set by main.cpp
+// via reasixty_setVpotCaptureActive). The UF8 learn tick reads it to route
+// DISCRETE (button) param changes into the capture instead of binding the
+// first one as a single param. File-scope so both the anon-namespace learn
+// tick and the global setter below see it.
+static std::atomic<bool> g_uf8CaptureActiveFlag{false};
+void reasixty_setVpotCaptureActive(bool active)
+{
+    g_uf8CaptureActiveFlag.store(active);
+}
 // True when a V-Pot PRESS during learn flagged the pending bind as Toggle
 // (defined in main.cpp; read by the UF8 bind paths). Frank 2026-06-20.
 bool reasixty_uf8LearnAsToggle();
@@ -8612,6 +8623,25 @@ bool hudUf8LearnTick_()
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    // Touch-to-Learn step-capture: while a V-Pot is armed for capture, a
+    // DISCRETE (button) param change feeds the capture (main.cpp's Extended
+    // hook) and must NOT bind here — otherwise the first button press would
+    // bind the V-Pot to that one param and disarm, so only one button "took"
+    // (Frank 2026-06-23). Stay armed; the capture accumulates and commits on
+    // the next wiggle / mode-off. Continuous wiggles still bind normally.
+    if (g_uf8CaptureActiveFlag.load() && g_hudUf8LearnKind == 0) {
+        double ps = 0, a2 = 0, b2 = 0; bool isT = false;
+        bool discrete = false;
+        if (TrackFX_GetParameterStepSizes(tr, f, p, &ps, &a2, &b2, &isT)) {
+            discrete = isT;
+            if (!discrete && ps > 0.0) {
+                double jn = 0; bool jc = false;
+                const bool isJ = uf8::jsfxStepClassify(tr, f, p, ps, jn, jc);
+                discrete = !(isJ && jc);   // exclude continuous JSFX sliders
+            }
+        }
+        if (discrete) return false;   // let the capture own it; stay armed
+    }
     // CREATE-NEW mode: any wiggled FX defines the (virgin) plug-in — build a
     // fresh UF8-only map for it, no match filter.
     const bool asToggle = reasixty_uf8LearnAsToggle();
@@ -16839,6 +16869,30 @@ bool reasixty_uf8CommitStepCycle(const std::string& match, int fb, int vb,
         // Give the slot a primary param (first step) so readout / colour have
         // something to resolve; a macro keeps whatever was there.
         if (bs.vst3Param < 0) bs.vst3Param = steps.front().vst3Param;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
+// Single captured button → bind the V-Pot to that param as a Toggle (push
+// flips it), clearing any step list. Used when a Touch-to-Learn capture
+// collected exactly one discrete press.
+bool reasixty_uf8CommitSingleToggle(const std::string& match, int fb, int vb,
+                                    int strip, int param)
+{
+    if (match.empty() || param < 0) return false;
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount
+        || vb < 0 || vb >= uf8::kUserUf8VpotBankCount
+        || strip < 0 || strip > 7) return false;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& bs = m.uf8.banks.banks[fb][vb][strip];
+        bs.vpotSteps.clear();
+        bs.vst3Param = param;
+        bs.vpotMode  = uf8::VPotMode::Toggle;
         uf8::user_plugins::upsert(m);
         uf8::user_plugins::save();
         return true;

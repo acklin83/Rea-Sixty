@@ -196,6 +196,13 @@ void reasixty_clearCsFavByName(const char* addName);
 bool reasixty_uf8CommitStepCycle(const std::string& match, int fb, int vb,
                                  int strip,
                                  const std::vector<uf8::PushStep>& steps);
+// Bind a single captured discrete press as a Toggle V-Pot (1-button capture).
+bool reasixty_uf8CommitSingleToggle(const std::string& match, int fb, int vb,
+                                    int strip, int param);
+// Tell SettingsScreen's UF8 learn tick whether a V-Pot step-capture is armed,
+// so it routes DISCRETE (button) param changes into the capture instead of
+// binding the first one as a single param. Defined in SettingsScreen.cpp.
+void reasixty_setVpotCaptureActive(bool active);
 
 // Quick-Learn sweep entry point. Defined in SettingsScreen.cpp; called from
 // the main-thread drain after the Settings window is opened to FX Learn.
@@ -2261,12 +2268,21 @@ VpotStepCapture g_vpotCap;
 void vpotStepCaptureCommit_()
 {
     if (!g_vpotCap.active) return;
-    if (g_vpotCap.buf.size() >= 2 && !g_vpotCap.match.empty()) {
-        reasixty_uf8CommitStepCycle(g_vpotCap.match, g_vpotCap.fb,
-                                    g_vpotCap.vb, g_vpotCap.strip,
-                                    g_vpotCap.buf);
+    if (!g_vpotCap.match.empty()) {
+        if (g_vpotCap.buf.size() >= 2) {
+            // Several buttons → a step-cycle the V-Pot scrubs through.
+            reasixty_uf8CommitStepCycle(g_vpotCap.match, g_vpotCap.fb,
+                                        g_vpotCap.vb, g_vpotCap.strip,
+                                        g_vpotCap.buf);
+        } else if (g_vpotCap.buf.size() == 1) {
+            // A single button → a plain Toggle V-Pot (push flips it).
+            reasixty_uf8CommitSingleToggle(g_vpotCap.match, g_vpotCap.fb,
+                                           g_vpotCap.vb, g_vpotCap.strip,
+                                           g_vpotCap.buf[0].vst3Param);
+        }
     }
     g_vpotCap = VpotStepCapture{};
+    reasixty_setVpotCaptureActive(false);
 }
 
 // Set from the assignment_hud_toggle builtin (may fire on the libusb input
@@ -17370,6 +17386,7 @@ void onTimer()
                         g_vpotCap.fx     = fx;
                         g_vpotCap.match  = nm;
                         g_vpotCap.buf.clear();
+                        reasixty_setVpotCaptureActive(true);
                     }
                 }
             } else {
