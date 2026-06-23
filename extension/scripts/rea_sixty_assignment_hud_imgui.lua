@@ -1985,8 +1985,12 @@ local function drawPushCycle(idx)
       for _, p in ipairs(pd.params) do
         if reaper.ImGui_BeginMenu(ctx, p.name .. "##pu_p" .. p.param) then
           for oi, o in ipairs(p.opts) do
-            if reaper.ImGui_MenuItem(ctx,
-                o.label .. "##pu_o" .. p.param .. "_" .. oi) then
+            -- DontClosePopups so adding several steps in a row keeps the
+            -- submenu open instead of collapsing the whole chain each pick
+            -- (Frank 2026-06-23).
+            if reaper.ImGui_Selectable(ctx,
+                o.label .. "##pu_o" .. p.param .. "_" .. oi, false,
+                reaper.ImGui_SelectableFlags_DontClosePopups()) then
               sendCmd(string.format("pushadd;%d;%d;%d;%.6f",
                 idx, ctxCtrlLayer, p.param, o.norm))
             end
@@ -2044,8 +2048,10 @@ local function drawPushCycleUf8(strip)
       for _, p in ipairs(pd.params) do
         if reaper.ImGui_BeginMenu(ctx, p.name .. "##puu_p" .. p.param) then
           for oi, o in ipairs(p.opts) do
-            if reaper.ImGui_MenuItem(ctx,
-                o.label .. "##puu_o" .. p.param .. "_" .. oi) then
+            -- DontClosePopups — keep the submenu open across multiple adds.
+            if reaper.ImGui_Selectable(ctx,
+                o.label .. "##puu_o" .. p.param .. "_" .. oi, false,
+                reaper.ImGui_SelectableFlags_DontClosePopups()) then
               sendCmd(string.format("uf8pushadd;%d;%d;%.6f",
                 strip, p.param, o.norm))
             end
@@ -2061,6 +2067,7 @@ end
 local function drawControlContextMenu()
   if ctxCtrlIdx < 0 then
     reaper.SetExtState(SECT, "hud_push_req", "", false)
+    reaper.SetExtState(SECT, "hud_ctx_layer", "-1", false)
     return
   end
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
@@ -2068,9 +2075,15 @@ local function drawControlContextMenu()
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
   if not reaper.ImGui_BeginPopup(ctx, CTRL_POPUP) then
     reaper.SetExtState(SECT, "hud_push_req", "", false)
+    reaper.SetExtState(SECT, "hud_ctx_layer", "-1", false)
     reaper.ImGui_PopStyleVar(ctx, 3)
     return
   end
+  -- Freeze the modifier layer while the menu is open: publish the layer that
+  -- was active at right-click (ctxCtrlLayer) so the extension renders + edits
+  -- THIS layer's data even after the user releases the modifier to navigate the
+  -- menu (Frank 2026-06-23: nobody wants to hold the modifier while adjusting).
+  reaper.SetExtState(SECT, "hud_ctx_layer", tostring(ctxCtrlLayer), false)
 
   local idx, layer = ctxCtrlIdx, ctxCtrlLayer
   local asn    = readAssign()

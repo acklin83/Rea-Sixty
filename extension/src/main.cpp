@@ -6800,7 +6800,15 @@ void publishHud_()
     // feed the HUD's full-parity right-click menu (Frank 2026-06-20). Empty
     // detail while bootstrapping a virgin FX (no editable map yet).
     {
-        const int curLayer = reasixty_fxLearnActiveLayer();
+        // While the HUD control context menu is open it freezes the modifier
+        // layer (publishes the layer that was active at right-click) so the
+        // user can release the modifier and keep editing THAT layer's data
+        // (Frank 2026-06-23). Only the HUD publish is frozen — the live layer
+        // still drives the hardware. -1 / absent = no freeze.
+        const char* fl = GetExtState("rea_sixty", "hud_ctx_layer");
+        const int frozenLayer = (fl && *fl) ? std::atoi(fl) : -1;
+        const int curLayer = (frozenLayer >= 0 && frozenLayer <= 3)
+            ? frozenLayer : reasixty_fxLearnActiveLayer();
         const std::string detail = boot ? std::string()
             : reasixty_hudBuildDetail(csTr, csFx, bcTr, bcFx, curLayer);
         if (detail != g_hudDetailPublished) {
