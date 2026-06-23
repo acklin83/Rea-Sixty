@@ -7434,6 +7434,27 @@ void setUf8VPotMode_(int strip, int bank, uf8::VPotMode mode)
     });
 }
 
+// Rotary step-cycle list for a UF8 V-Pot (VPotMode::StepCycle). Reader +
+// single-writer, mirroring slotPushSteps_/setSlotPushSteps_ for UC1 buttons.
+std::vector<uf8::PushStep> uf8VpotSteps_(int strip, int bank)
+{
+    if (g_editingMatch.empty()) return {};
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        return m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].vpotSteps;
+    }
+    return {};
+}
+
+void setUf8VpotSteps_(int strip, int bank, std::vector<uf8::PushStep> steps)
+{
+    mutateUf8_([steps = std::move(steps), strip, bank]
+               (uf8::UserUf8Map& u) mutable {
+        u.banks.banks[g_uf8EditingFaderBank][bank][strip].vpotSteps =
+            std::move(steps);
+    });
+}
+
 uf8::VPotPolarity getUf8VPotPolarity_(int strip, int bank)
 {
     if (g_editingMatch.empty()) return uf8::VPotPolarity::Unipolar;
@@ -9335,7 +9356,12 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     const bool isButtonCtrl = (ctrl.kind == Uc1Control::DynBtn
                                || ctrl.kind == Uc1Control::Toggle);
     const bool isPushCycleBtn = isButtonCtrl && ctrl.linkIdx != 0;
-    const bool hasPushSteps   = isPushCycleBtn
+    // A UC1 KNOB can also carry a step-cycle (turn scrubs the option list) —
+    // same pushSteps model, just driven by rotation. linkIdx 0 (bypass) excl.
+    const bool isPushCycleKnob = (ctrl.kind == Uc1Control::Knob)
+                                 && ctrl.linkIdx != 0;
+    const bool isStepCycleCtrl = isPushCycleBtn || isPushCycleKnob;
+    const bool hasPushSteps   = isStepCycleCtrl
                               && !slotPushSteps_(ctrl.linkIdx).empty();
     // When an Option/Control tab is active and this control has no overlay of
     // its own, it inherits its Normal mapping at runtime — show that as a
@@ -9539,7 +9565,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     // Open the popup for mapped controls and for the discrete push-cycle
     // buttons even when unmapped, so an unmapped button can host the
     // "Push cycle" builder (right-click → pick params/values to step).
-    if (exists && (isMapped || isPushCycleBtn)) {
+    if (exists && (isMapped || isStepCycleCtrl)) {
         // Popup id must be unique per *physical* control, not per linkIdx:
         // two controls can share a linkIdx (e.g. the centre IN-Gain knob and
         // a Channel-IN toggle both bind the same slot). Keying the popup on
@@ -9635,9 +9661,11 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // subset of one param's discrete options, or a multi-param macro
             // built from scratch. An empty list keeps the default behaviour
             // (auto-cycle through ALL of the bound param's options).
-            if (isPushCycleBtn) {
+            if (isStepCycleCtrl) {
                 ImGui_Separator(ctx);
-                ImGui_Text(ctx, "Push cycle:");
+                // A knob scrubs the list on TURN, a button steps it on PRESS.
+                ImGui_Text(ctx, isPushCycleKnob ? "Step cycle (turn):"
+                                                : "Push cycle:");
 
                 // Reset the +Add-step picker state when switching buttons.
                 if (g_fxlAddLinkIdx != ctrl.linkIdx) {
@@ -11626,6 +11654,264 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (ImGui_MenuItem(ctx, "V-Pot mode: Toggle",
                                    nullptr, &isTgl, nullptr)) {
                     setUf8VPotMode_(ctrl.strip, bank, uf8::VPotMode::Toggle);
+                }
+                bool isStep = (curMode == uf8::VPotMode::StepCycle);
+                if (ImGui_MenuItem(ctx, "V-Pot mode: Step cycle (turn)",
+                                   nullptr, &isStep, nullptr)) {
+                    setUf8VPotMode_(ctrl.strip, bank, uf8::VPotMode::StepCycle);
+                    // Materialise the bound param's discrete options as a
+                    // starting list so the V-Pot scrubs immediately (a
+                    // StepCycle slot with no steps is inert). Needs a live FX
+                    // instance to read the option grid; offline the user adds
+                    // steps via the editor below.
+                    if (uf8VpotSteps_(ctrl.strip, bank).empty()
+                        && fx.ok && mapped >= 0) {
+                        double s=0.0, a=0.0, b=0.0; bool isT=false;
+                        int opts = 0; double step = 1.0;
+                        if (TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx,
+                                mapped, &s, &a, &b, &isT)) {
+                            if (isT) { opts = 2; step = 1.0; }
+                            else if (s > 0.0 && s < 1.0) {
+                                opts = uf8::numStepsFor(static_cast<float>(s));
+                                step = s;
+                            }
+                        }
+                        if (opts >= 2) {
+                            std::vector<uf8::PushStep> v;
+                            for (int i = 0; i < opts; ++i) {
+                                float nrm = static_cast<float>(i * step);
+                                if (nrm > 1.0f) nrm = 1.0f;
+                                v.push_back(uf8::PushStep{mapped, nrm, true});
+                            }
+                            setUf8VpotSteps_(ctrl.strip, bank, std::move(v));
+                        }
+                    }
+                }
+
+                // ---- Step cycle (rotary, VPotMode::StepCycle) ------------
+                // Curate which option values the V-Pot scrubs through: a
+                // subset / custom order of one param's discrete options, or a
+                // multi-param macro built from scratch. Same UI as the UC1
+                // button push-cycle editor; here an empty list just means
+                // "no steps yet" (the V-Pot is inert until you add some).
+                if (curMode == uf8::VPotMode::StepCycle) {
+                    ImGui_Separator(ctx);
+                    ImGui_Text(ctx, "Step cycle:");
+
+                    // +Add picker state — keyed on a synthetic id distinct
+                    // from any UC1 linkIdx so switching popups resets it.
+                    const int addKey = -(1000 + g_uf8EditingFaderBank * 64
+                                         + bank * 8 + ctrl.strip);
+                    if (g_fxlAddLinkIdx != addKey) {
+                        g_fxlAddLinkIdx   = addKey;
+                        g_fxlAddParam     = -1;
+                        g_fxlAddNorm      = 0.5f;
+                        g_fxlAddFilter[0] = '\0';
+                    }
+                    const UserPluginMap* vEditing = nullptr;
+                    for (const auto& m : uf8::user_plugins::get().maps)
+                        if (m.match == g_editingMatch) { vEditing = &m; break; }
+
+                    auto optionCountFor = [&](int p, double& pStepOut) -> int {
+                        pStepOut = 1.0;
+                        if (fx.ok) {
+                            double s=0.0, a=0.0, b=0.0; bool isT=false;
+                            if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx,
+                                    p, &s, &a, &b, &isT)) return 0;
+                            if (isT) { pStepOut = 1.0; return 2; }
+                            if (s > 0.0 && s < 1.0) {
+                                pStepOut = s;
+                                return uf8::numStepsFor(static_cast<float>(s));
+                            }
+                            return 0;
+                        }
+                        if (vEditing)
+                            for (const auto& pi : vEditing->paramSnapshot)
+                                if (pi.vst3Param == p) return pi.wasEnum ? 2 : 0;
+                        return 0;
+                    };
+
+                    double boundStep = 1.0;
+                    const int boundOpts =
+                        (mapped >= 0) ? optionCountFor(mapped, boundStep) : 0;
+                    const bool boundDiscrete = boundOpts >= 2;
+
+                    std::vector<uf8::PushStep> view =
+                        uf8VpotSteps_(ctrl.strip, bank);
+                    if (view.empty() && boundDiscrete) {
+                        for (int i = 0; i < boundOpts; ++i) {
+                            float nrm = static_cast<float>(i * boundStep);
+                            if (nrm > 1.0f) nrm = 1.0f;
+                            view.push_back(uf8::PushStep{mapped, nrm, true});
+                        }
+                    }
+                    auto commit = [&](std::vector<uf8::PushStep> v) {
+                        setUf8VpotSteps_(ctrl.strip, bank, std::move(v));
+                    };
+
+                    if (!view.empty()) {
+                        ImGui_TextDisabled(ctx,
+                            "Drag \xE2\x89\xA1 to reorder \xC2\xB7 untick to exclude:");
+                        int dragFrom = -1, dragTo = -1, removeIdx = -1;
+                        for (int i = 0; i < static_cast<int>(view.size()); ++i) {
+                            const uf8::PushStep& st = view[i];
+                            const bool foreign =
+                                (mapped < 0) || st.vst3Param != mapped;
+                            char pn[96] = {0};
+                            if (foreign && vEditing)
+                                paramNameFor_(*vEditing, fx, st.vst3Param,
+                                              pn, sizeof(pn));
+                            char vb[64] = {0};
+                            if (fx.ok)
+                                TrackFX_FormatParamValueNormalized(fx.tr,
+                                    fx.fxIdx, st.vst3Param, st.norm,
+                                    vb, sizeof(vb));
+                            char disp[180];
+                            if (foreign)
+                                snprintf(disp, sizeof(disp), "%s = %s",
+                                         pn[0] ? pn : "(param)",
+                                         vb[0] ? vb : "?");
+                            else
+                                snprintf(disp, sizeof(disp), "%s",
+                                         vb[0] ? vb : "(option)");
+                            char cbId[208];
+                            snprintf(cbId, sizeof(cbId),
+                                     "%s##uf8sc_cb_%d", disp, i);
+                            char hId[40];
+                            snprintf(hId, sizeof(hId),
+                                     "\xE2\x89\xA1##uf8sc_h_%d", i);
+                            ImGui_SmallButton(ctx, hId);
+                            int dndF = 0;
+                            if (ImGui_BeginDragDropSource(ctx, &dndF)) {
+                                char pl[8]; snprintf(pl, sizeof(pl), "%d", i);
+                                ImGui_SetDragDropPayload(ctx, "UF8_PSORD",
+                                                         pl, nullptr);
+                                ImGui_Text(ctx, disp);
+                                ImGui_EndDragDropSource(ctx);
+                            }
+                            if (ImGui_BeginDragDropTarget(ctx)) {
+                                char buf[8] = {0}; int af = 0;
+                                if (ImGui_AcceptDragDropPayload(ctx, "UF8_PSORD",
+                                        buf, static_cast<int>(sizeof(buf)),
+                                        &af)) {
+                                    dragFrom = std::atoi(buf); dragTo = i;
+                                }
+                                ImGui_EndDragDropTarget(ctx);
+                            }
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                            bool en = st.enabled;
+                            if (ImGui_Checkbox(ctx, cbId, &en)) {
+                                std::vector<uf8::PushStep> v = view;
+                                v[i].enabled = en;
+                                commit(v);
+                            }
+                            if (foreign) {
+                                ImGui_SameLine(ctx, nullptr, nullptr);
+                                char rmId[40];
+                                snprintf(rmId, sizeof(rmId),
+                                         "x##uf8sc_rm_%d", i);
+                                if (ImGui_SmallButton(ctx, rmId)) removeIdx = i;
+                            }
+                        }
+                        if (removeIdx >= 0) {
+                            std::vector<uf8::PushStep> v = view;
+                            v.erase(v.begin() + removeIdx);
+                            commit(v);
+                        } else if (dragFrom >= 0 && dragTo >= 0
+                                   && dragFrom != dragTo
+                                   && dragFrom < static_cast<int>(view.size())) {
+                            std::vector<uf8::PushStep> v = view;
+                            uf8::PushStep moved = v[dragFrom];
+                            v.erase(v.begin() + dragFrom);
+                            int dst = dragTo > dragFrom ? dragTo - 1 : dragTo;
+                            if (dst < 0) dst = 0;
+                            if (dst > static_cast<int>(v.size()))
+                                dst = static_cast<int>(v.size());
+                            v.insert(v.begin() + dst, moved);
+                            commit(v);
+                        }
+                        if (!uf8VpotSteps_(ctrl.strip, bank).empty()) {
+                            if (ImGui_SmallButton(ctx, "Clear steps##uf8sc_reset"))
+                                setUf8VpotSteps_(ctrl.strip, bank, {});
+                        }
+                    }
+
+                    if (ImGui_BeginMenu(ctx, "+ Add step##uf8sc_add", nullptr)) {
+                        const int pcount =
+                            vEditing ? paramCountFor_(*vEditing, fx) : 0;
+                        int fFlags = 0;
+                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+                        ImGui_InputText(ctx, "##uf8sc_filter", g_fxlAddFilter,
+                                        sizeof(g_fxlAddFilter), &fFlags, nullptr);
+                        auto icontains = [](const char* hay, const char* needle) {
+                            if (!needle || !needle[0]) return true;
+                            if (!hay) return false;
+                            std::string h, n;
+                            for (const char* p = hay; *p; ++p)
+                                h += static_cast<char>(std::tolower((unsigned char)*p));
+                            for (const char* p = needle; *p; ++p)
+                                n += static_cast<char>(std::tolower((unsigned char)*p));
+                            return h.find(n) != std::string::npos;
+                        };
+                        char curPName[96] = {0};
+                        if (g_fxlAddParam >= 0 && vEditing)
+                            paramNameFor_(*vEditing, fx, g_fxlAddParam,
+                                          curPName, sizeof(curPName));
+                        if (ImGui_BeginCombo(ctx, "##uf8sc_param",
+                                g_fxlAddParam >= 0 ? (curPName[0] ? curPName
+                                                                  : "(param)")
+                                                   : "Choose param…",
+                                nullptr)) {
+                            int shown = 0;
+                            for (int p = 0; p < pcount && shown < 1024; ++p) {
+                                char pn[96] = {0};
+                                if (vEditing)
+                                    paramNameFor_(*vEditing, fx, p, pn, sizeof(pn));
+                                if (isReaperMidiParam_(pn)) continue;
+                                if (!icontains(pn, g_fxlAddFilter)) continue;
+                                double dummyStep = 1.0;
+                                if (optionCountFor(p, dummyStep) < 2) continue;
+                                ++shown;
+                                bool sel = (g_fxlAddParam == p);
+                                char rid[112];
+                                snprintf(rid, sizeof(rid), "%s##uf8sc_p_%d",
+                                         pn[0] ? pn : "(param)", p);
+                                if (ImGui_Selectable(ctx, rid, &sel, nullptr,
+                                                     nullptr, nullptr))
+                                    g_fxlAddParam = p;
+                            }
+                            ImGui_EndCombo(ctx);
+                        }
+                        if (g_fxlAddParam >= 0) {
+                            double pStep = 1.0;
+                            const int numSteps =
+                                optionCountFor(g_fxlAddParam, pStep);
+                            if (numSteps >= 2) {
+                                ImGui_TextDisabled(ctx, "Add option:");
+                                for (int i = 0; i < numSteps; ++i) {
+                                    float nrm = static_cast<float>(i * pStep);
+                                    if (nrm > 1.0f) nrm = 1.0f;
+                                    char vbuf[64] = {0};
+                                    if (fx.ok)
+                                        TrackFX_FormatParamValueNormalized(fx.tr,
+                                            fx.fxIdx, g_fxlAddParam, nrm,
+                                            vbuf, sizeof(vbuf));
+                                    char oid[96];
+                                    snprintf(oid, sizeof(oid), "%s##uf8sc_opt_%d",
+                                             vbuf[0] ? vbuf
+                                                     : (i == 0 ? "OFF" : "ON"), i);
+                                    if (ImGui_SmallButton(ctx, oid)) {
+                                        std::vector<uf8::PushStep> v = view;
+                                        v.push_back(uf8::PushStep{
+                                            g_fxlAddParam, nrm, true});
+                                        commit(v);
+                                    }
+                                }
+                            }
+                        }
+                        ImGui_EndMenu(ctx);
+                    }
+                    ImGui_Separator(ctx);
                 }
 
                 // Polarity — controls LED ring rendering (centre-out vs
