@@ -11559,7 +11559,14 @@ std::array<std::string, 8> g_lastSlotLabel{};
 // Top-soft-key LED dedup. -1 = unset. Encodes the TopSoftKeyState as
 // 0=Off / 1=Dim / 2=On so transitions between any two visible levels
 // trigger a re-push.
-std::array<int8_t, 8>      g_lastTopSoftKey{-1, -1, -1, -1, -1, -1, -1, -1};
+// Full LED composite (state + 24-bit colour) per top-soft-key, for an
+// EXACT dedup. Was an int8_t 7-bit hash, which collided (e.g. a white
+// cell's Active and Inactive states hashed equal) so a mode change never
+// re-pushed the LED until an unrelated cache-clear (a modifier press) ran
+// — the "leuchtet erst nach Shift" + "alter Mode bleibt an" bug (Frank
+// 2026-06-23). -1 is unreachable by any real composite, so it stays the
+// "force push" sentinel.
+std::array<int32_t, 8>     g_lastTopSoftKey{-1, -1, -1, -1, -1, -1, -1, -1};
 // Sentinel that can't be a real label nor a blank send — guarantees
 // the first refresh (after extension load or bank shift) actually
 // emits a frame, even when the resolved csType is empty. Without
@@ -11873,10 +11880,8 @@ void pushNavOverlayDecorations()
         const int32_t composite =
             (int32_t(static_cast<int>(tssk)) << 28)
           ^ static_cast<int32_t>(rgb & 0x00FFFFFFu);
-        const int8_t shortKey =
-            static_cast<int8_t>(((composite >> 16) ^ composite) & 0x7F);
-        if (shortKey != g_lastTopSoftKey[s]) {
-            g_lastTopSoftKey[s] = shortKey;
+        if (composite != g_lastTopSoftKey[s]) {
+            g_lastTopSoftKey[s] = composite;
             sendLedFrames(uf8::buildTopSoftKeyLed(
                 static_cast<uint8_t>(s), tssk, ledClr));
         }
@@ -12859,21 +12864,21 @@ void pushZonesForVisibleSlots()
                     ledClr = uf8::ledColourForTrackRgb(bc);
                 }
             }
-            // Cache key folds tssk state + 24-bit colour into a single
-            // hash so colour changes re-emit even when state is steady.
+            // Cache key folds tssk state + ledCacheKey + 24-bit colour into
+            // the FULL composite (stored exactly in g_lastTopSoftKey) so any
+            // state/colour change re-emits. A previous 7-bit hash collided
+            // (Active vs Inactive of a white cell hashed equal → no re-push
+            // until an unrelated cache-clear), which is what left mode LEDs
+            // stale until Shift / kept the old mode lit (Frank 2026-06-23).
             const int32_t composite =
                 (int32_t(ledCacheKey) << 24)
               ^ (int32_t(static_cast<int>(tssk)) << 28)
               ^ static_cast<int32_t>(ledColRgb & 0x00FFFFFFu);
-            // g_lastTopSoftKey is int8_t — keep just a hash; identical
-            // composites short-circuit, distinct composites push.
-            const int8_t shortKey =
-                static_cast<int8_t>(((composite >> 16) ^ composite) & 0x7F);
             // Nav overlay owns the top-soft-key LED + slot label
             // zones while active; skip the track-derived writes so the
             // dedup caches don't ping-pong against pushNavOverlayDecorations.
-            if (!overlayActive && shortKey != g_lastTopSoftKey[s]) {
-                g_lastTopSoftKey[s] = shortKey;
+            if (!overlayActive && composite != g_lastTopSoftKey[s]) {
+                g_lastTopSoftKey[s] = composite;
                 sendLedFrames(uf8::buildTopSoftKeyLed(
                     static_cast<uint8_t>(s), tssk, ledClr));
             }
