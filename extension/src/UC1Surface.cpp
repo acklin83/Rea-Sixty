@@ -1715,11 +1715,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         ? &uf8::fxEffectiveLayer(*uslRaw, reasixty_fxLearnActiveLayer())
         : nullptr;
 
+    // A binary on/off on a KNOB is treated as a 2-option stepped param so it
+    // scrubs DIRECTIONALLY and CLAMPS at the ends (turn right → On and stays,
+    // left → Off and stays) — same as a 3+ state param — instead of flipping
+    // on every detent (Frank 2026-06-23: "on/off auf knob wrapt herum").
+    // effStep=1.0 is the 0↔1 grid; the stepped branch below clamps to [0,1].
+    if (haveStepInfo && isToggle) effStep = 1.0;
     double next;
-    if (haveStepInfo && isToggle) {
-        // Any detent flips the toggle. Sign of delta is irrelevant.
-        next = (cur >= 0.5) ? 0.0 : 1.0;
-    } else if (haveStepInfo && pStep > 0.0 && !jsfxBogusStep) {
+    if (haveStepInfo && (isToggle || (pStep > 0.0 && !jsfxBogusStep))) {
         // Discrete-stepped — accumulate raw detents into logical steps
         // so a fast hardware scroll doesn't slam through 8 stops. The
         // detents-per-step threshold derives from user sensitivity:
