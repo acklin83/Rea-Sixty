@@ -13437,16 +13437,17 @@ void pushZonesForVisibleSlots()
                 g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), blankVal));
             }
 
-            // Routing-mode-active + invalid slot → park the motor at
-            // -INF (pb14 = 0) for the duration of the mode. The fader
-            // physically moves to the bottom so the user sees at a
-            // glance that this strip's send/receive doesn't exist.
-            // Skipped while the user is touching the fader (so a
-            // simultaneous touch isn't fought by the motor); next
-            // render tick after release re-pushes 0. When the routing
-            // mode exits, the regular render path takes over and
-            // drives the fader to the track's actual volume.
-            if (routedButInvalid && !g_touchReported[s].load()) {
+            // Empty channel (no track) OR routing-mode invalid slot → park the
+            // motor at -INF (pb14 = 0). The fader physically drops to the bottom
+            // so an empty/absent strip reads at a glance (Frank 2026-06-24: empty
+            // UF8 channels should always sit fully down). We're inside the
+            // `!tr || routedButInvalid` branch, so every strip here qualifies.
+            // Skipped while the user is touching the fader (so a simultaneous
+            // touch isn't fought by the motor); the next render tick after
+            // release re-pushes 0. When a track appears (bank shift) or the
+            // routing mode exits, the regular render path drives the fader to
+            // the real volume.
+            if (!g_touchReported[s].load()) {
                 if (!g_faderPbInit || g_lastFaderPb[s] != 0) {
                     g_lastFaderPb[s] = 0;
                     g_dev->send(uf8::buildFaderPosition(
