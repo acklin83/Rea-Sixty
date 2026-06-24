@@ -3277,8 +3277,11 @@ int loadFactoryReaSixtySet(int layer, int quick)
     if (layer < 0 || layer >= 3) return -1;
     if (quick < 0 || quick >= kQuicksPerLayer) return -1;
     const auto& banks = factoryReaSixtyBanks_();
-    const int n = std::min(static_cast<int>(banks.size()),
-                           kSubBanksPerQuick);
+    // std::clamp, not std::min — Windows <windows.h> defines a min() macro that
+    // breaks std::min on MSVC (error C2589). banks.size() ≥ 0, so clamping the
+    // low end at 0 is equivalent to min(size, kSubBanksPerQuick).
+    const int n = std::clamp(static_cast<int>(banks.size()),
+                             0, kSubBanksPerQuick);
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         for (int sb = 0; sb < n; ++sb) {
