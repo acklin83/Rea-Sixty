@@ -1,0 +1,149 @@
+REA-SIXTY v0.2 — WHAT'S NEW
+All new features and changes since v0.1.32.
+
+
+CHANNEL-STRIP SWITCH (CS-SWITCH)
+
+Swap a track's active SSL Channel Strip for one of up to 8 favourite plug-ins,
+in place, carrying the values across. Actions "Switch to CS 1-8" and "CS Cycle"
+(also available on an encoder) replace the strip on all selected tracks (or the
+focused one).
+
+Value transfer is unit-aware and intention-aware, matched by the shared surface
+control — never by guessing:
+ - Numeric values (gain, frequency, Q, threshold, ratio, time) transfer by
+   engineering value; Hz<->kHz and s<->ms scale differences are reconciled;
+   dB/ratio are never rescaled.
+ - Same-family swaps (SSL->SSL) stay bit-exact.
+ - Discrete states / buttons (Bell/Shelf, In/Out, Gate/Expander...) transfer by
+   meaning — active<->active even when the two plug-ins label or order them
+   differently.
+ - A control the new plug-in lacks is remembered and restored on a round-trip.
+ - The plug-in GUI stays open and bypass state is preserved across the swap.
+
+Requirement: CS favourites must be mapped / learned. The transfer relies on the
+learned mapping as ground truth; a custom plug-in must be learned in FX-Learn
+first. (Name-alias matching is only a fallback for individual unmapped controls
+and never overrides your map.)
+
+
+TOUCH-TO-LEARN
+
+A bindable hardware mode (category "Hardware Modes"). While armed, touch a
+control on the surface and wiggle a plug-in parameter to bind it on the fly —
+FX-Learn without opening Settings. Live hardware feedback: the armed control's
+ring/bar "breathes" and the scribble shows "Waiting". The soft-keys switch the
+V-Pot layer while armed; a V-Pot press learns a Toggle binding, a turn learns
+continuous.
+
+Wiggle-learn is for continuous controls. Toggles/buttons (which cascade or don't
+update REAPER's last-touched-FX) are bound via the HUD parameter list or the
+FX-Learn page instead.
+
+
+ROTARY STEP CYCLE
+
+Put a plug-in's button/enum options onto a V-Pot or UC1 knob: turning scrubs a
+curated list (e.g. EQ type A->B->C), pressing steps one forward. Turning clamps
+at the ends; pressing wraps. Build a step cycle two ways:
+ - Capture by touch (UF8 V-Pots): with Touch-to-Learn armed, wiggle the V-Pot
+   then click the plug-in's buttons in order.
+ - Curate in the editor: in the FX-Learn V-Pot menu or the on-screen Learn-HUD —
+   drag to reorder, untick to exclude, "+ Add step". Works for UC1 knobs too.
+
+On UC1, build step cycles via the editor (auto-capture was disabled — it was
+fragile and could pollute normal knobs). Re-learning a knob clears its step
+cycle.
+
+
+PARAMETER GROUPS — MAPLESS MIRRORING
+
+In addition to mapped SSL/learned-FX mirroring, an unmapped, third-party plug-in
+now mirrors 1:1 across group members that host the exact same plug-in — tweak a
+knob (hardware or mouse) and every member with an identical plug-in follows.
+Different plug-ins deliberately do not mirror (the same internal value rarely
+means the same thing). CS favourites stay map-only.
+
+
+FOCUS SET
+
+The Temporary Selection Set was rebuilt as a pin source: pin the focused track
+(or a chosen set) to the left of the surface, composing left-to-right with
+REAPER TCP pins and a Master pin. New actions (with REAPER-action equivalents
+for keyboard/toolbar): clear / toggle-selected / set-from-selection /
+pin-focused, plus an encoder to scroll set members. A dedicated Focus-Set
+Auto-Mode arms members to an automation mode in AUTO; members are exempt from
+the Auto-hide Trim/Read filter. Persists per project.
+
+
+SOLO / MUTE MODIFIER MODES (UF8 + UC1)
+
+Hold a computer-keyboard modifier while pressing a surface Solo/Cut button to
+invoke REAPER's solo/mute button modes, mirroring its right-click menus. The
+"Ctrl" role is Cmd on macOS / Ctrl on Windows (AltGr counts as Alt):
+
+  Modifier            Solo                    Cut / Mute
+  ------------------  ----------------------  ------------------
+  Alt                 Solo, ignore routing    Mute all others
+  Ctrl / Cmd          Unsolo all              Unmute all
+  Ctrl / Cmd + Alt    Exclusive solo          Exclusive mute
+  Ctrl / Cmd + Shift  Solo defeat             —
+
+No modifier behaves exactly as before; routing / plug-in modes keep priority.
+
+
+V-POT PAN RECORDS IN TOUCH
+
+Turning a V-Pot in Pan now records track-pan automation in Touch mode and holds
+on release — matching how the motor fader records volume.
+
+
+SOFT-KEYS & BINDINGS
+
+ - User-definable free SSL CS/BC soft-key slots, with LEDs.
+ - Offline soft-key editor plus coherent factory banks (including a Brightness
+   bank replacing filler).
+ - 12-character soft-key labels; LED refresh on stateful-toggle changes; exact
+   top-soft-key LED de-dup (no stale mode LEDs).
+ - CS/BC soft-key parameter labels follow the edit page across all banks.
+ - Bindings schematic reflects the edit-context Quick / Sub-Bank, live and
+   manual.
+ - Action picker opens to the currently-bound action; "Grab Focus" relabelled.
+ - A mode-change banner on screen.
+
+
+EMPTY UF8 CHANNELS PARK THE FADER DOWN
+
+A UF8 strip with no track now drives its motor fader fully down, so empty
+channels read at a glance (previously the fader stayed wherever it last sat).
+
+
+PINNED-TRACK-AWARE NAVIGATION
+
+Mixer-follow scrolls an off-bank selection into non-pinned strips; manual Bank
+left/right no longer skips pinned tracks per page.
+
+
+IN-APP MANUAL (v0.2)
+
+ - Searchable: a search box with additive terms (every word must appear); the
+   result list shows matching chapters and the matched words are highlighted in
+   the chapter text.
+ - De-jargoned: internal code identifiers that had leaked into the user manual
+   were rewritten in user-facing language.
+ - New sections for all of the above.
+
+
+FIXES
+
+ - JSFX: coarse reported step sizes on continuous knobs are normalised so they
+   resolve finely (no more jumpy ~2.4 dB steps); the GR FX-Learn offset
+   (grOffsetDb) is now actually applied.
+ - UC1: a binary on/off knob now flips per detent instead of clamping at the
+   ends.
+ - Learn-HUD: modifier layer frozen while a context menu is open; +Add step
+   keeps the popup open; fixed a nil-crash from a renamed ImGui flag.
+ - CS-Switch: robust across plug-in families; multi-track no longer collapses to
+   the last track's values; a second control can't clobber a destination param.
+ - Windows build: fixed the std::min macro trap that had been breaking CI on
+   every push.
