@@ -2,6 +2,8 @@
 
 Goal: an open-source replacement for **SSL 360°** that drives the **SSL UF8** (and eventually **UC1**) controllers — without the SSL-plugin-on-every-track requirement, with DAW-layer scribble-strip colors, and cross-platform (macOS first, Windows and Linux follow).
 
+> Competitive positioning — where rival surfaces (SSL 360° V2.0, ReaLearn, DrivenByMoss, CSI) still beat us, and the prioritised plan to close or deliberately ignore each gap: see [`docs/competitive-analysis.md`](docs/competitive-analysis.md).
+
 The project started 2026-04-19 as a "just the colors" REAPER extension. After decoding the vendor-USB protocol it became clear that:
 - The UF8 needs a wakeup/init sequence from the host to render anything, so a simple color-push side-car isn't possible
 - SSL 360° claims the vendor-USB interface exclusively — can't coexist
