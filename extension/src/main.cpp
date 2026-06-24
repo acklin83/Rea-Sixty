@@ -242,6 +242,15 @@ bool   reasixty_uc1OutGainFaderMode();
 double reasixty_trackVolNorm(MediaTrack* tr);
 void   reasixty_setTrackVolNorm(MediaTrack* tr, double norm);
 
+// Solo/Mute button modifier modes. reasixty_soloMuteMod() returns the
+// host-keyboard modifier held right now (0=none) mapped to REAPER's solo/mute
+// button modes; the apply helpers run the corresponding behaviour on a track.
+// MAIN-THREAD ONLY (they read the OS keyboard + call REAPER track API). Shared
+// with UC1Surface.cpp via the same free-function bridge pattern. Frank 2026-06-24.
+int    reasixty_soloMuteMod();
+void   reasixty_applySoloMod(MediaTrack* tr, int mod);
+void   reasixty_applyMuteMod(MediaTrack* tr, int mod);
+
 // rec->GetFunc capture for SWELL/BrowseForSaveFile lookups. Defined at
 // file scope (not inside any anonymous namespace) so the SWELL-API
 // loader helpers further down — which sit in the first anonymous
@@ -8308,6 +8317,10 @@ void drainInputQueue()
                     }
                 }
                 if (!tr) break;  // PM/routing didn't claim; no track to solo.
+                if (const int sm = reasixty_soloMuteMod(); sm != 0) {
+                    reasixty_applySoloMod(tr, sm);   // modifier mode, no group broadcast
+                    break;
+                }
                 CSurf_OnSoloChange(tr, -1);
                 {
                     const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
@@ -8354,6 +8367,10 @@ void drainInputQueue()
                     }
                 }
                 if (!tr) break;  // PM/routing didn't claim; no track to mute.
+                if (const int sm = reasixty_soloMuteMod(); sm != 0) {
+                    reasixty_applyMuteMod(tr, sm);   // modifier mode, no group broadcast
+                    break;
+                }
                 CSurf_OnMuteChange(tr, -1);
                 {
                     const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
@@ -15223,6 +15240,43 @@ bool hostCtrlHeld_()
 #endif
 }
 
+// --- Solo/Mute button modifier modes ------------------------------------
+// Held host-keyboard modifiers when a Solo/Cut button is pressed select a
+// REAPER solo/mute mode, mirroring REAPER's own button menus. The "Ctrl" role
+// follows REAPER's cross-platform convention: on macOS it is the COMMAND key
+// (⌘, what REAPER's own solo/mute menus show; physical Control ⌃ also accepted),
+// on Windows it is Ctrl.
+//   Ctrl-role        → Unsolo all             / Unmute all
+//   Alt              → Solo (ignore routing)  / Mute all others
+//   Ctrl-role+Alt    → Exclusive solo         / Exclusive mute
+//   Ctrl-role+Shift  → Solo defeat            / (no mute mode)
+// AltGr (Windows right-Alt, reported as Ctrl+Alt) counts as Alt — same drop as
+// refreshFxActiveLayer_. MAIN-THREAD ONLY: host* hit CGEventSourceFlagsState /
+// GetAsyncKeyState; both call sites (UF8 drainInputQueue, UC1 poll) are main.
+enum class SoloMuteMod { None = 0, Option, Control, CtrlOption, ShiftCtrl };
+
+static SoloMuteMod soloMuteModFromHost_()
+{
+    // macOS: Command (⌘) is the Windows-Ctrl equivalent; accept physical
+    // Control (⌃) too. Windows: hostCmdHeld_ is always false → plain Ctrl.
+    bool ctrl  = hostCmdHeld_() || hostCtrlHeld_();
+    bool alt   = hostAltHeld_();
+    bool shift = hostShiftHeld_();
+#if defined(_WIN32)
+    if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrl = false; // AltGr → Alt
+#endif
+    if (ctrl && shift) return SoloMuteMod::ShiftCtrl;
+    if (ctrl && alt)   return SoloMuteMod::CtrlOption;
+    if (ctrl)          return SoloMuteMod::Control;
+    if (alt)           return SoloMuteMod::Option;
+    return SoloMuteMod::None;
+}
+
+// reasixty_soloMuteMod / applySoloMod / applyMuteMod are defined at FILE SCOPE
+// (after the anonymous namespace, near reasixty_setTrackVolNorm) so the UC1
+// translation unit can link them. The SoloMuteMod enum + soloMuteModFromHost_
+// above stay internal but remain visible TU-wide for those definitions.
+
 // Returns true when any Shift source (UF8 hardware OR keyboard) should
 // engage fine mode for V-Pots / encoders. Gated by the Settings toggle
 // "Shift activates Fine mode". Does NOT affect faders.
@@ -18977,6 +19031,77 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
 }
 
 } // anonymous
+
+// ---- Solo/Mute button modifier modes (external linkage) ---------------
+// Defined outside the anonymous namespace so UC1Surface.cpp links against
+// them. The SoloMuteMod enum + soloMuteModFromHost_ helper live in the anon
+// namespace above but stay visible TU-wide for these definitions. Main-thread
+// only (host keyboard + REAPER track API). Frank 2026-06-24.
+int reasixty_soloMuteMod() { return static_cast<int>(soloMuteModFromHost_()); }
+
+void reasixty_applySoloMod(MediaTrack* tr, int modIn)
+{
+    if (!tr) return;
+    switch (static_cast<SoloMuteMod>(modIn)) {
+        case SoloMuteMod::Option: {          // Solo (ignore routing): I_SOLO 0↔1
+            const int cur = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_SOLO"));
+            SetMediaTrackInfo_Value(tr, "I_SOLO", cur != 0 ? 0.0 : 1.0);
+            break;
+        }
+        case SoloMuteMod::Control:            // Unsolo all (action 40340)
+            Main_OnCommand(40340, 0);
+            break;
+        case SoloMuteMod::CtrlOption: {       // Exclusive solo: this on, rest off
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i)
+                if (MediaTrack* t = GetTrack(nullptr, i))
+                    CSurf_OnSoloChange(t, t == tr ? 1 : 0);
+            break;
+        }
+        case SoloMuteMod::ShiftCtrl: {        // Solo defeat toggle
+            const bool cur = GetMediaTrackInfo_Value(tr, "B_SOLO_DEFEAT") > 0.5;
+            SetMediaTrackInfo_Value(tr, "B_SOLO_DEFEAT", cur ? 0.0 : 1.0);
+            break;
+        }
+        case SoloMuteMod::None:
+        default:
+            CSurf_OnSoloChange(tr, -1);       // default solo toggle
+            break;
+    }
+}
+
+void reasixty_applyMuteMod(MediaTrack* tr, int modIn)
+{
+    if (!tr) return;
+    switch (static_cast<SoloMuteMod>(modIn)) {
+        case SoloMuteMod::Option: {           // Mute all others: this off, rest on
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i)
+                if (MediaTrack* t = GetTrack(nullptr, i))
+                    CSurf_OnMuteChange(t, t == tr ? 0 : 1);
+            break;
+        }
+        case SoloMuteMod::Control: {           // Unmute all
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i)
+                if (MediaTrack* t = GetTrack(nullptr, i))
+                    CSurf_OnMuteChange(t, 0);
+            break;
+        }
+        case SoloMuteMod::CtrlOption: {        // Exclusive mute: this on, rest off
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i)
+                if (MediaTrack* t = GetTrack(nullptr, i))
+                    CSurf_OnMuteChange(t, t == tr ? 1 : 0);
+            break;
+        }
+        case SoloMuteMod::ShiftCtrl:           // no mute mode for Ctrl+Shift
+        case SoloMuteMod::None:
+        default:
+            CSurf_OnMuteChange(tr, -1);        // default mute toggle
+            break;
+    }
+}
 
 // ---- UC1 Out-Gain → REAPER fader toggle (external linkage) -------------
 // State accessor + a 0..1 track-volume position that reuses the SAME

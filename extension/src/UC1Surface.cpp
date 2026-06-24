@@ -101,6 +101,12 @@ bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Devic
 bool   reasixty_uc1OutGainFaderMode();
 double reasixty_trackVolNorm(MediaTrack* tr);
 void   reasixty_setTrackVolNorm(MediaTrack* tr, double norm);
+// Solo/Mute button modifier modes (host keyboard) — shared with main.cpp.
+// reasixty_soloMuteMod() returns 0 when no modifier is held. Main-thread only;
+// UC1Surface::poll drains buttons on the main thread, so this is safe here.
+int    reasixty_soloMuteMod();
+void   reasixty_applySoloMod(MediaTrack* tr, int mod);
+void   reasixty_applyMuteMod(MediaTrack* tr, int mod);
 // Settings → Modes → FX/Instance Cycle — controls-routing bitmask. Bit 2
 // = UC1 Encoder 1 (CHANNEL), bit 3 = UC1 Encoder 2 (BC). When set AND
 // SelectionMode is Instance / InstanceCycle, the encoder rotation drives
@@ -2266,9 +2272,17 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 ++stats_.buttonEventsHandled;
                 return;
             }
-            CSurf_OnSoloChange(tr, -1);
+            // Held keyboard modifier → REAPER solo mode (ignore-routing /
+            // unsolo-all / exclusive / solo-defeat) instead of the plain toggle.
+            const int sm = reasixty_soloMuteMod();
+            if (sm != 0) {
+                reasixty_applySoloMod(tr, sm);
+            } else {
+                CSurf_OnSoloChange(tr, -1);
+            }
             const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
-            uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
+            if (sm == 0)
+                uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
             pushButtonLed_(button::kSolo, on);
             pushButtonLed_(button::kSoloClear, anySolo());
             pushButtonReadout_(button::kSolo, "Solo", on ? "On" : "Off",
@@ -2292,9 +2306,17 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 ++stats_.buttonEventsHandled;
                 return;
             }
-            CSurf_OnMuteChange(tr, -1);
+            // Held keyboard modifier → REAPER mute mode (mute-all-others /
+            // unmute-all / exclusive) instead of the plain toggle.
+            const int sm = reasixty_soloMuteMod();
+            if (sm != 0) {
+                reasixty_applyMuteMod(tr, sm);
+            } else {
+                CSurf_OnMuteChange(tr, -1);
+            }
             const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
-            uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
+            if (sm == 0)
+                uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
             pushButtonLed_(button::kCut, on);
             pushButtonReadout_(button::kCut, "Cut", on ? "On" : "Off",
                                zone::kChannelStripReadout);
