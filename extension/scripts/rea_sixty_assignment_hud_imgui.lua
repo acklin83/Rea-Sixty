@@ -150,6 +150,7 @@ local tabRects     = {}
 local learnBtnRect = nil
 local ctrlRects    = {}
 local learnIdx     = -1
+local learnLayer   = 0     -- modifier overlay the armed learn will bind to
 local ctxCtrlIdx   = -1   -- control under a right-click → control context menu
 local ctxCtrlLayer = 0    -- active modifier layer captured AT right-click (the
                           -- modifier is still held then; renaming opens a native
@@ -162,6 +163,9 @@ local uf8Learn     = -1   -- armed cell, encoded kind*8+strip (hud_uf8_learn), -
 local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
 local ctxUf8Strip  = -1
 local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
+local nameRect     = nil  -- LCD / UF8-header click target → edit plug-in Kurzname
+local csFavRect    = nil  -- CS-Favourite dropdown box (CS/BC tabs) hit-rect
+local FAV_H        = 0     -- height reserved for the CS-Favourite row (0 on UF8)
 local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
 local uf8BankCols  = {}   -- [0..7] = V-Pot bank colour (0xRRGGBB or nil)
 local uf8StripCols = {}   -- [0..7] = display colour-bar colour for the active bank
@@ -393,6 +397,29 @@ local function readCsFav()
   return cur, hasCs, slots
 end
 
+-- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>" — the USER map's
+-- short label per domain, empty when that domain has no editable user map.
+-- Feeds the inline Kurzname editor (click the LCD / UF8 header).
+local function readShort()
+  local raw = reaper.GetExtState(SECT, "hud_short")
+  local cs, bc, uf8 = raw:match("^([^;]*);([^;]*);(.*)$")
+  return cs or "", bc or "", uf8 or ""
+end
+
+-- Open the native rename dialog for the active plug-in's Kurzname and push it
+-- to the extension. `dom` = "c" CS / "b" BC / "u" UF8. Seeds with the current
+-- value so an edit is non-destructive. No-op when the FX has no user map (the
+-- extension silently drops it). Frank 2026-06-24.
+local function editPluginShort(dom)
+  local cs, bc, uf8 = readShort()
+  local cur = (dom == "b" and bc) or (dom == "u" and uf8) or cs
+  local ok, val = reaper.GetUserInputs("Plug-in name", 1,
+    "Short name (max 7),extrawidth=80", cur)
+  if not ok then return end
+  val = val:gsub("[;\n]", " "):sub(1, 7)
+  sendCmd("setshort;" .. dom .. ";" .. val)
+end
+
 -- Per-V-Pot tuning detail for the UF8 tab's full-parity menu. One line per
 -- mapped V-Pot on the live banks:
 --   strip;pol;rmin;rmax;sens;dn;stepped;nsteps;vpotMode;t0:v0,…
@@ -552,6 +579,11 @@ end
 -- Render. [ported from gfx, using the draw abstraction]
 ------------------------------------------------------------------------
 local TAB_H = 36
+
+-- Content origin below the chrome: the tab row (TAB_H) plus the CS-Favourite
+-- row when shown (FAV_H, 0 on the UF8 tab). All body renderers anchor here so
+-- the dropdown row reserves its own space without overlapping the list/mockup.
+local function bodyTop() return TAB_H + FAV_H end
 
 local function fit(s, maxw, px)
   if s == "" then return s end
@@ -820,7 +852,7 @@ local function renderList(st, asn)
   local headFont = floor(15 * fs + 0.5)
 
   local M      = 14
-  local top    = TAB_H + 10
+  local top    = bodyTop() + 10
   local bottom = WH - 8
   if (WW - RW) - 2 * M < 60 or bottom - top < 40 then return end
 
@@ -957,7 +989,7 @@ end
 
 local function renderFace(st, asn)
   local DW, DH = geom.w or 860, geom.h or 660
-  local M, top = 8, TAB_H + 6
+  local M, top = 8, bodyTop() + 6
   local availW, availH = (WW - RW) - 2 * M, WH - top - M
   if availW < 60 or availH < 60 then return end
   local scale = math.min(availW / DW, availH / DH)
@@ -1226,7 +1258,7 @@ end
 local function renderParamPanel(st, asn)
   local PW = RW
   local x0  = WW - PW
-  local top = TAB_H
+  local top = bodyTop()
   local fs  = fontScale()
   local hf  = floor(13 * fs + 0.5)
   local rf  = floor(14 * fs + 0.5)
@@ -1325,7 +1357,7 @@ local function renderUf8Grid(ust, uasn)
   ctrlRects = {}                                  -- no UC1 hit-rects on this tab
   uf8Rects  = {}
   local availW = WW - RW
-  local top    = TAB_H
+  local top    = bodyTop()
   local hpx    = floor(13 * fontScale() + 0.5)
 
   local sub
@@ -1447,7 +1479,7 @@ local function renderUf8Face(ust, uasn)
   -- Same sizing as the CS/BC mockup (renderFace): design face centred in the
   -- full content area, scaled to fit, accounting for the param-list strip (RW).
   local FW, FH = 860, 520
-  local M, top = 8, TAB_H + 6
+  local M, top = 8, bodyTop() + 6
   local availW, availH = (WW - RW) - 2 * M, WH - top - M
   if availW < 60 or availH < 60 then return end
 
@@ -1465,12 +1497,13 @@ local function renderUf8Face(ust, uasn)
 
   -- Compact context line in the top centring margin (plugin + fader bank).
   do
+    local ipx  = floor(12 * fontScale() + 0.5)
     local info = ust.boot
       and ("Map " .. (ust.short ~= "" and ust.short or "plug-in")
            .. "  \xE2\x80\x94  click a control, then wiggle a parameter")
       or  ((ust.short ~= "" and ust.short or "UF8")
            .. "      Fader Bank " .. (ust.faderBank + 1) .. " / 2")
-    dtext(M + 2, top, col(0x9098A4, 0.9), info, floor(12 * fontScale() + 0.5))
+    dtext(M + 2, top, col(0x9098A4, 0.9), info, ipx)
   end
 
   local function px(dx) return faceX + dx * sc end
@@ -1644,6 +1677,75 @@ local function renderUf8Face(ust, uasn)
   end
 end
 
+-- Edit row above the body (all tabs): an always-visible "Name" field for the
+-- plug-in Kurzname (click → native dialog) plus, on the CS tab ONLY, the
+-- CS-Favourite slot dropdown. Both are DrawList "fields" styled with a border
+-- so the edit affordance is visible (Frank: the click-the-LCD edit wasn't).
+-- Sets FAV_H so the body shifts down; registers nameRect + csFavRect.
+local CS_FAV_ACCENT = 0x4A90D8
+local function field(x, y, w, h, fillRgb)
+  rect(x, y, w, h, col(fillRgb, 1))
+  rect(x,         y,         w, 1, col(0x3A3A42, 1))   -- top edge
+  rect(x,         y + h - 1, w, 1, col(0x3A3A42, 1))   -- bottom edge
+  rect(x,         y,         1, h, col(0x3A3A42, 1))   -- left edge
+  rect(x + w - 1, y,         1, h, col(0x3A3A42, 1))   -- right edge
+end
+local function drawHudEditRow()
+  local fpx  = floor(12 * fontScale() + 0.5)
+  local rowH = floor(fpx + 11 * fontScale() + 0.5)
+  FAV_H = rowH + 8
+  local y = TAB_H + 4
+  rect(0, TAB_H, WW - RW, FAV_H, col(0x131316, 1))
+
+  local dom = (activeTab == "bc") and "b" or (activeTab == "uf8") and "u" or "c"
+  local cs, bc, uf8 = readShort()
+  local curShort = (dom == "b" and bc) or (dom == "u" and uf8) or cs
+
+  -- Name field (Kurzname) — all tabs.
+  local nlbl = "Name:"
+  local nlw, nlh = measure(nlbl, fpx)
+  dtext(10, y + (rowH - nlh) / 2, col(0x8890A0, 0.9), nlbl, fpx)
+  local nbx  = 10 + nlw + 8
+  local nbW  = floor(120 * fontScale() + 0.5)
+  field(nbx, y, nbW, rowH, 0x202024)
+  local ntxt = (curShort ~= "" and curShort) or "click to set\xE2\x80\xA6"
+  local ncol = (curShort ~= "") and 0xD0D6E0 or 0x60656E
+  local nd   = fit(ntxt, nbW - 12, fpx)
+  local _, ndh = measure(nd, fpx)
+  dtext(nbx + 6, y + (rowH - ndh) / 2, col(ncol, 1), nd, fpx)
+  nameRect = { x = nbx, y = y, w = nbW, h = rowH, dom = dom }
+
+  -- CS-Favourite dropdown — CS tab ONLY (a Channel-Strip concept; meaningless
+  -- on the BC tab — Frank 2026-06-24).
+  if activeTab == "cs" then
+    local cur, hasCs, slots = readCsFav()
+    local flbl = "CS Fav:"
+    local flw  = measure(flbl, fpx)
+    local fbx  = nbx + nbW + 22
+    dtext(fbx, y + (rowH - nlh) / 2, col(0x8890A0, 0.9), flbl, fpx)
+    local bx   = fbx + flw + 8
+    local boxW = floor(160 * fontScale() + 0.5)
+    local cval
+    if not hasCs then
+      cval = "(no CS)"
+    elseif cur >= 0 then
+      local s = slots[cur] or { label = "" }
+      cval = string.format("%d \xE2\x80\x94 %s", cur + 1,
+                           s.label ~= "" and s.label or "?")
+    else
+      cval = "None"
+    end
+    field(bx, y, boxW, rowH, hasCs and 0x2A2A30 or 0x202024)
+    local disp  = fit(cval, boxW - 24, fpx)
+    local _, dh = measure(disp, fpx)
+    dtext(bx + 8, y + (rowH - dh) / 2,
+          col(hasCs and 0xC6CCD6 or 0x6A6F78, 1), disp, fpx)
+    dtext(bx + boxW - 15, y + (rowH - dh) / 2,
+          col(hasCs and CS_FAV_ACCENT or 0x6A6F78, 0.95), "\xE2\x96\xBE", fpx)
+    if hasCs then csFavRect = { x = bx, y = y, w = boxW, h = rowH } end
+  end
+end
+
 local function render()
   TAB_H = 38   -- fixed chrome height (text-size option only affects list/param body)
 
@@ -1662,8 +1764,12 @@ local function render()
   end
 
   frame = frame + 1
+  -- "idx" (legacy) or "idx;layer" — the layer is the modifier overlay the bind
+  -- will land on (latched at arm time). Feeds the "Learning Ctrl+HPF" banner.
   local hl = reaper.GetExtState(SECT, "hud_learn")
-  learnIdx = (hl ~= "" and tonumber(hl)) or -1
+  local hlIdx, hlLayer = hl:match("^(%-?%d+);(%d+)$")
+  learnIdx     = tonumber(hlIdx) or tonumber(hl) or -1
+  learnLayer   = tonumber(hlLayer) or 0
   local ul = reaper.GetExtState(SECT, "hud_uf8_learn")
   uf8Learn = (ul ~= "" and tonumber(ul)) or -1
   local hint = reaper.GetExtState(SECT, "hud_hint")
@@ -1694,6 +1800,12 @@ local function render()
   end
 
   drawTabs(st, ust)
+
+  -- Edit row above the body (all tabs): Name field + CS-Favourite dropdown
+  -- (CS only). Sets FAV_H (body shifts down) + nameRect/csFavRect.
+  csFavRect = nil
+  nameRect  = nil
+  drawHudEditRow()
 
   -- Tell the extension when the UF8 tab is showing so it auto-engages UF8
   -- Plugin Mode (hardware Top-Soft-Keys drive V-Pot banks). Edge-write only.
@@ -1741,7 +1853,7 @@ local function render()
   local nCtrl = 0; for _ in pairs(geom.ctrl) do nCtrl = nCtrl + 1 end
 
   if not geom or nCtrl == 0 then
-    dtext(10, TAB_H + 12, col(0x808890, 0.9),
+    dtext(10, bodyTop() + 12, col(0x808890, 0.9),
       "Waiting for surface geometry\xE2\x80\xA6", floor(15 * fontScale() + 0.5))
     return
   end
@@ -1765,7 +1877,7 @@ local function render()
     local px = floor(14 * fontScale() + 0.5)
     local tw, th = measure(msg, px)
     local bw, bh = tw + 20, th + 8
-    local bx, by = (WW - RW - bw) / 2, TAB_H + 4
+    local bx, by = (WW - RW - bw) / 2, bodyTop() + 4
     rect(bx, by, bw, bh, col(bgRgb, bgA))
     dtext(bx + 10, by + 4, col(fgRgb, 1), msg, px)
   end
@@ -1780,7 +1892,11 @@ local function render()
   elseif learnIdx >= 0 then
     local c   = geom.ctrl[learnIdx]
     local lbl = (c and c.label ~= "" and c.label) or ("#" .. learnIdx)
-    banner("Learning " .. lbl ..
+    -- Prefix the held modifier overlay so the bind target is unambiguous, e.g.
+    -- "Learning Ctrl+HPF". learnLayer is latched at arm time (see hud_learn).
+    local mod = (learnLayer == 1 and "Opt+") or (learnLayer == 2 and "Ctrl+")
+             or (learnLayer == 3 and "Ctrl+Opt+") or ""
+    banner("Learning " .. mod .. lbl ..
            "  \xE2\x80\x94  wiggle a plug-in parameter to bind it"
            .. "   (click again or Esc to cancel)",
            0x101418, 0.88, 0xFFD060)
@@ -1806,6 +1922,7 @@ local POPUP          = "##hud_ctx"
 local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
+local CS_FAV_POPUP   = "##hud_cs_fav_ctx"
 local CURVE_POPUP    = "Curve editor###hud_curve_editor"
 
 -- Full-parity control-menu working state (Frank 2026-06-20). `cedit` holds the
@@ -1836,6 +1953,35 @@ local FONT_PRESETS = {
   { l = "L",      v = 1.2  },
   { l = "XL",     v = 1.45 },
 }
+
+-- Standalone CS-Favourite slot picker, opened by clicking the CS-Favourite
+-- dropdown row. Same data + command as the right-click "CS Favourite" submenu
+-- (readCsFav / csfav;<slot>) — just surfaced as an always-visible dropdown so
+-- the active slot is ersichtlich. Frank 2026-06-24.
+local function drawCsFavPopup()
+  -- Drop the popup just under the dropdown field (else it anchors at the window
+  -- origin and covers the mockup — Frank 2026-06-24).
+  if csFavRect then
+    reaper.ImGui_SetNextWindowPos(ctx, OX + csFavRect.x,
+                                  OY + csFavRect.y + csFavRect.h + 2)
+  end
+  if not reaper.ImGui_BeginPopup(ctx, CS_FAV_POPUP) then return end
+  local cur, _, slots = readCsFav()
+  if reaper.ImGui_MenuItem(ctx, "None", nil, cur < 0) then
+    sendCmd("csfav;-1")
+  end
+  reaper.ImGui_Separator(ctx)
+  for i = 0, 7 do
+    local s = slots[i] or { used = false, label = "" }
+    local lbl = s.used
+      and string.format("%d  \xE2\x80\x94  %s", i + 1, s.label)
+      or  string.format("%d  \xE2\x80\x94  (empty)", i + 1)
+    if reaper.ImGui_MenuItem(ctx, lbl .. "##csfavpop" .. i, nil, cur == i) then
+      sendCmd("csfav;" .. i)
+    end
+  end
+  reaper.ImGui_EndPopup(ctx)
+end
 
 local function drawContextMenu()
   -- Roomier popup — WindowPadding read at BeginPopup, so push first; pop always.
@@ -2864,13 +3010,19 @@ local function loop()
           end
         end
       elseif reaper.ImGui_IsMouseClicked(ctx, 0) then
-        if activeTab == "uf8" then
+        if csFavRect and hitRect(csFavRect, lx, ly) then
+          -- CS-Favourite dropdown box → open the slot picker popup.
+          reaper.ImGui_OpenPopup(ctx, CS_FAV_POPUP)
+        elseif nameRect and hitRect(nameRect, lx, ly) then
+          -- LCD / UF8 header plug-in name → edit the Kurzname inline.
+          editPluginShort(nameRect.dom)
+        elseif activeTab == "uf8" then
           -- Tab → toggles (Touch-to-Learn / Parameter List) → param row → bank
           -- row → grid cell. A click that misses everything cancels any armed
           -- learn (an easy mouse "escape").
           if handleTabClick(lx, ly) then
           elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
-          elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
+          elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
             handleParamClick(lx, ly)
           else
             local b = uf8BankAt(lx, ly)
@@ -2881,7 +3033,7 @@ local function loop()
           end
         -- Top toggle buttons first, then param-panel row, then tab, then control.
         elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
-        elseif paramPanelOpen and lx >= WW - RW and ly >= TAB_H then
+        elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
           handleParamClick(lx, ly)
         elseif not handleTabClick(lx, ly) then
           handleControlClick(lx, ly)
@@ -2935,6 +3087,7 @@ local function loop()
     refreshPushBtns()
     render()
     drawContextMenu()
+    drawCsFavPopup()
     drawControlContextMenu()
     drawCurveEditor()
     drawUf8ControlContextMenu()

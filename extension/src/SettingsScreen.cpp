@@ -16991,6 +16991,33 @@ bool reasixty_hudBindParam(int idx, int vst3Param, int layer,
 }
 bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLayer); }
 int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
+int  reasixty_hudLearnLayer()               { return uf8::g_hudLearnLayer; }
+
+// Set the "Kurzname" (displayShort, 7-char zone label) of the USER map that
+// owns `fxName`, driven from the on-screen Learn-HUD. Mirrors the Settings
+// FX-Learn short field exactly (catalog-copy → upsert → persist). No-op when
+// the FX has no user map (built-in SSL maps aren't user-editable). Frank
+// 2026-06-24. Returns true when a map was found (even if the value was a
+// no-op) so the caller can re-publish.
+bool reasixty_hudSetShort(const char* fxName, const char* text)
+{
+    if (!fxName || !*fxName) return false;
+    const uf8::UserPluginMap* om = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (!om) return false;
+    const std::string match = om->match;
+    std::string s = text ? text : "";
+    if (s.size() > 7) s.resize(7);
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        if (m.displayShort == s) return true;   // no-op
+        m.displayShort = s;
+        uf8::user_plugins::upsert(m);
+        uf8::persistAndReport_();
+        return true;
+    }
+    return false;
+}
 void reasixty_hudCancelLearn()              { uf8::hudCancelLearn_(); }
 bool reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx)
 {

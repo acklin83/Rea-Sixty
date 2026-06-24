@@ -37,6 +37,12 @@ namespace {
 // Native SSL Channel Strip 2 (VST3: "SSL Native Channel Strip 2 (SSL)")
 constexpr LinkSlot kCs2Slots[] = {
     {  0, "Bypass",             "Bypass",           "BYP",    0,  false },
+    // FaderLevel (the strip's internal fader, = UC1 Out Gain knob + UF8 motor
+    // fader in SSL Strip Mode). Built-in variants expose it at a hardcoded vst3
+    // index (NOT via the SSL 360 Link slot) — present here so the value READOUT
+    // resolves on both surfaces (findSlotByLinkIdx / slotIdxForVst3Param).
+    // Frank 2026-06-24.
+    {  1, "FaderLevel",         "Fader Level",      "FDR",   38,  false },
     {  4, "InputTrim",          "Input Trim",       "IN",     2,  false },
     {  7, "HighPassFreq",       "HPF",              "HPF",    5,  false, 0.0 },
     {  6, "LowPassFreq",        "LPF",              "LPF",    4,  false, 1.0 },
@@ -99,6 +105,7 @@ constexpr LinkSlot kCs2Slots[] = {
 // place of EQ Type. VST3 param indices from docs/ssl-native-params.
 constexpr LinkSlot k4kESlots[] = {
     {  0, "Bypass",             "Bypass",           "BYP",    0,  false },
+    {  1, "FaderLevel",         "Fader Level",      "FDR",    6,  false },  // see CS 2 note
     {  4, "InputTrim",          "Input Trim",       "IN",     2,  false },
     {  7, "HighPassFreq",       "HPF",              "HPF",   14,  false, 0.0 },
     {  6, "LowPassFreq",        "LPF",              "LPF",   15,  false, 1.0 },
@@ -156,6 +163,7 @@ constexpr LinkSlot k4kESlots[] = {
 // Comp-Peak (simpler 4000-series B-feature set).
 constexpr LinkSlot k4kBSlots[] = {
     {  0, "Bypass",             "Bypass",           "BYP",    0,  false },
+    {  1, "FaderLevel",         "Fader Level",      "FDR",    6,  false },  // see CS 2 note
     {  4, "InputTrim",          "Input Trim",       "IN",     2,  false },
     {  7, "HighPassFreq",       "HPF",              "HPF",   10,  false, 0.0 },
     {  6, "LowPassFreq",        "LPF",              "LPF",   11,  false, 1.0 },
@@ -208,6 +216,7 @@ constexpr LinkSlot k4kBSlots[] = {
 // 4K G — full-featured G-series strip.
 constexpr LinkSlot k4kGSlots[] = {
     {  0, "Bypass",             "Bypass",           "BYP",    0,  false },
+    {  1, "FaderLevel",         "Fader Level",      "FDR",   12,  false },  // see CS 2 note
     {  4, "InputTrim",          "Input Trim",       "IN",     6,  false },
     {  7, "HighPassFreq",       "HPF",              "HPF",   20,  false, 0.0 },
     {  6, "LowPassFreq",        "LPF",              "LPF",   21,  false, 1.0 },

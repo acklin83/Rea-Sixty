@@ -106,6 +106,8 @@ bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
                                   void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudLearnTick(int activeLayer);
 int         reasixty_hudLearnArmed();
+int         reasixty_hudLearnLayer();
+bool        reasixty_hudSetShort(const char* fxName, const char* text);
 void        reasixty_hudCancelLearn();
 bool        reasixty_hudUnbind(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudInvert(int idx, int layer, void* csTr, int csFx, void* bcTr, int bcFx);
@@ -982,6 +984,16 @@ std::string composeValueLine(std::string_view label, std::string_view value);
 constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
 extern std::array<std::string, 8> g_panOverlayText;
+
+// V-Pot pan "fake touch": the V-Pot has no touch sensor, so to make REAPER's
+// Touch automation record we hold the touch armed for a short window after each
+// detent and re-assert it every tick (keeps CSurf_OnPanChange continuous so it
+// doesn't read the gaps as touch-releases → the snap-to-centre sawtooth). When
+// the window lapses (user stopped turning) the writes stop and Touch releases.
+extern std::array<int64_t, 8>      g_panTouchUntilMs;
+extern std::array<double, 8>       g_panTouchVal;
+extern std::array<MediaTrack*, 8>  g_panTouchTr;
+constexpr int64_t kPanTouchHoldMs = 250;
 
 // Folder Mode value-line override: parent tracks normally show "Folder"
 // in the V-Pot value line; turning the V-Pot reveals the actual value
@@ -6309,6 +6321,20 @@ std::string fxFactoryShort_(MediaTrack* tr, int fxIdx)
     return std::string{};
 }
 
+// The USER map's displayShort ("Kurzname") for (tr,fx), or "" when the FX has
+// no user map (built-in SSL maps aren't user-editable). Seeds the on-screen
+// HUD Kurzname editor so the dialog opens with the current value. Frank
+// 2026-06-24.
+std::string userMapShort_(MediaTrack* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return std::string{};
+    char buf[256] = {0};
+    if (!uf8::fxIdentityName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(buf))
+        return um->displayShort;
+    return std::string{};
+}
+
 // Ensure the FX at `fx` carries the active marker for its domain.
 void markInsertActive_(MediaTrack* tr, int fx, const char* marker)
 {
@@ -6671,6 +6697,7 @@ std::string g_hudUf8PushPublished;    // last-published "hud_uf8_push" (V-Pot st
 std::string g_hudPushPublished;    // last-published "hud_push" (button push-cycle)
 std::string g_hudPushBtnsPublished;// last-published "hud_pushbtns" (push-cycle idx set)
 std::string g_hudCsFavPublished;   // last-published "hud_cs_fav" (CS-Switch favourites)
+std::string g_hudShortPublished;   // last-published "hud_short" (CS/BC/UF8 Kurzname seeds)
 bool        g_hudGeomPublished = false;
 // UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
 // drive V-Pot banks while the user maps from the HUD). Edge-triggered on tab
@@ -6947,7 +6974,17 @@ void publishHud_()
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
             const bool used = reasixty_csFav(i, a, l);
-            fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + l + '\n';
+            // Show the plug-in SHORT name, not the raw identity stored as the
+            // favourite's label (mirrors the Settings FX-Learn combo). Frank
+            // 2026-06-24 — the long "VST3: bx_console SSL 4000 G (…)" strings
+            // blew the dropdown full-width.
+            std::string disp = l;
+            if (used) {
+                if (const auto* pb = uc1::lookupBindingsByName(a);
+                    pb && pb->shortName && *pb->shortName)
+                    disp = pb->shortName;
+            }
+            fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + disp + '\n';
         }
         if (fav != g_hudCsFavPublished) {
             g_hudCsFavPublished = fav;
@@ -6966,6 +7003,20 @@ void publishHud_()
         MediaTrack* uf8Tr = nullptr; int uf8Fx = -1; const void* uf8Map = nullptr;
         bool uf8Focus = false;
         resolveFocusedUf8Target_(uf8Tr, uf8Fx, uf8Map, &uf8Focus);
+
+        // Kurzname seeds for the HUD's inline editor: the USER map's displayShort
+        // per domain ("<cs>;<bc>;<uf8>"), empty when that domain has no user map
+        // (built-in maps aren't editable). The HUD opens GetUserInputs seeded with
+        // the matching field. Frank 2026-06-24.
+        {
+            const std::string sShort = userMapShort_(csTr, csFx) + ';'
+                                     + userMapShort_(bcTr, bcFx) + ';'
+                                     + userMapShort_(uf8Tr, uf8Fx);
+            if (sShort != g_hudShortPublished) {
+                g_hudShortPublished = sShort;
+                SetExtState("rea_sixty", "hud_short", sShort.c_str(), false);
+            }
+        }
         const int faderBank = std::clamp(g_uf8FaderBank.load(),
                                          0, uf8::kUserUf8FaderBankCount - 1);
         const int vpotBank  = std::clamp(g_softKeyBank.load(),
@@ -7759,6 +7810,42 @@ void queueInput(PendingInput e)
 // Frank's side.
 // (diagSetParamLog_ defined below, outside this anonymous namespace.)
 
+// Write REAPER track pan from a relative V-Pot detent, recording in Touch like
+// the motor fader does for volume. The fader records because it (a) writes via
+// CSurf_On*Change AND (b) reports a touch through GetTouchState — without (b)
+// REAPER never engages Touch recording (this is what every earlier pan attempt
+// missed: GetTouchState hard-returned false for isPan, so CSurf_OnPanChange was
+// seen as an untouched, momentary move → the snap-to-centre sawtooth). The V-Pot
+// has no touch sensor, so we fake the touch with a short timed window armed on
+// every detent (kPanTouchHoldMs); GetTouchState(isPan) consults that window, so
+// REAPER sees a sustained touch and records the gaps between detents as a held
+// line instead of releases. Because the encoder is RELATIVE we keep our own
+// absolute accumulator (g_panTouchVal) and write it with the absolute CSurf form,
+// re-seeding from the effective pan only when a fresh gesture starts — so we
+// never read back a value that doesn't yet reflect our own write (the bug that
+// pinned every CSurf attempt at centre). No per-tick re-assert (attempt 8's
+// sawtooth); the only CSurf write is the real detent. Frank 2026-06-24.
+static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
+{
+    if (strip < 0 || strip >= 8) return;
+    const int64_t now = nowMs_();
+    // Fresh gesture (touch window lapsed) or track changed → re-seed the
+    // accumulator from the EFFECTIVE pan (GetTrackUIVolPan reflects an active
+    // envelope), so we grab the pan where it currently plays and move relative.
+    if (now > g_panTouchUntilMs[strip] || g_panTouchTr[strip] != tr) {
+        double vol = 1.0, pan = 0.0;
+        GetTrackUIVolPan(tr, &vol, &pan);
+        g_panTouchVal[strip] = pan;
+    }
+    double next = g_panTouchVal[strip] + panDelta;
+    if (next < -1.0) next = -1.0;
+    if (next >  1.0) next =  1.0;
+    g_panTouchVal[strip]     = next;
+    g_panTouchTr[strip]      = tr;
+    g_panTouchUntilMs[strip] = now + kPanTouchHoldMs;  // arm/extend fake touch
+    CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
+}
+
 void drainInputQueue()
 {
     std::vector<PendingInput> local;
@@ -8491,6 +8578,13 @@ void drainInputQueue()
                                 TrackFX_SetParamNormalized(m, mcs.fxIndex,
                                     mcs.vst3Param, n);
                         }
+                        // Focus the CS FaderLevel slot (linkIdx 1) so the value
+                        // READOUT follows the motor fader on both surfaces —
+                        // the fader write otherwise never set focus, so the
+                        // Output Gain dB never showed. Slot now resolvable via
+                        // findSlotByLinkIdx after the PluginMap addition. Frank
+                        // 2026-06-24.
+                        uf8::setFocus({uf8::Domain::ChannelStrip, 1});
                         break;
                     }
                 }
@@ -9057,23 +9151,13 @@ void drainInputQueue()
                         break;
                     }
                     // Fall through to REAPER pan if no CS plug-in.
-                    const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
                     const double panDelta = e.value
                         * reasixty_uf8KnobScale(vpotFineActive_());
-                    const double next = uf8::applyVirtualNotch(
-                        cur, panDelta, /*center*/0.0,
-                        /*zone*/g_notchZone.load() * 2.0,
-                        -1.0, 1.0);
-                    SetMediaTrackInfo_Value(tr, "D_PAN", next);
+                    writeVpotTrackPan_(tr, e.strip, panDelta);
                 } else {
-                    const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
                     const double panDelta = e.value
                         * reasixty_uf8KnobScale(vpotFineActive_());
-                    const double next = uf8::applyVirtualNotch(
-                        cur, panDelta, /*center*/0.0,
-                        /*zone*/g_notchZone.load() * 2.0,
-                        -1.0, 1.0);
-                    SetMediaTrackInfo_Value(tr, "D_PAN", next);
+                    writeVpotTrackPan_(tr, e.strip, panDelta);
                 }
                 break;
             }
@@ -9396,6 +9480,22 @@ void drainInputQueue()
                 const int cur  = GetTrackAutomationMode(tr);
                 const int next = (cur + 1) % 6;
                 SetTrackAutomationMode(tr, next);
+                // Flash the new mode on the strip's value line — the value line
+                // no longer shows it permanently (the V-Pot drives the param),
+                // so give brief feedback on the change. Frank 2026-06-24.
+                if (e.strip < 8) {
+                    const char* nm = "Trim";
+                    switch (next) {
+                        case 1: nm = "Read";  break;
+                        case 2: nm = "Touch"; break;
+                        case 3: nm = "Write"; break;
+                        case 4: nm = "Latch"; break;
+                        case 5: nm = "LtPrv"; break;
+                        default: nm = "Trim";  break;
+                    }
+                    g_panOverlayUntilMs[e.strip] = nowMs_() + kPanOverlayMs;
+                    g_panOverlayText[e.strip]    = composeValueLine("Auto", nm);
+                }
                 break;
             }
             case PendingInput::AutoModeSet: {
@@ -9941,7 +10041,17 @@ constexpr auto kTouchDebounceQuiet = std::chrono::milliseconds(150);
 
 bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
 {
-    if (isPan != 0) return false;   // fader touch only
+    if (isPan != 0) {
+        // V-Pot pan fake-touch: writeVpotTrackPan_ arms a timed window per strip
+        // on each detent. While the window is live REAPER sees a sustained touch
+        // and records pan automation in Touch (mirrors the fader's volume touch).
+        const int64_t now = nowMs_();
+        for (int s = 0; s < 8; ++s) {
+            if (g_panTouchTr[s] != tr) continue;
+            if (now <= g_panTouchUntilMs[s]) return true;
+        }
+        return false;
+    }
     for (int s = 0; s < 8; ++s) {
         if (!g_touchReported[s].load()) continue;
         if (g_slotTrack[s] == tr) return true;
@@ -11136,10 +11246,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             const bool vpotsCycle =
                                 (g_cycleControlMask.load() & kCycleCtrlVpots) != 0;
                             switch (selMode) {
-                                case SelectionMode::Auto:
-                                    queueInput({PendingInput::AutoModeSet,
-                                                strip, 0.0});
-                                    break;
+                                // AUTO V-Pot push reverts to the default
+                                // pan-center reset — auto-mode is changed via
+                                // the SEL push instead. Frank 2026-06-24.
                                 case SelectionMode::Instance:
                                 case SelectionMode::InstanceCycle:
                                     // Push semantics are identical for both
@@ -11467,11 +11576,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     const bool vpotsCycle =
                         (g_cycleControlMask.load() & kCycleCtrlVpots) != 0;
                     switch (selMode) {
-                        case SelectionMode::Auto:
-                            queueInput({PendingInput::AutoModeDelta,
-                                        strip,
-                                        static_cast<double>(signed6)});
-                            break;
+                        // AUTO no longer hijacks V-Pot rotation for the
+                        // automation mode — it falls through to the default
+                        // pan/param wiring (PAN toggle → pan, else focused
+                        // param), respecting "V-Pots → Pan". Auto-mode is
+                        // cycled via the SEL push only (AutoModeStep). Frank
+                        // 2026-06-24.
                         case SelectionMode::Instance:
                             if (vpotsCycle) {
                                 queueInput({PendingInput::StripInstanceDelta,
@@ -11908,6 +12018,11 @@ std::array<uint8_t, 8>     g_lastVPotMode{};     // FF 66 09 0D mode byte per st
 // (also main thread) — plain types are sufficient.
 std::array<int64_t, 8>     g_panOverlayUntilMs{};
 std::array<std::string, 8> g_panOverlayText{};
+
+// V-Pot pan fake-touch hold state (see forward decls).
+std::array<int64_t, 8>      g_panTouchUntilMs{};
+std::array<double, 8>       g_panTouchVal{};
+std::array<MediaTrack*, 8>  g_panTouchTr{};
 
 // Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
 // drainInputQueue so a parent strip briefly shows the real value before
@@ -13845,7 +13960,8 @@ void pushZonesForVisibleSlots()
                 }
             }
         } else if (g_forcePan.load()) {
-            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+            double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
+            GetTrackUIVolPan(tr, &vDisp, &pan);
             vpotBar[s] = vpotPosFromPan(pan);
         } else if (slot && fxIdx >= 0 && !isVPotPanFocus(focused)) {
             const double norm = TrackFX_GetParamNormalized(tr, fxIdx, slot->vst3Param);
@@ -13873,11 +13989,13 @@ void pushZonesForVisibleSlots()
                     tr, pn.fxIndex, pn.vst3Param);
                 vpotBar[s] = vpotPosFromBipolar(norm * 2.0 - 1.0);
             } else {
-                const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+                double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
+                GetTrackUIVolPan(tr, &vDisp, &pan);
                 vpotBar[s] = vpotPosFromPan(pan);
             }
         } else {
-            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+            double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
+            GetTrackUIVolPan(tr, &vDisp, &pan);
             vpotBar[s] = vpotPosFromPan(pan);
         }
 
@@ -14189,20 +14307,12 @@ void pushZonesForVisibleSlots()
         // since the cycle targets the focused track). Both win over
         // the legacy resolution chain.
         bool selectionModeHandled = false;
-        if (g_selectionMode.load() == SelectionMode::Auto) {
-            const char* modeName = "Trim";
-            switch (GetTrackAutomationMode(tr)) {
-                case 0: modeName = "Trim";  break;
-                case 1: modeName = "Read";  break;
-                case 2: modeName = "Touch"; break;
-                case 3: modeName = "Write"; break;
-                case 4: modeName = "Latch"; break;
-                case 5: modeName = "LtPrv"; break;
-                default: break;
-            }
-            valLine = composeValueLine("Auto", modeName);
-            selectionModeHandled = true;
-        }
+        // AUTO mode no longer permanently overrides the value line with the
+        // automation-mode name — the V-Pot drives the normal param/pan, so the
+        // value line shows THAT (Frank 2026-06-24: "param wird nicht
+        // angezeigt"). The per-strip automation mode stays visible via the SEL
+        // LED colour, and a SEL push flashes the new mode transiently (see
+        // AutoModeStep → g_panOverlayText).
         // REC + RME override: V-Pot value zone shows TotalMix preamp
         // state — 48V / Pad / Phase flags on the left, gain dB on the
         // right. Values come from TotalReaper's P_EXT cache, which it
@@ -16869,6 +16979,37 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("setshort;", 0) == 0) {
+                // "setshort;<dom>;<text>" — set the active plug-in's Kurzname
+                // (displayShort) for domain c=CS / b=BC / u=UF8, from the HUD's
+                // inline editor. Resolves the live FX identity (rename-safe) and
+                // writes the USER map's short label; no-op for built-in/unmapped
+                // FX. Frank 2026-06-24.
+                const auto d1 = s.find(';');
+                const auto d2 = s.find(';', d1 + 1);
+                if (d1 != std::string::npos && d2 != std::string::npos) {
+                    const char dom = s[d1 + 1];
+                    const std::string text = s.substr(d2 + 1);
+                    MediaTrack* tr = nullptr; int fx = -1;
+                    if (dom == 'u') {
+                        const void* m = nullptr;
+                        resolveFocusedUf8Target_(tr, fx, m, nullptr);
+                    } else {
+                        MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                        int csFx = -1, bcFx = -1;
+                        activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                        if (dom == 'b') { tr = bcTr; fx = bcFx; }
+                        else            { tr = csTr; fx = csFx; }
+                    }
+                    char ident[256];
+                    if (tr && fx >= 0
+                        && ValidatePtr2(nullptr, tr, "MediaTrack*")
+                        && uf8::fxIdentityName(tr, fx, ident, sizeof(ident))
+                        && reasixty_hudSetShort(ident, text.c_str())) {
+                        g_hudShortPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("bind;", 0) == 0) {
                 // "bind;<idx>;<param>" — direct assign from the param list
                 // (no wiggle). Resolves the domain target from the control idx
@@ -17473,7 +17614,13 @@ void onTimer()
         }
         // Publish the armed control idx so the companion can highlight it.
         const int armed = reasixty_hudLearnArmed();
-        std::string pub = (armed >= 0) ? std::to_string(armed) : std::string();
+        // Encode the latched bind-layer with the armed idx ("idx;layer") so the
+        // HUD banner can show "Learning Ctrl+HPF". The layer is captured at ARM
+        // time (g_hudLearnLayer), NOT the live one — see hudLearn arm latch. Old
+        // single-int form still parses (tonumber stops at ';' via the script).
+        std::string pub;
+        if (armed >= 0)
+            pub = std::to_string(armed) + ";" + std::to_string(reasixty_hudLearnLayer());
         if (pub != g_hudLearnPublished) {
             g_hudLearnPublished = pub;
             SetExtState("rea_sixty", "hud_learn", pub.c_str(), false);
