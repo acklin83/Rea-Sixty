@@ -19,7 +19,7 @@ The thing we replace. SSL caught up in 2025. Where it still wins:
 | Their feature | Our status |
 |---|---|
 | **On-screen Plug-in Mixer** — every CS/BC instance in one window, fully interactive | **Phase 2.6 PENDING.** Our docked window hosts Settings tabs only. This is *the* gap that still makes a user glance at SSL 360°. |
-| **Collapse & Pin** — tidy multiple 360°-enabled strips on a single DAW track | Not implemented. Instance-Cycle walks instances; there is no pin / collapse. |
+| **Collapse & Pin** — tidy multiple 360°-enabled strips on a single DAW track | Largely **not a real gap for us** — see note below. It is view-management SSL needs because their Plugin Mixer auto-aggregates every 360°-enabled instance; our generic-FX model doesn't create that clutter, and Instance-Cycle already covers the "which instance does the surface focus" need. |
 | **Hybrid Mode** — DAW control layer *and* Plugin-Mixer layer at once: automation soft-keys + favourite DAW shortcuts straight from the Plugin-Mixer | We have separate modes, no hybrid overlay. |
 | **UF1 support**, 13 DAW workflow templates, **Multi-DAW (3 at once)** | UF1 unsupported; Multi-DAW is a deliberate non-goal (architecture-decision.md). |
 | **In-app firmware update** | Deliberately left to SSL 360° (Phase 4). |
@@ -39,6 +39,8 @@ Open source, mature, years of polish. Beats our bindings clearly at:
 - **CSI**: extremely deep, fully text-based configuration; **huge community template library**; strong accessibility community.
 - Shared lead over us: **ecosystem & config sharing.** Hundreds of ready-made configs to trade. Our config Import/Export is still **Phase 2.7e PENDING**.
 
+> **Note on SSL's Collapse & Pin.** This is not a feature we lack so much as a symptom we don't have. SSL's Plugin Mixer **auto-collects every 360°-enabled SSL instance** on a track, so stacking multiple Channel Strip / 360° Link instances clutters the view — Collapse hides the duplicates, Pin chooses which one survives a track change. We handle third-party *and* SSL plugins through generic FX-Learn (name-substring), with no wrapper and no auto-aggregation, so the clutter never arises. The only legitimate kernel — "which instance does the surface focus on a multi-instance track" — is already solved by the **Encoder Instance-Cycle** (walks surface-mapped CS/BC/UF8 plugins incl. combos and 360° Link), with CS-Switch for swapping. So this is at most a **view-design decision inside Phase 2.6** (how the on-screen mixer renders multi-instance tracks), not a standalone feature to build.
+
 ---
 
 ## Battle plan
@@ -55,7 +57,8 @@ Guiding principle: do **not** try to out-map ReaLearn or build multi-DAW — tho
 ### Wave 2 — Ergonomic parity with V2.0
 
 3. **Hybrid layer overlay** — DAW functions (automation soft-keys, favourite shortcuts) reachable without leaving the plugin context. Counterpart to SSL Hybrid Mode; fits the existing EncoderMode/overlay pattern (same family as Nav Mode).
-4. **Collapse & Pin** for multi-CS/BC tracks — likely a small extension of Instance-Cycle (a pin flag per instance).
+
+*(SSL's "Collapse & Pin" is deliberately absent here — it is a workaround for SSL's auto-aggregating Plugin Mixer, a problem our generic-FX model doesn't have. The only kernel worth carrying is a view-design choice folded into Phase 2.6; see the note above.)*
 
 ### Wave 3 — Leapfrog (something nobody in the SSL camp has)
 
@@ -81,7 +84,7 @@ Wave 1 immediately. Item 1 (Plugin Mixer) is the single remaining reason to open
 | 1. Plugin Mixer window | 2.6b–d (PENDING) | Promote to next build. |
 | 2. Config Import/Export + Reset | 2.7e (partially shipped) | Finish the two pending bullets. |
 | 3. Hybrid layer overlay | *new* | Add as a surface-mode peer (Nav/Lanes/Group family). |
-| 4. Collapse & Pin | *new* | Extend Instance-Cycle with a pin flag. |
+| ~~Collapse & Pin~~ | folded into 2.6 | Not a standalone feature — a multi-instance view-design choice inside the Plugin Mixer. Instance-Cycle already covers the focus need. |
 | 5. Second-screen / Projection | *new* | New phase after 2.6; reuses the ReaImGui host. |
 | UF1 support | Phase 4 candidate | Defer; large decode effort. |
 
