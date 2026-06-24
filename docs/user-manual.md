@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.1.33
+date: v0.2
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.1.33. Earlier manuals (anything dated before 2026-06-22) are superseded.
+This manual documents Rea-Sixty v0.2. Earlier manuals (anything dated before 2026-06-24) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.1.33.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.1.33.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.1.33.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
 
 ## Enabling the surface
 
@@ -94,7 +94,7 @@ The track REAPER considers "selected first" — `GetSelectedTrack(nullptr, 0)`. 
 
 ## FX vs Instance
 
-- **FX** = any audio effect on a REAPER track (everything `TrackFX_GetCount` sees).
+- **FX** = any audio effect on a REAPER track.
 - **Instance** = the surface-mapped subset only:
   - SSL Channel Strip 2 + 4K B/E/G variants
   - SSL Bus Compressor 2
@@ -162,7 +162,7 @@ If a Selection Set is active and **Settings → Modes → AUTO → "Selection-Se
 
 ## FX Cycle (V-Pot Sel-Mode)
 
-Each strip's V-Pot rotation walks every FX on the strip's track. Push opens the active FX's floating window. The strip's colour bar shows the FX-cursor's current FX name. Internal name `SelectionMode::Instance` — kept for binding-file compatibility despite walking all FX.
+Each strip's V-Pot rotation walks every FX on the strip's track. Push opens the active FX's floating window. The strip's colour bar shows the FX-cursor's current FX name.
 
 ## Instance Cycle (V-Pot Sel-Mode)
 
@@ -184,7 +184,7 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | Markers | Step prev / next marker | Stops playback while seeking |
 | Bank by 1ch | Shift the surface 1 strip left/right | Sub-bank precision |
 | Last Touched Param | Step the last-touched REAPER param ± | Fine increments |
-| Instance (Instance Cycle) | Walk Instances on the focused track | Same dispatch as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
+| Instance (Instance Cycle) | Walk Instances on the focused track | Same behaviour as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
 | FX Cycle | Walk every FX on the focused track | Focused-track scope |
 | Cycle Instance (across tracks) | Walk Instances on the focused track, then cross to the next track | One detent per track boundary; lands on the neighbour's first (fwd) / last (back) Instance. Empty neighbour is still selected (dead detent). Hard-stops at the project edge, no within-track wrap. |
 | Cycle FX (across tracks) | Walk every FX on the focused track, then cross to the next track | Same cross-track behaviour as above, for all FX. SSL 360°-native feel. |
@@ -192,13 +192,13 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 
 `Shift` + rotation re-banks ±1 strip in every mode (alias for Bank by 1ch).
 
-The encoder also drives **SEL-Mode cycle** when **Settings → Modes → FX / Cycle → "UF8 Channel Encoder"** is ticked AND a cycle-kind Selection Mode is engaged. In that override the encoder dispatches via `reasixty_dispatchSelModeCycle` instead of its normal mode.
+The encoder also drives **SEL-Mode cycle** when **Settings → Modes → FX / Cycle → "UF8 Channel Encoder"** is ticked AND a cycle-kind Selection Mode is engaged. In that override the encoder steps the active Selection-Mode cycle instead of its normal mode.
 
 \newpage
 
 # Nav Mode (Markers + Regions)
 
-Nav Mode is a surface overlay — separate from the Selection Modes — that turns the UF8 strips into a live marker / region jump panel. It can be active alongside any Selection Mode; toggling it does not change `g_selectionMode`.
+Nav Mode is a surface overlay — separate from the Selection Modes — that turns the UF8 strips into a live marker / region jump panel. It can be active alongside any Selection Mode; toggling it does not change the active Selection Mode.
 
 ## Engaging Nav Mode
 
@@ -277,7 +277,7 @@ Per strip, from top to bottom:
 |---|---|---|
 | Top soft-key | SSL Soft-Key for this strip in the current PAGE bank | Default action **SSL Soft-Key (current bank, slot 0..7)**. Rebindable. |
 | Colour TFT (scribble strip) | Upper zone = track name / mode-dependent. Lower zone = parameter readout. Track-colour bar at the bottom. | Hijacked by Plug-in Modes for parameter / FX names. |
-| V-Pot rotation | Pan | Re-maps per Selection Mode (REC + RME → preamp gain; AUTO → automation indicator; FX Cycle / Instance Cycle → walk FX/Instances). |
+| V-Pot rotation | Pan | Re-maps per Selection Mode (REC + RME → preamp gain; AUTO → automation indicator; FX Cycle / Instance Cycle → walk FX/Instances). In Pan, turning records track-pan automation in Touch mode and holds on release. |
 | V-Pot push | Centre Pan | In FX Cycle / Instance Cycle Sel-Modes → open the active FX's GUI. |
 | `SOLO` | Solo | LED colour follows REAPER track colour when *Settings → Device → Display behaviour → "SEL LED follows REAPER track colour"* is on. |
 | `CUT` | Mute |  |
@@ -428,7 +428,7 @@ The large rotary on the central control panel. ButtonId `Uc1Encoder1` in the bin
 
 - **Rotation** — **Encoder: scroll tracks** by default (step REAPER track selection ±, with UC1 focused-track and CS-domain focus following along). Rebindable in Settings → Bindings → UC1 (ROTATE tile under ENCODER 1) — Shift = **Encoder: cycle plug-in instance** by default; Cmd / Ctrl free.
 - **Push** — push event arrives as button 0x0D; default binding empty.
-- When **Settings → Modes → FX / Cycle → "UC1 Encoder 1 (CHANNEL)"** is ticked AND a cycle-kind Selection Mode is engaged, rotation drives `reasixty_dispatchSelModeCycle` instead, regardless of the binding.
+- When **Settings → Modes → FX / Cycle → "UC1 Encoder 1 (CHANNEL)"** is ticked AND a cycle-kind Selection Mode is engaged, rotation steps the active Selection-Mode cycle instead, regardless of the binding.
 
 ## Secondary encoder (right of the central LCD)
 
@@ -487,7 +487,7 @@ Set independently so you can crank the displays while keeping the LED ring dim, 
 | Touch selects channel | Touching a UF8 fader exclusively selects that strip's track. |
 | SSL Strip Mode follows focused plug-in window | When REAPER's last-focused FX is a CS Instance, SSL Strip Mode auto-engages. |
 | Plug-in GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. |
-| Pin plug-in GUI position | Capture an XY coordinate (drag a window, click *Capture current*). Every subsequent managed `TrackFX_Show` snaps the window to that pin. Alternatively *Center on Screen*. |
+| Pin plug-in GUI position | Capture an XY coordinate (drag a window, click *Capture current*). Every plug-in window Rea-Sixty subsequently opens snaps to that pin. Alternatively *Center on Screen*. |
 | Pin FX-chain GUI position | Same pattern for FX-chain windows. Title matching looks for "FX:" on macOS. |
 
 ### Master track
@@ -526,7 +526,7 @@ Default is **26.5 dB/s** — REAPER's own meter decay, so the UC1 input meter fa
 
 | Toggle | Effect |
 |---|---|
-| Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip TrackFX slots whose `TrackFX_GetOffline` returns true. Offline-only tracks show a `-`. |
+| Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip FX slots that are set offline. Offline-only tracks show a `-`. |
 | Wrap Plug-in Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
 | Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a **Plug-in: toggle focused GUI** binding lands on a UF8-mapped plug-in, also engage UF8 Plug-in Mode with GUI. |
 
@@ -710,7 +710,7 @@ V-Pots cycle per-strip (each strip's own track). The three single encoders cycle
 
 | Setting | Effect |
 |---|---|
-| Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below dispatch TotalReaper actions against the strip's track. |
+| Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below trigger TotalReaper actions against the strip's track. |
 | V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain instead of pan. |
 | V-Pot rotation + Shift → Change input channel | Re-routes the strip's track input on rotation. |
 | V-Pot push (combo) | TotalReaper action assignment. Choices: `None`, `Toggle 48V phantom`, `Toggle pad`, `Toggle phase invert`, `Toggle AutoLevel`. |
@@ -794,7 +794,7 @@ The editor **live-follows the active FX** — open it and it loads the map + ins
 Top bar:
 
 - **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
-- **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode dispatch.
+- **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
 - **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS-Switch favourite slots, or clear it. See chapter *Channel-Strip Switch (CS-Switch)*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
@@ -838,7 +838,7 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 A user-mapped UC1 control can carry **three independent overlays** — *Normal*, *Option*, *Control* — so the same physical knob or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on a held keyboard modifier.
 
 - **Editing:** the editor's layer tab strip selects which layer you're editing; every per-control edit (bind, invert, Display label, knob travel, push-cycle) applies to the selected layer. Controls with no overlay on the active layer show a dim "ghost" ring — at runtime they inherit their Normal mapping.
-- **Enabling at runtime:** tick *Settings → Device → Keyboard Options → "Hold Option / Control for the FX-Learn layer"*. Then holding **Option/Alt** selects the Option layer and **Control** the Control layer; both-or-neither resolves to Normal. The held modifier drives dispatch, the UC1 LCD readout, and the Learn-HUD's layer badge live. *(Windows: **AltGr** — the right Alt on European layouts — engages the Option layer, even though Windows reports it as Ctrl+Alt.)*
+- **Enabling at runtime:** tick *Settings → Device → Keyboard Options → "Hold Option / Control for the FX-Learn layer"*. Then holding **Option/Alt** selects the Option layer and **Control** the Control layer; both-or-neither resolves to Normal. The held modifier takes effect live — on the bound control, the UC1 LCD readout, and the Learn-HUD's layer badge. *(Windows: **AltGr** — the right Alt on European layouts — engages the Option layer, even though Windows reports it as Ctrl+Alt.)*
 - **Fallback:** an overlay left unmapped passes through to the Normal mapping for that control, so you only override the controls you want different under a modifier.
 - **Scope:** UC1 only. The Display label (custom name) is **per layer** — each layer can show its own name on the UC1 readout / Learn-HUD.
 
@@ -875,7 +875,7 @@ The ten slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every 
 
 ### Stepped parameters
 
-When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/release time selectors, HPF slope pickers, oversampling toggles) — anything REAPER reports with a non-zero per-step size via `TrackFX_GetParameterStepSizes` — the editor automatically switches to a stepped-aware layout. Sensitivity, range, and push-reset still apply; curve does not.
+When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/release time selectors, HPF slope pickers, oversampling toggles) — anything REAPER reports as having discrete steps — the editor automatically switches to a stepped-aware layout. Sensitivity, range, and push-reset still apply; curve does not.
 
 - **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 knobs (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at slider min (0.1×) Shift gives an effective 0.025× (≈40 detents per step) for ultra-precise crawling.
 - **Canvas + preset row hidden.** A single info line replaces them: `Stepped parameter — N values (~X.XXX per step). Curve disabled; Min/Max snap to the step grid.`
@@ -891,9 +891,20 @@ In the FX-Learn schematic, slots with customised knob travel show:
 - Two radial ticks at the Min / Max angles on the on-screen knob (7 o'clock → 12 → 5).
 - A small centre dot when a curve is set.
 
-UF8 V-Pots dispatch the math at the encoder-delta site (`sensitivity → inverseCurve → step → applyCurve`) so external automation writes stay coherent. UC1 channel-strip / bus-comp knobs and the EXT_FUNCS encoder honour the same path — a UC1 knob and a UF8 V-Pot bound to the same parameter stay in lock-step. Built-in SSL CS / BC slots are intentionally untouched and keep the legacy linear + EQ-gain virtual-notch path; knob travel only kicks in when a user-learned slot is present for the focused plug-in.
+UF8 V-Pots apply the same sensitivity → curve → step math on every encoder movement, so external automation writes stay coherent. UC1 channel-strip / bus-comp knobs and the EXT_FUNCS encoder honour the same path — a UC1 knob and a UF8 V-Pot bound to the same parameter stay in lock-step. Built-in SSL CS / BC slots are intentionally untouched and keep the legacy linear + EQ-gain virtual-notch path; knob travel only kicks in when a user-learned slot is present for the focused plug-in.
 
 > **UF8 faders intentionally exclude knob travel.** Absolute-position + motor feedback creates round-trip races with plug-in quantisation (fader jumps during user motion, snaps on release). The plug-in's own taper is the right place for fader-side shaping.
+
+### Step cycle (rotary)
+
+A V-Pot or UC1 knob can step through a curated list of a plug-in's button / enum options instead of moving a continuous parameter — for example walking an EQ type A → B → C, or a saturation mode, from a single rotary. **Turning** scrubs the list and stops at the ends; **pressing** advances one step and wraps around.
+
+There are two ways to build a step cycle:
+
+- **Capture by touch** (UF8 V-Pots): with **Touch-to-Learn** armed, wiggle the V-Pot you want, then click the plug-in's buttons in the order you want them — each press is recorded as a step. Wiggle the next V-Pot, or turn Touch-to-Learn off, to finish. The plug-in must already be mapped. Continuous controls keep binding the normal way, so a knob wiggle is not captured as steps.
+- **Curate in the editor**: in the FX-Learn V-Pot right-click menu (or the on-screen Learn-HUD), pick **Step cycle (turn)** and edit the list — drag to reorder, untick to exclude an option, **+ Add step** to add one by name. The same editor opens for UC1 knobs.
+
+On UC1, build step cycles through the **editor** rather than by touch capture. Re-learning a knob the normal way clears any step cycle on it, so a continuous pot is one re-learn away.
 
 ### Multi-instance picker
 
@@ -928,7 +939,7 @@ Eight slots (1..8). The slot acts as a filter — combined with any active Folde
 Each slot is either:
 
 - **Snapshot** — fixed list of REAPER track GUIDs frozen at save time.
-- **Group** — bound to a REAPER track group (1..64). Membership refreshes every onTimer tick from `GetSetTrackGroupMembership` across all Lead/Follow categories (ANY category).
+- **Group** — bound to a REAPER track group (1..64). Membership refreshes continuously from REAPER's track groups across all Lead/Follow categories (ANY category).
 
 The slot rows are laid out as a fixed-width 7-column table so columns align across rows regardless of slot type. Left to right:
 
@@ -1120,7 +1131,7 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **Encoder Mode → FX Move (in chain)** — move the active FX up / down within the focused track's chain on rotation (within-chain only; hard-stop at the ends).
 - **Encoder Mode → Selection Set Cycle** — step through populated Selection Set slots (off → 1 → 2 → … → off).
 - **Encoder Mode → CS Cycle (favourites)** — Channel-Strip Switch: cycle the active CS through the favourite slots (see chapter *Channel-Strip Switch (CS-Switch)*).
-- **Encoder: dispatch by current mode** — rotation handler that routes to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
+- **Encoder: dispatch by current mode** — routes rotation to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
 
@@ -1183,7 +1194,7 @@ These step *only* the Instance index (CS / BC / UF8-Mode-mapped). They are the f
 - **Focus → Channel Strip** — set the focused domain to Channel Strip (so subsequent *Instance: next* walks CS Instances, UC1 CS section refreshes).
 - **Focus → Bus Comp** — set the focused domain to Bus Comp.
 
-The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and Domain::None (UF8-only user maps) still reset to slot 0 because the slot index isn't meaningful there.
+The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and UF8-only user maps still reset to slot 0 because the slot position isn't meaningful there.
 
 ## Per-track automation modes
 
@@ -1294,7 +1305,7 @@ When held, these shift every other binding to its modifier slot. The three match
 - **Learn-HUD: show / hide (focused plug-in assignments)** — show / hide the **Learn-HUD** (focused plug-in's assignments). Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle Learn-HUD* (`REASIXTY_LEARN_HUD_TOGGLE`). See *On-Screen Display → Learn-HUD*.
 - **Focused-track panel: show / hide (frameless, on Arrange)** — show / hide the frameless **focused-track panel**. See *On-Screen Display → Focused-track panel*.
 - **Mode-change banner: show / hide (flashes Sel / Encoder mode)** — show / hide the transient **mode-change banner**. See *On-Screen Display → Mode-change banner*.
-- **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding.
+- **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Pressing several of the plug-in's buttons in a row while a V-Pot is armed builds a **step cycle** on it (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 - **FX: Quick Learn Project** / **FX: Quick Learn Track** — run the AutoLearn sweep over the whole project / the focused track. Same one-shot as the REAPER actions *Rea-Sixty: Quick Learn …*.
 
@@ -1348,7 +1359,7 @@ Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Po
 
 ## 360° Link
 
-The SSL 360° Link plug-in (a wrapper that mirrors third-party VSTs into the 360° surface) is recognised natively. When the focused track has a 360° Link instance pointing at a learned plug-in, SSL Strip Mode / UF8 Plug-in Mode dispatch through the linked plug-in transparently.
+The SSL 360° Link plug-in (a wrapper that mirrors third-party VSTs into the 360° surface) is recognised natively. When the focused track has a 360° Link instance pointing at a learned plug-in, SSL Strip Mode / UF8 Plug-in Mode drive the linked plug-in transparently.
 
 User-renamed 360° Link instances show the rename instead of the generic "Link" / "L-BC" abbreviation.
 
@@ -1395,6 +1406,31 @@ Each control carries its value to the matching control on the new plug-in, match
 - A control the **new** plug-in lacks is remembered, so the value survives a round-trip through a simpler strip and is restored when you cycle back.
 
 If a value genuinely can't be represented (a frequency far outside the target's range), the control is left at its default rather than slammed to a rail.
+
+\newpage
+
+# Solo / Mute modifier modes
+
+The UF8 strip **Solo / Cut** buttons and the UC1 **Solo / Cut** buttons normally toggle the track's solo or mute. Hold a modifier on your **computer keyboard** while pressing the button to invoke REAPER's other solo / mute modes instead — the same modes you get from right-clicking a track's solo or mute button in REAPER.
+
+The modifier follows REAPER's own convention: on **macOS** the Command key (⌘) is the "Ctrl" role (what REAPER's solo / mute menus show); on **Windows** it is Ctrl. Option/Alt and Shift are the same on both. Windows **AltGr** counts as Alt.
+
+| Hold while pressing Solo | Action |
+|---|---|
+| *(nothing)* | Solo in place (normal) |
+| Alt | Solo, ignoring routing |
+| Cmd / Ctrl | Unsolo all tracks |
+| Cmd / Ctrl + Alt | Exclusive solo (this track only) |
+| Cmd / Ctrl + Shift | Toggle solo defeat |
+
+| Hold while pressing Cut / Mute | Action |
+|---|---|
+| *(nothing)* | Mute (normal) |
+| Alt | Mute all other tracks |
+| Cmd / Ctrl | Unmute all tracks |
+| Cmd / Ctrl + Alt | Exclusive mute (this track only) |
+
+Without a modifier the buttons behave exactly as before. In routing or Plug-in modes — where Solo / Cut already act on a send or a plug-in parameter — the modifiers do not apply; they only affect the plain track solo / mute.
 
 \newpage
 

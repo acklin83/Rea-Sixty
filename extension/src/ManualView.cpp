@@ -1,5 +1,7 @@
 #include "ManualView.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -406,6 +408,28 @@ const Model& model()
 
 constexpr int kCodeColour = 0xE6A45CFF;  // warm amber — reads on dark + light
 constexpr int kLinkColour = 0x4AA3FFFF;  // blue
+constexpr int kHitColour  = 0xF2C84BFF;  // yellow — search-term highlight
+
+// Active manual-search terms (lowercased), set each frame by ManualView::draw.
+// drawTok highlights any body token that contains one of them, so the matched
+// words light up in the chapter text on the right, where they are readable.
+std::vector<std::string> g_searchTerms;
+
+static std::string toLower(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return s;
+}
+
+static bool tokenIsSearchHit(const std::string& text)
+{
+    if (g_searchTerms.empty()) return false;
+    const std::string low = toLower(text);
+    for (const std::string& term : g_searchTerms)
+        if (!term.empty() && low.find(term) != std::string::npos) return true;
+    return false;
+}
 
 ImGui_Font* fontFor(uint8_t style)
 {
@@ -417,6 +441,13 @@ ImGui_Font* fontFor(uint8_t style)
 
 void drawTok(ImGui_Context* ctx, const Tok& t)
 {
+    if (tokenIsSearchHit(t.text)) {
+        ImGui_TextColored(ctx, kHitColour, t.text.c_str());
+        if (t.style == S_LINK && ImGui_IsItemClicked(ctx, nullptr)
+            && !t.href.empty())
+            reasixty_openUrl(t.href.c_str());
+        return;
+    }
     if (t.style == S_LINK) {
         ImGui_TextColored(ctx, kLinkColour, t.text.c_str());
         if (ImGui_IsItemClicked(ctx, nullptr) && !t.href.empty())
@@ -547,6 +578,46 @@ void renderListItem(ImGui_Context* ctx, const Block& b, double basePx)
 
 } // namespace
 
+// Flatten a block's visible text (paragraph/heading inline tokens + table
+// cells) into one string, for the search index.
+static std::string blockPlain(const Block& b)
+{
+    std::string s;
+    for (const Tok& t : b.inl) {
+        if (t.spaceBefore && !s.empty()) s += ' ';
+        s += t.text;
+    }
+    for (const auto& row : b.rows)
+        for (const auto& col : row)
+            for (const Tok& t : col) { s += ' '; s += t.text; }
+    return s;
+}
+
+// Split a query into whitespace-separated lowercase terms. The search is
+// ADDITIVE: a passage matches only when it contains EVERY term (so "focus strip"
+// finds a line mentioning both, in any order), not the literal phrase.
+static std::vector<std::string> searchTerms(const std::string& q)
+{
+    std::vector<std::string> terms;
+    size_t i = 0, n = q.size();
+    while (i < n) {
+        while (i < n && std::isspace(static_cast<unsigned char>(q[i]))) ++i;
+        size_t j = i;
+        while (j < n && !std::isspace(static_cast<unsigned char>(q[j]))) ++j;
+        if (j > i) terms.push_back(toLower(q.substr(i, j - i)));
+        i = j;
+    }
+    return terms;
+}
+
+static bool matchesAll(const std::string& lowText,
+                       const std::vector<std::string>& terms)
+{
+    for (const std::string& t : terms)
+        if (lowText.find(t) == std::string::npos) return false;
+    return !terms.empty();
+}
+
 void ManualView::draw(ImGui_Context* ctx)
 {
     const Model& m = model();
@@ -566,32 +637,80 @@ void ManualView::draw(ImGui_Context* ctx)
         if (!m.version.empty()) {
             std::string v = "Manual " + m.version;
             ImGui_TextDisabled(ctx, v.c_str());
-            ImGui_Separator(ctx);
         }
-        for (int ci = 0; ci < static_cast<int>(m.chapters.size()); ++ci) {
-            const Chapter& c = m.chapters[ci];
-            bool sel = (ci == selectedChapter);
-            char lbl[256];
-            snprintf(lbl, sizeof(lbl), "%s##man_ch_%d", c.title.c_str(), ci);
-            if (ImGui_Selectable(ctx, lbl, &sel, nullptr, nullptr, nullptr)) {
-                selectedChapter = ci;
-                pendingScrollBlock = c.blockStart;
-            }
-            if (ci == selectedChapter && !c.sections.empty()) {
-                double ind = basePx * 1.0;
-                ImGui_Indent(ctx, &ind);
-                for (size_t si = 0; si < c.sections.size(); ++si) {
-                    const SectionRef& s = c.sections[si];
-                    bool ssel = false;
-                    char slbl[300];
-                    snprintf(slbl, sizeof(slbl), "%s##man_sec_%d_%zu",
-                             s.title.c_str(), ci, si);
-                    if (ImGui_Selectable(ctx, slbl, &ssel, nullptr,
-                                         nullptr, nullptr)) {
-                        pendingScrollBlock = s.blockIdx;
+
+        // ---- Search box: filters to a flat hit list across all chapters ----
+        static char searchBuf[128] = {0};
+        ImGui_PushItemWidth(ctx, -1.0);
+        ImGui_InputTextWithHint(ctx, "##man_search", "Search the manual…",
+                                searchBuf, sizeof(searchBuf),
+                                nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Separator(ctx);
+
+        const std::vector<std::string> terms =
+            searchTerms(std::string(searchBuf));
+        g_searchTerms = terms;   // the body renderer highlights these
+        if (!terms.empty()) {
+            // Readable result list: every chapter that contains ALL the terms
+            // (anywhere in it). Click a chapter → the right pane shows it,
+            // scrolled to the first match, with the terms highlighted in the
+            // text. The query stays active so the highlight persists.
+            int hits = 0;
+            for (int ci = 0; ci < static_cast<int>(m.chapters.size()); ++ci) {
+                const Chapter& c = m.chapters[ci];
+                std::string chapLow;
+                int firstBlock = -1;
+                for (int bi = c.blockStart; bi < c.blockEnd; ++bi) {
+                    const std::string low = toLower(blockPlain(m.blocks[bi]));
+                    if (firstBlock < 0) {
+                        for (const std::string& t : terms)
+                            if (!t.empty() && low.find(t) != std::string::npos) {
+                                firstBlock = bi; break;
+                            }
                     }
+                    chapLow += low;
+                    chapLow += ' ';
                 }
-                ImGui_Unindent(ctx, &ind);
+                if (!matchesAll(chapLow, terms)) continue;
+
+                bool sel = (ci == selectedChapter);
+                char lbl[256];
+                snprintf(lbl, sizeof(lbl), "%s##man_hit_%d", c.title.c_str(), ci);
+                if (ImGui_Selectable(ctx, lbl, &sel, nullptr, nullptr, nullptr)) {
+                    selectedChapter    = ci;
+                    pendingScrollBlock = (firstBlock >= 0) ? firstBlock
+                                                           : c.blockStart;
+                }
+                ++hits;
+            }
+            if (hits == 0) ImGui_TextDisabled(ctx, "No matches.");
+        } else {
+            for (int ci = 0; ci < static_cast<int>(m.chapters.size()); ++ci) {
+                const Chapter& c = m.chapters[ci];
+                bool sel = (ci == selectedChapter);
+                char lbl[256];
+                snprintf(lbl, sizeof(lbl), "%s##man_ch_%d", c.title.c_str(), ci);
+                if (ImGui_Selectable(ctx, lbl, &sel, nullptr, nullptr, nullptr)) {
+                    selectedChapter = ci;
+                    pendingScrollBlock = c.blockStart;
+                }
+                if (ci == selectedChapter && !c.sections.empty()) {
+                    double ind = basePx * 1.0;
+                    ImGui_Indent(ctx, &ind);
+                    for (size_t si = 0; si < c.sections.size(); ++si) {
+                        const SectionRef& s = c.sections[si];
+                        bool ssel = false;
+                        char slbl[300];
+                        snprintf(slbl, sizeof(slbl), "%s##man_sec_%d_%zu",
+                                 s.title.c_str(), ci, si);
+                        if (ImGui_Selectable(ctx, slbl, &ssel, nullptr,
+                                             nullptr, nullptr)) {
+                            pendingScrollBlock = s.blockIdx;
+                        }
+                    }
+                    ImGui_Unindent(ctx, &ind);
+                }
             }
         }
     }
