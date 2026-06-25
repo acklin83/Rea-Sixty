@@ -72,8 +72,10 @@ end
 -- are stored as 0xRRGGBB ints; drive BOTH the MCP highlight and the dock panel.
 local function csRgb()  return math.floor(num("overlay_cs_col", 0xFFFF00)) & 0xFFFFFF end
 local function bcRgb()  return math.floor(num("overlay_bc_col", 0xFF0000)) & 0xFFFFFF end
-local function csCol()  return csRgb() | ALPHA end
-local function bcCol()  return bcRgb() | ALPHA end
+local function selRgb() return math.floor(num("overlay_sel_col", 0x3060FF)) & 0xFFFFFF end
+local function csCol()  return csRgb()  | ALPHA end
+local function bcCol()  return bcRgb()  | ALPHA end
+local function selCol() return selRgb() | ALPHA end
 local function fillA()  return num("overlay_fill_a", 0.0) end
 local function lineA()  return num("overlay_line_a", 0.90) end
 
@@ -88,8 +90,10 @@ local function readActive()
   local on  = (raw:match("^(%d);") == "1")
   local rev = tonumber(raw:match("^%d;(%d+);")) or 0
   local byGuid = {}
-  for guid, cs, bc in raw:gmatch("({[%x%-]+}),(%-?%d+),(%-?%d+)") do
-    byGuid[guid] = { cs = tonumber(cs), bc = tonumber(bc) }
+  -- Per-track entry: guid,csSlot,bcSlot,selSlot. selSlot = the surface-focused
+  -- FX that is NOT a CS/BC (-1 when none) → the blue "selected FX" box.
+  for guid, cs, bc, sel in raw:gmatch("({[%x%-]+}),(%-?%d+),(%-?%d+),(%-?%d+)") do
+    byGuid[guid] = { cs = tonumber(cs), bc = tonumber(bc), sel = tonumber(sel) }
   end
   return on, rev, byGuid
 end
@@ -145,13 +149,26 @@ local function scanFxBlocks(want)
   -- TCP overlay is experimental (shared track-panel window + Retina coordinate
   -- mismatch causes glitches) — opt-in via ExtState overlay_tcp=1. MCP always on.
   local tcpOn = num("overlay_tcp", 0) ~= 0
+  -- Sweep regions in priority order: a DETACHED mixer (the "Mixer" window used
+  -- for the fullscreen / separate-window mixer) lives OUTSIDE the main window, so
+  -- scan it FIRST when present (the strips are there → early-out fast), then the
+  -- main window. The old GetMainHwnd-only sweep found nothing when the mixer was
+  -- fullscreen/detached. Frank 2026-06-25.
+  local regions = {}
   local main = reaper.GetMainHwnd()
+  local mix  = reaper.JS_Window_Find and reaper.JS_Window_Find("Mixer", true)
+  if mix and mix ~= main and reaper.JS_Window_IsWindow(mix) then
+    local _, l, t, r, b = reaper.JS_Window_GetRect(mix)
+    regions[#regions + 1] = { math.min(l, r), math.max(l, r), math.min(t, b), math.max(t, b) }
+  end
   local _, ml, mt, mr, mb = reaper.JS_Window_GetRect(main)
-  local x0, x1 = math.min(ml, mr), math.max(ml, mr)
-  local y0, y1 = math.min(mt, mb), math.max(mt, mb)
+  regions[#regions + 1] = { math.min(ml, mr), math.max(ml, mr), math.min(mt, mb), math.max(mt, mb) }
+
   local done = false
-  local y = y0
-  while y <= y1 and not done do
+  for _, reg in ipairs(regions) do
+   local x0, x1, y0, y1 = reg[1], reg[2], reg[3], reg[4]
+   local y = y0
+   while y <= y1 and not done do
     local x = x0
     while x <= x1 do
       local _, info = reaper.GetThingFromPoint(x, y)
@@ -198,6 +215,8 @@ local function scanFxBlocks(want)
       x = x + STEP
     end
     y = y + STEP
+   end
+   if done then break end
   end
   return byGuid
 end
@@ -280,8 +299,9 @@ local function rebuildDraw(byGuid, blocks)
     local list = blocks[guid]
     if list then
       for _, block in ipairs(list) do
-        if a.cs and a.cs >= 0 then drawBlockRow(block, a.cs, csCol()) end
-        if a.bc and a.bc >= 0 then drawBlockRow(block, a.bc, bcCol()) end
+        if a.cs  and a.cs  >= 0 then drawBlockRow(block, a.cs,  csCol())  end
+        if a.bc  and a.bc  >= 0 then drawBlockRow(block, a.bc,  bcCol())  end
+        if a.sel and a.sel >= 0 then drawBlockRow(block, a.sel, selCol()) end
       end
     end
   end
@@ -301,12 +321,40 @@ local function findTrackByGuid(guid)
   return nil
 end
 
+-- Are the located fxlist windows still valid? Cheap TARGETED point-checks (one
+-- or two GetThingFromPoint per active track — NOT the full-window grid scan), so
+-- safe to run throttled on the timer. Catches mixer hide/show + layout switches
+-- (docked side-mixer ↔ fullscreen) that change NOTHING in rev/scroll/count and so
+-- never triggered a rescan → stale boxes until you changed the selection.
+-- Frank 2026-06-25.
+local function blocksLive(want, blocks)
+  for g in pairs(want) do
+    local list = blocks[g]
+    if not list or #list == 0 then return false end
+    local alive = false
+    for _, b in ipairs(list) do
+      if b.kind == "tcp" then
+        alive = true; break
+      elseif reaper.JS_Window_IsWindow(b.hwnd) then
+        local px, py = math.floor(b.sl + 1), math.floor(b.sy)
+        if select(2, reaper.GetThingFromPoint(px, py)) == "mcp.fxlist" then
+          local tr = reaper.GetTrackFromPoint(px, py)
+          if tr and reaper.GetTrackGUID(tr) == g then alive = true; break end
+        end
+      end
+    end
+    if not alive then return false end
+  end
+  return true
+end
+
 ------------------------------------------------------------------------
 -- Main defer loop
 ------------------------------------------------------------------------
 local g_lastSig, g_blocks, g_lastRev = nil, {}, -1
 local g_lastScroll, g_lastCount = nil, -1   -- cheap rescan triggers
 local g_emptyTick = 0                       -- slow retry while no target found
+local g_liveTick  = 0                       -- throttle for the block-liveness check
 local g_scrollPending = false               -- rescan owed once scrolling settles
 local g_stableTicks = 0                     -- ticks since the mixer scroll last moved
 
@@ -325,12 +373,13 @@ local function drawSig(byGuid, blocks)
       for _, b in ipairs(list) do t[#t + 1] = blockSig(b) end
       table.sort(t); bs = table.concat(t, ";")
     end
-    parts[#parts + 1] = string.format("%s:%s:%s:%s", guid, tostring(a.cs), tostring(a.bc), bs)
+    parts[#parts + 1] = string.format("%s:%s:%s:%s:%s", guid,
+      tostring(a.cs), tostring(a.bc), tostring(a.sel), bs)
   end
   table.sort(parts)
   return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 17) .. "," .. num("overlay_toppad", 1)
     .. "," .. num("overlay_rowh_tcp", 14) .. "," .. num("overlay_toppad_tcp", 0)
-    .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. fillA() .. "," .. lineA()
+    .. "|" .. csRgb() .. "," .. bcRgb() .. "," .. selRgb() .. "," .. fillA() .. "," .. lineA()
     .. "," .. num("overlay_ss", is_windows and 1 or 2)
 end
 
@@ -397,6 +446,14 @@ local function loop()
           if g_emptyTick >= 30 then need = true; g_emptyTick = 0 end
         else
           g_emptyTick = 0
+          -- Located windows present but maybe stale (mixer hidden/shown, or
+          -- docked↔fullscreen) — re-verify cheaply, throttled, and re-acquire if
+          -- they died WITHOUT a rev/scroll/count change. Frank 2026-06-25.
+          g_liveTick = g_liveTick + 1
+          if g_liveTick >= 6 then
+            g_liveTick = 0
+            if not blocksLive(byGuid, g_blocks) then need = true end
+          end
         end
       end
       if need then

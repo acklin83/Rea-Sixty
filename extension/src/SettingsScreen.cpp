@@ -109,6 +109,8 @@ int    reasixty_overlayCsColor();
 void   reasixty_setOverlayCsColor(int rgb);
 int    reasixty_overlayBcColor();
 void   reasixty_setOverlayBcColor(int rgb);
+int    reasixty_overlaySelColor();
+void   reasixty_setOverlaySelColor(int rgb);
 double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
@@ -668,6 +670,15 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
         ImGui_SetNextItemWidth(ctx, 220.0);
         if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
             reasixty_setOverlayBcColor(bcCol);
+        }
+        // Selected-FX box (the surface-focused non-CS/BC plug-in) — MCP overlay
+        // only, so only offered when the overlay is enabled.
+        if (insMark) {
+            int selCol = reasixty_overlaySelColor();
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_ColorEdit3(ctx, "Selected FX colour", &selCol, &ceFlags)) {
+                reasixty_setOverlaySelColor(selCol);
+            }
         }
     }
 
@@ -7325,44 +7336,23 @@ int fillSequentialUf8_(int kind, int strip, int bank,
     const int total = paramCountFor_(*editing, fx);
     if (total <= 0) return 0;
 
-    // Snapshot the source strip's modifier attributes — LED colour and
-    // inverted/reverse-LED flags propagate to every filled strip, so a
-    // CS-channel row stays visually + behaviourally consistent without
-    // the user having to touch every strip after a Fill (Frank 2026-05-21).
-    bool         srcFaderInverted = false;
-    bool         srcVpotInverted  = false;
-    uf8::VPotMode     srcVpotMode     = uf8::VPotMode::Value;
-    uf8::VPotPolarity srcVpotPolarity = uf8::VPotPolarity::Unipolar;
-    double       srcVpotDefault   = 0.5;
-    uint32_t     srcStripColour   = 0;
-    uint32_t     srcSoloColour    = 0;
-    uint32_t     srcCutColour     = 0;
-    uint32_t     srcSelColour     = 0;
-    bool         srcSoloInvert    = false;
-    bool         srcCutInvert     = false;
-    bool         srcSelInvert     = false;
-    // Snapshot V-Pot knob-travel too so a user who set up Min/Max +
-    // curve on the source strip gets it propagated to every filled
-    // strip. (Fader has no knob-travel — see UserUf8StripBinding.)
-    uf8::KnobTravel srcVpotTravel{};
-    {
-        const auto& srcU  = editing->uf8;
-        const auto& srcS  = srcU.strips[g_uf8EditingFaderBank][strip];
-        const auto& srcVB = srcU.banks.banks[g_uf8EditingFaderBank][bank][strip];
-        srcFaderInverted = srcS.faderInverted;
-        srcVpotInverted  = srcVB.inverted;
-        srcVpotMode      = srcVB.vpotMode;
-        srcVpotPolarity  = srcVB.polarity;
-        srcVpotDefault   = srcVB.defaultNorm;
-        srcStripColour   = srcVB.stripColour;
-        srcSoloColour    = srcS.soloColour;
-        srcCutColour     = srcS.cutColour;
-        srcSelColour     = srcS.selColour;
-        srcSoloInvert    = srcS.soloInvert;
-        srcCutInvert     = srcS.cutInvert;
-        srcSelInvert     = srcS.selInvert;
-        srcVpotTravel    = srcVB.travel;
-    }
+    // Snapshot the FULL source binding so a Fill carries EVERY property, not just
+    // the param (Frank 2026-06-25: "ALLE eigenschaften nachziehen"). V-Pots copy
+    // the whole bank-slot — V-Pot mode (Value/Toggle/StepCycle) + the StepCycle
+    // step list + feel/range/curve/polarity/default/colour/label. The strip struct
+    // holds all four kinds, so only the active kind's fields are taken there
+    // (incl. its scribble label / LED colour / reverse flag).
+    const auto& srcS = editing->uf8.strips[g_uf8EditingFaderBank][strip];
+    const uf8::UserUf8BankSlot srcVpotSlot =
+        editing->uf8.banks.banks[g_uf8EditingFaderBank][bank][strip];
+    const bool         srcFaderInverted = srcS.faderInverted;
+    const std::string  srcFaderLabel    = srcS.faderLabel;
+    const uint32_t     srcSoloColour    = srcS.soloColour;
+    const uint32_t     srcCutColour     = srcS.cutColour;
+    const uint32_t     srcSelColour     = srcS.selColour;
+    const bool         srcSoloInvert    = srcS.soloInvert;
+    const bool         srcCutInvert     = srcS.cutInvert;
+    const bool         srcSelInvert     = srcS.selInvert;
 
     int filled = 0;
     for (int g = srcGlobal + 1; g <= lastGlobal; ++g) {
@@ -7386,6 +7376,7 @@ int fillSequentialUf8_(int kind, int strip, int bank,
             case 0:
                 u.strips[curFb][s].faderVst3Param = found;
                 u.strips[curFb][s].faderInverted  = srcFaderInverted;
+                u.strips[curFb][s].faderLabel     = srcFaderLabel;
                 break;
             case 3:
                 u.strips[curFb][s].soloVst3Param  = found;
@@ -7404,14 +7395,11 @@ int fillSequentialUf8_(int kind, int strip, int bank,
                 break;
             case 1:
             case 2: {
+                // Whole-slot copy → carries mode + step-cycle list + feel/range/
+                // curve/polarity/default/colour/label. Only the bound param differs.
                 auto& bs = u.banks.banks[curFb][bank][s];
-                bs.vst3Param   = found;
-                bs.inverted    = srcVpotInverted;
-                bs.vpotMode    = srcVpotMode;
-                bs.polarity    = srcVpotPolarity;
-                bs.defaultNorm = srcVpotDefault;
-                bs.stripColour = srcStripColour;
-                bs.travel      = srcVpotTravel;
+                bs = srcVpotSlot;
+                bs.vst3Param = found;
                 break;
             }
             default: continue;
@@ -8846,13 +8834,11 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
     if (srcGlobal >= lastGlobal) return 0;
 
     int curParam = -1;
-    bool srcInv = false;
     for (const auto& m : uf8::user_plugins::get().maps) {
         if (m.match != match) continue;
         auto p = uf8HudFieldPtrs_(const_cast<uf8::UserUf8Map&>(m.uf8),
                                   kind, fb, vb, strip);
-        if (p.param)  curParam = *p.param;
-        if (p.invert) srcInv   = *p.invert;
+        if (p.param) curParam = *p.param;
         break;
     }
     if (curParam < 0) return 0;
@@ -8884,6 +8870,14 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
     for (auto& m : cat.maps) if (m.match == match) { editing = &m; break; }
     if (!editing) return 0;
 
+    // Snapshot the FULL source binding so the Fill carries EVERY property — not
+    // just param+invert as before (Frank 2026-06-25: V-Pot mode/StepCycle steps
+    // + feel/range/curve/colour/label all propagate). V-Pot = whole bank-slot;
+    // the strip struct holds all kinds so only the active one's fields are taken.
+    const uf8::UserUf8BankSlot     srcVpotSlot =
+        (kind == 0) ? editing->uf8.banks.banks[fb][vb][strip] : uf8::UserUf8BankSlot{};
+    const uf8::UserUf8StripBinding srcStripB = editing->uf8.strips[fb][strip];
+
     int  filled = 0;
     char nm[256];
     for (int g = srcGlobal + 1; g <= lastGlobal; ++g) {
@@ -8897,8 +8891,26 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
         for (int p = 0; p < total; ++p)
             if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) && target == nm) { found = p; break; }
         if (found < 0) continue;
-        auto dp = uf8HudFieldPtrs_(editing->uf8, kind, curFb, vb, s);
-        if (dp.param) { *dp.param = found; if (dp.invert) *dp.invert = srcInv; ++filled; }
+        // Copy ALL properties from the source to this overflow position (HUD kind
+        // encoding: V-Pot 0, Fader 1, Solo 2, Cut 3, Sel 4).
+        switch (kind) {
+            case 0: { auto& bs = editing->uf8.banks.banks[curFb][vb][s];
+                      bs = srcVpotSlot; bs.vst3Param = found; break; }
+            case 1: { auto& ds = editing->uf8.strips[curFb][s];
+                      ds.faderVst3Param = found; ds.faderInverted = srcStripB.faderInverted;
+                      ds.faderLabel = srcStripB.faderLabel; break; }
+            case 2: { auto& ds = editing->uf8.strips[curFb][s];
+                      ds.soloVst3Param = found; ds.soloColour = srcStripB.soloColour;
+                      ds.soloInvert = srcStripB.soloInvert; break; }
+            case 3: { auto& ds = editing->uf8.strips[curFb][s];
+                      ds.cutVst3Param = found; ds.cutColour = srcStripB.cutColour;
+                      ds.cutInvert = srcStripB.cutInvert; break; }
+            case 4: { auto& ds = editing->uf8.strips[curFb][s];
+                      ds.selVst3Param = found; ds.selColour = srcStripB.selColour;
+                      ds.selInvert = srcStripB.selInvert; break; }
+            default: continue;
+        }
+        ++filled;
     }
     if (filled > 0) {
         uf8::user_plugins::upsert(*editing);
@@ -9460,6 +9472,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     bool   slotInverted   = false;
     float  slotRangeMin   = 0.0f;
     float  slotRangeMax   = 1.0f;
+    float  slotSens       = 1.0f;   // shown in the hover tooltip when != 1
     bool   slotHasCurve   = false;
     bool   slotKnobCustom = false;  // any non-default knob-travel field
     if (isMapped) {
@@ -9470,6 +9483,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     slotInverted   = s.inverted;
                     slotRangeMin   = s.rangeMin;
                     slotRangeMax   = s.rangeMax;
+                    slotSens       = s.sensitivity;
                     slotHasCurve   = !s.curvePoints.empty();
                     slotKnobCustom = slotHasCurve
                                   || slotRangeMin != 0.0f
@@ -9573,9 +9587,12 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     break;
                 }
             }
+            char sensStr[40] = {};
+            if (slotSens != 1.0f)
+                snprintf(sensStr, sizeof(sensStr), "\n  sensitivity x%.2g", slotSens);
             snprintf(tip, sizeof(tip),
-                "%s\n  -> param %d  '%s'",
-                slot->name ? slot->name : "(slot)", mapped, pname);
+                "%s\n  -> param %d  '%s'%s",
+                slot->name ? slot->name : "(slot)", mapped, pname, sensStr);
         } else {
             snprintf(tip, sizeof(tip),
                 "%s\n  unmapped — drag a param here or click to listen",
@@ -11562,15 +11579,25 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 snprintf(bankSuffix, sizeof(bankSuffix),
                               "  Soft-Key %d", bank + 1);
             }
+            // Sensitivity factor (V-Pots only — discrete buttons have none),
+            // shown when it isn't the default 1.0. Frank 2026-06-25.
+            char sensStr[40] = {};
+            if (ctrl.kind == Uf8Control::VPot) {
+                uf8::KnobTravel tr{};
+                if (fetchUf8VPotTravel_(ctrl.strip, bank, tr)
+                    && tr.sensitivity != 1.0f)
+                    snprintf(sensStr, sizeof(sensStr),
+                             "\n  sensitivity x%.2g", tr.sensitivity);
+            }
             if (isNav) {
                 snprintf(tip, sizeof(tip),
-                    "%s%s\n  -> param %d  '%s'",
-                    kindLabel, bankSuffix, mapped, pname);
+                    "%s%s\n  -> param %d  '%s'%s",
+                    kindLabel, bankSuffix, mapped, pname, sensStr);
             } else {
                 snprintf(tip, sizeof(tip),
-                    "%s strip %d%s\n  -> param %d  '%s'",
+                    "%s strip %d%s\n  -> param %d  '%s'%s",
                     kindLabel, ctrl.strip + 1, bankSuffix,
-                    mapped, pname);
+                    mapped, pname, sensStr);
             }
         } else if (isNav) {
             snprintf(tip, sizeof(tip),

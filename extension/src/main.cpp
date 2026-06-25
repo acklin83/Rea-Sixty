@@ -37,6 +37,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <algorithm>
@@ -1212,8 +1213,13 @@ std::atomic<int>  g_selsetSaveRequest{0};
 //   cycle  req: accumulated signed detents (0 = none)
 std::atomic<int>  g_csSwitchReq{-1};
 std::atomic<int>  g_csCycleReq{0};
+// FX move-in-chain req: accumulated signed detents (0 = none). Posted by the
+// REAPER-action route (hookCommand2); the surface builtins call the worker
+// directly. Drained on the main thread (TrackFX_CopyToTrack).
+std::atomic<int>  g_fxMoveReq{0};
 static void applyCsSwitch_(int slot);   // defined with the CS-Switch block
 static void applyCsCycle_(int step);
+static void applyFxMoveSlotAware_(int step, bool carousel);
 
 // True when REAPER is currently honouring TCP track pins. The two TCP-pin
 // view actions are NON-destructive — they don't clear B_TCPPIN — so to
@@ -1859,6 +1865,10 @@ void drainSelsets_() {
         applyCsSwitch_(csSlot);
     if (const int csSteps = g_csCycleReq.exchange(0); csSteps != 0)
         applyCsCycle_(csSteps);
+    // FX move-in-chain posted by the REAPER action route (no on-screen carousel
+    // there — the surface builtins drive that themselves).
+    if (const int mvSteps = g_fxMoveReq.exchange(0); mvSteps != 0)
+        applyFxMoveSlotAware_(mvSteps, /*carousel*/ false);
     const int actReq = g_selsetActivateRequest.exchange(0);
     // Capture the previously-active slot BEFORE mutating g_selsetActive
     // so the auto-mode revert can walk its tracks (Frank 2026-05-17:
@@ -3489,10 +3499,200 @@ void reasixty_toggleMasterPin(int which)
     g_pageDirty.store(true);
 }
 
+// REAPER 7.75: the MCP/TCP send list can be reordered / have empty slots, so the
+// API send INDEX no longer matches the VISUAL top-to-bottom order. The resolved
+// visual slot of a SEND is stored as AUXRECV_SLOT_HINT on the DEST track's
+// receive of us — read via the receive-side I_SLOT_HINT getter. (The send-side
+// getter, GetTrackSendInfo_Value(tr,0,idx,"I_SLOT_HINT"), is unreliable/frozen —
+// confirmed by the 2026-06-25 atomic chunk probe: chunk hints 0,1,3,4 reproduced
+// the visual 6,4,gap,3,5 exactly.) For receives/HW-outs the own-side hint is
+// canonical. -1 = unhinted.
+int sendVisualSlotHint_(MediaTrack* src, int category, int idx)
+{
+    if (!src || idx < 0) return -1;
+    if (category != 0)
+        return static_cast<int>(GetTrackSendInfo_Value(src, category, idx, "I_SLOT_HINT"));
+    auto* dest = static_cast<MediaTrack*>(
+        GetSetTrackSendInfo(src, 0, idx, "P_DESTTRACK", nullptr));
+    if (!dest || !ValidatePtr2(nullptr, dest, "MediaTrack*")) return -1;
+    // Scan the dest's receives past empty-slot gaps too: an empty receive slot
+    // occupies an index without counting, so the matching receive can sit at
+    // index >= GetTrackNumSends. Walk until we've seen `nr` real receives (or
+    // matched). Empty slots have null P_SRCTRACK → never false-match.
+    const int nr = GetTrackNumSends(dest, -1);
+    const int kMax = nr + 64;
+    int foundReal = 0;
+    for (int i = 0; i < kMax && foundReal < nr; ++i) {
+        auto* s = static_cast<MediaTrack*>(
+            GetSetTrackSendInfo(dest, -1, i, "P_SRCTRACK", nullptr));
+        if (!s || !ValidatePtr2(nullptr, s, "MediaTrack*")) continue;
+        ++foundReal;
+        if (s == src)
+            return static_cast<int>(GetTrackSendInfo_Value(dest, -1, i, "I_SLOT_HINT"));
+    }
+    return -1;
+}
+
+// REAPER 7.75 empty send/receive slots OCCUPY an API index but are NOT counted
+// by GetTrackNumSends. So real sends can live at indices >= GetTrackNumSends: an
+// empty at index 3 pushes the 5th real send to index 5 while the count stays 5.
+// Iterating 0..count-1 then misses every real send displaced past the count —
+// the "send after the empty slot disappears" bug (Frank 2026-06-25: soll
+// F,BBB,E,leer,CC,DD but DD at idx 5 was never enumerated). Scan upward until we
+// have seen `count` real (resolvable-dest) sends; the highest index reached is
+// the true extent (real sends + the empties wedged between them). Bounded so a
+// transient null dest can't run the scan away. Main-thread only.
+int sendIndexExtent_(MediaTrack* tr, int category)
+{
+    if (!tr) return 0;
+    const int count = GetTrackNumSends(tr, category);
+    if (count <= 0) return 0;
+    const char* tag = (category == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
+    const int kMax = count + 64;   // generous empty-slot budget
+    int found = 0, i = 0;
+    for (; i < kMax && found < count; ++i) {
+        auto* o = static_cast<MediaTrack*>(
+            GetSetTrackSendInfo(tr, category, i, tag, nullptr));
+        if (o && ValidatePtr2(nullptr, o, "MediaTrack*")) ++found;
+    }
+    return i;   // index positions spanning all `count` real sends + gaps
+}
+
+// Map a VISUAL slot back to the send/recv API index, replicating REAPER's layout:
+// a hinted entry pins to its slot; unhinted entries fill the lowest free slots in
+// index order. Returns -1 for an empty visual slot (strip stays blank). With no
+// hints (pre-7.75 / unreordered) this is identity → no behaviour change.
+int sendIndexForVisualSlot_(MediaTrack* tr, int category, int slot)
+{
+    if (!tr || slot < 0) return -1;
+    const int n = sendIndexExtent_(tr, category);   // counts empty-slot indices
+    if (n <= 0) return -1;
+    std::vector<int> hint(static_cast<size_t>(n));
+    bool anyHinted = false;
+    for (int i = 0; i < n; ++i) {
+        hint[i] = sendVisualSlotHint_(tr, category, i);
+        if (hint[i] >= 0) anyHinted = true;
+    }
+    if (!anyHinted) return (slot < n) ? slot : -1;   // identity fast-path
+
+    // Build a COMPLETE index→visual-slot bijection so every counted send
+    // entry — a real send OR a 7.75 empty slot (null dest) — lands on exactly
+    // one visual slot and NONE is ever orphaned. The old code returned the
+    // first index whose hint == slot and then skipped every hint>=0 entry in
+    // the fill. That silently DROPPED a send whenever two entries claimed the
+    // same slot (hint collision — the empty slot or a stale send-side hint
+    // duplicates a real send's slot) OR an empty occupied the slot a later
+    // send wanted: the loser kept its >=0 hint, was skipped by the fill, and
+    // vanished. That is exactly Frank's "Send nach der Leerstelle wird nicht
+    // angezeigt" (2026-06-25). Two passes guarantee a bijection:
+    //   1. Honour each hinted entry's claim in index order; lowest index wins
+    //      a contested slot. A loser is demoted to the unhinted pool.
+    //   2. Fill every still-unassigned entry (unhinted + demoted) into the
+    //      lowest free slot in index order — so it still gets a slot.
+    // Slot space spans max(n, highestHint+1) so a send dragged past the last
+    // counted index (when REAPER doesn't count the empty) still reaches its
+    // slot; unfilled positions in between are genuine empty gaps → -1.
+    int slotSpace = n;
+    for (int i = 0; i < n; ++i)
+        if (hint[i] >= 0 && hint[i] + 1 > slotSpace) slotSpace = hint[i] + 1;
+    std::vector<int>  slotOf(static_cast<size_t>(n), -1);
+    std::vector<char> used(static_cast<size_t>(slotSpace), 0);
+    for (int i = 0; i < n; ++i) {
+        const int h = hint[i];
+        if (h >= 0 && h < slotSpace && !used[h]) { slotOf[i] = h; used[h] = 1; }
+    }
+    int freeSlot = 0;
+    for (int i = 0; i < n; ++i) {
+        if (slotOf[i] >= 0) continue;
+        while (freeSlot < slotSpace && used[freeSlot]) ++freeSlot;
+        if (freeSlot >= slotSpace) break;   // guard; n entries fit in slotSpace
+        slotOf[i] = freeSlot; used[freeSlot] = 1; ++freeSlot;
+    }
+    for (int i = 0; i < n; ++i) if (slotOf[i] == slot) return i;
+    return -1;   // genuine empty visual slot (no entry maps here)
+}
+
+// One visual slot of the focused-track combined SEND view. apiIndex < 0 = an
+// empty gap (blank strip). category is 0 (track send) or 1 (hardware output).
+struct CombinedSlot { int category; int apiIndex; };
+
+// Build the focused-track SEND view exactly as REAPER's mixer send list shows
+// it: track sends (cat 0, including empty slots) AND hardware outputs (cat 1)
+// share ONE visual slot space. Hinted entries (I_SLOT_HINT >= 0, i.e. the user
+// dragged them) pin to their slot; the rest fill the lowest free slots in the
+// order REAPER uses (observed 2026-06-25 against Frank's mixer: an un-dragged
+// hardware output takes the free slot ahead of an empty track-send slot — so
+// hw outputs, then real track sends, then empty slots last). out[slot] gives
+// the (category, apiIndex) feeding that strip.
+void buildCombinedSendLayout_(MediaTrack* tr, std::vector<CombinedSlot>& out)
+{
+    out.clear();
+    if (!tr) return;
+    struct E { int category; int apiIndex; int hint; bool empty; };
+    std::vector<E> hinted, hwUnhinted, sendUnhinted, emptyUnhinted;
+
+    const int ext0 = sendIndexExtent_(tr, 0);
+    for (int i = 0; i < ext0; ++i) {
+        auto* dst = static_cast<MediaTrack*>(
+            GetSetTrackSendInfo(tr, 0, i, "P_DESTTRACK", nullptr));
+        const bool empty = !(dst && ValidatePtr2(nullptr, dst, "MediaTrack*"));
+        const int h = empty ? -1 : sendVisualSlotHint_(tr, 0, i);
+        const E e{0, i, h, empty};
+        if (h >= 0)     hinted.push_back(e);
+        else if (empty) emptyUnhinted.push_back(e);
+        else            sendUnhinted.push_back(e);
+    }
+    const int nhw = GetTrackNumSends(tr, 1);
+    for (int i = 0; i < nhw; ++i) {
+        const int h = static_cast<int>(
+            GetTrackSendInfo_Value(tr, 1, i, "I_SLOT_HINT"));
+        const E e{1, i, h, false};
+        if (h >= 0) hinted.push_back(e);
+        else        hwUnhinted.push_back(e);
+    }
+
+    int slotSpace = static_cast<int>(hinted.size() + hwUnhinted.size()
+                                     + sendUnhinted.size() + emptyUnhinted.size());
+    for (const auto& e : hinted) if (e.hint + 1 > slotSpace) slotSpace = e.hint + 1;
+    if (slotSpace <= 0) return;
+
+    out.assign(static_cast<size_t>(slotSpace), CombinedSlot{0, -1});
+    std::vector<char> used(static_cast<size_t>(slotSpace), 0);
+
+    std::vector<E> demoted;
+    for (const auto& e : hinted) {
+        if (e.hint < slotSpace && !used[e.hint]) {
+            out[e.hint] = {e.category, e.apiIndex}; used[e.hint] = 1;
+        } else demoted.push_back(e);   // slot stolen by a lower-index claim
+    }
+    int freeSlot = 0;
+    auto place = [&](const E& e) {
+        while (freeSlot < slotSpace && used[freeSlot]) ++freeSlot;
+        if (freeSlot >= slotSpace) return;
+        out[freeSlot] = {e.category, e.empty ? -1 : e.apiIndex};
+        used[freeSlot] = 1; ++freeSlot;
+    };
+    for (const auto& e : hwUnhinted)    place(e);
+    for (const auto& e : sendUnhinted)  place(e);
+    for (const auto& e : demoted)       place(e);
+    for (const auto& e : emptyUnhinted) place(e);
+}
+
+// Resolve one visual slot of the focused-track combined send view. Main-thread
+// only (rebuilds the layout each call; send counts are tiny). apiIndex<0 = gap.
+CombinedSlot combinedSendSlot_(MediaTrack* tr, int slot)
+{
+    static std::vector<CombinedSlot> layout;   // reused, main-thread only
+    buildCombinedSendLayout_(tr, layout);
+    if (slot < 0 || slot >= static_cast<int>(layout.size())) return {0, -1};
+    return layout[slot];
+}
+
 StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
                       int allIdx, bool thisTrack, int category)
 {
     StripRoute r;
+    int slotIdx = -1;   // the visual slot this strip resolves to
     if (allIdx >= 0) {
         const int rs = stripToVisibleSlot(strip, bankOffset);
         // Surface-aware lookup: in folder_mode / show_only_selected the
@@ -3502,7 +3702,7 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         // negative slots — used by AUTO fill-from-right padding).
         r.track        = visibleTrackAt(rs);
         r.sendCategory = category;
-        r.sendIndex    = allIdx;
+        slotIdx        = allIdx;
     } else if (thisTrack) {
         // Focused track for the strip-as-send-list mode. GetLastTouchedTrack
         // usually survives mixer-scroll, but it can briefly return null
@@ -3523,15 +3723,47 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         }
         r.track        = lt;
         r.sendCategory = category;
-        // Paged send window: strip 0..7 maps onto sends N..N+7 where N is
-        // the current send-bank offset. Out-of-range slots fail the
-        // GetTrackNumSends bound below and blank as before.
-        r.sendIndex    = strip + g_sendBankOffset.load();
+        // Paged send window: strip 0..7 maps onto VISUAL slots N..N+7 (N = the
+        // send-bank offset).
+        slotIdx        = strip + g_sendBankOffset.load();
     } else {
         return r;  // not in this routing mode
     }
+
+    // Resolve the visual slot → API index. SEND mode (category 0) uses the
+    // COMBINED layout so track sends AND hardware outputs share one slot space
+    // exactly like REAPER's mixer send list — the slot may resolve to a cat-1
+    // hardware output, in which case r.sendCategory flips to 1. RECEIVE mode
+    // (category -1) is single-category and stays slot-aware via the per-category
+    // mapper. -1 = empty slot.
+    if (category == 0) {
+        const CombinedSlot cs = combinedSendSlot_(r.track, slotIdx);
+        r.sendCategory = (cs.apiIndex >= 0) ? cs.category : 0;
+        r.sendIndex    = cs.apiIndex;
+    } else {
+        // 7.75 slot-aware: "slot N" means the entry at VISUAL slot N, not API
+        // index N (the list can be reordered / have gaps). -1 = empty slot.
+        r.sendIndex    = sendIndexForVisualSlot_(r.track, category, slotIdx);
+    }
+
     if (r.track && r.sendIndex >= 0) {
-        r.valid = (r.sendIndex < GetTrackNumSends(r.track, category));
+        if (r.sendCategory == 1) {
+            // Hardware output: a real send with no destination TRACK (the far
+            // end is an audio device channel). Always valid — its strip shows
+            // the output name + fader, just no track-coloured bar.
+            r.valid = true;
+        } else if (r.sendIndex < sendIndexExtent_(r.track, r.sendCategory)) {
+            // 7.75 EMPTY track-send/receive slot = a counted entry whose target
+            // is null (P_DESTTRACK / P_SRCTRACK doesn't resolve to a track) —
+            // the send analogue of an empty FX slot. It OCCUPIES its visual slot
+            // (so following sends don't shift left) but the strip must fully
+            // BLANK. A null target → invalid → the routedButInvalid blank path
+            // handles the strip (Frank 2026-06-25).
+            const char* tag = (r.sendCategory == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
+            auto* tgt = static_cast<MediaTrack*>(GetSetTrackSendInfo(
+                r.track, r.sendCategory, r.sendIndex, tag, nullptr));
+            r.valid = (tgt && ValidatePtr2(nullptr, tgt, "MediaTrack*"));
+        }
     }
     return r;
 }
@@ -3596,8 +3828,18 @@ void writeRouteVolumeLinear_(const StripRoute& r, double v)
 std::string getTrackSendName(MediaTrack* tr, int sendIdx)
 {
     if (!tr || sendIdx < 0) return {};
+    // GetTrackSendName uses a COMBINED index space: hardware outputs first
+    // (0..nb_hw-1), then track sends (see reaper_plugin_functions.h:
+    // "send_idx>=0 for hw outputs, >=nb_of_hw_outputs for sends"). Our sendIdx
+    // is category-0-scoped (track sends only, matching GetTrackSendInfo_Value
+    // / the fader path), so we must shift past the hardware outputs — otherwise
+    // the label resolves to a different send than the fader controls (the first
+    // nb_hw slots showed hardware-output names, the rest were off by nb_hw).
+    // This is why faders followed the 7.75 slot order but labels didn't on a
+    // track that has any hardware outputs (Frank 2026-06-25).
+    const int hwOuts = GetTrackNumSends(tr, 1);   // category 1 = hardware outputs
     char buf[256] = {0};
-    if (!GetTrackSendName(tr, sendIdx, buf, sizeof(buf))) return {};
+    if (!GetTrackSendName(tr, hwOuts + sendIdx, buf, sizeof(buf))) return {};
     return std::string(buf);
 }
 std::string getTrackReceiveName(MediaTrack* tr, int recvIdx)
@@ -3611,9 +3853,50 @@ std::string getTrackReceiveName(MediaTrack* tr, int recvIdx)
 std::string routeName_(const StripRoute& r)
 {
     if (!r.valid) return {};
-    return (r.sendCategory == 0)
-        ? getTrackSendName(r.track, r.sendIndex)
-        : getTrackReceiveName(r.track, r.sendIndex);
+    // Resolve the label from the route's DEST/SRC TRACK — NOT GetTrackSendName.
+    // Proven 2026-06-25 (send probe): GetTrackSendName(tr, i) enumerates sends in
+    // a DIFFERENT order than GetTrackSendInfo_Value(tr, 0, i). For the SAME index
+    // the two APIs returned different sends (dest F,E,BBB,DD,CC vs name BBB,CC,DD,
+    // E,F), so the labels came out unsorted while the faders — which read
+    // Info_Value — followed the 7.75 visual reorder. Reading P_DESTTRACK /
+    // P_SRCTRACK off the same index the fader uses locks label and fader to one
+    // send. (Frank: "die Reihenfolge ändert sich nur im Namen nicht, nur die Fader".)
+    // Hardware-output send (category 1): the far end is an audio device output
+    // channel, not a track. Name it from the device channel(s) like REAPER's
+    // send list ("Analog 1 / Analog 2"). I_DSTCHAN low 10 bits = first channel,
+    // &1024 = mono; I_SRCCHAN high bits encode the channel count.
+    if (r.sendCategory == 1) {
+        const int dch = static_cast<int>(GetTrackSendInfo_Value(
+            r.track, 1, r.sendIndex, "I_DSTCHAN"));
+        const int base = dch & 0x3FF;
+        const bool mono = (dch & 1024) != 0;
+        const char* a = GetOutputChannelName ? GetOutputChannelName(base) : nullptr;
+        if (a && *a) {
+            if (mono) return std::string(a);
+            const char* b = GetOutputChannelName ? GetOutputChannelName(base + 1)
+                                                  : nullptr;
+            if (b && *b) return std::string(a) + " / " + b;
+            return std::string(a);
+        }
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "Out %d", base + 1);
+        return std::string(buf);
+    }
+    const char* tag = (r.sendCategory == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
+    auto* other = static_cast<MediaTrack*>(GetSetTrackSendInfo(
+        r.track, r.sendCategory, r.sendIndex, tag, nullptr));
+    if (!other || !ValidatePtr2(nullptr, other, "MediaTrack*"))
+        return {};   // hardware-output send (no track) — nothing track-named here
+    char nm[256] = {0};
+    GetSetMediaTrackInfo_String(other, "P_NAME", nm, false);
+    if (nm[0]) return std::string(nm);
+    // Unnamed dest/src track → REAPER track number so the slot still self-
+    // identifies (and isn't blanked as if it were an empty slot).
+    const int trkNo = static_cast<int>(
+        GetMediaTrackInfo_Value(other, "IP_TRACKNUMBER"));
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "CH %d", trkNo > 0 ? trkNo : 0);
+    return std::string(buf);
 }
 
 // Destination track for a send / source track for a receive. Returns
@@ -4087,8 +4370,10 @@ int focusedRouteCount_()
     MediaTrack* tr = GetLastTouchedTrack();
     if (!tr) return 0;
     int n = 0;
-    if (sendThis) { int s = GetTrackNumSends(tr, 0);  if (s > n) n = s; }
-    if (recvThis) { int r = GetTrackNumSends(tr, -1); if (r > n) n = r; }
+    // Extent (not GetTrackNumSends) so the window spans empty-slot indices too
+    // — otherwise the last real send past a gap can't be paged into view.
+    if (sendThis) { int s = sendIndexExtent_(tr, 0);  if (s > n) n = s; }
+    if (recvThis) { int r = sendIndexExtent_(tr, -1); if (r > n) n = r; }
     return n;
 }
 
@@ -5879,8 +6164,11 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 // the ENGINEERING values agreeing too (7000 vs 10000 Hz can't collide),
                 // which still tolerates round-trip rounding drift.
                 const double engDiff  = std::fabs(live.eng - mem.eng);
-                const double engScale = std::max(1.0,
-                    std::max(std::fabs(live.eng), std::fabs(mem.eng)));
+                // Manual max — Windows defines max() as a macro (no NOMINMAX),
+                // so std::max breaks the MSVC build (see ~line 3859).
+                const double aE = std::fabs(live.eng), bE = std::fabs(mem.eng);
+                double engScale = (aE > bE) ? aE : bE;
+                if (engScale < 1.0) engScale = 1.0;
                 const bool   engClose = engDiff <= 0.005 * engScale;   // 0.5%
                 const bool untouched =
                     mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
@@ -6783,19 +7071,39 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
     }
 }
 
-void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
+// The surface's currently-focused FX on `tr`, but ONLY when it is NOT a CS/BC
+// (those already show as the cyan/amber boxes) — drives the blue "selected FX"
+// overlay box. Source = the Instance cursor (stripInstanceFxRaw_, -1 until the
+// user has actually navigated to an FX on this track via FX/Instance cycle).
+// Frank 2026-06-25.
+int focusedSelectedFx_(MediaTrack* tr)
 {
-    if (!tr || (csFx < 0 && bcFx < 0)) return;
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return -1;
+    const int fx = stripInstanceFxRaw_(tr);
+    if (fx < 0 || fx >= TrackFX_GetCount(tr)) return -1;
+    char nm[256];
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return -1;
+    const uf8::PluginMap* pm = uf8::lookupPluginMapByName(nm);
+    if (pm && (pm->domain == uf8::Domain::ChannelStrip
+            || pm->domain == uf8::Domain::BusComp))
+        return -1;                                  // a CS/BC → already shown
+    return fx;
+}
+
+void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, int selFx, std::string& out)
+{
+    if (!tr || (csFx < 0 && bcFx < 0 && selFx < 0)) return;
     const std::string guid = uc1::trackGuid(tr);
     if (guid.empty()) return;
     // Publish the visual SLOT, not the chain index: REAPER 7.75 lets the MCP/TCP
     // FX list leave empty slots, so the overlay (row = topPad + N*rowH) needs the
     // visual slot. fxChainIndexToSlot_ (defined up by applyFxMoveSlotAware_) maps
     // chain index -> effective 0-based slot; index unchanged on pre-7.75.
-    const int csSlot = (csFx >= 0) ? fxChainIndexToSlot_(tr, csFx) : -1;
-    const int bcSlot = (bcFx >= 0) ? fxChainIndexToSlot_(tr, bcFx) : -1;
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), "%s,%d,%d;", guid.c_str(), csSlot, bcSlot);
+    const int csSlot  = (csFx  >= 0) ? fxChainIndexToSlot_(tr, csFx)  : -1;
+    const int bcSlot  = (bcFx  >= 0) ? fxChainIndexToSlot_(tr, bcFx)  : -1;
+    const int selSlot = (selFx >= 0) ? fxChainIndexToSlot_(tr, selFx) : -1;
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%s,%d,%d,%d;", guid.c_str(), csSlot, bcSlot, selSlot);
     out += buf;
 }
 
@@ -6811,15 +7119,20 @@ void publishOverlayState_()
     int csFx = -1, bcFx = -1;
     if (body_on) activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
     publishOverlayParams_(csTr, csFx, bcTr, bcFx);   // per-domain last param
+    // The blue "selected FX" box: the focused track's surface-focused non-CS/BC
+    // FX (csTr == focusedTrack()). Only when the MCP highlight is on, not the
+    // panel-only path. Frank 2026-06-25.
+    const int selFx = (on && csTr) ? focusedSelectedFx_(csTr) : -1;
     std::string body;
     if (body_on) {
         // Mark ONLY the surface's active CS/BC, not every track that merely
-        // hosts one: CS on the focused track, BC on the BC-anchor track.
+        // hosts one: CS on the focused track, BC on the BC-anchor track. The
+        // selected-FX box rides the focused track's entry (= csTr).
         if (csTr && csTr == bcTr) {
-            appendOverlayEntry_(csTr, csFx, bcFx, body);     // both on one track
+            appendOverlayEntry_(csTr, csFx, bcFx, selFx, body);  // both on one track
         } else {
-            appendOverlayEntry_(csTr, csFx, -1, body);
-            appendOverlayEntry_(bcTr, -1, bcFx, body);
+            appendOverlayEntry_(csTr, csFx, -1, selFx, body);
+            appendOverlayEntry_(bcTr, -1, bcFx, -1, body);
         }
     }
     const std::string sig = (on ? "1|" : "0|") + body;
@@ -8406,29 +8719,58 @@ void drainInputQueue()
                     sr = resolveVpotRoute_(e.strip, bankOffset, surfaceCount);
                 if (sr.active()) {
                     if (sr.valid && sr.track) {
-                        const int n = GetTrackNumSends(sr.track,
-                                                       sr.sendCategory);
+                        // Collect every REAL route entry to mute against. The
+                        // SEND view (cat 0/1) is COMBINED — soloing a send must
+                        // mute the other track sends AND the hardware outputs,
+                        // not just the soloed entry's own category. Iterate the
+                        // true extent (not GetTrackNumSends, which doesn't count
+                        // empty-slot indices and stopped the loop at strip 5 once
+                        // a gap existed). Empty track-send slots (null dest) are
+                        // skipped. Receive view (cat -1) is receives only.
+                        std::vector<std::pair<int,int>> entries;  // (cat, idx)
+                        auto collect = [&](int cat) {
+                            if (cat == 1) {
+                                const int nhw = GetTrackNumSends(sr.track, 1);
+                                for (int i = 0; i < nhw; ++i)
+                                    entries.emplace_back(1, i);
+                                return;
+                            }
+                            const int ext = sendIndexExtent_(sr.track, cat);
+                            const char* tag = (cat == -1) ? "P_SRCTRACK"
+                                                          : "P_DESTTRACK";
+                            for (int i = 0; i < ext; ++i) {
+                                auto* t = static_cast<MediaTrack*>(
+                                    GetSetTrackSendInfo(sr.track, cat, i, tag,
+                                                        nullptr));
+                                if (t && ValidatePtr2(nullptr, t, "MediaTrack*"))
+                                    entries.emplace_back(cat, i);
+                            }
+                        };
+                        if (sr.sendCategory == -1) collect(-1);
+                        else { collect(0); collect(1); }
+
                         const bool thisOpen =
                             GetTrackSendInfo_Value(sr.track,
                                 sr.sendCategory, sr.sendIndex,
                                 "B_MUTE") < 0.5;
                         bool othersMuted = true;
-                        for (int i = 0; i < n; ++i) {
-                            if (i == sr.sendIndex) continue;
-                            if (GetTrackSendInfo_Value(sr.track,
-                                    sr.sendCategory, i, "B_MUTE") < 0.5)
-                            {
+                        for (const auto& [cat, i] : entries) {
+                            if (cat == sr.sendCategory && i == sr.sendIndex)
+                                continue;
+                            if (GetTrackSendInfo_Value(sr.track, cat, i,
+                                    "B_MUTE") < 0.5) {
                                 othersMuted = false;
                                 break;
                             }
                         }
                         const bool soloActive = thisOpen && othersMuted;
-                        for (int i = 0; i < n; ++i) {
-                            const double tgt = soloActive
-                                ? 0.0
-                                : (i == sr.sendIndex ? 0.0 : 1.0);
-                            SetTrackSendInfo_Value(sr.track,
-                                sr.sendCategory, i, "B_MUTE", tgt);
+                        for (const auto& [cat, i] : entries) {
+                            const bool isThis =
+                                (cat == sr.sendCategory && i == sr.sendIndex);
+                            const double tgt = soloActive ? 0.0
+                                                          : (isThis ? 0.0 : 1.0);
+                            SetTrackSendInfo_Value(sr.track, cat, i,
+                                                   "B_MUTE", tgt);
                         }
                     }
                     // active-but-invalid (empty strip / hardware-output
@@ -12968,21 +13310,27 @@ void pushZonesForVisibleSlots()
                 if (const char* key = recRmePExtKey(cutRme)) {
                     effMute = readTrackPExt_(tr, key) == "1";
                 }
-            } else if (tr) {
-                if (routedFader && faderRoute.valid) {
-                    effMute = GetTrackSendInfo_Value(
-                        faderRoute.track, faderRoute.sendCategory,
-                        faderRoute.sendIndex, "B_MUTE") > 0.5;
-                } else if (routedVpot && vpotRoute.valid) {
-                    effMute = GetTrackSendInfo_Value(
-                        vpotRoute.track, vpotRoute.sendCategory,
-                        vpotRoute.sendIndex, "B_MUTE") > 0.5;
-                } else if (!routedFader && !routedVpot) {
-                    effMute = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
-                }
-                // routedFader/routedVpot active but invalid → effMute stays
-                // false (empty send slot, nothing to mute).
+            } else if (routedFader && faderRoute.valid) {
+                // Routed strips read the route's OWN track, independent of the
+                // bank track. Crucial when the focused track's send list is
+                // longer than the visible bank (e.g. 6 tracks but 8 send slots):
+                // strips past the bank end have a null `tr` here (the tr-
+                // substitution for routed strips runs later, in the blank-strip
+                // branch), so gating on `tr` dropped the Cut/mute LED for the
+                // last sends + hardware outputs — they showed only up to the
+                // bank's track count (Frank 2026-06-25).
+                effMute = GetTrackSendInfo_Value(
+                    faderRoute.track, faderRoute.sendCategory,
+                    faderRoute.sendIndex, "B_MUTE") > 0.5;
+            } else if (routedVpot && vpotRoute.valid) {
+                effMute = GetTrackSendInfo_Value(
+                    vpotRoute.track, vpotRoute.sendCategory,
+                    vpotRoute.sendIndex, "B_MUTE") > 0.5;
+            } else if (tr && !routedFader && !routedVpot) {
+                effMute = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
             }
+            // routedFader/routedVpot active but invalid → effMute stays
+            // false (empty send slot, nothing to mute).
             const int8_t cutKey = effMute ? 1 : 0;
             if (cutKey != g_lastCutLed[s]) {
                 g_lastCutLed[s] = cutKey;
@@ -12993,8 +13341,10 @@ void pushZonesForVisibleSlots()
                 if (userStripActive) colourTr = userS.tr;
                 else if (routedFader && faderRoute.valid) {
                     if (auto* rt = routeTargetTrack_(faderRoute)) colourTr = rt;
+                    else if (!colourTr) colourTr = faderRoute.track;  // hw out
                 } else if (routedVpot && vpotRoute.valid) {
                     if (auto* rt = routeTargetTrack_(vpotRoute)) colourTr = rt;
+                    else if (!colourTr) colourTr = vpotRoute.track;
                 }
                 uf8::LedColour cutCol = (userStripActive && userColourCut != 0)
                     ? uf8::ledColourForTrackRgb(userColourCut)
@@ -13917,6 +14267,10 @@ void pushZonesForVisibleSlots()
         // A blank LCD field reads "nothing here" faster than a literal
         // "REAPER" / "MAIN" label that suggests something is loaded.
         // Frank 2026-05-25.
+        // In Send/Receive routing mode the strip represents a route, not the
+        // bank track's plug-in chain — showing a plug-in / CS name in the
+        // colour bar there is misleading. Blank it (Frank 2026-06-25).
+        if (routedFader || routedVpot) csType.clear();
         if (csType.size() > 7) csType.resize(7);
         if (csType != g_lastCsType[s]) {
             g_lastCsType[s] = csType;
@@ -14200,19 +14554,26 @@ void pushZonesForVisibleSlots()
             // doesn't actually control that track in the active mode.
             const bool blankInUserStripMode = userStripActive
                 && !userFaderActive;
-            if (n.empty() && !blankInUserStripMode) {
+            // In a Send/Receive routing mode an EMPTY visual slot (7.75 reorder /
+            // gaps) must BLANK — not fall back to the bank track's name. routeName_
+            // already returned "" for the gap; without this the empty slot showed
+            // a track name and the labels looked unmirrored (Frank 2026-06-25).
+            const bool inRouteMode = routedFader || routedVpot;
+            const bool blankStrip  = blankInUserStripMode
+                                  || (inRouteMode && n.empty());
+            if (n.empty() && !blankStrip) {
                 char name[256] = {0};
                 GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
                 n = name;
             }
-            if (n.empty() && !blankInUserStripMode
+            if (n.empty() && !blankStrip
                 && tr == GetMasterTrack(nullptr)) {
                 // Master-pin strip: Master's P_NAME is empty and its
                 // IP_TRACKNUMBER is -1, which would fall through to the
                 // "CH <realSlot+1>" path below. Show "MASTER" instead.
                 n = "MASTER";
             }
-            if (n.empty() && !blankInUserStripMode) {
+            if (n.empty() && !blankStrip) {
                 // Fallback name for unnamed tracks — use REAPER's
                 // actual track number (IP_TRACKNUMBER) not the visible
                 // -slot index so it stays consistent with the channel-
@@ -14224,7 +14585,7 @@ void pushZonesForVisibleSlots()
                          trkNo > 0 ? trkNo : realSlot + 1);
                 n = fallback;
             }
-            if (blankInUserStripMode) {
+            if (blankStrip) {
                 n = "       ";   // 7 spaces, matches blank-strip path
             }
             n = abbreviateTrackName_(n, 7);
@@ -17088,10 +17449,29 @@ void onTimer()
     // Frank 2026-05-22.
     uf8::bindings::setKeyboardShiftHeld(
         g_keyboardShiftModifier.load() && hostShiftHeld_());
+#ifdef _WIN32
+    // Windows has no keyboard Cmd key (hostCmdHeld_ is always false), so the
+    // "Cmd" modifier slot would be unreachable from the keyboard — drive it from
+    // ALT instead (the natural second modifier; matches the "Alt/Cmd" mental
+    // model). AND guard AltGr: right-Alt reports as Ctrl+Alt, which otherwise
+    // falsely engaged the Ctrl slot — Frank's Win user saw alt+enc2 fire the
+    // ctrl+enc2 action ("scroll BC anchor"). Drop the Ctrl bit when right-Alt is
+    // down so Alt and Ctrl stay distinct (same rule as soloMuteModFromHost_).
+    {
+        const bool altHeld  = hostAltHeld_();
+        bool       ctrlHeld = hostCtrlHeld_();
+        if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrlHeld = false; // AltGr → Alt
+        uf8::bindings::setKeyboardCmdHeld(
+            g_keyboardCmdModifier.load()  && altHeld);
+        uf8::bindings::setKeyboardCtrlHeld(
+            g_keyboardCtrlModifier.load() && ctrlHeld);
+    }
+#else
     uf8::bindings::setKeyboardCmdHeld(
         g_keyboardCmdModifier.load()   && hostCmdHeld_());
     uf8::bindings::setKeyboardCtrlHeld(
         g_keyboardCtrlModifier.load()  && hostCtrlHeld_());
+#endif
 
     // Resolve the active FX-Learn modifier layer for this frame (Option /
     // Control overlays on UC1/UF8 controls). Read by lookupBindingsByName +
@@ -19038,6 +19418,39 @@ custom_action_register_t g_actionFocusPinFocused{
 };
 int g_cmdFocusPinFocused = 0;
 
+// CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
+// user 2026-06-25: "would be cool if these were available as Reaper actions").
+// Same workers as the surface built-ins; dispatch posts the existing request
+// atomics so everything runs on the main thread via onTimer. The 8 switch slots
+// + cycle fwd/back + move up/down. idStr/name strings are static-storage literals.
+custom_action_register_t g_actionCsSwitch[8] = {
+    { 0, "REASIXTY_CS_SWITCH_1", "Rea-Sixty: Switch Channel Strip to Favourite 1", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_2", "Rea-Sixty: Switch Channel Strip to Favourite 2", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_3", "Rea-Sixty: Switch Channel Strip to Favourite 3", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_4", "Rea-Sixty: Switch Channel Strip to Favourite 4", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_5", "Rea-Sixty: Switch Channel Strip to Favourite 5", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_6", "Rea-Sixty: Switch Channel Strip to Favourite 6", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_7", "Rea-Sixty: Switch Channel Strip to Favourite 7", nullptr },
+    { 0, "REASIXTY_CS_SWITCH_8", "Rea-Sixty: Switch Channel Strip to Favourite 8", nullptr },
+};
+int g_cmdCsSwitch[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+custom_action_register_t g_actionCsCycleNext{
+    0, "REASIXTY_CS_CYCLE_NEXT", "Rea-Sixty: Cycle Channel Strip Favourites (next)", nullptr,
+};
+int g_cmdCsCycleNext = 0;
+custom_action_register_t g_actionCsCyclePrev{
+    0, "REASIXTY_CS_CYCLE_PREV", "Rea-Sixty: Cycle Channel Strip Favourites (previous)", nullptr,
+};
+int g_cmdCsCyclePrev = 0;
+custom_action_register_t g_actionFxMoveUp{
+    0, "REASIXTY_FX_MOVE_UP", "Rea-Sixty: Move active FX up in chain", nullptr,
+};
+int g_cmdFxMoveUp = 0;
+custom_action_register_t g_actionFxMoveDown{
+    0, "REASIXTY_FX_MOVE_DOWN", "Rea-Sixty: Move active FX down in chain", nullptr,
+};
+int g_cmdFxMoveDown = 0;
+
 // Temporary Selection Set handlers — invoked by the temp_selset_*
 // built-ins (Bindings UI "Selection Sets" category). Pure surface
 // concept (ad-hoc working set); no Settings slot, ProjExtState-persisted
@@ -19173,6 +19586,12 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdFocusToggleSel) { g_tempSelsetToggleSelRequest.store(true); return true; }
     if (command == g_cmdFocusSetFromSel){ g_tempSelsetSetFromSelRequest.store(true); return true; }
     if (command == g_cmdFocusPinFocused){ g_tempSelsetPinFocusedRequest.store(true); return true; }
+    for (int i = 0; i < 8; ++i)
+        if (command == g_cmdCsSwitch[i]) { g_csSwitchReq.store(i); return true; }
+    if (command == g_cmdCsCycleNext)    { g_csCycleReq.fetch_add(+1); return true; }
+    if (command == g_cmdCsCyclePrev)    { g_csCycleReq.fetch_add(-1); return true; }
+    if (command == g_cmdFxMoveUp)       { g_fxMoveReq.fetch_add(-1);  return true; }
+    if (command == g_cmdFxMoveDown)     { g_fxMoveReq.fetch_add(+1);  return true; }
     return false;
 }
 
@@ -19837,6 +20256,16 @@ void reasixty_setOverlayBcColor(int rgb)
 {
     char b[16]; snprintf(b, sizeof(b), "%d", rgb & 0xFFFFFF);
     SetExtState("rea_sixty", "overlay_bc_col", b, true);
+}
+int  reasixty_overlaySelColor()
+{
+    const char* v = GetExtState("rea_sixty", "overlay_sel_col");
+    return (v && *v) ? (std::atoi(v) & 0xFFFFFF) : 0x3060FF;   // default: blue
+}
+void reasixty_setOverlaySelColor(int rgb)
+{
+    char b[16]; snprintf(b, sizeof(b), "%d", rgb & 0xFFFFFF);
+    SetExtState("rea_sixty", "overlay_sel_col", b, true);
 }
 double reasixty_overlayFillAlpha()
 {
@@ -24886,6 +25315,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdFocusToggleSel  = plugin_register("custom_action", &g_actionFocusToggleSel);
     g_cmdFocusSetFromSel = plugin_register("custom_action", &g_actionFocusSetFromSel);
     g_cmdFocusPinFocused = plugin_register("custom_action", &g_actionFocusPinFocused);
+    for (int i = 0; i < 8; ++i)
+        g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
+    g_cmdCsCycleNext = plugin_register("custom_action", &g_actionCsCycleNext);
+    g_cmdCsCyclePrev = plugin_register("custom_action", &g_actionCsCyclePrev);
+    g_cmdFxMoveUp    = plugin_register("custom_action", &g_actionFxMoveUp);
+    g_cmdFxMoveDown  = plugin_register("custom_action", &g_actionFxMoveDown);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into

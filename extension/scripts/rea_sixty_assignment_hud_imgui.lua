@@ -1018,6 +1018,16 @@ local function renderFace(st, asn)
   ctrlRects = {}
   local det = readDetail()   -- per-knob invert/range/curve for the indicators
 
+  -- Hover-tooltip suffix: show the sensitivity factor when it isn't the
+  -- default 1.0 (knobs/V-Pots only; buttons have no det entry → ""). Frank 2026-06-25.
+  local function sensTip(idx)
+    local d = det[idx]
+    if d and d.sens and math.abs(d.sens - 1.0) > 0.001 then
+      return string.format("  \xC2\xB7  sens %.2g\xC3\x97", d.sens)
+    end
+    return ""
+  end
+
   -- design-space draw helpers ------------------------------------------
   local function dRect(x, y, w, h, fill, outl, rounding)
     local rd = (rounding or 3) * scale
@@ -1086,7 +1096,7 @@ local function renderFace(st, asn)
       local dx, dy = lmx - sx, lmy - sy
       if dx * dx + dy * dy <= (r + 3) * (r + 3) then
         local g = geom.ctrl[idx]; tipSlot = (g and g.label) or lbl
-        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "")) or nil
+        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "") .. sensTip(idx)) or nil
       end
     end
   end
@@ -1122,7 +1132,7 @@ local function renderFace(st, asn)
       ctrlRects[#ctrlRects + 1] = { idx = idx, shape = 1, x = sx, y = sy, w = sw, h = sh }
       if lmx >= sx and lmx <= sx + sw and lmy >= sy and lmy <= sy + sh then
         local g = geom.ctrl[idx]; tipSlot = (g and g.label) or label
-        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "")) or nil
+        tipParam = mapped and (asn[idx].name .. (asn[idx].inv and "  (inverted)" or "") .. sensTip(idx)) or nil
       end
     end
   end
