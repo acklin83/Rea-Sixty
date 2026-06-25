@@ -5119,14 +5119,64 @@ ActiveFxTarget resolveActiveFx_()
     return {nullptr, -1};
 }
 
-// EncoderMode::FxMove — rotate to shuffle the active FX up / down within
-// the focused track's chain. Shares the reorder mechanism with the
-// plugin_move_up / plugin_move_down one-shots (TrackFX_CopyToTrack with
-// is_move=true). `step` is signed detents: CW (>0) moves the FX down /
-// later in the chain, CCW (<0) up / earlier. Hard-stops at the chain ends
-// (no wrap). The FX-cursor follows the moved plug-in to its new index so
-// the carousel + any chained action still target it. Frank 2026-06-12.
-void applyFxMove_(int step)
+// ── REAPER 7.75 FX-slot helpers (chain index ↔ visual slot) ──────────
+// 7.75 decoupled the visual MCP/TCP row from the chain index: empty slots are
+// allowed and an FX's display position is governed by its "slot_hint". Crucially
+// (probed on HW 2026-06-25) DISPLAY ORDER ALWAYS FOLLOWS CHAIN ORDER — slot_hint
+// only inserts gaps, it can't reorder FX past each other. So a slot-aware move is:
+//   • target slot empty  → pure display move = set slot_hint (processing untouched)
+//   • target slot has FX  → must cross it = reorder the chain (the classic move)
+// All parm strings + 0-based-ness verified against the live 7.75 binary + probes.
+
+// chain index → effective 0-based visual slot. Returns the index unchanged when
+// empty-slots are off or the parm is unavailable (pre-7.75) — safe drop-in.
+static int fxChainIndexToSlot_(MediaTrack* tr, int idx)
+{
+    if (!tr || idx < 0) return idx;
+    char buf[64] = {0};
+    if (TrackFX_GetNamedConfigParm(tr, idx, "chain_index_to_slot", buf, sizeof(buf))
+        && buf[0]) {
+        const int slot = std::atoi(buf);
+        if (slot >= 0) return slot;
+    }
+    return idx;
+}
+
+// visual slot → chain index. Returns true with out=chain index when a real FX
+// occupies the slot; false when empty (out = the index that would fill it, from
+// REAPER's "empty:x"). Syntax: slot number passed as the fx arg (verified; the
+// ":N"/".N" suffix forms do NOT work). false/-1 on pre-7.75 / API failure.
+static bool fxSlotToIndex_(MediaTrack* tr, int slot, int& out)
+{
+    out = -1;
+    if (!tr || slot < 0) return false;
+    char buf[64] = {0};
+    if (!TrackFX_GetNamedConfigParm(tr, slot, "chain_slot_to_index", buf, sizeof(buf))
+        || !buf[0])
+        return false;
+    if (std::strncmp(buf, "empty:", 6) == 0) { out = std::atoi(buf + 6); return false; }
+    out = std::atoi(buf);
+    return true;
+}
+
+static void fxSetSlotHint_(MediaTrack* tr, int idx, int slot)
+{
+    if (!tr || idx < 0) return;
+    char v[16];
+    std::snprintf(v, sizeof(v), "%d", slot);
+    TrackFX_SetNamedConfigParm(tr, idx, "slot_hint", v);
+}
+
+// EncoderMode::FxMove — rotate to shuffle the active FX up / down within the
+// focused track's chain, ONE VISUAL SLOT per detent (7.75-aware). Into an empty
+// slot it only re-hints the FX (display shifts, signal order untouched) so it
+// glides into the gap instead of the pre-7.75 leapfrog; onto a real FX it crosses
+// it via the proven chain reorder. `step` is signed detents: CW (>0) = down /
+// later, CCW (<0) = up / earlier. Hard-stops at the chain ends (no wrap). The
+// FX-cursor follows the moved plug-in so the carousel + any chained action still
+// target it. `carousel` shows the on-screen ring (encoder path only).
+// Frank 2026-06-12, slot-aware 2026-06-25.
+static void applyFxMoveSlotAware_(int step, bool carousel)
 {
     if (step == 0) return;
     auto t = resolveActiveFx_();
@@ -5134,25 +5184,89 @@ void applyFxMove_(int step)
     const int n = TrackFX_GetCount(t.tr);
     if (n < 2 || t.fxIdx < 0 || t.fxIdx >= n) return;
 
-    int dest = t.fxIdx + step;
-    if (dest < 0)     dest = 0;
-    if (dest > n - 1) dest = n - 1;
-    if (dest == t.fxIdx) return;   // already at the chain edge
+    const int dir = (step > 0) ? 1 : -1;
+    int remaining = (step > 0) ? step : -step;
+    int cur = t.fxIdx;
+    bool changed = false;
 
-    TrackFX_CopyToTrack(t.tr, t.fxIdx, t.tr, dest, /*is_move*/ true);
-    setStripInstanceFx_(t.tr, dest);   // re-anchor cursor to the new index
+    // Track the moving FX by GUID, not by index math: REAPER 7.75's slot-aware
+    // CopyToTrack lands the FX at an index that depends on the gap layout, so the
+    // old "landed = cur+1" assumption clobbered the wrong FX's hint (whole chain
+    // dragged a slot) and re-anchored onto the crossed FX (focus jumped to the
+    // CS/BC). Re-resolving the index from the GUID after every op is layout-proof.
+    const std::string movingGuid = uf8::fxGuidString(t.tr, cur);
+
+    while (remaining-- > 0) {
+        if (!movingGuid.empty()) {
+            const int gi = uf8::findFxIndexByGuid(t.tr, movingGuid);
+            if (gi >= 0) cur = gi;                          // re-resolve current index
+        }
+        const int sM       = fxChainIndexToSlot_(t.tr, cur);
+        const int target   = sM + dir;
+        if (target < 0) break;                              // top edge
+        const int lastSlot = fxChainIndexToSlot_(t.tr, n - 1);
+        int idxAtTarget = -1;
+        const bool occupied = fxSlotToIndex_(t.tr, target, idxAtTarget);
+        if (!occupied) {
+            // Empty slot — glide into the gap. Never fabricate unbounded trailing
+            // gaps below the last FX (would just push the FX into the void).
+            if (target > lastSlot) break;
+            fxSetSlotHint_(t.tr, cur, target);              // display-only move
+            changed = true;                                 // cur (chain idx) unchanged
+        } else {
+            // Real FX at the adjacent slot — cross it. REAPER 7.75's CopyToTrack is
+            // slot-aware: a DOWN move with dest=cur+1 is a chain no-op, so REAPER
+            // only HINT-shifts (no cross). dest=cur+2 down / cur-1 up truly crosses
+            // the one neighbour; REAPER pins the mover to the dest slot, so clear
+            // THAT hint (found via GUID) to seat it tight. (Verified on 7.75 incl.
+            // gap layouts, probe 2026-06-25.)
+            const int dest = (dir > 0) ? cur + 2 : cur - 1;
+            if (dest < 0 || dest > n) break;
+            TrackFX_CopyToTrack(t.tr, cur, t.tr, dest, /*is_move*/ true);
+            const int gi = movingGuid.empty()
+                ? ((dir > 0) ? cur + 1 : cur - 1)           // no-GUID fallback
+                : uf8::findFxIndexByGuid(t.tr, movingGuid);
+            if (gi < 0) break;
+            // Seat the mover TIGHT against the FX it just crossed, on the side it
+            // moved to — NOT its natural minimum slot. Clearing the hint (-1) let it
+            // overshoot UP past empty slots: cross Pro-Q upward and it jumped to slot
+            // 2 instead of the gap directly above Pro-Q (slot 4). The crossed FX is
+            // the immediate neighbour on the far side (gi-1 down / gi+1 up); pin the
+            // mover one slot beyond it. (Down to a natural last slot this equals the
+            // old clear, so no regression.) Frank 2026-06-25.
+            const int crossedSlot = fxChainIndexToSlot_(t.tr, (dir > 0) ? gi - 1 : gi + 1);
+            fxSetSlotHint_(t.tr, gi, (dir > 0) ? crossedSlot + 1 : crossedSlot - 1);
+            cur = gi;
+            changed = true;
+        }
+    }
+
+    if (!changed) return;
+    if (!movingGuid.empty()) {
+        const int gi = uf8::findFxIndexByGuid(t.tr, movingGuid);
+        if (gi >= 0) cur = gi;
+    }
+    setStripInstanceFx_(t.tr, cur);   // re-anchor the Instance cursor (GUID-based)
+    // Also re-rank the CS/BC DOMAIN instance onto the moved FX — mirrors
+    // landFxCursor_. Without this the domain active-instance kept its old ordinal,
+    // so moving one CS instance past another flipped focus to the wrong strip
+    // (4K B moved over 4K E → 4K E went active). Frank 2026-06-25.
+    syncInstanceFromFxIdx_(t.tr, cur, /*setFocusedDomain*/ true, /*setBcAnchor*/ true);
     g_bankDirty.store(true);
     if (g_uc1_surface) {
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
     }
-    // Carousel feedback at the FX's new slot (mirrors applyFxCycle_).
-    std::vector<int> ring = buildFxRing_(t.tr);
-    int k = 0;
-    for (size_t i = 0; i < ring.size(); ++i)
-        if (ring[i] == dest) { k = static_cast<int>(i); break; }
-    showCycleCarousel_(t.tr, k, ring);
+    if (carousel) {
+        std::vector<int> ring = buildFxRing_(t.tr);
+        int k = 0;
+        for (size_t i = 0; i < ring.size(); ++i)
+            if (ring[i] == cur) { k = static_cast<int>(i); break; }
+        showCycleCarousel_(t.tr, k, ring);
+    }
 }
+
+void applyFxMove_(int step) { applyFxMoveSlotAware_(step, /*carousel*/ true); }
 
 // ===================== CS-Switch (2026-06-20) =========================
 // Favourite Channel-Strip swapping. switchCsTo_ replaces a track's active CS
@@ -5664,6 +5778,12 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     const bool  oldEnabled = TrackFX_GetEnabled(tr, oldIdx);
     void* const oldFloat   = TrackFX_GetFloatingWindow(tr, oldIdx);
     const bool  oldOpen    = TrackFX_GetOpen(tr, oldIdx);
+    // REAPER 7.75: carry the old CS's visual slot pin. The new instance is added
+    // at the chain end with no slot_hint, so after the move it would fall into any
+    // empty slot that sat before oldIdx ("Cycle CS Favorites fällt einen Slot
+    // zurück"). Capture the hint and re-apply it to the replacement below.
+    char oldSlotHint[16] = {0};
+    TrackFX_GetNamedConfigParm(tr, oldIdx, "slot_hint", oldSlotHint, sizeof(oldSlotHint));
 
     const int newIdx = TrackFX_AddByName(tr, addName, false, -1);
     if (newIdx < 0) return false;   // plug-in not installed → leave chain intact
@@ -5749,9 +5869,23 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 // value we WROTE there last swap, the user hasn't touched it — carry
                 // the ORIGINAL intent forward instead of the freshly-rounded read,
                 // so a value can't drift 10.0→10.03→10.05→… across a chain of swaps.
+                //
+                // BUT the norm match alone is NOT enough across a CYCLE: mem.appliedNorm
+                // was the norm on a DIFFERENT plug-in (the previous hop), and normalised
+                // values aren't comparable between plug-ins with different ranges — a
+                // coincidental norm collision made HMF Freq carry a stale 10 kHz over a
+                // live 7000 Hz read (Frank 2026-06-25, only via cs_cycle because cycling
+                // accumulates intent; a fresh direct switch has none). Gate the carry on
+                // the ENGINEERING values agreeing too (7000 vs 10000 Hz can't collide),
+                // which still tolerates round-trip rounding drift.
+                const double engDiff  = std::fabs(live.eng - mem.eng);
+                const double engScale = std::max(1.0,
+                    std::max(std::fabs(live.eng), std::fabs(mem.eng)));
+                const bool   engClose = engDiff <= 0.005 * engScale;   // 0.5%
                 const bool untouched =
                     mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
-                    && std::fabs(live.norm - mem.appliedNorm) < 1e-3;
+                    && std::fabs(live.norm - mem.appliedNorm) < 1e-3
+                    && engClose;
                 val = untouched ? mem : live;
                 if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
                     char sn[96] = {0}; TrackFX_GetParamName(tr, oldIdx, sp, sn, sizeof(sn));
@@ -5823,6 +5957,11 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             csLog_(lg);
         }
     }
+
+    // Restore the old CS's visual slot pin so the replacement stays put instead
+    // of dropping into a preceding empty slot (REAPER 7.75). No-op pre-7.75.
+    if (oldSlotHint[0])
+        TrackFX_SetNamedConfigParm(tr, oldIdx, "slot_hint", oldSlotHint);
 
     // Restore enable + GUI state onto the new CS (now at oldIdx).
     TrackFX_SetEnabled(tr, oldIdx, oldEnabled);
@@ -6649,8 +6788,14 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, std::string& out)
     if (!tr || (csFx < 0 && bcFx < 0)) return;
     const std::string guid = uc1::trackGuid(tr);
     if (guid.empty()) return;
+    // Publish the visual SLOT, not the chain index: REAPER 7.75 lets the MCP/TCP
+    // FX list leave empty slots, so the overlay (row = topPad + N*rowH) needs the
+    // visual slot. fxChainIndexToSlot_ (defined up by applyFxMoveSlotAware_) maps
+    // chain index -> effective 0-based slot; index unchanged on pre-7.75.
+    const int csSlot = (csFx >= 0) ? fxChainIndexToSlot_(tr, csFx) : -1;
+    const int bcSlot = (bcFx >= 0) ? fxChainIndexToSlot_(tr, bcFx) : -1;
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "%s,%d,%d;", guid.c_str(), csFx, bcFx);
+    std::snprintf(buf, sizeof(buf), "%s,%d,%d;", guid.c_str(), csSlot, bcSlot);
     out += buf;
 }
 
@@ -23518,26 +23663,16 @@ void registerBindingHandlers()
         "Plug-in: close all floating FX windows", false
     });
 
-    // Move the active FX up / down in its track's chain. TrackFX_CopyToTrack
-    // with is_move=true reorders within the same track. No-op at chain
-    // ends. Cursor follows the moved FX to its new index so a chained
-    // bypass / preset hit still targets the right plug-in.
+    // Move the active FX up / down in its track's chain, one VISUAL slot per
+    // press (7.75 slot-aware — glides into empty slots, crosses real FX via a
+    // chain reorder; see applyFxMoveSlotAware_). Cursor follows the moved FX so a
+    // chained bypass / preset hit still targets the right plug-in. No on-screen
+    // carousel on these one-shots (button path).
     auto pluginMove = [](int dir) {
         return DescBuilder{
             [dir](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
-                auto t = resolveActiveFx_();
-                if (!t.tr) return;
-                const int n = TrackFX_GetCount(t.tr);
-                const int dest = t.fxIdx + dir;
-                if (dest < 0 || dest >= n) return;   // edge — no wrap
-                TrackFX_CopyToTrack(t.tr, t.fxIdx, t.tr, dest, /*is_move*/ true);
-                setStripInstanceFx_(t.tr, dest);
-                g_bankDirty.store(true);
-                if (g_uc1_surface) {
-                    g_uc1_surface->invalidateCache();
-                    g_uc1_surface->refresh();
-                }
+                applyFxMoveSlotAware_(dir, /*carousel*/ false);
             },
             nullptr,
             dir > 0 ? "Plug-in: move active FX down in chain"
