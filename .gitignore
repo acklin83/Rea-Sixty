@@ -45,6 +45,7 @@ dist-windows/
 dist/stage-*/
 dist/rea-sixty-mac-*.zip
 dist/rea-sixty-win-*.zip
+dist/rea-sixty-x86_64-*.zip
 dist/rea-sixty-linux-*.zip
 dist/rea-sixty-linux-*.tar.gz
 

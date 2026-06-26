@@ -179,6 +179,11 @@ bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
 bool reasixty_wrapPluginCycle();
 void reasixty_setWrapPluginCycle(bool on);
+bool reasixty_csCopyEq();    void reasixty_setCsCopyEq(bool on);
+bool reasixty_csCopyDyn();   void reasixty_setCsCopyDyn(bool on);
+bool reasixty_csCopyGate();  void reasixty_setCsCopyGate(bool on);
+bool reasixty_csCopyFader(); void reasixty_setCsCopyFader(bool on);
+bool reasixty_csFavRememberNonCopied(); void reasixty_setCsFavRememberNonCopied(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
 bool reasixty_keyboardCmdModifier();
@@ -881,6 +886,31 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool wrapCycle = reasixty_wrapPluginCycle();
     if (ImGui_Checkbox(ctx, "Wrap Plug-in Cycle", &wrapCycle)) {
         reasixty_setWrapPluginCycle(wrapCycle);
+    }
+
+    // Channel-Strip Switch / Cycle / Copy: which sections carry their values
+    // onto the new strip. Untick a section to leave the favourite's own defaults
+    // there. Applies to Switch-to-CS, CS-Cycle and Copy-to-CS. Frank 2026-06-25.
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx, "Channel Strip Switch — copy sections:");
+    {
+        bool eq = reasixty_csCopyEq();
+        if (ImGui_Checkbox(ctx, "EQ##cs_copy_eq", &eq)) reasixty_setCsCopyEq(eq);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        bool dyn = reasixty_csCopyDyn();
+        if (ImGui_Checkbox(ctx, "Dyn##cs_copy_dyn", &dyn)) reasixty_setCsCopyDyn(dyn);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        bool gate = reasixty_csCopyGate();
+        if (ImGui_Checkbox(ctx, "Gate##cs_copy_gate", &gate)) reasixty_setCsCopyGate(gate);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        bool fader = reasixty_csCopyFader();
+        if (ImGui_Checkbox(ctx, "Fader##cs_copy_fader", &fader)) reasixty_setCsCopyFader(fader);
+    }
+    // When on, each favourite keeps its own values for the unticked sections
+    // (per track) instead of falling to the new plug-in's defaults. Default on.
+    bool favRemember = reasixty_csFavRememberNonCopied();
+    if (ImGui_Checkbox(ctx, "Favourites remember non-copied sections", &favRemember)) {
+        reasixty_setCsFavRememberNonCopied(favRemember);
     }
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
@@ -2969,6 +2999,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "fx_scroll_all"  || n == "instance_scroll_all"
                  || n == "fx_move"
                  || n == "cs_cycle"       || n.rfind("switch_cs_", 0) == 0
+                 || n.rfind("copy_cs_", 0) == 0
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
                  || n == "bc_track_scroll_select"

@@ -162,6 +162,13 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
 enum class CsQuantityKind { Generic, Db, Freq, Time, Ratio, Q, Pct };
 CsQuantityKind csQuantityKind(int linkIdx);
 
+// Which Channel-Strip section a CS SSL-Link slot belongs to (EQ incl. filters,
+// Dyn = compressor, Gate, Fader). Lets the CS-Switch value transfer honour a
+// global "copy / ignore" mask per section (Settings → Plug-ins → Channel Strip
+// Switch). `Other` (input trim, polarity, …) is never maskable — always copied.
+enum class CsSection { Other, Eq, Dyn, Gate, Fader };
+CsSection csSection(int linkIdx);
+
 // True when `paramName` matches a known name alias for the UC1 knob that SSL-Link
 // `linkIdx` drives (case-insensitive substring). Lets CS value transfer resolve a
 // control on a plug-in that only NAMES the param differently ("High Pass Filter

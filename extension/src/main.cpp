@@ -738,6 +738,20 @@ std::atomic<bool>         g_hideOfflineFx{false};
 // hard-stop — "Next" at the last FX is a no-op, "Previous" at the first
 // FX is a no-op. Frank 2026-05-22.
 std::atomic<bool>         g_wrapPluginCycle{true};
+// CS-Switch / CS-Copy value-transfer section mask (Settings → Plug-ins →
+// Channel Strip Switch). When a section is unticked, switchCsTo_ does NOT carry
+// that section's values onto the new strip — the freshly-added favourite keeps
+// its own defaults there. Default all-on = legacy behaviour (copy everything).
+// Applies to Switch-to-CS-N, CS-Cycle AND Copy-to-CS-N. Frank 2026-06-25.
+std::atomic<bool>         g_csCopyEq{true};
+std::atomic<bool>         g_csCopyDyn{true};
+std::atomic<bool>         g_csCopyGate{true};
+std::atomic<bool>         g_csCopyFader{true};
+// When on (default), each favourite remembers its OWN values for the sections
+// the mask excludes from the carry, per track instance — so cycling restores
+// each strip's personal EQ/Dyn/Gate/Fader instead of falling to the new
+// plug-in's defaults. Off → non-copied sections use the new plug-in's defaults.
+std::atomic<bool>         g_csFavRememberNonCopied{true};
 // Host-OS keyboard modifier keys engage the matching modifier slots.
 // Polled in onTimer and OR'd with the HW `mod_*` flags. Default on.
 // Cmd has no Windows keyboard source — the toggle is still respected
@@ -1212,12 +1226,14 @@ std::atomic<int>  g_selsetSaveRequest{0};
 //   switch req: 0..7 = favourite slot to switch to, -1 = none
 //   cycle  req: accumulated signed detents (0 = none)
 std::atomic<int>  g_csSwitchReq{-1};
+std::atomic<int>  g_csCopyReq{-1};
 std::atomic<int>  g_csCycleReq{0};
 // FX move-in-chain req: accumulated signed detents (0 = none). Posted by the
 // REAPER-action route (hookCommand2); the surface builtins call the worker
 // directly. Drained on the main thread (TrackFX_CopyToTrack).
 std::atomic<int>  g_fxMoveReq{0};
 static void applyCsSwitch_(int slot);   // defined with the CS-Switch block
+static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step);
 static void applyFxMoveSlotAware_(int step, bool carousel);
 
@@ -1863,6 +1879,8 @@ void drainSelsets_() {
     // floats a window → must not run on the input thread).
     if (const int csSlot = g_csSwitchReq.exchange(-1); csSlot >= 0)
         applyCsSwitch_(csSlot);
+    if (const int csCopySlot = g_csCopyReq.exchange(-1); csCopySlot >= 0)
+        applyCsCopy_(csCopySlot);
     if (const int csSteps = g_csCycleReq.exchange(0); csSteps != 0)
         applyCsCycle_(csSteps);
     // FX move-in-chain posted by the REAPER action route (no on-screen carousel
@@ -2882,6 +2900,16 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "wrap_plugin_cycle"); v && *v) {
         g_wrapPluginCycle.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "cs_copy_mask"); v && *v) {
+        // 4 chars: EQ Dyn Gate Fader. Tolerate a short string (leaves rest on).
+        g_csCopyEq.store   (v[0] && v[0] != '0');
+        if (v[0]) g_csCopyDyn.store  (v[1] && v[1] != '0');
+        if (v[0] && v[1]) g_csCopyGate.store (v[2] && v[2] != '0');
+        if (v[0] && v[1] && v[2]) g_csCopyFader.store(v[3] && v[3] != '0');
+    }
+    if (const char* v = GetExtState("rea_sixty", "cs_fav_remember"); v && *v) {
+        g_csFavRememberNonCopied.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
         g_keyboardShiftModifier.store(std::atoi(v) != 0);
@@ -5715,6 +5743,110 @@ static int csScanStates_(MediaTrack* tr, int fx, int param, CsState* out, int ma
 // Main-thread only.
 std::map<std::string, std::array<CsVal, 128>> g_csIntent;
 
+// Per-favourite-instance memory for NON-copied sections. Keyed "trackGUID#slot"
+// → per control (linkIdx*2 + isBtn) last-known value of THAT favourite on THAT
+// track. Saved when a favourite is switched away from, restored when it returns,
+// so each favourite keeps its own EQ/Dyn/Gate/Fader for the sections the global
+// mask leaves out of the carry (g_csFavRememberNonCopied). Persisted PER PROJECT
+// into the .rpp via the projectconfig hook below (SetProjExtState is unreliable
+// in this build — see the temp-selset note). One line per valid control:
+//   CSFAVMEM "<guid#slot>" <key> <numeric> <norm> <eng> <kind> <dim> <sIdx> <sCnt> "<text>"
+std::map<std::string, std::array<CsVal, 128>> g_csFavMem;
+
+// Drop dead entries from g_csFavMem: a favourite slot that is now empty (no
+// plug-in assigned — project-independent, always safe) or a track GUID that no
+// longer exists in the active project. Keeps the .rpp + RAM map from growing
+// after track / favourite deletions. Called from the save hook so the cleaned
+// map is what gets serialised. (Active-project track scan → same single-project
+// assumption the rest of the projectconfig state already makes.)
+static void csFavMemPrune_()
+{
+    std::unordered_set<std::string> liveGuids;
+    if (MediaTrack* m = GetMasterTrack(nullptr)) liveGuids.insert(trackGuidStr_(m));
+    const int nt = CountTracks(nullptr);
+    for (int i = 0; i < nt; ++i)
+        if (MediaTrack* t = GetTrack(nullptr, i)) liveGuids.insert(trackGuidStr_(t));
+
+    for (auto it = g_csFavMem.begin(); it != g_csFavMem.end(); ) {
+        const std::string& k = it->first;
+        const size_t hash = k.rfind('#');
+        bool drop = (hash == std::string::npos);
+        if (!drop) {
+            const std::string guid = k.substr(0, hash);
+            const int slot = std::atoi(k.c_str() + hash + 1);
+            std::string a, l;
+            if (slot < 0 || slot > 7 || !reasixty_csFav(slot, a, l)
+                || !liveGuids.count(guid))
+                drop = true;
+        }
+        if (drop) it = g_csFavMem.erase(it); else ++it;
+    }
+}
+
+void csFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                      struct project_config_extension_t* /*reg*/)
+{
+    csFavMemPrune_();
+    for (const auto& kv : g_csFavMem) {
+        for (int key = 0; key < 128; ++key) {
+            const CsVal& v = kv.second[key];
+            if (!v.valid) continue;
+            ctx->AddLine("CSFAVMEM \"%s\" %d %d %.6f %.6f %d %d %d %d \"%s\"",
+                         kv.first.c_str(), key, v.numeric ? 1 : 0, v.norm, v.eng,
+                         static_cast<int>(v.kind), static_cast<int>(v.dim),
+                         v.stateIdx, v.stateCount, v.text);
+        }
+    }
+}
+
+bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                          bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "CSFAVMEM", 8) != 0) return false;
+    p += 8;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (*p != '"') return false;
+    ++p;
+    std::string memKey;
+    while (*p && *p != '"') memKey += *p++;
+    if (*p == '"') ++p;
+    // 8 scalar fields, then the quoted display text.
+    int key = -1, num = 0, kind = 0, dim = 0, sIdx = -1, sCnt = 0;
+    double norm = 0.0, eng = 0.0;
+    if (std::sscanf(p, " %d %d %lf %lf %d %d %d %d",
+                    &key, &num, &norm, &eng, &kind, &dim, &sIdx, &sCnt) != 8)
+        return true;   // malformed CSFAVMEM line — consume it, don't pass on
+    if (key < 0 || key >= 128) return true;
+    CsVal v;
+    v.valid = true;  v.numeric = (num != 0);  v.norm = norm;  v.eng = eng;
+    v.kind = static_cast<uc1::CsQuantityKind>(kind);
+    v.dim  = static_cast<CsUnit>(dim);
+    v.stateIdx = sIdx;  v.stateCount = sCnt;
+    if (const char* q = std::strchr(p, '"')) {
+        ++q; int i = 0;
+        while (*q && *q != '"' && i < static_cast<int>(sizeof(v.text)) - 1)
+            v.text[i++] = *q++;
+        v.text[i] = '\0';
+    }
+    g_csFavMem[memKey][key] = v;
+    return true;
+}
+
+void csFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    g_csFavMem.clear();
+}
+
+project_config_extension_t g_csFavMemProjConfig{
+    csFavMemProcessLine_,
+    csFavMemSaveExt_,
+    csFavMemBeginLoad_,
+    nullptr
+};
+
 // Debug: opt-in via ExtState "rea_sixty"/"cs_log" = "1" (Desktop cs_log_on.lua).
 // Appends one line per param transfer to /tmp/rea_sixty_cs.log.
 static void csLog_(const char* s)
@@ -6038,8 +6170,27 @@ static int resolveControlByAlias_(MediaTrack* tr, int fx, int linkIdx,
 // Replace tr's active CS with `addName` (dstMap = its resolved CS bindings, may
 // be null → swap without value carry). No undo / refresh here — the caller
 // wraps the whole gesture. Returns true if a swap happened.
+// Is this CS section currently set to copy? (Settings global mask.) `Other`
+// sections — input trim, polarity, etc. — are never maskable and always copy.
+static bool csSectionEnabled_(uc1::CsSection s)
+{
+    switch (s) {
+        case uc1::CsSection::Eq:    return g_csCopyEq.load();
+        case uc1::CsSection::Dyn:   return g_csCopyDyn.load();
+        case uc1::CsSection::Gate:  return g_csCopyGate.load();
+        case uc1::CsSection::Fader: return g_csCopyFader.load();
+        default:                    return true;
+    }
+}
+
+// Replace (copyMode=false) or duplicate-below (copyMode=true) the track's active
+// Channel Strip with `addName`, carrying the masked sections' values across.
+//   copyMode=false → new strip MOVES into the old slot, old is deleted (Switch / Cycle).
+//   copyMode=true  → new strip is inserted BELOW the old, old is left BYPASSED in
+//                    place (Copy-to-CS-N — an A/B with identical settings).
 static bool switchCsTo_(MediaTrack* tr, const char* addName,
-                        const uc1::PluginBindings* dstMap, bool focusResult)
+                        const uc1::PluginBindings* dstMap, bool focusResult,
+                        bool copyMode = false)
 {
     if (!tr || !addName || !*addName) return false;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
@@ -6124,8 +6275,27 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         }
     }
 
+    // Per-favourite-instance memory for the NON-copied sections (see g_csFavMem):
+    // identify the outgoing favourite (old strip) and the incoming one (addName)
+    // so we can save/restore each one's own values for the masked-out sections.
+    const std::string guid = trackGuidStr_(tr);
+    char oldIdent[256];
+    const int oldSlot = uf8::fxIdentityName(tr, oldIdx, oldIdent, sizeof(oldIdent))
+                        ? csFavSlotForName_(oldIdent) : -1;
+    const int newSlot = csFavSlotForName_(addName);
+    std::array<CsVal, 128>* oldFavMem =
+        (oldSlot >= 0) ? &g_csFavMem[guid + "#" + std::to_string(oldSlot)] : nullptr;
+    std::array<CsVal, 128>* newFavMem =
+        (newSlot >= 0) ? &g_csFavMem[guid + "#" + std::to_string(newSlot)] : nullptr;
+    const bool favRemember = g_csFavRememberNonCopied.load();
+
     auto& intent = g_csIntent[trackGuidStr_(tr)];
     for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
+        // Global section mask: when a section is unticked it is NOT carried from
+        // the old strip. Instead of falling to the new plug-in's defaults, each
+        // favourite remembers its OWN values for those sections per instance
+        // (favRemember, default on). Handled per control in the !copied branch.
+        const bool copied = csSectionEnabled_(uc1::csSection(linkIdx));
         for (int btn = 0; btn <= 1; ++btn) {
             const bool isBtn = (btn != 0);
             // The learned/explicit map is GROUND TRUTH — it's what the user
@@ -6146,6 +6316,33 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             const int key = linkIdx * 2 + (isBtn ? 1 : 0);
             const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
                                                    : uc1::csQuantityKind(linkIdx);
+
+            if (!copied) {
+                // NON-copied section. With per-favourite memory on (default):
+                // save the OUTGOING favourite's value for this control, and
+                // restore the INCOMING favourite's remembered value (if any).
+                // This never reads the old strip onto the new one — each
+                // favourite keeps its own settings. Off → new plug-in defaults.
+                if (favRemember) {
+                    if (oldFavMem && sp != uc1::kParamNone)
+                        (*oldFavMem)[key] = readParamValue_(tr, oldIdx, sp, kind);
+                    if (newFavMem && dp != uc1::kParamNone
+                        && !dstWritten.count(dp) && (*newFavMem)[key].valid) {
+                        dstWritten.insert(dp);
+                        applyParamValue_(tr, newIdx, dp, (*newFavMem)[key], key);
+                        if ((*newFavMem)[key].numeric)
+                            reapply.push_back({ dp, key, (*newFavMem)[key] });
+                        if (const char* en = GetExtState("rea_sixty", "cs_log");
+                            en && en[0] == '1') {
+                            char lg[160]; std::snprintf(lg, sizeof(lg),
+                                "[cs] k=%d FAVMEM restore slot%d dp=p%d", key, newSlot, dp);
+                            csLog_(lg);
+                        }
+                    }
+                }
+                continue;
+            }
+
             CsVal val;
             if (sp != uc1::kParamNone) {            // old has it → live value
                 const CsVal live = readParamValue_(tr, oldIdx, sp, kind);
@@ -6219,26 +6416,35 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         }
     }
 
-    // Move the new plug-in into the old CS's chain slot, then delete the old.
-    // CopyToTrack(move) inserts at oldIdx and shifts the old CS to oldIdx+1.
-    TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
-    TrackFX_Delete(tr, oldIdx + 1);
+    // Land the new plug-in in the chain. `finalIdx` = where it ends up.
+    //   Switch: MOVE it into oldIdx (shifts old to oldIdx+1), delete the old.
+    //   Copy:   MOVE it to oldIdx+1 (BELOW old); old stays in place, bypassed.
+    // CopyToTrack(move) inserts at the destination index and shifts the rest down.
+    int finalIdx;
+    if (copyMode) {
+        TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx + 1, /*is_move*/ true);
+        finalIdx = oldIdx + 1;
+    } else {
+        TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
+        TrackFX_Delete(tr, oldIdx + 1);
+        finalIdx = oldIdx;
+    }
 
     // SECOND PASS — re-apply numeric values now that all params (incl. EQ Type and
-    // other mode params) are final at oldIdx. applyParamValue_ re-runs the
+    // other mode params) are final at finalIdx. applyParamValue_ re-runs the
     // display-driven search under the SETTLED state, so a gain whose norm→dB
     // mapping was re-scaled by a later mode write lands on the right dB (the
     // bx +2.6→+2.0 corruption). Order-independent: modes are fixed, gains are
     // mutually independent. intent.appliedNorm is refreshed to the final norm.
     const bool csLogOn = []{ const char* e = GetExtState("rea_sixty","cs_log"); return e && e[0]=='1'; }();
     for (const auto& r : reapply) {
-        applyParamValue_(tr, oldIdx, r.dp, r.val, r.key);
-        const double finalN = TrackFX_GetParamNormalized(tr, oldIdx, r.dp);
+        applyParamValue_(tr, finalIdx, r.dp, r.val, r.key);
+        const double finalN = TrackFX_GetParamNormalized(tr, finalIdx, r.dp);
         intent[r.key].appliedNorm = finalN;
         if (csLogOn) {
             char nm[96] = {0}, b[64] = {0};
-            TrackFX_GetParamName(tr, oldIdx, r.dp, nm, sizeof(nm));
-            TrackFX_GetFormattedParamValue(tr, oldIdx, r.dp, b, sizeof(b));
+            TrackFX_GetParamName(tr, finalIdx, r.dp, nm, sizeof(nm));
+            TrackFX_GetFormattedParamValue(tr, finalIdx, r.dp, b, sizeof(b));
             char lg[260]; std::snprintf(lg, sizeof(lg),
                 "[cs] REAPPLY p%d'%s' src=%.4g -> n=%.5f now='%s'",
                 r.dp, nm, r.val.eng, finalN, b);
@@ -6246,20 +6452,31 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         }
     }
 
-    // Restore the old CS's visual slot pin so the replacement stays put instead
-    // of dropping into a preceding empty slot (REAPER 7.75). No-op pre-7.75.
-    if (oldSlotHint[0])
-        TrackFX_SetNamedConfigParm(tr, oldIdx, "slot_hint", oldSlotHint);
+    if (copyMode) {
+        // A/B: bypass the original (kept above), enable the active copy below.
+        TrackFX_SetEnabled(tr, oldIdx,   false);
+        TrackFX_SetEnabled(tr, finalIdx, true);
+        // If the old CS had its GUI up, move the view to the copy (the now-active
+        // one) and close the original's window so the user tweaks the live strip.
+        if (oldFloat)     { TrackFX_Show(tr, oldIdx, 2); TrackFX_Show(tr, finalIdx, 3); }
+        else if (oldOpen) { TrackFX_Show(tr, oldIdx, 2); TrackFX_Show(tr, finalIdx, 1); }
+    } else {
+        // Restore the old CS's visual slot pin so the replacement stays put instead
+        // of dropping into a preceding empty slot (REAPER 7.75). No-op pre-7.75.
+        // (Copy mode: the duplicate gets its own slot below — don't carry the hint.)
+        if (oldSlotHint[0])
+            TrackFX_SetNamedConfigParm(tr, finalIdx, "slot_hint", oldSlotHint);
 
-    // Restore enable + GUI state onto the new CS (now at oldIdx).
-    TrackFX_SetEnabled(tr, oldIdx, oldEnabled);
-    if      (oldFloat) TrackFX_Show(tr, oldIdx, 3);   // was floating → reopen floating
-    else if (oldOpen)  TrackFX_Show(tr, oldIdx, 1);   // was open in chain → reopen in chain
+        // Restore enable + GUI state onto the new CS (now at finalIdx).
+        TrackFX_SetEnabled(tr, finalIdx, oldEnabled);
+        if      (oldFloat) TrackFX_Show(tr, finalIdx, 3);   // was floating → reopen floating
+        else if (oldOpen)  TrackFX_Show(tr, finalIdx, 1);   // was open in chain → reopen in chain
+    }
 
     if (focusResult) {
-        syncInstanceFromFxIdx_(tr, oldIdx, /*setFocusedDomain*/ true,
+        syncInstanceFromFxIdx_(tr, finalIdx, /*setFocusedDomain*/ true,
                                /*setBcAnchor*/ false);
-        setStripInstanceFx_(tr, oldIdx);
+        setStripInstanceFx_(tr, finalIdx);
     }
     return true;
 }
@@ -6329,6 +6546,39 @@ static void applyCsSwitch_(int slot)
             csLog_(lg);
         }
     }
+
+    if (any) {
+        g_bankDirty.store(true);
+        if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
+    }
+}
+
+// "Copy to CS N" (slot 0..7). Like Switch-to-CS-N but NON-destructive: inserts
+// favourite N BELOW the active CS, carries the masked sections' values onto it,
+// and BYPASSES the original (left in place above). An instant A/B between two
+// channel strips with identical settings. Same broadcast-suppress + single undo.
+static void applyCsCopy_(int slot)
+{
+    std::string addName, label;
+    if (!reasixty_csFav(slot, addName, label)) return;   // empty slot → no-op
+    const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+
+    const std::vector<MediaTrack*> targets = csSwitchTargets_();
+    if (targets.empty()) return;
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+
+    uf8::param_groups::pushBroadcastSuppress();
+    PreventUIRefresh(1);
+    Undo_BeginBlock2(nullptr);
+    bool any = false;
+    for (MediaTrack* tr : targets)
+        any |= switchCsTo_(tr, addName.c_str(), dstMap,
+                           /*focusResult*/ tr == focusTr, /*copyMode*/ true);
+    Undo_EndBlock2(nullptr, "Rea-Sixty: Copy Channel Strip", -1);
+    PreventUIRefresh(-1);
+    uf8::param_groups::popBroadcastSuppress();
 
     if (any) {
         g_bankDirty.store(true);
@@ -19434,6 +19684,17 @@ custom_action_register_t g_actionCsSwitch[8] = {
     { 0, "REASIXTY_CS_SWITCH_8", "Rea-Sixty: Switch Channel Strip to Favourite 8", nullptr },
 };
 int g_cmdCsSwitch[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+custom_action_register_t g_actionCsCopy[8] = {
+    { 0, "REASIXTY_CS_COPY_1", "Rea-Sixty: Copy Channel Strip to Favourite 1 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_2", "Rea-Sixty: Copy Channel Strip to Favourite 2 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_3", "Rea-Sixty: Copy Channel Strip to Favourite 3 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_4", "Rea-Sixty: Copy Channel Strip to Favourite 4 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_5", "Rea-Sixty: Copy Channel Strip to Favourite 5 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_6", "Rea-Sixty: Copy Channel Strip to Favourite 6 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_7", "Rea-Sixty: Copy Channel Strip to Favourite 7 (A/B)", nullptr },
+    { 0, "REASIXTY_CS_COPY_8", "Rea-Sixty: Copy Channel Strip to Favourite 8 (A/B)", nullptr },
+};
+int g_cmdCsCopy[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 custom_action_register_t g_actionCsCycleNext{
     0, "REASIXTY_CS_CYCLE_NEXT", "Rea-Sixty: Cycle Channel Strip Favourites (next)", nullptr,
 };
@@ -19588,6 +19849,8 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdFocusPinFocused){ g_tempSelsetPinFocusedRequest.store(true); return true; }
     for (int i = 0; i < 8; ++i)
         if (command == g_cmdCsSwitch[i]) { g_csSwitchReq.store(i); return true; }
+    for (int i = 0; i < 8; ++i)
+        if (command == g_cmdCsCopy[i])   { g_csCopyReq.store(i);   return true; }
     if (command == g_cmdCsCycleNext)    { g_csCycleReq.fetch_add(+1); return true; }
     if (command == g_cmdCsCyclePrev)    { g_csCycleReq.fetch_add(-1); return true; }
     if (command == g_cmdFxMoveUp)       { g_fxMoveReq.fetch_add(-1);  return true; }
@@ -20953,6 +21216,33 @@ void reasixty_setWrapPluginCycle(bool on)
 {
     g_wrapPluginCycle.store(on);
     SetExtState("rea_sixty", "wrap_plugin_cycle", on ? "1" : "0", true);
+}
+// CS-Switch / CS-Copy section copy mask. Persisted as one ExtState string of 4
+// chars (EQ Dyn Gate Fader), each '0'/'1'. Default all-on.
+static void writeCsCopyMask_()
+{
+    char m[5] = {
+        g_csCopyEq.load()    ? '1' : '0',
+        g_csCopyDyn.load()   ? '1' : '0',
+        g_csCopyGate.load()  ? '1' : '0',
+        g_csCopyFader.load() ? '1' : '0',
+        '\0'
+    };
+    SetExtState("rea_sixty", "cs_copy_mask", m, true);
+}
+bool reasixty_csCopyEq()              { return g_csCopyEq.load(); }
+bool reasixty_csCopyDyn()             { return g_csCopyDyn.load(); }
+bool reasixty_csCopyGate()            { return g_csCopyGate.load(); }
+bool reasixty_csCopyFader()           { return g_csCopyFader.load(); }
+void reasixty_setCsCopyEq(bool on)    { g_csCopyEq.store(on);    writeCsCopyMask_(); }
+void reasixty_setCsCopyDyn(bool on)   { g_csCopyDyn.store(on);   writeCsCopyMask_(); }
+void reasixty_setCsCopyGate(bool on)  { g_csCopyGate.store(on);  writeCsCopyMask_(); }
+void reasixty_setCsCopyFader(bool on) { g_csCopyFader.store(on); writeCsCopyMask_(); }
+bool reasixty_csFavRememberNonCopied() { return g_csFavRememberNonCopied.load(); }
+void reasixty_setCsFavRememberNonCopied(bool on)
+{
+    g_csFavRememberNonCopied.store(on);
+    SetExtState("rea_sixty", "cs_fav_remember", on ? "1" : "0", true);
 }
 bool reasixty_keyboardShiftModifier() { return g_keyboardShiftModifier.load(); }
 void reasixty_setKeyboardShiftModifier(bool on)
@@ -23945,6 +24235,23 @@ void registerBindingHandlers()
             label, false
         });
     }
+    // "Copy to CS Favourite N" (N = 1..8). Non-destructive A/B: inserts
+    // favourite N below the active CS with the same (masked) settings and
+    // bypasses the original. No lit-state (it's an action, not a toggle).
+    // Frank 2026-06-25.
+    for (int slot = 0; slot < 8; ++slot) {
+        char name[24];
+        snprintf(name, sizeof(name), "copy_cs_%d", slot + 1);
+        char label[40];
+        snprintf(label, sizeof(label), "Copy to CS Favourite %d", slot + 1);
+        registerBuiltin(name, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                g_csCopyReq.store(slot);   // run on main thread (onTimer drain)
+            },
+            nullptr, label, false
+        });
+    }
     registerBuiltin("bc_track_scroll", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
@@ -25317,6 +25624,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdFocusPinFocused = plugin_register("custom_action", &g_actionFocusPinFocused);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
+    for (int i = 0; i < 8; ++i)
+        g_cmdCsCopy[i] = plugin_register("custom_action", &g_actionCsCopy[i]);
     g_cmdCsCycleNext = plugin_register("custom_action", &g_actionCsCycleNext);
     g_cmdCsCyclePrev = plugin_register("custom_action", &g_actionCsCyclePrev);
     g_cmdFxMoveUp    = plugin_register("custom_action", &g_actionFxMoveUp);
@@ -25333,6 +25642,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // (reliable). Preemptive migration so the slots don't bite us the
     // way temp_selset did. Frank 2026-05-27.
     plugin_register("projectconfig", &g_slotsProjConfig);
+    // Per-favourite-instance memory for non-copied CS sections → .rpp.
+    plugin_register("projectconfig", &g_csFavMemProjConfig);
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");
     return 1;

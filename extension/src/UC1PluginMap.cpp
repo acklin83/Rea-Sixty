@@ -855,6 +855,34 @@ CsQuantityKind csQuantityKind(int linkIdx)
     }
 }
 
+CsSection csSection(int linkIdx)
+{
+    // Keyed by the stable SSL 360 Link CS slot number (see kCsLinkToUc1). The
+    // filters (LP/HP) live with the EQ section on the SSL strip, so they ride the
+    // EQ mask. SC Listen (36) is a dynamics-sidechain monitor → Dyn.
+    switch (linkIdx) {
+        case 1:                               // Fader Level
+            return CsSection::Fader;
+        case 6: case 7:                       // Low-Pass / High-Pass filters
+        case 8: case 9: case 10:              // HF bell + gain + freq
+        case 11: case 12: case 13:            // HMF gain + freq + Q
+        case 14: case 15:                     // EQ Type + EQ In
+        case 16: case 17: case 18:            // LMF gain + freq + Q
+        case 19: case 20: case 21:            // LF freq + gain + LF bell
+            return CsSection::Eq;
+        case 22:                              // Dyn In
+        case 24: case 25:                     // Fast-Att Comp / Peak
+        case 26: case 27: case 28:            // Comp ratio + threshold + release
+        case 36:                              // SC Listen
+            return CsSection::Dyn;
+        case 29: case 30: case 31: case 32:   // Gate range + threshold + release + hold
+        case 33: case 34:                     // Expand / Fast-Att Gate
+            return CsSection::Gate;
+        default:
+            return CsSection::Other;          // input trim, polarity, … — always copied
+    }
+}
+
 ControlDomain classifyKnob(uint8_t knobId)
 {
     // Top V-Pots live in 0x0C..0x16. By physical layout on the SSL UC1:
