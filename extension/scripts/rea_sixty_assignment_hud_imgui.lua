@@ -166,7 +166,6 @@ local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
 local nameRect     = nil  -- LCD / UF8-header click target → edit plug-in Kurzname
 local csFavRect    = nil  -- CS-Favourite dropdown box (CS tab) hit-rect
 local bcFavRect    = nil  -- BC-Favourite dropdown box (BC tab) hit-rect
-local favModeRect  = nil  -- Copy/Own mode toggle (CS+BC tabs) hit-rect
 local FAV_H        = 0     -- height reserved for the CS-Favourite row (0 on UF8)
 local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
 local uf8BankCols  = {}   -- [0..7] = V-Pot bank colour (0xRRGGBB or nil)
@@ -383,45 +382,41 @@ end
 -- CS-Switch favourites for the CS-Favourite submenu. Line 0 = "<cur>;<hasCs>"
 -- (cur = the slot the focused track's active CS occupies, -1 none; hasCs = 1
 -- when there is an active CS to assign). Lines 1..8 = "<i>;<used>;<label>".
+-- Line 0 carries an optional 3rd field = the active favourite SOURCE (the
+-- assigned set name, or "Base"). 4th return is that source string.
 local function readCsFav()
   local raw = reaper.GetExtState(SECT, "hud_cs_fav")
-  local cur, hasCs, slots, first = -1, false, {}, true
+  local cur, hasCs, slots, src, first = -1, false, {}, "", true
   for line in raw:gmatch("[^\n]+") do
     if first then
-      local c, h = line:match("^(%-?%d+);(%d)$")
-      if c then cur, hasCs = tonumber(c), (h == "1") end
+      local c, h, s = line:match("^(%-?%d+);(%d);(.*)$")
+      if not c then c, h = line:match("^(%-?%d+);(%d)$") end
+      if c then cur, hasCs, src = tonumber(c), (h == "1"), (s or "") end
       first = false
     else
       local i, used, label = line:match("^(%d+);(%d);(.*)$")
       if i then slots[tonumber(i)] = { used = (used == "1"), label = label or "" } end
     end
   end
-  return cur, hasCs, slots
+  return cur, hasCs, slots, src
 end
 
 -- BC-Switch favourites, identical format to hud_cs_fav (Phase 4b).
 local function readBcFav()
   local raw = reaper.GetExtState(SECT, "hud_bc_fav")
-  local cur, hasBc, slots, first = -1, false, {}, true
+  local cur, hasBc, slots, src, first = -1, false, {}, "", true
   for line in raw:gmatch("[^\n]+") do
     if first then
-      local c, h = line:match("^(%-?%d+);(%d)$")
-      if c then cur, hasBc = tonumber(c), (h == "1") end
+      local c, h, s = line:match("^(%-?%d+);(%d);(.*)$")
+      if not c then c, h = line:match("^(%-?%d+);(%d)$") end
+      if c then cur, hasBc, src = tonumber(c), (h == "1"), (s or "") end
       first = false
     else
       local i, used, label = line:match("^(%d+);(%d);(.*)$")
       if i then slots[tonumber(i)] = { used = (used == "1"), label = label or "" } end
     end
   end
-  return cur, hasBc, slots
-end
-
--- Favourite copy/own mode toggle: "1" = own settings, "0" = copy values.
--- "hud_fav_mode" = "<csOwn><bcOwn>" (per domain). isCs picks which.
-local function readFavMode(isCs)
-  local m = reaper.GetExtState(SECT, "hud_fav_mode")
-  local i = isCs and 1 or 2
-  return m:sub(i, i) == "1"
+  return cur, hasBc, slots, src
 end
 
 -- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>" — the USER map's
@@ -1757,12 +1752,15 @@ local function drawHudEditRow()
   local rightX = nbx + nbW + 22
   if activeTab == "cs" or activeTab == "bc" then
     local isCs = (activeTab == "cs")
-    -- NB: `isCs and readCsFav() or readBcFav()` would collapse the 3 returns to
-    -- the first — call explicitly so has/slots survive.
-    local cur, has, slots
-    if isCs then cur, has, slots = readCsFav()
-    else         cur, has, slots = readBcFav() end
-    local flbl = isCs and "CS Fav:" or "BC Fav:"
+    -- NB: `isCs and readCsFav() or readBcFav()` would collapse the returns to
+    -- the first — call explicitly so has/slots/src survive.
+    local cur, has, slots, src
+    if isCs then cur, has, slots, src = readCsFav()
+    else         cur, has, slots, src = readBcFav() end
+    -- Annotate the source set ("Base" when no named set is assigned).
+    local srcTag = (src ~= "" and src) or "Base"
+    if #srcTag > 12 then srcTag = srcTag:sub(1, 12) end
+    local flbl = (isCs and "CS Fav" or "BC Fav") .. " \xC2\xB7 " .. srcTag .. ":"
     local flw  = measure(flbl, fpx)
     local fbx  = rightX
     dtext(fbx, y + (rowH - nlh) / 2, col(0x8890A0, 0.9), flbl, fpx)
@@ -1790,21 +1788,6 @@ local function drawHudEditRow()
       else        bcFavRect = { x = bx, y = y, w = boxW, h = rowH } end
     end
     rightX = bx + boxW + 18
-  end
-
-  -- Copy/Own mode toggle — CS + BC tabs, per domain (Frank 2026-06-26). Click
-  -- flips that domain's favourite mode the surface Switch/Cycle obey.
-  if activeTab == "cs" or activeTab == "bc" then
-    local isCs = activeTab == "cs"
-    local own  = readFavMode(isCs)
-    local mlbl = own and "Own settings" or "Copy values"
-    local mlw  = measure(mlbl, fpx)
-    local boxW = mlw + 26
-    field(rightX, y, boxW, rowH, own and 0x2A3038 or 0x202024)
-    local _, mh = measure(mlbl, fpx)
-    dtext(rightX + 8, y + (rowH - mh) / 2,
-          col(own and 0x9AD0A0 or 0xB0B6C0, 1), mlbl, fpx)
-    favModeRect = { x = rightX, y = y, w = boxW, h = rowH, cs = isCs }
   end
 end
 
@@ -1867,7 +1850,6 @@ local function render()
   -- (CS only). Sets FAV_H (body shifts down) + nameRect/csFavRect.
   csFavRect   = nil
   bcFavRect   = nil
-  favModeRect = nil
   nameRect    = nil
   drawHudEditRow()
 
@@ -3104,11 +3086,6 @@ local function loop()
           reaper.ImGui_OpenPopup(ctx, CS_FAV_POPUP)
         elseif bcFavRect and hitRect(bcFavRect, lx, ly) then
           reaper.ImGui_OpenPopup(ctx, BC_FAV_POPUP)
-        elseif favModeRect and hitRect(favModeRect, lx, ly) then
-          -- Copy/Own toggle → flip that domain's mode (Frank 2026-06-26).
-          local isCs = favModeRect.cs
-          sendCmd("favmode;" .. (isCs and "cs;" or "bc;")
-                  .. (readFavMode(isCs) and "0" or "1"))
         elseif nameRect and hitRect(nameRect, lx, ly) then
           -- LCD / UF8 header plug-in name → edit the Kurzname inline.
           editPluginShort(nameRect.dom)

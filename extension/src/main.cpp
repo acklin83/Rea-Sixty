@@ -9145,8 +9145,15 @@ void publishHud_()
                 favCurSlot = csFavSlotForName_(ident);
             }
         }
+        // Active CS favourite SOURCE for the context track: its assigned named
+        // set, else "Base" (the base bank). Surfaced in the HUD CS-Fav label so
+        // the user sees which set is driving the dropdown (Frank 2026-06-26).
+        std::string csSetName;
+        if (!boot && csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*"))
+            reasixty_trackAssignedSet(true, csTr, csSetName);
+        if (csSetName.empty()) csSetName = "Base";
         std::string fav = std::to_string(favCurSlot) + ';'
-                        + std::to_string(favHasCs) + '\n';
+                        + std::to_string(favHasCs) + ';' + csSetName + '\n';
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
             const bool used = resolveCsFav(i, a, l);
@@ -9181,8 +9188,13 @@ void publishHud_()
                 favCurSlot = bcFavSlotForName_(ident);
             }
         }
+        // Active BC favourite SOURCE: assigned set, else "Base" (mirror of CS).
+        std::string bcSetName;
+        if (!boot && bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*"))
+            reasixty_trackAssignedSet(false, bcTr, bcSetName);
+        if (bcSetName.empty()) bcSetName = "Base";
         std::string fav = std::to_string(favCurSlot) + ';'
-                        + std::to_string(favHasBc) + '\n';
+                        + std::to_string(favHasBc) + ';' + bcSetName + '\n';
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
             const bool used = resolveBcFav(i, a, l);
