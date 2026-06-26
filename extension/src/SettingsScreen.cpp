@@ -105,19 +105,18 @@ void favClearCsFavByName(const char* addName);
 void favClearBcFavByName(const char* addName);
 bool reasixty_favProjectBank();
 void reasixty_setFavProjectBank(bool on);
-// Named favourite SET library + per-track assignment (Phase 3).
-int  reasixty_favSetCount();
-bool reasixty_favSetName(int idx, std::string& out);
-int  reasixty_favSetCreate(const char* name);
-void reasixty_favSetRename(int idx, const char* name);
-void reasixty_favSetDelete(int idx);
-int  reasixty_favSetDuplicate(int idx);
-bool reasixty_favSetGetCs(int setIdx, int slot, std::string& add, std::string& label);
-bool reasixty_favSetGetBc(int setIdx, int slot, std::string& add, std::string& label);
-void reasixty_favSetSetCs(int setIdx, int slot, const char* add, const char* label);
-void reasixty_favSetSetBc(int setIdx, int slot, const char* add, const char* label);
-bool reasixty_trackAssignedSet(MediaTrack* tr, std::string& setName);
-void reasixty_assignTrackSet(MediaTrack* tr, const char* setName);
+// Named favourite SET libraries + per-track assignment (Phase 3; CS/BC split
+// 2026-06-26 — cs flag selects the Channel-Strip or Bus-Comp library).
+int  reasixty_favSetCount(bool cs);
+bool reasixty_favSetName(bool cs, int idx, std::string& out);
+int  reasixty_favSetCreate(bool cs, const char* name);
+void reasixty_favSetRename(bool cs, int idx, const char* name);
+void reasixty_favSetDelete(bool cs, int idx);
+int  reasixty_favSetDuplicate(bool cs, int idx);
+bool reasixty_favSetGet(bool cs, int setIdx, int slot, std::string& add, std::string& label);
+void reasixty_favSetSet(bool cs, int setIdx, int slot, const char* add, const char* label);
+bool reasixty_trackAssignedSet(bool cs, MediaTrack* tr, std::string& setName);
+void reasixty_assignTrackSet(bool cs, MediaTrack* tr, const char* setName);
 bool reasixty_grCombineUc1();
 void reasixty_setGrCombineUc1(bool on);
 bool reasixty_insertMarkers();
@@ -212,7 +211,8 @@ bool reasixty_csCopyDyn();   void reasixty_setCsCopyDyn(bool on);
 bool reasixty_csCopyGate();  void reasixty_setCsCopyGate(bool on);
 bool reasixty_csCopyFader(); void reasixty_setCsCopyFader(bool on);
 bool reasixty_csFavRememberNonCopied(); void reasixty_setCsFavRememberNonCopied(bool on);
-bool reasixty_favOwnSettings(); void reasixty_setFavOwnSettings(bool on);
+bool reasixty_csFavOwnSettings(); void reasixty_setCsFavOwnSettings(bool on);
+bool reasixty_bcFavOwnSettings(); void reasixty_setBcFavOwnSettings(bool on);
 bool reasixty_favMultiUnify(); void reasixty_setFavMultiUnify(bool on);
 bool reasixty_paramSwitchesSoftKeyBank(); void reasixty_setParamSwitchesSoftKeyBank(bool on);
 bool reasixty_keyboardShiftModifier();
@@ -3012,16 +3012,22 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 // for one-shot or continuous cycling. Sits at the top of
                 // the picker because these are the most-asked-for
                 // bindings (Frank 2026-05-15).
+                // Favourites — unified (domain follows focus) listed first, then the
+                // explicit per-domain actions, then the copy/own toggles. Frank
+                // 2026-06-26 ("schön sortieren").
+                if (n.rfind("switch_fav_", 0) == 0 || n.rfind("copy_fav_", 0) == 0
+                 || n == "fav_cycle"
+                 || n.rfind("switch_cs_", 0) == 0 || n.rfind("copy_cs_", 0) == 0
+                 || n == "cs_cycle"
+                 || n.rfind("switch_bc_", 0) == 0 || n.rfind("copy_bc_", 0) == 0
+                 || n == "bc_cycle"
+                 || n == "fav_copy_own_toggle"
+                 || n == "cs_copy_own_toggle" || n == "bc_copy_own_toggle")
+                    return "Favourites";
+
                 if (n == "instance_cycle" || n == "fx_cycle"
                  || n == "fx_scroll_all"  || n == "instance_scroll_all"
                  || n == "fx_move"
-                 || n == "cs_cycle"       || n == "cs_cycle_own"
-                 || n.rfind("switch_cs_", 0) == 0
-                 || n.rfind("copy_cs_", 0) == 0
-                 || n == "bc_cycle"       || n == "bc_cycle_own"
-                 || n.rfind("switch_bc_", 0) == 0
-                 || n.rfind("copy_bc_", 0) == 0
-                 || n == "fav_copy_own_toggle"
                  || n == "instance_next"  || n == "instance_prev"
                  || n == "bc_track_scroll"
                  || n == "bc_track_scroll_select"
@@ -3121,6 +3127,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 return "";
             };
             static const char* kCats[] = {
+                "Favourites",
                 "Cycle Actions",
                 "Selection Modes",
                 "Encoder Modes",
@@ -16413,12 +16420,16 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // --- Global copy / own mode ---------------------------------------------
-    bool favOwn = reasixty_favOwnSettings();
-    if (ImGui_Checkbox(ctx, "Favourites use own settings (vs copy values)", &favOwn))
-        reasixty_setFavOwnSettings(favOwn);
-    ImGui_TextDisabled(ctx, "Copy carries the live values onto the next favourite; "
-                            "own settings restores each favourite's own per-channel values.");
+    // --- Copy / own mode (per domain) ---------------------------------------
+    bool csOwn = reasixty_csFavOwnSettings();
+    if (ImGui_Checkbox(ctx, "Channel Strip: use own settings (vs copy values)", &csOwn))
+        reasixty_setCsFavOwnSettings(csOwn);
+    bool bcOwn = reasixty_bcFavOwnSettings();
+    if (ImGui_Checkbox(ctx, "Bus Compressor: use own settings (vs copy values)", &bcOwn))
+        reasixty_setBcFavOwnSettings(bcOwn);
+    ImGui_TextDisabled(ctx, "Copy carries the live values onto the next Favourite; own "
+                            "settings restores each Favourite's own per-channel values. "
+                            "Defaults: Channel Strip copies, Bus Comp uses own.");
 
     // Which Channel-Strip sections carry across in copy mode (Switch/Cycle/Copy).
     ImGui_Spacing(ctx);
@@ -16450,7 +16461,7 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
 
     // Per-project favourite bank (overrides the global set for this project).
     bool projBank = reasixty_favProjectBank();
-    if (ImGui_Checkbox(ctx, "This project uses its own favourites", &projBank))
+    if (ImGui_Checkbox(ctx, "This project uses its own Favourites", &projBank))
         reasixty_setFavProjectBank(projBank);
 
     // Build the pool of plug-ins a set slot can hold: every plug-in mapped as CS
@@ -16476,164 +16487,154 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
         // Anything already favourited (base + sets) not covered above.
         std::string a, l;
         for (int i = 0; i < 8; ++i) { if (cs) baseCsFav(i, a, l); else baseBcFav(i, a, l); push(a, disp(a, l)); }
-        for (int s = 0; s < reasixty_favSetCount(); ++s)
+        for (int s = 0; s < reasixty_favSetCount(cs); ++s)
             for (int i = 0; i < 8; ++i) {
-                if (cs) reasixty_favSetGetCs(s, i, a, l); else reasixty_favSetGetBc(s, i, a, l);
+                reasixty_favSetGet(cs, s, i, a, l);
                 push(a, disp(a, l));
             }
     };
 
-    // --- Favourite banks: the Base set + named Sets --------------------------
+    // --- Favourite sets: CS and BC libraries, side by side -------------------
     ImGui_Spacing(ctx); ImGui_Separator(ctx);
-    ImGui_Text(ctx, "Favourite banks");
-    ImGui_TextDisabled(ctx, "Edit the base favourites, or a named set (its favourites "
-                            "override the base on tracks you assign it to below).");
+    ImGui_Text(ctx, "Favourite sets");
+    ImGui_TextDisabled(ctx, "Channel-Strip and Bus-Comp sets are separate libraries. "
+                            "Edit the base Favourites or a named set; assign one CS and "
+                            "one BC set per track below.");
 
-    const int setCount = reasixty_favSetCount();
-    // s_setSel: -1 = the base bank, 0..n-1 = a named set.
-    static int s_setSel = -1;
-    if (s_setSel >= setCount) s_setSel = setCount - 1;
-    if (s_setSel < -1) s_setSel = -1;
-    const bool isBase = (s_setSel < 0);
+    std::vector<std::pair<std::string, std::string>> poolCs, poolBc;
+    buildPool(true, poolCs);
+    buildPool(false, poolBc);
 
-    std::string selName;
-    if (!isBase) reasixty_favSetName(s_setSel, selName);
-    const std::string baseLabel = reasixty_favProjectBank()
-                                      ? "Base favourites (this project)"
-                                      : "Base favourites (global)";
+    // s_csSel / s_bcSel: -1 = base bank, 0..n-1 = a named set in that library.
+    static int s_csSel = -1, s_bcSel = -1;
 
-    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 240.0));
-    if (ImGui_BeginCombo(ctx, "##fav_set_sel",
-                         isBase ? baseLabel.c_str() : selName.c_str(), nullptr)) {
-        bool selBase = isBase;
-        if (ImGui_Selectable(ctx, "Base favourites##fav_set_base", &selBase, nullptr, nullptr, nullptr))
-            s_setSel = -1;
-        for (int s = 0; s < setCount; ++s) {
-            std::string nm; reasixty_favSetName(s, nm);
-            char item[96]; snprintf(item, sizeof(item), "%s##fav_set_%d", nm.c_str(), s);
-            bool sel = (s == s_setSel);
-            if (ImGui_Selectable(ctx, item, &sel, nullptr, nullptr, nullptr)) s_setSel = s;
+    // One domain's library editor: bank selector + new/dup/del + rename + 8 slots.
+    // No nested table (the outer two-column table is the only table here).
+    auto drawLibrary = [&](bool cs) {
+        auto& pool = cs ? poolCs : poolBc;
+        int&  sel  = cs ? s_csSel : s_bcSel;
+        const char* dom = cs ? "cs" : "bc";
+        const int setCount = reasixty_favSetCount(cs);
+        if (sel >= setCount) sel = setCount - 1;
+        if (sel < -1) sel = -1;
+        bool isBase = (sel < 0);
+
+        ImGui_Text(ctx, cs ? "Channel Strip sets" : "Bus Compressor sets");
+
+        std::string selName;
+        if (!isBase) reasixty_favSetName(cs, sel, selName);
+        const std::string baseLabel = reasixty_favProjectBank()
+                                          ? "Base (this project)" : "Base (global)";
+        char id[32]; snprintf(id, sizeof(id), "##fav_sel_%s", dom);
+        ImGui_SetNextItemWidth(ctx, -1.0);
+        if (ImGui_BeginCombo(ctx, id, isBase ? baseLabel.c_str() : selName.c_str(), nullptr)) {
+            bool selBase = isBase;
+            char bid[32]; snprintf(bid, sizeof(bid), "Base Favourites##fb_%s", dom);
+            if (ImGui_Selectable(ctx, bid, &selBase, nullptr, nullptr, nullptr)) sel = -1;
+            for (int s = 0; s < setCount; ++s) {
+                std::string nm; reasixty_favSetName(cs, s, nm);
+                char item[96]; snprintf(item, sizeof(item), "%s##fs_%s_%d", nm.c_str(), dom, s);
+                bool issel = (s == sel);
+                if (ImGui_Selectable(ctx, item, &issel, nullptr, nullptr, nullptr)) sel = s;
+            }
+            ImGui_EndCombo(ctx);
         }
-        ImGui_EndCombo(ctx);
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, "New set##fav_set_new", nullptr, nullptr)) {
-        char nm[32]; snprintf(nm, sizeof(nm), "Set %d", setCount + 1);
-        s_setSel = reasixty_favSetCreate(nm);
-    }
-    if (!isBase) {
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Duplicate##fav_set_dup", nullptr, nullptr))
-            s_setSel = reasixty_favSetDuplicate(s_setSel);
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Delete##fav_set_del", nullptr, nullptr)) {
-            reasixty_favSetDelete(s_setSel);
-            if (s_setSel >= reasixty_favSetCount()) s_setSel = reasixty_favSetCount() - 1;
+        char nbid[32]; snprintf(nbid, sizeof(nbid), "New##fn_%s", dom);
+        if (ImGui_Button(ctx, nbid, nullptr, nullptr)) {
+            char nm[32]; snprintf(nm, sizeof(nm), "Set %d", setCount + 1);
+            sel = reasixty_favSetCreate(cs, nm);
         }
-    }
+        if (!isBase) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char dbid[32]; snprintf(dbid, sizeof(dbid), "Dup##fd_%s", dom);
+            if (ImGui_Button(ctx, dbid, nullptr, nullptr)) sel = reasixty_favSetDuplicate(cs, sel);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char xbid[32]; snprintf(xbid, sizeof(xbid), "Del##fx_%s", dom);
+            if (ImGui_Button(ctx, xbid, nullptr, nullptr)) {
+                reasixty_favSetDelete(cs, sel);
+                if (sel >= reasixty_favSetCount(cs)) sel = reasixty_favSetCount(cs) - 1;
+            }
+        }
 
-    // Re-read selection (a delete may have shifted it) and rename field for sets.
-    if (s_setSel >= reasixty_favSetCount()) s_setSel = reasixty_favSetCount() - 1;
-    const bool isBaseNow = (s_setSel < 0);
-    if (!isBaseNow && reasixty_favSetName(s_setSel, selName)) {
-        char nameBuf[64];
-        snprintf(nameBuf, sizeof(nameBuf), "%s", selName.c_str());
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 240.0));
-        if (ImGui_InputTextWithHint(ctx, "##fav_set_rename", "set name",
-                                    nameBuf, sizeof(nameBuf), nullptr, nullptr))
-            reasixty_favSetRename(s_setSel, nameBuf);
-    }
+        // Re-read (a delete may have shifted) + rename field for sets.
+        if (sel >= reasixty_favSetCount(cs)) sel = reasixty_favSetCount(cs) - 1;
+        isBase = (sel < 0);
+        if (!isBase && reasixty_favSetName(cs, sel, selName)) {
+            char nameBuf[64]; snprintf(nameBuf, sizeof(nameBuf), "%s", selName.c_str());
+            char rid[32]; snprintf(rid, sizeof(rid), "##fav_ren_%s", dom);
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            if (ImGui_InputTextWithHint(ctx, rid, "set name", nameBuf, sizeof(nameBuf), nullptr, nullptr))
+                reasixty_favSetRename(cs, sel, nameBuf);
+        }
 
-    {
-        std::vector<std::pair<std::string, std::string>> poolCs, poolBc;
-        buildPool(true, poolCs);
-        buildPool(false, poolBc);
+        // 8 slots — one searchable combo per row (number prefix via SameLine).
+        for (int i = 0; i < 8; ++i) {
+            char n[8]; snprintf(n, sizeof(n), "%d", i + 1);
+            ImGui_Text(ctx, n);
+            ImGui_SameLine(ctx, nullptr, nullptr);
 
-        // Read / write slot `i` of the selected bank (base or set).
-        auto getSlot = [&](bool cs, int i, std::string& a, std::string& l) {
-            if (isBaseNow)   { if (cs) baseCsFav(i, a, l);            else baseBcFav(i, a, l); }
-            else             { if (cs) reasixty_favSetGetCs(s_setSel, i, a, l); else reasixty_favSetGetBc(s_setSel, i, a, l); }
-        };
-        auto setSlot = [&](bool cs, int i, const char* add) {
-            if (isBaseNow)   { if (cs) favSetCsFav(i, add, add);      else favSetBcFav(i, add, add); }
-            else             { if (cs) reasixty_favSetSetCs(s_setSel, i, add, add); else reasixty_favSetSetBc(s_setSel, i, add, add); }
-        };
-
-        // One searchable combo cell — picks favourite `i` (or clears it).
-        auto slotCombo = [&](bool cs, int i) {
             std::string a, l;
-            getSlot(cs, i, a, l);
-            auto& pool = cs ? poolCs : poolBc;
-            char id[24]; snprintf(id, sizeof(id), "##set_%s_%d", cs ? "cs" : "bc", i);
-            ImGui_SetNextItemWidth(ctx, -1.0);   // fill the table cell
+            if (isBase) { if (cs) baseCsFav(i, a, l); else baseBcFav(i, a, l); }
+            else        reasixty_favSetGet(cs, sel, i, a, l);
+
+            char cid[24]; snprintf(cid, sizeof(cid), "##slot_%s_%d", dom, i);
+            ImGui_SetNextItemWidth(ctx, -1.0);
             const std::string preview = a.empty() ? "(empty)" : disp(a, l);
             constexpr double kPopupW = 300.0;
             ImGui_SetNextWindowSizeConstraints(ctx, kPopupW, 0.0, kPopupW, 999999.0, nullptr);
-            if (ImGui_BeginCombo(ctx, id, preview.c_str(), nullptr)) {
+            if (ImGui_BeginCombo(ctx, cid, preview.c_str(), nullptr)) {
                 ImGui_Dummy(ctx, kPopupW, 0.0);   // pin popup width (see action picker)
                 const bool justOpened = ImGui_IsWindowAppearing(ctx);
-                static char setSearch[128] = {0};   // shared: only one combo open at a time
+                static char setSearch[128] = {0};   // only one combo open at a time
                 if (justOpened) { setSearch[0] = 0; ImGui_SetKeyboardFocusHere(ctx, nullptr); }
                 ImGui_PushItemWidth(ctx, -1.0);
-                ImGui_InputTextWithHint(ctx, "##set_slot_search", "Search plug-ins…",
+                ImGui_InputTextWithHint(ctx, "##slot_search", "Search plug-ins…",
                                         setSearch, sizeof(setSearch), nullptr, nullptr);
                 ImGui_PopItemWidth(ctx);
                 const std::string filt = lower_(setSearch);
 
+                auto writeSlot = [&](const char* add) {
+                    if (isBase) { if (cs) favSetCsFav(i, add, add); else favSetBcFav(i, add, add); }
+                    else        reasixty_favSetSet(cs, sel, i, add, add);
+                };
                 bool selNone = a.empty();
-                char eid[24]; snprintf(eid, sizeof(eid), "(empty)##e_%s_%d", cs ? "cs" : "bc", i);
-                if (ImGui_Selectable(ctx, eid, &selNone, nullptr, nullptr, nullptr))
-                    setSlot(cs, i, "");
+                char eid[24]; snprintf(eid, sizeof(eid), "(empty)##e_%s_%d", dom, i);
+                if (ImGui_Selectable(ctx, eid, &selNone, nullptr, nullptr, nullptr)) writeSlot("");
                 for (size_t k = 0; k < pool.size(); ++k) {
                     if (!filt.empty()
                         && lower_(pool[k].second).find(filt) == std::string::npos
                         && lower_(pool[k].first).find(filt) == std::string::npos)
                         continue;
                     char it[160]; snprintf(it, sizeof(it), "%s##p_%s_%d_%zu",
-                                           pool[k].second.c_str(), cs ? "cs" : "bc", i, k);
-                    bool sel = (pool[k].first == a);
-                    if (ImGui_Selectable(ctx, it, &sel, nullptr, nullptr, nullptr))
-                        setSlot(cs, i, pool[k].first.c_str());
+                                           pool[k].second.c_str(), dom, i, k);
+                    bool issel = (pool[k].first == a);
+                    if (ImGui_Selectable(ctx, it, &issel, nullptr, nullptr, nullptr))
+                        writeSlot(pool[k].first.c_str());
                 }
                 ImGui_EndCombo(ctx);
             }
-        };
-
-        ImGui_Spacing(ctx);
-        int tblFlags = 0;
-        if (ImGui_BeginTable(ctx, "##fav_set_tbl", 3, &tblFlags, nullptr, nullptr, nullptr)) {
-            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
-            double wNum  = scaleW_(ctx, 26.0);
-            double wCol  = scaleW_(ctx, 240.0);
-            ImGui_TableSetupColumn(ctx, "n",  &wFlag, &wNum, nullptr);
-            ImGui_TableSetupColumn(ctx, "cs", &wFlag, &wCol, nullptr);
-            ImGui_TableSetupColumn(ctx, "bc", &wFlag, &wCol, nullptr);
-            // Manual header row (ImGui_TableHeadersRow isn't vendored here).
-            ImGui_TableNextColumn(ctx);
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Channel Strip");
-            ImGui_TableNextColumn(ctx); ImGui_TextDisabled(ctx, "Bus Compressor");
-            for (int i = 0; i < 8; ++i) {
-                ImGui_TableNextColumn(ctx);
-                char n[8]; snprintf(n, sizeof(n), "%d", i + 1);
-                ImGui_Text(ctx, n);
-                ImGui_TableNextColumn(ctx); slotCombo(true, i);
-                ImGui_TableNextColumn(ctx); slotCombo(false, i);
-            }
-            ImGui_EndTable(ctx);
         }
+    };
+
+    ImGui_Spacing(ctx);
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "##fav_libs", 2, &tblFlags, nullptr, nullptr, nullptr)) {
+        int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+        double wCol  = scaleW_(ctx, 280.0);
+        ImGui_TableSetupColumn(ctx, "cs", &wFlag, &wCol, nullptr);
+        ImGui_TableSetupColumn(ctx, "bc", &wFlag, &wCol, nullptr);
+        ImGui_TableNextColumn(ctx); drawLibrary(true);
+        ImGui_TableNextColumn(ctx); drawLibrary(false);
+        ImGui_EndTable(ctx);
     }
 
-    // --- Per-track assignment -----------------------------------------------
-    // Works on ALL selected tracks at once: lists every selected channel name and
-    // assigns the chosen set to each. The combo preview shows the common assignment
-    // or "(mixed)" when the selection's current assignments differ.
+    // --- Per-track assignment (one CS set + one BC set) ----------------------
     ImGui_Spacing(ctx); ImGui_Separator(ctx);
-    ImGui_Text(ctx, "Assign set to selected tracks");
+    ImGui_Text(ctx, "Assign sets to selected tracks");
     const int nSel = CountSelectedTracks(nullptr);
     if (nSel <= 0) {
-        ImGui_TextDisabled(ctx, "Select one or more tracks to assign them a favourite set.");
+        ImGui_TextDisabled(ctx, "Select one or more tracks to assign a CS and/or BC set.");
     } else {
-        // List all selected channel names.
         std::string names;
         for (int i = 0; i < nSel; ++i) {
             MediaTrack* t = GetSelectedTrack(nullptr, i);
@@ -16646,39 +16647,45 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
         snprintf(hdr, sizeof(hdr), "Selected (%d): %s", nSel, names.c_str());
         ImGui_TextWrapped(ctx, hdr);
 
-        // Determine the common current assignment across the selection.
-        std::string common; bool first = true, mixed = false, anyAssigned = false;
-        for (int i = 0; i < nSel; ++i) {
-            MediaTrack* t = GetSelectedTrack(nullptr, i);
-            if (!t) continue;
-            std::string a; const bool has = reasixty_trackAssignedSet(t, a);
-            const std::string v = has ? a : std::string();
-            if (has) anyAssigned = true;
-            if (first) { common = v; first = false; }
-            else if (v != common) mixed = true;
-        }
-        const char* preview = mixed ? "(mixed)"
-                            : (common.empty() ? "(base favourites)" : common.c_str());
-
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 240.0));
-        if (ImGui_BeginCombo(ctx, "##fav_track_set", preview, nullptr)) {
-            bool selNone = !mixed && common.empty();
-            if (ImGui_Selectable(ctx, "(base favourites)##fav_track_none", &selNone, nullptr, nullptr, nullptr))
-                for (int i = 0; i < nSel; ++i)
-                    if (MediaTrack* t = GetSelectedTrack(nullptr, i)) reasixty_assignTrackSet(t, "");
-            for (int s = 0; s < reasixty_favSetCount(); ++s) {
-                std::string nm; reasixty_favSetName(s, nm);
-                char item[96]; snprintf(item, sizeof(item), "%s##fav_track_%d", nm.c_str(), s);
-                bool sel = (!mixed && common == nm);
-                if (ImGui_Selectable(ctx, item, &sel, nullptr, nullptr, nullptr))
-                    for (int i = 0; i < nSel; ++i)
-                        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) reasixty_assignTrackSet(t, nm.c_str());
+        // One assignment combo for a domain — common value or "(mixed)".
+        auto assignCombo = [&](bool cs) {
+            const char* dom = cs ? "cs" : "bc";
+            std::string common; bool first = true, mixed = false;
+            for (int i = 0; i < nSel; ++i) {
+                MediaTrack* t = GetSelectedTrack(nullptr, i);
+                if (!t) continue;
+                std::string a; const bool has = reasixty_trackAssignedSet(cs, t, a);
+                const std::string v = has ? a : std::string();
+                if (first) { common = v; first = false; }
+                else if (v != common) mixed = true;
             }
-            ImGui_EndCombo(ctx);
-        }
-        (void)anyAssigned;
+            const char* preview = mixed ? "(mixed)"
+                                : (common.empty() ? "(Base Favourites)" : common.c_str());
+            ImGui_Text(ctx, cs ? "CS set" : "BC set");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char id[24]; snprintf(id, sizeof(id), "##fav_trk_%s", dom);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 240.0));
+            if (ImGui_BeginCombo(ctx, id, preview, nullptr)) {
+                char nid[40]; snprintf(nid, sizeof(nid), "(Base Favourites)##ftn_%s", dom);
+                bool selNone = !mixed && common.empty();
+                if (ImGui_Selectable(ctx, nid, &selNone, nullptr, nullptr, nullptr))
+                    for (int i = 0; i < nSel; ++i)
+                        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) reasixty_assignTrackSet(cs, t, "");
+                for (int s = 0; s < reasixty_favSetCount(cs); ++s) {
+                    std::string nm; reasixty_favSetName(cs, s, nm);
+                    char item[96]; snprintf(item, sizeof(item), "%s##ft_%s_%d", nm.c_str(), dom, s);
+                    bool issel = (!mixed && common == nm);
+                    if (ImGui_Selectable(ctx, item, &issel, nullptr, nullptr, nullptr))
+                        for (int i = 0; i < nSel; ++i)
+                            if (MediaTrack* t = GetSelectedTrack(nullptr, i)) reasixty_assignTrackSet(cs, t, nm.c_str());
+                }
+                ImGui_EndCombo(ctx);
+            }
+        };
+        assignCombo(true);
+        assignCombo(false);
         ImGui_TextDisabled(ctx, "When assigned, each track's Switch / Cycle / soft-keys "
-                                "use its set's favourites instead of the base.");
+                                "use its set's Favourites instead of the base.");
     }
 }
 

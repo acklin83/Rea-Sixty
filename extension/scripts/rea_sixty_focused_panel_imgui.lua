@@ -88,20 +88,22 @@ local function readActive()
 end
 
 -- Interactive favourite back-channel (Phase 4c). The panel writes commands to
--- "focused_panel_cmd"; the extension drains them (favmode / favset_track).
+-- "focused_panel_cmd"; the extension drains them (favmode / favset_cs_track / favset_bc_track).
 local function sendPanelCmd(s) reaper.SetExtState(SECT, "focused_panel_cmd", s, false) end
 
--- "overlay_fav" = "<own 0/1>\t<assigned set name>" (empty = base favourites).
+-- "overlay_fav" = "<csOwn><bcOwn>\t<CS set>\t<BC set>" (own per domain; set empty
+-- = base favourites). Returns csOwn, bcOwn, csSet, bcSet.
 local function readFav()
   local raw = reaper.GetExtState(SECT, "overlay_fav")
-  local own, set = raw:match("^(%d)\t(.*)$")
-  return own == "1", set or ""
+  local own, cs, bc = raw:match("^(%d%d)\t([^\t]*)\t(.*)$")
+  own = own or "00"
+  return own:sub(1, 1) == "1", own:sub(2, 2) == "1", cs or "", bc or ""
 end
 
--- "overlay_fav_sets" = newline-separated set names.
-local function readFavSets()
+-- "overlay_cs_sets" / "overlay_bc_sets" = newline-separated set names.
+local function readSets(key)
   local out = {}
-  for line in reaper.GetExtState(SECT, "overlay_fav_sets"):gmatch("[^\n]+") do
+  for line in reaper.GetExtState(SECT, key):gmatch("[^\n]+") do
     out[#out + 1] = line
   end
   return out
@@ -347,14 +349,19 @@ local function drawContent()
   local ftr, fMaster = findTrackByGuid(fGuid)
   local fa = byGuid[fGuid]
   local csTrk  = ftr and trackDisplay(trackLabel(ftr, fMaster)) or nil
-  local csName = (ftr and fa) and fxLabel(ftr, fa.cs) or nil
+  -- Plug-in name comes from the extension (correct chain index + rename-safe),
+  -- NOT from fxLabel(slot) — the overlay body carries the visual slot, which
+  -- mis-indexed GetFXName when the chain had gaps. Frank 2026-06-26.
+  local csIdent = reaper.GetExtState(SECT, "overlay_name_cs")
+  local csName = (csIdent ~= "") and shortName(csIdent) or nil
   local csTrkCol = trackNameRgb(ftr)
 
   local bcGuid, bcIdx = findActiveBc(byGuid)
   local btr, bMaster = nil, false
   if bcGuid then btr, bMaster = findTrackByGuid(bcGuid) end
   local bcTrk  = btr and trackDisplay(trackLabel(btr, bMaster)) or nil
-  local bcName = btr and fxLabel(btr, bcIdx) or nil
+  local bcIdent = reaper.GetExtState(SECT, "overlay_name_bc")
+  local bcName = (bcIdent ~= "") and shortName(bcIdent) or nil
   local bcTrkCol = trackNameRgb(btr)
 
   local csPN, csPV = paramStr("overlay_param_cs")
@@ -370,30 +377,41 @@ local function drawContent()
   local anyFav = showMode or showSet
 
   local function drawFav()
-    local own, curSet = readFav()
+    local csOwn, bcOwn, curCs, curBc = readFav()
     local drew = false
     if showMode then
-      -- Full ImGui_Button (not SmallButton) so its height matches the combo.
-      if reaper.ImGui_Button(ctx, own and "Own settings" or "Copy values") then
-        sendPanelCmd("favmode;" .. (own and "0" or "1"))
+      -- Per-domain copy/own (Frank 2026-06-26). Full ImGui_Button so the height
+      -- matches the set combo.
+      if reaper.ImGui_Button(ctx, csOwn and "CS: Own" or "CS: Copy") then
+        sendPanelCmd("favmode;cs;" .. (csOwn and "0" or "1"))
+      end
+      reaper.ImGui_SameLine(ctx, 0, font_px)
+      if reaper.ImGui_Button(ctx, bcOwn and "BC: Own" or "BC: Copy") then
+        sendPanelCmd("favmode;bc;" .. (bcOwn and "0" or "1"))
       end
       drew = true
     end
     if showSet then
-      if drew then reaper.ImGui_SameLine(ctx, 0, font_px) end
-      reaper.ImGui_SetNextItemWidth(ctx, 160)
-      local preview = (curSet ~= "" and curSet) or "(base favourites)"
-      if reaper.ImGui_BeginCombo(ctx, "##fav_set", preview) then
-        if reaper.ImGui_Selectable(ctx, "(base favourites)", curSet == "") then
-          sendPanelCmd("favset_track;")
-        end
-        for _, nm in ipairs(readFavSets()) do
-          if reaper.ImGui_Selectable(ctx, nm, curSet == nm) then
-            sendPanelCmd("favset_track;" .. nm)
+      -- CS and BC sets are assigned independently (Frank 2026-06-26).
+      local function setCombo(label, key, curVal, cmd)
+        if drew then reaper.ImGui_SameLine(ctx, 0, font_px) end
+        reaper.ImGui_SetNextItemWidth(ctx, 150)
+        local preview = label .. ": " .. ((curVal ~= "" and curVal) or "(base)")
+        if reaper.ImGui_BeginCombo(ctx, "##fav_" .. label, preview) then
+          if reaper.ImGui_Selectable(ctx, "(Base Favourites)", curVal == "") then
+            sendPanelCmd(cmd .. ";")
           end
+          for _, nm in ipairs(readSets(key)) do
+            if reaper.ImGui_Selectable(ctx, nm, curVal == nm) then
+              sendPanelCmd(cmd .. ";" .. nm)
+            end
+          end
+          reaper.ImGui_EndCombo(ctx)
         end
-        reaper.ImGui_EndCombo(ctx)
+        drew = true
       end
+      setCombo("CS", "overlay_cs_sets", curCs, "favset_cs_track")
+      setCombo("BC", "overlay_bc_sets", curBc, "favset_bc_track")
     end
   end
 

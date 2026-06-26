@@ -417,8 +417,11 @@ local function readBcFav()
 end
 
 -- Favourite copy/own mode toggle: "1" = own settings, "0" = copy values.
-local function readFavMode()
-  return reaper.GetExtState(SECT, "hud_fav_mode") == "1"
+-- "hud_fav_mode" = "<csOwn><bcOwn>" (per domain). isCs picks which.
+local function readFavMode(isCs)
+  local m = reaper.GetExtState(SECT, "hud_fav_mode")
+  local i = isCs and 1 or 2
+  return m:sub(i, i) == "1"
 end
 
 -- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>" — the USER map's
@@ -1789,10 +1792,11 @@ local function drawHudEditRow()
     rightX = bx + boxW + 18
   end
 
-  -- Copy/Own mode toggle — CS + BC tabs. Click flips the global favourite mode
-  -- the surface Switch/Cycle actions obey (favmode;0|1). Phase 4b.
+  -- Copy/Own mode toggle — CS + BC tabs, per domain (Frank 2026-06-26). Click
+  -- flips that domain's favourite mode the surface Switch/Cycle obey.
   if activeTab == "cs" or activeTab == "bc" then
-    local own  = readFavMode()
+    local isCs = activeTab == "cs"
+    local own  = readFavMode(isCs)
     local mlbl = own and "Own settings" or "Copy values"
     local mlw  = measure(mlbl, fpx)
     local boxW = mlw + 26
@@ -1800,7 +1804,7 @@ local function drawHudEditRow()
     local _, mh = measure(mlbl, fpx)
     dtext(rightX + 8, y + (rowH - mh) / 2,
           col(own and 0x9AD0A0 or 0xB0B6C0, 1), mlbl, fpx)
-    favModeRect = { x = rightX, y = y, w = boxW, h = rowH }
+    favModeRect = { x = rightX, y = y, w = boxW, h = rowH, cs = isCs }
   end
 end
 
@@ -3101,8 +3105,10 @@ local function loop()
         elseif bcFavRect and hitRect(bcFavRect, lx, ly) then
           reaper.ImGui_OpenPopup(ctx, BC_FAV_POPUP)
         elseif favModeRect and hitRect(favModeRect, lx, ly) then
-          -- Copy/Own toggle → flip the published mode.
-          sendCmd("favmode;" .. (readFavMode() and "0" or "1"))
+          -- Copy/Own toggle → flip that domain's mode (Frank 2026-06-26).
+          local isCs = favModeRect.cs
+          sendCmd("favmode;" .. (isCs and "cs;" or "bc;")
+                  .. (readFavMode(isCs) and "0" or "1"))
         elseif nameRect and hitRect(nameRect, lx, ly) then
           -- LCD / UF8 header plug-in name → edit the Kurzname inline.
           editPluginShort(nameRect.dom)
