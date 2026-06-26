@@ -681,7 +681,9 @@ pushStepsForKnob(const PluginBindings* channelMap, uint8_t knobId)
     return nullptr;
 }
 
-const PluginBindings* lookupBindingsByName(std::string_view fxName)
+// Layer-specific lookup. Built-ins have no layers (returned as-is); user maps
+// return the requested FX-Learn layer's stable binding pointer.
+const PluginBindings* lookupBindingsByNameLayer(std::string_view fxName, int layer)
 {
     // Built-ins win first (mirrors uf8::lookupPluginMapByName ordering)
     // — UserPluginCatalog::save guarantees no user map can shadow a
@@ -693,22 +695,26 @@ const PluginBindings* lookupBindingsByName(std::string_view fxName)
         if (fxName.find(b->match) != std::string_view::npos) return b;
     }
 
-    // User catalog fallback — synthesize a UC1 PluginBindings on first
-    // touch, cache it, return the active FX-Learn layer's stable pointer.
-    // The active layer is resolved from held Option/Control (recomputed once
-    // per onTimer tick); a control with no overlay on that layer was
-    // synthesized to fall back to its Normal mapping, so the returned binding
-    // is correct for every control.
-    int L = reasixty_fxLearnActiveLayer();
-    if (L < 0 || L >= uf8::kNumFxLayers) L = uf8::FxLayer::Normal;
+    if (layer < 0 || layer >= uf8::kNumFxLayers) layer = uf8::FxLayer::Normal;
     refreshUserCache_();
     std::lock_guard<std::mutex> lk(g_userCacheMutex);
     for (const auto& e : g_userCache) {
         if (fxName.find(e->matchOwned) != std::string_view::npos) {
-            return &e->bindings[L];
+            return &e->bindings[layer];
         }
     }
     return nullptr;
+}
+
+const PluginBindings* lookupBindingsByName(std::string_view fxName)
+{
+    // The active layer is resolved from held Option/Control (recomputed once
+    // per onTimer tick); a control with no overlay on that layer was
+    // synthesized to fall back to its Normal mapping, so the returned binding
+    // is correct for every control. NOTE: callers that need the plug-in's REAL
+    // parameter mapping irrespective of held modifiers (e.g. CS/BC value
+    // transfer) must use lookupBindingsByNameLayer(name, FxLayer::Normal).
+    return lookupBindingsByNameLayer(fxName, reasixty_fxLearnActiveLayer());
 }
 
 int hudParamForControl(const PluginBindings* b, bool busComp,
@@ -851,6 +857,41 @@ CsQuantityKind csQuantityKind(int linkIdx)
         case knob::kCSGateHold:
             return CsQuantityKind::Time;
         default:
+            return CsQuantityKind::Generic;
+    }
+}
+
+// Built-in CS / BC plug-in bindings, for the favourites set editor's pickers.
+// (kChannelStripCandidates / kBusCompCandidates live in the anonymous namespace
+// above but are visible TU-wide.)
+std::vector<const PluginBindings*> builtinChannelStripBindings()
+{
+    return { std::begin(kChannelStripCandidates), std::end(kChannelStripCandidates) };
+}
+std::vector<const PluginBindings*> builtinBusCompBindings()
+{
+    return { std::begin(kBusCompCandidates), std::end(kBusCompCandidates) };
+}
+
+CsQuantityKind bcQuantityKind(int linkIdx)
+{
+    // Keyed by the SSL 360 Link BC slot number (see kBcLinkToUc1). BC is
+    // monolithic — no sections — so this only tags each control's quantity so
+    // the unit-aware value transfer (Hz↔kHz, s↔ms, ratio) resolves correctly.
+    switch (linkIdx) {
+        case 1:            // Threshold
+        case 2:            // Makeup
+            return CsQuantityKind::Db;
+        case 3:            // Attack
+        case 4:            // Release
+            return CsQuantityKind::Time;
+        case 5:            // Ratio
+            return CsQuantityKind::Ratio;
+        case 6:            // SC HPF
+            return CsQuantityKind::Freq;
+        case 7:            // Mix
+            return CsQuantityKind::Pct;
+        default:           // 0 = IN (button)
             return CsQuantityKind::Generic;
     }
 }

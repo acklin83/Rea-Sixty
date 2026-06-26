@@ -125,6 +125,9 @@ UC1Bindings lookupBindingsOnTrack(void* track /*MediaTrack**/);
 
 // Lookup by raw FX name (substring). Exposed for tests.
 const PluginBindings* lookupBindingsByName(std::string_view fxName);
+// Layer-specific variant — value transfer must pass FxLayer::Normal so a held
+// Option/Control modifier can't map a control onto its overlay param.
+const PluginBindings* lookupBindingsByNameLayer(std::string_view fxName, int layer);
 
 // Resolve the VST3 param that a UC1-schematic control drives on `b`. The
 // schematic identifies controls by SSL-Link `linkIdx` + domain; this joins
@@ -161,6 +164,15 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
 // instead of guessing from the display string. Generic = no clear musical kind.
 enum class CsQuantityKind { Generic, Db, Freq, Time, Ratio, Q, Pct };
 CsQuantityKind csQuantityKind(int linkIdx);
+// BC analog — quantity kind for a Bus-Compressor SSL-Link slot (kBcLinkToUc1).
+// BC is monolithic (no sections); this only tags units for the value transfer.
+CsQuantityKind bcQuantityKind(int linkIdx);
+
+// Built-in CS / BC plug-in bindings (match + shortName) for the favourites set
+// editor's plug-in pickers. Does NOT include user-learned maps — combine with
+// uf8::user_plugins::get().maps filtered by domain for the full list.
+std::vector<const PluginBindings*> builtinChannelStripBindings();
+std::vector<const PluginBindings*> builtinBusCompBindings();
 
 // Which Channel-Strip section a CS SSL-Link slot belongs to (EQ incl. filters,
 // Dyn = compressor, Gate, Fader). Lets the CS-Switch value transfer honour a

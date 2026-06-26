@@ -191,6 +191,45 @@ bool reasixty_csFav(int slot, std::string& addName, std::string& label);
 int  reasixty_csFavSlotOf(const char* addName);
 void reasixty_setCsFav(int slot, const char* addName, const char* label);
 void reasixty_clearCsFavByName(const char* addName);
+// Bus-Compressor favourites — exact analog of the CS favourites.
+bool reasixty_bcFav(int slot, std::string& addName, std::string& label);
+int  reasixty_bcFavSlotOf(const char* addName);
+void reasixty_setBcFav(int slot, const char* addName, const char* label);
+void reasixty_clearBcFavByName(const char* addName);
+int  reasixty_bcFavSlotMatching(const char* addName);
+// Favourite RESOLVERS. base*Fav = base bank only (project override else global);
+// resolve*Fav = full chain (focused track's named SET → base). favSet*/favClear*
+// write the base bank. All behaviour + UI paths go through these.
+bool baseCsFav(int slot, std::string& addName, std::string& label);
+bool baseBcFav(int slot, std::string& addName, std::string& label);
+bool resolveCsFav(int slot, std::string& addName, std::string& label);
+bool resolveBcFav(int slot, std::string& addName, std::string& label);
+// Per-track variants — resolve against a SPECIFIC track's assigned set (not the
+// shared focus/context track). Used by multi-track Switch/Copy/Cycle so each
+// selected track honours its OWN set.
+bool resolveCsFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::string& label);
+bool resolveBcFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::string& label);
+void favSetCsFav(int slot, const char* addName, const char* label);
+void favSetBcFav(int slot, const char* addName, const char* label);
+void favClearCsFavByName(const char* addName);
+void favClearBcFavByName(const char* addName);
+bool reasixty_favProjectBank();
+void reasixty_setFavProjectBank(bool on);
+// Named favourite SET library + per-track assignment (Phase 3) — for the
+// Favourites Settings page. Library is global (favourite_sets.txt); the
+// assignment is per project (.rpp).
+int  reasixty_favSetCount();
+bool reasixty_favSetName(int idx, std::string& out);
+int  reasixty_favSetCreate(const char* name);          // returns new index
+void reasixty_favSetRename(int idx, const char* name);
+void reasixty_favSetDelete(int idx);
+int  reasixty_favSetDuplicate(int idx);                // returns new index
+bool reasixty_favSetGetCs(int setIdx, int slot, std::string& add, std::string& label);
+bool reasixty_favSetGetBc(int setIdx, int slot, std::string& add, std::string& label);
+void reasixty_favSetSetCs(int setIdx, int slot, const char* add, const char* label);
+void reasixty_favSetSetBc(int setIdx, int slot, const char* add, const char* label);
+bool reasixty_trackAssignedSet(MediaTrack* tr, std::string& setName);
+void reasixty_assignTrackSet(MediaTrack* tr, const char* setName);
 
 // Commit a captured Touch-to-Learn rotary step-cycle onto a UF8 V-Pot slot.
 // Defined in SettingsScreen.cpp; called from the anon-namespace capture helper
@@ -752,6 +791,19 @@ std::atomic<bool>         g_csCopyFader{true};
 // each strip's personal EQ/Dyn/Gate/Fader instead of falling to the new
 // plug-in's defaults. Off → non-copied sections use the new plug-in's defaults.
 std::atomic<bool>         g_csFavRememberNonCopied{true};
+// GLOBAL favourite copy-mode (CS + BC). Default false = "copy values": Switch /
+// Cycle carry the live values onto the next favourite (gated by the section
+// mask). True = "own settings": every plain Switch / Cycle / favourite soft-key
+// restores each favourite's own per-channel memory instead. One switch drives
+// ALL plain favourite actions incl. the CS/BC Favourites soft-key banks; the
+// explicit *_own cycle builtins always force own regardless. Frank 2026-06-26.
+std::atomic<bool>         g_favOwnSettings{false};
+// Multi-select with DIFFERING assigned favourite sets: when on (default), a
+// Switch/Cycle/Copy unifies the selection — every selected track is re-assigned
+// to the focused/context track's set (persistent, mirrors the ParameterGroups
+// ganging). When off ("keep separate"), each track resolves slot N against its
+// OWN set. ExtState fav_multi_unify. Frank 2026-06-26.
+std::atomic<bool>         g_favMultiUnify{true};
 // Host-OS keyboard modifier keys engage the matching modifier slots.
 // Polled in onTimer and OR'd with the HW `mod_*` flags. Default on.
 // Cmd has no Windows keyboard source — the toggle is still respected
@@ -1228,13 +1280,24 @@ std::atomic<int>  g_selsetSaveRequest{0};
 std::atomic<int>  g_csSwitchReq{-1};
 std::atomic<int>  g_csCopyReq{-1};
 std::atomic<int>  g_csCycleReq{0};
+// "Cycle (own settings)" detents — same as g_csCycleReq but each step restores
+// the favourite's own per-channel memory instead of carrying the live values.
+std::atomic<int>  g_csCycleOwnReq{0};
+// Bus-Compressor favourites — exact analog of the CS request atomics.
+std::atomic<int>  g_bcSwitchReq{-1};
+std::atomic<int>  g_bcCopyReq{-1};
+std::atomic<int>  g_bcCycleReq{0};
+std::atomic<int>  g_bcCycleOwnReq{0};
 // FX move-in-chain req: accumulated signed detents (0 = none). Posted by the
 // REAPER-action route (hookCommand2); the surface builtins call the worker
 // directly. Drained on the main thread (TrackFX_CopyToTrack).
 std::atomic<int>  g_fxMoveReq{0};
-static void applyCsSwitch_(int slot);   // defined with the CS-Switch block
+static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
-static void applyCsCycle_(int step);
+static void applyCsCycle_(int step, bool ownSettings = false);
+static void applyBcSwitch_(int slot, bool ownSettings = false);  // BC analogs
+static void applyBcCopy_(int slot);
+static void applyBcCycle_(int step, bool ownSettings = false);
 static void applyFxMoveSlotAware_(int step, bool carousel);
 
 // True when REAPER is currently honouring TCP track pins. The two TCP-pin
@@ -1877,12 +1940,25 @@ void drainSelsets_() {
     if (saveReq >= 1 && saveReq <= 8) saveCurrentSelectionToSlot_(saveReq);
     // CS-Switch: run the posted swap on the main thread (TrackFX_AddByName
     // floats a window → must not run on the input thread).
+    // Plain Switch / Cycle follow the GLOBAL copy-mode toggle; the explicit
+    // *_own requests always force own settings regardless.
+    const bool favOwn = g_favOwnSettings.load();
     if (const int csSlot = g_csSwitchReq.exchange(-1); csSlot >= 0)
-        applyCsSwitch_(csSlot);
+        applyCsSwitch_(csSlot, favOwn);
     if (const int csCopySlot = g_csCopyReq.exchange(-1); csCopySlot >= 0)
         applyCsCopy_(csCopySlot);
     if (const int csSteps = g_csCycleReq.exchange(0); csSteps != 0)
-        applyCsCycle_(csSteps);
+        applyCsCycle_(csSteps, favOwn);
+    if (const int csOwnSteps = g_csCycleOwnReq.exchange(0); csOwnSteps != 0)
+        applyCsCycle_(csOwnSteps, /*ownSettings*/ true);
+    if (const int bcSlot = g_bcSwitchReq.exchange(-1); bcSlot >= 0)
+        applyBcSwitch_(bcSlot, favOwn);
+    if (const int bcCopySlot = g_bcCopyReq.exchange(-1); bcCopySlot >= 0)
+        applyBcCopy_(bcCopySlot);
+    if (const int bcSteps = g_bcCycleReq.exchange(0); bcSteps != 0)
+        applyBcCycle_(bcSteps, favOwn);
+    if (const int bcOwnSteps = g_bcCycleOwnReq.exchange(0); bcOwnSteps != 0)
+        applyBcCycle_(bcOwnSteps, /*ownSettings*/ true);
     // FX move-in-chain posted by the REAPER action route (no on-screen carousel
     // there — the surface builtins drive that themselves).
     if (const int mvSteps = g_fxMoveReq.exchange(0); mvSteps != 0)
@@ -2269,6 +2345,175 @@ static void saveCsFavourites_locked_()
         out += '\t';
     }
     SetExtState("rea_sixty", "cs_favourites2", out.c_str(), true);
+}
+
+// Bus-Compressor favourites — exact analog of the CS favourites above (8 slots,
+// global, single-line ExtState "bc_favourites"). Reuses the CsFav struct (it's
+// just add-name + label). "Switch to BC N" / "Copy to BC N" / "BC Cycle" replace
+// the track's active Bus Compressor with the favourite, carrying the 8 shared
+// BC params across (or restoring per-favourite memory in "own settings" mode).
+// Frank 2026-06-26.
+std::array<CsFav, 8> g_bcFav;
+std::mutex           g_bcFavMutex;
+
+static void saveBcFavourites_locked_()
+{
+    std::string out;
+    for (int i = 0; i < 8; ++i) {
+        out += g_bcFav[i].addName;
+        out += '\t';
+        out += g_bcFav[i].label;
+        out += '\t';
+    }
+    SetExtState("rea_sixty", "bc_favourites", out.c_str(), true);
+}
+
+// Per-project favourite bank override (Phase 2). When `active`, the PROJECT's own
+// 8 CS + 8 BC favourites override the global ExtState set; otherwise the global
+// set is used — so a fresh project inherits the last-used (global) favourites.
+// Persisted per project via g_favBankProjConfig (CSFAVBANK / BCFAVBANK lines).
+// Seeded from the global set the first time it's enabled. Main-thread only.
+struct ProjFavBank {
+    bool                 active = false;
+    std::array<CsFav, 8> cs;
+    std::array<CsFav, 8> bc;
+};
+ProjFavBank g_projFavBank;
+
+// Assign `name` to slot in an 8-slot favourite array, stealing it from any other
+// slot it occupied (mirrors reasixty_setCsFav's one-plug-in-one-slot rule). Empty
+// name clears the slot.
+static void setFavInArray_(std::array<CsFav, 8>& arr, int slot,
+                           const char* addName, const char* label)
+{
+    if (slot < 0 || slot >= 8) return;
+    const std::string name = addName ? addName : "";
+    if (name.empty()) { arr[slot].addName.clear(); arr[slot].label.clear(); return; }
+    for (int i = 0; i < 8; ++i)
+        if (i != slot && arr[i].addName == name) { arr[i].addName.clear(); arr[i].label.clear(); }
+    arr[slot].addName = name;
+    arr[slot].label   = (label && *label) ? label : name;
+}
+
+// ---- Named favourite Set library (Phase 3) ---------------------------------
+// A Set = a name + its own 8 CS + 8 BC favourites. The global library lives in
+// <RESOURCE>/rea_sixty/favourite_sets.txt — a simple line format (no JSON dep;
+// plug-in names + set names never contain a TAB or newline, the same guarantee
+// the ExtState favourites already rely on). Tracks are assigned a set by name
+// PER PROJECT (g_trackSetAssign, persisted via the favBank projectconfig hook).
+// Resolution at action time, against the focused/context track:
+//   track's assigned set → project bank → global Default.
+struct FavSet {
+    std::string          name;
+    std::array<CsFav, 8> cs;
+    std::array<CsFav, 8> bc;
+};
+std::vector<FavSet>                g_favSets;
+std::map<std::string, std::string> g_trackSetAssign;   // trackGUID → set name
+
+static std::string favSetsFilePath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    std::string d = (base && *base) ? base : ".";
+    d += "/rea_sixty";
+#ifdef _WIN32
+    _mkdir(d.c_str());
+#else
+    mkdir(d.c_str(), 0755);
+#endif
+    return d + "/favourite_sets.txt";
+}
+
+// File format (one record per Set):
+//   SET\t<name>
+//   CS\t<slot>\t<addName>\t<label>
+//   BC\t<slot>\t<addName>\t<label>
+static void favSetsSave_()
+{
+    std::string out;
+    for (const auto& s : g_favSets) {
+        out += "SET\t"; out += s.name; out += '\n';
+        for (int i = 0; i < 8; ++i) {
+            if (!s.cs[i].addName.empty())
+                out += "CS\t" + std::to_string(i) + '\t' + s.cs[i].addName + '\t' + s.cs[i].label + '\n';
+            if (!s.bc[i].addName.empty())
+                out += "BC\t" + std::to_string(i) + '\t' + s.bc[i].addName + '\t' + s.bc[i].label + '\n';
+        }
+    }
+    const std::string path = favSetsFilePath_();
+    const std::string tmp = path + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+        if (!out.empty()) std::fwrite(out.data(), 1, out.size(), f);
+        std::fclose(f);
+        std::rename(tmp.c_str(), path.c_str());
+    }
+}
+
+static void favSetsLoad_()
+{
+    g_favSets.clear();
+    FILE* f = std::fopen(favSetsFilePath_().c_str(), "rb");
+    if (!f) return;
+    std::fseek(f, 0, SEEK_END); long n = std::ftell(f); std::fseek(f, 0, SEEK_SET);
+    std::string buf;
+    if (n > 0) { buf.resize(static_cast<size_t>(n)); std::fread(buf.data(), 1, buf.size(), f); }
+    std::fclose(f);
+
+    size_t pos = 0;
+    auto nextField = [](const std::string& line, size_t& p) -> std::string {
+        const size_t t = line.find('\t', p);
+        std::string out = (t == std::string::npos) ? line.substr(p) : line.substr(p, t - p);
+        p = (t == std::string::npos) ? line.size() : t + 1;
+        return out;
+    };
+    while (pos < buf.size()) {
+        size_t nl = buf.find('\n', pos);
+        std::string line = (nl == std::string::npos) ? buf.substr(pos) : buf.substr(pos, nl - pos);
+        pos = (nl == std::string::npos) ? buf.size() : nl + 1;
+        if (line.empty()) continue;
+        size_t p = 0;
+        const std::string tag = nextField(line, p);
+        if (tag == "SET") {
+            FavSet s; s.name = line.substr(p);
+            g_favSets.push_back(std::move(s));
+        } else if ((tag == "CS" || tag == "BC") && !g_favSets.empty()) {
+            const int slot = std::atoi(nextField(line, p).c_str());
+            const std::string add = nextField(line, p);
+            const std::string label = line.substr(p);
+            if (slot >= 0 && slot < 8) {
+                auto& arr = (tag == "CS") ? g_favSets.back().cs : g_favSets.back().bc;
+                arr[slot].addName = add;
+                arr[slot].label   = label.empty() ? add : label;
+            }
+        }
+    }
+}
+
+static int favSetIndexByName_(const std::string& name)
+{
+    for (size_t i = 0; i < g_favSets.size(); ++i)
+        if (g_favSets[i].name == name) return static_cast<int>(i);
+    return -1;
+}
+
+// The track a favourite gesture resolves against: focused track, else first
+// selected. Main-thread only.
+static MediaTrack* favContextTrack_()
+{
+    MediaTrack* tr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    return tr;
+}
+
+// The FavSet a track resolves to via its per-project assignment, or nullptr.
+static const FavSet* favSetForTrack_(MediaTrack* tr)
+{
+    if (!tr) return nullptr;
+    const auto it = g_trackSetAssign.find(trackGuidStr_(tr));
+    if (it == g_trackSetAssign.end()) return nullptr;
+    const int si = favSetIndexByName_(it->second);
+    return (si >= 0) ? &g_favSets[si] : nullptr;
 }
 
 // Learn-HUD: a ReaImGui place-anywhere companion that draws the focused
@@ -2708,6 +2953,28 @@ void loadBrightness()
             }
         }
     }
+    if (const char* v = GetExtState("rea_sixty", "bc_favourites"); v && *v) {
+        std::lock_guard<std::mutex> lk(g_bcFavMutex);
+        for (auto& f : g_bcFav) { f.addName.clear(); f.label.clear(); }
+        std::string s(v);
+        if (s.find('\n') == std::string::npos) {
+            std::vector<std::string> fields;
+            size_t pos = 0;
+            for (;;) {
+                const size_t t = s.find('\t', pos);
+                if (t == std::string::npos) { fields.push_back(s.substr(pos)); break; }
+                fields.push_back(s.substr(pos, t - pos));
+                pos = t + 1;
+            }
+            for (int i = 0; i < 8; ++i) {
+                const size_t a = static_cast<size_t>(2 * i);
+                const size_t l = a + 1;
+                if (l >= fields.size()) break;
+                g_bcFav[i].addName = fields[a];
+                g_bcFav[i].label   = fields[l];
+            }
+        }
+    }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uc1"); v && *v) {
         g_grCombineUc1.store(std::atoi(v) != 0);
     }
@@ -2910,6 +3177,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "cs_fav_remember"); v && *v) {
         g_csFavRememberNonCopied.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fav_own_settings"); v && *v) {
+        g_favOwnSettings.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fav_multi_unify"); v && *v) {
+        g_favMultiUnify.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
         g_keyboardShiftModifier.store(std::atoi(v) != 0);
@@ -3346,6 +3619,12 @@ enum class EncoderMode : uint8_t {
     // Strip with the next/previous favourite (carries shared-control values).
     // Frank 2026-06-20.
     CsCycle,
+    // Like CsCycle but "own settings": each favourite restores its own
+    // per-channel values from memory instead of carrying the live ones.
+    // Frank 2026-06-26.
+    CsCycleOwn,
+    // Bus-Compressor favourite cycle (copy values) + its own-settings variant.
+    BcCycle, BcCycleOwn,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
@@ -3366,6 +3645,9 @@ inline const char* encoderModeFriendly(EncoderMode m)
         case EncoderMode::InstanceScrollAll: return "Instance Scroll (all)";
         case EncoderMode::FxMove:            return "FX Move";
         case EncoderMode::CsCycle:           return "CS Cycle";
+        case EncoderMode::CsCycleOwn:        return "CS Cycle (own settings)";
+        case EncoderMode::BcCycle:           return "BC Cycle";
+        case EncoderMode::BcCycleOwn:        return "BC Cycle (own settings)";
     }
     return "Encoder";
 }
@@ -5607,9 +5889,24 @@ static int csFavSlotForName_(const char* addName)
     const uc1::PluginBindings* want = uc1::lookupBindingsByName(addName);
     for (int i = 0; i < 8; ++i) {
         std::string a, l;
-        if (!reasixty_csFav(i, a, l)) continue;
+        if (!resolveCsFav(i, a, l)) continue;                    // active bank
         if (a == addName) return i;                              // fast exact
         if (want && uc1::lookupBindingsByName(a) == want) return i;   // same plug-in
+    }
+    return -1;
+}
+
+// BC analog of csFavSlotForName_ — favourite slot (0..7) whose BC plug-in is the
+// same as addName, or -1.
+static int bcFavSlotForName_(const char* addName)
+{
+    if (!addName || !*addName) return -1;
+    const uc1::PluginBindings* want = uc1::lookupBindingsByName(addName);
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (!resolveBcFav(i, a, l)) continue;                    // active bank
+        if (a == addName) return i;
+        if (want && uc1::lookupBindingsByName(a) == want) return i;
     }
     return -1;
 }
@@ -5702,6 +5999,7 @@ struct CsVal {
     uc1::CsQuantityKind kind = uc1::CsQuantityKind::Generic;
     CsUnit dim     = CsUnit::None;   // source display dimension (cross-dim guard)
     double appliedNorm = -1.0;       // norm last WRITTEN to the dst (round-trip detect)
+    unsigned appliedHash = 0;        // identity-hash of the plug-in appliedNorm was written to
     int    stateIdx  = -1;           // discrete: which state position the value sits on
     int    stateCount = 0;           // discrete: total distinct states on the source
 };
@@ -5733,6 +6031,18 @@ static int csScanStates_(MediaTrack* tr, int fx, int param, CsState* out, int ma
         }
     }
     return cnt;
+}
+
+// FNV-1a hash of a plug-in identity string. The round-trip carry trusts a stored
+// appliedNorm only when it was written to the SAME plug-in we now read live from —
+// across a cs_cycle that hops through strips with fewer params, appliedNorm can be
+// left over from an EARLIER plug-in (different range), so a coincidental norm
+// collision would otherwise carry a stale value (Frank 2026-06-25 HMF Freq). A
+// cheap hash beats embedding the full 256-char identity in every CsVal.
+static unsigned csIdentHash_(const char* s) {
+    unsigned h = 2166136261u;
+    for (; s && *s; ++s) { h ^= (unsigned char)*s; h *= 16777619u; }
+    return h ? h : 1u;   // reserve 0 for "never written"
 }
 
 // Per track GUID → per control (linkIdx*2 + isBtn) last-known value. Used ONLY to
@@ -5767,18 +6077,12 @@ static void csFavMemPrune_()
     for (int i = 0; i < nt; ++i)
         if (MediaTrack* t = GetTrack(nullptr, i)) liveGuids.insert(trackGuidStr_(t));
 
+    // Keys are "<guid>\t<identity>" — drop entries whose track GUID is gone.
     for (auto it = g_csFavMem.begin(); it != g_csFavMem.end(); ) {
         const std::string& k = it->first;
-        const size_t hash = k.rfind('#');
-        bool drop = (hash == std::string::npos);
-        if (!drop) {
-            const std::string guid = k.substr(0, hash);
-            const int slot = std::atoi(k.c_str() + hash + 1);
-            std::string a, l;
-            if (slot < 0 || slot > 7 || !reasixty_csFav(slot, a, l)
-                || !liveGuids.count(guid))
-                drop = true;
-        }
+        const size_t tab = k.find('\t');
+        const bool drop = (tab == std::string::npos)
+                       || !liveGuids.count(k.substr(0, tab));
         if (drop) it = g_csFavMem.erase(it); else ++it;
     }
 }
@@ -5844,6 +6148,183 @@ project_config_extension_t g_csFavMemProjConfig{
     csFavMemProcessLine_,
     csFavMemSaveExt_,
     csFavMemBeginLoad_,
+    nullptr
+};
+
+// ---- Bus-Compressor intent + per-favourite memory — exact analog of CS ------
+// Separate maps from the CS ones: BC linkIdx 1..7 would otherwise collide with
+// CS linkIdx keys on the same track GUID. BCFAVMEM lines persist per project.
+std::map<std::string, std::array<CsVal, 128>> g_bcIntent;
+std::map<std::string, std::array<CsVal, 128>> g_bcFavMem;
+
+static void bcFavMemPrune_()
+{
+    std::unordered_set<std::string> liveGuids;
+    if (MediaTrack* m = GetMasterTrack(nullptr)) liveGuids.insert(trackGuidStr_(m));
+    const int nt = CountTracks(nullptr);
+    for (int i = 0; i < nt; ++i)
+        if (MediaTrack* t = GetTrack(nullptr, i)) liveGuids.insert(trackGuidStr_(t));
+
+    for (auto it = g_bcFavMem.begin(); it != g_bcFavMem.end(); ) {
+        const std::string& k = it->first;
+        const size_t tab = k.find('\t');
+        const bool drop = (tab == std::string::npos)
+                       || !liveGuids.count(k.substr(0, tab));
+        if (drop) it = g_bcFavMem.erase(it); else ++it;
+    }
+}
+
+void bcFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                      struct project_config_extension_t* /*reg*/)
+{
+    bcFavMemPrune_();
+    for (const auto& kv : g_bcFavMem) {
+        for (int key = 0; key < 128; ++key) {
+            const CsVal& v = kv.second[key];
+            if (!v.valid) continue;
+            ctx->AddLine("BCFAVMEM \"%s\" %d %d %.6f %.6f %d %d %d %d \"%s\"",
+                         kv.first.c_str(), key, v.numeric ? 1 : 0, v.norm, v.eng,
+                         static_cast<int>(v.kind), static_cast<int>(v.dim),
+                         v.stateIdx, v.stateCount, v.text);
+        }
+    }
+}
+
+bool bcFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                          bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "BCFAVMEM", 8) != 0) return false;
+    p += 8;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (*p != '"') return false;
+    ++p;
+    std::string memKey;
+    while (*p && *p != '"') memKey += *p++;
+    if (*p == '"') ++p;
+    int key = -1, num = 0, kind = 0, dim = 0, sIdx = -1, sCnt = 0;
+    double norm = 0.0, eng = 0.0;
+    if (std::sscanf(p, " %d %d %lf %lf %d %d %d %d",
+                    &key, &num, &norm, &eng, &kind, &dim, &sIdx, &sCnt) != 8)
+        return true;
+    if (key < 0 || key >= 128) return true;
+    CsVal v;
+    v.valid = true;  v.numeric = (num != 0);  v.norm = norm;  v.eng = eng;
+    v.kind = static_cast<uc1::CsQuantityKind>(kind);
+    v.dim  = static_cast<CsUnit>(dim);
+    v.stateIdx = sIdx;  v.stateCount = sCnt;
+    if (const char* q = std::strchr(p, '"')) {
+        ++q; int i = 0;
+        while (*q && *q != '"' && i < static_cast<int>(sizeof(v.text)) - 1)
+            v.text[i++] = *q++;
+        v.text[i] = '\0';
+    }
+    g_bcFavMem[memKey][key] = v;
+    return true;
+}
+
+void bcFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    g_bcFavMem.clear();
+}
+
+project_config_extension_t g_bcFavMemProjConfig{
+    bcFavMemProcessLine_,
+    bcFavMemSaveExt_,
+    bcFavMemBeginLoad_,
+    nullptr
+};
+
+// ---- Per-project favourite bank (Phase 2) → .rpp ----------------------------
+// CSFAVBANK_ACTIVE 1   (present only when the project overrides the global set)
+// CSFAVBANK <slot> "<add>" "<label>"   /   BCFAVBANK <slot> "<add>" "<label>"
+static void favBankSaveOne_(ProjectStateContext* ctx, const char* tag,
+                            const std::array<CsFav, 8>& arr)
+{
+    for (int i = 0; i < 8; ++i) {
+        if (arr[i].addName.empty()) continue;
+        ctx->AddLine("%s %d \"%s\" \"%s\"", tag, i,
+                     arr[i].addName.c_str(), arr[i].label.c_str());
+    }
+}
+
+void favBankSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                     struct project_config_extension_t* /*reg*/)
+{
+    if (g_projFavBank.active) {                  // project override → write its bank
+        ctx->AddLine("CSFAVBANK_ACTIVE 1");
+        favBankSaveOne_(ctx, "CSFAVBANK", g_projFavBank.cs);
+        favBankSaveOne_(ctx, "BCFAVBANK", g_projFavBank.bc);
+    }
+    // Per-track named-set assignments (independent of the project bank).
+    for (const auto& kv : g_trackSetAssign) {
+        if (kv.second.empty()) continue;
+        ctx->AddLine("TRACKSET \"%s\" \"%s\"", kv.first.c_str(), kv.second.c_str());
+    }
+}
+
+// Parse one  TAG <slot> "<add>" "<label>"  line into arr. Returns true if handled.
+static bool favBankParseSlot_(const char* p, const char* tag, size_t tagLen,
+                              std::array<CsFav, 8>& arr)
+{
+    if (std::strncmp(p, tag, tagLen) != 0) return false;
+    p += tagLen;
+    while (*p == ' ' || *p == '\t') ++p;
+    const int slot = std::atoi(p);
+    while (*p && *p != '"') ++p;            // → opening quote of <add>
+    if (*p != '"') return true;
+    ++p;
+    std::string add;  while (*p && *p != '"') add += *p++;
+    if (*p == '"') ++p;
+    while (*p && *p != '"') ++p;            // → opening quote of <label>
+    std::string label;
+    if (*p == '"') { ++p; while (*p && *p != '"') label += *p++; }
+    if (slot >= 0 && slot < 8) {
+        arr[slot].addName = add;
+        arr[slot].label   = label.empty() ? add : label;
+    }
+    return true;
+}
+
+bool favBankProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                         bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "CSFAVBANK_ACTIVE", 16) == 0) { g_projFavBank.active = true; return true; }
+    if (favBankParseSlot_(p, "CSFAVBANK", 9, g_projFavBank.cs)) return true;
+    if (favBankParseSlot_(p, "BCFAVBANK", 9, g_projFavBank.bc)) return true;
+    if (std::strncmp(p, "TRACKSET", 8) == 0) {
+        p += 8;
+        while (*p && *p != '"') ++p;                 // → opening quote of <guid>
+        if (*p != '"') return true;
+        ++p;
+        std::string guid;  while (*p && *p != '"') guid += *p++;
+        if (*p == '"') ++p;
+        while (*p && *p != '"') ++p;                 // → opening quote of <setName>
+        std::string setName;
+        if (*p == '"') { ++p; while (*p && *p != '"') setName += *p++; }
+        if (!guid.empty() && !setName.empty()) g_trackSetAssign[guid] = setName;
+        return true;
+    }
+    return false;
+}
+
+void favBankBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    g_projFavBank.active = false;
+    for (auto& f : g_projFavBank.cs) { f.addName.clear(); f.label.clear(); }
+    for (auto& f : g_projFavBank.bc) { f.addName.clear(); f.label.clear(); }
+    g_trackSetAssign.clear();
+}
+
+project_config_extension_t g_favBankProjConfig{
+    favBankProcessLine_,
+    favBankSaveExt_,
+    favBankBeginLoad_,
     nullptr
 };
 
@@ -5965,6 +6446,20 @@ static double applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
                 for (int i = 0; i < dc; ++i)
                     if (csStateActive_(st[i].disp) == sa) { useIdx = i; how = "semantic"; break; }
         }
+        // 2b) Source is an OFF / OUT / BYPASS state but the dst has no matching
+        //     off-state (semantic step found none): mapping it by position would
+        //     land on the dst's FIRST real value — e.g. an SSL filter 'out' onto
+        //     Analog Molecule's "Low Pass Filter (Hz)" whose index 0 is 2000 Hz
+        //     (it has no off; off is a separate button). Leave the dst at its own
+        //     default instead of switching the filter ON at 2 kHz.
+        if (useIdx < 0 && csStateActive_(v.text) == 0) {
+            TrackFX_SetParamNormalized(tr, dstFx, dstParam, origN);
+            char lg[200]; std::snprintf(lg, sizeof(lg),
+                "[cs] k=%d DISCRETE src='%s' OFF, no dst off-state -> kept default n=%.5f",
+                ctrlKey, v.text, origN);
+            csLog_(lg);
+            return origN;
+        }
         // 3) else map by STATE POSITION: source is state X of N → dst state X of M.
         //    The control is the SAME linkIdx on both plug-ins, so position is the
         //    meaning when neither label nor active/inactive axis applies (multi-way
@@ -6070,18 +6565,36 @@ static double applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
     }
 
     // OUT-OF-RANGE guard (Freq/Time only) — the target can't fit the dst even after
-    // scaling, and it's not a near-miss dB rail but a wild mismatch (e.g. a 10.8 kHz
-    // low-pass written onto a [16,350] Hz param the hardware map mis-learned). Don't
-    // slam the knob to a rail — leave it at the dst's own default. dB/Ratio/Q still
-    // clamp (a genuine over-range gain SHOULD pin to the rail).
+    // scaling. Two sub-cases:
+    //  (a) a unit conversion lands it in the dst's ORDER OF MAGNITUDE (within 2× of
+    //      the range) → it's a genuine but unreachable value (e.g. a 2 kHz low-pass
+    //      onto a [3,33.83] kHz param): clamp to the nearest reachable bound (3 kHz)
+    //      so the filter sits as close as the plug-in allows instead of going off.
+    //  (b) a wild mismatch even after scaling (e.g. a 10.8 kHz low-pass onto a
+    //      [16,350] Hz param the hardware map mis-learned) → leave the dst at its
+    //      own default; don't slam a rail with garbage.
+    // dB/Ratio/Q are not handled here — a genuine over-range gain SHOULD clamp below.
     if (resolvable && scalable && gMin > 0.0 && target > 0.0
         && (target > gMax * 1.5 || target < gMin / 1.5)) {
-        TrackFX_SetParamNormalized(tr, dstFx, dstParam, origN);
-        char lg[220]; std::snprintf(lg, sizeof(lg),
-            "[cs] k=%d kind=%d src=%.4g OUT-OF-RANGE rng=[%.4g,%.4g] -> kept default n=%.5f",
-            ctrlKey, (int)v.kind, target, gMin, gMax, origN);
-        csLog_(lg);
-        return origN;
+        const double facs[] = { 1.0, 1000.0, 0.001, 1e6, 1e-6 };
+        double clamped = 0.0;
+        for (double f : facs) {
+            const double t2 = target * f;
+            if (t2 >= gMin * 0.5 && t2 <= gMax * 2.0) {     // right order of magnitude
+                clamped = (t2 < gMin) ? gMin : (t2 > gMax) ? gMax : t2;
+                break;
+            }
+        }
+        if (clamped > 0.0) {
+            target = clamped;   // fall through to the display scan → lands nearest
+        } else {
+            TrackFX_SetParamNormalized(tr, dstFx, dstParam, origN);
+            char lg[220]; std::snprintf(lg, sizeof(lg),
+                "[cs] k=%d kind=%d src=%.4g OUT-OF-RANGE rng=[%.4g,%.4g] -> kept default n=%.5f",
+                ctrlKey, (int)v.kind, target, gMin, gMax, origN);
+            csLog_(lg);
+            return origN;
+        }
     }
 
     // Pass 2 — find the dst position whose DISPLAYED value is closest to target,
@@ -6188,9 +6701,15 @@ static bool csSectionEnabled_(uc1::CsSection s)
 //   copyMode=false → new strip MOVES into the old slot, old is deleted (Switch / Cycle).
 //   copyMode=true  → new strip is inserted BELOW the old, old is left BYPASSED in
 //                    place (Copy-to-CS-N — an A/B with identical settings).
+//   forceOwnSettings=true → ignore the section copy-mask and treat EVERY section as
+//                    non-copied: snapshot the outgoing favourite's whole strip into
+//                    g_csFavMem and restore the incoming favourite's remembered
+//                    strip. This is the "Cycle (own settings)" mode — each favourite
+//                    keeps its own per-channel values instead of carrying the live
+//                    ones across. Needs favRemember on to have anything to restore.
 static bool switchCsTo_(MediaTrack* tr, const char* addName,
                         const uc1::PluginBindings* dstMap, bool focusResult,
-                        bool copyMode = false)
+                        bool copyMode = false, bool forceOwnSettings = false)
 {
     if (!tr || !addName || !*addName) return false;
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
@@ -6200,6 +6719,11 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     const uc1::PluginBindings* oldMap = b.channelMap;
     if (oldIdx < 0 || !oldMap) return false;   // no CS on track → skip (decision Q2)
 
+    // Remember which parameter the user was on, so the swap keeps the focus on
+    // the SAME control instead of resetting to slot 0 (bypass/IN). Restored after
+    // syncInstanceFromFxIdx_ below, which otherwise forces {domain, 0}.
+    const uf8::FocusedParam fpBefore = uf8::getFocusedParam();
+
     // Already this plug-in? Don't replace a strip with itself.
     char ident[256];
     if (uf8::fxIdentityName(tr, oldIdx, ident, sizeof(ident))
@@ -6207,6 +6731,17 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             || (dstMap && uc1::lookupBindingsByName(ident) == dstMap))) {
         return false;
     }
+
+    // Value transfer must use the NORMAL FX-Learn layer mapping (the real param
+    // for each control), never the currently-active modifier layer — a held or
+    // sticky Option/Control layer maps e.g. HF Gain onto its overlay param
+    // instead of the real one (UADx API Vision: 550 HF Gain p25 vs the 560
+    // graphic-EQ overlay p34, which corrupted the carried value). Re-resolve both
+    // maps at Normal; built-ins have no layers and return unchanged.
+    if (const auto* nm = uc1::lookupBindingsByNameLayer(ident, uf8::FxLayer::Normal))
+        oldMap = nm;
+    if (const auto* nm = uc1::lookupBindingsByNameLayer(addName, uf8::FxLayer::Normal))
+        dstMap = nm;
 
     // Capture the old CS's enable + window state so the new strip lands the
     // same way: enabled/bypassed as before, and — if its GUI was open — with
@@ -6275,19 +6810,25 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         }
     }
 
-    // Per-favourite-instance memory for the NON-copied sections (see g_csFavMem):
-    // identify the outgoing favourite (old strip) and the incoming one (addName)
-    // so we can save/restore each one's own values for the masked-out sections.
+    // Per-instance memory for the NON-copied sections (see g_csFavMem): keyed by
+    // "<trackGUID>\t<plug-in identity>" so each strip keeps its OWN values for the
+    // masked-out sections, independent of which favourite SLOT or SET it sits in
+    // (slot numbers aren't stable once per-track sets exist — Phase 3). Save the
+    // outgoing strip's values, restore the incoming one's.
     const std::string guid = trackGuidStr_(tr);
-    char oldIdent[256];
-    const int oldSlot = uf8::fxIdentityName(tr, oldIdx, oldIdent, sizeof(oldIdent))
-                        ? csFavSlotForName_(oldIdent) : -1;
-    const int newSlot = csFavSlotForName_(addName);
+    char oldIdent[256] = {0};
+    const bool haveOldIdent = uf8::fxIdentityName(tr, oldIdx, oldIdent, sizeof(oldIdent));
     std::array<CsVal, 128>* oldFavMem =
-        (oldSlot >= 0) ? &g_csFavMem[guid + "#" + std::to_string(oldSlot)] : nullptr;
-    std::array<CsVal, 128>* newFavMem =
-        (newSlot >= 0) ? &g_csFavMem[guid + "#" + std::to_string(newSlot)] : nullptr;
+        haveOldIdent ? &g_csFavMem[guid + "\t" + oldIdent] : nullptr;
+    std::array<CsVal, 128>* newFavMem = &g_csFavMem[guid + "\t" + addName];
     const bool favRemember = g_csFavRememberNonCopied.load();
+    // Identity hashes for the round-trip carry: live reads come from the OLD plug-in,
+    // writes land on the NEW one. Only trust a stored appliedNorm if it was written
+    // to the plug-in we now read live from (see csIdentHash_).
+    const unsigned oldHash = haveOldIdent ? csIdentHash_(oldIdent) : 0u;
+    char newIdent[256] = {0};
+    const unsigned newHash = uf8::fxIdentityName(tr, newIdx, newIdent, sizeof(newIdent))
+                                 ? csIdentHash_(newIdent) : 0u;
 
     auto& intent = g_csIntent[trackGuidStr_(tr)];
     for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
@@ -6295,7 +6836,10 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         // the old strip. Instead of falling to the new plug-in's defaults, each
         // favourite remembers its OWN values for those sections per instance
         // (favRemember, default on). Handled per control in the !copied branch.
-        const bool copied = csSectionEnabled_(uc1::csSection(linkIdx));
+        // forceOwnSettings (Cycle "own settings") treats EVERY section as
+        // non-copied, so the whole strip routes through the per-favourite memory.
+        const bool copied = !forceOwnSettings
+                          && csSectionEnabled_(uc1::csSection(linkIdx));
         for (int btn = 0; btn <= 1; ++btn) {
             const bool isBtn = (btn != 0);
             // The learned/explicit map is GROUND TRUTH — it's what the user
@@ -6335,7 +6879,7 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                         if (const char* en = GetExtState("rea_sixty", "cs_log");
                             en && en[0] == '1') {
                             char lg[160]; std::snprintf(lg, sizeof(lg),
-                                "[cs] k=%d FAVMEM restore slot%d dp=p%d", key, newSlot, dp);
+                                "[cs] k=%d FAVMEM restore '%s' dp=p%d", key, addName, dp);
                             csLog_(lg);
                         }
                     }
@@ -6353,24 +6897,21 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 // so a value can't drift 10.0→10.03→10.05→… across a chain of swaps.
                 //
                 // BUT the norm match alone is NOT enough across a CYCLE: mem.appliedNorm
-                // was the norm on a DIFFERENT plug-in (the previous hop), and normalised
-                // values aren't comparable between plug-ins with different ranges — a
-                // coincidental norm collision made HMF Freq carry a stale 10 kHz over a
-                // live 7000 Hz read (Frank 2026-06-25, only via cs_cycle because cycling
-                // accumulates intent; a fresh direct switch has none). Gate the carry on
-                // the ENGINEERING values agreeing too (7000 vs 10000 Hz can't collide),
-                // which still tolerates round-trip rounding drift.
-                const double engDiff  = std::fabs(live.eng - mem.eng);
-                // Manual max — Windows defines max() as a macro (no NOMINMAX),
-                // so std::max breaks the MSVC build (see ~line 3859).
-                const double aE = std::fabs(live.eng), bE = std::fabs(mem.eng);
-                double engScale = (aE > bE) ? aE : bE;
-                if (engScale < 1.0) engScale = 1.0;
-                const bool   engClose = engDiff <= 0.005 * engScale;   // 0.5%
+                // can be left over from a DIFFERENT plug-in (an intermediate hop that
+                // lacked this control), and normalised values aren't comparable between
+                // plug-ins with different ranges — a coincidental norm collision made HMF
+                // Freq carry a stale 10 kHz over a live 7000 Hz read (Frank 2026-06-25).
+                // Gate the carry on the live read coming from the SAME plug-in we wrote
+                // appliedNorm to (identity hash). A previous fix gated on the ENGINEERING
+                // values agreeing (engClose ≤0.5 %), but that defeats the headline case:
+                // SSL +4.8 dB → API snaps to +4.0 (Δ0.8 dB ≫ 0.5 %) → carry suppressed →
+                // the round-trip lost +4.8 (Frank 2026-06-26). The identity gate fixes
+                // the freq false-carry AND keeps the dB quantisation carry.
+                const bool sameDst = mem.appliedHash != 0u && mem.appliedHash == oldHash;
                 const bool untouched =
                     mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
                     && std::fabs(live.norm - mem.appliedNorm) < 1e-3
-                    && engClose;
+                    && sameDst;
                 val = untouched ? mem : live;
                 if (const char* en = GetExtState("rea_sixty", "cs_log"); en && en[0] == '1') {
                     char sn[96] = {0}; TrackFX_GetParamName(tr, oldIdx, sp, sn, sizeof(sn));
@@ -6384,7 +6925,11 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             } else {
                 continue;                          // never seen → nothing to carry
             }
-            double appliedN = val.norm;
+            // appliedNorm/appliedHash are a MATCHED PAIR describing the last real
+            // write. If no write happens this switch, preserve the prior pair so a
+            // later round-trip still gates on the genuine write event.
+            double   appliedN = val.appliedNorm;
+            unsigned appliedH = val.appliedHash;
             if (dp != uc1::kParamNone && dstWritten.count(dp)) {
                 // Another (earlier, lower-linkIdx) control already wrote this
                 // dst param this switch — do NOT clobber it. Happens when the
@@ -6406,6 +6951,7 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 dstWritten.insert(dp);
                 applyParamValue_(tr, newIdx, dp, val, key);
                 appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
+                appliedH = newHash;                // wrote → this plug-in holds it now
                 // Numeric values get RE-APPLIED after the move (below) under the
                 // final, settled state — bx re-scales gains when a later mode param
                 // (EQ Type) is written, so the first pass alone is not enough.
@@ -6413,6 +6959,7 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             }
             intent[key] = val;                     // remember intent + where we wrote it
             intent[key].appliedNorm = appliedN;
+            intent[key].appliedHash = appliedH;
         }
     }
 
@@ -6441,6 +6988,7 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         applyParamValue_(tr, finalIdx, r.dp, r.val, r.key);
         const double finalN = TrackFX_GetParamNormalized(tr, finalIdx, r.dp);
         intent[r.key].appliedNorm = finalN;
+        intent[r.key].appliedHash = newHash;
         if (csLogOn) {
             char nm[96] = {0}, b[64] = {0};
             TrackFX_GetParamName(tr, finalIdx, r.dp, nm, sizeof(nm));
@@ -6477,6 +7025,189 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         syncInstanceFromFxIdx_(tr, finalIdx, /*setFocusedDomain*/ true,
                                /*setBcAnchor*/ false);
         setStripInstanceFx_(tr, finalIdx);
+        // Keep the pre-swap parameter focused (sync forced slot 0 = bypass).
+        if (fpBefore.domain == uf8::Domain::ChannelStrip && fpBefore.slotIdx != 0)
+            uf8::setFocus({uf8::Domain::ChannelStrip, fpBefore.slotIdx});
+    }
+    return true;
+}
+
+// Replace / duplicate-below the track's active Bus Compressor with `addName`.
+// Exact analog of switchCsTo_ but for the BC domain: BC is monolithic (8 shared
+// params, no sections), so the only "non-copied" path is forceOwnSettings, which
+// routes the whole compressor through the per-favourite memory (g_bcFavMem).
+//   copyMode=false → MOVE new into the old BC slot, delete old (Switch / Cycle).
+//   copyMode=true  → insert new BELOW the old, leave old bypassed (Copy A/B).
+//   forceOwnSettings=true → restore the incoming favourite's own remembered
+//                    values instead of carrying the live ones (Cycle own settings).
+static bool switchBcTo_(MediaTrack* tr, const char* addName,
+                        const uc1::PluginBindings* dstMap, bool focusResult,
+                        bool copyMode = false, bool forceOwnSettings = false)
+{
+    if (!tr || !addName || !*addName) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+
+    const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+    const int oldIdx = b.busCompFxIdx;
+    const uc1::PluginBindings* oldMap = b.busCompMap;
+    if (oldIdx < 0 || !oldMap) return false;   // no BC on track → skip
+
+    const uf8::FocusedParam fpBefore = uf8::getFocusedParam();   // keep focus on swap
+
+    char ident[256];
+    if (uf8::fxIdentityName(tr, oldIdx, ident, sizeof(ident))
+        && (std::strcmp(ident, addName) == 0
+            || (dstMap && uc1::lookupBindingsByName(ident) == dstMap))) {
+        return false;   // already this plug-in
+    }
+
+    // Value transfer uses the NORMAL FX-Learn layer (see switchCsTo_).
+    if (const auto* nm = uc1::lookupBindingsByNameLayer(ident, uf8::FxLayer::Normal))
+        oldMap = nm;
+    if (const auto* nm = uc1::lookupBindingsByNameLayer(addName, uf8::FxLayer::Normal))
+        dstMap = nm;
+
+    const bool  oldEnabled = TrackFX_GetEnabled(tr, oldIdx);
+    void* const oldFloat   = TrackFX_GetFloatingWindow(tr, oldIdx);
+    const bool  oldOpen    = TrackFX_GetOpen(tr, oldIdx);
+    char oldSlotHint[16] = {0};
+    TrackFX_GetNamedConfigParm(tr, oldIdx, "slot_hint", oldSlotHint, sizeof(oldSlotHint));
+
+    const int newIdx = TrackFX_AddByName(tr, addName, false, -1);
+    if (newIdx < 0) return false;
+    TrackFX_Show(tr, newIdx, 2);
+
+    // Seed alias-claim sets with every BC param the maps already own (slots 1..7;
+    // 0 = IN/bypass handled via enable).
+    std::unordered_set<int> srcClaimed, dstClaimed;
+    for (int li = 1; li <= 7; ++li) {
+        const int s = uc1::hudParamForControl(oldMap, true, li, false, nullptr);
+        const int d = uc1::hudParamForControl(dstMap, true, li, false, nullptr);
+        if (s != uc1::kParamNone) srcClaimed.insert(s);
+        if (d != uc1::kParamNone) dstClaimed.insert(d);
+    }
+
+    struct ReApply { int dp; int key; CsVal val; };
+    std::vector<ReApply> reapply;
+    std::unordered_set<int> dstWritten;
+
+    // Identity-keyed per-instance memory (see switchCsTo_ / g_bcFavMem).
+    const std::string guid = trackGuidStr_(tr);
+    char oldIdent[256] = {0};
+    const bool haveOldIdent = uf8::fxIdentityName(tr, oldIdx, oldIdent, sizeof(oldIdent));
+    std::array<CsVal, 128>* oldFavMem =
+        haveOldIdent ? &g_bcFavMem[guid + "\t" + oldIdent] : nullptr;
+    std::array<CsVal, 128>* newFavMem = &g_bcFavMem[guid + "\t" + addName];
+    // Round-trip identity hashes (see switchCsTo_).
+    const unsigned oldHash = haveOldIdent ? csIdentHash_(oldIdent) : 0u;
+    char newIdent[256] = {0};
+    const unsigned newHash = uf8::fxIdentityName(tr, newIdx, newIdent, sizeof(newIdent))
+                                 ? csIdentHash_(newIdent) : 0u;
+
+    auto& intent = g_bcIntent[guid];
+    for (int linkIdx = 1; linkIdx <= 7; ++linkIdx) {
+        // BC has no section mask — the only non-copied path is own settings.
+        const bool copied = !forceOwnSettings;
+        for (int btn = 0; btn <= 1; ++btn) {
+            const bool isBtn = (btn != 0);
+            int sp = uc1::hudParamForControl(oldMap, true, linkIdx, isBtn, nullptr);
+            int dp = uc1::hudParamForControl(dstMap, true, linkIdx, isBtn, nullptr);
+            if (!isBtn) {
+                if (sp == uc1::kParamNone
+                    && (sp = resolveControlByAlias_(tr, oldIdx, linkIdx, srcClaimed)) != uc1::kParamNone)
+                    srcClaimed.insert(sp);
+                if (dp == uc1::kParamNone
+                    && (dp = resolveControlByAlias_(tr, newIdx, linkIdx, dstClaimed)) != uc1::kParamNone)
+                    dstClaimed.insert(dp);
+            }
+            if (sp == uc1::kParamNone && dp == uc1::kParamNone) continue;
+            const int key = linkIdx * 2 + (isBtn ? 1 : 0);
+            const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
+                                                   : uc1::bcQuantityKind(linkIdx);
+
+            if (!copied) {
+                // Own-settings: snapshot the outgoing favourite, restore the
+                // incoming favourite's remembered value (BC always remembers).
+                if (oldFavMem && sp != uc1::kParamNone)
+                    (*oldFavMem)[key] = readParamValue_(tr, oldIdx, sp, kind);
+                if (newFavMem && dp != uc1::kParamNone
+                    && !dstWritten.count(dp) && (*newFavMem)[key].valid) {
+                    dstWritten.insert(dp);
+                    applyParamValue_(tr, newIdx, dp, (*newFavMem)[key], key);
+                    if ((*newFavMem)[key].numeric)
+                        reapply.push_back({ dp, key, (*newFavMem)[key] });
+                }
+                continue;
+            }
+
+            CsVal val;
+            if (sp != uc1::kParamNone) {            // old has it → live value
+                const CsVal live = readParamValue_(tr, oldIdx, sp, kind);
+                const CsVal& mem = intent[key];
+                // Carry the original intent only if the live read comes from the same
+                // plug-in we wrote appliedNorm to (identity hash) and it still holds it
+                // — see switchCsTo_ for why engClose was wrong (killed dB quantisation).
+                const bool sameDst = mem.appliedHash != 0u && mem.appliedHash == oldHash;
+                const bool untouched =
+                    mem.valid && mem.numeric && live.numeric && mem.appliedNorm >= 0.0
+                    && std::fabs(live.norm - mem.appliedNorm) < 1e-3
+                    && sameDst;
+                val = untouched ? mem : live;
+            } else if (intent[key].valid) {
+                val = intent[key];
+            } else {
+                continue;
+            }
+            double   appliedN = val.appliedNorm;
+            unsigned appliedH = val.appliedHash;
+            if (dp != uc1::kParamNone && !dstWritten.count(dp)) {
+                dstWritten.insert(dp);
+                applyParamValue_(tr, newIdx, dp, val, key);
+                appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
+                appliedH = newHash;
+                if (val.numeric) reapply.push_back({ dp, key, val });
+            }
+            intent[key] = val;
+            intent[key].appliedNorm = appliedN;
+            intent[key].appliedHash = appliedH;
+        }
+    }
+
+    int finalIdx;
+    if (copyMode) {
+        TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx + 1, /*is_move*/ true);
+        finalIdx = oldIdx + 1;
+    } else {
+        TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
+        TrackFX_Delete(tr, oldIdx + 1);
+        finalIdx = oldIdx;
+    }
+
+    for (const auto& r : reapply) {
+        applyParamValue_(tr, finalIdx, r.dp, r.val, r.key);
+        intent[r.key].appliedNorm = TrackFX_GetParamNormalized(tr, finalIdx, r.dp);
+        intent[r.key].appliedHash = newHash;
+    }
+
+    if (copyMode) {
+        TrackFX_SetEnabled(tr, oldIdx,   false);
+        TrackFX_SetEnabled(tr, finalIdx, true);
+        if (oldFloat)     { TrackFX_Show(tr, oldIdx, 2); TrackFX_Show(tr, finalIdx, 3); }
+        else if (oldOpen) { TrackFX_Show(tr, oldIdx, 2); TrackFX_Show(tr, finalIdx, 1); }
+    } else {
+        if (oldSlotHint[0])
+            TrackFX_SetNamedConfigParm(tr, finalIdx, "slot_hint", oldSlotHint);
+        TrackFX_SetEnabled(tr, finalIdx, oldEnabled);
+        if      (oldFloat) TrackFX_Show(tr, finalIdx, 3);
+        else if (oldOpen)  TrackFX_Show(tr, finalIdx, 1);
+    }
+
+    if (focusResult) {
+        syncInstanceFromFxIdx_(tr, finalIdx, /*setFocusedDomain*/ true,
+                               /*setBcAnchor*/ true);
+        setStripInstanceFx_(tr, finalIdx);
+        if (fpBefore.domain == uf8::Domain::BusComp && fpBefore.slotIdx != 0)
+            uf8::setFocus({uf8::Domain::BusComp, fpBefore.slotIdx});
     }
     return true;
 }
@@ -6497,16 +7228,38 @@ static std::vector<MediaTrack*> csSwitchTargets_()
     return targets;
 }
 
-// "Switch to CS N" (slot 0..7). Replaces the active CS on every target track
-// with favourite N in a single undo step.
-static void applyCsSwitch_(int slot)
+// Multi-select unify (g_favMultiUnify, default on): when more than one track is
+// being switched/cycled/copied and their assigned favourite sets DIFFER, re-assign
+// every target to the focused/context track's set so the whole selection resolves
+// to the same favourites — the favourite analogue of the ParameterGroups ganging
+// that is active during a multi-selection. Persistent (writes g_trackSetAssign via
+// reasixty_assignTrackSet → marks the project dirty). When off, each track keeps
+// its own set and resolveCsFavForTrack gives per-track results. Frank 2026-06-26.
+static void favUnifyTargetsIfNeeded_(const std::vector<MediaTrack*>& targets)
 {
-    std::string addName, label;
-    if (!reasixty_csFav(slot, addName, label)) return;   // empty slot → no-op
-    const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+    if (!g_favMultiUnify.load() || targets.size() < 2) return;
+    MediaTrack* ctx = favContextTrack_();
+    if (!ctx) ctx = targets.front();
+    std::string ctxSet; reasixty_trackAssignedSet(ctx, ctxSet);   // "" = base favourites
+    bool differ = false;
+    for (MediaTrack* t : targets) {
+        std::string s; reasixty_trackAssignedSet(t, s);
+        if (s != ctxSet) { differ = true; break; }
+    }
+    if (!differ) return;
+    for (MediaTrack* t : targets)
+        reasixty_assignTrackSet(t, ctxSet.empty() ? "" : ctxSet.c_str());
+}
 
+// "Switch to CS N" (slot 0..7). Replaces the active CS on every target track
+// with favourite N in a single undo step. ownSettings=true routes the swap
+// through per-favourite memory (Cycle "own settings") instead of carrying the
+// live values across.
+static void applyCsSwitch_(int slot, bool ownSettings)
+{
     const std::vector<MediaTrack*> targets = csSwitchTargets_();
     if (targets.empty()) return;
+    favUnifyTargetsIfNeeded_(targets);
 
     MediaTrack* focusTr = g_uc1_surface
         ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
@@ -6519,8 +7272,16 @@ static void applyCsSwitch_(int slot)
     PreventUIRefresh(1);
     Undo_BeginBlock2(nullptr);
     bool any = false;
-    for (MediaTrack* tr : targets)
-        any |= switchCsTo_(tr, addName.c_str(), dstMap, /*focusResult*/ tr == focusTr);
+    // Resolve the favourite PER TRACK so that selected tracks with different
+    // assigned sets each switch to THEIR OWN slot-N plug-in. A track whose set
+    // leaves slot N empty is skipped.
+    for (MediaTrack* tr : targets) {
+        std::string addName, label;
+        if (!resolveCsFavForTrack(tr, slot, addName, label)) continue;
+        const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+        any |= switchCsTo_(tr, addName.c_str(), dstMap, /*focusResult*/ tr == focusTr,
+                           /*copyMode*/ false, /*forceOwnSettings*/ ownSettings);
+    }
     Undo_EndBlock2(nullptr, "Rea-Sixty: Switch Channel Strip", -1);
     PreventUIRefresh(-1);
     uf8::param_groups::popBroadcastSuppress();
@@ -6559,12 +7320,9 @@ static void applyCsSwitch_(int slot)
 // channel strips with identical settings. Same broadcast-suppress + single undo.
 static void applyCsCopy_(int slot)
 {
-    std::string addName, label;
-    if (!reasixty_csFav(slot, addName, label)) return;   // empty slot → no-op
-    const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
-
     const std::vector<MediaTrack*> targets = csSwitchTargets_();
     if (targets.empty()) return;
+    favUnifyTargetsIfNeeded_(targets);
 
     MediaTrack* focusTr = g_uc1_surface
         ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
@@ -6573,9 +7331,14 @@ static void applyCsCopy_(int slot)
     PreventUIRefresh(1);
     Undo_BeginBlock2(nullptr);
     bool any = false;
-    for (MediaTrack* tr : targets)
+    // Per-track resolve — each selected track copies in ITS OWN slot-N favourite.
+    for (MediaTrack* tr : targets) {
+        std::string addName, label;
+        if (!resolveCsFavForTrack(tr, slot, addName, label)) continue;
+        const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
         any |= switchCsTo_(tr, addName.c_str(), dstMap,
                            /*focusResult*/ tr == focusTr, /*copyMode*/ true);
+    }
     Undo_EndBlock2(nullptr, "Rea-Sixty: Copy Channel Strip", -1);
     PreventUIRefresh(-1);
     uf8::param_groups::popBroadcastSuppress();
@@ -6591,13 +7354,15 @@ static void applyCsCopy_(int slot)
 // already occupies (cycle from a favourited strip moves to its neighbour); if
 // the current CS isn't a favourite, the first forward detent lands on the first
 // favourite. Wrap follows g_wrapPluginCycle, like the other plug-in cycles.
-static void applyCsCycle_(int step)
+// ownSettings=true → "Cycle (own settings)": each favourite restores its own
+// per-channel values from memory instead of carrying the live ones across.
+static void applyCsCycle_(int step, bool ownSettings)
 {
     if (step == 0) return;
     std::vector<int> slots;
     for (int i = 0; i < 8; ++i) {
         std::string a, l;
-        if (reasixty_csFav(i, a, l)) slots.push_back(i);
+        if (resolveCsFav(i, a, l)) slots.push_back(i);
     }
     if (slots.empty()) return;
 
@@ -6629,7 +7394,118 @@ static void applyCsCycle_(int step)
             return;   // hard-stop at the ends
         }
     }
-    applyCsSwitch_(slots[next]);
+    applyCsSwitch_(slots[next], ownSettings);
+}
+
+// ---- Bus-Compressor favourite drivers — exact analog of the CS drivers ------
+// "Switch to BC N" (slot 0..7) — replace the active BC on every target track.
+static void applyBcSwitch_(int slot, bool ownSettings)
+{
+    const std::vector<MediaTrack*> targets = csSwitchTargets_();
+    if (targets.empty()) return;
+    favUnifyTargetsIfNeeded_(targets);
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+
+    uf8::param_groups::pushBroadcastSuppress();
+    PreventUIRefresh(1);
+    Undo_BeginBlock2(nullptr);
+    bool any = false;
+    // Per-track resolve — each selected track uses its OWN assigned set's slot N.
+    for (MediaTrack* tr : targets) {
+        std::string addName, label;
+        if (!resolveBcFavForTrack(tr, slot, addName, label)) continue;
+        const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+        any |= switchBcTo_(tr, addName.c_str(), dstMap, /*focusResult*/ tr == focusTr,
+                           /*copyMode*/ false, /*forceOwnSettings*/ ownSettings);
+    }
+    Undo_EndBlock2(nullptr, "Rea-Sixty: Switch Bus Compressor", -1);
+    PreventUIRefresh(-1);
+    uf8::param_groups::popBroadcastSuppress();
+
+    if (any) {
+        g_bankDirty.store(true);
+        if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
+    }
+}
+
+// "Copy to BC N" (slot 0..7) — non-destructive A/B: insert favourite N below the
+// active BC, carry the values, bypass the original.
+static void applyBcCopy_(int slot)
+{
+    const std::vector<MediaTrack*> targets = csSwitchTargets_();
+    if (targets.empty()) return;
+    favUnifyTargetsIfNeeded_(targets);
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+
+    uf8::param_groups::pushBroadcastSuppress();
+    PreventUIRefresh(1);
+    Undo_BeginBlock2(nullptr);
+    bool any = false;
+    // Per-track resolve — each selected track copies in ITS OWN slot-N favourite.
+    for (MediaTrack* tr : targets) {
+        std::string addName, label;
+        if (!resolveBcFavForTrack(tr, slot, addName, label)) continue;
+        const uc1::PluginBindings* dstMap = uc1::lookupBindingsByName(addName);
+        any |= switchBcTo_(tr, addName.c_str(), dstMap,
+                           /*focusResult*/ tr == focusTr, /*copyMode*/ true);
+    }
+    Undo_EndBlock2(nullptr, "Rea-Sixty: Copy Bus Compressor", -1);
+    PreventUIRefresh(-1);
+    uf8::param_groups::popBroadcastSuppress();
+
+    if (any) {
+        g_bankDirty.store(true);
+        if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
+    }
+}
+
+// "BC Cycle" — step the active BC through the non-empty favourites. ownSettings
+// restores each favourite's own per-channel memory. The current slot is read from
+// the same track applyBcSwitch_ acts on (focused track, else first selected), so
+// the cycle direction stays coherent with the switch — mirrors applyCsCycle_.
+static void applyBcCycle_(int step, bool ownSettings)
+{
+    if (step == 0) return;
+    std::vector<int> slots;
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (resolveBcFav(i, a, l)) slots.push_back(i);
+    }
+    if (slots.empty()) return;
+
+    MediaTrack* focusTr = g_uc1_surface
+        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    if (!focusTr) focusTr = GetSelectedTrack(nullptr, 0);
+    if (!focusTr) return;
+
+    int cur = -1;
+    const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(focusTr);
+    if (b.busCompFxIdx >= 0) {
+        char ident[256];
+        if (uf8::fxIdentityName(focusTr, b.busCompFxIdx, ident, sizeof(ident))) {
+            const int favSlot = bcFavSlotForName_(ident);
+            for (size_t i = 0; i < slots.size(); ++i)
+                if (slots[i] == favSlot) { cur = static_cast<int>(i); break; }
+        }
+    }
+
+    const int m = static_cast<int>(slots.size());
+    int next;
+    if (cur < 0) {
+        next = (step > 0) ? 0 : m - 1;
+    } else {
+        next = cur + (step > 0 ? 1 : -1);
+        if (g_wrapPluginCycle.load()) {
+            next = ((next % m) + m) % m;
+        } else if (next < 0 || next >= m) {
+            return;
+        }
+    }
+    applyBcSwitch_(slots[next], ownSettings);
 }
 
 void applyShowFocusedPluginGui_()
@@ -7690,7 +8566,7 @@ void publishHud_()
                         + std::to_string(favHasCs) + '\n';
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
-            const bool used = reasixty_csFav(i, a, l);
+            const bool used = resolveCsFav(i, a, l);
             // Show the plug-in SHORT name, not the raw identity stored as the
             // favourite's label (mirrors the Settings FX-Learn combo). Frank
             // 2026-06-24 — the long "VST3: bx_console SSL 4000 G (…)" strings
@@ -13773,16 +14649,19 @@ void pushZonesForVisibleSlots()
                     userLabel = sp.action;
                     if (userLabel.size() > 12) userLabel.resize(12);
                 }
-                // Bank-5 dynamic label: a switch_cs_N slot shows the CS
-                // favourite's own name (factory "CS N" is the fallback when
-                // the favourite slot is empty). Frank's curation 2026-06-22.
-                if (userBankSlotPresent
-                    && sp.action.rfind("switch_cs_", 0) == 0) {
+                // Bank-5 dynamic label: a switch_cs_N / switch_bc_N slot shows
+                // the favourite's own name (factory "CS N" / "BC N" is the
+                // fallback when the slot is empty). Frank's curation 2026-06-22.
+                const bool isCsFavSk = sp.action.rfind("switch_cs_", 0) == 0;
+                const bool isBcFavSk = sp.action.rfind("switch_bc_", 0) == 0;
+                if (userBankSlotPresent && (isCsFavSk || isBcFavSk)) {
                     const int favSlot =
                         std::atoi(sp.action.c_str() + 10) - 1;  // 1→0-based
                     std::string favAdd, favLbl;
-                    if (favSlot >= 0 && favSlot < 8
-                        && reasixty_csFav(favSlot, favAdd, favLbl)) {
+                    const bool taken = (favSlot >= 0 && favSlot < 8)
+                        && (isCsFavSk ? resolveCsFav(favSlot, favAdd, favLbl)
+                                      : resolveBcFav(favSlot, favAdd, favLbl));
+                    if (taken) {
                         // Show the plug-in's SHORT name (displayShort: "CS 2",
                         // user-defined short, …) — same source as the FX-Cycle
                         // colour-bar — NOT the raw identity. The favourite's
@@ -14348,7 +15227,10 @@ void pushZonesForVisibleSlots()
                  || g_encoderMode.load() == EncoderMode::FxScrollAll
                  || g_encoderMode.load() == EncoderMode::InstanceScrollAll
                  || g_encoderMode.load() == EncoderMode::FxMove
-                 || g_encoderMode.load() == EncoderMode::CsCycle)
+                 || g_encoderMode.load() == EncoderMode::CsCycle
+                 || g_encoderMode.load() == EncoderMode::CsCycleOwn
+                 || g_encoderMode.load() == EncoderMode::BcCycle
+                 || g_encoderMode.load() == EncoderMode::BcCycleOwn)
                 && g_uc1_surface
                 && tr == g_uc1_surface->focusedTrack()) {
             // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
@@ -17803,8 +18685,8 @@ void onTimer()
                     if (cb.channelFxIdx >= 0
                         && uf8::fxIdentityName(csTr, cb.channelFxIdx,
                                                ident, sizeof(ident))) {
-                        if (slot < 0) reasixty_clearCsFavByName(ident);
-                        else          reasixty_setCsFav(slot, ident, ident);
+                        if (slot < 0) favClearCsFavByName(ident);
+                        else          favSetCsFav(slot, ident, ident);
                         g_hudCsFavPublished.clear();   // force re-publish
                         publishHud_();
                     }
@@ -18662,6 +19544,9 @@ void onTimer()
             else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
             else if (std::strcmp(m, "FxMove")            == 0) g_encoderMode.store(EncoderMode::FxMove);
             else if (std::strcmp(m, "CsCycle")           == 0) g_encoderMode.store(EncoderMode::CsCycle);
+            else if (std::strcmp(m, "CsCycleOwn")        == 0) g_encoderMode.store(EncoderMode::CsCycleOwn);
+            else if (std::strcmp(m, "BcCycle")           == 0) g_encoderMode.store(EncoderMode::BcCycle);
+            else if (std::strcmp(m, "BcCycleOwn")        == 0) g_encoderMode.store(EncoderMode::BcCycleOwn);
             else if (std::strcmp(m, "SelsetCycle") == 0) g_encoderMode.store(EncoderMode::SelsetCycle);
             else if (std::strcmp(m, "Nudge")       == 0) g_encoderMode.store(EncoderMode::Nudge);
             // 'Focus' (legacy) and 'Mousewheel' (post-2026-05-19 rename)
@@ -19703,6 +20588,62 @@ custom_action_register_t g_actionCsCyclePrev{
     0, "REASIXTY_CS_CYCLE_PREV", "Rea-Sixty: Cycle Channel Strip Favourites (previous)", nullptr,
 };
 int g_cmdCsCyclePrev = 0;
+custom_action_register_t g_actionCsCycleOwnNext{
+    0, "REASIXTY_CS_CYCLE_OWN_NEXT",
+    "Rea-Sixty: Cycle Channel Strip Favourites — own settings (next)", nullptr,
+};
+int g_cmdCsCycleOwnNext = 0;
+custom_action_register_t g_actionCsCycleOwnPrev{
+    0, "REASIXTY_CS_CYCLE_OWN_PREV",
+    "Rea-Sixty: Cycle Channel Strip Favourites — own settings (previous)", nullptr,
+};
+int g_cmdCsCycleOwnPrev = 0;
+custom_action_register_t g_actionFavCopyOwnToggle{
+    0, "REASIXTY_FAV_COPY_OWN_TOGGLE",
+    "Rea-Sixty: Favourites — toggle copy / own settings", nullptr,
+};
+int g_cmdFavCopyOwnToggle = 0;
+// ---- Bus-Compressor favourite actions — exact analog of the CS actions ------
+custom_action_register_t g_actionBcSwitch[8] = {
+    { 0, "REASIXTY_BC_SWITCH_1", "Rea-Sixty: Switch Bus Compressor to Favourite 1", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_2", "Rea-Sixty: Switch Bus Compressor to Favourite 2", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_3", "Rea-Sixty: Switch Bus Compressor to Favourite 3", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_4", "Rea-Sixty: Switch Bus Compressor to Favourite 4", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_5", "Rea-Sixty: Switch Bus Compressor to Favourite 5", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_6", "Rea-Sixty: Switch Bus Compressor to Favourite 6", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_7", "Rea-Sixty: Switch Bus Compressor to Favourite 7", nullptr },
+    { 0, "REASIXTY_BC_SWITCH_8", "Rea-Sixty: Switch Bus Compressor to Favourite 8", nullptr },
+};
+int g_cmdBcSwitch[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+custom_action_register_t g_actionBcCopy[8] = {
+    { 0, "REASIXTY_BC_COPY_1", "Rea-Sixty: Copy Bus Compressor to Favourite 1 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_2", "Rea-Sixty: Copy Bus Compressor to Favourite 2 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_3", "Rea-Sixty: Copy Bus Compressor to Favourite 3 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_4", "Rea-Sixty: Copy Bus Compressor to Favourite 4 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_5", "Rea-Sixty: Copy Bus Compressor to Favourite 5 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_6", "Rea-Sixty: Copy Bus Compressor to Favourite 6 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_7", "Rea-Sixty: Copy Bus Compressor to Favourite 7 (A/B)", nullptr },
+    { 0, "REASIXTY_BC_COPY_8", "Rea-Sixty: Copy Bus Compressor to Favourite 8 (A/B)", nullptr },
+};
+int g_cmdBcCopy[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+custom_action_register_t g_actionBcCycleNext{
+    0, "REASIXTY_BC_CYCLE_NEXT", "Rea-Sixty: Cycle Bus Compressor Favourites (next)", nullptr,
+};
+int g_cmdBcCycleNext = 0;
+custom_action_register_t g_actionBcCyclePrev{
+    0, "REASIXTY_BC_CYCLE_PREV", "Rea-Sixty: Cycle Bus Compressor Favourites (previous)", nullptr,
+};
+int g_cmdBcCyclePrev = 0;
+custom_action_register_t g_actionBcCycleOwnNext{
+    0, "REASIXTY_BC_CYCLE_OWN_NEXT",
+    "Rea-Sixty: Cycle Bus Compressor Favourites — own settings (next)", nullptr,
+};
+int g_cmdBcCycleOwnNext = 0;
+custom_action_register_t g_actionBcCycleOwnPrev{
+    0, "REASIXTY_BC_CYCLE_OWN_PREV",
+    "Rea-Sixty: Cycle Bus Compressor Favourites — own settings (previous)", nullptr,
+};
+int g_cmdBcCycleOwnPrev = 0;
 custom_action_register_t g_actionFxMoveUp{
     0, "REASIXTY_FX_MOVE_UP", "Rea-Sixty: Move active FX up in chain", nullptr,
 };
@@ -19853,6 +20794,22 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         if (command == g_cmdCsCopy[i])   { g_csCopyReq.store(i);   return true; }
     if (command == g_cmdCsCycleNext)    { g_csCycleReq.fetch_add(+1); return true; }
     if (command == g_cmdCsCyclePrev)    { g_csCycleReq.fetch_add(-1); return true; }
+    if (command == g_cmdCsCycleOwnNext) { g_csCycleOwnReq.fetch_add(+1); return true; }
+    if (command == g_cmdCsCycleOwnPrev) { g_csCycleOwnReq.fetch_add(-1); return true; }
+    if (command == g_cmdFavCopyOwnToggle) {
+        const bool now = !g_favOwnSettings.load();
+        g_favOwnSettings.store(now);
+        SetExtState("rea_sixty", "fav_own_settings", now ? "1" : "0", true);
+        return true;
+    }
+    for (int i = 0; i < 8; ++i)
+        if (command == g_cmdBcSwitch[i]) { g_bcSwitchReq.store(i); return true; }
+    for (int i = 0; i < 8; ++i)
+        if (command == g_cmdBcCopy[i])   { g_bcCopyReq.store(i);   return true; }
+    if (command == g_cmdBcCycleNext)    { g_bcCycleReq.fetch_add(+1); return true; }
+    if (command == g_cmdBcCyclePrev)    { g_bcCycleReq.fetch_add(-1); return true; }
+    if (command == g_cmdBcCycleOwnNext) { g_bcCycleOwnReq.fetch_add(+1); return true; }
+    if (command == g_cmdBcCycleOwnPrev) { g_bcCycleOwnReq.fetch_add(-1); return true; }
     if (command == g_cmdFxMoveUp)       { g_fxMoveReq.fetch_add(-1);  return true; }
     if (command == g_cmdFxMoveDown)     { g_fxMoveReq.fetch_add(+1);  return true; }
     return false;
@@ -20404,6 +21361,291 @@ void reasixty_clearCsFavByName(const char* addName)
 int reasixty_csFavSlotMatching(const char* addName)
 {
     return csFavSlotForName_(addName);
+}
+
+// ---- Bus-Compressor favourites — exact analog of the CS exports above -------
+bool reasixty_bcFav(int slot, std::string& addName, std::string& label)
+{
+    addName.clear();
+    label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    std::lock_guard<std::mutex> lk(g_bcFavMutex);
+    addName = g_bcFav[slot].addName;
+    label   = g_bcFav[slot].label;
+    return !addName.empty();
+}
+
+int reasixty_bcFavSlotOf(const char* addName)
+{
+    if (!addName || !*addName) return -1;
+    std::lock_guard<std::mutex> lk(g_bcFavMutex);
+    for (int i = 0; i < 8; ++i)
+        if (g_bcFav[i].addName == addName) return i;
+    return -1;
+}
+
+void reasixty_setBcFav(int slot, const char* addName, const char* label)
+{
+    if (slot < 0 || slot >= 8) return;
+    std::lock_guard<std::mutex> lk(g_bcFavMutex);
+    const std::string name = addName ? addName : "";
+    if (name.empty()) {
+        g_bcFav[slot].addName.clear();
+        g_bcFav[slot].label.clear();
+        saveBcFavourites_locked_();
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        if (i != slot && g_bcFav[i].addName == name) {
+            g_bcFav[i].addName.clear();
+            g_bcFav[i].label.clear();
+        }
+    }
+    g_bcFav[slot].addName = name;
+    g_bcFav[slot].label   = (label && *label) ? label : name;
+    saveBcFavourites_locked_();
+}
+
+void reasixty_clearBcFavByName(const char* addName)
+{
+    if (!addName || !*addName) return;
+    std::lock_guard<std::mutex> lk(g_bcFavMutex);
+    bool changed = false;
+    for (auto& f : g_bcFav) {
+        if (f.addName == addName) { f.addName.clear(); f.label.clear(); changed = true; }
+    }
+    if (changed) saveBcFavourites_locked_();
+}
+
+int reasixty_bcFavSlotMatching(const char* addName)
+{
+    return bcFavSlotForName_(addName);
+}
+
+// ---- Favourite resolvers --------------------------------------------------
+// baseCsFav / baseBcFav — the BASE bank only (project override when on, else the
+// global set). Used by the FX-Learn favourite picker (authoring) + the HUD
+// csfav command, which edit the base set, not per-track named sets.
+bool baseCsFav(int slot, std::string& addName, std::string& label)
+{
+    addName.clear(); label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    if (g_projFavBank.active) {
+        addName = g_projFavBank.cs[slot].addName;
+        label   = g_projFavBank.cs[slot].label;
+        return !addName.empty();
+    }
+    return reasixty_csFav(slot, addName, label);
+}
+
+bool baseBcFav(int slot, std::string& addName, std::string& label)
+{
+    addName.clear(); label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    if (g_projFavBank.active) {
+        addName = g_projFavBank.bc[slot].addName;
+        label   = g_projFavBank.bc[slot].label;
+        return !addName.empty();
+    }
+    return reasixty_bcFav(slot, addName, label);
+}
+
+// resolveCsFav / resolveBcFav — the FULL chain used by every behaviour + display
+// path: the focused/context track's assigned named SET takes precedence (and is
+// authoritative — an empty slot in the assigned set stays empty), else fall to
+// the base bank. Phase 3.
+bool resolveCsFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::string& label)
+{
+    addName.clear(); label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    if (const FavSet* s = favSetForTrack_(tr)) {
+        addName = s->cs[slot].addName;
+        label   = s->cs[slot].label;
+        return !addName.empty();
+    }
+    return baseCsFav(slot, addName, label);
+}
+
+bool resolveBcFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::string& label)
+{
+    addName.clear(); label.clear();
+    if (slot < 0 || slot >= 8) return false;
+    if (const FavSet* s = favSetForTrack_(tr)) {
+        addName = s->bc[slot].addName;
+        label   = s->bc[slot].label;
+        return !addName.empty();
+    }
+    return baseBcFav(slot, addName, label);
+}
+
+bool resolveCsFav(int slot, std::string& addName, std::string& label)
+{
+    return resolveCsFavForTrack(favContextTrack_(), slot, addName, label);
+}
+
+bool resolveBcFav(int slot, std::string& addName, std::string& label)
+{
+    return resolveBcFavForTrack(favContextTrack_(), slot, addName, label);
+}
+
+// Writes route to the active bank: the project override when on (and mark the
+// project dirty so the .rpp saves), else the global ExtState set.
+void favSetCsFav(int slot, const char* addName, const char* label)
+{
+    if (g_projFavBank.active) {
+        setFavInArray_(g_projFavBank.cs, slot, addName, label);
+        MarkProjectDirty(nullptr);
+    } else {
+        reasixty_setCsFav(slot, addName, label);
+    }
+}
+void favSetBcFav(int slot, const char* addName, const char* label)
+{
+    if (g_projFavBank.active) {
+        setFavInArray_(g_projFavBank.bc, slot, addName, label);
+        MarkProjectDirty(nullptr);
+    } else {
+        reasixty_setBcFav(slot, addName, label);
+    }
+}
+void favClearCsFavByName(const char* addName)
+{
+    if (!addName || !*addName) return;
+    if (g_projFavBank.active) {
+        bool changed = false;
+        for (auto& f : g_projFavBank.cs)
+            if (f.addName == addName) { f.addName.clear(); f.label.clear(); changed = true; }
+        if (changed) MarkProjectDirty(nullptr);
+    } else {
+        reasixty_clearCsFavByName(addName);
+    }
+}
+void favClearBcFavByName(const char* addName)
+{
+    if (!addName || !*addName) return;
+    if (g_projFavBank.active) {
+        bool changed = false;
+        for (auto& f : g_projFavBank.bc)
+            if (f.addName == addName) { f.addName.clear(); f.label.clear(); changed = true; }
+        if (changed) MarkProjectDirty(nullptr);
+    } else {
+        reasixty_clearBcFavByName(addName);
+    }
+}
+
+bool reasixty_favProjectBank() { return g_projFavBank.active; }
+void reasixty_setFavProjectBank(bool on)
+{
+    if (on == g_projFavBank.active) return;
+    if (on) {
+        // Seed the project bank from the current global set the first time it is
+        // enabled (empty bank), so the project starts from the live favourites
+        // and can then diverge. A non-empty bank (re-enable) keeps its contents.
+        bool empty = true;
+        for (const auto& f : g_projFavBank.cs) if (!f.addName.empty()) { empty = false; break; }
+        for (const auto& f : g_projFavBank.bc) if (!f.addName.empty()) { empty = false; break; }
+        if (empty) {
+            std::string a, l;
+            for (int i = 0; i < 8; ++i) {
+                if (reasixty_csFav(i, a, l)) { g_projFavBank.cs[i].addName = a; g_projFavBank.cs[i].label = l; }
+                if (reasixty_bcFav(i, a, l)) { g_projFavBank.bc[i].addName = a; g_projFavBank.bc[i].label = l; }
+            }
+        }
+    }
+    g_projFavBank.active = on;
+    MarkProjectDirty(nullptr);
+}
+
+// ---- Named favourite SET library API (Phase 3) — for the Settings page -------
+int  reasixty_favSetCount() { return static_cast<int>(g_favSets.size()); }
+bool reasixty_favSetName(int idx, std::string& out)
+{
+    out.clear();
+    if (idx < 0 || idx >= static_cast<int>(g_favSets.size())) return false;
+    out = g_favSets[idx].name;
+    return true;
+}
+int reasixty_favSetCreate(const char* name)
+{
+    FavSet s;
+    s.name = (name && *name) ? name : "Set";
+    g_favSets.push_back(std::move(s));
+    favSetsSave_();
+    return static_cast<int>(g_favSets.size()) - 1;
+}
+void reasixty_favSetRename(int idx, const char* name)
+{
+    if (idx < 0 || idx >= static_cast<int>(g_favSets.size()) || !name || !*name) return;
+    g_favSets[idx].name = name;
+    favSetsSave_();
+}
+void reasixty_favSetDelete(int idx)
+{
+    if (idx < 0 || idx >= static_cast<int>(g_favSets.size())) return;
+    // Drop any per-track assignments that pointed at this set (this project).
+    const std::string gone = g_favSets[idx].name;
+    for (auto it = g_trackSetAssign.begin(); it != g_trackSetAssign.end(); )
+        if (it->second == gone) it = g_trackSetAssign.erase(it); else ++it;
+    g_favSets.erase(g_favSets.begin() + idx);
+    favSetsSave_();
+    MarkProjectDirty(nullptr);
+}
+int reasixty_favSetDuplicate(int idx)
+{
+    if (idx < 0 || idx >= static_cast<int>(g_favSets.size())) return -1;
+    FavSet s = g_favSets[idx];
+    s.name += " copy";
+    g_favSets.push_back(std::move(s));
+    favSetsSave_();
+    return static_cast<int>(g_favSets.size()) - 1;
+}
+bool reasixty_favSetGetCs(int setIdx, int slot, std::string& add, std::string& label)
+{
+    add.clear(); label.clear();
+    if (setIdx < 0 || setIdx >= static_cast<int>(g_favSets.size()) || slot < 0 || slot >= 8)
+        return false;
+    add = g_favSets[setIdx].cs[slot].addName;
+    label = g_favSets[setIdx].cs[slot].label;
+    return !add.empty();
+}
+bool reasixty_favSetGetBc(int setIdx, int slot, std::string& add, std::string& label)
+{
+    add.clear(); label.clear();
+    if (setIdx < 0 || setIdx >= static_cast<int>(g_favSets.size()) || slot < 0 || slot >= 8)
+        return false;
+    add = g_favSets[setIdx].bc[slot].addName;
+    label = g_favSets[setIdx].bc[slot].label;
+    return !add.empty();
+}
+void reasixty_favSetSetCs(int setIdx, int slot, const char* add, const char* label)
+{
+    if (setIdx < 0 || setIdx >= static_cast<int>(g_favSets.size())) return;
+    setFavInArray_(g_favSets[setIdx].cs, slot, add, label);
+    favSetsSave_();
+}
+void reasixty_favSetSetBc(int setIdx, int slot, const char* add, const char* label)
+{
+    if (setIdx < 0 || setIdx >= static_cast<int>(g_favSets.size())) return;
+    setFavInArray_(g_favSets[setIdx].bc, slot, add, label);
+    favSetsSave_();
+}
+bool reasixty_trackAssignedSet(MediaTrack* tr, std::string& setName)
+{
+    setName.clear();
+    if (!tr) return false;
+    const auto it = g_trackSetAssign.find(trackGuidStr_(tr));
+    if (it == g_trackSetAssign.end() || it->second.empty()) return false;
+    setName = it->second;
+    return true;
+}
+void reasixty_assignTrackSet(MediaTrack* tr, const char* setName)
+{
+    if (!tr) return;
+    const std::string guid = trackGuidStr_(tr);
+    if (!setName || !*setName) g_trackSetAssign.erase(guid);
+    else                       g_trackSetAssign[guid] = setName;
+    MarkProjectDirty(nullptr);
+    if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
 }
 
 bool reasixty_grCombineUc1() { return g_grCombineUc1.load(); }
@@ -21243,6 +22485,18 @@ void reasixty_setCsFavRememberNonCopied(bool on)
 {
     g_csFavRememberNonCopied.store(on);
     SetExtState("rea_sixty", "cs_fav_remember", on ? "1" : "0", true);
+}
+bool reasixty_favOwnSettings() { return g_favOwnSettings.load(); }
+void reasixty_setFavOwnSettings(bool on)
+{
+    g_favOwnSettings.store(on);
+    SetExtState("rea_sixty", "fav_own_settings", on ? "1" : "0", true);
+}
+bool reasixty_favMultiUnify() { return g_favMultiUnify.load(); }
+void reasixty_setFavMultiUnify(bool on)
+{
+    g_favMultiUnify.store(on);
+    SetExtState("rea_sixty", "fav_multi_unify", on ? "1" : "0", true);
 }
 bool reasixty_keyboardShiftModifier() { return g_keyboardShiftModifier.load(); }
 void reasixty_setKeyboardShiftModifier(bool on)
@@ -23899,6 +25153,33 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::CsCycle; },
         "Encoder Mode → CS Cycle (favourites)", false
     });
+    // CS-Switch cycle — "own settings" variant: each favourite restores its
+    // own per-channel values instead of carrying the live ones. Frank 2026-06-26.
+    registerBuiltin("encoder_cs_cycle_own", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::CsCycleOwn, "CsCycleOwn");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::CsCycleOwn; },
+        "Encoder Mode → CS Cycle (own settings)", false
+    });
+    // Bus-Compressor favourite cycle — encoder counterpart, copy + own variants.
+    registerBuiltin("encoder_bc_cycle", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::BcCycle, "BcCycle");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::BcCycle; },
+        "Encoder Mode → BC Cycle (favourites)", false
+    });
+    registerBuiltin("encoder_bc_cycle_own", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::BcCycleOwn, "BcCycleOwn");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::BcCycleOwn; },
+        "Encoder Mode → BC Cycle (own settings)", false
+    });
     // Selection-Set cycle mode — Channel-Encoder rotation steps through
     // populated Selection-Set slots (off → 1 → 2 → … → last → off).
     // Pairs with the bindable selset_cycle builtin further down so the
@@ -23931,6 +25212,9 @@ void registerBindingHandlers()
                 case EncoderMode::InstanceScrollAll: applyInstanceScrollAll_(step); break;
                 case EncoderMode::FxMove:      applyFxMove_(step);         break;
                 case EncoderMode::CsCycle:     g_csCycleReq.fetch_add(step); break;
+                case EncoderMode::CsCycleOwn:  g_csCycleOwnReq.fetch_add(step); break;
+                case EncoderMode::BcCycle:     g_bcCycleReq.fetch_add(step); break;
+                case EncoderMode::BcCycleOwn:  g_bcCycleOwnReq.fetch_add(step); break;
                 case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
                 case EncoderMode::Markers:     applyMarkerStep_(step);     break;
                 case EncoderMode::BankBy1:
@@ -24206,6 +25490,28 @@ void registerBindingHandlers()
         },
         nullptr, "Encoder: cycle Channel Strip favourites", false
     });
+    // GLOBAL favourite copy-mode toggle — flips ALL plain Switch / Cycle /
+    // favourite-soft-key actions (CS + BC) between "copy values" and "own
+    // settings". Lit when own. Frank 2026-06-26.
+    registerBuiltin("fav_copy_own_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool now = !g_favOwnSettings.load();
+            g_favOwnSettings.store(now);
+            SetExtState("rea_sixty", "fav_own_settings", now ? "1" : "0", true);
+        },
+        [](int) { return g_favOwnSettings.load(); },
+        "Favourites: copy ↔ own settings (toggle)", false
+    });
+    // "Own settings" cycle variant: each favourite restores its own per-channel
+    // values from memory instead of carrying the live ones across. Frank 2026-06-26.
+    registerBuiltin("cs_cycle_own", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            g_csCycleOwnReq.fetch_add(param);   // run on main thread (onTimer drain)
+        },
+        nullptr, "Encoder: cycle Channel Strip favourites (own settings)", false
+    });
     // CS-Switch — "Switch to CS Favourite N" (N = 1..8). One builtin per slot
     // (button-friendly, mirrors master_pin_strip*). Replaces the active CS on
     // every selected track — focused track if none selected — with favourite N.
@@ -24248,6 +25554,59 @@ void registerBindingHandlers()
             [slot](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
                 g_csCopyReq.store(slot);   // run on main thread (onTimer drain)
+            },
+            nullptr, label, false
+        });
+    }
+    // ---- Bus-Compressor favourite builtins — exact analog of the CS ones ----
+    registerBuiltin("bc_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            g_bcCycleReq.fetch_add(param);
+        },
+        nullptr, "Encoder: cycle Bus Compressor favourites", false
+    });
+    registerBuiltin("bc_cycle_own", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            g_bcCycleOwnReq.fetch_add(param);
+        },
+        nullptr, "Encoder: cycle Bus Compressor favourites (own settings)", false
+    });
+    for (int slot = 0; slot < 8; ++slot) {
+        char name[24];
+        snprintf(name, sizeof(name), "switch_bc_%d", slot + 1);
+        char label[40];
+        snprintf(label, sizeof(label), "Switch to BC Favourite %d", slot + 1);
+        registerBuiltin(name, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                g_bcSwitchReq.store(slot);
+            },
+            // Lit when the focused track's BC already is favourite N.
+            [slot](int) {
+                MediaTrack* tr = g_uc1_surface
+                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+                if (!tr) return false;
+                const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+                if (b.busCompFxIdx < 0) return false;
+                char ident[256];
+                if (!uf8::fxIdentityName(tr, b.busCompFxIdx, ident, sizeof(ident)))
+                    return false;
+                return bcFavSlotForName_(ident) == slot;
+            },
+            label, false
+        });
+    }
+    for (int slot = 0; slot < 8; ++slot) {
+        char name[24];
+        snprintf(name, sizeof(name), "copy_bc_%d", slot + 1);
+        char label[40];
+        snprintf(label, sizeof(label), "Copy to BC Favourite %d", slot + 1);
+        registerBuiltin(name, DescBuilder{
+            [slot](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                g_bcCopyReq.store(slot);
             },
             nullptr, label, false
         });
@@ -25542,6 +26901,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         else if (std::strcmp(m, "FxScrollAll") == 0)       g_encoderMode.store(EncoderMode::FxScrollAll);
         else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
         else if (std::strcmp(m, "CsCycle") == 0)       g_encoderMode.store(EncoderMode::CsCycle);
+        else if (std::strcmp(m, "CsCycleOwn") == 0)    g_encoderMode.store(EncoderMode::CsCycleOwn);
+        else if (std::strcmp(m, "BcCycle") == 0)       g_encoderMode.store(EncoderMode::BcCycle);
+        else if (std::strcmp(m, "BcCycleOwn") == 0)    g_encoderMode.store(EncoderMode::BcCycleOwn);
         else if (std::strcmp(m, "SelsetCycle") == 0)   g_encoderMode.store(EncoderMode::SelsetCycle);
         else if (std::strcmp(m, "Markers") == 0)       g_encoderMode.store(EncoderMode::Markers);
         else if (std::strcmp(m, "BankBy1") == 0)       g_encoderMode.store(EncoderMode::BankBy1);
@@ -25628,6 +26990,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         g_cmdCsCopy[i] = plugin_register("custom_action", &g_actionCsCopy[i]);
     g_cmdCsCycleNext = plugin_register("custom_action", &g_actionCsCycleNext);
     g_cmdCsCyclePrev = plugin_register("custom_action", &g_actionCsCyclePrev);
+    g_cmdCsCycleOwnNext = plugin_register("custom_action", &g_actionCsCycleOwnNext);
+    g_cmdCsCycleOwnPrev = plugin_register("custom_action", &g_actionCsCycleOwnPrev);
+    g_cmdFavCopyOwnToggle = plugin_register("custom_action", &g_actionFavCopyOwnToggle);
+    for (int i = 0; i < 8; ++i)
+        g_cmdBcSwitch[i] = plugin_register("custom_action", &g_actionBcSwitch[i]);
+    for (int i = 0; i < 8; ++i)
+        g_cmdBcCopy[i] = plugin_register("custom_action", &g_actionBcCopy[i]);
+    g_cmdBcCycleNext = plugin_register("custom_action", &g_actionBcCycleNext);
+    g_cmdBcCyclePrev = plugin_register("custom_action", &g_actionBcCyclePrev);
+    g_cmdBcCycleOwnNext = plugin_register("custom_action", &g_actionBcCycleOwnNext);
+    g_cmdBcCycleOwnPrev = plugin_register("custom_action", &g_actionBcCycleOwnPrev);
     g_cmdFxMoveUp    = plugin_register("custom_action", &g_actionFxMoveUp);
     g_cmdFxMoveDown  = plugin_register("custom_action", &g_actionFxMoveDown);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
@@ -25644,6 +27017,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     plugin_register("projectconfig", &g_slotsProjConfig);
     // Per-favourite-instance memory for non-copied CS sections → .rpp.
     plugin_register("projectconfig", &g_csFavMemProjConfig);
+    // BC analog — per-favourite BC memory (own-settings cycle) → .rpp.
+    plugin_register("projectconfig", &g_bcFavMemProjConfig);
+    // Per-project favourite bank override (CSFAVBANK / BCFAVBANK) → .rpp.
+    plugin_register("projectconfig", &g_favBankProjConfig);
+    // Named favourite Set library (global) — load once from disk.
+    favSetsLoad_();
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");
     return 1;

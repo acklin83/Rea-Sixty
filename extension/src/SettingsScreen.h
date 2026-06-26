@@ -25,6 +25,7 @@ public:
     static void drawBindings(ImGui_Context* ctx);
     static void drawModes(ImGui_Context* ctx);
     static void drawFxLearn(ImGui_Context* ctx);
+    static void drawFavourites(ImGui_Context* ctx);
     static void drawSelectionSets(ImGui_Context* ctx);
     static void drawParameterGroups(ImGui_Context* ctx);
     static void drawAbout(ImGui_Context* ctx);

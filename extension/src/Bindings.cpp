@@ -3227,6 +3227,17 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"switch_cs_7", "CS Fav 7"},
             {"switch_cs_8", "CS Fav 8"},
         }));
+        // BC Favourites — switch_bc_1..8. Same render-time label override as CS.
+        v.push_back(bank("BC Favourites", {
+            {"switch_bc_1", "BC Fav 1"},
+            {"switch_bc_2", "BC Fav 2"},
+            {"switch_bc_3", "BC Fav 3"},
+            {"switch_bc_4", "BC Fav 4"},
+            {"switch_bc_5", "BC Fav 5"},
+            {"switch_bc_6", "BC Fav 6"},
+            {"switch_bc_7", "BC Fav 7"},
+            {"switch_bc_8", "BC Fav 8"},
+        }));
         // Brightness — replaces the old "View / Utility" filler bank (Focus
         // CS/BC did nothing, the rest was junk). Only brightness is genuinely
         // useful here, so make the whole bank coherent: all / LCDs / LEDs ×
