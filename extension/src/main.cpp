@@ -2147,6 +2147,22 @@ static bool favDomainIsBc_()
     return g_softKeyDomain.load() == 1;
 }
 
+// The domain the SSL soft-key row currently represents. With "Parameter change
+// switches soft-key bank" ON it tracks the focused param's domain; with it OFF
+// it stays on the latched g_softKeyDomain so a param touch in the other domain
+// doesn't silently repoint soft-key DISPATCH while the row label stays put.
+// Single source of truth for the label render AND every press-dispatch path so
+// they never disagree (Frank Quick-2/BC desync: "label bleibt, aber Key-bank
+// wechselt" 2026-06-26). Reads atomics only → input-thread-safe.
+static uf8::Domain softKeyDomainNow_()
+{
+    if (g_paramSwitchesSoftKeyBank.load())
+        return (uf8::getFocusedParam().domain == uf8::Domain::BusComp)
+            ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+    return (g_softKeyDomain.load() == 1)
+        ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+}
+
 // UF8 Plugin Mode fader-bank (Frank 2026-05-17). Toggles between 0
 // (strips 1-8 of a logical 16-strip plug-in like SSL Sigma) and 1
 // (strips 9-16). Bank ←/→ buttons drive this while UF8 Plugin Mode is
@@ -5306,6 +5322,38 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
         label(prevK), label(curK), label(nxtK), header);
 }
 
+// Favourite-cycle carousel — prev/curr/next favourite display labels for the
+// UC1 central LCD, mirroring showCycleCarousel_ but sourcing names from the
+// CS / BC favourite slots instead of an FX-index ring. `slots` is the non-empty
+// favourite-slot list (in cycle order); `curK` is the post-step index into it.
+// `isBc` selects the resolver (resolveBcFav vs resolveCsFav). Wrap-aware
+// neighbours match the cycle so the carousel shows nothing past the ends when
+// Wrap Plugin Cycle is off. Reuses the same showInstanceCarousel overlay the
+// FX / Instance cycle uses, so the favourite cycle looks identical on the LCD.
+void showFavCarousel_(MediaTrack* tr, const std::vector<int>& slots, int curK,
+                      bool isBc)
+{
+    if (!g_uc1_surface || !tr) return;
+    const int sz = static_cast<int>(slots.size());
+    if (sz <= 0 || curK < 0 || curK >= sz) return;
+    auto label = [&](int k) -> std::string {
+        if (k < 0 || k >= sz) return {};
+        std::string add, lbl;
+        const bool ok = isBc ? resolveBcFav(slots[k], add, lbl)
+                             : resolveCsFav(slots[k], add, lbl);
+        if (!ok) return {};
+        return !lbl.empty() ? lbl : add;
+    };
+    const bool wrap = g_wrapPluginCycle.load();
+    const int prevK = wrap ? ((curK - 1 + sz) % sz) : (curK - 1);
+    const int nxtK  = wrap ? ((curK + 1) % sz)      : (curK + 1);
+    char trkName[128] = {0};
+    GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
+    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    g_uc1_surface->showInstanceCarousel(
+        label(prevK), label(curK), label(nxtK), header);
+}
+
 // Follow the show_focused_plugin_gui floating window across an
 // Instance / FX cycle. Closes the old fxIdx's window, opens the new
 // one, pins it via the macOS-level NSWindow helper. Gated by the
@@ -7824,9 +7872,17 @@ static void applyCsCycle_(int step, bool ownSettings)
         if (g_wrapPluginCycle.load()) {
             next = ((next % m) + m) % m;
         } else if (next < 0 || next >= m) {
-            return;   // hard-stop at the ends
+            // Hard-stop at the ends — keep state but still show the carousel
+            // at the current favourite (mirrors applyFxCycle_ at the edge).
+            if (cur >= 0) showFavCarousel_(focusTr, slots, cur, /*isBc*/false);
+            return;
         }
     }
+    // Carousel before the switch's internal refresh: showFavCarousel_ sets
+    // instanceCarouselActive_, which suppresses the normal central-label /
+    // readout push so the LCD doesn't flash before the carousel lands —
+    // same ordering applyFxCycle_ / landFxCursor_ rely on.
+    showFavCarousel_(focusTr, slots, next, /*isBc*/false);
     applyCsSwitch_(slots[next], ownSettings);
 }
 
@@ -7935,9 +7991,14 @@ static void applyBcCycle_(int step, bool ownSettings)
         if (g_wrapPluginCycle.load()) {
             next = ((next % m) + m) % m;
         } else if (next < 0 || next >= m) {
+            // Hard-stop at the ends — still show the carousel at the current
+            // favourite (mirrors applyCsCycle_ / applyFxCycle_).
+            if (cur >= 0) showFavCarousel_(focusTr, slots, cur, /*isBc*/true);
             return;
         }
     }
+    // Carousel before the switch's internal refresh (see applyCsCycle_).
+    showFavCarousel_(focusTr, slots, next, /*isBc*/true);
     applyBcSwitch_(slots[next], ownSettings);
 }
 
@@ -13239,10 +13300,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 && !handledNatively
                 && uf8::bindings::getActiveLayer() == 0)
             {
-                const auto fp     = uf8::getFocusedParam();
-                const bool isBc   = (fp.domain == uf8::Domain::BusComp);
-                const auto domain = isBc ? uf8::Domain::BusComp
-                                         : uf8::Domain::ChannelStrip;
+                // Use the latched soft-key domain (not the raw focused param)
+                // when bank-follow is off, so the dispatched Quick (Q1=CS /
+                // Q2=BC) matches the row the LABELS show — else label stays on
+                // Q2 while the press fires Q1 (Frank desync 2026-06-26).
+                const auto domain = softKeyDomainNow_();
+                const bool isBc   = (domain == uf8::Domain::BusComp);
                 const int  bank   = std::clamp(g_softKeyBank.load(),
                                         0, softkey::maxBankFor(domain));
                 const int  slot   = id - 0x18;
@@ -15149,11 +15212,9 @@ void pushZonesForVisibleSlots()
             // Domain normally follows the focused param; with bank-follow OFF it
             // stays on the latched domain so a param touch in the other domain
             // doesn't flip the soft-key row (Frank 2026-06-26, Quick-2/BC case).
-            const auto domSk = g_paramSwitchesSoftKeyBank.load()
-                ? ((focused.domain == uf8::Domain::BusComp)
-                       ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip)
-                : ((g_softKeyDomain.load() == 1)
-                       ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip);
+            // Same resolver the press-dispatch paths use → labels and dispatch
+            // can never disagree.
+            const auto domSk = softKeyDomainNow_();
             const int bankSk = std::clamp(g_softKeyBank.load(),
                 0, softkey::maxBankFor(domSk));
             auto vSk = softkey::viewFor(domSk, bankSk);
@@ -26936,9 +26997,8 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
             if (param < 0 || param >= 8) return;
-            const auto fp = uf8::getFocusedParam();
-            const auto domain = (fp.domain == uf8::Domain::BusComp)
-                ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+            // Latched domain when bank-follow is off (matches label render).
+            const auto domain = softKeyDomainNow_();
             const int bank = std::clamp(g_softKeyBank.load(),
                 0, softkey::maxBankFor(domain));
             const auto v = softkey::viewFor(domain, bank);
@@ -26962,9 +27022,8 @@ void registerBindingHandlers()
             [bankIdx](bool firing, bool /*pressed*/, int param) {
                 if (!firing) return;
                 if (param < 0 || param >= 8) return;
-                const auto fp = uf8::getFocusedParam();
-                const auto domain = (fp.domain == uf8::Domain::BusComp)
-                    ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+                // Latched domain when bank-follow is off (matches label render).
+                const auto domain = softKeyDomainNow_();
                 const int b = std::clamp(bankIdx,
                     0, softkey::maxBankFor(domain));
                 const auto v = softkey::viewFor(domain, b);

@@ -386,6 +386,46 @@ namespace uf8 {
 // text at the user's chosen Font Size (Appearance tab). Reference size
 // is the "Normal" preset (14 px) that all hardcoded widths were tuned
 // for. Frank 2026-05-22.
+// ---- Additive search matching (shared by every Settings search field) -------
+// Split a query into whitespace-separated lowercased tokens; a candidate
+// matches when EVERY token is a substring of its haystack, in ANY order. So
+// "favo focu" finds "Favourite … Focused" everywhere. Empty query → no filter.
+// Frank 2026-06-26 ("suchfeld additiv … bei allen").
+static std::vector<std::string> searchTokensLower_(const char* q)
+{
+    std::vector<std::string> toks;
+    if (!q) return toks;
+    std::string s;
+    for (const char* p = q; *p; ++p)
+        s += static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
+    for (size_t i = 0; i < s.size();) {
+        while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+        size_t j = i;
+        while (j < s.size() && !std::isspace((unsigned char)s[j])) ++j;
+        if (j > i) toks.emplace_back(s.substr(i, j - i));
+        i = j;
+    }
+    return toks;
+}
+// True if every token is found in hayLower (caller already lowercased it).
+// Empty token list → true.
+static bool searchAllTokens_(const std::vector<std::string>& toks,
+                             const std::string& hayLower)
+{
+    for (const auto& t : toks)
+        if (hayLower.find(t) == std::string::npos) return false;
+    return true;
+}
+// Convenience: lowercases the haystack for you, then token-AND matches.
+static bool searchAllTokensCI_(const std::vector<std::string>& toks,
+                               const std::string& hay)
+{
+    std::string h;
+    h.reserve(hay.size());
+    for (char c : hay) h += static_cast<char>(std::tolower((unsigned char)c));
+    return searchAllTokens_(toks, h);
+}
+
 static inline double scaleW_(ImGui_Context* ctx, double designWidth)
 {
     constexpr double kRefSize = 14.0;
@@ -2986,17 +3026,15 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                            });
             const bool filtering = !filter.empty();
 
+            // Additive search: every whitespace-separated token must appear (in
+            // any order) in the display name or key. So "favo focu" finds
+            // "Switch to Favourite N (Focused Domain)". Shared helper so all
+            // Settings search fields behave identically (Frank 2026-06-26).
+            const auto filterTokens = searchTokensLower_(searchBuf);
             auto matches = [&](const std::string& key) -> bool {
                 if (!filtering) return true;
-                auto toLower = [](std::string s) {
-                    for (auto& c : s)
-                        c = std::tolower(static_cast<unsigned char>(c));
-                    return s;
-                };
-                const std::string display = toLower(builtinDisplayName(key));
-                const std::string keyLower = toLower(key);
-                return display.find(filter) != std::string::npos
-                    || keyLower.find(filter) != std::string::npos;
+                return searchAllTokensCI_(filterTokens,
+                    builtinDisplayName(key) + ' ' + key);
             };
 
             // ---- Category buckets -------------------------------------
@@ -9961,12 +9999,9 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     auto icontains = [](const char* hay, const char* needle) {
                         if (!needle || !needle[0]) return true;
                         if (!hay) return false;
-                        std::string h, n;
-                        for (const char* p = hay; *p; ++p)
-                            h += static_cast<char>(std::tolower((unsigned char)*p));
-                        for (const char* p = needle; *p; ++p)
-                            n += static_cast<char>(std::tolower((unsigned char)*p));
-                        return h.find(n) != std::string::npos;
+                        // Additive: every whitespace token must be present.
+                        return searchAllTokensCI_(
+                            searchTokensLower_(needle), hay);
                     };
                     // Param picker combo — only params that have options.
                     char curPName[96] = {0};
@@ -12868,15 +12903,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             nullptr, nullptr);
         ImGui_PopItemWidth(ctx);
 
-        std::string filter(mapSearchBuf);
-        std::transform(filter.begin(), filter.end(), filter.begin(),
-            [](unsigned char c) { return std::tolower(c); });
-        const bool filtering = !filter.empty();
-        auto toLower = [](std::string s) {
-            for (auto& c : s)
-                c = std::tolower(static_cast<unsigned char>(c));
-            return s;
-        };
+        const auto filterTokens = searchTokensLower_(mapSearchBuf);
+        const bool filtering = !filterTokens.empty();
 
         // Bucket every user map by developer. Empty developer string
         // collapses into "Other" so the entry is still reachable.
@@ -12893,16 +12921,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             if (m.match.empty()) continue;
             std::string dev = fxlMasterDeveloperFor_(m.match);
             if (dev.empty()) dev = "Other";
-            if (filtering) {
-                const std::string keyMatch   = toLower(m.match);
-                const std::string keyShort   = toLower(m.displayShort);
-                const std::string keyDev     = toLower(dev);
-                if (keyMatch.find(filter)   == std::string::npos
-                 && keyShort.find(filter)   == std::string::npos
-                 && keyDev.find(filter)     == std::string::npos) {
-                    continue;
-                }
-            }
+            // Additive: each token may match the match-string, the short
+            // name, or the developer — but every token must be present.
+            if (filtering
+                && !searchAllTokensCI_(filterTokens,
+                       m.match + ' ' + m.displayShort + ' ' + dev))
+                continue;
             if (bucket.find(dev) == bucket.end()) devOrder.push_back(dev);
             bucket[dev].push_back(&m);
         }
@@ -13870,9 +13894,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 ImGui_InputTextWithHint(ctx, "##al_pf", "filter…",
                                         s_flt, sizeof(s_flt), nullptr, nullptr);
                 ImGui_PopItemWidth(ctx);
-                std::string flt = s_flt;
-                for (auto& c : flt)
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                const auto fltToks = searchTokensLower_(s_flt);
                 {
                     bool sel = (vst3Param < 0); int sf = 0;
                     char clr[64];
@@ -13883,12 +13905,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     }
                 }
                 for (const auto& pi : editing->paramSnapshot) {
-                    if (!flt.empty()) {
-                        std::string lc = pi.name;
-                        for (auto& c : lc)
-                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        if (lc.find(flt) == std::string::npos) continue;
-                    }
+                    if (!searchAllTokensCI_(fltToks, pi.name)) continue;
                     bool sel = (vst3Param == pi.vst3Param); int sf = 0;
                     char rid[300];
                     snprintf(rid, sizeof(rid), "[%4d] %s##al_%s_opt_%d_%d",
@@ -14090,10 +14107,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                                 s_paramFilter, sizeof(s_paramFilter),
                                 nullptr, nullptr);
                             ImGui_PopItemWidth(ctx);
-                            std::string flt = s_paramFilter;
-                            for (auto& c : flt)
-                                c = static_cast<char>(std::tolower(
-                                    static_cast<unsigned char>(c)));
+                            const auto fltToks =
+                                searchTokensLower_(s_paramFilter);
 
                             // (unmapped) entry first — clears the row.
                             {
@@ -14116,15 +14131,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             for (const auto& pi :
                                  editing->paramSnapshot)
                             {
-                                if (!flt.empty()) {
-                                    std::string lc = pi.name;
-                                    for (auto& c : lc)
-                                        c = static_cast<char>(
-                                            std::tolower(
-                                              static_cast<unsigned char>(c)));
-                                    if (lc.find(flt) == std::string::npos)
-                                        continue;
-                                }
+                                if (!searchAllTokensCI_(fltToks, pi.name))
+                                    continue;
                                 bool sel = (s.vst3Param == pi.vst3Param);
                                 int sf = 0;
                                 char rowId[300];
@@ -14989,11 +14997,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // the rest. 1024 is comfortably above any musical plugin.
             const int kMaxParams = 1024;
             const int n = (std::min)(paramCount, kMaxParams);
-            // Case-insensitive: lowercase the filter once, lowercase each
-            // param name before matching — so "out" finds "Output Gain".
-            std::string filt = g_paramFilter;
-            for (auto& c : filt)
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            // Additive, case-insensitive — so "out gain" finds "Output Gain"
+            // and "out" alone still finds it (every token must be present).
+            const auto fltToks = searchTokensLower_(g_paramFilter);
 
             char pname[128];
             for (int p = 0; p < n; ++p) {
@@ -15005,13 +15011,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 // controls, just clutter in the picker. (Frank 2026-05-29.)
                 if (isReaperMidiParam_(pname)) continue;
 
-                if (!filt.empty()) {
-                    std::string lc(pname);
-                    for (auto& c : lc)
-                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    if (lc.find(filt) == std::string::npos)
-                        continue;
-                }
+                if (!searchAllTokensCI_(fltToks, pname)) continue;
 
                 auto it = usedBy.find(p);
                 const bool isBound = (it != usedBy.end());
@@ -15346,8 +15346,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             nullptr, nullptr);
 
         // Filterable list. Case-insensitive substring match.
-        std::string flt = g_pickerFilter;
-        for (auto& c : flt) c = static_cast<char>(std::tolower(c));
+        // Additive — "fabfilter pro q" matches "FabFilter Pro-Q 4" etc.
+        const auto fltToks = searchTokensLower_(g_pickerFilter);
 
         // Lowercased haystacks computed lazily once per render — fine for
         // a few thousand entries; if it ever shows up in profiles we can
@@ -15390,7 +15390,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 }
             };
 
-            const bool filtering = !flt.empty();
+            const bool filtering = !fltToks.empty();
             for (const auto& dev : g_pickerDevOrder) {
                 const auto bit = g_pickerBuckets.find(dev);
                 if (bit == g_pickerBuckets.end()) continue;
@@ -15400,9 +15400,9 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 if (filtering) {
                     bool any = false;
                     for (size_t i : bit->second) {
-                        std::string lc = g_installedFx[i].name;
-                        for (auto& c : lc) c = static_cast<char>(std::tolower(c));
-                        if (lc.find(flt) != std::string::npos) { any = true; break; }
+                        if (searchAllTokensCI_(fltToks, g_installedFx[i].name)) {
+                            any = true; break;
+                        }
                     }
                     if (!any) continue;
                 }
@@ -15414,11 +15414,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 }
                 if (ImGui_TreeNode(ctx, dev.c_str(), &treeFlags)) {
                     for (size_t i : bit->second) {
-                        if (filtering) {
-                            std::string lc = g_installedFx[i].name;
-                            for (auto& c : lc) c = static_cast<char>(std::tolower(c));
-                            if (lc.find(flt) == std::string::npos) continue;
-                        }
+                        if (filtering
+                            && !searchAllTokensCI_(fltToks,
+                                                   g_installedFx[i].name))
+                            continue;
                         pickRow(i);
                     }
                     ImGui_TreePop(ctx);
@@ -16591,7 +16590,7 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
                 ImGui_InputTextWithHint(ctx, "##slot_search", "Search plug-ins…",
                                         setSearch, sizeof(setSearch), nullptr, nullptr);
                 ImGui_PopItemWidth(ctx);
-                const std::string filt = lower_(setSearch);
+                const auto fltToks = searchTokensLower_(setSearch);
 
                 auto writeSlot = [&](const char* add) {
                     if (isBase) { if (cs) favSetCsFav(i, add, add); else favSetBcFav(i, add, add); }
@@ -16601,9 +16600,10 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
                 char eid[24]; snprintf(eid, sizeof(eid), "(empty)##e_%s_%d", dom, i);
                 if (ImGui_Selectable(ctx, eid, &selNone, nullptr, nullptr, nullptr)) writeSlot("");
                 for (size_t k = 0; k < pool.size(); ++k) {
-                    if (!filt.empty()
-                        && lower_(pool[k].second).find(filt) == std::string::npos
-                        && lower_(pool[k].first).find(filt) == std::string::npos)
+                    // Additive: tokens may match the display name or the
+                    // add-name; every token must be present.
+                    if (!searchAllTokensCI_(fltToks,
+                            pool[k].second + ' ' + pool[k].first))
                         continue;
                     char it[160]; snprintf(it, sizeof(it), "%s##p_%s_%d_%zu",
                                            pool[k].second.c_str(), dom, i, k);
