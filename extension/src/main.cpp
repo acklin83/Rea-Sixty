@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <climits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -2125,6 +2126,12 @@ inline bool isVPotPanFocus(const uf8::FocusedParam& f) {
 // Layout from SSL UF8 User Guide p.180-181. Persisted across sessions.
 std::atomic<int>  g_softKeyBank{0};
 std::atomic<bool> g_softKeyDirty{false};
+// When on (default), a focused-parameter change switches the SSL soft-key bank
+// to whichever bank holds that param ("bank-follow-focus"). Off = the soft-key
+// bank stays put when you touch a param. NEVER affects the UF8 parameter display
+// (label/value re-push runs regardless). ExtState param_switches_softkey.
+// Frank 2026-06-26.
+std::atomic<bool> g_paramSwitchesSoftKeyBank{true};
 
 // UF8 Plugin Mode fader-bank (Frank 2026-05-17). Toggles between 0
 // (strips 1-8 of a logical 16-strip plug-in like SSL Sigma) and 1
@@ -3184,6 +3191,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "fav_multi_unify"); v && *v) {
         g_favMultiUnify.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "param_switches_softkey"); v && *v) {
+        g_paramSwitchesSoftKeyBank.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
         g_keyboardShiftModifier.store(std::atoi(v) != 0);
     }
@@ -4107,11 +4117,35 @@ StripRoute resolveFaderRoute_(int strip, int bankOffset, int trackCount)
     return {};
 }
 
-// Volume read/write helper that funnels through GetTrack/SetTrackSendInfo
-// when a route is active, else returns the track-direct linear volume.
+// Maps a StripRoute (GetTrackSendInfo_Value SLOT index — visual/7.75 order, with
+// gaps) to the CSurf_OnSend*/GetTrack*UIVolPan COMBINED index (lap-less, different
+// permutation; REAPER exposes no GUID there — see [[send-receive-automation]]).
+// Resolved by VALUE-DIFF when the user moves the fader (the only identity-proof
+// REAPER allows): write via slot, see which combined index changed. Main-thread
+// only. Key = "<trackGUID>\t<category>\t<slotIndex>".
+std::map<std::string, int> g_sendCsurfMap;
+std::map<std::string, int> g_sendCsurfCnt;   // send/recv count when the index was probed
+static std::string routeCacheKey_(const StripRoute& r)
+{
+    char b[48]; std::snprintf(b, sizeof(b), "\t%d\t%d", r.sendCategory, r.sendIndex);
+    return trackGuidStr_(r.track) + b;
+}
+
+// Volume read/write helper. For a routed send/receive: if we have resolved the
+// CSurf combined index (the fader was moved at least once), read the EFFECTIVE
+// (post-envelope) level via GetTrack{Send,Receive}UIVolPan so the motor fader
+// mirrors automation + snaps back on Touch release. Otherwise read the trim.
 double readRouteVolumeLinear_(const StripRoute& r, MediaTrack* fallbackTr)
 {
     if (r.valid) {
+        const auto it = g_sendCsurfMap.find(routeCacheKey_(r));
+        if (it != g_sendCsurfMap.end() && it->second >= 0) {
+            double v = 1.0, p = 0.0;
+            const bool ok = (r.sendCategory == -1)
+                ? GetTrackReceiveUIVolPan(r.track, it->second, &v, &p)
+                : GetTrackSendUIVolPan(r.track, it->second, &v, &p);
+            if (ok) return v;
+        }
         return GetTrackSendInfo_Value(r.track, r.sendCategory,
                                       r.sendIndex, "D_VOL");
     }
@@ -4122,11 +4156,208 @@ double readRouteVolumeLinear_(const StripRoute& r, MediaTrack* fallbackTr)
     return vol;
 }
 
+// Raw (non-recording) trim write — kept for resets / non-gesture paths.
 void writeRouteVolumeLinear_(const StripRoute& r, double v)
 {
     if (!r.valid) return;
     SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex,
                            "D_VOL", v);
+}
+
+// Per-strip send-gesture tracking, so the first fader move of a gesture re-probes
+// the combined index (handles a send reorder between gestures) and the rest reuse
+// it. g_sendEdit* hold the in-flight edit so the touch-release path can issue the
+// SetTrackSendUIVol "end of edit" (isend=1) that finalises Touch recording.
+std::array<int64_t, 8>     g_sendGestureMs{};
+std::array<std::string, 8> g_sendGestureKey;
+std::array<MediaTrack*, 8> g_sendEditTrack{};
+std::array<int, 8>         g_sendEditUiIdx;   // SetTrackSendUIVol index, or INT_MIN
+std::array<double, 8>      g_sendEditVal{};
+struct SendEditInit_ { SendEditInit_() { g_sendEditUiIdx.fill(INT_MIN); } } g_sendEditInit_;
+
+// Read the EFFECTIVE level of send/receive at the cached combined index `ci`
+// (sends: GetTrackSendUIVolPan combined index; receives: GetTrackReceiveUIVolPan
+// recv index). Used by the probe (with the live combined index) and the read.
+static double routeUiVolAt_(MediaTrack* tr, bool recv, int ci)
+{
+    double v = 1.0, p = 0.0;
+    if (recv) GetTrackReceiveUIVolPan(tr, ci, &v, &p);
+    else      GetTrackSendUIVolPan(tr, ci, &v, &p);
+    return v;
+}
+
+// SetTrackSendUIVol / GetTrack*UIVolPan use a UNIFIED UI index: receives are
+// negative (send_idx = -1 - recvIdx), hardware outputs [0, nbHw), sends
+// [nbHw, …). Our cache stores the POSITIVE half (combined send index for sends,
+// recv index for receives); this maps it to the SetTrackSendUIVol argument.
+static int sendUiVolArg_(bool recv, int ci) { return recv ? (-1 - ci) : ci; }
+
+// Send/receive fader write WITH automation recording (Frank 2026-06-26, after
+// thorough SDK research). KEY: the correct API is SetTrackSendUIVol — the same
+// UI path the mouse uses, which MOVES the send AND records automation in Touch/
+// Write/Latch (CSurf_OnSendVolumeChange did NOT record reliably here). It uses
+// the same UNIFIED index as GetTrack*UIVolPan, which differs from the StripRoute
+// slot index (7.75 reorder) and exposes no GUID — so the FIRST move of a gesture
+// identifies the matching index purely by VALUE (raw slot write + detect which
+// UI index moved; immune to duplicate names — only one physical value changes).
+// isend: 0 = normal tweak (every move); the touch-release path issues 1 (end of
+// edit). Falls back to the raw slot write only if the value-probe can't pin an
+// index (moves the correct send, just no automation that gesture).
+void writeRouteVolAutomation_(const StripRoute& r, int strip, double vLin)
+{
+    if (!r.valid) return;
+    if (strip < 0 || strip >= 8) { writeRouteVolumeLinear_(r, vLin); return; }
+    const bool   recv = (r.sendCategory == -1);
+    const std::string key = routeCacheKey_(r);
+    const int curCount = GetTrackNumSends(r.track, recv ? -1 : 0);
+
+    // Invalidate a cached index if the send/receive count changed (add/remove
+    // shifts indices). Otherwise the index, once found, is REUSED across gestures
+    // — re-probing every gesture is what broke recording after the first release:
+    // the trim-write probe can't detect a move once an envelope exists, so it must
+    // run ONLY when we have no index yet (before the first envelope). Frank
+    // 2026-06-26 "schreibt nur bis zum ersten loslassen".
+    if (g_sendCsurfCnt.count(key) && g_sendCsurfCnt[key] != curCount) {
+        g_sendCsurfMap.erase(key); g_sendCsurfCnt.erase(key);
+    }
+
+    if (!g_sendCsurfMap.count(key)) {
+        // PROBE: snapshot every UI vol, write via the slot (always the correct
+        // send, raw → no automation), then detect which UI index moved. Works
+        // before the first envelope exists; once cached it is never re-probed.
+        const int hwOuts = recv ? 0 : GetTrackNumSends(r.track, 1);
+        const int count  = curCount;
+        std::vector<double> before(count);
+        for (int k = 0; k < count; ++k)
+            before[k] = routeUiVolAt_(r.track, recv, recv ? k : hwOuts + k);
+        SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_VOL", vLin);
+        int best = -1; double bestChange = 1e-4;     // most-moved = our send
+        for (int k = 0; k < count; ++k) {
+            const int ci = recv ? k : hwOuts + k;
+            const double change = std::fabs(routeUiVolAt_(r.track, recv, ci) - before[k]);
+            if (change > bestChange) { bestChange = change; best = ci; }
+        }
+        if (best < 0) { g_sendCsurfMap.erase(key); g_sendCsurfCnt.erase(key); }
+        else          { g_sendCsurfMap[key] = best; g_sendCsurfCnt[key] = curCount; }
+    }
+
+    const auto it = g_sendCsurfMap.find(key);
+    if (it != g_sendCsurfMap.end() && it->second >= 0) {
+        const int arg = sendUiVolArg_(recv, it->second);
+        SetTrackSendUIVol(r.track, arg, vLin, 0);    // UI tweak → moves + records
+        g_sendEditTrack[strip] = r.track;            // remember for end-of-edit
+        g_sendEditUiIdx[strip] = arg;
+        g_sendEditVal[strip]   = vLin;
+    } else {
+        SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_VOL", vLin);
+        g_sendEditUiIdx[strip] = INT_MIN;
+    }
+}
+
+// Finalise a send/receive Touch edit on fader release — SetTrackSendUIVol with
+// isend=1 tells REAPER the edit ended so Touch stops writing + snaps back.
+void finishRouteVolEdit_(int strip)
+{
+    if (strip < 0 || strip >= 8) return;
+    if (g_sendEditUiIdx[strip] == INT_MIN) return;
+    if (g_sendEditTrack[strip]
+        && ValidatePtr2(nullptr, g_sendEditTrack[strip], "MediaTrack*"))
+        SetTrackSendUIVol(g_sendEditTrack[strip], g_sendEditUiIdx[strip],
+                          g_sendEditVal[strip], 1);
+    g_sendEditUiIdx[strip] = INT_MIN;
+}
+
+// ---- Send/receive PAN automation — exact analog of the volume path, sharing the
+// SAME index cache (a send's combined index is identical for vol and pan). Uses
+// SetTrackSendUIPan (UI path → records pan automation in Touch). Frank 2026-06-26.
+std::array<MediaTrack*, 8> g_sendPanEditTrack{};
+std::array<int, 8>         g_sendPanEditUiIdx;
+std::array<double, 8>      g_sendPanEditVal{};
+std::array<int64_t, 8>     g_sendPanEditUntilMs{};   // V-Pot pan: timed end-of-edit
+struct SendPanEditInit_ { SendPanEditInit_() { g_sendPanEditUiIdx.fill(INT_MIN); } } g_sendPanEditInit_;
+void finishRoutePanEdit_(int strip);
+
+static double routeUiPanAt_(MediaTrack* tr, bool recv, int ci)
+{
+    double v = 1.0, p = 0.0;
+    if (recv) GetTrackReceiveUIVolPan(tr, ci, &v, &p);
+    else      GetTrackSendUIVolPan(tr, ci, &v, &p);
+    return p;
+}
+
+void writeRoutePanAutomation_(const StripRoute& r, int strip, double pan)
+{
+    if (!r.valid) return;
+    if (strip < 0 || strip >= 8) {
+        SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
+        return;
+    }
+    const bool recv = (r.sendCategory == -1);
+    const std::string key = routeCacheKey_(r);
+    const int curCount = GetTrackNumSends(r.track, recv ? -1 : 0);
+    if (g_sendCsurfCnt.count(key) && g_sendCsurfCnt[key] != curCount) {
+        g_sendCsurfMap.erase(key); g_sendCsurfCnt.erase(key);
+    }
+    if (!g_sendCsurfMap.count(key)) {
+        // Probe by PAN value-diff (before the first pan envelope exists).
+        const int hwOuts = recv ? 0 : GetTrackNumSends(r.track, 1);
+        const int count  = curCount;
+        std::vector<double> before(count);
+        for (int k = 0; k < count; ++k)
+            before[k] = routeUiPanAt_(r.track, recv, recv ? k : hwOuts + k);
+        SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
+        int best = -1; double bestChange = 1e-4;
+        for (int k = 0; k < count; ++k) {
+            const int ci = recv ? k : hwOuts + k;
+            const double change = std::fabs(routeUiPanAt_(r.track, recv, ci) - before[k]);
+            if (change > bestChange) { bestChange = change; best = ci; }
+        }
+        if (best < 0) { g_sendCsurfMap.erase(key); g_sendCsurfCnt.erase(key); }
+        else          { g_sendCsurfMap[key] = best; g_sendCsurfCnt[key] = curCount; }
+    }
+    const auto it = g_sendCsurfMap.find(key);
+    if (it != g_sendCsurfMap.end() && it->second >= 0) {
+        const int arg = sendUiVolArg_(recv, it->second);
+        SetTrackSendUIPan(r.track, arg, pan, 0);
+        g_sendPanEditTrack[strip] = r.track;
+        g_sendPanEditUiIdx[strip] = arg;
+        g_sendPanEditVal[strip]   = pan;
+        // V-Pot pan has no touch-release; arm a timed end-of-edit. The fader-flip
+        // path calls finishRoutePanEdit_ on release first, clearing this.
+        g_sendPanEditUntilMs[strip] = nowMs_() + 300;
+    } else {
+        SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
+        g_sendPanEditUiIdx[strip] = INT_MIN;
+    }
+}
+
+// Effective send/receive pan (post-envelope) via the cached combined index, else
+// the D_PAN trim. Used to SEED the V-Pot pan accumulator at gesture start.
+static double readRoutePanEffective_(const StripRoute& r)
+{
+    const auto it = g_sendCsurfMap.find(routeCacheKey_(r));
+    if (it != g_sendCsurfMap.end() && it->second >= 0)
+        return routeUiPanAt_(r.track, r.sendCategory == -1, it->second);
+    return GetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN");
+}
+
+// V-Pot send-pan software accumulator (like writeVpotTrackPan_): re-seed from the
+// EFFECTIVE pan only at gesture start, then accumulate the delta in software and
+// never re-read mid-gesture — D_PAN trim does NOT reflect the recorded envelope,
+// so re-reading it pinned every point at centre (Frank 2026-06-26 send-pan bug).
+std::array<double, 8>      g_sendPanVpotAccum{};
+std::array<std::string, 8> g_sendPanVpotKey;
+std::array<int64_t, 8>     g_sendPanVpotMs{};
+
+void finishRoutePanEdit_(int strip)
+{
+    if (strip < 0 || strip >= 8) return;
+    if (g_sendPanEditUiIdx[strip] == INT_MIN) return;
+    if (g_sendPanEditTrack[strip]
+        && ValidatePtr2(nullptr, g_sendPanEditTrack[strip], "MediaTrack*"))
+        SetTrackSendUIPan(g_sendPanEditTrack[strip], g_sendPanEditUiIdx[strip],
+                          g_sendPanEditVal[strip], 1);
+    g_sendPanEditUiIdx[strip] = INT_MIN;
 }
 
 // REAPER's GetTrackSendName / GetTrackReceiveName produce the
@@ -8050,6 +8281,36 @@ void publishOverlayFocus_()
     SetExtState("rea_sixty", "overlay_focus", guid.c_str(), false);
 }
 
+// Favourite context for the Focused-Track Panel (Phase 4c): the copy/own mode +
+// the focused track's assigned set ("overlay_fav" = "<own>\t<setName>", setName
+// empty = base favourites) plus the full set-name list ("overlay_fav_sets", one
+// per line). Diff-guarded; only published while the panel feature is on.
+std::string g_overlayFavPublished, g_overlayFavSetsPublished;
+void publishOverlayFav_()
+{
+    if (!g_focusedPanel.load()) return;
+    std::string setName;
+    if (g_uc1_surface) {
+        auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+        if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+            reasixty_trackAssignedSet(tr, setName);
+    }
+    std::string fav = (g_favOwnSettings.load() ? "1\t" : "0\t") + setName;
+    if (fav != g_overlayFavPublished) {
+        g_overlayFavPublished = fav;
+        SetExtState("rea_sixty", "overlay_fav", fav.c_str(), false);
+    }
+    std::string sets;
+    for (int i = 0, n = reasixty_favSetCount(); i < n; ++i) {
+        std::string nm; reasixty_favSetName(i, nm);
+        sets += nm; sets += '\n';
+    }
+    if (sets != g_overlayFavSetsPublished) {
+        g_overlayFavSetsPublished = sets;
+        SetExtState("rea_sixty", "overlay_fav_sets", sets.c_str(), false);
+    }
+}
+
 // Resolve the surface's active CS / BC instances (track + FX chain index).
 // CS = focused track, BC = BC-anchor track (effectiveBcTrack_). fx = -1 when
 // that domain is absent. The track ptr may be non-null with fx == -1.
@@ -8236,6 +8497,7 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, int selFx, std::str
 void publishOverlayState_()
 {
     publishOverlayFocus_();   // refresh focused-track GUID for the readout panel
+    publishOverlayFav_();     // copy/own mode + assigned set for the panel (4c)
     // `on` drives the MCP highlight (markers feature). The per-track CS/BC body
     // is published whenever EITHER feature is on, because the docker panel needs
     // it to show the active instance names even when the MCP highlight is off.
@@ -8290,6 +8552,8 @@ std::string g_hudUf8PushPublished;    // last-published "hud_uf8_push" (V-Pot st
 std::string g_hudPushPublished;    // last-published "hud_push" (button push-cycle)
 std::string g_hudPushBtnsPublished;// last-published "hud_pushbtns" (push-cycle idx set)
 std::string g_hudCsFavPublished;   // last-published "hud_cs_fav" (CS-Switch favourites)
+std::string g_hudBcFavPublished;   // last-published "hud_bc_fav" (BC-Switch favourites)
+std::string g_hudFavModePublished; // last-published "hud_fav_mode" (copy/own toggle)
 std::string g_hudShortPublished;   // last-published "hud_short" (CS/BC/UF8 Kurzname seeds)
 bool        g_hudGeomPublished = false;
 // UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
@@ -8582,6 +8846,48 @@ void publishHud_()
         if (fav != g_hudCsFavPublished) {
             g_hudCsFavPublished = fav;
             SetExtState("rea_sixty", "hud_cs_fav", fav.c_str(), false);
+        }
+    }
+
+    // BC-Switch favourites for the HUD's BC-page dropdown — exact mirror of the
+    // CS-Fav block above (line0 "<curSlot>;<hasBc>", then 8× "<i>;<used>;<label>").
+    {
+        int favCurSlot = -1, favHasBc = 0;
+        if (!boot && bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*")) {
+            const uc1::UC1Bindings cb = uc1::lookupBindingsOnTrack(bcTr);
+            char ident[256];
+            if (cb.busCompFxIdx >= 0
+                && uf8::fxIdentityName(bcTr, cb.busCompFxIdx, ident, sizeof(ident))) {
+                favHasBc   = 1;
+                favCurSlot = bcFavSlotForName_(ident);
+            }
+        }
+        std::string fav = std::to_string(favCurSlot) + ';'
+                        + std::to_string(favHasBc) + '\n';
+        for (int i = 0; i < 8; ++i) {
+            std::string a, l;
+            const bool used = resolveBcFav(i, a, l);
+            std::string disp = l;
+            if (used) {
+                if (const auto* pb = uc1::lookupBindingsByName(a);
+                    pb && pb->shortName && *pb->shortName)
+                    disp = pb->shortName;
+            }
+            fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + disp + '\n';
+        }
+        if (fav != g_hudBcFavPublished) {
+            g_hudBcFavPublished = fav;
+            SetExtState("rea_sixty", "hud_bc_fav", fav.c_str(), false);
+        }
+    }
+
+    // Favourite copy/own mode (g_favOwnSettings) for the HUD + Focused-Panel
+    // toggles — "1" = own settings, "0" = copy values.
+    {
+        const std::string mode = g_favOwnSettings.load() ? "1" : "0";
+        if (mode != g_hudFavModePublished) {
+            g_hudFavModePublished = mode;
+            SetExtState("rea_sixty", "hud_fav_mode", mode.c_str(), false);
         }
     }
 
@@ -10080,13 +10386,12 @@ void drainInputQueue()
                             pan = pan * 2.0 - 1.0;
                             if (pan < -1.0) pan = -1.0;
                             if (pan >  1.0) pan =  1.0;
-                            SetTrackSendInfo_Value(fr.track, fr.sendCategory,
-                                                   fr.sendIndex, "D_PAN", pan);
+                            writeRoutePanAutomation_(fr, e.strip, pan);
                             g_panOverlayUntilMs[e.strip] = nowMs_() + kPanOverlayMs;
                             g_panOverlayText[e.strip]    =
                                 composeValueLine("Pan", formatPanReadout(pan));
                         } else {
-                            writeRouteVolumeLinear_(fr, e.value);
+                            writeRouteVolAutomation_(fr, e.strip, e.value);
                         }
                         break;
                     }
@@ -10272,15 +10577,24 @@ void drainInputQueue()
                     const StripRoute vr = resolveVpotRoute_(
                         e.strip, bankOffset, trackCount);
                     auto writePan = [&](const StripRoute& r, double dv, int strip) -> double {
-                        const double cur = GetTrackSendInfo_Value(
-                            r.track, r.sendCategory, r.sendIndex, "D_PAN");
+                        // Software accumulator — seed from EFFECTIVE pan at gesture
+                        // start, never re-read mid-gesture (the value records into the
+                        // envelope, so D_PAN trim stays put → points pinned at centre).
+                        const int64_t now = nowMs_();
+                        const std::string key = routeCacheKey_(r);
+                        if (now - g_sendPanVpotMs[strip] > 300
+                            || g_sendPanVpotKey[strip] != key) {
+                            g_sendPanVpotAccum[strip] = readRoutePanEffective_(r);
+                            g_sendPanVpotKey[strip]   = key;
+                        }
                         const double next = uf8::applyVirtualNotch(
-                            cur, dv, /*center*/0.0,
+                            g_sendPanVpotAccum[strip], dv, /*center*/0.0,
                             /*zone*/g_notchZone.load() * 2.0,
                             -1.0, 1.0);
-                        SetTrackSendInfo_Value(r.track, r.sendCategory,
-                                               r.sendIndex, "D_PAN", next);
-                        g_panOverlayUntilMs[strip] = nowMs_() + kPanOverlayMs;
+                        g_sendPanVpotAccum[strip] = next;
+                        g_sendPanVpotMs[strip]    = now;
+                        writeRoutePanAutomation_(r, strip, next);
+                        g_panOverlayUntilMs[strip] = now + kPanOverlayMs;
                         g_panOverlayText[strip]    =
                             composeValueLine("Pan", formatPanReadout(next));
                         return next;
@@ -14243,8 +14557,11 @@ void pushZonesForVisibleSlots()
     // chase) changes the focused param, switch the soft-key bank to
     // whichever bank in the new domain holds that linkIdx. Skips when
     // the linkIdx isn't in any bank (custom param, or not yet
-    // registered in the soft-key tables).
-    if (focusChanged) {
+    // registered in the soft-key tables). Gated by a Settings option
+    // (default on) — when off the soft-key bank stays put on a param
+    // change. The UF8 parameter display (pageChanged above) is NOT
+    // gated, so the readout still follows the param. Frank 2026-06-26.
+    if (focusChanged && g_paramSwitchesSoftKeyBank.load()) {
         const int b = softkey::bankContaining(focused.domain, focused.slotIdx);
         if (b >= 0 && g_softKeyBank.exchange(b) != b) {
             g_softKeyDirty.store(true);
@@ -15523,9 +15840,7 @@ void pushZonesForVisibleSlots()
                     vpotBar[s] = vpotPosFromUnipolar(
                         static_cast<double>(pbVol) / 16383.0);
                 } else {
-                    const double pan = GetTrackSendInfo_Value(
-                        faderRoute.track, faderRoute.sendCategory,
-                        faderRoute.sendIndex, "D_PAN");
+                    const double pan = readRoutePanEffective_(faderRoute);
                     vpotBar[s] = vpotPosFromPan(pan);
                 }
             } else {
@@ -15535,12 +15850,9 @@ void pushZonesForVisibleSlots()
             if (vpotRoute.valid) {
                 if (g_forcePan.load()) {
                     // PAN held in routing mode → V-Pot bar shows the
-                    // routed entity's D_PAN as a bipolar centre-out
-                    // sweep (matches the input handler that writes
-                    // D_PAN instead of D_VOL when PAN is held).
-                    const double pan = GetTrackSendInfo_Value(
-                        vpotRoute.track, vpotRoute.sendCategory,
-                        vpotRoute.sendIndex, "D_PAN");
+                    // routed entity's effective (post-envelope) D_PAN as a
+                    // bipolar centre-out sweep (mirrors recorded automation).
+                    const double pan = readRoutePanEffective_(vpotRoute);
                     vpotBar[s] = vpotPosFromPan(pan);
                 } else {
                     const double volLin = readRouteVolumeLinear_(vpotRoute, tr);
@@ -15851,10 +16163,9 @@ void pushZonesForVisibleSlots()
                 if (g_flip.load() && faderRoute.valid) {
                     // FLIP+route: fader carries the send's D_PAN. Map
                     // pan -1..+1 → 0..kUf8FaderPbMax so the motor parks
-                    // at full-left / centre / full-right cleanly.
-                    const double pan = GetTrackSendInfo_Value(
-                        faderRoute.track, faderRoute.sendCategory,
-                        faderRoute.sendIndex, "D_PAN");
+                    // at full-left / centre / full-right cleanly. Effective
+                    // (post-envelope) so the motor follows recorded automation.
+                    const double pan = readRoutePanEffective_(faderRoute);
                     double n = (pan + 1.0) * 0.5;
                     if (n < 0.0) n = 0.0;
                     if (n > 1.0) n = 1.0;
@@ -17034,10 +17345,14 @@ void commitDebouncedTouchReleases()
                         pan = pan * 2.0 - 1.0;
                         if (pan < -1.0) pan = -1.0;
                         if (pan >  1.0) pan =  1.0;
-                        SetTrackSendInfo_Value(fr.track, fr.sendCategory,
-                                               fr.sendIndex, "D_PAN", pan);
+                        writeRoutePanAutomation_(fr, static_cast<int>(s), pan);
+                        finishRoutePanEdit_(static_cast<int>(s));
                     } else {
-                        writeRouteVolumeLinear_(fr, pbToLinearVolume(touchPb));
+                        // Land the final value through the automation path, then
+                        // signal end-of-edit so Touch finalises + snaps back.
+                        writeRouteVolAutomation_(fr, static_cast<int>(s),
+                                                 pbToLinearVolume(touchPb));
+                        finishRouteVolEdit_(static_cast<int>(s));
                     }
                 }
                 // active-but-invalid: eat the writeback, do NOT fall
@@ -18628,6 +18943,32 @@ void onTimer()
     // standalone Touch-to-Learn (the bindable action runs the arm/bind + the
     // hardware feedback without the HUD — Frank 2026-06-20). publishHud_ +
     // the hud_cmd drain self-gate on g_hudEnabled, so they stay HUD-only.
+    // Focused-Track Panel back-channel (Phase 4c) — the Lua panel writes
+    // "focused_panel_cmd"; drained here independently of the HUD. Commands:
+    //   favmode;<0|1>          → global copy/own favourite mode
+    //   favset_track;<name>    → assign a named set to the focused track ("" = base)
+    if (g_focusedPanel.load()) {
+        if (const char* cmd = GetExtState("rea_sixty", "focused_panel_cmd"); cmd && *cmd) {
+            const std::string s = cmd;
+            SetExtState("rea_sixty", "focused_panel_cmd", "", false);   // consume
+            if (s.rfind("favmode;", 0) == 0) {
+                const bool own = std::atoi(s.c_str() + 8) != 0;
+                g_favOwnSettings.store(own);
+                SetExtState("rea_sixty", "fav_own_settings", own ? "1" : "0", true);
+                g_overlayFavPublished.clear();
+                g_hudFavModePublished.clear();
+            } else if (s.rfind("favset_track;", 0) == 0) {
+                const std::string name = s.substr(13);   // after "favset_track;"
+                if (g_uc1_surface) {
+                    auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+                    if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+                        reasixty_assignTrackSet(tr, name.c_str());
+                }
+                g_overlayFavPublished.clear();
+            }
+        }
+    }
+
     if (g_hudEnabled.load() || g_hudTouchLearn.load()) {
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
         if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))
@@ -18691,6 +19032,35 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("bcfav;", 0) == 0) {
+                // "bcfav;<slot>" — assign the focused track's active BC to slot
+                // 0..7, clear when slot < 0. Mirror of csfav. Phase 4b.
+                const int slot = std::atoi(s.c_str() + 6);
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                if (bcTr && ValidatePtr2(nullptr, bcTr, "MediaTrack*")) {
+                    const uc1::UC1Bindings cb = uc1::lookupBindingsOnTrack(bcTr);
+                    char ident[256];
+                    if (cb.busCompFxIdx >= 0
+                        && uf8::fxIdentityName(bcTr, cb.busCompFxIdx,
+                                               ident, sizeof(ident))) {
+                        if (slot < 0) favClearBcFavByName(ident);
+                        else          favSetBcFav(slot, ident, ident);
+                        g_hudBcFavPublished.clear();   // force re-publish
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("favmode;", 0) == 0) {
+                // "favmode;<0|1>" — set the global copy/own favourite mode from
+                // the HUD / Focused-Panel toggle. Phase 4b/4c. (Inline store +
+                // persist; the reasixty_setFavOwnSettings accessor is defined
+                // further down the file.)
+                const bool own = std::atoi(s.c_str() + 8) != 0;
+                g_favOwnSettings.store(own);
+                SetExtState("rea_sixty", "fav_own_settings", own ? "1" : "0", true);
+                g_hudFavModePublished.clear();
+                publishHud_();
             } else if (s.rfind("setshort;", 0) == 0) {
                 // "setshort;<dom>;<text>" — set the active plug-in's Kurzname
                 // (displayShort) for domain c=CS / b=BC / u=UF8, from the HUD's
@@ -19591,6 +19961,17 @@ void onTimer()
     uf8::bindings::tickPending();
     drainInputQueue();
     commitDebouncedTouchReleases();
+    // V-Pot send-pan has no touch-release; finalise its automation edit once the
+    // knob has been idle past the window (the fader-flip path finalises on release).
+    {
+        const int64_t now = nowMs_();
+        for (int s = 0; s < 8; ++s)
+            if (g_sendPanEditUiIdx[s] != INT_MIN && g_sendPanEditUntilMs[s]
+                && now > g_sendPanEditUntilMs[s]) {
+                finishRoutePanEdit_(s);
+                g_sendPanEditUntilMs[s] = 0;
+            }
+    }
     if (g_sync) {
         // Phase 2.8 Nav Mode hijacks the colour-bar: marker/region colour
         // (or neutral fallback when no override) replaces track colour.
@@ -22497,6 +22878,12 @@ void reasixty_setFavMultiUnify(bool on)
 {
     g_favMultiUnify.store(on);
     SetExtState("rea_sixty", "fav_multi_unify", on ? "1" : "0", true);
+}
+bool reasixty_paramSwitchesSoftKeyBank() { return g_paramSwitchesSoftKeyBank.load(); }
+void reasixty_setParamSwitchesSoftKeyBank(bool on)
+{
+    g_paramSwitchesSoftKeyBank.store(on);
+    SetExtState("rea_sixty", "param_switches_softkey", on ? "1" : "0", true);
 }
 bool reasixty_keyboardShiftModifier() { return g_keyboardShiftModifier.load(); }
 void reasixty_setKeyboardShiftModifier(bool on)

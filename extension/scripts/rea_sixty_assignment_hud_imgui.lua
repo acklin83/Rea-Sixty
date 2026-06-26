@@ -164,7 +164,9 @@ local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
 local ctxUf8Strip  = -1
 local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
 local nameRect     = nil  -- LCD / UF8-header click target → edit plug-in Kurzname
-local csFavRect    = nil  -- CS-Favourite dropdown box (CS/BC tabs) hit-rect
+local csFavRect    = nil  -- CS-Favourite dropdown box (CS tab) hit-rect
+local bcFavRect    = nil  -- BC-Favourite dropdown box (BC tab) hit-rect
+local favModeRect  = nil  -- Copy/Own mode toggle (CS+BC tabs) hit-rect
 local FAV_H        = 0     -- height reserved for the CS-Favourite row (0 on UF8)
 local uf8Banks     = {}   -- [0..7] = V-Pot bank label ("" = none)
 local uf8BankCols  = {}   -- [0..7] = V-Pot bank colour (0xRRGGBB or nil)
@@ -395,6 +397,28 @@ local function readCsFav()
     end
   end
   return cur, hasCs, slots
+end
+
+-- BC-Switch favourites, identical format to hud_cs_fav (Phase 4b).
+local function readBcFav()
+  local raw = reaper.GetExtState(SECT, "hud_bc_fav")
+  local cur, hasBc, slots, first = -1, false, {}, true
+  for line in raw:gmatch("[^\n]+") do
+    if first then
+      local c, h = line:match("^(%-?%d+);(%d)$")
+      if c then cur, hasBc = tonumber(c), (h == "1") end
+      first = false
+    else
+      local i, used, label = line:match("^(%d+);(%d);(.*)$")
+      if i then slots[tonumber(i)] = { used = (used == "1"), label = label or "" } end
+    end
+  end
+  return cur, hasBc, slots
+end
+
+-- Favourite copy/own mode toggle: "1" = own settings, "0" = copy values.
+local function readFavMode()
+  return reaper.GetExtState(SECT, "hud_fav_mode") == "1"
 end
 
 -- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>" — the USER map's
@@ -1725,19 +1749,25 @@ local function drawHudEditRow()
   dtext(nbx + 6, y + (rowH - ndh) / 2, col(ncol, 1), nd, fpx)
   nameRect = { x = nbx, y = y, w = nbW, h = rowH, dom = dom }
 
-  -- CS-Favourite dropdown — CS tab ONLY (a Channel-Strip concept; meaningless
-  -- on the BC tab — Frank 2026-06-24).
-  if activeTab == "cs" then
-    local cur, hasCs, slots = readCsFav()
-    local flbl = "CS Fav:"
+  -- Favourite dropdown — CS tab shows the CS-Fav list, BC tab the BC-Fav list
+  -- (Phase 4b; BC mirrors the CS row Frank knew from 2026-06-24).
+  local rightX = nbx + nbW + 22
+  if activeTab == "cs" or activeTab == "bc" then
+    local isCs = (activeTab == "cs")
+    -- NB: `isCs and readCsFav() or readBcFav()` would collapse the 3 returns to
+    -- the first — call explicitly so has/slots survive.
+    local cur, has, slots
+    if isCs then cur, has, slots = readCsFav()
+    else         cur, has, slots = readBcFav() end
+    local flbl = isCs and "CS Fav:" or "BC Fav:"
     local flw  = measure(flbl, fpx)
-    local fbx  = nbx + nbW + 22
+    local fbx  = rightX
     dtext(fbx, y + (rowH - nlh) / 2, col(0x8890A0, 0.9), flbl, fpx)
     local bx   = fbx + flw + 8
     local boxW = floor(160 * fontScale() + 0.5)
     local cval
-    if not hasCs then
-      cval = "(no CS)"
+    if not has then
+      cval = isCs and "(no CS)" or "(no BC)"
     elseif cur >= 0 then
       local s = slots[cur] or { label = "" }
       cval = string.format("%d \xE2\x80\x94 %s", cur + 1,
@@ -1745,14 +1775,32 @@ local function drawHudEditRow()
     else
       cval = "None"
     end
-    field(bx, y, boxW, rowH, hasCs and 0x2A2A30 or 0x202024)
+    field(bx, y, boxW, rowH, has and 0x2A2A30 or 0x202024)
     local disp  = fit(cval, boxW - 24, fpx)
     local _, dh = measure(disp, fpx)
     dtext(bx + 8, y + (rowH - dh) / 2,
-          col(hasCs and 0xC6CCD6 or 0x6A6F78, 1), disp, fpx)
+          col(has and 0xC6CCD6 or 0x6A6F78, 1), disp, fpx)
     dtext(bx + boxW - 15, y + (rowH - dh) / 2,
-          col(hasCs and CS_FAV_ACCENT or 0x6A6F78, 0.95), "\xE2\x96\xBE", fpx)
-    if hasCs then csFavRect = { x = bx, y = y, w = boxW, h = rowH } end
+          col(has and CS_FAV_ACCENT or 0x6A6F78, 0.95), "\xE2\x96\xBE", fpx)
+    if has then
+      if isCs then csFavRect = { x = bx, y = y, w = boxW, h = rowH }
+      else        bcFavRect = { x = bx, y = y, w = boxW, h = rowH } end
+    end
+    rightX = bx + boxW + 18
+  end
+
+  -- Copy/Own mode toggle — CS + BC tabs. Click flips the global favourite mode
+  -- the surface Switch/Cycle actions obey (favmode;0|1). Phase 4b.
+  if activeTab == "cs" or activeTab == "bc" then
+    local own  = readFavMode()
+    local mlbl = own and "Own settings" or "Copy values"
+    local mlw  = measure(mlbl, fpx)
+    local boxW = mlw + 26
+    field(rightX, y, boxW, rowH, own and 0x2A3038 or 0x202024)
+    local _, mh = measure(mlbl, fpx)
+    dtext(rightX + 8, y + (rowH - mh) / 2,
+          col(own and 0x9AD0A0 or 0xB0B6C0, 1), mlbl, fpx)
+    favModeRect = { x = rightX, y = y, w = boxW, h = rowH }
   end
 end
 
@@ -1813,8 +1861,10 @@ local function render()
 
   -- Edit row above the body (all tabs): Name field + CS-Favourite dropdown
   -- (CS only). Sets FAV_H (body shifts down) + nameRect/csFavRect.
-  csFavRect = nil
-  nameRect  = nil
+  csFavRect   = nil
+  bcFavRect   = nil
+  favModeRect = nil
+  nameRect    = nil
   drawHudEditRow()
 
   -- Tell the extension when the UF8 tab is showing so it auto-engages UF8
@@ -1933,6 +1983,7 @@ local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
 local CS_FAV_POPUP   = "##hud_cs_fav_ctx"
+local BC_FAV_POPUP   = "##hud_bc_fav_ctx"
 local CURVE_POPUP    = "Curve editor###hud_curve_editor"
 
 -- Full-parity control-menu working state (Frank 2026-06-20). `cedit` holds the
@@ -1988,6 +2039,30 @@ local function drawCsFavPopup()
       or  string.format("%d  \xE2\x80\x94  (empty)", i + 1)
     if reaper.ImGui_MenuItem(ctx, lbl .. "##csfavpop" .. i, nil, cur == i) then
       sendCmd("csfav;" .. i)
+    end
+  end
+  reaper.ImGui_EndPopup(ctx)
+end
+
+-- BC-Favourite slot picker — mirror of drawCsFavPopup (readBcFav / bcfav;<slot>).
+local function drawBcFavPopup()
+  if bcFavRect then
+    reaper.ImGui_SetNextWindowPos(ctx, OX + bcFavRect.x,
+                                  OY + bcFavRect.y + bcFavRect.h + 2)
+  end
+  if not reaper.ImGui_BeginPopup(ctx, BC_FAV_POPUP) then return end
+  local cur, _, slots = readBcFav()
+  if reaper.ImGui_MenuItem(ctx, "None", nil, cur < 0) then
+    sendCmd("bcfav;-1")
+  end
+  reaper.ImGui_Separator(ctx)
+  for i = 0, 7 do
+    local s = slots[i] or { used = false, label = "" }
+    local lbl = s.used
+      and string.format("%d  \xE2\x80\x94  %s", i + 1, s.label)
+      or  string.format("%d  \xE2\x80\x94  (empty)", i + 1)
+    if reaper.ImGui_MenuItem(ctx, lbl .. "##bcfavpop" .. i, nil, cur == i) then
+      sendCmd("bcfav;" .. i)
     end
   end
   reaper.ImGui_EndPopup(ctx)
@@ -3023,6 +3098,11 @@ local function loop()
         if csFavRect and hitRect(csFavRect, lx, ly) then
           -- CS-Favourite dropdown box → open the slot picker popup.
           reaper.ImGui_OpenPopup(ctx, CS_FAV_POPUP)
+        elseif bcFavRect and hitRect(bcFavRect, lx, ly) then
+          reaper.ImGui_OpenPopup(ctx, BC_FAV_POPUP)
+        elseif favModeRect and hitRect(favModeRect, lx, ly) then
+          -- Copy/Own toggle → flip the published mode.
+          sendCmd("favmode;" .. (readFavMode() and "0" or "1"))
         elseif nameRect and hitRect(nameRect, lx, ly) then
           -- LCD / UF8 header plug-in name → edit the Kurzname inline.
           editPluginShort(nameRect.dom)
@@ -3098,6 +3178,7 @@ local function loop()
     render()
     drawContextMenu()
     drawCsFavPopup()
+    drawBcFavPopup()
     drawControlContextMenu()
     drawCurveEditor()
     drawUf8ControlContextMenu()

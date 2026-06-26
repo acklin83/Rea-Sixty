@@ -214,6 +214,7 @@ bool reasixty_csCopyFader(); void reasixty_setCsCopyFader(bool on);
 bool reasixty_csFavRememberNonCopied(); void reasixty_setCsFavRememberNonCopied(bool on);
 bool reasixty_favOwnSettings(); void reasixty_setFavOwnSettings(bool on);
 bool reasixty_favMultiUnify(); void reasixty_setFavMultiUnify(bool on);
+bool reasixty_paramSwitchesSoftKeyBank(); void reasixty_setParamSwitchesSoftKeyBank(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
 bool reasixty_keyboardCmdModifier();
@@ -620,6 +621,15 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Track selection follows parameter change",
                        &tsfp)) {
         reasixty_setTrackSelFollowsParam(tsfp);
+    }
+
+    // When on (default), a focused-parameter change switches the SSL soft-key
+    // bank to the bank holding that param. Off = the soft-key bank stays put.
+    // The UF8 parameter display follows the param either way.
+    bool pssb = reasixty_paramSwitchesSoftKeyBank();
+    if (ImGui_Checkbox(ctx, "Parameter change switches soft-key bank",
+                       &pssb)) {
+        reasixty_setParamSwitchesSoftKeyBank(pssb);
     }
 
     // Touch a UF8 fader → that strip's track becomes the only selected

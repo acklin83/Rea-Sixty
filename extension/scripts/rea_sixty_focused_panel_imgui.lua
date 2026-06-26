@@ -87,6 +87,26 @@ local function readActive()
   return byGuid
 end
 
+-- Interactive favourite back-channel (Phase 4c). The panel writes commands to
+-- "focused_panel_cmd"; the extension drains them (favmode / favset_track).
+local function sendPanelCmd(s) reaper.SetExtState(SECT, "focused_panel_cmd", s, false) end
+
+-- "overlay_fav" = "<own 0/1>\t<assigned set name>" (empty = base favourites).
+local function readFav()
+  local raw = reaper.GetExtState(SECT, "overlay_fav")
+  local own, set = raw:match("^(%d)\t(.*)$")
+  return own == "1", set or ""
+end
+
+-- "overlay_fav_sets" = newline-separated set names.
+local function readFavSets()
+  local out = {}
+  for line in reaper.GetExtState(SECT, "overlay_fav_sets"):gmatch("[^\n]+") do
+    out[#out + 1] = line
+  end
+  return out
+end
+
 local function findTrackByGuid(guid)
   if not guid or guid == "" then return nil end
   local m = reaper.GetMasterTrack(0)
@@ -340,6 +360,55 @@ local function drawContent()
   local csPN, csPV = paramStr("overlay_param_cs")
   local bcPN, bcPV = paramStr("overlay_param_bc")
 
+  -- Favourite controls (Phase 4c) — copy/own toggle + per-track set picker,
+  -- each independently shown (Layout → Favourites), positioned on their own
+  -- line or inline before/after the CS/BC parameter line. Frank 2026-06-26.
+  local showMode = reaper.GetExtState(SECT, "focused_panel_fav_mode") == "1"
+  local showSet  = reaper.GetExtState(SECT, "focused_panel_fav_set")  == "1"
+  local favPos   = reaper.GetExtState(SECT, "focused_panel_fav_pos")
+  if favPos == "" then favPos = "own" end
+  local anyFav = showMode or showSet
+
+  local function drawFav()
+    local own, curSet = readFav()
+    local drew = false
+    if showMode then
+      -- Full ImGui_Button (not SmallButton) so its height matches the combo.
+      if reaper.ImGui_Button(ctx, own and "Own settings" or "Copy values") then
+        sendPanelCmd("favmode;" .. (own and "0" or "1"))
+      end
+      drew = true
+    end
+    if showSet then
+      if drew then reaper.ImGui_SameLine(ctx, 0, font_px) end
+      reaper.ImGui_SetNextItemWidth(ctx, 160)
+      local preview = (curSet ~= "" and curSet) or "(base favourites)"
+      if reaper.ImGui_BeginCombo(ctx, "##fav_set", preview) then
+        if reaper.ImGui_Selectable(ctx, "(base favourites)", curSet == "") then
+          sendPanelCmd("favset_track;")
+        end
+        for _, nm in ipairs(readFavSets()) do
+          if reaper.ImGui_Selectable(ctx, nm, curSet == nm) then
+            sendPanelCmd("favset_track;" .. nm)
+          end
+        end
+        reaper.ImGui_EndCombo(ctx)
+      end
+    end
+  end
+
+  -- CS/BC parameter display can be hidden entirely (default shown) — someone
+  -- may want ONLY the favourite controls. Frank 2026-06-26.
+  if reaper.GetExtState(SECT, "focused_panel_params") == "0" then
+    if anyFav then drawFav() end
+    return
+  end
+
+  if anyFav and favPos == "before" then
+    drawFav()
+    reaper.ImGui_SameLine(ctx, 0, font_px)
+  end
+
   if oneLine() then
     segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
     reaper.ImGui_SameLine(ctx, 0, font_px)   -- gap between CS and BC
@@ -347,6 +416,14 @@ local function drawContent()
   else
     segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
     segment("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol)
+  end
+
+  if anyFav and favPos == "after" then
+    reaper.ImGui_SameLine(ctx, 0, font_px)
+    drawFav()
+  elseif anyFav and favPos == "own" then
+    reaper.ImGui_Spacing(ctx)
+    drawFav()
   end
 end
 
@@ -484,6 +561,33 @@ local function drawContextMenu()
     end
     if reaper.ImGui_MenuItem(ctx, "One line", nil, one) then
       reaper.SetExtState(SECT, "focused_panel_oneline", "1", true)
+    end
+    reaper.ImGui_Separator(ctx)
+    local showParams = reaper.GetExtState(SECT, "focused_panel_params") ~= "0"
+    if reaper.ImGui_MenuItem(ctx, "Show CS / BC parameters", nil, showParams) then
+      toggleKey("focused_panel_params", true)
+    end
+    local showMode = reaper.GetExtState(SECT, "focused_panel_fav_mode") == "1"
+    if reaper.ImGui_MenuItem(ctx, "Favourite: copy/own toggle", nil, showMode) then
+      toggleKey("focused_panel_fav_mode", false)
+    end
+    local showSet = reaper.GetExtState(SECT, "focused_panel_fav_set") == "1"
+    if reaper.ImGui_MenuItem(ctx, "Favourite: set picker", nil, showSet) then
+      toggleKey("focused_panel_fav_set", false)
+    end
+    local favPos = reaper.GetExtState(SECT, "focused_panel_fav_pos")
+    if favPos == "" then favPos = "own" end
+    if reaper.ImGui_BeginMenu(ctx, "Favourites position") then
+      if reaper.ImGui_MenuItem(ctx, "Own line", nil, favPos == "own") then
+        reaper.SetExtState(SECT, "focused_panel_fav_pos", "own", true)
+      end
+      if reaper.ImGui_MenuItem(ctx, "Before CS / BC", nil, favPos == "before") then
+        reaper.SetExtState(SECT, "focused_panel_fav_pos", "before", true)
+      end
+      if reaper.ImGui_MenuItem(ctx, "After CS / BC", nil, favPos == "after") then
+        reaper.SetExtState(SECT, "focused_panel_fav_pos", "after", true)
+      end
+      reaper.ImGui_EndMenu(ctx)
     end
     reaper.ImGui_EndMenu(ctx)
   end
