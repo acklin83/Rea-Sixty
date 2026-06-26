@@ -16421,8 +16421,11 @@ void pushZonesForVisibleSlots()
                 if (g_panOverlayUntilMs[s] > nowMs_()) {
                     valLine = g_panOverlayText[s];
                 } else if (routedFader) {
-                    // Pan readout — track's own pan (V-Pots are free).
-                    const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+                    // Send mode: the routed SEND's pan is what the surface
+                    // controls (V-Pot in default, fader in FLIP) — show its
+                    // EFFECTIVE pan so the readout matches the bar. Was reading
+                    // track pan → stuck at "C" during automation playback.
+                    const double pan = readRoutePanEffective_(faderRoute);
                     valLine = composeValueLine("Pan", formatPanReadout(pan));
                 } else {
                     std::string n = routeName_(r);
