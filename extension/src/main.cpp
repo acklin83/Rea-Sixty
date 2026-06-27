@@ -324,6 +324,13 @@ void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // (line ~5532) need this forward decl visible.
 uint32_t trackColorRgb(MediaTrack* tr);
 
+// Dynamic-bank config accessors — defined at global scope (external linkage,
+// called from SettingsScreen.cpp) but used inside the anon namespace too.
+int      reasixty_fxBankOp(int gesture);
+void     reasixty_setFxBankOp(int gesture, int op);
+uint32_t reasixty_trackBankColour(int i);
+void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+
 
 namespace {
 
@@ -1306,6 +1313,8 @@ std::atomic<int>  g_fxMoveReq{0};
 // gesture 0=plain push, 1=+Shift, 2=+Cmd, 3=+Ctrl, 4=long-press.
 std::atomic<uint32_t> g_dynBankReq{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
+static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
+                                   bool setFocusedDomain, bool setBcAnchor);
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step, bool ownSettings = false);
@@ -4534,6 +4543,91 @@ MediaTrack* routeTargetTrack_(const StripRoute& r)
     return nullptr;
 }
 
+// ── Dynamic-bank configuration (FX gestures + colour palette) ──────────
+// Global, shared by every FX / colour bank. Lazily loaded from ExtState on
+// first access (main thread only); setters persist immediately.
+
+// What an FX-bank key does for a given gesture. Pickable per gesture in
+// Settings; the 5 gestures are Push / +Shift / +Cmd / +Ctrl / Long.
+enum class FxBankOp : int {
+    None = 0, Focus, Float, Bypass, FxSolo, Offline, Delete, MoveUp, MoveDown,
+};
+constexpr int kFxBankOpCount = 9;
+static const char* fxBankOpName_(FxBankOp op)
+{
+    switch (op) {
+        case FxBankOp::None:     return "(nothing)";
+        case FxBankOp::Focus:    return "Focus FX (surface follows)";
+        case FxBankOp::Float:    return "Float/close FX window";
+        case FxBankOp::Bypass:   return "Bypass toggle";
+        case FxBankOp::FxSolo:   return "FX solo (bypass others)";
+        case FxBankOp::Offline:  return "Offline toggle";
+        case FxBankOp::Delete:   return "Delete FX";
+        case FxBankOp::MoveUp:   return "Move FX up";
+        case FxBankOp::MoveDown: return "Move FX down";
+    }
+    return "?";
+}
+// gesture index 0=Push 1=Shift 2=Cmd 3=Ctrl 4=Long
+std::atomic<int> g_fxBankOp[5] = {
+    int(FxBankOp::Focus), int(FxBankOp::Float), int(FxBankOp::Bypass),
+    int(FxBankOp::FxSolo), int(FxBankOp::Offline),
+};
+// 8 user-configured RGB colours (0xRRGGBB) for the Track-Colours bank.
+std::atomic<uint32_t> g_trackBankColour[8] = {
+    0xE53935, 0xFB8C00, 0xFDD835, 0x43A047,
+    0x1E88E5, 0x5E35B1, 0xD81B60, 0x6D4C41,
+};
+static void ensureDynCfgLoaded_()
+{
+    static bool done = false;
+    if (done) return;
+    done = true;
+    if (const char* v = GetExtState("rea_sixty", "fx_bank_ops"); v && v[0]) {
+        int o[5]; int got = std::sscanf(v, "%d,%d,%d,%d,%d",
+                                        &o[0], &o[1], &o[2], &o[3], &o[4]);
+        for (int i = 0; i < got && i < 5; ++i)
+            if (o[i] >= 0 && o[i] < kFxBankOpCount) g_fxBankOp[i].store(o[i]);
+    }
+    for (int i = 0; i < 8; ++i) {
+        char k[32]; std::snprintf(k, sizeof(k), "track_bank_col_%d", i);
+        if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
+            const long c = std::strtol(v, nullptr, 16);
+            g_trackBankColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
+        }
+    }
+}
+// FX-solo (audition one FX): remember the chain's enabled states, disable
+// every FX but the target; pressing the same key (or soloing elsewhere)
+// restores. Main-thread only.
+static MediaTrack*      g_fxSoloTrack = nullptr;
+static int              g_fxSoloIdx   = -1;
+static std::vector<char> g_fxSoloSaved;
+static void fxSoloRestore_()
+{
+    if (!g_fxSoloTrack || !ValidatePtr2(nullptr, g_fxSoloTrack, "MediaTrack*")) {
+        g_fxSoloTrack = nullptr; g_fxSoloIdx = -1; g_fxSoloSaved.clear(); return;
+    }
+    const int n = TrackFX_GetCount(g_fxSoloTrack);
+    for (int i = 0; i < n && i < static_cast<int>(g_fxSoloSaved.size()); ++i)
+        TrackFX_SetEnabled(g_fxSoloTrack, i, g_fxSoloSaved[i] != 0);
+    g_fxSoloTrack = nullptr; g_fxSoloIdx = -1; g_fxSoloSaved.clear();
+}
+static void fxSoloToggle_(MediaTrack* tr, int idx)
+{
+    if (g_fxSoloTrack == tr && g_fxSoloIdx == idx) { fxSoloRestore_(); return; }
+    if (g_fxSoloTrack) fxSoloRestore_();      // un-solo whatever was soloed
+    const int n = TrackFX_GetCount(tr);
+    if (idx < 0 || idx >= n) return;
+    g_fxSoloSaved.assign(static_cast<size_t>(n), 0);
+    for (int i = 0; i < n; ++i) {
+        g_fxSoloSaved[static_cast<size_t>(i)] =
+            TrackFX_GetEnabled(tr, i) ? 1 : 0;
+        TrackFX_SetEnabled(tr, i, i == idx);
+    }
+    g_fxSoloTrack = tr; g_fxSoloIdx = idx;
+}
+
 // ── Dynamic soft-key banks ─────────────────────────────────────────────
 // A Sub-Bank flagged with a DynamicBankKind computes its 8 keys live from
 // the focused track's context instead of carrying static bindings. The
@@ -4549,7 +4643,9 @@ MediaTrack* routeTargetTrack_(const StripRoute& r)
 struct DynSlotInfo {
     std::string label;
     bool        present = false;
-    int         led     = 0;   // 0 off, 1 dim, 2 on
+    int         led     = 0;          // 0 off, 1 dim, 2 on
+    bool        hasRgb  = false;      // override the soft-key LED colour
+    uint32_t    rgb     = 0xFFFFFFu;  // 0xRRGGBB when hasRgb
 };
 
 // Visual-slot base offset for a dynamic bank kind: Sends bank 2 / FX bank 2
@@ -4595,8 +4691,61 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             info.led = muted ? 1 : 2;   // active bright, muted dim
             return info;
         }
+        case DK::FxBank1:
+        case DK::FxBank2: {
+            const int fxIdx = dynBankSlotBase_(kind) + slot;
+            if (fxIdx >= TrackFX_GetCount(tr)) return info;   // empty slot
+            info.present = true;
+            char nm[256] = {0};
+            TrackFX_GetFXName(tr, fxIdx, nm, sizeof(nm));
+            std::string s(nm);
+            // Strip a leading "VST3: " / "JS: " type prefix + trailing
+            // " (vendor)" so the 12-char LCD shows the plug-in name.
+            if (const auto p = s.find(": "); p != std::string::npos && p < 8)
+                s.erase(0, p + 2);
+            if (const auto p = s.rfind(" ("); p != std::string::npos)
+                s.erase(p);
+            info.label = s.empty() ? "FX" : s;
+            const bool enabled = TrackFX_GetEnabled(tr, fxIdx);
+            const bool offline = TrackFX_GetOffline(tr, fxIdx);
+            info.led = (enabled && !offline) ? 2 : 1;  // bright on, dim if off
+            return info;
+        }
+        case DK::ParamGroups: {
+            // 8 fixed groups always exist; show all (empty name → "Grp N").
+            info.present = true;
+            const auto& st = uf8::param_groups::state();
+            std::string nm = st.slots[slot].name;
+            if (nm.empty()) { char b[12]; std::snprintf(b, sizeof(b), "Grp %d", slot + 1); nm = b; }
+            info.label = nm;
+            const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
+            const bool member = (mask & (1u << slot)) != 0;
+            info.led = member ? 2 : 1;   // bright = focused track is a member
+            return info;
+        }
+        case DK::TrackColours: {
+            info.present = true;
+            char b[12]; std::snprintf(b, sizeof(b), "Col %d", slot + 1);
+            info.label = b;
+            const uint32_t want = reasixty_trackBankColour(slot);
+            info.hasRgb = true;
+            info.rgb    = want;
+            // Bright when the focused track currently wears this colour.
+            const int cc = static_cast<int>(
+                GetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR"));
+            bool match = false;
+            if (cc & 0x1000000) {
+                int r = 0, g = 0, bl = 0;
+                ColorFromNative(cc & 0xFFFFFF, &r, &g, &bl);
+                const uint32_t cur = (uint32_t(r) << 16) | (uint32_t(g) << 8)
+                                   | uint32_t(bl);
+                match = (cur == want);
+            }
+            info.led = match ? 2 : 1;
+            return info;
+        }
         default:
-            return info;   // FX / param-groups / colours not wired yet
+            return info;
     }
 }
 
@@ -4670,7 +4819,85 @@ static void applyDynBankReq_(uint32_t enc)
             g_pageDirty.store(true);
             break;
         }
-        default: break;   // FX / param-groups / colours not wired yet
+        case DK::FxBank1:
+        case DK::FxBank2: {
+            const int fxIdx = dynBankSlotBase_(kind) + slot;
+            const int n = TrackFX_GetCount(tr);
+            if (fxIdx < 0 || fxIdx >= n) return;
+            const auto op = static_cast<FxBankOp>(reasixty_fxBankOp(gesture));
+            switch (op) {
+                case FxBankOp::Focus:
+                    syncInstanceFromFxIdx_(tr, fxIdx, /*setFocusedDomain*/ true,
+                                           /*setBcAnchor*/ true);
+                    uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
+                                                std::memory_order_relaxed);
+                    g_bankDirty.store(true);
+                    break;
+                case FxBankOp::Float: {
+                    const bool open =
+                        TrackFX_GetFloatingWindow(tr, fxIdx) != nullptr;
+                    TrackFX_Show(tr, fxIdx, open ? 2 : 3);
+                    break;
+                }
+                case FxBankOp::Bypass:
+                    TrackFX_SetEnabled(tr, fxIdx, !TrackFX_GetEnabled(tr, fxIdx));
+                    break;
+                case FxBankOp::FxSolo:
+                    fxSoloToggle_(tr, fxIdx);
+                    break;
+                case FxBankOp::Offline:
+                    TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
+                    break;
+                case FxBankOp::Delete:
+                    TrackFX_Delete(tr, fxIdx);
+                    break;
+                case FxBankOp::MoveUp:
+                    if (fxIdx > 0)
+                        TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx - 1,
+                                            /*is_move*/ true);
+                    break;
+                case FxBankOp::MoveDown:
+                    if (fxIdx < n - 1)
+                        TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx + 1,
+                                            /*is_move*/ true);
+                    break;
+                case FxBankOp::None: break;
+            }
+            g_softKeyDirty.store(true);
+            g_pageDirty.store(true);
+            break;
+        }
+        case DK::ParamGroups: {
+            if (slot < 0 || slot >= 8) return;
+            if (gesture == 4) {                 // long: toggle group broadcast
+                uf8::param_groups::toggleGroupActive(slot);
+            } else {                            // toggle focused-track membership
+                const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
+                const uint8_t bit  = static_cast<uint8_t>(1u << slot);
+                uf8::param_groups::setMaskForTrack(
+                    tr, static_cast<uint8_t>(mask ^ bit));
+            }
+            g_softKeyDirty.store(true);
+            g_pageDirty.store(true);
+            break;
+        }
+        case DK::TrackColours: {
+            if (slot < 0 || slot >= 8) return;
+            if (gesture == 4) {                 // long: clear custom colour
+                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", 0.0);
+            } else {                            // apply the configured colour
+                const uint32_t rgb = reasixty_trackBankColour(slot);
+                const int native = ColorToNative((rgb >> 16) & 0xFF,
+                                                 (rgb >> 8) & 0xFF, rgb & 0xFF);
+                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR",
+                    static_cast<double>(native | 0x1000000));
+            }
+            UpdateArrange();
+            g_softKeyDirty.store(true);
+            g_pageDirty.store(true);
+            break;
+        }
+        default: break;
     }
 }
 
@@ -15941,7 +16168,13 @@ void pushZonesForVisibleSlots()
                      |  uint32_t(c[2]);
             };
             const bool wantActive = (tssk == uf8::TopSoftKeyState::On);
-            if (pluginModeLocal) {
+            if (dynKind != uf8::bindings::DynamicBankKind::None
+                && dynInfo.hasRgb) {
+                // Dynamic bank (Track Colours) supplies its own per-key LED
+                // colour; brightness still follows tssk (match = bright).
+                ledColRgb = dynInfo.rgb;
+                ledClr = uf8::ledColourForTrackRgb(ledColRgb);
+            } else if (pluginModeLocal) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const auto& tl = uctx.map->uf8.topSoftKeyLeds[s];
                     const uint32_t bc = tl.colour & 0x00FFFFFFu;
@@ -22910,6 +23143,42 @@ void reasixty_setInsertMarkerStyle(int style)
         reconcileAllInsertMarkers_();
     }
     publishOverlayState_();
+}
+
+// Dynamic-bank config accessors (external linkage — SettingsScreen.cpp drives
+// them). The atomics + ensureDynCfgLoaded_ live in the anon namespace above;
+// anon-ns names are visible here in the same TU.
+int  reasixty_fxBankOp(int gesture)
+{
+    ensureDynCfgLoaded_();
+    return (gesture >= 0 && gesture < 5) ? g_fxBankOp[gesture].load()
+                                         : int(FxBankOp::None);
+}
+void reasixty_setFxBankOp(int gesture, int op)
+{
+    if (gesture < 0 || gesture >= 5 || op < 0 || op >= kFxBankOpCount) return;
+    ensureDynCfgLoaded_();
+    g_fxBankOp[gesture].store(op);
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d",
+                  g_fxBankOp[0].load(), g_fxBankOp[1].load(),
+                  g_fxBankOp[2].load(), g_fxBankOp[3].load(),
+                  g_fxBankOp[4].load());
+    SetExtState("rea_sixty", "fx_bank_ops", buf, true);
+}
+uint32_t reasixty_trackBankColour(int i)
+{
+    ensureDynCfgLoaded_();
+    return (i >= 0 && i < 8) ? g_trackBankColour[i].load() : 0xFFFFFFu;
+}
+void reasixty_setTrackBankColour(int i, uint32_t rgb)
+{
+    if (i < 0 || i >= 8) return;
+    ensureDynCfgLoaded_();
+    g_trackBankColour[i].store(rgb & 0xFFFFFFu);
+    char k[32]; std::snprintf(k, sizeof(k), "track_bank_col_%d", i);
+    char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
+    SetExtState("rea_sixty", k, v, true);
 }
 
 // Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /

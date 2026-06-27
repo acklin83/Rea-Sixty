@@ -138,6 +138,11 @@ int    reasixty_overlayBcColor();
 void   reasixty_setOverlayBcColor(int rgb);
 int    reasixty_overlaySelColor();
 void   reasixty_setOverlaySelColor(int rgb);
+// Dynamic-bank config: FX-bank gesture scheme + Track-Colours palette.
+int      reasixty_fxBankOp(int gesture);
+void     reasixty_setFxBankOp(int gesture, int op);
+uint32_t reasixty_trackBankColour(int i);
+void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
@@ -4752,9 +4757,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
         struct DynOpt { DynamicBankKind kind; const char* label; };
         static const DynOpt kDynOpts[] = {
-            { DynamicBankKind::None,   "Off (static slots)" },
-            { DynamicBankKind::Sends,  "Sends 1-8 (focused track)" },
-            { DynamicBankKind::Sends2, "Sends 9-16 (focused track)" },
+            { DynamicBankKind::None,         "Off (static slots)" },
+            { DynamicBankKind::FxBank1,      "FX 1-8 (focused track)" },
+            { DynamicBankKind::FxBank2,      "FX 9-16 (focused track)" },
+            { DynamicBankKind::Sends,        "Sends 1-8 (focused track)" },
+            { DynamicBankKind::Sends2,       "Sends 9-16 (focused track)" },
+            { DynamicBankKind::ParamGroups,  "Parameter Groups" },
+            { DynamicBankKind::TrackColours, "Track Colours" },
         };
         const DynamicBankKind curKind =
             getSubBankDynamic(editLayer, engagedQ, sbIdx);
@@ -4775,6 +4784,56 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             }
             ImGui_EndCombo(ctx);
         }
+        ImGui_Spacing(ctx);
+
+        // Contextual editor for the selected kind. The config is GLOBAL
+        // (shared by every FX / colour bank), edited here for convenience.
+        if (curKind == DynamicBankKind::FxBank1
+            || curKind == DynamicBankKind::FxBank2) {
+            ImGui_TextDisabled(ctx,
+                "FX-key gestures (global — applies to every FX bank):");
+            static const char* kOpNames[] = {
+                "(nothing)", "Focus FX (surface follows)",
+                "Float/close FX window", "Bypass toggle",
+                "FX solo (bypass others)", "Offline toggle",
+                "Delete FX", "Move FX up", "Move FX down",
+            };
+            static const char* kGesture[5] = {
+                "Push", "+Shift", "+Cmd", "+Ctrl", "Long-press",
+            };
+            for (int g = 0; g < 5; ++g) {
+                const int cur = reasixty_fxBankOp(g);
+                char cid[24]; std::snprintf(cid, sizeof(cid), "##fxop%d", g);
+                ImGui_Text(ctx, kGesture[g]);
+                double sameOffs = 90.0;
+                ImGui_SameLine(ctx, &sameOffs, nullptr);
+                ImGui_SetNextItemWidth(ctx, 220.0);
+                if (ImGui_BeginCombo(ctx, cid,
+                        kOpNames[(cur >= 0 && cur < 9) ? cur : 0],
+                        /*flags*/ nullptr)) {
+                    for (int o = 0; o < 9; ++o) {
+                        bool sel = (o == cur);
+                        if (ImGui_Selectable(ctx, kOpNames[o], &sel,
+                                             nullptr, nullptr, nullptr))
+                            reasixty_setFxBankOp(g, o);
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+            }
+        } else if (curKind == DynamicBankKind::TrackColours) {
+            ImGui_TextDisabled(ctx,
+                "Track-Colours palette (global — 8 keys = these colours):");
+            int ceFlags = ImGui_ColorEditFlags_NoInputs;
+            for (int i = 0; i < 8; ++i) {
+                int col = static_cast<int>(reasixty_trackBankColour(i));
+                char lid[24]; std::snprintf(lid, sizeof(lid), "Colour %d", i + 1);
+                ImGui_SetNextItemWidth(ctx, 200.0);
+                if (ImGui_ColorEdit3(ctx, lid, &col, &ceFlags))
+                    reasixty_setTrackBankColour(
+                        i, static_cast<uint32_t>(col) & 0xFFFFFFu);
+            }
+        }
+
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
