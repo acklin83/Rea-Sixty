@@ -809,6 +809,13 @@ std::atomic<bool>         g_bcFavOwnSettings{true};
 // ganging). When off ("keep separate"), each track resolves slot N against its
 // OWN set. ExtState fav_multi_unify. Frank 2026-06-26.
 std::atomic<bool>         g_favMultiUnify{true};
+// Favourite value-carry scope. On (default) = copy ONLY explicitly FX-Learn-mapped
+// params; the NAME fallback is skipped so unmapped plug-in internals never move.
+// Off = legacy: a control whose param isn't explicitly mapped gets matched by NAME
+// (resolveControlByAlias_) so it still carries across plug-ins. Default on fixes SSL
+// CS "Auto Makeup Gain" being dragged by the output-fader alias "makeup gain" (its
+// lowercase name substring-matches it). ExtState fav_copy_mapped_only. Frank 2026-06-27.
+std::atomic<bool>         g_favCopyMappedOnly{true};
 // Host-OS keyboard modifier keys engage the matching modifier slots.
 // Polled in onTimer and OR'd with the HW `mod_*` flags. Default on.
 // Cmd has no Windows keyboard source — the toggle is still respected
@@ -3250,6 +3257,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "fav_multi_unify"); v && *v) {
         g_favMultiUnify.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fav_copy_mapped_only"); v && *v) {
+        g_favCopyMappedOnly.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "param_switches_softkey"); v && *v) {
         g_paramSwitchesSoftKeyBank.store(std::atoi(v) != 0);
@@ -6385,6 +6395,13 @@ std::map<std::string, std::array<CsVal, 128>> g_csIntent;
 // in this build — see the temp-selset note). One line per valid control:
 //   CSFAVMEM "<guid#slot>" <key> <numeric> <norm> <eng> <kind> <dim> <sIdx> <sCnt> "<text>"
 std::map<std::string, std::array<CsVal, 128>> g_csFavMem;
+// Per-instance memory for FREE map slots (linkIdx < 1: the EXT FUNCS — Auto
+// Makeup / Filters / Width / … — which sit OFF the SSL-Link grid the main carry
+// loop covers, so a plain cycle resets them to the new plug-in's defaults even in
+// "own settings" mode). Lets own-mode restore each favourite's own ext-func
+// values. Keyed like g_csFavMem (guid\tident) → (slot id → value). Session-only.
+// Frank 2026-06-27.
+std::map<std::string, std::map<std::string, CsVal>> g_csFavMemExt;
 
 // Drop dead entries from g_csFavMem: a favourite slot that is now empty (no
 // plug-in assigned — project-independent, always safe) or a track GUID that no
@@ -6408,6 +6425,14 @@ static void csFavMemPrune_()
                        || !liveGuids.count(k.substr(0, tab));
         if (drop) it = g_csFavMem.erase(it); else ++it;
     }
+    // Same prune for the off-grid (routing / EXT FUNCS) memory.
+    for (auto it = g_csFavMemExt.begin(); it != g_csFavMemExt.end(); ) {
+        const std::string& k = it->first;
+        const size_t tab = k.find('\t');
+        const bool drop = (tab == std::string::npos)
+                       || !liveGuids.count(k.substr(0, tab));
+        if (drop) it = g_csFavMemExt.erase(it); else ++it;
+    }
 }
 
 void csFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
@@ -6424,6 +6449,18 @@ void csFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
                          v.stateIdx, v.stateCount, v.text);
         }
     }
+    // Off-grid (routing / EXT FUNCS) memory — keyed by slot id (a string), so a
+    // second quoted field replaces the integer key of the CSFAVMEM line.
+    for (const auto& kv : g_csFavMemExt) {
+        for (const auto& sv : kv.second) {
+            const CsVal& v = sv.second;
+            if (!v.valid) continue;
+            ctx->AddLine("CSFAVMEMEXT \"%s\" \"%s\" %d %.6f %.6f %d %d %d %d \"%s\"",
+                         kv.first.c_str(), sv.first.c_str(), v.numeric ? 1 : 0,
+                         v.norm, v.eng, static_cast<int>(v.kind),
+                         static_cast<int>(v.dim), v.stateIdx, v.stateCount, v.text);
+        }
+    }
 }
 
 bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
@@ -6432,6 +6469,38 @@ bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
     if (!line || !*line) return false;
     const char* p = line;
     while (*p == ' ' || *p == '\t') ++p;
+    // Off-grid (routing / EXT FUNCS) line — checked FIRST since "CSFAVMEMEXT" also
+    // has the "CSFAVMEM" prefix. Two quoted keys (memKey, slotId) then 7 scalars
+    // and the quoted display text.
+    if (std::strncmp(p, "CSFAVMEMEXT", 11) == 0) {
+        p += 11;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') return true;
+        ++p; std::string memKey; while (*p && *p != '"') memKey += *p++;
+        if (*p == '"') ++p;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') return true;
+        ++p; std::string slotId; while (*p && *p != '"') slotId += *p++;
+        if (*p == '"') ++p;
+        int num = 0, kind = 0, dim = 0, sIdx = -1, sCnt = 0;
+        double norm = 0.0, eng = 0.0;
+        if (std::sscanf(p, " %d %lf %lf %d %d %d %d",
+                        &num, &norm, &eng, &kind, &dim, &sIdx, &sCnt) != 7)
+            return true;
+        CsVal v;
+        v.valid = true;  v.numeric = (num != 0);  v.norm = norm;  v.eng = eng;
+        v.kind = static_cast<uc1::CsQuantityKind>(kind);
+        v.dim  = static_cast<CsUnit>(dim);
+        v.stateIdx = sIdx;  v.stateCount = sCnt;
+        if (const char* q = std::strchr(p, '"')) {
+            ++q; int i = 0;
+            while (*q && *q != '"' && i < static_cast<int>(sizeof(v.text)) - 1)
+                v.text[i++] = *q++;
+            v.text[i] = '\0';
+        }
+        if (!memKey.empty() && !slotId.empty()) g_csFavMemExt[memKey][slotId] = v;
+        return true;
+    }
     if (std::strncmp(p, "CSFAVMEM", 8) != 0) return false;
     p += 8;
     while (*p == ' ' || *p == '\t') ++p;
@@ -6465,6 +6534,7 @@ bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
 void csFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
 {
     g_csFavMem.clear();
+    g_csFavMemExt.clear();
 }
 
 project_config_extension_t g_csFavMemProjConfig{
@@ -7318,7 +7388,10 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             // explicit mapping (that grabbed bx's 'HPF On/Off' over 'HPF Frequency').
             int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, nullptr);
             int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, nullptr);
-            if (!isBtn) {
+            // Name-based fallback for controls without an explicit FX-Learn map —
+            // skipped when "copy only mapped parameters" is on, so unmapped plug-in
+            // internals (e.g. SSL CS Auto Makeup Gain) are never carried. Frank 2026-06-27.
+            if (!isBtn && !g_favCopyMappedOnly.load()) {
                 if (sp == uc1::kParamNone
                     && (sp = resolveControlByAlias_(tr, oldIdx, linkIdx, srcClaimed)) != uc1::kParamNone)
                     srcClaimed.insert(sp);
@@ -7360,6 +7433,12 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             CsVal val;
             if (sp != uc1::kParamNone) {            // old has it → live value
                 const CsVal live = readParamValue_(tr, oldIdx, sp, kind);
+                // Snapshot the OUTGOING favourite's live value to its per-instance
+                // memory even in COPY mode, so a later switch to "own" restores each
+                // strip as it was when last LEFT — not a stale value from the last
+                // own-mode pass. (Own mode snapshots in the !copied branch above.)
+                // Frank 2026-06-27.
+                if (favRemember && oldFavMem) (*oldFavMem)[key] = live;
                 const CsVal& mem = intent[key];
                 // Round-trip: if the old control still holds (within rounding) the
                 // value we WROTE there last swap, the user hasn't touched it — carry
@@ -7419,17 +7498,97 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 }
             } else if (dp != uc1::kParamNone) {
                 dstWritten.insert(dp);
-                applyParamValue_(tr, newIdx, dp, val, key);
-                appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
-                appliedH = newHash;                // wrote → this plug-in holds it now
-                // Numeric values get RE-APPLIED after the move (below) under the
-                // final, settled state — bx re-scales gains when a later mode param
-                // (EQ Type) is written, so the first pass alone is not enough.
-                if (val.numeric) reapply.push_back({ dp, key, val });
+                // Filter-open → dst off-state. A source LPF (linkIdx 6) parked at
+                // its MAX freq (norm≈1), or HPF (linkIdx 7) at its MIN (norm≈0),
+                // means the filter is OPEN/off. If the dst filter has a discrete
+                // off ('out'/'off'), snap to it instead of letting the numeric
+                // match land the nearest frequency — else an Analog Molecule LPF
+                // off (= 20 kHz max) carries as a real 20 kHz onto a 4K B that has
+                // an explicit 'out'. Frank 2026-06-27.
+                bool didFilterOff = false;
+                if (val.numeric
+                    && ((linkIdx == 6 && val.norm >= 0.99)
+                     || (linkIdx == 7 && val.norm <= 0.01))) {
+                    CsState st[24];
+                    const int dc = csScanStates_(tr, newIdx, dp, st, 24);
+                    for (int i = 0; i < dc; ++i) {
+                        if (csStateActive_(st[i].disp) == 0) {   // out / off / bypass
+                            TrackFX_SetParamNormalized(tr, newIdx, dp, st[i].repN);
+                            appliedN = st[i].repN; appliedH = newHash;
+                            didFilterOff = true;
+                            if (const char* en = GetExtState("rea_sixty", "cs_log");
+                                en && en[0] == '1') {
+                                char lg[200]; std::snprintf(lg, sizeof(lg),
+                                    "[cs] k=%d FILTER-OPEN src norm=%.3f -> dst off '%s' n=%.5f",
+                                    key, val.norm, st[i].disp, st[i].repN);
+                                csLog_(lg);
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (!didFilterOff) {
+                    applyParamValue_(tr, newIdx, dp, val, key);
+                    appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
+                    appliedH = newHash;             // wrote → this plug-in holds it now
+                    // Numeric values get RE-APPLIED after the move (below) under the
+                    // final, settled state — bx re-scales gains when a later mode param
+                    // (EQ Type) is written, so the first pass alone is not enough.
+                    if (val.numeric) reapply.push_back({ dp, key, val });
+                }
             }
             intent[key] = val;                     // remember intent + where we wrote it
             intent[key].appliedNorm = appliedN;
             intent[key].appliedHash = appliedH;
+        }
+    }
+
+    // Map slots that sit OFF the SSL-Link grid the loop above carries (linkIdx 1..63)
+    // reset to the new plug-in's defaults on every cycle. This covers the SSL ROUTING
+    // flags (ext::FiltersToInput/FiltersToSC/EqToSC/DynamicsPreEq/ExternalSC, linkIdx
+    // ≥100 → the "1 / 1a / 2 / 2a …" EQ-Filter-Dyn order + Ext S/C) AND the free EXT
+    // FUNCS (Auto Makeup, Filters In, Width …). Matched by slot id, so it carries
+    // across DIFFERENT SSL strips whose vst3 indices differ.
+    //   OWN  → restore the incoming instance's own remembered value (CSFAVMEMEXT,
+    //          persists per project).
+    //   COPY → carry the outgoing strip's live value onto the new one.
+    // The outgoing instance is always snapshot to memory so a later own-mode switch
+    // has it. Frank 2026-06-27.
+    auto isOffGridSlot = [](const uf8::LinkSlot& s) {
+        return s.id && s.vst3Param >= 0 && (s.linkIdx < 1 || s.linkIdx > 63);
+    };
+    if (haveOldIdent && haveNewIdent) {
+        const uf8::PluginMap* oldPM = uf8::lookupPluginMapByName(oldIdent);
+        const uf8::PluginMap* newPM = uf8::lookupPluginMapByName(newIdent);
+        auto& extOldMem = g_csFavMemExt[guid + "\t" + oldIdent];
+        std::map<std::string, CsVal> liveOld;     // slot id → outgoing live value
+        if (oldPM) {
+            for (const auto& s : oldPM->slots) {
+                if (!isOffGridSlot(s)) continue;
+                const CsVal v = readParamValue_(tr, oldIdx, s.vst3Param,
+                                                uc1::CsQuantityKind::Generic);
+                extOldMem[s.id] = v;   // remember for own mode
+                liveOld[s.id]   = v;   // and as the live source for a copy carry
+            }
+        }
+        if (newPM) {
+            auto& extNewMem = g_csFavMemExt[guid + "\t" + newIdent];
+            std::unordered_set<int> extWritten;
+            for (const auto& s : newPM->slots) {
+                if (!isOffGridSlot(s) || extWritten.count(s.vst3Param)) continue;
+                const CsVal* src = nullptr;
+                if (forceOwnSettings) {
+                    auto it = extNewMem.find(s.id);
+                    if (it != extNewMem.end()) src = &it->second;
+                } else {
+                    auto it = liveOld.find(s.id);
+                    if (it != liveOld.end()) src = &it->second;
+                }
+                if (src && src->valid) {
+                    extWritten.insert(s.vst3Param);
+                    applyParamValue_(tr, newIdx, s.vst3Param, *src, 0);
+                }
+            }
         }
     }
 
@@ -7592,7 +7751,10 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
             const bool isBtn = (btn != 0);
             int sp = uc1::hudParamForControl(oldMap, true, linkIdx, isBtn, nullptr);
             int dp = uc1::hudParamForControl(dstMap, true, linkIdx, isBtn, nullptr);
-            if (!isBtn) {
+            // Name-based fallback for controls without an explicit FX-Learn map —
+            // skipped when "copy only mapped parameters" is on, so unmapped plug-in
+            // internals (e.g. SSL CS Auto Makeup Gain) are never carried. Frank 2026-06-27.
+            if (!isBtn && !g_favCopyMappedOnly.load()) {
                 if (sp == uc1::kParamNone
                     && (sp = resolveControlByAlias_(tr, oldIdx, linkIdx, srcClaimed)) != uc1::kParamNone)
                     srcClaimed.insert(sp);
@@ -7623,6 +7785,9 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
             CsVal val;
             if (sp != uc1::kParamNone) {            // old has it → live value
                 const CsVal live = readParamValue_(tr, oldIdx, sp, kind);
+                // Snapshot the outgoing favourite even in copy mode so a later "own"
+                // switch restores it as last left (see switchCsTo_). Frank 2026-06-27.
+                if (oldFavMem) (*oldFavMem)[key] = live;
                 const CsVal& mem = intent[key];
                 // Carry the original intent only if the live read comes from the same
                 // plug-in we wrote appliedNorm to (identity hash) and it still holds it
@@ -8691,6 +8856,7 @@ static std::string fmtParam_(MediaTrack* tr, int fx, int param, int layer)
 // alias when the param was renamed. Diff-guarded; main-thread-only.
 std::string g_csParamPublished, g_bcParamPublished;
 std::string g_csNamePublished, g_bcNamePublished;
+std::string g_csIdxPublished, g_bcIdxPublished;
 void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcFx)
 {
     static MediaTrack* sCsTr = nullptr; static int sCsFx = -1, sCsParam = -1;
@@ -8775,6 +8941,15 @@ void publishOverlayParams_(MediaTrack* csTr, int csFx, MediaTrack* bcTr, int bcF
         g_bcNamePublished = bcN;
         SetExtState("rea_sixty", "overlay_name_bc", bcN.c_str(), false);
     }
+    // Real chain index for the focused CS/BC — lets the panel click-to-open the
+    // EXACT plug-in (csFx/bcFx are real chain indices, not the visual MCP slot the
+    // "overlay" body carries). Diff-guarded. Frank 2026-06-27.
+    const std::string csIdx = (feat && csTr && csFx >= 0) ? std::to_string(csFx) : std::string();
+    const std::string bcIdx = (feat && bcTr && bcFx >= 0) ? std::to_string(bcFx) : std::string();
+    if (csIdx != g_csIdxPublished) { g_csIdxPublished = csIdx;
+        SetExtState("rea_sixty", "overlay_idx_cs", csIdx.c_str(), false); }
+    if (bcIdx != g_bcIdxPublished) { g_bcIdxPublished = bcIdx;
+        SetExtState("rea_sixty", "overlay_idx_bc", bcIdx.c_str(), false); }
 }
 
 // The surface's currently-focused FX on `tr`, but ONLY when it is NOT a CS/BC
@@ -19220,6 +19395,17 @@ void onTimer()
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
+        // Persistent current-mode readout ("<sel>\t<enc>") for the focused panel's
+        // always-on mode indicator — the banner below is transient/on-change only,
+        // so a panel started mid-session needs the live state too. Diff-guarded.
+        // Frank 2026-06-27.
+        {
+            static std::string msPub;
+            std::string ms = std::string(selectionModeFriendly(sm)) + "\t"
+                           + encoderModeFriendly(em);
+            if (ms != msPub) { msPub = ms;
+                SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
+        }
         if (!mbInit) {
             mbInit = true;
             mbLastSel = sm;
@@ -23300,6 +23486,12 @@ void reasixty_setFavMultiUnify(bool on)
 {
     g_favMultiUnify.store(on);
     SetExtState("rea_sixty", "fav_multi_unify", on ? "1" : "0", true);
+}
+bool reasixty_favCopyMappedOnly() { return g_favCopyMappedOnly.load(); }
+void reasixty_setFavCopyMappedOnly(bool on)
+{
+    g_favCopyMappedOnly.store(on);
+    SetExtState("rea_sixty", "fav_copy_mapped_only", on ? "1" : "0", true);
 }
 bool reasixty_paramSwitchesSoftKeyBank() { return g_paramSwitchesSoftKeyBank.load(); }
 void reasixty_setParamSwitchesSoftKeyBank(bool on)

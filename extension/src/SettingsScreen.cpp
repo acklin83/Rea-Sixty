@@ -214,6 +214,7 @@ bool reasixty_csFavRememberNonCopied(); void reasixty_setCsFavRememberNonCopied(
 bool reasixty_csFavOwnSettings(); void reasixty_setCsFavOwnSettings(bool on);
 bool reasixty_bcFavOwnSettings(); void reasixty_setBcFavOwnSettings(bool on);
 bool reasixty_favMultiUnify(); void reasixty_setFavMultiUnify(bool on);
+bool reasixty_favCopyMappedOnly(); void reasixty_setFavCopyMappedOnly(bool on);
 bool reasixty_paramSwitchesSoftKeyBank(); void reasixty_setParamSwitchesSoftKeyBank(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
@@ -16449,6 +16450,13 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
     bool favRemember = reasixty_csFavRememberNonCopied();
     if (ImGui_Checkbox(ctx, "Favourites remember non-copied sections", &favRemember))
         reasixty_setCsFavRememberNonCopied(favRemember);
+
+    bool mappedOnly = reasixty_favCopyMappedOnly();
+    if (ImGui_Checkbox(ctx, "Copy only mapped parameters", &mappedOnly))
+        reasixty_setFavCopyMappedOnly(mappedOnly);
+    ImGui_TextDisabled(ctx, "On: carry only parameters mapped to a UC1 control. Off: also "
+                            "match unmapped parameters by name (can drag plug-in internals "
+                            "like Auto Makeup Gain).");
 
     // Multi-select with differing assigned sets: unify to the focused track's set,
     // or keep each track on its own. Default on (mirrors the parameter ganging).
