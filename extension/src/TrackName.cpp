@@ -1,10 +1,40 @@
 #include "TrackName.h"
 
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 std::atomic<int> g_trackNameMode{TNM_Truncate};
+
+std::string utf8ToLatin1(std::string_view in)
+{
+    std::string out;
+    out.reserve(in.size());
+    const size_t n = in.size();
+    for (size_t i = 0; i < n; ) {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+        if (c < 0x80) { out.push_back(static_cast<char>(c)); ++i; continue; }
+        const int len = (c >= 0xF0) ? 4 : (c >= 0xE0) ? 3 : (c >= 0xC0) ? 2 : 0;
+        if (len == 0 || i + static_cast<size_t>(len) > n) {
+            // Stray continuation / lead byte / truncated tail → pass through
+            // as a Latin-1 byte so we never drop or mis-shift the rest.
+            out.push_back(static_cast<char>(c)); ++i; continue;
+        }
+        uint32_t cp = (len == 2) ? (c & 0x1F) : (len == 3) ? (c & 0x0F) : (c & 0x07);
+        bool ok = true;
+        for (int k = 1; k < len; ++k) {
+            const unsigned char cc = static_cast<unsigned char>(in[i + k]);
+            if ((cc & 0xC0) != 0x80) { ok = false; break; }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (!ok) { out.push_back(static_cast<char>(c)); ++i; continue; }
+        out.push_back(cp <= 0xFF ? static_cast<char>(static_cast<unsigned char>(cp))
+                                 : '?');
+        i += static_cast<size_t>(len);
+    }
+    return out;
+}
 
 // Shorten `src` to at most `maxLen` chars. In Truncate mode this is a
 // straight resize. SmartAbbrev tries to keep every word visible:
@@ -16,9 +46,14 @@ std::atomic<int> g_trackNameMode{TNM_Truncate};
 //      least one char per token so "Background Vocals" lands as
 //      "BckgrV" or similar instead of "Bckgrnd" (which loses the V).
 // All-uppercase short tokens (DI, FX, EQ, …) survive untouched.
-std::string abbreviateTrackName_(const std::string& src, int maxLen,
+std::string abbreviateTrackName_(const std::string& srcIn, int maxLen,
                                  int forceMode)
 {
+    // Fold UTF-8 → Latin-1 first so every char is one byte: the abbreviation
+    // logic below counts/truncates by byte, and the LCD is Latin-1. This is
+    // the single fold point for ALL track-name displays (UF8 scribble + UC1
+    // carousels both route through here) — do not fold again downstream.
+    const std::string src = utf8ToLatin1(srcIn);
     if (maxLen <= 0) return src;
     if (static_cast<int>(src.size()) <= maxLen) return src;
     const int mode = (forceMode >= 0) ? forceMode : g_trackNameMode.load();

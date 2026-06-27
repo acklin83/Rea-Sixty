@@ -1025,6 +1025,39 @@ void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Per-(Layer, Quick, Sub-Bank) dynamic-kind flags. Flat list, one entry
+// per Sub-Bank whose kind != None. A dynamic Sub-Bank can have all-empty
+// static slots (that's the point), so this can't piggy-back on the
+// user_quicks slot list — it needs its own array. Default None writes
+// nothing.
+void serializeSubBankDynamic_(const Config& c, std::ostringstream& os)
+{
+    bool anyData = false;
+    for (int li = 0; li < 3 && !anyData; ++li)
+        for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
+            for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
+                if (c.userQuicks[li].quicks[qi].subBanks[bi].dynamic
+                    != DynamicBankKind::None)
+                    anyData = true;
+    if (!anyData) return;
+
+    os << ",\n  \"sub_bank_dynamic\": [";
+    bool first = true;
+    for (int li = 0; li < 3; ++li)
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi)
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
+                const auto k = c.userQuicks[li].quicks[qi].subBanks[bi].dynamic;
+                if (k == DynamicBankKind::None) continue;
+                if (!first) os << ",";
+                first = false;
+                os << "\n    {\"layer\": " << li
+                   << ", \"quick\": " << qi
+                   << ", \"sub_bank\": " << bi
+                   << ", \"kind\": " << static_cast<int>(k) << "}";
+            }
+    os << "\n  ]";
+}
+
 // Named Sub-Bank snapshots — flat list, each entry holds the preset's
 // name + an array of 8 Binding bodies. Empty list writes nothing.
 void serializeBankPresets_(const Config& c, std::ostringstream& os)
@@ -1064,6 +1097,7 @@ std::string serialize(const Config& c)
     os << "  ]";
     serializeUserQuicks_(c, os);
     serializeSubBankLeds_(c, os);
+    serializeSubBankDynamic_(c, os);
     serializeBankPresets_(c, os);
     os << "\n}\n";
     return os.str();
@@ -1323,6 +1357,33 @@ void parseSubBankLeds_(wdl_json_element* root, Config& out)
         }
         if (auto* v = eo->get_item_by_name("inactive_brightness"))
             a.inactiveBrightness = brightnessFromName(v->get_string_value());
+    }
+}
+
+void parseSubBankDynamic_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("sub_bank_dynamic");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int layer = -1, quick = -1, subBank = -1, kind = 0;
+        if (auto* v = eo->get_item_by_name("layer"))
+            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("quick"))
+            if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("sub_bank"))
+            if (auto* s = v->get_string_value(true)) subBank = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("kind"))
+            if (auto* s = v->get_string_value(true)) kind = std::atoi(s);
+        if (layer   < 0 || layer   >= 3)                 continue;
+        if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
+        if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
+        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
+            continue;
+        out.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic =
+            static_cast<DynamicBankKind>(kind);
     }
 }
 
@@ -1605,6 +1666,7 @@ bool tryParse_(const std::string& json, Config& out)
     }
     parseUserQuicks_(root, out);
     parseSubBankLeds_(root, out);
+    parseSubBankDynamic_(root, out);
     parseBankPresets_(root, out);
     return true;
 }
@@ -3059,6 +3121,21 @@ void setSubBankLed(int layer, int quick, int subBank,
     if (!subBankLedInRange_(layer, quick, subBank)) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank] = app;
+    persistLocked_();
+}
+
+DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank)
+{
+    if (!subBankLedInRange_(layer, quick, subBank)) return DynamicBankKind::None;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic;
+}
+
+void setSubBankDynamic(int layer, int quick, int subBank, DynamicBankKind kind)
+{
+    if (!subBankLedInRange_(layer, quick, subBank)) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic = kind;
     persistLocked_();
 }
 

@@ -322,8 +322,23 @@ constexpr int kQuicksPerLayer    = 3;
 constexpr int kSubBanksPerQuick  = 6;
 constexpr int kSlotsPerSubBank   = 8;
 
+// Dynamic soft-key bank kinds. A Sub-Bank flagged with a non-None kind
+// IGNORES its 8 static slots; labels / LEDs / dispatch are computed live
+// from the focused track's context instead (FX list, sends, parameter
+// groups, colour palette). Default None ⇒ classic static behaviour.
+enum class DynamicBankKind : uint8_t {
+    None = 0,
+    FxBank1,       // track FX 1..8
+    FxBank2,       // track FX 9..16
+    Sends,         // track sends 1..8 (visual/7.75 order, incl. HW outs)
+    Sends2,        // track sends 9..16
+    ParamGroups,   // parameter groups 1..8
+    TrackColours,  // configured colour palette 1..8
+};
+
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
+    DynamicBankKind dynamic = DynamicBankKind::None;  // non-None → computed bank
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
 // Soft 1..5) under a specific (Layer, Quick) context. Lets the user
@@ -547,6 +562,14 @@ void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
 SubBankLed getSubBankLed(int layer, int quick, int subBank);
 void       setSubBankLed(int layer, int quick, int subBank,
                          const SubBankLed& app);
+
+// Per-(Layer, Quick) Sub-Bank dynamic-kind flag. Non-None turns the
+// Sub-Bank into a computed bank (FX list / sends / groups / colours);
+// its 8 static slots are then ignored. Out-of-range returns None /
+// ignores writes.
+DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank);
+void            setSubBankDynamic(int layer, int quick, int subBank,
+                                  DynamicBankKind kind);
 
 // Soft-Key Bank presets — named snapshots of one Sub-Bank's 8 slots
 // that can be recalled into any (Layer, Quick, Sub-Bank) coordinate.

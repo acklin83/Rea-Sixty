@@ -4739,6 +4739,47 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
+    // ---- Dynamic bank -------------------------------------------------
+    // Flag this Sub-Bank as computed-from-context. Any non-Off kind makes
+    // the 8 keys derive live from the focused track (its sends, FX, …);
+    // the static slots below are then ignored.
+    {
+        ImGui_Text(ctx, "Dynamic bank");
+        ImGui_TextDisabled(ctx,
+            "Compute this Sub-Bank's 8 keys live from the focused track "
+            "instead of fixed slots. The slots below are ignored while on.");
+        ImGui_Spacing(ctx);
+
+        struct DynOpt { DynamicBankKind kind; const char* label; };
+        static const DynOpt kDynOpts[] = {
+            { DynamicBankKind::None,   "Off (static slots)" },
+            { DynamicBankKind::Sends,  "Sends 1-8 (focused track)" },
+            { DynamicBankKind::Sends2, "Sends 9-16 (focused track)" },
+        };
+        const DynamicBankKind curKind =
+            getSubBankDynamic(editLayer, engagedQ, sbIdx);
+        const char* curDynLabel = kDynOpts[0].label;
+        for (const auto& o : kDynOpts)
+            if (o.kind == curKind) curDynLabel = o.label;
+
+        ImGui_SetNextItemWidth(ctx, 260.0);
+        if (ImGui_BeginCombo(ctx, "##dynbank", curDynLabel, /*flags*/ nullptr)) {
+            for (const auto& o : kDynOpts) {
+                bool sel = (o.kind == curKind);
+                if (ImGui_Selectable(ctx, o.label, &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr,
+                                     /*size_h*/ nullptr)) {
+                    setSubBankDynamic(editLayer, engagedQ, sbIdx, o.kind);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+    }
+
     // ---- Soft-Key Bank preset save/recall -----------------------------
     // Snapshot all 8 top-soft-key slots in the current (L, Q, SB)
     // tuple as a named preset; recall a preset into any (L, Q, SB).

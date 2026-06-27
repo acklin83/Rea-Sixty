@@ -1300,6 +1300,12 @@ std::atomic<int>  g_bcCycleReq{0};
 // REAPER-action route (hookCommand2); the surface builtins call the worker
 // directly. Drained on the main thread (TrackFX_CopyToTrack).
 std::atomic<int>  g_fxMoveReq{0};
+// Dynamic soft-key bank press, posted from the input thread (onUf8Input) and
+// drained on the main thread (REAPER send/FX/track API is main-thread-only).
+// Encoding: 0 = none; else (1<<24) | (kind<<16) | (slot<<8) | gesture, where
+// gesture 0=plain push, 1=+Shift, 2=+Cmd, 3=+Ctrl, 4=long-press.
+std::atomic<uint32_t> g_dynBankReq{0};
+static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step, bool ownSettings = false);
@@ -1964,6 +1970,10 @@ void drainSelsets_() {
         applyBcCopy_(bcCopySlot);
     if (const int bcSteps = g_bcCycleReq.exchange(0); bcSteps != 0)
         applyBcCycle_(bcSteps, bcFavOwn);
+    // Dynamic soft-key bank press (sends/FX/groups/colours) — executed on the
+    // main thread; the input thread only posts the encoded request.
+    if (const uint32_t dyn = g_dynBankReq.exchange(0); dyn != 0)
+        applyDynBankReq_(dyn);
     // FX move-in-chain posted by the REAPER action route (no on-screen carousel
     // there — the surface builtins drive that themselves).
     if (const int mvSteps = g_fxMoveReq.exchange(0); mvSteps != 0)
@@ -4522,6 +4532,146 @@ MediaTrack* routeTargetTrack_(const StripRoute& r)
         r.track, r.sendCategory, r.sendIndex, tag, nullptr));
     if (other && ValidatePtr2(nullptr, other, "MediaTrack*")) return other;
     return nullptr;
+}
+
+// ── Dynamic soft-key banks ─────────────────────────────────────────────
+// A Sub-Bank flagged with a DynamicBankKind computes its 8 keys live from
+// the focused track's context instead of carrying static bindings. The
+// render path (main thread) reads dynamicBankSlot_ for each key's label +
+// LED; the input thread posts presses via dispatchDynamicPress_, drained by
+// applyDynBankReq_ on the main thread. Defined here so the Sends kinds can
+// reuse the 7.75-correct combined send layout (combinedSendSlot_ /
+// routeName_) above — reorderable sends, empty-slot gaps and hardware
+// outputs all map exactly as REAPER's mixer send list shows them.
+
+// One computed key: its label, whether the slot is occupied, and a 3-state
+// LED hint (0 = off/empty, 1 = dim/inactive, 2 = on/active).
+struct DynSlotInfo {
+    std::string label;
+    bool        present = false;
+    int         led     = 0;   // 0 off, 1 dim, 2 on
+};
+
+// Visual-slot base offset for a dynamic bank kind: Sends bank 2 / FX bank 2
+// start 8 entries in. -1 = not a paged kind.
+static int dynBankSlotBase_(uf8::bindings::DynamicBankKind kind)
+{
+    using DK = uf8::bindings::DynamicBankKind;
+    switch (kind) {
+        case DK::Sends:   case DK::FxBank1: return 0;
+        case DK::Sends2:  case DK::FxBank2: return 8;
+        default:                            return 0;
+    }
+}
+
+// Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
+// (touches REAPER track/send API). Empty/out-of-range → present=false.
+static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
+                                    MediaTrack* tr, int slot)
+{
+    DynSlotInfo info;
+    if (!tr || slot < 0 || slot >= 8) return info;
+    using DK = uf8::bindings::DynamicBankKind;
+    switch (kind) {
+        case DK::Sends:
+        case DK::Sends2: {
+            const int vslot = dynBankSlotBase_(kind) + slot;
+            // 7.75-correct: visual slot → (category, apiIndex). apiIndex < 0
+            // is a genuine empty gap; category 0 = track send, 1 = HW output.
+            const CombinedSlot cs = combinedSendSlot_(tr, vslot);
+            if (cs.apiIndex < 0) return info;          // empty visual slot
+            info.present = true;
+            StripRoute r;
+            r.track = tr; r.sendCategory = cs.category;
+            r.sendIndex = cs.apiIndex; r.valid = true;
+            std::string nm = routeName_(r);
+            if (nm.empty()) nm = "Send";
+            // Leave UTF-8 intact + untruncated: the soft-key label path folds
+            // to Latin-1 and buildPluginSlotName clamps to 12 chars (char-safe
+            // once folded). Truncating raw bytes here could split an umlaut.
+            info.label = nm;
+            const bool muted = GetTrackSendInfo_Value(
+                tr, cs.category, cs.apiIndex, "B_MUTE") > 0.5;
+            info.led = muted ? 1 : 2;   // active bright, muted dim
+            return info;
+        }
+        default:
+            return info;   // FX / param-groups / colours not wired yet
+    }
+}
+
+// Input-thread press handler for a dynamic bank key. Tracks press timing +
+// the modifier snapshot locally (sole accessor, like g_inputResidual), then
+// posts an encoded request for the main-thread drain. Momentary on release
+// so long-press can be distinguished. Safe on the input thread — no REAPER
+// track API here, only atomics.
+static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
+                                  int slot, bool pressed)
+{
+    if (slot < 0 || slot >= 8) return;
+    static std::unordered_map<int,
+        std::pair<std::chrono::steady_clock::time_point,
+                  uf8::bindings::Modifier>> s_press;
+    if (pressed) {
+        s_press[slot] = { std::chrono::steady_clock::now(),
+                          uf8::bindings::currentModifierSnapshot() };
+        return;
+    }
+    auto it = s_press.find(slot);
+    if (it == s_press.end()) return;
+    const auto held = std::chrono::steady_clock::now() - it->second.first;
+    const int  mod  = static_cast<int>(it->second.second);
+    s_press.erase(it);
+    const int gesture =
+        (held >= std::chrono::milliseconds(500)) ? 4 : mod;  // 4 = long-press
+    const uint32_t enc = (1u << 24)
+                       | (static_cast<uint32_t>(kind) << 16)
+                       | (static_cast<uint32_t>(slot) << 8)
+                       | static_cast<uint32_t>(gesture);
+    g_dynBankReq.store(enc);
+}
+
+// Main-thread executor for a dynamic bank press (drained in onTimer).
+static void applyDynBankReq_(uint32_t enc)
+{
+    const auto kind    = static_cast<uf8::bindings::DynamicBankKind>(
+                             (enc >> 16) & 0xFF);
+    const int  slot    = (enc >> 8) & 0xFF;
+    const int  gesture = enc & 0xFF;
+    MediaTrack* tr = favContextTrack_();
+    if (!tr) return;
+    using DK = uf8::bindings::DynamicBankKind;
+    switch (kind) {
+        case DK::Sends:
+        case DK::Sends2: {
+            const int vslot = dynBankSlotBase_(kind) + slot;
+            const CombinedSlot cs = combinedSendSlot_(tr, vslot);
+            if (cs.apiIndex < 0) return;               // empty visual slot
+            if (gesture == 1) {                        // +Shift: pre/post
+                const double m = GetTrackSendInfo_Value(
+                    tr, cs.category, cs.apiIndex, "I_SENDMODE");
+                // 0 = post-fader (post-pan) ↔ 3 = pre-fader (post-FX) — the
+                // pair the routing window's pre/post button flips between.
+                SetTrackSendInfo_Value(tr, cs.category, cs.apiIndex,
+                                       "I_SENDMODE", (m == 0.0) ? 3.0 : 0.0);
+            } else if (gesture == 4) {                 // long: jump to dest
+                StripRoute r;
+                r.track = tr; r.sendCategory = cs.category;
+                r.sendIndex = cs.apiIndex; r.valid = true;
+                if (MediaTrack* dest = routeTargetTrack_(r))
+                    SetOnlyTrackSelected(dest);
+            } else {                                   // plain: mute toggle
+                const double mute = GetTrackSendInfo_Value(
+                    tr, cs.category, cs.apiIndex, "B_MUTE");
+                SetTrackSendInfo_Value(tr, cs.category, cs.apiIndex,
+                                       "B_MUTE", (mute > 0.5) ? 0.0 : 1.0);
+            }
+            g_softKeyDirty.store(true);
+            g_pageDirty.store(true);
+            break;
+        }
+        default: break;   // FX / param-groups / colours not wired yet
+    }
 }
 
 // Fallback nudge step per physical detent (seconds). Used only when
@@ -13468,8 +13618,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                ? g_activeQuick[layer].load() : -1;
                 if (aq >= 0) {
                     const int sb = g_activeSubBank[layer].load();
-                    uf8::bindings::dispatchUserQuickSlot(
-                        layer, aq, sb, id - 0x18, pressed);
+                    // A dynamic Sub-Bank computes its keys live → route the
+                    // press to the dynamic handler (posts to the main-thread
+                    // drain) instead of the stored user-Quick binding.
+                    const auto dk =
+                        uf8::bindings::getSubBankDynamic(layer, aq, sb);
+                    if (dk != uf8::bindings::DynamicBankKind::None) {
+                        dispatchDynamicPress_(dk, id - 0x18, pressed);
+                    } else {
+                        uf8::bindings::dispatchUserQuickSlot(
+                            layer, aq, sb, id - 0x18, pressed);
+                    }
                     handledNatively = true;
                 }
             }
@@ -14687,7 +14846,10 @@ void pushNavOverlayDecorations()
         // overwritten).
         std::string label;
         if (it) {
-            label = it->name;
+            // Marker/region names are UTF-8 → fold to Latin-1 before the
+            // byte truncation so umlauts render and no multi-byte char is
+            // split. This path bypasses abbreviateTrackName_, so fold here.
+            label = utf8ToLatin1(it->name);
             if (label.size() > 12) label.resize(12);
         } else {
             label = "            ";   // 12 spaces
@@ -15469,7 +15631,20 @@ void pushZonesForVisibleSlots()
                                   ? g_activeSubBank[curLayer].load() : 0;
             std::string userLabel;
             bool userBankSlotPresent = false;
-            if (curQuick >= 0) {
+            // Dynamic Sub-Bank: keys computed live from the focused track's
+            // context (sends/FX/groups/colours) instead of the static slots.
+            uf8::bindings::DynamicBankKind dynKind =
+                uf8::bindings::DynamicBankKind::None;
+            DynSlotInfo dynInfo;
+            if (curQuick >= 0)
+                dynKind = uf8::bindings::getSubBankDynamic(
+                    curLayer, curQuick, curSub);
+            if (curQuick >= 0
+                && dynKind != uf8::bindings::DynamicBankKind::None) {
+                dynInfo = dynamicBankSlot_(dynKind, favContextTrack_(), s);
+                userLabel = dynInfo.label;
+                userBankSlotPresent = dynInfo.present;
+            } else if (curQuick >= 0) {
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
                     curLayer, curQuick, curSub, s);
                 userLabel = userSlot.label;
@@ -15583,6 +15758,12 @@ void pushZonesForVisibleSlots()
                 else if (!sslFreeLabel.empty()) label = sslFreeLabel;
                 else                          label = std::string(vSk.labels[s]);
             }
+            // Fold UTF-8 → Latin-1 before padding so umlauts in user labels,
+            // favourite names and dynamic-bank (send/track) names render on
+            // the LCD and the centring width is counted in real characters.
+            // Single fold point for this soft-key label path (none of its
+            // sources route through abbreviateTrackName_).
+            label = utf8ToLatin1(label);
             // Pad to 12 chars centred (leading + trailing spaces) so
             //  - shorter / empty labels actively overwrite any longer
             //    residue left in the LCD zone from the previous bank;
@@ -15680,15 +15861,24 @@ void pushZonesForVisibleSlots()
                 // bringen sie nicht auf dim") which made stateless one-
                 // shot bindings indistinguishable from latched toggles.
                 bool slotActive = false;
-                if (userBankSlotPresent) {
-                    const auto userSlot = uf8::bindings::getUserQuickSlot(
-                        curLayer, curQuick, curSub, s);
-                    slotActive = bindingHasActiveSlot_(userSlot);
+                if (dynKind != uf8::bindings::DynamicBankKind::None) {
+                    // Dynamic bank LED: off when the slot is empty, else
+                    // On (active) / Dim (inactive) per dynInfo.led.
+                    tssk = dynInfo.led == 2 ? uf8::TopSoftKeyState::On
+                         : dynInfo.led == 1 ? uf8::TopSoftKeyState::Dim
+                                            : uf8::TopSoftKeyState::Off;
+                    ledCacheKey = static_cast<int8_t>(20 + dynInfo.led);
+                } else {
+                    if (userBankSlotPresent) {
+                        const auto userSlot = uf8::bindings::getUserQuickSlot(
+                            curLayer, curQuick, curSub, s);
+                        slotActive = bindingHasActiveSlot_(userSlot);
+                    }
+                    tssk = slotActive
+                        ? uf8::TopSoftKeyState::On
+                        : uf8::TopSoftKeyState::Dim;
+                    ledCacheKey = static_cast<int8_t>(slotActive ? 8 : 7);
                 }
-                tssk = slotActive
-                    ? uf8::TopSoftKeyState::On
-                    : uf8::TopSoftKeyState::Dim;
-                ledCacheKey = static_cast<int8_t>(slotActive ? 8 : 7);
             } else if (sslFreeSlotPresent) {
                 // SSL CS/BC free user-slot: light like a user-Quick slot —
                 // On when its action's toggle is active, else Dim. (Frank
