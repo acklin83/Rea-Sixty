@@ -133,27 +133,64 @@ local function refineMcpColumn(px, py, track)
 end
 
 ------------------------------------------------------------------------
+-- Track lookup (used by the column scanner and the scroll-motion fingerprint).
+------------------------------------------------------------------------
+local function findTrackByGuid(guid)
+  if not guid or guid == "" then return nil end
+  local m = reaper.GetMasterTrack(0)
+  if m and reaper.GetTrackGUID(m) == guid then return m, true end
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if tr and reaper.GetTrackGUID(tr) == guid then return tr, false end
+  end
+  return nil
+end
+
+------------------------------------------------------------------------
 -- Locate FX-list targets per track: MCP per-strip child windows and the
 -- TCP names column (shared window). byGuid[guid] = list of blocks.
 ------------------------------------------------------------------------
--- `want` = set of active track GUIDs (the only ones the overlay ever draws).
--- We skip every track that's not in it and STOP the whole-window grid scan as
--- soon as all wanted tracks' fxlist windows are located — so locating the
--- overlay targets no longer walks the entire mixer for strips we never draw.
--- Frank 2026-06-14 (MCP scroll lag).
-local function scanFxBlocks(want)
+-- Record one located fxlist hit at screen (x,y) for track `tr`. Builds the same
+-- block shape both scanners use. Returns true if a block was added.
+local function addHit(byGuid, seen, want, kind, tr, x, y)
+  local h = reaper.JS_Window_FromPoint(x, y)
+  if not h then return false end
+  local g = reaper.GetTrackGUID(tr)
+  if not g or g == "" or (want and not want[g]) then return false end
+  local key = g .. "|" .. tostring(h) .. "|" .. kind
+  if seen[key] then return false end
+  seen[key] = true
+  byGuid[g] = byGuid[g] or {}
+  if kind == "mcp" then
+    local _, cw, ch = reaper.JS_Window_GetClientSize(h)
+    if not (cw and ch and cw > 0 and ch > 0) then return false end
+    -- Confine to THIS strip's x-column (the fxlist window spans all strips on
+    -- macOS — see refineMcpColumn). sl/sw in screen x; converted to client x at
+    -- draw time. sy = a screen y inside the window for the ScreenToClient call.
+    local sl, sr = refineMcpColumn(x, y, tr)
+    byGuid[g][#byGuid[g] + 1] =
+      { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
+        sl = sl, sw = sr - sl, sy = y }
+  else
+    local l, t, r = refineTcp(x, y, tr)
+    byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
+  end
+  return true
+end
+
+-- Old full-mixer pixel-grid sweep. Kept for the experimental TCP overlay
+-- (tcp.fxparm lives in a shared track-panel window, NOT addressable by the
+-- mixer's I_MCPX column geometry) and as a correctness fallback. On macOS 26
+-- each GetThingFromPoint round-trips through SkyLight (~0.065 ms), so a
+-- 1920×1050 mixer = ~8000 calls = ~520 ms main-thread stall → peak meters and
+-- the mouse-edit cursor stutter. The fast path below replaces it for the
+-- default MCP case. Frank 2026-06-27.
+local function scanFxBlocksFull(want)
   local byGuid, seen = {}, {}
   local wantN = 0
   if want then for _ in pairs(want) do wantN = wantN + 1 end end
   local foundGuids, foundN = {}, 0
-  -- TCP overlay is experimental (shared track-panel window + Retina coordinate
-  -- mismatch causes glitches) — opt-in via ExtState overlay_tcp=1. MCP always on.
   local tcpOn = num("overlay_tcp", 0) ~= 0
-  -- Sweep regions in priority order: a DETACHED mixer (the "Mixer" window used
-  -- for the fullscreen / separate-window mixer) lives OUTSIDE the main window, so
-  -- scan it FIRST when present (the strips are there → early-out fast), then the
-  -- main window. The old GetMainHwnd-only sweep found nothing when the mixer was
-  -- fullscreen/detached. Frank 2026-06-25.
   local regions = {}
   local main = reaper.GetMainHwnd()
   local mix  = reaper.JS_Window_Find and reaper.JS_Window_Find("Mixer", true)
@@ -177,40 +214,11 @@ local function scanFxBlocks(want)
       elseif tcpOn and info == "tcp.fxparm" then kind = "tcp" end
       if kind then
         local tr = reaper.GetTrackFromPoint(x, y)
-        local h  = reaper.JS_Window_FromPoint(x, y)
-        if tr and h then
+        if tr and addHit(byGuid, seen, want, kind, tr, x, y) then
           local g = reaper.GetTrackGUID(tr)
-          -- Only the active CS/BC tracks are ever drawn — ignore the rest.
-          if g and g ~= "" and (not want or want[g]) then
-            local key = g .. "|" .. tostring(h) .. "|" .. kind
-            if not seen[key] then
-              seen[key] = true
-              byGuid[g] = byGuid[g] or {}
-              if kind == "mcp" then
-                local _, cw, ch = reaper.JS_Window_GetClientSize(h)
-                if cw and ch and cw > 0 and ch > 0 then
-                  -- Confine to THIS strip's x-column (the fxlist window spans all
-                  -- strips on macOS — see refineMcpColumn). sl/sw in screen x;
-                  -- converted to client x at draw time. sy = a screen y inside
-                  -- the window for the ScreenToClient call.
-                  local sl, sr = refineMcpColumn(x, y, tr)
-                  local cnt = reaper.TrackFX_GetCount(tr)
-                  byGuid[g][#byGuid[g] + 1] =
-                    { kind = "mcp", hwnd = h, ch = ch, count = cnt,
-                      sl = sl, sw = sr - sl, sy = y }
-                end
-              else
-                local l, t, r = refineTcp(x, y, tr)
-                byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
-              end
-              -- Track how many wanted tracks we've located so we can bail early.
-              if not foundGuids[g] then foundGuids[g] = true; foundN = foundN + 1 end
-            end
-          end
+          if not foundGuids[g] then foundGuids[g] = true; foundN = foundN + 1 end
         end
       end
-      -- Early-out once every active target is found (MCP-only path; the
-      -- experimental TCP refine needs the full sweep, so skip the shortcut).
       if wantN > 0 and foundN >= wantN and not tcpOn then done = true; break end
       x = x + STEP
     end
@@ -219,6 +227,80 @@ local function scanFxBlocks(want)
    if done then break end
   end
   return byGuid
+end
+
+-- Fast MCP scanner: instead of sweeping the whole mixer, compute each WANTED
+-- track's strip column from I_MCPX/I_MCPW (cheap getters, no SkyLight round-
+-- trip) and probe only a single vertical line down that column. ~height/STEP
+-- calls per active track (≈60) instead of ~8000 for the full grid — the Y-sweep
+-- over the full mixer WIDTH was the whole cost. macOS 26. Frank 2026-06-27.
+local function scanFxBlocksFast(want)
+  local byGuid, seen = {}, {}
+
+  -- Candidate panes: a genuinely detached "Mixer" window first (its I_MCPX is
+  -- relative to that window's client), then the main window. A track is placed
+  -- by whichever pane actually has it under the computed column.
+  local panes = {}
+  local main = reaper.GetMainHwnd()
+  local mix  = reaper.JS_Window_Find and reaper.JS_Window_Find("Mixer", true)
+  local function addPane(hwnd)
+    if not hwnd or not reaper.JS_Window_IsWindow(hwnd) then return end
+    local _, l, t, r, b = reaper.JS_Window_GetRect(hwnd)
+    local ox = reaper.JS_Window_ClientToScreen(hwnd, 0, 0)
+    panes[#panes + 1] = { ox = ox, xl = math.min(l, r), xr = math.max(l, r),
+                          y0 = math.min(t, b), y1 = math.max(t, b) }
+  end
+  if mix and mix ~= main then addPane(mix) end
+  addPane(main)
+
+  for guid in pairs(want) do
+    local tr = findTrackByGuid(guid)
+    if tr then
+      local mcpw = reaper.GetMediaTrackInfo_Value(tr, "I_MCPW") or 0
+      local vis  = reaper.GetMediaTrackInfo_Value(tr, "B_SHOWINMIXER") or 0
+      if vis == 1 and mcpw > 0 then
+        local mcpx = reaper.GetMediaTrackInfo_Value(tr, "I_MCPX") or 0
+        local placed = false
+        for _, p in ipairs(panes) do
+          if placed then break end
+          -- I_MCPX is mixer-pane-relative; for a full-width docked mixer the
+          -- pane starts at the window client x=0, so ox + I_MCPX is the strip's
+          -- screen-x. If the pane is offset the probe lands on a neighbour →
+          -- correct by the neighbour's own I_MCPX delta (1-2 steps).
+          local cx = math.floor(p.ox + mcpx + mcpw * 0.5 + 0.5)
+          local midY = (p.y0 + p.y1) // 2
+          for _ = 1, 2 do
+            if cx < p.xl or cx > p.xr then break end
+            local tHere = reaper.GetTrackFromPoint(cx, midY)
+            if tHere == tr then break end
+            if tHere then
+              local nx = reaper.GetMediaTrackInfo_Value(tHere, "I_MCPX") or mcpx
+              cx = cx + math.floor(mcpx - nx + 0.5)
+            else break end
+          end
+          if cx >= p.xl and cx <= p.xr then
+            local y = p.y0
+            while y <= p.y1 do
+              local _, info = reaper.GetThingFromPoint(cx, y)
+              if info == "mcp.fxlist" and reaper.GetTrackFromPoint(cx, y) == tr then
+                if addHit(byGuid, seen, want, "mcp", tr, cx, y) then placed = true end
+                break  -- one mcp block per track
+              end
+              y = y + STEP
+            end
+          end
+        end
+      end
+    end
+  end
+  return byGuid
+end
+
+-- Default to the fast column scanner; the experimental TCP overlay needs the
+-- shared-window full sweep (its rows aren't addressable by mixer I_MCPX).
+local function scanFxBlocks(want)
+  if num("overlay_tcp", 0) ~= 0 then return scanFxBlocksFull(want) end
+  return scanFxBlocksFast(want)
 end
 
 ------------------------------------------------------------------------
@@ -307,40 +389,22 @@ local function rebuildDraw(byGuid, blocks)
   end
 end
 
-------------------------------------------------------------------------
--- Track lookup (used by the scroll-motion fingerprint below).
-------------------------------------------------------------------------
-local function findTrackByGuid(guid)
-  if not guid or guid == "" then return nil end
-  local m = reaper.GetMasterTrack(0)
-  if m and reaper.GetTrackGUID(m) == guid then return m, true end
-  for i = 0, reaper.CountTracks(0) - 1 do
-    local tr = reaper.GetTrack(0, i)
-    if tr and reaper.GetTrackGUID(tr) == guid then return tr, false end
-  end
-  return nil
-end
-
--- Are the located fxlist windows still valid? Cheap TARGETED point-checks (one
--- or two GetThingFromPoint per active track — NOT the full-window grid scan), so
--- safe to run throttled on the timer. Catches mixer hide/show + layout switches
--- (docked side-mixer ↔ fullscreen) that change NOTHING in rev/scroll/count and so
--- never triggered a rescan → stale boxes until you changed the selection.
--- Frank 2026-06-25.
+-- Are the located fxlist windows still valid? Cheap hwnd-only check — no
+-- GetThingFromPoint. On macOS 26 each GetThingFromPoint round-trips through
+-- SkyLight (_orderedWindowsWithPanels) and at the throttled cadence below was
+-- enough to stall REAPER's main thread → peak meters stuttered visibly. Frank
+-- 2026-06-27. The "hwnd lives but now belongs to a different track" case is
+-- already covered by scrollFp / rev / count triggers above; layout switches
+-- (docked side-mixer ↔ fullscreen) and mixer hide destroy the fxlist hwnds,
+-- so JS_Window_IsWindow returning false catches them.
 local function blocksLive(want, blocks)
   for g in pairs(want) do
     local list = blocks[g]
     if not list or #list == 0 then return false end
     local alive = false
     for _, b in ipairs(list) do
-      if b.kind == "tcp" then
+      if b.kind == "tcp" or reaper.JS_Window_IsWindow(b.hwnd) then
         alive = true; break
-      elseif reaper.JS_Window_IsWindow(b.hwnd) then
-        local px, py = math.floor(b.sl + 1), math.floor(b.sy)
-        if select(2, reaper.GetThingFromPoint(px, py)) == "mcp.fxlist" then
-          local tr = reaper.GetTrackFromPoint(px, py)
-          if tr and reaper.GetTrackGUID(tr) == g then alive = true; break end
-        end
       end
     end
     if not alive then return false end
@@ -352,11 +416,24 @@ end
 -- Main defer loop
 ------------------------------------------------------------------------
 local g_lastSig, g_blocks, g_lastRev = nil, {}, -1
+local g_lastWant = nil                      -- want-set fingerprint at last scan
+local g_blockCache = {}                     -- guid → block list (positional cache)
 local g_lastScroll, g_lastCount = nil, -1   -- cheap rescan triggers
 local g_emptyTick = 0                       -- slow retry while no target found
 local g_liveTick  = 0                       -- throttle for the block-liveness check
 local g_scrollPending = false               -- rescan owed once scrolling settles
 local g_stableTicks = 0                     -- ticks since the mixer scroll last moved
+local g_tickCounter  = 0                    -- monotonic defer-tick count
+local g_lastScanTick = -1000                -- ticks since last scanFxBlocks call
+-- Minimum ticks between scanFxBlocks calls (~30 Hz defer → 8 ticks ≈ 267 ms).
+-- scanFxBlocks does a pixel-grid GetThingFromPoint sweep across the mixer —
+-- thousands of calls per pass — and on macOS 26 each call round-trips through
+-- SkyLight (_orderedWindowsWithPanels), so unthrottled it pegs the main thread
+-- whenever the extension bumps `rev` at audio-rate (mute/solo/touch during
+-- mixing) → peak meters stutter visibly. The throttle does not drop scans, it
+-- coalesces back-to-back triggers; user-visible lag for a single CS/BC switch
+-- stays well under a frame. Frank 2026-06-27.
+local SCAN_MIN_TICKS = 8
 
 local function blockSig(b)
   if b.kind == "mcp" then return string.format("m%s,%d,%d,%d,%d", tostring(b.hwnd), b.sl, b.sw, b.ch, b.count or 0)
@@ -383,6 +460,21 @@ local function drawSig(byGuid, blocks)
     .. "," .. num("overlay_ss", is_windows and 1 or 2)
 end
 
+-- Want-set fingerprint: the sorted GUID list of currently active CS/BC
+-- tracks. scanFxBlocks's grid sweep only needs to re-run when this set
+-- CHANGES — a slot-only `rev` bump (user toggled CS within the same track,
+-- or the extension touched any per-tick state) leaves all fxlist window
+-- positions unchanged, so the existing g_blocks stays valid and only the
+-- draw refreshes via drawSig. Skipping these scans is the difference between
+-- "stutters every 1-2 s while mixing" and "smooth meters" on macOS 26 where
+-- each GetThingFromPoint round-trips through SkyLight. Frank 2026-06-27.
+local function wantFp(byGuid)
+  local t = {}
+  for g in pairs(byGuid) do t[#t + 1] = g end
+  table.sort(t)
+  return table.concat(t, "|")
+end
+
 -- Motion fingerprint for "is the mixer mid-scroll". GetMixerScroll alone is
 -- quantised to whole tracks, so it stays constant for many ticks during a
 -- smooth/pixel scroll → the settle counter fired while the user was still
@@ -406,6 +498,7 @@ local shutdown
 
 local function loop()
   if reaper.GetExtState("rea_sixty", RUNKEY) ~= "1" then return shutdown() end
+  g_tickCounter = g_tickCounter + 1
   local on, rev, byGuid = readActive()
   if not on or next(byGuid) == nil then
     if g_lastSig ~= "off" then clearDrawn(); g_lastSig = "off" end
@@ -426,6 +519,12 @@ local function loop()
       g_lastScroll = scroll
       g_scrollPending = true
       g_stableTicks = 0
+      -- Mixer scroll: every cached fxlist hwnd is now at a different screen
+      -- x → cached positions are stale, wipe the cache so the post-settle
+      -- pass re-scans cleanly. Cache stays useful across selection-driven
+      -- want-set changes (the common stuttering trigger) and only invalidates
+      -- on actual layout movement. Frank 2026-06-27.
+      g_blockCache = {}
       if g_lastSig ~= "scrolling" then clearDrawn(); g_lastSig = "scrolling" end
     else
       g_stableTicks = g_stableTicks + 1
@@ -438,7 +537,11 @@ local function loop()
       if g_scrollPending then
         need = (g_stableTicks >= settle)      -- wait out the settle, stay hidden
       else
-        need = rev ~= g_lastRev or ntrk ~= g_lastCount
+        -- Trigger on want-set change (different active tracks), NOT bare rev:
+        -- the extension bumps rev for every mute/solo/touch during mixing, but
+        -- those don't move fxlist windows. See wantFp(). Frank 2026-06-27.
+        local wantNow = wantFp(byGuid)
+        need = wantNow ~= g_lastWant or ntrk ~= g_lastCount
         -- No target yet (mixer hidden / strip scrolled off) → slow ~1 Hz retry,
         -- never per-tick, so a closed mixer can't re-introduce lag.
         if next(g_blocks) == nil then
@@ -450,20 +553,64 @@ local function loop()
           -- docked↔fullscreen) — re-verify cheaply, throttled, and re-acquire if
           -- they died WITHOUT a rev/scroll/count change. Frank 2026-06-25.
           g_liveTick = g_liveTick + 1
-          if g_liveTick >= 6 then
+          if g_liveTick >= 30 then
             g_liveTick = 0
             if not blocksLive(byGuid, g_blocks) then need = true end
           end
         end
+      end
+      -- Coalesce back-to-back rescans (see SCAN_MIN_TICKS): if the extension
+      -- bumps `rev` faster than the throttle, leave `need` set so the very
+      -- next eligible tick still scans — we never drop a trigger, just delay.
+      if need and (g_tickCounter - g_lastScanTick) < SCAN_MIN_TICKS then
+        need = false
       end
       if need then
         -- Only the active CS/BC tracks are ever drawn — scan for just those and
         -- bail as soon as they're located (see scanFxBlocks).
         local want = {}
         for guid in pairs(byGuid) do want[guid] = true end
-        g_blocks = scanFxBlocks(want)
+
+        -- Per-track block cache: scanFxBlocks does a thousands-of-calls
+        -- GetThingFromPoint grid sweep, and on macOS 26 each call round-trips
+        -- through SkyLight — running it whenever the want-set shifts (e.g.
+        -- selection moving across tracks during mixing) stalls REAPER's main
+        -- thread visibly (peak meters + mouse-edit cursor freeze every 1–2 s).
+        -- Reuse cached blocks for guids we've seen before whose fxlist hwnds
+        -- are still alive; scan only the genuinely-missing tracks. Scroll
+        -- invalidates the cache wholesale (see the scrollFp branch above).
+        -- Frank 2026-06-27.
+        local cached, missing, missingN = {}, {}, 0
+        for g in pairs(want) do
+          local list = g_blockCache[g]
+          local alive = list ~= nil
+          if alive then
+            for _, b in ipairs(list) do
+              if b.kind ~= "tcp" and not reaper.JS_Window_IsWindow(b.hwnd) then
+                alive = false; break
+              end
+            end
+          end
+          if alive then cached[g] = list
+          else missing[g] = true; missingN = missingN + 1 end
+        end
+
+        if missingN > 0 then
+          local fresh = scanFxBlocks(missing)
+          g_blocks = {}
+          for g, list in pairs(cached) do g_blocks[g] = list end
+          for g, list in pairs(fresh)  do
+            g_blocks[g] = list
+            g_blockCache[g] = list
+          end
+        else
+          g_blocks = cached
+        end
+
         g_lastRev, g_lastCount = rev, ntrk
+        g_lastWant = wantFp(byGuid)
         g_scrollPending = false
+        g_lastScanTick = g_tickCounter
       end
       -- Stay hidden while a post-scroll rescan is still owed (settling).
       if not g_scrollPending then
