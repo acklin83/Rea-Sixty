@@ -284,7 +284,13 @@ end
 ------------------------------------------------------------------------
 -- ImGui context + font (recreate-on-change, like TK's font_needs_update)
 ------------------------------------------------------------------------
-local ctx  = reaper.ImGui_CreateContext('Rea-Sixty Focused Panel')
+-- Docking MUST be enabled at context creation, else the window can't dock and
+-- ImGui_GetWindowDockID always returns 0 — so dock state can never persist (the
+-- bug Frank hit with the top toolbar docker). Proven pattern: rodilab Color
+-- palette. Frank 2026-06-27.
+local DOCK_CFG = reaper.ImGui_ConfigFlags_DockingEnable
+  and reaper.ImGui_ConfigFlags_DockingEnable() or 0
+local ctx  = reaper.ImGui_CreateContext('Rea-Sixty Focused Panel', DOCK_CFG)
 -- ReaImGui v0.10: fonts are size-less objects; the size is supplied at PushFont
 -- time, so we create+attach ONCE (2nd arg = style flags, not px) and just push a
 -- different px each frame. (Pre-0.10 baked the size into CreateFont — if this
@@ -311,11 +317,38 @@ end
 local restore_x, restore_y, restore_w, restore_h = loadRect()
 local first_frame = true
 local last_save_x, last_save_y, last_save_w, last_save_h
+local g_contentW, g_contentH               -- last measured content size (centering)
+local mb_text, mb_seq, mb_until = "", nil, 0   -- in-panel mode-change flash state
+
+-- Dock state. ReaImGui dock id: 0 = floating, <0 = a REAPER docker cell. We
+-- persist it under its own key and re-attach on first frame, so a docked panel
+-- survives restart (the saved rect alone can't — it only restores a FLOATING
+-- position). Guarded: older ReaImGui without the dock API stays floating-only.
+local has_dock = DOCK_CFG ~= 0
+  and reaper.APIExists("ImGui_SetNextWindowDockID")
+  and reaper.APIExists("ImGui_GetWindowDockID")
+local restore_dock  = tonumber(reaper.GetExtState(SECT, "focused_panel_imgui_dock")) or 0
+-- Preferred docker to re-dock into when toggling float→dock (last one used; a
+-- REAPER docker is a negative id). Kept separate so undocking to 0 doesn't lose it.
+local dock_pref     = tonumber(reaper.GetExtState(SECT, "focused_panel_imgui_dockpref")) or -1
+if dock_pref >= 0 then dock_pref = -1 end
+local cur_dock      = restore_dock
+local last_save_dock = restore_dock
+local pending_dock  = nil   -- menu-requested dock id, applied on the next frame
 
 ------------------------------------------------------------------------
 -- One CS/BC segment. Uses SameLine to lay out coloured runs on a row.
 ------------------------------------------------------------------------
-local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb)
+-- Float/unfloat the FX window for a clicked plug-in name. idx = the REAL chain
+-- index the extension publishes (overlay_idx_cs|bc), not the visual MCP slot.
+local function toggleFxOpen(tr, idx)
+  if not (tr and idx and idx >= 0) then return end
+  if not reaper.ValidatePtr2(0, tr, "MediaTrack*") then return end
+  if idx >= reaper.TrackFX_GetCount(tr) then return end
+  reaper.TrackFX_Show(tr, idx, reaper.TrackFX_GetOpen(tr, idx) and 2 or 3)
+end
+
+local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb, openTr, openIdx)
   local lit = name ~= nil
   local dim = lit and 0xB0B0BC or 0x6A6A74
   -- Track name position: before (default) or after the CS/BC tag+name+param.
@@ -329,6 +362,14 @@ local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb)
   reaper.ImGui_SameLine(ctx, 0, 0)
   reaper.ImGui_TextColored(ctx, rgba(lit and 0xEDEDF2 or 0x6A6A74),
     name or "\xE2\x80\x94")
+  -- Click the plug-in name → float/unfloat its FX window (hand cursor = affordance).
+  if lit and openTr and openIdx and openIdx >= 0
+     and reaper.GetExtState(SECT, "focused_panel_open_click") ~= "0" then
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetMouseCursor(ctx, reaper.ImGui_MouseCursor_Hand())
+    end
+    if reaper.ImGui_IsItemClicked(ctx) then toggleFxOpen(openTr, openIdx) end
+  end
   if pn and pn ~= "" then
     reaper.ImGui_SameLine(ctx, 0, 0)
     reaper.ImGui_TextColored(ctx, rgba(0xA8C6F0), "   " .. pn)
@@ -341,6 +382,114 @@ local function segment(tag, tagRgb, name, pn, pv, trk, trkRgb)
     reaper.ImGui_SameLine(ctx, 0, 0)
     reaper.ImGui_TextColored(ctx, rgba(trkRgb or dim), "  " .. (trk or ""))
   end
+end
+
+------------------------------------------------------------------------
+-- Optional extra elements (toggled via the context menu → Elements).
+------------------------------------------------------------------------
+local function runAction(cmdName)
+  local id = reaper.NamedCommandLookup(cmdName)
+  if id ~= 0 then reaper.Main_OnCommand(id, 0) end
+end
+
+-- Watch the extension's mode-change seq; flash the new label for a couple of
+-- seconds. Polled every frame so enabling the flash later never replays an old
+-- change, and a panel started mid-session syncs the baseline silently.
+local function pollModeBanner()
+  local raw = reaper.GetExtState(SECT, "mode_banner")
+  local text, seq = raw:match("^(.-)\t(%d+)$")
+  if not seq then return end
+  if mb_seq == nil then mb_seq = seq; return end   -- baseline only, no flash
+  if seq ~= mb_seq then
+    mb_seq, mb_text = seq, text or ""
+    mb_until = reaper.time_precise() + math.max(0.3, num("mode_banner_secs", 2.0))
+  end
+end
+
+-- Persistent current-mode line ("mode_state" = "<sel>\t<enc>").
+local function drawModeIndicator()
+  local sel, enc = reaper.GetExtState(SECT, "mode_state"):match("^(.-)\t(.*)$")
+  if not sel then return end
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Sel ")
+  reaper.ImGui_SameLine(ctx, 0, 0)
+  reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), sel)
+  reaper.ImGui_SameLine(ctx, 0, font_px)
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Enc ")
+  reaper.ImGui_SameLine(ctx, 0, 0)
+  reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), enc)
+end
+
+local function drawButtons()
+  if reaper.ImGui_Button(ctx, "Settings") then runAction("_REASIXTY_TOGGLE_SETTINGS") end
+  reaper.ImGui_SameLine(ctx, 0, math.max(4, font_px * 0.5))
+  if reaper.ImGui_Button(ctx, "HUD") then runAction("_REASIXTY_LEARN_HUD_TOGGLE") end
+end
+
+local function drawCycle()
+  local function pair(label, prevCmd, nextCmd)
+    reaper.ImGui_TextColored(ctx, rgba(0x9A9AA2), label .. " ")
+    reaper.ImGui_SameLine(ctx, 0, 0)
+    if reaper.ImGui_Button(ctx, "\xE2\x97\x80##p" .. label) then runAction(prevCmd) end
+    reaper.ImGui_SameLine(ctx, 0, 2)
+    if reaper.ImGui_Button(ctx, "\xE2\x96\xB6##n" .. label) then runAction(nextCmd) end
+  end
+  pair("CS", "_REASIXTY_CS_CYCLE_PREV", "_REASIXTY_CS_CYCLE_NEXT")
+  reaper.ImGui_SameLine(ctx, 0, font_px)
+  pair("BC", "_REASIXTY_BC_CYCLE_PREV", "_REASIXTY_BC_CYCLE_NEXT")
+end
+
+------------------------------------------------------------------------
+-- Element ordering. Blocks render in a user-defined order, inline (one row) by
+-- default; a block flagged "new line" starts a fresh row. Arrange mode shows a
+-- drag grip per block so the order can be rearranged by dragging. Frank 2026-06-27.
+------------------------------------------------------------------------
+local BLOCK_IDS = { "params", "fav", "mode", "cycle", "buttons" }
+local has_dnd = reaper.APIExists("ImGui_BeginDragDropSource")
+  and reaper.APIExists("ImGui_AcceptDragDropPayload")
+
+-- Saved order, sanitised: known ids only, no dups, with any newly-added block
+-- appended so it can never go missing.
+local function parseOrder()
+  local seen, out = {}, {}
+  for id in reaper.GetExtState(SECT, "focused_panel_order"):gmatch("[^,]+") do
+    for _, k in ipairs(BLOCK_IDS) do
+      if k == id and not seen[id] then out[#out + 1] = id; seen[id] = true end
+    end
+  end
+  for _, k in ipairs(BLOCK_IDS) do
+    if not seen[k] then out[#out + 1] = k end
+  end
+  return out
+end
+
+local function saveOrder(order)
+  reaper.SetExtState(SECT, "focused_panel_order", table.concat(order, ","), true)
+end
+
+local function breakSet()
+  local s = {}
+  for id in reaper.GetExtState(SECT, "focused_panel_breaks"):gmatch("[^,]+") do s[id] = true end
+  return s
+end
+
+local function toggleBreak(id)
+  local s = breakSet(); s[id] = (not s[id]) or nil
+  local out = {}
+  for _, k in ipairs(BLOCK_IDS) do if s[k] then out[#out + 1] = k end end
+  reaper.SetExtState(SECT, "focused_panel_breaks", table.concat(out, ","), true)
+end
+
+-- Move `src` to just before `dst`, persist.
+local function moveBefore(order, src, dst)
+  if src == dst then return end
+  local out = {}
+  for _, id in ipairs(order) do if id ~= src then out[#out + 1] = id end end
+  local res = {}
+  for _, id in ipairs(out) do
+    if id == dst then res[#res + 1] = src end
+    res[#res + 1] = id
+  end
+  saveOrder(res)
 end
 
 local function drawContent()
@@ -367,13 +516,15 @@ local function drawContent()
   local csPN, csPV = paramStr("overlay_param_cs")
   local bcPN, bcPV = paramStr("overlay_param_bc")
 
+  -- Real chain index (click-to-open), published by the extension.
+  local csOpenIdx = tonumber(reaper.GetExtState(SECT, "overlay_idx_cs"))
+  local bcOpenIdx = tonumber(reaper.GetExtState(SECT, "overlay_idx_bc"))
+
   -- Favourite controls (Phase 4c) — copy/own toggle + per-track set picker,
   -- each independently shown (Layout → Favourites), positioned on their own
   -- line or inline before/after the CS/BC parameter line. Frank 2026-06-26.
   local showMode = reaper.GetExtState(SECT, "focused_panel_fav_mode") == "1"
   local showSet  = reaper.GetExtState(SECT, "focused_panel_fav_set")  == "1"
-  local favPos   = reaper.GetExtState(SECT, "focused_panel_fav_pos")
-  if favPos == "" then favPos = "own" end
   local anyFav = showMode or showSet
 
   local function drawFav()
@@ -415,33 +566,69 @@ local function drawContent()
     end
   end
 
-  -- CS/BC parameter display can be hidden entirely (default shown) — someone
-  -- may want ONLY the favourite controls. Frank 2026-06-26.
-  if reaper.GetExtState(SECT, "focused_panel_params") == "0" then
-    if anyFav then drawFav() end
-    return
+  -- Params block: the CS/BC segments (oneLine controls their internal stacking;
+  -- the segments can be hidden entirely so someone may want only fav controls).
+  local function drawParams()
+    segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol, ftr, csOpenIdx)
+    if oneLine() then reaper.ImGui_SameLine(ctx, 0, font_px) end
+    segment("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol, btr, bcOpenIdx)
   end
 
-  if anyFav and favPos == "before" then
-    drawFav()
-    reaper.ImGui_SameLine(ctx, 0, font_px)
+  -- Block registry: id → render fn + whether it shows this frame.
+  local blocks = {
+    params  = { draw = drawParams,        show = reaper.GetExtState(SECT, "focused_panel_params") ~= "0" },
+    fav     = { draw = drawFav,           show = anyFav },
+    mode    = { draw = drawModeIndicator, show = reaper.GetExtState(SECT, "focused_panel_mode")    == "1" },
+    cycle   = { draw = drawCycle,         show = reaper.GetExtState(SECT, "focused_panel_cycle")   == "1" },
+    buttons = { draw = drawButtons,       show = reaper.GetExtState(SECT, "focused_panel_buttons") == "1" },
+  }
+
+  -- Transient mode-change flash sits above the flow (not reorderable).
+  pollModeBanner()
+  if reaper.GetExtState(SECT, "focused_panel_banner") == "1"
+     and reaper.time_precise() < mb_until and mb_text ~= "" then
+    reaper.ImGui_TextColored(ctx, rgba(0x70E0A0), mb_text)
   end
 
-  if oneLine() then
-    segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
-    reaper.ImGui_SameLine(ctx, 0, font_px)   -- gap between CS and BC
-    segment("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol)
-  else
-    segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol)
-    segment("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol)
-  end
-
-  if anyFav and favPos == "after" then
-    reaper.ImGui_SameLine(ctx, 0, font_px)
-    drawFav()
-  elseif anyFav and favPos == "own" then
-    reaper.ImGui_Spacing(ctx)
-    drawFav()
+  -- Flow blocks in the saved order: inline (one row) unless flagged new-line.
+  -- Arrange mode adds a per-block drag grip + a new-line toggle, and disables the
+  -- block content so dragging never trips a button/click.
+  local arrange = has_dnd and reaper.GetExtState(SECT, "focused_panel_arrange") == "1"
+  local order   = parseOrder()
+  local brk     = breakSet()
+  local first   = true
+  for _, id in ipairs(order) do
+    local b = blocks[id]
+    if b and b.show then
+      if not first and not brk[id] then reaper.ImGui_SameLine(ctx, 0, font_px) end
+      reaper.ImGui_PushID(ctx, id)
+      if arrange then
+        reaper.ImGui_Button(ctx, "\xE2\xA0\xBF")        -- ⠿ drag grip
+        if reaper.ImGui_BeginDragDropSource(ctx) then
+          reaper.ImGui_SetDragDropPayload(ctx, "FP_BLOCK", id)
+          reaper.ImGui_Text(ctx, id)
+          reaper.ImGui_EndDragDropSource(ctx)
+        end
+        if reaper.ImGui_BeginDragDropTarget(ctx) then
+          local ok, payload = reaper.ImGui_AcceptDragDropPayload(ctx, "FP_BLOCK")
+          if ok and payload and payload ~= "" then moveBefore(order, payload, id) end
+          reaper.ImGui_EndDragDropTarget(ctx)
+        end
+        reaper.ImGui_SameLine(ctx, 0, 2)
+        -- ↵ = breaks to a new line before this block; → = stays inline.
+        if reaper.ImGui_Button(ctx, brk[id] and "\xE2\x86\xB5" or "\xE2\x86\x92") then
+          toggleBreak(id)
+        end
+        reaper.ImGui_SameLine(ctx, 0, 6)
+        reaper.ImGui_BeginDisabled(ctx)
+        b.draw()
+        reaper.ImGui_EndDisabled(ctx)
+      else
+        b.draw()
+      end
+      reaper.ImGui_PopID(ctx)
+      first = false
+    end
   end
 end
 
@@ -593,19 +780,12 @@ local function drawContextMenu()
     if reaper.ImGui_MenuItem(ctx, "Favourite: set picker", nil, showSet) then
       toggleKey("focused_panel_fav_set", false)
     end
-    local favPos = reaper.GetExtState(SECT, "focused_panel_fav_pos")
-    if favPos == "" then favPos = "own" end
-    if reaper.ImGui_BeginMenu(ctx, "Favourites position") then
-      if reaper.ImGui_MenuItem(ctx, "Own line", nil, favPos == "own") then
-        reaper.SetExtState(SECT, "focused_panel_fav_pos", "own", true)
+    if has_dnd then
+      reaper.ImGui_Separator(ctx)
+      local arr = reaper.GetExtState(SECT, "focused_panel_arrange") == "1"
+      if reaper.ImGui_MenuItem(ctx, "Arrange elements (drag to reorder)", nil, arr) then
+        toggleKey("focused_panel_arrange", false)
       end
-      if reaper.ImGui_MenuItem(ctx, "Before CS / BC", nil, favPos == "before") then
-        reaper.SetExtState(SECT, "focused_panel_fav_pos", "before", true)
-      end
-      if reaper.ImGui_MenuItem(ctx, "After CS / BC", nil, favPos == "after") then
-        reaper.SetExtState(SECT, "focused_panel_fav_pos", "after", true)
-      end
-      reaper.ImGui_EndMenu(ctx)
     end
     reaper.ImGui_EndMenu(ctx)
   end
@@ -650,6 +830,41 @@ local function drawContextMenu()
     reaper.ImGui_EndMenu(ctx)
   end
 
+  if reaper.ImGui_BeginMenu(ctx, "Elements") then
+    local function item(label, key, def)
+      local cur = reaper.GetExtState(SECT, key)
+      local on = (cur == "") and def or (cur == "1")
+      if reaper.ImGui_MenuItem(ctx, label, nil, on) then toggleKey(key, def) end
+    end
+    item("Mode indicator (Sel / Encoder)",        "focused_panel_mode",       false)
+    item("Flash mode changes",                    "focused_panel_banner",     false)
+    item("Settings + HUD buttons",                "focused_panel_buttons",    false)
+    item("CS / BC cycle buttons",                 "focused_panel_cycle",      false)
+    item("Click plug-in name to open",            "focused_panel_open_click", true)
+    reaper.ImGui_EndMenu(ctx)
+  end
+
+  if reaper.ImGui_BeginMenu(ctx, "Align") then
+    local ch = reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
+    if reaper.ImGui_MenuItem(ctx, "Centre horizontally", nil, ch) then
+      toggleKey("focused_panel_center_h", false)
+    end
+    local cv = reaper.GetExtState(SECT, "focused_panel_center_v") == "1"
+    if reaper.ImGui_MenuItem(ctx, "Centre vertically", nil, cv) then
+      toggleKey("focused_panel_center_v", false)
+    end
+    reaper.ImGui_EndMenu(ctx)
+  end
+
+  if has_dock then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Dock window", nil, cur_dock < 0) then
+      -- Toggle: float (0) ↔ the preferred REAPER docker (negative id, remembered
+      -- from the last time it was docked). Applied next frame.
+      pending_dock = (cur_dock < 0) and 0 or dock_pref
+    end
+  end
+
   reaper.ImGui_Separator(ctx)
   reaper.ImGui_BeginDisabled(ctx)
   reaper.ImGui_MenuItem(ctx, "Drag the box anywhere to move it")
@@ -670,10 +885,13 @@ end
 ------------------------------------------------------------------------
 -- Main loop
 ------------------------------------------------------------------------
-local WFLAGS = reaper.ImGui_WindowFlags_NoTitleBar()
-  | reaper.ImGui_WindowFlags_NoScrollbar()
+-- Flags split so docking can drop the frameless/topmost character: a docked
+-- window needs a title-bar tab and must not be top-most. Floating keeps the
+-- frameless place-anywhere overlay look.
+local BASE_FLAGS = reaper.ImGui_WindowFlags_NoScrollbar()
   | reaper.ImGui_WindowFlags_NoScrollWithMouse()
   | reaper.ImGui_WindowFlags_NoCollapse()
+local FLOAT_FLAGS = reaper.ImGui_WindowFlags_NoTitleBar()
   | (reaper.ImGui_WindowFlags_TopMost and reaper.ImGui_WindowFlags_TopMost() or 0)
 
 local function loop()
@@ -684,11 +902,22 @@ local function loop()
 
   font_px = fontPx()
 
+  -- Apply a menu-requested dock change (dock into / out of a REAPER docker).
+  if has_dock and pending_dock ~= nil then
+    reaper.ImGui_SetNextWindowDockID(ctx, pending_dock)
+    cur_dock = pending_dock
+    pending_dock = nil
+  end
+
   -- Restore saved geometry on first frame only; afterwards the OS/ImGui owns the
   -- window position (this is exactly why it's freely draggable — we do NOT call
-  -- SetNextWindowPos every frame).
+  -- SetNextWindowPos every frame). Re-attach the saved dock here too.
   if first_frame then
-    if restore_x then
+    if has_dock and restore_dock < 0 then
+      -- Re-dock to the saved docker; do NOT also set pos/size (that would force
+      -- it to float at the saved rect, overriding the dock).
+      reaper.ImGui_SetNextWindowDockID(ctx, restore_dock)
+    elseif restore_x then
       reaper.ImGui_SetNextWindowPos(ctx, restore_x, restore_y)
       reaper.ImGui_SetNextWindowSize(ctx, restore_w, restore_h)
     else
@@ -696,6 +925,9 @@ local function loop()
     end
     first_frame = false
   end
+
+  local docked = has_dock and cur_dock < 0
+  local wflags = docked and BASE_FLAGS or (BASE_FLAGS | FLOAT_FLAGS)
 
   local bg = math.floor(num("focused_panel_bg",     0x1C1C1F)) & 0xFFFFFF
   local bd = math.floor(num("focused_panel_border", 0x3A3D44)) & 0xFFFFFF
@@ -712,9 +944,25 @@ local function loop()
   -- (the old <=0.9 convention) raises "Calling End() too many times!" whenever the
   -- window is collapsed / clipped / fully off-screen (visible == false). The
   -- official ReaImGui_Demo does exactly this: `if not rv then return` / End inside.
-  local visible, open = reaper.ImGui_Begin(ctx, 'Rea-Sixty Focused##fp', true, WFLAGS)
+  local visible, open = reaper.ImGui_Begin(ctx, 'Rea-Sixty Focused##fp', true, wflags)
   if visible then
+    -- Optional centering: offset the cursor by (avail − content)/2 using LAST
+    -- frame's measured content size (1-frame lag, invisible). Content is wrapped
+    -- in a group so GetItemRectSize yields its bounding box. Frank 2026-06-27.
+    local availW, availH = reaper.ImGui_GetContentRegionAvail(ctx)
+    local sx, sy = reaper.ImGui_GetCursorPos(ctx)
+    if reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
+       and g_contentW and g_contentW < availW then
+      reaper.ImGui_SetCursorPosX(ctx, sx + (availW - g_contentW) * 0.5)
+    end
+    if reaper.GetExtState(SECT, "focused_panel_center_v") == "1"
+       and g_contentH and g_contentH < availH then
+      reaper.ImGui_SetCursorPosY(ctx, sy + (availH - g_contentH) * 0.5)
+    end
+    reaper.ImGui_BeginGroup(ctx)
     drawContent()
+    reaper.ImGui_EndGroup(ctx)
+    g_contentW, g_contentH = reaper.ImGui_GetItemRectSize(ctx)
 
     -- Right-click anywhere in the window → context menu (whole-window hit area).
     if reaper.ImGui_IsWindowHovered(ctx)
@@ -723,13 +971,31 @@ local function loop()
     end
     drawContextMenu()
 
-    -- Persist geometry when it changes (throttled to actual deltas).
-    local px, py = reaper.ImGui_GetWindowPos(ctx)
-    local pw, ph = reaper.ImGui_GetWindowSize(ctx)
-    px, py, pw, ph = math.floor(px), math.floor(py), math.floor(pw), math.floor(ph)
-    if px ~= last_save_x or py ~= last_save_y or pw ~= last_save_w or ph ~= last_save_h then
-      last_save_x, last_save_y, last_save_w, last_save_h = px, py, pw, ph
-      saveRect(px, py, pw, ph)
+    -- Track + persist the live dock id so a docked panel re-attaches on restart.
+    if has_dock then
+      cur_dock = reaper.ImGui_GetWindowDockID(ctx)
+      if cur_dock ~= last_save_dock then
+        last_save_dock = cur_dock
+        reaper.SetExtState(SECT, "focused_panel_imgui_dock", tostring(cur_dock), true)
+        -- Remember the docker we were in so float→dock can return there.
+        if cur_dock < 0 and cur_dock ~= dock_pref then
+          dock_pref = cur_dock
+          reaper.SetExtState(SECT, "focused_panel_imgui_dockpref", tostring(dock_pref), true)
+        end
+      end
+    end
+
+    -- Persist FLOATING geometry when it changes (throttled to actual deltas). Skip
+    -- while docked — the docker owns the size then, and saving it would clobber the
+    -- floating rect we want to return to on undock.
+    if not (has_dock and cur_dock < 0) then
+      local px, py = reaper.ImGui_GetWindowPos(ctx)
+      local pw, ph = reaper.ImGui_GetWindowSize(ctx)
+      px, py, pw, ph = math.floor(px), math.floor(py), math.floor(pw), math.floor(ph)
+      if px ~= last_save_x or py ~= last_save_y or pw ~= last_save_w or ph ~= last_save_h then
+        last_save_x, last_save_y, last_save_w, last_save_h = px, py, pw, ph
+        saveRect(px, py, pw, ph)
+      end
     end
     reaper.ImGui_End(ctx)   -- only when visible (see note at Begin)
   end
