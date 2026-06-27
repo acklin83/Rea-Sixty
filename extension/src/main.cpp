@@ -325,11 +325,18 @@ void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 uint32_t trackColorRgb(MediaTrack* tr);
 
 // Dynamic-bank config accessors — defined at global scope (external linkage,
-// called from SettingsScreen.cpp) but used inside the anon namespace too.
+// called from SettingsScreen.cpp / UC1Surface.cpp) but used inside the anon
+// namespace too.
 int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+int      reasixty_dynBankCtrl(int kind);             // banking control per kind
+void     reasixty_setDynBankCtrl(int kind, int ctrl);
+// Page a bankable dynamic bank from a UC1 encoder (main thread). Returns true
+// when the engaged sub-bank is bankable AND its configured control matches —
+// the caller then skips the encoder's normal action. control: see BankControl.
+bool     reasixty_dynBankPageControl(int control, int delta);
 
 
 namespace {
@@ -1312,7 +1319,13 @@ std::atomic<int>  g_fxMoveReq{0};
 // Encoding: 0 = none; else (1<<24) | (kind<<16) | (slot<<8) | gesture, where
 // gesture 0=plain push, 1=+Shift, 2=+Cmd, 3=+Ctrl, 4=long-press.
 std::atomic<uint32_t> g_dynBankReq{0};
+// Page-delta for a bankable dynamic bank (FX / Sends), posted from the input
+// thread (UF8 encoder / Bank buttons) and drained on the main thread.
+std::atomic<int> g_dynBankPageReq{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
+static int  engagedBankableKind_();                  // any thread
+static void pageDynBank_(int kind, int delta);       // main thread
+static void tickDynBankPaging_();                    // main thread (onTimer)
 static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
                                    bool setFocusedDomain, bool setBcAnchor);
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
@@ -1983,6 +1996,9 @@ void drainSelsets_() {
     // main thread; the input thread only posts the encoded request.
     if (const uint32_t dyn = g_dynBankReq.exchange(0); dyn != 0)
         applyDynBankReq_(dyn);
+    // Reset bankable-bank pages on track change + drain posted page deltas
+    // (defined after favContextTrack_ / the page state).
+    tickDynBankPaging_();
     // FX move-in-chain posted by the REAPER action route (no on-screen carousel
     // there — the surface builtins drive that themselves).
     if (const int mvSteps = g_fxMoveReq.exchange(0); mvSteps != 0)
@@ -4578,6 +4594,21 @@ std::atomic<uint32_t> g_trackBankColour[8] = {
     0xE53935, 0xFB8C00, 0xFDD835, 0x43A047,
     0x1E88E5, 0x5E35B1, 0xD81B60, 0x6D4C41,
 };
+// Which control pages a bankable dynamic bank (FX / Sends). One setting per
+// dynamic kind, indexed by DynamicBankKind int (only FxBank / Sends use it).
+enum class BankControl : int {
+    None = 0, Uf8Enc, Uc1Enc1, Uc1Enc2, Uf8Bank,
+};
+constexpr int kBankControlCount = 5;
+std::atomic<int> g_dynBankCtrl[8] = {};   // BankControl per kind; default None
+// Current page offset (× 8) per bankable kind; reset to 0 on track change.
+std::atomic<int> g_dynBankPage[8] = {};
+// A bankable kind has more than 8 items and pages; Groups / Colours don't.
+static bool dynBankBankable_(uf8::bindings::DynamicBankKind k)
+{
+    return k == uf8::bindings::DynamicBankKind::FxBank
+        || k == uf8::bindings::DynamicBankKind::Sends;
+}
 static void ensureDynCfgLoaded_()
 {
     static bool done = false;
@@ -4594,6 +4625,13 @@ static void ensureDynCfgLoaded_()
         if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
             const long c = std::strtol(v, nullptr, 16);
             g_trackBankColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
+        }
+    }
+    for (int i = 0; i < 8; ++i) {
+        char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", i);
+        if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
+            const int c = std::atoi(v);
+            if (c >= 0 && c < kBankControlCount) g_dynBankCtrl[i].store(c);
         }
     }
 }
@@ -4648,15 +4686,68 @@ struct DynSlotInfo {
     uint32_t    rgb     = 0xFFFFFFu;  // 0xRRGGBB when hasRgb
 };
 
-// Visual-slot base offset for a dynamic bank kind: Sends bank 2 / FX bank 2
-// start 8 entries in. -1 = not a paged kind.
+// Visual-slot base offset for a dynamic bank kind = page × 8 (bankable kinds
+// page through 1-8 / 9-16 / …; non-bankable kinds are always page 0).
 static int dynBankSlotBase_(uf8::bindings::DynamicBankKind kind)
 {
-    using DK = uf8::bindings::DynamicBankKind;
-    switch (kind) {
-        case DK::Sends:   case DK::FxBank1: return 0;
-        case DK::Sends2:  case DK::FxBank2: return 8;
-        default:                            return 0;
+    return dynBankBankable_(kind)
+        ? g_dynBankPage[static_cast<int>(kind)].load() * 8 : 0;
+}
+
+// The dynamic kind of the engaged sub-bank IF it is bankable (FX / Sends),
+// else -1. Reads atomics + the config mutex only → safe on any thread.
+static int engagedBankableKind_()
+{
+    const int layer = uf8::bindings::getActiveLayer();
+    if (layer < 0 || layer > 2) return -1;
+    const int q = g_activeQuick[layer].load();
+    if (q < 0) return -1;
+    const int sb = g_activeSubBank[layer].load();
+    const auto dk = uf8::bindings::getSubBankDynamic(layer, q, sb);
+    return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
+}
+
+// Page a bankable dynamic bank by `delta` pages, clamped to the focused
+// track's item count. Main-thread only (reads FX / send counts).
+static void pageDynBank_(int kind, int delta)
+{
+    if (kind < 0 || kind >= 8 || delta == 0) return;
+    MediaTrack* tr = favContextTrack_();
+    if (!tr) return;
+    const auto K = static_cast<uf8::bindings::DynamicBankKind>(kind);
+    int count = 0;
+    if (K == uf8::bindings::DynamicBankKind::FxBank) {
+        count = TrackFX_GetCount(tr);
+    } else if (K == uf8::bindings::DynamicBankKind::Sends) {
+        std::vector<CombinedSlot> lay;
+        buildCombinedSendLayout_(tr, lay);
+        count = static_cast<int>(lay.size());
+    } else {
+        return;
+    }
+    const int maxPage = count > 0 ? (count - 1) / 8 : 0;
+    int p = g_dynBankPage[kind].load() + delta;
+    if (p < 0) p = 0;
+    if (p > maxPage) p = maxPage;
+    g_dynBankPage[kind].store(p);
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// onTimer (main thread): reset bankable pages when the focused track changes
+// (a 3-FX track must not linger on page 2), then apply any page delta posted
+// from the input thread (UF8 encoder / Bank buttons).
+static void tickDynBankPaging_()
+{
+    static void* s_track = nullptr;
+    void* ct = static_cast<void*>(favContextTrack_());
+    if (ct != s_track) {
+        s_track = ct;
+        for (auto& p : g_dynBankPage) p.store(0);
+    }
+    if (const int pd = g_dynBankPageReq.exchange(0); pd != 0) {
+        const int k = engagedBankableKind_();
+        if (k >= 0) pageDynBank_(k, pd);
     }
 }
 
@@ -4669,8 +4760,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     if (!tr || slot < 0 || slot >= 8) return info;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::Sends:
-        case DK::Sends2: {
+        case DK::Sends: {
             const int vslot = dynBankSlotBase_(kind) + slot;
             // 7.75-correct: visual slot → (category, apiIndex). apiIndex < 0
             // is a genuine empty gap; category 0 = track send, 1 = HW output.
@@ -4691,8 +4781,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             info.led = muted ? 1 : 2;   // active bright, muted dim
             return info;
         }
-        case DK::FxBank1:
-        case DK::FxBank2: {
+        case DK::FxBank: {
             const int fxIdx = dynBankSlotBase_(kind) + slot;
             if (fxIdx >= TrackFX_GetCount(tr)) return info;   // empty slot
             info.present = true;
@@ -4791,8 +4880,7 @@ static void applyDynBankReq_(uint32_t enc)
     if (!tr) return;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::Sends:
-        case DK::Sends2: {
+        case DK::Sends: {
             const int vslot = dynBankSlotBase_(kind) + slot;
             const CombinedSlot cs = combinedSendSlot_(tr, vslot);
             if (cs.apiIndex < 0) return;               // empty visual slot
@@ -4819,8 +4907,7 @@ static void applyDynBankReq_(uint32_t enc)
             g_pageDirty.store(true);
             break;
         }
-        case DK::FxBank1:
-        case DK::FxBank2: {
+        case DK::FxBank: {
             const int fxIdx = dynBankSlotBase_(kind) + slot;
             const int n = TrackFX_GetCount(tr);
             if (fxIdx < 0 || fxIdx >= n) return;
@@ -14024,7 +14111,24 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             if (!handledNatively) {
                 if (auto bid = uf8::bindings::fromUf8DeviceId(id);
                     bid != uf8::bindings::ButtonId::None) {
-                    if (uf8::bindings::dispatch(bid, pressed)) {
+                    // Bankable dynamic bank paging via the Bank ◄/► buttons:
+                    // when the engaged sub-bank is an FX / Sends bank set to
+                    // page with the Bank buttons, page instead of banking
+                    // tracks (post a delta for the main thread).
+                    const bool isBankBtn =
+                        bid == uf8::bindings::ButtonId::BankLeft
+                     || bid == uf8::bindings::ButtonId::BankRight;
+                    int bk = -1;
+                    if (isBankBtn) bk = engagedBankableKind_();
+                    if (isBankBtn && bk >= 0
+                        && g_dynBankCtrl[bk].load()
+                               == static_cast<int>(BankControl::Uf8Bank)) {
+                        if (pressed)
+                            g_dynBankPageReq.fetch_add(
+                                bid == uf8::bindings::ButtonId::BankRight
+                                    ? 1 : -1);
+                        handledNatively = true;
+                    } else if (uf8::bindings::dispatch(bid, pressed)) {
                         handledNatively = true;
                     }
                 }
@@ -14451,6 +14555,15 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     }
                 }
             } else if (strip == 0x08) {
+                // Bankable dynamic bank paging: when the engaged sub-bank is
+                // an FX / Sends bank configured to page with the UF8 encoder,
+                // consume the detent here (post a page delta for the main
+                // thread) instead of running the normal encoder action.
+                const int bk = engagedBankableKind_();
+                if (bk >= 0 && g_dynBankCtrl[bk].load()
+                                   == static_cast<int>(BankControl::Uf8Enc)) {
+                    g_dynBankPageReq.fetch_add(signed6 > 0 ? 1 : -1);
+                } else {
                 // Channel encoder — dispatched through the bindings
                 // system (ButtonId::ChannelEncoder) from the drain
                 // handler. The active-modifier slot's builtin decides
@@ -14461,6 +14574,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // Settings → Bindings → Channel Encoder.
                 queueInput({PendingInput::EncoderRotation, 0,
                             static_cast<double>(signed6)});
+                }
             }
         }
         // cmd 0x33 — secondary "user-actively-manipulating-cap" sensor.
@@ -23179,6 +23293,29 @@ void reasixty_setTrackBankColour(int i, uint32_t rgb)
     char k[32]; std::snprintf(k, sizeof(k), "track_bank_col_%d", i);
     char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
     SetExtState("rea_sixty", k, v, true);
+}
+int  reasixty_dynBankCtrl(int kind)
+{
+    ensureDynCfgLoaded_();
+    return (kind >= 0 && kind < 8) ? g_dynBankCtrl[kind].load()
+                                   : int(BankControl::None);
+}
+void reasixty_setDynBankCtrl(int kind, int ctrl)
+{
+    if (kind < 0 || kind >= 8 || ctrl < 0 || ctrl >= kBankControlCount) return;
+    ensureDynCfgLoaded_();
+    g_dynBankCtrl[kind].store(ctrl);
+    char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", kind);
+    char v[8]; std::snprintf(v, sizeof(v), "%d", ctrl);
+    SetExtState("rea_sixty", k, v, true);
+}
+bool reasixty_dynBankPageControl(int control, int delta)
+{
+    const int k = engagedBankableKind_();
+    if (k < 0) return false;
+    if (g_dynBankCtrl[k].load() != control) return false;
+    pageDynBank_(k, delta > 0 ? 1 : (delta < 0 ? -1 : 0));
+    return true;
 }
 
 // Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /

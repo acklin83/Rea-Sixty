@@ -88,6 +88,10 @@ MediaTrack* reasixty_stepVisibleTrack(MediaTrack* cur, int step);
 // so bindings.json files saved before this encoder became bindable
 // still scroll tracks (factory behaviour).
 void reasixty_applyTrackScroll(int step);
+// Page a bankable dynamic soft-key bank from a UC1 encoder. control 2 =
+// UC1 Encoder 1, 3 = UC1 Encoder 2 (BankControl). Returns true when it
+// consumed the turn (engaged bank is bankable + set to this encoder).
+bool reasixty_dynBankPageControl(int control, int delta);
 int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
@@ -959,7 +963,11 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // normal path. The CS-readout overlay + carousel redraw below
         // fire unconditionally — they're hardware-UI side effects of
         // ANY Encoder 1 rotation, independent of the binding's action.
-        if (!uf8::bindings::dispatchEncoder(
+        // Bankable dynamic-bank paging: if the engaged sub-bank is an FX /
+        // Sends bank set to page with UC1 Encoder 1, consume the turn here.
+        if (reasixty_dynBankPageControl(/*Uc1Enc1*/ 2, step)) {
+            // paged — skip the normal encoder action
+        } else if (!uf8::bindings::dispatchEncoder(
                 uf8::bindings::ButtonId::Uc1Encoder1, step)) {
             reasixty_applyTrackScroll(step);
         }
@@ -1446,7 +1454,9 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // legacy BC-track-scroll when no binding exists (older
         // bindings.json files saved before this surface became
         // bindable) so behaviour is preserved across upgrades.
-        if (!uf8::bindings::dispatchEncoder(
+        if (reasixty_dynBankPageControl(/*Uc1Enc2*/ 3, step)) {
+            // bankable dynamic-bank paging consumed the turn
+        } else if (!uf8::bindings::dispatchEncoder(
                 uf8::bindings::ButtonId::Uc1Encoder2, step)) {
             applyBcTrackScroll(step);
         }

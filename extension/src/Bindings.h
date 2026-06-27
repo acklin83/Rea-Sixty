@@ -328,10 +328,8 @@ constexpr int kSlotsPerSubBank   = 8;
 // groups, colour palette). Default None ⇒ classic static behaviour.
 enum class DynamicBankKind : uint8_t {
     None = 0,
-    FxBank1,       // track FX 1..8
-    FxBank2,       // track FX 9..16
-    Sends,         // track sends 1..8 (visual/7.75 order, incl. HW outs)
-    Sends2,        // track sends 9..16
+    FxBank,        // track FX, paged 1-8 / 9-16 / … by a configured control
+    Sends,         // track sends, paged (visual/7.75 order, incl. HW outs)
     ParamGroups,   // parameter groups 1..8
     TrackColours,  // configured colour palette 1..8
 };

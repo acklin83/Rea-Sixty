@@ -143,6 +143,8 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+int      reasixty_dynBankCtrl(int kind);
+void     reasixty_setDynBankCtrl(int kind, int ctrl);
 double reasixty_overlayFillAlpha();
 void   reasixty_setOverlayFillAlpha(double a);
 double reasixty_overlayLineAlpha();
@@ -4758,10 +4760,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         struct DynOpt { DynamicBankKind kind; const char* label; };
         static const DynOpt kDynOpts[] = {
             { DynamicBankKind::None,         "Off (static slots)" },
-            { DynamicBankKind::FxBank1,      "FX 1-8 (focused track)" },
-            { DynamicBankKind::FxBank2,      "FX 9-16 (focused track)" },
-            { DynamicBankKind::Sends,        "Sends 1-8 (focused track)" },
-            { DynamicBankKind::Sends2,       "Sends 9-16 (focused track)" },
+            { DynamicBankKind::FxBank,       "FX (focused track, paged)" },
+            { DynamicBankKind::Sends,        "Sends (focused track, paged)" },
             { DynamicBankKind::ParamGroups,  "Parameter Groups" },
             { DynamicBankKind::TrackColours, "Track Colours" },
         };
@@ -4788,8 +4788,39 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
         // Contextual editor for the selected kind. The config is GLOBAL
         // (shared by every FX / colour bank), edited here for convenience.
-        if (curKind == DynamicBankKind::FxBank1
-            || curKind == DynamicBankKind::FxBank2) {
+
+        // "Page with" — bankable kinds (FX / Sends) page 1-8 / 9-16 / … via
+        // a chosen control. Shown for both bankable kinds.
+        if (curKind == DynamicBankKind::FxBank
+            || curKind == DynamicBankKind::Sends) {
+            static const char* kCtrlNames[] = {
+                "(no paging — stays on 1-8)", "UF8 encoder",
+                "UC1 Encoder 1", "UC1 Encoder 2", "UF8 Bank ◄ ►",
+            };
+            const int kindI = static_cast<int>(curKind);
+            const int cur = reasixty_dynBankCtrl(kindI);
+            ImGui_Text(ctx, "Page with");
+            double offs = 90.0;
+            ImGui_SameLine(ctx, &offs, nullptr);
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_BeginCombo(ctx, "##dynpagectrl",
+                    kCtrlNames[(cur >= 0 && cur < 5) ? cur : 0],
+                    /*flags*/ nullptr)) {
+                for (int o = 0; o < 5; ++o) {
+                    bool sel = (o == cur);
+                    if (ImGui_Selectable(ctx, kCtrlNames[o], &sel,
+                                         nullptr, nullptr, nullptr))
+                        reasixty_setDynBankCtrl(kindI, o);
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_TextDisabled(ctx,
+                "Only while this bank is the engaged Sub-Bank; the control "
+                "keeps its normal function otherwise.");
+            ImGui_Spacing(ctx);
+        }
+
+        if (curKind == DynamicBankKind::FxBank) {
             ImGui_TextDisabled(ctx,
                 "FX-key gestures (global — applies to every FX bank):");
             static const char* kOpNames[] = {
