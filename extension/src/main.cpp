@@ -16629,7 +16629,10 @@ void pushZonesForVisibleSlots()
                     const auto& c = info.cal;
                     const int lo = flipped ? c.vMin : c.hMin;
                     const int hi = flipped ? c.vMax : c.hMax;
-                    const int live = lo + static_cast<int>(norm * (hi - lo) + 0.5);
+                    // Distance (Y) fader is inverted (top = nearest) — mirror
+                    // setDistance(1-f01) so the live readout matches.
+                    const double useNorm = flipped ? norm : (1.0 - norm);
+                    const int live = lo + static_cast<int>(useNorm * (hi - lo) + 0.5);
                     if (flipped) vVal = live; else hVal = live;
                 }
 
@@ -16658,11 +16661,12 @@ void pushZonesForVisibleSlots()
                     g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), ch));
                 }
 
-                // Fader readout — the active axis value. No "dB" unit (this
-                // isn't a level): pass "" to blank the unit slot.
+                // Fader readout — the active axis value in DynaMount terms:
+                // FLIP off → Y (distance), FLIP on → X (left/right). No "dB"
+                // unit (this isn't a level): pass "" to blank the unit slot.
                 char dbbuf[8];
                 snprintf(dbbuf, sizeof(dbbuf), "%c%d",
-                         flipped ? 'V' : 'H', flipped ? vVal : hVal);
+                         flipped ? 'X' : 'Y', flipped ? vVal : hVal);
                 const std::string db = dbbuf;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
@@ -16670,10 +16674,11 @@ void pushZonesForVisibleSlots()
                         static_cast<uint8_t>(s), db, ""));
                 }
 
-                // Value line — full mount state (+ OFF tag when not reachable).
+                // Value line — full mount state in X/Y/R (+ OFF when offline).
+                // X = left/right (v), Y = distance (h), R = rotation (r).
                 char vlbuf[24];
-                snprintf(vlbuf, sizeof(vlbuf), "H%-3d V%-3d R%-3d%s",
-                         hVal, vVal, rVal, info.online ? "" : " OFF");
+                snprintf(vlbuf, sizeof(vlbuf), "X%-3d Y%-3d R%-3d%s",
+                         vVal, hVal, rVal, info.online ? "" : " OFF");
                 std::string vl = vlbuf;
                 if (vl.size() > 19) vl.resize(19);
                 if (bankChanged || g_lastValueLine[s] != vl) {
@@ -20182,6 +20187,30 @@ void pushTouchLearnFeedback_()
     }
 }
 
+// Persist each mount's live position (h/r/v) to global ExtState whenever it
+// changes, so the controller's state survives a restart and the faders/display
+// come back correct (Frank 2026-06-28: "global jede Änderung speichern … dann
+// stimmen sie immer, solange niemand mit der App arbeitet"). Main-thread only
+// (SetExtState); the input thread just moves the atomics. Format per enabled
+// mount: "idx,h,r,v;".
+static void persistDynaState_()
+{
+    auto& dm = uf8::dynamount::manager();
+    static std::string lastBlob;
+    std::string blob;
+    char buf[48];
+    for (int i = 0; i < uf8::dynamount::kMaxMounts; ++i) {
+        if (!dm.mountEnabled(i)) continue;
+        snprintf(buf, sizeof(buf), "%d,%d,%d,%d;",
+                 i, dm.targetH(i), dm.targetR(i), dm.targetV(i));
+        blob += buf;
+    }
+    if (blob != lastBlob) {
+        lastBlob = blob;
+        SetExtState("rea_sixty", "dynamount_state", blob.c_str(), true);
+    }
+}
+
 void onTimer()
 {
     ++g_tickCounter;
@@ -21408,6 +21437,7 @@ void onTimer()
         }
     }
     pushZonesForVisibleSlots();
+    persistDynaState_();
     // Phase 2.8 Nav Mode — decorate three zones (slot label, channel
     // number, top-soft-key LED) when overlay active; runs after the
     // track-render pass so its writes win against any stale dedup
@@ -28847,6 +28877,22 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         const char* fill = GetExtState("rea_sixty", "dynamount_fill");
         dm.setFillDir((fill && *fill == 'R') ? uf8::dynamount::FillDir::Right
                                              : uf8::dynamount::FillDir::Left);
+        // Restore the last-known mount positions (saved live by
+        // persistDynaState_). markDirty=false: the mounts physically hold this
+        // pose already, so don't re-drive them on launch. Format "idx,h,r,v;".
+        if (const char* st = GetExtState("rea_sixty", "dynamount_state");
+            st && *st)
+        {
+            const char* p = st;
+            while (*p) {
+                int idx = 0, h = 0, r = 90, v = 0;
+                if (std::sscanf(p, "%d,%d,%d,%d", &idx, &h, &r, &v) == 4)
+                    dm.setTargets(idx, h, r, v, /*markDirty=*/false);
+                const char* semi = std::strchr(p, ';');
+                if (!semi) break;
+                p = semi + 1;
+            }
+        }
     }
 
     initLog("step: deploy input-level JSFX");

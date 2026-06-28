@@ -51,6 +51,12 @@ int DynaMountManager::definedCount() {
     return n;
 }
 
+bool DynaMountManager::mountEnabled(int idx) {
+    if (idx < 0 || idx >= kMaxMounts) return false;
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    return mounts_[idx].enabled;
+}
+
 DynaMountManager::Info DynaMountManager::info(int idx) {
     Info i{};
     if (idx < 0 || idx >= kMaxMounts) return i;
@@ -107,8 +113,17 @@ int DynaMountManager::mapFader(const Calibration& c, double f01, bool horizontal
 void DynaMountManager::setDistance(int idx, double f01) {
     if (idx < 0 || idx >= kMaxMounts) return;
     Calibration c; { std::lock_guard<std::mutex> lk(cfgMx_); c = mounts_[idx].cal; }
-    mounts_[idx].tgtH.store(mapFader(c, f01, /*horizontal=*/false));
+    // Inverted: fader top (f01=1) → nearest (h-min). See header.
+    mounts_[idx].tgtH.store(mapFader(c, 1.0 - f01, /*horizontal=*/false));
     mounts_[idx].dirty.store(true);
+}
+
+void DynaMountManager::setTargets(int idx, int h, int r, int v, bool markDirty) {
+    if (idx < 0 || idx >= kMaxMounts) return;
+    mounts_[idx].tgtH.store(clampi(h, std::min(kHMin, kHMax), std::max(kHMin, kHMax)));
+    mounts_[idx].tgtR.store(clampi(r, kRMin, kRMax));
+    mounts_[idx].tgtV.store(clampi(v, std::min(kVMin, kVMax), std::max(kVMin, kVMax)));
+    if (markDirty) mounts_[idx].dirty.store(true);
 }
 
 void DynaMountManager::setHorizontal(int idx, double f01) {
@@ -140,7 +155,11 @@ double DynaMountManager::faderNorm(int idx, bool flipped) {
     const int hi = flipped ? c.vMax : c.hMax;
     const int val = flipped ? mounts_[idx].tgtV.load() : mounts_[idx].tgtH.load();
     if (hi == lo) return 0.0;
-    return std::clamp(double(val - lo) / double(hi - lo), 0.0, 1.0);
+    double n = std::clamp(double(val - lo) / double(hi - lo), 0.0, 1.0);
+    // Distance (Y) fader is inverted: device h-min (nearest) parks the motor
+    // at the TOP. Left/right (X) stays direct.
+    if (!flipped) n = 1.0 - n;
+    return n;
 }
 
 void DynaMountManager::requestDetect(int idx) {

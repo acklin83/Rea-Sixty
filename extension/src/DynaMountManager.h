@@ -78,6 +78,8 @@ public:
 
     // Number of enabled mounts (= number of pinned DynaMount strips).
     int definedCount();
+    // Cheap per-index enabled check (no string copy, unlike info()).
+    bool mountEnabled(int idx);
 
     // Snapshot of a mount's config fields for the Settings UI / feedback.
     struct Info { bool enabled; std::string name, ip; int color; Proto proto; bool online; Calibration cal; };
@@ -91,10 +93,20 @@ public:
     bool isDynaStrip(int strip) { return mountForStrip(strip) >= 0; }
 
     // ---- Control (main thread, cheap) --------------------------------------
-    // Normalized fader f in [0,1] → device units via calibration.
-    void setDistance(int idx, double f01);    // → h
-    void setHorizontal(int idx, double f01);   // → v
-    void nudgeRotation(int idx, int deltaClicks); // → r (clamped 0..180)
+    // Normalized fader f in [0,1] → device units via calibration. The distance
+    // (Y) fader is INVERTED: f=1 (fader top) = nearest = device h-min, so the
+    // user pulls up to bring the mic closer (Frank 2026-06-28).
+    void setDistance(int idx, double f01);    // → h (Y), inverted
+    void setHorizontal(int idx, double f01);   // → v (X)
+    void nudgeRotation(int idx, int deltaClicks); // → r (R, clamped 0..180)
+
+    // Set absolute device targets directly (h/r/v). markDirty=true queues a
+    // send to the mount; false just updates our state (e.g. restoring the
+    // persisted position on load — the mount already physically holds it).
+    void setTargets(int idx, int h, int r, int v, bool markDirty);
+    // Calibration home: drive (or assume) the mount at X(v)=50 centre, Y(h)=0
+    // nearest, R(r)=90 straight. The DynaMount nomenclature reference pose.
+    void home(int idx) { setTargets(idx, /*h*/0, /*r*/90, /*v*/50, true); }
 
     // ---- Feedback reads (main thread) --------------------------------------
     int  targetH(int idx);

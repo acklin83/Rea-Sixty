@@ -80,11 +80,13 @@ int main()
         EXPECT(mgr.mountForStrip(6) == 2);
         EXPECT(mgr.mountForStrip(7) == 5);
 
-        // Calibration mapping: fader 0..1 → [hMin..hMax]; rotation clamps; faderNorm round-trips.
+        // Calibration mapping. Distance (Y) fader is INVERTED: fader top
+        // (f01=1) → nearest = hMin; fader bottom (f01=0) → hMax. Left/right
+        // (X/v) stays direct. Rotation clamps; faderNorm round-trips inverted.
         Calibration cal; cal.hMin = 10; cal.hMax = 90; cal.vMin = 0; cal.vMax = 100; cal.valid = true;
         mgr.setCalibration(0, cal);
-        mgr.setDistance(0, 0.0);   EXPECT(mgr.targetH(0) == 10);
-        mgr.setDistance(0, 1.0);   EXPECT(mgr.targetH(0) == 90);
+        mgr.setDistance(0, 1.0);   EXPECT(mgr.targetH(0) == 10);   // top = nearest
+        mgr.setDistance(0, 0.0);   EXPECT(mgr.targetH(0) == 90);   // bottom = farthest
         mgr.setDistance(0, 0.5);   EXPECT(mgr.targetH(0) == 50);
         mgr.setHorizontal(0, 0.25); EXPECT(mgr.targetV(0) == 25);
 
@@ -92,9 +94,16 @@ int main()
         mgr.nudgeRotation(0, 1000); EXPECT(mgr.targetR(0) == 180);
         mgr.nudgeRotation(0, -1000); EXPECT(mgr.targetR(0) == 0);
 
-        // faderNorm reflects the active axis.
+        // setTargets sets absolute device units (used by Home + state restore).
+        mgr.setTargets(0, /*h*/0, /*r*/90, /*v*/50, false);
+        EXPECT(mgr.targetH(0) == 0 && mgr.targetR(0) == 90 && mgr.targetV(0) == 50);
+
+        // faderNorm reflects the active axis; distance is inverted, so the
+        // fader sits near the TOP (≈1.0) when the mount is at its nearest (hMin).
         mgr.setDistance(0, 0.5);
         EXPECT(mgr.faderNorm(0, /*flipped=*/false) > 0.49 && mgr.faderNorm(0, false) < 0.51);
+        mgr.setTargets(0, /*h*/cal.hMin, 90, 50, false);
+        EXPECT(mgr.faderNorm(0, /*flipped=*/false) > 0.99);   // nearest → fader top
 
         // --- serialize / deserialize round-trip ------------------------------
         std::string blob = mgr.serialize();

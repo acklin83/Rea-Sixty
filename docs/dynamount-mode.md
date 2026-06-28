@@ -108,10 +108,22 @@ Integration hooks (from a prior code map, verify against current `main.cpp`):
 - Lifecycle: optionally create the manager explicitly in `REAPER_PLUGIN_ENTRY` and `stop()` in
   QUIT instead of relying on the lazy singleton.
 
-Calibration: still FULL range for now (fader 0..1 → h/v 0..100 absolute, Frank's choice
-2026-06-28 — get the feel right first). Per-mount min/max travel + rotation offset exist
-in the data model & persist; the capture wizard is Phase 5 (Frank wants the full wizard,
-not manual fields).
+Nomenclature (DynaMount terms, 2026-06-28): **X** = left/right (device v, 50 = centre),
+**Y** = distance (device h, 0 = nearest), **R** = rotation (device r, 90 = straight).
+Display + Settings use X/Y/R. Fader = Y, FLIP = X, V-Pot = R.
 
-Phase 5 = calibration wizard (drive to reference poses, record values, `rst=2` offset).
+Fader inversion: the Y fader is INVERTED — fader TOP = nearest (h-min). Handled in
+`setDistance` (maps 1-f01), `faderNorm` (returns 1-n for distance) and the live-display
+calc in main.cpp. X stays direct.
+
+Calibration (simple, shipped 2026-06-28 — NOT the wizard): a per-mount **Home** button in
+Settings → DYNA drives the mount to the reference pose X50 Y0 R90 (`manager().home`) and
+syncs our state. Live positions (h/r/v) are saved GLOBALLY every tick by `persistDynaState_`
+→ ExtState `rea_sixty`/`dynamount_state` ("idx,h,r,v;"), restored on launch with
+markDirty=false (the mount already holds the pose). So positions stay correct across
+restarts UNLESS the DynaMount app moves a mount — then click Home to recalibrate.
+
+Phase 5 = full calibration wizard (per-mount min/max travel capture, `rst=2` offset) —
+still TODO; the min/max travel + rotation-offset fields exist & persist but aren't captured
+via UI yet (default = full range).
 Phase 6 = Gen2 TCP path (needs hardware to verify field encoding).

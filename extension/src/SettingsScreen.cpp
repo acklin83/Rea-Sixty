@@ -15917,7 +15917,7 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
     // Per-mount config table. Columns are labelled so the empty fields are
     // self-explanatory (Frank 2026-06-28: the bare row was unreadable).
     int tblFlags = 0;
-    if (ImGui_BeginTable(ctx, "##dyna_tbl", 6, &tblFlags,
+    if (ImGui_BeginTable(ctx, "##dyna_tbl", 7, &tblFlags,
                          nullptr, nullptr, nullptr)) {
         int    wFlag = ImGui_TableColumnFlags_WidthFixed;
         double wOn   = scaleW_(ctx, 30.0);
@@ -15925,12 +15925,14 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
         double wIp   = scaleW_(ctx, 140.0);
         double wCol  = scaleW_(ctx, 70.0);
         double wDet  = scaleW_(ctx, 70.0);
+        double wHome = scaleW_(ctx, 60.0);
         double wStat = scaleW_(ctx, 90.0);
         ImGui_TableSetupColumn(ctx, "On",         &wFlag, &wOn,   nullptr);
         ImGui_TableSetupColumn(ctx, "Name",       &wFlag, &wName, nullptr);
         ImGui_TableSetupColumn(ctx, "IP address", &wFlag, &wIp,   nullptr);
         ImGui_TableSetupColumn(ctx, "Colour",     &wFlag, &wCol,  nullptr);
         ImGui_TableSetupColumn(ctx, "",           &wFlag, &wDet,  nullptr);
+        ImGui_TableSetupColumn(ctx, "Calibrate",  &wFlag, &wHome, nullptr);
         ImGui_TableSetupColumn(ctx, "Status",     &wFlag, &wStat, nullptr);
         ImGui_TableHeadersRow(ctx);
 
@@ -16013,6 +16015,13 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
             if (ImGui_Button(ctx, id, nullptr, nullptr))
                 mgr.requestDetect(i);
 
+            // Calibrate — drive the mount to the reference pose X50 Y0 R90
+            // and sync our state. Recalibrate after using the DynaMount app.
+            ImGui_TableNextColumn(ctx);
+            snprintf(id, sizeof(id), "Home##dm_home_%d", i);
+            if (ImGui_Button(ctx, id, nullptr, nullptr))
+                mgr.home(i);
+
             // Status.
             ImGui_TableNextColumn(ctx);
             const char* status = in.online ? protoName(in.proto)
@@ -16024,9 +16033,11 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "  Motor speed is fixed (9). Calibration wizard: coming soon. "
-        "FLIP swaps a mount strip between distance and left/right; "
-        "V-Pot is rotation.");
+        "  Fader = Y (distance, fader up = nearest); FLIP = X (left/right); "
+        "V-Pot = R (rotation). Calibrate (Home) sets the mount to the "
+        "reference pose X50 Y0 R90. Positions are saved globally, so they "
+        "stay correct until the DynaMount app moves a mount — then just "
+        "recalibrate. Motor speed is fixed (9).");
 }
 
 void SettingsScreen::drawModes(ImGui_Context* ctx)
