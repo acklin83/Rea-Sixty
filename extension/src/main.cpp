@@ -13625,6 +13625,21 @@ std::array<std::atomic<uint16_t>, 8> g_motorTargetPb{};   // mirror of last driv
 // at release time.
 std::array<std::atomic<double>, 8> g_dynFaderPendingNorm{};
 std::array<std::atomic<bool>,   8> g_dynFaderPendingValid{};
+
+// pb14 → normalised 0..1 for a DynaMount fader. The physical fader ends don't
+// quite reach pb 0 / max (firmware readback offset), so raw norm tops out
+// ~0.98 and bottoms ~0.01 and the user can't hit the axis extremes (Frank
+// 2026-06-28: "Y nur runter bis 1, hoch bis 98"). Expand by a small margin at
+// both ends and clamp so the last few % snap to 0 / 1.
+static inline double dynaFaderNorm_(uint16_t pb14)
+{
+    constexpr double kMargin = 0.03;
+    double n = static_cast<double>(pb14) / static_cast<double>(kUf8FaderPbMax);
+    n = (n - kMargin) / (1.0 - 2.0 * kMargin);
+    if (n < 0.0) n = 0.0;
+    if (n > 1.0) n = 1.0;
+    return n;
+}
 // Per-strip motor engage state. The firmware silently discards drive frames
 // while a fader is limp (PM invariant #4), and we deliberately leave the
 // motor limp after a no-move tap (matches SSL 360°: touch-only release = no
@@ -13873,8 +13888,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 if (g_selectionMode.load() == SelectionMode::DynaMount) {
                     const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                     if (mnt >= 0) {
-                        g_dynFaderPendingNorm[strip].store(
-                            double(pb14) / double(kUf8FaderPbMax));
+                        g_dynFaderPendingNorm[strip].store(dynaFaderNorm_(pb14));
                         g_dynFaderPendingValid[strip].store(true);
                         if (g_dev)
                             g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
@@ -14493,10 +14507,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         g_touchReported[strip].store(false);
                         if (g_dynFaderPendingValid[strip].load()) {
                             const double norm = g_dynFaderPendingNorm[strip].load();
+                            // No FLIP → X (horizontal); FLIP → Y (distance).
                             if (g_flip.load())
-                                uf8::dynamount::manager().setHorizontal(mnt, norm);
-                            else
                                 uf8::dynamount::manager().setDistance(mnt, norm);
+                            else
+                                uf8::dynamount::manager().setHorizontal(mnt, norm);
                             g_dynFaderPendingValid[strip].store(false);
                         }
                     }
@@ -16620,20 +16635,22 @@ void pushZonesForVisibleSlots()
                 // isn't moved until release (send-on-release), but the SCREEN
                 // should still follow the fader. Map the cached pending norm
                 // through the same calibration mapFader uses and overwrite the
-                // active axis (FLIP → v, else h) so the readout / value line
-                // track the drag in real time (Frank 2026-06-28).
+                // active axis so the readout / value line track the drag in
+                // real time. Fader axis: no FLIP → X (horizontal, v); FLIP → Y
+                // (distance, h, inverted) (Frank 2026-06-28).
+                const bool faderDist = flipped;
                 if (g_touchReported[s].load() && g_dynFaderPendingValid[s].load()) {
                     double norm = g_dynFaderPendingNorm[s].load();
                     if (norm < 0.0) norm = 0.0;
                     if (norm > 1.0) norm = 1.0;
                     const auto& c = info.cal;
-                    const int lo = flipped ? c.vMin : c.hMin;
-                    const int hi = flipped ? c.vMax : c.hMax;
+                    const int lo = faderDist ? c.hMin : c.vMin;
+                    const int hi = faderDist ? c.hMax : c.vMax;
                     // Distance (Y) fader is inverted (top = nearest) — mirror
                     // setDistance(1-f01) so the live readout matches.
-                    const double useNorm = flipped ? norm : (1.0 - norm);
+                    const double useNorm = faderDist ? (1.0 - norm) : norm;
                     const int live = lo + static_cast<int>(useNorm * (hi - lo) + 0.5);
-                    if (flipped) vVal = live; else hVal = live;
+                    if (faderDist) hVal = live; else vVal = live;
                 }
 
                 // Upper scribble — mount name (≤7 chars, folded to Latin-1).
@@ -16662,11 +16679,11 @@ void pushZonesForVisibleSlots()
                 }
 
                 // Fader readout — the active axis value in DynaMount terms:
-                // FLIP off → Y (distance), FLIP on → X (left/right). No "dB"
-                // unit (this isn't a level): pass "" to blank the unit slot.
+                // no FLIP → X (horizontal), FLIP → Y (distance). No "dB" unit
+                // (this isn't a level): pass "" to blank the unit slot.
                 char dbbuf[8];
                 snprintf(dbbuf, sizeof(dbbuf), "%c%d",
-                         flipped ? 'X' : 'Y', flipped ? vVal : hVal);
+                         faderDist ? 'Y' : 'X', faderDist ? hVal : vVal);
                 const std::string db = dbbuf;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
@@ -16696,7 +16713,9 @@ void pushZonesForVisibleSlots()
                 // motor-enable drives there cleanly. Mirrors the track path
                 // at ~17549.
                 if (!g_touchReported[s].load()) {
-                    const double fn = dm.faderNorm(mnt, flipped);
+                    // faderNorm(idx, horizontal): true → X (left/right), false →
+                    // Y (distance, inverted). No FLIP shows X, FLIP shows Y.
+                    const double fn = dm.faderNorm(mnt, /*horizontal=*/!faderDist);
                     uint16_t pb = static_cast<uint16_t>(
                         fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
                     if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
