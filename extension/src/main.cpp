@@ -1722,8 +1722,13 @@ void pgActiveSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
                       struct project_config_extension_t* /*reg*/)
 {
     const std::string bits = uf8::param_groups::activeFlagsBits();
-    if (bits.find('1') == std::string::npos) return;   // none active → no line
-    ctx->AddLine("PG_ACTIVE %s", bits.c_str());
+    if (bits.find('1') != std::string::npos)
+        ctx->AddLine("PG_ACTIVE %s", bits.c_str());
+    // Per-group names — one `PG_NAME <slot> "<name>"` line per named group.
+    for (int i = 0; i < uf8::param_groups::kSlotCount; ++i) {
+        const std::string nm = uf8::param_groups::groupName(i);
+        if (!nm.empty()) ctx->AddLine("PG_NAME %d \"%s\"", i, nm.c_str());
+    }
 }
 
 bool pgActiveProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
@@ -1733,18 +1738,34 @@ bool pgActiveProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
     if (!line || !*line) return false;
     const char* p = line;
     while (*p == ' ' || *p == '\t') ++p;
-    if (std::strncmp(p, "PG_ACTIVE", 9) != 0) return false;
-    p += 9;
-    while (*p == ' ' || *p == '\t') ++p;
-    uf8::param_groups::applyActiveFlags(p);
-    return true;
+    if (std::strncmp(p, "PG_ACTIVE", 9) == 0) {
+        p += 9;
+        while (*p == ' ' || *p == '\t') ++p;
+        uf8::param_groups::applyActiveFlags(p);
+        return true;
+    }
+    if (std::strncmp(p, "PG_NAME", 7) == 0) {
+        p += 7;
+        while (*p == ' ' || *p == '\t') ++p;
+        int slot = 0;
+        while (*p >= '0' && *p <= '9') { slot = slot * 10 + (*p - '0'); ++p; }
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '"') ++p;
+        std::string name;
+        while (*p && *p != '"') name += *p++;
+        uf8::param_groups::applyGroupName(slot, name.c_str());
+        return true;
+    }
+    return false;
 }
 
 void pgActiveBeginLoad_(bool /*isUndo*/,
                         struct project_config_extension_t* /*reg*/)
 {
-    // New / loading project: all groups off until a PG_ACTIVE line restores them.
+    // New / loading project: all groups off + unnamed until the project's
+    // PG_ACTIVE / PG_NAME lines restore them.
     uf8::param_groups::resetActiveFlags();
+    uf8::param_groups::resetGroupNames();
 }
 
 project_config_extension_t g_pgActiveProjConfig{

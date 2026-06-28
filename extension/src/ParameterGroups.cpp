@@ -289,6 +289,36 @@ void applyActiveFlags(const char* bits)
         g_state.slots[i].active = (bits[i] == '1');
 }
 
+void resetGroupNames()
+{
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (auto& s : g_state.slots) s.name.clear();
+}
+
+std::string groupName(int slot)
+{
+    if (slot < 0 || slot >= kSlotCount) return {};
+    std::lock_guard<std::mutex> lk(g_mutex);
+    return g_state.slots[slot].name;
+}
+
+void setGroupName(int slot, const char* name)
+{
+    if (slot < 0 || slot >= kSlotCount) return;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_state.slots[slot].name = name ? name : "";
+    }
+    MarkProjectDirty(nullptr);   // name is per-project now
+}
+
+void applyGroupName(int slot, const char* name)
+{
+    if (slot < 0 || slot >= kSlotCount) return;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_state.slots[slot].name = name ? name : "";
+}
+
 bool isGroupActive(int slotIdx)
 {
     if (slotIdx < 0 || slotIdx >= kSlotCount) return false;
@@ -514,11 +544,11 @@ void load()
 {
     std::lock_guard<std::mutex> lk(g_mutex);
 
-    // Reset NAME + multi-select defaults only — the `active` flags are
-    // per-project (loaded by the projectconfig hook), so don't clobber them
-    // here or a global load racing a project load would wipe them.
+    // Only the multi-select toggle is global now. Group NAMES + on/off are
+    // per-project (loaded by the projectconfig hook in main.cpp), so this
+    // never touches them — a global load racing a project load can't wipe
+    // the project's names/active.
     g_state.multiSelectAsTempGroup = true;
-    for (auto& s : g_state.slots) s.name.clear();
 
     std::string contents;
     if (!readFile_(configPath_(), contents) || contents.empty()) return;
@@ -531,39 +561,19 @@ void load()
     bool b = false;
     if (getBoolI_(root, "multi_select_as_temp_group", b))
         g_state.multiSelectAsTempGroup = b;
-
-    if (auto* arr = root->get_item_by_name("slots");
-        arr && arr->is_array() && arr->m_array)
-    {
-        const int n = std::min<int>(arr->m_array->GetSize(), kSlotCount);
-        for (int i = 0; i < n; ++i) {
-            wdl_json_element* so = arr->enum_item(i);
-            if (!so || !so->is_object()) continue;
-            getStrI_(so, "name", g_state.slots[i].name);
-            // `active` is per-project now — ignore any legacy global value.
-        }
-    }
 }
 
 void save()
 {
     // No mutex re-entry: this is the only writer, called from main-thread
     // or from input-thread dispatchers; either way single-threaded per call.
+    // Global file now holds ONLY the multi-select toggle; names + on/off are
+    // per-project (.rpp projectconfig).
     std::ostringstream os;
     os << "{\n";
     os << "  \"format_version\": 1,\n";
     os << "  \"multi_select_as_temp_group\": "
-       << (g_state.multiSelectAsTempGroup ? "true" : "false") << ",\n";
-    os << "  \"slots\": [\n";
-    for (int i = 0; i < kSlotCount; ++i) {
-        os << "    { \"name\": ";
-        appendEscaped_(os, g_state.slots[i].name);
-        os << ", \"active\": "
-           << (g_state.slots[i].active ? "true" : "false") << " }";
-        if (i + 1 < kSlotCount) os << ",";
-        os << "\n";
-    }
-    os << "  ]\n";
+       << (g_state.multiSelectAsTempGroup ? "true" : "false") << "\n";
     os << "}\n";
 
     ensureConfigDir_();

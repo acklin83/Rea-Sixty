@@ -72,13 +72,18 @@ void clearGroupMembership(int slotIdx);
 void toggleGroupActive(int slotIdx);
 bool isGroupActive(int slotIdx);
 
-// Per-project active-flag persistence helpers, driven by the projectconfig
-// extension. resetActiveFlags() = all off (new project / BeginLoad);
-// activeFlagsBits() serialises the 8 flags as "01010000"; applyActiveFlags()
-// restores them on project load.
+// Per-project active-flag + name persistence, driven by the projectconfig
+// extension. Names AND on/off are per-project now (only the multi-select
+// toggle stays global); a new/empty project loads with every group off and
+// unnamed. reset*() = BeginLoad defaults; *Bits/groupName serialise; apply*
+// restore on load (no dirty); setGroupName edits + marks the project dirty.
 void        resetActiveFlags();
 std::string activeFlagsBits();
 void        applyActiveFlags(const char* bits);
+void        resetGroupNames();
+std::string groupName(int slot);
+void        setGroupName(int slot, const char* name);   // + marks dirty
+void        applyGroupName(int slot, const char* name); // load: no dirty
 
 // Multi-select fallback (Settings checkbox).
 bool multiSelectAsTempGroup();

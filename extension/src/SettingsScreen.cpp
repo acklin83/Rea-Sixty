@@ -17081,8 +17081,8 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
                                         nameBuf, sizeof(nameBuf),
                                         nullptr, nullptr))
             {
-                st.slots[slot].name = nameBuf;
-                uf8::param_groups::save();
+                // Name is per-project now → set + mark the project dirty.
+                uf8::param_groups::setGroupName(slot, nameBuf);
             }
 
             // Col 4 — Member count.
