@@ -5886,7 +5886,8 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
     if (sz <= 0 || curK < 0 || curK >= sz) return;
     auto label = [&](int k) -> std::string {
         if (k < 0 || k >= sz) return {};
-        return fxCycleDisplayName_(tr, ringFxIdx[k]);
+        // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX name once.
+        return utf8ToLatin1(fxCycleDisplayName_(tr, ringFxIdx[k]));
     };
     // Wrap-aware neighbour resolution. When Wrap Plugin Cycle is off,
     // prev at the first slot and next at the last slot resolve to
@@ -5898,7 +5899,9 @@ void showCycleCarousel_(MediaTrack* tr, int curK,
     const int nxtK  = wrap ? ((curK + 1) % sz)      : (curK + 1);
     char trkName[128] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
-    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    // UC1 LCD renders Latin-1 — fold the UTF-8 track name once at source.
+    std::string header = trkName[0] ? utf8ToLatin1(std::string(trkName))
+                                    : std::string{};
     g_uc1_surface->showInstanceCarousel(
         label(prevK), label(curK), label(nxtK), header);
 }
@@ -5923,14 +5926,17 @@ void showFavCarousel_(MediaTrack* tr, const std::vector<int>& slots, int curK,
         const bool ok = isBc ? resolveBcFav(slots[k], add, lbl)
                              : resolveCsFav(slots[k], add, lbl);
         if (!ok) return {};
-        return !lbl.empty() ? lbl : add;
+        // UC1 LCD = Latin-1; fold the favourite label once at source.
+        return utf8ToLatin1(!lbl.empty() ? lbl : add);
     };
     const bool wrap = g_wrapPluginCycle.load();
     const int prevK = wrap ? ((curK - 1 + sz) % sz) : (curK - 1);
     const int nxtK  = wrap ? ((curK + 1) % sz)      : (curK + 1);
     char trkName[128] = {0};
     GetSetMediaTrackInfo_String(tr, "P_NAME", trkName, false);
-    std::string header = trkName[0] ? std::string(trkName) : std::string{};
+    // UC1 LCD renders Latin-1 — fold the UTF-8 track name once at source.
+    std::string header = trkName[0] ? utf8ToLatin1(std::string(trkName))
+                                    : std::string{};
     g_uc1_surface->showInstanceCarousel(
         label(prevK), label(curK), label(nxtK), header);
 }
@@ -15653,7 +15659,7 @@ void pushUc1NavCarousel()
             if (rgnName.empty()) {
                 header = "MARKERS";
             } else {
-                header = "M: " + rgnName;
+                header = "M: " + utf8ToLatin1(rgnName);  // UC1 LCD = Latin-1
                 if (header.size() > 14) header.resize(14);
             }
             break;
@@ -15699,7 +15705,7 @@ void pushUc1NavCarousel()
                 uf8::nav::Overlay::enumerateFiltered(
                     uf8::nav::View::MarkersInRegion,
                     scopedRegionIdx, &uc1Items);
-                header = "IN: " + rgnName;
+                header = "IN: " + utf8ToLatin1(rgnName);  // UC1 LCD = Latin-1
                 if (header.size() > 14) header.resize(14);
             } else {
                 uf8::nav::Overlay::enumerateFiltered(
@@ -15725,7 +15731,9 @@ void pushUc1NavCarousel()
 
     auto nameOf = [&](int idx) -> std::string {
         if (idx < 0 || idx >= n) return std::string();
-        std::string s = items[idx].name;
+        // UC1 LCD = Latin-1; fold UTF-8 → Latin-1 BEFORE the byte-wise
+        // truncation so a multi-byte umlaut never gets split.
+        std::string s = utf8ToLatin1(items[idx].name);
         if (s.size() > 14) s.resize(14);
         return s;
     };
@@ -24889,7 +24897,7 @@ bool reasixty_recUc1ReadoutText(MediaTrack* tr,
         {
             const int chan = recInput & 0x3FF;
             if (const char* nm = GetInputChannelName(chan); nm && *nm) {
-                std::string s2(nm);
+                std::string s2 = utf8ToLatin1(nm);  // UC1 LCD = Latin-1
                 if ((recInput & 1024) != 0) {
                     // Stereo pair: append "/<n+1>" from trailing digit.
                     size_t numStart = s2.size();

@@ -3307,7 +3307,7 @@ void UC1Surface::renderPresetsSubscreen_()
     const std::string prev = (curIdx > 0) ? "..." : "";
     const std::string next = (curIdx + 1 < numPresets) ? "..." : "";
     sendListBody("", prev,
-        name[0] ? std::string{name} : std::string{"<no name>"},
+        name[0] ? utf8ToLatin1(name) : std::string{"<no name>"},  // UC1 = Latin-1
         next, "");
 }
 
@@ -4721,7 +4721,10 @@ void UC1Surface::refresh()
         // not the LCD label).
         constexpr int kCentralLabelW = 7;
         char labelBuf[kCentralLabelW + 1] = {0};
-        std::strncpy(labelBuf, baseLabel.c_str(), kCentralLabelW);
+        // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX label
+        // BEFORE the byte-wise strncpy so an umlaut never gets split.
+        const std::string foldedLabel = utf8ToLatin1(baseLabel);
+        std::strncpy(labelBuf, foldedLabel.c_str(), kCentralLabelW);
         const int total = !instanceTrack ? 0
             : useBc ? bcInstanceCount(instanceTrack)
                     : csInstanceCount(instanceTrack);
