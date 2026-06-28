@@ -7,8 +7,12 @@ Protocol was reverse-engineered & live-verified; reference material lives in the
 ## Protocol (Gen1 — Frank's units, LIVE-VERIFIED)
 - Plain HTTP/1.0 GET on port 80, single endpoint, no auth, Webduino firmware:
   `GET /move?h=<0-100>&r=<0-180>&v=<0-100>&s=9` → `{"result": "success"}`
-- `h` = distance, `v` = left/right, `r` = rotation, `s` = speed (fixed 9).
-  `roff` = rotation offset, `rst` = reset cmd (1 calibrate, 4 home).
+- `h` = **Horizontal** (left/right), `v` = **Vertical** (= distance), `r` = rotation,
+  `s` = speed (fixed 9). `roff` = rotation offset, `rst` = reset cmd (1 calibrate, 4 home).
+  NOTE: the field letters were originally documented as "h=distance, v=left/right" but
+  hardware testing 2026-06-28 (Frank) showed they're the OTHER way round — h drives the
+  horizontal axis, v the distance. Our internal targets keep the old names (tgtH=distance,
+  tgtV=left/right) and the worker REMAPS at the gen1Move send (device h←tgtV, device v←tgtH).
 - **Open-loop**: no position feedback — the controller owns the h/r/v state.
 - Frank's mounts: `192.168.177.253`, `192.168.177.254`.
 - Gen2 (Axial-2/RIZR): raw TCP :5000, `a<axial>f<focus>r<rot><speed>#` — scaffolded only,

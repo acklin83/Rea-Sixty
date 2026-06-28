@@ -9,6 +9,11 @@ namespace uf8::dynamount {
 
 using clock = std::chrono::steady_clock;
 
+static int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        clock::now().time_since_epoch()).count();
+}
+
 DynaMountManager::~DynaMountManager() { stop(); }
 
 void DynaMountManager::start() {
@@ -137,7 +142,10 @@ void DynaMountManager::nudgeRotation(int idx, int deltaClicks) {
     if (idx < 0 || idx >= kMaxMounts || deltaClicks == 0) return;
     int r = clampi(mounts_[idx].tgtR.load() + deltaClicks, kRMin, kRMax);
     mounts_[idx].tgtR.store(r);
-    mounts_[idx].dirty.store(true);
+    // Debounced: don't send now — stamp the change. The worker commits the
+    // rotation 1s after the last turn (Frank 2026-06-28). The display reads
+    // tgtR directly, so the value still updates live on screen.
+    mounts_[idx].rotPendingMs.store(nowMs());
 }
 
 // ---- feedback ---------------------------------------------------------------
@@ -266,6 +274,15 @@ void DynaMountManager::workerLoop() {
                 m.online.store(p == Proto::Gen1Http || p == Proto::Gen2Tcp);
             }
 
+            // Debounced rotation: 1s after the last V-Pot turn, promote the
+            // pending rotation to a real send. Fader (h/v) changes set dirty
+            // directly and send immediately.
+            const int64_t rp = m.rotPendingMs.load();
+            if (rp != 0 && nowMs() - rp >= 1000) {
+                m.rotPendingMs.store(0);
+                m.dirty.store(true);
+            }
+
             // motion: only if dirty and rate-limit elapsed
             if (!m.dirty.load()) continue;
             if (now - lastSend[i] < kMinSpacing) continue;
@@ -278,7 +295,13 @@ void DynaMountManager::workerLoop() {
             if (p == Proto::Unknown) { p = detectPassive(ip); m.proto.store(p); }
             bool ok = false;
             if (p == Proto::Gen1Http) {
-                Result res = gen1Move(ip, h, r, v);
+                // Axis remap: the DynaMount query fields are h = Horizontal and
+                // v = Vertical (= distance) — the OPPOSITE of our internal
+                // tgtH (distance) / tgtV (left-right) names. Confirmed on
+                // hardware (Frank 2026-06-28: axes were swapped). So the device
+                // h-field gets our horizontal target (tgtV) and the device
+                // v-field gets our distance target (tgtH).
+                Result res = gen1Move(ip, /*device h=*/v, r, /*device v=*/h);
                 ok = res.success;
             }
             m.online.store(ok);

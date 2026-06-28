@@ -47,12 +47,18 @@ struct Mount {
     Calibration cal;
 
     // --- live (atomic): main thread writes targets, worker reads ------------
-    std::atomic<int>  tgtH{50};
+    // Defaults = the home pose so a never-homed mount reads X50 Y0 R90:
+    // tgtH = distance (Y) 0 = nearest, tgtV = left/right (X) 50 = centre.
+    std::atomic<int>  tgtH{0};
     std::atomic<int>  tgtR{90};
-    std::atomic<int>  tgtV{0};
+    std::atomic<int>  tgtV{50};
     std::atomic<bool> dirty{false};
     std::atomic<bool> online{false};
     std::atomic<Proto> proto{Proto::Unknown};
+    // Rotation debounce: nudgeRotation stamps this (steady-clock ms) instead of
+    // setting dirty; the worker only commits the rotation after 1s of no
+    // further turning, so spinning the V-Pot doesn't stream commands. 0 = none.
+    std::atomic<int64_t> rotPendingMs{0};
 
     // --- worker-only bookkeeping --------------------------------------------
     int sentH = -1, sentR = -1, sentV = -1;
