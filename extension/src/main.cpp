@@ -4885,6 +4885,12 @@ static void applyDynBankReq_(uint32_t enc)
                     break;
                 case FxBankOp::FxSolo:
                     fxSoloToggle_(tr, fxIdx);
+                    // The soloed FX must also become the focused one — else
+                    // the surface + GUI keep showing the previously focused
+                    // plug-in instead of the one we just auditioned.
+                    uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
+                                                std::memory_order_relaxed);
+                    landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
                     break;
                 case FxBankOp::Offline:
                     TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
