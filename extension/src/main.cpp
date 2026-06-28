@@ -1322,6 +1322,10 @@ std::atomic<uint32_t> g_dynBankReq{0};
 // Page-delta for a bankable dynamic bank (FX / Sends), posted from the input
 // thread (UF8 encoder / Bank buttons) and drained on the main thread.
 std::atomic<int> g_dynBankPageReq{0};
+// After an explicit FX-bank Focus/Solo, suppress chaseLastTouchedFx until this
+// timestamp so REAPER's stale last-touched FX (e.g. a just-bypassed BC) can't
+// yank focus + the GUI back off the FX the user just picked. ms (nowMs_).
+std::atomic<int64_t> g_dynFxFocusLockUntilMs{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static int  engagedBankableKind_();                  // any thread
 static void pageDynBank_(int kind, int delta);       // main thread
@@ -4902,6 +4906,7 @@ static void applyDynBankReq_(uint32_t enc)
                     // it keeps showing the previously focused plug-in.
                     triggerPluginModeFollowSync_();
                     fxBankRetargetFocusGui_(tr, fxIdx);
+                    g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
                     break;
                 case FxBankOp::Float: {
                     const bool open =
@@ -4922,6 +4927,7 @@ static void applyDynBankReq_(uint32_t enc)
                     landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
                     triggerPluginModeFollowSync_();
                     fxBankRetargetFocusGui_(tr, fxIdx);
+                    g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
                     break;
                 case FxBankOp::Offline:
                     TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
@@ -17862,6 +17868,14 @@ void chaseLastTouchedFx()
     // put. 250 ms covers continuous edits (timer ~30 ms) — focus
     // resumes following last-touched the moment the user lets go.
     if (uf8::param_groups::millisSinceLastBroadcast() < 250) {
+        lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+        return;
+    }
+    // FX-bank Focus/Solo lock: the user just explicitly picked an FX, so don't
+    // let a stale last-touched FX (e.g. the BC they last edited, now bypassed)
+    // pull focus + the GUI back off it. Absorb the tick (update dedup so the
+    // stale tuple reads "unchanged" once the lock lifts) and stay put.
+    if (nowMs_() < g_dynFxFocusLockUntilMs.load()) {
         lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
         return;
     }
