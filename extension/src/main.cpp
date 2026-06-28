@@ -1328,6 +1328,8 @@ static void pageDynBank_(int kind, int delta);       // main thread
 static void tickDynBankPaging_();                    // main thread (onTimer)
 static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
                                    bool setFocusedDomain, bool setBcAnchor);
+int  stripInstanceActiveFx_(MediaTrack* tr);         // focused FX index
+void landFxCursor_(MediaTrack* tr, const std::vector<int>& ring, int k);
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step, bool ownSettings = false);
@@ -4797,7 +4799,10 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             info.label = s.empty() ? "FX" : s;
             const bool enabled = TrackFX_GetEnabled(tr, fxIdx);
             const bool offline = TrackFX_GetOffline(tr, fxIdx);
-            info.led = (enabled && !offline) ? 2 : 1;  // bright on, dim if off
+            // Focused FX bright, other enabled FX dim, bypassed/offline dark.
+            if (!enabled || offline)                    info.led = 0;
+            else if (fxIdx == stripInstanceActiveFx_(tr)) info.led = 2;
+            else                                          info.led = 1;
             return info;
         }
         case DK::ParamGroups: {
@@ -4914,11 +4919,13 @@ static void applyDynBankReq_(uint32_t enc)
             const auto op = static_cast<FxBankOp>(reasixty_fxBankOp(gesture));
             switch (op) {
                 case FxBankOp::Focus:
-                    syncInstanceFromFxIdx_(tr, fxIdx, /*setFocusedDomain*/ true,
-                                           /*setBcAnchor*/ true);
                     uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                                 std::memory_order_relaxed);
-                    g_bankDirty.store(true);
+                    // Full focus landing (like the FX-Cycle): updates the
+                    // colour-bar readout (setStripInstanceFx_) + the focused-
+                    // plugin GUI follow immediately, not only after a param
+                    // is touched. A single-element ring lands on this FX.
+                    landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
                     break;
                 case FxBankOp::Float: {
                     const bool open =
