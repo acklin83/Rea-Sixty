@@ -261,7 +261,32 @@ void toggleGroupActive(int slotIdx)
 {
     if (slotIdx < 0 || slotIdx >= kSlotCount) return;
     g_state.slots[slotIdx].active = !g_state.slots[slotIdx].active;
-    save();
+    // on/off is per-project → dirty the project so the projectconfig hook
+    // serialises it; no global save (that file holds names only now).
+    MarkProjectDirty(nullptr);
+}
+
+void resetActiveFlags()
+{
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (auto& s : g_state.slots) s.active = false;
+}
+
+std::string activeFlagsBits()
+{
+    std::lock_guard<std::mutex> lk(g_mutex);
+    std::string bits(kSlotCount, '0');
+    for (int i = 0; i < kSlotCount; ++i)
+        if (g_state.slots[i].active) bits[i] = '1';
+    return bits;
+}
+
+void applyActiveFlags(const char* bits)
+{
+    if (!bits) return;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (int i = 0; i < kSlotCount && bits[i]; ++i)
+        g_state.slots[i].active = (bits[i] == '1');
 }
 
 bool isGroupActive(int slotIdx)
@@ -489,8 +514,11 @@ void load()
 {
     std::lock_guard<std::mutex> lk(g_mutex);
 
-    // Reset to defaults first so a missing/empty file gives a clean slate.
-    g_state = State{};
+    // Reset NAME + multi-select defaults only — the `active` flags are
+    // per-project (loaded by the projectconfig hook), so don't clobber them
+    // here or a global load racing a project load would wipe them.
+    g_state.multiSelectAsTempGroup = true;
+    for (auto& s : g_state.slots) s.name.clear();
 
     std::string contents;
     if (!readFile_(configPath_(), contents) || contents.empty()) return;
@@ -512,8 +540,7 @@ void load()
             wdl_json_element* so = arr->enum_item(i);
             if (!so || !so->is_object()) continue;
             getStrI_(so, "name", g_state.slots[i].name);
-            bool a = false;
-            if (getBoolI_(so, "active", a)) g_state.slots[i].active = a;
+            // `active` is per-project now — ignore any legacy global value.
         }
     }
 }

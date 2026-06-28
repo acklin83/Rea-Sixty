@@ -1714,6 +1714,46 @@ project_config_extension_t g_slotsProjConfig{
     nullptr
 };
 
+// projectconfig hooks for Parameter-Group ON/OFF flags — per-project so a new
+// empty project always loads with every group off (membership is already
+// per-project via the tracks' P_EXT mask). Group NAMES stay global
+// (parameter_groups.json). One line: `PG_ACTIVE <8 bits>` e.g. PG_ACTIVE 01010000.
+void pgActiveSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                      struct project_config_extension_t* /*reg*/)
+{
+    const std::string bits = uf8::param_groups::activeFlagsBits();
+    if (bits.find('1') == std::string::npos) return;   // none active → no line
+    ctx->AddLine("PG_ACTIVE %s", bits.c_str());
+}
+
+bool pgActiveProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                          bool /*isUndo*/,
+                          struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "PG_ACTIVE", 9) != 0) return false;
+    p += 9;
+    while (*p == ' ' || *p == '\t') ++p;
+    uf8::param_groups::applyActiveFlags(p);
+    return true;
+}
+
+void pgActiveBeginLoad_(bool /*isUndo*/,
+                        struct project_config_extension_t* /*reg*/)
+{
+    // New / loading project: all groups off until a PG_ACTIVE line restores them.
+    uf8::param_groups::resetActiveFlags();
+}
+
+project_config_extension_t g_pgActiveProjConfig{
+    pgActiveProcessLine_,
+    pgActiveSaveExt_,
+    pgActiveBeginLoad_,
+    nullptr
+};
+
 // Temporary-selection-set persistence: TAB-joined GUIDs in ProjExtState
 // key "temp_selset", recall flag in "temp_selset_active" ("1" / ""). Per-
 // project (so a working set saved in Project A doesn't leak into Project
@@ -28701,6 +28741,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // (reliable). Preemptive migration so the slots don't bite us the
     // way temp_selset did. Frank 2026-05-27.
     plugin_register("projectconfig", &g_slotsProjConfig);
+    // Parameter-Group ON/OFF flags per project (PG_ACTIVE) → .rpp.
+    plugin_register("projectconfig", &g_pgActiveProjConfig);
     // Per-favourite-instance memory for non-copied CS sections → .rpp.
     plugin_register("projectconfig", &g_csFavMemProjConfig);
     // BC analog — per-favourite BC memory (own-settings cycle) → .rpp.

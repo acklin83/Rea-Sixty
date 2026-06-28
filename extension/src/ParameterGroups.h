@@ -66,9 +66,19 @@ void removeSelectedFromAllGroups();
 // Wipe membership of group `slotIdx` across every track in the project.
 void clearGroupMembership(int slotIdx);
 
-// Toggle the `active` flag (persists via save()).
+// Toggle the `active` flag. The on/off state is PER-PROJECT (persisted via
+// the projectconfig hook in main.cpp), so this only flips + marks the
+// project dirty — a new/empty project always loads with every group off.
 void toggleGroupActive(int slotIdx);
 bool isGroupActive(int slotIdx);
+
+// Per-project active-flag persistence helpers, driven by the projectconfig
+// extension. resetActiveFlags() = all off (new project / BeginLoad);
+// activeFlagsBits() serialises the 8 flags as "01010000"; applyActiveFlags()
+// restores them on project load.
+void        resetActiveFlags();
+std::string activeFlagsBits();
+void        applyActiveFlags(const char* bits);
 
 // Multi-select fallback (Settings checkbox).
 bool multiSelectAsTempGroup();
