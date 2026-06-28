@@ -40,10 +40,15 @@ Built + compiles clean + tests pass + deployed; **awaiting Frank HW test.**
 - `stripToVisibleSlot` (`main.cpp:1177`) branch: in DynaMount mode the N enabled
   mounts pin strips to one side (Left 0..N-1 / Right 8-N..7), return -1 (no track);
   the rest show tracks PUSHED past the reserved block (the AUTO-fill analogue).
-- Fader input intercept (`main.cpp` ~13859): mount strip → `setDistance` (FLIP off, h)
-  / `setHorizontal` (FLIP on, v), echoes pos back, skips track volume. Called straight
-  from the input thread — manager setters are atomics, no REAPER API touched.
-- V-Pot input intercept (~14598): mount strip → `nudgeRotation` (always r).
+- Fader input is **send-on-release** (Frank 2026-06-28: open-loop mount shouldn't chase
+  every drag frame). FF 21 03 only caches the latest norm (`g_dynFaderPendingNorm`);
+  the FF 20 02 touch-OFF edge pushes it ONCE → `setDistance` (FLIP off, h) /
+  `setHorizontal` (FLIP on, v). Echo keeps the fader's own firmware buffer synced so
+  it doesn't jump on release. Called from the input thread (atomic setters, no REAPER API).
+- V-Pot input intercept: mount strip → `nudgeRotation` (always r) — still live per detent.
+- FLIP re-park fix: the dyna motor feedback re-engages a LIMP fader (bit-7 echo +
+  motor-enable) before driving, so toggling FLIP after a touch actually moves the fader
+  to the new axis (it was staying limp → plain frames discarded by firmware).
 - Feedback block in the big render loop (before the empty-strip branch): name → upper
   scribble, "DYNA" → CS-type zone, mount slot → channel digit, active-axis value →
   fader-dB zone, "H.. V.. R.." → value line, motor fader → `faderNorm(flipped)`,
@@ -102,6 +107,11 @@ Integration hooks (from a prior code map, verify against current `main.cpp`):
   bottom = `H.. R..`/`V.. R..`/`OFFLINE`, colorbar = mount color, banner = "DynaMount".
 - Lifecycle: optionally create the manager explicitly in `REAPER_PLUGIN_ENTRY` and `stop()` in
   QUIT instead of relying on the lazy singleton.
+
+Calibration: still FULL range for now (fader 0..1 → h/v 0..100 absolute, Frank's choice
+2026-06-28 — get the feel right first). Per-mount min/max travel + rotation offset exist
+in the data model & persist; the capture wizard is Phase 5 (Frank wants the full wizard,
+not manual fields).
 
 Phase 5 = calibration wizard (drive to reference poses, record values, `rst=2` offset).
 Phase 6 = Gen2 TCP path (needs hardware to verify field encoding).

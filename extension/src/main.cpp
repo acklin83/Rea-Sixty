@@ -13618,6 +13618,13 @@ bool                                g_faderPbInit{false};
 // track the user's motion. Mode-agnostic: the anchor is whatever the
 // motor was parked at, so track-vol / plugin / FLIP all pick up cleanly.
 std::array<std::atomic<uint16_t>, 8> g_motorTargetPb{};   // mirror of last driven motor pb (main thread)
+// DynaMount send-on-release: while a mount strip's fader is touched we only
+// cache the latest normalised position here; the value is pushed to the mount
+// ONCE on touch-release (open-loop mounts shouldn't chase every intermediate
+// frame — Frank 2026-06-28). Axis (distance vs left/right) is decided by FLIP
+// at release time.
+std::array<std::atomic<double>, 8> g_dynFaderPendingNorm{};
+std::array<std::atomic<bool>,   8> g_dynFaderPendingValid{};
 // Per-strip motor engage state. The firmware silently discards drive frames
 // while a fader is limp (PM invariant #4), and we deliberately leave the
 // motor limp after a no-move tap (matches SSL 360°: touch-only release = no
@@ -13857,21 +13864,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     continue;
                 }
                 // DynaMount mode: a mount strip's fader drives the robotic
-                // mount, not a track. FLIP off → distance (h); FLIP on →
-                // left/right (v). The mount manager setters are atomic and
-                // thread-safe, so we call them straight from the input thread
-                // (no REAPER API touched). Echo the position back so the
-                // firmware motor target tracks the touch, then skip the
-                // track-volume pipeline entirely.
+                // mount, not a track. Send-on-release (Frank 2026-06-28): the
+                // mount is slow + open-loop, so we DON'T stream every drag
+                // frame — we just cache the latest position and push it once
+                // on touch-release (handled in the FF 20 02 OFF edge). Echo
+                // the position back so the firmware motor buffer tracks the
+                // touch (no jump when the motor re-engages on release).
                 if (g_selectionMode.load() == SelectionMode::DynaMount) {
                     const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                     if (mnt >= 0) {
-                        const double norm =
-                            double(pb14) / double(kUf8FaderPbMax);
-                        if (g_flip.load())
-                            uf8::dynamount::manager().setHorizontal(mnt, norm);
-                        else
-                            uf8::dynamount::manager().setDistance(mnt, norm);
+                        g_dynFaderPendingNorm[strip].store(
+                            double(pb14) / double(kUf8FaderPbMax));
+                        g_dynFaderPendingValid[strip].store(true);
                         if (g_dev)
                             g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
                         i += frameSize;
@@ -14472,6 +14476,34 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // re-seeds the current volume; the fader only writes a value if it's
             // physically moved, which a learn-touch doesn't.
             if (state != 0) uf8TouchLearnArm_(1, strip);
+            // DynaMount mode: a mount strip's fader is send-on-release. On
+            // touch-ON limp the motor (loose under the finger); on touch-OFF
+            // push the cached position to the mount ONCE (FLIP picks the axis)
+            // and drop touch-reported so the feedback loop re-parks the motor.
+            if (strip < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
+                const int mnt = uf8::dynamount::manager().mountForStrip(strip);
+                if (mnt >= 0) {
+                    if (state != 0) {
+                        g_touchReported[strip].store(true);
+                        g_dynFaderPendingValid[strip].store(false);
+                        if (g_dev) g_dev->sendPriority(
+                            uf8::buildMotorEnable(strip, false));
+                        g_faderMotorEngaged[strip].store(false);
+                    } else {
+                        g_touchReported[strip].store(false);
+                        if (g_dynFaderPendingValid[strip].load()) {
+                            const double norm = g_dynFaderPendingNorm[strip].load();
+                            if (g_flip.load())
+                                uf8::dynamount::manager().setHorizontal(mnt, norm);
+                            else
+                                uf8::dynamount::manager().setDistance(mnt, norm);
+                            g_dynFaderPendingValid[strip].store(false);
+                        }
+                    }
+                    i += frameSize;
+                    continue;
+                }
+            }
             if (strip < 8) {
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive
@@ -16634,16 +16666,30 @@ void pushZonesForVisibleSlots()
 
                 // Motor fader — drive to the active axis position. Skipped
                 // while the user is touching it (so the motor doesn't fight
-                // the hand). FLIP picks h vs v via faderNorm.
+                // the hand). FLIP picks h vs v via faderNorm. After a touch
+                // the strip is left LIMP, and the firmware discards plain
+                // drive frames while limp — so on FLIP the new-axis position
+                // would never reach the fader (Frank 2026-06-28). Re-engage
+                // SSL-style first: bit-7 echo loads the limp buffer, then
+                // motor-enable drives there cleanly. Mirrors the track path
+                // at ~17549.
                 if (!g_touchReported[s].load()) {
                     const double fn = dm.faderNorm(mnt, flipped);
                     uint16_t pb = static_cast<uint16_t>(
                         fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
                     if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
+                    g_motorTargetPb[s].store(pb);
                     if (!g_faderPbInit || g_lastFaderPb[s] != pb) {
                         g_lastFaderPb[s] = pb;
                         const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                         const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                        if (!g_faderMotorEngaged[s].load()) {
+                            g_dev->send(uf8::buildFaderPosition(
+                                static_cast<uint8_t>(s), (lsb | 0x80), msb));
+                            g_dev->send(uf8::buildMotorEnable(
+                                static_cast<uint8_t>(s), true));
+                            g_faderMotorEngaged[s].store(true);
+                        }
                         g_dev->send(uf8::buildFaderPosition(
                             static_cast<uint8_t>(s), lsb, msb));
                     }
