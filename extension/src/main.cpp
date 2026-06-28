@@ -4977,14 +4977,22 @@ static void applyDynBankReq_(uint32_t enc)
         }
         case DK::TrackColours: {
             if (slot < 0 || slot >= 8) return;
-            if (gesture == 4) {                 // long: clear custom colour
-                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", 0.0);
-            } else {                            // apply the configured colour
-                const uint32_t rgb = reasixty_trackBankColour(slot);
-                const int native = ColorToNative((rgb >> 16) & 0xFF,
-                                                 (rgb >> 8) & 0xFF, rgb & 0xFF);
-                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR",
-                    static_cast<double>(native | 0x1000000));
+            // long: clear custom colour, else apply the configured colour.
+            const uint32_t rgb = reasixty_trackBankColour(slot);
+            const double native = (gesture == 4)
+                ? 0.0
+                : static_cast<double>(
+                      ColorToNative((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF,
+                                    rgb & 0xFF) | 0x1000000);
+            // Apply to EVERY selected track (multi-select); fall back to the
+            // context track when nothing is selected.
+            const int nSel = CountSelectedTracks(nullptr);
+            if (nSel > 0) {
+                for (int i = 0; i < nSel; ++i)
+                    if (MediaTrack* t = GetSelectedTrack(nullptr, i))
+                        SetMediaTrackInfo_Value(t, "I_CUSTOMCOLOR", native);
+            } else {
+                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", native);
             }
             UpdateArrange();
             g_softKeyDirty.store(true);
