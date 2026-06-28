@@ -346,6 +346,9 @@ add_library(reaper_uf8 MODULE
     src/NavDispatch.cpp
     # Setup bundle (save/restore of the whole configuration)
     src/SetupBundle.cpp
+    # DynaMount Mode — robotic mic-stand control over the LAN
+    src/DynaMountClient.cpp
+    src/DynaMountManager.cpp
 )
 
 if(APPLE)
@@ -521,6 +524,13 @@ if(NOT WIN32)
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
+
+    add_executable(test_dynamount tests/test_dynamount.cpp
+        src/DynaMountClient.cpp src/DynaMountManager.cpp)
+    target_include_directories(test_dynamount PRIVATE src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_dynamount PRIVATE Threads::Threads)
+    add_test(NAME dynamount COMMAND test_dynamount)
 
     add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
     target_include_directories(uf8_color_test PRIVATE src)
