@@ -109,6 +109,12 @@ public:
     // Ask the worker to probe this mount's IP; result lands in proto + online.
     void requestDetect(int idx);
 
+    // ---- Persistence (pure; REAPER-free, unit-tested) ----------------------
+    // Compact tab/newline-delimited form of the mount config + calibration.
+    // Fill direction is persisted separately by the caller.
+    std::string serialize();
+    void deserialize(const std::string& s);
+
 private:
     void   workerLoop();
     int    mapFader(const Calibration& c, double f01, bool horizontal);
@@ -121,5 +127,9 @@ private:
     std::thread         worker_;
     std::atomic<bool>   run_{false};
 };
+
+// Process-wide manager singleton. First access lazily inits sockets and starts
+// the worker thread. Shared by the Settings UI and the (future) UF8 mode code.
+DynaMountManager& manager();
 
 } // namespace uf8::dynamount

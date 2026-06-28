@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <sstream>
 
 namespace uf8::dynamount {
 
@@ -144,6 +146,70 @@ double DynaMountManager::faderNorm(int idx, bool flipped) {
 void DynaMountManager::requestDetect(int idx) {
     if (idx < 0 || idx >= kMaxMounts) return;
     detectReq_.fetch_or(1u << idx);
+}
+
+// ---- persistence ------------------------------------------------------------
+// One record per enabled mount, fields tab-separated, records newline-separated:
+//   idx \t name \t ip \t color \t hMin \t hMax \t vMin \t vMax \t rOff \t calValid
+// Names/IPs have tabs/newlines stripped on the way in.
+
+static std::string sanitize(const std::string& in) {
+    std::string out = in;
+    for (char& c : out) if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+    return out;
+}
+
+std::string DynaMountManager::serialize() {
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    std::ostringstream os;
+    for (int i = 0; i < kMaxMounts; ++i) {
+        Mount& m = mounts_[i];
+        if (!m.enabled) continue;
+        os << i << '\t' << sanitize(m.name) << '\t' << m.ip << '\t' << m.color
+           << '\t' << m.cal.hMin << '\t' << m.cal.hMax
+           << '\t' << m.cal.vMin << '\t' << m.cal.vMax
+           << '\t' << m.cal.rOffset << '\t' << (m.cal.valid ? 1 : 0) << '\n';
+    }
+    return os.str();
+}
+
+void DynaMountManager::deserialize(const std::string& s) {
+    // Reset all slots first.
+    {
+        std::lock_guard<std::mutex> lk(cfgMx_);
+        for (auto& m : mounts_) {
+            m.enabled = false; m.name.clear(); m.ip.clear(); m.color = 0;
+            m.cal = Calibration{};
+            m.proto.store(Proto::Unknown); m.online.store(false);
+        }
+    }
+    std::istringstream is(s);
+    std::string line;
+    while (std::getline(is, line)) {
+        if (line.empty()) continue;
+        std::vector<std::string> f;
+        std::string cur;
+        std::istringstream ls(line);
+        while (std::getline(ls, cur, '\t')) f.push_back(cur);
+        if (f.size() < 10) continue;
+        int idx = std::atoi(f[0].c_str());
+        if (idx < 0 || idx >= kMaxMounts) continue;
+        Calibration cal;
+        cal.hMin = std::atoi(f[4].c_str()); cal.hMax = std::atoi(f[5].c_str());
+        cal.vMin = std::atoi(f[6].c_str()); cal.vMax = std::atoi(f[7].c_str());
+        cal.rOffset = std::atoi(f[8].c_str()); cal.valid = std::atoi(f[9].c_str()) != 0;
+        setMount(idx, true, f[1], f[2], std::atoi(f[3].c_str()));
+        setCalibration(idx, cal);
+    }
+}
+
+// ---- singleton --------------------------------------------------------------
+
+DynaMountManager& manager() {
+    static DynaMountManager m;
+    static std::once_flag once;
+    std::call_once(once, [] { init(); m.start(); });
+    return m;
 }
 
 // ---- worker -----------------------------------------------------------------

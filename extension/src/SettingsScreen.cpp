@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Bindings.h"
+#include "DynaMountManager.h"
 #include "GrCalibration.h"
 #include "KnobFeelPresets.h"
 #include "ParameterGroups.h"
@@ -15861,6 +15862,120 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 // Per-Selection-Mode tweaks. Each section enables behaviour that only
 // applies while that Selection Mode is engaged on the surface. Empty
 // sections stay as headers so users see what's planned.
+// --- DynaMount Mode settings tab ---------------------------------------------
+// Configures up to 8 robotic mic stands (IP + name + colorbar color) controlled
+// from the UF8 surface in DynaMount Mode. Backend: DynaMountManager (own worker
+// thread). Persists to ExtState "rea_sixty"/"dynamount_devices" (+ "_fill"),
+// which SetupBundle picks up automatically. See REA-SIXTY-INTEGRATION.md.
+static void drawDynaMountTab_(ImGui_Context* ctx)
+{
+    using namespace uf8::dynamount;
+    DynaMountManager& mgr = manager();
+
+    // One-shot load of persisted config into the manager + seed text buffers.
+    static bool s_loaded = false;
+    static char s_name[kMaxMounts][32];
+    static char s_ip[kMaxMounts][24];
+    if (!s_loaded) {
+        const char* blob = GetExtState("rea_sixty", "dynamount_devices");
+        if (blob && *blob) mgr.deserialize(blob);
+        const char* fill = GetExtState("rea_sixty", "dynamount_fill");
+        mgr.setFillDir((fill && *fill == 'R') ? FillDir::Right : FillDir::Left);
+        for (int i = 0; i < kMaxMounts; ++i) {
+            DynaMountManager::Info in = mgr.info(i);
+            snprintf(s_name[i], sizeof(s_name[i]), "%s", in.name.c_str());
+            snprintf(s_ip[i],   sizeof(s_ip[i]),   "%s", in.ip.c_str());
+        }
+        s_loaded = true;
+    }
+
+    auto persist = [&]() {
+        std::string blob = mgr.serialize();
+        SetExtState("rea_sixty", "dynamount_devices", blob.c_str(), true);
+    };
+
+    ImGui_Text(ctx,
+        "Control up to 8 DynaMount robotic mic stands from the UF8 strips. "
+        "Only the defined mounts become DynaMount strips; the rest stay tracks.");
+    ImGui_Spacing(ctx);
+
+    // Fill direction — which side the pinned DynaMount strips anchor to.
+    bool fillRight = mgr.fillDir() == FillDir::Right;
+    if (ImGui_RadioButton(ctx, "Fill from left##dm_fill_left", !fillRight)) {
+        mgr.setFillDir(FillDir::Left);
+        SetExtState("rea_sixty", "dynamount_fill", "L", true);
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_RadioButton(ctx, "Fill from right##dm_fill_right", fillRight)) {
+        mgr.setFillDir(FillDir::Right);
+        SetExtState("rea_sixty", "dynamount_fill", "R", true);
+    }
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    for (int i = 0; i < kMaxMounts; ++i) {
+        DynaMountManager::Info in = mgr.info(i);
+        char id[24];
+
+        // Enable checkbox.
+        bool en = in.enabled;
+        snprintf(id, sizeof(id), "##dm_en_%d", i);
+        if (ImGui_Checkbox(ctx, id, &en)) {
+            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Name.
+        ImGui_SetNextItemWidth(ctx, 120.0);
+        snprintf(id, sizeof(id), "##dm_name_%d", i);
+        int tf = 0;
+        if (ImGui_InputText(ctx, id, s_name[i], sizeof(s_name[i]), &tf, nullptr)) {
+            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // IP.
+        ImGui_SetNextItemWidth(ctx, 130.0);
+        snprintf(id, sizeof(id), "##dm_ip_%d", i);
+        if (ImGui_InputText(ctx, id, s_ip[i], sizeof(s_ip[i]), &tf, nullptr)) {
+            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Color (palette index 0..15).
+        ImGui_SetNextItemWidth(ctx, 90.0);
+        int color = in.color;
+        snprintf(id, sizeof(id), "##dm_col_%d", i);
+        if (ImGui_SliderInt(ctx, id, &color, 0, 15, "col %d", nullptr)) {
+            mgr.setMount(i, en, s_name[i], s_ip[i], color);
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Detect.
+        snprintf(id, sizeof(id), "Detect##dm_det_%d", i);
+        if (ImGui_Button(ctx, id, nullptr, nullptr)) {
+            mgr.requestDetect(i);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        // Status.
+        const char* status = in.online ? protoName(in.proto)
+                                        : (in.enabled ? "offline" : "--");
+        ImGui_Text(ctx, status);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "  Motor speed is fixed (9). Calibration wizard: coming soon. "
+        "FLIP swaps a mount strip between distance and left/right; "
+        "V-Pot is rotation.");
+}
+
 void SettingsScreen::drawModes(ImGui_Context* ctx)
 {
     ImGui_Text(ctx, "Modes");
@@ -15883,7 +15998,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
-        if (s_savedTab < 0 || s_savedTab > 4) s_savedTab = 0;
+        if (s_savedTab < 0 || s_savedTab > 5) s_savedTab = 0;
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
@@ -16504,6 +16619,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     ImGui_Text(ctx, kNudgeUnits[curIdx].label);
 
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- DYNA (DynaMount Mode) --------------------------------------
+    int flagsDyna = tabFlagsFor(5);
+    if (ImGui_BeginTabItem(ctx, "DYNA", nullptr, &flagsDyna)) {
+        persistActive(5);
+        drawDynaMountTab_(ctx);
         ImGui_EndTabItem(ctx);
     }
 

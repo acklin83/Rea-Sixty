@@ -95,6 +95,18 @@ int main()
         // faderNorm reflects the active axis.
         mgr.setDistance(0, 0.5);
         EXPECT(mgr.faderNorm(0, /*flipped=*/false) > 0.49 && mgr.faderNorm(0, false) < 0.51);
+
+        // --- serialize / deserialize round-trip ------------------------------
+        std::string blob = mgr.serialize();
+        DynaMountManager mgr2;
+        mgr2.deserialize(blob);
+        EXPECT(mgr2.definedCount() == 3);
+        DynaMountManager::Info a = mgr.info(2), b = mgr2.info(2);
+        EXPECT(b.enabled && b.name == "OH-L" && b.ip == "192.168.177.254" && b.color == 5);
+        DynaMountManager::Info c0 = mgr2.info(0);
+        EXPECT(c0.cal.hMin == 10 && c0.cal.hMax == 90 && c0.cal.valid);
+        // Disabled slot stays empty after round-trip.
+        EXPECT(!mgr2.info(1).enabled);
     }
 
     std::printf("test_dynamount: all passed\n");
