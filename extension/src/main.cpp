@@ -1330,6 +1330,7 @@ static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
                                    bool setFocusedDomain, bool setBcAnchor);
 int  stripInstanceActiveFx_(MediaTrack* tr);         // focused FX index
 void landFxCursor_(MediaTrack* tr, const std::vector<int>& ring, int k);
+void triggerPluginModeFollowSync_();                 // re-point plugin-mode GUI
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step, bool ownSettings = false);
@@ -4873,6 +4874,11 @@ static void applyDynBankReq_(uint32_t enc)
                     // plugin GUI follow immediately, not only after a param
                     // is touched. A single-element ring lands on this FX.
                     landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
+                    // landFxCursor_ moves the floating focused-window; also
+                    // re-point the plugin-mode master GUI (SSL Strip / UF8
+                    // Plugin Mode with GUI) to the now-focused domain, else
+                    // it keeps showing the previously focused plug-in.
+                    triggerPluginModeFollowSync_();
                     break;
                 case FxBankOp::Float: {
                     const bool open =
@@ -4891,6 +4897,7 @@ static void applyDynBankReq_(uint32_t enc)
                     uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
                                                 std::memory_order_relaxed);
                     landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
+                    triggerPluginModeFollowSync_();
                     break;
                 case FxBankOp::Offline:
                     TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
