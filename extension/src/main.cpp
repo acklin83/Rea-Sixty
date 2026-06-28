@@ -21401,20 +21401,15 @@ void onTimer()
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
     chaseFocusedFxWindow();
-    // Touched-FX reveal expiry — when the 3 s window closes the UF8
-    // csType naturally falls back to the mode-default label on the
-    // next pushZonesForVisibleSlots tick (dedup detects the change).
-    // UC1 LCD is event-driven (refresh()) so we need an explicit
-    // refresh trigger here when reveal transitions from active to
-    // expired. Frank 2026-05-15.
-    {
-        static bool s_revealWasActive = false;
-        const bool nowActive = touchedFxRevealActive_();
-        if (s_revealWasActive && !nowActive && g_uc1_surface) {
-            g_uc1_surface->refresh();
-        }
-        s_revealWasActive = nowActive;
-    }
+    // Touched-FX reveal expiry: the UF8 csType falls back to the mode-default
+    // label on the next pushZonesForVisibleSlots tick (dedup). The UC1 used to
+    // get an explicit refresh() here when the 3 s window closed — but that
+    // forced repaint is what made the UC1 drop the just-edited parameter (and,
+    // pre-fix, snap to the carousel) ~2-3 s after a knob release. Frank
+    // 2026-06-28: "Parameter geht weg / will das Karussell nur beim Umschalten".
+    // So we DON'T refresh on reveal expiry anymore — the UC1 keeps the last
+    // painted plug-in/param display until the next real event (channel switch,
+    // another touch), which is what the user wants. (Removed the forced refresh.)
     // "View active plug-in" follow drain TEMPORARILY DISABLED — Frank
     // reported a regression where the inline TrackFX_Show pair (even
     // deferred to next tick) prevented UF8's colour-bar plug-in name

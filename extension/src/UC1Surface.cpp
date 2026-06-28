@@ -811,14 +811,16 @@ int UC1Surface::poll()
     }
 
     // CS track-name carousel self-hide: when its post-switch window expires,
-    // repaint once so refresh() clears the carousel zone (fires once — the
-    // reset to epoch makes the gate false until the next channel switch).
+    // collapse the carousel to curr-only by re-sending JUST that zone — NOT a
+    // full refresh(), which would clobber the live parameter readout (Frank
+    // 2026-06-28: "parameter wird nach 1s ausgeblendet"). Fires once (reset to
+    // epoch), then the gate stays false until the next channel switch.
     if (csCarouselUntil_ != std::chrono::steady_clock::time_point{}
         && std::chrono::steady_clock::now() >= csCarouselUntil_
         && device_ && mode_ == Uc1Mode::Main)
     {
         csCarouselUntil_ = {};
-        refresh();
+        device_->send(uc1::buildTrackNameTripleSmall("", csCarouselCurrName_, ""));
     }
 
     // EXT FUNCS active: mirror EXTERNAL edits (UF8 V-Pot / plugin GUI /
@@ -4796,13 +4798,16 @@ void UC1Surface::refresh()
     if (!instanceCarouselActive_) {
         device_->send(std::vector<uint8_t>(largeTriple));
     }
-    // CS track-name carousel: only within the post-channel-switch window.
-    // Outside it, CLEAR the carousel zone (a blank triple) — it's a separate
-    // LCD zone from the central label, so skipping would leave stale names.
+    // CS track-name carousel: the full prev/curr/next triple shows only
+    // within the post-channel-switch window. Outside it, show ONLY the
+    // current track name (prev/next blanked) — the curr slot IS the track
+    // name, so the user still sees which channel they're on; just the
+    // scrolling neighbours go away. Frank 2026-06-28.
+    csCarouselCurrName_ = currName;   // cache for poll()'s expiry collapse
     if (std::chrono::steady_clock::now() < csCarouselUntil_) {
         device_->send(std::vector<uint8_t>(smallTriple));
     } else {
-        device_->send(uc1::buildTrackNameTripleSmall("", "", ""));
+        device_->send(uc1::buildTrackNameTripleSmall("", currName, ""));
     }
 
     // Focused-track colour bar — single palette byte. Uses the same

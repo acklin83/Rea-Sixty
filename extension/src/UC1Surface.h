@@ -424,7 +424,11 @@ private:
     // CS track-name carousel (prev/curr/next) is shown only for a short
     // window after a channel switch — like SSL 360° (which drops it ~after
     // the encoder stops), not permanently. Set on focused-track change.
+    // csCarouselCurrName_ caches the current (folded) track name so poll()
+    // can collapse the carousel to curr-only at window expiry WITHOUT a full
+    // refresh() (which would clobber the live parameter readout).
     std::chrono::steady_clock::time_point csCarouselUntil_{};
+    std::string                           csCarouselCurrName_;
 
     // Nav Mode carousel (Phase 2.8b). Persistent — no timeout. Cached
     // strings + palette so showNavCarousel can be called every poll
