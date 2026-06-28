@@ -1331,6 +1331,7 @@ static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
 int  stripInstanceActiveFx_(MediaTrack* tr);         // focused FX index
 void landFxCursor_(MediaTrack* tr, const std::vector<int>& ring, int k);
 void triggerPluginModeFollowSync_();                 // re-point plugin-mode GUI
+static void pinFxGuiIfEnabled_(MediaTrack* tr, int fxIdx);
 static void applyCsSwitch_(int slot, bool ownSettings = false);  // CS-Switch block
 static void applyCsCopy_(int slot);     // copy-below-and-bypass variant
 static void applyCsCycle_(int step, bool ownSettings = false);
@@ -4749,6 +4750,27 @@ static void tickDynBankPaging_()
     }
 }
 
+// Re-target the "Show focused plugin GUI" (Toggle-UI) floating window to
+// (tr, fxIdx) when one is currently open. Used by the FX bank's Focus/Solo:
+// an explicit key press is an explicit "show me this FX", so it follows even
+// when the passive "Plug-in GUI follows active Instance" setting is OFF (that
+// gate only governs cycle/param chasing). Never POPS a window open unprompted
+// — only re-targets an already-open one. Main-thread only.
+static void fxBankRetargetFocusGui_(MediaTrack* tr, int fxIdx)
+{
+    if (!g_focusedGuiShownTr || !tr || fxIdx < 0) return;
+    if (uf8::fxIsAcustica(tr, fxIdx)) return;   // host-open faults Acustica
+    if (g_focusedGuiShownTr == static_cast<void*>(tr)
+        && g_focusedGuiShownFx == fxIdx) return;     // already showing it
+    if (ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+        TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
+                     g_focusedGuiShownFx, /*hide floating*/ 2);
+    TrackFX_Show(tr, fxIdx, /*float window*/ 3);
+    pinFxGuiIfEnabled_(tr, fxIdx);
+    g_focusedGuiShownTr = static_cast<void*>(tr);
+    g_focusedGuiShownFx = fxIdx;
+}
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -4879,6 +4901,7 @@ static void applyDynBankReq_(uint32_t enc)
                     // Plugin Mode with GUI) to the now-focused domain, else
                     // it keeps showing the previously focused plug-in.
                     triggerPluginModeFollowSync_();
+                    fxBankRetargetFocusGui_(tr, fxIdx);
                     break;
                 case FxBankOp::Float: {
                     const bool open =
@@ -4898,6 +4921,7 @@ static void applyDynBankReq_(uint32_t enc)
                                                 std::memory_order_relaxed);
                     landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
                     triggerPluginModeFollowSync_();
+                    fxBankRetargetFocusGui_(tr, fxIdx);
                     break;
                 case FxBankOp::Offline:
                     TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
