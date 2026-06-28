@@ -16612,9 +16612,26 @@ void pushZonesForVisibleSlots()
             if (mnt >= 0) {
                 const auto info    = dm.info(mnt);
                 const bool flipped = g_flip.load();
-                const int  hVal = dm.targetH(mnt);
-                const int  vVal = dm.targetV(mnt);
+                int        hVal = dm.targetH(mnt);
+                int        vVal = dm.targetV(mnt);
                 const int  rVal = dm.targetR(mnt);
+
+                // Live display: while the fader is touched the mount itself
+                // isn't moved until release (send-on-release), but the SCREEN
+                // should still follow the fader. Map the cached pending norm
+                // through the same calibration mapFader uses and overwrite the
+                // active axis (FLIP → v, else h) so the readout / value line
+                // track the drag in real time (Frank 2026-06-28).
+                if (g_touchReported[s].load() && g_dynFaderPendingValid[s].load()) {
+                    double norm = g_dynFaderPendingNorm[s].load();
+                    if (norm < 0.0) norm = 0.0;
+                    if (norm > 1.0) norm = 1.0;
+                    const auto& c = info.cal;
+                    const int lo = flipped ? c.vMin : c.hMin;
+                    const int hi = flipped ? c.vMax : c.hMax;
+                    const int live = lo + static_cast<int>(norm * (hi - lo) + 0.5);
+                    if (flipped) vVal = live; else hVal = live;
+                }
 
                 // Upper scribble — mount name (≤7 chars, folded to Latin-1).
                 std::string nm = utf8ToLatin1(info.name);
@@ -16641,22 +16658,22 @@ void pushZonesForVisibleSlots()
                     g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), ch));
                 }
 
-                // Fader dB readout — the active axis value, or OFFLINE.
+                // Fader readout — the active axis value. No "dB" unit (this
+                // isn't a level): pass "" to blank the unit slot.
                 char dbbuf[8];
-                if (!info.online) snprintf(dbbuf, sizeof(dbbuf), "OFF");
-                else snprintf(dbbuf, sizeof(dbbuf), "%c%d",
-                              flipped ? 'V' : 'H', flipped ? vVal : hVal);
+                snprintf(dbbuf, sizeof(dbbuf), "%c%d",
+                         flipped ? 'V' : 'H', flipped ? vVal : hVal);
                 const std::string db = dbbuf;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
-                    g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s), db));
+                    g_dev->send(uf8::buildFaderDbReadout(
+                        static_cast<uint8_t>(s), db, ""));
                 }
 
-                // Value line — full mount state (or OFFLINE).
+                // Value line — full mount state (+ OFF tag when not reachable).
                 char vlbuf[24];
-                if (!info.online) snprintf(vlbuf, sizeof(vlbuf), "OFFLINE");
-                else snprintf(vlbuf, sizeof(vlbuf), "H%-3d V%-3d R%-3d",
-                              hVal, vVal, rVal);
+                snprintf(vlbuf, sizeof(vlbuf), "H%-3d V%-3d R%-3d%s",
+                         hVal, vVal, rVal, info.online ? "" : " OFF");
                 std::string vl = vlbuf;
                 if (vl.size() > 19) vl.resize(19);
                 if (bankChanged || g_lastValueLine[s] != vl) {

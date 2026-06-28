@@ -290,7 +290,10 @@ std::vector<uint8_t> buildVPotReadoutBar(const std::array<uint16_t, kStripCount>
 // the trailing two as NUL — the LCD renders whatever ASCII is present, so
 // we use the full 6 bytes when needed (e.g. "-12.5") and NUL-pad otherwise.
 //   FF 66 0A 0C <strip> <6 bytes> "dB" CKSUM  (14 bytes)
-std::vector<uint8_t> buildFaderDbReadout(uint8_t strip, std::string_view value);
+// `unit` fills the trailing 2-byte unit slot (SSL uses "dB"); pass "" to blank
+// it (e.g. DynaMount strips, where the value isn't a level).
+std::vector<uint8_t> buildFaderDbReadout(uint8_t strip, std::string_view value,
+                                         std::string_view unit = "dB");
 
 // ---- Decoded 2026-04-24 ----
 
