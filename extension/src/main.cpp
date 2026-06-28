@@ -28893,6 +28893,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 p = semi + 1;
             }
         }
+        // Probe every enabled mount once at startup so the DYNA tab + surface
+        // show online/offline without the user opening Settings and clicking
+        // Detect each time (Frank 2026-06-28). Worker is already running.
+        for (int i = 0; i < uf8::dynamount::kMaxMounts; ++i)
+            if (dm.mountEnabled(i)) dm.requestDetect(i);
     }
 
     initLog("step: deploy input-level JSFX");

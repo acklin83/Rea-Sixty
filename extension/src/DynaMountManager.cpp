@@ -168,13 +168,18 @@ void DynaMountManager::requestDetect(int idx) {
 }
 
 // ---- persistence ------------------------------------------------------------
-// One record per enabled mount, fields tab-separated, records newline-separated:
-//   idx \t name \t ip \t color \t hMin \t hMax \t vMin \t vMax \t rOff \t calValid
-// Names/IPs have tabs/newlines stripped on the way in.
-
+// One record per enabled mount, fields tab-separated, records SEMICOLON-
+// separated:
+//   idx \t name \t ip \t color \t hMin \t hMax \t vMin \t vMax \t rOff \t calValid ;
+// Records used to be '\n'-separated, but REAPER's SetExtState stores each value
+// as a single INI line — an embedded newline truncated the value at the first
+// record, so only the FIRST mount survived a restart (Frank 2026-06-28). ';'
+// is ExtState-safe; sanitize strips it from names. A legacy single-record value
+// (no ';') still parses as one record, so old saves stay readable.
 static std::string sanitize(const std::string& in) {
     std::string out = in;
-    for (char& c : out) if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+    for (char& c : out)
+        if (c == '\t' || c == '\n' || c == '\r' || c == ';') c = ' ';
     return out;
 }
 
@@ -187,7 +192,7 @@ std::string DynaMountManager::serialize() {
         os << i << '\t' << sanitize(m.name) << '\t' << m.ip << '\t' << m.color
            << '\t' << m.cal.hMin << '\t' << m.cal.hMax
            << '\t' << m.cal.vMin << '\t' << m.cal.vMax
-           << '\t' << m.cal.rOffset << '\t' << (m.cal.valid ? 1 : 0) << '\n';
+           << '\t' << m.cal.rOffset << '\t' << (m.cal.valid ? 1 : 0) << ';';
     }
     return os.str();
 }
@@ -204,7 +209,11 @@ void DynaMountManager::deserialize(const std::string& s) {
     }
     std::istringstream is(s);
     std::string line;
-    while (std::getline(is, line)) {
+    // Records separated by ';' (legacy '\n' also works — getline on either).
+    while (std::getline(is, line, ';')) {
+        // Tolerate stray newlines from legacy blobs.
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
         if (line.empty()) continue;
         std::vector<std::string> f;
         std::string cur;
