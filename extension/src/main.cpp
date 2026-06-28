@@ -17104,7 +17104,7 @@ void pushZonesForVisibleSlots()
                             shorten("SPDIF ",  "SP ");
                             shorten("AES ",    "AE ");
                         }
-                        csType = abbreviateTrackName_(s2, 7);
+                        csType = abbreviateTrackName_(s2, 7, -1, /*foldLatin1*/ true);
                     }
                 }
             }
@@ -17429,7 +17429,7 @@ void pushZonesForVisibleSlots()
             if (blankStrip) {
                 n = "       ";   // 7 spaces, matches blank-strip path
             }
-            n = abbreviateTrackName_(n, 7);
+            n = abbreviateTrackName_(n, 7, -1, /*foldLatin1*/ true);
             if (n != g_lastTrackName[s]) {
                 g_lastTrackName[s] = n;
                 g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), n));

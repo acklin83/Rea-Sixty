@@ -27,5 +27,10 @@ extern std::atomic<int> g_trackNameMode;
 
 // forceMode < 0 → use the global g_trackNameMode; otherwise force that
 // TrackNameMode for this call only (e.g. the HUD LCD always wants Smart).
+//
+// foldLatin1: fold UTF-8 → Latin-1 BEFORE abbreviating. ONLY the UF8 hardware
+// scribble wants this (its LCD renders Latin-1; verified on HW 2026-06-28).
+// UC1 and the ImGui companions must NOT fold (UC1 uses a different encoding;
+// ImGui renders UTF-8 natively) — folding there produces mojibake.
 std::string abbreviateTrackName_(const std::string& src, int maxLen,
-                                 int forceMode = -1);
+                                 int forceMode = -1, bool foldLatin1 = false);

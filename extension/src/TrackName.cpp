@@ -47,13 +47,12 @@ std::string utf8ToLatin1(std::string_view in)
 //      "BckgrV" or similar instead of "Bckgrnd" (which loses the V).
 // All-uppercase short tokens (DI, FX, EQ, …) survive untouched.
 std::string abbreviateTrackName_(const std::string& srcIn, int maxLen,
-                                 int forceMode)
+                                 int forceMode, bool foldLatin1)
 {
-    // Fold UTF-8 → Latin-1 first so every char is one byte: the abbreviation
-    // logic below counts/truncates by byte, and the LCD is Latin-1. This is
-    // the single fold point for ALL track-name displays (UF8 scribble + UC1
-    // carousels both route through here) — do not fold again downstream.
-    const std::string src = utf8ToLatin1(srcIn);
+    // Fold UTF-8 → Latin-1 ONLY for the UF8 hardware scribble (caller opts in).
+    // After folding every char is one byte, so the byte-wise abbreviation below
+    // stays character-safe. UC1 + ImGui companions pass false (raw UTF-8).
+    const std::string src = foldLatin1 ? utf8ToLatin1(srcIn) : srcIn;
     if (maxLen <= 0) return src;
     if (static_cast<int>(src.size()) <= maxLen) return src;
     const int mode = (forceMode >= 0) ? forceMode : g_trackNameMode.load();
