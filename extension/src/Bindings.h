@@ -326,12 +326,14 @@ constexpr int kSlotsPerSubBank   = 8;
 // IGNORES its 8 static slots; labels / LEDs / dispatch are computed live
 // from the focused track's context instead (FX list, sends, parameter
 // groups, colour palette). Default None ⇒ classic static behaviour.
+// Explicit values: 2 was a Sends bank (removed — a mute-only send bank
+// wasn't worth it). Kept the others' values stable so persisted assignments
+// don't shift.
 enum class DynamicBankKind : uint8_t {
-    None = 0,
-    FxBank,        // track FX, paged 1-8 / 9-16 / … by a configured control
-    Sends,         // track sends, paged (visual/7.75 order, incl. HW outs)
-    ParamGroups,   // parameter groups 1..8
-    TrackColours,  // configured colour palette 1..8
+    None         = 0,
+    FxBank       = 1,   // track FX, paged 1-8 / 9-16 / … by a configured control
+    ParamGroups  = 3,   // parameter groups 1..8
+    TrackColours = 4,   // configured colour palette 1..8
 };
 
 struct UserQuickSubBank {

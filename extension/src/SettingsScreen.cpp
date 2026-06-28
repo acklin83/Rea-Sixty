@@ -4761,7 +4761,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         static const DynOpt kDynOpts[] = {
             { DynamicBankKind::None,         "Off (static slots)" },
             { DynamicBankKind::FxBank,       "FX (focused track, paged)" },
-            { DynamicBankKind::Sends,        "Sends (focused track, paged)" },
             { DynamicBankKind::ParamGroups,  "Parameter Groups" },
             { DynamicBankKind::TrackColours, "Track Colours" },
         };
@@ -4789,10 +4788,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         // Contextual editor for the selected kind. The config is GLOBAL
         // (shared by every FX / colour bank), edited here for convenience.
 
-        // "Page with" — bankable kinds (FX / Sends) page 1-8 / 9-16 / … via
-        // a chosen control. Shown for both bankable kinds.
-        if (curKind == DynamicBankKind::FxBank
-            || curKind == DynamicBankKind::Sends) {
+        // "Page with" — the FX bank pages 1-8 / 9-16 / … via a chosen control.
+        if (curKind == DynamicBankKind::FxBank) {
             static const char* kCtrlNames[] = {
                 "(no paging — stays on 1-8)", "UF8 encoder",
                 "UC1 Encoder 1", "UC1 Encoder 2", "UF8 Bank ◄ ►",

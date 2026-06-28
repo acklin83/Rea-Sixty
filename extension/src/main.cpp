@@ -4608,8 +4608,7 @@ std::atomic<int> g_dynBankPage[8] = {};
 // A bankable kind has more than 8 items and pages; Groups / Colours don't.
 static bool dynBankBankable_(uf8::bindings::DynamicBankKind k)
 {
-    return k == uf8::bindings::DynamicBankKind::FxBank
-        || k == uf8::bindings::DynamicBankKind::Sends;
+    return k == uf8::bindings::DynamicBankKind::FxBank;
 }
 static void ensureDynCfgLoaded_()
 {
@@ -4720,10 +4719,6 @@ static void pageDynBank_(int kind, int delta)
     int count = 0;
     if (K == uf8::bindings::DynamicBankKind::FxBank) {
         count = TrackFX_GetCount(tr);
-    } else if (K == uf8::bindings::DynamicBankKind::Sends) {
-        std::vector<CombinedSlot> lay;
-        buildCombinedSendLayout_(tr, lay);
-        count = static_cast<int>(lay.size());
     } else {
         return;
     }
@@ -4762,27 +4757,6 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     if (!tr || slot < 0 || slot >= 8) return info;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::Sends: {
-            const int vslot = dynBankSlotBase_(kind) + slot;
-            // 7.75-correct: visual slot → (category, apiIndex). apiIndex < 0
-            // is a genuine empty gap; category 0 = track send, 1 = HW output.
-            const CombinedSlot cs = combinedSendSlot_(tr, vslot);
-            if (cs.apiIndex < 0) return info;          // empty visual slot
-            info.present = true;
-            StripRoute r;
-            r.track = tr; r.sendCategory = cs.category;
-            r.sendIndex = cs.apiIndex; r.valid = true;
-            std::string nm = routeName_(r);
-            if (nm.empty()) nm = "Send";
-            // Leave UTF-8 intact + untruncated: the soft-key label path folds
-            // to Latin-1 and buildPluginSlotName clamps to 12 chars (char-safe
-            // once folded). Truncating raw bytes here could split an umlaut.
-            info.label = nm;
-            const bool muted = GetTrackSendInfo_Value(
-                tr, cs.category, cs.apiIndex, "B_MUTE") > 0.5;
-            info.led = muted ? 1 : 2;   // active bright, muted dim
-            return info;
-        }
         case DK::FxBank: {
             const int fxIdx = dynBankSlotBase_(kind) + slot;
             if (fxIdx >= TrackFX_GetCount(tr)) return info;   // empty slot
@@ -4885,33 +4859,6 @@ static void applyDynBankReq_(uint32_t enc)
     if (!tr) return;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::Sends: {
-            const int vslot = dynBankSlotBase_(kind) + slot;
-            const CombinedSlot cs = combinedSendSlot_(tr, vslot);
-            if (cs.apiIndex < 0) return;               // empty visual slot
-            if (gesture == 1) {                        // +Shift: pre/post
-                const double m = GetTrackSendInfo_Value(
-                    tr, cs.category, cs.apiIndex, "I_SENDMODE");
-                // 0 = post-fader (post-pan) ↔ 3 = pre-fader (post-FX) — the
-                // pair the routing window's pre/post button flips between.
-                SetTrackSendInfo_Value(tr, cs.category, cs.apiIndex,
-                                       "I_SENDMODE", (m == 0.0) ? 3.0 : 0.0);
-            } else if (gesture == 4) {                 // long: jump to dest
-                StripRoute r;
-                r.track = tr; r.sendCategory = cs.category;
-                r.sendIndex = cs.apiIndex; r.valid = true;
-                if (MediaTrack* dest = routeTargetTrack_(r))
-                    SetOnlyTrackSelected(dest);
-            } else {                                   // plain: mute toggle
-                const double mute = GetTrackSendInfo_Value(
-                    tr, cs.category, cs.apiIndex, "B_MUTE");
-                SetTrackSendInfo_Value(tr, cs.category, cs.apiIndex,
-                                       "B_MUTE", (mute > 0.5) ? 0.0 : 1.0);
-            }
-            g_softKeyDirty.store(true);
-            g_pageDirty.store(true);
-            break;
-        }
         case DK::FxBank: {
             const int fxIdx = dynBankSlotBase_(kind) + slot;
             const int n = TrackFX_GetCount(tr);
