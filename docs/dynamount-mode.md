@@ -31,6 +31,41 @@ Protocol was reverse-engineered & live-verified; reference material lives in the
 
 Speed fixed global 9 (not user-exposed). Rotation clamps 0–180.
 
+## Done & on `main` (phase 4 — UF8 mode, code-complete 2026-06-28)
+Built + compiles clean + tests pass + deployed; **awaiting Frank HW test.**
+- New `SelectionMode::DynaMount` (`main.cpp:1010`) + friendly/str/parse strings.
+- `selection_mode_dynamount` builtin (registerSelectionModeToggle) — toggles in/out
+  like the other selection modes; appears in the action picker under "Selection Modes"
+  (prefix-categorised, no whitelist edit needed). Bind it to a hardware button.
+- `stripToVisibleSlot` (`main.cpp:1177`) branch: in DynaMount mode the N enabled
+  mounts pin strips to one side (Left 0..N-1 / Right 8-N..7), return -1 (no track);
+  the rest show tracks PUSHED past the reserved block (the AUTO-fill analogue).
+- Fader input intercept (`main.cpp` ~13859): mount strip → `setDistance` (FLIP off, h)
+  / `setHorizontal` (FLIP on, v), echoes pos back, skips track volume. Called straight
+  from the input thread — manager setters are atomics, no REAPER API touched.
+- V-Pot input intercept (~14598): mount strip → `nudgeRotation` (always r).
+- Feedback block in the big render loop (before the empty-strip branch): name → upper
+  scribble, "DYNA" → CS-type zone, mount slot → channel digit, active-axis value →
+  fader-dB zone, "H.. V.. R.." → value line, motor fader → `faderNorm(flipped)`,
+  V-Pot ring → rotation/180. Offline → "OFF"/"OFFLINE". tr is null so Solo/Cut/Sel
+  LEDs already render off.
+- Colour bar: `reaperColorForVisibleSlot` returns the mount's palette colour;
+  `slotLabelForVisibleSlot` returns the mount name (keeps the bar rendered).
+- Lifecycle: manager loaded from ExtState + worker started in `REAPER_PLUGIN_ENTRYPOINT`
+  init; `manager().stop()` in the unload path.
+- FLIP: no handler change needed — the per-tick feedback reads `g_flip` so the motor
+  fader re-drives to the new axis automatically; V-Pot stays rotation.
+
+Settings DYNA tab reworked 2026-06-28: labelled table (On/Name/IP/Colour/Detect/Status)
++ colour SWATCH picker (was an unlabelled "col N" slider) + input-field hints.
+
+### Phase-4 HW-test checklist (Frank)
+- Bind a button to `selection_mode_dynamount`; enter mode → N strips pin to the
+  Fill side, rest show tracks banked past them.
+- Fader moves distance; FLIP → fader moves left/right; V-Pot turns rotation.
+- Scribbles show name + H/V/R; colour bar = mount colour; offline shows OFF/OFFLINE.
+- Calibration is still defaults (Phase 5) — travel maps 0..1 → full h/v range.
+
 ## Build / install (verified working)
 ```
 cd extension
@@ -41,7 +76,10 @@ cmake --build build --target test_dynamount && ./build/test_dynamount
 cp build/reaper_rea-sixty.dylib ~/Library/Application\ Support/REAPER/UserPlugins/
 ```
 
-## Phase 4 — UF8 mode (NOT started; the deep part)
+## Phase 4 — UF8 mode (DONE, see "Done & on main (phase 4)" above; awaiting HW)
+Original plan kept below for reference.
+
+
 Wire a dedicated **selection mode like REC**. Key decisions (Frank, locked):
 - Only **N strips** (= enabled mounts) become DynaMount strips; the rest stay normal tracks.
 - **Pinned** strips, fill **Left or Right** (Setting), pins **push** tracks (track-bank offset by N) —

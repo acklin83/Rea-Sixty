@@ -15914,59 +15914,112 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    for (int i = 0; i < kMaxMounts; ++i) {
-        DynaMountManager::Info in = mgr.info(i);
-        char id[24];
+    // Per-mount config table. Columns are labelled so the empty fields are
+    // self-explanatory (Frank 2026-06-28: the bare row was unreadable).
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "##dyna_tbl", 6, &tblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+        double wOn   = scaleW_(ctx, 30.0);
+        double wName = scaleW_(ctx, 130.0);
+        double wIp   = scaleW_(ctx, 140.0);
+        double wCol  = scaleW_(ctx, 70.0);
+        double wDet  = scaleW_(ctx, 70.0);
+        double wStat = scaleW_(ctx, 90.0);
+        ImGui_TableSetupColumn(ctx, "On",         &wFlag, &wOn,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Name",       &wFlag, &wName, nullptr);
+        ImGui_TableSetupColumn(ctx, "IP address", &wFlag, &wIp,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Colour",     &wFlag, &wCol,  nullptr);
+        ImGui_TableSetupColumn(ctx, "",           &wFlag, &wDet,  nullptr);
+        ImGui_TableSetupColumn(ctx, "Status",     &wFlag, &wStat, nullptr);
+        ImGui_TableHeadersRow(ctx);
 
-        // Enable checkbox.
-        bool en = in.enabled;
-        snprintf(id, sizeof(id), "##dm_en_%d", i);
-        if (ImGui_Checkbox(ctx, id, &en)) {
-            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
-            persist();
+        int palCount = 0;
+        const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
+
+        for (int i = 0; i < kMaxMounts; ++i) {
+            DynaMountManager::Info in = mgr.info(i);
+            char id[32];
+
+            // On.
+            ImGui_TableNextColumn(ctx);
+            bool en = in.enabled;
+            snprintf(id, sizeof(id), "##dm_en_%d", i);
+            if (ImGui_Checkbox(ctx, id, &en)) {
+                mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+                persist();
+            }
+
+            // Name.
+            ImGui_TableNextColumn(ctx);
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            snprintf(id, sizeof(id), "##dm_name_%d", i);
+            int tf = 0;
+            if (ImGui_InputTextWithHint(ctx, id, "mic name", s_name[i],
+                                        sizeof(s_name[i]), &tf, nullptr)) {
+                mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+                persist();
+            }
+
+            // IP.
+            ImGui_TableNextColumn(ctx);
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            snprintf(id, sizeof(id), "##dm_ip_%d", i);
+            if (ImGui_InputTextWithHint(ctx, id, "192.168.1.50", s_ip[i],
+                                        sizeof(s_ip[i]), &tf, nullptr)) {
+                mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
+                persist();
+            }
+
+            // Colour — swatch button + palette popup (same idiom as the
+            // track-bank colour pickers). Stores a palette index.
+            ImGui_TableNextColumn(ctx);
+            int ci = in.color;
+            if (ci < 0) ci = 0;
+            if (palCount > 0 && ci >= palCount) ci = palCount - 1;
+            const uf8::PaletteRgb cur = (palCount > 0) ? pal[ci]
+                                                       : uf8::PaletteRgb{128,128,128};
+            const int curRgba = (int(cur.r) << 24) | (int(cur.g) << 16) |
+                                (int(cur.b) << 8) | 0xFF;
+            snprintf(id, sizeof(id), "##dm_colbtn_%d", i);
+            int btnFlags = 0; double bw = scaleW_(ctx, 56.0), bh = 22.0;
+            if (ImGui_ColorButton(ctx, id, curRgba, &btnFlags, &bw, &bh)) {
+                char popId[24]; snprintf(popId, sizeof(popId), "dm_pal_%d", i);
+                ImGui_OpenPopup(ctx, popId, nullptr);
+            }
+            char popId[24]; snprintf(popId, sizeof(popId), "dm_pal_%d", i);
+            if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+                const double sw = 26.0; const int perRow = 5;
+                for (int k = 0; k < palCount; ++k) {
+                    const auto& p = pal[k];
+                    const int packed = (int(p.r) << 24) | (int(p.g) << 16) |
+                                       (int(p.b) << 8) | 0xFF;
+                    char swId[24]; snprintf(swId, sizeof(swId), "##dm_sw%d_%d", i, k);
+                    int swFlags = 0; double w = sw, h = sw;
+                    if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                        mgr.setMount(i, en, s_name[i], s_ip[i], k);
+                        persist();
+                        ImGui_CloseCurrentPopup(ctx);
+                    }
+                    if ((k % perRow) != (perRow - 1) && k != palCount - 1)
+                        ImGui_SameLine(ctx, nullptr, nullptr);
+                }
+                ImGui_EndPopup(ctx);
+            }
+
+            // Detect.
+            ImGui_TableNextColumn(ctx);
+            snprintf(id, sizeof(id), "Detect##dm_det_%d", i);
+            if (ImGui_Button(ctx, id, nullptr, nullptr))
+                mgr.requestDetect(i);
+
+            // Status.
+            ImGui_TableNextColumn(ctx);
+            const char* status = in.online ? protoName(in.proto)
+                                            : (in.enabled ? "offline" : "--");
+            ImGui_Text(ctx, status);
         }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Name.
-        ImGui_SetNextItemWidth(ctx, 120.0);
-        snprintf(id, sizeof(id), "##dm_name_%d", i);
-        int tf = 0;
-        if (ImGui_InputText(ctx, id, s_name[i], sizeof(s_name[i]), &tf, nullptr)) {
-            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
-            persist();
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // IP.
-        ImGui_SetNextItemWidth(ctx, 130.0);
-        snprintf(id, sizeof(id), "##dm_ip_%d", i);
-        if (ImGui_InputText(ctx, id, s_ip[i], sizeof(s_ip[i]), &tf, nullptr)) {
-            mgr.setMount(i, en, s_name[i], s_ip[i], in.color);
-            persist();
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Color (palette index 0..15).
-        ImGui_SetNextItemWidth(ctx, 90.0);
-        int color = in.color;
-        snprintf(id, sizeof(id), "##dm_col_%d", i);
-        if (ImGui_SliderInt(ctx, id, &color, 0, 15, "col %d", nullptr)) {
-            mgr.setMount(i, en, s_name[i], s_ip[i], color);
-            persist();
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Detect.
-        snprintf(id, sizeof(id), "Detect##dm_det_%d", i);
-        if (ImGui_Button(ctx, id, nullptr, nullptr)) {
-            mgr.requestDetect(i);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-
-        // Status.
-        const char* status = in.online ? protoName(in.proto)
-                                        : (in.enabled ? "offline" : "--");
-        ImGui_Text(ctx, status);
+        ImGui_EndTable(ctx);
     }
 
     ImGui_Spacing(ctx);

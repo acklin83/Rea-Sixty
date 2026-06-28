@@ -67,6 +67,7 @@
 #include "HidDevice.h"
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
+#include "DynaMountManager.h"
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
@@ -1006,7 +1007,7 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 // & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
 // cycles the plug-in instance on the strip's track. Bindable via the
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
-enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle };
+enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 
 // Master-pin: replace one physical UF8 strip with the REAPER Master bus.
@@ -1034,6 +1035,7 @@ inline const char* selectionModeStr(SelectionMode m)
         case SelectionMode::Auto:          return "auto";
         case SelectionMode::Instance:      return "instance";
         case SelectionMode::InstanceCycle: return "instance_cycle";
+        case SelectionMode::DynaMount:     return "dynamount";
         case SelectionMode::Norm:
         default:                           return "norm";
     }
@@ -1048,6 +1050,7 @@ inline const char* selectionModeFriendly(SelectionMode m)
         case SelectionMode::Auto:          return "Automation";
         case SelectionMode::Instance:      return "Instance";
         case SelectionMode::InstanceCycle: return "Instance Cycle";
+        case SelectionMode::DynaMount:     return "DynaMount";
         case SelectionMode::Norm:
         default:                           return "Select";
     }
@@ -1061,6 +1064,7 @@ inline SelectionMode parseSelectionMode(const char* s)
     if (std::strcmp(s, "auto")           == 0) return SelectionMode::Auto;
     if (std::strcmp(s, "instance")       == 0) return SelectionMode::Instance;
     if (std::strcmp(s, "instance_cycle") == 0) return SelectionMode::InstanceCycle;
+    if (std::strcmp(s, "dynamount")      == 0) return SelectionMode::DynaMount;
     return SelectionMode::Norm;
 }
 
@@ -1171,6 +1175,27 @@ inline MediaTrack* visibleTrackAt(int idx) {
 // negative slots, so existing null-check callers stay correct without
 // extra guards.
 inline int stripToVisibleSlot(int strip, int bankOffset) {
+    // DynaMount mode: the enabled mounts pin N physical strips to one side
+    // (Left → strips 0..N-1, Right → strips 8-N..7); those strips control
+    // robotic mounts, not tracks, so they return -1 here. The remaining
+    // strips show tracks with the window PUSHED past the reserved block, so
+    // the mounts don't consume track slots — same idea as AUTO fill, but the
+    // reservation is a fixed count (N) instead of right-padding. Composes
+    // ahead of Master-pin / sticky (those aren't expected to combine with
+    // DynaMount mode).
+    if (g_selectionMode.load() == SelectionMode::DynaMount) {
+        auto& dm = uf8::dynamount::manager();
+        const int n = dm.definedCount();
+        if (n > 0) {
+            if (dm.mountForStrip(strip) >= 0) return -1;  // mount strip, no track
+            const bool right = dm.fillDir() == uf8::dynamount::FillDir::Right;
+            // Right-anchored mounts sit on strips 8-N..7, so the left strips
+            // 0..7-N map 1:1 onto tracks. Left-anchored mounts sit on 0..N-1,
+            // so track strips start at N and shift down by N.
+            const int tpos = right ? strip : (strip - n);
+            return tpos + bankOffset;
+        }
+    }
     // Unified reservation that composes Master-pin Shift + the sticky pin
     // head (Focus Set ∪ honoured TCP pins) + banking, left to right:
     //   Master left (S1):  [ Master ][ head ][ banked rest ]
@@ -13831,6 +13856,28 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                       // typical bundle layouts).
                     continue;
                 }
+                // DynaMount mode: a mount strip's fader drives the robotic
+                // mount, not a track. FLIP off → distance (h); FLIP on →
+                // left/right (v). The mount manager setters are atomic and
+                // thread-safe, so we call them straight from the input thread
+                // (no REAPER API touched). Echo the position back so the
+                // firmware motor target tracks the touch, then skip the
+                // track-volume pipeline entirely.
+                if (g_selectionMode.load() == SelectionMode::DynaMount) {
+                    const int mnt = uf8::dynamount::manager().mountForStrip(strip);
+                    if (mnt >= 0) {
+                        const double norm =
+                            double(pb14) / double(kUf8FaderPbMax);
+                        if (g_flip.load())
+                            uf8::dynamount::manager().setHorizontal(mnt, norm);
+                        else
+                            uf8::dynamount::manager().setDistance(mnt, norm);
+                        if (g_dev)
+                            g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
+                        i += frameSize;
+                        continue;
+                    }
+                }
                 // Always record the raw position so the touch-release
                 // commit can snap REAPER to where the fader physically
                 // ended up, even if every frame this touch was sub-deadband.
@@ -14548,6 +14595,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 i += frameSize;
                 continue;
             }
+            // DynaMount mode: a mount strip's V-Pot nudges rotation (r),
+            // regardless of FLIP. Atomic setter → safe from the input thread.
+            if (strip < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
+                const int mnt = uf8::dynamount::manager().mountForStrip(strip);
+                if (mnt >= 0) {
+                    uf8::dynamount::manager().nudgeRotation(mnt, signed6);
+                    i += frameSize;
+                    continue;
+                }
+            }
             if (strip < 8) {
                 // Continuous detent fraction = signed6/128. DON'T change this
                 // divisor: the stepped-param path recovers the integer detent
@@ -14772,6 +14829,27 @@ uint32_t reaperColorForVisibleSlot(int slot)
 {
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
+
+    // DynaMount strip — colour bar reflects the mount's configured palette
+    // colour, not a track. Resolve before stripToVisibleSlot (which returns
+    // -1 for mount strips).
+    if (g_selectionMode.load() == SelectionMode::DynaMount && slot >= 0 && slot < 8) {
+        auto& dm = uf8::dynamount::manager();
+        const int mnt = dm.mountForStrip(slot);
+        if (mnt >= 0) {
+            int palCount = 0;
+            const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
+            int ci = dm.info(mnt).color;
+            if (ci < 0) ci = 0;
+            if (palCount > 0 && ci >= palCount) ci = palCount - 1;
+            if (palCount > 0) {
+                const uf8::PaletteRgb& p = pal[ci];
+                return (uint32_t(p.r) << 16) | (uint32_t(p.g) << 8) | uint32_t(p.b);
+            }
+            return 0;
+        }
+    }
+
     const int realSlot   = stripToVisibleSlot(slot, bankOffset);
 
     // FX Learn UF8 user-strip mode: the focused track has a user-mapped
@@ -14878,6 +14956,16 @@ std::string sslPluginShortName(MediaTrack* tr)
 std::string slotLabelForVisibleSlot(int slot)
 {
     const int trackCount = visibleTrackCount();
+    // DynaMount strip — label the colour-bar zone with the mount name so the
+    // bar stays rendered and the strip identifies as a mount.
+    if (g_selectionMode.load() == SelectionMode::DynaMount && slot >= 0 && slot < 8) {
+        auto& dm = uf8::dynamount::manager();
+        const int mnt = dm.mountForStrip(slot);
+        if (mnt >= 0) {
+            std::string nm = utf8ToLatin1(dm.info(mnt).name);
+            return nm.empty() ? std::string("MOUNT") : nm;
+        }
+    }
     const int realSlot   = stripToVisibleSlot(slot, g_bankOffset.load());
     if (MediaTrack* mp = masterPinTrack_(slot)) {
         // CS short name if a Channel Strip is on the Master, else "MASTER"
@@ -16481,6 +16569,94 @@ void pushZonesForVisibleSlots()
             const auto& r = routedFader ? faderRoute : vpotRoute;
             if (r.track) tr = r.track;
         }
+        // DynaMount strip — render the mount's live state and skip the
+        // track render pipeline. `tr` is null for mount strips, so the
+        // Solo/Cut/Sel LED blocks above already painted them off; the colour
+        // bar + slot-label zone come from reaperColorForVisibleSlot /
+        // slotLabelForVisibleSlot. We own everything else here.
+        if (g_selectionMode.load() == SelectionMode::DynaMount) {
+            auto& dm = uf8::dynamount::manager();
+            const int mnt = dm.mountForStrip(s);
+            if (mnt >= 0) {
+                const auto info    = dm.info(mnt);
+                const bool flipped = g_flip.load();
+                const int  hVal = dm.targetH(mnt);
+                const int  vVal = dm.targetV(mnt);
+                const int  rVal = dm.targetR(mnt);
+
+                // Upper scribble — mount name (≤7 chars, folded to Latin-1).
+                std::string nm = utf8ToLatin1(info.name);
+                if (nm.empty()) nm = "MOUNT";
+                if (nm.size() > 7) nm.resize(7);
+                if (bankChanged || g_lastTrackName[s] != nm) {
+                    g_lastTrackName[s] = nm;
+                    g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), nm));
+                }
+
+                // Channel-strip-type zone — tag the strip as a mount.
+                const std::string cs = "DYNA";
+                if (bankChanged || g_lastCsType[s] != cs) {
+                    g_lastCsType[s] = cs;
+                    g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), cs));
+                }
+
+                // Channel-number digit — mount slot (1-based config index).
+                char chbuf[8];
+                snprintf(chbuf, sizeof(chbuf), "%d", mnt + 1);
+                const std::string ch = chbuf;
+                if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
+                    g_lastChanNum[s] = ch;
+                    g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), ch));
+                }
+
+                // Fader dB readout — the active axis value, or OFFLINE.
+                char dbbuf[8];
+                if (!info.online) snprintf(dbbuf, sizeof(dbbuf), "OFF");
+                else snprintf(dbbuf, sizeof(dbbuf), "%c%d",
+                              flipped ? 'V' : 'H', flipped ? vVal : hVal);
+                const std::string db = dbbuf;
+                if (bankChanged || g_lastFaderDb[s] != db) {
+                    g_lastFaderDb[s] = db;
+                    g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s), db));
+                }
+
+                // Value line — full mount state (or OFFLINE).
+                char vlbuf[24];
+                if (!info.online) snprintf(vlbuf, sizeof(vlbuf), "OFFLINE");
+                else snprintf(vlbuf, sizeof(vlbuf), "H%-3d V%-3d R%-3d",
+                              hVal, vVal, rVal);
+                std::string vl = vlbuf;
+                if (vl.size() > 19) vl.resize(19);
+                if (bankChanged || g_lastValueLine[s] != vl) {
+                    g_lastValueLine[s] = vl;
+                    g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), vl));
+                }
+
+                // Motor fader — drive to the active axis position. Skipped
+                // while the user is touching it (so the motor doesn't fight
+                // the hand). FLIP picks h vs v via faderNorm.
+                if (!g_touchReported[s].load()) {
+                    const double fn = dm.faderNorm(mnt, flipped);
+                    uint16_t pb = static_cast<uint16_t>(
+                        fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
+                    if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
+                    if (!g_faderPbInit || g_lastFaderPb[s] != pb) {
+                        g_lastFaderPb[s] = pb;
+                        const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
+                        const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                        g_dev->send(uf8::buildFaderPosition(
+                            static_cast<uint8_t>(s), lsb, msb));
+                    }
+                }
+
+                // V-Pot ring — rotation 0..180 as a unipolar bar.
+                vpotBar[s] = vpotPosFromUnipolar(
+                    static_cast<double>(rVal) /
+                    static_cast<double>(uf8::dynamount::kRMax));
+                continue;
+            }
+        }
+
         if (!tr || routedButInvalid) {
             const std::string blankCs   = "";   // empty → NUL-padded to width
             const std::string blankDb   = "    ";
@@ -26065,6 +26241,14 @@ void registerBindingHandlers()
                                 SelectionMode::InstanceCycle,
                                 "Selection Mode → Instance Cycle (V-Pot)");
 
+    // DynaMount Mode — the enabled mounts (Settings → Modes → DYNA) pin N
+    // strips to one side; their faders drive distance / left-right (FLIP
+    // swaps the axis) and their V-Pots nudge rotation. The remaining strips
+    // stay normal tracks (banked past the reserved block).
+    registerSelectionModeToggle("selection_mode_dynamount",
+                                SelectionMode::DynaMount,
+                                "Selection Mode → DynaMount");
+
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
     // change but still forces a re-push so the LED layer stays in sync.
@@ -28495,6 +28679,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         if (g_insertMarkersEnabled.load()) clearAllInsertMarkers_();
         // Tell the companion overlay to stop drawing (extension going away).
         SetExtState("rea_sixty", "overlay", "0;0;", false);
+        // Stop the DynaMount worker thread + close its sockets (created in the
+        // init path below, so it always exists here).
+        uf8::dynamount::manager().stop();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
@@ -28581,6 +28768,22 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         char m[64];
         snprintf(m, sizeof(m), "LoadAPI: %d missing (proceeding)", missing);
         initLog(m);
+    }
+
+    initLog("step: init DynaMount manager");
+    // Load the persisted mount config + fill direction so DynaMount mode
+    // works without first opening Settings, and start the worker thread on
+    // the main thread (so the libusb input thread never triggers the lazy
+    // singleton init mid-frame). Settings → DYNA edits update the same
+    // singleton live.
+    {
+        uf8::dynamount::DynaMountManager& dm = uf8::dynamount::manager();
+        if (const char* blob = GetExtState("rea_sixty", "dynamount_devices");
+            blob && *blob)
+            dm.deserialize(blob);
+        const char* fill = GetExtState("rea_sixty", "dynamount_fill");
+        dm.setFillDir((fill && *fill == 'R') ? uf8::dynamount::FillDir::Right
+                                             : uf8::dynamount::FillDir::Left);
     }
 
     initLog("step: deploy input-level JSFX");
