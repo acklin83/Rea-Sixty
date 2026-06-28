@@ -363,6 +363,11 @@ void UC1Surface::setFocusedTrack(void* track)
 {
     if (focusedTrack_ == track) return;
     focusedTrack_ = track;
+    // Channel switched → show the CS track-name carousel briefly (1 s), then
+    // it self-hides so the steady-state LCD shows the plug-in label, not the
+    // carousel. Frank 2026-06-28: "Karussell nur beim Umschalten per Encoder".
+    csCarouselUntil_ = std::chrono::steady_clock::now()
+                     + std::chrono::milliseconds(1000);
     // Skip GR pushes for a short window so the BC mechanical needle
     // doesn't twitch toward the outgoing track's last-read value
     // before the new track's GR settles in REAPER. ~250 ms is below
@@ -802,6 +807,17 @@ int UC1Surface::poll()
     {
         instanceCarouselActive_ = false;
         device_->send(buildCentralMode(CentralMode::Main, 0x00));
+        refresh();
+    }
+
+    // CS track-name carousel self-hide: when its post-switch window expires,
+    // repaint once so refresh() clears the carousel zone (fires once — the
+    // reset to epoch makes the gate false until the next channel switch).
+    if (csCarouselUntil_ != std::chrono::steady_clock::time_point{}
+        && std::chrono::steady_clock::now() >= csCarouselUntil_
+        && device_ && mode_ == Uc1Mode::Main)
+    {
+        csCarouselUntil_ = {};
         refresh();
     }
 
@@ -4527,9 +4543,10 @@ void UC1Surface::refresh()
     // UC1 CS carousel slot fits 12 chars; UC1 BC carousel slot fits 14
     // (per hardware testing 2026-05-25). abbreviateTrackName_ honours the
     // global Smart Abbreviate / Truncate toggle from Settings.
-    const std::string prevName = abbreviateTrackName_(nameOfIdx(curIdx - 1), 12);
-    const std::string currName = abbreviateTrackName_(nameOfIdx(curIdx),     12);
-    const std::string nextName = abbreviateTrackName_(nameOfIdx(curIdx + 1), 12);
+    // Fold UTF-8 → Latin-1 exactly like the UF8 scribble (foldLatin1=true).
+    const std::string prevName = abbreviateTrackName_(nameOfIdx(curIdx - 1), 12, -1, true);
+    const std::string currName = abbreviateTrackName_(nameOfIdx(curIdx),     12, -1, true);
+    const std::string nextName = abbreviateTrackName_(nameOfIdx(curIdx + 1), 12, -1, true);
     // Build triples but defer sending — uc1_47 Encoder 1 burst at
     // t=1.4309s shows SSL 360°'s order is layout-enable → central-label
     // → LARGE triple → SMALL triple → palette → invalidate(0x0F). The
@@ -4541,9 +4558,9 @@ void UC1Surface::refresh()
     auto smallTriple = buildTrackNameTripleSmall(prevName, currName, nextName);
     lastSmallTripleFrame_ = smallTriple;
     auto largeTriple = buildTrackNameTripleLarge(
-        abbreviateTrackName_(bcNameAtRank(bcRank - 1), 14),
-        abbreviateTrackName_(bcNameAtRank(bcRank),     14),
-        abbreviateTrackName_(bcNameAtRank(bcRank + 1), 14));
+        abbreviateTrackName_(bcNameAtRank(bcRank - 1), 14, -1, true),
+        abbreviateTrackName_(bcNameAtRank(bcRank),     14, -1, true),
+        abbreviateTrackName_(bcNameAtRank(bcRank + 1), 14, -1, true));
     lastLargeTripleFrame_ = largeTriple;
 
     // 7-segment push moved to the end of refresh() — see below. Several
@@ -4779,7 +4796,14 @@ void UC1Surface::refresh()
     if (!instanceCarouselActive_) {
         device_->send(std::vector<uint8_t>(largeTriple));
     }
-    device_->send(std::vector<uint8_t>(smallTriple));
+    // CS track-name carousel: only within the post-channel-switch window.
+    // Outside it, CLEAR the carousel zone (a blank triple) — it's a separate
+    // LCD zone from the central label, so skipping would leave stale names.
+    if (std::chrono::steady_clock::now() < csCarouselUntil_) {
+        device_->send(std::vector<uint8_t>(smallTriple));
+    } else {
+        device_->send(uc1::buildTrackNameTripleSmall("", "", ""));
+    }
 
     // Focused-track colour bar — single palette byte. Uses the same
     // quantizer as UF8's color-bar (uf8::quantize on the track's

@@ -421,6 +421,10 @@ private:
     std::chrono::steady_clock::time_point instanceCarouselUntil_{};
     std::string                           instanceCarouselHeader_;
     std::vector<uint8_t>                  instanceCarouselTripleFrame_;
+    // CS track-name carousel (prev/curr/next) is shown only for a short
+    // window after a channel switch — like SSL 360° (which drops it ~after
+    // the encoder stops), not permanently. Set on focused-track change.
+    std::chrono::steady_clock::time_point csCarouselUntil_{};
 
     // Nav Mode carousel (Phase 2.8b). Persistent — no timeout. Cached
     // strings + palette so showNavCarousel can be called every poll
