@@ -4965,11 +4965,27 @@ static void applyDynBankReq_(uint32_t enc)
             if (slot < 0 || slot >= 8) return;
             if (gesture == 4) {                 // long: toggle group broadcast
                 uf8::param_groups::toggleGroupActive(slot);
-            } else {                            // toggle focused-track membership
-                const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
-                const uint8_t bit  = static_cast<uint8_t>(1u << slot);
-                uf8::param_groups::setMaskForTrack(
-                    tr, static_cast<uint8_t>(mask ^ bit));
+            } else {
+                // Toggle membership. Multi-select: derive the target state
+                // from the context track (flip it), then apply it uniformly
+                // to every selected track so mixed states converge.
+                const uint8_t bit = static_cast<uint8_t>(1u << slot);
+                const bool add =
+                    (uf8::param_groups::getMaskForTrack(tr) & bit) == 0;
+                auto applyOne = [&](MediaTrack* t) {
+                    uint8_t m = uf8::param_groups::getMaskForTrack(t);
+                    m = add ? static_cast<uint8_t>(m | bit)
+                            : static_cast<uint8_t>(m & ~bit);
+                    uf8::param_groups::setMaskForTrack(t, m);
+                };
+                const int nSel = CountSelectedTracks(nullptr);
+                if (nSel > 0) {
+                    for (int i = 0; i < nSel; ++i)
+                        if (MediaTrack* t = GetSelectedTrack(nullptr, i))
+                            applyOne(t);
+                } else {
+                    applyOne(tr);
+                }
             }
             g_softKeyDirty.store(true);
             g_pageDirty.store(true);
