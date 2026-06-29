@@ -16184,11 +16184,12 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_Text(ctx,
-        "  Fader = Y (distance, fader up = nearest); FLIP = X (left/right); "
-        "V-Pot = R (rotation). Calibrate (Home) sets the mount to the "
-        "reference pose X50 Y0 R90. Positions are saved globally, so they "
-        "stay correct until the DynaMount app moves a mount — then just "
-        "recalibrate. Motor speed is fixed (9).");
+        "  Fader = X (left/right); FLIP = Y (distance, fader up = nearest); "
+        "V-Pot = R (rotation).\n"
+        "  Calibrate (Home) sets the mount to the reference pose X50 Y0 R90. "
+        "Positions are saved globally, so they stay correct until the "
+        "DynaMount app moves a mount — then just recalibrate. Motor speed "
+        "is fixed (9).");
 }
 
 void SettingsScreen::drawModes(ImGui_Context* ctx)
@@ -16837,9 +16838,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         ImGui_EndTabItem(ctx);
     }
 
-    // --- DYNA (DynaMount Mode) --------------------------------------
+    // --- Dynamount Mode ---------------------------------------------
     int flagsDyna = tabFlagsFor(5);
-    if (ImGui_BeginTabItem(ctx, "DYNA", nullptr, &flagsDyna)) {
+    if (ImGui_BeginTabItem(ctx, "Dynamount", nullptr, &flagsDyna)) {
         persistActive(5);
         drawDynaMountTab_(ctx);
         ImGui_EndTabItem(ctx);

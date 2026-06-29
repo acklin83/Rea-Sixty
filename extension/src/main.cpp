@@ -6980,6 +6980,17 @@ std::map<std::string, std::array<CsVal, 128>> g_csFavMem;
 // Frank 2026-06-27.
 std::map<std::string, std::map<std::string, CsVal>> g_csFavMemExt;
 
+// Per-favourite FULL parameter memory. Keyed like g_csFavMem (guid\tident) →
+// (param index → normalised value) for EVERY param of that favourite instance.
+// The SSL-Link carry + g_csFavMem/Ext only cover mapped/SSL controls, so a 3rd-
+// party plug-in used as a CS favourite (e.g. Analog Molecule) loses its OWN
+// non-mapped params ("3D Flux", "Thermal Bloom", …) to plug-in defaults when it
+// is re-inserted on cycle-back. Snapshotted on switch-away, restored on return
+// BEFORE the mapped carry (so carried params still win). Gated by
+// g_csFavRememberNonCopied. Session-only (in-session cycle is the reported case);
+// not persisted to the .rpp. Frank 2026-06-29.
+std::map<std::string, std::map<int, double>> g_csFavFull;
+
 // Drop dead entries from g_csFavMem: a favourite slot that is now empty (no
 // plug-in assigned — project-independent, always safe) or a track GUID that no
 // longer exists in the active project. Keeps the .rpp + RAM map from growing
@@ -7010,6 +7021,14 @@ static void csFavMemPrune_()
                        || !liveGuids.count(k.substr(0, tab));
         if (drop) it = g_csFavMemExt.erase(it); else ++it;
     }
+    // Same prune for the full-param memory.
+    for (auto it = g_csFavFull.begin(); it != g_csFavFull.end(); ) {
+        const std::string& k = it->first;
+        const size_t tab = k.find('\t');
+        const bool drop = (tab == std::string::npos)
+                       || !liveGuids.count(k.substr(0, tab));
+        if (drop) it = g_csFavFull.erase(it); else ++it;
+    }
 }
 
 void csFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
@@ -7038,6 +7057,10 @@ void csFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
                          static_cast<int>(v.dim), v.stateIdx, v.stateCount, v.text);
         }
     }
+    // Full-param memory — one line per (favourite, param index): normalised value.
+    for (const auto& kv : g_csFavFull)
+        for (const auto& pv : kv.second)
+            ctx->AddLine("CSFAVFULL \"%s\" %d %.6f", kv.first.c_str(), pv.first, pv.second);
 }
 
 bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
@@ -7078,6 +7101,18 @@ bool csFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
         if (!memKey.empty() && !slotId.empty()) g_csFavMemExt[memKey][slotId] = v;
         return true;
     }
+    // Full-param memory line:  CSFAVFULL "<memKey>" <paramIdx> <norm>
+    if (std::strncmp(p, "CSFAVFULL", 9) == 0) {
+        p += 9;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') return true;
+        ++p; std::string memKey; while (*p && *p != '"') memKey += *p++;
+        if (*p == '"') ++p;
+        int pidx = -1; double norm = 0.0;
+        if (std::sscanf(p, " %d %lf", &pidx, &norm) != 2) return true;
+        if (!memKey.empty() && pidx >= 0) g_csFavFull[memKey][pidx] = norm;
+        return true;
+    }
     if (std::strncmp(p, "CSFAVMEM", 8) != 0) return false;
     p += 8;
     while (*p == ' ' || *p == '\t') ++p;
@@ -7112,6 +7147,7 @@ void csFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*re
 {
     g_csFavMem.clear();
     g_csFavMemExt.clear();
+    g_csFavFull.clear();
 }
 
 project_config_extension_t g_csFavMemProjConfig{
@@ -7126,6 +7162,8 @@ project_config_extension_t g_csFavMemProjConfig{
 // CS linkIdx keys on the same track GUID. BCFAVMEM lines persist per project.
 std::map<std::string, std::array<CsVal, 128>> g_bcIntent;
 std::map<std::string, std::array<CsVal, 128>> g_bcFavMem;
+// BC full-param memory — exact analog of g_csFavFull (see its comment).
+std::map<std::string, std::map<int, double>> g_bcFavFull;
 
 static void bcFavMemPrune_()
 {
@@ -7141,6 +7179,13 @@ static void bcFavMemPrune_()
         const bool drop = (tab == std::string::npos)
                        || !liveGuids.count(k.substr(0, tab));
         if (drop) it = g_bcFavMem.erase(it); else ++it;
+    }
+    for (auto it = g_bcFavFull.begin(); it != g_bcFavFull.end(); ) {
+        const std::string& k = it->first;
+        const size_t tab = k.find('\t');
+        const bool drop = (tab == std::string::npos)
+                       || !liveGuids.count(k.substr(0, tab));
+        if (drop) it = g_bcFavFull.erase(it); else ++it;
     }
 }
 
@@ -7158,6 +7203,9 @@ void bcFavMemSaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
                          v.stateIdx, v.stateCount, v.text);
         }
     }
+    for (const auto& kv : g_bcFavFull)
+        for (const auto& pv : kv.second)
+            ctx->AddLine("BCFAVFULL \"%s\" %d %.6f", kv.first.c_str(), pv.first, pv.second);
 }
 
 bool bcFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
@@ -7166,6 +7214,17 @@ bool bcFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
     if (!line || !*line) return false;
     const char* p = line;
     while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "BCFAVFULL", 9) == 0) {
+        p += 9;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') return true;
+        ++p; std::string memKey; while (*p && *p != '"') memKey += *p++;
+        if (*p == '"') ++p;
+        int pidx = -1; double norm = 0.0;
+        if (std::sscanf(p, " %d %lf", &pidx, &norm) != 2) return true;
+        if (!memKey.empty() && pidx >= 0) g_bcFavFull[memKey][pidx] = norm;
+        return true;
+    }
     if (std::strncmp(p, "BCFAVMEM", 8) != 0) return false;
     p += 8;
     while (*p == ' ' || *p == '\t') ++p;
@@ -7198,6 +7257,7 @@ bool bcFavMemProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
 void bcFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
 {
     g_bcFavMem.clear();
+    g_bcFavFull.clear();
 }
 
 project_config_extension_t g_bcFavMemProjConfig{
@@ -7947,6 +8007,32 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     const unsigned oldHash = haveOldIdent ? csIdentHash_(oldIdent) : 0u;
     const unsigned newHash = haveNewIdent ? csIdentHash_(newIdent) : 0u;
 
+    // Full-param per-favourite memory: snapshot EVERY param of the OUTGOING
+    // favourite, then restore the INCOMING favourite's remembered full state
+    // onto the freshly-added instance. The SSL/map carry below overwrites the
+    // mapped params, so this only preserves the plug-in's OWN non-mapped extras
+    // (e.g. Analog Molecule "3D Flux"/"Thermal Bloom") that otherwise reset to
+    // defaults on cycle-back. Runs BEFORE the carry loop so carried/reapplied
+    // params win. Gated by favRemember (off → plug-in defaults, as before).
+    // Frank 2026-06-29.
+    if (favRemember) {
+        if (haveOldIdent) {
+            auto& full = g_csFavFull[guid + "\t" + oldIdent];
+            const int npOld = TrackFX_GetNumParams(tr, oldIdx);
+            for (int p = 0; p < npOld; ++p)
+                full[p] = TrackFX_GetParamNormalized(tr, oldIdx, p);
+        }
+        if (haveNewIdent) {
+            auto it = g_csFavFull.find(guid + "\t" + newIdent);
+            if (it != g_csFavFull.end()) {
+                const int npNew = TrackFX_GetNumParams(tr, newIdx);
+                for (const auto& pr : it->second)
+                    if (pr.first >= 0 && pr.first < npNew)
+                        TrackFX_SetParamNormalized(tr, newIdx, pr.first, pr.second);
+            }
+        }
+    }
+
     auto& intent = g_csIntent[trackGuidStr_(tr)];
     for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
         // Global section mask: when a section is unticked it is NOT carried from
@@ -8319,6 +8405,28 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
     // Round-trip identity hashes (see switchCsTo_).
     const unsigned oldHash = haveOldIdent ? csIdentHash_(oldIdent) : 0u;
     const unsigned newHash = haveNewIdent ? csIdentHash_(newIdent) : 0u;
+
+    // Full-param per-favourite memory (see g_csFavFull / switchCsTo_): snapshot
+    // the outgoing BC favourite's every param, restore the incoming one's
+    // remembered full state before the mapped carry, so a 3rd-party plug-in used
+    // as a BC favourite keeps its OWN non-mapped params across cycles.
+    if (g_csFavRememberNonCopied.load()) {
+        if (haveOldIdent) {
+            auto& full = g_bcFavFull[guid + "\t" + oldIdent];
+            const int npOld = TrackFX_GetNumParams(tr, oldIdx);
+            for (int p = 0; p < npOld; ++p)
+                full[p] = TrackFX_GetParamNormalized(tr, oldIdx, p);
+        }
+        if (haveNewIdent) {
+            auto it = g_bcFavFull.find(guid + "\t" + newIdent);
+            if (it != g_bcFavFull.end()) {
+                const int npNew = TrackFX_GetNumParams(tr, newIdx);
+                for (const auto& pr : it->second)
+                    if (pr.first >= 0 && pr.first < npNew)
+                        TrackFX_SetParamNormalized(tr, newIdx, pr.first, pr.second);
+            }
+        }
+    }
 
     auto& intent = g_bcIntent[guid];
     for (int linkIdx = 1; linkIdx <= 7; ++linkIdx) {
@@ -15015,8 +15123,9 @@ std::string slotLabelForVisibleSlot(int slot)
         auto& dm = uf8::dynamount::manager();
         const int mnt = dm.mountForStrip(slot);
         if (mnt >= 0) {
-            std::string nm = utf8ToLatin1(dm.info(mnt).name);
-            return nm.empty() ? std::string("MOUNT") : nm;
+            // Colour-bar zone identifies the mode (the per-mount name shows in
+            // the upper scribble text). Frank 2026-06-29: label = DYNAMOUNT.
+            return "DYNAMOUNT";
         }
     }
     const int realSlot   = stripToVisibleSlot(slot, g_bankOffset.load());
