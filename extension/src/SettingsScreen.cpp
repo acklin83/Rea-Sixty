@@ -1576,8 +1576,18 @@ std::string describeActionStep_(const uf8::bindings::ActionStep& s)
             return s.action.empty() ? "" : builtinDisplayName(s.action);
         case ActionType::Reaper:
             return "REAPER: " + (s.label.empty() ? s.action : s.label);
-        case ActionType::Keyboard:
-            return s.action.empty() ? "" : ("Key: " + s.action);
+        case ActionType::Keyboard: {
+            if (s.action.empty()) return "";
+            const auto me = keymacro::parseMacro(s.action);
+            if (me.empty()) return "";
+            keymacro::KeyChord kc;
+            std::string first = keymacro::parseChord(me.front().chord, kc)
+                                    ? keymacro::formatChord(kc)
+                                    : me.front().chord;
+            std::string lbl = "Key: " + first;
+            if (me.size() > 1) lbl += " +" + std::to_string(me.size() - 1);
+            return lbl;
+        }
         case ActionType::Midi:    return "MIDI";
     }
     return "";
@@ -2840,6 +2850,7 @@ static const char* capturedKeyName_(ImGui_Context* ctx)
         {ImGui_Key_F5,"f5"},{ImGui_Key_F6,"f6"},{ImGui_Key_F7,"f7"},{ImGui_Key_F8,"f8"},
         {ImGui_Key_F9,"f9"},{ImGui_Key_F10,"f10"},{ImGui_Key_F11,"f11"},{ImGui_Key_F12,"f12"},
         {ImGui_Key_Tab,"tab"},{ImGui_Key_Enter,"enter"},{ImGui_Key_Space,"space"},
+        {ImGui_Key_Escape,"escape"},
         {ImGui_Key_Backspace,"backspace"},{ImGui_Key_Delete,"delete"},
         {ImGui_Key_Insert,"insert"},{ImGui_Key_Home,"home"},{ImGui_Key_End,"end"},
         {ImGui_Key_PageUp,"pageup"},{ImGui_Key_PageDown,"pagedown"},
@@ -2850,92 +2861,162 @@ static const char* capturedKeyName_(ImGui_Context* ctx)
         bool repeat = false;
         if (ImGui_IsKeyPressed(ctx, k.key, &repeat) && !repeat) return k.name;
     }
+    // Space / Escape / Enter / Tab / Backspace / Delete are swallowed by ImGui
+    // (active text field, nav, popup-close) so IsKeyPressed never reports them
+    // while capturing — read these straight from the OS instead. (Capture
+    // clears the armed flag on the first hit, so a held key fires once.)
+#if defined(__APPLE__)
+    struct OsKey { int kc; const char* name; };  // Carbon virtual key codes
+    static const OsKey osk[] = {
+        {49, "space"}, {53, "escape"}, {36, "enter"}, {48, "tab"},
+        {51, "backspace"}, {117, "delete"},
+    };
+    for (const auto& k : osk)
+        if (CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState,
+                                  static_cast<CGKeyCode>(k.kc)))
+            return k.name;
+#elif defined(_WIN32)
+    struct OsKey { int vk; const char* name; };
+    static const OsKey osk[] = {
+        {VK_SPACE, "space"}, {VK_ESCAPE, "escape"}, {VK_RETURN, "enter"},
+        {VK_TAB, "tab"}, {VK_BACK, "backspace"}, {VK_DELETE, "delete"},
+    };
+    for (const auto& k : osk)
+        if (GetAsyncKeyState(k.vk) & 0x8000) return k.name;
+#endif
     return nullptr;
 }
 
-// Render the chord field for one Keyboard-macro step: a manual/display text
-// box, a Capture (live key-listen) button, and a canonical preview line.
-// Writes the captured/typed chord into `action`. Returns true if it changed.
+// Read the currently-held modifiers straight from the OS — ImGui's mac modifier
+// reporting is SWELL-swapped (⌘<->⌃) and GetKeyMods' bits don't match this
+// header's KeyModFlags_*. Used by the live chord capture.
+static void captureHeldMods_(ImGui_Context* ctx, bool& ctrl, bool& alt,
+                             bool& shift, bool& cmd)
+{
+    ctrl = alt = shift = cmd = false;
+#if defined(__APPLE__)
+    (void)ctx;
+    const CGEventFlags fl =
+        CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);
+    cmd   = (fl & kCGEventFlagMaskCommand)   != 0;   // ⌘
+    ctrl  = (fl & kCGEventFlagMaskControl)   != 0;   // ⌃ (kept distinct)
+    alt   = (fl & kCGEventFlagMaskAlternate) != 0;
+    shift = (fl & kCGEventFlagMaskShift)     != 0;
+#elif defined(_WIN32)
+    (void)ctx;
+    ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+    shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+    cmd   = ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+#else
+    auto down = [&](int k) { return ImGui_IsKeyDown(ctx, k); };
+    ctrl  = down(ImGui_Key_LeftCtrl)  || down(ImGui_Key_RightCtrl);
+    alt   = down(ImGui_Key_LeftAlt)   || down(ImGui_Key_RightAlt);
+    shift = down(ImGui_Key_LeftShift) || down(ImGui_Key_RightShift);
+    cmd   = down(ImGui_Key_LeftSuper) || down(ImGui_Key_RightSuper);
+#endif
+}
+
+// Render the Keyboard-macro editor for one binding action: a Delay (ms) |
+// Keyboard Command table, one row per chord, each row a delay spinner + the
+// captured combo + a live Capture button + a remove (×). "+ Add key" appends a
+// row. The whole macro lives in `action` as a "<delay>|<chord>;…" string, so it
+// is self-contained and works in ANY editor context (no multi-step chain
+// needed). Returns true if `action` changed. Frank 2026-06-29.
 static bool drawKeyboardChordField(ImGui_Context* ctx, const char* prefix,
                                    std::string& action)
 {
     bool dirty = false;
     char idbuf[96];
-    const bool capturing = (g_kbCapturePrefix == prefix);
+    std::vector<keymacro::MacroEntry> entries = keymacro::parseMacro(action);
+    if (entries.empty()) entries.push_back(keymacro::MacroEntry{});   // show one row
 
-    char buf[64] = {0};
-    std::strncpy(buf, action.c_str(), sizeof(buf) - 1);
-    snprintf(idbuf, sizeof(idbuf), "Keyboard Command##%s_kbcmd", prefix);
-    ImGui_PushItemWidth(ctx, 220);
-    if (ImGui_InputTextWithHint(ctx, idbuf, "Capture, or type e.g. ctrl+shift+t",
-                                buf, sizeof(buf), nullptr, nullptr)) {
-        action = buf;
-        dirty = true;
-    }
-    ImGui_PopItemWidth(ctx);
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    snprintf(idbuf, sizeof(idbuf),
-                  capturing ? "Listening — press keys (Esc cancels)##%s_cap"
-                            : "Capture##%s_cap",
-                  prefix);
-    if (ImGui_Button(ctx, idbuf, nullptr, nullptr))
-        g_kbCapturePrefix = capturing ? std::string() : std::string(prefix);
+    ImGui_TextDisabled(ctx, "Delay (ms) before each key, then the combo:");
+    int removeIdx = -1;
+    for (size_t r = 0; r < entries.size(); ++r) {
+        keymacro::MacroEntry& e = entries[r];
+        const std::string cap = std::string(prefix) + "#" + std::to_string(r);
+        const bool capturing = (g_kbCapturePrefix == cap);
 
-    // Live capture poll — runs only for the armed field.
-    if (g_kbCapturePrefix == prefix) {
-        bool escRep = false;
-        if (ImGui_IsKeyPressed(ctx, ImGui_Key_Escape, &escRep)) {
-            g_kbCapturePrefix.clear();             // Esc cancels (bind via text)
-        } else if (const char* nm = capturedKeyName_(ctx)) {
-            // Read modifiers straight from the OS — ImGui's mac modifier
-            // reporting is SWELL-swapped (⌘<->⌃), and GetKeyMods' bits don't
-            // match this header's KeyModFlags_*. The main key still comes from
-            // ImGui above (letters/F-keys aren't affected by the swap).
-            bool ctrl = false, alt = false, shift = false, cmd = false;
-#if defined(__APPLE__)
-            const CGEventFlags fl =
-                CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);
-            cmd   = (fl & kCGEventFlagMaskCommand)   != 0;   // ⌘
-            ctrl  = (fl & kCGEventFlagMaskControl)   != 0;   // ⌃ (kept distinct)
-            alt   = (fl & kCGEventFlagMaskAlternate) != 0;
-            shift = (fl & kCGEventFlagMaskShift)     != 0;
-#elif defined(_WIN32)
-            ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-            alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
-            shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
-            cmd   = ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
-#else
-            auto down = [&](int k) { return ImGui_IsKeyDown(ctx, k); };
-            ctrl  = down(ImGui_Key_LeftCtrl)  || down(ImGui_Key_RightCtrl);
-            alt   = down(ImGui_Key_LeftAlt)   || down(ImGui_Key_RightAlt);
-            shift = down(ImGui_Key_LeftShift) || down(ImGui_Key_RightShift);
-            cmd   = down(ImGui_Key_LeftSuper) || down(ImGui_Key_RightSuper);
-#endif
-            std::string chord;
-            auto add = [&](const char* t) {
-                if (!chord.empty()) chord += " + ";
-                chord += t;
-            };
-            if (ctrl)  add("ctrl");
-            if (alt)   add("alt");
-            if (shift) add("shift");
-            if (cmd)   add("cmd");
-            add(nm);
-            action = chord;
-            dirty  = true;
-            g_kbCapturePrefix.clear();
+        // Delay (ms) before this key fires.
+        snprintf(idbuf, sizeof(idbuf), "##%s_dly_%zu", prefix, r);
+        ImGui_PushItemWidth(ctx, 80);
+        int d = e.delayMs;
+        if (ImGui_InputInt(ctx, idbuf, &d, nullptr, nullptr, nullptr)) {
+            if (d < 0) d = 0;
+            if (d > 600000) d = 600000;
+            e.delayMs = d;
+            dirty = true;
+        }
+        ImGui_PopItemWidth(ctx);
+
+        // Editable chord text — type it ("esc", "space", "cmd+shift+t") or fill
+        // it via Capture. Stored raw so half-typed input round-trips.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        char buf[64] = {0};
+        std::strncpy(buf, e.chord.c_str(), sizeof(buf) - 1);
+        snprintf(idbuf, sizeof(idbuf), "##%s_chd_%zu", prefix, r);
+        ImGui_PushItemWidth(ctx, 180);
+        if (ImGui_InputTextWithHint(ctx, idbuf, "type or Capture", buf, sizeof(buf),
+                                    nullptr, nullptr)) {
+            e.chord = buf;
+            dirty = true;
+        }
+        ImGui_PopItemWidth(ctx);
+
+        // Capture button — must NOT take keyboard focus, else Space/Enter/Esc
+        // would activate IT instead of being captured. PushAllowKeyboardFocus
+        // keeps those keys flowing to the poll below.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        snprintf(idbuf, sizeof(idbuf),
+                      capturing ? "Listening…##%s_cap_%zu"
+                                : "Capture##%s_cap_%zu",
+                      prefix, r);
+        ImGui_PushAllowKeyboardFocus(ctx, false);
+        if (ImGui_Button(ctx, idbuf, nullptr, nullptr))
+            g_kbCapturePrefix = capturing ? std::string() : cap;
+        ImGui_PopAllowKeyboardFocus(ctx);
+
+        // Remove this row.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        snprintf(idbuf, sizeof(idbuf), "×##%s_rm_%zu", prefix, r);
+        if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) removeIdx = static_cast<int>(r);
+
+        // Live capture poll for the armed row — first non-modifier key wins
+        // (Esc/Space/Enter included; click Capture again to cancel).
+        if (g_kbCapturePrefix == cap) {
+            if (const char* nm = capturedKeyName_(ctx)) {
+                bool ctrl, alt, shift, cmd;
+                captureHeldMods_(ctx, ctrl, alt, shift, cmd);
+                std::string chord;
+                auto addt = [&](const char* t) {
+                    if (!chord.empty()) chord += " + ";
+                    chord += t;
+                };
+                if (ctrl)  addt("ctrl");
+                if (alt)   addt("alt");
+                if (shift) addt("shift");
+                if (cmd)   addt("cmd");
+                addt(nm);
+                e.chord = chord;
+                dirty   = true;
+                g_kbCapturePrefix.clear();
+            }
         }
     }
 
-    // Canonical preview / validation.
-    if (!action.empty()) {
-        keymacro::KeyChord ch;
-        if (keymacro::parseChord(action, ch))
-            ImGui_TextDisabled(ctx,
-                ("Sends to REAPER: " + keymacro::formatChord(ch)).c_str());
-        else
-            ImGui_TextDisabled(ctx, "Unrecognised key combo");
+    if (removeIdx >= 0 && !entries.empty()) {
+        entries.erase(entries.begin() + removeIdx);
+        dirty = true;
     }
+
+    snprintf(idbuf, sizeof(idbuf), "+ Add key##%s_add", prefix);
+    if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) {
+        entries.push_back(keymacro::MacroEntry{});
+        dirty = true;
+    }
+
+    if (dirty) action = keymacro::formatMacro(entries);
     return dirty;
 }
 

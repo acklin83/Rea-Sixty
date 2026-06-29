@@ -2494,10 +2494,15 @@ void dispatchMidi_(const ActionStep& a)
 // Keyboard-macro chords queued for main-thread delivery. runStep_ runs on the
 // libusb input thread (single-step slots) or the main thread (chain steps via
 // tickPending); SWELL window messages must be posted on the main thread, so a
-// Keyboard step parks its chord here and tickPending() drains + sends it.
-// Frank 2026-06-29.
-std::mutex                      g_keyMutex;
-std::vector<keymacro::KeyChord> g_pendingKeys;
+// Keyboard step parks its chords here and tickPending() drains + sends those
+// whose fireAt has elapsed. A macro = several entries each with a pre-delay, so
+// they carry a scheduled time, not just a chord. Frank 2026-06-29.
+struct PendingKey {
+    std::chrono::steady_clock::time_point fireAt;
+    keymacro::KeyChord                    chord;
+};
+std::mutex               g_keyMutex;
+std::vector<PendingKey>  g_pendingKeys;
 
 void runStep_(const ActionStep& a, bool firing, bool pressed)
 {
@@ -2535,16 +2540,22 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             break;
         }
         case ActionType::Keyboard: {
-            // Synthesise the chord to REAPER on the press edge only (like
-            // MIDI). Delivery is deferred to the main-thread tick — SWELL
-            // window messages can't be posted from the input thread — so we
-            // park the parsed chord and tickPending() sends it. Multi-key
-            // macros are chains of Keyboard steps with wait_ms between them.
+            // Fire on the press edge only (like MIDI). The action string is a
+            // self-contained macro: a list of (pre-delay ms, chord) entries.
+            // Schedule each entry at the cumulative delay from now; tickPending
+            // sends them on the main thread as their times elapse (SWELL window
+            // messages can't go out from the input thread). Frank 2026-06-29.
             if (!firing) break;
-            keymacro::KeyChord ch;
-            if (keymacro::parseChord(a.action, ch)) {
-                std::lock_guard<std::mutex> lk(g_keyMutex);
-                g_pendingKeys.push_back(ch);
+            const auto entries = keymacro::parseMacro(a.action);
+            const auto base = std::chrono::steady_clock::now();
+            int cum = 0;
+            std::lock_guard<std::mutex> lk(g_keyMutex);
+            for (const auto& e : entries) {
+                cum += (e.delayMs < 0 ? 0 : e.delayMs);
+                keymacro::KeyChord kc;
+                if (!keymacro::parseChord(e.chord, kc)) continue;   // skip invalid
+                g_pendingKeys.push_back(
+                    { base + std::chrono::milliseconds(cum), kc });
             }
             break;
         }
@@ -2673,16 +2684,23 @@ void tickPending()
         }
     }
 
-    // Deliver keyboard-macro chords parked by runStep_ (this tick's chain
-    // steps enqueue above and go out now; input-thread single-step firings
-    // land on the next tick). Sending here keeps SWELL messages on the main
-    // thread. See g_pendingKeys.
-    std::vector<keymacro::KeyChord> keys;
+    // Deliver keyboard-macro chords whose scheduled time has elapsed; keep the
+    // rest queued (a macro's later entries fire on subsequent ticks per their
+    // delays). Sending here keeps SWELL messages on the main thread. See
+    // g_pendingKeys.
+    std::vector<keymacro::KeyChord> dueKeys;
     {
         std::lock_guard<std::mutex> lk(g_keyMutex);
-        keys.swap(g_pendingKeys);
+        const auto kn = std::chrono::steady_clock::now();
+        std::vector<PendingKey> keep;
+        keep.reserve(g_pendingKeys.size());
+        for (auto& pk : g_pendingKeys) {
+            if (pk.fireAt <= kn) dueKeys.push_back(pk.chord);
+            else                 keep.push_back(pk);
+        }
+        g_pendingKeys.swap(keep);
     }
-    for (const auto& ch : keys) keymacro::sendChordToReaper(ch);
+    for (const auto& ch : dueKeys) keymacro::sendChordToReaper(ch);
 }
 
 void effectiveLedActive(const Binding& bd, const ActionSlot& slot,

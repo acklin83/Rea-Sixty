@@ -15,6 +15,7 @@
 //
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace keymacro {
 
@@ -51,5 +52,24 @@ bool isModifierVk(int vk);
 // window messages + reads GetMainHwnd). No-op if the chord is invalid or the
 // main window is unavailable.
 void sendChordToReaper(const KeyChord& c);
+
+// ---- Macro (sequence of chords with per-entry delays) ----------------------
+// A keyboard macro is self-contained in a single binding action string: a list
+// of entries, each a pre-delay (ms, applied before the chord fires) and a
+// chord. Serialised as  "<delayMs>|<chord>;<delayMs>|<chord>;…"  (entries split
+// by ';', delay and chord by '|'). A plain chord with no '|' parses as one
+// entry with delay 0 — backward-compatible with single-chord values.
+struct MacroEntry {
+    int         delayMs = 0;   // wait this long BEFORE firing the chord
+    std::string chord;         // RAW chord text (parsed at dispatch via parseChord)
+};
+
+// Parse a macro string into entries. The chord is kept as its raw text so the
+// editor can round-trip half-typed input losslessly; parse it with parseChord
+// when firing (skip entries whose chord doesn't parse).
+std::vector<MacroEntry> parseMacro(const std::string& s);
+
+// Serialise entries back to the canonical macro string.
+std::string formatMacro(const std::vector<MacroEntry>& entries);
 
 } // namespace keymacro

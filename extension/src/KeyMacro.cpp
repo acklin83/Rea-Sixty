@@ -8,7 +8,9 @@
 #endif
 
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace keymacro {
@@ -169,6 +171,45 @@ void sendChordToReaper(const KeyChord& c) {
 
     KbdSectionInfo* mainSection = SectionFromUniqueID(0);  // 0 = main actions
     kbd_translateAccelerator(h, &msg, mainSection);
+}
+
+std::vector<MacroEntry> parseMacro(const std::string& s) {
+    std::vector<MacroEntry> out;
+    size_t i = 0;
+    while (i <= s.size()) {
+        const size_t semi = s.find(';', i);
+        const std::string part = s.substr(i, semi == std::string::npos ? std::string::npos
+                                                                        : semi - i);
+        i = (semi == std::string::npos) ? s.size() + 1 : semi + 1;
+        // Trim surrounding whitespace.
+        size_t a = 0, b = part.size();
+        while (a < b && (part[a] == ' ' || part[a] == '\t')) ++a;
+        while (b > a && (part[b - 1] == ' ' || part[b - 1] == '\t')) --b;
+        const std::string e = part.substr(a, b - a);
+        if (e.empty()) continue;
+        MacroEntry me;
+        const size_t bar = e.find('|');
+        if (bar != std::string::npos) {
+            me.delayMs = std::atoi(e.substr(0, bar).c_str());
+            if (me.delayMs < 0) me.delayMs = 0;
+            me.chord = e.substr(bar + 1);   // raw chord text (parsed at dispatch)
+        } else {
+            me.chord = e;                   // bare chord → delay 0 (back-compat)
+        }
+        out.push_back(me);
+    }
+    return out;
+}
+
+std::string formatMacro(const std::vector<MacroEntry>& entries) {
+    std::string out;
+    for (const auto& e : entries) {
+        if (!out.empty()) out += ';';
+        out += std::to_string(e.delayMs < 0 ? 0 : e.delayMs);
+        out += '|';
+        out += e.chord;
+    }
+    return out;
 }
 
 } // namespace keymacro
