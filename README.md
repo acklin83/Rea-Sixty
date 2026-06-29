@@ -8,6 +8,13 @@
 > ```
 > (The ReaPack index lives in a separate `reaper-scripts` repo — that's expected, not a typo.)
 > Or download the manual installer from the [latest release](https://github.com/acklin83/Rea-Sixty/releases/latest) (Mac / Windows / Linux archives).
+>
+> **Windows & Linux — one-time USB setup:** after installing, open the Settings window
+> (Action List → *"Rea-Sixty: Open / Close Rea-Sixty Settings"*) and go to the **About** tab:
+> - **Windows:** click **"Install UF8/UC1 WinUSB driver"** (binds UF8 + UC1 to WinUSB; one UAC + publisher prompt — SSL 360° stops seeing the devices afterwards).
+> - **Linux:** click **"Install Linux udev rule"** (grants non-root USB access via `/etc/udev/rules.d/99-rea-sixty.rules`; one pkexec password prompt).
+>
+> Then unplug + replug UF8 + UC1 and restart REAPER. macOS needs no driver step. Details: [`docs/install-windows.md`](docs/install-windows.md) and the `INSTALL.txt` in the Linux tarball.
 
 Rea-Sixty drives the SSL **UF8** and **UC1** controllers directly from a REAPER extension over their vendor-USB protocols — no SSL 360° required, no plugin-on-every-track restriction, no CSI, no virtual MCU MIDI. Track colors land on the UF8 scribble strips in the DAW layer (something SSL 360° does not offer at all), faders run at full 16-bit precision, and the SSL Bus Compressor's GR meter on the UC1 follows audio-driven gain reduction on the focused REAPER track.
 
