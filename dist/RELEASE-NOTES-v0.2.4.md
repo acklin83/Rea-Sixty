@@ -22,8 +22,8 @@ First-run setup buttons (`Settings → About`):
 
 ### Dynamic soft-key banks
 - A Sub-Bank can now compute its 8 keys **live from the focused track**: **FX 1-8/9-16**, **Parameter Groups**, or **Track Colours** — no manual per-key assignment.
-- **FX and Sends banks are pageable** by a control you choose (a UF8 encoder, UC1 Enc 1/2, or the UF8 Bank keys) so banks of more than 8 page through 1-8 / 9-16 / …
-- **FX bank**: only the focused FX's key lights bright; pressing a key focuses that FX (and re-syncs the plug-in-mode GUI), pressing again toggles solo and focuses the soloed FX. Focus holds against the last-touched-FX chase.
+- The **FX bank is pageable** by a control you choose (a UF8 encoder, UC1 Enc 1/2, or the UF8 Bank keys), so a track with more than 8 FX walks 1-8 / 9-16 / …
+- **FX bank**: only the focused FX's key lights bright (bypassed = dark). Each key acts on its FX with a **configurable gesture set** — Focus, Float/close window, Bypass, FX-solo (bypass the others), Offline, Move, Delete (default press = Focus).
 - **Parameter Groups** and **Track Colours** apply to **all selected tracks**; Parameter-Group on/off state and names are saved **per project**.
 
 ### DynaMount mode
