@@ -35,6 +35,8 @@
 
 #include "WDL/jsonparse.h"
 
+#include "KeyMacro.h"
+
 namespace uf8::bindings {
 
 namespace {
@@ -2489,6 +2491,14 @@ void dispatchMidi_(const ActionStep& a)
     }
 }
 
+// Keyboard-macro chords queued for main-thread delivery. runStep_ runs on the
+// libusb input thread (single-step slots) or the main thread (chain steps via
+// tickPending); SWELL window messages must be posted on the main thread, so a
+// Keyboard step parks its chord here and tickPending() drains + sends it.
+// Frank 2026-06-29.
+std::mutex                      g_keyMutex;
+std::vector<keymacro::KeyChord> g_pendingKeys;
+
 void runStep_(const ActionStep& a, bool firing, bool pressed)
 {
     switch (a.type) {
@@ -2524,9 +2534,20 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             }
             break;
         }
-        case ActionType::Keyboard:
-            // Phase D — needs platform key-event injection.
+        case ActionType::Keyboard: {
+            // Synthesise the chord to REAPER on the press edge only (like
+            // MIDI). Delivery is deferred to the main-thread tick — SWELL
+            // window messages can't be posted from the input thread — so we
+            // park the parsed chord and tickPending() sends it. Multi-key
+            // macros are chains of Keyboard steps with wait_ms between them.
+            if (!firing) break;
+            keymacro::KeyChord ch;
+            if (keymacro::parseChord(a.action, ch)) {
+                std::lock_guard<std::mutex> lk(g_keyMutex);
+                g_pendingKeys.push_back(ch);
+            }
             break;
+        }
         case ActionType::Builtin: {
             auto it = g_builtins.find(a.action);
             if (it != g_builtins.end()) {
@@ -2651,6 +2672,17 @@ void tickPending()
             g_pendingChains.push_back(std::move(pc));
         }
     }
+
+    // Deliver keyboard-macro chords parked by runStep_ (this tick's chain
+    // steps enqueue above and go out now; input-thread single-step firings
+    // land on the next tick). Sending here keeps SWELL messages on the main
+    // thread. See g_pendingKeys.
+    std::vector<keymacro::KeyChord> keys;
+    {
+        std::lock_guard<std::mutex> lk(g_keyMutex);
+        keys.swap(g_pendingKeys);
+    }
+    for (const auto& ch : keys) keymacro::sendChordToReaper(ch);
 }
 
 void effectiveLedActive(const Binding& bd, const ActionSlot& slot,

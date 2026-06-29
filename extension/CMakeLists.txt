@@ -337,6 +337,8 @@ add_library(reaper_uf8 MODULE
     src/ThemeBridge.cpp
     # Phase 2.7 Bindings — Phase A
     src/Bindings.cpp
+    # Keyboard-macro action type — chord synthesis to REAPER's main window
+    src/KeyMacro.cpp
     # Virtual notch / detent for relative-encoder writes
     src/VirtualNotch.cpp
     # Multi-track parameter sync (8 persistent groups + temp-from-selection)
