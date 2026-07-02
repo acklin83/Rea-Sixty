@@ -387,6 +387,8 @@ bool reasixty_installLinuxUdevRule(std::string* errOut);
 bool reasixty_uninstallLinuxUdevRule(std::string* errOut);
 #endif
 bool reasixty_importLayerViaDialog(int layer);
+bool reasixty_exportUc1ViaDialog(int layer);
+bool reasixty_importUc1ViaDialog(int layer);
 void reasixty_onActiveLayerChanged();
 const char* reasixty_reaperVersion();
 void reasixty_openUrl(const char* url);
@@ -3341,6 +3343,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                  || n == "touch_to_learn_toggle"
                  || n == "focused_panel_toggle"
                  || n == "mode_banner_toggle"
+                 || n == "tcp_follows_selection_toggle"
+                 || n == "surface_mirror_tcp"
+                 || n == "surface_mirror_mcp"
                  || n.rfind("marker_overlay_", 0) == 0)
                     return "Hardware Modes";
 
@@ -4125,12 +4130,21 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     const bool idIsQuick =
         id == ButtonId::Quick1 || id == ButtonId::Quick2
      || id == ButtonId::Quick3;
+    // UC1 has no user-facing layer concept — hide the "Layer N" breadcrumb
+    // and the LED block for its controls (Frank 2026-07-02).
+    const bool idIsUc1 =
+        id == ButtonId::Uc1Encoder1 || id == ButtonId::Uc1Encoder2
+     || id == ButtonId::Uc1Encoder2Push || id == ButtonId::Uc1Magnifier
+     || id == ButtonId::Uc1Btn360;
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
       : (id == ButtonId::Quick2) ? 2
       : (id == ButtonId::Quick3) ? 3 : 0;
 
-    if (idIsLayer) {
+    if (idIsUc1) {
+        // No layer breadcrumb for UC1 — just the control face.
+        snprintf(header, sizeof(header), "Editing: %s", hwFaceLabel(id));
+    } else if (idIsLayer) {
         snprintf(header, sizeof(header),
                       "Editing: Layer %d", layer + 1);
     } else if (idIsQuick) {
@@ -4363,6 +4377,10 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_EndChild(ctx);
     }
 
+    // LED appearance is UF8-only — the UC1's encoders / 360 / MAGNIFY
+    // don't expose user-settable RGB, so hide the whole LED block on the
+    // UC1 bindings page (idIsUc1 computed above).
+    if (!idIsUc1) {
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
 
@@ -4472,6 +4490,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             dirty = true;
         }
     }
+    }   // end !idIsUc1 — LED block hidden for UC1 controls
 
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
@@ -5654,9 +5673,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // which schematic you click on. s_selected is preserved across
     // tab switches so the editor stays open on the last-clicked
     // button.
+    // Which device tab is open drives the admin row below (UF8 = per-layer
+    // save/load, UC1 = device-scoped UC1 save/load). Set inside the tab
+    // bodies, which only run for the selected tab.
+    static int s_deviceTab = 0;   // 0 = UF8, 1 = UC1
     int tabBarFlags = 0;
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
         if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
+            s_deviceTab = 0;
             drawUf8Vector(ctx, s_selected, s_editQuick, s_editSubBank);
             // Bank-scroll stride: when a selection scrolls past the surface
             // edge, jump a whole 8-strip bank or slide by one channel.
@@ -5677,6 +5701,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_EndTabItem(ctx);
         }
         if (ImGui_BeginTabItem(ctx, "UC1", nullptr, nullptr)) {
+            s_deviceTab = 1;
             drawUc1BindingsVector(ctx, s_selected);
             ImGui_EndTabItem(ctx);
         }
@@ -5714,16 +5739,32 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // A top-soft-key tile pivots to the user-Quick slot editor for the
     // selected (Layer, Quick, Sub-Bank, slot) combination. Everything
     // else goes through the regular per-button binding editor.
+    // Device-scoped editor selection. s_selected persists across the UF8 /
+    // UC1 tabs, but each tab should only edit its own device's controls —
+    // otherwise a UF8 soft-key selection would linger on the UC1 page (its
+    // Edit Quick / sub-bank selectors + soft-key editor) even though the
+    // UC1 is independent of the UF8 Quick / layer (Frank 2026-07-02).
+    const bool selIsUc1 =
+        s_selected == ButtonId::Uc1Encoder1
+     || s_selected == ButtonId::Uc1Encoder2
+     || s_selected == ButtonId::Uc1Encoder2Push
+     || s_selected == ButtonId::Uc1Magnifier
+     || s_selected == ButtonId::Uc1Btn360;
+    const ButtonId editSel =
+        (s_deviceTab == 1 && !selIsUc1) ? ButtonId::None :   // UC1 tab: UC1 only
+        (s_deviceTab == 0 &&  selIsUc1) ? ButtonId::None :   // UF8 tab: hide UC1
+        s_selected;
+
     const bool isTopSoftKey =
-        s_selected >= ButtonId::TopSoftKey1
-        && s_selected <= ButtonId::TopSoftKey8;
+        editSel >= ButtonId::TopSoftKey1
+        && editSel <= ButtonId::TopSoftKey8;
     const bool isSubBankCell =
-        s_selected == ButtonId::VPotBank
-     || s_selected == ButtonId::SoftKey1Bank
-     || s_selected == ButtonId::SoftKey2Bank
-     || s_selected == ButtonId::SoftKey3Bank
-     || s_selected == ButtonId::SoftKey4Bank
-     || s_selected == ButtonId::SoftKey5Bank;
+        editSel == ButtonId::VPotBank
+     || editSel == ButtonId::SoftKey1Bank
+     || editSel == ButtonId::SoftKey2Bank
+     || editSel == ButtonId::SoftKey3Bank
+     || editSel == ButtonId::SoftKey4Bank
+     || editSel == ButtonId::SoftKey5Bank;
 
     // Soft-key edit-context selector. Lets the user choose which Quick
     // (and, for the slot editor, which Sub-Bank) to edit independent of
@@ -5766,12 +5807,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
     }
 
-    if (s_selected == ButtonId::None) {
+    if (editSel == ButtonId::None) {
         // Nothing selected — leave the editor area blank. Help text
         // dropped 2026-05-22; the schematic is self-explanatory.
     } else if (isTopSoftKey) {
         const int slotIdx =
-            static_cast<int>(s_selected)
+            static_cast<int>(editSel)
             - static_cast<int>(ButtonId::TopSoftKey1);
         drawUserQuickSlotEditor_(ctx, s_editLayer, s_editQuick,
                                  s_editSubBank, slotIdx);
@@ -5781,38 +5822,56 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // top-soft-key slots. The editor below shows what's
         // selected + a Per-Quick LED override so the user can
         // distinguish (L, Q) contexts visually. Frank 2026-05-13.
-        drawSubBankCellEditor_(ctx, s_editLayer, s_editQuick, s_selected);
+        drawSubBankCellEditor_(ctx, s_editLayer, s_editQuick, editSel);
     } else {
-        drawBindingEditor(ctx, s_editLayer, s_selected);
+        drawBindingEditor(ctx, s_editLayer, editSel);
     }
 
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // ---- Per-layer admin row (reset / save / load) -----------------
-    if (ImGui_Button(ctx, "Reset this layer to factory defaults",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        resetLayerToDefaults(s_editLayer);
-    }
-
+    // ---- Admin row (reset / save / load) — device-scoped ------------
+    // UC1 tab: the device has no user-facing layer, so save/load acts on
+    // just the UC1 controls (of the active layer). UF8 tab: per-layer.
     static std::string s_portMsg;
-    char btnSave[40], btnLoad[40];
-    snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
-                  s_editLayer + 1);
-    snprintf(btnLoad, sizeof(btnLoad), "Load layer %d from file…",
-                  s_editLayer + 1);
-    sameLine(ctx);
-    if (ImGui_Button(ctx, btnSave, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        s_portMsg = reasixty_exportLayerViaDialog(s_editLayer)
-            ? "Layer exported."
-            : "Export cancelled or failed.";
-    }
-    sameLine(ctx);
-    if (ImGui_Button(ctx, btnLoad, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        s_portMsg = reasixty_importLayerViaDialog(s_editLayer)
-            ? "Layer imported."
-            : "Import cancelled or failed.";
+    if (s_deviceTab == 1) {
+        if (ImGui_Button(ctx, "Save UC1 bindings…",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            s_portMsg = reasixty_exportUc1ViaDialog(s_editLayer)
+                ? "UC1 bindings exported."
+                : "Export cancelled or failed.";
+        }
+        sameLine(ctx);
+        if (ImGui_Button(ctx, "Load UC1 bindings…",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            s_portMsg = reasixty_importUc1ViaDialog(s_editLayer)
+                ? "UC1 bindings imported."
+                : "Import cancelled or failed.";
+        }
+    } else {
+        if (ImGui_Button(ctx, "Reset this layer to factory defaults",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            resetLayerToDefaults(s_editLayer);
+        }
+
+        char btnSave[40], btnLoad[40];
+        snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
+                      s_editLayer + 1);
+        snprintf(btnLoad, sizeof(btnLoad), "Load layer %d from file…",
+                      s_editLayer + 1);
+        sameLine(ctx);
+        if (ImGui_Button(ctx, btnSave, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            s_portMsg = reasixty_exportLayerViaDialog(s_editLayer)
+                ? "Layer exported."
+                : "Export cancelled or failed.";
+        }
+        sameLine(ctx);
+        if (ImGui_Button(ctx, btnLoad, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            s_portMsg = reasixty_importLayerViaDialog(s_editLayer)
+                ? "Layer imported."
+                : "Import cancelled or failed.";
+        }
     }
     if (!s_portMsg.empty()) {
         ImGui_TextDisabled(ctx, s_portMsg.c_str());

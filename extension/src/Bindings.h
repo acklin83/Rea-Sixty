@@ -490,6 +490,12 @@ Modifier currentModifierSnapshot();
 bool exportLayerTo(int layer, const std::string& path);
 bool importLayerFrom(int layer, const std::string& path);
 
+// UC1-only variants. Serialise / restore just the five UC1 controls of one
+// layer as a {"version":1,"type":"uc1","bindings":{…}} container. Import
+// replaces only the UC1 controls; UF8 bindings and other layers are kept.
+bool exportUc1To(int layer, const std::string& path);
+bool importUc1From(int layer, const std::string& path);
+
 const Config& get();
 
 // Active-layer accessors. Phase B exposes these so the Layer LED-pusher

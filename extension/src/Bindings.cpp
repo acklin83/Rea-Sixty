@@ -2410,6 +2410,79 @@ bool importLayerFrom(int layer, const std::string& path)
     return true;
 }
 
+// ---- UC1-only bindings export / import ----------------------------------
+// The UC1 has no user-facing layer concept, so its Save/Load operates on
+// just the five UC1 controls of one layer (the active layer in practice).
+// The file is a small {"type":"uc1","bindings":{…}} container that reuses
+// the per-binding serialiser; import replaces only the UC1 controls in the
+// target layer, leaving UF8 bindings and every other layer untouched.
+static bool isUc1Id_(ButtonId id)
+{
+    return id == ButtonId::Uc1Encoder1 || id == ButtonId::Uc1Encoder2
+        || id == ButtonId::Uc1Encoder2Push || id == ButtonId::Uc1Magnifier
+        || id == ButtonId::Uc1Btn360;
+}
+
+bool exportUc1To(int layer, const std::string& path)
+{
+    if (layer < 0 || layer > 2) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const Layer& L = g_cfg.layers[layer];
+    std::ostringstream os;
+    os << "{\n  \"version\": 1,\n  \"type\": \"uc1\",\n  \"bindings\": {";
+    bool first = true;
+    for (auto& kv : L.bindings) {
+        if (!isUc1Id_(kv.first)) continue;
+        const char* name = toName(kv.first);
+        if (!name || !*name) continue;
+        if (!first) os << ",";
+        first = false;
+        os << "\n    \"" << name << "\": {";
+        serializeBindingBody_(kv.second, os);
+        os << "}";
+    }
+    if (!first) os << "\n  ";
+    os << "}\n}\n";
+    return writeFile_(path, os.str());
+}
+
+bool importUc1From(int layer, const std::string& path)
+{
+    if (layer < 0 || layer > 2) return false;
+    std::string contents;
+    if (!readFile_(path, contents) || contents.empty()) return false;
+
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(contents.c_str(),
+                                     static_cast<int>(contents.size()));
+    if (!root || !root->is_object()) return false;
+
+    auto* t = root->get_item_by_name("type");
+    const char* ts = t ? t->get_string_value() : nullptr;
+    if (!ts || std::strcmp(ts, "uc1") != 0) return false;
+
+    // parseLayer_ reads the "bindings" child of the passed object, so the
+    // root container (which holds "bindings" directly) works as-is.
+    Layer tmp;
+    if (!parseLayer_(root, tmp)) return false;
+
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        Layer& L = g_cfg.layers[layer];
+        for (ButtonId id : { ButtonId::Uc1Encoder1, ButtonId::Uc1Encoder2,
+                             ButtonId::Uc1Encoder2Push, ButtonId::Uc1Magnifier,
+                             ButtonId::Uc1Btn360 }) {
+            L.bindings.erase(id);
+            auto it = tmp.bindings.find(id);
+            if (it != tmp.bindings.end()) L.bindings[id] = it->second;
+        }
+        ensureConfigDir_();
+        writeFile_(configPath_(), serialize(g_cfg));
+        g_bindingsGen.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+}
+
 const Config& get()
 {
     return g_cfg;

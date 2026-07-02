@@ -25690,6 +25690,17 @@ bool reasixty_exportLayerViaDialog(int layer)
     return ok;
 }
 
+// UC1-only bindings export — Save dialog wrapper. Operates on `layer`
+// (the active layer in practice; the UC1 page hides the layer concept).
+bool reasixty_exportUc1ViaDialog(int layer)
+{
+    std::string chosen = reasixtySaveDialog_(
+        "Export Rea-Sixty UC1 bindings", "rea-sixty-uc1.json", "json",
+        "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0");
+    if (chosen.empty()) return false;
+    return uf8::bindings::exportUc1To(layer, chosen);
+}
+
 // Whole-setup bundle — Save dialog wrapper. Returns the chosen path
 // on success, "" on cancel / error.
 std::string reasixty_setupExportViaDialog(std::string* errOut)
@@ -26055,6 +26066,17 @@ bool reasixty_importLayerViaDialog(int layer)
         return false;
     }
     return uf8::bindings::importLayerFrom(layer, buf);
+}
+
+// UC1-only bindings import — Open dialog wrapper. Replaces only the UC1
+// controls in `layer`; UF8 bindings and other layers stay intact.
+bool reasixty_importUc1ViaDialog(int layer)
+{
+    char buf[4096] = {0};
+    if (!GetUserFileNameForRead(buf, "Import Rea-Sixty UC1 bindings", "json")) {
+        return false;
+    }
+    return uf8::bindings::importUc1From(layer, buf);
 }
 
 // File picker → register ReaScript → return the action string suitable
@@ -26748,6 +26770,45 @@ void registerBindingHandlers()
         },
         [](int) -> bool { return g_modeBanner.load(); },
         "Mode-change banner: show / hide (flashes Sel / Encoder mode)", false
+    });
+
+    registerBuiltin("tcp_follows_selection_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            reasixty_setTcpFollowsSelection(!g_tcpFollowsSelection.load());
+        },
+        [](int) -> bool { return g_tcpFollowsSelection.load(); },
+        "TCP follows selection", false
+    });
+
+    // Surface-mirror source (visibility follow): two mutually-exclusive
+    // actions so a key sets an absolute mode (LED = that mode active),
+    // rather than a blind toggle. 0 = TCP, 1 = MCP. Only atomics +
+    // dirty flags here — the main-thread bank rebuild reads the new
+    // value (folder_mode pattern); calling the full setter inline would
+    // hit REAPER track APIs on the input thread.
+    registerBuiltin("surface_mirror_tcp", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_visibilityFollow.store(0);
+            SetExtState("rea_sixty", "visibility_follow", "0", true);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+        },
+        [](int) -> bool { return g_visibilityFollow.load() == 0; },
+        "Surface mirrors: TCP", false
+    });
+
+    registerBuiltin("surface_mirror_mcp", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_visibilityFollow.store(1);
+            SetExtState("rea_sixty", "visibility_follow", "1", true);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+        },
+        [](int) -> bool { return g_visibilityFollow.load() == 1; },
+        "Surface mirrors: MCP", false
     });
 
     registerBuiltin("uf8_plugin_mode_toggle", DescBuilder{
