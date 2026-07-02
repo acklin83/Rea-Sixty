@@ -24,5 +24,8 @@ Needles are simple position values → cleanly self-driveable.
 | Analogue | `0x0125` VU needle L + `0x0127` VU needle R (position) | `0x011c` current/max |
 | RTA | `0x0122` 31-band spectrum (64 B) | selected-freq readout |
 
-Exact byte→dB / byte→position scaling can be refined with a level-sweep if needed, but for
-native output the meters are self-renderable from REAPER metering. Addresses + formats are decoded.
+Addresses + formats are decoded. Exact byte→dB / byte→position scaling per mode STILL needs a
+level-sweep capture — and that is CRITICAL work, not optional: the meter/analyzer display is the
+main UF1 selling point, so we match SSL's real graphic byte-for-byte. The Meter view is 100%
+SSL-plugin-gated (Frank 2026-07-02); REAPER self-rendering is DEFERRED. See memory
+`uf1-meter-analyzer-display`.

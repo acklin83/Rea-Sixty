@@ -29,8 +29,11 @@ like the EQ graph). Looks like a packed segment/bitmap encoding, **per-mode spec
 - **`0x0126` / `0x0127`** (2 B, ~160..164) = L-R balance bar / phase-correlation position.
 - `0x0125` = meter-instance label; 0x0009/a/0015/0016 = idle here.
 
-## Remaining (own chapter; LOW priority — can self-render)
+## Remaining (own chapter; CRITICAL — this IS the deliverable)
 Exact per-mode `0x0122` pixel codec (Overview scope+bars, Analogue VU needle, RTA 31-band) needs a
-level-SWEEP capture per mode to map level→bytes. **But for native output we can render our own
-meters from REAPER metering (like the EQ graph), so matching SSL's exact pixel codec is optional
-polish.** The meter NUMERIC readouts (0x011c) + structure are decoded — enough to drive a meter.
+level-SWEEP capture per mode to map level→bytes. **This is NOT optional polish — the meter/analyzer
+display is the MAIN UF1 selling point, so matching SSL's exact graphic byte-for-byte is the goal
+(Frank 2026-07-02).** The Meter view is **100% SSL-plugin-gated** (SSL Meter / Meter Pro must be on
+the track — no generic-track meter-bridge); we mirror the plugin's real display data. REAPER-native
+self-rendering is DEFERRED, a later fallback only. See memory `uf1-meter-analyzer-display`. The
+meter NUMERIC readouts (0x011c) + structure are decoded; the graphic codec is the open work.

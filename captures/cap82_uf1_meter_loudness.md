@@ -21,4 +21,7 @@
 | RTA | sel-freq | 0x0122 31-band spectrum (64 B) |
 | Loudness | 0x011c LKFS/LRA + 0x000c momentary | 0x0122 loudness-history graph (+ dB & time axes) |
 
-Meter decode complete (addresses + formats for all modes). Exact byte→value scaling = optional polish.
+Meter decode complete (addresses + formats for all modes). Exact byte→value scaling per mode STILL
+needs level-sweep captures — CRITICAL, not optional: the meter/analyzer display is the main UF1
+selling point (match SSL's graphic byte-for-byte). Meter view is 100% SSL-plugin-gated (Frank
+2026-07-02); REAPER self-rendering DEFERRED. See memory `uf1-meter-analyzer-display`.
