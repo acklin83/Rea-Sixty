@@ -3286,152 +3286,14 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             // Automation, Zoom, …) lives further down. Internals starting
             // with "__" are hidden. New builtins must be added here
             // explicitly or they will not show in the picker.
+            // Category grouping now lives in one place — uf8::bindings — so
+            // the picker and the Stream Deck bridge can never drift. See
+            // Bindings.cpp builtinCategory() / builtinCategoryOrder().
             auto categoryFor = [](const std::string& n) -> const char* {
-                if (n.rfind("__", 0) == 0) return "";
-
-                // Cycle Actions — free-bindable to any button / encoder
-                // for one-shot or continuous cycling. Sits at the top of
-                // the picker because these are the most-asked-for
-                // bindings (Frank 2026-05-15).
-                // Favourites — unified (domain follows focus) listed first, then the
-                // explicit per-domain actions, then the copy/own toggles. Frank
-                // 2026-06-26 ("schön sortieren").
-                if (n.rfind("switch_fav_", 0) == 0 || n.rfind("copy_fav_", 0) == 0
-                 || n == "fav_cycle"
-                 || n.rfind("switch_cs_", 0) == 0 || n.rfind("copy_cs_", 0) == 0
-                 || n == "cs_cycle"
-                 || n.rfind("switch_bc_", 0) == 0 || n.rfind("copy_bc_", 0) == 0
-                 || n == "bc_cycle"
-                 || n == "fav_copy_own_toggle"
-                 || n == "cs_copy_own_toggle" || n == "bc_copy_own_toggle")
-                    return "Favourites";
-
-                if (n == "instance_cycle" || n == "fx_cycle"
-                 || n == "fx_scroll_all"  || n == "instance_scroll_all"
-                 || n == "fx_move"
-                 || n == "instance_next"  || n == "instance_prev"
-                 || n == "bc_track_scroll"
-                 || n == "bc_track_scroll_select"
-                 || n == "select_relative"
-                 || n == "track_scroll"
-                 || n == "track_select_range"
-                 || n == "temp_selset_scroll"
-                 || n == "playhead_nudge"
-                 || n == "mouse_scroll")
-                    return "Cycle Actions";
-
-                // Selection Modes — what the V-Pot rotation / push
-                // and SEL button do per strip. Each action's display
-                // string carries a "(V-Pot)" / "(SEL Button)" suffix so
-                // the user sees the control surface at a glance.
-                if (n.rfind("selection_mode_", 0) == 0)
-                    return "Selection Modes";
-
-                // Encoder Modes — what the UF8 Channel Encoder rotation
-                // does (Nav / Nudge / Focus / Instance Cycle / FX Cycle).
-                if (n.rfind("encoder_", 0) == 0)
-                    return "Encoder Modes";
-
-                // Hardware Modes — surface-wide toggles.
-                if (n == "flip" || n == "pan_force"
-                 || n == "mixer_toggle" || n == "home"
-                 || n == "folder_mode" || n == "show_only_selected"
-                 || n.rfind("ssl_strip_mode_", 0) == 0
-                 || n.rfind("uf8_plugin_mode_", 0) == 0
-                 || n == "uc1_outgain_fader_toggle"
-                 || n == "learn_hud_toggle"
-                 || n == "touch_to_learn_toggle"
-                 || n == "focused_panel_toggle"
-                 || n == "mode_banner_toggle"
-                 || n == "tcp_follows_selection_toggle"
-                 || n == "surface_mirror_tcp"
-                 || n == "surface_mirror_mcp"
-                 || n.rfind("marker_overlay_", 0) == 0)
-                    return "Hardware Modes";
-
-                // Plug-in family — operates on the currently active
-                // FX (cursor with focused-Instance fallback): GUI
-                // toggles, bypass / offline, preset navigation, chain
-                // reorder. Toggle-all-windows belongs here too.
-                if (n == "show_focused_plugin_gui"
-                 || n == "show_fx_chain"
-                 || n == "close_all_fx_guis"
-                 || n == "quick_learn"
-                 || n == "quick_learn_track"
-                 || n.rfind("plugin_", 0) == 0)
-                    return "Plug-in";
-
-                if (n.rfind("layer_select", 0) == 0)
-                    return "Layer";
-                if (n.rfind("softkey_bank_", 0) == 0)
-                    return "Soft-Key Bank";
-
-                // SSL stock factory mappings (domain focus + bank-aware
-                // soft-key / V-Pot pickers).
-                if (n == "domain_cs" || n == "domain_bc"
-                 || n == "ssl_softkey"
-                 || n.rfind("ssl_bank_", 0) == 0)
-                    return "SSL";
-
-                if (n == "bank_left"  || n == "bank_right"
-                 || n == "page_left"  || n == "page_right"
-                 || n == "bank_by_1_left" || n == "bank_by_1_right")
-                    return "Bank / Page";
-
-                if (n.rfind("auto_", 0) == 0) return "Automation";
-                if (n.rfind("zoom_", 0) == 0) return "Zoom";
-
-                if (n == "send_this" || n == "recv_this"
-                 || n.rfind("send_all_", 0) == 0
-                 || n.rfind("recv_all_", 0) == 0)
-                    return "Sends / Receives";
-
-                if (n.rfind("selset_", 0) == 0
-                 || n.rfind("temp_selset_", 0) == 0) return "Selection Sets";
-
-                if (n.rfind("param_group_", 0) == 0
-                 || n == "multi_select_as_temp_group_toggle")
-                    return "Parameter Groups";
-
-                if (n == "selection_clear_all"
-                 || n == "tracks_arm_all"
-                 || n == "automation_zero_all")
-                    return "Tracks";
-
-                if (n.rfind("master_pin_", 0) == 0) return "Master";
-
-                if (n.rfind("brightness_", 0) == 0) return "Brightness";
-
-                if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
-                    return "Modifiers";
-
-                if (n.rfind("fx_param_", 0) == 0)
-                    return "FX Param";
-
-                return "";
+                return uf8::bindings::builtinCategory(n);
             };
-            static const char* kCats[] = {
-                "Favourites",
-                "Cycle Actions",
-                "Selection Modes",
-                "Encoder Modes",
-                "Hardware Modes",
-                "Plug-in",
-                "Layer",
-                "Soft-Key Bank",
-                "SSL",
-                "Bank / Page",
-                "Automation",
-                "Zoom",
-                "Sends / Receives",
-                "Selection Sets",
-                "Parameter Groups",
-                "Tracks",
-                "Master",
-                "Brightness",
-                "Modifiers",
-                "FX Param",
-            };
+            const auto& kCatsVec = uf8::bindings::builtinCategoryOrder();
+            const char* const* kCats = kCatsVec.data();
 
             std::unordered_map<std::string, std::vector<std::string>> bucket;
             for (auto& n : builtinNames()) {
@@ -3456,7 +3318,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             const char* activeCat =
                 (f.action && !f.action->empty()) ? categoryFor(*f.action) : "";
 
-            for (auto* cat : kCats) {
+            for (auto* cat : kCatsVec) {
                 auto it = bucket.find(cat);
                 if (it == bucket.end() || it->second.empty()) continue;
 

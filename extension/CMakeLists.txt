@@ -351,6 +351,7 @@ add_library(reaper_uf8 MODULE
     # DynaMount Mode — robotic mic-stand control over the LAN
     src/DynaMountClient.cpp
     src/DynaMountManager.cpp
+    src/StreamDeckBridge.cpp
 )
 
 if(APPLE)

@@ -420,9 +420,25 @@ struct BuiltinDescriptor {
 
 void registerBuiltin(const char* name, BuiltinDescriptor desc);
 
+// Fire a registered builtin by name, as if a bound button had triggered it
+// (run(firing=true, pressed=false, param)). Returns false if `name` isn't
+// registered or has no run handler. MAIN THREAD ONLY — the handler reaches
+// into REAPER + surface state exactly like a hardware dispatch. Used by the
+// Stream Deck bridge to invoke actions coming over the localhost socket.
+bool invokeBuiltin(const std::string& name, int param);
+
 // Look up a builtin's display name. Falls back to the canonical name
 // if the builtin isn't registered (UI then shows the snake_case name).
 std::string builtinDisplayName(const std::string& name);
+
+// Category label for a built-in — the SAME grouping the Settings action
+// picker shows. Empty string = uncategorised / internal sentinel. Single
+// source of truth shared by the picker (SettingsScreen) and the Stream Deck
+// bridge so the two never drift.
+const char* builtinCategory(const std::string& name);
+
+// Category display order (top-to-bottom), matching the action picker.
+const std::vector<const char*>& builtinCategoryOrder();
 
 // Whether this builtin reads its `param` arg. UI uses this to hide the
 // param column for buttons whose action is param-less.

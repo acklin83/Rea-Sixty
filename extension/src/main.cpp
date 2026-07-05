@@ -68,6 +68,7 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
+#include "StreamDeckBridge.h"
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
@@ -20361,9 +20362,233 @@ static void persistDynaState_()
     }
 }
 
+// Minimal JSON string escaper for the bridge's hand-built output lines.
+static std::string sdJsonEsc_(const std::string& s)
+{
+    std::string o; o.reserve(s.size() + 2);
+    for (char ch : s) {
+        switch (ch) {
+            case '"':  o += "\\\""; break;
+            case '\\': o += "\\\\"; break;
+            case '\n': o += "\\n";  break;
+            case '\r': o += "\\r";  break;
+            case '\t': o += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(ch) >= 0x20) o += ch;
+        }
+    }
+    return o;
+}
+
+// Peak (post-fader) of one channel in dBFS; -150 = silence.
+static double sdPeakDb_(MediaTrack* tr, int ch)
+{
+    if (!tr) return -150.0;
+    const double v = Track_GetPeakInfo(tr, ch);
+    return v > 1e-7 ? 20.0 * std::log10(v) : -150.0;
+}
+
+// |GainReduction_dB| of the `dom` plug-in on `tr` (0 = none / not present).
+// For ChannelStrip, fall back to the first non-Acustica FX exposing
+// GainReduction_dB — same behaviour as the extension's GR "Any FX" poll.
+// Acustica (Acqua) FX are skipped: host config-parm polling faults them.
+static float sdGrDb_(MediaTrack* tr, uf8::Domain dom)
+{
+    if (!tr) return 0.0f;
+    int fx = uf8::lookupPluginOnTrack(tr, dom).fxIndex;
+    if (fx < 0 && dom == uf8::Domain::ChannelStrip) {
+        const int n = TrackFX_GetCount(tr);
+        for (int i = 0; i < n; ++i) {
+            if (uf8::fxIsAcustica(tr, i)) continue;
+            char b[64] = {0};
+            if (TrackFX_GetNamedConfigParm(tr, i, "GainReduction_dB", b, sizeof b)) {
+                fx = i; break;
+            }
+        }
+    }
+    if (fx < 0 || uf8::fxIsAcustica(tr, fx)) return 0.0f;
+    char buf[64] = {0};
+    if (!TrackFX_GetNamedConfigParm(tr, fx, "GainReduction_dB", buf, sizeof buf))
+        return 0.0f;
+    const double v = std::atof(buf);
+    return static_cast<float>(v < 0 ? -v : v);
+}
+
+// Resolve a meter target string to a track. "sel" = selected; "num:<N>" =
+// 1-based track number (0 = master); "name:<X>" = first case-insensitive
+// name match. nullptr when unresolved.
+static MediaTrack* sdResolveTarget_(const std::string& t)
+{
+    if (t == "sel") return GetSelectedTrack(nullptr, 0);
+    if (t.rfind("num:", 0) == 0) {
+        const int n = std::atoi(t.c_str() + 4);
+        return n <= 0 ? GetMasterTrack(nullptr) : GetTrack(nullptr, n - 1);
+    }
+    if (t.rfind("name:", 0) == 0) {
+        const std::string want = t.substr(5);
+        const int nt = CountTracks(nullptr);
+        for (int i = 0; i < nt; ++i) {
+            MediaTrack* tr = GetTrack(nullptr, i);
+            char nm[256] = {0};
+            GetSetMediaTrackInfo_String(tr, "P_NAME", nm, false);
+            if (want.size() != std::strlen(nm)) continue;
+            bool eq = true;
+            for (size_t k = 0; k < want.size(); ++k)
+                if (std::tolower((unsigned char)want[k])
+                    != std::tolower((unsigned char)nm[k])) { eq = false; break; }
+            if (eq) return tr;
+        }
+    }
+    return nullptr;
+}
+
+// ---- Stream Deck Companion bridge tick (main thread) ----------------------
+// Drains inbound commands from the localhost bridge and executes them here on
+// the main thread (REAPER-API-safe), then pushes a compact live-state line to
+// subscribed clients whenever it changes. Phase-1 spike surface: selection
+// identity + colour + active layer + flip. Meters / favourites / mode-mirror
+// grow from here without touching the transport.
+static void sdBridgeTick_()
+{
+    if (!uf8::sdbridge::isRunning()) return;
+
+    // Track targets the Stream Deck currently wants metered (persists across
+    // ticks). Replaced whole each time a "meters" command arrives.
+    static std::vector<std::string> s_meterTargets;
+
+    static std::vector<uf8::sdbridge::SdCommand> cmds;
+    uf8::sdbridge::drainCommands(cmds);
+    bool forceFull = false;
+    for (const auto& c : cmds) {
+        using K = uf8::sdbridge::SdCommand::Kind;
+        switch (c.kind) {
+            case K::Action:
+                uf8::bindings::invokeBuiltin(c.name, c.param);
+                break;
+            case K::ReaperId:
+                if (c.id > 0) Main_OnCommand(c.id, 0);
+                break;
+            case K::ReaperName:
+                if (const int id = NamedCommandLookup(c.name.c_str()); id > 0)
+                    Main_OnCommand(id, 0);
+                break;
+            case K::Subscribe:
+                forceFull = true;   // fresh subscriber → re-send full snapshot
+                break;
+            case K::Meters:
+                s_meterTargets = c.targets;   // replace the whole target set
+                break;
+            case K::List: {
+                // Send the REAL registered Rea-Sixty built-in catalogue so the
+                // Stream Deck Property Inspector never shows a hand-picked
+                // list. Each item carries n(ame) / d(isplay) / c(ategory), and
+                // we send the ordered category list so the PI groups exactly
+                // like the Settings action picker. builtinNames() already
+                // filters internal `__` sentinels.
+                std::string out = "{\"ev\":\"builtins\",\"cats\":[";
+                bool f = true;
+                for (const char* c : uf8::bindings::builtinCategoryOrder()) {
+                    if (!f) out += ",";
+                    f = false;
+                    out += "\"" + sdJsonEsc_(c) + "\"";
+                }
+                out += "],\"items\":[";
+                f = true;
+                for (const auto& n : uf8::bindings::builtinNames()) {
+                    const char* cat = uf8::bindings::builtinCategory(n);
+                    if (!f) out += ",";
+                    f = false;
+                    out += "{\"n\":\"" + sdJsonEsc_(n) + "\",\"d\":\""
+                         + sdJsonEsc_(uf8::bindings::builtinDisplayName(n))
+                         + "\",\"c\":\"" + sdJsonEsc_(cat ? cat : "")
+                         + "\",\"p\":"
+                         + (uf8::bindings::builtinUsesParam(n) ? "true" : "false")
+                         + "}";
+                }
+                out += "]}";
+                uf8::sdbridge::broadcast(out);
+                break;
+            }
+            default:
+                break;              // Hello / Ping handled in the worker
+        }
+    }
+
+    // Nobody listening → skip snapshots entirely.
+    if (uf8::sdbridge::clientCount() <= 0) return;
+
+    // --- meter push (throttled ~15 Hz; only when meter keys are active) ---
+    if (!s_meterTargets.empty() && (g_tickCounter % 2) == 0) {
+        auto f1 = [](double v) {
+            char b[24]; std::snprintf(b, sizeof b, "%.1f", v); return std::string(b);
+        };
+        std::string ml = "{\"ev\":\"meter\",\"t\":[";
+        bool f = true;
+        for (const auto& t : s_meterTargets) {
+            MediaTrack* mt = sdResolveTarget_(t);
+            const double pL = sdPeakDb_(mt, 0), pR = sdPeakDb_(mt, 1);
+            const float comp = sdGrDb_(mt, uf8::Domain::ChannelStrip);
+            const float bc   = sdGrDb_(mt, uf8::Domain::BusComp);
+            char nm[256] = {0};
+            if (mt) GetSetMediaTrackInfo_String(mt, "P_NAME", nm, false);
+            std::string nmS = nm;
+            if (nmS.empty() && mt && mt == GetMasterTrack(nullptr)) nmS = "Master";
+            // Track colour: rgb when a custom colour is set, else [-1,-1,-1].
+            int cr = -1, cg = -1, cb = -1;
+            if (mt) {
+                const int col = static_cast<int>(GetMediaTrackInfo_Value(mt, "I_CUSTOMCOLOR"));
+                if (col & 0x1000000) ColorFromNative(col & 0xFFFFFF, &cr, &cg, &cb);
+            }
+            if (!f) ml += ",";
+            f = false;
+            ml += "{\"id\":\"" + sdJsonEsc_(t) + "\",\"peak\":["
+                + f1(pL) + "," + f1(pR) + "],\"comp\":" + f1(comp)
+                + ",\"bc\":" + f1(bc) + ",\"nm\":\"" + sdJsonEsc_(nmS) + "\",\"rgb\":["
+                + std::to_string(cr) + "," + std::to_string(cg) + "," + std::to_string(cb) + "]}";
+        }
+        ml += "]}";
+        uf8::sdbridge::broadcast(ml);
+    }
+
+    MediaTrack* tr = GetSelectedTrack(nullptr, 0);
+    char name[256] = {0};
+    int  trkNum = -1, r = 0, g = 0, b = 0;
+    if (tr) {
+        GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
+        trkNum = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+        const int col = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR"));
+        if (col & 0x1000000) ColorFromNative(col & 0xFFFFFF, &r, &g, &b);
+    }
+    const int  layer = uf8::bindings::getActiveLayer();
+    const bool flip  = g_flip.load();
+
+    static std::string lastName;
+    static int lastNum = -2, lastR = -1, lastG = -1, lastB = -1,
+               lastLayer = -2, lastFlip = -1;
+    const std::string cur(name);
+    const bool changed = forceFull
+        || cur != lastName || trkNum != lastNum
+        || r != lastR || g != lastG || b != lastB
+        || layer != lastLayer || (flip ? 1 : 0) != lastFlip;
+    if (!changed) return;
+    lastName = cur; lastNum = trkNum; lastR = r; lastG = g; lastB = b;
+    lastLayer = layer; lastFlip = flip ? 1 : 0;
+
+    std::string line = "{\"ev\":\"state\",\"sel\":{\"num\":";
+    line += std::to_string(trkNum);
+    line += ",\"name\":\"" + sdJsonEsc_(cur) + "\",\"rgb\":[";
+    line += std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b);
+    line += "]},\"layer\":" + std::to_string(layer);
+    line += ",\"flip\":";
+    line += flip ? "true" : "false";
+    line += "}";
+    uf8::sdbridge::broadcast(line);
+}
+
 void onTimer()
 {
     ++g_tickCounter;
+    sdBridgeTick_();
 
     // Seed the favourite re-add cache from loaded plug-ins: once shortly after
     // start, then every ~30 s so newly-added instances register. Makes SSL built-in
@@ -28981,6 +29206,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Stop the DynaMount worker thread + close its sockets (created in the
         // init path below, so it always exists here).
         uf8::dynamount::manager().stop();
+        // Stop the Stream Deck bridge server + join its worker thread.
+        uf8::sdbridge::stop();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
@@ -29295,6 +29522,22 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     plugin_register("projectconfig", &g_favBankProjConfig);
     // Named favourite Set library (global) — load once from disk.
     favSetsLoad_();
+
+    // Stream Deck Companion bridge — loopback TCP server the Elgato plugin
+    // connects to. Port overridable via ExtState (rea_sixty/sd_bridge_port)
+    // so a user with a clash can retune without a rebuild. 0 or absent = off
+    // is NOT the default; the default is to listen on kDefaultPort.
+    {
+        int port = uf8::sdbridge::kDefaultPort;
+        if (const char* pv = GetExtState("rea_sixty", "sd_bridge_port");
+            pv && *pv) {
+            const int p = std::atoi(pv);
+            if (p > 0 && p < 65536) port = p;
+        }
+        const bool ok = uf8::sdbridge::start(port);
+        initLog(ok ? "step: StreamDeck bridge listening"
+                   : "step: StreamDeck bridge FAILED to bind");
+    }
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");
     return 1;

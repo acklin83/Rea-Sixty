@@ -1681,6 +1681,15 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
     g_builtins[name] = std::move(desc);
 }
 
+bool invokeBuiltin(const std::string& name, int param)
+{
+    if (name.empty()) return false;
+    auto it = g_builtins.find(name);
+    if (it == g_builtins.end() || !it->second.run) return false;
+    it->second.run(/*firing*/ true, /*pressed*/ false, param);
+    return true;
+}
+
 // Bumped each time we ship a default-binding change that needs to
 // reach existing configs. load() runs every defined upgrade step in
 // order, then writes the bumped version back so the upgrade is
@@ -3646,6 +3655,126 @@ bool builtinUsesParam(const std::string& name)
     auto it = g_builtins.find(name);
     if (it == g_builtins.end()) return false;
     return it->second.usesParam;
+}
+
+// Single source of truth for built-in → category grouping. The Settings
+// action picker (SettingsScreen) and the Stream Deck bridge both call this so
+// the two can never drift. Keep in sync with builtinCategoryOrder() below.
+const char* builtinCategory(const std::string& n)
+{
+    if (n.rfind("__", 0) == 0) return "";
+
+    if (n.rfind("switch_fav_", 0) == 0 || n.rfind("copy_fav_", 0) == 0
+     || n == "fav_cycle"
+     || n.rfind("switch_cs_", 0) == 0 || n.rfind("copy_cs_", 0) == 0
+     || n == "cs_cycle"
+     || n.rfind("switch_bc_", 0) == 0 || n.rfind("copy_bc_", 0) == 0
+     || n == "bc_cycle"
+     || n == "fav_copy_own_toggle"
+     || n == "cs_copy_own_toggle" || n == "bc_copy_own_toggle")
+        return "Favourites";
+
+    if (n == "instance_cycle" || n == "fx_cycle"
+     || n == "fx_scroll_all"  || n == "instance_scroll_all"
+     || n == "fx_move"
+     || n == "instance_next"  || n == "instance_prev"
+     || n == "bc_track_scroll"
+     || n == "bc_track_scroll_select"
+     || n == "select_relative"
+     || n == "track_scroll"
+     || n == "track_select_range"
+     || n == "temp_selset_scroll"
+     || n == "playhead_nudge"
+     || n == "mouse_scroll")
+        return "Cycle Actions";
+
+    if (n.rfind("selection_mode_", 0) == 0)
+        return "Selection Modes";
+
+    if (n.rfind("encoder_", 0) == 0)
+        return "Encoder Modes";
+
+    if (n == "flip" || n == "pan_force"
+     || n == "mixer_toggle" || n == "home"
+     || n == "folder_mode" || n == "show_only_selected"
+     || n.rfind("ssl_strip_mode_", 0) == 0
+     || n.rfind("uf8_plugin_mode_", 0) == 0
+     || n == "uc1_outgain_fader_toggle"
+     || n == "learn_hud_toggle"
+     || n == "touch_to_learn_toggle"
+     || n == "focused_panel_toggle"
+     || n == "mode_banner_toggle"
+     || n == "tcp_follows_selection_toggle"
+     || n == "surface_mirror_tcp"
+     || n == "surface_mirror_mcp"
+     || n.rfind("marker_overlay_", 0) == 0)
+        return "Hardware Modes";
+
+    if (n == "show_focused_plugin_gui"
+     || n == "show_fx_chain"
+     || n == "close_all_fx_guis"
+     || n == "quick_learn"
+     || n == "quick_learn_track"
+     || n.rfind("plugin_", 0) == 0)
+        return "Plug-in";
+
+    if (n.rfind("layer_select", 0) == 0)
+        return "Layer";
+    if (n.rfind("softkey_bank_", 0) == 0)
+        return "Soft-Key Bank";
+
+    if (n == "domain_cs" || n == "domain_bc"
+     || n == "ssl_softkey"
+     || n.rfind("ssl_bank_", 0) == 0)
+        return "SSL";
+
+    if (n == "bank_left"  || n == "bank_right"
+     || n == "page_left"  || n == "page_right"
+     || n == "bank_by_1_left" || n == "bank_by_1_right")
+        return "Bank / Page";
+
+    if (n.rfind("auto_", 0) == 0) return "Automation";
+    if (n.rfind("zoom_", 0) == 0) return "Zoom";
+
+    if (n == "send_this" || n == "recv_this"
+     || n.rfind("send_all_", 0) == 0
+     || n.rfind("recv_all_", 0) == 0)
+        return "Sends / Receives";
+
+    if (n.rfind("selset_", 0) == 0
+     || n.rfind("temp_selset_", 0) == 0) return "Selection Sets";
+
+    if (n.rfind("param_group_", 0) == 0
+     || n == "multi_select_as_temp_group_toggle")
+        return "Parameter Groups";
+
+    if (n == "selection_clear_all"
+     || n == "tracks_arm_all"
+     || n == "automation_zero_all")
+        return "Tracks";
+
+    if (n.rfind("master_pin_", 0) == 0) return "Master";
+    if (n.rfind("brightness_", 0) == 0) return "Brightness";
+
+    if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
+        return "Modifiers";
+
+    if (n.rfind("fx_param_", 0) == 0)
+        return "FX Param";
+
+    return "";
+}
+
+const std::vector<const char*>& builtinCategoryOrder()
+{
+    static const std::vector<const char*> kCats = {
+        "Favourites", "Cycle Actions", "Selection Modes", "Encoder Modes",
+        "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
+        "Bank / Page", "Automation", "Zoom", "Sends / Receives",
+        "Selection Sets", "Parameter Groups", "Tracks", "Master",
+        "Brightness", "Modifiers", "FX Param",
+    };
+    return kCats;
 }
 
 bool builtinStateOf(const std::string& name, int param)
