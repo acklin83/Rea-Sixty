@@ -1,17 +1,16 @@
 #include "StreamDeckBridge.h"
 
-#include "WDL/jsonparse.h"
-
-#include <atomic>
-#include <mutex>
-#include <thread>
-#include <deque>
-#include <cstdio>
-#include <cstring>
-
 // Socket plumbing mirrors DynaMountClient.cpp (same cross-platform typedefs),
-// but this is a LISTENING server rather than a client.
+// but this is a LISTENING server rather than a client. On Windows the socket
+// headers MUST come before any <windows.h> (which WDL/jsonparse.h pulls in
+// transitively) — otherwise the old Winsock v1 <winsock.h> is included first
+// and its sockaddr / fd_set / timeval definitions collide with winsock2's
+// (C2011 struct redefinition). DynaMountClient dodges this only because it
+// includes no WDL header. Hence: socket block FIRST, jsonparse.h after.
 #if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #pragma comment(lib, "ws2_32.lib")
@@ -31,6 +30,16 @@
   static constexpr socket_t kInvalid = -1;
   #define SD_CLOSE ::close
 #endif
+
+#include "WDL/jsonparse.h"
+
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <deque>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
 
 namespace uf8::sdbridge {
 
