@@ -16216,9 +16216,23 @@ void pushZonesForVisibleSlots()
             }
             g_lastSelLed[s] = -1;
         } else {
-            // Reset cache so the next entry into a per-tick-owning mode
-            // (or a bank shift) re-pushes against fresh data.
-            g_lastSoloLed[s] = -1;
+            // Leaving a per-tick-owning mode. The SOLO LED may have been
+            // force-cleared while this strip was routed (branch above), and
+            // REAPER fires no SetSurfaceSolo on mode-exit — so a still-soloed
+            // bank track would keep a dark Solo LED. Reconcile the SOLO LED
+            // against the track's real solo state here; the event-driven
+            // sendLed path keeps it in sync from then on (Frank 2026-07-05:
+            // soloed track lost its Solo LED after a sends/receives round-trip).
+            const bool soloOn = tr && GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+            const int8_t soloKey = soloOn ? 1 : 0;
+            if (soloKey != g_lastSoloLed[s]) {
+                g_lastSoloLed[s] = soloKey;
+                sendLedFrames(uf8::buildLedColourPair(
+                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                    ledColourFor(LedClass::Solo, tr)));
+            }
+            // SEL stays event-driven and is never force-cleared by routing;
+            // reset its cache so a per-tick-owning mode re-pushes fresh.
             g_lastSelLed[s]  = -1;
         }
 
