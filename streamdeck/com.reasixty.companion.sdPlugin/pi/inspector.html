@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Rea-Sixty</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 12px; color: #d8d8d8; background: #2d2d2d;
+      margin: 0; padding: 10px 12px;
+    }
+    .row { display: flex; align-items: center; margin: 8px 0; }
+    .row label { flex: 0 0 92px; text-align: right; padding-right: 10px; color: #9a9a9a; }
+    .row input[type=text], .row input[type=number], .row select {
+      flex: 1 1 auto; background: #3d3d3d; border: 1px solid #4d4d4d;
+      color: #eee; border-radius: 4px; padding: 5px 7px; font-size: 12px; min-width: 0;
+    }
+    .hint { color: #7a7a7a; font-size: 11px; margin: 2px 0 10px 102px; line-height: 1.4; }
+    .sep { border: none; border-top: 1px solid #444; margin: 12px 0; }
+    h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+         color: #8a8a8a; margin: 4px 0 6px 8px; }
+    .hidden { display: none !important; }
+    #status { color: #c8863f; margin: 2px 0 8px 102px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h3 id="grpTitle">Action</h3>
+
+  <!-- ===== built-in / REAPER action mode ===== -->
+  <div id="actionBlock">
+    <div class="row">
+      <label for="action">Action</label>
+      <select id="action"><option value="">— pick —</option></select>
+    </div>
+    <div id="status" class="hidden">Rea-Sixty not connected — start REAPER with the extension.</div>
+    <div class="row hidden" id="paramRow">
+      <label for="param">Param</label>
+      <input type="number" id="param" value="0" />
+    </div>
+
+    <div id="reaperBlock">
+      <hr class="sep" />
+      <h3>…or a REAPER command (overrides the action)</h3>
+      <div class="row">
+        <label for="reaperId">Command ID</label>
+        <input type="number" id="reaperId" placeholder="e.g. 40044" />
+      </div>
+      <div class="row">
+        <label for="reaperAction">Named cmd</label>
+        <input type="text" id="reaperAction" placeholder="e.g. _SWS_ABOUT" />
+      </div>
+      <div class="hint">Numeric ID wins over named. Both override the action above.</div>
+    </div>
+
+    <hr class="sep" />
+    <h3>Key display</h3>
+    <div class="row">
+      <label for="label">Title</label>
+      <input type="text" id="label" placeholder="(optional) fixed key title" />
+    </div>
+    <div class="row">
+      <label for="showTrack">Show track</label>
+      <input type="checkbox" id="showTrack" />
+      <span style="color:#7a7a7a; margin-left:8px;">mirror the selected track name</span>
+    </div>
+  </div>
+
+  <!-- ===== meter mode ===== -->
+  <div id="meterBlock" class="hidden">
+    <div class="row">
+      <label for="source">Source</label>
+      <select id="source">
+        <option value="peak">Peak</option>
+        <option value="comp">Gain Reduction</option>
+        <option value="bc">Gain Reduction — Bus Comp</option>
+        <option value="peak_comp">Peak + GR</option>
+        <option value="peak_bc">Peak + GR (Bus Comp)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="trackMode">Track</label>
+      <select id="trackMode">
+        <option value="sel">Selected track</option>
+        <option value="master">Master track</option>
+        <option value="num">Track number…</option>
+        <option value="name">Track name…</option>
+      </select>
+    </div>
+    <div class="row hidden" id="trackNumRow">
+      <label for="trackNum">Number</label>
+      <input type="number" id="trackNum" min="1" value="1" />
+    </div>
+    <div class="row hidden" id="trackNameRow">
+      <label for="trackName">Name</label>
+      <input type="text" id="trackName" placeholder="exact track name" />
+    </div>
+    <div class="row" id="showNameRow">
+      <label for="showName">Track name</label>
+      <input type="checkbox" id="showName" />
+      <span style="color:#7a7a7a; margin-left:8px;">show it on the key</span>
+    </div>
+    <div class="row" id="followColorRow">
+      <label for="followColor">Track colour</label>
+      <input type="checkbox" id="followColor" />
+      <span style="color:#7a7a7a; margin-left:8px;">tint the key background</span>
+    </div>
+    <div class="hint">Gain Reduction reads the first FX on the track reporting GainReduction
+      (any compressor / limiter). “Bus Comp” targets the mapped SSL Bus Compressor.
+      Peak follows REAPER's track meter (Pre / Post-Fader as configured).</div>
+
+    <hr class="sep" />
+    <h3>On press (optional)</h3>
+    <div class="row">
+      <label for="clickAction">Action</label>
+      <select id="clickAction"><option value="">— none —</option></select>
+    </div>
+    <div class="hint">Fire a Rea-Sixty action when this meter key is pressed.</div>
+  </div>
+
+  <script>
+    const ACTION_CATS = {
+      favourite:    ["Favourites"],
+      layer:        ["Layer"],
+      hardware:     ["Hardware Modes"],
+      navigation:   ["Bank / Page", "Zoom"],
+      plugin:       ["Plug-in"],
+      selectionset: ["Selection Sets"],
+      surface:      ["Selection Modes", "Encoder Modes", "Sends / Receives",
+                     "Parameter Groups", "Soft-Key Bank", "SSL"],
+      action:       null,
+    };
+    const TITLES = {
+      favourite: "Favourite", layer: "Layer",
+      hardware: "Hardware Mode", navigation: "Navigation", plugin: "Plug-in",
+      selectionset: "Selection Set", surface: "Surface Target",
+      meter: "Meter", action: "Rea-Sixty action",
+    };
+
+    let ws = null, piCtx = null, actionKey = "action", myCats = null, isMeter = false;
+    let settings = {};
+    let items = [], cats = [];
+
+    function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+      piCtx = inUUID;
+      let uuid = "com.reasixty.companion.action";
+      try {
+        const ai = JSON.parse(inActionInfo);
+        settings = (ai && ai.payload && ai.payload.settings) || {};
+        uuid = (ai && ai.action) || uuid;
+        actionKey = uuid.split(".").pop() || "action";
+      } catch (e) { settings = {}; }
+      isMeter = actionKey === "meter";
+      myCats = ACTION_CATS.hasOwnProperty(actionKey) ? ACTION_CATS[actionKey] : null;
+
+      document.getElementById("grpTitle").textContent = TITLES[actionKey] || "Action";
+      if (isMeter) {
+        document.getElementById("actionBlock").classList.add("hidden");
+        document.getElementById("meterBlock").classList.remove("hidden");
+      } else if (myCats !== null) {
+        document.getElementById("reaperBlock").classList.add("hidden");
+      }
+
+      ws = new WebSocket("ws://127.0.0.1:" + inPort);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+        fillFields();
+        // Both the category tiles and the meter "On press" picker need the
+        // built-in catalogue.
+        ws.send(JSON.stringify({
+          event: "sendToPlugin", context: inUUID, action: uuid,
+          payload: { request: "builtins" },
+        }));
+      };
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+        if (m.event === "sendToPropertyInspector" && m.payload &&
+            m.payload.event === "builtins") {
+          items = m.payload.items || [];
+          cats = m.payload.cats || [];
+          buildActionSelect();
+        }
+      };
+    }
+
+    function fillFields() {
+      if (isMeter) {
+        setVal("source", settings.source || "peak");
+        setVal("trackMode", settings.trackMode || "sel");
+        setVal("trackNum", settings.trackNum || "1");
+        setVal("trackName", settings.trackName || "");
+        document.getElementById("showName").checked = !!settings.showName;
+        document.getElementById("followColor").checked = !!settings.followColor;
+        updateTrackRows();
+      } else {
+        ["param", "reaperId", "reaperAction", "label"].forEach((k) => {
+          if (settings[k] != null) setVal(k, settings[k]);
+        });
+        document.getElementById("showTrack").checked = !!settings.showTrack;
+      }
+    }
+    function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = v; }
+
+    function buildActionSelect() {
+      // Meter tiles populate the optional "On press" picker (whole catalogue);
+      // every other tile populates its category-filtered #action select.
+      const sel = document.getElementById(isMeter ? "clickAction" : "action");
+      if (!sel) return;
+      const filter = isMeter ? null : myCats;
+      sel.innerHTML = isMeter ? '<option value="">— none —</option>'
+                              : '<option value="">— pick —</option>';
+      const EXCLUDE = ["Modifiers"];  // can't be a momentary press (needs holding)
+      const order = ((filter && filter.length) ? filter : cats).filter((c) => !EXCLUDE.includes(c));
+      let count = 0;
+      order.forEach((cat) => {
+        const inCat = items.filter((it) => it.c === cat);
+        if (!inCat.length) return;
+        const og = document.createElement("optgroup");
+        og.label = cat;
+        inCat.forEach((it) => {
+          const opt = document.createElement("option");
+          opt.value = it.n;
+          opt.textContent = it.d && it.d !== it.n ? it.d : it.n;
+          opt.dataset.usesParam = it.p ? "1" : "0";
+          og.appendChild(opt); count++;
+        });
+        sel.appendChild(og);
+      });
+      if (settings.action) sel.value = settings.action;
+      if (!isMeter) {
+        document.getElementById("status").classList.toggle("hidden", count > 0);
+        updateParamRow();
+      }
+    }
+
+    function updateParamRow() {
+      const opt = document.getElementById("action").selectedOptions[0];
+      const uses = opt && opt.dataset && opt.dataset.usesParam === "1";
+      document.getElementById("paramRow").classList.toggle("hidden", !uses);
+    }
+    function updateTrackRows() {
+      const mode = document.getElementById("trackMode").value;
+      document.getElementById("trackNumRow").classList.toggle("hidden", mode !== "num");
+      document.getElementById("trackNameRow").classList.toggle("hidden", mode !== "name");
+    }
+
+    function save() {
+      if (isMeter) {
+        settings = {
+          source:    document.getElementById("source").value,
+          trackMode: document.getElementById("trackMode").value,
+          trackNum:  document.getElementById("trackNum").value.trim(),
+          trackName: document.getElementById("trackName").value,
+          showName:   document.getElementById("showName").checked,
+          followColor: document.getElementById("followColor").checked,
+          action:     document.getElementById("clickAction").value,
+        };
+      } else {
+        settings = {
+          action:       document.getElementById("action").value,
+          param:        document.getElementById("param").value.trim(),
+          reaperId:     document.getElementById("reaperId").value.trim(),
+          reaperAction: document.getElementById("reaperAction").value.trim(),
+          label:        document.getElementById("label").value,
+          showTrack:    document.getElementById("showTrack").checked,
+        };
+      }
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ event: "setSettings", context: piCtx, payload: settings }));
+      }
+    }
+
+    function onEdit(e) {
+      if (!e.target) return;
+      if (e.target.id === "action") updateParamRow();
+      if (e.target.id === "trackMode") updateTrackRows();
+      save();
+    }
+    document.addEventListener("input", onEdit);
+    document.addEventListener("change", onEdit);
+  </script>
+</body>
+</html>

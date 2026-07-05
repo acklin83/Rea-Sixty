@@ -1,0 +1,177 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "SDKVersion": 2,
+  "Name": "Rea-Sixty Companion",
+  "Version": "0.1.0.0",
+  "Author": "Rea-Sixty",
+  "UUID": "com.reasixty.companion",
+  "Icon": "icons/plugin",
+  "Description": "Fire Rea-Sixty / REAPER actions from your Stream Deck and mirror live surface state. Requires the Rea-Sixty REAPER extension (its localhost bridge on 127.0.0.1:49900).",
+  "Category": "Rea-Sixty Companion",
+  "CategoryIcon": "icons/plugin",
+  "URL": "https://github.com/acklin83/Rea-Sixty",
+  "CodePath": "plugin.js",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "11"
+    },
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "Name": "Favourite",
+      "UUID": "com.reasixty.companion.favourite",
+      "Icon": "icons/action",
+      "Tooltip": "Switch / cycle CS·BC·Fav favourites.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Layer",
+      "UUID": "com.reasixty.companion.layer",
+      "Icon": "icons/action",
+      "Tooltip": "Select binding layer 1 / 2 / 3.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Hardware Mode",
+      "UUID": "com.reasixty.companion.hardware",
+      "Icon": "icons/action",
+      "Tooltip": "Surface-wide toggles: Flip, Home, Settings, mirrors, overlays, learn.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Navigation",
+      "UUID": "com.reasixty.companion.navigation",
+      "Icon": "icons/action",
+      "Tooltip": "Bank / Page navigation and Zoom.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Plug-in",
+      "UUID": "com.reasixty.companion.plugin",
+      "Icon": "icons/action",
+      "Tooltip": "FX GUI toggles, chain, close-all, Quick-Learn, bypass/offline.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Selection Set",
+      "UUID": "com.reasixty.companion.selectionset",
+      "Icon": "icons/action",
+      "Tooltip": "Recall selection sets and temp selection sets.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Meter",
+      "UUID": "com.reasixty.companion.meter",
+      "Icon": "icons/action",
+      "Tooltip": "Live peak / gain-reduction readout for a track (selected or fixed).",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Surface Target",
+      "UUID": "com.reasixty.companion.surface",
+      "Icon": "icons/action",
+      "Tooltip": "What the surface controls: Selection/Encoder modes, Sends, Param Groups, Soft-Key banks, SSL.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Any Rea-Sixty Action",
+      "UUID": "com.reasixty.companion.action",
+      "Icon": "icons/action",
+      "Tooltip": "Any Rea-Sixty built-in (grouped), or a raw REAPER command.",
+      "PropertyInspectorPath": "pi/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "icons/blank",
+          "TitleAlignment": "middle"
+        }
+      ]
+    }
+  ]
+}

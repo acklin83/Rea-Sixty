@@ -1,0 +1,8 @@
+{
+  "name": "com.reasixty.companion",
+  "version": "0.1.0",
+  "description": "Rea-Sixty Companion Stream Deck plugin",
+  "main": "plugin.js",
+  "private": true,
+  "dependencies": { "ws": "^8.18.0" }
+}
