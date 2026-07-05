@@ -16,9 +16,10 @@ You do **not** need to install anything else (no Node, no extra tools).
 
 ## Install — 3 steps
 
-1. **Download the plugin.** It's one file. The name looks technical
-   (`com.reasixty.companion.streamDeckPlugin`) — that's normal for Stream Deck
-   plugins, don't worry about it.
+1. **Download the plugin** from the Rea-Sixty releases page:
+   **<https://github.com/acklin83/Rea-Sixty/releases/latest>** — under
+   *Assets*, click the file named **`com.reasixty.companion.streamDeckPlugin`**.
+   (The long name is normal for Stream Deck plugins — don't worry about it.)
 2. **Double-click the file you downloaded.** The Stream Deck app pops up and
    installs it for you. There's nothing to set up.
 3. **Open the Stream Deck app.** On the right, in the list of actions, you'll see
