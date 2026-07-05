@@ -4,24 +4,32 @@ Fire Rea-Sixty / REAPER actions from an Elgato Stream Deck and mirror live
 surface state (selected track, per-track peak & gain-reduction meters) onto the
 keys.
 
-## Requirements
+## What you need first
 
-- **REAPER** with the **Rea-Sixty extension** installed and running. The plugin
-  talks to a localhost bridge the extension opens on `127.0.0.1:49900` — without
-  the extension (and a running REAPER) the plugin does nothing.
-- **Stream Deck app 6.5 or newer.** The Node runtime is provided by the app; you
-  do **not** need to install Node yourself.
+This plugin is a remote for **Rea-Sixty**, so you need Rea-Sixty running:
 
-## Install (users)
+- **REAPER** with **Rea-Sixty** installed, and REAPER open. If you already use
+  Rea-Sixty, you're good.
+- The **Stream Deck app** (version 6.5 or newer — basically any current one).
 
-1. Install the Rea-Sixty extension in REAPER (via ReaPack) and start REAPER.
-2. Download **`com.reasixty.companion.streamDeckPlugin`** from the release.
-3. **Double-click** the file. The Stream Deck app installs it automatically.
-4. In the Stream Deck app you'll find a **“Rea-Sixty”** category in the actions
-   list on the right. Drag a tile onto a key and configure it in the panel.
+You do **not** need to install anything else (no Node, no extra tools).
 
-That's it. As long as REAPER is running with the extension, keys work
-immediately (the plugin reconnects on its own if REAPER is started later).
+## Install — 3 steps
+
+1. **Download the plugin.** It's one file. The name looks technical
+   (`com.reasixty.companion.streamDeckPlugin`) — that's normal for Stream Deck
+   plugins, don't worry about it.
+2. **Double-click the file you downloaded.** The Stream Deck app pops up and
+   installs it for you. There's nothing to set up.
+3. **Open the Stream Deck app.** On the right, in the list of actions, you'll see
+   a **Rea-Sixty** section. Drag any tile onto a key, and set it up in the panel
+   that appears.
+
+Done. As long as REAPER is open with Rea-Sixty, the keys just work. If you start
+REAPER later, the keys connect by themselves — no need to reinstall.
+
+> **Nothing happens when I press a key?** Make sure REAPER is open and Rea-Sixty
+> is loaded. That's almost always it.
 
 ## The tiles
 
