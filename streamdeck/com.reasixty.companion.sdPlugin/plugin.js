@@ -176,12 +176,16 @@ let bridge = null;
 let bridgeBuf = "";
 let lastState = null;
 let reconnectTimer = null;
+let isConnected = false;   // true between a successful connect and its close
 
 function connectBridge() {
   bridge = net.createConnection({ host: BRIDGE_HOST, port: BRIDGE_PORT }, () => {
     log("bridge connected");
+    isConnected = true;
     bridge.write('{"cmd":"subscribe"}\n');
     bridge.write('{"cmd":"list"}\n');   // warm the built-in catalogue cache
+    meterTargetsSent = "";              // re-arm metering on the fresh bridge
+    recomputeMeters();
   });
   bridge.setEncoding("utf8");
   bridge.on("data", (d) => {
@@ -196,10 +200,39 @@ function connectBridge() {
   bridge.on("error", (e) => log("bridge error", e && e.code ? e.code : ""));
   bridge.on("close", () => {
     bridge = null;
+    if (isConnected) { isConnected = false; onBridgeLost(); }
     if (!reconnectTimer) {
       reconnectTimer = setTimeout(() => { reconnectTimer = null; connectBridge(); }, 1500);
     }
   });
+}
+
+// REAPER quit / bridge dropped: clear the frozen meter images and stale titles
+// so keys don't keep showing the last values. Frank 2026-07-07.
+function onBridgeLost() {
+  log("bridge lost — clearing meters");
+  lastState = null;
+  for (const [ctx, c] of contexts) {
+    if (isMeter(c)) {
+      c.meterSig = "__lost__";   // force a live re-render once the bridge is back
+      c.m = {};                  // reset ballistics
+      sdSend({ event: "setImage", context: ctx,
+               payload: { image: meterOfflineSvg(), target: "hardware" } });
+    } else {
+      applyTitle(ctx);           // showTrack titles clear (lastState is null)
+    }
+  }
+}
+
+// Dim placeholder shown on a meter key while the bridge is unreachable.
+function meterOfflineSvg() {
+  const F = 'font-family="Helvetica,Arial,sans-serif"';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">' +
+    '<rect width="100" height="100" fill="#141416"/>' +
+    '<text x="50" y="52" ' + F + ' font-size="34" font-weight="700" fill="#555" text-anchor="middle">–</text>' +
+    '<text x="50" y="74" ' + F + ' font-size="10" fill="#555" text-anchor="middle">no REAPER</text>' +
+    '</svg>';
+  return "data:image/svg+xml;charset=utf8;base64," + Buffer.from(svg).toString("base64");
 }
 
 function onBridgeLine(line) {
