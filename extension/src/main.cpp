@@ -793,6 +793,11 @@ std::atomic<bool>         g_hideOfflineFx{false};
 // hard-stop — "Next" at the last FX is a no-op, "Previous" at the first
 // FX is a no-op. Frank 2026-05-22.
 std::atomic<bool>         g_wrapPluginCycle{true};
+// Grid-fine for long continuous JSFX sliders: when Fine is engaged, step by
+// whole native slider increments instead of the analog fraction so a REAPER
+// JSFX with a very long slider resolves cleanly. Default ON. Continuous JSFX
+// + Fine only — VST3/AU and non-Fine turns are unaffected. Frank 2026-07-09.
+std::atomic<bool>         g_jsfxGridFine{true};
 // CS-Switch / CS-Copy value-transfer section mask (Settings → Plug-ins →
 // Channel Strip Switch). When a section is unticked, switchCsTo_ does NOT carry
 // that section's values onto the new strip — the freshly-added favourite keeps
@@ -3368,6 +3373,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "wrap_plugin_cycle"); v && *v) {
         g_wrapPluginCycle.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "jsfx_grid_fine"); v && *v) {
+        g_jsfxGridFine.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "cs_copy_mask"); v && *v) {
         // 4 chars: EQ Dyn Gate Fader. Tolerate a short string (leaves rest on).
@@ -11934,17 +11942,20 @@ void drainInputQueue()
                             // path below; small JSFX enums use the normalised
                             // step. VST3/AU keep their real pStep, byte-identical.
                             double effStep = pStep;
+                            double jsfxNormStep = 0.0;   // native increment
                             bool jsfxBogusStep = false;
                             if (stepped && !isToggle) {
                                 double nrm = 0.0; bool cont = false;
                                 if (uf8::jsfxStepClassify(uctx.tr, uctx.fxIdx,
                                         bs.vst3Param, pStep, nrm, cont)) {
                                     jsfxBogusStep = cont;
+                                    jsfxNormStep = nrm;
                                     if (!cont) effStep = nrm;
                                 }
                             }
                             const auto& kt = bs.travel;
                             double next;
+                            bool gridFineApplied = false;
                             if (stepped && isToggle) {
                                 // Any detent flips the toggle. Sens /
                                 // range / curve don't apply.
@@ -11987,6 +11998,23 @@ void drainInputQueue()
                                 next = cur + r.logicalSteps * effStep;
                                 if (next < minN) next = minN;
                                 if (next > maxN) next = maxN;
+                            } else if (jsfxBogusStep && jsfxNormStep > 0.0
+                                       && vpotFineActive_()
+                                       && g_jsfxGridFine.load()) {
+                                // Grid-fine: a long continuous JSFX slider
+                                // can't be set cleanly even in Fine via the
+                                // analog curve. Step by whole native slider
+                                // increments instead (1 detent = 1 increment,
+                                // fast flick accelerates). Bypasses curve /
+                                // notch / sensitivity — lands exactly on grid.
+                                const int rawDet = static_cast<int>(
+                                    std::round(e.value * 128.0));
+                                const int dir = bs.inverted ? -1 : 1;
+                                double gf = cur + uf8::jsfxGridFineStep(
+                                    rawDet * dir, jsfxNormStep);
+                                gf = std::round(gf / jsfxNormStep) * jsfxNormStep;
+                                next = gf < 0.0 ? 0.0 : (gf > 1.0 ? 1.0 : gf);
+                                gridFineApplied = true;
                             } else {
                                 // Continuous param — existing knob-travel
                                 // path. Defaults are linear so untouched
@@ -12043,7 +12071,7 @@ void drainInputQueue()
                             // JSFX coarse-quantisation accumulator: keep
                             // sub-quantum fine-mode moves until they cross
                             // the slider grid (else the param sticks in fine).
-                            if (jsfxBogusStep) {
+                            if (jsfxBogusStep && !gridFineApplied) {
                                 static double s_jsfxWant[8][6]{};
                                 next = uf8::jsfxAccumulate(
                                     s_jsfxWant[s & 7][bank % 6], cur, next);
@@ -12139,16 +12167,19 @@ void drainInputQueue()
                     // JSFX → softened path; small enums use the normalised
                     // step. VST3/AU keep their real pStep, byte-identical.
                     double effStep = pStep;
+                    double jsfxNormStep = 0.0;   // native increment
                     bool jsfxBogusStep = false;
                     if (stepped && !isToggle) {
                         double nrm = 0.0; bool cont = false;
                         if (uf8::jsfxStepClassify(tr, mm.fxIndex, sl.vst3Param,
                                 pStep, nrm, cont)) {
                             jsfxBogusStep = cont;
+                            jsfxNormStep = nrm;
                             if (!cont) effStep = nrm;
                         }
                     }
                     double next;
+                    bool gridFineApplied = false;
                     if (stepped && isToggle) {
                         next = (cur >= 0.5) ? 0.0 : 1.0;
                     } else if (stepped && pStep > 0.0 && !jsfxBogusStep) {
@@ -12190,6 +12221,19 @@ void drainInputQueue()
                         next = cur + r.logicalSteps * effStep;
                         if (next < minN) next = minN;
                         if (next > maxN) next = maxN;
+                    } else if (jsfxBogusStep && jsfxNormStep > 0.0
+                               && vpotFineActive_()
+                               && g_jsfxGridFine.load()) {
+                        // Grid-fine: step a long continuous JSFX slider by
+                        // whole native increments (see UF8 user-bank path).
+                        const int rawDet = static_cast<int>(
+                            std::round(e.value * 128.0));
+                        const int dir = sl.inverted ? -1 : 1;
+                        double gf = cur + uf8::jsfxGridFineStep(
+                            rawDet * dir, jsfxNormStep);
+                        gf = std::round(gf / jsfxNormStep) * jsfxNormStep;
+                        next = gf < 0.0 ? 0.0 : (gf > 1.0 ? 1.0 : gf);
+                        gridFineApplied = true;
                     } else {
                         // Continuous param — existing knob-travel path.
                         // kVpotBoost lifts the base per-detent step: the bare
@@ -12251,7 +12295,7 @@ void drainInputQueue()
                     }
                     // JSFX coarse-quantisation accumulator: keep sub-quantum
                     // fine-mode moves until they cross the slider grid.
-                    if (jsfxBogusStep) {
+                    if (jsfxBogusStep && !gridFineApplied) {
                         static double s_jsfxWant[8]{};
                         next = uf8::jsfxAccumulate(
                             s_jsfxWant[static_cast<int>(e.strip) & 7],
@@ -24760,6 +24804,12 @@ void reasixty_setHideOfflineFx(bool on)
         g_uc1_surface->invalidateCache();
         g_uc1_surface->refresh();
     }
+}
+bool reasixty_jsfxGridFine()          { return g_jsfxGridFine.load(); }
+void reasixty_setJsfxGridFine(bool on)
+{
+    g_jsfxGridFine.store(on);
+    SetExtState("rea_sixty", "jsfx_grid_fine", on ? "1" : "0", true);
 }
 bool reasixty_wrapPluginCycle()       { return g_wrapPluginCycle.load(); }
 void reasixty_setWrapPluginCycle(bool on)

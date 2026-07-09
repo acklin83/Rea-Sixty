@@ -1616,6 +1616,22 @@ double jsfxContinuousStep(int rawDetents)
     return rawDetents < 0 ? -mag : mag;
 }
 
+double jsfxGridFineStep(int rawDetents, double normStep)
+{
+    const int d = std::abs(rawDetents);
+    if (d <= 0 || normStep <= 0.0) return 0.0;
+    // 1 detent = exactly 1 native slider increment (max precision). A fast
+    // flick piles on a few more via a mild sqrt so a hard spin still travels
+    // without leaving Fine; slow turns stay strictly 1:1. kAccel tunes how
+    // quickly the extra increments accumulate — keep it modest, Fine is for
+    // nudging (release Fine for the analog fast-travel curve).
+    constexpr double kAccel = 0.6;
+    const double units = 1.0 + kAccel * std::sqrt(static_cast<double>(d - 1));
+    const int n = std::max(1, static_cast<int>(units + 0.5));
+    const double mag = static_cast<double>(n) * normStep;
+    return rawDetents < 0 ? -mag : mag;
+}
+
 double jsfxAccumulate(double& wantN, double curN, double intendedNext)
 {
     // Re-sync when the virtual position has drifted past a few slider

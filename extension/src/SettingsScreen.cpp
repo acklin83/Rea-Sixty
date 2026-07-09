@@ -225,6 +225,8 @@ bool reasixty_hideOfflineFx();
 void reasixty_setHideOfflineFx(bool on);
 bool reasixty_wrapPluginCycle();
 void reasixty_setWrapPluginCycle(bool on);
+bool reasixty_jsfxGridFine();
+void reasixty_setJsfxGridFine(bool on);
 bool reasixty_csCopyEq();    void reasixty_setCsCopyEq(bool on);
 bool reasixty_csCopyDyn();   void reasixty_setCsCopyDyn(bool on);
 bool reasixty_csCopyGate();  void reasixty_setCsCopyGate(bool on);
@@ -988,6 +990,20 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool wrapCycle = reasixty_wrapPluginCycle();
     if (ImGui_Checkbox(ctx, "Wrap Plug-in Cycle", &wrapCycle)) {
         reasixty_setWrapPluginCycle(wrapCycle);
+    }
+
+    // JSFX (esp. REAPER's own) can have sliders so long that even Fine mode
+    // can't resolve a single value cleanly. With this on, Fine on a
+    // continuous JSFX slider steps by the slider's OWN native increment
+    // (1 detent = 1 step, fast flick accelerates) — the finest the plug-in
+    // supports. Continuous JSFX + Fine only; VST3/AU and normal turns are
+    // unaffected. Frank 2026-07-09.
+    bool jsfxGrid = reasixty_jsfxGridFine();
+    if (ImGui_Checkbox(ctx,
+        "Fine mode steps JSFX sliders by their native increment",
+        &jsfxGrid))
+    {
+        reasixty_setJsfxGridFine(jsfxGrid);
     }
     // (Favourite copy-mode, section mask, remember + per-project bank moved to
     // the dedicated Favourites tab. Frank 2026-06-26.)

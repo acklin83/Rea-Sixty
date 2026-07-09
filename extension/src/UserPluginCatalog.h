@@ -257,6 +257,18 @@ int   numStepsFor(float pStep);
 // the result downstream. Returns 0 for a zero detent count.
 double jsfxContinuousStep(int rawDetents);
 
+// Grid-fine mode for long continuous JSFX sliders. The analog
+// jsfxContinuousStep floor (~1/33 of range, quartered in Fine) is still
+// dozens-to-hundreds of native increments on a slider like <20,20000,1> —
+// too coarse to set cleanly. This instead steps by whole native slider
+// increments: `normStep` is the slider's own quantum (rawStep/range, from
+// jsfxStepClassify). A slow detent moves exactly ONE increment (the finest
+// the plug-in supports); a fast flick accelerates to a few increments so a
+// hard spin still covers ground without leaving Fine. Returns a SIGNED
+// normalised delta, already quantised to whole increments. 0 for a zero
+// detent count or a non-positive normStep (gridless slider).
+double jsfxGridFineStep(int rawDetents, double normStep);
+
 // JSFX sliders are often coarsely quantised, so a small fine-mode nudge
 // (~0.008 normalised) rounds straight back to the stored value and the
 // param never moves. This accumulates the intended move against a caller-

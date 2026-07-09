@@ -33,6 +33,9 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
+// JSFX grid-fine toggle (Settings → Plug-ins; defined in main.cpp). When on,
+// Fine on a continuous JSFX slider steps by whole native slider increments.
+bool reasixty_jsfxGridFine();
 // Global UC1 encoder resolution (defined in main.cpp). Speed = linear
 // multiplier on every base delta (default 1.0); fineFactor scales further
 // while Fine is engaged (default 0.25). uc1KnobScale_ folds both.
@@ -1097,16 +1100,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // continuous JSFX → softened branch; small enums use the
             // normalised step. VST3/AU keep their real pStep, byte-identical.
             double effStep = pStep;
+            double jsfxNormStep = 0.0;   // native slider increment
             bool jsfxBogusStep = false;
             if (haveStepInfo && !isToggle) {
                 double nrm = 0.0; bool cont = false;
                 if (uf8::jsfxStepClassify(tr, match.fxIndex, vst3Param,
                         pStep, nrm, cont)) {
                     jsfxBogusStep = cont;
+                    jsfxNormStep = nrm;
                     if (!cont) effStep = nrm;
                 }
             }
             double next = curN;
+            bool gridFineApplied = false;
             // usl knob-travel customisation only applies to SSL slots (which
             // carry a stable linkIdx). Free user EXT FUNCS params have no usl
             // → plain linear/stepped behaviour (range/curve/reset deferred).
@@ -1169,6 +1175,18 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 next = curN + logical * effStep;
                 if (next < minN) next = minN;
                 if (next > maxN) next = maxN;
+            } else if (jsfxBogusStep && jsfxNormStep > 0.0
+                       && (fineMode_.load(std::memory_order_relaxed)
+                           || reasixty_shiftFineActive())
+                       && reasixty_jsfxGridFine()) {
+                // Grid-fine: step a long continuous JSFX slider by whole
+                // native increments so it resolves cleanly in Fine. `step`
+                // is already the signed pre-accumulated detent. Bypasses the
+                // curve — lands exactly on the slider grid.
+                double gf = curN + uf8::jsfxGridFineStep(step, jsfxNormStep);
+                gf = std::round(gf / jsfxNormStep) * jsfxNormStep;
+                next = gf < 0.0 ? 0.0 : (gf > 1.0 ? 1.0 : gf);
+                gridFineApplied = true;
             } else {
                 // Continuous — 1% per detent, 0.1% in fine mode. When the
                 // bound plug-in is a user-learned map with an explicit
@@ -1203,7 +1221,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             }
             // JSFX coarse-quantisation accumulator (see handleKnob_): keep
             // sub-quantum fine-mode moves until they cross the slider grid.
-            if (jsfxBogusStep) {
+            if (jsfxBogusStep && !gridFineApplied) {
                 static double s_jsfxWantExt[0x40]{};
                 const int wk = (linkIdx >= 0 ? linkIdx : vst3Param) & 0x3F;
                 next = uf8::jsfxAccumulate(s_jsfxWantExt[wk], curN, next);
@@ -1698,11 +1716,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // acceleration below). VST3 / AU stepped params keep their real pStep
     // and byte-identical behaviour.
     double effStep = pStep;
+    double jsfxNormStep = 0.0;   // native slider increment
     bool jsfxBogusStep = false;
     if (haveStepInfo && !isToggle) {
         double nrm = 0.0; bool cont = false;
         if (uf8::jsfxStepClassify(tr, fxIdx, vst3Param, pStep, nrm, cont)) {
             jsfxBogusStep = cont;
+            jsfxNormStep = nrm;
             if (!cont) effStep = nrm;
         }
     }
@@ -1756,6 +1776,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // effStep=1.0 is the 0↔1 grid; the stepped branch below clamps to [0,1].
     if (haveStepInfo && isToggle) effStep = 1.0;
     double next;
+    bool gridFineApplied = false;
     if (haveStepInfo && (isToggle || (pStep > 0.0 && !jsfxBogusStep))) {
         // Discrete-stepped — accumulate raw detents into logical steps
         // so a fast hardware scroll doesn't slam through 8 stops. The
@@ -1797,6 +1818,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         next = cur + r.logicalSteps * effStep;
         if (next < minN) next = minN;
         if (next > maxN) next = maxN;
+    } else if (jsfxBogusStep && jsfxNormStep > 0.0
+               && (fineMode_.load(std::memory_order_relaxed)
+                   || reasixty_shiftFineActive())
+               && reasixty_jsfxGridFine()) {
+        // Grid-fine: step a long continuous JSFX slider by whole native
+        // increments (1 detent = 1 increment, fast flick accelerates) so it
+        // resolves cleanly in Fine. Bypasses clickToDelta_ / EQ-gain magnet /
+        // per-slot curve — lands exactly on the slider grid.
+        const int dir = map->inverted[ev.id] ? -1 : 1;
+        double gf = cur + uf8::jsfxGridFineStep(ev.delta * dir, jsfxNormStep);
+        gf = std::round(gf / jsfxNormStep) * jsfxNormStep;
+        next = gf < 0.0 ? 0.0 : (gf > 1.0 ? 1.0 : gf);
+        gridFineApplied = true;
     } else {
         // Continuous — clickToDelta_ + EQ-gain magnet, plus per-slot
         // knob travel (range/curve/sensitivity) when the bound plug-in
@@ -1853,7 +1887,7 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
     // (~0.008) rounds straight back to the stored value, so accumulate the
     // intended move in a per-control virtual position until it crosses the
     // slider's grid. JSFX-only — VST3/AU write `next` directly.
-    if (jsfxBogusStep) {
+    if (jsfxBogusStep && !gridFineApplied) {
         static double s_jsfxWant[0x20]{};
         next = uf8::jsfxAccumulate(s_jsfxWant[ev.id & 0x1F], cur, next);
     }
