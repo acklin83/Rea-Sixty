@@ -4210,9 +4210,14 @@ void UC1Surface::pollGainReduction_()
     // track (independent of focus — same as pollBcBypassState_).
     float bcGr = 0.0f;
     MediaTrack* bcTr = static_cast<MediaTrack*>(effectiveBcTrack_());
+    int bcAnchorFxIdx = -1;   // BC compressor slot on bcTr — skipped in the
+                              // CS-GR any-FX fallback so the bus comp's GR
+                              // doesn't mirror onto the CS Comp strip when the
+                              // focused track IS the BC anchor. Frank 2026-07-09.
     if (bcTr) {
         UC1Bindings b = lookupBindingsOnTrack(bcTr);
         if (b.busCompMap) {
+            bcAnchorFxIdx = b.busCompFxIdx;
             bcGr = readGr(bcTr, b.busCompFxIdx, b.busCompGrParam,
                           b.busCompGrOffsetDb,
                           b.busCompGrBcVuCal, uf8::kBcVuBpDb, uf8::kBcVuBpCount);
@@ -4253,6 +4258,9 @@ void UC1Surface::pollGainReduction_()
                 // counted). In-series GR sums in dB. Frank 2026-06-12.
                 for (int fx = 0; fx < fxCount; ++fx) {
                     if (fx == csFxIdx) continue;
+                    // Skip the BC anchor FX when the focused track is the BC
+                    // track — its GR belongs on the BC needle, not the CS strip.
+                    if (csTr == bcTr && fx == bcAnchorFxIdx) continue;
                     if (uf8::fxIsAcustica(csTr, fx)) continue;
                     char buf[64] = {0};
                     if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
@@ -4264,6 +4272,7 @@ void UC1Surface::pollGainReduction_()
             } else if (!b.channelMap) {
                 // Single source: first GR-exposing FX (legacy, no CS).
                 for (int fx = 0; fx < fxCount; ++fx) {
+                    if (csTr == bcTr && fx == bcAnchorFxIdx) continue;
                     if (uf8::fxIsAcustica(csTr, fx)) continue;
                     char buf[64] = {0};
                     if (!TrackFX_GetNamedConfigParm(csTr, fx, "GainReduction_dB",
