@@ -1627,7 +1627,10 @@ double jsfxGridFineStep(int rawDetents, double normStep)
     // nudging (release Fine for the analog fast-travel curve).
     constexpr double kAccel = 0.6;
     const double units = 1.0 + kAccel * std::sqrt(static_cast<double>(d - 1));
-    const int n = std::max(1, static_cast<int>(units + 0.5));
+    // NOT std::max(1, …): on MSVC the windows.h `max` macro expands and breaks
+    // `std::max(` (error C2589). Manual clamp instead. See msvc-minmax trap.
+    int n = static_cast<int>(units + 0.5);
+    if (n < 1) n = 1;
     const double mag = static_cast<double>(n) * normStep;
     return rawDetents < 0 ? -mag : mag;
 }
