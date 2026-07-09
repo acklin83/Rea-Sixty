@@ -2544,8 +2544,16 @@ local function drawCurveEditor()
   reaper.ImGui_SetNextWindowPos(ctx,
     (OX or 0) + (WW or 420) / 2, (OY or 0) + (WH or 380) / 2,
     reaper.ImGui_Cond_Appearing(), 0.5, 0.5)
-  reaper.ImGui_SetNextWindowSize(ctx, 420, 380, reaper.ImGui_Cond_Appearing())
-  if not reaper.ImGui_BeginPopup(ctx, CURVE_POPUP) then
+  reaper.ImGui_SetNextWindowSize(ctx, 440, 400, reaper.ImGui_Cond_Appearing())
+  -- Roomier padding so the content isn't flush against the frame. The parent
+  -- HUD window pushes WindowPadding 0,0 (it draws its own margins), which this
+  -- nested popup would otherwise inherit → everything glued to the edge. Push
+  -- the same 10,8 the right-click context menus use. Read at BeginPopup, so
+  -- pop right after regardless of the result. Frank 2026-07-09.
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  local curveShown = reaper.ImGui_BeginPopup(ctx, CURVE_POPUP)
+  reaper.ImGui_PopStyleVar(ctx, 1)
+  if not curveShown then
     -- Still waiting for the deferred open to take effect → keep curveOpen.
     if not curveNeedsOpen then curveOpen = false end
     return
