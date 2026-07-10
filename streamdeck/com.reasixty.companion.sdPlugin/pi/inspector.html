@@ -105,6 +105,16 @@
       <input type="checkbox" id="followColor" />
       <span style="color:#7a7a7a; margin-left:8px;">tint the key background</span>
     </div>
+    <div class="row" id="fontScaleRow">
+      <label for="fontScale">Font size</label>
+      <select id="fontScale">
+        <option value="0.85">Small</option>
+        <option value="1">Normal</option>
+        <option value="1.2">Large</option>
+        <option value="1.4">Extra large</option>
+      </select>
+      <span style="color:#7a7a7a; margin-left:8px;">size of the dB values &amp; track name</span>
+    </div>
     <div class="hint">Gain Reduction reads the first FX on the track reporting GainReduction
       (any compressor / limiter). “Bus Comp” targets the mapped SSL Bus Compressor.
       Peak follows REAPER's track meter (Pre / Post-Fader as configured).</div>
@@ -191,6 +201,7 @@
         setVal("trackName", settings.trackName || "");
         document.getElementById("showName").checked = !!settings.showName;
         document.getElementById("followColor").checked = !!settings.followColor;
+        setVal("fontScale", settings.fontScale || "1");
         updateTrackRows();
       } else {
         ["param", "reaperId", "reaperAction", "label"].forEach((k) => {
@@ -253,6 +264,7 @@
           trackName: document.getElementById("trackName").value,
           showName:   document.getElementById("showName").checked,
           followColor: document.getElementById("followColor").checked,
+          fontScale:  document.getElementById("fontScale").value,
           action:     document.getElementById("clickAction").value,
         };
       } else {

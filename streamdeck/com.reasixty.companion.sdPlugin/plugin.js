@@ -342,12 +342,16 @@ function renderMeter(ctx, c, e) {
     bg = "rgb(" + d(e.rgb[0]) + "," + d(e.rgb[1]) + "," + d(e.rgb[2]) + ")";
   }
 
+  // Font size for the generated readouts (dB values + track name). Stored as a
+  // scale factor; default 1.
+  const fontScale = parseFloat(c.settings && c.settings.fontScale) || 1;
+
   // Dead-band: only push a new image when the rendered result changes.
-  const sig = bars.map((b) => b.db + b.color).join("/") + "|" + name + "|" + bg;
+  const sig = bars.map((b) => b.db + b.color).join("/") + "|" + name + "|" + bg + "|" + fontScale;
   if (c.meterSig === sig) return;
   c.meterSig = sig;
   sdSend({ event: "setImage", context: ctx,
-           payload: { image: meterSvg(bars, name, bg), target: "hardware" } });
+           payload: { image: meterSvg(bars, name, bg, fontScale), target: "hardware" } });
 }
 
 function xmlEsc_(s) {
@@ -359,8 +363,13 @@ function xmlEsc_(s) {
 // NAME (when enabled) instead of a "PK"/"GR" label — the source is obvious
 // from the value, and the name is what the user actually wants there (Frank
 // 2026-07-05). SVG data URI.
-function meterSvg(bars, name, bg) {
+// fontScale (default 1) scales every generated text — the dB values, the "dB"
+// label and the track name — so the user can make the readouts bigger/smaller
+// (Property Inspector "Font size"). Base sizes are tuned for scale 1.
+function meterSvg(bars, name, bg, fontScale) {
   const y0 = 20, H = 60, bx = [10, 30];
+  const s = fontScale > 0 ? fontScale : 1;
+  const fs = (base) => Math.max(6, Math.round(base * s));
   const F = 'font-family="Helvetica,Arial,sans-serif"';
   let g = '<rect width="100" height="100" fill="' + (bg || "#1c1c1f") + '"/>';
   bars.forEach((b, i) => {
@@ -370,15 +379,15 @@ function meterSvg(bars, name, bg) {
     g += '<rect x="' + bx[i] + '" y="' + fillY + '" width="14" height="' + barH + '" rx="3" fill="' + b.color + '"/>';
   });
   if (bars.length === 1) {
-    g += '<text x="34" y="' + (y0 + 26) + '" ' + F + ' font-size="24" font-weight="700" fill="#eaeaea">' + bars[0].db + '</text>';
-    g += '<text x="34" y="' + (y0 + 44) + '" ' + F + ' font-size="12" fill="#8a8a8a">dB</text>';
+    g += '<text x="34" y="' + (y0 + 26) + '" ' + F + ' font-size="' + fs(24) + '" font-weight="700" fill="#eaeaea">' + bars[0].db + '</text>';
+    g += '<text x="34" y="' + (y0 + 44) + '" ' + F + ' font-size="' + fs(12) + '" fill="#8a8a8a">dB</text>';
   } else {
     bars.forEach((b, i) => {
-      g += '<text x="50" y="' + (y0 + 18 + i * 26) + '" ' + F + ' font-size="18" font-weight="700" fill="' + b.color + '">' + b.db + '</text>';
+      g += '<text x="50" y="' + (y0 + 18 + i * 26) + '" ' + F + ' font-size="' + fs(18) + '" font-weight="700" fill="' + b.color + '">' + b.db + '</text>';
     });
   }
   if (name)
-    g += '<text x="50" y="95" ' + F + ' font-size="13" font-weight="600" fill="#dcdcdc" text-anchor="middle">' + xmlEsc_(name.slice(0, 12)) + '</text>';
+    g += '<text x="50" y="95" ' + F + ' font-size="' + fs(13) + '" font-weight="600" fill="#dcdcdc" text-anchor="middle">' + xmlEsc_(name.slice(0, 12)) + '</text>';
   return "data:image/svg+xml;charset=utf8;base64," +
     Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">' + g + '</svg>').toString("base64");
 }
