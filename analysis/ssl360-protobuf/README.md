@@ -96,6 +96,31 @@ Confirmed live values: BarPeak −10.44..−4.32 dBFS, Correlation 0..0.95,
 StereoBalance −0.07..0.09, Lissajous 0..1, Loudness LKFS floats, RTA 31-band.
 Two instances streamed on two ports simultaneously (the multi-channel case).
 
+## Connection topology (from cap loopback, 2026-07-10)
+
+Roles (confirmed): **360°Core = the server**, plugins = clients.
+
+1. **Discovery** — Core opens a TCP server on an ephemeral port (seen: 49586,
+   49587 — one per plugin instance) and sends a UDP
+   `LgxPropertyConnectionAnnouncementData{ AppVerMajor=2, IpAddress, Port,
+   MachineName }` to **fixed discovery ports 16008 / 16009**.
+2. **Control channel (TCP)** — plugin connects to the announced port; Core sends
+   `"server heartbeat"` frames (efbc-framed, 46 B), plugin replies (28 B). This
+   carries the property-VM sync (`PluginConfigMessage` / `ServerConfigMessage`
+   incl. `UDPDataPortToCore`) — the handshake that tells the plugin where to send
+   meter data. NOT yet fully decoded (Lgx property-VM; needs a clean cold-connect
+   capture — the 372 MB loopback was noisy: our own :49900 bridge + other apps).
+3. **Meter data (UDP)** — plugin streams `PluginMeterDataMessage` to the Core UDP
+   data port it was assigned (seen: 16010, 50881). One port per instance.
+
+To **impersonate Core** we must: open the TCP server, emit the announcement to
+16008/16009, run the heartbeat/handshake, hand the plugin a UDP data port via
+`ServerConfigMessage`, then receive+decode the meter UDP. Steps 1/3 are clear;
+step 2 (exact handshake bytes) is the remaining reverse-engineering — best cracked
+with a **clean minimal handshake capture** (start tcpdump, then cold-launch one
+Meter plugin + 360°), then prototyped (Python) against a live plugin before the
+C++ subsystem lands in the extension.
+
 ## Build path
 
 Two options for wiring this into our extension:
