@@ -329,10 +329,13 @@ function renderMeter(ctx, c, e) {
   if (grKind)   bars.push(grBar_(c, grKind, grKind === "comp" ? e.comp : e.bc));
   if (!bars.length) bars.push(peakBar_(c, Math.max(e.peak[0], e.peak[1])));
 
-  // Track name comes resolved from the bridge (e.nm) so it works for ANY
-  // track mode — selected, master, fixed number or name. Frank 2026-07-05.
+  // Track name comes resolved from the bridge so it works for ANY track mode —
+  // selected, master, fixed number or name. Prefer e.nma: the name already
+  // abbreviated with Rea-Sixty's configured strategy (Settings → Track-name
+  // mode), matching the hardware LCD. Fall back to the raw e.nm for older
+  // extensions that don't send it. Frank 2026-07-10.
   let name = "";
-  if (c.settings && c.settings.showName) name = e.nm || "";
+  if (c.settings && c.settings.showName) name = e.nma || e.nm || "";
 
   // Optional: darkened track colour as the key background (readability keeps
   // the bars/text on top). [-1,…] from the bridge = no custom colour set.

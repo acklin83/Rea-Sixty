@@ -20577,6 +20577,12 @@ static void sdBridgeTick_()
             if (mt) GetSetMediaTrackInfo_String(mt, "P_NAME", nm, false);
             std::string nmS = nm;
             if (nmS.empty() && mt && mt == GetMasterTrack(nullptr)) nmS = "Master";
+            // Abbreviated name using Rea-Sixty's configured strategy (Settings →
+            // Track-name mode: Truncate vs Smart Abbreviate) at the LCD's 12-char
+            // budget. forceMode=-1 honours the user setting; foldLatin1=false
+            // because the Stream Deck / Companion render UTF-8 (SVG), not the
+            // Latin-1 hardware LCD. Sent as "nma" alongside the raw "nm".
+            const std::string nmA = abbreviateTrackName_(nmS, 12, -1, /*foldLatin1*/ false);
             // Track colour: rgb when a custom colour is set, else [-1,-1,-1].
             int cr = -1, cg = -1, cb = -1;
             if (mt) {
@@ -20587,7 +20593,8 @@ static void sdBridgeTick_()
             f = false;
             ml += "{\"id\":\"" + sdJsonEsc_(t) + "\",\"peak\":["
                 + f1(pL) + "," + f1(pR) + "],\"comp\":" + f1(comp)
-                + ",\"bc\":" + f1(bc) + ",\"nm\":\"" + sdJsonEsc_(nmS) + "\",\"rgb\":["
+                + ",\"bc\":" + f1(bc) + ",\"nm\":\"" + sdJsonEsc_(nmS)
+                + "\",\"nma\":\"" + sdJsonEsc_(nmA) + "\",\"rgb\":["
                 + std::to_string(cr) + "," + std::to_string(cg) + "," + std::to_string(cb) + "]}";
         }
         ml += "]}";
