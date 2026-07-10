@@ -69,6 +69,7 @@
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
 #include "StreamDeckBridge.h"
+#include "SslCoreImpersonator.h"
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
@@ -15292,9 +15293,32 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         if (!std::isfinite(p) || p <= 0.0) return -120.f;
         return static_cast<float>(20.0 * std::log10(p));
     };
-    const float dbL = peakToDb(Track_GetPeakInfo(tr, 0));
-    const float dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+
+    // Value source, in priority order:
+    //  1. The SSL Meter (Pro) plugin, via our 360°Core impersonator — publishes
+    //     real dBFS Peak (BarPeak) and RMS (BarRms) per channel (cap87: BarPeak
+    //     −10.44..−4.32, BarRms −129.6..−20.5; current[0]=L current[1]=R).
+    //  2. REAPER's own Track_GetPeakInfo (peak only) when the impersonator is off
+    //     or hasn't received meter data yet. Non-regressive fallback.
+    float dbL = -120.f, dbR = -120.f;    // peak L/R (dBFS)
+    float rmsL = -120.f, rmsR = -120.f;  // RMS  L/R (dBFS)
+    bool  haveRms = false;
+    {
+        std::vector<float> cur, pk;
+        if (sslcore::isRunning() &&
+            sslcore::getMeter(int(sslmeter::DataType::BarPeak), cur, pk) &&
+            cur.size() >= 2) {
+            dbL = cur[0]; dbR = cur[1];
+            std::vector<float> rc, rp;
+            if (sslcore::getMeter(int(sslmeter::DataType::BarRms), rc, rp) &&
+                rc.size() >= 2) { rmsL = rc[0]; rmsR = rc[1]; haveRms = true; }
+        } else {
+            dbL = peakToDb(Track_GetPeakInfo(tr, 0));
+            dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+        }
+    }
     const float peak = (dbL > dbR) ? dbL : dbR;   // no std::max — MSVC macro trap
+    const float rms  = haveRms ? ((rmsL > rmsR) ? rmsL : rmsR) : -120.f;
 
     // Peak-hold: jump up instantly, fall at 26.5 dB/s.
     static MediaTrack* sHoldTr = nullptr;
@@ -15312,12 +15336,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     sHoldT = now;
 
     const std::array<std::string, 6> fields{
-        uf1FormatMeterDb_(sHold),   // Peak hold
-        uf1FormatMeterDb_(dbL),     // Peak L
-        uf1FormatMeterDb_(dbR),     // Peak R
-        std::string(),              // RMS hold — no cheap REAPER source yet
-        std::string(),              // RMS L
-        std::string(),              // RMS R
+        uf1FormatMeterDb_(sHold),                          // Peak hold
+        uf1FormatMeterDb_(dbL),                            // Peak L
+        uf1FormatMeterDb_(dbR),                            // Peak R
+        haveRms ? uf1FormatMeterDb_(rms) : std::string(),  // RMS hold (combined)
+        haveRms ? uf1FormatMeterDb_(rmsL) : std::string(), // RMS L
+        haveRms ? uf1FormatMeterDb_(rmsR) : std::string(), // RMS R
     };
     std::vector<uint8_t> p;
     p.reserve(6 * 25);
@@ -15642,31 +15666,69 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(meterView ? 0x011f : 0x0123, zero));
     }
 
-    // Re-assert the Plugin-layout mode bytes (baked into UF1Device::runInit_ at
-    // init-time; mirrored here on any change as belt-and-suspenders for a firmware
-    // that re-latches MCU layout, or an init-thread race). 0x0000=03 00 / 0x000d=03
-    // / 0x0011=01 = cap84's Plugin cold-start values (vs cap66 MCU 02 00 / 04 / 00).
+    // Re-assert the large-LCD layout on any change. 0x0100 is the LARGE-LCD
+    // LAYOUT SELECTOR — 0x0300 = plugin/channel (EQ graph), 0x0400 = Meter — so
+    // the two views need DIFFERENT bursts. Both are mirrored byte-for-byte from
+    // cap75 (SSL 360 driving the UF1 across the MODE-button transitions). Without
+    // the Meter burst the firmware stays in the plugin layout even after MODE, so
+    // the Meter view never appeared (diagnosed 2026-07-10 via frame trace + cap75).
     if (changed) {
-        // Plugin large-display state, mirrored from cap85 (the SSL 360 init that
-        // renders the channel-strip + EQ graph). Re-asserted here as belt-and-
-        // suspenders for UF1Device::runInit_ (latched-or-dynamic firmware). The
-        // 0x01xx bytes (esp. 0x0100=0300) put the LARGE LCD into plugin layout so
-        // the 0x0122 EQ graph paints; without them only the channel-info plane
-        // (colour bar + name/dB/pan) renders.
         auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
             g_uf1_dev->send(uf1::buildScreen(a,
                 std::span<const uint8_t>(std::data(p), p.size())));
         };
-        put(0x0000, {0x03, 0x00});
-        put(0x000d, {0x01});
-        put(0x0011, {0x01});
-        put(0x0100, {0x03, 0x00});
-        put(0x0101, {0x05});
-        put(0x010d, {0x02, 0x02, 0x08, 0x02});
-        put(0x0110, {0x0f});
-        put(0x011a, {0x02});
-        put(0x011d, {0x19});
-        put(0x011e, {0x18});
+        if (meterView) {
+            // Meter-view setup burst — byte-exact from cap75 (Channel→Meter). ASCII
+            // labels encoded as raw bytes to stay faithful (embedded NULs in the
+            // settings strings). 0x0104=soft-keys, 0x010e=meter settings labels,
+            // 0x0122(63B)=silent bar, 0x0125/26/27=value boxes. The 0x011c dB row
+            // is painted by uf1PaintMeter_ below (live values); here we only set up
+            // the plane so the firmware switches layout.
+            put(0x0100, {0x04, 0x00});                 // LAYOUT = Meter
+            put(0x0101, {0x03});
+            put(0x0102, {0x01});
+            put(0x0104, {0x00,0x4f,0x56,0x45,0x52,0x56,0x49,0x45,0x57}); // "OVERVIEW"
+            put(0x0104, {0x01,0x52,0x45,0x53,0x45,0x54});                // "RESET"
+            put(0x0104, {0x02,0x46,0x49,0x4e,0x45});                     // "FINE"
+            put(0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53});      // "PRESETS"
+            put(0x010d, {0x0a,0x0b,0x0a,0x0b});
+            put(0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52});           // "MASTER"
+            put(0x010e, {0x01,0x54,0x72,0x75,0x65,0x50,0x6b,0x00,0x00,
+                         0x4f,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00}); // "TruePk"/"Off"
+            put(0x010e, {0x02,0x4e,0x6f,0x6e,0x2d,0x4c,0x69,0x6e,0x65,0x61,0x72}); // "Non-Linear"
+            put(0x010e, {0x03,0x46,0x61,0x64,0x65,0x00,0x00,0x00,0x00,
+                         0x00,0x32,0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}); // "Fade"/"2 sec"
+            put(0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
+            put(0x011a, {0x07});
+            put(0x011e, {0x10});
+            put(0x0120, {0x00});
+            put(0x0129, {0xff});
+            // 0x0122 silent bar + value boxes (seeded; live update wired later).
+            put(0x0122, {0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
+            put(0x0125, {0x00,0x00});
+            put(0x0126, {0x00,0x00});
+            put(0x0127, {0x00,0x00});
+            put(0x0128, {0x00});
+            put(0x011d, {0x00});
+        } else {
+            // Channel/plugin-EQ layout — UNCHANGED (this path renders the working
+            // channel-strip + EQ graph; derived from cap84/cap85 plugin cold-start).
+            put(0x0000, {0x03, 0x00});
+            put(0x000d, {0x01});
+            put(0x0011, {0x01});
+            put(0x0100, {0x03, 0x00});                 // LAYOUT = plugin/channel
+            put(0x0101, {0x05});
+            put(0x010d, {0x02, 0x02, 0x08, 0x02});
+            put(0x0110, {0x0f});
+            put(0x011a, {0x02});
+            put(0x011d, {0x19});
+            put(0x011e, {0x18});
+        }
     }
 
     if (meterView) {
@@ -30317,6 +30379,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         uf8::dynamount::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
+        // Stop the SSL Core impersonator worker (no-op if it was never started).
+        sslcore::stop();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
@@ -30660,6 +30724,43 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         initLog(ok ? (bindAll ? "step: StreamDeck bridge listening (LAN 0.0.0.0)"
                               : "step: StreamDeck bridge listening (loopback)")
                    : "step: StreamDeck bridge FAILED to bind");
+    }
+
+    // SSL 360°Core impersonator — stand in for 360°Core so SSL Meter (Pro)
+    // plugins stream their live meter data to us, driving the UF1 Meter/Analyzer
+    // view without SSL 360° running. Reverse-engineered + proven end-to-end
+    // 2026-07-10 (see SslCoreImpersonator.h, memory ssl360-plugin-protobuf).
+    //
+    // OPT-IN (default OFF): it announces itself on the SSL discovery ports
+    // (16008/16009) and would clash with a running SSL 360°. Enable per-user via
+    //   reaper.SetExtState("rea_sixty","ssl_core","1",true)
+    // TCP control port + UDP data port are overridable for clash-avoidance:
+    //   rea_sixty/ssl_core_tcp  (0 = ephemeral, announced)
+    //   rea_sixty/ssl_core_data (default 16010)
+    {
+        bool enable = false;
+        if (const char* ev = GetExtState("rea_sixty", "ssl_core"); ev && *ev)
+            enable = (!strcmp(ev, "1") || !strcmp(ev, "on")
+                      || !strcmp(ev, "true") || !strcmp(ev, "yes"));
+        if (enable) {
+            int tcpPort = 0;
+            if (const char* tv = GetExtState("rea_sixty", "ssl_core_tcp");
+                tv && *tv) {
+                const int p = std::atoi(tv);
+                if (p > 0 && p < 65536) tcpPort = p;
+            }
+            int dataPort = 16010;
+            if (const char* dv = GetExtState("rea_sixty", "ssl_core_data");
+                dv && *dv) {
+                const int p = std::atoi(dv);
+                if (p > 0 && p < 65536) dataPort = p;
+            }
+            const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
+            initLog(ok ? "step: SSL Core impersonator started"
+                       : "step: SSL Core impersonator FAILED to start");
+        } else {
+            initLog("step: SSL Core impersonator disabled (rea_sixty/ssl_core)");
+        }
     }
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");
