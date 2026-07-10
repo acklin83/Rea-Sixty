@@ -354,6 +354,9 @@ add_library(reaper_uf8 MODULE
     src/DynaMountClient.cpp
     src/DynaMountManager.cpp
     src/StreamDeckBridge.cpp
+    # SSL 360°Core impersonator — meter data straight from the SSL plugin
+    src/SslMeterProtocol.cpp
+    src/SslCoreImpersonator.cpp
 )
 
 if(APPLE)
