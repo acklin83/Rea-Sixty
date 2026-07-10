@@ -2,7 +2,7 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "SDKVersion": 2,
   "Name": "Rea-Sixty Companion",
-  "Version": "0.1.0.0",
+  "Version": "0.1.1.0",
   "Author": "Rea-Sixty",
   "UUID": "com.reasixty.companion",
   "Icon": "icons/plugin",
