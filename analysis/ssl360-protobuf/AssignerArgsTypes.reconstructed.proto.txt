@@ -1,0 +1,1059 @@
+blob len: 30723 range 0x1cdca60 0x1ce4263
+
+=== FILE: AssignerArgsTypes.proto
+package: (none)
+syntax: proto2(default)
+
+enum AutomationActionType {
+  AAT_AutomationActionStart = 0;
+  AAT_AutomationActionEnd = 1;
+}
+
+enum BusCompMeterType {
+  BusCompMeterType_GainReduction = 0;
+}
+
+enum ChanStripsWidthMode {
+  ChanStrips_WidthFull = 0;
+  ChanStrips_WidthLow = 1;
+  ChanStrips_WidthHigh = 2;
+  NumChanStripsWidthModes = 3;
+}
+
+enum ChannelStripMeterType {
+  ChannelStripMeterType_Input = 0;
+  ChannelStripMeterType_InputRms = 1;
+  ChannelStripMeterType_Output = 2;
+  ChannelStripMeterType_OutputRms = 3;
+  ChannelStripMeterType_CompGain = 4;
+  ChannelStripMeterType_GateGain = 5;
+  ChannelStripMeterType_MicPreSaturation = 6;
+  NumChannelStripMeterTypes = 7;
+}
+
+enum ChannelStripRoutingType {
+  ChannelStripRoutingType_1a = 0;
+  ChannelStripRoutingType_1b = 1;
+  ChannelStripRoutingType_2a = 2;
+  ChannelStripRoutingType_2b = 3;
+  ChannelStripRoutingType_3a = 4;
+  ChannelStripRoutingType_3b = 5;
+  ChannelStripRoutingType_4a = 6;
+  ChannelStripRoutingType_4b = 7;
+  ChannelStripRoutingType_5a = 8;
+  ChannelStripRoutingType_5b = 9;
+  ChannelStripRoutingType_6a = 10;
+  ChannelStripRoutingType_6b = 11;
+  ChannelStripRoutingType_7a = 12;
+  ChannelStripRoutingType_7b = 13;
+  ChannelStripRoutingType_8a = 14;
+  ChannelStripRoutingType_8b = 15;
+  ChannelStripRoutingType_9a = 16;
+  ChannelStripRoutingType_9b = 17;
+  ChannelStripRoutingType_10a = 18;
+  ChannelStripRoutingType_10b = 19;
+  NumChannelStripRoutingTypes = 20;
+  Invalid = 21;
+}
+
+enum DisplayAs {
+  DisplayAsUnknown = 0;
+  DisplayAsProxy = 1;
+  DisplayAsSwitch = 2;
+  DisplayAsGain = 3;
+  DisplayAsAnalogueLevel = 4;
+  DisplayAsSpl = 5;
+  DisplayAsDbFS = 6;
+  DisplayAsFreq = 7;
+  DisplayAsQ = 8;
+  DisplayAsInt = 9;
+  DisplayAsIntReal = 10;
+  DisplayAsNullableInt = 11;
+  DisplayAsString = 12;
+  DisplayAsStringList = 13;
+  DisplayAsReal = 14;
+  DisplayAsTime = 15;
+  DisplayAsSlope = 16;
+  DisplayAsDelay = 17;
+  DisplayAsEQGraph = 18;
+  DisplayAsStatusBar = 19;
+  DisplayAsMeter = 20;
+  DisplayAsGraph = 21;
+  DisplayAsNothing = 22;
+  DisplayAsCueNavigator = 23;
+  DisplayAsPercent = 24;
+  DisplayAsPercentRatio = 25;
+  DisplayAsEffectsRackSlotId = 26;
+  DisplayAsEffectsRackSlotContent = 27;
+  DisplayAsAvailableEffectsRack = 28;
+  DisplayAsRegularityAndRegular = 29;
+  DisplayAsPathLabel = 30;
+  DisplayAsProcessingOrder = 31;
+  DisplayAsGlobalFilter = 32;
+  DisplayAsProjectNavigator = 33;
+  DisplayAsProjectItemSelection = 34;
+  DisplayAsEnum = 35;
+  DisplayAsSpeed = 36;
+  DisplayAsPresetNavigator = 37;
+  DisplayAsRoutingConfig = 38;
+  DisplayAsRoutesQuery = 39;
+  DisplayAsIODeviceSettings = 40;
+  DisplayAsIODeviceClassifications = 41;
+  DisplayAsIODeviceConflict = 42;
+  DisplayAsPathDisplayNumMap = 43;
+  DisplayAsCrossfadeFilter = 44;
+  DisplayAsFormat = 45;
+  DisplayAsFormatInfoList = 46;
+  DisplayAsFrameRate = 47;
+  DisplayAsRoundTripTest = 48;
+  DisplayAsPanLeftRight = 49;
+  DisplayAsPanWidth = 50;
+  DisplayAsPanDivergence = 51;
+  DisplayAsPanFrontRear = 52;
+  DisplayAsPanDepth = 53;
+  DisplayAsTileList = 54;
+  DisplayAsBusFeedPoint = 55;
+  DisplayAsCueManagerProgress = 56;
+  DisplayAsPerSceneFilter = 57;
+  DisplayAsInputActions = 58;
+  DisplayAsOutputActions = 59;
+  DisplayAsMicSensitivity = 60;
+  DisplayAsGpoStates = 61;
+  DisplayAsGpiStates = 62;
+  DisplayAsRealWithPseudoInfinity = 63;
+  DisplayAsEffectsRackDspUsage = 64;
+  DisplayAsEffectsRackTypeDspUsage = 65;
+  DisplayAsIntList = 66;
+  DisplayAsSemitonePitchInterval = 67;
+  DisplayAsDoubleList = 68;
+  DisplayAsBpm = 69;
+  DisplayAsVersionData = 70;
+  DisplayAsUpdateProgress = 71;
+  DisplayAsEventList = 72;
+  DisplayAsEvent = 73;
+  DisplayAsEventSource = 74;
+  DisplayAsEventDestination = 75;
+  DisplayAsEventCueActionList = 76;
+  DisplayAsEventUserKeyList = 77;
+  DisplayAsMeterTest = 78;
+  DisplayAsPathList = 79;
+  DisplayAsActionPathList = 80;
+  DisplayAsLoudness = 81;
+  DisplayAsSoftKeyReplacement = 82;
+  DisplayAsSoftKeyRename = 83;
+  DisplayAsMeterBallisticSetting = 84;
+  DisplayAsTruePeakLevel = 85;
+  DisplayAsIntHashSet = 86;
+  DisplayAsDawEncoder = 87;
+  DisplayAsDistance = 88;
+  DisplayAsPanBottomTop = 89;
+  DisplayAsPanHeight = 90;
+  DisplayAsSoftKeyReplacementsTally = 91;
+  DisplayAsSoftKeyRequestReplacement = 92;
+  DisplayAsSoftKeyRequestRename = 93;
+  DisplayAsApplicationViewDisplay = 94;
+  DisplayAsApplicationViewSelect = 95;
+  DisplayAsApplicationViewSetup = 96;
+  DisplayAsApplicationViewVisibility = 97;
+  DisplayAsAutoPanNumberOfSteps = 98;
+  DisplayAsLayerBankSelection = 99;
+  DisplayAsLayerPosition = 100;
+  DisplayAsDanteHcConfig = 101;
+  DisplayAsTfAnalyserAveraging = 102;
+  DisplayAsTransientShaperSpeed = 103;
+  DisplayAsMixPassUidAndName = 104;
+  DisplayAsMixPassUidNameAndDate = 105;
+  DisplayAsMixPassList = 106;
+  DisplayAsAngle = 107;
+  DisplayAsThetaPanSpread = 108;
+  DisplayAsThetaPanWidth = 109;
+  DisplayAsMixPassUserNotes = 110;
+  DisplayAsNumFrames = 111;
+  DisplayAsLicenceDetails = 112;
+  DisplayAsLicenceFeatures = 113;
+  DisplayAsThLicenceKeys = 114;
+  DisplayAsBool = 115;
+  DisplayAsBoolList = 116;
+  DisplayAsBlankReal = 117;
+  DisplayAsBankCopy = 118;
+  DisplayAsBankDelete = 119;
+  DisplayAsScrollDelta = 120;
+  DisplayAsAccessControlLevels = 121;
+  DisplayAsActiveAccessControlLevel = 122;
+  DisplayAsServerToClientSlotAssignment = 123;
+  DisplayAsOscParameter = 124;
+  DisplayAsEncryptedString = 125;
+  DisplayAsDeltaInput = 126;
+  DisplayAsPresetPathFilters = 127;
+  DisplayAsFunctionId = 128;
+  DisplayAsKeyCommand = 129;
+  DisplayAsSdpDeviceList = 130;
+  DisplayAsSwitchInputNotifier = 131;
+  DisplayAsOscParameters = 132;
+  DisplayAsRealUsingCustomString = 133;
+  DisplayAsRegularityList = 134;
+  DisplayAsRecallProtectFilter = 135;
+  DisplayAsFreqKHz = 136;
+  DisplayAsTimeSeconds = 137;
+  DisplayAsCompThreshold = 138;
+  DisplayAsGateThreshold = 139;
+  DisplayAsInt64 = 140;
+  DisplayAsSpacemapRate = 141;
+  DisplayAsIpSettingsList = 142;
+  DisplayAsUfPageSelection = 143;
+  DisplayAsRatio = 144;
+  DisplayAsSubnetValidationValue = 145;
+  DisplayAsBalance = 146;
+  DisplayAsThLicenceFileNames = 147;
+  DisplayAsPluginPanLeftRight = 148;
+  DisplayAsSelectableStringList = 149;
+  DisplayAsGainWithoutOff = 150;
+  DisplayAsFormatIdList = 151;
+  DisplayAsDanteConnectConfig = 152;
+  DisplayAsRackCardInfo = 153;
+  DisplayAsRegularityAndRegularList = 154;
+  DisplayAsMirrorDestList = 155;
+  DisplayAsRegularityRegularAndIndex = 156;
+  DisplayAsRegularityRegularAndIndexList = 157;
+  DisplayAsLedRingTest = 158;
+  DisplayAsInlineConsoleProcessingOrder = 159;
+  DisplayAsPositiveTrimBalance = 160;
+  DisplayAsNegativeTrimBalance = 161;
+  DisplayAsRealUsingCustomStringsList = 162;
+  DisplayAsResistance = 163;
+  DisplayAsCompExpandThreshold = 164;
+  DisplayAsWetDryMixAudition = 165;
+  DisplayAsEnumList = 166;
+}
+
+enum DisplayUnits {
+  DisplayUnitsUnknown = 0;
+  DisplayUnitsAuto = 1;
+  DisplayUnitsSeconds = 2;
+  DisplayUnitsMinutes = 3;
+  DisplayUnitsMilliseconds = 4;
+  DisplayUnitsBpm = 5;
+  DisplayUnitsHz = 6;
+  DisplayUnitsMeters = 7;
+  DisplayUnitsCentimeters = 8;
+  DisplayUnitsFeet = 9;
+  DisplayUnitsInches = 10;
+  DisplayUnitsFrames = 11;
+  DisplayUnitsRelativeLoudnessK = 12;
+  DisplayUnitsAbsoluteLoudnessK = 13;
+  DisplayUnitsRelativeLoudnessU = 14;
+  DisplayUnitsAbsoluteLoudnessU = 15;
+}
+
+enum GestureEventType {
+  GET_GestureBeginEvent = 0;
+  GET_GestureEndEvent = 1;
+}
+
+enum InputValidity {
+  InputValidUnknown = 0;
+  InputInvalid = 1;
+  InputValid = 2;
+}
+
+enum LedColourType {
+  LedColourType_NotSet = 0;
+  White = 1;
+  Red = 2;
+  Green = 3;
+  Blue = 4;
+  Cyan = 5;
+  Magenta = 6;
+  Yellow = 7;
+  Orange = 8;
+  Purple = 9;
+  LightGreen = 10;
+  Pink = 11;
+  LightBlue = 12;
+  Lamp = 13;
+  Black = 14;
+}
+
+enum LedStatus {
+  LedStatus_NotSet = 0;
+  Off = 1;
+  On = 2;
+  Flash = 3;
+  FastFlash = 4;
+  Dim = 5;
+  Pulse = 6;
+  FastPulse = 7;
+}
+
+enum MeterOverloadDisplayMode {
+  NoOverloadDisplay = 0;
+  OverloadDisplay = 1;
+  OverloadDisplayInfiniteHold = 2;
+  OverloadDisplayPreferInfiniteHold = 4;
+}
+
+enum MeterPlugin360View {
+  MeterPlugin360View_Overview = 0;
+  MeterPlugin360View_AnalogueMeters = 1;
+  MeterPlugin360View_Rta = 2;
+  MeterPlugin360View_Loudness = 3;
+  NumMeterPlugin360Views = 4;
+}
+
+enum MeterPluginAnalogueMetersDualFormat {
+  MeterPluginAnalogueMetersDualFormat_Stereo = 0;
+  MeterPluginAnalogueMetersDualFormat_MidSide = 1;
+  MeterPluginAnalogueMetersDualFormat_Custom = 2;
+  NumMeterPluginAnalogueMetersDualFormats = 3;
+}
+
+enum MeterPluginAnalogueMetersMode {
+  MeterPluginAnalogueMetersMode_VU = 0;
+  MeterPluginAnalogueMetersMode_PPM = 1;
+  NumMeterPluginAnalogueMetersModes = 2;
+}
+
+enum MeterPluginAnalogueMetersPeakHold {
+  MeterPluginAnalogueMetersPeakHold_PeakHold_Off = 0;
+  MeterPluginAnalogueMetersPeakHold_PeakHold_2s = 1;
+  MeterPluginAnalogueMetersPeakHold_PeakHold_Inf = 2;
+  NumMeterPluginAnalogueMetersPeakHoldOptions = 3;
+}
+
+enum MeterPluginAnalogueMetersVUOffset {
+  MeterPluginAnalogueMetersVUOffset_Minus4 = 0;
+  MeterPluginAnalogueMetersVUOffset_Zero = 1;
+  MeterPluginAnalogueMetersVUOffset_Plus2 = 2;
+  NumMeterPluginAnalogueMetersVUOffsets = 3;
+}
+
+enum MeterPluginAnalysisSource {
+  MeterPluginAnalysisSource_LplusR = 0;
+  MeterPluginAnalysisSource_Left = 1;
+  MeterPluginAnalysisSource_Right = 2;
+  MeterPluginAnalysisSource_Mid = 3;
+  MeterPluginAnalysisSource_Side = 4;
+  MeterPluginAnalysisSource_SurroundsSum = 5;
+  MeterPluginAnalysisSource_HeightsSum = 6;
+  MeterPluginAnalysisSource_SumAllChans = 7;
+  MeterPluginAnalysisSource_Chan1 = 8;
+  MeterPluginAnalysisSource_Chan2 = 9;
+  MeterPluginAnalysisSource_Chan3 = 10;
+  MeterPluginAnalysisSource_Chan4 = 11;
+  MeterPluginAnalysisSource_Chan5 = 12;
+  MeterPluginAnalysisSource_Chan6 = 13;
+  MeterPluginAnalysisSource_Chan7 = 14;
+  MeterPluginAnalysisSource_Chan8 = 15;
+  MeterPluginAnalysisSource_Chan9 = 16;
+  MeterPluginAnalysisSource_Chan10 = 17;
+  MeterPluginAnalysisSource_Chan11 = 18;
+  MeterPluginAnalysisSource_Chan12 = 19;
+}
+
+enum MeterPluginDataType {
+  MeterPluginDataType_VuPpm = 0;
+  MeterPluginDataType_TextVuPpm = 1;
+  MeterPluginDataType_BarPeak = 2;
+  MeterPluginDataType_BarRms = 3;
+  MeterPluginDataType_TextPeak = 4;
+  MeterPluginDataType_TextRms = 5;
+  MeterPluginDataType_Correlation = 6;
+  MeterPluginDataType_StereoBalance = 7;
+  MeterPluginDataType_Rta31Band = 8;
+  MeterPluginDataType_TextRta = 9;
+  MeterPluginDataType_Lissajous = 10;
+  MeterPluginDataType_Loud_Momentary = 11;
+  MeterPluginDataType_Loud_ShortTerm = 12;
+  MeterPluginDataType_Loud_RangeLow = 13;
+  MeterPluginDataType_Loud_RangeHigh = 14;
+  MeterPluginDataType_Loud_Readout1 = 15;
+  MeterPluginDataType_Loud_Readout2 = 16;
+  MeterPluginDataType_Loud_Readout3 = 17;
+  MeterPluginDataType_Loud_Readout4 = 18;
+  MeterPluginDataType_Loud_Readout5 = 19;
+  MeterPluginDataType_Loud_Readout6 = 20;
+  MeterPluginDataType_Loud_Readout7 = 21;
+  MeterPluginDataType_Loud_Readout8 = 22;
+  MeterPluginDataType_Loud_Readout9 = 23;
+  MeterPluginDataType_Loud_Readout10 = 24;
+  MeterPluginDataType_Loud_CompleteHistory = 25;
+  MeterPluginDataType_Loud_ScrollableHistory = 26;
+  MeterPluginDataType_Loud_Histogram = 27;
+  NumMeterPluginDataTypes = 28;
+}
+
+enum MeterPluginDigitalMetersPeakHold {
+  MeterPluginDigitalMetersPeakHold_PeakHold_Off = 0;
+  MeterPluginDigitalMetersPeakHold_PeakHold_1s = 1;
+  MeterPluginDigitalMetersPeakHold_PeakHold_3s = 2;
+  MeterPluginDigitalMetersPeakHold_PeakHold_6s = 3;
+  MeterPluginDigitalMetersPeakHold_PeakHold_Inf = 4;
+  NumMeterPluginDigitalMetersPeakHoldOptions = 5;
+}
+
+enum MeterPluginDigitalMetersType {
+  MeterPluginDigitalMetersType_DbNonLinear = 0;
+  MeterPluginDigitalMetersType_DbNonLinear2x = 1;
+  MeterPluginDigitalMetersType_DbLinear = 2;
+  MeterPluginDigitalMetersType_DbLinear2x = 3;
+  MeterPluginDigitalMetersType_K20 = 4;
+  MeterPluginDigitalMetersType_K14 = 5;
+  MeterPluginDigitalMetersType_K12 = 6;
+  NumMeterPluginDigitalMetersTypes = 7;
+}
+
+enum MeterPluginLissajousFadeTime {
+  MeterPluginLissajousFadeTime_FadeTime_0s = 0;
+  MeterPluginLissajousFadeTime_FadeTime_025s = 1;
+  MeterPluginLissajousFadeTime_FadeTime_05s = 2;
+  MeterPluginLissajousFadeTime_FadeTime_1s = 3;
+  MeterPluginLissajousFadeTime_FadeTime_2s = 4;
+  MeterPluginLissajousFadeTime_FadeTime_3s = 5;
+  MeterPluginLissajousFadeTime_FadeTime_5s = 6;
+  NumMeterPluginLissajousFadeTimeOptions = 7;
+}
+
+enum MeterPluginRtaAveraging {
+  MeterPluginRtaAveraging_RealTime = 0;
+  MeterPluginRtaAveraging_Fast = 1;
+  MeterPluginRtaAveraging_Medium = 2;
+  MeterPluginRtaAveraging_Slow = 3;
+  MeterPluginRtaAveraging_Infinite = 4;
+  NumMeterPluginRtaAveragingOptions = 5;
+}
+
+enum MeterPluginRtaPeakHold {
+  MeterPluginRtaPeakHold_PeakHold_Off = 0;
+  MeterPluginRtaPeakHold_PeakHold_05s = 1;
+  MeterPluginRtaPeakHold_PeakHold_1s = 2;
+  MeterPluginRtaPeakHold_PeakHold_2s = 3;
+  MeterPluginRtaPeakHold_PeakHold_3s = 4;
+  MeterPluginRtaPeakHold_PeakHold_10s = 5;
+  MeterPluginRtaPeakHold_PeakHold_30s = 6;
+  MeterPluginRtaPeakHold_PeakHold_Inf = 7;
+  NumMeterPluginRtaPeakHoldOptions = 8;
+}
+
+enum MeterPluginRtaScaleBottom {
+  MeterPluginRtaScaleBottom_Minus10dB = 0;
+  MeterPluginRtaScaleBottom_Minus20dB = 1;
+  MeterPluginRtaScaleBottom_Minus30dB = 2;
+  MeterPluginRtaScaleBottom_Minus40dB = 3;
+  MeterPluginRtaScaleBottom_Minus50dB = 4;
+  MeterPluginRtaScaleBottom_Minus60dB = 5;
+  MeterPluginRtaScaleBottom_Minus70dB = 6;
+  MeterPluginRtaScaleBottom_Minus80dB = 7;
+  MeterPluginRtaScaleBottom_Minus90dB = 8;
+  MeterPluginRtaScaleBottom_Minus100dB = 9;
+  MeterPluginRtaScaleBottom_Minus110dB = 10;
+  MeterPluginRtaScaleBottom_Minus120dB = 11;
+  NumMeterPluginRtaScaleBottomOptions = 12;
+}
+
+enum MeterPluginRtaScaleTop {
+  MeterPluginRtaScaleTop_ScaleTop_0dB = 0;
+  MeterPluginRtaScaleTop_Minus10dB = 1;
+  MeterPluginRtaScaleTop_Minus20dB = 2;
+  MeterPluginRtaScaleTop_Minus30dB = 3;
+  MeterPluginRtaScaleTop_Minus40dB = 4;
+  MeterPluginRtaScaleTop_Minus50dB = 5;
+  MeterPluginRtaScaleTop_Minus60dB = 6;
+  MeterPluginRtaScaleTop_Minus70dB = 7;
+  MeterPluginRtaScaleTop_Minus80dB = 8;
+  MeterPluginRtaScaleTop_Minus90dB = 9;
+  MeterPluginRtaScaleTop_Minus100dB = 10;
+  MeterPluginRtaScaleTop_Minus110dB = 11;
+  NumMeterPluginRtaScaleTopOptions = 12;
+}
+
+enum MeterPluginRtaSelectedBand {
+  MeterPluginRtaSelectedBand_NoSelectedBand = 0;
+  MeterPluginRtaSelectedBand_Band1 = 1;
+  MeterPluginRtaSelectedBand_Band2 = 2;
+  MeterPluginRtaSelectedBand_Band3 = 3;
+  MeterPluginRtaSelectedBand_Band4 = 4;
+  MeterPluginRtaSelectedBand_Band5 = 5;
+  MeterPluginRtaSelectedBand_Band6 = 6;
+  MeterPluginRtaSelectedBand_Band7 = 7;
+  MeterPluginRtaSelectedBand_Band8 = 8;
+  MeterPluginRtaSelectedBand_Band9 = 9;
+  MeterPluginRtaSelectedBand_Band10 = 10;
+  MeterPluginRtaSelectedBand_Band11 = 11;
+  MeterPluginRtaSelectedBand_Band12 = 12;
+  MeterPluginRtaSelectedBand_Band13 = 13;
+  MeterPluginRtaSelectedBand_Band14 = 14;
+  MeterPluginRtaSelectedBand_Band15 = 15;
+  MeterPluginRtaSelectedBand_Band16 = 16;
+  MeterPluginRtaSelectedBand_Band17 = 17;
+  MeterPluginRtaSelectedBand_Band18 = 18;
+  MeterPluginRtaSelectedBand_Band19 = 19;
+  MeterPluginRtaSelectedBand_Band20 = 20;
+  MeterPluginRtaSelectedBand_Band21 = 21;
+  MeterPluginRtaSelectedBand_Band22 = 22;
+  MeterPluginRtaSelectedBand_Band23 = 23;
+  MeterPluginRtaSelectedBand_Band24 = 24;
+  MeterPluginRtaSelectedBand_Band25 = 25;
+  MeterPluginRtaSelectedBand_Band26 = 26;
+  MeterPluginRtaSelectedBand_Band27 = 27;
+  MeterPluginRtaSelectedBand_Band28 = 28;
+  MeterPluginRtaSelectedBand_Band29 = 29;
+  MeterPluginRtaSelectedBand_Band30 = 30;
+  MeterPluginRtaSelectedBand_Band31 = 31;
+  NumMeterPluginRtaSelectedBandOptions = 32;
+}
+
+enum MeterPluginRtaWeighting {
+  MeterPluginRtaWeighting_None = 0;
+  MeterPluginRtaWeighting_A = 1;
+  MeterPluginRtaWeighting_C = 2;
+  NumMeterPluginRtaWeightings = 3;
+}
+
+enum MeterProChannelFormat {
+  MeterProChannelFormat_Auto = 0;
+  MeterProChannelFormat_Mono = 1;
+  MeterProChannelFormat_Stereo = 2;
+  MeterProChannelFormat_LRC_ITU = 3;
+  MeterProChannelFormat_LCR_Film = 4;
+  MeterProChannelFormat_Quad = 5;
+  MeterProChannelFormat_5_0_DTS = 6;
+  MeterProChannelFormat_5_0_ITU = 7;
+  MeterProChannelFormat_5_0_Film = 8;
+  MeterProChannelFormat_5_1_DTS = 9;
+  MeterProChannelFormat_5_1_ITU = 10;
+  MeterProChannelFormat_5_1_Film = 11;
+  MeterProChannelFormat_7_1_Std = 12;
+  MeterProChannelFormat_7_1_Alt = 13;
+  MeterProChannelFormat_7_1_ProTls = 14;
+  MeterProChannelFormat_7_1_LogicP = 15;
+  MeterProChannelFormat_7_1_Nndo = 16;
+  MeterProChannelFormat_7_1_SDDS1 = 17;
+  MeterProChannelFormat_7_1_SDDS2 = 18;
+  MeterProChannelFormat_7_1_2_Std = 19;
+  MeterProChannelFormat_7_1_2_ProTls = 20;
+  MeterProChannelFormat_7_1_2_LogicP = 21;
+  MeterProChannelFormat_7_1_2_Nndo = 22;
+  MeterProChannelFormat_7_1_4_Std = 23;
+  MeterProChannelFormat_7_1_4_ProTls = 24;
+  MeterProChannelFormat_7_1_4_LogicP = 25;
+  MeterProChannelFormat_7_1_4_Nndo = 26;
+}
+
+enum MeterProLoudnessGateMode {
+  MeterProLoudnessGateMode_Off = 0;
+  MeterProLoudnessGateMode_ProgramMinus8 = 1;
+  MeterProLoudnessGateMode_ProgramMinus10 = 2;
+}
+
+enum MeterProLoudnessMeterScaleRange {
+  MeterProLoudnessMeterScaleRange_Minus18_Plus9 = 0;
+  MeterProLoudnessMeterScaleRange_Minus36_Plus18 = 1;
+  MeterProLoudnessMeterScaleRange_Minus54_Plus27 = 2;
+}
+
+enum MeterProLoudnessOperation {
+  MeterProLoudnessOperation_AutoPause = 0;
+  MeterProLoudnessOperation_AutoPauseAndReset = 1;
+  MeterProLoudnessOperation_HostTimelineSync = 2;
+  MeterProLoudnessOperation_SystemClockSync = 3;
+  MeterProLoudnessOperation_Continuous = 4;
+}
+
+enum OutputValidity {
+  OutputValidUnknown = 0;
+  OutputInvalid = 1;
+  OutputValid = 2;
+}
+
+enum Plugin4kBCompRatio {
+  Plugin4kBCompRatio_Ratio_Out = 0;
+  Plugin4kBCompRatio_Ratio_2 = 1;
+  Plugin4kBCompRatio_Ratio_4 = 2;
+  Plugin4kBCompRatio_Ratio_10 = 3;
+  Plugin4kBCompRatio_Ratio_Ds = 4;
+  Num4kBCompRatios = 5;
+}
+
+enum Plugin4kBCompRelease {
+  Plugin4kBCompRelease_Release_Ds = 0;
+  Plugin4kBCompRelease_Release_0_2 = 1;
+  Plugin4kBCompRelease_Release_0_4 = 2;
+  Plugin4kBCompRelease_Release_0_8 = 3;
+  Plugin4kBCompRelease_Release_1_6 = 4;
+  Plugin4kBCompRelease_Release_Auto = 5;
+  Num4kBCompReleases = 6;
+}
+
+enum Plugin4kBGateRelease {
+  Plugin4kBGateRelease_Release_0_1 = 0;
+  Plugin4kBGateRelease_Release_0_2 = 1;
+  Plugin4kBGateRelease_Release_0_4 = 2;
+  Plugin4kBGateRelease_Release_0_8 = 3;
+  Plugin4kBGateRelease_Release_1_6 = 4;
+  Num4kBGateReleases = 5;
+}
+
+enum Plugin4kEEqColour {
+  Plugin4kEEqColour_Brown = 0;
+  Plugin4kEEqColour_Black = 1;
+  Plugin4kEEqColour_Orange = 2;
+  Num4kEEqColours = 3;
+}
+
+enum PluginAssignerFunctionType {
+  PAFT_EndOfFunctions = 0;
+  PAFT_SwitchLed = 1;
+  PAFT_RealValue = 2;
+  PAFT_Text = 3;
+  PAFT_BusCompAttack = 4;
+  PAFT_BusCompRelease = 5;
+  PAFT_BusCompRatio = 6;
+  PAFT_IntValue = 7;
+  PAFT_PresetList = 8;
+  PAFT_ChannelStripRouting = 9;
+  PAFT_MeterConfiguration = 10;
+  PAFT_ScrollValue = 11;
+  PAFT_Int64Value = 12;
+  PAFT_4kBCompRatio = 13;
+  PAFT_4kBCompRelease = 14;
+  PAFT_4kBGateRelease = 15;
+  PAFT_CurveData = 16;
+  PAFT_MeterPluginAnalogueMetersMode = 17;
+  PAFT_MeterPluginAnalogueMetersVUOffset = 18;
+  PAFT_MeterPluginAnalogueMetersPeakHold = 19;
+  PAFT_MeterPluginAnalogueMetersDualFormat = 20;
+  PAFT_MeterPluginDigitalMetersPeakHold = 21;
+  PAFT_MeterPluginDigitalMetersType = 22;
+  PAFT_MeterPluginLissajousFadeTime = 23;
+  PAFT_MeterPluginRtaPeakHold = 24;
+  PAFT_MeterPluginAnalysisSource = 25;
+  PAFT_MeterPluginRtaWeighting = 26;
+  PAFT_MeterPluginRtaAveraging = 27;
+  PAFT_MeterPluginRtaScaleTop = 28;
+  PAFT_MeterPluginRtaScaleBottom = 29;
+  PAFT_MeterPluginRTASelectedBand = 30;
+  PAFT_MeterPlugin360View = 31;
+  PAFT_4kEEqColour = 32;
+  PAFT_ChanStripsWidthMode = 33;
+  PAFT_RealTextValue = 34;
+  PAFT_MeterProChannelFormat = 35;
+  PAFT_MeterProLoudnessOperation = 36;
+  PAFT_MeterProLoudnessGateMode = 37;
+  PAFT_MeterProLoudnessMeterScaleRange = 38;
+  PAFT_TextMeterConfiguration = 39;
+  PAFT_NoType = 2147483647;
+}
+
+enum PluginBusCompAttack {
+  Attack_0_1 = 0;
+  Attack_0_3 = 1;
+  Attack_1 = 2;
+  Attack_3 = 3;
+  Attack_10 = 4;
+  Attack_20 = 5;
+  Attack_30 = 6;
+  NumBusCompAttacks = 7;
+}
+
+enum PluginBusCompRatio {
+  Ratio_1_5 = 0;
+  Ratio_2 = 1;
+  Ratio_3 = 2;
+  Ratio_4 = 3;
+  Ratio_10 = 4;
+  Ratio_20 = 5;
+  Ratio_Slam = 6;
+  NumBusCompRatios = 7;
+}
+
+enum PluginBusCompRelease {
+  Release_0_1 = 0;
+  Release_0_3 = 1;
+  Release_0_4 = 2;
+  Release_0_6 = 3;
+  Release_0_8 = 4;
+  Release_1_2 = 5;
+  Release_Auto = 6;
+  NumBusCompReleases = 7;
+}
+
+enum PluginHost {
+  NotSet = 0;
+  ProTools = 1;
+  LogicPro = 2;
+  Cubase = 3;
+  AbletonLive = 4;
+  StudioOne = 5;
+  BitwigStudio = 6;
+  Reason = 7;
+  Reaper = 8;
+  FruityLoops = 9;
+  Cakewalk = 10;
+  DigitalPerformer = 11;
+  Ardour = 12;
+  Nuendo = 13;
+  Luna = 14;
+  TracktionWaveform = 15;
+  Pyramix = 16;
+  GarageBand = 17;
+  GenericDawHost = 18;
+  Samplitude = 19;
+  Mixbus = 20;
+}
+
+enum PluginMeterChannelFormat {
+  PluginMeterChannelFormat_Unformatted = 0;
+  PluginMeterChannelFormat_Mono = 1;
+  PluginMeterChannelFormat_Stereo = 2;
+  PluginMeterChannelFormat_LRC_ITU = 3;
+  PluginMeterChannelFormat_LCR_Film = 4;
+  PluginMeterChannelFormat_Quad = 5;
+  PluginMeterChannelFormat_5_0_DTS = 6;
+  PluginMeterChannelFormat_5_0_ITU = 7;
+  PluginMeterChannelFormat_5_0_Film = 8;
+  PluginMeterChannelFormat_5_1_DTS = 9;
+  PluginMeterChannelFormat_5_1_ITU = 10;
+  PluginMeterChannelFormat_5_1_Film = 11;
+  PluginMeterChannelFormat_7_1_Std = 12;
+  PluginMeterChannelFormat_7_1_Alt = 13;
+  PluginMeterChannelFormat_7_1_ProTls = 14;
+  PluginMeterChannelFormat_7_1_LogicP = 15;
+  PluginMeterChannelFormat_7_1_Nndo = 16;
+  PluginMeterChannelFormat_7_1_SDDS1 = 17;
+  PluginMeterChannelFormat_7_1_SDDS2 = 18;
+  PluginMeterChannelFormat_7_1_2_Std = 19;
+  PluginMeterChannelFormat_7_1_2_ProTls = 20;
+  PluginMeterChannelFormat_7_1_2_LogicP = 21;
+  PluginMeterChannelFormat_7_1_2_Nndo = 22;
+  PluginMeterChannelFormat_7_1_4_Std = 23;
+  PluginMeterChannelFormat_7_1_4_ProTls = 24;
+  PluginMeterChannelFormat_7_1_4_LogicP = 25;
+  PluginMeterChannelFormat_7_1_4_Nndo = 26;
+}
+
+enum PluginType {
+  EPT_Unknown = 0;
+  EPT_NativeChannelStrip = 1;
+  EPT_NativeBusComp = 2;
+  EPT_4k_B = 3;
+  EPT_Meter = 4;
+  EPT_4k_E = 5;
+  EPT_GenericChannelStrip = 6;
+  EPT_GenericBusComp = 7;
+  EPT_MeterPro = 8;
+  EPT_4k_G = 9;
+}
+
+enum PluginWrapperType {
+  HostNotSet = 0;
+  HostVst2 = 1;
+  HostVst3 = 2;
+  HostAax = 3;
+  HostAu = 4;
+}
+
+enum ScaleType {
+  Linear = 0;
+  Logarithmic = 1;
+  Skew = 2;
+  SymmetricSkew = 3;
+  SkewedLogarithmic = 4;
+}
+
+enum SwitchEventType {
+  SwitchEventType_NotSet = 0;
+  PrePress = 1;
+  Press = 2;
+  Release = 3;
+  SwitchEventType_On = 4;
+  SwitchEventType_Off = 5;
+}
+
+message LgxPropertyConnectionAnnouncementData {
+  optional uint32 AppVersionMajor = 1;
+  optional uint32 AppVersionMinor = 2;
+  optional string IpAddress = 3;
+  optional uint32 Port = 4;
+  optional string MachineName = 5;
+}
+
+message LgxProperty_Boolean {
+  optional bool m_value = 1;
+}
+
+message LgxProperty_Double {
+  optional double m_value = 1;
+}
+
+message LgxProperty_Int32 {
+  optional int32 m_value = 1;
+}
+
+message LgxProperty_Int64 {
+  optional int64 m_value = 1;
+}
+
+message LgxProperty_Single {
+  optional float m_value = 1;
+}
+
+message LgxProperty_String {
+  optional string m_value = 1;
+}
+
+message PluginAssignerArgs {
+  optional int32 SequenceNo = 1;
+}
+
+message PluginAssignerFunctionRequest {
+  optional .PluginAssignerFunctionType AssignerFunctionType = 1;
+  optional string AssignerFunctionIdentifier = 2;
+}
+
+message PluginAutomationActionEventArgs {
+  optional .AutomationActionType m_automationActionEvent = 1;
+}
+
+message PluginConfigMessage {
+  optional .PluginType PluginType = 1;
+  optional int64 InstantiationTime = 2;
+  optional .PluginHost Daw = 3;
+  optional int64 PluginCodeVersion = 4;
+  optional .PluginWrapperType HostType = 5;
+  optional string PluginVersionNumber = 6;
+  optional uint32 TargetViewModelVersion = 7;
+}
+
+message PluginEQCurveDataPrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+  optional float MinFrequencyHz = 2;
+  optional float MaxFrequencyHz = 3;
+  optional float SuggestedMinDbValue = 4;
+  optional float SuggestedMaxDbValue = 5;
+}
+
+message PluginEQCurveDataValueEventArgs {
+  repeated float m_dBValues = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginEnumPrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+  optional float DefaultValue = 2;
+  repeated int32 ValidEnumEntryIntValues = 3;
+}
+
+message PluginGestureValueEventArgs {
+  optional .PluginValueEventArgs ValueEventArgs = 1;
+  optional .GestureEventType GestureEvent = 2;
+}
+
+message PluginInt64PrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+  optional int64 TravelMin = 2;
+  optional int64 TravelMax = 3;
+}
+
+message PluginInt64ValueEventArgs {
+  optional int64 m_int64Value = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginIntPrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+  optional int32 TravelMin = 2;
+  optional int32 TravelMax = 3;
+}
+
+message PluginIntValueEventArgs {
+  optional int32 m_intValue = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginLedValueEventArgs {
+  optional .LedStatus m_ledStatus = 1;
+  optional string m_ledStatusDisplayString = 2;
+  optional .PluginValueEventArgs m_valueEventArgs = 3;
+  optional int32 m_selectedItemNumber = 4;
+  optional int32 m_numberOfSelectableItems = 5;
+}
+
+message PluginMeterDataMessage {
+  optional .PluginType PluginType = 1;
+  optional int32 DataType = 2;
+  repeated float CurrentMeterValues = 3;
+  repeated float PeakValues = 4;
+  repeated bool OverloadValues = 5;
+  repeated bool OverloadInfHoldValues = 6;
+  optional int32 MaxValueCount = 7;
+  optional int32 ChunkSize = 8;
+  optional int32 ChunkOffset = 9;
+  optional int64 time = 10;
+}
+
+message PluginMeterDataReference {
+  optional .PluginType PluginType = 1;
+  optional int32 MeterDataType = 2;
+}
+
+message PluginMeterPrepareEventArgs {
+  optional .OutputValidity OutputValid = 1;
+  repeated string Legends = 2;
+  optional string Units = 3;
+  optional .PluginMeterChannelFormat PluginFormat = 4;
+  optional int32 MeterDataType = 5;
+  optional int32 NumEnabledValues = 6;
+  optional .MeterOverloadDisplayMode MeterOverloadDisplayMode = 7;
+  optional double MaxRangeStart = 8;
+  optional double MaxRangeEnd = 9;
+  optional double ClearValue = 10;
+  optional .PluginAssignerArgs m_assignerArgs = 11;
+}
+
+message PluginPrepareEventArgs {
+  optional .InputValidity InputValid = 1;
+  optional .OutputValidity OutputValid = 2;
+  optional .DisplayAs DisplayAs = 3;
+  optional .LedColourType BaseColour = 4;
+  optional .DisplayUnits DisplayUnits = 5;
+  repeated string Legends = 6;
+  optional .PluginAssignerArgs m_assignerArgs = 7;
+  optional bool ParameterIsAutomatable = 8;
+  optional bool ParameterIsUndoable = 9;
+}
+
+message PluginProtoBufExporter {
+  optional .PluginPrepareEventArgs PluginPrepareEventArgs = 1;
+  optional .PluginSwitchValueEventArgs PluginSwitchValueEventArgs = 2;
+  optional .LgxPropertyConnectionAnnouncementData LgxPropertyConnectionAnnouncementData = 3;
+  optional .LgxProperty_Int32 LgxPropertyInt = 4;
+  optional .LgxProperty_String LgxPropertyString = 5;
+  optional .LgxProperty_Boolean LgxPropertyBool = 6;
+  optional .LgxProperty_Single LgxPropertyFloat = 7;
+  optional .LgxProperty_Double LgxPropertyDouble = 8;
+  optional .PluginAssignerFunctionRequest PluginAssignerFunctionRequest = 9;
+  optional .PluginLedValueEventArgs PluginLedValueEventArgs = 10;
+  optional .PluginRealPrepareEventArgs PluginRealPrepareEventArgs = 11;
+  optional .PluginRealValueEventArgs PluginRealValueEventArgs = 12;
+  optional .PluginConfigMessage PluginConfigMessage = 13;
+  optional .PluginBusCompAttack PluginBusCompAttack = 14;
+  optional .PluginIntValueEventArgs PluginIntValueEventArgs = 15;
+  optional .PluginTextValueEventArgs PluginTextValueEventArgs = 16;
+  optional .PluginMeterDataMessage PluginMeterDataMessage = 17;
+  optional .ServerConfigMessage ServerConfigMessage = 18;
+  optional .PluginMeterDataReference PluginMeterDataReference = 19;
+  optional .PluginBusCompRelease PluginBusCompRelease = 20;
+  optional .PluginBusCompRatio PluginBusCompRatio = 21;
+  optional .BusCompMeterType BusCompMeterType = 22;
+  optional .ChannelStripMeterType ChannelStripMeterType = 23;
+  optional .ChannelStripRoutingType ChannelStripRoutingType = 24;
+  optional .PluginIntPrepareEventArgs PluginIntPrepareEventArgs = 25;
+  optional .PluginAutomationActionEventArgs PluginAutomationActionEventArgs = 26;
+  optional .PluginScrollPrepareEventArgs PluginScrollPrepareEventArgs = 27;
+  optional .PluginScrollValueEventArgs PluginScrollValueEventArgs = 28;
+  optional .PluginGestureValueEventArgs PluginGestureValueEventArgs = 29;
+  optional .Plugin4kBCompRatio Plugin4kBCompRatio = 30;
+  optional .Plugin4kBCompRelease Plugin4kBCompRelease = 31;
+  optional .Plugin4kBGateRelease Plugin4kBGateRelease = 32;
+  optional .MeterPluginDataType MeterPluginDataType = 33;
+  optional .PluginEQCurveDataValueEventArgs PluginCurveDataValueEventArgs = 34;
+  optional .PluginEQCurveDataPrepareEventArgs PluginCurveDataPrepareEventArgs = 35;
+  optional .MeterPluginAnalogueMetersMode MeterPluginAnalogueMetersMode = 36;
+  optional .MeterPluginAnalogueMetersVUOffset MeterPluginAnalogueMetersVUOffset = 37;
+  optional .MeterPluginAnalogueMetersPeakHold MeterPluginAnalogueMetersPeakHold = 38;
+  optional .MeterPluginAnalogueMetersDualFormat MeterPluginAnalogueMetersDualFormat = 39;
+  optional .MeterPluginDigitalMetersPeakHold MeterPluginDigitalMetersPeakHold = 40;
+  optional .MeterPluginDigitalMetersType MeterPluginDigitalMetersType = 41;
+  optional .MeterPluginLissajousFadeTime MeterPluginLissajousFadeTime = 42;
+  optional .MeterPluginRtaPeakHold MeterPluginRtaPeakHold = 43;
+  optional .MeterPluginAnalysisSource MeterPluginAnalysisSource = 44;
+  optional .MeterPluginRtaWeighting MeterPluginRtaWeighting = 45;
+  optional .MeterPluginRtaAveraging MeterPluginRtaAveraging = 46;
+  optional .MeterPluginRtaScaleTop MeterPluginRtaScaleTop = 47;
+  optional .MeterPluginRtaScaleBottom MeterPluginRtaScaleBottom = 48;
+  optional .MeterPluginRtaSelectedBand MeterPluginRtaSelectedBand = 49;
+  optional .MeterPlugin360View MeterPlugin360View = 50;
+  optional .Plugin4kEEqColour Plugin4kEEqColour = 51;
+  optional .ChanStripsWidthMode ChanStripsWidthMode = 52;
+  optional .PluginRealTextValueEventArgs PluginRealTextValueEventArgs = 53;
+  optional .PluginEnumPrepareEventArgs PluginEnumPrepareEventArgs = 54;
+  optional .MeterProChannelFormat MeterProChannelFormat = 55;
+  optional .MeterProLoudnessOperation MeterProLoudnessOperation = 56;
+  optional .MeterProLoudnessGateMode MeterProLoudnessGateMode = 57;
+  optional .MeterProLoudnessMeterScaleRange MeterProLoudnessMeterScaleRange = 58;
+  optional .PluginMeterPrepareEventArgs PluginMeterPrepareEventArgs = 59;
+  optional .PluginTextMeterPrepareEventArgs PluginTextMeterPrepareEventArgs = 60;
+  optional .PluginInt64ValueEventArgs PluginInt64ValueEventArgs = 61;
+  optional .PluginInt64PrepareEventArgs PluginInt64PrepareEventArgs = 62;
+  optional .LgxProperty_Int64 LgxPropertyInt64 = 63;
+}
+
+message PluginRealPrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+  optional double TravelMin = 2;
+  optional double TravelMax = 3;
+  optional bool TravelInverted = 4;
+  optional .ScaleType MappingScale = 5;
+  optional double TravelMultiplier = 6;
+  optional double ScaledMin = 7;
+  optional double ScaledMax = 8;
+  optional bool InfiniteRotation = 9;
+  optional bool TopDownVerticalTravel = 10;
+  optional double Skew = 11;
+  optional double NullValue = 12;
+  optional bool HasNullValue = 13;
+  optional float DefaultValue = 14;
+  repeated double MappedControlRefPoints = 15;
+  repeated double MappedFunctionValues = 16;
+  optional bool FirstSectionConstantValue = 17;
+  optional bool LastSectionConstantValue = 18;
+  optional bool AcceptTextInput = 19;
+}
+
+message PluginRealTextValueEventArgs {
+  optional string ValueAsText = 1;
+  optional bool TextChanged = 2;
+  optional .PluginRealValueEventArgs RealValueEventArgs = 3;
+  optional string UnitsText = 4;
+}
+
+message PluginRealValueEventArgs {
+  optional double RealValue = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginScrollPrepareEventArgs {
+  optional .PluginPrepareEventArgs PrepareEventArgs = 1;
+}
+
+message PluginScrollValueEventArgs {
+  optional int32 m_scrollValue = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginSwitchValueEventArgs {
+  optional .SwitchEventType m_switchValue = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginTextMeterPrepareEventArgs {
+  optional .PluginMeterPrepareEventArgs PluginMeterPrepareEventArgs = 1;
+  optional float LowerAlertThreshold = 2;
+  optional bool DisplayPeakValues = 3;
+  optional int32 NumDecimalPlacesToDisplay = 4;
+}
+
+message PluginTextValueEventArgs {
+  optional string m_textValue = 1;
+  optional .PluginValueEventArgs m_valueEventArgs = 2;
+}
+
+message PluginValueEventArgs {
+  optional .PluginAssignerArgs m_assignerArgs = 1;
+}
+
+message ServerConfigMessage {
+  optional int32 UDPDataPortToCore = 1;
+  optional string LgxVmRootScopeName = 2;
+  optional int32 Regular = 3;
+}
