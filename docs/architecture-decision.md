@@ -88,7 +88,7 @@ REAPER  <->  CSI  <->  virtual MCU MIDI  <->  reaper-uf8  <->  UF8
    `Run()` is REAPER-driven.
 8. **Docs update** — `README.md` narrative from "alongside CSI" →
    "drop-in SSL 360° replacement, no other surface plugin needed".
-   `ROADMAP.md` milestone criterion. This document collapses once done.
+   This document collapses once done.
 
 ## Open Questions to Resolve Before Step 5
 1. **Button-ID → REAPER-action mapping.** UF8 button byte-IDs known

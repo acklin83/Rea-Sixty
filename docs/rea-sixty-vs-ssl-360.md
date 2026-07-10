@@ -94,9 +94,8 @@ they only make sense if you know REAPER's data model:
   panel inside REAPER, in the colours of whatever theme you use.
 - **Settings inside REAPER too.** Same dockable window, no second app.
 
-All of these are in `ROADMAP.md` under Phase 2.5–2.7. Some are shipped,
-some are landing. None require any more reverse engineering — the hard
-USB protocol work is done.
+Some of these are shipped, some are landing. None require any more
+reverse engineering — the hard USB protocol work is done.
 
 ## Why not just wait for SSL to fix it
 
@@ -120,9 +119,8 @@ see `interop-rationale.md`) took months. That part is in
 `protocol-notes.md` and `protocol-notes-uc1.md`, with checksums verified
 and init sequences working.
 
-What's left is REAPER-API plumbing and a docked UI window. Three
-phases, each broken into small steps in `ROADMAP.md`. No more sessions
-with Wireshark on a Windows machine. No more "what does this byte
+What's left is REAPER-API plumbing and a docked UI window. No more
+sessions with Wireshark on a Windows machine. No more "what does this byte
 mean." Just REAPER calls and ImGui widgets — the kind of work this
 codebase is already shaped for.
 

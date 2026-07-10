@@ -84,7 +84,7 @@ FAQs, Q&A, compatibility info (effectively a links page).
 | UF8 page → 3 Quick Keys | Settings → Bindings | Add explicit Quick Keys section in Bindings tab (3 dedicated rows). Default DAW assignment is Channel-Strip / Bus-Comp / Metering — we can default these to layer switches |
 | UF8 page → 2 Foot-switches | **not planned** | **Add** to Bindings tab. UF8 has the physical jacks — wasted feature if we don't expose them. Same binding model as buttons (REAPER action, builtin, keyboard). Detection of foot-switch press already in our USB protocol decoding TODO |
 | Per-key Assignment dialog | Bindings inspector — planned | Match SSL's modal flow: radio (REAPER action / Keyboard / Builtin) + Short Label field + CLEAR. Existing `bindings.md` already specifies this |
-| Profile Management (SAVE/LOAD/SAVE AS XML) | Settings → Bindings → Import/Export — planned 2.7e | Use **JSON** not XML (we own the format). One-time SSL 360° XML import for migration, mentioned in ROADMAP non-goals already |
+| Profile Management (SAVE/LOAD/SAVE AS XML) | Settings → Bindings → Import/Export — planned 2.7e | Use **JSON** not XML (we own the format). One-time SSL 360° XML import for migration is a non-goal |
 | ADVANCED → Always Fine Pan/Sends | not planned | **Add** to Modes tab as "V-Pot Behaviour" subsection: `Always fine pan` / `Always fine sends` toggles |
 | ADVANCED → Show Auto State | not planned | **Add** to Modes tab — toggle to surface REAPER's `GetTrackAutomationMode()` on the scribble strip |
 | UC1 page (mirror of UF8 page for UC1) | not planned | **Add** UC1-specific section in Device tab (or split: separate "UC1" tab if config diverges). UC1 has fewer user-assignable keys — minor section, not a top-level tab |

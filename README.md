@@ -13,7 +13,7 @@ Rea-Sixty drives the SSL **UF8** and **UC1** controllers directly from a REAPER 
 
 ## Status
 
-Public beta — Mac (Apple Silicon), Windows (x64) and Linux (x86_64) all ship in the [latest release](https://github.com/acklin83/Rea-Sixty/releases/latest). macOS is the primary daily-driver. Phase 1 (UF8 standalone), Phase 2 (UC1 integration with parameter mirror + GR pipeline), Phase 2.5 (Folder Mode, Send/Receive, generic FX Learn — Selection-Set storage still queued), Phase 2.7 (in-app Settings — Device, Bindings, Modes incl. REC + RME (TotalReaper), FX Learn, Selection Sets, Parameter Groups, About) and Phase 2.8 (Nav Mode for Markers + Regions) are shipped. Phase 2.6 (on-screen Plug-in Mixer view) is still pending; the docked window currently hosts the Settings tabs only. Roadmap details in [`ROADMAP.md`](ROADMAP.md); full feature reference in [`docs/user-manual.md`](docs/user-manual.md).
+Public beta — Mac (Apple Silicon), Windows (x64) and Linux (x86_64) all ship in the [latest release](https://github.com/acklin83/Rea-Sixty/releases/latest). macOS is the primary daily-driver. Phase 1 (UF8 standalone), Phase 2 (UC1 integration with parameter mirror + GR pipeline), Phase 2.5 (Folder Mode, Send/Receive, generic FX Learn — Selection-Set storage still queued), Phase 2.7 (in-app Settings — Device, Bindings, Modes incl. REC + RME (TotalReaper), FX Learn, Selection Sets, Parameter Groups, About) and Phase 2.8 (Nav Mode for Markers + Regions) are shipped. Phase 2.6 (on-screen Plug-in Mixer view) is still pending; the docked window currently hosts the Settings tabs only. Full feature reference in [`docs/user-manual.md`](docs/user-manual.md).
 
 ## What it does today
 
@@ -55,7 +55,6 @@ extension/            The C++ REAPER extension
                       actual ImGui implementation lives in the user's
                       ReaPack-installed reaper_imgui*.so/.dll/.dylib)
   CMakeLists.txt      FetchContent for reaper-sdk + WDL, pkg-config for libusb
-ROADMAP.md            Phase plan
 ```
 
 ## Build from source (macOS)
