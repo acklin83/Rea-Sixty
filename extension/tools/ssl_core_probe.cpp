@@ -111,6 +111,58 @@ std::vector<uint8_t> buildAnnouncement(uint16_t tcpPort, const char* ip, const c
     return frame;
 }
 
+// ---- Core control-frame builder (reverse-engineered from ssl_coldconnect) ----
+// Frame = [ef bc 51 00][u32 bodyLen] + body. body(28-B hdr) =
+//   u32{16, 1, seq, innerLen=12+payloadLen, type, scope=0x5f7a0579, msgid=284}
+// + payload (protobuf). scope/msgid are protocol constants (also seen from the
+// live plugin). See captures/cap88 notes.
+constexpr uint32_t kScopeId = 0x5f7a0579;
+constexpr uint32_t kMsgId   = 284;
+const char* kScopeName = "PluginControls.PerSslMeterProPlugin";
+
+void putU32(std::vector<uint8_t>& v, uint32_t x) {
+    v.push_back(uint8_t(x)); v.push_back(uint8_t(x >> 8));
+    v.push_back(uint8_t(x >> 16)); v.push_back(uint8_t(x >> 24));
+}
+void putVarint(std::vector<uint8_t>& v, uint64_t x) {
+    while (x >= 0x80) { v.push_back(uint8_t(x) | 0x80); x >>= 7; }
+    v.push_back(uint8_t(x));
+}
+std::vector<uint8_t> ctrlFrame(uint32_t type, const std::vector<uint8_t>& payload, uint32_t seq = 0) {
+    std::vector<uint8_t> body;
+    putU32(body, 16); putU32(body, 1); putU32(body, seq);
+    putU32(body, uint32_t(12 + payload.size()));           // innerLen
+    putU32(body, type); putU32(body, kScopeId); putU32(body, kMsgId);
+    body.insert(body.end(), payload.begin(), payload.end());
+    std::vector<uint8_t> frame;
+    frame.insert(frame.end(), sslmeter::kMagic, sslmeter::kMagic + 4);
+    putU32(frame, uint32_t(body.size()));
+    frame.insert(frame.end(), body.begin(), body.end());
+    return frame;
+}
+// f2 = scope name (len-delimited), f3 = 1. With `port`, prepend f1 = UDPDataPortToCore.
+std::vector<uint8_t> serverConfig(int port) {
+    std::vector<uint8_t> pb;
+    if (port >= 0) { putVarint(pb, (1 << 3) | 0); putVarint(pb, uint64_t(port)); }  // f1
+    putVarint(pb, (2 << 3) | 2);                                                    // f2
+    putVarint(pb, std::strlen(kScopeName));
+    pb.insert(pb.end(), kScopeName, kScopeName + std::strlen(kScopeName));
+    putVarint(pb, (3 << 3) | 0); putVarint(pb, 1);                                  // f3=1
+    return ctrlFrame(19, pb);
+}
+// The Core opening sequence sent to a freshly-connected plugin. `dataPort` = the
+// UDP port we tell the plugin to stream meter data to (we bind + listen on it).
+std::vector<uint8_t> openingSequence(int dataPort) {
+    std::vector<uint8_t> out;
+    auto append = [&](const std::vector<uint8_t>& f){ out.insert(out.end(), f.begin(), f.end()); };
+    append(serverConfig(-1));                         // type-19 scope announce (no port)
+    append(ctrlFrame(6, {}));                         // type-6 (empty ack)
+    { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, 0x9abc);
+      append(ctrlFrame(7, pb)); }                     // type-7 session token (nonce)
+    append(serverConfig(dataPort));                   // type-19 UDP-port assignment
+    return out;
+}
+
 // The exact "server heartbeat" frame Core sends to a connected plugin
 // (captured 49586->56704). type=10, scope=0x5f7a0579, msgid=284, protobuf
 // f1="server heartbeat". Replayed verbatim; the offset-8 seq/time field is left
@@ -136,7 +188,8 @@ int main(int argc, char** argv) {
     udpPorts.push_back(50881);
     uint16_t tcpPort = 0;
     int announceTo = 0;       // if set, advertise this TCP port to 16008/16009
-    bool serve = false;       // reply to connected plugins with server-heartbeat
+    bool serve = false;       // reply to connected plugins with the Core handshake
+    int dataPort = 16010;     // UDP port we assign the plugin to stream meter to
     double secs = 30.0;
 
     for (int i = 1; i < argc; ++i) {
@@ -145,6 +198,7 @@ int main(int argc, char** argv) {
         else if (a == "--tcp" && i + 1 < argc) tcpPort = uint16_t(std::atoi(argv[++i]));
         else if (a == "--announce" && i + 1 < argc) announceTo = std::atoi(argv[++i]);
         else if (a == "--serve") serve = true;
+        else if (a == "--dataport" && i + 1 < argc) dataPort = std::atoi(argv[++i]);
         else if (a == "--secs" && i + 1 < argc) secs = std::atof(argv[++i]);
     }
 
@@ -242,8 +296,13 @@ int main(int argc, char** argv) {
             if (c >= 0) {
                 int f = fcntl(c, F_GETFL, 0); fcntl(c, F_SETFL, f | O_NONBLOCK);
                 std::printf("[TCP] plugin connected from :%u%s\n", ntohs(from.sin_port),
-                            serve ? " (serving heartbeats)" : "");
-                if (serve) ::send(c, hb.data(), hb.size(), 0);
+                            serve ? " — sending Core handshake" : "");
+                if (serve) {
+                    auto seq = openingSequence(dataPort);
+                    ::send(c, seq.data(), seq.size(), 0);
+                    std::printf("[TCP] -> sent opening seq (%zu B), assigned UDP data port %d\n",
+                                seq.size(), dataPort);
+                }
                 tcpClients.push_back(c);
             }
         }
