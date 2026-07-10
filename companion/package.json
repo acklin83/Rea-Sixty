@@ -1,0 +1,22 @@
+{
+	"name": "companion-module-reasixty",
+	"version": "0.1.0",
+	"type": "module",
+	"main": "src/main.js",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/acklin83/Rea-Sixty.git"
+	},
+	"scripts": {
+		"format": "prettier -w .",
+		"package": "companion-module-build"
+	},
+	"dependencies": {
+		"@companion-module/base": "~2.0.4"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^3.0.1",
+		"prettier": "^3.8.3"
+	}
+}

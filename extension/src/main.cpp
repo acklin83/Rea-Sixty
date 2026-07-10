@@ -29573,10 +29573,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Named favourite Set library (global) — load once from disk.
     favSetsLoad_();
 
-    // Stream Deck Companion bridge — loopback TCP server the Elgato plugin
-    // connects to. Port overridable via ExtState (rea_sixty/sd_bridge_port)
-    // so a user with a clash can retune without a rebuild. 0 or absent = off
-    // is NOT the default; the default is to listen on kDefaultPort.
+    // Stream Deck / Bitfocus Companion bridge — a TCP server the Elgato plugin
+    // or a Companion module connects to. Port overridable via ExtState
+    // (rea_sixty/sd_bridge_port) so a user with a clash can retune without a
+    // rebuild. Default is to listen on kDefaultPort.
+    //
+    // Bind scope via ExtState (rea_sixty/sd_bridge_bind): default is loopback
+    // (127.0.0.1) — same-machine clients only. Set it to "lan" / "all" / "1"
+    // to bind 0.0.0.0 so Companion running on a SEPARATE machine (dedicated
+    // PC / Raspberry Pi / Companion Satellite) can reach REAPER. No auth on the
+    // wire, so only enable on a trusted network:
+    //   reaper.SetExtState("rea_sixty","sd_bridge_bind","lan",true)
     {
         int port = uf8::sdbridge::kDefaultPort;
         if (const char* pv = GetExtState("rea_sixty", "sd_bridge_port");
@@ -29584,8 +29591,15 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             const int p = std::atoi(pv);
             if (p > 0 && p < 65536) port = p;
         }
-        const bool ok = uf8::sdbridge::start(port);
-        initLog(ok ? "step: StreamDeck bridge listening"
+        bool bindAll = false;
+        if (const char* bv = GetExtState("rea_sixty", "sd_bridge_bind");
+            bv && *bv) {
+            bindAll = (!strcmp(bv, "lan") || !strcmp(bv, "all")
+                       || !strcmp(bv, "1") || !strcmp(bv, "true"));
+        }
+        const bool ok = uf8::sdbridge::start(port, bindAll);
+        initLog(ok ? (bindAll ? "step: StreamDeck bridge listening (LAN 0.0.0.0)"
+                              : "step: StreamDeck bridge listening (loopback)")
                    : "step: StreamDeck bridge FAILED to bind");
     }
 

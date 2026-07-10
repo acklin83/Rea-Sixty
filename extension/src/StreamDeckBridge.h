@@ -61,10 +61,18 @@ struct SdCommand {
     std::vector<std::string> targets;
 };
 
-// Start the server on `port` (loopback). Idempotent — a second call while
-// already running is a no-op. Returns false if the socket could not be bound
-// (e.g. port already in use); the extension keeps running regardless.
-bool start(int port = kDefaultPort);
+// Start the server on `port`. Idempotent — a second call while already running
+// is a no-op. Returns false if the socket could not be bound (e.g. port already
+// in use); the extension keeps running regardless.
+//
+// bindAll = false (default): bind 127.0.0.1 — loopback only, the secure default
+//   for a same-machine Stream-Deck / Companion client. No auth (localhost trust
+//   boundary).
+// bindAll = true: bind 0.0.0.0 — reachable from the LAN, so Bitfocus Companion
+//   (or Companion Satellite) running on a SEPARATE box can connect. There is
+//   STILL no auth on the wire, so this must be opt-in (ExtState) and only used
+//   on a trusted network. See main.cpp REAPER_PLUGIN_ENTRY.
+bool start(int port = kDefaultPort, bool bindAll = false);
 
 // Stop the server: close the listen socket, drop all clients, join the worker
 // thread. Safe to call when not running. Called from the extension's unload

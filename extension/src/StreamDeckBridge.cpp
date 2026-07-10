@@ -49,6 +49,7 @@ namespace {
 std::atomic<bool>  g_running{false};
 std::thread        g_worker;
 int                g_port = kDefaultPort;
+bool               g_bindAll = false;
 
 // Inbound: worker parses lines -> queue; main thread drains.
 std::mutex             g_inMutex;
@@ -198,7 +199,7 @@ bool ingest(Client& cl, const char* buf, int n) {
 }
 
 // -------------------------------------------------------------- the worker
-void workerMain(int port) {
+void workerMain(int port, bool bindAll) {
     netInit();
 
     socket_t listenFd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -211,7 +212,9 @@ void workerMain(int port) {
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(static_cast<uint16_t>(port));
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // 127.0.0.1 only
+    // Loopback (127.0.0.1) by default; INADDR_ANY (0.0.0.0) when the user opts
+    // in via ExtState so a Companion instance on another machine can reach it.
+    addr.sin_addr.s_addr = htonl(bindAll ? INADDR_ANY : INADDR_LOOPBACK);
 
     if (::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0
         || ::listen(listenFd, 8) != 0) {
@@ -313,12 +316,13 @@ void workerMain(int port) {
 } // namespace
 
 // ------------------------------------------------------------------ public
-bool start(int port) {
+bool start(int port, bool bindAll) {
     if (g_running.load()) return true;
     g_port = port;
+    g_bindAll = bindAll;
     g_running.store(true);
     try {
-        g_worker = std::thread(workerMain, port);
+        g_worker = std::thread(workerMain, port, bindAll);
     } catch (...) {
         g_running.store(false);
         return false;

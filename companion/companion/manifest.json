@@ -1,0 +1,28 @@
+{
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+	"type": "connection",
+	"id": "reasixty",
+	"name": "reasixty",
+	"shortname": "Rea-Sixty",
+	"description": "Control Rea-Sixty / REAPER and mirror live surface state (selected track, layer, flip, peak & gain-reduction meters) via the Rea-Sixty bridge.",
+	"version": "0.1.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/acklin83/Rea-Sixty.git",
+	"bugs": "https://github.com/acklin83/Rea-Sixty/issues",
+	"maintainers": [
+		{
+			"name": "Frank Acklin",
+			"email": "frank.acklin@bluewin.ch"
+		}
+	],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "2.0.4",
+		"entrypoint": "../src/main.js"
+	},
+	"legacyIds": [],
+	"manufacturer": "Rea-Sixty",
+	"products": ["Rea-Sixty"],
+	"keywords": ["reaper", "daw", "ssl", "rea-sixty", "uf8"]
+}
