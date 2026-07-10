@@ -28,21 +28,34 @@ The bridge is protocol-agnostic; this module is just a client. See
 
 ## Install as a developer module (for testing before it's in the store)
 
-1. Build/prepare this folder with its dependencies:
+1. Install this module's dependencies:
 
    ```sh
    cd companion
    npm install
    ```
 
-2. In Companion, set the **Developer modules path** to the folder that
-   *contains* this module folder, then restart Companion. (Companion →
-   Settings → “Developer modules path”, or the `COMPANION_DEV_MODULES` env var.)
+2. In Companion's launcher, set the **Developer modules path** to a directory
+   whose *subdirectories* are modules — i.e. the directory that **contains**
+   this `companion/` folder. The simplest choice is the repo root:
 
-   Point it at the `companion/` directory here; Companion loads any subfolder
-   with a `companion/manifest.json`.
+   ```
+   Developer modules path:  /path/to/Rea-Sixty
+   ```
 
-3. In Companion, **Connections → Add connection → search “Rea-Sixty”**, set the
+   Companion scans it and finds `companion/` (the folder holding
+   `companion/manifest.json`). Restart the launcher so it re-scans.
+
+   > **⚠️ Do NOT point it at a symlink.** Companion 4.x loads dev modules in a
+   > Node process locked down with the permission model (`--allow-fs-read`
+   > scoped to the real module directory). A symlink resolves to a path outside
+   > that scope, so Node blocks reading the module and the connection dies at
+   > startup with a bare `Error: Restart forced` in the log (the real cause,
+   > *"Access to this API has been restricted"*, only shows at `--log-level
+   > debug`). Point the path at the **real** directory, or use a real copy — not
+   > a symlink.
+
+3. In Companion, **Connections → Add connection → search "Rea-Sixty"**, set the
    REAPER host/port, and go.
 
 ## Package a distributable

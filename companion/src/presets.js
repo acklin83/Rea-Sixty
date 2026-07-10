@@ -1,7 +1,7 @@
 import { combineRgb } from '@companion-module/base'
 
 // v2 signature: setPresetDefinitions(structure, presets).
-//   structure = [{ id, name, presets: [presetId, ...] }, ...]  (sections)
+//   structure = [{ id, name, definitions: [presetId, ...] }, ...]  (sections)
 //   presets   = { presetId: { type:'simple', name, style, steps, feedbacks } }
 //
 // The builtin-action presets are generated LIVE from the Rea-Sixty catalogue so
@@ -44,7 +44,7 @@ export default function (self) {
 			}
 			ids.push(pid)
 		}
-		if (ids.length) structure.push({ id: `cat_${ci}`, name: cat, presets: ids })
+		if (ids.length) structure.push({ id: `cat_${ci}`, name: cat, definitions: ids })
 	})
 
 	// ---- Meter presets, one per configured target --------------------------
@@ -66,7 +66,7 @@ export default function (self) {
 		mk('peak', 'peak', 'Peak meter')
 		mk('peakcomp', 'peak_comp', 'Peak + GR meter')
 	}
-	if (meterIds.length) structure.push({ id: 'meters', name: 'Meters', presets: meterIds })
+	if (meterIds.length) structure.push({ id: 'meters', name: 'Meters', definitions: meterIds })
 
 	// ---- Status presets (feedback + variable only) -------------------------
 	presets['status_connection'] = {
@@ -102,7 +102,7 @@ export default function (self) {
 		}
 		statusIds.push(pid)
 	}
-	structure.push({ id: 'status', name: 'Status', presets: statusIds })
+	structure.push({ id: 'status', name: 'Status', definitions: statusIds })
 
 	self.setPresetDefinitions(structure, presets)
 }
