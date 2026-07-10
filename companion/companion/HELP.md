@@ -4,6 +4,12 @@ Control **Rea-Sixty / REAPER** from Bitfocus Companion, and mirror live surface
 state (selected track, binding layer, flip, peak & gain-reduction meters) onto
 your buttons.
 
+> **Community module — provided as-is.** This Companion module is **not
+> officially supported** by Rea-Sixty. It exposes the Rea-Sixty bridge to
+> Companion so you can build your own buttons; it does not aim to replicate the
+> Stream Deck plugin one-to-one (Companion styles buttons via feedbacks, not
+> pre-made tiles). Extend it yourself as needed — the source is in the repo.
+
 This module talks to the **Rea-Sixty bridge** built into the REAPER extension —
 the same bridge the Stream Deck plugin uses. You do **not** need the Elgato
 Stream Deck app.

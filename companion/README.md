@@ -8,6 +8,12 @@ surface state (selected track, layer, flip, peak & gain-reduction meters).
 
 No Elgato Stream Deck app required.
 
+> **Status: community / unsupported.** Shipped as-is and **not officially
+> supported** by Rea-Sixty. It is not a 1:1 port of the Stream Deck plugin —
+> Companion builds buttons from actions + feedbacks rather than pre-styled
+> tiles, and some plugin conveniences (e.g. meter-by-track-name) are not
+> implemented. Users who want more are welcome to extend the source here.
+
 ## Requirements
 
 - **Bitfocus Companion 4.x** (module API v2 — this module targets
