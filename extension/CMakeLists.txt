@@ -537,6 +537,10 @@ if(NOT WIN32)
     target_link_libraries(test_dynamount PRIVATE Threads::Threads)
     add_test(NAME dynamount COMMAND test_dynamount)
 
+    add_executable(test_ssl_meter tests/test_ssl_meter.cpp src/SslMeterProtocol.cpp)
+    target_include_directories(test_ssl_meter PRIVATE src)
+    add_test(NAME ssl_meter COMMAND test_ssl_meter)
+
     add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
     target_include_directories(uf8_color_test PRIVATE src)
     target_link_libraries(uf8_color_test PRIVATE reasixty_libusb)
