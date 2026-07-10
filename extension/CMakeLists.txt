@@ -551,4 +551,8 @@ if(NOT WIN32)
 
     add_executable(uf8_hid_probe tools/uf8_hid_probe.cpp)
     target_link_libraries(uf8_hid_probe PRIVATE reasixty_hidapi)
+
+    # SSL 360° Core-impersonation handshake probe (POSIX dev tool).
+    add_executable(ssl_core_probe tools/ssl_core_probe.cpp src/SslMeterProtocol.cpp)
+    target_include_directories(ssl_core_probe PRIVATE src)
 endif()
