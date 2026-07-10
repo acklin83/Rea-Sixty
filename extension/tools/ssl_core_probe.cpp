@@ -111,12 +111,32 @@ std::vector<uint8_t> buildAnnouncement(uint16_t tcpPort, const char* ip, const c
     return frame;
 }
 
+// The exact "server heartbeat" frame Core sends to a connected plugin
+// (captured 49586->56704). type=10, scope=0x5f7a0579, msgid=284, protobuf
+// f1="server heartbeat". Replayed verbatim; the offset-8 seq/time field is left
+// as captured (refine if the plugin rejects a static value).
+std::vector<uint8_t> serverHeartbeat() {
+    static const char* hx =
+        "efbc51002e000000"                                   // magic + len(46)
+        "100000000100000054af4b0e1e0000000a00000079057a5f1c010000"  // 28-B header
+        "0a1073657276657220686561727462656174";              // pb f1 "server heartbeat"
+    std::vector<uint8_t> v;
+    for (const char* p = hx; p[0] && p[1]; p += 2) {
+        auto nyb = [](char c){ return (c<='9')?c-'0':(c|0x20)-'a'+10; };
+        v.push_back(uint8_t(nyb(p[0]) << 4 | nyb(p[1])));
+    }
+    return v;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    std::vector<uint16_t> udpPorts = {16008, 16009, 16010, 16011, 50881};
+    std::vector<uint16_t> udpPorts;
+    for (uint16_t p = 16008; p <= 16030; ++p) udpPorts.push_back(p);   // Core data-port range
+    udpPorts.push_back(50881);
     uint16_t tcpPort = 0;
     int announceTo = 0;       // if set, advertise this TCP port to 16008/16009
+    bool serve = false;       // reply to connected plugins with server-heartbeat
     double secs = 30.0;
 
     for (int i = 1; i < argc; ++i) {
@@ -124,6 +144,7 @@ int main(int argc, char** argv) {
         if (a == "--udp") { udpPorts.clear(); while (i + 1 < argc && argv[i+1][0] != '-') udpPorts.push_back(uint16_t(std::atoi(argv[++i]))); }
         else if (a == "--tcp" && i + 1 < argc) tcpPort = uint16_t(std::atoi(argv[++i]));
         else if (a == "--announce" && i + 1 < argc) announceTo = std::atoi(argv[++i]);
+        else if (a == "--serve") serve = true;
         else if (a == "--secs" && i + 1 < argc) secs = std::atof(argv[++i]);
     }
 
@@ -156,6 +177,8 @@ int main(int argc, char** argv) {
 
     const double t0 = nowSecs();
     double lastAnnounce = 0;
+    double lastHeartbeat = 0;
+    const std::vector<uint8_t> hb = serverHeartbeat();
     uint8_t buf[65536];
 
     while (nowSecs() - t0 < secs) {
@@ -167,6 +190,12 @@ int main(int argc, char** argv) {
                 sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(dp); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
                 ::sendto(announceSock, ann.data(), ann.size(), 0, reinterpret_cast<sockaddr*>(&a), sizeof(a));
             }
+        }
+
+        // periodic server-heartbeat to every connected plugin
+        if (serve && !tcpClients.empty() && nowSecs() - lastHeartbeat > 0.25) {
+            lastHeartbeat = nowSecs();
+            for (int c : tcpClients) ::send(c, hb.data(), hb.size(), 0);
         }
 
         fd_set rset; FD_ZERO(&rset); int maxfd = -1;
@@ -196,7 +225,14 @@ int main(int argc, char** argv) {
                     std::printf("\n");
                 }
             } else {
-                std::printf("[UDP src:%u] %d bytes (not meter): ", sport, n); hexdump(buf, size_t(n)); std::printf("\n");
+                // Rate-limit non-meter chatter (our own announce loopback etc.)
+                // to one line / 2 s per source so real meter data stays visible.
+                auto key = std::make_pair(int(sport), -1);
+                double& last = lastLogged[key];
+                if (nowSecs() - last >= 2.0) {
+                    last = nowSecs();
+                    std::printf("[UDP src:%u] %d bytes (not meter): ", sport, n); hexdump(buf, size_t(n)); std::printf("\n");
+                }
             }
         }
         // TCP accept
@@ -205,7 +241,9 @@ int main(int argc, char** argv) {
             int c = ::accept(listenFd, reinterpret_cast<sockaddr*>(&from), &fl);
             if (c >= 0) {
                 int f = fcntl(c, F_GETFL, 0); fcntl(c, F_SETFL, f | O_NONBLOCK);
-                std::printf("[TCP] plugin connected from :%u\n", ntohs(from.sin_port));
+                std::printf("[TCP] plugin connected from :%u%s\n", ntohs(from.sin_port),
+                            serve ? " (serving heartbeats)" : "");
+                if (serve) ::send(c, hb.data(), hb.size(), 0);
                 tcpClients.push_back(c);
             }
         }
