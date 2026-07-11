@@ -48,6 +48,7 @@
   .pill.rac { background: #2b4a3a; color: #8fffc4; }
   .pill.mtr { background: #4a3a2b; color: #ffc48f; }
   .pill.skip { background: #3a2b2b; color: #ff9a9a; }
+  .pill.flag { background: #46381f; color: #ffcf8a; }
   .tablewrap { max-height: 340px; overflow: auto; border: 1px solid #2e2e34; border-radius: 8px; }
   ol { margin: 6px 0; padding-left: 20px; } ol li { margin: 3px 0; }
   code { background: #2a2a30; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
@@ -59,7 +60,7 @@
 <body>
 <header>
   <h1>Rea-Sixty <span class="tag">Companion → Stream Deck</span> migrator</h1>
-  <p class="sub">Turn your Bitfocus Companion buttons into a native Elgato Stream Deck profile that drives Rea-Sixty. Runs entirely in your browser — nothing is uploaded.</p>
+  <p class="sub">Turn your Bitfocus Companion REAPER buttons into a native Elgato Stream Deck profile that drives REAPER through the Rea-Sixty plugin. Reads the official <b>REAPER</b> (cockos-reaper) module and Rea-Sixty's own actions. Runs entirely in your browser — nothing is uploaded.</p>
 </header>
 <main>
 
@@ -69,6 +70,7 @@
       <li>Install the <b>Rea-Sixty Companion</b> Stream Deck plugin (<code>com.reasixty.companion.sdPlugin</code>) into the Elgato Stream Deck app.</li>
       <li>In Companion: <b>Import / Export → Export → Full Configuration</b> (or a single page) to get a <code>.companionconfig</code> file.</li>
     </ol>
+    <p class="muted" style="margin:6px 2px 0">Buttons that fire a <b>REAPER command</b> — the module's <code>Custom Action</code> (<code>/action &lt;id&gt;</code>) and the transport actions (Play, Stop, Record…) — migrate cleanly. Track-number, volume/pan-fader and marker actions can't become a single Stream Deck key; they're listed so you can remap them by hand.</p>
   </div>
 
   <div class="panel">
@@ -106,6 +108,10 @@
         <th>Page</th><th>Companion</th><th>Label</th><th>Type</th><th>Stream Deck settings</th>
       </tr></thead><tbody></tbody></table>
     </div>
+    <details id="flagDet" class="hide" open>
+      <summary><span class="warn"></span></summary>
+      <div id="flagList" class="muted mono" style="margin-top:6px"></div>
+    </details>
     <details id="skipDet" class="hide">
       <summary><span class="warn"></span></summary>
       <div id="skipList" class="muted mono" style="margin-top:6px"></div>
@@ -131,11 +137,44 @@
 "use strict";
 
 /* ============================================================= constants
- * Rea-Sixty Companion action ids (companion/src/actions.js) and the meter
- * feedback ids (companion/src/feedbacks.js) — the only things we translate.
+ * Two source modules are recognised:
+ *  - Rea-Sixty Companion  (companion/src/actions.js + feedbacks.js)
+ *  - cockos-reaper        (the official REAPER module — OSC based)
+ * Both end up firing REAPER commands / Rea-Sixty builtins through our Stream
+ * Deck plugin's bridge.
  */
 const ACT_IDS   = new Set(["builtin", "reaper_command_id", "reaper_command_action"]);
 const METER_FBS = new Set(["meter_bar", "meter_over"]);
+
+// cockos-reaper ActionId enum (src/actions.ts). These are the `action` values
+// stored in a Companion button for the official REAPER module.
+const COCKOS_IDS = new Set([
+  "record","play","stop","pause","start_rewind","stop_rewind","start_forward",
+  "stop_forward","click","repeat","goto_marker","goto_region",
+  "track_mute","track_solo","track_arm","track_unmute","track_unsolo","track_unarm",
+  "track_mute_toggle","track_solo_toggle","track_arm_toggle","track_select","track_deselect",
+  "track_monitor_enable","track_monitor_disable","track_set_volume_db",
+  "track_set_volume_fader_position","track_volume_up","track_volume_down","track_volume_fade",
+  "track_set_pan","track_set_pan2","track_fx_bypass","track_fx_openui","track_fx_unbypass",
+  "track_fx_closeui","track_fx_toggleui","autorecarm","soloreset","custom_action",
+  "refresh_osc","custom_message",
+]);
+
+// cockos-reaper semantic actions that have a well-known REAPER native command
+// ID (so they become a Stream Deck key that fires that command). Only actions
+// whose command ID is unambiguous are listed — the rest are flagged, never
+// guessed.
+const COCKOS_TRANSPORT = {
+  play: 1007, stop: 1016, record: 1013, pause: 1008,
+  repeat: 1068, click: 40364, soloreset: 40340,
+};
+const COCKOS_LABEL = {
+  play: "Play", stop: "Stop", record: "Record", pause: "Pause",
+  repeat: "Toggle Repeat", click: "Toggle Metronome", soloreset: "Unsolo all",
+};
+
+// Everything the tool knows how to look at inside a control.
+const KNOWN_ACTION_IDS = new Set([...ACT_IDS, ...COCKOS_IDS]);
 
 // Native Stream Deck action UUIDs (streamdeck/.../manifest.json). Every
 // non-meter button maps to the catch-all "Any Rea-Sixty Action" tile; it
@@ -200,30 +239,73 @@ function backKey() {
 }
 
 /* ============================================================= translate
- * Companion stored action / feedback  ->  Stream Deck key settings. */
-function translateAction(id, o) {
+ * Companion stored action / feedback  ->  Stream Deck key settings.
+ * Each translate returns one of:
+ *   null                         not this module / empty
+ *   { ok:true, kind, detail, settings, note? }   -> becomes a key
+ *   { flagged:true, detail }     recognised but no single-key equivalent
+ */
+function keySettings({ action = "", param = "", reaperId = "", reaperAction = "" }) {
+  return { action, param, reaperId, reaperAction, label: "", showTrack: false };
+}
+
+// --- Rea-Sixty Companion module ---
+function translateReaSixty(id, o) {
   o = o || {};
   if (id === "builtin") {
     const name = String(o.builtin != null ? o.builtin : "").trim();
     if (!name) return null;
-    return { kind: "builtin", detail: "builtin " + name + (o.param ? " · p=" + o.param : ""),
-      settings: { action: name, param: String(o.param != null ? o.param : 0),
-        reaperId: "", reaperAction: "", label: "", showTrack: false } };
+    return { ok: true, kind: "builtin", detail: "builtin " + name + (o.param ? " · p=" + o.param : ""),
+      settings: keySettings({ action: name, param: String(o.param != null ? o.param : 0) }) };
   }
   if (id === "reaper_command_id") {
     const cid = parseInt(o.id, 10);
     if (!cid || cid <= 0) return null;
-    return { kind: "reaperId", detail: "REAPER id " + cid,
-      settings: { action: "", param: "", reaperId: String(cid), reaperAction: "", label: "", showTrack: false } };
+    return { ok: true, kind: "reaperId", detail: "REAPER id " + cid, settings: keySettings({ reaperId: String(cid) }) };
   }
   if (id === "reaper_command_action") {
     const s = String(o.action != null ? o.action : "").trim();
     if (!s) return null;
-    return { kind: "reaperAction", detail: "REAPER " + s,
-      settings: { action: "", param: "", reaperId: "", reaperAction: s, label: "", showTrack: false } };
+    return { ok: true, kind: "reaperAction", detail: "REAPER " + s, settings: keySettings({ reaperAction: s }) };
   }
   return null;
 }
+
+// --- cockos-reaper (official REAPER module, OSC based) ---
+function cockosUnmappable(id, o) {
+  o = o || {};
+  if (id === "goto_marker") return "Go to marker " + (o.marker != null ? o.marker : "?") + " — map manually to a REAPER marker action";
+  if (id === "goto_region") return "Go to region " + (o.region != null ? o.region : "?") + " — map manually to a REAPER region action";
+  if (/^track_set_volume|^track_volume|^track_set_pan/.test(id)) return "continuous volume/pan — a Stream Deck key can't set a fader value";
+  if (id.indexOf("track_fx") === 0) return "FX " + (o.fx != null ? o.fx : "?") + " on track " + (o.track != null ? o.track : "?") + " — targets a fixed track/FX; use Rea-Sixty's selected-track FX actions instead";
+  if (id.indexOf("track_") === 0) return "acts on track " + (o.track != null ? o.track : "?") + " — REAPER key commands hit the selected track, not a fixed number";
+  if (/rewind|forward/.test(id)) return "momentary rewind / fast-forward (hold) — no single-key equivalent";
+  if (id === "autorecarm") return "toggle auto-record-arm — map manually (no standard command ID)";
+  if (id === "custom_message") return "raw OSC message — not a REAPER action";
+  if (id === "refresh_osc") return "OSC refresh — not needed with Rea-Sixty";
+  return "no automatic Stream Deck equivalent — map manually";
+}
+function translateCockos(id, o) {
+  o = o || {};
+  if (COCKOS_TRANSPORT[id] != null) {
+    const cid = COCKOS_TRANSPORT[id];
+    return { ok: true, kind: "reaperId", detail: COCKOS_LABEL[id] + " → REAPER " + cid, settings: keySettings({ reaperId: String(cid) }) };
+  }
+  if (id === "custom_action") {
+    const raw = String(o.action_cmd_id != null ? o.action_cmd_id : "").trim();
+    if (!raw) return null;
+    // Our plugin has no Companion-variable engine, so a $(...) command would
+    // fire an unresolved string at REAPER. Flag it rather than ship a dud key.
+    if (raw.indexOf("$(") >= 0)
+      return { flagged: true, detail: "Custom Action uses a Companion variable (" + raw + ") — the Stream Deck plugin has no variables; set a fixed command ID/action by hand" };
+    if (/^\d+$/.test(raw))
+      return { ok: true, kind: "reaperId", detail: "Custom /action " + raw, settings: keySettings({ reaperId: raw }) };
+    return { ok: true, kind: "reaperAction", detail: "Custom action " + raw, settings: keySettings({ reaperAction: raw }) };
+  }
+  if (COCKOS_IDS.has(id)) return { flagged: true, detail: cockosUnmappable(id, o) };
+  return null;
+}
+function translateAny(id, o) { return translateReaSixty(id, o) || translateCockos(id, o); }
 function translateMeter(o) {
   o = o || {};
   const src = String(o.source || "peak");
@@ -251,7 +333,7 @@ function collectFromControl(ctrl) {
     if (!n || typeof n !== "object") return;
     if (Array.isArray(n)) { n.forEach(rec); return; }
     const idv = n.actionId != null ? n.actionId : n.action;
-    if (typeof idv === "string" && ACT_IDS.has(idv) && n.options && typeof n.options === "object")
+    if (typeof idv === "string" && KNOWN_ACTION_IDS.has(idv) && n.options && typeof n.options === "object")
       acts.push({ id: idv, options: n.options });
     const fbv = n.feedbackId != null ? n.feedbackId : n.type;
     if (typeof fbv === "string" && METER_FBS.has(fbv) && n.options && typeof n.options === "object")
@@ -274,7 +356,7 @@ function coordSort(a, b) {
 
 // -> [{ pageId, pageName, buttons:[{coord,label,button|meter, note}] }], plus skipped[]
 function parseCompanion(json) {
-  const pagesOut = [], skipped = [];
+  const pagesOut = [], skipped = [], flagged = [];
   let pagesObj = json && json.pages;
   // Some single-page/button exports put controls at top level.
   if (!pagesObj || typeof pagesObj !== "object") {
@@ -297,12 +379,19 @@ function parseCompanion(json) {
       const label = firstLine(ctrl.style && ctrl.style.text);
       const { acts, mets } = collectFromControl(ctrl);
 
-      // Non-meter action wins the key; take the FIRST recognized one.
-      let picked = null;
-      for (const a of acts) { const t = translateAction(a.id, a.options); if (t) { picked = t; break; } }
+      // A firing action wins the key; take the FIRST that maps to a Stream
+      // Deck key. Remember whether any recognised-but-unmappable action was
+      // seen so we can flag (not silently skip) it.
+      let picked = null, flagReason = null;
+      for (const a of acts) {
+        const t = translateAny(a.id, a.options);
+        if (t && t.ok) { picked = t; break; }
+        if (t && t.flagged && !flagReason) flagReason = t.detail;
+      }
       if (picked) {
         picked.settings.label = label;         // mirror Companion text onto the key
-        const note = acts.length > 1 ? ("+" + (acts.length - 1) + " more action(s) dropped") : "";
+        const extra = acts.length - 1;
+        const note = [picked.note, extra > 0 ? "+" + extra + " more action(s) not migrated" : ""].filter(Boolean).join("; ");
         buttons.push({ coord, label, key: reaSixtyKey(label, picked.settings), kind: picked.kind, detail: picked.detail, note });
         continue;
       }
@@ -312,13 +401,15 @@ function parseCompanion(json) {
         buttons.push({ coord, label, key: meterKey(label, t.settings), kind: t.kind, detail: t.detail, note: "" });
         continue;
       }
+      // Recognised REAPER/Rea-Sixty action but no single-key equivalent -> flag.
+      if (flagReason) { flagged.push({ pageName, coord, label: label || "(no label)", reason: flagReason }); continue; }
       // Nothing we own -> report so the user knows it wasn't silently lost.
       if (label || acts.length || mets.length || (ctrl.steps && Object.keys(ctrl.steps).length))
         skipped.push({ pageName, coord, label: label || "(no label)" });
     }
     if (buttons.length) pagesOut.push({ pageId: pid, pageName, buttons });
   }
-  return { pages: pagesOut, skipped };
+  return { pages: pagesOut, skipped, flagged };
 }
 
 /* ============================================================= layout
@@ -489,16 +580,23 @@ function readFile(f) {
 function totalButtons(p) { return p.pages.reduce((n, pg) => n + pg.buttons.length, 0); }
 
 function onParsed(fname) {
-  const nBtn = totalButtons(PARSED), nPg = PARSED.pages.length, nSkip = PARSED.skipped.length;
+  const nBtn = totalButtons(PARSED), nPg = PARSED.pages.length;
+  const nFlag = PARSED.flagged.length, nSkip = PARSED.skipped.length;
   if (!nBtn) {
-    $("loadmsg").innerHTML = '<span class="err">No Rea-Sixty buttons found in <b>' + fname +
-      "</b>.</span> This tool only migrates buttons that use the Rea-Sixty Companion actions " +
-      "(builtin / REAPER command) or the meter feedback.";
-    ["cfgPanel", "previewPanel", "dlPanel"].forEach((id) => $(id).classList.add("hide"));
+    let msg = '<span class="err">No migratable REAPER buttons found in <b>' + esc(fname) +
+      "</b>.</span> The tool migrates the <b>REAPER</b> module's Custom Action / transport actions " +
+      "and Rea-Sixty's own actions.";
+    if (nFlag) msg += ' <b>' + nFlag + "</b> recognised REAPER action(s) can't become a single Stream Deck key — see below.";
+    $("loadmsg").innerHTML = msg;
+    $("cfgPanel").classList.add("hide"); $("dlPanel").classList.add("hide");
+    if (nFlag || nSkip) { $("previewPanel").classList.remove("hide"); renderPreview(); }
+    else $("previewPanel").classList.add("hide");
     return;
   }
-  $("loadmsg").innerHTML = '<span class="ok">Loaded <b>' + fname + "</b> — found <b>" + nBtn +
-    "</b> Rea-Sixty button(s) across <b>" + nPg + "</b> page(s)." + "</span>";
+  let msg = '<span class="ok">Loaded <b>' + esc(fname) + "</b> — <b>" + nBtn +
+    "</b> button(s) will migrate across <b>" + nPg + "</b> page(s).</span>";
+  if (nFlag) msg += ' <span class="warn"><b>' + nFlag + "</b> need manual remapping (see below).</span>";
+  $("loadmsg").innerHTML = msg;
   ["cfgPanel", "previewPanel", "dlPanel"].forEach((id) => $(id).classList.remove("hide"));
   renderPreview();
   $("counts").innerHTML = layoutSummary();
@@ -525,11 +623,21 @@ function renderPreview() {
       tb.appendChild(tr);
     }
   }
+  const flagDet = $("flagDet");
+  if (PARSED.flagged.length) {
+    flagDet.classList.remove("hide");
+    flagDet.querySelector("summary .warn").textContent =
+      "⚠ " + PARSED.flagged.length + " REAPER action(s) need manual remapping — click to see why";
+    $("flagList").innerHTML = PARSED.flagged
+      .map((s) => "<b>" + esc(s.pageName) + " · " + esc(s.coord) + "</b>  " + esc(s.label) +
+        '  <span class="warn">→ ' + esc(s.reason) + "</span>").join("<br />");
+  } else flagDet.classList.add("hide");
+
   const det = $("skipDet");
   if (PARSED.skipped.length) {
     det.classList.remove("hide");
     det.querySelector("summary .warn").textContent =
-      PARSED.skipped.length + " control(s) skipped (no Rea-Sixty action) — click to see";
+      PARSED.skipped.length + " control(s) skipped (no REAPER/Rea-Sixty action) — click to see";
     $("skipList").innerHTML = PARSED.skipped
       .map((s) => esc(s.pageName) + "  " + esc(s.coord) + "  " + esc(s.label)).join("<br />");
   } else det.classList.add("hide");

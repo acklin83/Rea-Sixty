@@ -1,14 +1,20 @@
 # Companion → Stream Deck migrator (Rea-Sixty)
 
-Converts your **Bitfocus Companion** buttons into a native **Elgato Stream Deck**
-profile that drives Rea-Sixty. One self-contained HTML file — no install, no
-Python, works offline. Nothing is uploaded; all conversion happens in your browser.
+Converts your **Bitfocus Companion** REAPER buttons into a native **Elgato Stream
+Deck** profile that drives REAPER through the Rea-Sixty plugin. One self-contained
+HTML file — no install, no Python, works offline. Nothing is uploaded; all
+conversion happens in your browser.
+
+## What it reads
+- The official **REAPER** Companion module (`cockos-reaper`) — the one most REAPER
+  users have.
+- Rea-Sixty's own Companion actions (if you use those too).
 
 ## Why it works
-Companion and the native Stream Deck plugin are two clients of the **same**
-Rea-Sixty bridge (`127.0.0.1:49900`). A button fires the identical command on
-either side, so migrating is just re-packing the button config into the Stream
-Deck profile format.
+The Rea-Sixty Stream Deck plugin fires REAPER commands through the extension's
+bridge (`127.0.0.1:49900`). Any Companion button that fires a REAPER command
+(by ID or action string) has a direct equivalent, so migrating is re-packing the
+button into the Stream Deck profile format.
 
 ## Steps (Windows)
 1. Install the **Rea-Sixty Companion** Stream Deck plugin
@@ -22,20 +28,28 @@ Deck profile format.
    it. On import, assign it to your device.
 6. Run REAPER with the Rea-Sixty extension. Done.
 
-## What migrates
-- **Rea-Sixty action** buttons (builtin + parameter)
-- **REAPER command** buttons (by ID and by action string)
-- **Meter** buttons (the `meter_bar` / `meter_over` feedback → native meter tile)
+## What migrates cleanly
+- **Custom Action** (`/action <command ID>`) — the REAPER module's raw-command
+  button. Maps 1:1 to a REAPER command ID / action string. This is the main case.
+- **Transport**: Play, Stop, Record, Pause, Toggle Repeat, Toggle Metronome,
+  Unsolo-all → their native REAPER command IDs.
+- **Rea-Sixty** actions (builtin + parameter, REAPER command, meter feedback).
 
 Companion **pages become folders** on the Stream Deck; pages that hold more
 buttons than fit auto-paginate with `▶ More` / `◀ Back` keys.
 
-## Limits (shown in the preview)
-- A Stream Deck key fires **one** command. If a Companion button chained several
-  actions, the **first** Rea-Sixty action is kept and the rest are flagged.
-- Buttons that used non-Rea-Sixty actions (internal Companion actions, other
-  modules) are **skipped** and listed under "controls skipped".
-- The button **label** carries over; custom colours/PNG icons do not.
+## What can't auto-migrate (listed in the preview, so nothing is silent)
+A Stream Deck key is a single press, so these are **flagged for manual remapping**
+instead of producing a broken key:
+- **Track-number** actions (Mute/Solo/Arm/Select track *N*) — REAPER key commands
+  act on the *selected* track, not a fixed number.
+- **Volume / pan faders** — a key can't set a continuous value.
+- **Go to marker / region**, momentary **rewind / fast-forward**, raw **OSC
+  messages**, and Custom Actions that use a **Companion variable** (`$(...)`).
+
+Also: a Stream Deck key fires **one** command — if a button chained several
+actions, the first migratable one is kept and the rest are noted. The button
+**label** carries over; custom colours / PNG icons do not.
 
 The device is intentionally left unset in the profile so it imports cleanly on
 any Stream Deck — you assign it during import.
