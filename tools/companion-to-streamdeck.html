@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rea-Sixty · Companion → Stream Deck migrator</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #1b1b1e; color: #dcdcdc; margin: 0; padding: 0;
+    font-size: 14px; line-height: 1.5;
+  }
+  header { padding: 22px 26px 10px; }
+  h1 { font-size: 19px; margin: 0 0 4px; font-weight: 650; }
+  h1 .tag { color: #c8863f; }
+  .sub { color: #8a8a8a; font-size: 13px; margin: 0; }
+  main { padding: 8px 26px 60px; max-width: 1000px; }
+  .panel { background: #232327; border: 1px solid #34343a; border-radius: 10px;
+           padding: 16px 18px; margin: 14px 0; }
+  .step { color: #c8863f; font-weight: 650; font-size: 12px; text-transform: uppercase;
+          letter-spacing: .6px; margin: 0 0 8px; }
+  #drop {
+    border: 2px dashed #45454d; border-radius: 10px; padding: 30px 20px; text-align: center;
+    color: #9a9a9a; cursor: pointer; transition: .15s; background: #202024;
+  }
+  #drop.hot { border-color: #c8863f; color: #e6c79a; background: #26231e; }
+  #drop b { color: #d8d8d8; }
+  .row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+  label.fld { color: #9a9a9a; }
+  select, button {
+    background: #303036; border: 1px solid #45454d; color: #eee;
+    border-radius: 6px; padding: 8px 12px; font-size: 14px; font-family: inherit;
+  }
+  button.primary { background: #c8863f; border-color: #c8863f; color: #1b1b1e; font-weight: 650; cursor: pointer; }
+  button.primary:disabled { background: #3a3a40; border-color: #3a3a40; color: #77777d; cursor: default; }
+  button.primary:not(:disabled):hover { background: #d9974e; }
+  .muted { color: #8a8a8a; font-size: 13px; }
+  .ok { color: #5cc27a; } .warn { color: #e0a83a; } .err { color: #e0574a; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 8px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #2e2e34; vertical-align: top; }
+  th { color: #8a8a8a; font-weight: 600; position: sticky; top: 0; background: #232327; }
+  td.mono, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.act { background: #2b3a4a; color: #8fc4ff; }
+  .pill.rid { background: #3a2b4a; color: #c79aff; }
+  .pill.rac { background: #2b4a3a; color: #8fffc4; }
+  .pill.mtr { background: #4a3a2b; color: #ffc48f; }
+  .pill.skip { background: #3a2b2b; color: #ff9a9a; }
+  .tablewrap { max-height: 340px; overflow: auto; border: 1px solid #2e2e34; border-radius: 8px; }
+  ol { margin: 6px 0; padding-left: 20px; } ol li { margin: 3px 0; }
+  code { background: #2a2a30; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .hide { display: none !important; }
+  .counts b { color: #d8d8d8; }
+  details { margin-top: 8px; } summary { cursor: pointer; color: #9a9a9a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rea-Sixty <span class="tag">Companion → Stream Deck</span> migrator</h1>
+  <p class="sub">Turn your Bitfocus Companion buttons into a native Elgato Stream Deck profile that drives Rea-Sixty. Runs entirely in your browser — nothing is uploaded.</p>
+</header>
+<main>
+
+  <div class="panel">
+    <p class="step">Before you start</p>
+    <ol>
+      <li>Install the <b>Rea-Sixty Companion</b> Stream Deck plugin (<code>com.reasixty.companion.sdPlugin</code>) into the Elgato Stream Deck app.</li>
+      <li>In Companion: <b>Import / Export → Export → Full Configuration</b> (or a single page) to get a <code>.companionconfig</code> file.</li>
+    </ol>
+  </div>
+
+  <div class="panel">
+    <p class="step">1 · Drop your Companion export</p>
+    <div id="drop">
+      <b>Drop a .companionconfig file here</b><br />
+      <span class="muted">or click to choose &nbsp;·&nbsp; nothing leaves this page</span>
+      <input id="file" type="file" accept=".companionconfig,.json,application/json" class="hide" />
+    </div>
+    <p id="loadmsg" class="muted" style="margin:10px 2px 0"></p>
+  </div>
+
+  <div id="cfgPanel" class="panel hide">
+    <p class="step">2 · Choose your Stream Deck &amp; profile name</p>
+    <div class="row">
+      <label class="fld" for="device">Device layout</label>
+      <select id="device">
+        <option value="15">Stream Deck / MK.2 — 15 keys (5×3)</option>
+        <option value="32">Stream Deck XL — 32 keys (8×4)</option>
+        <option value="6">Stream Deck Mini — 6 keys (3×2)</option>
+        <option value="8">Stream Deck + / Neo — 8 keys (4×2)</option>
+      </select>
+      <label class="fld" for="pname">Profile name</label>
+      <select id="pname" class="hide"></select>
+      <input id="pnameTxt" type="text" value="Rea-Sixty" style="background:#303036;border:1px solid #45454d;color:#eee;border-radius:6px;padding:8px 12px;font-size:14px;" />
+    </div>
+    <p class="muted counts" id="counts"></p>
+    <p class="muted">Pages become <b>folders</b> on the Stream Deck. Each page auto-paginates with <code>▶ More</code> / <code>◀ Back</code> keys when it has more buttons than fit.</p>
+  </div>
+
+  <div id="previewPanel" class="panel hide">
+    <p class="step">3 · Preview — what will be created</p>
+    <div class="tablewrap">
+      <table id="tbl"><thead><tr>
+        <th>Page</th><th>Companion</th><th>Label</th><th>Type</th><th>Stream Deck settings</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <details id="skipDet" class="hide">
+      <summary><span class="warn"></span></summary>
+      <div id="skipList" class="muted mono" style="margin-top:6px"></div>
+    </details>
+  </div>
+
+  <div id="dlPanel" class="panel hide">
+    <p class="step">4 · Download &amp; import</p>
+    <div class="row">
+      <button id="build" class="primary">Generate .streamDeckProfile</button>
+      <span id="buildmsg" class="muted"></span>
+    </div>
+    <ol style="margin-top:10px">
+      <li>Double-click the downloaded <code>.streamDeckProfile</code> — the Stream Deck app imports it.</li>
+      <li>Make sure REAPER is running with the Rea-Sixty extension (its bridge on <code>127.0.0.1:49900</code>).</li>
+      <li>The device is left unset in the profile, so on import the app lets you assign it to <em>your</em> Stream Deck — pick the one that matches the layout you chose above.</li>
+    </ol>
+  </div>
+
+</main>
+
+<script>
+"use strict";
+
+/* ============================================================= constants
+ * Rea-Sixty Companion action ids (companion/src/actions.js) and the meter
+ * feedback ids (companion/src/feedbacks.js) — the only things we translate.
+ */
+const ACT_IDS   = new Set(["builtin", "reaper_command_id", "reaper_command_action"]);
+const METER_FBS = new Set(["meter_bar", "meter_over"]);
+
+// Native Stream Deck action UUIDs (streamdeck/.../manifest.json). Every
+// non-meter button maps to the catch-all "Any Rea-Sixty Action" tile; it
+// accepts any builtin or raw REAPER command, and fires the identical bridge
+// command the Companion button did.
+const SD_ACTION = "com.reasixty.companion.action";
+const SD_METER  = "com.reasixty.companion.meter";
+const SD_FOLDER = "com.elgato.streamdeck.profile.openchild";
+const SD_BACK   = "com.elgato.streamdeck.profile.backtoparent";
+
+const DEVICES = {
+  "15": { cols: 5, rows: 3 },
+  "32": { cols: 8, rows: 4 },
+  "6":  { cols: 3, rows: 2 },
+  "8":  { cols: 4, rows: 2 },
+};
+
+/* ============================================================= ids (ported
+ * verbatim from data-enabler/streamdeck-profile-generator lib/ids.js) */
+function uuidV4() {
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+    (+c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16)
+  );
+}
+function profileFolderId(id) {
+  return (
+    ((id.replace(/-/g, "") + "000").match(/.{5}/g) || [])
+      .map((s) => parseInt(s, 16).toString(32).padStart(4, "0"))
+      .join("")
+      .substring(0, 26)
+      .toUpperCase()
+      .replace(/V/g, "W")
+      .replace(/U/g, "V") + "Z"
+  );
+}
+
+/* ============================================================= SD action objs
+ * (shape ported from the same generator's lib/actions.js) */
+function sdAction({ name, title, uuid, settings, numStates = 1, state = 0 }) {
+  return {
+    ActionID: "00000000-0000-0000-0000-000000000000",
+    LinkedTitle: true,
+    Name: name,
+    Settings: settings,
+    State: state,
+    States: Array.from({ length: numStates }, () => ({ Title: title || "" })),
+    UUID: uuid,
+  };
+}
+// Non-meter Rea-Sixty key. `s` = our inspector's saved settings shape.
+function reaSixtyKey(label, s) {
+  return sdAction({ name: "Rea-Sixty action", title: label, uuid: SD_ACTION, settings: s });
+}
+function meterKey(label, s) {
+  return sdAction({ name: "Meter", title: "", uuid: SD_METER, settings: s });
+}
+function folderKey(title, childUuid) {
+  return sdAction({ name: "Create Folder", title, uuid: SD_FOLDER, settings: { ProfileUUID: childUuid } });
+}
+function backKey() {
+  return sdAction({ name: "Open Folder", title: "◀ Back", uuid: SD_BACK, settings: null });
+}
+
+/* ============================================================= translate
+ * Companion stored action / feedback  ->  Stream Deck key settings. */
+function translateAction(id, o) {
+  o = o || {};
+  if (id === "builtin") {
+    const name = String(o.builtin != null ? o.builtin : "").trim();
+    if (!name) return null;
+    return { kind: "builtin", detail: "builtin " + name + (o.param ? " · p=" + o.param : ""),
+      settings: { action: name, param: String(o.param != null ? o.param : 0),
+        reaperId: "", reaperAction: "", label: "", showTrack: false } };
+  }
+  if (id === "reaper_command_id") {
+    const cid = parseInt(o.id, 10);
+    if (!cid || cid <= 0) return null;
+    return { kind: "reaperId", detail: "REAPER id " + cid,
+      settings: { action: "", param: "", reaperId: String(cid), reaperAction: "", label: "", showTrack: false } };
+  }
+  if (id === "reaper_command_action") {
+    const s = String(o.action != null ? o.action : "").trim();
+    if (!s) return null;
+    return { kind: "reaperAction", detail: "REAPER " + s,
+      settings: { action: "", param: "", reaperId: "", reaperAction: s, label: "", showTrack: false } };
+  }
+  return null;
+}
+function translateMeter(o) {
+  o = o || {};
+  const src = String(o.source || "peak");
+  const tgt = String(o.target || "sel");
+  let trackMode = "sel", trackNum = "1", trackName = "";
+  if (tgt === "master") trackMode = "master";
+  else if (tgt.indexOf("num:") === 0) { trackMode = "num"; trackNum = tgt.slice(4) || "1"; }
+  else if (tgt.indexOf("name:") === 0) { trackMode = "name"; trackName = tgt.slice(5); }
+  return { kind: "meter", detail: "meter " + src + " · " + tgt,
+    settings: { source: src, trackMode, trackNum, trackName,
+      showName: true, followColor: false, fontScale: "1", action: "" } };
+}
+
+/* ============================================================= parse
+ * Companion exports have drifted across v2/v3/v4, so instead of assuming a
+ * fixed schema we (a) locate pages+controls where they normally live, and
+ * (b) deep-scan each control for anything carrying one of OUR action/feedback
+ * ids. Robust to array-vs-object step layouts and the actionId-vs-action key
+ * difference between the preset API and stored controls. */
+function firstLine(t) { return String(t == null ? "" : t).replace(/\r?\n+/g, " ").trim(); }
+
+function collectFromControl(ctrl) {
+  const acts = [], mets = [];
+  (function rec(n) {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(rec); return; }
+    const idv = n.actionId != null ? n.actionId : n.action;
+    if (typeof idv === "string" && ACT_IDS.has(idv) && n.options && typeof n.options === "object")
+      acts.push({ id: idv, options: n.options });
+    const fbv = n.feedbackId != null ? n.feedbackId : n.type;
+    if (typeof fbv === "string" && METER_FBS.has(fbv) && n.options && typeof n.options === "object")
+      mets.push({ type: fbv, options: n.options });
+    for (const k in n) if (k !== "action" && k !== "feedbackId") rec(n[k]);
+    // (we still recurse action/feedbackId siblings above via the generic loop
+    //  when they are objects; the guard just avoids re-reading the id string)
+  })(ctrl);
+  return { acts, mets };
+}
+
+function coordSort(a, b) {
+  const pa = String(a).split(/[\/,]/).map(Number), pb = String(b).split(/[\/,]/).map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
+// -> [{ pageId, pageName, buttons:[{coord,label,button|meter, note}] }], plus skipped[]
+function parseCompanion(json) {
+  const pagesOut = [], skipped = [];
+  let pagesObj = json && json.pages;
+  // Some single-page/button exports put controls at top level.
+  if (!pagesObj || typeof pagesObj !== "object") {
+    if (json && json.controls) pagesObj = { "1": { name: "Imported", controls: json.controls } };
+    else if (json && (json.type === "button" || json.style || json.steps))
+      pagesObj = { "1": { name: "Imported", controls: { "0/0": json } } };
+    else pagesObj = {};
+  }
+
+  const pageIds = Object.keys(pagesObj).sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+  for (const pid of pageIds) {
+    const page = pagesObj[pid] || {};
+    const controls = page.controls || page.buttons || {};
+    const pageName = firstLine(page.name) || ("Page " + pid);
+    const buttons = [];
+    const coords = Object.keys(controls).sort(coordSort);
+    for (const coord of coords) {
+      const ctrl = controls[coord];
+      if (!ctrl || typeof ctrl !== "object") continue;
+      const label = firstLine(ctrl.style && ctrl.style.text);
+      const { acts, mets } = collectFromControl(ctrl);
+
+      // Non-meter action wins the key; take the FIRST recognized one.
+      let picked = null;
+      for (const a of acts) { const t = translateAction(a.id, a.options); if (t) { picked = t; break; } }
+      if (picked) {
+        picked.settings.label = label;         // mirror Companion text onto the key
+        const note = acts.length > 1 ? ("+" + (acts.length - 1) + " more action(s) dropped") : "";
+        buttons.push({ coord, label, key: reaSixtyKey(label, picked.settings), kind: picked.kind, detail: picked.detail, note });
+        continue;
+      }
+      // No firing action, but a meter feedback -> meter tile.
+      if (mets.length) {
+        const t = translateMeter(mets[0].options);
+        buttons.push({ coord, label, key: meterKey(label, t.settings), kind: t.kind, detail: t.detail, note: "" });
+        continue;
+      }
+      // Nothing we own -> report so the user knows it wasn't silently lost.
+      if (label || acts.length || mets.length || (ctrl.steps && Object.keys(ctrl.steps).length))
+        skipped.push({ pageName, coord, label: label || "(no label)" });
+    }
+    if (buttons.length) pagesOut.push({ pageId: pid, pageName, buttons });
+  }
+  return { pages: pagesOut, skipped };
+}
+
+/* ============================================================= layout
+ * pages -> a main index profile of folder keys + one (or more, paginated)
+ * child profile per page. Nav keys sit at fixed grid slots. */
+function layout(parsed, deviceKey) {
+  const { cols, rows } = DEVICES[deviceKey];
+  const grid = cols * rows;
+  const backSlot = grid - 1;           // bottom-right
+  const nextSlot = grid - 2;           // to its left
+  const profiles = [];                 // { uuid, name, actionsByCoord }
+
+  function slotToCoord(i) { return (i % cols) + "," + Math.floor(i / cols); }
+
+  // Place `cells` (array of {key} | null) into paginated profiles.
+  // withBack => reserve backSlot for ◀ Back on every page.
+  function paginate(name, cells, withBack) {
+    const reservedBase = withBack ? 1 : 0;
+    const capNoNext = grid - reservedBase;
+    const capNext = grid - reservedBase - 1;
+    const chunks = [];
+    if (cells.length <= capNoNext) chunks.push(cells);
+    else for (let i = 0; i < cells.length; i += capNext) chunks.push(cells.slice(i, i + capNext));
+
+    // Build back-to-front so each chunk knows its "next" uuid.
+    const uuids = chunks.map(() => uuidV4());
+    for (let ci = chunks.length - 1; ci >= 0; ci--) {
+      const abc = {};
+      const reserved = new Set();
+      if (withBack) reserved.add(backSlot);
+      const hasNext = ci < chunks.length - 1;
+      if (hasNext) reserved.add(nextSlot);
+      // fill free slots row-major
+      let slot = 0;
+      for (const cell of chunks[ci]) {
+        while (reserved.has(slot)) slot++;
+        if (slot >= grid) break;
+        if (cell && cell.key) abc[slotToCoord(slot)] = cell.key;
+        slot++;
+      }
+      if (withBack) abc[slotToCoord(backSlot)] = backKey();
+      if (hasNext) abc[slotToCoord(nextSlot)] = folderKey("▶ More", uuids[ci + 1]);
+      profiles.push({ uuid: uuids[ci], name: chunks.length > 1 ? name + " " + (ci + 1) : name, actionsByCoord: abc });
+    }
+    return uuids[0]; // entry uuid
+  }
+
+  // Each page -> child profile(s); collect a folder key for the index.
+  const indexCells = [];
+  for (const pg of parsed.pages) {
+    const cells = pg.buttons.map((b) => ({ key: b.key }));
+    const entry = paginate(pg.pageName, cells, true);
+    indexCells.push({ key: folderKey(pg.pageName, entry) });
+  }
+  // The index itself paginates if there are more pages than fit (no back — it's root).
+  const mainUuid = paginate(parsed.pages.length ? "" : "Empty", indexCells.length ? indexCells : [], false);
+
+  return { profiles, mainUuid, cols, rows };
+}
+
+/* ============================================================= build profile
+ * Assemble the .streamDeckProfile bundle. Layout ported from
+ * data-enabler/streamdeck-profile-generator lib/profile.js + writeToDisk.js. */
+function buildBundle(profileName, parsed, deviceKey) {
+  const { profiles, mainUuid } = layout(parsed, deviceKey);
+  const files = {}; // path -> string
+
+  const rootDir = mainUuid + ".sdProfile";
+  const topManifest = {
+    Name: profileName,
+    Pages: { Current: mainUuid, Pages: [mainUuid] },
+    Version: "2.0",
+  };
+  files[rootDir + "/manifest.json"] = JSON.stringify(topManifest);
+
+  for (const p of profiles) {
+    const pm = { Controllers: [{ Actions: p.actionsByCoord, Type: "Keypad" }] };
+    files[rootDir + "/Profiles/" + profileFolderId(p.uuid) + "/manifest.json"] = JSON.stringify(pm);
+  }
+  return files;
+}
+
+/* ============================================================= zip (STORE)
+ * Minimal, dependency-free store-only zip writer. Stream Deck reads the
+ * bundle as a plain zip; no compression needed. */
+const CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function zipStore(files) {
+  const enc = new TextEncoder();
+  const entries = [];
+  const chunks = [];
+  let offset = 0;
+  const push = (arr) => { chunks.push(arr); offset += arr.length; };
+  const u16 = (v) => new Uint8Array([v & 255, (v >> 8) & 255]);
+  const u32 = (v) => new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]);
+
+  for (const path in files) {
+    const nameBytes = enc.encode(path);
+    const data = enc.encode(files[path]);
+    const crc = crc32(data);
+    const localOff = offset;
+    // local file header
+    push(u32(0x04034b50)); push(u16(20)); push(u16(0x0800)); push(u16(0)); // sig,ver,flag(UTF8),method=store
+    push(u16(0)); push(u16(0));                                           // time,date
+    push(u32(crc)); push(u32(data.length)); push(u32(data.length));       // crc,comp,uncomp
+    push(u16(nameBytes.length)); push(u16(0));                            // nameLen,extraLen
+    push(nameBytes); push(data);
+    entries.push({ nameBytes, crc, size: data.length, localOff });
+  }
+  const cdStart = offset;
+  for (const e of entries) {
+    push(u32(0x02014b50)); push(u16(20)); push(u16(20)); push(u16(0x0800)); push(u16(0)); // sig,verMade,verNeed,flag,method
+    push(u16(0)); push(u16(0));                                          // time,date
+    push(u32(e.crc)); push(u32(e.size)); push(u32(e.size));              // crc,comp,uncomp
+    push(u16(e.nameBytes.length)); push(u16(0)); push(u16(0));           // nameLen,extraLen,commentLen
+    push(u16(0)); push(u16(0)); push(u32(0));                            // diskStart,intAttr,extAttr
+    push(u32(e.localOff));                                               // localHeaderOffset
+    push(e.nameBytes);
+  }
+  const cdSize = offset - cdStart;
+  push(u32(0x06054b50)); push(u16(0)); push(u16(0));                     // eocd sig, disk, cd disk
+  push(u16(entries.length)); push(u16(entries.length));
+  push(u32(cdSize)); push(u32(cdStart)); push(u16(0));                   // cdSize, cdOffset, commentLen
+
+  let total = 0; for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let pos = 0; for (const c of chunks) { out.set(c, pos); pos += c.length; }
+  return out;
+}
+
+/* ============================================================= UI */
+const $ = (id) => document.getElementById(id);
+let PARSED = null;
+
+const drop = $("drop"), fileInput = $("file");
+drop.addEventListener("click", () => fileInput.click());
+["dragover", "dragenter"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", (ev) => { const f = ev.dataTransfer.files[0]; if (f) readFile(f); });
+fileInput.addEventListener("change", (ev) => { const f = ev.target.files[0]; if (f) readFile(f); });
+
+function readFile(f) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let json;
+    try { json = JSON.parse(rd.result); }
+    catch (e) { $("loadmsg").innerHTML = '<span class="err">Not valid JSON — is this really a .companionconfig export?</span>'; return; }
+    try { PARSED = parseCompanion(json); }
+    catch (e) { $("loadmsg").innerHTML = '<span class="err">Parse error: ' + e.message + "</span>"; return; }
+    onParsed(f.name);
+  };
+  rd.onerror = () => { $("loadmsg").innerHTML = '<span class="err">Could not read the file.</span>'; };
+  rd.readAsText(f);
+}
+
+function totalButtons(p) { return p.pages.reduce((n, pg) => n + pg.buttons.length, 0); }
+
+function onParsed(fname) {
+  const nBtn = totalButtons(PARSED), nPg = PARSED.pages.length, nSkip = PARSED.skipped.length;
+  if (!nBtn) {
+    $("loadmsg").innerHTML = '<span class="err">No Rea-Sixty buttons found in <b>' + fname +
+      "</b>.</span> This tool only migrates buttons that use the Rea-Sixty Companion actions " +
+      "(builtin / REAPER command) or the meter feedback.";
+    ["cfgPanel", "previewPanel", "dlPanel"].forEach((id) => $(id).classList.add("hide"));
+    return;
+  }
+  $("loadmsg").innerHTML = '<span class="ok">Loaded <b>' + fname + "</b> — found <b>" + nBtn +
+    "</b> Rea-Sixty button(s) across <b>" + nPg + "</b> page(s)." + "</span>";
+  ["cfgPanel", "previewPanel", "dlPanel"].forEach((id) => $(id).classList.remove("hide"));
+  renderPreview();
+  $("counts").innerHTML = layoutSummary();
+}
+
+function pillFor(kind) {
+  const map = { builtin: ["act", "builtin"], reaperId: ["rid", "REAPER id"], reaperAction: ["rac", "REAPER cmd"], meter: ["mtr", "meter"] };
+  const [cls, txt] = map[kind] || ["act", kind];
+  return '<span class="pill ' + cls + '">' + txt + "</span>";
+}
+
+function renderPreview() {
+  const tb = $("tbl").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const pg of PARSED.pages) {
+    for (const b of pg.buttons) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + esc(pg.pageName) + "</td>" +
+        '<td class="mono">' + esc(b.coord) + "</td>" +
+        "<td>" + (esc(b.label) || '<span class="muted">—</span>') + "</td>" +
+        "<td>" + pillFor(b.kind) + (b.note ? ' <span class="warn" title="' + esc(b.note) + '">!</span>' : "") + "</td>" +
+        '<td class="mono">' + esc(b.detail) + "</td>";
+      tb.appendChild(tr);
+    }
+  }
+  const det = $("skipDet");
+  if (PARSED.skipped.length) {
+    det.classList.remove("hide");
+    det.querySelector("summary .warn").textContent =
+      PARSED.skipped.length + " control(s) skipped (no Rea-Sixty action) — click to see";
+    $("skipList").innerHTML = PARSED.skipped
+      .map((s) => esc(s.pageName) + "  " + esc(s.coord) + "  " + esc(s.label)).join("<br />");
+  } else det.classList.add("hide");
+}
+
+function layoutSummary() {
+  const dev = $("device").value;
+  const { profiles } = layout(PARSED, dev);
+  const pageProfiles = profiles.length; // includes index + all child chunks
+  return "Target: <b>" + $("device").selectedOptions[0].text + "</b> → <b>" + totalButtons(PARSED) +
+    "</b> keys, <b>" + PARSED.pages.length + "</b> folder(s), <b>" + pageProfiles + "</b> Stream Deck page(s) total.";
+}
+
+$("device").addEventListener("change", () => { $("counts").innerHTML = layoutSummary(); });
+
+$("build").addEventListener("click", () => {
+  if (!PARSED) return;
+  const name = ($("pnameTxt").value || "Rea-Sixty").trim().replace(/[\/\\:*?"<>|]/g, "_");
+  try {
+    const files = buildBundle(name, PARSED, $("device").value);
+    const zip = zipStore(files);
+    const blob = new Blob([zip], { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name + ".streamDeckProfile";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    $("buildmsg").innerHTML = '<span class="ok">Generated <b>' + esc(name) + ".streamDeckProfile</b> (" +
+      Object.keys(files).length + " files). Check your downloads.</span>";
+  } catch (e) {
+    $("buildmsg").innerHTML = '<span class="err">Build failed: ' + esc(e.message) + "</span>";
+    console.error(e);
+  }
+});
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+</script>
+</body>
+</html>
