@@ -15401,6 +15401,47 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
     return kUf1MeterScreens[static_cast<size_t>(screen)];
 }
 
+// ---- Meter graphic codecs (decoded 2026-07-14 from level-sweep captures) ----
+// Each screen paints its own graphic elements from the plugin's real meter
+// floats. The scales below are byte-exact lookups measured from SSL 360 driving
+// the UF1 (captures cap88–cap94; see captures/cap8*_*.md and memory
+// uf1-meter-codec-decoded). We DRIVE these from impersonator protobuf values,
+// never from DSP we compute (Frank's hard rule).
+
+// Overview bargraph scale: dBFS -> bar byte. index = round(dBFS) + 93, covering
+// -93..0 dBFS (cap89 + cap93, every overlapping count identical). Non-linear —
+// a table, not a formula. Below -93 the bar is empty (0).
+constexpr uint8_t kUf1BarScale[94] = {
+      9,  10,  10,  11,  11,  12,  12,  12,  12,  13,  13,  13,  14,  14,  15,  15,
+     16,  16,  16,  16,  17,  17,  17,  18,  18,  18,  19,  19,  19,  20,  20,  20,
+     21,  21,  22,  24,  25,  27,  28,  30,  31,  33,  34,  35,  36,  38,  39,  40,
+     42,  43,  44,  46,  47,  48,  51,  54,  57,  60,  63,  66,  69,  72,  75,  77,
+     80,  83,  86,  89,  92,  95,  98, 101, 104, 107, 111, 115, 119, 123, 126, 130,
+    134, 138, 142, 147, 151, 156, 162, 167, 172, 178, 183, 188, 194, 199,
+};
+
+// dBFS -> Overview bar byte (0 = empty below the scale floor).
+uint8_t uf1BarByte_(float dbfs)
+{
+    if (!(dbfs > -93.f)) return 0;          // includes -inf/NaN
+    int idx = static_cast<int>(std::lround(dbfs)) + 93;
+    if (idx < 0)  idx = 0;
+    if (idx > 93) idx = 93;                  // pins at 0 dBFS -> 199
+    return kUf1BarScale[idx];
+}
+
+// RTA band value: dBFS -> byte. A pure linear law (cap90), derived from the
+// screen's own scale settings (SclTop 0 dB, SclBtm -120 dB, cap76):
+// byte = 3 + (dBFS + 120) * 5/3, clamped to [3, 200]. Header baseline is 3.
+uint8_t uf1RtaByte_(float dbfs)
+{
+    if (!std::isfinite(dbfs)) return 3;
+    double b = 3.0 + (static_cast<double>(dbfs) + 120.0) * (5.0 / 3.0);
+    if (b < 3.0)   b = 3.0;
+    if (b > 200.0) b = 200.0;
+    return static_cast<uint8_t>(std::lround(b));
+}
+
 // Format a dB value the way the UF1's Meter view does: one decimal, "-inf"
 // for silence (cap76: "-6.1", "-16.4", "-inf").
 std::string uf1FormatMeterDb_(float db)
@@ -15482,11 +15523,89 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         for (size_t k = 0; k < 25; ++k)
             p.push_back(k < s.size() ? static_cast<uint8_t>(s[k]) : 0x00);
 
-    // Only resend when the rendered row actually changes.
+    // 0x011c (the numeric row) only needs resending when the rounded text
+    // changes — but the graphic elements below animate every tick, so this must
+    // NOT early-return the whole function.
     static std::vector<uint8_t> sLast;
-    if (!force && p == sLast) return;
-    sLast = p;
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
+    if (force || p != sLast) {
+        sLast = p;
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
+    }
+
+    // ---- Per-screen graphic ------------------------------------------------
+    // Drive each screen's decoded graphic from the same plugin floats. Only the
+    // Overview bargraphs are wired so far (cap89/cap93); Analogue needles, RTA
+    // and the Lissajous follow. Screen index matches kUf1MeterScreens:
+    // 0 Overview, 1 Analogue, 2 RTA, 3 Loudness.
+    const int screen = g_uf1MeterScreen.load();
+
+    if (screen == 0) {
+        // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
+        // 0x0127 = (hold_L,hold_R). All on the one dBFS bar scale.
+        static MediaTrack* sBarTr = nullptr;
+        static float sBarHoldL = -120.f, sBarHoldR = -120.f;
+        static auto  sBarHoldT = std::chrono::steady_clock::now();
+        if (force || tr != sBarTr) { sBarTr = tr; sBarHoldL = sBarHoldR = -120.f; }
+        const double dtB = std::chrono::duration<double>(now - sBarHoldT).count();
+        auto holdStep = [&](float peakCh, float& hold) {
+            if (peakCh >= hold) hold = peakCh;
+            else { hold = static_cast<float>(hold - 26.5 * dtB);
+                   if (hold < peakCh) hold = peakCh; }
+        };
+        holdStep(dbL, sBarHoldL);
+        holdStep(dbR, sBarHoldR);
+        sBarHoldT = now;
+
+        const std::array<uint8_t, 2> rmsBar {
+            uf1BarByte_(haveRms ? rmsL : -120.f),
+            uf1BarByte_(haveRms ? rmsR : -120.f) };
+        const std::array<uint8_t, 2> peakBar { uf1BarByte_(dbL), uf1BarByte_(dbR) };
+        const std::array<uint8_t, 2> holdBar {
+            uf1BarByte_(sBarHoldL), uf1BarByte_(sBarHoldR) };
+
+        auto putBar = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
+            g_uf1_dev->send(uf1::buildScreen(addr,
+                std::span<const uint8_t>(v.data(), v.size())));
+        };
+        static std::array<uint8_t, 2> sRms{}, sPeak{}, sHoldB{};
+        if (force || rmsBar  != sRms)   { sRms   = rmsBar;  putBar(0x0125, rmsBar); }
+        if (force || peakBar != sPeak)  { sPeak  = peakBar; putBar(0x0126, peakBar); }
+        if (force || holdBar != sHoldB) { sHoldB = holdBar; putBar(0x0127, holdBar); }
+    }
+    else if (screen == 2) {
+        // RTA: 0x0122 = 64 bytes. Header (0x00,0x03), then per band i:
+        // byte[2+2i] = current, byte[3+2i] = peak-hold. 31 ISO bands from
+        // the plugin's Rta31Band float array (dBFS).
+        std::vector<float> cur, pk;
+        const bool have = sslcore::isRunning() &&
+            sslcore::getMeter(int(sslmeter::DataType::Rta31Band), cur, pk) &&
+            cur.size() >= 31;
+
+        std::array<uint8_t, 64> rta{};
+        rta[0] = 0x00; rta[1] = 0x03;
+        // Own peak-hold per band (the plugin's pk array isn't always present).
+        static std::array<float, 31> sRtaHold;
+        static bool sRtaInit = false;
+        static auto sRtaHoldT = std::chrono::steady_clock::now();
+        if (force || !sRtaInit) { sRtaHold.fill(-120.f); sRtaInit = true; }
+        const double dtR = std::chrono::duration<double>(now - sRtaHoldT).count();
+        sRtaHoldT = now;
+        for (int i = 0; i < 31; ++i) {
+            const float v = have ? cur[static_cast<size_t>(i)] : -120.f;
+            float& h = sRtaHold[static_cast<size_t>(i)];
+            if (have && (pk.size() >= 31)) h = pk[static_cast<size_t>(i)];
+            else if (v >= h) h = v;
+            else { h = static_cast<float>(h - 26.5 * dtR); if (h < v) h = v; }
+            rta[static_cast<size_t>(2 + 2 * i)] = uf1RtaByte_(v);
+            rta[static_cast<size_t>(3 + 2 * i)] = uf1RtaByte_(h);
+        }
+        static std::array<uint8_t, 64> sRta{};
+        if (force || rta != sRta) {
+            sRta = rta;
+            g_uf1_dev->send(uf1::buildScreen(0x0122,
+                std::span<const uint8_t>(rta.data(), rta.size())));
+        }
+    }
 }
 
 // ---- UF1 EQ graph (0x0122) native render ----------------------------------
