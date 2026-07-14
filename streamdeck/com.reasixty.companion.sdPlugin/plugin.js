@@ -349,12 +349,22 @@ function renderMeter(ctx, c, e) {
   // scale factor; default 1.
   const fontScale = parseFloat(c.settings && c.settings.fontScale) || 1;
 
-  // Dead-band: only push a new image when the rendered result changes.
-  const sig = bars.map((b) => b.db + b.color).join("/") + "|" + name + "|" + bg + "|" + fontScale;
+  // Where the track name sits, and whether it may use a second line. Default
+  // "bottom" + no wrap = the original look. A Stream Deck at a shallow angle
+  // hides the bottom of the key, hence the choice.
+  const namePos  = (c.settings && c.settings.namePos) || "bottom";
+  const nameWrap = !!(c.settings && c.settings.nameWrap);
+
+  // Dead-band: only push a new image when the rendered result changes. The
+  // layout settings belong in here too, else flipping them in the PI leaves
+  // the old image on the key until a meter value happens to move.
+  const sig = bars.map((b) => b.db + b.color).join("/") + "|" + name + "|" + bg +
+              "|" + fontScale + "|" + namePos + "|" + (nameWrap ? "w" : "-");
   if (c.meterSig === sig) return;
   c.meterSig = sig;
   sdSend({ event: "setImage", context: ctx,
-           payload: { image: meterSvg(bars, name, bg, fontScale), target: "hardware" } });
+           payload: { image: meterSvg(bars, name, bg, fontScale, namePos, nameWrap),
+                      target: "hardware" } });
 }
 
 function xmlEsc_(s) {
@@ -369,11 +379,51 @@ function xmlEsc_(s) {
 // fontScale (default 1) scales every generated text — the dB values, the "dB"
 // label and the track name — so the user can make the readouts bigger/smaller
 // (Property Inspector "Font size"). Base sizes are tuned for scale 1.
-function meterSvg(bars, name, bg, fontScale) {
-  const y0 = 20, H = 60, bx = [10, 30];
+// Break `name` into at most `maxLines` lines that fit `width` px at font size
+// `fs`. There is no text-measuring API here (we generate SVG, we don't lay it
+// out), so this estimates: Helvetica averages ~0.58 em per character for mixed
+// case. Prefers a space break, falls back to a hard break for one long word.
+function wrapName_(name, fs, maxLines, width) {
+  if (!name) return [];
+  const perLine = Math.max(4, Math.floor(width / (fs * 0.58)));
+  if (maxLines <= 1) return [name.slice(0, perLine)];
+  const out = [];
+  let rest = String(name).trim();
+  while (rest.length && out.length < maxLines) {
+    if (rest.length <= perLine) { out.push(rest); break; }
+    let cut = rest.lastIndexOf(" ", perLine);
+    if (cut <= 0) cut = perLine;            // no space in range → hard break
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  return out;
+}
+
+// namePos: "top" | "bottom" (default). nameWrap: allow a second line.
+// The default (bottom, single line) keeps the EXACT geometry it always had —
+// y0=20, H=60 — so the meters stay identical for anyone who liked them as is.
+function meterSvg(bars, name, bg, fontScale, namePos, nameWrap) {
+  const bx = [10, 30];
   const s = fontScale > 0 ? fontScale : 1;
   const fs = (base) => Math.max(6, Math.round(base * s));
   const F = 'font-family="Helvetica,Arial,sans-serif"';
+  const nameFs = fs(13);
+  const lineH  = nameFs + 1;
+  const lines  = name ? wrapName_(name, nameFs, nameWrap ? 2 : 1, 96) : [];
+  const block  = lines.length * lineH;
+
+  // Carve the name's space out of the bar band rather than drawing over it —
+  // the whole point of the request: at a shallow viewing angle the bottom of
+  // the key is unreadable, and the native SD text box overlaps the meter.
+  let y0 = 20, H = 60;
+  if (lines.length) {
+    if (namePos === "top") {
+      y0 = block + 4;          // name sits in the (previously empty) top strip
+      H  = 80 - y0;            // bars still end at 80
+    } else if (lines.length > 1) {
+      H = 60 - (block - lineH);  // a second line eats upward into the bars
+    }
+  }
   let g = '<rect width="100" height="100" fill="' + (bg || "#1c1c1f") + '"/>';
   bars.forEach((b, i) => {
     const barH = Math.round(H * b.frac);
@@ -389,8 +439,16 @@ function meterSvg(bars, name, bg, fontScale) {
       g += '<text x="50" y="' + (y0 + 18 + i * 26) + '" ' + F + ' font-size="' + fs(18) + '" font-weight="700" fill="' + b.color + '">' + b.db + '</text>';
     });
   }
-  if (name)
-    g += '<text x="50" y="95" ' + F + ' font-size="' + fs(13) + '" font-weight="600" fill="#dcdcdc" text-anchor="middle">' + xmlEsc_(name.slice(0, 12)) + '</text>';
+  lines.forEach((ln, i) => {
+    // top: stack down from the key's top edge. bottom: keep the last line on
+    // the old baseline (95) and stack any earlier line above it.
+    const yy = (namePos === "top")
+      ? (i + 1) * lineH
+      : 95 - (lines.length - 1 - i) * lineH;
+    g += '<text x="50" y="' + yy + '" ' + F + ' font-size="' + nameFs +
+         '" font-weight="600" fill="#dcdcdc" text-anchor="middle">' +
+         xmlEsc_(ln) + '</text>';
+  });
   return "data:image/svg+xml;charset=utf8;base64," +
     Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">' + g + '</svg>').toString("base64");
 }

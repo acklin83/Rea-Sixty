@@ -100,6 +100,19 @@
       <input type="checkbox" id="showName" />
       <span style="color:#7a7a7a; margin-left:8px;">show it on the key</span>
     </div>
+    <div class="row" id="namePosRow">
+      <label for="namePos">Name position</label>
+      <select id="namePos">
+        <option value="bottom">Bottom</option>
+        <option value="top">Top</option>
+      </select>
+      <span style="color:#7a7a7a; margin-left:8px;">top reads better on an angled deck</span>
+    </div>
+    <div class="row" id="nameWrapRow">
+      <label for="nameWrap">Wrap name</label>
+      <input type="checkbox" id="nameWrap" />
+      <span style="color:#7a7a7a; margin-left:8px;">allow a second line</span>
+    </div>
     <div class="row" id="followColorRow">
       <label for="followColor">Track colour</label>
       <input type="checkbox" id="followColor" />
@@ -202,6 +215,8 @@
         document.getElementById("showName").checked = !!settings.showName;
         document.getElementById("followColor").checked = !!settings.followColor;
         setVal("fontScale", settings.fontScale || "1");
+        setVal("namePos", settings.namePos || "bottom");
+        document.getElementById("nameWrap").checked = !!settings.nameWrap;
         updateTrackRows();
       } else {
         ["param", "reaperId", "reaperAction", "label"].forEach((k) => {
@@ -253,6 +268,10 @@
       const mode = document.getElementById("trackMode").value;
       document.getElementById("trackNumRow").classList.toggle("hidden", mode !== "num");
       document.getElementById("trackNameRow").classList.toggle("hidden", mode !== "name");
+      // Name layout only matters when the name is actually drawn.
+      const named = document.getElementById("showName").checked;
+      document.getElementById("namePosRow").classList.toggle("hidden", !named);
+      document.getElementById("nameWrapRow").classList.toggle("hidden", !named);
     }
 
     function save() {
@@ -265,6 +284,8 @@
           showName:   document.getElementById("showName").checked,
           followColor: document.getElementById("followColor").checked,
           fontScale:  document.getElementById("fontScale").value,
+          namePos:    document.getElementById("namePos").value,
+          nameWrap:   document.getElementById("nameWrap").checked,
           action:     document.getElementById("clickAction").value,
         };
       } else {
@@ -285,7 +306,7 @@
     function onEdit(e) {
       if (!e.target) return;
       if (e.target.id === "action") updateParamRow();
-      if (e.target.id === "trackMode") updateTrackRows();
+      if (e.target.id === "trackMode" || e.target.id === "showName") updateTrackRows();
       save();
     }
     document.addEventListener("input", onEdit);
