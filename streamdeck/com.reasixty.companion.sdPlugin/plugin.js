@@ -334,8 +334,16 @@ function renderMeter(ctx, c, e) {
   // abbreviated with Rea-Sixty's configured strategy (Settings → Track-name
   // mode), matching the hardware LCD. Fall back to the raw e.nm for older
   // extensions that don't send it. Frank 2026-07-10.
+  // "Smart abbreviate" (default on, = what this tile always did): e.nms is the
+  // bridge's FORCED Smart-Abbrev name, so the switch means what it says even when
+  // Rea-Sixty's global Track-name mode is Truncate. Falls back to e.nma (the
+  // configured mode) for an extension too old to send nms, then to the raw name.
+  // Off = the full track name — worth having now that the tile can wrap.
   let name = "";
-  if (c.settings && c.settings.showName) name = e.nma || e.nm || "";
+  if (c.settings && c.settings.showName) {
+    const smart = c.settings.smartAbbrev !== false;   // undefined = on
+    name = smart ? (e.nms || e.nma || e.nm || "") : (e.nm || "");
+  }
 
   // Optional: darkened track colour as the key background (readability keeps
   // the bars/text on top). [-1,…] from the bridge = no custom colour set.

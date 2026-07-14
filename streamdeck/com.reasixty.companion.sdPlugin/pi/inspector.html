@@ -100,6 +100,11 @@
       <input type="checkbox" id="showName" />
       <span style="color:#7a7a7a; margin-left:8px;">show it on the key</span>
     </div>
+    <div class="row" id="smartAbbrevRow">
+      <label for="smartAbbrev">Smart abbrev.</label>
+      <input type="checkbox" id="smartAbbrev" />
+      <span style="color:#7a7a7a; margin-left:8px;">off shows the full track name</span>
+    </div>
     <div class="row" id="namePosRow">
       <label for="namePos">Name position</label>
       <select id="namePos">
@@ -215,6 +220,7 @@
         document.getElementById("showName").checked = !!settings.showName;
         document.getElementById("followColor").checked = !!settings.followColor;
         setVal("fontScale", settings.fontScale || "1");
+        document.getElementById("smartAbbrev").checked = settings.smartAbbrev !== false;
         setVal("namePos", settings.namePos || "bottom");
         document.getElementById("nameWrap").checked = !!settings.nameWrap;
         updateTrackRows();
@@ -270,6 +276,7 @@
       document.getElementById("trackNameRow").classList.toggle("hidden", mode !== "name");
       // Name layout only matters when the name is actually drawn.
       const named = document.getElementById("showName").checked;
+      document.getElementById("smartAbbrevRow").classList.toggle("hidden", !named);
       document.getElementById("namePosRow").classList.toggle("hidden", !named);
       document.getElementById("nameWrapRow").classList.toggle("hidden", !named);
     }
@@ -284,6 +291,7 @@
           showName:   document.getElementById("showName").checked,
           followColor: document.getElementById("followColor").checked,
           fontScale:  document.getElementById("fontScale").value,
+          smartAbbrev: document.getElementById("smartAbbrev").checked,
           namePos:    document.getElementById("namePos").value,
           nameWrap:   document.getElementById("nameWrap").checked,
           action:     document.getElementById("clickAction").value,

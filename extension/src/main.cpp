@@ -20603,6 +20603,13 @@ static void sdBridgeTick_()
             // because the Stream Deck / Companion render UTF-8 (SVG), not the
             // Latin-1 hardware LCD. Sent as "nma" alongside the raw "nm".
             const std::string nmA = abbreviateTrackName_(nmS, 12, -1, /*foldLatin1*/ false);
+            // ...and a FORCED Smart-Abbrev variant as "nms". The Stream Deck tile
+            // has its own "Smart abbreviate" switch, which must mean what it says:
+            // nmA follows the global Track-name mode, so with that set to Truncate
+            // a ticked "Smart abbreviate" would show a merely truncated name.
+            // forceMode exists for exactly this (see TrackName.h).
+            const std::string nmSm = abbreviateTrackName_(nmS, 12, TNM_SmartAbbrev,
+                                                          /*foldLatin1*/ false);
             // Track colour: rgb when a custom colour is set, else [-1,-1,-1].
             int cr = -1, cg = -1, cb = -1;
             if (mt) {
@@ -20614,7 +20621,8 @@ static void sdBridgeTick_()
             ml += "{\"id\":\"" + sdJsonEsc_(t) + "\",\"peak\":["
                 + f1(pL) + "," + f1(pR) + "],\"comp\":" + f1(comp)
                 + ",\"bc\":" + f1(bc) + ",\"nm\":\"" + sdJsonEsc_(nmS)
-                + "\",\"nma\":\"" + sdJsonEsc_(nmA) + "\",\"rgb\":["
+                + "\",\"nma\":\"" + sdJsonEsc_(nmA)
+                + "\",\"nms\":\"" + sdJsonEsc_(nmSm) + "\",\"rgb\":["
                 + std::to_string(cr) + "," + std::to_string(cg) + "," + std::to_string(cb) + "]}";
         }
         ml += "]}";
