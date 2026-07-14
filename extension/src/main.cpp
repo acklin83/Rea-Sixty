@@ -376,6 +376,22 @@ std::atomic<bool>     g_uf1FaderTouched{false};// capacitive touch state (motor 
 // content. The cap66 init lands in Channel view (cap84 cold-start), so false.
 std::atomic<bool>     g_uf1MeterView{false};
 
+// Which Meter screen is shown (index into kUf1MeterScreens). Unlike the
+// Channel<->Meter view toggle above, the screen is NOT firmware-local: SSL 360
+// drives it from the host and the device just renders what it's told, so the
+// "Meter Screen Selector" soft-key (display soft-key 1, id 0x19 — the label SSL
+// paints on it) has to be handled by US. Set from the input worker (atomic
+// store only), read by the main-thread painter. Overview = the layout the
+// firmware lands in (cap75/cap76 0x0100 = 04 00).
+std::atomic<int>      g_uf1MeterScreen{0};
+
+// How many screens the selector cycles through. The soft-key walks the first
+// three of kUf1MeterScreens (Overview/Analogue/RTA) — the set the UF1 User Guide
+// Rev4.0 documents. Loudness is a Meter-Pro-only extra: its burst is captured in
+// the table but stays out of the cycle until we can tell a Meter Pro from a plain
+// Meter (the impersonator doesn't surface PluginType yet).
+constexpr int kUf1MeterScreenCycle = 3;
+
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
 // via the atomic flag below — never call toggle() directly from any
@@ -15159,6 +15175,20 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterView.store(!g_uf1MeterView.load());
                 break;
             }
+            // Display soft-key 1 is the "Meter Screen Selector" while the Meter
+            // view is up (SSL UF1 User Guide Rev4.0 S.189-191) — it cycles
+            // Overview -> Analogue -> RTA. The screen is host-driven (see
+            // g_uf1MeterScreen), so unlike MODE this key does nothing on the
+            // device unless we act on it. In Channel view the same key stays a
+            // normal user-bindable soft-key, which is why this is gated on the
+            // view rather than being a fixed binding. Atomic store only — the
+            // painter does the repaint on the main thread (threading rule).
+            if (ev.id == uf1::btn::kDisplaySoft1 && ev.pressed &&
+                g_uf1MeterView.load()) {
+                g_uf1MeterScreen.store((g_uf1MeterScreen.load() + 1) %
+                                       kUf1MeterScreenCycle);
+                break;
+            }
             // All other UF1 buttons route through the shared Bindings
             // system (Phase 1) — fromUf1DeviceId maps the device byte to a
             // UF1-specific ButtonId, and dispatch() fires the bound action.
@@ -15266,6 +15296,109 @@ uint16_t uf1VolToPos_(double linear)
     if (pos < 0) pos = 0;
     if (pos > static_cast<double>(kUf1FaderMax)) pos = kUf1FaderMax;
     return static_cast<uint16_t>(pos + 0.5);
+}
+
+// ---- Meter screens (Overview / Analogue / RTA / Loudness) -------------------
+// Each screen's setup burst, byte-exact from cap76 (SSL 360 cycling the screens
+// with audio playing; extracted by analysis/uf1_meter_screen_burst.py). SSL
+// sends these as one block the moment the screen changes, always in this order.
+//
+// The key decode: 0x0100 = { 0x04, <screen> } — 0x04 selects the Meter layout
+// (vs 0x03 = plugin/channel) and the SECOND byte picks the screen: 00 Overview,
+// 01 Analogue, 02 RTA, 05 Loudness. (03/04 unseen — cap76 only cycled these
+// four.) The rest of the burst is the screen's chrome: 0x0104 = the 4 soft-key
+// labels, 0x010e = the 4 meter-setting labels, 0x010d = soft-key styling, 0x011a
+// = per-screen mode byte, then a short per-screen tail.
+//
+// The live content (0x011c readouts, 0x0122 graphic, 0x0125/26/27 boxes) is NOT
+// part of the burst — that's streamed by uf1PaintMeter_ from real plugin values.
+struct Uf1ScreenFrame { uint16_t addr; std::vector<uint8_t> payload; };
+
+const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
+{
+    // Byte-for-byte as captured; ASCII kept as raw bytes because the 0x010e
+    // setting strings carry embedded NULs (label + value in one fixed-width
+    // field), which a C string literal would truncate.
+    static const std::vector<std::vector<Uf1ScreenFrame>> kUf1MeterScreens = {
+        // [0] OVERVIEW — readouts + L-R balance + bargraphs + Lissajous + correlation.
+        {
+            {0x0100, {0x04,0x00}},
+            {0x0102, {0x01}},
+            {0x0104, {0x00,0x4f,0x56,0x45,0x52,0x56,0x49,0x45,0x57}},   // "OVERVIEW"
+            {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
+            {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
+            {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x010d, {0x0a,0x0b,0x0a,0x0b}},
+            {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
+            {0x010e, {0x01,0x54,0x72,0x75,0x65,0x50,0x6b,0x00,0x00,0x4f,0x6e,
+                      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},        // "TruePk" / "On"
+            {0x010e, {0x02,0x4e,0x6f,0x6e,0x2d,0x4c,0x69,0x6e,0x65,0x61,0x72}}, // "Non-Linear"
+            {0x010e, {0x03,0x46,0x61,0x64,0x65,0x00,0x00,0x00,0x00,0x00,0x32,
+                      0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}},   // "Fade" / "2 sec"
+            {0x011a, {0x07}},
+            {0x0128, {0x00}},
+            {0x011d, {0xff}},
+        },
+        // [1] ANALOGUE — VU (or PPM Type-II) needles + readouts.
+        {
+            {0x0100, {0x04,0x01}},
+            {0x0102, {0x01}},
+            {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
+            {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
+            {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
+            {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x010d, {0x0a,0x0a,0x0b,0x0b}},
+            {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
+            {0x010e, {0x01,0x56,0x55}},                                 // "VU"
+            {0x010e, {0x02,0x30,0x64,0x42,0x75,0x00,0x00,0x00,0x00,0x00,0x30,
+                      0x20,0x64,0x42,0x75,0x00,0x00,0x00,0x00,0x00}},   // "0dBu" / "0 dBu"
+            {0x010e, {0x03,0x52,0x65,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x2d,
+                      0x31,0x38,0x2e,0x30,0x64,0x42,0x00,0x00,0x00}},   // "Ref" / "-18.0dB"
+            {0x011a, {0x02}},
+            {0x0128, {0x00}},
+        },
+        // [2] RTA — 31-band spectrum + selected-frequency readout.
+        {
+            {0x0100, {0x04,0x02}},
+            {0x0102, {0x01}},
+            {0x0104, {0x00,0x52,0x54,0x41}},                            // "RTA"
+            {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
+            {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
+            {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x010d, {0x0a,0x0b,0x0b,0x0b}},
+            {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
+            {0x010e, {0x01,0x53,0x6c,0x46,0x72,0x65,0x71,0x00,0x00,0x4e,0x6f,
+                      0x6e,0x65,0x00,0x00,0x00,0x00,0x00,0x00}},        // "SlFreq" / "None"
+            {0x010e, {0x02,0x53,0x63,0x6c,0x54,0x6f,0x70,0x00,0x00,0x30,0x20,
+                      0x64,0x42,0x00,0x00,0x00,0x00,0x00,0x00}},        // "SclTop" / "0 dB"
+            {0x010e, {0x03,0x53,0x63,0x6c,0x42,0x74,0x6d,0x00,0x00,0x2d,0x31,
+                      0x32,0x30,0x20,0x64,0x42,0x00,0x00,0x00}},        // "SclBtm" / "-120 dB"
+            {0x011a, {0x01}},
+            {0x0124, {0x00}},
+            {0x012a, {0x00,0x78}},
+        },
+        // [3] LOUDNESS — Meter Pro only; captured but out of the cycle (see
+        // kUf1MeterScreenCycle). Note its 0x0100 selector is 05, not 03.
+        {
+            {0x0100, {0x04,0x05}},
+            {0x0102, {0x05}},
+            {0x0104, {0x00,0x4c,0x4f,0x55,0x44,0x4e,0x45,0x53,0x53}},   // "LOUDNESS"
+            {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
+            {0x0104, {0x02,0x50,0x4c,0x41,0x59}},                       // "PLAY"
+            {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x010d, {0x0a,0x0a,0x0a,0x0a}},
+            {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
+            {0x010e, {0x01,0x44,0x41,0x57,0x20,0x53,0x79,0x6e,0x63}},   // "DAW Sync"
+            {0x010e, {0x02,0x33,0x30,0x20,0x73,0x65,0x63,0x73}},        // "30 secs"
+            {0x010e, {0x03,0x53,0x63,0x72,0x6f,0x6c,0x6c,0x20,0x54,0x69,0x6d,
+                      0x65,0x6c,0x69,0x6e,0x65}},                       // "Scroll Timeline"
+            {0x011a, {0x01}},
+            {0x0123, {0x00}},
+        },
+    };
+    if (screen < 0 || screen >= static_cast<int>(kUf1MeterScreens.size()))
+        screen = 0;
+    return kUf1MeterScreens[static_cast<size_t>(screen)];
 }
 
 // Format a dB value the way the UF1's Meter view does: one decimal, "-inf"
@@ -15643,6 +15776,7 @@ void uf1PaintChannel_()
     static int         sPanBar = INT_MIN;   // encoded pos*2+centreFlag (−1 = unset)
     static uint32_t    sColor = 0xFFFFFFFFu;
     static bool        sMeterView = false;
+    static int         sMeterScreen = -1;   // −1 = unset, forces the first burst
 
     if (!tr) { sTr = nullptr; return; }
     // The MODE button flips the firmware view; a switch forces a full repaint
@@ -15651,7 +15785,13 @@ void uf1PaintChannel_()
     const bool meterView   = g_uf1MeterView.load();
     const bool viewChanged = (meterView != sMeterView);
     sMeterView = meterView;
-    const bool changed = (tr != sTr) || viewChanged;
+    // The Meter Screen Selector soft-key only moves an atomic; the repaint that
+    // actually switches the screen happens here. A screen change re-sends that
+    // screen's setup burst, which is what makes the device swap layout.
+    const int  meterScreen   = g_uf1MeterScreen.load();
+    const bool screenChanged = meterView && (meterScreen != sMeterScreen);
+    sMeterScreen = meterScreen;
+    const bool changed = (tr != sTr) || viewChanged || screenChanged;
     sTr = tr;
 
     // Replicate SSL 360's exact per-transition frame (cap75 payload diff of the
@@ -15678,43 +15818,37 @@ void uf1PaintChannel_()
                 std::span<const uint8_t>(std::data(p), p.size())));
         };
         if (meterView) {
-            // Meter-view setup burst — byte-exact from cap75 (Channel→Meter). ASCII
-            // labels encoded as raw bytes to stay faithful (embedded NULs in the
-            // settings strings). 0x0104=soft-keys, 0x010e=meter settings labels,
-            // 0x0122(63B)=silent bar, 0x0125/26/27=value boxes. The 0x011c dB row
-            // is painted by uf1PaintMeter_ below (live values); here we only set up
-            // the plane so the firmware switches layout.
-            put(0x0100, {0x04, 0x00});                 // LAYOUT = Meter
-            put(0x0101, {0x03});
-            put(0x0102, {0x01});
-            put(0x0104, {0x00,0x4f,0x56,0x45,0x52,0x56,0x49,0x45,0x57}); // "OVERVIEW"
-            put(0x0104, {0x01,0x52,0x45,0x53,0x45,0x54});                // "RESET"
-            put(0x0104, {0x02,0x46,0x49,0x4e,0x45});                     // "FINE"
-            put(0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53});      // "PRESETS"
-            put(0x010d, {0x0a,0x0b,0x0a,0x0b});
-            put(0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52});           // "MASTER"
-            put(0x010e, {0x01,0x54,0x72,0x75,0x65,0x50,0x6b,0x00,0x00,
-                         0x4f,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00}); // "TruePk"/"Off"
-            put(0x010e, {0x02,0x4e,0x6f,0x6e,0x2d,0x4c,0x69,0x6e,0x65,0x61,0x72}); // "Non-Linear"
-            put(0x010e, {0x03,0x46,0x61,0x64,0x65,0x00,0x00,0x00,0x00,
-                         0x00,0x32,0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}); // "Fade"/"2 sec"
-            put(0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
-            put(0x011a, {0x07});
-            put(0x011e, {0x10});
-            put(0x0120, {0x00});
-            put(0x0129, {0xff});
-            // 0x0122 silent bar + value boxes (seeded; live update wired later).
-            put(0x0122, {0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
-            put(0x0125, {0x00,0x00});
-            put(0x0126, {0x00,0x00});
-            put(0x0127, {0x00,0x00});
-            put(0x0128, {0x00});
-            put(0x011d, {0x00});
+            // The Meter plane is set up in two parts, matching how SSL 360 does it:
+            //
+            //  1. Per-SCREEN burst (cap76) — 0x0100 (layout+screen), soft-key and
+            //     settings labels, per-screen tail. Re-sent on every screen change;
+            //     this is what actually swaps Overview/Analogue/RTA.
+            //  2. View-ENTRY chrome (cap75) — the elements SSL only writes when
+            //     coming from the Channel view, so they're absent from cap76's
+            //     screen-to-screen transitions. Sent once on entry.
+            //
+            // Live content (0x011c readouts, 0x0122 graphic) is streamed by
+            // uf1PaintMeter_ below from real plugin values; the seeds here just
+            // keep the plane blank rather than stale until the first data lands.
+            for (const auto& f : uf1MeterScreenBurst_(meterScreen))
+                g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+
+            if (viewChanged) {
+                put(0x0101, {0x03});
+                put(0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
+                put(0x011e, {0x10});
+                put(0x0120, {0x00});
+                put(0x0129, {0xff});
+                put(0x0122, {0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
+                put(0x0125, {0x00,0x00});
+                put(0x0126, {0x00,0x00});
+                put(0x0127, {0x00,0x00});
+            }
         } else {
             // Channel/plugin-EQ layout — UNCHANGED (this path renders the working
             // channel-strip + EQ graph; derived from cap84/cap85 plugin cold-start).
