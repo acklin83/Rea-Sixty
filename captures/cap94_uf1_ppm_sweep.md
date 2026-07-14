@@ -28,12 +28,32 @@ From 1.0 to 7.0 the mapping is linear to within ±2 counts:
 byte = 9 + (mark - 1) * 27.3,  clamped to [0, 180]
 ```
 
-`(173-9)/6 = 27.33` counts per mark — the classic **PPM Type-II faceplate, marks 1..7**,
-which is linear by construction. That is why PPM needs a formula and VU needs a lookup
-table (curved faceplate). Below mark ~1 the scale compresses hard into the 0 pin; above
-mark 7 it sits at 180.
+`(173-9)/6 = 27.33` counts per mark — the **PPM Type-II faceplate, marks 1..7**, which is
+linear by construction. That is why PPM needs a formula and VU needs a lookup table
+(curved faceplate). Below mark ~1 the scale compresses hard into the 0 pin; above mark 7
+it sits at 180.
 
 Every L/R pair agrees (the opposite sweep gives two independent measurements per level).
+
+## Verified against the standard, not just against itself
+The readout really is **PPM marks per IEC 60268-10 Type II**, not an arbitrary unit.
+Fitting the known dBFS steps against the readout over the 18 points inside the printed
+1..7 scale gives **3.999 dB per mark** — the standard specifies 4.0 (deviation 0.001).
+
+Three independent sources agree on the reference:
+
+| source | says |
+|--------|------|
+| screen setting (cap76) | `Ref -18.0dB` |
+| IEC 60268-10 | PPM **4** = 0 dBu = alignment level |
+| this capture | PPM **4.0** sits at **-18 dBFS** ✓ |
+
+Cross-check on the standard's second landmark: PPM **6** = +8 dBu ⇒ -10 dBFS. Measured
+-9 → 6.2 and -12 → 5.5, i.e. PPM 6.0 interpolates to **-10.2 dBFS** ✓.
+
+Refs: [Peak programme meter (Wikipedia)](https://en.wikipedia.org/wiki/Peak_programme_meter) ·
+[IEC 60268-10 Type II PPM, UK](https://www.liquisearch.com/peak_programme_meter/history_and_national_variants/iec_60268-10_type_ii_ppm/united_kingdom) ·
+[BBC Engineering — Programme Meters (PDF)](https://www.bbceng.info/additions/2016/No.%206%20-%20Programme%20Meters.pdf)
 
 ## Two needles in PPM — confirmed by Frank at the hardware
 Frank: *"bei ppm sinds 2 nadeln, eine ist schnell, die andre zieht nach."* That matches
