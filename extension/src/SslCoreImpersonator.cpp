@@ -35,6 +35,7 @@
 #include <cstdarg>
 #include <array>
 #include <vector>
+#include <string>
 
 namespace sslcore {
 namespace {
@@ -190,13 +191,26 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     const uint16_t actualTcp = ntohs(bound.sin_port);
     setNonBlocking(listenFd);
 
-    socket_t dataFd = makeUdp(dataPort, true);
-    if (dataFd == kInvalid) {
-        slog("[err] UDP data-port %u bind failed (in use? 360 running?)", unsigned(dataPort));
+    // Bind a RANGE of UDP data ports, not just the one we assign. Multi-instance
+    // Meter plugins each stream to a different Core port (cap87: 16010 =
+    // master+loudness, 50881 = stereo), and a plugin may ignore our assigned
+    // port and use its own. The standalone probe that worked bound 16010-16011 +
+    // 50881; binding only the assigned 16010 meant we missed the stereo
+    // instance's BarPeak/BarRms/RTA entirely (2026-07-14). Bind a spread.
+    std::vector<socket_t> dataFds;
+    std::vector<uint16_t> dataPorts;
+    for (uint16_t dp : {uint16_t(dataPort), uint16_t(16011), uint16_t(16012),
+                        uint16_t(16013), uint16_t(50881), uint16_t(50882)}) {
+        socket_t fd = makeUdp(dp, true);
+        if (fd != kInvalid) { dataFds.push_back(fd); dataPorts.push_back(dp); }
+    }
+    if (dataFds.empty()) {
+        slog("[err] no UDP data port could bind (in use? 360 running?)");
         SC_CLOSE(listenFd); g_running = false; return;
     }
-    slog("[worker] up: TCP :%u  UDP data :%u  announcing on 16008/16009",
-         unsigned(actualTcp), unsigned(dataPort));
+    { std::string ps; for (auto p : dataPorts) ps += " " + std::to_string(p);
+      slog("[worker] up: TCP :%u  UDP data:%s  announcing on 16008/16009",
+           unsigned(actualTcp), ps.c_str()); }
     socket_t annFd = makeUdp(0, false);
 
     std::vector<socket_t> clients;
@@ -222,8 +236,9 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         }
 
         fd_set rset; FD_ZERO(&rset);
-        FD_SET(listenFd, &rset); FD_SET(dataFd, &rset);
-        socket_t maxfd = listenFd > dataFd ? listenFd : dataFd;
+        FD_SET(listenFd, &rset);
+        socket_t maxfd = listenFd;
+        for (socket_t d : dataFds) { FD_SET(d, &rset); if (d > maxfd) maxfd = d; }
         for (socket_t c : clients) { FD_SET(c, &rset); if (c > maxfd) maxfd = c; }
         timeval tv{0, 40 * 1000};
         if (::select(int(maxfd) + 1, &rset, nullptr, nullptr, &tv) <= 0) continue;
@@ -241,9 +256,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                      "assigned data port %u", t, int(c), seq.size(), unsigned(dataPort));
             }
         }
-        if (FD_ISSET(dataFd, &rset)) {
-            int n = int(::recvfrom(dataFd, reinterpret_cast<char*>(buf), sizeof(buf), 0, nullptr, nullptr));
-            if (n > 0) {
+        for (socket_t d : dataFds) {
+          if (!FD_ISSET(d, &rset)) continue;
+          int n = int(::recvfrom(d, reinterpret_cast<char*>(buf), sizeof(buf), 0, nullptr, nullptr));
+          if (n > 0) {
                 std::vector<sslmeter::Update> ups;
                 if (sslmeter::parseDatagram(buf, size_t(n), ups) > 0) {
                     g_lastDataMs.store(nowMs());
@@ -293,7 +309,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 
     for (socket_t c : clients) SC_CLOSE(c);
     if (annFd != kInvalid) SC_CLOSE(annFd);
-    SC_CLOSE(dataFd);
+    for (socket_t d : dataFds) SC_CLOSE(d);
     SC_CLOSE(listenFd);
     g_connected.store(false);
     netCleanup();
