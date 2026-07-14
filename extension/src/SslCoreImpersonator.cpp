@@ -254,11 +254,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         s.current = std::move(u.current); s.peak = std::move(u.peak); s.have = true;
                     }
                     // Periodic summary: which DataTypes are live + a sample value.
+                    // We ALREADY hold g_meterMx here (lk above) — std::mutex is
+                    // NOT recursive, so re-locking self-deadlocks the worker
+                    // while it holds the lock, which then hangs every main-thread
+                    // getMeter() and freezes REAPER. Read the slots directly.
                     if (g_trace) {
                         static double sLastLog = 0;
                         if (t - sLastLog > 2.0) {
                             sLastLog = t;
-                            std::lock_guard<std::mutex> lk2(g_meterMx);
                             char line[512]; int off = 0;
                             off += std::snprintf(line + off, sizeof(line) - off,
                                                  "[%.1f] rx:", t);
