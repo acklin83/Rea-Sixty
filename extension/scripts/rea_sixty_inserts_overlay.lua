@@ -44,8 +44,7 @@ end
 
 local NEED = { "GetThingFromPoint", "GetTrackFromPoint", "JS_Composite",
   "JS_Composite_Delay", "JS_Window_FromPoint", "JS_Window_GetClientSize",
-  "JS_Window_GetRect", "JS_Window_ScreenToClient", "JS_Window_ClientToScreen",
-  "JS_LICE_CreateBitmap",
+  "JS_Window_GetRect", "JS_Window_ScreenToClient", "JS_LICE_CreateBitmap",
   "JS_LICE_FillRect", "JS_LICE_Clear", "JS_LICE_RoundRect" }
 for _, fn in ipairs(NEED) do
   if not reaper.APIExists(fn) then
@@ -171,7 +170,7 @@ local function addHit(byGuid, seen, want, kind, tr, x, y)
     local sl, sr = refineMcpColumn(x, y, tr)
     byGuid[g][#byGuid[g] + 1] =
       { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
-        sl = sl, sw = sr - sl, sy = y, tr = tr }
+        sl = sl, sw = sr - sl, sy = y }
   else
     local l, t, r = refineTcp(x, y, tr)
     byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
@@ -354,29 +353,10 @@ local function drawBlockRow(block, fxIdx, col)
     local rowH   = num("overlay_rowh", 17)
     local topPad = num("overlay_toppad", 1)
     local y = topPad + fxIdx * rowH
-    -- The pitch is right — measured 2026-07-14: FX 2 sits at client y 35..50,
-    -- and topPad(1) + 2*rowH(17) = 35. What was missing is a bound: block.ch is
-    -- the WHOLE strip's client height (measured 914), so this check could never
-    -- fire. With plug-in parameters shown in the track controls the inserts area
-    -- is SHORTER than the strip, so a high fxIdx computes a row past the end of
-    -- the list and paints it onto the controls below — "where the slot would be
-    -- if track controls were off", exactly as reported.
     if y < -1 or y + rowH > block.ch + 1 then return end
     -- Confine to this strip's column: screen-left → client x (x isn't flipped on
     -- macOS; only y is, handled in the tcp path). Width = the strip's own width.
     local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
-    -- Bound the row to the list by ASKING, not by arithmetic: is this row's
-    -- centre actually over this track's mcp.fxlist? Geometry can't answer it —
-    -- the rows are not contiguous (only ~15 of every 17 px report mcp.fxlist),
-    -- so walking for the list's extent finds a single row and collapses. The
-    -- centre always lands inside the reported band, never in the gap.
-    -- ClientToScreen round-trips ScreenToClient, so no y-convention assumptions.
-    local ccx = math.floor(cx + block.sw / 2)
-    local px, py = reaper.JS_Window_ClientToScreen(block.hwnd, ccx,
-                                                  math.floor(y + rowH / 2))
-    local _, info = reaper.GetThingFromPoint(px, py)
-    if info ~= "mcp.fxlist" then return end
-    if block.tr and reaper.GetTrackFromPoint(px, py) ~= block.tr then return end
     composite(block.hwnd, math.floor(cx + 0.5), math.floor(y + 0.5),
               math.floor(block.sw + 0.5), math.floor(rowH + 0.5), col)
   else  -- tcp: shared track-panel window
