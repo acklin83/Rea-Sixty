@@ -34,7 +34,29 @@ bool pluginConnected();
 
 // Copy the most recent values for `dataType` (a sslmeter::DataType) into out.
 // Returns false if that type hasn't been seen yet. Thread-safe.
+// Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on
+// the same track publishes into overlapping indices (see below).
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak);
+
+// ChannelStripMeterType (AssignerArgsTypes.proto). An SSL channel strip numbers
+// its meters with THIS vocabulary, not MeterPluginDataType — the two overlap on
+// the wire and are told apart per plug-in instance (see SslCoreImpersonator.cpp).
+enum class ChannelStripMeter : int {
+    Input = 0, InputRms = 1, Output = 2, OutputRms = 3,
+    CompGain = 4,          // compressor gain reduction, dB (0 = not reducing)
+    GateGain = 5,          // gate attenuation, dB (0 = open, negative = closing)
+    MicPreSaturation = 6,
+};
+
+// Copy the most recent channel-strip meter values for `csType` (a
+// ChannelStripMeter) into `current`. Returns false if no channel-strip instance
+// has published that type yet. Thread-safe.
+//
+// CompGain/GateGain are THE gain-reduction source: REAPER's GainReduction_dB
+// named-config parm exposes only one number per FX and nothing at all for the
+// gate. Verified on the wire 2026-07-14: GateGain swept 0 dB (open) to -42 dB
+// (closed) with the ramp in between, CompGain tracked the compressor.
+bool getChannelStripMeter(int csType, std::vector<float>& current);
 
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();

@@ -65,24 +65,47 @@ std::thread            g_worker;
 std::atomic<bool>      g_connected{false};
 std::atomic<long long> g_lastDataMs{0};
 
-// `pluginType` is the message's PluginType (f1) — kept because DataType alone is
-// AMBIGUOUS. Schema (AssignerArgsTypes): PluginMeterDataMessage.DataType is a
-// plain int32, not a typed enum, and its vocabulary depends on PluginType:
-// MeterPluginDataType for Meter/MeterPro, ChannelStripMeterType for a channel
-// strip (where 4 = CompGain, 5 = GateGain), BusCompMeterType for a bus comp.
-// So a channel strip's GateGain(5) and the Meter plug-in's TextRms(5) are the
-// SAME index here and would silently overwrite each other.
-struct Slot { std::vector<float> current, peak; bool have = false; int pluginType = -1; };
-std::mutex                                     g_meterMx;
-std::array<Slot, int(sslmeter::DataType::Count)> g_meter;
+struct Slot { std::vector<float> current, peak; bool have = false; };
 
-// Census of every (PluginType, DataType) pair actually seen on the wire, with a
-// sample value. This is the diagnostic that tells us WHICH plug-in families
-// stream and whether two of them collide in g_meter above — e.g. whether an SSL
-// channel strip publishes ChannelStripMeterType_GateGain(5), which is the
-// long-missing Gate-GR source. Guarded by g_meterMx (same lock as g_meter).
-struct Census { long long n = 0; size_t nvals = 0; float first = 0.f; };
-std::map<std::pair<int, int>, Census> g_census;
+// SSL plug-ins number their meters PER FAMILY, and the datagram does not say
+// which family it came from: PluginMeterDataMessage.DataType is a plain int32
+// (schema), not a typed enum, and its vocabulary depends on the plug-in —
+// MeterPluginDataType (0..27) for Meter/MeterPro, ChannelStripMeterType (0..6)
+// for a channel strip, where 4 = CompGain and 5 = GateGain. The PluginType field
+// would disambiguate, but MEASURED 2026-07-14 it is simply absent: every frame
+// arrived with f1 omitted. So the Meter plug-in's TextRms(5) and a channel
+// strip's GateGain(5) are the same index and must NOT share a slot — with both
+// plug-ins loaded they overwrite each other (observed in the trace: dt=4/5
+// flipping between vals=2 and vals=1).
+//
+// Each plug-in instance streams from its own UDP socket, so the datagram's
+// SOURCE PORT identifies the instance. One slot array per instance.
+enum class Kind : uint8_t { Unknown, Meter, ChannelStrip };
+struct Instance {
+    std::array<Slot, int(sslmeter::DataType::Count)> meter;
+    Kind      kind   = Kind::Unknown;
+    long long lastMs = 0;
+};
+std::mutex                   g_meterMx;
+std::map<uint16_t, Instance> g_inst;      // key = UDP source port = one plug-in
+
+// Classify an instance from what it emits. ChannelStripMeterType only spans
+// 0..6, so ANY DataType >= 7 can only be a Meter/MeterPro plug-in (Rta,
+// Lissajous, Loudness…) — authoritative and sticky. Conversely a channel strip's
+// CompGain/GateGain carry exactly ONE value where the Meter plug-in's
+// TextPeak/TextRms carry two (L,R) — measured, and only used while still
+// unclassified, so a late DataType>=7 still wins.
+void classify_(Instance& in, int dataType, size_t nvals)
+{
+    if (dataType >= 7) { in.kind = Kind::Meter; return; }
+    if (in.kind == Kind::Unknown && (dataType == 4 || dataType == 5) && nvals == 1)
+        in.kind = Kind::ChannelStrip;
+}
+
+const char* kindName_(Kind k)
+{
+    return k == Kind::Meter ? "Meter" : (k == Kind::ChannelStrip ? "ChanStrip" : "?");
+}
 
 long long nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -328,25 +351,24 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         }
         for (socket_t d : dataFds) {
           if (!FD_ISSET(d, &rset)) continue;
-          int n = int(::recvfrom(d, reinterpret_cast<char*>(buf), sizeof(buf), 0, nullptr, nullptr));
+          // Keep the sender: its source port is what tells two plug-in instances
+          // apart (see the Instance comment — the wire carries no PluginType).
+          sockaddr_in from{}; socklen_t fromLen = sizeof(from);
+          int n = int(::recvfrom(d, reinterpret_cast<char*>(buf), sizeof(buf), 0,
+                                 reinterpret_cast<sockaddr*>(&from), &fromLen));
           if (n > 0) {
                 std::vector<sslmeter::Update> ups;
                 if (sslmeter::parseDatagram(buf, size_t(n), ups) > 0) {
                     g_lastDataMs.store(nowMs());
                     std::lock_guard<std::mutex> lk(g_meterMx);
+                    Instance& inst = g_inst[ntohs(from.sin_port)];
+                    inst.lastMs = nowMs();
                     for (auto& u : ups) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
-                        // Census BEFORE the move — records what really arrived,
-                        // including pairs that collide in g_meter.
-                        {
-                            Census& c = g_census[{u.pluginType, u.dataType}];
-                            ++c.n;
-                            c.nvals = u.current.size();
-                            if (!u.current.empty()) c.first = u.current[0];
-                        }
-                        Slot& s = g_meter[u.dataType];
+                        classify_(inst, u.dataType, u.current.size());
+                        Slot& s = inst.meter[u.dataType];
                         s.current = std::move(u.current); s.peak = std::move(u.peak);
-                        s.have = true; s.pluginType = u.pluginType;
+                        s.have = true;
                     }
                     // Periodic summary: which DataTypes are live + a sample value.
                     // We ALREADY hold g_meterMx here (lk above) — std::mutex is
@@ -357,17 +379,23 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         static double sLastLog = 0;
                         if (t - sLastLog > 2.0) {
                             sLastLog = t;
-                            // Census dump: one line per (PluginType, DataType)
-                            // pair seen. PluginType is what disambiguates a
-                            // channel strip's GateGain(5) from the Meter
-                            // plug-in's TextRms(5) — see the Slot comment.
-                            // pt=-1 means the plug-in omitted the field.
-                            slog("[%.1f] --- census (pluginType, dataType) ---", t);
-                            for (const auto& kv : g_census) {
-                                slog("   pt=%-3d dt=%-3d n=%-7lld vals=%-5zu first=%.2f",
-                                     kv.first.first, kv.first.second,
-                                     kv.second.n, kv.second.nvals,
-                                     double(kv.second.first));
+                            // One line per plug-in instance (UDP source port),
+                            // its classification, and its live DataTypes. A
+                            // channel-strip line's dt4/dt5 are Comp/Gate GR.
+                            for (const auto& kv : g_inst) {
+                                char line[512]; int off = 0;
+                                off += std::snprintf(line + off, sizeof(line) - off,
+                                    "[%.1f] src=%-5u %-9s:", t, unsigned(kv.first),
+                                    kindName_(kv.second.kind));
+                                for (int d = 0; d < int(sslmeter::DataType::Count); ++d) {
+                                    const Slot& s = kv.second.meter[d];
+                                    if (!s.have || s.current.empty()) continue;
+                                    off += std::snprintf(line + off, sizeof(line) - off,
+                                        " %d[%zu]=%.1f", d, s.current.size(),
+                                        double(s.current[0]));
+                                    if (off > int(sizeof(line)) - 32) break;
+                                }
+                                slog("%s", line);
                             }
                         }
                     }
@@ -400,7 +428,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 bool start(uint16_t tcpPort, uint16_t dataPort) {
     if (g_running.load()) return true;
     g_trace = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
-    { std::lock_guard<std::mutex> lk(g_meterMx); for (auto& s : g_meter) s = Slot{}; }
+    { std::lock_guard<std::mutex> lk(g_meterMx); g_inst.clear(); }
     g_lastDataMs.store(0);
     g_running.store(true);
     slog("[start] tcpPort=%u dataPort=%u", unsigned(tcpPort), unsigned(dataPort));
@@ -420,10 +448,37 @@ bool pluginConnected(){ return g_connected.load(); }
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
-    const Slot& s = g_meter[dataType];
-    if (!s.have) return false;
-    current = s.current; peak = s.peak;
-    return true;
+    // Prefer a positively-identified Meter plug-in: a channel strip on the same
+    // track publishes Output(2)/OutputRms(3) into the very indices the UF1 meter
+    // view reads as BarPeak(2)/BarRms(3), so taking "whatever arrived last"
+    // shows the strip's output instead of the Meter plug-in's bars.
+    const Instance* fallback = nullptr;
+    for (const auto& kv : g_inst) {
+        const Instance& in = kv.second;
+        if (in.kind == Kind::Meter) {
+            const Slot& s = in.meter[dataType];
+            if (s.have) { current = s.current; peak = s.peak; return true; }
+        } else if (in.kind == Kind::Unknown && !fallback) {
+            fallback = &in;
+        }
+    }
+    // Nothing classified yet (single plug-in, first datagrams) — old behaviour.
+    if (fallback) {
+        const Slot& s = fallback->meter[dataType];
+        if (s.have) { current = s.current; peak = s.peak; return true; }
+    }
+    return false;
+}
+
+bool getChannelStripMeter(int csType, std::vector<float>& current) {
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    for (const auto& kv : g_inst) {
+        if (kv.second.kind != Kind::ChannelStrip) continue;
+        const Slot& s = kv.second.meter[csType];
+        if (s.have && !s.current.empty()) { current = s.current; return true; }
+    }
+    return false;
 }
 
 long long msSinceLastData() {
