@@ -392,6 +392,17 @@ std::atomic<int>      g_uf1MeterScreen{0};
 // Meter (the impersonator doesn't surface PluginType yet).
 constexpr int kUf1MeterScreenCycle = 3;
 
+// Which V-Pot parameter PAGE is active within the current Meter screen. The UF1
+// User Guide Rev4.0 (S.189-191) gives each meter screen multiple pages of V-Pot
+// assignments (Overview 2, Analogue 2, RTA 3); the manual doesn't document how
+// SSL switches pages, so we cycle them with Display soft-key 2 (0x1A) while in
+// Meter view. Set from the input worker (atomic store only), read by the
+// main-thread V-Pot handler + painter. Reset to 0 on a screen change.
+std::atomic<int>      g_uf1MeterPage{0};
+// Pages per meter screen, indexed by g_uf1MeterScreen (0 Overview, 1 Analogue,
+// 2 RTA). See uf1-vpot-operator-spec.md / manual S.189-191.
+constexpr int kUf1MeterPageCount[3] = { 2, 2, 3 };
+
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
 // via the atomic flag below — never call toggle() directly from any
@@ -10993,6 +11004,137 @@ void applyUf1AboveFaderVpot_(int step)
     }
 }
 
+// ---- UF1 Meter-view V-Pot operator layer ----------------------------------
+// Spec: uf1-vpot-operator-spec.md — manual S.189-191 cross-referenced against the
+// SSL Meter Pro param dump (docs/ssl-native-params/). In Meter view the 4 V-Pots
+// stop driving the channel-strip and instead operate the SSL Meter (Pro) plug-in
+// on the focused track: V-Pot1 selects the instance, V-Pot2/3/4 = "Parameter
+// Control 1/2/3" for the current screen+page. Every table entry is a real
+// TrackFX param index; nothing here is guessed. Main-thread only (drained).
+struct Uf1MeterVPot {
+    int param;   // TrackFX param index; -1 = this V-Pot is unassigned on this page
+    int steps;   // >=2: discrete enum, one notch = 1/(steps-1) normalised;
+                 //  0 : continuous — fine dial (kUf1MeterContStep per notch)
+};
+struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
+// [screen][page].  screen: 0 Overview, 1 Analogue, 2 RTA.  Param indices from the
+// dump: 6 Digital Type(3), 5 RMS Integration, 16 Lissajous Fade, 3 Peak Hold(3),
+// 4 True Peak(2); 8 Analogue Mode(2), 11 0 VU Line-Up(3), 9 Reference Level,
+// 10 Max Needle(3), 12 Dual Format(3), 1 Global Delay; 51 RTA Band, 22 Scale Top,
+// 23 Scale Bottom, 18 RTA Peak Hold(3), 20 Weighting(3), 21 Averaging(3),
+// 19 Analysis Source.
+const Uf1MeterPage kUf1MeterVPots[3][3] = {
+    { // Overview
+        { {6,3},  {5,0},  {16,0} },
+        { {3,3},  {4,2},  {-1,0} },
+        { {-1,0}, {-1,0}, {-1,0} },   // no page 3
+    },
+    { // Analogue
+        { {8,2},  {11,3}, {9,0}  },
+        { {10,3}, {12,3}, {1,0}  },
+        { {-1,0}, {-1,0}, {-1,0} },   // no page 3
+    },
+    { // RTA
+        { {51,0}, {22,0}, {23,0} },
+        { {18,3}, {20,3}, {21,3} },
+        { {19,0}, {-1,0}, {-1,0} },
+    },
+};
+// Continuous params move this much normalised per detent (fine — a full sweep is
+// ~50 clicks). HW-tunable, no correctness impact (enum params use their notch).
+constexpr double kUf1MeterContStep = 0.02;
+// The device's V-Pots emit ~4 raw counts per physical click (cap58, same encoder
+// hardware as the channel encoder → kChannelEncoderScale). Accumulate so one
+// click = exactly one enum notch regardless of the raw count granularity.
+std::atomic<int> g_uf1MeterFxSel{0};   // which SSL Meter instance V-Pot1 picked
+
+// Find the SSL Meter (Pro) plug-in on `tr`. `sel` picks the sel-th match (V-Pot1
+// instance select), clamped. Returns the FX index and the total match count.
+bool uf1FindMeterFx_(MediaTrack* tr, int sel, int& fxOut, int& countOut)
+{
+    fxOut = -1; countOut = 0;
+    if (!tr) return false;
+    const int n = TrackFX_GetCount(tr);
+    int matchIdx = -1;
+    for (int i = 0; i < n; ++i) {
+        char nm[256] = {0};
+        if (!uf8::fxIdentityName(tr, i, nm, sizeof(nm))) continue;
+        // "SSL Meter" and "SSL Meter Pro" both contain "SSL Meter".
+        if (std::strstr(nm, "SSL Meter") == nullptr) continue;
+        if (countOut == 0) matchIdx = i;             // first match = fallback
+        if (countOut == sel) fxOut = i;
+        ++countOut;
+    }
+    if (countOut == 0) return false;
+    if (fxOut < 0) fxOut = matchIdx;                  // sel out of range → first
+    return true;
+}
+
+// Apply a Meter-view V-Pot detent. id = uf1::enc::kVpot1..kVpot4. Main-thread
+// only (drained). No-op when not in Meter view or no SSL Meter plug-in is found.
+void applyUf1MeterVpot_(uint8_t id, int step)
+{
+    if (step == 0) return;
+    MediaTrack* tr = uf1FocusedTrack_();
+    if (!tr) return;
+    const int screen = std::clamp(g_uf1MeterScreen.load(), 0, 2);
+    const int page   = std::clamp(g_uf1MeterPage.load(), 0,
+                                  kUf1MeterPageCount[screen] - 1);
+
+    int sel = g_uf1MeterFxSel.load();
+    int fx = -1, count = 0;
+    if (!uf1FindMeterFx_(tr, sel, fx, count)) return;
+
+    // Per-target detent accumulators so one physical click = one enum notch even
+    // though the encoder emits ~4 raw counts/click. Reset when the addressed
+    // target (screen/page/vpot) changes so a partial notch never leaks across.
+    static double sAccum[4] = {0,0,0,0};   // index by vpot 0..3
+    static int    sScreen = -1, sPage = -1;
+    if (screen != sScreen || page != sPage) {
+        sAccum[0]=sAccum[1]=sAccum[2]=sAccum[3]=0; sScreen=screen; sPage=page;
+    }
+
+    if (id == uf1::enc::kVpot1) {
+        // Instance select: accumulate, step whole instances, wrap.
+        static double sSelAccum = 0;
+        sSelAccum += step / kChannelEncoderScale;
+        int d = 0;
+        if (sSelAccum >=  1.0) { d = int(sSelAccum); }
+        if (sSelAccum <= -1.0) { d = int(sSelAccum); }
+        if (d != 0) {
+            sSelAccum -= d;
+            if (count > 0) {
+                sel = ((sel + d) % count + count) % count;
+                g_uf1MeterFxSel.store(sel);
+            }
+        }
+        return;
+    }
+
+    const int vi = (id == uf1::enc::kVpot2) ? 0 :
+                   (id == uf1::enc::kVpot3) ? 1 :
+                   (id == uf1::enc::kVpot4) ? 2 : -1;
+    if (vi < 0) return;
+    const Uf1MeterVPot& v = (vi == 0) ? kUf1MeterVPots[screen][page].v2 :
+                            (vi == 1) ? kUf1MeterVPots[screen][page].v3 :
+                                        kUf1MeterVPots[screen][page].v4;
+    if (v.param < 0) return;
+
+    sAccum[vi+1] += step / kChannelEncoderScale;   // +1: slot 0 reserved for sel
+    int notches = 0;
+    if (sAccum[vi+1] >=  1.0) notches = int(sAccum[vi+1]);
+    if (sAccum[vi+1] <= -1.0) notches = int(sAccum[vi+1]);
+    if (notches == 0) return;
+    sAccum[vi+1] -= notches;
+
+    const double cur = TrackFX_GetParamNormalized(tr, fx, v.param);
+    const double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1)) : kUf1MeterContStep;
+    double nv = cur + notches * dn;
+    if (nv < 0.0) nv = 0.0;
+    if (nv > 1.0) nv = 1.0;
+    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, v.param, nv);
+}
+
 // Forward decls: diag helpers live OUTSIDE this anonymous namespace
 // (after the closing `} // anonymous`) so UC1Surface.cpp can call
 // them via extern. Defined just below the namespace close.
@@ -11136,10 +11278,13 @@ void drainInputQueue()
                 case uf1::enc::kVpotAboveFader: // above-fader V-pot → Pan (extensible)
                     applyUf1AboveFaderVpot_(step);
                     break;
-                case uf1::enc::kVpot1:          // 4 plugin V-pots → focused-plugin
-                case uf1::enc::kVpot2:          // params via the SSL page tables —
-                case uf1::enc::kVpot3:          // wired in step 3b; routed but inert
-                case uf1::enc::kVpot4:          // here.
+                case uf1::enc::kVpot1:          // 4 plugin V-pots. In Meter view
+                case uf1::enc::kVpot2:          // they operate the SSL Meter plug-in
+                case uf1::enc::kVpot3:          // (V1 instance select, V2-4 the
+                case uf1::enc::kVpot4:          // per-screen/page params). In Channel
+                    // view they stay inert (channel-strip mapping is future work).
+                    if (g_uf1MeterView.load()) applyUf1MeterVpot_(id, step);
+                    break;
                 default:
                     break;
             }
@@ -15187,6 +15332,18 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterView.load()) {
                 g_uf1MeterScreen.store((g_uf1MeterScreen.load() + 1) %
                                        kUf1MeterScreenCycle);
+                g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
+                break;
+            }
+            // Display soft-key 2 cycles the V-Pot parameter PAGE within the current
+            // meter screen (manual S.189-191 gives each screen multiple pages;
+            // Overview/Analogue 2, RTA 3). Meter view only; a normal bindable
+            // soft-key in Channel view. Atomic store only (threading rule).
+            if (ev.id == uf1::btn::kDisplaySoft2 && ev.pressed &&
+                g_uf1MeterView.load()) {
+                const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 2);
+                g_uf1MeterPage.store((g_uf1MeterPage.load() + 1) %
+                                     kUf1MeterPageCount[scr]);
                 break;
             }
             // All other UF1 buttons route through the shared Bindings
@@ -15639,10 +15796,20 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
-        // Needle position in VU units = BarPeak_dBFS - Ref. Ref defaults to the
-        // screen's -18 dBFS (manual S.190 makes it a V-Pot param — TODO wire it).
+        // Needle position in VU units = BarPeak_dBFS - Ref. Ref = the plug-in's
+        // "Analogue Reference Level" param (idx 9), which V-Pot4 on this screen
+        // also drives (uf1-vpot-operator-spec.md). Read it live so the needle
+        // follows the ref set on hardware OR in the plug-in GUI — Frank's
+        // "ref/lineup nicht einstellbar" complaint. Param maps linearly:
+        // norm 0.0/0.5/1.0 = -36/-18/0 dBFS (dump), so refDbFS = -36 + norm*36.
+        // Fallback -18 (the plug-in default) when no Meter FX is found.
         // GUI ground-truth: a -18.1 dBFS tone reads VU current -0.1 = -18.1+18.
-        constexpr float kVuRef = -18.f;
+        float kVuRef = -18.f;
+        {
+            int mfx = -1, mcnt = 0;
+            if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
+                kVuRef = float(-36.0 + TrackFX_GetParamNormalized(tr, mfx, 9) * 36.0);
+        }
         const uint8_t nL = uf1VuByte_(dbL - kVuRef);
         const uint8_t nR = uf1VuByte_(dbR - kVuRef);
         // Peak-hold "second needle" (Frank: fast + lagging). Falls at 26.5 dB/s.
