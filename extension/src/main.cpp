@@ -392,6 +392,21 @@ std::atomic<bool> g_closeAllFxGuisRequest{false};
 // the dylib for the process lifetime, so new code still needs a REAPER restart.
 std::atomic<bool> g_restartRequest{false};
 
+// The FIRST open() after a close() fails; a SECOND one succeeds. That is why the
+// action needed pressing twice — press 1 = close + (failed) open, press 2 = close
+// (no-op, already shut) + open (works). MEASURED, not assumed: waiting 500 ms and
+// waiting 6 s between close and open both still needed two presses, which rules
+// time out as the factor. It is the attempt that counts, not the delay.
+//
+// So retry the whole close+open cycle — i.e. do automatically what Frank was
+// doing by hand — until a device is actually back, or the attempts run out.
+// Each attempt closes first, exactly like the manual second press.
+// Timer is ~30 Hz (see the "~30 s" comment on the 900-tick block).
+int       g_restartAttemptsLeft = 0;
+long long g_restartNextTick     = 0;
+constexpr int       kRestartAttempts = 5;
+constexpr long long kRestartGapTicks = 30;   // ~1 s between attempts
+
 // Entry-time snap for UF8 Plugin Mode. Set by uf8_plugin_mode_toggle{,_with_gui}
 // from the libusb input thread when the mode is being switched ON. The
 // main-thread GUI-sync drain consumes it via snapUf8PluginModeToFocusedFx_,
@@ -20693,12 +20708,23 @@ void onTimer()
 {
     ++g_tickCounter;
 
-    // Restart before anything else touches a device this tick — the pointers
-    // are replaced wholesale here.
+    // Restart before anything else touches a device this tick — the pointers are
+    // replaced wholesale here. Retried across ticks: the first open() after a
+    // close() fails (see g_restartAttemptsLeft).
     if (g_restartRequest.exchange(false)) {
-        shutdownDevices_();
+        g_restartAttemptsLeft = kRestartAttempts;
+        g_restartNextTick     = g_tickCounter;   // first attempt right away
+    }
+    if (g_restartAttemptsLeft > 0 && g_tickCounter >= g_restartNextTick) {
+        --g_restartAttemptsLeft;
+        shutdownDevices_();          // no-op once already shut — like press 2
         initDevices_();
-        g_pageDirty.store(true);   // repaint everything from scratch
+        if (g_dev || g_uc1_dev) {
+            g_restartAttemptsLeft = 0;   // something came back — done
+            g_pageDirty.store(true);     // repaint everything from scratch
+        } else {
+            g_restartNextTick = g_tickCounter + kRestartGapTicks;
+        }
     }
 
     sdBridgeTick_();
