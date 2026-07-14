@@ -384,6 +384,14 @@ std::atomic<bool> g_showFocusedPluginGuiRequest{false};
 std::atomic<bool> g_showFxChainRequest{false};
 std::atomic<bool> g_closeAllFxGuisRequest{false};
 
+// "Restart Rea-Sixty": close every device and bring them back up. Set from the
+// builtin (which may fire on the USB worker thread) and drained at the TOP of
+// onTimer — closing a device from the very thread that is calling into us would
+// be a deadlock at best. Same defer pattern as g_closeAllFxGuisRequest.
+// NOTE this re-inits the DEVICES, it does not reload the extension: REAPER keeps
+// the dylib for the process lifetime, so new code still needs a REAPER restart.
+std::atomic<bool> g_restartRequest{false};
+
 // Entry-time snap for UF8 Plugin Mode. Set by uf8_plugin_mode_toggle{,_with_gui}
 // from the libusb input thread when the mode is being switched ON. The
 // main-thread GUI-sync drain consumes it via snapUf8PluginModeToFocusedFx_,
@@ -13627,7 +13635,12 @@ void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
                     int delta, const char* decision);
 void onMidiFromReaper(std::span<const uint8_t> bytes);
 
-ReaSixtySurface::ReaSixtySurface()
+// Open + initialise every device. Split out of the constructor so the "Restart
+// Rea-Sixty" action can re-run EXACTLY the same bring-up rather than a
+// second, drifting copy of it. Main thread only (constructor / action drain).
+// Does NOT touch the timer registration — that belongs to the surface's
+// lifetime, not to a device re-init.
+void initDevices_()
 {
     // Open the virtual MIDI ports first — harmless if unused, and keeps
     // the legacy MCU-SysEx scribble pipe available for anyone still
@@ -13722,17 +13735,17 @@ ReaSixtySurface::ReaSixtySurface()
         g_uc1_dev.reset();
     }
 
-    plugin_register("timer", reinterpret_cast<void*>(onTimer));
-
     // Push the persisted brightness level to both devices now that
     // they're open. If no ExtState yet (first-run), defaults to "full".
     loadBrightness();
     applyBrightness();
 }
 
-ReaSixtySurface::~ReaSixtySurface()
+// Close every device and drop the derived state. The counterpart to
+// initDevices_; the destructor and the restart action share it so a re-init can
+// never diverge from a real teardown. Leaves the timer alone (see initDevices_).
+void shutdownDevices_()
 {
-    plugin_register("-timer", reinterpret_cast<void*>(onTimer));
     g_sync.reset();
     if (g_midi) g_midi->close();
     g_midi.reset();
@@ -13742,6 +13755,18 @@ ReaSixtySurface::~ReaSixtySurface()
     if (g_uc1_dev) g_uc1_dev->close();
     g_uc1_dev.reset();
     g_slotTrack.fill(nullptr);
+}
+
+ReaSixtySurface::ReaSixtySurface()
+{
+    initDevices_();
+    plugin_register("timer", reinterpret_cast<void*>(onTimer));
+}
+
+ReaSixtySurface::~ReaSixtySurface()
+{
+    plugin_register("-timer", reinterpret_cast<void*>(onTimer));
+    shutdownDevices_();
 }
 
 IReaperControlSurface* createReaSixty(const char* /*type*/, const char* /*config*/,
@@ -20667,6 +20692,15 @@ static void sdBridgeTick_()
 void onTimer()
 {
     ++g_tickCounter;
+
+    // Restart before anything else touches a device this tick — the pointers
+    // are replaced wholesale here.
+    if (g_restartRequest.exchange(false)) {
+        shutdownDevices_();
+        initDevices_();
+        g_pageDirty.store(true);   // repaint everything from scratch
+    }
+
     sdBridgeTick_();
 
     // Seed the favourite re-add cache from loaded plug-ins: once shortly after
@@ -22784,6 +22818,15 @@ custom_action_register_t g_actionToggleMixer{
 };
 int g_cmdToggleMixer = 0;
 
+// The point of this one is to avoid the Preferences → Control Surface round-trip,
+// so it has to be reachable from REAPER's Action list / a shortcut. The builtin
+// alone (registerBuiltin "restart") only reaches Settings → Bindings, i.e. a
+// hardware key — no help when the surface is the thing that needs re-opening.
+custom_action_register_t g_actionRestart{
+    0, "REASIXTY_RESTART", "Rea-Sixty: Restart Rea-Sixty (re-open devices)", nullptr,
+};
+int g_cmdRestart = 0;
+
 custom_action_register_t g_actionQuickLearn{
     0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn Project", nullptr,
 };
@@ -23080,6 +23123,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
+    if (command == g_cmdRestart)        { g_restartRequest.store(true); return true; }
     if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
     if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
@@ -26730,6 +26774,22 @@ void registerBindingHandlers()
     // Shares reasixty_toggleUc1OutGainFaderMode() with the REAPER action
     // REASIXTY_UC1_OUTGAIN_FADER_TOGGLE. stateOf drives the bound button's
     // LED on UC1 / UF8.
+    // Re-open the hardware without the Preferences → Control Surface round-trip
+    // Frank otherwise has to make. Only sets a flag: this may fire on the USB
+    // worker thread, and closing a device from the thread calling into us would
+    // hang. onTimer does the work (see g_restartRequest).
+    // This restarts the DEVICES, not the extension — REAPER holds the dylib for
+    // the whole process, so new code still needs a REAPER restart. Nothing can
+    // change that, and the Preferences round-trip doesn't either.
+    registerBuiltin("restart", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_restartRequest.store(true);
+        },
+        nullptr,
+        "Restart Rea-Sixty (re-open devices)", false
+    });
+
     registerBuiltin("uc1_outgain_fader_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -29597,6 +29657,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
+    g_cmdRestart        = plugin_register("custom_action", &g_actionRestart);
     g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);

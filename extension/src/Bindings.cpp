@@ -3708,7 +3708,8 @@ const char* builtinCategory(const std::string& n)
      || n == "tcp_follows_selection_toggle"
      || n == "surface_mirror_tcp"
      || n == "surface_mirror_mcp"
-     || n.rfind("marker_overlay_", 0) == 0)
+     || n.rfind("marker_overlay_", 0) == 0
+     || n == "restart")
         return "Hardware Modes";
 
     if (n == "show_focused_plugin_gui"
