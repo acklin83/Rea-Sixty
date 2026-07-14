@@ -122,14 +122,26 @@ end
 -- right from the hit point along the same row while still over THIS track's
 -- mcp.fxlist to find the strip's own x-column [l, r) in screen coords; the draw
 -- then confines the highlight to that column only.
+-- Also walks UP/DOWN for the list's own screen top/bottom. The draw anchors its
+-- rows at that top, NOT at the target window's client top: where the theme gives
+-- mcp.fxlist no child window of its own, JS_Window_FromPoint hands back the
+-- whole strip/mixer panel, whose top sits ABOVE the track controls — so
+-- anchoring there drew the highlight over the track controls, exactly one
+-- "track controls height" too high (Frank 2026-07-14). The tcp path already
+-- anchors to a refined screen top (refineTcp's `t`); this mirrors it. The
+-- bottom bounds the rows to the real list instead of the window height, which
+-- is far too generous when the window is the whole strip.
 local function refineMcpColumn(px, py, track)
-  local function ok(x)
-    local _, info = reaper.GetThingFromPoint(x, py)
-    return info == "mcp.fxlist" and reaper.GetTrackFromPoint(x, py) == track
+  local function ok(x, y)
+    y = y or py
+    local _, info = reaper.GetThingFromPoint(x, y)
+    return info == "mcp.fxlist" and reaper.GetTrackFromPoint(x, y) == track
   end
   local l = px; while ok(l - 1) do l = l - 1 end
   local r = px; while ok(r + 1) do r = r + 1 end
-  return l, r + 1
+  local t = py; while ok(px, t - 1) do t = t - 1 end
+  local b = py; while ok(px, b + 1) do b = b + 1 end
+  return l, r + 1, t, b + 1
 end
 
 ------------------------------------------------------------------------
@@ -167,10 +179,10 @@ local function addHit(byGuid, seen, want, kind, tr, x, y)
     -- Confine to THIS strip's x-column (the fxlist window spans all strips on
     -- macOS — see refineMcpColumn). sl/sw in screen x; converted to client x at
     -- draw time. sy = a screen y inside the window for the ScreenToClient call.
-    local sl, sr = refineMcpColumn(x, y, tr)
+    local sl, sr, st, sb = refineMcpColumn(x, y, tr)
     byGuid[g][#byGuid[g] + 1] =
       { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
-        sl = sl, sw = sr - sl, sy = y }
+        sl = sl, sw = sr - sl, sy = y, st = st, sb = sb }
   else
     local l, t, r = refineTcp(x, y, tr)
     byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
@@ -352,12 +364,20 @@ local function drawBlockRow(block, fxIdx, col)
     -- tuned constant + a Settings slider. topPad nudges the first row.
     local rowH   = num("overlay_rowh", 17)
     local topPad = num("overlay_toppad", 1)
-    local y = topPad + fxIdx * rowH
-    if y < -1 or y + rowH > block.ch + 1 then return end
-    -- Confine to this strip's column: screen-left → client x (x isn't flipped on
-    -- macOS; only y is, handled in the tcp path). Width = the strip's own width.
-    local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
-    composite(block.hwnd, math.floor(cx + 0.5), math.floor(y + 0.5),
+    -- Anchor at the list's OWN screen top (block.st), not the window's client
+    -- top — see refineMcpColumn. Bound against the list's real bottom too.
+    local screenY = block.st + topPad + fxIdx * rowH
+    if screenY < block.st - 1 or screenY + rowH > block.sb + 1 then return end
+    -- Confine to this strip's column; width = the strip's own width.
+    local cx, cy = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, screenY)
+    -- macOS: ScreenToClient returns y-up (from the client bottom) but
+    -- JS_Composite dst is y-down — flip it, same as the tcp path.
+    local yd = cy
+    if not is_windows then
+      local _, _, wch = reaper.JS_Window_GetClientSize(block.hwnd)
+      yd = (wch or 0) - cy
+    end
+    composite(block.hwnd, math.floor(cx + 0.5), math.floor(yd + 0.5),
               math.floor(block.sw + 0.5), math.floor(rowH + 0.5), col)
   else  -- tcp: shared track-panel window
     local rowH   = num("overlay_rowh_tcp", 14)
