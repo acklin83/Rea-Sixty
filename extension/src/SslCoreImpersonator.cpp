@@ -36,6 +36,8 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <map>
+#include <utility>
 
 namespace sslcore {
 namespace {
@@ -63,9 +65,24 @@ std::thread            g_worker;
 std::atomic<bool>      g_connected{false};
 std::atomic<long long> g_lastDataMs{0};
 
-struct Slot { std::vector<float> current, peak; bool have = false; };
+// `pluginType` is the message's PluginType (f1) — kept because DataType alone is
+// AMBIGUOUS. Schema (AssignerArgsTypes): PluginMeterDataMessage.DataType is a
+// plain int32, not a typed enum, and its vocabulary depends on PluginType:
+// MeterPluginDataType for Meter/MeterPro, ChannelStripMeterType for a channel
+// strip (where 4 = CompGain, 5 = GateGain), BusCompMeterType for a bus comp.
+// So a channel strip's GateGain(5) and the Meter plug-in's TextRms(5) are the
+// SAME index here and would silently overwrite each other.
+struct Slot { std::vector<float> current, peak; bool have = false; int pluginType = -1; };
 std::mutex                                     g_meterMx;
 std::array<Slot, int(sslmeter::DataType::Count)> g_meter;
+
+// Census of every (PluginType, DataType) pair actually seen on the wire, with a
+// sample value. This is the diagnostic that tells us WHICH plug-in families
+// stream and whether two of them collide in g_meter above — e.g. whether an SSL
+// channel strip publishes ChannelStripMeterType_GateGain(5), which is the
+// long-missing Gate-GR source. Guarded by g_meterMx (same lock as g_meter).
+struct Census { long long n = 0; size_t nvals = 0; float first = 0.f; };
+std::map<std::pair<int, int>, Census> g_census;
 
 long long nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -319,8 +336,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     std::lock_guard<std::mutex> lk(g_meterMx);
                     for (auto& u : ups) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
+                        // Census BEFORE the move — records what really arrived,
+                        // including pairs that collide in g_meter.
+                        {
+                            Census& c = g_census[{u.pluginType, u.dataType}];
+                            ++c.n;
+                            c.nvals = u.current.size();
+                            if (!u.current.empty()) c.first = u.current[0];
+                        }
                         Slot& s = g_meter[u.dataType];
-                        s.current = std::move(u.current); s.peak = std::move(u.peak); s.have = true;
+                        s.current = std::move(u.current); s.peak = std::move(u.peak);
+                        s.have = true; s.pluginType = u.pluginType;
                     }
                     // Periodic summary: which DataTypes are live + a sample value.
                     // We ALREADY hold g_meterMx here (lk above) — std::mutex is
@@ -331,18 +357,18 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         static double sLastLog = 0;
                         if (t - sLastLog > 2.0) {
                             sLastLog = t;
-                            char line[512]; int off = 0;
-                            off += std::snprintf(line + off, sizeof(line) - off,
-                                                 "[%.1f] rx:", t);
-                            for (int d = 0; d < int(sslmeter::DataType::Count); ++d) {
-                                const Slot& s = g_meter[d];
-                                if (!s.have || s.current.empty()) continue;
-                                off += std::snprintf(line + off, sizeof(line) - off,
-                                    " t%d[%zu]=%.1f", d, s.current.size(),
-                                    double(s.current[0]));
-                                if (off > int(sizeof(line)) - 32) break;
+                            // Census dump: one line per (PluginType, DataType)
+                            // pair seen. PluginType is what disambiguates a
+                            // channel strip's GateGain(5) from the Meter
+                            // plug-in's TextRms(5) — see the Slot comment.
+                            // pt=-1 means the plug-in omitted the field.
+                            slog("[%.1f] --- census (pluginType, dataType) ---", t);
+                            for (const auto& kv : g_census) {
+                                slog("   pt=%-3d dt=%-3d n=%-7lld vals=%-5zu first=%.2f",
+                                     kv.first.first, kv.first.second,
+                                     kv.second.n, kv.second.nvals,
+                                     double(kv.second.first));
                             }
-                            slog("%s", line);
                         }
                     }
                 }
