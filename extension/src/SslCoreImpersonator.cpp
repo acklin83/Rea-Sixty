@@ -160,17 +160,22 @@ std::vector<uint8_t> subscribeInitial() {
     add("efbc51002d000000100000000100000028e0c7451d00000012000000636a1bfcb188080c0801120d0a0b08ffffffffffffffffff01");
     add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
     add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
+    // 4th object (fc74d763) — seen once in another stream; likely a further meter
+    // stream (RTA t8/t9 never arrived because only the first 3 were subscribed).
+    // Cheap to include; if RTA data appears it was this.
+    add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
     return out;
 }
-// The 3 type-18 subscribe frames, replayed periodically to keep the streams
-// alive. (The capture increments a counter each round; the plugin accepts the
-// verbatim round-1 frames on repeat — good enough to hold the connection.)
+// The type-18 subscribe frames, replayed periodically to keep the streams alive.
+// (The capture increments a counter each round; the plugin accepts the verbatim
+// round-1 frames on repeat — good enough to hold the connection.)
 std::vector<uint8_t> subscribeRefresh() {
     std::vector<uint8_t> out;
     auto add = [&](const char* hx){ auto f = fromHex(hx); out.insert(out.end(), f.begin(), f.end()); };
     add("efbc51002d000000100000000100000028e0c7451d00000012000000636a1bfcb188080c0801120d0a0b08ffffffffffffffffff01");
     add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
     add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
+    add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
     return out;
 }
 
