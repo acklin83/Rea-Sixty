@@ -15458,6 +15458,35 @@ uint8_t uf1BarByte_(float dbfs)
     return kUf1BarScale[idx];
 }
 
+// Analogue VU faceplate scale: VU units -> needle byte (cap88). index = VU + 20,
+// covering -20..+3 VU. Curved dial (a table, not a formula), pins at 4/180.
+constexpr uint8_t kUf1VuScale[24] = {
+    4, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 32,
+    39, 45, 55, 65, 77, 89, 104, 119, 134, 149, 164, 179,
+};
+
+// VU units -> needle byte. Clamps to the printed -20..+3 VU range.
+uint8_t uf1VuByte_(float vu)
+{
+    if (!std::isfinite(vu) || vu <= -20.f) return 4;
+    if (vu >= 3.f) return 180;
+    int idx = static_cast<int>(std::lround(vu)) + 20;
+    if (idx < 0)  idx = 0;
+    if (idx > 23) idx = 23;
+    return kUf1VuScale[idx];
+}
+
+// PPM Type-II is linear in marks (cap94, verified vs IEC 60268-10): byte = 9 +
+// (mark-1)*27.3, clamped [0,180]. mark relates to dBFS via the reference.
+uint8_t uf1PpmByte_(float mark)
+{
+    if (!std::isfinite(mark)) return 0;
+    double b = 9.0 + (static_cast<double>(mark) - 1.0) * 27.3;
+    if (b < 0.0)   b = 0.0;
+    if (b > 180.0) b = 180.0;
+    return static_cast<uint8_t>(std::lround(b));
+}
+
 // RTA band value: dBFS -> byte. A pure linear law (cap90), derived from the
 // screen's own scale settings (SclTop 0 dB, SclBtm -120 dB, cap76):
 // byte = 3 + (dBFS + 120) * 5/3, clamped to [3, 200]. Header baseline is 3.
@@ -15607,6 +15636,36 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         if (force || rmsBar  != sRms)   { sRms   = rmsBar;  putBar(0x0125, rmsBar); }
         if (force || peakBar != sPeak)  { sPeak  = peakBar; putBar(0x0126, peakBar); }
         if (force || holdBar != sHoldB) { sHoldB = holdBar; putBar(0x0127, holdBar); }
+    }
+    else if (screen == 1) {
+        // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
+        // Needle position in VU units = BarPeak_dBFS - Ref. Ref defaults to the
+        // screen's -18 dBFS (manual S.190 makes it a V-Pot param — TODO wire it).
+        // GUI ground-truth: a -18.1 dBFS tone reads VU current -0.1 = -18.1+18.
+        constexpr float kVuRef = -18.f;
+        const uint8_t nL = uf1VuByte_(dbL - kVuRef);
+        const uint8_t nR = uf1VuByte_(dbR - kVuRef);
+        // Peak-hold "second needle" (Frank: fast + lagging). Falls at 26.5 dB/s.
+        static MediaTrack* sNdlTr = nullptr;
+        static float sNdlHoldL = -120.f, sNdlHoldR = -120.f;
+        static auto  sNdlHoldT = std::chrono::steady_clock::now();
+        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHoldL = sNdlHoldR = -120.f; }
+        const double dtN = std::chrono::duration<double>(now - sNdlHoldT).count();
+        sNdlHoldT = now;
+        auto holdN = [&](float v, float& h){ if (v >= h) h = v;
+            else { h = float(h - 26.5 * dtN); if (h < v) h = v; } };
+        holdN(dbL, sNdlHoldL); holdN(dbR, sNdlHoldR);
+        const uint8_t hL = uf1VuByte_(sNdlHoldL - kVuRef);
+        const uint8_t hR = uf1VuByte_(sNdlHoldR - kVuRef);
+
+        const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
+        auto putNdl = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
+            g_uf1_dev->send(uf1::buildScreen(addr,
+                std::span<const uint8_t>(v.data(), v.size())));
+        };
+        static std::array<uint8_t, 2> sNdl{}, sHld{};
+        if (force || ndl != sNdl) { sNdl = ndl; putNdl(0x0125, ndl); }
+        if (force || hld != sHld) { sHld = hld; putNdl(0x0127, hld); }
     }
     else if (screen == 2) {
         // RTA: 0x0122 = 64 bytes. Header (0x00,0x03), then per band i:
