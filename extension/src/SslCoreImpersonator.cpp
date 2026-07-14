@@ -135,6 +135,45 @@ std::vector<uint8_t> heartbeat() {
     }
     return v;
 }
+// Hex -> bytes helper for verbatim frame replay.
+std::vector<uint8_t> fromHex(const char* hx) {
+    std::vector<uint8_t> v;
+    for (const char* p = hx; p[0] && p[1]; p += 2) {
+        auto nyb = [](char c){ return (c <= '9') ? c - '0' : (c | 0x20) - 'a' + 10; };
+        v.push_back(uint8_t(nyb(p[0]) << 4 | nyb(p[1])));
+    }
+    return v;
+}
+
+// After the opening handshake, Core registers 3 objects (type-2) and subscribes
+// to 3 meter-data streams (type-18), then RE-subscribes every ~6.6s. Without
+// this the plugin disconnects after ~6s and reconnects in a loop, so no
+// continuous meter stream (observed in-extension 2026-07-14; the missing
+// "type-2/type-18 per-object subscribe frames" flagged in the 2026-07-10 notes).
+// Extracted verbatim from the cold-connect capture (Core :52143 -> plugin).
+std::vector<uint8_t> subscribeInitial() {
+    std::vector<uint8_t> out;
+    auto add = [&](const char* hx){ auto f = fromHex(hx); out.insert(out.end(), f.begin(), f.end()); };
+    add("efbc51001c000000100000000100000028e0c7450c0000000200000038f0291a5ed5dbff");
+    add("efbc51001c000000100000000100000028e0c7450c000000020000000196ce3d09ab3dfe");
+    add("efbc51001e000000100000000100000028e0c7450e0000000200000038f0291a5ed5dbff0801");
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000636a1bfcb188080c0801120d0a0b08ffffffffffffffffff01");
+    add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
+    add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
+    return out;
+}
+// The 3 type-18 subscribe frames, replayed periodically to keep the streams
+// alive. (The capture increments a counter each round; the plugin accepts the
+// verbatim round-1 frames on repeat — good enough to hold the connection.)
+std::vector<uint8_t> subscribeRefresh() {
+    std::vector<uint8_t> out;
+    auto add = [&](const char* hx){ auto f = fromHex(hx); out.insert(out.end(), f.begin(), f.end()); };
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000636a1bfcb188080c0801120d0a0b08ffffffffffffffffff01");
+    add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
+    add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
+    return out;
+}
+
 std::vector<uint8_t> announcement(uint16_t tcpPort) {
     std::vector<uint8_t> pb;                       // LgxPropertyConnectionAnnouncementData
     putVarint(pb, (1<<3)|0); putVarint(pb, 2);                       // AppVerMajor
@@ -216,7 +255,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     std::vector<socket_t> clients;
     const std::vector<uint8_t> hb  = heartbeat();
     const std::vector<uint8_t> ann = announcement(actualTcp);
-    double lastAnn = 0, lastHb = 0;
+    double lastAnn = 0, lastHb = 0, lastSub = 0;
     auto secs = []{ return nowMs() / 1000.0; };
     uint8_t buf[65536];
 
@@ -234,6 +273,13 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             lastHb = t;
             for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(hb.data()), int(hb.size()), 0);
         }
+        // Re-subscribe every 5s (capture cadence ~6.6s) so the plugin keeps the
+        // meter streams open instead of dropping the connection.
+        if (!clients.empty() && t - lastSub > 5.0) {
+            lastSub = t;
+            const auto sub = subscribeRefresh();
+            for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+        }
 
         fd_set rset; FD_ZERO(&rset);
         FD_SET(listenFd, &rset);
@@ -250,10 +296,12 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 int one = 1; setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&one), sizeof(one));
                 auto seq = openingSequence(dataPort);
                 ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
+                auto sub = subscribeInitial();
+                ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
                 clients.push_back(c);
                 g_connected.store(true);
-                slog("[%.1f] plugin CONNECTED (fd=%d), sent opening sequence (%zu B), "
-                     "assigned data port %u", t, int(c), seq.size(), unsigned(dataPort));
+                slog("[%.1f] plugin CONNECTED (fd=%d), sent opening (%zu B) + subscribe "
+                     "(%zu B), data port %u", t, int(c), seq.size(), sub.size(), unsigned(dataPort));
             }
         }
         for (socket_t d : dataFds) {

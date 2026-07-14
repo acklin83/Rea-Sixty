@@ -15507,13 +15507,21 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     bool  haveRms = false;
     {
         std::vector<float> cur, pk;
-        if (sslcore::isRunning() &&
+        // Use the plugin's BarPeak only when it actually carries signal. A silent
+        // Meter instance (e.g. the master) streams floor (-129 dBFS); taking that
+        // over REAPER's own peak would blank the bars. Require a non-floor value,
+        // else fall back to Track_GetPeakInfo (which always tracks the track).
+        const bool pluginPeak =
+            sslcore::isRunning() &&
             sslcore::getMeter(int(sslmeter::DataType::BarPeak), cur, pk) &&
-            cur.size() >= 2) {
+            cur.size() >= 2 && (cur[0] > -120.f || cur[1] > -120.f);
+        if (pluginPeak) {
             dbL = cur[0]; dbR = cur[1];
             std::vector<float> rc, rp;
             if (sslcore::getMeter(int(sslmeter::DataType::BarRms), rc, rp) &&
-                rc.size() >= 2) { rmsL = rc[0]; rmsR = rc[1]; haveRms = true; }
+                rc.size() >= 2 && (rc[0] > -120.f || rc[1] > -120.f)) {
+                rmsL = rc[0]; rmsR = rc[1]; haveRms = true;
+            }
         } else {
             dbL = peakToDb(Track_GetPeakInfo(tr, 0));
             dbR = peakToDb(Track_GetPeakInfo(tr, 1));
@@ -31036,10 +31044,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 const int p = std::atoi(dv);
                 if (p > 0 && p < 65536) dataPort = p;
             }
-            // Trace log opt-in via ExtState (the Lua test helper sets it); the
-            // impersonator reads REASIXTY_SSLCORE_TRACE at start, so translate.
-            if (const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
-                trv && *trv && strcmp(trv, "0"))
+            // Trace log: on by default while the impersonator runs (we're still
+            // bringing it up end-to-end). Opt out with ssl_core_trace=0.
+            const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
+            if (!(trv && *trv && !strcmp(trv, "0")))
                 setenv("REASIXTY_SSLCORE_TRACE", "1", 1);
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
