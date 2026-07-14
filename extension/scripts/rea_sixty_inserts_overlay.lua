@@ -56,6 +56,34 @@ end
 
 local is_windows = reaper.GetOS():find("Win") ~= nil
 
+-- Which build of this file is actually RUNNING. The overlay is a defer loop: it
+-- keeps whatever was loaded when the script started, so copying a new file over
+-- it changes nothing until the action is toggled off/on. Without this marker
+-- "did my fix even load?" is unanswerable, and I wasted Frank's time on exactly
+-- that question. Bump BUILD on every behavioural change to this file.
+-- (SECT is declared further down; this runs before it, so name the section here.)
+local BUILD = "2026-07-14-fxlist-prefix"
+reaper.SetExtState("rea_sixty", "overlay_build", BUILD, true)   -- persist: readable from outside
+
+-- Diagnostic: set ExtState rea_sixty/overlay_debug=1 and this writes what the
+-- overlay ACTUALLY decides — the measured list bounds and every row's verdict —
+-- to /tmp/rea_sixty_overlay.log. Reasoning about this from the outside has been
+-- wrong three times running; the code has to say it itself.
+local DBG = reaper.GetExtState("rea_sixty", "overlay_debug") == "1"
+local dbgFile = (reaper.GetOS():find("Win") and (os.getenv("TEMP") or "C:\\Windows\\Temp") .. "\\"
+                                             or "/tmp/") .. "rea_sixty_overlay.log"
+local function dbg(fmt, ...)
+  if not DBG then return end
+  local f = io.open(dbgFile, "a")
+  if not f then return end
+  f:write(string.format(fmt, ...), "\n")
+  f:close()
+end
+if DBG then
+  local f = io.open(dbgFile, "w")   -- fresh file per script start
+  if f then f:write("=== overlay start  build=", BUILD, " ===\n"); f:close() end
+end
+
 ------------------------------------------------------------------------
 -- Tunables (live via ExtState — calibrate without editing the file).
 ------------------------------------------------------------------------
@@ -80,6 +108,19 @@ local function fillA()  return num("overlay_fill_a", 0.0) end
 local function lineA()  return num("overlay_line_a", 0.90) end
 
 local STEP = 16
+
+-- GetThingFromPoint does NOT return a bare "mcp.fxlist" for an occupied row: it
+-- returns "mcp.fxlist <slot> fx:<chainIndex>", e.g. "mcp.fxlist 0 fx:0". Only the
+-- empty tail of the list answers with the bare string (measured 2026-07-14, column
+-- profile of a 6-FX track: client y 2..18 "mcp.fxlist 0 fx:0", 19..35
+-- "mcp.fxlist 1 fx:1", 36..50 "mcp.fxlist", 51.. "mcp"/"mcp.fxparm").
+-- So `info == "mcp.fxlist"` — which this file used everywhere — matches ONLY the
+-- empty tail. That is why every attempt to bound the rows by probing blanked the
+-- overlay: each real row answered with a suffix and was rejected. Match the
+-- prefix. (The rows are contiguous; the "gaps" I inferred earlier never existed.)
+local function isFxList_(info)
+  return info ~= nil and info:match("^mcp%.fxlist") ~= nil
+end
 
 ------------------------------------------------------------------------
 -- ExtState: active CS/BC per track GUID
@@ -122,14 +163,47 @@ end
 -- right from the hit point along the same row while still over THIS track's
 -- mcp.fxlist to find the strip's own x-column [l, r) in screen coords; the draw
 -- then confines the highlight to that column only.
-local function refineMcpColumn(px, py, track)
-  local function ok(x)
-    local _, info = reaper.GetThingFromPoint(x, py)
-    return info == "mcp.fxlist" and reaper.GetTrackFromPoint(x, py) == track
+--
+-- Also returns the list's own extent as CLIENT y (top, bottom) of `hwnd`, which
+-- is what bounds the drawn rows. Measured 2026-07-14: the target window is the
+-- WHOLE strip (client 85x914), so the existing `y + rowH > block.ch` test can
+-- never fire; with plug-in parameters shown in the track controls the inserts
+-- area is shorter than the strip, and a high fxIdx paints past the list's end
+-- onto the controls below.
+--
+-- The walk depends on isFxList_ matching the PREFIX — see its comment. Rows are
+-- contiguous; matching the bare string finds only the list's empty tail and
+-- collapses the extent to a single row.
+-- Only ScreenToClient is used here (measured: screen 922 -> client 50, window top
+-- 972); min/max sorts the two edges, so no y-up/y-down assumption either.
+local function refineMcpColumn(px, py, track, hwnd)
+  local function ok(x, y)
+    local _, info = reaper.GetThingFromPoint(x, y or py)
+    return isFxList_(info) and reaper.GetTrackFromPoint(x, y or py) == track
   end
   local l = px; while ok(l - 1) do l = l - 1 end
   local r = px; while ok(r + 1) do r = r + 1 end
-  return l, r + 1
+
+  -- The list's own extent as CLIENT y of `hwnd` — what bounds the drawn rows.
+  -- The target window is the WHOLE strip (measured client 85x914), so the
+  -- existing `y + rowH > block.ch` test can never fire; the list itself is only
+  -- ~50 px tall when plug-in parameters share the strip, and a chain index past
+  -- its end paints onto mcp.fxparm below. That is the reported bug.
+  -- Only ScreenToClient is used (measured: screen 922 -> client 50, window top
+  -- 972); min/max sorts the edges, so no y-up/y-down assumption.
+  local LIMIT = 2000
+  local function edge(dir)
+    local y = py
+    while math.abs(y - py) < LIMIT and ok(px, y + dir) do y = y + dir end
+    return y
+  end
+  local cTop, cBot
+  if hwnd then
+    local _, ca = reaper.JS_Window_ScreenToClient(hwnd, px, edge(-1))
+    local _, cb = reaper.JS_Window_ScreenToClient(hwnd, px, edge(1))
+    if ca and cb then cTop = math.min(ca, cb); cBot = math.max(ca, cb) end
+  end
+  return l, r + 1, cTop, cBot
 end
 
 ------------------------------------------------------------------------
@@ -167,10 +241,14 @@ local function addHit(byGuid, seen, want, kind, tr, x, y)
     -- Confine to THIS strip's x-column (the fxlist window spans all strips on
     -- macOS — see refineMcpColumn). sl/sw in screen x; converted to client x at
     -- draw time. sy = a screen y inside the window for the ScreenToClient call.
-    local sl, sr = refineMcpColumn(x, y, tr)
+    local sl, sr, cTop, cBot = refineMcpColumn(x, y, tr, h)
+    local _, hitInfo = reaper.GetThingFromPoint(x, y)
+    dbg("addHit  track=%s  hit=(%d,%d) info=%q  ch=%d  cTop=%s cBot=%s",
+        select(2, reaper.GetTrackName(tr)) or "?", x, y, tostring(hitInfo), ch or -1,
+        tostring(cTop), tostring(cBot))
     byGuid[g][#byGuid[g] + 1] =
       { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
-        sl = sl, sw = sr - sl, sy = y }
+        sl = sl, sw = sr - sl, sy = y, cTop = cTop, cBot = cBot }
   else
     local l, t, r = refineTcp(x, y, tr)
     byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
@@ -210,7 +288,7 @@ local function scanFxBlocksFull(want)
     while x <= x1 do
       local _, info = reaper.GetThingFromPoint(x, y)
       local kind
-      if info == "mcp.fxlist" then kind = "mcp"
+      if isFxList_(info) then kind = "mcp"
       elseif tcpOn and info == "tcp.fxparm" then kind = "tcp" end
       if kind then
         local tr = reaper.GetTrackFromPoint(x, y)
@@ -282,7 +360,7 @@ local function scanFxBlocksFast(want)
             local y = p.y0
             while y <= p.y1 do
               local _, info = reaper.GetThingFromPoint(cx, y)
-              if info == "mcp.fxlist" and reaper.GetTrackFromPoint(cx, y) == tr then
+              if isFxList_(info) and reaper.GetTrackFromPoint(cx, y) == tr then
                 if addHit(byGuid, seen, want, "mcp", tr, cx, y) then placed = true end
                 break  -- one mcp block per track
               end
@@ -354,6 +432,21 @@ local function drawBlockRow(block, fxIdx, col)
     local topPad = num("overlay_toppad", 1)
     local y = topPad + fxIdx * rowH
     if y < -1 or y + rowH > block.ch + 1 then return end
+    -- Bound the row to the FX list itself (block.ch is the whole strip, so the
+    -- test above never fires). FAIL OPEN: only trust an extent that is at least
+    -- one row tall and actually contains the list's start. If the measurement
+    -- looks wrong we skip the bound entirely and behave exactly as before —
+    -- a wrong guess must degrade to the old behaviour, never to a blank
+    -- overlay. Both earlier attempts failed CLOSED and blanked it.
+    local bounded = block.cTop and block.cBot and (block.cBot - block.cTop) >= rowH
+    local mid = y + rowH / 2
+    if bounded and (mid < block.cTop - 1 or mid > block.cBot + 1) then
+      dbg("row fx=%d y=%d mid=%.1f  bounds=%s..%s  -> SKIP (ausserhalb)",
+          fxIdx, y, mid, tostring(block.cTop), tostring(block.cBot))
+      return
+    end
+    dbg("row fx=%d y=%d mid=%.1f  bounds=%s..%s bounded=%s -> ZEICHNEN",
+        fxIdx, y, mid, tostring(block.cTop), tostring(block.cBot), tostring(bounded))
     -- Confine to this strip's column: screen-left → client x (x isn't flipped on
     -- macOS; only y is, handled in the tcp path). Width = the strip's own width.
     local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
