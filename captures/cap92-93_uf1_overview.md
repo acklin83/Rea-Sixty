@@ -69,8 +69,34 @@ the exact shape is not yet pinned down.
 At corr = −1.0 (horizontal line) the lit bytes cluster around index 3500..4900 in several
 long runs (75, 73, 70, 69, 68…) rather than one — the trace has thickness/persistence.
 
-## Open — the Lissajous codec
-Structure and geometry direction are established; the exact packing is not. This is a
-desk job, **not** a capture problem: cap89 already sweeps the Lissajous through every
-angle (opposite L/R ⇒ the line rotates continuously) and cap92 covers correlation. Both
-are the right datasets. See memory `uf1-meter-analyzer-display`.
+## SOLVED — the Lissajous codec (2026-07-14, desk analysis of cap92 + cap89)
+
+`0x0122` on the Overview screen is a **goniometer bitmap**: a 45°-rotated square (a
+vectorscope face) stored as **187 horizontal rows** of a diamond, one byte per pixel =
+that pixel's **intensity** (0 = off, higher = brighter), NOT 1 bit.
+
+### Geometry (exact, sums to 8560)
+Row widths, measured from a corr=+1 frame where exactly one pixel per row is lit:
+```
+2, 1, 1, 2, 3, 4, ... , 91, 92, 92, 91, ... , 4, 3, 2, 1, 1
+```
+i.e. 1..92 then 92..1 (peak 92 at the centre, two rows wide), with an antialiased
+`2,1,1` apex at each tip. 187 rows, Σ = 8560 = the payload byte count. The offset of row
+r is the running sum of the widths before it. Decoder: `analysis/uf1_gonio_decode.py`
+(rebuilds the geometry + renders any assembled frame).
+
+### Proof — the three correlation extremes render as a textbook goniometer
+- **corr +1** (L=R): one lit pixel per row tracing a straight line (display-vertical,
+  which is a diagonal in the row-major diamond because the face is rotated 45°).
+- **corr 0** (uncorrelated): the diamond fills with a scattered cloud.
+- **corr −1** (L=−R): a dense horizontal band across the wide middle rows.
+
+Frank confirmed the instrument behaviour that anchored the geometry: L=R → vertical line,
+corr −1 → horizontal line.
+
+### Still finer detail (not blocking)
+The goniometer draws a fixed **graticule** (the diamond frame + diagonal reference lines)
+that is always lit; the signal trace adds to it. Separating trace from graticule, and the
+exact L/R→pixel coordinate transform, are refinements — the packing itself is done. The
+balance bar and correlation meter are rendered *into* this same buffer (which is why they
+have no elements of their own), so they come for free once we paint the buffer.
