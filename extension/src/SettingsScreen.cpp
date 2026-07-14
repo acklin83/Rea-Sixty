@@ -1,6 +1,7 @@
 #include "SettingsScreen.h"
 
 #include "commit_count.h"   // generated; defines REASIXTY_COMMIT_COUNT
+#include "LogPath.h"        // uf8::logPath — /tmp vs %TEMP%
 
 #include <algorithm>
 #include <cctype>
@@ -97,6 +98,8 @@ bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
 bool reasixty_grCombineUf8();
 void reasixty_setGrCombineUf8(bool on);
+bool reasixty_consoleOutput();
+void reasixty_setConsoleOutput(bool on);
 bool reasixty_csFav(int slot, std::string& addName, std::string& label);
 int  reasixty_csFavSlotOf(const char* addName);
 void reasixty_setCsFav(int slot, const char* addName, const char* label);
@@ -6341,7 +6344,8 @@ void persistAndReport_()
     switch (uf8::user_plugins::save()) {
         case SaveResult::Ok:        break;
         case SaveResult::Collision: g_lastSaveError = "Save refused: a match collides with a built-in plug-in map."; break;
-        case SaveResult::IoError:   g_lastSaveError = "Save failed: could not write user_plugins.json (see /tmp/rea_sixty.log)."; break;
+        case SaveResult::IoError:   g_lastSaveError = "Save failed: could not write user_plugins.json (see "
+                                                      + uf8::logPath("rea_sixty.log") + ")."; break;
     }
 }
 
@@ -17736,11 +17740,29 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Logs");
     ImGui_Separator(ctx);
-    ImGui_Text(ctx, "  /tmp/reaper_uf8_frames.log   (frame trace, when enabled)");
-    ImGui_Text(ctx, "  /tmp/reaper_uf8_colors.log   (ColorSync push log)");
-    if (ImGui_Button(ctx, "Reveal /tmp in Finder",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        reasixty_revealInFinder("/tmp");
+    bool con = reasixty_consoleOutput();
+    if (ImGui_Checkbox(ctx, "Console output", &con)) {
+        reasixty_setConsoleOutput(con);
+    }
+    // Show the real directory — it is %TEMP% on Windows, not /tmp.
+    {
+        const std::string frames = uf8::logPath("reaper_uf8_frames.log");
+        const std::string colors = uf8::logPath("reaper_uf8_colors.log");
+        ImGui_Text(ctx, ("  " + frames + "   (frame trace, when enabled)").c_str());
+        ImGui_Text(ctx, ("  " + colors + "   (ColorSync push log)").c_str());
+        std::string dir = frames;
+        const size_t cut = dir.find_last_of("/\\");
+        if (cut != std::string::npos) dir.erase(cut);
+#if defined(_WIN32)
+        const char* reveal = "Reveal log folder in Explorer";
+#elif defined(__APPLE__)
+        const char* reveal = "Reveal log folder in Finder";
+#else
+        const char* reveal = "Reveal log folder";
+#endif
+        if (ImGui_Button(ctx, reveal, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_revealInFinder(dir.c_str());
+        }
     }
 
     ImGui_Spacing(ctx);

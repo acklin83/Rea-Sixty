@@ -312,6 +312,8 @@ endif()
 
 add_library(reaper_uf8 MODULE
     src/main.cpp
+    # Per-platform location of our diagnostic logs (/tmp vs %TEMP%)
+    src/LogPath.cpp
     src/Protocol.cpp
     src/Palette.cpp
     src/TrackName.cpp

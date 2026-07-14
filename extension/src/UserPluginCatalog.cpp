@@ -10,6 +10,7 @@
 //
 
 #include "UserPluginCatalog.h"
+#include "LogPath.h"
 
 #include <algorithm>
 #include <atomic>
@@ -138,7 +139,7 @@ void logErr_(const char* fmt, ...)
 #ifdef _WIN32
     const char* logPath = "rea_sixty.log";
 #else
-    const char* logPath = "/tmp/rea_sixty.log";
+    const char* logPath = uf8::logPath("rea_sixty.log").c_str();
 #endif
     if (FILE* lf = std::fopen(logPath, "a")) {
         va_list ap;

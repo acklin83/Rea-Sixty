@@ -12,6 +12,7 @@
 
 #define REAPERAPI_IMPLEMENT
 #include "reaper_plugin.h"
+#include "LogPath.h"
 #include "reaper_plugin_functions.h"
 
 // Host-OS modifier-key polling for Alt-drag snap-back. REAPER's SDK
@@ -2466,6 +2467,21 @@ std::atomic<bool> g_grAnyFx{true};
 // for the UF8 CS-GR strip and the UC1 Comp meter so each surface can be
 // set independently. Frank 2026-06-12. Settings → Device → GR meter source.
 std::atomic<bool> g_grCombineUf8{false};
+
+// Whether Rea-Sixty writes to REAPER's Console. Default OFF: REAPER pops the
+// Console window open unbidden for each message, which is pure noise when a
+// device is simply not connected. The same text still goes to the stale.log
+// files, so nothing is lost — turn this on in Settings when diagnosing.
+// Every ShowConsoleMsg of ours goes through consoleMsg_ (in here) or
+// reasixty_console (file scope, for the other translation units).
+std::atomic<bool> g_consoleOutput{false};
+
+void consoleMsg_(const char* msg)
+{
+    if (!msg || !*msg) return;
+    if (!g_consoleOutput.load()) return;
+    ShowConsoleMsg(msg);
+}
 std::atomic<bool> g_grCombineUc1{false};
 
 // On-screen "active instance" marker (Settings → Device → Inserts). When
@@ -3133,6 +3149,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uf8"); v && *v) {
         g_grCombineUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "console_output"); v && *v) {
+        g_consoleOutput.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "cs_favourites2"); v && *v) {
         std::lock_guard<std::mutex> lk(g_csFavMutex);
@@ -7394,7 +7413,7 @@ static void csLog_(const char* s)
 {
     const char* en = GetExtState("rea_sixty", "cs_log");
     if (!(en && en[0] == '1')) return;
-    if (FILE* f = std::fopen("/tmp/rea_sixty_cs.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_cs.log").c_str(), "a")) {
         std::fputs(s, f); std::fputc('\n', f); std::fclose(f);
     }
 }
@@ -13631,12 +13650,12 @@ ReaSixtySurface::ReaSixtySurface()
     const bool uf8Opened = g_dev->open();
     if (!uf8Opened) {
         const std::string err = g_dev->lastError();
-        ShowConsoleMsg(("Rea-Sixty UF8: " + err
-                        + "  (UF8 optional — continuing)\n").c_str());
+        consoleMsg_(("Rea-Sixty UF8: " + err
+                     + "  (UF8 optional — continuing)\n").c_str());
         // Mirror to the stale.log too — Frank-2026-05-20 missed a Console
         // line for a startup-failure case where UC1 just didn't connect.
         // The log file accumulates across sessions.
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uf8_stale.log", "a")) {
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now()
                 .time_since_epoch();
             const auto ms = std::chrono::duration_cast<
@@ -13688,9 +13707,9 @@ ReaSixtySurface::ReaSixtySurface()
         }
     } else {
         const std::string err = g_uc1_dev->lastError();
-        ShowConsoleMsg(("Rea-Sixty UC1: " + err
-                        + "  (UC1 optional — UF8 continues)\n").c_str());
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+        consoleMsg_(("Rea-Sixty UC1: " + err
+                     + "  (UC1 optional — UF8 continues)\n").c_str());
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now()
                 .time_since_epoch();
             const auto ms = std::chrono::duration_cast<
@@ -13960,7 +13979,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
         if (frameSize == 0) {
             // Unknown command — log (trace-gated) and skip one byte.
             if (g_uf8Trace)
-            if (FILE* f = std::fopen("/tmp/reaper_uf8_unknown.log", "a")) {
+            if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_unknown.log").c_str(), "a")) {
                 std::fprintf(f, "unknown:");
                 const size_t show = std::min<size_t>(len - i, 12);
                 for (size_t k = 0; k < show; ++k) std::fprintf(f, " %02X", data[i + k]);
@@ -14683,7 +14702,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // per touch event so we can correlate with FF 1B keepalive
                 // and FF 1D motor commands logged from the worker thread.
                 if (g_uf8Trace)
-                if (FILE* lg = std::fopen("/tmp/reaper_uf8_motor.log", "a")) {
+                if (FILE* lg = std::fopen(uf8::logPath("reaper_uf8_motor.log").c_str(), "a")) {
                     const auto t = std::chrono::system_clock::now().time_since_epoch();
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
                     std::fprintf(lg, "[%lld] TOUCH rawStrip=%u strip=%u state=%u\n",
@@ -14938,7 +14957,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 // Log raw HID reports until we've reverse-engineered the report format.
 void logHid(const uint8_t* data, size_t len)
 {
-    if (FILE* f = std::fopen("/tmp/reaper_uf8_hid.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_hid.log").c_str(), "a")) {
         for (size_t i = 0; i < len; ++i) std::fprintf(f, "%02x ", data[i]);
         std::fprintf(f, "\n");
         std::fclose(f);
@@ -14950,7 +14969,7 @@ void logHid(const uint8_t* data, size_t len)
 // kept fopen/fprintf/fclose for simplicity; REAPER's MIDI rate is low.
 void logMidi(std::span<const uint8_t> bytes)
 {
-    FILE* f = std::fopen("/tmp/reaper_uf8_midi.log", "a");
+    FILE* f = std::fopen(uf8::logPath("reaper_uf8_midi.log").c_str(), "a");
     if (!f) return;
     for (auto b : bytes) std::fprintf(f, "%02x ", b);
     std::fprintf(f, "\n");
@@ -21634,7 +21653,7 @@ void onTimer()
             sLastReopen = nowR;
             if (ucStale) {
                 if (FILE* f = std::fopen(
-                        "/tmp/rea_sixty_uc1_stale.log", "a"))
+                        uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a"))
                 {
                     const auto t = std::chrono::system_clock::now()
                         .time_since_epoch();
@@ -21662,7 +21681,7 @@ void onTimer()
             }
             if (ufStale) {
                 if (FILE* f = std::fopen(
-                        "/tmp/rea_sixty_uf8_stale.log", "a"))
+                        uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a"))
                 {
                     const auto t = std::chrono::system_clock::now()
                         .time_since_epoch();
@@ -22322,7 +22341,7 @@ void onTimer()
             const auto dOf = of - prevOutFrames;
             const auto dOe = oe - prevOutErrors;
             if ((dOe > 0 || dOf < 20)) {
-                if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stats.log", "a")) {
+                if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
                     std::fprintf(f,
                         "UC1 WARN: OUT=%llu frames/s errs=%llu (expected ~50)\n",
                         (unsigned long long)dOf, (unsigned long long)dOe);
@@ -22736,7 +22755,7 @@ void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
     std::lock_guard<std::mutex> lk(g_faderInputLogMutex);
     static FILE* f = nullptr;
     if (!f) {
-        f = std::fopen("/tmp/uf8_fader_input.log", "w");
+        f = std::fopen(uf8::logPath("uf8_fader_input.log").c_str(), "w");
         if (!f) return;
         std::fprintf(f, "t_ms\tkind\tstrip\tpb14\tprevPb\tdelta\tdecision\n");
     }
@@ -23597,6 +23616,18 @@ void reasixty_setGrCombineUf8(bool on)
     g_grCombineUf8.store(on);
     SetExtState("rea_sixty", "gr_combine_uf8", on ? "1" : "0", true);
 }
+
+bool reasixty_consoleOutput() { return g_consoleOutput.load(); }
+void reasixty_setConsoleOutput(bool on)
+{
+    g_consoleOutput.store(on);
+    SetExtState("rea_sixty", "console_output", on ? "1" : "0", true);
+}
+
+// Every Console message Rea-Sixty emits goes through here (or consoleMsg_ inside
+// main.cpp) so the Settings toggle silences all of them from one place.
+// Main-thread only, like ShowConsoleMsg itself.
+void reasixty_console(const char* msg) { consoleMsg_(msg); }
 
 // --- CS-Switch favourites public API (Settings + Learn-HUD) ---
 // Fills addName/label for slot (0..7); returns false (and empties both) if the
@@ -25963,7 +25994,7 @@ void reasixty_onActiveLayerChanged()
 // number so users with three saved layers can tell them apart.
 bool reasixty_exportLayerViaDialog(int layer)
 {
-    FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
+    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
     if (lg) std::fprintf(lg, "[exportLayer] enter layer=%d\n", layer);
 
     char defName[64];
@@ -29366,7 +29397,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         }
         FILE* f = std::fopen(path, "a");
 #else
-        FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+        FILE* f = std::fopen(uf8::logPath("rea_sixty_init.log").c_str(), "a");
 #endif
         if (f) { std::fprintf(f, "%s\n", msg); std::fclose(f); }
     };

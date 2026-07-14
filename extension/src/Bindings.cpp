@@ -11,6 +11,7 @@
 //
 
 #include "Bindings.h"
+#include "LogPath.h"
 
 #include <algorithm>
 #include <atomic>
@@ -56,7 +57,7 @@ inline void crumb_(const char* msg)
     }
     FILE* f = std::fopen(path, "a");
 #else
-    FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+    FILE* f = std::fopen(uf8::logPath("rea_sixty_init.log").c_str(), "a");
 #endif
     if (f) { std::fprintf(f, "  bindings:%s\n", msg); std::fclose(f); }
 }
@@ -2005,7 +2006,7 @@ void upgradeRetireQuickSelect_(Config& c)
 // shortPress[Plain].
 void upgradeSanitizeBankAndQuickActions_(Config& c)
 {
-    FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
+    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
     auto logReset = [&](int li, const char* cellName,
                         const std::string& oldAction,
                         const std::string& newAction) {
@@ -2202,7 +2203,7 @@ void load()
         }
         FILE* f = std::fopen(path, "a");
 #else
-        FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+        FILE* f = std::fopen(uf8::logPath("rea_sixty_init.log").c_str(), "a");
 #endif
         if (f) { std::fprintf(f, "  bindings:LOAD_ENTERED_RAW\n"); std::fclose(f); }
     }
@@ -2275,7 +2276,7 @@ void load()
             // Diagnostic snapshot. Dumps the resolved bindings for the
             // load-bearing buttons so "press did nothing" / "LED dark"
             // reports can be diagnosed from a single shared file.
-            if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                 std::fprintf(lg,
                     "[bindings::load] version_read=%d → migrated_to=%d\n",
                     tmp.version, kCurrentBindingsVersion);
@@ -2564,7 +2565,7 @@ void dispatchMidi_(const ActionStep& a)
     }
     // Bound device name no longer enumerated (unplugged or renamed) —
     // log once for diagnosis but don't surface a UI error every press.
-    if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
         std::fprintf(lg,
             "[midi] bound device '%s' not in current MIDI output list "
             "(unplugged or renamed)\n",
@@ -2664,7 +2665,7 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
                 // config) that dispatch silently no-op'd. Logging once
                 // per firing gives a paper trail for "press did nothing"
                 // bug reports.
-                if (FILE* lg = std::fopen("/tmp/rea_sixty.log", "a")) {
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                     std::fprintf(lg,
                         "[dispatch] unknown builtin action='%s' (firing press); "
                         "config may need re-migration or rebind\n",
