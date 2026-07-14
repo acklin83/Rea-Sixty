@@ -26442,20 +26442,51 @@ void reasixty_actionPickerPoll()
 // About tab uses these to launch the system handler. macOS-only path
 // (`open` CLI); cross-platform later. URL is shell-quoted by single
 // quotes — caller is trusted (hard-coded in UI).
+// Open a URL in the user's browser. Was macOS-only (`/usr/bin/open`), which is
+// why the About-page links did nothing at all on Windows: the click arrived, the
+// command silently didn't exist. ShellExecute rather than system() on Windows —
+// system() would flash up a console window.
 void reasixty_openUrl(const char* url)
 {
     if (!url || !*url) return;
+#if defined(_WIN32)
+    ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
+#elif defined(__APPLE__)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", url);
     std::system(cmd);
+#else
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' &", url);
+    std::system(cmd);
+#endif
 }
 
+// Show a file or folder in the OS file manager (Finder / Explorer / xdg).
+// Same macOS-only bug as reasixty_openUrl above.
 void reasixty_revealInFinder(const char* path)
 {
     if (!path || !*path) return;
+#if defined(_WIN32)
+    // "/select," highlights a FILE inside its folder; for a folder that syntax
+    // would open its parent instead, so open directories directly.
+    DWORD attr = GetFileAttributesA(path);
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        ShellExecuteA(nullptr, "open", path, nullptr, nullptr, SW_SHOWNORMAL);
+    } else {
+        char args[1024];
+        snprintf(args, sizeof(args), "/select,\"%s\"", path);
+        ShellExecuteA(nullptr, "open", "explorer.exe", args, nullptr, SW_SHOWNORMAL);
+    }
+#elif defined(__APPLE__)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", path);
     std::system(cmd);
+#else
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' &", path);
+    std::system(cmd);
+#endif
 }
 
 void reasixty_exportDiagnostic()
