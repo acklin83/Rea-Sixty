@@ -117,11 +117,22 @@ std::vector<uint8_t> openingSequence(int dataPort) {
     return out;
 }
 std::vector<uint8_t> heartbeat() {
-    std::vector<uint8_t> pb;                       // f1 = "server heartbeat"
-    putVarint(pb, (1<<3)|2); putVarint(pb, 16);
-    const char* s = "server heartbeat";
-    pb.insert(pb.end(), s, s + 16);
-    return ctrlFrame(10, pb);
+    // Replay Core's captured "server heartbeat" frame VERBATIM — this is the
+    // exact byte string the standalone probe used when it got the plugin to
+    // stream end-to-end (ssl_core_probe --serve, 2026-07-10). Rebuilding it via
+    // ctrlFrame(10, …) with seq=0 was NOT enough: the plugin reconnected in a
+    // loop and never sent meter UDP (observed in-extension 2026-07-14). The
+    // offset-8 seq/time field (0x0e4baf54) is part of what the plugin accepts.
+    static const char* hx =
+        "efbc51002e000000"                                          // magic + len(46)
+        "100000000100000054af4b0e1e0000000a00000079057a5f1c010000"  // 28-B header
+        "0a1073657276657220686561727462656174";                     // pb f1 "server heartbeat"
+    std::vector<uint8_t> v;
+    for (const char* p = hx; p[0] && p[1]; p += 2) {
+        auto nyb = [](char c){ return (c <= '9') ? c - '0' : (c | 0x20) - 'a' + 10; };
+        v.push_back(uint8_t(nyb(p[0]) << 4 | nyb(p[1])));
+    }
+    return v;
 }
 std::vector<uint8_t> announcement(uint16_t tcpPort) {
     std::vector<uint8_t> pb;                       // LgxPropertyConnectionAnnouncementData
