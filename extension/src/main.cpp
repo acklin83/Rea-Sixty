@@ -31036,6 +31036,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 const int p = std::atoi(dv);
                 if (p > 0 && p < 65536) dataPort = p;
             }
+            // Trace log opt-in via ExtState (the Lua test helper sets it); the
+            // impersonator reads REASIXTY_SSLCORE_TRACE at start, so translate.
+            if (const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
+                trv && *trv && strcmp(trv, "0"))
+                setenv("REASIXTY_SSLCORE_TRACE", "1", 1);
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");

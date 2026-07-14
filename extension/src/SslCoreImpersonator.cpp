@@ -30,11 +30,31 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdarg>
 #include <array>
 #include <vector>
 
 namespace sslcore {
 namespace {
+
+// Diagnostic log — the impersonator is otherwise blind. Enabled by the env var
+// REASIXTY_SSLCORE_TRACE; writes to /tmp/reaper_sslcore.log. Logs the lifecycle
+// (bind, announce, plugin connect/disconnect) and a periodic summary of which
+// meter DataTypes are arriving with sample values, so we can see end-to-end that
+// the plugin is streaming to us.
+bool  g_trace = false;
+void  slog(const char* fmt, ...) {
+    if (!g_trace) return;
+    FILE* f = std::fopen("/tmp/reaper_sslcore.log", "a");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
 
 // ---------------------------------------------------------------- shared state
 std::atomic<bool>      g_running{false};
@@ -146,10 +166,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     netInit();
 
     socket_t listenFd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listenFd == kInvalid) { g_running = false; return; }
+    if (listenFd == kInvalid) { slog("[err] TCP socket() failed"); g_running = false; return; }
     int yes = 1; setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char*>(&yes), sizeof(yes));
     sockaddr_in la{}; la.sin_family = AF_INET; la.sin_port = htons(tcpPort); la.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (::bind(listenFd, reinterpret_cast<sockaddr*>(&la), sizeof(la)) != 0 || ::listen(listenFd, 8) != 0) {
+        slog("[err] TCP bind/listen on port %u failed (in use? 360 running?)", unsigned(tcpPort));
         SC_CLOSE(listenFd); g_running = false; return;
     }
     // Read back the actual TCP port (if tcpPort was 0) to announce it.
@@ -159,7 +180,12 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     setNonBlocking(listenFd);
 
     socket_t dataFd = makeUdp(dataPort, true);
-    if (dataFd == kInvalid) { SC_CLOSE(listenFd); g_running = false; return; }
+    if (dataFd == kInvalid) {
+        slog("[err] UDP data-port %u bind failed (in use? 360 running?)", unsigned(dataPort));
+        SC_CLOSE(listenFd); g_running = false; return;
+    }
+    slog("[worker] up: TCP :%u  UDP data :%u  announcing on 16008/16009",
+         unsigned(actualTcp), unsigned(dataPort));
     socket_t annFd = makeUdp(0, false);
 
     std::vector<socket_t> clients;
@@ -200,6 +226,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
                 clients.push_back(c);
                 g_connected.store(true);
+                slog("[%.1f] plugin CONNECTED (fd=%d), sent opening sequence (%zu B), "
+                     "assigned data port %u", t, int(c), seq.size(), unsigned(dataPort));
             }
         }
         if (FD_ISSET(dataFd, &rset)) {
@@ -213,6 +241,26 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
                         Slot& s = g_meter[u.dataType];
                         s.current = std::move(u.current); s.peak = std::move(u.peak); s.have = true;
+                    }
+                    // Periodic summary: which DataTypes are live + a sample value.
+                    if (g_trace) {
+                        static double sLastLog = 0;
+                        if (t - sLastLog > 2.0) {
+                            sLastLog = t;
+                            std::lock_guard<std::mutex> lk2(g_meterMx);
+                            char line[512]; int off = 0;
+                            off += std::snprintf(line + off, sizeof(line) - off,
+                                                 "[%.1f] rx:", t);
+                            for (int d = 0; d < int(sslmeter::DataType::Count); ++d) {
+                                const Slot& s = g_meter[d];
+                                if (!s.have || s.current.empty()) continue;
+                                off += std::snprintf(line + off, sizeof(line) - off,
+                                    " t%d[%zu]=%.1f", d, s.current.size(),
+                                    double(s.current[0]));
+                                if (off > int(sizeof(line)) - 32) break;
+                            }
+                            slog("%s", line);
+                        }
                     }
                 }
             }
@@ -242,9 +290,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 // ------------------------------------------------------------------- public
 bool start(uint16_t tcpPort, uint16_t dataPort) {
     if (g_running.load()) return true;
+    g_trace = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
     { std::lock_guard<std::mutex> lk(g_meterMx); for (auto& s : g_meter) s = Slot{}; }
     g_lastDataMs.store(0);
     g_running.store(true);
+    slog("[start] tcpPort=%u dataPort=%u", unsigned(tcpPort), unsigned(dataPort));
     try { g_worker = std::thread(workerMain, tcpPort, dataPort); }
     catch (...) { g_running.store(false); return false; }
     return true;
