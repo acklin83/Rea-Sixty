@@ -70,6 +70,7 @@
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
 #include "StreamDeckBridge.h"
+#include "SslCoreImpersonator.h"
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
@@ -29327,6 +29328,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         uf8::dynamount::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
+        // Stop the SSL Core impersonator worker (no-op if it never started).
+        sslcore::stop();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
     }
@@ -29670,6 +29673,57 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         initLog(ok ? (bindAll ? "step: StreamDeck bridge listening (LAN 0.0.0.0)"
                               : "step: StreamDeck bridge listening (loopback)")
                    : "step: StreamDeck bridge FAILED to bind");
+    }
+
+    // SSL 360°Core impersonator — stand in for 360°Core so the SSL plug-ins
+    // stream their live meter data to us. That stream is the ONLY source for the
+    // Channel Strip's Gate/Comp gain reduction: REAPER's GainReduction_dB parm
+    // gives one number per FX and nothing at all for the gate (see UC1Surface's
+    // csGateGr). Reverse-engineered + proven end-to-end 2026-07-10/14.
+    //
+    // OPT-IN (default OFF): it announces itself on the SSL discovery ports
+    // (16008/16009) and would clash with a running SSL 360°. Enable per-user via
+    //   reaper.SetExtState("rea_sixty","ssl_core","1",true)
+    // Ports are overridable for clash-avoidance:
+    //   rea_sixty/ssl_core_tcp  (0 = ephemeral, announced)
+    //   rea_sixty/ssl_core_data (default 16010)
+    {
+        bool enable = false;
+        if (const char* ev = GetExtState("rea_sixty", "ssl_core"); ev && *ev)
+            enable = (!strcmp(ev, "1") || !strcmp(ev, "on")
+                      || !strcmp(ev, "true") || !strcmp(ev, "yes"));
+        if (enable) {
+            int tcpPort = 0;
+            if (const char* tv = GetExtState("rea_sixty", "ssl_core_tcp");
+                tv && *tv) {
+                const int p = std::atoi(tv);
+                if (p > 0 && p < 65536) tcpPort = p;
+            }
+            int dataPort = 16010;
+            if (const char* dv = GetExtState("rea_sixty", "ssl_core_data");
+                dv && *dv) {
+                const int p = std::atoi(dv);
+                if (p > 0 && p < 65536) dataPort = p;
+            }
+            // Trace log (/tmp or %TEMP%): on while the impersonator runs, since
+            // it is still young. Opt out with ssl_core_trace=0.
+            // setenv() is POSIX and absent on MSVC — _putenv_s is the Windows
+            // spelling. The uf1 branch this came from is macOS-only, so its bare
+            // setenv would not have compiled here.
+            const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
+            if (!(trv && *trv && !strcmp(trv, "0"))) {
+#if defined(_WIN32)
+                _putenv_s("REASIXTY_SSLCORE_TRACE", "1");
+#else
+                setenv("REASIXTY_SSLCORE_TRACE", "1", 1);
+#endif
+            }
+            const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
+            initLog(ok ? "step: SSL Core impersonator started"
+                       : "step: SSL Core impersonator FAILED to start");
+        } else {
+            initLog("step: SSL Core impersonator disabled (rea_sixty/ssl_core)");
+        }
     }
 
     initLog("step: REAPER_PLUGIN_ENTRY returning 1");

@@ -354,6 +354,11 @@ add_library(reaper_uf8 MODULE
     src/DynaMountClient.cpp
     src/DynaMountManager.cpp
     src/StreamDeckBridge.cpp
+    # SSL 360°Core impersonator — meter data straight from the SSL plug-in.
+    # Self-contained (std lib only, no REAPER API); this is what supplies the
+    # CS Gate/Comp gain reduction that no REAPER API exposes.
+    src/SslMeterProtocol.cpp
+    src/SslCoreImpersonator.cpp
 )
 
 if(APPLE)

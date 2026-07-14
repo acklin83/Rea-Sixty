@@ -14,6 +14,7 @@
 #include "Bindings.h"  // dispatch / dispatchEncoder for Uc1Encoder2
 #include "FocusedParam.h"  // uf8::setFocus — project UC1 knob turns onto the broadcast UF8 strip
 #include "GrCalibration.h" // uf8::applyGrCalibration + kBcVuBpDb / kLedsBpDb
+#include "SslCoreImpersonator.h" // sslcore::getChannelStripMeter — the Gate-GR source
 #include "MarkerOverlay.h"  // Phase 2.8b: Encoder 2 intercept for Nav Mode cursor
 #include "NavDispatch.h"    // shared push-action dispatcher (UC1 + UF8)
 #include "Palette.h"  // uf8::quantize for UC1 focused-track colour
@@ -4287,13 +4288,26 @@ void UC1Surface::pollGainReduction_()
         }
     }
 
-    // CS Gate GR: TODO. SSL CS2 doesn't expose a Gate-only readout via
-    // GainReduction_dB; the user's hardware shows Gate GR independently
-    // (it lit up alongside the Range knob during dual_35 capture work).
-    // Until we find the right data source (separate parmname? Range param
-    // value? real-time signal vs Gate-Threshold?), drive at 0 so the
-    // strip stays dark — better than mirroring Comp GR onto it.
+    // CS Gate GR — from the SSL plug-in itself, via our 360°Core impersonator.
+    // REAPER's GainReduction_dB parm carries ONE number per FX and nothing for
+    // the gate, which is why this stayed dark for months. SSL's own plug-in↔Core
+    // protocol does publish it: ChannelStripMeterType_GateGain. Verified on the
+    // wire 2026-07-14 — swept 0 dB (gate open) to -42 dB (closed, the Range
+    // setting) with the attack/release ramp in between, while CompGain tracked
+    // the compressor independently.
+    //
+    // Requires the impersonator to be running (ExtState rea_sixty/ssl_core=1,
+    // and SSL 360° quit). Stays 0 = dark otherwise, exactly as before — no
+    // mirroring of Comp GR onto the gate strip.
+    // Sign: the wire is 0..negative; the meters take magnitude (as above).
     float csGateGr = 0.0f;
+    if (sslcore::isRunning()) {
+        std::vector<float> gg;
+        if (sslcore::getChannelStripMeter(
+                int(sslcore::ChannelStripMeter::GateGain), gg) && !gg.empty()) {
+            csGateGr = std::abs(gg[0]);
+        }
+    }
 
     // Device-level per-tick calibration (Settings → Device → Calibrate).
     // Applied AFTER per-plugin FX-Learn cal — this is a hardware-trim,
