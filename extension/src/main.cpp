@@ -15683,14 +15683,27 @@ constexpr uint8_t kUf1VuScale[24] = {
 };
 
 // VU units -> needle byte. Clamps to the printed -20..+3 VU range.
+//
+// INTERPOLATES between table entries. The table is sampled at whole VU, so
+// rounding to the nearest entry gives the needle exactly 24 positions across the
+// whole faceplate and it visibly steps between them — Frank, 2026-07-15: "im
+// plugin sind die nadeln viel flüssiger". That was quantisation, not ballistics:
+// the plug-in hands us a smooth ~300 ms-ballistic value (t0/VuPpm) and we were
+// throwing the fraction away. The dial is curved (5 counts/VU at the bottom, 15
+// at the top), so interpolate on the byte, not on VU.
 uint8_t uf1VuByte_(float vu)
 {
     if (!std::isfinite(vu) || vu <= -20.f) return 4;
     if (vu >= 3.f) return 180;
-    int idx = static_cast<int>(std::lround(vu)) + 20;
-    if (idx < 0)  idx = 0;
-    if (idx > 23) idx = 23;
-    return kUf1VuScale[idx];
+    const float f = vu + 20.f;                    // 0 .. 23
+    int i = static_cast<int>(std::floor(f));
+    if (i < 0)  i = 0;
+    if (i > 22) i = 22;                           // i+1 must stay in range
+    const float frac = f - float(i);
+    const float a = float(kUf1VuScale[i]);
+    const float b = float(kUf1VuScale[i + 1]);
+    const float v = a + (b - a) * frac;
+    return static_cast<uint8_t>(std::lround(std::clamp(v, 0.f, 180.f)));
 }
 
 // SSL's peak-hold law, MEASURED from cap89 (analysis/uf1_hold_law.py: 28 snaps
@@ -15960,6 +15973,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // here is precisely why this screen painted one frame and then froze.
         putNdl(0x0125, ndl);
         putNdl(0x0127, hld);
+
+        // ⚠ HYPOTHESIS UNDER TEST (2026-07-15) — the red peak lights.
+        // Frank: "rotes peak licht auf dem VU hast du nicht kapiert".
+        // 0x0015 and 0x0016 are the only two single-byte elements unique to this
+        // screen's setup burst, both seeded 0x00 at rest (cap80) — which is what
+        // a pair of per-channel peak LEDs would look like. NOT yet confirmed: no
+        // capture we hold drives the Analogue screen into overload (cap88's sweep
+        // tops out at +5 VU). Lighting them on the needle crossing 0 VU tests the
+        // element identity with the hardware in front of Frank, which is cheaper
+        // and more honest than inventing a threshold from a capture we don't have.
+        // If the lights follow the needle past 0, the ids are right and only the
+        // threshold is left to pin down (SSL exposes AnalogueMetersLedOverload =
+        // b9138c4e76e51371, so the real trigger is likely a settable dBFS point,
+        // not 0 VU). If nothing lights, these are not the LEDs — say so and look
+        // again rather than tuning a number that was never connected.
+        const uint8_t ovL = uint8_t(vuL >= 0.f ? 0x01 : 0x00);
+        const uint8_t ovR = uint8_t(vuR >= 0.f ? 0x01 : 0x00);
+        g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&ovL, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&ovR, 1)));
     }
     else if (screen == 2) {
         // RTA: 0x0122 = 64 bytes. Header (0x00,0x03), then per band i:
