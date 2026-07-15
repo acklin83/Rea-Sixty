@@ -15570,14 +15570,17 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
         {
             {0x0100, {0x04,0x01}},
             {0x0102, {0x01}},
-            // Analogue chrome (cap80 at-rest). 0x0009 differs from the other
-            // screens (1e1e vs ffff); 0x000c is an extra dB readout seeded at
-            // rest (live wiring TODO).
-            {0x0009, {0x1e,0x1e,0x00,0x00}},
+            // Analogue chrome. CORRECTED 2026-07-15 against cap88 AND cap94 —
+            // both are Analogue captures and both send 0x0009 = ffff0000 and
+            // 0x0015 = 0x0016 = 0xff, constant, for their whole length. The old
+            // values here (1e1e0000 / 0x00 / 0x00) came from cap80 and match
+            // NEITHER; "0x0009 differs from the other screens" was simply wrong.
+            // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
+            {0x0009, {0xff,0xff,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
             {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
-            {0x0015, {0x00}},
-            {0x0016, {0x00}},
+            {0x0015, {0xff}},
+            {0x0016, {0xff}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
@@ -16025,14 +16028,55 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     if (!haveTp) { tpL = dbL; tpR = dbR; tpHold = holdMax; }
     if (!haveTr) { trL = rmsL; trR = rmsR; trHold = rms; haveTr = haveRms; }
 
-    const std::array<std::string, 6> fields{
-        uf1FormatMeterDb_(tpHold),                         // Peak hold  (f4)
-        uf1FormatMeterDb_(tpL),                            // Peak L
-        uf1FormatMeterDb_(tpR),                            // Peak R
-        haveTr ? uf1FormatMeterDb_(trHold) : std::string(),// RMS hold   (f4)
-        haveTr ? uf1FormatMeterDb_(trL) : std::string(),   // RMS L
-        haveTr ? uf1FormatMeterDb_(trR) : std::string(),   // RMS R
-    };
+    // The readout row is PER SCREEN — this used to send the Overview layout on
+    // every screen, which is Frank's "VU Zahlen zeigen was völlig anderes an".
+    //
+    // ANALOGUE = [L VU, L hold, R VU, R hold, "L", "R"], and the values are
+    // TextVuPpm(1)'s cur[0], pk[0], cur[1], pk[1]. PROVEN by the probe run:
+    // a -30/-20/-10 dBFS tone gives TextVuPpm cur = -12.01 / -2.01 / 8.0, i.e.
+    // exactly dBFS + 18 against the -18 dBFS reference, and cap88 proves the UF1
+    // field order independently (its f0 = 4.0 with the needle at 180 = the +3 VU
+    // peg, f0 = 2.0 with the needle at 164 = VU table index 22).
+    //
+    // ⚠ TextVuPpm(1) is NOT VuPpm(0), exactly as TextPeak is not BarPeak: at a
+    // -10 dBFS tone VuPpm cur = 3.0 (CLAMPED to the faceplate's +3 VU end stop,
+    // which is what the NEEDLE wants) while TextVuPpm cur = 8.0 (the true value,
+    // which is what the NUMBER must print). Reading the needle type here would
+    // print a number pinned at 3.0.
+    const int screenNow = g_uf1MeterScreen.load();
+    std::array<std::string, 6> fields;
+    if (screenNow == 1) {
+        float vc0 = -120.f, vc1 = -120.f, vp0 = -120.f, vp1 = -120.f;
+        bool haveVu = false;
+        std::vector<float> c, k;
+        if (sslcore::isRunning() &&
+            sslcore::getMeter(int(sslmeter::DataType::TextVuPpm), c, k) &&
+            c.size() >= 2 && (std::isfinite(c[0]) || std::isfinite(c[1]))) {
+            vc0 = std::isfinite(c[0]) ? c[0] : -120.f;
+            vc1 = std::isfinite(c[1]) ? c[1] : -120.f;
+            if (k.size() >= 2) {
+                vp0 = std::isfinite(k[0]) ? k[0] : -120.f;
+                vp1 = std::isfinite(k[1]) ? k[1] : -120.f;
+            }
+            haveVu = true;
+        }
+        fields = {
+            haveVu ? uf1FormatMeterDb_(vc0) : std::string(),   // L VU
+            haveVu ? uf1FormatMeterDb_(vp0) : std::string(),   // L hold
+            haveVu ? uf1FormatMeterDb_(vc1) : std::string(),   // R VU
+            haveVu ? uf1FormatMeterDb_(vp1) : std::string(),   // R hold
+            "L", "R",
+        };
+    } else {
+        fields = {
+            uf1FormatMeterDb_(tpHold),                         // Peak hold  (f4)
+            uf1FormatMeterDb_(tpL),                            // Peak L
+            uf1FormatMeterDb_(tpR),                            // Peak R
+            haveTr ? uf1FormatMeterDb_(trHold) : std::string(),// RMS hold   (f4)
+            haveTr ? uf1FormatMeterDb_(trL) : std::string(),   // RMS L
+            haveTr ? uf1FormatMeterDb_(trR) : std::string(),   // RMS R
+        };
+    }
     std::vector<uint8_t> p;
     p.reserve(6 * 25);
     for (const auto& s : fields)

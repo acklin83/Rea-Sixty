@@ -432,23 +432,23 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         if (u.chunked()) {
                             // Reassemble. Publish only once the whole array is in,
                             // so getMeter() never hands out a half-built image.
+                            // f7 (the total) is usually ABSENT, so grow the buffer
+                            // as chunks land and close it on the short tail chunk.
                             const size_t at = u.chunkStartIndex();
-                            if (s.asm_.size() != size_t(u.maxCount)) {
-                                s.asm_.assign(size_t(u.maxCount), 0.f);
-                                s.asmGot_ = 0;
-                            }
-                            const size_t n = (at < s.asm_.size())
-                                ? ((u.current.size() < s.asm_.size() - at)
-                                       ? u.current.size() : s.asm_.size() - at)
-                                : 0;
-                            for (size_t q = 0; q < n; ++q) s.asm_[at + q] = u.current[q];
-                            s.asmGot_ += n;
-                            if (s.asmGot_ >= s.asm_.size()) {
-                                s.current = s.asm_;         // one complete array
-                                s.peak    = std::move(u.peak);
-                                s.have    = true;
-                                s.asmGot_ = 0;
-                                completed = true;
+                            if (at == 0) s.asm_.clear();        // f9==0 starts an image
+                            if (s.asm_.size() < at + u.current.size())
+                                s.asm_.resize(at + u.current.size(), 0.f);
+                            for (size_t q = 0; q < u.current.size(); ++q)
+                                s.asm_[at + q] = u.current[q];
+                            if (u.isTailChunk()) {
+                                const size_t total = u.totalCount();
+                                if (total && s.asm_.size() >= total) {
+                                    s.asm_.resize(total);
+                                    s.current = s.asm_;         // one complete array
+                                    s.peak    = std::move(u.peak);
+                                    s.have    = true;
+                                    completed = true;
+                                }
                             }
                         } else {
                             s.current = std::move(u.current); s.peak = std::move(u.peak);
@@ -471,20 +471,70 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         // remainder — and every geometry ever fitted to that log was
                         // fitted to a chunk boundary. Only complete arrays reach
                         // here now (s.have is set once, when the last chunk lands).
-                        if (u.dataType == int(sslmeter::DataType::Lissajous) &&
-                            g_t10Dump && completed && !s.current.empty()) {
-                            size_t nz = 0;
-                            for (float v : s.current) if (v != 0.f) ++nz;
-                            if (nz > 0) {
-                                if (FILE* gf = std::fopen("/tmp/reaper_t10_frames.log", "a")) {
-                                    std::fprintf(gf, "FRAME t=%.3f src=%u n=%zu nz=%zu\n",
-                                                 t, unsigned(ntohs(from.sin_port)),
-                                                 s.current.size(), nz);
-                                    for (size_t k = 0; k < s.current.size(); ++k)
-                                        if (s.current[k] != 0.f)
-                                            std::fprintf(gf, "%zu %.4f\n", k, double(s.current[k]));
-                                    std::fclose(gf);
+                        // ---- FULL METER DUMP (REASIXTY_T10_DUMP=1) -------------
+                        // Log EVERY DataType with EVERY field. The last probe only
+                        // dumped t10 and only its f3, which is exactly why four
+                        // separate faults had to be chased one capture at a time.
+                        // One run of the probe WAV must answer all of them.
+                        //   MSG  = one message, all scalar fields (small arrays in
+                        //          full: that is TextPeak/TextRms/VuPpm/overload).
+                        //   T10  = one COMPLETE reassembled Lissajous array, sparse
+                        //          (index value), throttled to ~2 Hz so 17113 floats
+                        //          x 25 Hz cannot bury the log. Each probe section is
+                        //          held 4 s, so 2 Hz still catches every one.
+                        if (g_t10Dump) {
+                            static FILE* mf = nullptr;
+                            if (!mf) {
+                                // /tmp, NOT ~/Desktop. The Desktop is TCC-protected:
+                                // REAPER can write there, but the tooling that has to
+                                // READ the dump afterwards cannot open a file another
+                                // app created — cost a round trip on 2026-07-15. /tmp
+                                // does get reaped eventually, so copy anything worth
+                                // keeping into captures/ as soon as the run is done.
+                                mf = std::fopen("/tmp/reasixty_meter_dump.log", "a");
+                                if (mf) std::fprintf(mf, "\n==== RUN START ====\n");
+                            }
+                            if (mf) {
+                                const unsigned sp = unsigned(ntohs(from.sin_port));
+                                std::fprintf(mf, "MSG t=%.3f src=%u dt=%d n3=%zu n4=%zu n5=%zu "
+                                                 "f7=%d f8=%d f9=%d",
+                                             t, sp, u.dataType, s.current.size(), s.peak.size(),
+                                             s.overload.size(), u.maxCount, u.chunkSize, u.chunkOffset);
+                                if (s.current.size() <= 16) {
+                                    std::fprintf(mf, " cur=[");
+                                    for (size_t q = 0; q < s.current.size(); ++q)
+                                        std::fprintf(mf, "%s%.3f", q ? "," : "", double(s.current[q]));
+                                    std::fprintf(mf, "]");
                                 }
+                                if (s.peak.size() <= 16 && !s.peak.empty()) {
+                                    std::fprintf(mf, " pk=[");
+                                    for (size_t q = 0; q < s.peak.size(); ++q)
+                                        std::fprintf(mf, "%s%.3f", q ? "," : "", double(s.peak[q]));
+                                    std::fprintf(mf, "]");
+                                }
+                                if (!s.overload.empty()) {
+                                    std::fprintf(mf, " ovl=[");
+                                    for (size_t q = 0; q < s.overload.size(); ++q)
+                                        std::fprintf(mf, "%s%u", q ? "," : "", unsigned(s.overload[q]));
+                                    std::fprintf(mf, "]");
+                                }
+                                std::fprintf(mf, "\n");
+
+                                if (u.dataType == int(sslmeter::DataType::Lissajous) &&
+                                    completed && !s.current.empty()) {
+                                    static double sLastT10 = 0;
+                                    if (t - sLastT10 > 0.5) {
+                                        sLastT10 = t;
+                                        size_t nz = 0;
+                                        for (float v : s.current) if (v != 0.f) ++nz;
+                                        std::fprintf(mf, "T10 t=%.3f src=%u n=%zu nz=%zu\n",
+                                                     t, sp, s.current.size(), nz);
+                                        for (size_t k = 0; k < s.current.size(); ++k)
+                                            if (s.current[k] != 0.f)
+                                                std::fprintf(mf, "%zu %.3f\n", k, double(s.current[k]));
+                                    }
+                                }
+                                std::fflush(mf);
                             }
                         }
                     }

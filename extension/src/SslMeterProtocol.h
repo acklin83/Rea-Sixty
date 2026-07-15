@@ -59,22 +59,43 @@ struct Update {
     std::vector<uint8_t> overloadHold;   // OverloadInfHoldValues (f6)
 
     // Chunking. A big array (the Lissajous) does NOT fit one message: the plugin
-    // splits it and each part carries these. MEASURED in cap87 — the Lissajous is
-    // 17113 floats total and arrives in pieces:
-    //   src 59625: chunkSize 5000, chunkOffset 0,1,2,3      -> offset is an INDEX
-    //   src 59950: chunkSize 1500, chunkOffset 0,1500,3000… -> offset is in FLOATS
-    // Both sum to exactly 17113. Two senders, two conventions — see
-    // chunkStartIndex() for how we tell them apart. Before this was understood we
-    // simply overwrote the slot with each chunk and kept whichever arrived last,
-    // which is why the "array length" looked like it randomly alternated between
-    // 5000 and 2113 (= 17113 - 3*5000, the remainder chunk).
-    int maxCount    = -1;  // MaxValueCount (f7) — total floats in the whole array
-    int chunkSize   = -1;  // ChunkSize      (f8)
+    // splits it and each part carries these. MEASURED — the Lissajous is 17113
+    // floats total and arrives in pieces. THREE conventions seen so far, and only
+    // dt=10 is ever chunked (every other type has f7=f8=f9 absent):
+    //   cap87 src 59950: f7=17113, f8=1500 (ACTUAL size, 613 on the tail),
+    //                    f9 = 0,1500,3000…16500  -> offset in FLOATS
+    //   cap87 src 59625: f7 ABSENT, f8=5000 (NOMINAL, stays 5000 on the tail),
+    //                    f9 = 0,1,2,3            -> offset is a chunk INDEX
+    //   live 2026-07-15: f7 ABSENT, f8=5000, f9 = 0,1,2,3, sizes 5000,5000,5000,
+    //                    2113  -> 17113, same as cap87's f7. Both plug-in
+    //                    instances did this.
+    // So f7 may be ABSENT: do not require it (that bug made the first probe run
+    // dump chunks instead of images). Detect the tail by a short chunk instead.
+    // Before any of this was understood we overwrote the slot with each chunk and
+    // kept whichever arrived last — which is the whole reason the "array length"
+    // looked like it alternated between 5000 and 2113 (= 17113 - 3*5000).
+    int maxCount    = -1;  // MaxValueCount (f7) — total floats; OFTEN ABSENT
+    int chunkSize   = -1;  // ChunkSize      (f8) — nominal OR actual, sender-dependent
     int chunkOffset = -1;  // ChunkOffset    (f9) — index OR float offset
 
     bool valid() const { return dataType >= 0 && dataType < int(DataType::Count); }
-    bool chunked() const { return maxCount > 0 && chunkSize > 0 &&
-                                 size_t(maxCount) > current.size(); }
+
+    // Only the chunked types carry f8 at all, so its presence IS the flag.
+    bool chunked() const { return chunkSize > 0; }
+
+    // True when this chunk closes the array. With f7 we simply know the total;
+    // without it, the tail is the chunk shorter than the nominal chunk size.
+    bool isTailChunk() const {
+        if (maxCount > 0) return chunkStartIndex() + current.size() >= size_t(maxCount);
+        return current.size() < size_t(chunkSize);
+    }
+
+    // Total floats, once known. 0 = not yet determined (f7 absent, tail not seen).
+    size_t totalCount() const {
+        if (maxCount > 0) return size_t(maxCount);
+        if (current.size() < size_t(chunkSize)) return chunkStartIndex() + current.size();
+        return 0;
+    }
 
     // Where this chunk's floats start in the full array. The two observed senders
     // disagree on what ChunkOffset means, so disambiguate by magnitude: a value
