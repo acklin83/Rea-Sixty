@@ -15539,48 +15539,72 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
     static const std::vector<std::vector<Uf1ScreenFrame>> kUf1MeterScreens = {
         // [0] OVERVIEW — readouts + L-R balance + bargraphs + Lissajous + correlation.
         {
-            {0x0100, {0x04,0x00}},
-            {0x0102, {0x01}},
-            // Common meter chrome that SSL sends but the burst extractor wrongly
-            // dropped as "animated" (cap89 at-rest values). Without these the
-            // screen frame/scales don't render — the cause of "only one bar,
-            // many displays missing". 0x0119 is a small balance/correlation
-            // strip we seed at rest (its codec is still undecoded).
-            {0x0009, {0xff,0xff,0x00,0x00}},
+            // ⚠ REBUILT 2026-07-15 to be cap75's Overview entry, in cap75's ORDER.
+            // cap75 is the ONLY capture of SSL doing what Frank actually does —
+            // entering the Meter view FROM the Channel view. cap76 only cycles
+            // BETWEEN meter screens, so its burst is missing every element SSL
+            // writes on a view change. I compared against cap76 for hours.
+            //
+            // 0x0110 = 0f was the hole: SSL writes it on Overview entry and we
+            // only ever wrote it in the CHANNEL branch, so it was never sent while
+            // the meter view came up.
+            //
+            // 0x0009/0x0015/0x0016 are 00 here — cap75 AND cap76 agree. They are
+            // NOT chrome: cap89 holds them at ffff0000/ff/ff for its whole length
+            // and STILL draws the goniometer, so they are per-session state, and
+            // setting them to cap89's ff is what recoloured Frank's VU readout.
+            // Two captures that disagree are two states, not a vote to win.
+            {0x0009, {0x00,0x00,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
-            {0x0015, {0xff}},
-            {0x0016, {0xff}},
-            {0x0119, {0x00,0x00,0x00,0x00,0x0d,0x0d,0x7e,0x7e,0x00,0x00,0x00}},
+            {0x0015, {0x00}},
+            {0x0016, {0x00}},
+            {0x0100, {0x04,0x00}},
+            {0x0101, {0x03}},
+            {0x0102, {0x01}},
             {0x0104, {0x00,0x4f,0x56,0x45,0x52,0x56,0x49,0x45,0x57}},   // "OVERVIEW"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
             {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x0110, {0x0f}},                                           // <- was never sent here
             {0x010d, {0x0a,0x0b,0x0a,0x0b}},
             {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
             {0x010e, {0x01,0x54,0x72,0x75,0x65,0x50,0x6b,0x00,0x00,0x4f,0x6e,
                       0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},        // "TruePk" / "On"
             {0x010e, {0x02,0x4e,0x6f,0x6e,0x2d,0x4c,0x69,0x6e,0x65,0x61,0x72}}, // "Non-Linear"
-            {0x010e, {0x03,0x46,0x61,0x64,0x65,0x00,0x00,0x00,0x00,0x00,0x32,
-                      0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}},   // "Fade" / "2 sec"
+            // "Fade" / "2 sec" — exactly 4 NULs between the two fields. We had 5,
+            // which shifts the value field by one byte (cap75/cap76 both show 4).
+            {0x010e, {0x03,0x46,0x61,0x64,0x65,0x00,0x00,0x00,0x00,0x32,
+                      0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}},
+            {0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
             {0x011a, {0x07}},
+            {0x011e, {0x10}},
+            {0x0120, {0x00}},
+            {0x0129, {0xff}},
+            {0x011f, {0x00}},
             {0x0128, {0x00}},
-            {0x011d, {0xff}},
+            {0x011d, {0x00}},
         },
         // [1] ANALOGUE — VU (or PPM Type-II) needles + readouts.
         {
             {0x0100, {0x04,0x01}},
             {0x0102, {0x01}},
-            // Analogue chrome. CORRECTED 2026-07-15 against cap88 AND cap94 —
-            // both are Analogue captures and both send 0x0009 = ffff0000 and
-            // 0x0015 = 0x0016 = 0xff, constant, for their whole length. The old
-            // values here (1e1e0000 / 0x00 / 0x00) came from cap80 and match
-            // NEITHER; "0x0009 differs from the other screens" was simply wrong.
+            // Analogue chrome (cap80 at-rest).
+            // ⚠ DO NOT "correct" 0x0009 to ffff0000 or 0x0015/0x0016 to 0xff.
+            // I did exactly that on 2026-07-15 because cap88 AND cap94 hold those
+            // values constant — and it CHANGED THE COLOUR OF THE VU READOUT on the
+            // hardware. Frank: "du wechselst die farbe der vu meter zahlen-werte
+            // ... macht ssl meter pro NIE." Two captures agreeing does not outvote
+            // a third: 0x0009 is not chrome at all, it VARIES in cap80 (1e1e, 1f1f,
+            // 1e1f, 1f1e, 1e1c, 1e1d — two independent bytes in 0x1c..0x1f), so
+            // cap88/cap94's constant ffff is that capture's state, not the law.
+            // Its real meaning is still unknown; keep cap80's at-rest seed until
+            // something MEASURES it.
             // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
-            {0x0009, {0xff,0xff,0x00,0x00}},
+            {0x0009, {0x1e,0x1e,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
             {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
-            {0x0015, {0xff}},
-            {0x0016, {0xff}},
+            {0x0015, {0x00}},
+            {0x0016, {0x00}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
@@ -16119,14 +16143,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         for (size_t k = 0; k < 25; ++k)
             p.push_back(k < s.size() ? static_cast<uint8_t>(s[k]) : 0x00);
 
-    // 0x011c (the numeric row) only needs resending when the rounded text
-    // changes — but the graphic elements below animate every tick, so this must
-    // NOT early-return the whole function.
-    static std::vector<uint8_t> sLast;
-    if (force || p != sLast) {
-        sLast = p;
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
-    }
+    // Unconditional. SSL restates 0x011c every cycle too (cap89: 2570 frames in
+    // 105 s, and the trace showed us sending only 241 where SSL sends 2570).
+    // Do not reintroduce a change-gate here: same rule as every other element.
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
 
     // ---- Per-screen graphic ------------------------------------------------
     // Drive each screen's decoded graphic from the same plugin floats. Only the
@@ -16184,6 +16204,41 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             std::vector<float> liss, pk;
             if (sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, pk))
                 uf1PaintGoniometer_(liss);
+        }
+
+        // The rest of cap89's cycle, in cap89's order. These five were sent ONCE,
+        // in the setup burst, and that is the last difference between our stream
+        // and SSL's — PROVEN by the frame trace (/tmp/reaper_uf1_frames.log) taken
+        // with the UF1 actually on Overview:
+        //          SSL (cap89)     us (before this)
+        //   0x0122  35/cycle        35/cycle, order 34->0, lens 257/67  — identical
+        //   0x0125/26/27, 0x0128, 0x011d  every cycle    every cycle    — identical
+        //   0x0009/0x000a/0x0015/0x0016   2569x = EVERY CYCLE      4x (burst only)
+        //   0x0119                        1011x                    4x (burst only)
+        // Everything about the image was right — content, geometry, chunk order,
+        // lengths, 35 chunks, 48797 frames on the wire — and the face stayed black.
+        // Values are cap89's own at-rest bytes.
+        //
+        // This is [[uf1-meter-codec-decoded]]'s own hard rule, which I broke here:
+        // NEVER send a UF1 display element once and assume it sticks. SSL restates
+        // every element ~25 Hz forever. Sending once is just the send-on-change
+        // dedup taken to its limit — the same trap that froze the Analogue needle
+        // and painted RTA exactly once.
+        // Values are cap75/cap76's, i.e. 00 — NOT cap89's ff. cap89 disagrees
+        // because these carry per-session state (they recoloured Frank's VU
+        // readout when I "corrected" them to ff), and cap89 draws the goniometer
+        // perfectly well with ff, so they gate nothing. Restating the burst's own
+        // values is the safe read.
+        // 0x0119 is deliberately NOT restated: cap75/cap76 never send it on
+        // Overview at all, and we do not know its codec.
+        {
+            static const uint8_t k0009[] = {0x00,0x00,0x00,0x00};
+            static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
+            static const uint8_t kZ      = 0x00;
+            g_uf1_dev->send(uf1::buildScreen(0x0009, k0009));
+            g_uf1_dev->send(uf1::buildScreen(0x000a, k000a));
+            g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kZ, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kZ, 1)));
         }
 
         putBar(0x0125, rmsBar);
