@@ -15740,12 +15740,31 @@ constexpr double kUf1HoldResetSec = 3.0;
 // of that diamond (52 of 99 rows lit in a single frame, identical across frames
 // — geometry, not signal). n = 2·50² is not a coincidence: 50 is the half-height.
 //
-// Derive the shape from n instead of hardcoding 5000: SSL sizes this raster to
-// its own view, and we have seen a second instance stream 2113. Any n = 2·m² is
-// a diamond of half-height m; anything else we do not understand, so we paint
-// nothing rather than paint garbage.
-// Row table for whatever shape the plug-in is streaming. Two shapes are known,
-// both MEASURED from cap97 — nothing here is inferred from the length alone.
+// The plug-in's raster is a diamond of ODD row widths: 1, 3, 5, …, 5, 3, 1.
+// ONE law covers both lengths the stream emits — R rows, width[i] = 2·min(i, R-1-i)+1:
+//   R odd  (= 2k-1)  ->  sum = 2k² - 2k + 1   single peak row, width 2k-1
+//   R even (= 2k)    ->  sum = 2k²            peak row doubled, width 2k-1
+// so n = 2113 -> 65 rows (k=33) and n = 5000 -> 100 rows (k=50). Both are exact;
+// invert n to get R. The doubled peak on even R is the same quirk the UF1's own
+// diamond has (its 92 is two rows) — it is how you rasterise a diamond whose
+// height is even.
+//
+// MEASURED from cap97 (the corr +1→0→−1 sweep), and the test that proves it is
+// PHYSICS, not a curve fit: with a mono signal (L=R) a goniometer must draw a
+// VERTICAL line, i.e. one lit pixel per row sitting on that row's CENTRE. Under
+// this law every one of the 25 mono frames at n=2113 has its lit pixels at
+// fraction 0.509–0.524 across the row (median 0.513 — dead centre), and all 38
+// at n=5000 at median 0.536.
+//
+// ⚠ Both earlier models are REFUTED — do not resurrect them:
+//   * "n = 2m², rows 2,4,…,2m,…,4,2" put the mono line on the row EDGE
+//     (frac 0.0) = a 45° diagonal, which is what a wrong geometry looks like.
+//     Its "proof" was that the lit indices are the row STARTS 0,2,6,12,20,30…
+//     Those indices are real — they are i(i+1) — but i(i+1) is the CENTRE of
+//     row i of THIS diamond (start i², width 2i+1). Same numbers, right shape.
+//   * "n=2113 = 42 lead-in then rows 90,88,…,2,1" — asymmetric, and it put the
+//     mono line on the edge in 45 of 46 rows. 2113 was never a fragment or a
+//     truncated packed field: 2·33²-2·33+1 = 2113 exactly.
 struct Uf1GonioGeom {
     std::vector<int> w;          // row widths, in floats
     std::vector<int> start;      // row start offsets
@@ -15754,28 +15773,23 @@ struct Uf1GonioGeom {
 inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
 {
     Uf1GonioGeom g;
+    const long long N = static_cast<long long>(n);
+    int rows = 0;
 
-    // Shape A — the diamond. n = 2m², rows 2,4,…,2m,…,4,2 (2m-1 rows).
-    // Proven for n=5000 (m=50): the lit indices at high correlation are exactly
-    // this table's row starts (0, 2, 6, 12, 20, 30, 42, 56, 72, 90 …).
-    const int m = int(std::lround(std::sqrt(double(n) / 2.0)));
-    if (m >= 2 && size_t(2 * m * m) == n) {
-        for (int k = 0; k < m; ++k)      g.w.push_back(2 * (k + 1));
-        for (int k = 0; k < m - 1; ++k)  g.w.push_back(2 * (m - 1 - k));
+    // Even row count: n = 2k².
+    if (N % 2 == 0) {
+        const long long k = std::llround(std::sqrt(double(N) / 2.0));
+        if (k >= 2 && 2 * k * k == N) rows = int(2 * k);
     }
-    // Shape B — what the SSL Meter (Pro) instance actually streams: n = 2113.
-    // Measured, not understood: 42 leading floats, then rows 90, 88, …, 4, 2, 1.
-    // 42 + 2070 + 1 = 2113 exactly, and the corr-high frame's 46 lit indices are
-    // this table's row starts (42, 132, 220, 306 …, 2112). It is NOT symmetric —
-    // a monotonically shrinking field, which is a strange shape for a goniometer
-    // and says the reading is incomplete. It maps well enough to paint and let
-    // the hardware judge; if the face comes out lopsided, THIS is the suspect.
-    else if (n == 2113) {
-        g.w.push_back(42);                                 // header/lead-in
-        for (int k = 90; k >= 2; k -= 2) g.w.push_back(k);
-        g.w.push_back(1);
+    // Odd row count: n = 2k² - 2k + 1  <=>  2n - 1 = (2k-1)², and R = 2k-1.
+    if (rows == 0) {
+        const long long s = std::llround(std::sqrt(double(2 * N - 1)));
+        if (s >= 3 && (s % 2) == 1 && s * s == 2 * N - 1) rows = int(s);
     }
-    else return g;                                          // unknown -> paint nothing
+    if (rows < 3) return g;                                 // unknown -> paint nothing
+
+    for (int i = 0; i < rows; ++i)
+        g.w.push_back(2 * std::min(i, rows - 1 - i) + 1);
 
     int s = 0;
     for (int x : g.w) { g.start.push_back(s); s += x; }
@@ -15814,6 +15828,15 @@ constexpr int kUf1DiamondRows  = 187;
 //
 // Chunking (8ecaec5): byte[0] = chunk index 0..34, then 250 payload bytes; the
 // last chunk carries 60. 35 chunks = 8560.
+//
+// ⚠ SEND THE CHUNKS DESCENDING, 34 FIRST AND 0 LAST. This is not cosmetic and it
+// is why the face stayed black through two sessions: cap89 has 2570 complete
+// images and every single one goes 34,33,…,1,0 — the 61-byte tail leads, chunk 0
+// closes. Zero images ascend. The device evidently latches on chunk 0, so
+// sending 0 first published an empty buffer and the 34 chunks that followed were
+// never drawn: "correct frames that the device ignores". The earlier check
+// compared payload sizes and the 34:1 ratio, called that byte-identical, and
+// never looked at the order.
 void uf1PaintGoniometer_(const std::vector<float>& src)
 {
     const Uf1GonioGeom g = uf1GonioGeomFor_(src.size());
@@ -15844,7 +15867,7 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
         uoff += uwid;
     }
 
-    for (int c = 0; c < 35; ++c) {
+    for (int c = 34; c >= 0; --c) {                 // 34 -> 0, exactly as cap89
         const int len = (c == 34) ? 60 : 250;
         std::vector<uint8_t> pay;
         pay.reserve(size_t(len) + 1);
@@ -16031,18 +16054,32 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // any value that saturates or goes constant stops the element dead. It
         // is what froze the Analogue needle: pegged at byte 180, so "unchanged",
         // so exactly ONE frame went out per visit to the screen.
-        putBar(0x0125, rmsBar);
-        putBar(0x0126, peakBar);
-        putBar(0x0127, holdBar);
-
-        // The goniometer. Overview is the only screen that streams Lissajous
-        // (t10) — the plug-in computes it for this view and no other — and until
-        // now we sent no 0x0122 here at all, which is why the face stayed black.
+        // Order matters, so follow cap89's cycle exactly: the goniometer image
+        // first, then the bars, then the commit. Overview is the only screen
+        // that streams Lissajous (t10) — the plug-in computes it for this view
+        // and no other.
         {
             std::vector<float> liss, pk;
             if (sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, pk))
                 uf1PaintGoniometer_(liss);
         }
+
+        putBar(0x0125, rmsBar);
+        putBar(0x0126, peakBar);
+        putBar(0x0127, holdBar);
+
+        // Commit / latch. SSL closes EVERY Overview cycle with exactly this pair
+        // and nothing else: cap89 has 0x0128 then 0x011d as the last two elements
+        // of 2536 of 2570 image cycles, each sent once per image, each carrying
+        // 0x00 and no other value in the whole 105 s capture. We only ever sent
+        // them once, inside the setup burst, so a chunked image had nothing to
+        // publish it. (The setup burst seeds 0x011d = 0xff, a value that never
+        // occurs anywhere in cap89 — harmless now that the cycle overwrites it
+        // 25× a second, but do not trust that 0xff.) The RTA screen needs no
+        // commit because its 0x0122 is a single unchunked 64-byte frame.
+        const uint8_t kCommit = 0x00;
+        g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kCommit, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kCommit, 1)));
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
