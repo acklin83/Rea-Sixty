@@ -32,6 +32,20 @@ bool isRunning();
 // True while at least one plugin is TCP-connected.
 bool pluginConnected();
 
+// Select which meter view the plug-in should compute: 0 Overview, 1 Analogue,
+// 2 RTA — same order as kUf1MeterScreens.
+//
+// This is NOT cosmetic, it decides what you are allowed to receive. The plug-in
+// only computes the meters its selected view needs, and withholds the rest:
+// on view 0 the Lissajous (t10) streams and the RTA (t8/t9) does not; on view 2
+// it is the other way round. Proven 2026-07-15 — setting this to 2 is what made
+// t8[31]/t9[31] appear after five days of hunting a "missing subscribe" that
+// never existed. So the view MUST track whatever the UF1 is showing, or the
+// screen the user is looking at is fed by a stream the plug-in isn't producing.
+//
+// Safe to call from any thread; takes effect on the worker's next pass.
+void setView(int view);
+
 // Copy the most recent values for `dataType` (a sslmeter::DataType) into out.
 // Returns false if that type hasn't been seen yet. Thread-safe.
 // Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on

@@ -15855,6 +15855,14 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // 0 Overview, 1 Analogue, 2 RTA, 3 Loudness.
     const int screen = g_uf1MeterScreen.load();
 
+    // Tell the plug-in which view we are painting. This is a DATA dependency,
+    // not cosmetics: it only computes the meters its selected view needs, so
+    // asking for the wrong one starves the screen. On view 0 the Lissajous (t10)
+    // streams and the RTA (t8/t9) does not; on view 2 it is the other way round.
+    // Proven 2026-07-15: this call is what finally made t8[31]/t9[31] arrive.
+    // Cheap — setView() only stores, and only sends on an actual change.
+    sslcore::setView(screen);
+
     if (screen == 0) {
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
         // 0x0127 = (hold_L,hold_R). All on the one dBFS bar scale.

@@ -191,6 +191,40 @@ std::vector<uint8_t> fromHex(const char* hx) {
 // continuous meter stream (observed in-extension 2026-07-14; the missing
 // "type-2/type-18 per-object subscribe frames" flagged in the 2026-07-10 notes).
 // Extracted verbatim from the cold-connect capture (Core :52143 -> plugin).
+// Which meter view the plug-in should compute. See setView() in the header for
+// why this gates the data rather than just the plug-in's own GUI.
+std::atomic<int>  g_view{0};
+std::atomic<bool> g_viewDirty{false};
+
+// 360SelectedView (= c5ea04de4990b792) = `view` as a double.
+//
+// Read the four identity frames in subscribeInitial() again: they are NOT
+// "subscribes to meter data", whatever the old comment claimed. Resolved against
+// the object map the plug-in announces about itself, they are —
+//     636a1bfc… = GuiSlotIndex     b740ee1d… = PluginIdent
+//     2ba7d9fe… = SessionDataId    fc74d763… = UniqueId
+// and the trailing `08<varint>` is that property's VALUE, not a stream selector.
+// type-18 is SET-PROPERTY, not subscribe. We never subscribed to anything: we
+// say who we are, and the plug-in streams its meters at us unprompted. That is
+// why hunting for "the missing RTA subscribe" got nowhere — there is no such
+// frame. RTA was withheld because the plug-in only computes what its SELECTED
+// VIEW needs, and we never set the view, so it sat on 0.0 = Overview.
+//
+// Property values are protobuf field 1, wire type 1 = little-endian double
+// (09 + 8 B), NOT a varint — RtaPeakHold reads 090000000000001040 = 4.0. The
+// varint reading was a half-decoded double.
+std::vector<uint8_t> viewFrame(int view) {
+    static const char* kHdr =
+        "efbc510025000000100000000100000028e0c74515000000"
+        "12000000" "c5ea04de4990b792" "09";
+    auto f = fromHex(kHdr);
+    const double d = double(view);
+    uint8_t db[8];
+    std::memcpy(db, &d, 8);                 // x86/ARM: already little-endian
+    f.insert(f.end(), db, db + 8);
+    return f;
+}
+
 std::vector<uint8_t> subscribeInitial() {
     std::vector<uint8_t> out;
     auto add = [&](const char* hx){ auto f = fromHex(hx); out.insert(out.end(), f.begin(), f.end()); };
@@ -204,28 +238,8 @@ std::vector<uint8_t> subscribeInitial() {
     // stream (RTA t8/t9 never arrived because only the first 3 were subscribed).
     // Cheap to include; if RTA data appears it was this.
     add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
-    // RTA (t8) + TextRta (t9). ⚠ TRIED 2026-07-15 AND NOT SUFFICIENT — t8/t9
-    // still do not arrive with these in place. Kept because they are harmless
-    // (stream stays stable, 1 connect, no reconnect loop) and because the NEXT
-    // attempt needs to know this much was already ruled out.
-    //
-    // The ids themselves are solid — not guessed, not lifted from a capture. The
-    // plug-in ANNOUNCES every object it owns, by name, over the control socket we
-    // already hold; we threw those frames away unread until 2026-07-15 (see the
-    // recv() path below). Its declarations spell out, in clear text:
-    //     "Rta Meter Data"       = a7f10c0000000000
-    //     "TextRta Meter Data"   = 004aa60f13520000
-    //     "Lissajous Meter Data" = 21fcbf398d36940b   (goniometer; already t10)
-    // Re-read the list on any machine with REASIXTY_SSLCORE_TRACE=1 and
-    // `grep "PLUGIN->us" /tmp/reaper_sslcore.log` — no capture, no SSL 360 needed.
-    //
-    // So subscribing by object id is NOT the whole story. What is still unknown:
-    // the trailing varint. The 4 frames that DO work carry different values
-    // (0801 / 088010 / 08f6cbb302 / 08c1d828) and we copied 0801 blindly here.
-    // Prime suspect. Also unresolved: whether "360SelectedView"
-    // (= c5ea04de4990b792) gates RTA streaming on the view being selected.
-    add("efbc51002d000000100000000100000028e0c7451d00000012000000a7f10c00000000000801120d0a0b08ffffffffffffffffff01");
-    add("efbc51002d000000100000000100000028e0c7451d00000012000000004aa60f135200000801120d0a0b08ffffffffffffffffff01");
+    auto v = viewFrame(g_view.load());
+    out.insert(out.end(), v.begin(), v.end());
     return out;
 }
 // The type-18 subscribe frames, replayed periodically to keep the streams alive.
@@ -238,10 +252,11 @@ std::vector<uint8_t> subscribeRefresh() {
     add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
     add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
     add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
-    // RTA + TextRta — must be refreshed too, or the subscription lapses with the
-    // rest after ~6 s. See subscribeInitial() for where the ids come from.
-    add("efbc51002d000000100000000100000028e0c7451d00000012000000a7f10c00000000000801120d0a0b08ffffffffffffffffff01");
-    add("efbc51002d000000100000000100000028e0c7451d00000012000000004aa60f135200000801120d0a0b08ffffffffffffffffff01");
+    // Re-assert the view with the rest — see viewFrame(). Sending it on every
+    // refresh is also how a view CHANGE reaches the plug-in: setView() only
+    // stores, the worker carries it within 5 s.
+    auto v = viewFrame(g_view.load());
+    out.insert(out.end(), v.begin(), v.end());
     return out;
 }
 
@@ -350,6 +365,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             lastSub = t;
             const auto sub = subscribeRefresh();
             for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+        }
+        // A view change must not wait for the next 5 s refresh — the user has
+        // already switched the UF1 screen and would stare at a dead element
+        // until the plug-in starts computing that view's meters.
+        if (!clients.empty() && g_viewDirty.exchange(false)) {
+            const auto v = viewFrame(g_view.load());
+            for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(v.data()), int(v.size()), 0);
+            if (g_trace) slog("[%.1f] view -> %d", t, g_view.load());
         }
 
         fd_set rset; FD_ZERO(&rset);
@@ -533,6 +556,12 @@ void stop() {
 
 bool isRunning()      { return g_running.load(); }
 bool pluginConnected(){ return g_connected.load(); }
+
+void setView(int view)
+{
+    if (view < 0) view = 0;
+    if (g_view.exchange(view) != view) g_viewDirty.store(true);
+}
 
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
