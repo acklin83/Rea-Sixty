@@ -15724,6 +15724,120 @@ uint8_t uf1VuByte_(float vu)
 // fallen" (2026-07-14).
 constexpr double kUf1HoldResetSec = 3.0;
 
+// ---- Goniometer: plug-in raster (t10) -> UF1 diamond (0x0122) --------------
+//
+// BOTH SIDES ARE DIAMONDS, at different resolutions. Resampling one onto the
+// other is all that is left; the codecs are already decoded.
+//
+//   UF1    (8ecaec5, cap89/cap92): 187 rows, widths 2,1,1,2,3,…,92,92,…,3,2,1,1,
+//          sum 8560, one byte per pixel = intensity.
+//   plug-in (measured 2026-07-15 from cap97, the corr +1→0→−1 sweep):
+//          99 rows, widths 2,4,6,…,100,…,6,4,2, sum EXACTLY 5000, one float per
+//          pixel, 0..1.
+//
+// The proof is the row starts. At high correlation the lit float indices are
+// 0, 2, 6, 12, 20, 30, 42, 56, 72, 90 … which are byte-for-byte the row starts
+// of that diamond (52 of 99 rows lit in a single frame, identical across frames
+// — geometry, not signal). n = 2·50² is not a coincidence: 50 is the half-height.
+//
+// Derive the shape from n instead of hardcoding 5000: SSL sizes this raster to
+// its own view, and we have seen a second instance stream 2113. Any n = 2·m² is
+// a diamond of half-height m; anything else we do not understand, so we paint
+// nothing rather than paint garbage.
+struct Uf1GonioGeom {
+    int  m = 0;                  // half-height: rows are 2,4,…,2m,…,4,2
+    int  rows = 0;               // 2m - 1
+    bool ok = false;
+};
+inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
+{
+    Uf1GonioGeom g;
+    if (n < 8) return g;
+    const int m = int(std::lround(std::sqrt(double(n) / 2.0)));
+    if (m < 2 || size_t(2 * m * m) != n) return g;   // not a diamond we know
+    g.m = m; g.rows = 2 * m - 1; g.ok = true;
+    return g;
+}
+// Row r's width (in pixels) and start offset, for a 2,4,…,2m,…,4,2 diamond.
+inline int uf1GonioRowW_(const Uf1GonioGeom& g, int r)
+{ return 2 * ((r < g.m) ? (r + 1) : (g.rows - r)); }
+inline int uf1GonioRowStart_(const Uf1GonioGeom& g, int r)
+{
+    int s = 0;
+    for (int k = 0; k < r; ++k) s += uf1GonioRowW_(g, k);
+    return s;
+}
+
+// The UF1's own diamond — the exact MEASURED sequence from
+// analysis/uf1_gonio_decode.py row_widths(), which is ground truth from a corr=+1
+// frame. Do not "tidy" this into a neat loop: the obvious reconstruction
+// (2,1,1 + 2..92 + 92..2 + 1,1,2) gives 188 rows / 8562 bytes, not 187 / 8560 —
+// I tried, and the assert below is what caught it. The peak 92 is two rows wide
+// and the tips are an antialiased 2,1,1.
+inline const std::vector<int>& uf1DiamondWidths_()
+{
+    static const std::vector<int> w = [] {
+        std::vector<int> v{2, 1, 1};
+        for (int k = 2; k <= 91; ++k) v.push_back(k);   // 2..91
+        v.push_back(92); v.push_back(92);               // peak, two rows
+        for (int k = 91; k >= 2; --k) v.push_back(k);   // 91..2
+        v.push_back(1); v.push_back(1);
+        return v;
+    }();
+    return w;
+}
+constexpr int kUf1DiamondBytes = 8560;
+constexpr int kUf1DiamondRows  = 187;
+
+// Resample the plug-in's diamond onto the UF1's and paint it to 0x0122.
+//
+// Both are diamonds, so the map is per-row proportional: UF1 row i covers the
+// same fraction of the face as plug-in row j = i·(rows_p-1)/(rows_u-1), and
+// within a row the same again for the column. Nearest-neighbour, because the
+// source is already an intensity raster with its own antialiasing — smoothing it
+// again would only smear the trace.
+//
+// Chunking (8ecaec5): byte[0] = chunk index 0..34, then 250 payload bytes; the
+// last chunk carries 60. 35 chunks = 8560.
+void uf1PaintGoniometer_(const std::vector<float>& src)
+{
+    const Uf1GonioGeom g = uf1GonioGeomFor_(src.size());
+    if (!g.ok || !g_uf1_dev) return;          // shape we don't know -> paint nothing
+
+    const auto& uw = uf1DiamondWidths_();
+    std::array<uint8_t, kUf1DiamondBytes> img{};
+
+    int uoff = 0;
+    for (int i = 0; i < kUf1DiamondRows; ++i) {
+        const int uwid = uw[size_t(i)];
+        // Proportional row in the source diamond.
+        const int j = (kUf1DiamondRows > 1)
+            ? int(std::lround(double(i) * double(g.rows - 1) / double(kUf1DiamondRows - 1)))
+            : 0;
+        const int swid  = uf1GonioRowW_(g, j);
+        const int sstart = uf1GonioRowStart_(g, j);
+        for (int x = 0; x < uwid; ++x) {
+            const int sx = (uwid > 1)
+                ? int(std::lround(double(x) * double(swid - 1) / double(uwid - 1)))
+                : 0;
+            const size_t si = size_t(sstart + std::clamp(sx, 0, swid - 1));
+            const float  v  = (si < src.size()) ? src[si] : 0.f;
+            img[size_t(uoff + x)] =
+                uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+        }
+        uoff += uwid;
+    }
+
+    for (int c = 0; c < 35; ++c) {
+        const int len = (c == 34) ? 60 : 250;
+        std::vector<uint8_t> pay;
+        pay.reserve(size_t(len) + 1);
+        pay.push_back(uint8_t(c));
+        pay.insert(pay.end(), img.begin() + c * 250, img.begin() + c * 250 + len);
+        g_uf1_dev->send(uf1::buildScreen(0x0122, pay));
+    }
+}
+
 struct Uf1PeakHold {
     float l = -120.f, r = -120.f;
     std::chrono::steady_clock::time_point t{};
@@ -15904,6 +16018,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         putBar(0x0125, rmsBar);
         putBar(0x0126, peakBar);
         putBar(0x0127, holdBar);
+
+        // The goniometer. Overview is the only screen that streams Lissajous
+        // (t10) — the plug-in computes it for this view and no other — and until
+        // now we sent no 0x0122 here at all, which is why the face stayed black.
+        {
+            std::vector<float> liss, pk;
+            if (sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, pk))
+                uf1PaintGoniometer_(liss);
+        }
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
