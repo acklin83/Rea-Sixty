@@ -196,6 +196,10 @@ std::vector<uint8_t> fromHex(const char* hx) {
 std::atomic<int>  g_view{0};
 std::atomic<bool> g_viewDirty{false};
 
+// Lissajous geometry dump (REASIXTY_T10_DUMP). Separate from the trace flag: it
+// writes every frame at ~25 Hz, which is the point — see the dump site.
+bool g_t10Dump = false;
+
 // 360SelectedView (= c5ea04de4990b792) = `view` as a double.
 //
 // Read the four identity frames in subscribeInitial() again: they are NOT
@@ -418,6 +422,30 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         Slot& s = inst.meter[u.dataType];
                         s.current = std::move(u.current); s.peak = std::move(u.peak);
                         s.have = true;
+                        // Lissajous geometry dump — EVERY frame, deliberately NOT
+                        // inside the 2 s summary throttle below. The stream runs at
+                        // ~25 Hz, so throttling it sampled a 27 s correlation sweep
+                        // ~30 times and caught the +1/-1 extremes only by luck. The
+                        // extremes are the whole experiment: corr +1 lights one cell
+                        // per row (row starts), corr -1 lights a whole row (row
+                        // width). Opt-in via REASIXTY_T10_DUMP so it cannot bloat a
+                        // normal trace run.
+                        if (u.dataType == int(sslmeter::DataType::Lissajous) &&
+                            g_t10Dump && !s.current.empty()) {
+                            size_t nz = 0;
+                            for (float v : s.current) if (v != 0.f) ++nz;
+                            if (nz > 0) {
+                                if (FILE* gf = std::fopen("/tmp/reaper_t10_frames.log", "a")) {
+                                    std::fprintf(gf, "FRAME t=%.3f src=%u n=%zu nz=%zu\n",
+                                                 t, unsigned(ntohs(from.sin_port)),
+                                                 s.current.size(), nz);
+                                    for (size_t k = 0; k < s.current.size(); ++k)
+                                        if (s.current[k] != 0.f)
+                                            std::fprintf(gf, "%zu %.4f\n", k, double(s.current[k]));
+                                    std::fclose(gf);
+                                }
+                            }
+                        }
                     }
                     // Periodic summary: which DataTypes are live + a sample value.
                     // We ALREADY hold g_meterMx here (lk above) — std::mutex is
@@ -465,12 +493,9 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     if (v != 0.f) ++nz;
                                 }
                                 o += std::snprintf(line + o, sizeof(line) - o,
-                                    "[%.1f] t10 src=%u n=%zu nonzero=%zu min=%.3f max=%.3f head:",
+                                    "[%.1f] t10 src=%u n=%zu nonzero=%zu min=%.3f max=%.3f",
                                     t, unsigned(kv.first), s.current.size(), nz,
                                     double(mn), double(mx));
-                                for (size_t k = 0; k < s.current.size() && k < 16; ++k)
-                                    o += std::snprintf(line + o, sizeof(line) - o,
-                                                       " %.3f", double(s.current[k]));
                                 slog("%s", line);
                             }
                         }
@@ -566,7 +591,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 // ------------------------------------------------------------------- public
 bool start(uint16_t tcpPort, uint16_t dataPort) {
     if (g_running.load()) return true;
-    g_trace = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
+    g_trace   = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
+    g_t10Dump = std::getenv("REASIXTY_T10_DUMP") != nullptr;
     { std::lock_guard<std::mutex> lk(g_meterMx); g_inst.clear(); }
     g_lastDataMs.store(0);
     g_running.store(true);
