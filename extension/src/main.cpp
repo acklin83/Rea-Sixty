@@ -15917,14 +15917,20 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
         }
     }
 
+    // Enqueue the whole image atomically (sendBurst): SSL never emits anything
+    // inside an image burst, and per-chunk send() let the worker's FF1B
+    // keepalive land mid-image in ~11% of images (cap100).
+    std::vector<std::vector<uint8_t>> burst;
+    burst.reserve(35);
     for (int c = 34; c >= 0; --c) {                 // 34 -> 0, exactly as cap89
         const int len = (c == 34) ? 60 : 250;
         std::vector<uint8_t> pay;
         pay.reserve(size_t(len) + 1);
         pay.push_back(uint8_t(c));
         pay.insert(pay.end(), img.begin() + c * 250, img.begin() + c * 250 + len);
-        g_uf1_dev->send(uf1::buildScreen(0x0122, pay));
+        burst.push_back(uf1::buildScreen(0x0122, pay));
     }
+    g_uf1_dev->sendBurst(std::move(burst));
 }
 
 struct Uf1PeakHold {

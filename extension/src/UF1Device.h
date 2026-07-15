@@ -47,6 +47,10 @@ public:
 
     // Fire-and-forget send (thread-safe; worker drains over EP 0x02 OUT).
     void send(std::vector<uint8_t> frame);
+    // Enqueue a group of frames atomically (one lock), so nothing of ours can
+    // land between them. Used for the 35-chunk goniometer image: SSL never
+    // emits anything inside an image burst (cap89/cap100 diff).
+    void sendBurst(std::vector<std::vector<uint8_t>> frames);
     // Front-of-queue send for latency-sensitive frames (e.g. motor-limp on touch).
     void sendPriority(std::vector<uint8_t> frame);
 

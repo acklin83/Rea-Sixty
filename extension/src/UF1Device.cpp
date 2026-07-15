@@ -90,6 +90,44 @@ bool UF1Device::open()
         }
     }
 
+    // SSL 360 opens the comms bridge with a full FTDI-style D2XX sequence on
+    // EP0 BEFORE its first bulk byte (cap84 t=54.05..54.23): reset + modem-
+    // status twice ~150 ms apart, data 8N1, flow control off, baud divisor
+    // 0xc068 idx 0x0200 three times, latency timer 2 ms, purge RX six times,
+    // purge TX once. We never sent ANY of these. Replicated verbatim — counts,
+    // order and the 150 ms pause included. Best-effort: a failed request is
+    // traced ('C' lines) but does not abort the open, since bulk I/O has
+    // always worked without the sequence.
+    {
+        auto vendorOut = [this](uint8_t bRequest, uint16_t wValue, uint16_t wIndex) {
+            const int rc = libusb_control_transfer(
+                handle_, 0x40, bRequest, wValue, wIndex, nullptr, 0, 1000);
+            const uint8_t rec[6] = { 0x40, bRequest,
+                                     static_cast<uint8_t>(wValue & 0xff),
+                                     static_cast<uint8_t>(wValue >> 8),
+                                     static_cast<uint8_t>(wIndex & 0xff),
+                                     static_cast<uint8_t>(wIndex >> 8) };
+            traceFrame_('C', rec, sizeof(rec), rc);
+        };
+        auto vendorModemStatus = [this]() {
+            uint8_t st[2] = {0, 0};
+            const int rc = libusb_control_transfer(
+                handle_, 0xc0, 5, 0x0000, 0, st, sizeof(st), 1000);
+            traceFrame_('C', st, sizeof(st), rc);
+        };
+        vendorOut(0, 0x0000, 0);                                    // reset
+        vendorModemStatus();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        vendorOut(0, 0x0000, 0);                                    // reset, round 2
+        vendorModemStatus();
+        vendorOut(4, 0x0008, 0);                                    // data: 8N1
+        vendorOut(2, 0x0000, 0);                                    // flow control: none
+        for (int i = 0; i < 3; ++i) vendorOut(3, 0xc068, 0x0200);   // baud divisor
+        vendorOut(9, 0x0002, 0);                                    // latency timer 2 ms
+        for (int i = 0; i < 6; ++i) vendorOut(0, 0x0001, 0);        // purge RX
+        vendorOut(0, 0x0002, 0);                                    // purge TX
+    }
+
     libusb_clear_halt(handle_, kEpOut);
     libusb_clear_halt(handle_, kEpIn);
 
@@ -207,6 +245,16 @@ void UF1Device::send(std::vector<uint8_t> frame)
     pending_->cv.notify_one();
 }
 
+void UF1Device::sendBurst(std::vector<std::vector<uint8_t>> frames)
+{
+    if (frames.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(pending_->mu);
+        for (auto& f : frames) pending_->q.push_back(std::move(f));
+    }
+    pending_->cv.notify_one();
+}
+
 void UF1Device::sendPriority(std::vector<uint8_t> frame)
 {
     {
@@ -243,6 +291,7 @@ void UF1Device::workerLoop_()
 
     while (!shuttingDown_) {
         std::vector<std::vector<uint8_t>> batch;
+        bool queueDrained = true;
         {
             std::unique_lock<std::mutex> lk(pending_->mu);
             pending_->cv.wait_for(lk, std::chrono::milliseconds(20),
@@ -251,16 +300,34 @@ void UF1Device::workerLoop_()
             // Hold user frames until the init replay finishes (else REAPER's
             // onTimer pushes interleave with init frames and corrupt boot).
             if (!initInProgress_.load()) {
-                constexpr size_t kMaxBatch = 16;
+                // Big enough for a whole 35-chunk goniometer image, so a burst
+                // enqueued via sendBurst() goes out in ONE iteration.
+                constexpr size_t kMaxBatch = 40;
                 while (!pending_->q.empty() && batch.size() < kMaxBatch) {
                     batch.push_back(std::move(pending_->q.front()));
                     pending_->q.pop_front();
                 }
             }
+            queueDrained = pending_->q.empty();
+        }
+
+        // Content first, keepalive after — and only when the queue is empty.
+        // SSL never sends ANYTHING inside an image burst; our FF1B used to land
+        // mid-image in ~11% of images (cap100). The 500 ms override keeps the
+        // liveness beat under a hypothetical sustained backlog (normal bursts
+        // are ~7 ms, so deferral is invisible).
+        for (auto& frame : batch) {
+            int transferred = 0;
+            int rc = libusb_bulk_transfer(handle_, kEpOut, frame.data(),
+                                          static_cast<int>(frame.size()),
+                                          &transferred, 500);
+            if (rc < 0) lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
+            traceFrame_('O', frame.data(), frame.size(), rc);
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (now - lastKeepalive >= kKeepaliveInterval) {
+        const bool overdue = (now - lastKeepalive) >= std::chrono::milliseconds(500);
+        if ((queueDrained || overdue) && now - lastKeepalive >= kKeepaliveInterval) {
             std::vector<uint8_t> ka = buildKeepalive(kaCounter);
             int t = 0;
             int rc = libusb_bulk_transfer(handle_, kEpOut, ka.data(),
@@ -269,15 +336,6 @@ void UF1Device::workerLoop_()
             traceFrame_('O', ka.data(), ka.size(), rc);
             kaCounter = (kaCounter + 1) & 0x03;
             lastKeepalive = now;
-        }
-
-        for (auto& frame : batch) {
-            int transferred = 0;
-            int rc = libusb_bulk_transfer(handle_, kEpOut, frame.data(),
-                                          static_cast<int>(frame.size()),
-                                          &transferred, 500);
-            if (rc < 0) lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
-            traceFrame_('O', frame.data(), frame.size(), rc);
         }
 
         timeval tv{0, 1000};  // 1 ms
