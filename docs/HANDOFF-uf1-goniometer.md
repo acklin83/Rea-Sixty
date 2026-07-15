@@ -31,12 +31,15 @@ and *assumed* it reached the device.
 | **89.1% of image bursts are perfectly clean** | 713 of 800 images have zero interleaved frames. |
 
 ### The only measured difference left — and it does NOT explain black
-The **FF1B keepalive lands inside the image burst in ~11% of images** (87/800):
-the worker thread emits it every 150 ms while the timer thread is mid-image. SSL
-**never** sends anything inside a burst. Worth serialising (batch the 35 chunks
-under the queue lock, or suppress the keepalive mid-image) — but **89% of images
-are clean, so this cannot cause a permanently black face.** Do not ship it as
-"the fix".
+*(FIXED in `2bf2789` — kept for the record.)* The **FF1B keepalive landed inside
+the image burst in ~11% of images** (87/800): the worker thread emitted it every
+150 ms while the timer thread was mid-image. SSL **never** sends anything inside
+a burst. Now serialised (sendBurst + keepalive deferral) — but **89% of images
+were clean, so this alone cannot have caused a permanently black face.**
+
+**2026-07-15 evening: the table above only ever covered BULK traffic. EP0 was a
+blind spot — see NEXT item 1: SSL sends a 20-request FTDI vendor init at connect
+that we never sent.**
 
 ---
 
@@ -72,28 +75,39 @@ are clean, so this cannot cause a permanently black face.** Do not ship it as
 
 ## NEXT — in the order I would actually do them
 
-1. **Capture SSL 360 driving this UF1 on the Mac, on Overview, with audio.**
-   Now decisive, because SSL 360 provably draws on Frank's exact hardware. Same
-   machine, same MeterPro, same track — the first apples-to-apples comparison.
-   All previous captures (cap75/76/89) are from a Windows session with a possibly
-   different plug-in and a different device state. macOS can sniff USB with
-   Wireshark on the `XHC20` interface (no Windows box needed). **Then diff SSL's
-   stream against `captures/cap100` (ours) — element set, values, and ORDER.**
-   Everything I compared came from foreign captures; this removes that variable.
+1. ~~Compare the UF1 INIT / connect sequence~~ — **DONE 2026-07-15 evening,
+   FINDING (`2bf2789`): SSL sends a full FTDI-style D2XX vendor init on EP0
+   before its first bulk byte; we sent NONE of it.** cap84 t=54.05–54.23,
+   device 9: reset + modem-status twice ~150 ms apart, SET_DATA 8N1,
+   SET_FLOW none, SET_BAUDRATE 0xc068 idx 0x0200 ×3, **SET_LATENCY_TIMER
+   2 ms**, purge RX ×6, purge TX ×1 — the textbook FT_Open sequence, so the
+   "SSL 18 Comms Device" is an FTDI-compatible bridge and SSL 360 drives it
+   via D2XX. `tshark -Y "usb.transfer_type == 0x02"` to see it; **every
+   bulk-level parser (incl. parse_usbpcap.py) filters EP0 out — that is WHY
+   all comparisons read "identical".** Now replicated verbatim in
+   `UF1Device::open()`. Fits the symptom: connect-time device config,
+   invisible in steady-state diffs; plausibly gates internal buffering the
+   8.5 KB image burst needs (the goniometer is the only payload of that
+   size). **HW-verify pending.**
 
-2. **Compare the UF1 INIT / connect sequence — never examined.**
-   `captures/cap84_uf1_plugin_init.pcapng`. We only ever compared steady state and
-   the screen-entry burst. If SSL enables a graphic layer at CONNECT time and we
-   do not, the goniometer would never draw no matter what we send afterwards, and
-   every comparison I made would still come out "identical". This is the biggest
-   unexamined surface and it fits the symptom exactly.
+2. **Capture SSL 360 driving this UF1 on the Mac, on Overview, with audio.**
+   Still the decisive test if the vendor init doesn't fix it, because SSL 360
+   provably draws on Frank's exact hardware. Same machine, same MeterPro, same
+   track — the first apples-to-apples comparison. All previous captures
+   (cap75/76/89) are from a Windows session with a possibly different plug-in
+   and a different device state. macOS can sniff USB with Wireshark on the
+   `XHC20` interface (no Windows box needed). **Then diff SSL's stream against
+   `captures/cap100` (ours) — element set, values, ORDER, and now also EP0.**
 
 3. **Meter vs Meter Pro.** Frank runs **MeterPro** — the plug-in announces
    `PerSslMeterProPlugin` and `/Presets/MeterPro/Default Preset.xml` in clear
    text. cap75/76/89 may be plain Meter. `PluginType` (f1) is ABSENT on the wire,
    so we never distinguish them.
 
-4. **Serialise the image burst** (FF1B, see above). Real, but not the cause.
+4. ~~Serialise the image burst~~ — **DONE (`2bf2789`)**: the 35 chunks are
+   enqueued atomically (`sendBurst`), the FF1B keepalive defers while the queue
+   is non-empty (500 ms liveness override). Nothing of ours can land inside an
+   image burst any more.
 
 ## Tooling
 - Frame trace: launch REAPER with `REASIXTY_UF1_TRACE=1` → `/tmp/reaper_uf1_frames.log`.
