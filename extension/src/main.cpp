@@ -15549,15 +15549,13 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
             // only ever wrote it in the CHANNEL branch, so it was never sent while
             // the meter view came up.
             //
-            // 0x0009/0x0015/0x0016 are 00 here — cap75 AND cap76 agree. They are
-            // NOT chrome: cap89 holds them at ffff0000/ff/ff for its whole length
-            // and STILL draws the goniometer, so they are per-session state, and
-            // setting them to cap89's ff is what recoloured Frank's VU readout.
-            // Two captures that disagree are two states, not a vote to win.
-            {0x0009, {0x00,0x00,0x00,0x00}},
-            {0x000a, {0x00,0x00,0x00,0x00}},
-            {0x0015, {0x00}},
-            {0x0016, {0x00}},
+            // 0x0009/0x000a/0x0015/0x0016 are NOT written at Overview entry —
+            // cap101 (Frank's own cold-start, MeterPro, goniometer verifiably
+            // drawing) never sends them in the entry group; they ride in the
+            // per-image cycle, where Frank's session state is ffff0000/00/ff/ff
+            // (cap101 t=60..120: 1469 of 1469 cycles). cap75/cap76's 00 was that
+            // foreign session's state. The Overview CYCLE streams the ff values
+            // now; the Analogue entry keeps its own (0x1e.. VU-number colours).
             {0x0100, {0x04,0x00}},
             {0x0101, {0x03}},
             {0x0102, {0x01}},
@@ -15581,8 +15579,15 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
             {0x0120, {0x00}},
             {0x0129, {0xff}},
             {0x011f, {0x00}},
+            // cap101's entry closes 0125/26/27 = (0,0) then 0128, and the FIRST
+            // image burst follows immediately. NO 0x011d here: SSL's first 011d
+            // after a view change arrives only at the END of the first image
+            // cycle. We used to close the entry with 011d=00 — an image-less
+            // commit SSL never sends.
+            {0x0125, {0x00,0x00}},
+            {0x0126, {0x00,0x00}},
+            {0x0127, {0x00,0x00}},
             {0x0128, {0x00}},
-            {0x011d, {0x00}},
         },
         // [1] ANALOGUE — VU (or PPM Type-II) needles + readouts.
         {
@@ -16210,15 +16215,22 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // interleave. 0x0119 stays absent: change-driven, codec unknown, and
         // cap75/cap76 draw without it.
         //
-        // Trailer values are cap75/cap76's at-rest bytes (00) — NOT cap89's ff:
-        // 0x0009/15/16 carry per-session colour state (they recoloured Frank's
-        // VU readout when "corrected" to ff) and gate nothing. The dedup trap
-        // note stands: never send-on-change these elements — SSL restates the
-        // whole group every cycle (it froze the Analogue needle and one-shot
-        // RTA before). The cycle gate here is DATA freshness, not value change.
-        // 0x0128 = overload bitmask, 0x00 on Overview (no overload LEDs there,
-        // cap98). 0x011d = Overview-only, unidentified, best guess a per-image
-        // latch; both close every cap89 cycle.
+        // Trailer values = cap101's, Frank's own cold-start with MeterPro and
+        // the goniometer verifiably drawing: 0009=ffff0000, 000a=00000000,
+        // 0015=ff, 0016=ff in 1469 of 1469 Overview cycles (t=60..120). The
+        // earlier 00 values came from cap75/76 — a foreign session's state.
+        // (The "ff recoloured Frank's VU readout" incident was the ANALOGUE
+        // screen, whose 0x0009 carries VU-number colours; per-view state.)
+        // The dedup trap note stands: never send-on-change these elements —
+        // SSL restates the whole group every cycle (it froze the Analogue
+        // needle and one-shot RTA before). The cycle gate here is DATA
+        // freshness, not value change.
+        // 0x0128 = the overload bitmask and it is LIVE on Overview too:
+        // cap101 streams 0a/0f/0e (L/R latched + flashes) — cap89's constant
+        // 00 was merely quiet audio. Same bit layout as the Analogue branch.
+        // 0x011d = Overview-only, closes every cycle, value 00 here (the
+        // channel-view idle cycle closes with 011d=11 — its value is
+        // view-state, not a constant).
         std::vector<float> liss, lisspk;
         uint64_t lseq = 0;
         const bool haveLiss =
@@ -16232,13 +16244,14 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         if (haveLiss)
             uf1PaintGoniometer_(liss, cycle);   // appends the 35 chunks (nothing
                                                 // if the shape is unknown)
-        static const uint8_t k0009[] = {0x00,0x00,0x00,0x00};
+        static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
+        const uint8_t kFf   = 0xff;
         const uint8_t kZero = 0x00;
         cycle.push_back(uf1::buildScreen(0x0009, k0009));
         cycle.push_back(uf1::buildScreen(0x000a, k000a));
-        cycle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kZero, 1)));
-        cycle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kZero, 1)));
+        cycle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFf, 1)));
+        cycle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFf, 1)));
         cycle.push_back(uf1::buildScreen(uf1::scr::kHeaderRow, p));  // 011c, its slot
         auto barFrame = [](uint16_t addr, const std::array<uint8_t, 2>& v) {
             return uf1::buildScreen(addr,
@@ -16247,7 +16260,19 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         cycle.push_back(barFrame(0x0125, rmsBar));
         cycle.push_back(barFrame(0x0126, peakBar));
         cycle.push_back(barFrame(0x0127, holdBar));
-        cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kZero, 1)));
+        {
+            // Live overload bitmask (bit0/1 = L flash/latch, bit2/3 = R): on
+            // view 0 the plug-in publishes f5/f6 on BarPeak; VuPpm only fills
+            // on the Analogue view.
+            std::vector<uint8_t> ovl, ovlHold;
+            uint8_t mask = 0x00;
+            if (sslcore::getOverload(int(sslmeter::DataType::BarPeak), ovl, ovlHold) ||
+                sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
+                if (ovl.size() >= 2)     { if (ovl[0]) mask |= 0x01;     if (ovl[1]) mask |= 0x04; }
+                if (ovlHold.size() >= 2) { if (ovlHold[0]) mask |= 0x02; if (ovlHold[1]) mask |= 0x08; }
+            }
+            cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
+        }
         cycle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
         g_uf1_dev->sendBurst(std::move(cycle));
     }
