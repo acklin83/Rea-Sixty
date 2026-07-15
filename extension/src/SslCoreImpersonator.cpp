@@ -67,7 +67,8 @@ std::atomic<long long> g_lastDataMs{0};
 
 struct Slot {
     std::vector<float>   current, peak;
-    std::vector<uint8_t> overload;      // f5 OverloadValues — the red LEDs
+    std::vector<uint8_t> overload;      // f5 OverloadValues     — flashes, per channel
+    std::vector<uint8_t> overloadHold;  // f6 OverloadInfHoldValues — latched, per channel
     bool have = false;
     // Chunk reassembly buffer (the Lissajous arrives in pieces; see
     // sslmeter::Update). `current` is only replaced once the array is complete.
@@ -455,7 +456,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             s.have = true;
                             completed = true;
                         }
-                        if (!u.overload.empty()) s.overload = std::move(u.overload);
+                        if (!u.overload.empty())     s.overload     = std::move(u.overload);
+                        if (!u.overloadHold.empty()) s.overloadHold = std::move(u.overloadHold);
                         // Lissajous geometry dump — EVERY frame, deliberately NOT
                         // inside the 2 s summary throttle below. The stream runs at
                         // ~25 Hz, so throttling it sampled a 27 s correlation sweep
@@ -728,6 +730,26 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     if (fallback) {
         const Slot& s = fallback->meter[dataType];
         if (s.have) { current = s.current; peak = s.peak; return true; }
+    }
+    return false;
+}
+
+bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold) {
+    if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const Instance* fallback = nullptr;
+    for (const auto& kv : g_inst) {
+        const Instance& in = kv.second;
+        if (in.kind == Kind::Meter) {
+            const Slot& s = in.meter[dataType];
+            if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
+        } else if (in.kind == Kind::Unknown && !fallback) {
+            fallback = &in;
+        }
+    }
+    if (fallback) {
+        const Slot& s = fallback->meter[dataType];
+        if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
     }
     return false;
 }

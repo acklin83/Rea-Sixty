@@ -52,6 +52,15 @@ void setView(int view);
 // the same track publishes into overlapping indices (see below).
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak);
 
+// Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
+// flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
+// channel. Returns false if that type hasn't been seen yet. Thread-safe.
+// Only VuPpm(0) ever carries these — MEASURED (cap98): the same 0 dBFS clip sets
+// overload on NO data type at all while the Overview view is selected, because
+// the plug-in doesn't compute VuPpm there. Matches the property name the plug-in
+// announces in clear text: AnalogueMetersLedOverload.
+bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold);
+
 // ChannelStripMeterType (AssignerArgsTypes.proto). An SSL channel strip numbers
 // its meters with THIS vocabulary, not MeterPluginDataType — the two overlap on
 // the wire and are told apart per plug-in instance (see SslCoreImpersonator.cpp).

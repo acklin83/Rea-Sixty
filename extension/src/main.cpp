@@ -16154,18 +16154,21 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         putBar(0x0126, peakBar);
         putBar(0x0127, holdBar);
 
-        // Commit / latch. SSL closes EVERY Overview cycle with exactly this pair
-        // and nothing else: cap89 has 0x0128 then 0x011d as the last two elements
-        // of 2536 of 2570 image cycles, each sent once per image, each carrying
-        // 0x00 and no other value in the whole 105 s capture. We only ever sent
-        // them once, inside the setup burst, so a chunked image had nothing to
-        // publish it. (The setup burst seeds 0x011d = 0xff, a value that never
-        // occurs anywhere in cap89 — harmless now that the cycle overwrites it
-        // 25× a second, but do not trust that 0xff.) The RTA screen needs no
-        // commit because its 0x0122 is a single unchunked 64-byte frame.
-        const uint8_t kCommit = 0x00;
-        g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kCommit, 1)));
-        g_uf1_dev->send(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kCommit, 1)));
+        // SSL closes every Overview cycle with 0x0128 then 0x011d, both 0x00 —
+        // last two elements of 2536 of 2570 image cycles in cap89, no other value
+        // in 105 s. We only sent them once, in the setup burst.
+        //
+        // ⚠ 0x0128 is NOT a "commit", whatever the earlier comment here claimed:
+        // it is the OVERLOAD BITMASK (see the Analogue branch below). It is 0x00
+        // on Overview simply because that screen has no overload LEDs — cap98
+        // confirms the plug-in reports no overload at all while Overview is the
+        // selected view. Sending 0x00 here is right, but for that reason.
+        // 0x011d IS Overview-only (cap88/cap94 never send it on Analogue) and is
+        // still unidentified; a per-image latch remains the best guess. RTA needs
+        // neither — its 0x0122 is a single unchunked 64-byte frame.
+        const uint8_t kZero = 0x00;
+        g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kZero, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
@@ -16198,12 +16201,24 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // Fallback stays BarPeak - ref for when VuPpm has not arrived (view not
         // yet acknowledged, or the impersonator is off and we are on REAPER peaks).
         float vuL, vuR;
+        float vuHoldL = -120.f, vuHoldR = -120.f;
+        bool  haveVuHold = false;
         {
             std::vector<float> cur, pk;
             const bool haveVu =
                 sslcore::getMeter(int(sslmeter::DataType::VuPpm), cur, pk) &&
                 cur.size() >= 2 && cur[0] > -35.9f;
-            if (haveVu) { vuL = cur[0]; vuR = cur[1]; }
+            if (haveVu) {
+                vuL = cur[0]; vuR = cur[1];
+                // The lagging needle is VuPpm's OWN f4 — measured (cap98): a
+                // -30/-20/-10 dBFS tone gives pk = -11.88 / -1.83 / 8.17 while cur
+                // is clamped at +3.0. Do not re-derive it.
+                if (pk.size() >= 2 && (std::isfinite(pk[0]) || std::isfinite(pk[1]))) {
+                    vuHoldL = std::isfinite(pk[0]) ? pk[0] : -120.f;
+                    vuHoldR = std::isfinite(pk[1]) ? pk[1] : -120.f;
+                    haveVuHold = true;
+                }
+            }
             else {
                 float kVuRef = -18.f;
                 int mfx = -1, mcnt = 0;
@@ -16223,8 +16238,8 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         static Uf1PeakHold sNdlHold;
         if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHold.reset(vuL, vuR, now); }
         sNdlHold.step(vuL, vuR, now);
-        const uint8_t hL = uf1VuByte_(sNdlHold.l);
-        const uint8_t hR = uf1VuByte_(sNdlHold.r);
+        const uint8_t hL = uf1VuByte_(haveVuHold ? vuHoldL : sNdlHold.l);
+        const uint8_t hR = uf1VuByte_(haveVuHold ? vuHoldR : sNdlHold.r);
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
         auto putNdl = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
@@ -16236,24 +16251,50 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         putNdl(0x0125, ndl);
         putNdl(0x0127, hld);
 
-        // ⚠ HYPOTHESIS UNDER TEST (2026-07-15) — the red peak lights.
-        // Frank: "rotes peak licht auf dem VU hast du nicht kapiert".
-        // 0x0015 and 0x0016 are the only two single-byte elements unique to this
-        // screen's setup burst, both seeded 0x00 at rest (cap80) — which is what
-        // a pair of per-channel peak LEDs would look like. NOT yet confirmed: no
-        // capture we hold drives the Analogue screen into overload (cap88's sweep
-        // tops out at +5 VU). Lighting them on the needle crossing 0 VU tests the
-        // element identity with the hardware in front of Frank, which is cheaper
-        // and more honest than inventing a threshold from a capture we don't have.
-        // If the lights follow the needle past 0, the ids are right and only the
-        // threshold is left to pin down (SSL exposes AnalogueMetersLedOverload =
-        // b9138c4e76e51371, so the real trigger is likely a settable dBFS point,
-        // not 0 VU). If nothing lights, these are not the LEDs — say so and look
-        // again rather than tuning a number that was never connected.
-        const uint8_t ovL = uint8_t(vuL >= 0.f ? 0x01 : 0x00);
-        const uint8_t ovR = uint8_t(vuR >= 0.f ? 0x01 : 0x00);
-        g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&ovL, 1)));
-        g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&ovR, 1)));
+        // ---- The red overload LEDs = 0x0128, a BITMASK. MEASURED, not guessed.
+        //
+        // 0x0015/0x0016 are NOT the LEDs — the old guess here drove them from
+        // "needle past 0 VU". They never vary in ANY capture: constant 0x00 for
+        // all 614 frames of cap80 and constant 0xff for all 2573 of cap88 and
+        // cap94. A thing that never changes cannot be an indicator.
+        //
+        // cap80 (SSL driving the UF1, Analogue, music that clips) is the only
+        // capture where an overload ever happens, and there 0x0128 takes exactly
+        // four values — 0x0a, 0x0b, 0x0e, 0x0f = 1010, 1011, 1110, 1111:
+        //   bit0  L overload      flashes  (set in 116/389 frames)
+        //   bit1  L overload LATCHED       (set in 389/389 — never clears)
+        //   bit2  R overload      flashes  (set in 101/389)
+        //   bit3  R overload LATCHED       (set in 389/389)
+        //   bits 4..7 never set            (= 2 channels x 2 flags, nothing more)
+        // which is precisely the schema's f5 OverloadValues (per channel) and f6
+        // OverloadInfHoldValues (per channel), interleaved L,L,R,R. The rival
+        // layout (bit0=L ovl, bit1=R ovl, bit2=L latch…) would require R to be
+        // overloading in 100% of frames while L flashes in 30% — impossible.
+        // Channel order confirmed: bit0 fires ALONE in 45/45 frames where L is the
+        // louder channel and never once when R is; bit2 fires alone with R louder
+        // in 5/30. And on Overview 0x0128 is constant 0x00 — that screen has no
+        // overload LEDs, which is why the same 0 dBFS clip sets overload on no
+        // data type at all there (cap98).
+        //
+        // The LED is NOT a VU threshold: it flashes for 0.04-0.33 s (median 0.08),
+        // and the VU value at switch-on scatters over -4.9..+3.2 because a 300 ms
+        // ballistic needle cannot track a sample-peak event. So do not invent a
+        // trigger level — the plug-in already decided, in f5/f6. Read it.
+        {
+            std::vector<uint8_t> ovl, ovlHold;
+            uint8_t mask = 0x00;
+            if (sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
+                if (ovl.size() >= 2) {
+                    if (ovl[0]) mask |= 0x01;      // L overload
+                    if (ovl[1]) mask |= 0x04;      // R overload
+                }
+                if (ovlHold.size() >= 2) {
+                    if (ovlHold[0]) mask |= 0x02;  // L latched
+                    if (ovlHold[1]) mask |= 0x08;  // R latched
+                }
+            }
+            g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
+        }
     }
     else if (screen == 2) {
         // RTA: 0x0122 = 64 bytes. Header (0x00,0x03), then per band i:
