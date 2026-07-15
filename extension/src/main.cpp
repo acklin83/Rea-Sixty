@@ -15744,28 +15744,43 @@ constexpr double kUf1HoldResetSec = 3.0;
 // its own view, and we have seen a second instance stream 2113. Any n = 2·m² is
 // a diamond of half-height m; anything else we do not understand, so we paint
 // nothing rather than paint garbage.
+// Row table for whatever shape the plug-in is streaming. Two shapes are known,
+// both MEASURED from cap97 — nothing here is inferred from the length alone.
 struct Uf1GonioGeom {
-    int  m = 0;                  // half-height: rows are 2,4,…,2m,…,4,2
-    int  rows = 0;               // 2m - 1
+    std::vector<int> w;          // row widths, in floats
+    std::vector<int> start;      // row start offsets
     bool ok = false;
 };
 inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
 {
     Uf1GonioGeom g;
-    if (n < 8) return g;
+
+    // Shape A — the diamond. n = 2m², rows 2,4,…,2m,…,4,2 (2m-1 rows).
+    // Proven for n=5000 (m=50): the lit indices at high correlation are exactly
+    // this table's row starts (0, 2, 6, 12, 20, 30, 42, 56, 72, 90 …).
     const int m = int(std::lround(std::sqrt(double(n) / 2.0)));
-    if (m < 2 || size_t(2 * m * m) != n) return g;   // not a diamond we know
-    g.m = m; g.rows = 2 * m - 1; g.ok = true;
-    return g;
-}
-// Row r's width (in pixels) and start offset, for a 2,4,…,2m,…,4,2 diamond.
-inline int uf1GonioRowW_(const Uf1GonioGeom& g, int r)
-{ return 2 * ((r < g.m) ? (r + 1) : (g.rows - r)); }
-inline int uf1GonioRowStart_(const Uf1GonioGeom& g, int r)
-{
+    if (m >= 2 && size_t(2 * m * m) == n) {
+        for (int k = 0; k < m; ++k)      g.w.push_back(2 * (k + 1));
+        for (int k = 0; k < m - 1; ++k)  g.w.push_back(2 * (m - 1 - k));
+    }
+    // Shape B — what the SSL Meter (Pro) instance actually streams: n = 2113.
+    // Measured, not understood: 42 leading floats, then rows 90, 88, …, 4, 2, 1.
+    // 42 + 2070 + 1 = 2113 exactly, and the corr-high frame's 46 lit indices are
+    // this table's row starts (42, 132, 220, 306 …, 2112). It is NOT symmetric —
+    // a monotonically shrinking field, which is a strange shape for a goniometer
+    // and says the reading is incomplete. It maps well enough to paint and let
+    // the hardware judge; if the face comes out lopsided, THIS is the suspect.
+    else if (n == 2113) {
+        g.w.push_back(42);                                 // header/lead-in
+        for (int k = 90; k >= 2; k -= 2) g.w.push_back(k);
+        g.w.push_back(1);
+    }
+    else return g;                                          // unknown -> paint nothing
+
     int s = 0;
-    for (int k = 0; k < r; ++k) s += uf1GonioRowW_(g, k);
-    return s;
+    for (int x : g.w) { g.start.push_back(s); s += x; }
+    g.ok = (size_t(s) == n);                                // table must span n exactly
+    return g;
 }
 
 // The UF1's own diamond — the exact MEASURED sequence from
@@ -15805,6 +15820,7 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
     if (!g.ok || !g_uf1_dev) return;          // shape we don't know -> paint nothing
 
     const auto& uw = uf1DiamondWidths_();
+    const int   srows = int(g.w.size());
     std::array<uint8_t, kUf1DiamondBytes> img{};
 
     int uoff = 0;
@@ -15812,10 +15828,10 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
         const int uwid = uw[size_t(i)];
         // Proportional row in the source diamond.
         const int j = (kUf1DiamondRows > 1)
-            ? int(std::lround(double(i) * double(g.rows - 1) / double(kUf1DiamondRows - 1)))
+            ? int(std::lround(double(i) * double(srows - 1) / double(kUf1DiamondRows - 1)))
             : 0;
-        const int swid  = uf1GonioRowW_(g, j);
-        const int sstart = uf1GonioRowStart_(g, j);
+        const int swid   = g.w[size_t(std::clamp(j, 0, srows - 1))];
+        const int sstart = g.start[size_t(std::clamp(j, 0, srows - 1))];
         for (int x = 0; x < uwid; ++x) {
             const int sx = (uwid > 1)
                 ? int(std::lround(double(x) * double(swid - 1) / double(uwid - 1)))
