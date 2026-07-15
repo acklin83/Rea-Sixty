@@ -145,6 +145,22 @@ void UF1Device::runInit_()
     // Let the worker post its first IN transfer + a keepalive.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
+    // SSL's very FIRST bulk frame after the EP0 vendor init is 256 zero bytes,
+    // before the FF01 wake (cap101 t=26.16, cap84 likewise starts with an
+    // all-zero block previously dismissed as a "descriptor artifact"). It can
+    // only be a parser flush/resync: 0x00 is no opcode, so a firmware parser
+    // stuck mid-frame from a previous session swallows it and lands on a frame
+    // boundary. We never sent it.
+    {
+        std::vector<uint8_t> zeros(256, 0x00);
+        int transferred = 0;
+        int zrc = libusb_bulk_transfer(handle_, kEpOut, zeros.data(),
+                                       static_cast<int>(zeros.size()),
+                                       &transferred, 1000);
+        traceFrame_('O', zeros.data(), zeros.size(), zrc);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
     // Replay the cap66 cold-start burst: wake/mode opcodes -> per-LED init
     // sweep -> initial FF 67 screen paint. 2 ms inter-frame pacing matches
     // SSL's observed gap; explicit delay_ms_before honours any load-bearing
@@ -200,14 +216,21 @@ void UF1Device::runInit_()
         // large-display layout). cap84 (plugin idle, no plug-in) reaches the same
         // state but shows nothing for lack of EQ data — we have both now.
         sendModeFrame(0x0000, std::vector<uint8_t>{0x03, 0x00});
-        sendModeFrame(0x000d, std::vector<uint8_t>{0x01});
+        // 03, not 01: cap84 AND cap101 both hold 0x000d=03 in plugin mode; the
+        // 01 that used to be here contradicted this block's own source comment
+        // and left the device in a layout neither MCU (04) nor plugin (03).
+        sendModeFrame(0x000d, std::vector<uint8_t>{0x03});
         sendModeFrame(0x0011, std::vector<uint8_t>{0x01});
         sendModeFrame(0x0100, std::vector<uint8_t>{0x03, 0x00});
         sendModeFrame(0x0101, std::vector<uint8_t>{0x05});
         sendModeFrame(0x010d, std::vector<uint8_t>{0x02, 0x02, 0x08, 0x02});
         sendModeFrame(0x0110, std::vector<uint8_t>{0x0f});
         sendModeFrame(0x011a, std::vector<uint8_t>{0x02});
-        sendModeFrame(0x011d, std::vector<uint8_t>{0x19});
+        // 0x011d is the cycle-closing view-state byte (cap101: 00 on Overview,
+        // 11 in channel idle). The 0x19 that used to be seeded here was cap77's
+        // session value — we entered the first image cycle with a state SSL
+        // never has on this path. SSL's own first connect write is 00.
+        sendModeFrame(0x011d, std::vector<uint8_t>{0x00});
         sendModeFrame(0x011e, std::vector<uint8_t>{0x18});
     }
 
