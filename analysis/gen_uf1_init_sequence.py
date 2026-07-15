@@ -37,10 +37,14 @@ OUT_INC = Path(__file__).parent.parent / 'extension/src/uf1_init_sequence.inc'
 # steady FF67 screen repaints that stream alongside it, we keep EVERYTHING in
 # the initial burst [T_START, BURST_END] but ONLY motor frames (FF1D/FF1E)
 # after BURST_END.
-UF1_DEV_ADDR = 12
-T_START   = 14.06
-BURST_END = 14.62    # wake + LED sweep + first paint done by here
-T_END     = 22.70    # through the last FF1D release of the dance (22.570)
+UF1_DEV_ADDR = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+T_START   = float(sys.argv[3]) if len(sys.argv) > 3 else 14.06
+BURST_END = float(sys.argv[4]) if len(sys.argv) > 4 else 14.62   # wake + LED sweep + first paint done by here
+T_END     = float(sys.argv[5]) if len(sys.argv) > 5 else 22.70   # through the last FF1D release of the dance
+# cap101 (2026-07-15, SSL 360 plugin-mode cold start on Frank's own config, the
+# goniometer verifiably drawing): dev 14, T_START=26.15, BURST_END=26.64,
+# T_END=34.75. Usage:
+#   python3 analysis/gen_uf1_init_sequence.py captures/cap101_...pcap 14 26.15 26.64 34.75
 GAP_PACING_MS_THRESHOLD = 50    # any gap >= this before a motor frame -> explicit delay
 MAX_MOTOR_DELAY_MS      = 800   # cap dead gaps (the one ~2.5 s idle gap) while
                                 # preserving every ~500 ms motor-travel dwell
