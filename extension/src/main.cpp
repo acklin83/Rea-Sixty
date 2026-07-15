@@ -15743,48 +15743,63 @@ constexpr double kUf1HoldResetSec = 3.0;
 // of that diamond (52 of 99 rows lit in a single frame, identical across frames
 // — geometry, not signal). n = 2·50² is not a coincidence: 50 is the half-height.
 //
-// ⚠ THE SOURCE GEOMETRY IS NOT KNOWN. We paint nothing until it is. Do not put a
-// shape here that merely "sums exactly" — that is precisely how the last three
-// attempts went wrong.
+// SOLVED 2026-07-15 (cap99). The plug-in's Lissajous raster is a DIAMOND of ODD
+// row widths — 1, 3, 5, …, 185, …, 5, 3, 1: **185 rows, sum 93² + 92² = 17113**,
+// one float per pixel, 0..1 in 100 quantised levels (the "Fade 2 sec" trail).
 //
-// What IS known (cap87, protobuf schema): the Lissajous is ONE array of
-// **17113 floats**, values 0..1 quantised to 100 levels (the "Fade 2 sec"
-// persistence — ~8547 of ~8592 lit cells are identical frame to frame; only ~120
-// move). It arrives CHUNKED across several messages (f7 MaxValueCount = 17113,
-// f8 ChunkSize, f9 ChunkOffset) and SslCoreImpersonator now reassembles it, so
-// `src.size()` here is 17113, not a chunk.
+// Derive the row count from n; never hardcode 17113 (SSL sizes the raster to its
+// view, and a second instance may pick another size):
+//   R odd  (= 2k-1) -> n = 2k² - 2k + 1  <=>  2n-1 = (2k-1)² and R = 2k-1
+//   R even (= 2k)   -> n = 2k²                (peak row doubled)
+// 17113: 2n-1 = 34225 = 185², so R = 185, k = 93. Exact.
 //
-// ⚠ REFUTED — do not resurrect any of these:
-//   * "n = 2m², rows 2,4,…,2m,…,4,2" (n=5000) and "42 lead-in + rows 90,88,…"
-//     (n=2113): 5000 and 2113 were never arrays at all. 5000 is the CHUNK SIZE
-//     and 2113 is the remainder chunk (17113 - 3*5000). We kept whichever chunk
-//     landed last, which is why the "length" seemed to alternate.
-//   * "both are odd diamonds, width[i] = 2·min(i,R-1-i)+1" — my own fit, and pure
-//     numerology: it fitted diamonds to CHUNK BOUNDARIES. That 2·33²-2·33+1 =
-//     2113 and 2·50² = 5000 are exact is a coincidence of the chunk sizes. The
-//     "mono draws a vertical line" test passed only because a chunk happens to
-//     contain whole rows.
-//   * "packed protobuf / MTU truncation / we are seeing fragments": wrong for the
-//     right reason — the array IS delivered in pieces, but via f8/f9, not by
-//     truncation, and `case 2` was never involved.
-//   * "17113 = 109 x 157, a rectangle with an inscribed diamond": tested against
-//     80 reassembled frames — the lit region is not contiguous per row and does
-//     not peak at the middle row in either orientation. Best diamond-mask fit was
-//     0.548, i.e. chance. cap87 cannot settle it because it is uncontrolled music.
+// ⚠ THE PROOF IS PHYSICS ON THE COMPLETE ARRAY, and it is not a near-fit —
+// it is exact (probe WAV, sections whose shape is known by construction):
+//   corr +1 (mono, L=R)  -> 185 lit cells, touching ALL 185 rows, every one at
+//                           frac 0.500 across its row, min = max = 0.500.
+//                           A perfect vertical line down the centre column.
+//   corr -1 (L=-R)       -> 185 lit cells in exactly ONE row, frac 0.0..1.0.
+//                           The widest row, fully lit = a horizontal line.
+//   L only / R only      -> 93 cells over 93 rows = one diamond edge.
+// No lit index ever falls outside the diamond.
 //
-// To close it: play the correlation sweep (analysis/gen_rta_corr_wav.py corr) on
-// the Overview screen with REASIXTY_T10_DUMP=1, which now dumps the REASSEMBLED
-// 17113-float array. corr=+1 must draw one lit cell per row; that gives the row
-// structure directly. Validate any candidate with the PHYSICS test (mono => a
-// vertical line down the centre), never with "the widths sum to n".
+// ⚠ The array arrives CHUNKED (f7/f8/f9) and SslCoreImpersonator reassembles it,
+// so src.size() here is the whole 17113 — NOT a chunk. Everything below depends
+// on that: every geometry fitted before the reassembler existed was fitted to a
+// chunk boundary and was wrong, including my own "odd diamond" for n=2113/5000.
+// 5000 is the CHUNK SIZE and 2113 the remainder (17113 - 3*5000); neither was
+// ever an array. If this ever paints garbage again, check that src.size() is a
+// whole image before touching the geometry.
 struct Uf1GonioGeom {
     std::vector<int> w;          // row widths, in floats
     std::vector<int> start;      // row start offsets
     bool ok = false;
 };
-inline Uf1GonioGeom uf1GonioGeomFor_(size_t /*n*/)
+inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
 {
-    return Uf1GonioGeom{};       // geometry unknown -> ok=false -> paint nothing
+    Uf1GonioGeom g;
+    const long long N = static_cast<long long>(n);
+    int rows = 0;
+
+    // Odd row count: 2n - 1 = (2k-1)², R = 2k-1. This is what 17113 is.
+    {
+        const long long s = std::llround(std::sqrt(double(2 * N - 1)));
+        if (s >= 3 && (s % 2) == 1 && s * s == 2 * N - 1) rows = int(s);
+    }
+    // Even row count: n = 2k², peak row doubled.
+    if (rows == 0 && N % 2 == 0) {
+        const long long k = std::llround(std::sqrt(double(N) / 2.0));
+        if (k >= 2 && 2 * k * k == N) rows = int(2 * k);
+    }
+    if (rows < 3) return g;                                 // unknown -> paint nothing
+
+    for (int i = 0; i < rows; ++i)
+        g.w.push_back(2 * std::min(i, rows - 1 - i) + 1);
+
+    int s = 0;
+    for (int x : g.w) { g.start.push_back(s); s += x; }
+    g.ok = (size_t(s) == n);                                // table must span n exactly
+    return g;
 }
 
 // The UF1's own diamond — the exact MEASURED sequence from
@@ -15836,25 +15851,46 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
     const int   srows = int(g.w.size());
     std::array<uint8_t, kUf1DiamondBytes> img{};
 
-    int uoff = 0;
-    for (int i = 0; i < kUf1DiamondRows; ++i) {
-        const int uwid = uw[size_t(i)];
-        // Proportional row in the source diamond.
-        const int j = (kUf1DiamondRows > 1)
-            ? int(std::lround(double(i) * double(srows - 1) / double(kUf1DiamondRows - 1)))
+    // Row start offsets into the UF1 image.
+    std::array<int, kUf1DiamondRows> uoff{};
+    { int a = 0; for (int i = 0; i < kUf1DiamondRows; ++i) { uoff[size_t(i)] = a; a += uw[size_t(i)]; } }
+
+    // FORWARD map every source pixel onto the UF1 and keep the MAXIMUM.
+    //
+    // Not nearest-neighbour BACKWARD sampling, which is what used to be here and
+    // it silently dropped the picture: the source diamond is 185 wide where the
+    // UF1's is 92, so this is a 2:1 downsample, and point-sampling a 2:1 shrink
+    // steps straight over a one-pixel-wide trace. Measured on the real corr=+1
+    // frame: backward sampling lit 93 of 187 rows — half the mono line simply
+    // missing — while the pixels it DID find sat correctly at frac 0.500. The
+    // narrow rows near the tips were worst: a UF1 row of width 2 sampled only the
+    // source row's two outer edges and never its lit centre.
+    //
+    // Forward + max is the right operator for a sparse trace: every lit source
+    // pixel lands somewhere, and where several collapse onto one UF1 pixel the
+    // brightest wins (a goniometer trace must not dim just because it is being
+    // shrunk). Both faces are diamonds of the same square, so the map is the
+    // normalised position along each axis.
+    for (int j = 0; j < srows; ++j) {
+        const int swid   = g.w[size_t(j)];
+        const int sstart = g.start[size_t(j)];
+        const int i = (srows > 1)
+            ? int(std::lround(double(j) * double(kUf1DiamondRows - 1) / double(srows - 1)))
             : 0;
-        const int swid   = g.w[size_t(std::clamp(j, 0, srows - 1))];
-        const int sstart = g.start[size_t(std::clamp(j, 0, srows - 1))];
-        for (int x = 0; x < uwid; ++x) {
-            const int sx = (uwid > 1)
-                ? int(std::lround(double(x) * double(swid - 1) / double(uwid - 1)))
-                : 0;
-            const size_t si = size_t(sstart + std::clamp(sx, 0, swid - 1));
-            const float  v  = (si < src.size()) ? src[si] : 0.f;
-            img[size_t(uoff + x)] =
-                uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+        const int uwid = uw[size_t(std::clamp(i, 0, kUf1DiamondRows - 1))];
+        const int ubase = uoff[size_t(std::clamp(i, 0, kUf1DiamondRows - 1))];
+        for (int sx = 0; sx < swid; ++sx) {
+            const size_t si = size_t(sstart + sx);
+            if (si >= src.size()) break;
+            const float v = src[si];
+            if (!(v > 0.f)) continue;
+            const int x = (swid > 1)
+                ? int(std::lround(double(sx) * double(uwid - 1) / double(swid - 1)))
+                : (uwid - 1) / 2;
+            const size_t di = size_t(ubase + std::clamp(x, 0, uwid - 1));
+            const uint8_t b = uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+            if (b > img[di]) img[di] = b;
         }
-        uoff += uwid;
     }
 
     for (int c = 34; c >= 0; --c) {                 // 34 -> 0, exactly as cap89
