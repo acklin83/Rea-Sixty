@@ -204,6 +204,28 @@ std::vector<uint8_t> subscribeInitial() {
     // stream (RTA t8/t9 never arrived because only the first 3 were subscribed).
     // Cheap to include; if RTA data appears it was this.
     add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
+    // RTA (t8) + TextRta (t9). ⚠ TRIED 2026-07-15 AND NOT SUFFICIENT — t8/t9
+    // still do not arrive with these in place. Kept because they are harmless
+    // (stream stays stable, 1 connect, no reconnect loop) and because the NEXT
+    // attempt needs to know this much was already ruled out.
+    //
+    // The ids themselves are solid — not guessed, not lifted from a capture. The
+    // plug-in ANNOUNCES every object it owns, by name, over the control socket we
+    // already hold; we threw those frames away unread until 2026-07-15 (see the
+    // recv() path below). Its declarations spell out, in clear text:
+    //     "Rta Meter Data"       = a7f10c0000000000
+    //     "TextRta Meter Data"   = 004aa60f13520000
+    //     "Lissajous Meter Data" = 21fcbf398d36940b   (goniometer; already t10)
+    // Re-read the list on any machine with REASIXTY_SSLCORE_TRACE=1 and
+    // `grep "PLUGIN->us" /tmp/reaper_sslcore.log` — no capture, no SSL 360 needed.
+    //
+    // So subscribing by object id is NOT the whole story. What is still unknown:
+    // the trailing varint. The 4 frames that DO work carry different values
+    // (0801 / 088010 / 08f6cbb302 / 08c1d828) and we copied 0801 blindly here.
+    // Prime suspect. Also unresolved: whether "360SelectedView"
+    // (= c5ea04de4990b792) gates RTA streaming on the view being selected.
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000a7f10c00000000000801120d0a0b08ffffffffffffffffff01");
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000004aa60f135200000801120d0a0b08ffffffffffffffffff01");
     return out;
 }
 // The type-18 subscribe frames, replayed periodically to keep the streams alive.
@@ -216,6 +238,10 @@ std::vector<uint8_t> subscribeRefresh() {
     add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
     add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
     add("efbc51002f0000001000000001000000083fd2371f00000012000000fc74d76393cb200008c1d828120d0a0b08ffffffffffffffffff01");
+    // RTA + TextRta — must be refreshed too, or the subscription lapses with the
+    // rest after ~6 s. See subscribeInitial() for where the ids come from.
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000a7f10c00000000000801120d0a0b08ffffffffffffffffff01");
+    add("efbc51002d000000100000000100000028e0c7451d00000012000000004aa60f135200000801120d0a0b08ffffffffffffffffff01");
     return out;
 }
 
@@ -407,7 +433,70 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             if (FD_ISSET(c, &rset)) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
                 if (n == 0) { SC_CLOSE(c); clients.erase(clients.begin() + long(i)); continue; }
-                // else: drain plugin control frames; we don't need their content yet.
+                // The plug-in TALKS BACK here, and we used to bin it unread
+                // ("we don't need their content yet"). It does need reading: the
+                // frames it sends carry the object ids it has registered, which
+                // is exactly what the RTA hunt is missing. We replay 4 subscribe
+                // frames lifted from an old capture; the real Core sends 178, and
+                // RTA is one we never ask for. Rather than re-capture a cold
+                // connect (the 880 MB pcap that had them lived in /tmp and is
+                // gone), log what the plug-in tells us and read the ids off that.
+                //
+                // TCP is a stream, so accumulate per client and only parse whole
+                // frames. Layout, confirmed against the frames we send in
+                // subscribeInitial():
+                //   efbc5100 | len32 | 12-B hdr | paylen32 | type32 | payload
+                //   type 2 = register, 18 = subscribe, 17 = prepare (names the
+                //   meter), 19 = data-port assignment. payload = 8-B objId + pb.
+                if (n > 0 && g_trace) {
+                    static std::map<socket_t, std::vector<uint8_t>> sAcc;
+                    auto& acc = sAcc[c];
+                    acc.insert(acc.end(), buf, buf + n);
+                    size_t off = 0;
+                    for (;;) {
+                        if (acc.size() - off < 8) break;
+                        // resync: the stream must start on the magic
+                        if (!(acc[off] == 0xef && acc[off+1] == 0xbc &&
+                              acc[off+2] == 0x51 && acc[off+3] == 0x00)) { ++off; continue; }
+                        uint32_t flen = 0;
+                        std::memcpy(&flen, &acc[off + 4], 4);
+                        if (flen > 65536) { ++off; continue; }          // junk guard
+                        if (acc.size() - off < size_t(8 + flen)) break;  // frame incomplete
+                        const uint8_t* body = &acc[off + 8];
+                        if (flen >= 20) {
+                            uint32_t paylen = 0, ftype = 0;
+                            std::memcpy(&paylen, body + 12, 4);
+                            std::memcpy(&ftype,  body + 16, 4);
+                            char line[512]; int o = 0;
+                            o += std::snprintf(line + o, sizeof(line) - o,
+                                               "[%.1f] PLUGIN->us type=%-3u paylen=%-4u", t,
+                                               unsigned(ftype), unsigned(paylen));
+                            const uint8_t* pay = body + 20;
+                            const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
+                            if (avail >= 8) {
+                                o += std::snprintf(line + o, sizeof(line) - o, " obj=");
+                                for (int k = 0; k < 8; ++k)
+                                    o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
+                            }
+                            // Remaining protobuf, hex + any printable run (the
+                            // type-17 prepares carry meter NAMES in clear text).
+                            if (avail > 8) {
+                                o += std::snprintf(line + o, sizeof(line) - o, " pb=");
+                                for (size_t k = 8; k < avail && o < int(sizeof(line)) - 96; ++k)
+                                    o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
+                                std::string txt;
+                                for (size_t k = 8; k < avail; ++k)
+                                    txt += (pay[k] >= 0x20 && pay[k] < 0x7f)
+                                             ? char(pay[k]) : '.';
+                                o += std::snprintf(line + o, sizeof(line) - o, " |%s|", txt.c_str());
+                            }
+                            slog("%s", line);
+                        }
+                        off += 8 + flen;
+                    }
+                    acc.erase(acc.begin(), acc.begin() + long(off));
+                    if (acc.size() > (1u << 20)) acc.clear();   // runaway guard
+                }
             }
             ++i;
         }
