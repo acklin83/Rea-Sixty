@@ -300,9 +300,10 @@ void UF1Device::workerLoop_()
             // Hold user frames until the init replay finishes (else REAPER's
             // onTimer pushes interleave with init frames and corrupt boot).
             if (!initInProgress_.load()) {
-                // Big enough for a whole 35-chunk goniometer image, so a burst
-                // enqueued via sendBurst() goes out in ONE iteration.
-                constexpr size_t kMaxBatch = 40;
+                // Big enough for a whole Overview cycle (35 image chunks + 10
+                // trailer elements), so a burst enqueued via sendBurst() goes
+                // out in ONE iteration.
+                constexpr size_t kMaxBatch = 64;
                 while (!pending_->q.empty() && batch.size() < kMaxBatch) {
                     batch.push_back(std::move(pending_->q.front()));
                     pending_->q.pop_front();

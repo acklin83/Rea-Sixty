@@ -70,6 +70,10 @@ struct Slot {
     std::vector<uint8_t> overload;      // f5 OverloadValues     — flashes, per channel
     std::vector<uint8_t> overloadHold;  // f6 OverloadInfHoldValues — latched, per channel
     bool have = false;
+    uint64_t seq = 0;   // bumped on every completed store — lets callers paint
+                        // DATA-driven (once per plugin frame) instead of
+                        // timer-driven, the way SSL does (cap89: 24.5 Hz, never
+                        // a repeated/stale image between plugin frames)
     // Chunk reassembly buffer (the Lissajous arrives in pieces; see
     // sslmeter::Update). `current` is only replaced once the array is complete.
     std::vector<float> asm_;
@@ -448,12 +452,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     s.current = s.asm_;         // one complete array
                                     s.peak    = std::move(u.peak);
                                     s.have    = true;
+                                    ++s.seq;
                                     completed = true;
                                 }
                             }
                         } else {
                             s.current = std::move(u.current); s.peak = std::move(u.peak);
                             s.have = true;
+                            ++s.seq;
                             completed = true;
                         }
                         if (!u.overload.empty())     s.overload     = std::move(u.overload);
@@ -709,7 +715,8 @@ void setView(int view)
     if (g_view.exchange(view) != view) g_viewDirty.store(true);
 }
 
-bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak) {
+bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
+              uint64_t* seq) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
     // Prefer a positively-identified Meter plug-in: a channel strip on the same
@@ -721,7 +728,11 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
         const Instance& in = kv.second;
         if (in.kind == Kind::Meter) {
             const Slot& s = in.meter[dataType];
-            if (s.have) { current = s.current; peak = s.peak; return true; }
+            if (s.have) {
+                current = s.current; peak = s.peak;
+                if (seq) *seq = s.seq;
+                return true;
+            }
         } else if (in.kind == Kind::Unknown && !fallback) {
             fallback = &in;
         }
@@ -729,7 +740,11 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     // Nothing classified yet (single plug-in, first datagrams) — old behaviour.
     if (fallback) {
         const Slot& s = fallback->meter[dataType];
-        if (s.have) { current = s.current; peak = s.peak; return true; }
+        if (s.have) {
+            current = s.current; peak = s.peak;
+            if (seq) *seq = s.seq;
+            return true;
+        }
     }
     return false;
 }

@@ -15866,7 +15866,11 @@ constexpr int kUf1DiamondRows  = 187;
 // never drawn: "correct frames that the device ignores". The earlier check
 // compared payload sizes and the 34:1 ratio, called that byte-identical, and
 // never looked at the order.
-void uf1PaintGoniometer_(const std::vector<float>& src)
+// Appends the 35 image chunks to `burst` (does not send) so the caller can emit
+// the WHOLE Overview cycle — image + trailer elements — as one atomic burst,
+// exactly the unit SSL emits at 24.5 Hz in cap89.
+void uf1PaintGoniometer_(const std::vector<float>& src,
+                         std::vector<std::vector<uint8_t>>& burst)
 {
     const Uf1GonioGeom g = uf1GonioGeomFor_(src.size());
     if (!g.ok || !g_uf1_dev) return;          // shape we don't know -> paint nothing
@@ -15917,11 +15921,7 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
         }
     }
 
-    // Enqueue the whole image atomically (sendBurst): SSL never emits anything
-    // inside an image burst, and per-chunk send() let the worker's FF1B
-    // keepalive land mid-image in ~11% of images (cap100).
-    std::vector<std::vector<uint8_t>> burst;
-    burst.reserve(35);
+    burst.reserve(burst.size() + 35);
     for (int c = 34; c >= 0; --c) {                 // 34 -> 0, exactly as cap89
         const int len = (c == 34) ? 60 : 250;
         std::vector<uint8_t> pay;
@@ -15930,7 +15930,6 @@ void uf1PaintGoniometer_(const std::vector<float>& src)
         pay.insert(pay.end(), img.begin() + c * 250, img.begin() + c * 250 + len);
         burst.push_back(uf1::buildScreen(0x0122, pay));
     }
-    g_uf1_dev->sendBurst(std::move(burst));
 }
 
 struct Uf1PeakHold {
@@ -16149,17 +16148,23 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         for (size_t k = 0; k < 25; ++k)
             p.push_back(k < s.size() ? static_cast<uint8_t>(s[k]) : 0x00);
 
-    // Unconditional. SSL restates 0x011c every cycle too (cap89: 2570 frames in
-    // 105 s, and the trace showed us sending only 241 where SSL sends 2570).
-    // Do not reintroduce a change-gate here: same rule as every other element.
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
-
     // ---- Per-screen graphic ------------------------------------------------
     // Drive each screen's decoded graphic from the same plugin floats. Only the
     // Overview bargraphs are wired so far (cap89/cap93); Analogue needles, RTA
     // and the Lissajous follow. Screen index matches kUf1MeterScreens:
     // 0 Overview, 1 Analogue, 2 RTA, 3 Loudness.
     const int screen = g_uf1MeterScreen.load();
+
+    // Unconditional. SSL restates 0x011c every cycle too (cap89: 2570 frames in
+    // 105 s, and the trace showed us sending only 241 where SSL sends 2570).
+    // Do not reintroduce a change-gate here: same rule as every other element.
+    //
+    // EXCEPT on Overview: there 0x011c is part of the per-image cycle and sits
+    // in a FIXED SLOT — after the image and the 0009..0016 group, before the
+    // 0125..0128 boxes (cap89, all 2570 cycles). We used to send it here, i.e.
+    // BEFORE the image; the Overview branch below emits it in cap89's slot.
+    if (screen != 0)
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow, p));
 
     // Tell the plug-in which view we are painting. This is a DATA dependency,
     // not cosmetics: it only computes the meters its selected view needs, so
@@ -16192,80 +16197,59 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         const std::array<uint8_t, 2> holdBar {
             uf1BarByte_(barHoldL), uf1BarByte_(barHoldR) };
 
-        auto putBar = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
-            g_uf1_dev->send(uf1::buildScreen(addr,
-                std::span<const uint8_t>(v.data(), v.size())));
-        };
-        // Stream unconditionally, the way SSL does: cap89 carries 2570 frames of
-        // each element over 105 s (~25 Hz), resent even when the bytes are
-        // unchanged. The send-on-change dedup that used to sit here is a trap —
-        // any value that saturates or goes constant stops the element dead. It
-        // is what froze the Analogue needle: pegged at byte 180, so "unchanged",
-        // so exactly ONE frame went out per visit to the screen.
-        // Order matters, so follow cap89's cycle exactly: the goniometer image
-        // first, then the bars, then the commit. Overview is the only screen
-        // that streams Lissajous (t10) — the plug-in computes it for this view
-        // and no other.
-        {
-            std::vector<float> liss, pk;
-            if (sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, pk))
-                uf1PaintGoniometer_(liss);
-        }
-
-        // The rest of cap89's cycle, in cap89's order. These five were sent ONCE,
-        // in the setup burst, and that is the last difference between our stream
-        // and SSL's — PROVEN by the frame trace (/tmp/reaper_uf1_frames.log) taken
-        // with the UF1 actually on Overview:
-        //          SSL (cap89)     us (before this)
-        //   0x0122  35/cycle        35/cycle, order 34->0, lens 257/67  — identical
-        //   0x0125/26/27, 0x0128, 0x011d  every cycle    every cycle    — identical
-        //   0x0009/0x000a/0x0015/0x0016   2569x = EVERY CYCLE      4x (burst only)
-        //   0x0119                        1011x                    4x (burst only)
-        // Everything about the image was right — content, geometry, chunk order,
-        // lengths, 35 chunks, 48797 frames on the wire — and the face stayed black.
-        // Values are cap89's own at-rest bytes.
+        // ---- The Overview image cycle: DATA-driven, ONE atomic burst --------
+        // SSL's Overview steady state is one repeating unit at the plugin's own
+        // ~24.5 Hz — cap89, all 2570 cycles, fixed element order:
+        //   img34..img0  0009 000a 0015 0016 [0119] 011c 0125 0126 0127 0128 011d
+        // and BETWEEN images SSL sends nothing at all (only the 150 ms FF1B).
+        // We used to run this timer-driven at ~33 Hz — every tick, stale-image
+        // repeats included, and 0x011c BEFORE the image instead of in its slot
+        // after 0016 — a superset of SSL's stream in a different order. Now a
+        // NEW t10 arrival (slot seq) triggers exactly one cycle, assembled in
+        // cap89's order and enqueued as one burst so nothing of ours can
+        // interleave. 0x0119 stays absent: change-driven, codec unknown, and
+        // cap75/cap76 draw without it.
         //
-        // This is [[uf1-meter-codec-decoded]]'s own hard rule, which I broke here:
-        // NEVER send a UF1 display element once and assume it sticks. SSL restates
-        // every element ~25 Hz forever. Sending once is just the send-on-change
-        // dedup taken to its limit — the same trap that froze the Analogue needle
-        // and painted RTA exactly once.
-        // Values are cap75/cap76's, i.e. 00 — NOT cap89's ff. cap89 disagrees
-        // because these carry per-session state (they recoloured Frank's VU
-        // readout when I "corrected" them to ff), and cap89 draws the goniometer
-        // perfectly well with ff, so they gate nothing. Restating the burst's own
-        // values is the safe read.
-        // 0x0119 is deliberately NOT restated: cap75/cap76 never send it on
-        // Overview at all, and we do not know its codec.
-        {
-            static const uint8_t k0009[] = {0x00,0x00,0x00,0x00};
-            static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
-            static const uint8_t kZ      = 0x00;
-            g_uf1_dev->send(uf1::buildScreen(0x0009, k0009));
-            g_uf1_dev->send(uf1::buildScreen(0x000a, k000a));
-            g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kZ, 1)));
-            g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kZ, 1)));
-        }
+        // Trailer values are cap75/cap76's at-rest bytes (00) — NOT cap89's ff:
+        // 0x0009/15/16 carry per-session colour state (they recoloured Frank's
+        // VU readout when "corrected" to ff) and gate nothing. The dedup trap
+        // note stands: never send-on-change these elements — SSL restates the
+        // whole group every cycle (it froze the Analogue needle and one-shot
+        // RTA before). The cycle gate here is DATA freshness, not value change.
+        // 0x0128 = overload bitmask, 0x00 on Overview (no overload LEDs there,
+        // cap98). 0x011d = Overview-only, unidentified, best guess a per-image
+        // latch; both close every cap89 cycle.
+        std::vector<float> liss, lisspk;
+        uint64_t lseq = 0;
+        const bool haveLiss =
+            sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, lisspk, &lseq);
+        static uint64_t sLastLissSeq = 0;
+        if (haveLiss && lseq == sLastLissSeq && !force)
+            return;                 // between plugin frames: silence, like SSL
+        sLastLissSeq = lseq;
 
-        putBar(0x0125, rmsBar);
-        putBar(0x0126, peakBar);
-        putBar(0x0127, holdBar);
-
-        // SSL closes every Overview cycle with 0x0128 then 0x011d, both 0x00 —
-        // last two elements of 2536 of 2570 image cycles in cap89, no other value
-        // in 105 s. We only sent them once, in the setup burst.
-        //
-        // ⚠ 0x0128 is NOT a "commit", whatever the earlier comment here claimed:
-        // it is the OVERLOAD BITMASK (see the Analogue branch below). It is 0x00
-        // on Overview simply because that screen has no overload LEDs — cap98
-        // confirms the plug-in reports no overload at all while Overview is the
-        // selected view. Sending 0x00 here is right, but for that reason.
-        // 0x011d IS Overview-only (cap88/cap94 never send it on Analogue) and is
-        // still unidentified; a per-image latch remains the best guess. RTA needs
-        // neither — its 0x0122 is a single unchunked 64-byte frame.
+        std::vector<std::vector<uint8_t>> cycle;
+        if (haveLiss)
+            uf1PaintGoniometer_(liss, cycle);   // appends the 35 chunks (nothing
+                                                // if the shape is unknown)
+        static const uint8_t k0009[] = {0x00,0x00,0x00,0x00};
+        static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
         const uint8_t kZero = 0x00;
-        g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kZero, 1)));
-        g_uf1_dev->send(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
+        cycle.push_back(uf1::buildScreen(0x0009, k0009));
+        cycle.push_back(uf1::buildScreen(0x000a, k000a));
+        cycle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kZero, 1)));
+        cycle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kZero, 1)));
+        cycle.push_back(uf1::buildScreen(uf1::scr::kHeaderRow, p));  // 011c, its slot
+        auto barFrame = [](uint16_t addr, const std::array<uint8_t, 2>& v) {
+            return uf1::buildScreen(addr,
+                std::span<const uint8_t>(v.data(), v.size()));
+        };
+        cycle.push_back(barFrame(0x0125, rmsBar));
+        cycle.push_back(barFrame(0x0126, peakBar));
+        cycle.push_back(barFrame(0x0127, holdBar));
+        cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&kZero, 1)));
+        cycle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
+        g_uf1_dev->sendBurst(std::move(cycle));
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).

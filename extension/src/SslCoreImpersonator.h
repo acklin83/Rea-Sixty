@@ -50,7 +50,11 @@ void setView(int view);
 // Returns false if that type hasn't been seen yet. Thread-safe.
 // Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on
 // the same track publishes into overlapping indices (see below).
-bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak);
+// seq (optional): monotonic per-slot counter, bumped on every completed store.
+// Compare against the last seen value to paint data-driven (once per plugin
+// frame, like SSL) instead of timer-driven with stale repeats.
+bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
+              uint64_t* seq = nullptr);
 
 // Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
 // flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
