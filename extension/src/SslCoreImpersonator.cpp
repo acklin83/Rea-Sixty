@@ -446,6 +446,33 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 }
                                 slog("%s", line);
                             }
+                            // Lissajous (t10) structure probe. Its length CHANGES
+                            // frame to frame (2113, 5000, …), which a fixed
+                            // intensity raster cannot do — so the "t10 is a raster"
+                            // reading in the 2026-07-14 notes looks wrong, and the
+                            // 5000-floats-to-8560-byte-diamond mapping that was
+                            // called unsolved may be the wrong question entirely.
+                            // Dump the head so the real shape is visible.
+                            for (const auto& kv : g_inst) {
+                                const Slot& s = kv.second.meter[int(sslmeter::DataType::Lissajous)];
+                                if (!s.have || s.current.empty()) continue;
+                                char line[512]; int o = 0;
+                                float mn = s.current[0], mx = s.current[0];
+                                size_t nz = 0;
+                                for (float v : s.current) {
+                                    if (v < mn) mn = v;
+                                    if (v > mx) mx = v;
+                                    if (v != 0.f) ++nz;
+                                }
+                                o += std::snprintf(line + o, sizeof(line) - o,
+                                    "[%.1f] t10 src=%u n=%zu nonzero=%zu min=%.3f max=%.3f head:",
+                                    t, unsigned(kv.first), s.current.size(), nz,
+                                    double(mn), double(mx));
+                                for (size_t k = 0; k < s.current.size() && k < 16; ++k)
+                                    o += std::snprintf(line + o, sizeof(line) - o,
+                                                       " %.3f", double(s.current[k]));
+                                slog("%s", line);
+                            }
                         }
                     }
                 }
