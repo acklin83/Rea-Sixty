@@ -1,4 +1,5 @@
 #include "UC1Surface.h"
+#include "LogPath.h"
 
 #include <algorithm>
 #include <chrono>
@@ -3213,7 +3214,7 @@ void UC1Surface::renderExtFuncsSubscreen_()
     const auto& cur  = items[idx];
 
     // --- TEMP DIAGNOSTIC (ext-funcs name/focus) — remove after diagnosing ---
-    if (FILE* lf = std::fopen("/tmp/reasixty_extfuncs.log", "a")) {
+    if (FILE* lf = std::fopen(uf8::logPath("reasixty_extfuncs.log").c_str(), "a")) {
         auto* dtr = static_cast<MediaTrack*>(focusedTrack_);
         char fxn[256] = {0}; int dfx = -1;
         if (dtr) {
@@ -4523,7 +4524,7 @@ void UC1Surface::refresh()
         static int kDiagRemaining = 8;
         if (kDiagRemaining > 0) {
             --kDiagRemaining;
-            if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_refresh.log", "a")) {
+            if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_refresh.log").c_str(), "a")) {
                 std::fprintf(f, "UC1 refresh  cs='%s' bc='%s'\n",
                              csName.c_str(), bcName.c_str());
                 std::fclose(f);

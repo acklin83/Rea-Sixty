@@ -12,6 +12,7 @@
 
 #define REAPERAPI_IMPLEMENT
 #include "reaper_plugin.h"
+#include "LogPath.h"
 #include "reaper_plugin_functions.h"
 
 // Host-OS modifier-key polling for Alt-drag snap-back. REAPER's SDK
@@ -429,6 +430,29 @@ std::atomic<bool> g_pluginGuiSyncRequest{false};
 std::atomic<bool> g_showFocusedPluginGuiRequest{false};
 std::atomic<bool> g_showFxChainRequest{false};
 std::atomic<bool> g_closeAllFxGuisRequest{false};
+
+// "Restart Rea-Sixty": close every device and bring them back up. Set from the
+// builtin (which may fire on the USB worker thread) and drained at the TOP of
+// onTimer — closing a device from the very thread that is calling into us would
+// be a deadlock at best. Same defer pattern as g_closeAllFxGuisRequest.
+// NOTE this re-inits the DEVICES, it does not reload the extension: REAPER keeps
+// the dylib for the process lifetime, so new code still needs a REAPER restart.
+std::atomic<bool> g_restartRequest{false};
+
+// The FIRST open() after a close() fails; a SECOND one succeeds. That is why the
+// action needed pressing twice — press 1 = close + (failed) open, press 2 = close
+// (no-op, already shut) + open (works). MEASURED, not assumed: waiting 500 ms and
+// waiting 6 s between close and open both still needed two presses, which rules
+// time out as the factor. It is the attempt that counts, not the delay.
+//
+// So retry the whole close+open cycle — i.e. do automatically what Frank was
+// doing by hand — until a device is actually back, or the attempts run out.
+// Each attempt closes first, exactly like the manual second press.
+// Timer is ~30 Hz (see the "~30 s" comment on the 900-tick block).
+int       g_restartAttemptsLeft = 0;
+long long g_restartNextTick     = 0;
+constexpr int       kRestartAttempts = 5;
+constexpr long long kRestartGapTicks = 30;   // ~1 s between attempts
 
 // Entry-time snap for UF8 Plugin Mode. Set by uf8_plugin_mode_toggle{,_with_gui}
 // from the libusb input thread when the mode is being switched ON. The
@@ -2515,6 +2539,21 @@ std::atomic<bool> g_grAnyFx{true};
 // for the UF8 CS-GR strip and the UC1 Comp meter so each surface can be
 // set independently. Frank 2026-06-12. Settings → Device → GR meter source.
 std::atomic<bool> g_grCombineUf8{false};
+
+// Whether Rea-Sixty writes to REAPER's Console. Default OFF: REAPER pops the
+// Console window open unbidden for each message, which is pure noise when a
+// device is simply not connected. The same text still goes to the stale.log
+// files, so nothing is lost — turn this on in Settings when diagnosing.
+// Every ShowConsoleMsg of ours goes through consoleMsg_ (in here) or
+// reasixty_console (file scope, for the other translation units).
+std::atomic<bool> g_consoleOutput{false};
+
+void consoleMsg_(const char* msg)
+{
+    if (!msg || !*msg) return;
+    if (!g_consoleOutput.load()) return;
+    ShowConsoleMsg(msg);
+}
 std::atomic<bool> g_grCombineUc1{false};
 
 // On-screen "active instance" marker (Settings → Device → Inserts). When
@@ -3182,6 +3221,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uf8"); v && *v) {
         g_grCombineUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "console_output"); v && *v) {
+        g_consoleOutput.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "cs_favourites2"); v && *v) {
         std::lock_guard<std::mutex> lk(g_csFavMutex);
@@ -7463,7 +7505,7 @@ static void csLog_(const char* s)
 {
     const char* en = GetExtState("rea_sixty", "cs_log");
     if (!(en && en[0] == '1')) return;
-    if (FILE* f = std::fopen("/tmp/rea_sixty_cs.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_cs.log").c_str(), "a")) {
         std::fputs(s, f); std::fputc('\n', f); std::fclose(f);
     }
 }
@@ -13917,7 +13959,12 @@ void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
                     int delta, const char* decision);
 void onMidiFromReaper(std::span<const uint8_t> bytes);
 
-ReaSixtySurface::ReaSixtySurface()
+// Open + initialise every device. Split out of the constructor so the "Restart
+// Rea-Sixty" action can re-run EXACTLY the same bring-up rather than a
+// second, drifting copy of it. Main thread only (constructor / action drain).
+// Does NOT touch the timer registration — that belongs to the surface's
+// lifetime, not to a device re-init.
+void initDevices_()
 {
     // Open the virtual MIDI ports first — harmless if unused, and keeps
     // the legacy MCU-SysEx scribble pipe available for anyone still
@@ -13941,12 +13988,12 @@ ReaSixtySurface::ReaSixtySurface()
     const bool uf8Opened = g_dev->open();
     if (!uf8Opened) {
         const std::string err = g_dev->lastError();
-        ShowConsoleMsg(("Rea-Sixty UF8: " + err
-                        + "  (UF8 optional — continuing)\n").c_str());
+        consoleMsg_(("Rea-Sixty UF8: " + err
+                     + "  (UF8 optional — continuing)\n").c_str());
         // Mirror to the stale.log too — Frank-2026-05-20 missed a Console
         // line for a startup-failure case where UC1 just didn't connect.
         // The log file accumulates across sessions.
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uf8_stale.log", "a")) {
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now()
                 .time_since_epoch();
             const auto ms = std::chrono::duration_cast<
@@ -13998,9 +14045,9 @@ ReaSixtySurface::ReaSixtySurface()
         }
     } else {
         const std::string err = g_uc1_dev->lastError();
-        ShowConsoleMsg(("Rea-Sixty UC1: " + err
-                        + "  (UC1 optional — UF8 continues)\n").c_str());
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+        consoleMsg_(("Rea-Sixty UC1: " + err
+                     + "  (UC1 optional — UF8 continues)\n").c_str());
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now()
                 .time_since_epoch();
             const auto ms = std::chrono::duration_cast<
@@ -14015,7 +14062,6 @@ ReaSixtySurface::ReaSixtySurface()
     // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
     openUf1BringUp_();
 
-    plugin_register("timer", reinterpret_cast<void*>(onTimer));
 
     // Push the persisted brightness level to both devices now that
     // they're open. If no ExtState yet (first-run), defaults to "full".
@@ -14023,9 +14069,11 @@ ReaSixtySurface::ReaSixtySurface()
     applyBrightness();
 }
 
-ReaSixtySurface::~ReaSixtySurface()
+// Close every device and drop the derived state. The counterpart to
+// initDevices_; the destructor and the restart action share it so a re-init can
+// never diverge from a real teardown. Leaves the timer alone (see initDevices_).
+void shutdownDevices_()
 {
-    plugin_register("-timer", reinterpret_cast<void*>(onTimer));
     g_sync.reset();
     if (g_midi) g_midi->close();
     g_midi.reset();
@@ -14037,6 +14085,18 @@ ReaSixtySurface::~ReaSixtySurface()
     if (g_uf1_dev) g_uf1_dev->close();
     g_uf1_dev.reset();
     g_slotTrack.fill(nullptr);
+}
+
+ReaSixtySurface::ReaSixtySurface()
+{
+    initDevices_();
+    plugin_register("timer", reinterpret_cast<void*>(onTimer));
+}
+
+ReaSixtySurface::~ReaSixtySurface()
+{
+    plugin_register("-timer", reinterpret_cast<void*>(onTimer));
+    shutdownDevices_();
 }
 
 IReaperControlSurface* createReaSixty(const char* /*type*/, const char* /*config*/,
@@ -14275,7 +14335,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
         if (frameSize == 0) {
             // Unknown command — log (trace-gated) and skip one byte.
             if (g_uf8Trace)
-            if (FILE* f = std::fopen("/tmp/reaper_uf8_unknown.log", "a")) {
+            if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_unknown.log").c_str(), "a")) {
                 std::fprintf(f, "unknown:");
                 const size_t show = std::min<size_t>(len - i, 12);
                 for (size_t k = 0; k < show; ++k) std::fprintf(f, " %02X", data[i + k]);
@@ -14998,7 +15058,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // per touch event so we can correlate with FF 1B keepalive
                 // and FF 1D motor commands logged from the worker thread.
                 if (g_uf8Trace)
-                if (FILE* lg = std::fopen("/tmp/reaper_uf8_motor.log", "a")) {
+                if (FILE* lg = std::fopen(uf8::logPath("reaper_uf8_motor.log").c_str(), "a")) {
                     const auto t = std::chrono::system_clock::now().time_since_epoch();
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
                     std::fprintf(lg, "[%lld] TOUCH rawStrip=%u strip=%u state=%u\n",
@@ -16507,7 +16567,7 @@ void uf1PaintChannel_()
 // Log raw HID reports until we've reverse-engineered the report format.
 void logHid(const uint8_t* data, size_t len)
 {
-    if (FILE* f = std::fopen("/tmp/reaper_uf8_hid.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_hid.log").c_str(), "a")) {
         for (size_t i = 0; i < len; ++i) std::fprintf(f, "%02x ", data[i]);
         std::fprintf(f, "\n");
         std::fclose(f);
@@ -16519,7 +16579,7 @@ void logHid(const uint8_t* data, size_t len)
 // kept fopen/fprintf/fclose for simplicity; REAPER's MIDI rate is low.
 void logMidi(std::span<const uint8_t> bytes)
 {
-    FILE* f = std::fopen("/tmp/reaper_uf8_midi.log", "a");
+    FILE* f = std::fopen(uf8::logPath("reaper_uf8_midi.log").c_str(), "a");
     if (!f) return;
     for (auto b : bytes) std::fprintf(f, "%02x ", b);
     std::fprintf(f, "\n");
@@ -22152,6 +22212,13 @@ static void sdBridgeTick_()
             // because the Stream Deck / Companion render UTF-8 (SVG), not the
             // Latin-1 hardware LCD. Sent as "nma" alongside the raw "nm".
             const std::string nmA = abbreviateTrackName_(nmS, 12, -1, /*foldLatin1*/ false);
+            // ...and a FORCED Smart-Abbrev variant as "nms". The Stream Deck tile
+            // has its own "Smart abbreviate" switch, which must mean what it says:
+            // nmA follows the global Track-name mode, so with that set to Truncate
+            // a ticked "Smart abbreviate" would show a merely truncated name.
+            // forceMode exists for exactly this (see TrackName.h).
+            const std::string nmSm = abbreviateTrackName_(nmS, 12, TNM_SmartAbbrev,
+                                                          /*foldLatin1*/ false);
             // Track colour: rgb when a custom colour is set, else [-1,-1,-1].
             int cr = -1, cg = -1, cb = -1;
             if (mt) {
@@ -22163,7 +22230,8 @@ static void sdBridgeTick_()
             ml += "{\"id\":\"" + sdJsonEsc_(t) + "\",\"peak\":["
                 + f1(pL) + "," + f1(pR) + "],\"comp\":" + f1(comp)
                 + ",\"bc\":" + f1(bc) + ",\"nm\":\"" + sdJsonEsc_(nmS)
-                + "\",\"nma\":\"" + sdJsonEsc_(nmA) + "\",\"rgb\":["
+                + "\",\"nma\":\"" + sdJsonEsc_(nmA)
+                + "\",\"nms\":\"" + sdJsonEsc_(nmSm) + "\",\"rgb\":["
                 + std::to_string(cr) + "," + std::to_string(cg) + "," + std::to_string(cb) + "]}";
         }
         ml += "]}";
@@ -22208,6 +22276,26 @@ static void sdBridgeTick_()
 void onTimer()
 {
     ++g_tickCounter;
+
+    // Restart before anything else touches a device this tick — the pointers are
+    // replaced wholesale here. Retried across ticks: the first open() after a
+    // close() fails (see g_restartAttemptsLeft).
+    if (g_restartRequest.exchange(false)) {
+        g_restartAttemptsLeft = kRestartAttempts;
+        g_restartNextTick     = g_tickCounter;   // first attempt right away
+    }
+    if (g_restartAttemptsLeft > 0 && g_tickCounter >= g_restartNextTick) {
+        --g_restartAttemptsLeft;
+        shutdownDevices_();          // no-op once already shut — like press 2
+        initDevices_();
+        if (g_dev || g_uc1_dev) {
+            g_restartAttemptsLeft = 0;   // something came back — done
+            g_pageDirty.store(true);     // repaint everything from scratch
+        } else {
+            g_restartNextTick = g_tickCounter + kRestartGapTicks;
+        }
+    }
+
     sdBridgeTick_();
 
     // Seed the favourite re-add cache from loaded plug-ins: once shortly after
@@ -23204,7 +23292,7 @@ void onTimer()
             sLastReopen = nowR;
             if (ucStale) {
                 if (FILE* f = std::fopen(
-                        "/tmp/rea_sixty_uc1_stale.log", "a"))
+                        uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a"))
                 {
                     const auto t = std::chrono::system_clock::now()
                         .time_since_epoch();
@@ -23232,7 +23320,7 @@ void onTimer()
             }
             if (ufStale) {
                 if (FILE* f = std::fopen(
-                        "/tmp/rea_sixty_uf8_stale.log", "a"))
+                        uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a"))
                 {
                     const auto t = std::chrono::system_clock::now()
                         .time_since_epoch();
@@ -23904,7 +23992,7 @@ void onTimer()
             const auto dOf = of - prevOutFrames;
             const auto dOe = oe - prevOutErrors;
             if ((dOe > 0 || dOf < 20)) {
-                if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stats.log", "a")) {
+                if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
                     std::fprintf(f,
                         "UC1 WARN: OUT=%llu frames/s errs=%llu (expected ~50)\n",
                         (unsigned long long)dOf, (unsigned long long)dOe);
@@ -24322,7 +24410,7 @@ void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
     std::lock_guard<std::mutex> lk(g_faderInputLogMutex);
     static FILE* f = nullptr;
     if (!f) {
-        f = std::fopen("/tmp/uf8_fader_input.log", "w");
+        f = std::fopen(uf8::logPath("uf8_fader_input.log").c_str(), "w");
         if (!f) return;
         std::fprintf(f, "t_ms\tkind\tstrip\tpb14\tprevPb\tdelta\tdecision\n");
     }
@@ -24341,6 +24429,15 @@ custom_action_register_t g_actionToggleMixer{
     0, "REASIXTY_TOGGLE_SETTINGS", "Rea-Sixty: Open / Close Rea-Sixty Settings", nullptr,
 };
 int g_cmdToggleMixer = 0;
+
+// The point of this one is to avoid the Preferences → Control Surface round-trip,
+// so it has to be reachable from REAPER's Action list / a shortcut. The builtin
+// alone (registerBuiltin "restart") only reaches Settings → Bindings, i.e. a
+// hardware key — no help when the surface is the thing that needs re-opening.
+custom_action_register_t g_actionRestart{
+    0, "REASIXTY_RESTART", "Rea-Sixty: Restart Rea-Sixty (re-open devices)", nullptr,
+};
+int g_cmdRestart = 0;
 
 custom_action_register_t g_actionQuickLearn{
     0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn Project", nullptr,
@@ -24638,6 +24735,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
+    if (command == g_cmdRestart)        { g_restartRequest.store(true); return true; }
     if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
     if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
@@ -25194,6 +25292,18 @@ void reasixty_setGrCombineUf8(bool on)
     g_grCombineUf8.store(on);
     SetExtState("rea_sixty", "gr_combine_uf8", on ? "1" : "0", true);
 }
+
+bool reasixty_consoleOutput() { return g_consoleOutput.load(); }
+void reasixty_setConsoleOutput(bool on)
+{
+    g_consoleOutput.store(on);
+    SetExtState("rea_sixty", "console_output", on ? "1" : "0", true);
+}
+
+// Every Console message Rea-Sixty emits goes through here (or consoleMsg_ inside
+// main.cpp) so the Settings toggle silences all of them from one place.
+// Main-thread only, like ShowConsoleMsg itself.
+void reasixty_console(const char* msg) { consoleMsg_(msg); }
 
 // --- CS-Switch favourites public API (Settings + Learn-HUD) ---
 // Fills addName/label for slot (0..7); returns false (and empties both) if the
@@ -27560,7 +27670,7 @@ void reasixty_onActiveLayerChanged()
 // number so users with three saved layers can tell them apart.
 bool reasixty_exportLayerViaDialog(int layer)
 {
-    FILE* lg = std::fopen("/tmp/rea_sixty.log", "a");
+    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
     if (lg) std::fprintf(lg, "[exportLayer] enter layer=%d\n", layer);
 
     char defName[64];
@@ -28039,20 +28149,51 @@ void reasixty_actionPickerPoll()
 // About tab uses these to launch the system handler. macOS-only path
 // (`open` CLI); cross-platform later. URL is shell-quoted by single
 // quotes — caller is trusted (hard-coded in UI).
+// Open a URL in the user's browser. Was macOS-only (`/usr/bin/open`), which is
+// why the About-page links did nothing at all on Windows: the click arrived, the
+// command silently didn't exist. ShellExecute rather than system() on Windows —
+// system() would flash up a console window.
 void reasixty_openUrl(const char* url)
 {
     if (!url || !*url) return;
+#if defined(_WIN32)
+    ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
+#elif defined(__APPLE__)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", url);
     std::system(cmd);
+#else
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' &", url);
+    std::system(cmd);
+#endif
 }
 
+// Show a file or folder in the OS file manager (Finder / Explorer / xdg).
+// Same macOS-only bug as reasixty_openUrl above.
 void reasixty_revealInFinder(const char* path)
 {
     if (!path || !*path) return;
+#if defined(_WIN32)
+    // "/select," highlights a FILE inside its folder; for a folder that syntax
+    // would open its parent instead, so open directories directly.
+    DWORD attr = GetFileAttributesA(path);
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        ShellExecuteA(nullptr, "open", path, nullptr, nullptr, SW_SHOWNORMAL);
+    } else {
+        char args[1024];
+        snprintf(args, sizeof(args), "/select,\"%s\"", path);
+        ShellExecuteA(nullptr, "open", "explorer.exe", args, nullptr, SW_SHOWNORMAL);
+    }
+#elif defined(__APPLE__)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", path);
     std::system(cmd);
+#else
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' &", path);
+    std::system(cmd);
+#endif
 }
 
 void reasixty_exportDiagnostic()
@@ -28288,6 +28429,22 @@ void registerBindingHandlers()
     // Shares reasixty_toggleUc1OutGainFaderMode() with the REAPER action
     // REASIXTY_UC1_OUTGAIN_FADER_TOGGLE. stateOf drives the bound button's
     // LED on UC1 / UF8.
+    // Re-open the hardware without the Preferences → Control Surface round-trip
+    // Frank otherwise has to make. Only sets a flag: this may fire on the USB
+    // worker thread, and closing a device from the thread calling into us would
+    // hang. onTimer does the work (see g_restartRequest).
+    // This restarts the DEVICES, not the extension — REAPER holds the dylib for
+    // the whole process, so new code still needs a REAPER restart. Nothing can
+    // change that, and the Preferences round-trip doesn't either.
+    registerBuiltin("restart", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_restartRequest.store(true);
+        },
+        nullptr,
+        "Restart Rea-Sixty (re-open devices)", false
+    });
+
     registerBuiltin("uc1_outgain_fader_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -30894,7 +31051,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         uf8::dynamount::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
-        // Stop the SSL Core impersonator worker (no-op if it was never started).
+        // Stop the SSL Core impersonator worker (no-op if it never started).
         sslcore::stop();
         plugin_register("-csurf", &g_csurfReg);
         return 0;
@@ -30966,7 +31123,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         }
         FILE* f = std::fopen(path, "a");
 #else
-        FILE* f = std::fopen("/tmp/rea_sixty_init.log", "a");
+        FILE* f = std::fopen(uf8::logPath("rea_sixty_init.log").c_str(), "a");
 #endif
         if (f) { std::fprintf(f, "%s\n", msg); std::fclose(f); }
     };
@@ -31155,6 +31312,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessUp   = plugin_register("custom_action", &g_actionBrightnessUp);
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
+    g_cmdRestart        = plugin_register("custom_action", &g_actionRestart);
     g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
     g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
@@ -31241,10 +31399,14 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                    : "step: StreamDeck bridge FAILED to bind");
     }
 
-    // SSL 360°Core impersonator — stand in for 360°Core so SSL Meter (Pro)
-    // plugins stream their live meter data to us, driving the UF1 Meter/Analyzer
-    // view without SSL 360° running. Reverse-engineered + proven end-to-end
-    // 2026-07-10 (see SslCoreImpersonator.h, memory ssl360-plugin-protobuf).
+    // SSL 360°Core impersonator — stand in for 360°Core so the SSL plug-ins
+    // stream their live meter data to us, without SSL 360° running. Two
+    // consumers: the UF1 Meter/Analyzer view, and the Channel Strip's Gate/Comp
+    // gain reduction — for the latter this stream is the ONLY source, since
+    // REAPER's GainReduction_dB parm gives one number per FX and nothing at all
+    // for the gate (see UC1Surface's csGateGr). Reverse-engineered + proven
+    // end-to-end 2026-07-10/14 (see SslCoreImpersonator.h, memory
+    // ssl360-plugin-protobuf).
     //
     // OPT-IN (default OFF): it announces itself on the SSL discovery ports
     // (16008/16009) and would clash with a running SSL 360°. Enable per-user via
@@ -31270,11 +31432,18 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 const int p = std::atoi(dv);
                 if (p > 0 && p < 65536) dataPort = p;
             }
-            // Trace log: on by default while the impersonator runs (we're still
-            // bringing it up end-to-end). Opt out with ssl_core_trace=0.
+            // Trace log (/tmp or %TEMP%): on while the impersonator runs, since
+            // it is still young. Opt out with ssl_core_trace=0.
+            // setenv() is POSIX and absent on MSVC — _putenv_s is the Windows
+            // spelling.
             const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
-            if (!(trv && *trv && !strcmp(trv, "0")))
+            if (!(trv && *trv && !strcmp(trv, "0"))) {
+#if defined(_WIN32)
+                _putenv_s("REASIXTY_SSLCORE_TRACE", "1");
+#else
                 setenv("REASIXTY_SSLCORE_TRACE", "1", 1);
+#endif
+            }
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");

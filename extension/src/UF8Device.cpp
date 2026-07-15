@@ -1,4 +1,5 @@
 #include "UF8Device.h"
+#include "LogPath.h"
 
 #include <libusb.h>
 
@@ -336,7 +337,7 @@ void UF8Device::workerLoop_()
             if (!sLoggedFirstErr && consecutiveErrors_.load() == 0) {
                 sLoggedFirstErr = true;
                 if (FILE* f = std::fopen(
-                        "/tmp/rea_sixty_uf8_stale.log", "a"))
+                        uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a"))
                 {
                     const auto t = std::chrono::system_clock::now()
                         .time_since_epoch();
@@ -450,7 +451,7 @@ void UF8Device::workerLoop_()
             // Diag: log motor (FF 1D) and fader-pos (FF 1E) frames.
             if (frame.size() >= 5 && frame[0] == 0xFF
                 && (frame[1] == 0x1D || frame[1] == 0x1E)) {
-                if (FILE* lg = std::fopen("/tmp/reaper_uf8_motor.log", "a")) {
+                if (FILE* lg = std::fopen(uf8::logPath("reaper_uf8_motor.log").c_str(), "a")) {
                     const auto t = std::chrono::system_clock::now().time_since_epoch();
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
                     if (frame[1] == 0x1D) {
@@ -477,7 +478,7 @@ void UF8Device::traceFrame_(char dir, const uint8_t* data, size_t len,
                             int rc) const
 {
     if (!frameTrace_.load(std::memory_order_relaxed)) return;
-    FILE* lg = std::fopen("/tmp/reaper_uf8_frames.log", "a");
+    FILE* lg = std::fopen(uf8::logPath("reaper_uf8_frames.log").c_str(), "a");
     if (!lg) return;
     const auto t  = std::chrono::system_clock::now().time_since_epoch();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
@@ -532,7 +533,7 @@ void UF8Device::readCallback_(libusb_transfer* xfer)
         static bool sLoggedFirstIn = false;
         if (!sLoggedFirstIn) {
             sLoggedFirstIn = true;
-            if (FILE* f = std::fopen("/tmp/rea_sixty_uf8_stale.log", "a")) {
+            if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a")) {
                 const auto t = std::chrono::system_clock::now()
                     .time_since_epoch();
                 const auto ms = std::chrono::duration_cast<

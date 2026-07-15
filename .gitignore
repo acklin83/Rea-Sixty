@@ -70,3 +70,7 @@ streamdeck/**/node_modules/
 streamdeck/dist/
 # Obsidian editor config
 docs/.obsidian/
+
+# Local RE probes — tools for one experiment, not shipped to users.
+# They stay on disk; they just do not belong in the public repo (Frank 2026-07-14).
+analysis/*.lua

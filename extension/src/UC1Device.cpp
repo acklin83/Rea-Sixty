@@ -1,4 +1,5 @@
 #include "UC1Device.h"
+#include "LogPath.h"
 
 #include <libusb.h>
 
@@ -161,7 +162,7 @@ bool UC1Device::open()
     //     can't fix; needs reset_device or full re-enumeration.
     //   chOut/chIn < 0  → halt-clear itself failed (wrong endpoint,
     //     lost claim) — fix the precondition instead.
-    if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
         const auto t = std::chrono::system_clock::now().time_since_epoch();
         const auto ms = std::chrono::duration_cast<
             std::chrono::milliseconds>(t).count();
@@ -217,7 +218,7 @@ bool UC1Device::open()
     // every endpoint state. Frank 2026-05-20: confirmed via stale.log
     // that chOut/chIn returned 0 even when the handshake STALLed.
     if (hsRc == LIBUSB_ERROR_PIPE) {
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now().time_since_epoch();
             const auto ms = std::chrono::duration_cast<
                 std::chrono::milliseconds>(t).count();
@@ -428,7 +429,7 @@ void UC1Device::workerLoop_()
                 if (!sLoggedFirstErr && consecutiveErrors_.load() == 0) {
                     sLoggedFirstErr = true;
                     if (FILE* f = std::fopen(
-                            "/tmp/rea_sixty_uc1_stale.log", "a"))
+                            uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a"))
                     {
                         const auto t = std::chrono::system_clock::now()
                             .time_since_epoch();
@@ -581,7 +582,7 @@ void UC1Device::readCallback_(libusb_transfer* xfer)
         static bool sLoggedFirstIn = false;
         if (!sLoggedFirstIn) {
             sLoggedFirstIn = true;
-            if (FILE* f = std::fopen("/tmp/rea_sixty_uc1_stale.log", "a")) {
+            if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
                 const auto t = std::chrono::system_clock::now()
                     .time_since_epoch();
                 const auto ms = std::chrono::duration_cast<

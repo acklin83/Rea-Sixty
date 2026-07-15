@@ -1,4 +1,5 @@
 #include "MidiBridge.h"
+#include "LogPath.h"
 
 #include <cctype>
 #include <cstdio>
@@ -67,7 +68,7 @@ bool MidiBridge::openUf8Output()
     // diagnose if the match fails.
     ItemCount n = MIDIGetNumberOfDestinations();
     MIDIEndpointRef match = 0;
-    FILE* log = std::fopen("/tmp/reaper_uf8_midi_dests.log", "w");
+    FILE* log = std::fopen(uf8::logPath("reaper_uf8_midi_dests.log").c_str(), "w");
     for (ItemCount i = 0; i < n; ++i) {
         MIDIEndpointRef d = MIDIGetDestination(i);
         CFStringRef name = nullptr;
@@ -124,7 +125,7 @@ void MidiBridge::send(std::span<const uint8_t> bytes)
     if (!source_ || bytes.empty()) return;
 
     // Debug: log every outgoing MIDI we push up to REAPER.
-    if (FILE* f = std::fopen("/tmp/reaper_uf8_midi_out.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_midi_out.log").c_str(), "a")) {
         for (auto b : bytes) std::fprintf(f, "%02x ", b);
         std::fprintf(f, "\n");
         std::fclose(f);
