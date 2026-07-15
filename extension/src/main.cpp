@@ -15593,23 +15593,24 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
         {
             {0x0100, {0x04,0x01}},
             {0x0102, {0x01}},
-            // Analogue chrome (cap80 at-rest).
-            // ⚠ DO NOT "correct" 0x0009 to ffff0000 or 0x0015/0x0016 to 0xff.
-            // I did exactly that on 2026-07-15 because cap88 AND cap94 hold those
-            // values constant — and it CHANGED THE COLOUR OF THE VU READOUT on the
-            // hardware. Frank: "du wechselst die farbe der vu meter zahlen-werte
-            // ... macht ssl meter pro NIE." Two captures agreeing does not outvote
-            // a third: 0x0009 is not chrome at all, it VARIES in cap80 (1e1e, 1f1f,
-            // 1e1f, 1f1e, 1e1c, 1e1d — two independent bytes in 0x1c..0x1f), so
-            // cap88/cap94's constant ffff is that capture's state, not the law.
-            // Its real meaning is still unknown; keep cap80's at-rest seed until
-            // something MEASURES it.
+            // 0x0009 = current-number colour, 0x0015/0x0016 = peak-number colour,
+            // per channel. MEASURED 2026-07-15 via Frank's symptom + capture
+            // cross-check: seeding cap80's values (0009=1e1e, 0015/16=00) gave
+            // "peak always red, current flashing red in sync with the overload
+            // LED" — cap80 is a session whose numbers WERE red (its 0009
+            // flickers 1e/1f with the clipping music, its 0015/16 sit at 00 for
+            // the whole capture). SSL on Frank's own sessions shows white
+            // always, and cap88 + cap94 + cap101 unanimously hold the ff-state:
+            // 0009=ffff0000, 000a=00000000, 0015=ff, 0016=ff — across Analogue,
+            // Overview AND channel. (An earlier note here warned ff "recoloured
+            // the VU readout" — that observation was made while OTHER elements
+            // were also wrong; the unanimous captures + the red-numbers fix win.)
             // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
-            {0x0009, {0x1e,0x1e,0x00,0x00}},
+            {0x0009, {0xff,0xff,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
             {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
-            {0x0015, {0x00}},
-            {0x0016, {0x00}},
+            {0x0015, {0xff}},
+            {0x0016, {0xff}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
@@ -16799,18 +16800,35 @@ void uf1PaintChannel_()
                 put(0x0127, {0x00,0x00});
             }
         } else {
-            // Channel/plugin-EQ layout — UNCHANGED (this path renders the working
-            // channel-strip + EQ graph; derived from cap84/cap85 plugin cold-start).
+            // Channel/plugin-EQ layout (cap84/cap85 plugin cold-start, values
+            // corrected against cap101's channel state at connect, t=26.62):
             put(0x0000, {0x03, 0x00});
-            put(0x000d, {0x01});
+            // 03, not 01: cap84 AND cap101 hold 0x000d=03 in plugin mode; 01 was
+            // a transcription error that this block re-asserted on every change,
+            // overriding the (also fixed) init value.
+            put(0x000d, {0x03});
             put(0x0011, {0x01});
             put(0x0100, {0x03, 0x00});                 // LAYOUT = plugin/channel
             put(0x0101, {0x05});
             put(0x010d, {0x02, 0x02, 0x08, 0x02});
             put(0x0110, {0x0f});
             put(0x011a, {0x02});
-            put(0x011d, {0x19});
+            // 00, not 0x19 (cap77's session value): 0x011d is the cycle-closing
+            // view-state byte; SSL's channel state going into a meter-view entry
+            // is 00 (cap101).
+            put(0x011d, {0x00});
             put(0x011e, {0x18});
+            // The ff-state: SSL holds 0x0009=ffff0000, 0x0015/16=ff in the
+            // channel state (cap101 t=26.62 and the whole idle stream). Our
+            // cap66 init replay left 0009=00000000, so we entered the meter
+            // view from a state SSL never has.
+            put(0x0009, {0xff, 0xff, 0x00, 0x00});
+            put(0x000a, {0x00, 0x00, 0x00, 0x00});
+            put(0x0015, {0xff});
+            put(0x0016, {0xff});
+            // SSL writes 0x011b with an EMPTY payload (cap101 len-6 frame); the
+            // cap66 replay leaves a 2-byte 00 00 in it.
+            put(0x011b, {});
         }
     }
 
