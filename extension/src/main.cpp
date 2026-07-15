@@ -15740,61 +15740,48 @@ constexpr double kUf1HoldResetSec = 3.0;
 // of that diamond (52 of 99 rows lit in a single frame, identical across frames
 // — geometry, not signal). n = 2·50² is not a coincidence: 50 is the half-height.
 //
-// The plug-in's raster is a diamond of ODD row widths: 1, 3, 5, …, 5, 3, 1.
-// ONE law covers both lengths the stream emits — R rows, width[i] = 2·min(i, R-1-i)+1:
-//   R odd  (= 2k-1)  ->  sum = 2k² - 2k + 1   single peak row, width 2k-1
-//   R even (= 2k)    ->  sum = 2k²            peak row doubled, width 2k-1
-// so n = 2113 -> 65 rows (k=33) and n = 5000 -> 100 rows (k=50). Both are exact;
-// invert n to get R. The doubled peak on even R is the same quirk the UF1's own
-// diamond has (its 92 is two rows) — it is how you rasterise a diamond whose
-// height is even.
+// ⚠ THE SOURCE GEOMETRY IS NOT KNOWN. We paint nothing until it is. Do not put a
+// shape here that merely "sums exactly" — that is precisely how the last three
+// attempts went wrong.
 //
-// MEASURED from cap97 (the corr +1→0→−1 sweep), and the test that proves it is
-// PHYSICS, not a curve fit: with a mono signal (L=R) a goniometer must draw a
-// VERTICAL line, i.e. one lit pixel per row sitting on that row's CENTRE. Under
-// this law every one of the 25 mono frames at n=2113 has its lit pixels at
-// fraction 0.509–0.524 across the row (median 0.513 — dead centre), and all 38
-// at n=5000 at median 0.536.
+// What IS known (cap87, protobuf schema): the Lissajous is ONE array of
+// **17113 floats**, values 0..1 quantised to 100 levels (the "Fade 2 sec"
+// persistence — ~8547 of ~8592 lit cells are identical frame to frame; only ~120
+// move). It arrives CHUNKED across several messages (f7 MaxValueCount = 17113,
+// f8 ChunkSize, f9 ChunkOffset) and SslCoreImpersonator now reassembles it, so
+// `src.size()` here is 17113, not a chunk.
 //
-// ⚠ Both earlier models are REFUTED — do not resurrect them:
-//   * "n = 2m², rows 2,4,…,2m,…,4,2" put the mono line on the row EDGE
-//     (frac 0.0) = a 45° diagonal, which is what a wrong geometry looks like.
-//     Its "proof" was that the lit indices are the row STARTS 0,2,6,12,20,30…
-//     Those indices are real — they are i(i+1) — but i(i+1) is the CENTRE of
-//     row i of THIS diamond (start i², width 2i+1). Same numbers, right shape.
-//   * "n=2113 = 42 lead-in then rows 90,88,…,2,1" — asymmetric, and it put the
-//     mono line on the edge in 45 of 46 rows. 2113 was never a fragment or a
-//     truncated packed field: 2·33²-2·33+1 = 2113 exactly.
+// ⚠ REFUTED — do not resurrect any of these:
+//   * "n = 2m², rows 2,4,…,2m,…,4,2" (n=5000) and "42 lead-in + rows 90,88,…"
+//     (n=2113): 5000 and 2113 were never arrays at all. 5000 is the CHUNK SIZE
+//     and 2113 is the remainder chunk (17113 - 3*5000). We kept whichever chunk
+//     landed last, which is why the "length" seemed to alternate.
+//   * "both are odd diamonds, width[i] = 2·min(i,R-1-i)+1" — my own fit, and pure
+//     numerology: it fitted diamonds to CHUNK BOUNDARIES. That 2·33²-2·33+1 =
+//     2113 and 2·50² = 5000 are exact is a coincidence of the chunk sizes. The
+//     "mono draws a vertical line" test passed only because a chunk happens to
+//     contain whole rows.
+//   * "packed protobuf / MTU truncation / we are seeing fragments": wrong for the
+//     right reason — the array IS delivered in pieces, but via f8/f9, not by
+//     truncation, and `case 2` was never involved.
+//   * "17113 = 109 x 157, a rectangle with an inscribed diamond": tested against
+//     80 reassembled frames — the lit region is not contiguous per row and does
+//     not peak at the middle row in either orientation. Best diamond-mask fit was
+//     0.548, i.e. chance. cap87 cannot settle it because it is uncontrolled music.
+//
+// To close it: play the correlation sweep (analysis/gen_rta_corr_wav.py corr) on
+// the Overview screen with REASIXTY_T10_DUMP=1, which now dumps the REASSEMBLED
+// 17113-float array. corr=+1 must draw one lit cell per row; that gives the row
+// structure directly. Validate any candidate with the PHYSICS test (mono => a
+// vertical line down the centre), never with "the widths sum to n".
 struct Uf1GonioGeom {
     std::vector<int> w;          // row widths, in floats
     std::vector<int> start;      // row start offsets
     bool ok = false;
 };
-inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
+inline Uf1GonioGeom uf1GonioGeomFor_(size_t /*n*/)
 {
-    Uf1GonioGeom g;
-    const long long N = static_cast<long long>(n);
-    int rows = 0;
-
-    // Even row count: n = 2k².
-    if (N % 2 == 0) {
-        const long long k = std::llround(std::sqrt(double(N) / 2.0));
-        if (k >= 2 && 2 * k * k == N) rows = int(2 * k);
-    }
-    // Odd row count: n = 2k² - 2k + 1  <=>  2n - 1 = (2k-1)², and R = 2k-1.
-    if (rows == 0) {
-        const long long s = std::llround(std::sqrt(double(2 * N - 1)));
-        if (s >= 3 && (s % 2) == 1 && s * s == 2 * N - 1) rows = int(s);
-    }
-    if (rows < 3) return g;                                 // unknown -> paint nothing
-
-    for (int i = 0; i < rows; ++i)
-        g.w.push_back(2 * std::min(i, rows - 1 - i) + 1);
-
-    int s = 0;
-    for (int x : g.w) { g.start.push_back(s); s += x; }
-    g.ok = (size_t(s) == n);                                // table must span n exactly
-    return g;
+    return Uf1GonioGeom{};       // geometry unknown -> ok=false -> paint nothing
 }
 
 // The UF1's own diamond — the exact MEASURED sequence from
@@ -15950,22 +15937,41 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     //     or hasn't received meter data yet. Non-regressive fallback.
     float dbL = -120.f, dbR = -120.f;    // peak L/R (dBFS)
     float rmsL = -120.f, rmsR = -120.f;  // RMS  L/R (dBFS)
-    bool  haveRms = false;
+    float holdL = -120.f, holdR = -120.f; // PEAK HOLD L/R (dBFS), from the plugin
+    bool  haveRms = false, haveHold = false;
     {
         std::vector<float> cur, pk;
         // Use the plugin's BarPeak only when it actually carries signal. A silent
         // Meter instance (e.g. the master) streams floor (-129 dBFS); taking that
         // over REAPER's own peak would blank the bars. Require a non-floor value,
         // else fall back to Track_GetPeakInfo (which always tracks the track).
+        // finite() also rejects the silence sentinel: cap87 shows roughly every
+        // 5th BarPeak message carrying NaN (0xffc00000) in BOTH f3 and f4. That
+        // used to fail the > -120 test and silently flip the whole readout over
+        // to REAPER's peak for that tick — two different numbers alternating at
+        // 25 Hz. Skip those messages instead; the previous good value stands.
+        auto ok = [](float v) { return std::isfinite(v) && v > -120.f; };
         const bool pluginPeak =
             sslcore::isRunning() &&
             sslcore::getMeter(int(sslmeter::DataType::BarPeak), cur, pk) &&
-            cur.size() >= 2 && (cur[0] > -120.f || cur[1] > -120.f);
+            cur.size() >= 2 && (ok(cur[0]) || ok(cur[1]));
         if (pluginPeak) {
             dbL = cur[0]; dbR = cur[1];
+            // THE PEAK HOLD IS f4 PeakValues — the plugin computes and holds it
+            // for us (schema: repeated float PeakValues = 4). Do NOT re-derive it.
+            // cap87: f4 sits at -4.32 rock steady while f3 wanders -6.9..-9.2, and
+            // f4 never once falls below f3 in 116 messages. This is exactly Frank's
+            // "im plugin bleibt er auf peak". We had TWO home-made laws instead —
+            // a 3 s snap on the bars and a 26.5 dB/s decay on the numbers — and the
+            // decay is why the Overview readout would not hold.
+            if (pk.size() >= 2 && (std::isfinite(pk[0]) || std::isfinite(pk[1]))) {
+                holdL = std::isfinite(pk[0]) ? pk[0] : -120.f;
+                holdR = std::isfinite(pk[1]) ? pk[1] : -120.f;
+                haveHold = true;
+            }
             std::vector<float> rc, rp;
             if (sslcore::getMeter(int(sslmeter::DataType::BarRms), rc, rp) &&
-                rc.size() >= 2 && (rc[0] > -120.f || rc[1] > -120.f)) {
+                rc.size() >= 2 && (ok(rc[0]) || ok(rc[1]))) {
                 rmsL = rc[0]; rmsR = rc[1]; haveRms = true;
             }
         } else {
@@ -15976,28 +15982,56 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     const float peak = (dbL > dbR) ? dbL : dbR;   // no std::max — MSVC macro trap
     const float rms  = haveRms ? ((rmsL > rmsR) ? rmsL : rmsR) : -120.f;
 
-    // Peak-hold: jump up instantly, fall at 26.5 dB/s.
+    // Peak-hold. The plugin's f4 is the truth (see above). The REAPER fallback
+    // path has no hold of its own, so it keeps a plain running max there — it
+    // only runs when the impersonator is off or has no data yet.
     static MediaTrack* sHoldTr = nullptr;
-    static float       sHold   = -120.f;
-    static auto        sHoldT  = std::chrono::steady_clock::now();
+    static float       sFallbackHold = -120.f;
     const auto now = std::chrono::steady_clock::now();
-    if (force || tr != sHoldTr) { sHoldTr = tr; sHold = -120.f; }
-    if (peak >= sHold) {
-        sHold = peak;
-    } else {
-        const double dt = std::chrono::duration<double>(now - sHoldT).count();
-        sHold = static_cast<float>(sHold - 26.5 * dt);
-        if (sHold < peak) sHold = peak;
+    if (force || tr != sHoldTr) { sHoldTr = tr; sFallbackHold = -120.f; }
+    if (peak > sFallbackHold) sFallbackHold = peak;
+    const float holdMax = haveHold ? ((holdL > holdR) ? holdL : holdR)
+                                   : sFallbackHold;
+
+    // The NUMBERS have their own data types — TextPeak(4) / TextRms(5) — separate
+    // from the BAR types BarPeak(2) / BarRms(3), and they do NOT agree: cap87 has
+    // BarPeak f3 = -7.42 while TextPeak f3 = -6.00 at the same instant (different
+    // integration). Driving the readout from BarPeak, as we did, shows a number
+    // that is simply not the one SSL prints. Each Text* type carries its own hold
+    // in f4, which is what "PEAK max" is — no local hold law, ever.
+    auto textPair = [&](sslmeter::DataType dt, float& l, float& r,
+                        float& hold, bool& have) {
+        std::vector<float> c, k;
+        if (!sslcore::getMeter(int(dt), c, k) || c.size() < 2) return;
+        if (!std::isfinite(c[0]) && !std::isfinite(c[1])) return;   // NaN sentinel
+        l = std::isfinite(c[0]) ? c[0] : -120.f;
+        r = std::isfinite(c[1]) ? c[1] : -120.f;
+        hold = -120.f;
+        if (k.size() >= 2) {
+            const float a = std::isfinite(k[0]) ? k[0] : -120.f;
+            const float b = std::isfinite(k[1]) ? k[1] : -120.f;
+            hold = (a > b) ? a : b;
+        }
+        have = true;
+    };
+    float tpL = -120.f, tpR = -120.f, tpHold = -120.f; bool haveTp = false;
+    float trL = -120.f, trR = -120.f, trHold = -120.f; bool haveTr = false;
+    if (sslcore::isRunning()) {
+        textPair(sslmeter::DataType::TextPeak, tpL, tpR, tpHold, haveTp);
+        textPair(sslmeter::DataType::TextRms,  trL, trR, trHold, haveTr);
     }
-    sHoldT = now;
+    // Fall back to the bar values / REAPER peak when the Text types have not
+    // arrived (impersonator off, or the view has not been acknowledged yet).
+    if (!haveTp) { tpL = dbL; tpR = dbR; tpHold = holdMax; }
+    if (!haveTr) { trL = rmsL; trR = rmsR; trHold = rms; haveTr = haveRms; }
 
     const std::array<std::string, 6> fields{
-        uf1FormatMeterDb_(sHold),                          // Peak hold
-        uf1FormatMeterDb_(dbL),                            // Peak L
-        uf1FormatMeterDb_(dbR),                            // Peak R
-        haveRms ? uf1FormatMeterDb_(rms) : std::string(),  // RMS hold (combined)
-        haveRms ? uf1FormatMeterDb_(rmsL) : std::string(), // RMS L
-        haveRms ? uf1FormatMeterDb_(rmsR) : std::string(), // RMS R
+        uf1FormatMeterDb_(tpHold),                         // Peak hold  (f4)
+        uf1FormatMeterDb_(tpL),                            // Peak L
+        uf1FormatMeterDb_(tpR),                            // Peak R
+        haveTr ? uf1FormatMeterDb_(trHold) : std::string(),// RMS hold   (f4)
+        haveTr ? uf1FormatMeterDb_(trL) : std::string(),   // RMS L
+        haveTr ? uf1FormatMeterDb_(trR) : std::string(),   // RMS R
     };
     std::vector<uint8_t> p;
     p.reserve(6 * 25);
@@ -16033,16 +16067,24 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
         // 0x0127 = (hold_L,hold_R). All on the one dBFS bar scale.
         static MediaTrack* sBarTr = nullptr;
+        // 0x0127 = the bar peak-hold, and it is BarPeak's own f4 (holdL/holdR).
+        // The local Uf1PeakHold "running max + 3.0 s snap" that used to run here
+        // was reverse-engineered from cap89's 0x0127 — i.e. we measured SSL's
+        // output and rebuilt the law, when the law's INPUT was being handed to us
+        // in the same stream all along. Keep the local hold only as the fallback
+        // for the REAPER-peak path, which has no f4.
         static Uf1PeakHold sBarHold;
         if (force || tr != sBarTr) { sBarTr = tr; sBarHold.reset(dbL, dbR, now); }
         sBarHold.step(dbL, dbR, now);
+        const float barHoldL = haveHold ? holdL : sBarHold.l;
+        const float barHoldR = haveHold ? holdR : sBarHold.r;
 
         const std::array<uint8_t, 2> rmsBar {
             uf1BarByte_(haveRms ? rmsL : -120.f),
             uf1BarByte_(haveRms ? rmsR : -120.f) };
         const std::array<uint8_t, 2> peakBar { uf1BarByte_(dbL), uf1BarByte_(dbR) };
         const std::array<uint8_t, 2> holdBar {
-            uf1BarByte_(sBarHold.l), uf1BarByte_(sBarHold.r) };
+            uf1BarByte_(barHoldL), uf1BarByte_(barHoldR) };
 
         auto putBar = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
             g_uf1_dev->send(uf1::buildScreen(addr,

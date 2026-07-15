@@ -65,7 +65,15 @@ std::thread            g_worker;
 std::atomic<bool>      g_connected{false};
 std::atomic<long long> g_lastDataMs{0};
 
-struct Slot { std::vector<float> current, peak; bool have = false; };
+struct Slot {
+    std::vector<float>   current, peak;
+    std::vector<uint8_t> overload;      // f5 OverloadValues — the red LEDs
+    bool have = false;
+    // Chunk reassembly buffer (the Lissajous arrives in pieces; see
+    // sslmeter::Update). `current` is only replaced once the array is complete.
+    std::vector<float> asm_;
+    size_t             asmGot_ = 0;
+};
 
 // SSL plug-ins number their meters PER FAMILY, and the datagram does not say
 // which family it came from: PluginMeterDataMessage.DataType is a plain int32
@@ -420,8 +428,34 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
                         classify_(inst, u.dataType, u.current.size());
                         Slot& s = inst.meter[u.dataType];
-                        s.current = std::move(u.current); s.peak = std::move(u.peak);
-                        s.have = true;
+                        bool completed = false;   // this message finished an array
+                        if (u.chunked()) {
+                            // Reassemble. Publish only once the whole array is in,
+                            // so getMeter() never hands out a half-built image.
+                            const size_t at = u.chunkStartIndex();
+                            if (s.asm_.size() != size_t(u.maxCount)) {
+                                s.asm_.assign(size_t(u.maxCount), 0.f);
+                                s.asmGot_ = 0;
+                            }
+                            const size_t n = (at < s.asm_.size())
+                                ? ((u.current.size() < s.asm_.size() - at)
+                                       ? u.current.size() : s.asm_.size() - at)
+                                : 0;
+                            for (size_t q = 0; q < n; ++q) s.asm_[at + q] = u.current[q];
+                            s.asmGot_ += n;
+                            if (s.asmGot_ >= s.asm_.size()) {
+                                s.current = s.asm_;         // one complete array
+                                s.peak    = std::move(u.peak);
+                                s.have    = true;
+                                s.asmGot_ = 0;
+                                completed = true;
+                            }
+                        } else {
+                            s.current = std::move(u.current); s.peak = std::move(u.peak);
+                            s.have = true;
+                            completed = true;
+                        }
+                        if (!u.overload.empty()) s.overload = std::move(u.overload);
                         // Lissajous geometry dump — EVERY frame, deliberately NOT
                         // inside the 2 s summary throttle below. The stream runs at
                         // ~25 Hz, so throttling it sampled a 27 s correlation sweep
@@ -430,8 +464,15 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         // per row (row starts), corr -1 lights a whole row (row
                         // width). Opt-in via REASIXTY_T10_DUMP so it cannot bloat a
                         // normal trace run.
+                        //
+                        // This dumps the REASSEMBLED array (17113 floats). It used
+                        // to fire per MESSAGE, i.e. per chunk, so every "frame" in
+                        // cap97 was one chunk of the image — 5000 or the 2113-float
+                        // remainder — and every geometry ever fitted to that log was
+                        // fitted to a chunk boundary. Only complete arrays reach
+                        // here now (s.have is set once, when the last chunk lands).
                         if (u.dataType == int(sslmeter::DataType::Lissajous) &&
-                            g_t10Dump && !s.current.empty()) {
+                            g_t10Dump && completed && !s.current.empty()) {
                             size_t nz = 0;
                             for (float v : s.current) if (v != 0.f) ++nz;
                             if (nz > 0) {

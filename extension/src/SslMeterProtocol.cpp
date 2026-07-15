@@ -57,6 +57,11 @@ bool parseMeterMessage(const uint8_t* body, size_t len, Update& out)
                 if (!readVarint(b, L, i, v)) return u.valid() ? (out = std::move(u), true) : false;
                 if (field == 1)      u.pluginType = int(v);
                 else if (field == 2) u.dataType   = int(v);
+                else if (field == 5) u.overload.push_back(uint8_t(v));      // the red LEDs
+                else if (field == 6) u.overloadHold.push_back(uint8_t(v));
+                else if (field == 7) u.maxCount    = int(v);
+                else if (field == 8) u.chunkSize   = int(v);
+                else if (field == 9) u.chunkOffset = int(v);
                 break;
             }
             case 5: {                                   // fixed32 (float)
