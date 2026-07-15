@@ -234,6 +234,22 @@ void UF1Device::runInit_()
         sendModeFrame(0x011e, std::vector<uint8_t>{0x18});
     }
 
+    // FF 54 00 <ck> — a one-shot host->device setting SSL sent at t=34.08 in
+    // cap101 (the ONLY full-session capture with the goniometer verifiably
+    // drawing), acknowledged by the device with FF 55 00 within 2 ms, 1.7 s
+    // before the meter-view entry. Absent from cap66/cap84 (sessions that never
+    // opened a meter view); cap75/76/89 are mid-session windows that cannot
+    // refute it. Meaning unknown; replicated verbatim. The FF 55 ack arrives on
+    // the input path and is ignored there like any unhandled opcode.
+    {
+        std::vector<uint8_t> f{0xff, 0x54, 0x00, 0x54};
+        int transferred = 0;
+        int frc = libusb_bulk_transfer(handle_, kEpOut, f.data(),
+                                       static_cast<int>(f.size()),
+                                       &transferred, 1000);
+        traceFrame_('O', f.data(), f.size(), frc);
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // Init complete — worker can drain the user-send queue.
     initInProgress_ = false;
