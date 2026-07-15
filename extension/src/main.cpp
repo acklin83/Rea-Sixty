@@ -15693,6 +15693,40 @@ uint8_t uf1VuByte_(float vu)
     return kUf1VuScale[idx];
 }
 
+// SSL's peak-hold law, MEASURED from cap89 (analysis/uf1_hold_law.py: 28 snaps
+// on the falling channel, median 3.019 s, 26 of 27 intervals inside 2.90-3.10 s;
+// the lone 5.96 s is exactly 2x the period, a reset that moved nothing).
+//
+// The marker does NOT decay. It keeps the running maximum and SNAPS to the
+// current value every 3 s. Two independent proofs in the capture:
+//   - at t=104.27 the signal stops: 0x0126 collapses to (0,0) while 0x0127 sits
+//     at (38,134) completely unmoved to the end of the capture;
+//   - mid-sweep 0x0127 sits ABOVE 0x0126, then lands exactly on it 3.0 s later.
+//
+// This replaces a 26.5 dB/s decay — REAPER's PeakInfo rate (see memory
+// reaper-peakinfo-decay-rate), right for a falling peak METER, wrong for a hold
+// marker. At 30 Hz it shed only 0.87 dB per tick, so the marker tracked the peak
+// and the two elements went out byte-identical 206 of 261 times: there was no
+// second line on screen to see. Frank: "bei peak grafik keine peak-lines die
+// fallen" (2026-07-14).
+constexpr double kUf1HoldResetSec = 3.0;
+
+struct Uf1PeakHold {
+    float l = -120.f, r = -120.f;
+    std::chrono::steady_clock::time_point t{};
+
+    void reset(float vl, float vr, std::chrono::steady_clock::time_point now)
+    { l = vl; r = vr; t = now; }
+
+    void step(float vl, float vr, std::chrono::steady_clock::time_point now)
+    {
+        if (std::chrono::duration<double>(now - t).count() >= kUf1HoldResetSec)
+            reset(vl, vr, now);
+        if (vl > l) l = vl;
+        if (vr > r) r = vr;
+    }
+};
+
 // PPM Type-II is linear in marks (cap94, verified vs IEC 60268-10): byte = 9 +
 // (mark-1)*27.3, clamped [0,180]. mark relates to dBFS via the reference.
 uint8_t uf1PpmByte_(float mark)
@@ -15825,34 +15859,30 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
         // 0x0127 = (hold_L,hold_R). All on the one dBFS bar scale.
         static MediaTrack* sBarTr = nullptr;
-        static float sBarHoldL = -120.f, sBarHoldR = -120.f;
-        static auto  sBarHoldT = std::chrono::steady_clock::now();
-        if (force || tr != sBarTr) { sBarTr = tr; sBarHoldL = sBarHoldR = -120.f; }
-        const double dtB = std::chrono::duration<double>(now - sBarHoldT).count();
-        auto holdStep = [&](float peakCh, float& hold) {
-            if (peakCh >= hold) hold = peakCh;
-            else { hold = static_cast<float>(hold - 26.5 * dtB);
-                   if (hold < peakCh) hold = peakCh; }
-        };
-        holdStep(dbL, sBarHoldL);
-        holdStep(dbR, sBarHoldR);
-        sBarHoldT = now;
+        static Uf1PeakHold sBarHold;
+        if (force || tr != sBarTr) { sBarTr = tr; sBarHold.reset(dbL, dbR, now); }
+        sBarHold.step(dbL, dbR, now);
 
         const std::array<uint8_t, 2> rmsBar {
             uf1BarByte_(haveRms ? rmsL : -120.f),
             uf1BarByte_(haveRms ? rmsR : -120.f) };
         const std::array<uint8_t, 2> peakBar { uf1BarByte_(dbL), uf1BarByte_(dbR) };
         const std::array<uint8_t, 2> holdBar {
-            uf1BarByte_(sBarHoldL), uf1BarByte_(sBarHoldR) };
+            uf1BarByte_(sBarHold.l), uf1BarByte_(sBarHold.r) };
 
         auto putBar = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
             g_uf1_dev->send(uf1::buildScreen(addr,
                 std::span<const uint8_t>(v.data(), v.size())));
         };
-        static std::array<uint8_t, 2> sRms{}, sPeak{}, sHoldB{};
-        if (force || rmsBar  != sRms)   { sRms   = rmsBar;  putBar(0x0125, rmsBar); }
-        if (force || peakBar != sPeak)  { sPeak  = peakBar; putBar(0x0126, peakBar); }
-        if (force || holdBar != sHoldB) { sHoldB = holdBar; putBar(0x0127, holdBar); }
+        // Stream unconditionally, the way SSL does: cap89 carries 2570 frames of
+        // each element over 105 s (~25 Hz), resent even when the bytes are
+        // unchanged. The send-on-change dedup that used to sit here is a trap —
+        // any value that saturates or goes constant stops the element dead. It
+        // is what froze the Analogue needle: pegged at byte 180, so "unchanged",
+        // so exactly ONE frame went out per visit to the screen.
+        putBar(0x0125, rmsBar);
+        putBar(0x0126, peakBar);
+        putBar(0x0127, holdBar);
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
@@ -15872,27 +15902,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         }
         const uint8_t nL = uf1VuByte_(dbL - kVuRef);
         const uint8_t nR = uf1VuByte_(dbR - kVuRef);
-        // Peak-hold "second needle" (Frank: fast + lagging). Falls at 26.5 dB/s.
+        // Peak-hold "second needle" — same law as the Overview markers: hold the
+        // maximum, snap to current every 3 s (cap88 line 33 shows it too, 0x0127
+        // holding at (4,180) while 0x0125 has already fallen).
         static MediaTrack* sNdlTr = nullptr;
-        static float sNdlHoldL = -120.f, sNdlHoldR = -120.f;
-        static auto  sNdlHoldT = std::chrono::steady_clock::now();
-        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHoldL = sNdlHoldR = -120.f; }
-        const double dtN = std::chrono::duration<double>(now - sNdlHoldT).count();
-        sNdlHoldT = now;
-        auto holdN = [&](float v, float& h){ if (v >= h) h = v;
-            else { h = float(h - 26.5 * dtN); if (h < v) h = v; } };
-        holdN(dbL, sNdlHoldL); holdN(dbR, sNdlHoldR);
-        const uint8_t hL = uf1VuByte_(sNdlHoldL - kVuRef);
-        const uint8_t hR = uf1VuByte_(sNdlHoldR - kVuRef);
+        static Uf1PeakHold sNdlHold;
+        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHold.reset(dbL, dbR, now); }
+        sNdlHold.step(dbL, dbR, now);
+        const uint8_t hL = uf1VuByte_(sNdlHold.l - kVuRef);
+        const uint8_t hR = uf1VuByte_(sNdlHold.r - kVuRef);
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
         auto putNdl = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
             g_uf1_dev->send(uf1::buildScreen(addr,
                 std::span<const uint8_t>(v.data(), v.size())));
         };
-        static std::array<uint8_t, 2> sNdl{}, sHld{};
-        if (force || ndl != sNdl) { sNdl = ndl; putNdl(0x0125, ndl); }
-        if (force || hld != sHld) { sHld = hld; putNdl(0x0127, hld); }
+        // Unconditional, as on Overview — see the note there. The dedup that was
+        // here is precisely why this screen painted one frame and then froze.
+        putNdl(0x0125, ndl);
+        putNdl(0x0127, hld);
     }
     else if (screen == 2) {
         // RTA: 0x0122 = 64 bytes. Header (0x00,0x03), then per band i:
