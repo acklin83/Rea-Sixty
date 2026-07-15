@@ -15431,6 +15431,11 @@ void onUf1Event(const uf1::InputEvent& ev)
 void openUf1BringUp_()
 {
     g_uf1_dev = std::make_unique<uf1::UF1Device>();
+    // Trace flag BEFORE open(): open() spawns the init thread, and setting the
+    // flag afterwards raced it — traces randomly missed the whole init replay
+    // (EP0 'C' lines, the zero block, FF54), which made "did the init run?"
+    // unanswerable from the log.
+    g_uf1_dev->setFrameTrace(g_uf1Trace);
     if (!g_uf1_dev->open()) {
         const std::string err = g_uf1_dev->lastError();
         if (FILE* f = std::fopen("/tmp/rea_sixty_uf1_stale.log", "a")) {
@@ -15443,9 +15448,6 @@ void openUf1BringUp_()
         g_uf1_dev.reset();
         return;
     }
-    // Wire trace (/tmp/reaper_uf1_frames.log) — diagnostics only, OFF unless
-    // REASIXTY_UF1_TRACE is set (it grows unbounded).
-    g_uf1_dev->setFrameTrace(g_uf1Trace);
     g_uf1_dev->setRawInputHandler(onUf1Input);
     g_uf1_dev->setInputHandler(onUf1Event);
 
