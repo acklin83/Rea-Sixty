@@ -15902,23 +15902,54 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // norm 0.0/0.5/1.0 = -36/-18/0 dBFS (dump), so refDbFS = -36 + norm*36.
         // Fallback -18 (the plug-in default) when no Meter FX is found.
         // GUI ground-truth: a -18.1 dBFS tone reads VU current -0.1 = -18.1+18.
-        float kVuRef = -18.f;
+        // Read the plug-in's OWN VU meter (t0 = VuPpm) rather than deriving a
+        // needle from BarPeak.
+        //
+        // t0 was written off in the 2026-07-14 notes as "-36.0 CONSTANT, not the
+        // live VU value, don't use it". That was an artefact of the same bug that
+        // hid the RTA: the plug-in only computes the meters its selected view
+        // needs, and we never asked for the Analogue view, so VuPpm sat parked at
+        // -36.0 = the bottom of the VU scale. With sslcore::setView(1) in place it
+        // goes live and reads -1.8 / -1.1 / -0.7 — VU units, already ballistic
+        // (~300 ms, cap88) and already referenced by the plug-in's own
+        // AnalogueMetersRefLevel. No subtraction, no ballistics, no calibration
+        // for us to get wrong.
+        //
+        // This also settles the open BarPeak-vs-300ms-integration question the
+        // captures could not: neither. The plug-in computes the VU and we read it.
+        // And it explains the pegged needle — BarPeak -8 dBFS minus a -18 ref is
+        // +10 VU, past uf1VuByte_'s +3 peg, so the needle sat nailed to the top.
+        //
+        // Fallback stays BarPeak - ref for when VuPpm has not arrived (view not
+        // yet acknowledged, or the impersonator is off and we are on REAPER peaks).
+        float vuL, vuR;
         {
-            int mfx = -1, mcnt = 0;
-            if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
-                kVuRef = float(-36.0 + TrackFX_GetParamNormalized(tr, mfx, 9) * 36.0);
+            std::vector<float> cur, pk;
+            const bool haveVu =
+                sslcore::getMeter(int(sslmeter::DataType::VuPpm), cur, pk) &&
+                cur.size() >= 2 && cur[0] > -35.9f;
+            if (haveVu) { vuL = cur[0]; vuR = cur[1]; }
+            else {
+                float kVuRef = -18.f;
+                int mfx = -1, mcnt = 0;
+                if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
+                    kVuRef = float(-36.0 + TrackFX_GetParamNormalized(tr, mfx, 9) * 36.0);
+                vuL = dbL - kVuRef; vuR = dbR - kVuRef;
+            }
         }
-        const uint8_t nL = uf1VuByte_(dbL - kVuRef);
-        const uint8_t nR = uf1VuByte_(dbR - kVuRef);
+        const uint8_t nL = uf1VuByte_(vuL);
+        const uint8_t nR = uf1VuByte_(vuR);
         // Peak-hold "second needle" — same law as the Overview markers: hold the
         // maximum, snap to current every 3 s (cap88 line 33 shows it too, 0x0127
         // holding at (4,180) while 0x0125 has already fallen).
+        // Hold rides the same VU units as the needle above — mixing the two
+        // sources here would park the marker on a different scale entirely.
         static MediaTrack* sNdlTr = nullptr;
         static Uf1PeakHold sNdlHold;
-        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHold.reset(dbL, dbR, now); }
-        sNdlHold.step(dbL, dbR, now);
-        const uint8_t hL = uf1VuByte_(sNdlHold.l - kVuRef);
-        const uint8_t hR = uf1VuByte_(sNdlHold.r - kVuRef);
+        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHold.reset(vuL, vuR, now); }
+        sNdlHold.step(vuL, vuR, now);
+        const uint8_t hL = uf1VuByte_(sNdlHold.l);
+        const uint8_t hR = uf1VuByte_(sNdlHold.r);
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
         auto putNdl = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
