@@ -15878,6 +15878,57 @@ constexpr int kUf1DiamondRows  = 187;
 // never drawn: "correct frames that the device ignores". The earlier check
 // compared payload sizes and the 34:1 ratio, called that byte-identical, and
 // never looked at the order.
+// Chunk one complete 8560-byte diamond image into the 35 0x0122 frames
+// (34 -> 0, exactly as cap89/cap101) and append them to `burst`.
+void uf1AppendImageChunks_(const uint8_t* img,
+                           std::vector<std::vector<uint8_t>>& burst)
+{
+    burst.reserve(burst.size() + 35);
+    for (int c = 34; c >= 0; --c) {
+        const int len = (c == 34) ? 60 : 250;
+        std::vector<uint8_t> pay;
+        pay.reserve(size_t(len) + 1);
+        pay.push_back(uint8_t(c));
+        pay.insert(pay.end(), img + c * 250, img + c * 250 + len);
+        burst.push_back(uf1::buildScreen(0x0122, pay));
+    }
+}
+
+// DIAGNOSTIC replay (2026-07-17 StoerPC session): if
+// <resource>/rea_sixty/gonio_replay.bin exists (N x 8560 bytes, raw images
+// lifted from cap101 = SSL's own transmitted goniometer), the Overview cycle
+// streams THOSE images instead of our rendered ones — same cadence, same
+// framing, same trailer. Discriminates "our image CONTENT is refused" from
+// "the image element is gated by something outside the image data": every
+// byte-level property of these images is literally SSL's own.
+// Enabled by file presence; delete the file to return to live rendering.
+bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
+{
+    static std::vector<uint8_t> blob;
+    static bool tried = false;
+    static size_t idx = 0;
+    if (!tried) {
+        tried = true;
+        std::string p = std::string(GetResourcePath()) + "/rea_sixty/gonio_replay.bin";
+        if (FILE* f = std::fopen(p.c_str(), "rb")) {
+            std::fseek(f, 0, SEEK_END);
+            const long n = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (n >= 8560) {
+                blob.resize(size_t(n) - size_t(n) % 8560);
+                if (std::fread(blob.data(), 1, blob.size(), f) != blob.size())
+                    blob.clear();
+            }
+            std::fclose(f);
+        }
+    }
+    if (blob.empty()) return false;
+    const size_t nImg = blob.size() / 8560;
+    uf1AppendImageChunks_(blob.data() + (idx % nImg) * 8560, burst);
+    ++idx;
+    return true;
+}
+
 // Appends the 35 image chunks to `burst` (does not send) so the caller can emit
 // the WHOLE Overview cycle — image + trailer elements — as one atomic burst,
 // exactly the unit SSL emits at 24.5 Hz in cap89.
@@ -15933,15 +15984,7 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
         }
     }
 
-    burst.reserve(burst.size() + 35);
-    for (int c = 34; c >= 0; --c) {                 // 34 -> 0, exactly as cap89
-        const int len = (c == 34) ? 60 : 250;
-        std::vector<uint8_t> pay;
-        pay.reserve(size_t(len) + 1);
-        pay.push_back(uint8_t(c));
-        pay.insert(pay.end(), img.begin() + c * 250, img.begin() + c * 250 + len);
-        burst.push_back(uf1::buildScreen(0x0122, pay));
-    }
+    uf1AppendImageChunks_(img.data(), burst);
 }
 
 struct Uf1PeakHold {
@@ -16248,9 +16291,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         sLastLissSeq = lseq;
 
         std::vector<std::vector<uint8_t>> cycle;
-        if (haveLiss)
-            uf1PaintGoniometer_(liss, cycle);   // appends the 35 chunks (nothing
-                                                // if the shape is unknown)
+        if (haveLiss) {
+            // Diagnostic replay of cap101's own images when the replay file
+            // exists (see uf1GonioReplayNext_); live rendering otherwise.
+            if (!uf1GonioReplayNext_(cycle))
+                uf1PaintGoniometer_(liss, cycle);
+        }
         static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
         const uint8_t kFf   = 0xff;
