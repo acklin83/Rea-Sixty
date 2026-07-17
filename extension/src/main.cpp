@@ -15438,7 +15438,9 @@ void openUf1BringUp_()
     g_uf1_dev->setFrameTrace(g_uf1Trace);
     if (!g_uf1_dev->open()) {
         const std::string err = g_uf1_dev->lastError();
-        if (FILE* f = std::fopen("/tmp/rea_sixty_uf1_stale.log", "a")) {
+        // uf8::logPath, NOT a literal /tmp — on Windows the literal path ate
+        // the one line that says WHY the UF1 didn't open (2026-07-17 session).
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now().time_since_epoch();
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
             std::fprintf(f, "[%lld] UF1 open() failed: %s\n",
@@ -23881,7 +23883,7 @@ void onTimer()
                 }
             }
             if (u1Stale) {
-                if (FILE* f = std::fopen("/tmp/rea_sixty_uf1_stale.log", "a")) {
+                if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1_stale.log").c_str(), "a")) {
                     const auto t = std::chrono::system_clock::now().time_since_epoch();
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
                     std::fprintf(f, "[%lld] UF1 stale handle - reopening...\n",
