@@ -16285,28 +16285,29 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         uint64_t lseq = 0;
         const bool haveLiss =
             sslcore::getMeter(int(sslmeter::DataType::Lissajous), liss, lisspk, &lseq);
-        static uint64_t sLastLissSeq = 0;
-        if (haveLiss && lseq == sLastLissSeq && !force)
-            return;                 // between plugin frames: silence, like SSL
-        // ★ CADENCE FLOOR — THE goniometer fix (2026-07-17 StoerPC session).
-        // The device needs ~35-40 ms to rasterize a full diamond image. SSL
-        // streams at 24.5 Hz (40.8 ms spacing) — just enough. We streamed at
-        // 31-33 Hz, so EVERY new image aborted the in-progress render and the
-        // face stayed permanently black while every byte was correct. Proven
-        // by the cap101-image replay: at our cadence even SSL's own images
-        // stayed invisible during playback and appeared the moment the stream
-        // paused (render finally completed). Never let two image cycles go
-        // out closer than SSL's own spacing; surplus plugin frames are
-        // DROPPED, not queued.
+        // ★ THE CYCLE METRONOME (2026-07-17 StoerPC session, proven by the
+        // cap101 full-session blast). SSL streams the Overview cycle at a
+        // steady ~24.5 Hz WITHOUT EVER STOPPING — in silence it repeats the
+        // stale image; in the channel view it streams the idle cycle. The
+        // device evidently has two render strategies: continuous refresh when
+        // the cycle stream is uninterrupted, and lazy render-on-idle when it
+        // is bursty — which is why our data-driven gate (send only on fresh
+        // t10) produced a face that stayed black during playback and painted
+        // exactly one frame the moment the stream paused. The blast (byte-
+        // and timing-faithful cap101 replay from this very process) renders
+        // animated; the gap-free metronome is the difference.
+        // So: never gate on data freshness here. Pace at SSL's own spacing,
+        // repeat the stale image when no fresh one arrived, drop surplus
+        // plugin frames (33 Hz timer / 31 Hz plugin -> every ~40 ms one goes
+        // out, none queue).
         {
-            constexpr auto kMinImageGap = std::chrono::milliseconds(40);
+            constexpr auto kImageSpacing = std::chrono::milliseconds(40);
             static std::chrono::steady_clock::time_point sLastImageCycle{};
             const auto nowI = std::chrono::steady_clock::now();
-            if (nowI - sLastImageCycle < kMinImageGap)
-                return;             // too soon — drop this plugin frame
+            if (nowI - sLastImageCycle < kImageSpacing && !force)
+                return;             // metronome: not our slot yet
             sLastImageCycle = nowI;
         }
-        sLastLissSeq = lseq;
 
         std::vector<std::vector<uint8_t>> cycle;
         if (haveLiss) {
