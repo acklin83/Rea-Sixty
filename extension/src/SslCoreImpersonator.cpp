@@ -99,6 +99,13 @@ struct Instance {
     std::array<Slot, int(sslmeter::DataType::Count)> meter;
     Kind      kind   = Kind::Unknown;
     long long lastMs = 0;
+    // Last time this instance carried actual SIGNAL (any level meter above the
+    // silence floor). With several Meter instances loaded, the silent ones
+    // stream floor values just as diligently as the live one — getMeter must
+    // prefer a LIVE instance, not the first in port order (2026-07-17: two
+    // MeterPro instances, the UF1 was wired to the silent one all evening;
+    // Frank called the instance question hours before the trace proved it).
+    long long lastLiveMs = 0;
 };
 std::mutex                   g_meterMx;
 std::map<uint16_t, Instance> g_inst;      // key = UDP source port = one plug-in
@@ -430,6 +437,16 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     std::lock_guard<std::mutex> lk(g_meterMx);
                     Instance& inst = g_inst[ntohs(from.sin_port)];
                     inst.lastMs = nowMs();
+                    // Signal detector for instance preference: any level-type
+                    // meter (VuPpm..TextRms, 0..5) above -120 dBFS = live.
+                    for (const auto& u : ups) {
+                        if (u.dataType >= 0 && u.dataType <= 5)
+                            for (float v : u.current)
+                                if (std::isfinite(v) && v > -120.f) {
+                                    inst.lastLiveMs = inst.lastMs;
+                                    break;
+                                }
+                    }
                     for (auto& u : ups) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
                         classify_(inst, u.dataType, u.current.size());
@@ -724,18 +741,25 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     // track publishes Output(2)/OutputRms(3) into the very indices the UF1 meter
     // view reads as BarPeak(2)/BarRms(3), so taking "whatever arrived last"
     // shows the strip's output instead of the Meter plug-in's bars.
+    // Prefer a Meter instance that carried SIGNAL recently: silent instances
+    // stream floor values just as diligently, and taking the first in port
+    // order wired the UF1 to a silent one for a whole evening (2026-07-17).
+    const long long liveCutoff = nowMs() - 2000;
     const Instance* fallback = nullptr;
-    for (const auto& kv : g_inst) {
-        const Instance& in = kv.second;
-        if (in.kind == Kind::Meter) {
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto& kv : g_inst) {
+            const Instance& in = kv.second;
+            if (in.kind != Kind::Meter) {
+                if (in.kind == Kind::Unknown && !fallback) fallback = &in;
+                continue;
+            }
+            if (pass == 0 && in.lastLiveMs < liveCutoff) continue;
             const Slot& s = in.meter[dataType];
             if (s.have) {
                 current = s.current; peak = s.peak;
                 if (seq) *seq = s.seq;
                 return true;
             }
-        } else if (in.kind == Kind::Unknown && !fallback) {
-            fallback = &in;
         }
     }
     // Nothing classified yet (single plug-in, first datagrams) — old behaviour.
@@ -753,14 +777,19 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
 bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
+    // Same live-instance preference as getMeter (see there).
+    const long long liveCutoff = nowMs() - 2000;
     const Instance* fallback = nullptr;
-    for (const auto& kv : g_inst) {
-        const Instance& in = kv.second;
-        if (in.kind == Kind::Meter) {
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto& kv : g_inst) {
+            const Instance& in = kv.second;
+            if (in.kind != Kind::Meter) {
+                if (in.kind == Kind::Unknown && !fallback) fallback = &in;
+                continue;
+            }
+            if (pass == 0 && in.lastLiveMs < liveCutoff) continue;
             const Slot& s = in.meter[dataType];
             if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
-        } else if (in.kind == Kind::Unknown && !fallback) {
-            fallback = &in;
         }
     }
     if (fallback) {
