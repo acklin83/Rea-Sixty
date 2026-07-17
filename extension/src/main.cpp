@@ -16916,15 +16916,21 @@ void uf1PaintChannel_()
             //     coming from the Channel view, so they're absent from cap76's
             //     screen-to-screen transitions. Sent once on entry.
             //
-            // Live content (0x011c readouts, 0x0122 graphic) is streamed by
-            // uf1PaintMeter_ below from real plugin values; the seeds here just
-            // keep the plane blank rather than stale until the first data lands.
-            // Pause the pacer while the entry frames queue individually — a
-            // cycle burst must not interleave into the entry group. The
-            // Overview cycle re-activates it in this same tick.
-            g_uf1CycleActive.store(false, std::memory_order_relaxed);
-            for (const auto& f : uf1MeterScreenBurst_(meterScreen))
-                g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+            // ★ VIEW/SCREEN change ONLY — NOT track change (2026-07-17): the
+            // `changed` gate includes tr != sTr, and last-touched-track flips
+            // during playback re-fired this entry burst MID-STREAM (cap106:
+            // twice in 30 s while sitting still on Overview). Each re-entry is
+            // a layout reset SSL never sends while streaming — the device
+            // never settled while the transport ran, and rendered exactly one
+            // frame the moment it stopped ("zeichnet erst wenn cursor steht").
+            if (viewChanged || screenChanged) {
+                // Pause the pacer while the entry frames queue individually — a
+                // cycle burst must not interleave into the entry group. The
+                // Overview cycle re-activates it in this same tick.
+                g_uf1CycleActive.store(false, std::memory_order_relaxed);
+                for (const auto& f : uf1MeterScreenBurst_(meterScreen))
+                    g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+            }
 
             // The cap75-derived view-entry extras that used to sit here are
             // GONE (2026-07-17): they duplicated elements the screen list
