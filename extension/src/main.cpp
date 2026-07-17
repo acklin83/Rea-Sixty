@@ -14072,6 +14072,23 @@ void initDevices_()
 // Close every device and drop the derived state. The counterpart to
 // initDevices_; the destructor and the restart action share it so a re-init can
 // never diverge from a real teardown. Leaves the timer alone (see initDevices_).
+// Channel-view large-LCD header (0x011c, 8 x 25 bytes): "REAPER" + "1/8" +
+// "OFF" template, cap77. Shared by the channel painter and the idle cycle.
+static const uint8_t kUf1PluginHeader[200] = {
+    0x52,0x45,0x41,0x50,0x45,0x52,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0x31,0x2f,0x38,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0x4f,0x46,0x46,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0 };
+
 // ---- Overview cycle pacer ---------------------------------------------------
 // SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
 // ~1 ms jitter and NEVER pauses. REAPER's ~33 ms timer cannot produce that
@@ -16903,6 +16920,10 @@ void uf1PaintChannel_()
             // Live content (0x011c readouts, 0x0122 graphic) is streamed by
             // uf1PaintMeter_ below from real plugin values; the seeds here just
             // keep the plane blank rather than stale until the first data lands.
+            // Pause the pacer while the entry frames queue individually — a
+            // cycle burst must not interleave into the entry group. The
+            // Overview cycle re-activates it in this same tick.
+            g_uf1CycleActive.store(false, std::memory_order_relaxed);
             for (const auto& f : uf1MeterScreenBurst_(meterScreen))
                 g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
 
@@ -16958,7 +16979,32 @@ void uf1PaintChannel_()
     if (meterView) {
         uf1PaintMeter_(tr, changed);
     } else {
-    g_uf1CycleActive.store(false, std::memory_order_relaxed);   // channel view: pacer off
+    // Channel view: keep the cycle CHAIN running — SSL streams the idle cycle
+    // (0009 000a 0015 0016 011c 011d @ ~25 Hz) from connect onward and NEVER
+    // breaks it (cap84 plugin-idle, cap101 t=26.6..35.8). The full-session
+    // blast (which draws) contains exactly this pre-entry idle stream; our
+    // change-driven channel painting left a multi-second cycle gap before the
+    // meter entry.
+    {
+        std::vector<std::vector<uint8_t>> idle;
+        static const uint8_t k0009i[] = {0xff,0xff,0x00,0x00};
+        static const uint8_t k000ai[] = {0x00,0x00,0x00,0x00};
+        const uint8_t kFfi = 0xff, kZeroi = 0x00;
+        idle.push_back(uf1::buildScreen(0x0009, k0009i));
+        idle.push_back(uf1::buildScreen(0x000a, k000ai));
+        idle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFfi, 1)));
+        idle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFfi, 1)));
+        idle.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
+            std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
+        idle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZeroi, 1)));
+        {
+            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+            g_uf1CycleSnap = std::make_shared<const std::vector<std::vector<uint8_t>>>(
+                std::move(idle));
+        }
+        g_uf1CycleActive.store(true, std::memory_order_relaxed);
+        uf1EnsurePacer_();
+    }
 
     // 0x00-prefixed text send for the channel-info plane.
     auto sendZoneText = [&](uint16_t addr, const std::string& content) {
@@ -17117,22 +17163,8 @@ void uf1PaintChannel_()
         // with the Plugin-mode header "REAPER | 1/8 | OFF" (verbatim from cap85,
         // the init that renders the EQ). We were stuck in a hybrid MCU/Plugin
         // state — the EQ-graph view needs the plugin header, not the MCU one.
-        static const uint8_t kPluginHeader[200] = {
-            0x52,0x45,0x41,0x50,0x45,0x52,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0x31,0x2f,0x38,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0x4f,0x46,0x46,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0 };
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
-            std::span<const uint8_t>(kPluginHeader, sizeof(kPluginHeader))));
+            std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
 
         // 0x0017 CS TYPE: 0x00 + verbatim "4K E" (cap77: 00 34 4b 20 45).
         sendZoneText(uf1::scr::kCsType, "4K E");
