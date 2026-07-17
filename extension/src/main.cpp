@@ -16936,22 +16936,14 @@ void uf1PaintChannel_()
             for (const auto& f : uf1MeterScreenBurst_(meterScreen))
                 g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
 
-            if (viewChanged) {
-                put(0x0101, {0x03});
-                put(0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
-                put(0x011e, {0x10});
-                put(0x0120, {0x00});
-                put(0x0129, {0xff});
-                put(0x0122, {0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00});
-                put(0x0125, {0x00,0x00});
-                put(0x0126, {0x00,0x00});
-                put(0x0127, {0x00,0x00});
-            }
+            // The cap75-derived view-entry extras that used to sit here are
+            // GONE (2026-07-17): they duplicated elements the screen list
+            // already writes AND sent a lone zeroed chunk-34 0x0122 frame — an
+            // image START that is never completed. cap75's frame was the first
+            // chunk of a complete image that we cherry-picked; cap101's entry
+            // sends no 0x0122 at all before the first real image burst. A
+            // half-open image at every meter-view entry is exactly the kind of
+            // state that can wedge the firmware's image assembler.
         } else {
             // Channel/plugin-EQ layout (cap84/cap85 plugin cold-start, values
             // corrected against cap101's channel state at connect, t=26.62):
