@@ -16288,6 +16288,24 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         static uint64_t sLastLissSeq = 0;
         if (haveLiss && lseq == sLastLissSeq && !force)
             return;                 // between plugin frames: silence, like SSL
+        // ★ CADENCE FLOOR — THE goniometer fix (2026-07-17 StoerPC session).
+        // The device needs ~35-40 ms to rasterize a full diamond image. SSL
+        // streams at 24.5 Hz (40.8 ms spacing) — just enough. We streamed at
+        // 31-33 Hz, so EVERY new image aborted the in-progress render and the
+        // face stayed permanently black while every byte was correct. Proven
+        // by the cap101-image replay: at our cadence even SSL's own images
+        // stayed invisible during playback and appeared the moment the stream
+        // paused (render finally completed). Never let two image cycles go
+        // out closer than SSL's own spacing; surplus plugin frames are
+        // DROPPED, not queued.
+        {
+            constexpr auto kMinImageGap = std::chrono::milliseconds(40);
+            static std::chrono::steady_clock::time_point sLastImageCycle{};
+            const auto nowI = std::chrono::steady_clock::now();
+            if (nowI - sLastImageCycle < kMinImageGap)
+                return;             // too soon — drop this plugin frame
+            sLastImageCycle = nowI;
+        }
         sLastLissSeq = lseq;
 
         std::vector<std::vector<uint8_t>> cycle;
