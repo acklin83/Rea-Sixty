@@ -98,6 +98,10 @@ private:
 
     std::atomic<int>   consecutiveErrors_{0};
     std::atomic<bool>  needsReopen_{false};
+    // Diagnostic full-session replay (uf1_blast.bin): while set, the worker
+    // drops every queued user frame and sends no keepalive — the recording
+    // owns the wire. See runInit_.
+    std::atomic<bool>  blastActive_{false};
 };
 
 } // namespace uf1

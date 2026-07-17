@@ -5,11 +5,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <span>
 #include <thread>
 
+#include "LogPath.h"
 #include "uf1_init_sequence.inc"
 
 namespace uf1 {
@@ -144,6 +146,57 @@ void UF1Device::runInit_()
 {
     // Let the worker post its first IN transfer + a keepalive.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // DIAGNOSTIC FULL-SESSION BLAST (2026-07-17): if uf1_blast.bin exists next
+    // to the extension's log dir (%TEMP% on Windows, /tmp on macOS), replay it
+    // VERBATIM with recorded inter-frame timing and do nothing else — no init
+    // replay, no keepalives of our own (the recording contains SSL's), and the
+    // worker drops every queued user frame while blastActive_ is set. Format:
+    // repeated [u32 dt_us][u16 len][bytes]. The file is a literal cap101
+    // OUT-stream window (init + idle + meter entry + ~60 s streaming), so this
+    // is byte- AND timing-faithful SSL from our process. Discriminates "our
+    // live composition differs somehow" from "the device distinguishes the
+    // sessions by something outside the OUT stream".
+    {
+        FILE* bf = std::fopen(uf8::logPath("uf1_blast.bin").c_str(), "rb");
+        if (bf) {
+            blastActive_.store(true);
+            std::fseek(bf, 0, SEEK_END);
+            const long fsz = std::ftell(bf);
+            std::fseek(bf, 0, SEEK_SET);
+            std::vector<uint8_t> blast(size_t(fsz > 0 ? fsz : 0));
+            const bool ok = fsz > 0 &&
+                std::fread(blast.data(), 1, blast.size(), bf) == blast.size();
+            std::fclose(bf);
+            size_t off = 0;
+            int sent = 0;
+            while (ok && off + 6 <= blast.size() && !shuttingDown_.load()) {
+                uint32_t dt;  uint16_t len;
+                std::memcpy(&dt, blast.data() + off, 4);
+                std::memcpy(&len, blast.data() + off + 4, 2);
+                off += 6;
+                if (off + len > blast.size()) break;
+                if (dt > 0)
+                    std::this_thread::sleep_for(std::chrono::microseconds(dt));
+                int transferred = 0;
+                int brc = libusb_bulk_transfer(handle_, kEpOut,
+                                               blast.data() + off, len,
+                                               &transferred, 1000);
+                traceFrame_('O', blast.data() + off, len, brc);
+                off += len;
+                ++sent;
+            }
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty_uf1_stale.log").c_str(), "a")) {
+                std::fprintf(lg, "uf1 BLAST done: %d frames\n", sent);
+                std::fclose(lg);
+            }
+            // Stay silent afterwards: keep blastActive_ so the worker keeps
+            // dropping user frames — the post-blast face must show ONLY what
+            // the recording painted.
+            initInProgress_ = false;
+            return;
+        }
+    }
 
     // SSL's very FIRST bulk frame after the EP0 vendor init is 256 zero bytes,
     // before the FF01 wake (cap101 t=26.16, cap84 likewise starts with an
@@ -349,6 +402,15 @@ void UF1Device::workerLoop_()
                 }
             }
             queueDrained = pending_->q.empty();
+        }
+
+        // Blast mode: the recording owns the wire — drop user frames, no
+        // keepalive (the recording carries SSL's own).
+        if (blastActive_.load(std::memory_order_relaxed)) {
+            batch.clear();
+            timeval tvb{0, 1000};
+            libusb_handle_events_timeout_completed(ctx_, &tvb, nullptr);
+            continue;
         }
 
         // Content first, keepalive after — and only when the queue is empty.
