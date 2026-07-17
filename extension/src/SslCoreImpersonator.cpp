@@ -1,4 +1,5 @@
 #include "SslCoreImpersonator.h"
+#include "LogPath.h"
 
 // Socket plumbing mirrors StreamDeckBridge.cpp — socket headers FIRST so Winsock2
 // wins over the legacy <winsock.h> that WDL pulls in transitively.
@@ -50,7 +51,7 @@ namespace {
 bool  g_trace = false;
 void  slog(const char* fmt, ...) {
     if (!g_trace) return;
-    FILE* f = std::fopen("/tmp/reaper_sslcore.log", "a");
+    FILE* f = std::fopen(uf8::logPath("reaper_sslcore.log").c_str(), "a");
     if (!f) return;
     va_list ap; va_start(ap, fmt);
     std::vfprintf(f, fmt, ap);
@@ -499,7 +500,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 // app created — cost a round trip on 2026-07-15. /tmp
                                 // does get reaped eventually, so copy anything worth
                                 // keeping into captures/ as soon as the run is done.
-                                mf = std::fopen("/tmp/reasixty_meter_dump.log", "a");
+                                mf = std::fopen(uf8::logPath("reasixty_meter_dump.log").c_str(), "a");
                                 if (mf) std::fprintf(mf, "\n==== RUN START ====\n");
                             }
                             if (mf) {
