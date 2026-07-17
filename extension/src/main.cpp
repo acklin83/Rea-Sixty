@@ -16370,13 +16370,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // on it produced 66 ms gaps, cap105, and the device dropped to lazy
         // render-on-idle).
 
+        // ★ TRAILER FIRST, IMAGE LAST — the gap position is the render window.
+        // cap101 wire truth (2026-07-17): after img0 SSL sends NOTHING for a
+        // median 12 ms (the device rasters the diamond in that quiet window),
+        // and the trailer rides 0.06 ms in FRONT of the next img34. The frame
+        // ORDER is identical either way — what we had wrong for three days was
+        // where the SILENCE sits: we slammed the trailer 0.15 ms after img0
+        // and aborted every raster. So the cycle burst is [trailer, image] and
+        // the rest of the 40.8 ms pacer slot after img0 stays silent.
         std::vector<std::vector<uint8_t>> cycle;
-        if (haveLiss) {
-            // Diagnostic replay of cap101's own images when the replay file
-            // exists (see uf1GonioReplayNext_); live rendering otherwise.
-            if (!uf1GonioReplayNext_(cycle))
-                uf1PaintGoniometer_(liss, cycle);
-        }
         static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
         const uint8_t kFf   = 0xff;
@@ -16407,6 +16409,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
         cycle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
+        // Image LAST (see the render-window note above).
+        if (haveLiss) {
+            // Diagnostic replay of cap101's own images when the replay file
+            // exists (see uf1GonioReplayNext_); live rendering otherwise.
+            if (!uf1GonioReplayNext_(cycle))
+                uf1PaintGoniometer_(liss, cycle);
+        }
         // Hand the prepared cycle to the pacer (it emits at 40.8 ms and
         // re-sends the stale snapshot when we don't refresh in time).
         {
