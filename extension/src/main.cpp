@@ -15825,8 +15825,10 @@ inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
     }
     if (rows < 3) return g;                                 // unknown -> paint nothing
 
-    for (int i = 0; i < rows; ++i)
-        g.w.push_back(2 * std::min(i, rows - 1 - i) + 1);
+    for (int i = 0; i < rows; ++i) {
+        const int m = (i < rows - 1 - i) ? i : rows - 1 - i;   // no std::min — MSVC macro trap
+        g.w.push_back(2 * m + 1);
+    }
 
     int s = 0;
     for (int x : g.w) { g.start.push_back(s); s += x; }
