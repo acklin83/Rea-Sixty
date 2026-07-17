@@ -15999,53 +15999,28 @@ bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
 void uf1PaintGoniometer_(const std::vector<float>& src,
                          std::vector<std::vector<uint8_t>>& burst)
 {
-    const Uf1GonioGeom g = uf1GonioGeomFor_(src.size());
-    if (!g.ok || !g_uf1_dev) return;          // shape we don't know -> paint nothing
+    if (!g_uf1_dev || src.empty()) return;
 
-    const auto& uw = uf1DiamondWidths_();
-    const int   srows = int(g.w.size());
+    // ★ THE CODEC, decoded 2026-07-17 evening: the UF1 image IS the plug-in's
+    // t10 diamond at 4 BITS PER PIXEL — two pixels per byte, high nibble
+    // first, packed continuously across rows. 17113 source cells = 17120
+    // nibbles = 8560 bytes with 7 zero pad nibbles at the tail. NO resampling,
+    // NO 8-bit pixels, NO UF1-side diamond geometry. Proven by decoding
+    // cap101's own transmitted images as nibbles over the 185-row source
+    // diamond: a flawless symmetric goniometer cloud (the previous 8-bit /
+    // 187-row model only ever round-tripped through our OWN renderer —
+    // circular — and its images were nibble-space garbage the device refused
+    // to draw: blast-C, SSL's literal session with our pixels spliced in,
+    // stayed black while the unmodified blast drew).
     std::array<uint8_t, kUf1DiamondBytes> img{};
-
-    // Row start offsets into the UF1 image.
-    std::array<int, kUf1DiamondRows> uoff{};
-    { int a = 0; for (int i = 0; i < kUf1DiamondRows; ++i) { uoff[size_t(i)] = a; a += uw[size_t(i)]; } }
-
-    // FORWARD map every source pixel onto the UF1 and keep the MAXIMUM.
-    //
-    // Not nearest-neighbour BACKWARD sampling, which is what used to be here and
-    // it silently dropped the picture: the source diamond is 185 wide where the
-    // UF1's is 92, so this is a 2:1 downsample, and point-sampling a 2:1 shrink
-    // steps straight over a one-pixel-wide trace. Measured on the real corr=+1
-    // frame: backward sampling lit 93 of 187 rows — half the mono line simply
-    // missing — while the pixels it DID find sat correctly at frac 0.500. The
-    // narrow rows near the tips were worst: a UF1 row of width 2 sampled only the
-    // source row's two outer edges and never its lit centre.
-    //
-    // Forward + max is the right operator for a sparse trace: every lit source
-    // pixel lands somewhere, and where several collapse onto one UF1 pixel the
-    // brightest wins (a goniometer trace must not dim just because it is being
-    // shrunk). Both faces are diamonds of the same square, so the map is the
-    // normalised position along each axis.
-    for (int j = 0; j < srows; ++j) {
-        const int swid   = g.w[size_t(j)];
-        const int sstart = g.start[size_t(j)];
-        const int i = (srows > 1)
-            ? int(std::lround(double(j) * double(kUf1DiamondRows - 1) / double(srows - 1)))
-            : 0;
-        const int uwid = uw[size_t(std::clamp(i, 0, kUf1DiamondRows - 1))];
-        const int ubase = uoff[size_t(std::clamp(i, 0, kUf1DiamondRows - 1))];
-        for (int sx = 0; sx < swid; ++sx) {
-            const size_t si = size_t(sstart + sx);
-            if (si >= src.size()) break;
-            const float v = src[si];
-            if (!(v > 0.f)) continue;
-            const int x = (swid > 1)
-                ? int(std::lround(double(sx) * double(uwid - 1) / double(swid - 1)))
-                : (uwid - 1) / 2;
-            const size_t di = size_t(ubase + std::clamp(x, 0, uwid - 1));
-            const uint8_t b = uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
-            if (b > img[di]) img[di] = b;
-        }
+    const size_t n = src.size() < size_t(kUf1DiamondBytes) * 2
+                   ? src.size() : size_t(kUf1DiamondBytes) * 2;
+    for (size_t i = 0; i < n; ++i) {
+        const float v = src[i];
+        if (!(v > 0.f)) continue;
+        const uint8_t q = uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 15.f));
+        if (!q) continue;
+        img[i >> 1] |= (i & 1) ? q : uint8_t(q << 4);
     }
 
     uf1AppendImageChunks_(img.data(), burst);
