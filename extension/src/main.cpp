@@ -14072,6 +14072,48 @@ void initDevices_()
 // Close every device and drop the derived state. The counterpart to
 // initDevices_; the destructor and the restart action share it so a re-init can
 // never diverge from a real teardown. Leaves the timer alone (see initDevices_).
+// ---- Overview cycle pacer ---------------------------------------------------
+// SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
+// ~1 ms jitter and NEVER pauses. REAPER's ~33 ms timer cannot produce that
+// spacing (a 40 ms floor on a 33 ms grid yields 66 ms gaps — measured in
+// cap105 — and the device falls back to lazy render-on-idle: black face while
+// streaming). So the main-thread painter only PREPARES the freshest cycle
+// (REAPER/impersonator reads stay on the main thread) and this dedicated
+// thread emits the snapshot every 40.8 ms, re-sending the stale one when no
+// fresh cycle arrived — exactly SSL's behaviour in silence.
+static std::mutex g_uf1CycleMx;
+static std::shared_ptr<const std::vector<std::vector<uint8_t>>> g_uf1CycleSnap;
+static std::atomic<bool> g_uf1CycleActive{false};   // painter: screen 0 visible
+static std::atomic<bool> g_uf1PacerRun{false};
+static std::thread g_uf1PacerThread;
+
+static void uf1CyclePacerLoop_()
+{
+    constexpr auto kSpacing = std::chrono::microseconds(40800);
+    auto next = std::chrono::steady_clock::now();
+    while (g_uf1PacerRun.load(std::memory_order_relaxed)) {
+        next += kSpacing;
+        std::this_thread::sleep_until(next);
+        if (!g_uf1CycleActive.load(std::memory_order_relaxed)) {
+            next = std::chrono::steady_clock::now();   // don't burst on re-entry
+            continue;
+        }
+        std::shared_ptr<const std::vector<std::vector<uint8_t>>> snap;
+        {
+            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+            snap = g_uf1CycleSnap;
+        }
+        if (snap && g_uf1_dev)
+            g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(*snap));
+    }
+}
+
+static void uf1EnsurePacer_()
+{
+    if (!g_uf1PacerRun.exchange(true))
+        g_uf1PacerThread = std::thread(uf1CyclePacerLoop_);
+}
+
 void shutdownDevices_()
 {
     g_sync.reset();
@@ -14082,6 +14124,11 @@ void shutdownDevices_()
     g_uc1_surface.reset();
     if (g_uc1_dev) g_uc1_dev->close();
     g_uc1_dev.reset();
+    // Stop the Overview cycle pacer BEFORE closing the device it sends to.
+    g_uf1CycleActive.store(false, std::memory_order_relaxed);
+    if (g_uf1PacerRun.exchange(false) && g_uf1PacerThread.joinable())
+        g_uf1PacerThread.join();
+
     if (g_uf1_dev) g_uf1_dev->close();
     g_uf1_dev.reset();
     g_slotTrack.fill(nullptr);
@@ -16210,6 +16257,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // 0 Overview, 1 Analogue, 2 RTA, 3 Loudness.
     const int screen = g_uf1MeterScreen.load();
 
+    // Pacer only feeds the Overview screen; silence it elsewhere.
+    if (screen != 0)
+        g_uf1CycleActive.store(false, std::memory_order_relaxed);
+
     // Unconditional. SSL restates 0x011c every cycle too (cap89: 2570 frames in
     // 105 s, and the trace showed us sending only 241 where SSL sends 2570).
     // Do not reintroduce a change-gate here: same rule as every other element.
@@ -16296,18 +16347,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // exactly one frame the moment the stream paused. The blast (byte-
         // and timing-faithful cap101 replay from this very process) renders
         // animated; the gap-free metronome is the difference.
-        // So: never gate on data freshness here. Pace at SSL's own spacing,
-        // repeat the stale image when no fresh one arrived, drop surplus
-        // plugin frames (33 Hz timer / 31 Hz plugin -> every ~40 ms one goes
-        // out, none queue).
-        {
-            constexpr auto kImageSpacing = std::chrono::milliseconds(40);
-            static std::chrono::steady_clock::time_point sLastImageCycle{};
-            const auto nowI = std::chrono::steady_clock::now();
-            if (nowI - sLastImageCycle < kImageSpacing && !force)
-                return;             // metronome: not our slot yet
-            sLastImageCycle = nowI;
-        }
+        // So: never gate on data freshness. The main thread only PREPARES the
+        // cycle; the dedicated pacer thread (uf1CyclePacerLoop_) emits it at a
+        // metronomic 40.8 ms — REAPER's 33 ms timer grid cannot (a 40 ms floor
+        // on it produced 66 ms gaps, cap105, and the device dropped to lazy
+        // render-on-idle).
 
         std::vector<std::vector<uint8_t>> cycle;
         if (haveLiss) {
@@ -16346,7 +16390,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
         cycle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
-        g_uf1_dev->sendBurst(std::move(cycle));
+        // Hand the prepared cycle to the pacer (it emits at 40.8 ms and
+        // re-sends the stale snapshot when we don't refresh in time).
+        {
+            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+            g_uf1CycleSnap = std::make_shared<const std::vector<std::vector<uint8_t>>>(
+                std::move(cycle));
+        }
+        g_uf1CycleActive.store(true, std::memory_order_relaxed);
+        uf1EnsurePacer_();
     }
     else if (screen == 1) {
         // Analogue: 0x0125 = (needle_L, needle_R), 0x0127 = (hold_L, hold_R).
@@ -16906,6 +16958,7 @@ void uf1PaintChannel_()
     if (meterView) {
         uf1PaintMeter_(tr, changed);
     } else {
+    g_uf1CycleActive.store(false, std::memory_order_relaxed);   // channel view: pacer off
 
     // 0x00-prefixed text send for the channel-info plane.
     auto sendZoneText = [&](uint16_t addr, const std::string& content) {
