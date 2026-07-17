@@ -14098,30 +14098,53 @@ static const uint8_t kUf1PluginHeader[200] = {
 // (REAPER/impersonator reads stay on the main thread) and this dedicated
 // thread emits the snapshot every 40.8 ms, re-sending the stale one when no
 // fresh cycle arrived — exactly SSL's behaviour in silence.
+// The cycle is emitted in THREE sub-slots, exactly SSL's measured anatomy
+// (cap101 t=60..90, offsets within the 40.78 ms cycle): image chunks at
+// 0..4.7 ms, then SILENCE (the render window), the meters group (0009 000a
+// 0015 0016) floating at ~18 ms, silence again, and the end group (011c,
+// 0125-0127, 0128, 011d) at ~40.3 ms — the next image follows 0.06 ms after
+// 011d. Our one-contiguous-burst emission was the last structural difference
+// to the working full-session blast.
+struct Uf1CycleParts {
+    std::vector<std::vector<uint8_t>> img;     // 35 chunk frames
+    std::vector<std::vector<uint8_t>> meters;  // 0009 000a 0015 0016
+    std::vector<std::vector<uint8_t>> tail;    // 011c 0125 0126 0127 0128 011d
+};
 static std::mutex g_uf1CycleMx;
-static std::shared_ptr<const std::vector<std::vector<uint8_t>>> g_uf1CycleSnap;
+static std::shared_ptr<const Uf1CycleParts> g_uf1CycleSnap;
 static std::atomic<bool> g_uf1CycleActive{false};   // painter: screen 0 visible
 static std::atomic<bool> g_uf1PacerRun{false};
 static std::thread g_uf1PacerThread;
 
 static void uf1CyclePacerLoop_()
 {
-    constexpr auto kSpacing = std::chrono::microseconds(40800);
-    auto next = std::chrono::steady_clock::now();
+    using namespace std::chrono;
+    constexpr auto kSpacing   = microseconds(40800);
+    constexpr auto kMetersOff = microseconds(18000);
+    constexpr auto kTailOff   = microseconds(40300);
+    auto slot = steady_clock::now();
     while (g_uf1PacerRun.load(std::memory_order_relaxed)) {
-        next += kSpacing;
-        std::this_thread::sleep_until(next);
         if (!g_uf1CycleActive.load(std::memory_order_relaxed)) {
-            next = std::chrono::steady_clock::now();   // don't burst on re-entry
+            std::this_thread::sleep_for(milliseconds(5));
+            slot = steady_clock::now();
             continue;
         }
-        std::shared_ptr<const std::vector<std::vector<uint8_t>>> snap;
+        std::shared_ptr<const Uf1CycleParts> snap;
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             snap = g_uf1CycleSnap;
         }
-        if (snap && g_uf1_dev)
-            g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(*snap));
+        if (snap && g_uf1_dev) {
+            g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
+            std::this_thread::sleep_until(slot + kMetersOff);
+            if (!snap->meters.empty())
+                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->meters));
+            std::this_thread::sleep_until(slot + kTailOff);
+            if (!snap->tail.empty())
+                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
+        }
+        slot += kSpacing;
+        std::this_thread::sleep_until(slot);
     }
 }
 
@@ -16345,31 +16368,33 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // on it produced 66 ms gaps, cap105, and the device dropped to lazy
         // render-on-idle).
 
-        // ★ TRAILER FIRST, IMAGE LAST — the gap position is the render window.
-        // cap101 wire truth (2026-07-17): after img0 SSL sends NOTHING for a
-        // median 12 ms (the device rasters the diamond in that quiet window),
-        // and the trailer rides 0.06 ms in FRONT of the next img34. The frame
-        // ORDER is identical either way — what we had wrong for three days was
-        // where the SILENCE sits: we slammed the trailer 0.15 ms after img0
-        // and aborted every raster. So the cycle burst is [trailer, image] and
-        // the rest of the 40.8 ms pacer slot after img0 stays silent.
-        std::vector<std::vector<uint8_t>> cycle;
+        // Build the THREE cycle parts (see the pacer's anatomy note): the
+        // image chunks open the slot, the meters group floats mid-slot, the
+        // end group (011c, boxes, 0128, 011d) closes it right before the next
+        // image. The silences between them are the device's render windows.
+        auto parts = std::make_shared<Uf1CycleParts>();
+        if (haveLiss) {
+            // Diagnostic replay of cap101's own images when the replay file
+            // exists (see uf1GonioReplayNext_); live rendering otherwise.
+            if (!uf1GonioReplayNext_(parts->img))
+                uf1PaintGoniometer_(liss, parts->img);
+        }
         static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
         const uint8_t kFf   = 0xff;
         const uint8_t kZero = 0x00;
-        cycle.push_back(uf1::buildScreen(0x0009, k0009));
-        cycle.push_back(uf1::buildScreen(0x000a, k000a));
-        cycle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFf, 1)));
-        cycle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFf, 1)));
-        cycle.push_back(uf1::buildScreen(uf1::scr::kHeaderRow, p));  // 011c, its slot
+        parts->meters.push_back(uf1::buildScreen(0x0009, k0009));
+        parts->meters.push_back(uf1::buildScreen(0x000a, k000a));
+        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFf, 1)));
+        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFf, 1)));
+        parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow, p));   // 011c
         auto barFrame = [](uint16_t addr, const std::array<uint8_t, 2>& v) {
             return uf1::buildScreen(addr,
                 std::span<const uint8_t>(v.data(), v.size()));
         };
-        cycle.push_back(barFrame(0x0125, rmsBar));
-        cycle.push_back(barFrame(0x0126, peakBar));
-        cycle.push_back(barFrame(0x0127, holdBar));
+        parts->tail.push_back(barFrame(0x0125, rmsBar));
+        parts->tail.push_back(barFrame(0x0126, peakBar));
+        parts->tail.push_back(barFrame(0x0127, holdBar));
         {
             // Live overload bitmask (bit0/1 = L flash/latch, bit2/3 = R): on
             // view 0 the plug-in publishes f5/f6 on BarPeak; VuPpm only fills
@@ -16381,22 +16406,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 if (ovl.size() >= 2)     { if (ovl[0]) mask |= 0x01;     if (ovl[1]) mask |= 0x04; }
                 if (ovlHold.size() >= 2) { if (ovlHold[0]) mask |= 0x02; if (ovlHold[1]) mask |= 0x08; }
             }
-            cycle.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
+            parts->tail.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
-        cycle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
-        // Image LAST (see the render-window note above).
-        if (haveLiss) {
-            // Diagnostic replay of cap101's own images when the replay file
-            // exists (see uf1GonioReplayNext_); live rendering otherwise.
-            if (!uf1GonioReplayNext_(cycle))
-                uf1PaintGoniometer_(liss, cycle);
-        }
-        // Hand the prepared cycle to the pacer (it emits at 40.8 ms and
-        // re-sends the stale snapshot when we don't refresh in time).
+        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
-            g_uf1CycleSnap = std::make_shared<const std::vector<std::vector<uint8_t>>>(
-                std::move(cycle));
+            g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
         }
         g_uf1CycleActive.store(true, std::memory_order_relaxed);
         uf1EnsurePacer_();
@@ -16962,21 +16977,20 @@ void uf1PaintChannel_()
     // change-driven channel painting left a multi-second cycle gap before the
     // meter entry.
     {
-        std::vector<std::vector<uint8_t>> idle;
+        auto parts = std::make_shared<Uf1CycleParts>();
         static const uint8_t k0009i[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000ai[] = {0x00,0x00,0x00,0x00};
         const uint8_t kFfi = 0xff, kZeroi = 0x00;
-        idle.push_back(uf1::buildScreen(0x0009, k0009i));
-        idle.push_back(uf1::buildScreen(0x000a, k000ai));
-        idle.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFfi, 1)));
-        idle.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFfi, 1)));
-        idle.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
+        parts->meters.push_back(uf1::buildScreen(0x0009, k0009i));
+        parts->meters.push_back(uf1::buildScreen(0x000a, k000ai));
+        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFfi, 1)));
+        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFfi, 1)));
+        parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
             std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
-        idle.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZeroi, 1)));
+        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZeroi, 1)));
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
-            g_uf1CycleSnap = std::make_shared<const std::vector<std::vector<uint8_t>>>(
-                std::move(idle));
+            g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
         }
         g_uf1CycleActive.store(true, std::memory_order_relaxed);
         uf1EnsurePacer_();
