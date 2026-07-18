@@ -16100,10 +16100,57 @@ bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
 // Appends the 35 image chunks to `burst` (does not send) so the caller can emit
 // the WHOLE Overview cycle — image + trailer elements — as one atomic burst,
 // exactly the unit SSL emits at 24.5 Hz in cap89.
-void uf1PaintGoniometer_(const std::vector<float>& src,
+// ★ THE TRAIL IS OURS TO DRAW (2026-07-18, measured). The plug-in's t10 is the
+// INSTANTANEOUS raster — on transport stop the trace shows 5039 cells going to
+// zero within one logging second and nothing after it, while the plug-in's own
+// window keeps a cloud fading for seconds ("wenn ich stop drücke, dann bleibt
+// die wolke im plugin wie sie ist und fadet so langsam aus"). So the plug-in
+// renders its persistence in its GUI, hands us the bare frame, and SSL 360
+// accumulates before it ships the image — which is also why SSL's images carry
+// 14% of their pixels in the faintest byte class where ours had 2%.
+//
+// Exponential decay to ~1/255 (one code, i.e. invisible) after `fadeSec`, timed
+// off the real interval between paints rather than a frame count, because the
+// painter rides REAPER's timer and that is not a metronome.
+void uf1GonioTrail_(const std::vector<float>& src, double fadeSec,
+                    std::vector<float>& out)
+{
+    using namespace std::chrono;
+    static std::vector<float> trail;
+    static steady_clock::time_point last{};
+    const auto now = steady_clock::now();
+
+    if (fadeSec <= 0.0) { trail.clear(); last = now; out = src; return; }
+    if (trail.size() != src.size()) { trail.assign(src.size(), 0.f); last = now; }
+
+    const double dt = last.time_since_epoch().count()
+                    ? duration<double>(now - last).count() : 0.0;
+    last = now;
+    // ln(255) = 5.541: the time constant that takes 1.0 down to one code in
+    // fadeSec. Guard the first call and any scheduling hiccup.
+    const double k = (dt > 0.0 && dt < 1.0)
+                   ? std::exp(-dt * 5.541 / fadeSec) : 1.0;
+    for (size_t i = 0; i < src.size(); ++i) {
+        float v = trail[i] * float(k);
+        if (v < 1.f / 255.f) v = 0.f;          // below one code = off, not a haze
+        trail[i] = src[i] > v ? src[i] : v;
+    }
+    out = trail;
+}
+
+void uf1PaintGoniometer_(const std::vector<float>& src, double fadeSec,
                          std::vector<std::vector<uint8_t>>& burst)
 {
     if (!g_uf1_dev || src.empty()) return;
+    // NO trail accumulator here. It was added on 2026-07-18 on the strength of
+    // one trace line that showed 5039 cells going out "at once" on transport
+    // stop — but that line samples once a SECOND, and the full-rate log shows
+    // the plug-in's own fade ramping down over ~3 s with on=0 throughout, i.e.
+    // the shape holding still while it dims. The persistence is already in
+    // t10; accumulating again just fades everything twice. uf1GonioTrail_ and
+    // the Lissajous-Fade-Time read stay in the tree because the parameter is a
+    // V-Pot binding we still owe, but nothing calls the accumulator.
+    (void)fadeSec;
 
     // ★ THE CODEC, derived 2026-07-18 from cap92 (see uf1DiamondWidths_ for the
     // derivation and why the 4-bit reading was wrong): ONE BYTE PER PIXEL over
@@ -16170,20 +16217,28 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
         if (sr < 0 || sr >= rows) { dst += wu; continue; }
         const int ws = sg.w[size_t(sr)];
         const int s0 = sg.start[size_t(sr)];
+        // AREA-WEIGHTED, not max over integer spans (2026-07-18). 185 source
+        // columns onto 93 pixels is a ratio of 1.989, so integer spans cover
+        // mostly 2 cells but one per row covers only 1 — and a pixel taking the
+        // max of ONE cell is systematically darker than its neighbours taking
+        // the max of two. Those outliers sit at a similar place in every row, so
+        // they line up: "dunkle vertikale linien die auf dem plugin nicht sind".
+        // A max also cannot produce intermediate values at all, which is why our
+        // images had 2% of pixels in the faintest byte class where SSL's have
+        // 14% — a source cell straddling two pixels should become two half-lit
+        // pixels, and that faint population IS the visible trail.
+        const double scale = double(ws) / double(wu);
         for (int c = 0; c < wu; ++c) {
-            // This pixel's span in source columns. The spans must PARTITION the
-            // row — an inclusive-both-edges map shares each boundary cell with
-            // the next pixel, which lights two bytes per source cell and smears
-            // a one-cell-wide trace into a two-cell one (366 lit bytes instead
-            // of 185 on the corr=+1 check).
-            const int a = c * ws / wu;
-            int b = (c + 1) * ws / wu - 1;
-            if (b < a) b = a;
-            float m = 0.f;
-            for (int k = a; k <= b && k < ws; ++k) {
+            const double x0 = c * scale, x1 = (c + 1) * scale;
+            double acc = 0.0;
+            for (int k = int(x0); k < ws && double(k) < x1; ++k) {
+                const double lo = double(k) > x0 ? double(k) : x0;
+                const double hi = double(k + 1) < x1 ? double(k + 1) : x1;
+                if (hi <= lo) continue;
                 const size_t idx = size_t(s0 + k);
-                if (idx < src.size() && src[idx] > m) m = src[idx];
+                if (idx < src.size()) acc += double(src[idx]) * (hi - lo);
             }
+            const float m = float(acc / (x1 - x0));
             if (m > 0.f) {
                 ++litCells;
                 if (m > vmax) vmax = m;
@@ -16210,6 +16265,27 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
             static auto sLast = std::chrono::steady_clock::now();
             static size_t sFrames = 0;
             ++sFrames;
+            // Cell-level churn against the previous array, accumulated over the
+            // logging second (not just the last frame — one frame is noise).
+            static std::vector<float> sPrev;
+            static size_t sOff = 0, sOn = 0;
+            if (sPrev.size() == src.size()) {
+                for (size_t i = 0; i < src.size(); ++i) {
+                    const bool a = sPrev[i] > 0.f, b = src[i] > 0.f;
+                    if (a && !b) ++sOff;
+                    else if (!a && b) ++sOn;
+                }
+            }
+            sPrev = src;
+            // Same measure on the bytes we are about to transmit.
+            static std::array<uint8_t, kUf1DiamondBytes> sPrevImg{};
+            static size_t sOutOff = 0, sOutOn = 0;
+            for (size_t i = size_t(kUf1GonioOffset); i < img.size(); ++i) {
+                const bool a = sPrevImg[i] != 0, b = img[i] != 0;
+                if (a && !b) ++sOutOff;
+                else if (!a && b) ++sOutOn;
+            }
+            sPrevImg = img;
             const auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration<double>(now - sLast).count() >= 1.0) {
                 sLast = now;
@@ -16239,10 +16315,23 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
                             ++shist[size_t(std::clamp(int(v * 16.f), 0, 15))];
                     std::fprintf(f, " src16=");
                     for (int q = 0; q < 16; ++q)
-                        std::fprintf(f, "%zu%s", shist[size_t(q)], q < 15 ? "," : "\n");
+                        std::fprintf(f, "%zu%s", shist[size_t(q)], q < 15 ? "," : "");
+                    // Does the SOURCE blink? A 2 s fade at 25 Hz should let
+                    // roughly lit/50 cells reach zero per frame and light very
+                    // few that were dark. Thousands either way means the raster
+                    // the plug-in hands us is not a decaying trail at all, and
+                    // no amount of work on our side will make it look like one.
+                    // Churn of the EMITTED image, same idea one stage later. If
+                    // the source holds still while it dims (on=0) but this is
+                    // large, the movement is something we do — pooling, the
+                    // instance choice, a stale snapshot — not something we are
+                    // handed. Frank sees the cloud drift while it should sit
+                    // and fade; these two numbers side by side say whose it is.
+                    std::fprintf(f, " off=%zu on=%zu outOff=%zu outOn=%zu\n",
+                                 sOff, sOn, sOutOff, sOutOn);
                     std::fclose(f);
                 }
-                sFrames = 0;
+                sFrames = 0; sOff = 0; sOn = 0; sOutOff = 0; sOutOn = 0;
             }
         }
     }
@@ -16578,10 +16667,52 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // cycle per distinct value, which is how SSL's motion stays clean.
         parts->seq = lseq;
         if (haveLiss) {
+            // The trail length is the plug-in's OWN setting — param idx 16
+            // "Lissajous Fade Time", 7 steps 0/0.25/0.5/1/2/3/5 s over the
+            // normalised range (dump: 2 s at 0.6667 = step 4 of 6). Read it
+            // live so the UF1 follows the fade set in the plug-in GUI, exactly
+            // as the Analogue screen already does for the reference level.
+            // Default 2 s = the plug-in's own default, for when no Meter FX
+            // resolves (impersonator off, REAPER-peak fallback).
+            static const double kFadeSteps[7] = {0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0};
+            double fadeSec = 2.0;
+            int mfx = -1, mcnt = 0;
+            if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt)) {
+                // BY NAME, with 16 only as a hint. The index comes from a VST3
+                // dump (docs/ssl-native-params); another format numbers its
+                // params differently, and reading the wrong one returned 0.0 =
+                // step 0 = "0 sec" — which silently disabled the trail
+                // altogether and looked exactly like the bug it was meant to
+                // fix. A wrong index must not be able to masquerade as a
+                // setting.
+                int pi = -1;
+                char nm[128];
+                if (TrackFX_GetParamName(tr, mfx, 16, nm, sizeof(nm))
+                    && !std::strcmp(nm, "Lissajous Fade Time")) {
+                    pi = 16;
+                } else {
+                    const int np = TrackFX_GetNumParams(tr, mfx);
+                    for (int p = 0; p < np; ++p)
+                        if (TrackFX_GetParamName(tr, mfx, p, nm, sizeof(nm))
+                            && !std::strcmp(nm, "Lissajous Fade Time")) { pi = p; break; }
+                }
+                if (pi >= 0) {
+                    const double nv = TrackFX_GetParamNormalized(tr, mfx, pi);
+                    const int step = int(std::lround(std::clamp(nv, 0.0, 1.0) * 6.0));
+                    fadeSec = kFadeSteps[step < 0 ? 0 : (step > 6 ? 6 : step)];
+                }
+                static int sLoggedPi = -2;
+                if (pi != sLoggedPi) {
+                    sLoggedPi = pi;
+                    if (FILE* f = std::fopen(uf8::logPath("reasixty_gonio.log").c_str(), "a"))
+                    { std::fprintf(f, "fade: param idx=%d -> %.2f s\n", pi, fadeSec);
+                      std::fclose(f); }
+                }
+            }
             // Diagnostic replay of cap101's own images when the replay file
             // exists (see uf1GonioReplayNext_); live rendering otherwise.
             if (!uf1GonioReplayNext_(parts->img))
-                uf1PaintGoniometer_(liss, parts->img);
+                uf1PaintGoniometer_(liss, fadeSec, parts->img);
         }
         static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
