@@ -13955,6 +13955,10 @@ void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag
 void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
 void openUf1BringUp_();                                  // claim + handlers + colour proof
 void uf1PaintChannel_();                                 // main-thread channel-zone + colour painter
+// Bumped on every successful UF1 open(). The painters' send-on-change statics
+// describe what the DEVICE shows, so a reopen (USB re-plug, stale handle) must
+// invalidate them — see uf1PaintChannel_ for what surviving statics cost us.
+std::atomic<uint32_t> g_uf1Gen{0};
 void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
                     int delta, const char* decision);
 void onMidiFromReaper(std::span<const uint8_t> bytes);
@@ -14109,6 +14113,7 @@ struct Uf1CycleParts {
     std::vector<std::vector<uint8_t>> img;     // 35 chunk frames
     std::vector<std::vector<uint8_t>> meters;  // 0009 000a 0015 0016
     std::vector<std::vector<uint8_t>> tail;    // 011c 0125 0126 0127 0128 011d
+    uint64_t seq = 0;                          // the t10 array this was painted from
 };
 static std::mutex g_uf1CycleMx;
 static std::shared_ptr<const Uf1CycleParts> g_uf1CycleSnap;
@@ -14119,10 +14124,25 @@ static std::thread g_uf1PacerThread;
 static void uf1CyclePacerLoop_()
 {
     using namespace std::chrono;
-    constexpr auto kSpacing   = microseconds(40800);
+    // ★ DATA-LOCKED, not clock-locked (2026-07-18). A fixed 40.8 ms metronome
+    // is 24.5 Hz while the plug-in produces ~25 arrays/s, so the phase drifts
+    // and roughly once every two seconds a whole plug-in frame is never sent —
+    // a regular visible hitch ("unsere bilder stocken immer leicht, über SSL
+    // kein bisschen"). SSL emits exactly ONE cycle per plug-in frame, which is
+    // why its motion is clean; its 40.78 ms is the plug-in's frame time, not an
+    // independent clock we have to match.
+    //
+    // So: emit as soon as the painter has a NEW array (snap->seq changed), with
+    // a floor so a burst of arrivals cannot bunch up on the wire, and a ceiling
+    // so the cycle chain never breaks when the data pauses — in silence SSL
+    // keeps restating the stale image at the same rate, and the device wants
+    // that stream unbroken.
+    constexpr auto kFloor     = microseconds(25000);   // never faster than 40 Hz
+    constexpr auto kCeiling   = microseconds(41000);   // never slower than SSL
     constexpr auto kMetersOff = microseconds(18000);
     constexpr auto kTailOff   = microseconds(40300);
-    auto slot = steady_clock::now();
+    auto     slot     = steady_clock::now();
+    uint64_t sentSeq  = 0;
     while (g_uf1PacerRun.load(std::memory_order_relaxed)) {
         if (!g_uf1CycleActive.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(milliseconds(5));
@@ -14134,6 +14154,22 @@ static void uf1CyclePacerLoop_()
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             snap = g_uf1CycleSnap;
         }
+        // Wait for a fresh array, but no longer than the ceiling. Poll finely:
+        // the painter runs on REAPER's ~30 ms timer, so the arrival instant is
+        // what it is — the point here is not to ADD latency on top of it.
+        {
+            const auto floorAt = slot + kFloor;
+            const auto dueAt   = slot + kCeiling;
+            while (steady_clock::now() < dueAt) {
+                const auto now = steady_clock::now();
+                if (now >= floorAt && snap && snap->seq != sentSeq) break;
+                std::this_thread::sleep_for(microseconds(500));
+                std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+                snap = g_uf1CycleSnap;
+            }
+        }
+        slot = steady_clock::now();
+        if (snap) sentSeq = snap->seq;
         if (snap && g_uf1_dev) {
             g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
             std::this_thread::sleep_until(slot + kMetersOff);
@@ -14143,8 +14179,9 @@ static void uf1CyclePacerLoop_()
             if (!snap->tail.empty())
                 g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
         }
-        slot += kSpacing;
-        std::this_thread::sleep_until(slot);
+        // No `slot += kSpacing` — `slot` is stamped at the top of each cycle
+        // from the arrival, so the loop follows the plug-in instead of running
+        // its own clock away from it.
     }
 }
 
@@ -15404,9 +15441,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 // screen features) comes after this path is verified on hardware.
 
 // Bring-up wire logging is OFF unless REASIXTY_UF1_TRACE is set (it grew
-// /tmp/reaper_uf1_input.log + /tmp/reaper_uf1_frames.log unbounded). Functional
-// input handling always runs; only the diagnostic writes are gated.
-static const bool g_uf1Trace = (std::getenv("REASIXTY_UF1_TRACE") != nullptr);
+// reaper_uf1_input.log + reaper_uf1_frames.log unbounded). Functional input
+// handling always runs; only the diagnostic writes are gated.
+//
+// ALSO settable as rea_sixty/uf1_trace — an env var means launching REAPER from
+// a terminal, which on macOS `open -a` cannot do. Not a static initialiser: at
+// dylib-load time the REAPER API isn't bound yet, so the extstate is read in
+// openUf1BringUp_(), before the device (and its init thread) starts.
+static std::atomic<bool> g_uf1Trace{std::getenv("REASIXTY_UF1_TRACE") != nullptr};
 
 // Raw bulk-IN dump — skips pure idle polls (32 60 / 32 00) to keep the log
 // readable while a fader/button is exercised.
@@ -15414,7 +15456,7 @@ void onUf1Input(const uint8_t* data, size_t len)
 {
     if (!g_uf1Trace) return;
     if (len <= 2) return;  // bare report header = idle poll
-    if (FILE* f = std::fopen("/tmp/reaper_uf1_input.log", "a")) {
+    if (FILE* f = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
         std::fprintf(f, "RAW [%zu] ", len);
         for (size_t k = 0; k < len && k < 32; ++k) std::fprintf(f, "%02x ", data[k]);
         std::fputc('\n', f);
@@ -15425,7 +15467,7 @@ void onUf1Input(const uint8_t* data, size_t len)
 // Parsed control event — functional state updates always run; logging gated.
 void onUf1Event(const uf1::InputEvent& ev)
 {
-    FILE* f = g_uf1Trace ? std::fopen("/tmp/reaper_uf1_input.log", "a") : nullptr;
+    FILE* f = g_uf1Trace ? std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a") : nullptr;
     switch (ev.kind) {
         case uf1::InputKind::FaderTouch:
             if (f) std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
@@ -15518,11 +15560,15 @@ void onUf1Event(const uf1::InputEvent& ev)
 void openUf1BringUp_()
 {
     g_uf1_dev = std::make_unique<uf1::UF1Device>();
+    {
+        const char* v = GetExtState("rea_sixty", "uf1_trace");
+        if (v && *v && strcmp(v, "0")) g_uf1Trace.store(true);
+    }
     // Trace flag BEFORE open(): open() spawns the init thread, and setting the
     // flag afterwards raced it — traces randomly missed the whole init replay
     // (EP0 'C' lines, the zero block, FF54), which made "did the init run?"
     // unanswerable from the log.
-    g_uf1_dev->setFrameTrace(g_uf1Trace);
+    g_uf1_dev->setFrameTrace(g_uf1Trace.load());
     if (!g_uf1_dev->open()) {
         const std::string err = g_uf1_dev->lastError();
         // uf8::logPath, NOT a literal /tmp — on Windows the literal path ate
@@ -15539,6 +15585,11 @@ void openUf1BringUp_()
     }
     g_uf1_dev->setRawInputHandler(onUf1Input);
     g_uf1_dev->setInputHandler(onUf1Event);
+
+    // The device that just came up is BLANK. Invalidate the painters' idea of
+    // what it shows, or every send-on-change element stays unsent (see the
+    // generation check in uf1PaintChannel_).
+    g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
 
     // Header banner (0x011c — large-LCD header, NOT the 0x00xx channel plane,
     // so no leading attribute byte). The channel-zone content + track colour
@@ -15925,26 +15976,49 @@ inline Uf1GonioGeom uf1GonioGeomFor_(size_t n)
     return g;
 }
 
-// The UF1's own diamond — the exact MEASURED sequence from
-// analysis/uf1_gonio_decode.py row_widths(), which is ground truth from a corr=+1
-// frame. Do not "tidy" this into a neat loop: the obvious reconstruction
-// (2,1,1 + 2..92 + 92..2 + 1,1,2) gives 188 rows / 8562 bytes, not 187 / 8560 —
-// I tried, and the assert below is what caught it. The peak 92 is two rows wide
-// and the tips are an antialiased 2,1,1.
+// The UF1's own diamond — DERIVED 2026-07-18 from cap92, whose input is known by
+// construction (a correlation sweep: at corr=+1 the goniometer MUST be a vertical
+// line, at corr=-1 a horizontal one). Nothing here is fitted to our own decoder.
+//
+// The derivation, so it can be repeated rather than believed:
+//   1. corr=+1 lights ONE byte per row. Those bytes are the row CENTRES, not the
+//      row starts — proven independently by the corr=-1 frame, whose horizontal
+//      line is a contiguous run of 93 bytes at offset 4235, while the centre
+//      measured on that same row is 4281 = 4235 + 46.
+//   2. Centre-to-centre distance g_r = (w_r + w_r+1)/2, so w_r+1 = 2*g_r - w_r.
+//      Anchored on that one measured row (width 93) the recursion closes:
+//      185 rows, every width odd, PERFECTLY symmetric, ending exactly on 8560.
+//   3. It only closes if the two stray lit bytes at offsets 0 and 2 are dropped
+//      first — they are lit in the corr=-1 frame too, OUTSIDE the line, i.e. they
+//      belong to the balance/correlation widgets SSL renders into the same buffer
+//      (cap92-93 md). Dropping one or three instead leaves 46 asymmetric rows.
+//
+// So the buffer is:  bytes 0..2 = other widgets,  bytes 3..8559 = the diamond,
+// 185 rows of 1,1,3,3,...,91,91,93,91,91,...,3,3,1,1 (sum 8557), ONE BYTE per
+// pixel. Independent check that the table cannot fake: under it, the cloud's
+// axis ratio tracks sqrt((1-rho)/(1+rho)) across rho = +0.75..-0.5 to a constant
+// factor 0.45 — the 93-wide/185-tall aspect. Six values the table knows nothing
+// about.
+//
+// ⚠ The previous table (2,1,1,2,3,4,...,92,92,...,1,1 over 187 rows from offset
+// 0) summed to 8560 as well, which is why it survived: an exact sum proves
+// NOTHING here. It put every row boundary in the wrong place.
+constexpr int kUf1GonioRows   = 185;
+constexpr int kUf1GonioOffset = 3;     // bytes 0..2 are not the diamond
+
 inline const std::vector<int>& uf1DiamondWidths_()
 {
     static const std::vector<int> w = [] {
-        std::vector<int> v{2, 1, 1};
-        for (int k = 2; k <= 91; ++k) v.push_back(k);   // 2..91
-        v.push_back(92); v.push_back(92);               // peak, two rows
-        for (int k = 91; k >= 2; --k) v.push_back(k);   // 91..2
-        v.push_back(1); v.push_back(1);
+        std::vector<int> v;
+        for (int k = 1; k <= 91; k += 2) { v.push_back(k); v.push_back(k); }
+        v.push_back(93);                                    // peak, single row
+        for (int k = 91; k >= 1; k -= 2) { v.push_back(k); v.push_back(k); }
         return v;
     }();
     return w;
 }
 constexpr int kUf1DiamondBytes = 8560;
-constexpr int kUf1DiamondRows  = 187;
+constexpr int kUf1DiamondRows  = kUf1GonioRows;
 
 // Resample the plug-in's diamond onto the UF1's and paint it to 0x0122.
 //
@@ -16008,6 +16082,13 @@ bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
             }
             std::fclose(f);
         }
+        // Say so in the log: with the replay engaged uf1PaintGoniometer_ never
+        // runs, so its content trace goes silent — which reads exactly like a
+        // dead render path if you don't know which mode you're in.
+        if (FILE* g = std::fopen(uf8::logPath("reasixty_gonio.log").c_str(), "a"))
+        { std::fprintf(g, "replay: %s (%zu images from %s)\n",
+                       blob.empty() ? "OFF" : "ON", blob.size() / 8560, p.c_str());
+          std::fclose(g); }
     }
     if (blob.empty()) return false;
     const size_t nImg = blob.size() / 8560;
@@ -16024,26 +16105,146 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
 {
     if (!g_uf1_dev || src.empty()) return;
 
-    // ★ THE CODEC, decoded 2026-07-17 evening: the UF1 image IS the plug-in's
-    // t10 diamond at 4 BITS PER PIXEL — two pixels per byte, high nibble
-    // first, packed continuously across rows. 17113 source cells = 17120
-    // nibbles = 8560 bytes with 7 zero pad nibbles at the tail. NO resampling,
-    // NO 8-bit pixels, NO UF1-side diamond geometry. Proven by decoding
-    // cap101's own transmitted images as nibbles over the 185-row source
-    // diamond: a flawless symmetric goniometer cloud (the previous 8-bit /
-    // 187-row model only ever round-tripped through our OWN renderer —
-    // circular — and its images were nibble-space garbage the device refused
-    // to draw: blast-C, SSL's literal session with our pixels spliced in,
-    // stayed black while the unmodified blast drew).
+    // ★ THE CODEC, derived 2026-07-18 from cap92 (see uf1DiamondWidths_ for the
+    // derivation and why the 4-bit reading was wrong): ONE BYTE PER PIXEL over
+    // the 185-row UF1 diamond that starts at byte 3.
+    //
+    // Both rasters have 185 ROWS, so the vertical map is 1:1 — no row
+    // resampling, no interpolation, no rounding to chase. Only the width
+    // differs: the plug-in's row r is 2r+1 cells wide, the UF1's is half that
+    // (93 vs 185 at the peak). So each UF1 pixel covers ~2 source cells and we
+    // take their MAX — a goniometer trace is one cell wide, and averaging it
+    // with its dark neighbour halves the very thing we are drawing.
+    const Uf1GonioGeom sg = uf1GonioGeomFor_(src.size());
+    if (!sg.ok) return;
+
     std::array<uint8_t, kUf1DiamondBytes> img{};
-    const size_t n = src.size() < size_t(kUf1DiamondBytes) * 2
-                   ? src.size() : size_t(kUf1DiamondBytes) * 2;
-    for (size_t i = 0; i < n; ++i) {
-        const float v = src[i];
-        if (!(v > 0.f)) continue;
-        const uint8_t q = uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 15.f));
-        if (!q) continue;
-        img[i >> 1] |= (i & 1) ? q : uint8_t(q << 4);
+
+    // Byte 0 is 0x02 in EVERY image SSL sends — 1000 images across cap89,
+    // cap92 and cap101, three sessions with three different signals, no other
+    // value ever. Bytes 1 and 2 vary and are frequently 0 (they are the
+    // balance / correlation widgets that share this buffer — TODO: drive them
+    // from Correlation(6) and StereoBalance(7), which we already receive), so
+    // zero is legal THERE. It is not legal in byte 0: we sent 0x00 for four
+    // days, i.e. every image we ever transmitted carried an invalid marker.
+    img[0] = 0x02;
+
+    // Bytes 1 and 2 drive the two scales framing the diamond: the L/R balance
+    // strip above it and the -1/+1 correlation strip below. Both are a SIGNED
+    // int8 on a ±48 scale, measured against cap92 whose correlation is known by
+    // construction — byte 2 reads 48/36/24/12/0/-12/-24/-36/-48 for rho
+    // +1.00..-1.00, dead linear — and byte 1 spans the same ±48 in cap89/cap93,
+    // where L and R sweep in opposite directions. The plug-in hands us both
+    // values outright (Correlation(6), StereoBalance(7)); no DSP here either.
+    {
+        auto scale48 = [](float v) -> uint8_t {
+            if (!std::isfinite(v)) return 0;
+            const int n = int(std::lround(std::clamp(v, -1.f, 1.f) * 48.f));
+            return uint8_t(n < 0 ? n + 256 : n);
+        };
+        std::vector<float> cur, pk;
+        if (sslcore::getMeter(int(sslmeter::DataType::StereoBalance), cur, pk)
+            && !cur.empty())
+            img[1] = scale48(cur[0]);
+        if (sslcore::getMeter(int(sslmeter::DataType::Correlation), cur, pk)
+            && !cur.empty())
+            img[2] = scale48(cur[0]);
+    }
+
+    const std::vector<int>& uw = uf1DiamondWidths_();
+    size_t litCells = 0, litNibbles = 0;
+    float vmax = 0.f;
+    std::array<size_t, 16> qhist{};
+
+    int dst = kUf1GonioOffset;
+    const int rows = int(uw.size()) < int(sg.w.size()) ? int(uw.size())
+                                                       : int(sg.w.size());
+    for (int r = 0; r < int(uw.size()); ++r) {
+        const int wu = uw[size_t(r)];
+        // Source row: 1:1 when both are 185 rows (the case that matters),
+        // proportional otherwise so a differently-sized raster still lands.
+        const int sr = (int(sg.w.size()) == int(uw.size()))
+                     ? r
+                     : int(std::lround(double(r) * (sg.w.size() - 1)
+                                       / double(uw.size() - 1)));
+        if (sr < 0 || sr >= rows) { dst += wu; continue; }
+        const int ws = sg.w[size_t(sr)];
+        const int s0 = sg.start[size_t(sr)];
+        for (int c = 0; c < wu; ++c) {
+            // This pixel's span in source columns. The spans must PARTITION the
+            // row — an inclusive-both-edges map shares each boundary cell with
+            // the next pixel, which lights two bytes per source cell and smears
+            // a one-cell-wide trace into a two-cell one (366 lit bytes instead
+            // of 185 on the corr=+1 check).
+            const int a = c * ws / wu;
+            int b = (c + 1) * ws / wu - 1;
+            if (b < a) b = a;
+            float m = 0.f;
+            for (int k = a; k <= b && k < ws; ++k) {
+                const size_t idx = size_t(s0 + k);
+                if (idx < src.size() && src[idx] > m) m = src[idx];
+            }
+            if (m > 0.f) {
+                ++litCells;
+                if (m > vmax) vmax = m;
+                const int q = int(std::lround(std::clamp(m, 0.f, 1.f) * 255.f));
+                ++qhist[size_t(q >> 4)];
+                if (q) { ++litNibbles; img[size_t(dst + c)] = uint8_t(q); }
+            }
+        }
+        dst += wu;
+    }
+
+    // Content trace (rea_sixty/uf1_gonio_trace=1 -> <tmp>/reasixty_gonio.log).
+    // The Mac has no USBPcap, so this is the wire check the handoff asks for:
+    // a drawn frame needs THOUSANDS of lit nibbles. Distinguishes "no source
+    // data" (cells 0) from "source too quiet to survive quantising" (cells >
+    // 0, nibbles 0) from "we sent content and the device ignored it".
+    {
+        static int sTrace = -1;
+        if (sTrace < 0) {
+            const char* v = GetExtState("rea_sixty", "uf1_gonio_trace");
+            sTrace = (v && *v && strcmp(v, "0")) ? 1 : 0;
+        }
+        if (sTrace) {
+            static auto sLast = std::chrono::steady_clock::now();
+            static size_t sFrames = 0;
+            ++sFrames;
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(now - sLast).count() >= 1.0) {
+                sLast = now;
+                if (FILE* f = std::fopen(uf8::logPath("reasixty_gonio.log").c_str(), "a")) {
+                    // Same clock as the sslcore trace (steady_clock epoch
+                    // seconds) so the two logs line up line-for-line.
+                    const double ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count() / 1000.0;
+                    std::fprintf(f, "[%.1f] src=%zu frames=%zu litCells=%zu litNibbles=%zu max=%.3f",
+                                 ts, src.size(), sFrames, litCells, litNibbles, double(vmax));
+                    // Quantised-value histogram. SSL's own images (cap101, 200
+                    // frames) sit at 12-14 with 60% of cells lit; if ours pile
+                    // up at 1-3 the picture is simply too dim to see, and the
+                    // fix is the transfer curve, not the geometry.
+                    std::fprintf(f, " q=");
+                    for (int q = 0; q < 16; ++q)
+                        std::fprintf(f, "%zu%s", qhist[size_t(q)], q < 15 ? "," : "");
+                    // The SOURCE distribution, before any mapping of ours. SSL's
+                    // own images put 14% of their pixels in the faintest byte
+                    // class and only 3.5% at full scale; ours came out the other
+                    // way round (2% / 34%), which is what "flickers instead of
+                    // fading" looks like. This says whether the fade is already
+                    // missing in what the plug-in hands us or whether we lose it.
+                    std::array<size_t, 16> shist{};
+                    for (float v : src)
+                        if (v > 0.f)
+                            ++shist[size_t(std::clamp(int(v * 16.f), 0, 15))];
+                    std::fprintf(f, " src16=");
+                    for (int q = 0; q < 16; ++q)
+                        std::fprintf(f, "%zu%s", shist[size_t(q)], q < 15 ? "," : "\n");
+                    std::fclose(f);
+                }
+                sFrames = 0;
+            }
+        }
     }
 
     uf1AppendImageChunks_(img.data(), burst);
@@ -16373,6 +16574,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // end group (011c, boxes, 0128, 011d) closes it right before the next
         // image. The silences between them are the device's render windows.
         auto parts = std::make_shared<Uf1CycleParts>();
+        // The plug-in's own frame number for this array — the pacer emits one
+        // cycle per distinct value, which is how SSL's motion stays clean.
+        parts->seq = lseq;
         if (haveLiss) {
             // Diagnostic replay of cap101's own images when the replay file
             // exists (see uf1GonioReplayNext_); live rendering otherwise.
@@ -16767,7 +16971,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             // Diagnostic (OFF unless REASIXTY_UF1_TRACE): dump exactly what
             // resolved so a wrong grab is visible instead of guessed.
             if (g_uf1Trace)
-            if (FILE* lg = std::fopen("/tmp/reaper_uf1_input.log", "a")) {
+            if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
                 char hn[128]={0}, ln[128]={0}, hv[64]={0}, lv[64]={0};
                 if (ix[13]>=0){ TrackFX_GetParamName(eqTr,sFx,ix[13],hn,sizeof(hn));
                                 TrackFX_GetFormattedParamValue(eqTr,sFx,ix[13],hv,sizeof(hv)); }
@@ -16866,6 +17070,26 @@ void uf1PaintChannel_()
     static uint32_t    sColor = 0xFFFFFFFFu;
     static bool        sMeterView = false;
     static int         sMeterScreen = -1;   // −1 = unset, forces the first burst
+
+    // ★ A REOPENED DEVICE IS A BLANK DEVICE (2026-07-18). Every static above is
+    // "what the UF1 already shows", and everything here is send-on-change. They
+    // used to survive open() — so after a USB re-plug or a stale-handle reopen
+    // the firmware came up empty while this code still believed it had painted:
+    // the track name stuck on whichever track was current at the reopen, and
+    // sMeterScreen matching meterScreen meant the per-screen entry burst never
+    // fired, so the device never rebuilt the Meter layout and the 0x0122 image
+    // element did not exist for it. The VU needles kept working throughout —
+    // they stream unconditionally — which is exactly how this hid: two elements
+    // dead, one alive, and it reads like "the goniometer is broken".
+    // UF8 has had this since day one (ColorSync::invalidate + g_bankDirty on
+    // reopen); the UF1 path only called openUf1BringUp_().
+    static uint32_t sGen = 0;
+    if (const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed); gen != sGen) {
+        sGen = gen;
+        sTr = nullptr; sName.clear(); sDb.clear(); sPan.clear(); sCh.clear();
+        sPanBar = INT_MIN; sColor = 0xFFFFFFFFu;
+        sMeterView = false; sMeterScreen = -1;   // forces the entry burst
+    }
 
     if (!tr) { sTr = nullptr; return; }
     // The MODE button flips the firmware view; a switch forces a full repaint
@@ -17011,11 +17235,42 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
 
-    // Track name (0x000b)
-    char nameBuf[64];
-    trackDisplayName_(tr, nameBuf, sizeof(nameBuf));
-    std::string name(nameBuf);
-    if (name.size() > 12) name.resize(12);
+    // Track name (0x000b) — the SAME string the UF8 scribble prints (Frank
+    // 2026-07-18: UF8 showed "AdOnPst" / "CH 2" while the UF1 showed
+    // "Adi On P" / "Track 2").
+    //
+    // trackDisplayName_ was the wrong source. It exists to match REAPER's
+    // "FX: <track>" window title, so it returns the raw P_NAME and REAPER's
+    // own "Track N" label — and the UF1 then chopped that at 12 chars, which
+    // is truncation, not abbreviation. Mirror the UF8 path element for
+    // element: MASTER, else "CH <IP_TRACKNUMBER>" when unnamed, then
+    // abbreviateTrackName_ with forceMode -1 so it follows Settings →
+    // Track-name mode on both surfaces at once.
+    //
+    // Budget 12 — the zone's full width, Frank at the hardware. SSL never
+    // writes a real name into 0x000b in cap84/cap101, so there is no capture to
+    // read the width from; an earlier 8 here was inferred from one panel
+    // reading and was wrong.
+    std::string name;
+    {
+        char buf[256] = {0};
+        GetSetMediaTrackInfo_String(tr, "P_NAME", buf, false);
+        name = buf;
+        if (name.empty() && tr == GetMasterTrack(nullptr)) {
+            name = "MASTER";                       // its IP_TRACKNUMBER is -1
+        } else if (name.empty()) {
+            const int trkNo = static_cast<int>(
+                GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+            char fb[16];
+            snprintf(fb, sizeof(fb), "CH %d", trkNo > 0 ? trkNo : 0);
+            name = fb;
+        }
+        // foldLatin1 stays FALSE. The UF8 scribble is a Latin-1 LCD and folds;
+        // this plane never has, and the UF1 large display's encoding is not
+        // established — folding it blind is a separate question from this one
+        // (see surface-lcd-latin1-umlauts: fold ONCE, at the source, never twice).
+        name = abbreviateTrackName_(name, 12, -1, /*foldLatin1*/ false);
+    }
     if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
