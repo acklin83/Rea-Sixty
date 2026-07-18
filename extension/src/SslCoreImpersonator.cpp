@@ -109,6 +109,10 @@ struct Instance {
 };
 std::mutex                   g_meterMx;
 std::map<uint16_t, Instance> g_inst;      // key = UDP source port = one plug-in
+// The instance the meter view is currently reading. Held across calls so every
+// DataType comes from the SAME plug-in and the choice cannot flap; see getMeter.
+// 0 = none chosen yet. Guarded by g_meterMx.
+uint16_t                     g_srcPort = 0;
 
 // Classify an instance from what it emits. ChannelStripMeterType only spans
 // 0..6, so ANY DataType >= 7 can only be a Meter/MeterPro plug-in (Rta,
@@ -763,7 +767,34 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     // Prefer a Meter instance that carried SIGNAL recently: silent instances
     // stream floor values just as diligently, and taking the first in port
     // order wired the UF1 to a silent one for a whole evening (2026-07-17).
-    const long long liveCutoff = nowMs() - 2000;
+    const long long now = nowMs();
+    const long long liveCutoff = now - 2000;
+    // ★ STICKY (2026-07-18). Choosing per call let the source FLIP between two
+    // streaming instances, and it did so twice over: while both carry signal, a
+    // level dipping under the live threshold for one hands the view to the
+    // other, and on STOP the 2 s window lapses for everyone at once so the
+    // second pass takes whatever comes first in port order. Both show up as the
+    // goniometer jumping to a different cloud — "wenn ich stop drücke, dann
+    // bleibt die wolke im plugin wie sie ist und fadet aus. unsere auf dem uf1
+    // bewegt sich immer noch während dem ausblenden" (Frank). It also meant
+    // different DataTypes could come from different plug-ins in the same frame,
+    // so the bars and the image disagreed about what they were showing.
+    //
+    // Decide once, then hold it while it still streams AT ALL (signal or not).
+    // Only a genuinely dead instance releases the choice.
+    if (g_srcPort) {
+        auto it = g_inst.find(g_srcPort);
+        if (it == g_inst.end() || it->second.lastMs < now - 2000) {
+            g_srcPort = 0;                      // stopped streaming — re-choose
+        } else if (it->second.kind == Kind::Meter) {
+            const Slot& s = it->second.meter[dataType];
+            if (s.have) {
+                current = s.current; peak = s.peak;
+                if (seq) *seq = s.seq;
+                return true;
+            }
+        }
+    }
     const Instance* fallback = nullptr;
     for (int pass = 0; pass < 2; ++pass) {
         for (const auto& kv : g_inst) {
@@ -775,6 +806,7 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
             if (pass == 0 && in.lastLiveMs < liveCutoff) continue;
             const Slot& s = in.meter[dataType];
             if (s.have) {
+                g_srcPort = kv.first;           // hold this one from now on
                 current = s.current; peak = s.peak;
                 if (seq) *seq = s.seq;
                 return true;
@@ -796,8 +828,19 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
 bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
-    // Same live-instance preference as getMeter (see there).
-    const long long liveCutoff = nowMs() - 2000;
+    // Same STICKY instance as getMeter (see there) — the overload LEDs must
+    // come from the plug-in whose meters are on screen, not from whichever one
+    // happens to be first in port order this millisecond.
+    const long long now = nowMs();
+    const long long liveCutoff = now - 2000;
+    if (g_srcPort) {
+        auto it = g_inst.find(g_srcPort);
+        if (it != g_inst.end() && it->second.lastMs >= now - 2000
+            && it->second.kind == Kind::Meter) {
+            const Slot& s = it->second.meter[dataType];
+            if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
+        }
+    }
     const Instance* fallback = nullptr;
     for (int pass = 0; pass < 2; ++pass) {
         for (const auto& kv : g_inst) {
