@@ -458,11 +458,23 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // f7 (the total) is usually ABSENT, so grow the buffer
                             // as chunks land and close it on the short tail chunk.
                             const size_t at = u.chunkStartIndex();
-                            if (at == 0) s.asm_.clear();        // f9==0 starts an image
+                            // ★ DO NOT CLEAR on chunk 0 (2026-07-18). The chunks
+                            // are ~20 kB UDP datagrams, i.e. IP-FRAGMENTED — lose
+                            // one fragment and the whole chunk is gone. Clearing
+                            // first meant a lost chunk published a BAND OF ZEROS
+                            // through an otherwise good image: on the UF1 that is
+                            // a stripe of the goniometer blinking out for one
+                            // frame while the rest keeps fading. Frank: "die
+                            // Punkte flackern UND werden langsam dunkler" — the
+                            // fade was ours all along, the flicker was dropouts.
+                            // Overwriting in place instead leaves a lost region
+                            // showing the PREVIOUS frame — one frame stale beats
+                            // one frame black, and at 25 Hz nobody can see it.
                             if (s.asm_.size() < at + u.current.size())
                                 s.asm_.resize(at + u.current.size(), 0.f);
                             for (size_t q = 0; q < u.current.size(); ++q)
                                 s.asm_[at + q] = u.current[q];
+                            s.asmGot_ += u.current.size();
                             if (u.isTailChunk()) {
                                 const size_t total = u.totalCount();
                                 if (total && s.asm_.size() >= total) {
@@ -472,7 +484,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     s.have    = true;
                                     ++s.seq;
                                     completed = true;
+                                    // Cells actually received for this frame vs
+                                    // the array size — a short count IS a dropout.
+                                    if (g_trace && s.asmGot_ < total)
+                                        slog("[chunk] type=%d got %zu of %zu cells "
+                                             "(dropped datagram)", u.dataType,
+                                             s.asmGot_, total);
                                 }
+                                s.asmGot_ = 0;
                             }
                         } else {
                             s.current = std::move(u.current); s.peak = std::move(u.peak);
