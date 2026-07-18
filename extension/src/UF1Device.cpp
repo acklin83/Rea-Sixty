@@ -448,7 +448,7 @@ void UF1Device::workerLoop_()
 void UF1Device::traceFrame_(char dir, const uint8_t* data, size_t len, int rc) const
 {
     if (!frameTrace_.load(std::memory_order_relaxed)) return;
-    FILE* lg = std::fopen("/tmp/reaper_uf1_frames.log", "a");
+    FILE* lg = std::fopen(uf8::logPath("reaper_uf1_frames.log").c_str(), "a");
     if (!lg) return;
     const auto t  = std::chrono::system_clock::now().time_since_epoch();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();

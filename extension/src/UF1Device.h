@@ -62,7 +62,8 @@ public:
     const std::string& lastError() const { return lastError_; }
     const std::string& serial() const { return serial_; }
 
-    // When on, every IN + OUT frame is appended to /tmp/reaper_uf1_frames.log.
+    // When on, every IN + OUT frame is appended to <log dir>/reaper_uf1_frames.log
+    // (uf8::logPath — %TEMP% on Windows, /tmp elsewhere).
     void setFrameTrace(bool on) { frameTrace_.store(on, std::memory_order_relaxed); }
     bool frameTrace() const { return frameTrace_.load(std::memory_order_relaxed); }
 
