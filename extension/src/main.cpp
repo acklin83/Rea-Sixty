@@ -32508,6 +32508,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 setenv("REASIXTY_SSLCORE_TRACE", "1", 1);
 #endif
             }
+            // Raw meter/t10 dump — same bridge, because an env var means
+            // launching REAPER from a terminal and `open -a` cannot pass one.
+            // OFF by default: it writes every frame at ~25 Hz.
+            if (const char* dv = GetExtState("rea_sixty", "t10_dump");
+                dv && *dv && strcmp(dv, "0")) {
+#if defined(_WIN32)
+                _putenv_s("REASIXTY_T10_DUMP", "1");
+#else
+                setenv("REASIXTY_T10_DUMP", "1", 1);
+#endif
+            }
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");
