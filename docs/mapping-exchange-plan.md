@@ -328,7 +328,56 @@ uploaders for artwork:
 is derivable from the map, so nothing extra is asked of the uploader: *uses
 modifier layers* (`modLayers` populated), *has push-cycles* (`pushSteps`),
 *custom knob curves* (`curvePoints`), *custom ranges*, *EXT FUNCS populated*,
-*UF8 strip bindings*. Plus vendor and surface as plain facets.
+*UF8 strip bindings*, *off-face bindings*. Plus vendor and surface as plain
+facets.
+
+**The list-level visual is a coverage strip, not a shrunken faceplate.** One
+small cell per control, ordered and grouped by section (Filters · HF · HMF · EQ
+· LMF · LF · Comp · Gate · Channel), lit where the map binds it — roughly 200 px
+wide, and comparable down a column of rows. It answers the question the list has
+to answer ("does this cover the part I care about") which a miniature mockup
+cannot. A useful side effect fell out of it: a Bus Comp map's strip is 8 cells
+where a Channel Strip map's is 33, so the domain is legible before you read the
+badge.
+
+## The three screens
+
+Prototyped against the real catalog 2026-07-19. **The unit of the exchange is
+the plug-in; a plug-in carries N user maps.** That relationship is the product,
+and it is what the first draft of this plan missed entirely by designing a
+detail-page rendering before designing the exchange around it.
+
+### 1. `/mappings` — browse
+
+Search box over plug-in name; facet rail (surface · vendor · uses); sort
+(most complete · newest · works for me); rows as specified above.
+
+### 2. `/mappings/plugin/<slug>` — several maps for one plug-in
+
+**The screen that decides whether this is a service or a file dump**, and the one
+that has to be got right.
+
+**It must show a per-control DIFF, not N per-map summaries.** Evidence, from the
+only genuine same-plug-in pair in the 29-map corpus — `FabFilter Pro-C 2` and
+`Pro-C 2`:
+
+- Under a per-map summary both read **"7 of 8, Bus Comp"**. Identical. A visitor
+  would conclude they are interchangeable.
+- They are not. Six controls carry the same parameter; **MIX carries `Wet` in one
+  and `Dry Gain` in the other**, and the second binds an extra off-face slot
+  (`linkIdx 46`, no UC1 control) also to `Dry Gain`.
+
+A summary that hides the only difference is worse than no comparison — it
+actively misinforms. So: rows are the union of controls bound by any map in the
+group, columns are the maps, cells are the bound parameter name, and differing
+rows are highlighted, with a headline count ("8 bound controls between them — 6
+identical, 2 different"). Off-face bindings get their own rows rather than being
+dropped.
+
+### 3. `/mappings/<id>/<slug>` — one map
+
+Metadata and CTA left; the faceplate — **the only place it appears in the whole
+site** — right; the control → parameter table beneath it.
 
 **The one primitive that is not a mechanical move:** `drawTextCentered_`
 centres by calling `ImGui_CalcTextSize`. An SVG sink has no font metrics — but
