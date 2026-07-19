@@ -150,12 +150,63 @@ stronger reason.
 - The privacy policy must be live **before** the first sign-up. `/legal` on the
   site already carries the forward-looking version.
 
+## How comparable exchanges actually do it
+
+Researched 2026-07-19, after a first draft of this section specified a surface
+render for every mapping — which is wrong, and obviously so once you look at a
+real one.
+
+### reWASD — the closest analogue there is
+
+Community sharing of **hardware control mappings**: arbitrary user configs
+against a fixed physical device. Same problem shape as this.
+
+**Browse is a single-column list of rows with no preview image at all.** A row
+carries: star rating with vote count, the title (which is the description the
+author typed at upload), `by <author>`, a **"Perfect for:"** row of
+colour-coded hardware badges, a **"May be used on:"** list of secondary
+compatible hardware, and a download button. That is the whole row. No
+thumbnail, no render, no miniature of the device.
+
+**Filters are capability checkboxes, not categories** — `hardware mapping`,
+`paddles`, `shifts`, `gyro`, `led`, `turbo`, `key combo`, `custom stick
+deadzone`… i.e. *what the config uses*, derived from the config itself. Sort is
+Best / Latest.
+
+**The visual lives on the detail page only, and it is laid out the opposite way
+to my first draft.** Left column: title, author, date, stars, one-line
+description, hardware badges, two CTAs. Right column: a render of the device
+with **leader lines running outward to labels set in the margin** — the labels
+are *not* stacked on the controls. Below it, **carousel dots for several views**
+rather than everything at once, and the capability tags repeated as links back
+into the browse facets.
+
+That margin-and-leader-line layout is the fix for exactly the collision the
+prototype hit. It is a solved problem, and the solution is not "smaller text".
+
+### Elgato Marketplace — a card grid, but not a model to copy
+
+Stream Deck profiles are a 4-up grid **with** thumbnails: title, `by author ·
+category`, one-line description, price. But those thumbnails are **marketing
+artwork the author made by hand**, not generated from the profile. Filters are
+dropdown pills with removable active chips; sort is Popular.
+
+Worth naming because it is the tempting wrong turn: requiring an image from the
+uploader is a non-starter here. Someone sharing a Pro-Q mapping will not draw a
+banner, and a corpus where most entries have a blank thumbnail looks deader
+than one with no thumbnails at all.
+
 ## The visual preview
 
 The single feature that decides whether `/mappings/<id>/<slug>` is a service or
 a file dump. Without it, downloading is an act of faith: you cannot tell a
 thorough 27-slot map from someone's three-knob experiment until you have
 imported it and clicked around.
+
+**But it belongs on the detail page and nowhere else.** The index gets no
+surface render per row. What the index needs instead is the *number* — "27 of
+33 Channel Strip controls" — which answers the thorough-vs-token question on
+its own, in one line of text, at a cost that scales to hundreds of rows.
 
 ### It does not need to be drawn — the geometry already exists, twice
 
@@ -224,11 +275,40 @@ to ~18 characters to fit, which turns "EQ High Mid Frequency" into "EQ High Mid
 Freque". Both make the picture harder to read than the table it sits above,
 which defeats the point.
 
-So the production version needs a different labelling strategy. Options, none
-yet chosen: parameter name on hover/focus with the static view showing only
-lit-vs-dim; short abbreviations sourced from the map's own `customLabel` where
-the author set one; or numbered callouts keyed to the table. **Decide this
-before building the exporter** — it changes what the JSON has to carry.
+**The replacement is the reWASD layout: labels in the margin, leader lines to
+the control.** Not an invention — see the research section. It buys horizontal
+room for a full parameter name and removes the collision class entirely.
+
+**Open risk, must be tested before the exporter is built: density.** A gamepad
+has roughly twenty controls and the leader-line layout is comfortable there.
+The UC1 Channel Strip domain has **33**, in two tight vertical columns. Thirty-
+three leader lines may tangle where twenty do not. Test it on the real
+`kUc1Controls[]` coordinates before committing; if it does not hold, the
+fallbacks are numbered callouts keyed to the table beneath, or labels only on
+hover/focus with the static view showing lit-vs-dim alone. This decision
+changes what the control JSON must carry, so it comes first.
+
+### The index row — no render
+
+Following reWASD's row rather than Elgato's card, because we cannot ask
+uploaders for artwork:
+
+| Element | Source |
+| --- | --- |
+| Plug-in name | envelope `plugin` |
+| Vendor | envelope `vendor`, normalised |
+| Author | account display name |
+| Surface badges — UC1 / UF8 / UC1+UF8 | envelope `surfaces`; the direct analogue of "Perfect for:" |
+| **Coverage** — "27 of 33 Channel Strip" + bar | derived; does the thumbnail's job in one line |
+| "Works for me" count | ratings |
+| Description, first line | envelope `description` |
+| Download | — |
+
+**Facets follow reWASD's capability model, not a category tree** — and every one
+is derivable from the map, so nothing extra is asked of the uploader: *uses
+modifier layers* (`modLayers` populated), *has push-cycles* (`pushSteps`),
+*custom knob curves* (`curvePoints`), *custom ranges*, *EXT FUNCS populated*,
+*UF8 strip bindings*. Plus vendor and surface as plain facets.
 
 **The one primitive that is not a mechanical move:** `drawTextCentered_`
 centres by calling `ImGui_CalcTextSize`. An SVG sink has no font metrics — but
