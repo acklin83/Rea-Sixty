@@ -62,21 +62,29 @@ local is_windows = reaper.GetOS():find("Win") ~= nil
 -- "did my fix even load?" is unanswerable, and I wasted Frank's time on exactly
 -- that question. Bump BUILD on every behavioural change to this file.
 -- (SECT is declared further down; this runs before it, so name the section here.)
-local BUILD = "2026-07-14-fxlist-prefix"
+local BUILD = "2026-07-19-rowmap"
 reaper.SetExtState("rea_sixty", "overlay_build", BUILD, true)   -- persist: readable from outside
 
 -- Diagnostic: set ExtState rea_sixty/overlay_debug=1 and this writes what the
 -- overlay ACTUALLY decides — the measured list bounds and every row's verdict —
 -- to /tmp/rea_sixty_overlay.log. Reasoning about this from the outside has been
 -- wrong three times running; the code has to say it itself.
-local DBG = reaper.GetExtState("rea_sixty", "overlay_debug") == "1"
+-- FORCED ON for the 2026-07-19-rowmap diagnostic build: there is no interactive
+-- console in REAPER, so requiring an ExtState means shipping a script just to
+-- flip a flag. Capped at DBG_MAX lines so it cannot grow without bound or cost
+-- anything once it has said what it needs to. Revert to the ExtState read once
+-- the row-map path is confirmed.
+local DBG = true
+local DBG_MAX, dbgCount = 400, 0
 local dbgFile = (reaper.GetOS():find("Win") and (os.getenv("TEMP") or "C:\\Windows\\Temp") .. "\\"
                                              or "/tmp/") .. "rea_sixty_overlay.log"
 local function dbg(fmt, ...)
-  if not DBG then return end
+  if not DBG or dbgCount >= DBG_MAX then return end
+  dbgCount = dbgCount + 1
   local f = io.open(dbgFile, "a")
   if not f then return end
   f:write(string.format(fmt, ...), "\n")
+  if dbgCount == DBG_MAX then f:write("=== log full (", DBG_MAX, " lines) ===\n") end
   f:close()
 end
 if DBG then
@@ -197,13 +205,62 @@ local function refineMcpColumn(px, py, track, hwnd)
     while math.abs(y - py) < LIMIT and ok(px, y + dir) do y = y + dir end
     return y
   end
+  local eA, eB = edge(-1), edge(1)
   local cTop, cBot
   if hwnd then
-    local _, ca = reaper.JS_Window_ScreenToClient(hwnd, px, edge(-1))
-    local _, cb = reaper.JS_Window_ScreenToClient(hwnd, px, edge(1))
+    local _, ca = reaper.JS_Window_ScreenToClient(hwnd, px, eA)
+    local _, cb = reaper.JS_Window_ScreenToClient(hwnd, px, eB)
     if ca and cb then cTop = math.min(ca, cb); cBot = math.max(ca, cb) end
   end
-  return l, r + 1, cTop, cBot
+
+  -- ── Chain index -> CLIENT y of that insert's row ──────────────────────────
+  -- MEASURED 2026-07-19 (both cases, /tmp profiles). The row string carries
+  -- everything needed, so nothing here is inferred:
+  --
+  --   "mcp.fxlist 2 fx:2"            visual slot 2 holds chain FX 2
+  --   "mcp.fxlist 3 fx:2 param:20"   slot 3 is a PARAMETER of FX 2
+  --                                  ("group fx parameters with inserts" on)
+  --   "mcp.fxlist 1"                 slot 1 is an EMPTY slot
+  --
+  -- The visual slot is NOT the chain index in either case: grouped parameters
+  -- push later inserts down, and empty slots occupy a row without consuming a
+  -- chain index (unlike sends, where an empty slot DOES take an API index).
+  -- `topPad + fxIdx * rowH` therefore lands on a parameter or an empty slot —
+  -- that is the reported bug, in both configurations.
+  --
+  -- So: read the rows instead of computing them. Sample down the column and
+  -- record where each chain index actually lives. A row with `param:` is not
+  -- the insert itself and must never match.
+  local rows
+  if hwnd then
+    rows = {}
+    local yLo, yHi = math.min(eA, eB), math.max(eA, eB)
+    -- Rows are 17 px and contiguous (measured), so a 4 px step cannot skip one
+    -- while keeping the probe count low (~25 for a typical list).
+    local STEP = 4
+    for y = yLo, yHi, STEP do
+      local _, info = reaper.GetThingFromPoint(px, y)
+      if info and not info:match("param:") then
+        local fx = info:match("^mcp%.fxlist%s+%d+%s+fx:(%d+)")
+        if fx then
+          fx = tonumber(fx)
+          local _, cy = reaper.JS_Window_ScreenToClient(hwnd, px, y)
+          if cy then
+            local e = rows[fx]
+            if e then
+              if cy < e.lo then e.lo = cy end
+              if cy > e.hi then e.hi = cy end
+            else
+              rows[fx] = { lo = cy, hi = cy }
+            end
+          end
+        end
+      end
+    end
+    if not next(rows) then rows = nil end   -- nothing read -> fall back
+  end
+
+  return l, r + 1, cTop, cBot, rows
 end
 
 ------------------------------------------------------------------------
@@ -241,14 +298,16 @@ local function addHit(byGuid, seen, want, kind, tr, x, y)
     -- Confine to THIS strip's x-column (the fxlist window spans all strips on
     -- macOS — see refineMcpColumn). sl/sw in screen x; converted to client x at
     -- draw time. sy = a screen y inside the window for the ScreenToClient call.
-    local sl, sr, cTop, cBot = refineMcpColumn(x, y, tr, h)
+    local sl, sr, cTop, cBot, rows = refineMcpColumn(x, y, tr, h)
     local _, hitInfo = reaper.GetThingFromPoint(x, y)
-    dbg("addHit  track=%s  hit=(%d,%d) info=%q  ch=%d  cTop=%s cBot=%s",
+    local nRows = 0
+    if rows then for _ in pairs(rows) do nRows = nRows + 1 end end
+    dbg("addHit  track=%s  hit=(%d,%d) info=%q  ch=%d  cTop=%s cBot=%s  rows=%d",
         select(2, reaper.GetTrackName(tr)) or "?", x, y, tostring(hitInfo), ch or -1,
-        tostring(cTop), tostring(cBot))
+        tostring(cTop), tostring(cBot), nRows)
     byGuid[g][#byGuid[g] + 1] =
       { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
-        sl = sl, sw = sr - sl, sy = y, cTop = cTop, cBot = cBot }
+        sl = sl, sw = sr - sl, sy = y, cTop = cTop, cBot = cBot, rows = rows }
   else
     local l, t, r = refineTcp(x, y, tr)
     byGuid[g][#byGuid[g] + 1] = { kind = "tcp", hwnd = h, sl = l, st = t, sw = r - l }
@@ -430,6 +489,42 @@ local function drawBlockRow(block, fxIdx, col)
     -- tuned constant + a Settings slider. topPad nudges the first row.
     local rowH   = num("overlay_rowh", 17)
     local topPad = num("overlay_toppad", 1)
+
+    -- Preferred path: the row we MEASURED for this chain index (see the row map
+    -- in refineMcpColumn). `fxIdx * rowH` is only correct when visual slot ==
+    -- chain index, which stops being true the moment grouped parameters or
+    -- empty slots enter the list.
+    if block.rows then
+      local e = block.rows[fxIdx]
+      if not e then
+        -- The list was read successfully and this FX is not in it — genuinely
+        -- scrolled out or past the visible end. Drawing anywhere would be a lie.
+        dbg("row fx=%d -> not in the visible list (%d rows read) -> SKIP", fxIdx,
+            (function() local n = 0 for _ in pairs(block.rows) do n = n + 1 end return n end)())
+        return
+      end
+      -- The 4 px sampling brackets the row but does not pin its top, so snap to
+      -- the row grid the list actually uses: rows are contiguous and exactly
+      -- rowH tall from cTop + topPad (measured — with cTop=1 and topPad=1 the
+      -- rows come out at client 2, 19, 36 …, which is what the profile shows).
+      -- Falls back to the sampled top if the extent is unusable.
+      local y = e.lo
+      if block.cTop then
+        local mid  = (e.lo + e.hi) / 2
+        local base = block.cTop + topPad
+        local k    = math.floor((mid - base) / rowH + 0.5)
+        if k >= 0 then y = base + k * rowH end
+      end
+      dbg("row fx=%d -> sampled %d..%d, snapped y=%d -> ZEICHNEN", fxIdx, e.lo, e.hi, y)
+      local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
+      composite(block.hwnd, math.floor(cx + 0.5), math.floor(y + 0.5),
+                math.floor(block.sw + 0.5), math.floor(rowH + 0.5), col)
+      return
+    end
+
+    -- Fallback: no row map (measurement unavailable). Behave exactly as before —
+    -- FAIL OPEN. A failed measurement must degrade to the old behaviour, never
+    -- to a blank overlay; both earlier attempts at this file failed closed.
     local y = topPad + fxIdx * rowH
     if y < -1 or y + rowH > block.ch + 1 then return end
     -- Bound the row to the FX list itself (block.ch is the whole strip, so the
