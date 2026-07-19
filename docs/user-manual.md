@@ -645,6 +645,88 @@ The six factory banks are:
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
 
+### Dynamic sub-banks
+
+A normal Sub-Bank holds eight fixed assignments. A **dynamic** Sub-Bank computes its eight keys live from whatever track you are looking at — its plug-ins, for instance — so the keys change as you move around the session.
+
+Open a Sub-Bank cell in the UF8 schematic and look for the **Dynamic bank** section. The dropdown offers:
+
+| Setting | What the eight keys become |
+|---|---|
+| `Off (static slots)` | Normal behaviour — the eight slots you assigned |
+| `FX (focused track, paged)` | The focused track's plug-ins |
+| `Parameter Groups` | Parameter Groups 1–8 |
+| `Track Colours` | Your eight-colour palette |
+
+The choice is stored per Sub-Bank, so each of the six Sub-Banks under each Quick can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
+
+Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
+
+Dynamic banks are a UF8 feature and are inactive while UF8 Plug-in Mode is engaged.
+
+**Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
+
+**The FX bank**
+
+Each key takes one plug-in from the focused track's chain, labelled with its name — the format prefix (`VST3:`, `JS:`) and the trailing vendor suffix are stripped so the name fits.
+
+The LEDs read at a glance:
+
+| LED | Meaning |
+|---|---|
+| Bright | The focused plug-in — the one the surface is following |
+| Dim | Present and running |
+| Dark | Bypassed, offline, or no plug-in in that position |
+
+A track you have not touched yet shows its **first** plug-in bright, because that is where the surface's plug-in cursor starts.
+
+Populated keys take their colour from the colour stored on the underlying static slot, so if you want your FX keys a particular colour, set it on the slots underneath.
+
+**Paging.** A track can hold more than eight plug-ins. The **Page with** dropdown chooses what pages the bank:
+
+| Setting | Control |
+|---|---|
+| `(no paging — stays on 1-8)` | **Default** — the bank shows the first eight only |
+| `UF8 encoder` | The UF8 Channel encoder |
+| `UC1 Encoder 1` / `UC1 Encoder 2` | Either UC1 encoder |
+| `UF8 Bank ◄ ►` | The UF8 bank keys |
+
+Note the default: **out of the box an FX bank does not page**, so a track with twelve plug-ins shows only the first eight until you pick a paging control. The chosen control only pages while this Sub-Bank is the engaged one; the rest of the time it does its normal job. Paging returns to the first page whenever the focused track changes.
+
+**What a key press does** is configurable per gesture, and the setting is **global — it applies to every FX bank you create**, not to one bank:
+
+| Gesture | Default |
+|---|---|
+| Push | Focus FX (surface follows) |
+| +Shift | Float/close FX window |
+| +Cmd | Bypass toggle |
+| +Ctrl | FX solo (bypass others) |
+| Long-press | Offline toggle |
+
+The full set also includes **Delete FX**, **Move FX up** and **Move FX down**.
+
+A long press is half a second and fires when you let go. Long-press *replaces* the modifier rather than combining with it — Shift plus a long press runs the Long-press action, not the +Shift one.
+
+> **Delete FX removes the plug-in immediately, with no confirmation.** Think before you put it on Push.
+
+*Focus FX* moves the surface onto that plug-in and re-points an already-open plug-in window at it. It does not open a window that was closed — use *Float* for that.
+
+*FX solo* bypasses every other plug-in on the track and remembers what was on; pressing the same key again, or soloing another plug-in, puts them all back.
+
+**Parameter Groups and Track Colours**
+
+For these two the FX gesture table does not apply. Only short versus long press matters, and modifiers make no difference.
+
+**Parameter Groups** — the eight keys are the eight groups, labelled with your group names (falling back to `Grp 1`…`Grp 8`). A key is bright when the focused track belongs to that group. A short press toggles membership across every selected track; a long press toggles whether the group is broadcasting at all. Group names are edited in the separate **Parameter Groups** Settings section, not here. Membership is stored in the project; group names and their on/off state are global.
+
+**Track Colours** — the keys are labelled `Col 1`…`Col 8` and each glows its own palette colour, brightening when the focused track wears it. A short press paints every selected track; a long press clears the custom colour instead. The palette itself is edited right below the dropdown as eight swatches, and is global.
+
+**If a bank stays blank**
+
+With no track focused or selected, every dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from.
+
+One historical case: Rea-Sixty briefly had a **Sends** dynamic bank, which was removed. A configuration saved while it existed still loads, but the bank stays permanently blank. Set it to something else, or back to `Off (static slots)`.
+
 ### Binding visibility in the schematic
 
 Bound buttons in the UF8 schematic are **tinted** (a soft green face / border); empty buttons stay neutral, so you can see at a glance which controls carry a binding. Hovering a bound button shows a **tooltip** listing what it fires on **Plain / +Shift / +Cmd / +Ctrl**, any **long-press** action, and the **behaviour** (Momentary / Toggle / Hold).
