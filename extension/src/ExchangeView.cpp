@@ -1,5 +1,6 @@
 #include "ExchangeView.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -597,52 +598,43 @@ void drawPlugin(ImGui_Context* ctx) {
 // with the parameter on the tooltip. Then the fader/solo/cut/sel strip
 // bindings. 2 fader banks × 8 V-Pot banks × 8 strips = 128 slots.
 void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
-    // O(1) cell lookup: index = faderBank*64 + vpotBank*8 + strip.
-    const Uf8Vpot* grid[128] = { nullptr };
-    for (const auto& v : d.uf8VpotBindings) {
-        int idx = v.faderBank * 64 + v.vpotBank * 8 + v.strip;
-        if (idx >= 0 && idx < 128) grid[idx] = &v;
-    }
+    // Grouped by V-Pot bank (the page you cycle to), like the CS section
+    // tables: one compact table per bank, only the BOUND slots — no 8×8 sea of
+    // empty cells. Strip is the global 1–16 (fader bank folded in).
+    char h[64], buf[64];
+    for (int vb = 0; vb < 8; ++vb) {
+        // Collect this bank's bound slots, sorted by global strip.
+        std::vector<const Uf8Vpot*> inBank;
+        for (const auto& v : d.uf8VpotBindings)
+            if (v.vpotBank == vb) inBank.push_back(&v);
+        if (inBank.empty()) continue;
+        std::sort(inBank.begin(), inBank.end(), [](const Uf8Vpot* a, const Uf8Vpot* b) {
+            return a->faderBank * 8 + a->strip < b->faderBank * 8 + b->strip;
+        });
 
-    for (int fb = 0; fb < 2; ++fb) {
-        char h[96];
-        std::snprintf(h, sizeof(h), "Fader bank %d   (strips %d–%d)",
-                      fb + 1, fb * 8 + 1, fb * 8 + 8);
+        std::snprintf(h, sizeof(h), "V-Pot bank %d   (%d)", vb + 1, (int)inBank.size());
         ImGui_Text(ctx, h);
 
         char tid[32];
-        std::snprintf(tid, sizeof(tid), "##uf8_grid_%d", fb);
-        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders;
-        if (ImGui_BeginTable(ctx, tid, 9, &tFlags, nullptr, nullptr, nullptr)) {
+        std::snprintf(tid, sizeof(tid), "##uf8_bank_%d", vb);
+        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+        if (ImGui_BeginTable(ctx, tid, 3, &tFlags, nullptr, nullptr, nullptr)) {
             int fixed = ImGui_TableColumnFlags_WidthFixed;
             int stretch = ImGui_TableColumnFlags_WidthStretch;
-            double wBank = 56.0;
-            ImGui_TableSetupColumn(ctx, "Bank\\Strip", &fixed, &wBank, nullptr);
-            for (int s = 0; s < 8; ++s) {
-                char cn[8]; std::snprintf(cn, sizeof(cn), "%d", s + 1);
-                double w = 1.0;
-                ImGui_TableSetupColumn(ctx, cn, &stretch, &w, nullptr);
-            }
+            double wStrip = 56.0, wCtrl = 1.0, wParam = 2.0;
+            ImGui_TableSetupColumn(ctx, "Strip",     &fixed,   &wStrip, nullptr);
+            ImGui_TableSetupColumn(ctx, "V-Pot",     &stretch, &wCtrl,  nullptr);
+            ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wParam, nullptr);
             ImGui_TableHeadersRow(ctx);
-
-            for (int vb = 0; vb < 8; ++vb) {
+            for (const auto* v : inBank) {
                 ImGui_TableNextRow(ctx, nullptr, nullptr);
                 ImGui_TableSetColumnIndex(ctx, 0);
-                char bl[8]; std::snprintf(bl, sizeof(bl), "%d", vb + 1);
-                ImGui_Text(ctx, bl);
-                for (int s = 0; s < 8; ++s) {
-                    ImGui_TableSetColumnIndex(ctx, s + 1);
-                    const Uf8Vpot* v = grid[fb * 64 + vb * 8 + s];
-                    if (!v) continue;
-                    const std::string& lbl = !v->label.empty() ? v->label : v->param;
-                    ImGui_Text(ctx, lbl.empty() ? "●" : lbl.c_str());
-                    if (ImGui_IsItemHovered(ctx, nullptr)) {
-                        std::string tip = v->label;
-                        if (!v->param.empty())
-                            tip += (tip.empty() ? "" : "  ->  ") + v->param;
-                        if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
-                    }
-                }
+                std::snprintf(buf, sizeof(buf), "%d", v->faderBank * 8 + v->strip + 1);
+                ImGui_Text(ctx, buf);
+                ImGui_TableSetColumnIndex(ctx, 1);
+                ImGui_Text(ctx, v->label.empty() ? "—" : v->label.c_str());
+                ImGui_TableSetColumnIndex(ctx, 2);
+                ImGui_Text(ctx, v->param.empty() ? "(bound)" : v->param.c_str());
             }
             ImGui_EndTable(ctx);
         }
@@ -650,19 +642,16 @@ void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
     }
 
     if (!d.uf8StripBindings.empty()) {
-        ImGui_Text(ctx, "Strip bindings (fader / solo / cut / sel):");
-        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
-                   | ImGui_TableFlags_Resizable;
-        if (ImGui_BeginTable(ctx, "##uf8_strips", 4, &tFlags, nullptr, nullptr, nullptr)) {
+        ImGui_Text(ctx, "Strip bindings (fader / solo / cut / sel)");
+        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+        if (ImGui_BeginTable(ctx, "##uf8_strips", 3, &tFlags, nullptr, nullptr, nullptr)) {
             int fixed = ImGui_TableColumnFlags_WidthFixed;
             int stretch = ImGui_TableColumnFlags_WidthStretch;
-            double wStrip = 60.0, wKind = 70.0, wParam = 2.0, wBankc = 60.0;
+            double wStrip = 56.0, wKind = 1.0, wParam = 2.0;
             ImGui_TableSetupColumn(ctx, "Strip",     &fixed,   &wStrip, nullptr);
-            ImGui_TableSetupColumn(ctx, "Control",   &fixed,   &wKind,  nullptr);
+            ImGui_TableSetupColumn(ctx, "Control",   &stretch, &wKind,  nullptr);
             ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wParam, nullptr);
-            ImGui_TableSetupColumn(ctx, "Bank",      &fixed,   &wBankc, nullptr);
             ImGui_TableHeadersRow(ctx);
-            char buf[64];
             for (const auto& s : d.uf8StripBindings) {
                 ImGui_TableNextRow(ctx, nullptr, nullptr);
                 ImGui_TableSetColumnIndex(ctx, 0);
@@ -672,9 +661,6 @@ void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
                 ImGui_Text(ctx, s.kind.c_str());
                 ImGui_TableSetColumnIndex(ctx, 2);
                 ImGui_Text(ctx, s.param.empty() ? "(bound)" : s.param.c_str());
-                ImGui_TableSetColumnIndex(ctx, 3);
-                std::snprintf(buf, sizeof(buf), "%d", s.faderBank + 1);
-                ImGui_Text(ctx, buf);
             }
             ImGui_EndTable(ctx);
         }
