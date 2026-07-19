@@ -29,7 +29,7 @@ function freshDb() {
   return getDb();
 }
 
-function v2Envelope({ match, originalName, vendor = '', domain = 'BusComp' }) {
+function v2Envelope({ match, originalName, vendor = '', domain = 'BusComp', p7 = 7 }) {
   const inner = {
     format_version: 10,
     plugins: [{
@@ -39,7 +39,7 @@ function v2Envelope({ match, originalName, vendor = '', domain = 'BusComp' }) {
       slots: [
         { linkIdx: 0, vst3Param: 0 },
         { linkIdx: 1, vst3Param: 1 },
-        { linkIdx: 7, vst3Param: 7 },
+        { linkIdx: 7, vst3Param: p7 },
       ],
       paramSnapshot: [
         { vst3Param: 0, name: 'Bypass' },
@@ -91,9 +91,11 @@ test('same original_name, different match -> ONE plug-in, vendor resolved', () =
     .run('tester', 0).lastInsertRowid;
 
   // The real split: two different user-typed matches, one true factory name.
-  ingestMap(v2Envelope({ match: 'FabFilter Pro-C 2', originalName: 'FabFilter Pro-C 2 (FabFilter)' }),
+  // Distinct bindings (p7) so they merge by identity without tripping the
+  // duplicate-mapping guard.
+  ingestMap(v2Envelope({ match: 'FabFilter Pro-C 2', originalName: 'FabFilter Pro-C 2 (FabFilter)', p7: 7 }),
     { accountId: Number(acct) });
-  ingestMap(v2Envelope({ match: 'Pro-C 2', originalName: 'FabFilter Pro-C 2 (FabFilter)' }),
+  ingestMap(v2Envelope({ match: 'Pro-C 2', originalName: 'FabFilter Pro-C 2 (FabFilter)', p7: 8 }),
     { accountId: Number(acct) });
 
   const plugins = db.prepare('SELECT id, name, vendor_id FROM plugins').all();

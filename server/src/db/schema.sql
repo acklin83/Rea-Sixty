@@ -176,6 +176,12 @@ CREATE TABLE IF NOT EXISTS maps (
   file_sha256    TEXT    NOT NULL,
   file_bytes     INTEGER NOT NULL,
 
+  -- Fingerprint of the MAPPING itself (the bindings — which control/slot maps
+  -- to which parameter), NOT the file bytes (those carry author, description
+  -- and a timestamp, so two identical mappings would still differ). Used to
+  -- reject a duplicate identical mapping of the same plug-in.
+  content_hash   TEXT,
+
   published      INTEGER NOT NULL DEFAULT 1,
   unpublished_at INTEGER,
   unpublish_note TEXT,
@@ -184,6 +190,7 @@ CREATE TABLE IF NOT EXISTS maps (
 );
 CREATE INDEX IF NOT EXISTS idx_maps_plugin ON maps(plugin_id, published);
 CREATE INDEX IF NOT EXISTS idx_maps_account ON maps(account_id);
+CREATE INDEX IF NOT EXISTS idx_maps_content ON maps(plugin_id, content_hash);
 
 -- One row per bound control. This is what the diff reads.
 CREATE TABLE IF NOT EXISTS map_bindings (

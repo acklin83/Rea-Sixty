@@ -15,6 +15,7 @@ import { getDb } from '../db/index.js';
 const STATUS = {
   bundle_rejected: 422,
   too_large: 413,
+  duplicate_mapping: 409,
 };
 
 export async function registerUploadRoutes(app) {

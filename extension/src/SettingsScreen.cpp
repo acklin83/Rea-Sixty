@@ -13180,6 +13180,9 @@ static void pumpUpload_() {
         g_uploadStatus = "Rejected — bad or missing device token "
                          "(set it in the Exchange tab).";
         g_uploadColor  = 0xCC4444FF;
+    } else if (r.status == 409) {
+        g_uploadStatus = "Identical mapping already exists on the exchange.";
+        g_uploadColor  = 0xCC8844FF;
     } else {
         g_uploadStatus = "Upload failed: HTTP " + std::to_string(r.status);
         g_uploadColor  = 0xCC8844FF;

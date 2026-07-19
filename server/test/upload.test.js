@@ -80,7 +80,10 @@ test('replaces someone else\'s map -> 400', async () => {
   const otherAcct = Number(db.prepare('INSERT INTO accounts (display_name, created_at) VALUES (?,?)')
     .run('someone', 0).lastInsertRowid);
   const { ingestMap } = await import('../src/ingest/service.js');
-  const foreign = ingestMap(envelope({ match: 'Other' }), { accountId: otherAcct });
+  // A genuinely different plug-in (distinct original_name), so it doesn't trip
+  // the duplicate-mapping guard against the map uploaded earlier in this file.
+  const foreign = ingestMap(
+    envelope({ match: 'Other', originalName: 'Other Comp (Acme)' }), { accountId: otherAcct });
   const r = await app.inject({
     method: 'POST', url: `/v1/maps?replaces=${foreign.mapId}`, payload: envelope(),
     headers: { 'content-type': 'application/octet-stream', authorization: `Bearer ${token}` },

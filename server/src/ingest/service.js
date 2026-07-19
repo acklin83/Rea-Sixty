@@ -8,10 +8,32 @@ import { createHash } from 'node:crypto';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getDb, now, MAPS_DIR } from '../db/index.js';
-import { parseRea60Map } from '../lib/rea60map.js';
+import { parseRea60Map, IngestError } from '../lib/rea60map.js';
 import {
   vendorFromName, normVendor, pluginNameFromMatch, normPlugin, slugify, fxTypeOf,
 } from '../lib/vendor.js';
+
+/**
+ * Fingerprint the MAPPING — the set of bindings, not the file. Two uploads are
+ * "identical" when they bind the same controls/slots to the same parameters,
+ * regardless of author, description, timestamp or cached param NAMES (a stale
+ * name doesn't change what the knob does). Sorted so key order never matters.
+ */
+export function mappingFingerprint(domain, bindings, uf8) {
+  const slots = (bindings ?? [])
+    .map((b) => `${b.linkIdx}:${b.vst3Param}:${b.modLayer}`).sort();
+  const vpots = (uf8?.vpots ?? [])
+    .map((v) => `${v.faderBank}:${v.vpotBank}:${v.strip}:${v.vst3Param}`).sort();
+  const strips = (uf8?.strips ?? [])
+    .map((s) => `${s.kind}:${s.faderBank}:${s.strip}:${s.vst3Param}`).sort();
+  const canon = [
+    `domain=${domain}`,
+    `slots=${slots.join(',')}`,
+    `vpots=${vpots.join(',')}`,
+    `strips=${strips.join(',')}`,
+  ].join('|');
+  return createHash('sha256').update(canon, 'utf8').digest('hex');
+}
 
 /** Resolve or create a vendor, honouring the alias table. */
 export function resolveVendor(db, rawName) {
@@ -91,6 +113,7 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
 
   const sha = createHash('sha256').update(text, 'utf8').digest('hex');
   const bytes = Buffer.byteLength(text, 'utf8');
+  const contentHash = mappingFingerprint(map.domain, bindings, uf8);
 
   const tx = db.transaction(() => {
     const vendorId = resolveVendor(db, vendorName);
@@ -102,19 +125,31 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
       match: identityName, preferredName: preferredPluginName, vendorId, fxType,
     });
 
+    // Reject a duplicate: an identical mapping of the SAME plug-in already
+    // published (by anyone). A user replacing their own map is exempt for that
+    // one map, so re-uploading an unchanged map as a replacement is a no-op,
+    // not an error.
+    const dupe = db.prepare(
+      `SELECT id FROM maps
+        WHERE plugin_id = ? AND content_hash = ? AND published = 1 AND id != ?`,
+    ).get(pluginId, contentHash, replacesId ?? -1);
+    if (dupe) {
+      throw new IngestError('duplicate_mapping', 'identical mapping already exists');
+    }
+
     const ts = now();
     const info = db.prepare(`
       INSERT INTO maps (plugin_id, account_id, replaces_id, surfaces, domain,
                         author_name, description, licence, created_at, uploaded_at,
                         coverage_n, coverage_d, uf8_vpots, uf8_strips,
-                        file_path, file_sha256, file_bytes)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        file_path, file_sha256, file_bytes, content_hash)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       pluginId, accountId, replacesId, envelope.surfaces, map.domain,
       envelope.author, envelope.description, envelope.licence || 'CC0-1.0',
       envelope.createdAt || ts, ts,
       coverage.n, coverage.d, coverage.uf8Vpots, coverage.uf8Strips,
-      '', sha, bytes,
+      '', sha, bytes, contentHash,
     );
     const mapId = Number(info.lastInsertRowid);
 
