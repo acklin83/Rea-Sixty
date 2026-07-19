@@ -72,12 +72,15 @@ export function uf8Coverage(map) {
       }
     }
   }
+  // Strips are NESTED on disk — {"fader":{"vst3Param":N}, "solo":{…}, …}
+  // (UserPluginCatalog.cpp:567), NOT flat faderVst3Param keys. Reading the flat
+  // names counted zero strips on every map — the same on-disk-vs-struct trap the
+  // bank comment above warns about, fallen into one level down. Fixed 2026-07-19.
   let strips = 0;
   for (const faderBank of u.stripsByFaderBank ?? []) {
     for (const st of faderBank ?? []) {
       if (st && typeof st === 'object'
-        && ['faderVst3Param', 'soloVst3Param', 'cutVst3Param', 'selVst3Param']
-          .some((k) => (st[k] ?? -1) >= 0)) strips++;
+        && ['fader', 'solo', 'cut', 'sel'].some((k) => (st[k]?.vst3Param ?? -1) >= 0)) strips++;
     }
   }
   if (vpots > UF8_VPOT_SLOTS) {
@@ -88,6 +91,48 @@ export function uf8Coverage(map) {
     throw new IngestError('impossible_coverage',
       `${strips} bound strips exceeds the ${UF8_STRIPS} that exist`);
   }
+  return { vpots, strips };
+}
+
+/**
+ * Extract every bound UF8 slot with its coordinates, so the detail page can
+ * draw the full per-bank grid — the actual V-Pot → parameter mappings, not just
+ * a count. Walks the fixed three-level shape (fader bank → V-Pot bank → strip)
+ * and the nested strip bindings; resolves param names via paramSnapshot.
+ *
+ * Only bound slots are returned; the client fills an 8×8 grid and leaves the
+ * rest blank. The `label` is the user's own V-Pot label ("InputGain"), stored
+ * right on the slot — good for a compact cell; the param name is the tooltip.
+ */
+export function extractUf8(map) {
+  const u = map.uf8 ?? {};
+  const paramNames = new Map((map.paramSnapshot ?? []).map((p) => [p.vst3Param, p.name ?? '']));
+  const nameOf = (v) => paramNames.get(v) ?? '';
+
+  const vpots = [];
+  (u.banksByFaderBank ?? []).forEach((faderBank, fb) => {
+    (faderBank ?? []).forEach((vpotBank, vb) => {
+      (vpotBank ?? []).forEach((slot, strip) => {
+        const v = slot?.vst3Param ?? -1;
+        if (v >= 0) {
+          vpots.push({ faderBank: fb, vpotBank: vb, strip, label: slot.label ?? '', vst3Param: v, paramName: nameOf(v) });
+        }
+      });
+    });
+  });
+
+  const strips = [];
+  (u.stripsByFaderBank ?? []).forEach((faderBank, fb) => {
+    (faderBank ?? []).forEach((st, strip) => {
+      for (const kind of ['fader', 'solo', 'cut', 'sel']) {
+        const v = st?.[kind]?.vst3Param ?? -1;
+        if (v >= 0) {
+          strips.push({ faderBank: fb, strip, kind, label: st[kind].label ?? '', vst3Param: v, paramName: nameOf(v) });
+        }
+      }
+    });
+  });
+
   return { vpots, strips };
 }
 
@@ -250,6 +295,9 @@ export function parseRea60Map(text) {
 
   const bindings = extractBindings(map);
   const coverage = computeCoverage(map, bindings);
+  // UF8 maps (domain None) carry their bindings in the V-Pot/strip grid, not
+  // the `slots` array — extract them so the detail page can draw every bank.
+  const uf8 = map.domain === 'None' ? extractUf8(map) : { vpots: [], strips: [] };
 
   return {
     envelope: {
@@ -268,6 +316,7 @@ export function parseRea60Map(text) {
     map,
     domain: map.domain,
     bindings,
+    uf8,
     coverage,
   };
 }

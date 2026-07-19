@@ -203,6 +203,21 @@ CREATE TABLE IF NOT EXISTS map_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_bindings_map ON map_bindings(map_id);
 
+-- UF8 maps bind by grid coordinate, not linkIdx: 2 fader banks × 8 V-Pot banks
+-- × 8 strips (V-Pot slots), plus 2 × 8 strip bindings (fader/solo/cut/sel).
+-- One row per BOUND slot so the detail page can draw the full per-bank grid.
+CREATE TABLE IF NOT EXISTS uf8_slots (
+  map_id      INTEGER NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL,   -- 'vpot' | 'fader' | 'solo' | 'cut' | 'sel'
+  fader_bank  INTEGER NOT NULL,   -- 0..1
+  vpot_bank   INTEGER,            -- 0..7 for vpot; NULL for strip bindings
+  strip       INTEGER NOT NULL,   -- 0..7
+  label       TEXT,               -- the user's own V-Pot label
+  param_name  TEXT,
+  vst3_param  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uf8_map ON uf8_slots(map_id);
+
 -- ------------------------------------------------------- rating + moderation
 
 -- "Works for me" plus a confirmed plug-in version, NOT 5 stars. With few votes

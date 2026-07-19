@@ -140,12 +140,30 @@ export function getMap(id) {
     uploadedAt: m.uploaded_at,
     fileBytes: m.file_bytes,
     coverage: coverageOf(m),
-    uf8: isUf8
-      ? { vpots: m.uf8_vpots, vpotSlots: UF8_VPOT_SLOTS, strips: m.uf8_strips, stripSlots: UF8_STRIPS }
-      : null,
+    uf8: isUf8 ? uf8Grid(m.id, m.uf8_vpots, m.uf8_strips) : null,
     sections: isUf8 ? [] : coverageSections(m.id, m.domain),
     alsoMapped: alsoMapped(m.id),
     modifierLayers: modifierBindings(m.id),
+  };
+}
+
+/** The bound UF8 slots for the detail page's per-bank grid. */
+function uf8Grid(mapId, vpots, strips) {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT kind, fader_bank, vpot_bank, strip, label, param_name
+       FROM uf8_slots WHERE map_id = ? ORDER BY fader_bank, vpot_bank, strip`,
+  ).all(mapId);
+  return {
+    vpots, vpotSlots: UF8_VPOT_SLOTS, strips, stripSlots: UF8_STRIPS,
+    vpotBindings: rows.filter((r) => r.kind === 'vpot').map((r) => ({
+      faderBank: r.fader_bank, vpotBank: r.vpot_bank, strip: r.strip,
+      label: r.label ?? '', param: r.param_name ?? '',
+    })),
+    stripBindings: rows.filter((r) => r.kind !== 'vpot').map((r) => ({
+      faderBank: r.fader_bank, strip: r.strip, kind: r.kind,
+      label: r.label ?? '', param: r.param_name ?? '',
+    })),
   };
 }
 
