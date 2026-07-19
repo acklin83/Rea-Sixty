@@ -1,0 +1,9 @@
+node_modules/
+
+# Runtime state: the SQLite database and the uploaded .rea60map blobs.
+# Recreate locally with `node src/seed.js --reset`.
+var/
+
+# Secrets live in the environment, never in the repo.
+.env
+.env.*

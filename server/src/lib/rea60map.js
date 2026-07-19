@@ -1,0 +1,259 @@
+// Parse and validate a .rea60map file into the rows the exchange indexes.
+//
+// SECURITY RULE, and it is the whole reason this file is strict:
+// the platform hosts SINGLE PLUGIN MAPS ONLY, NEVER .rea60config bundles.
+// A UserPluginMap is pure data — ExtFuncEntry is {name, vst3Param}, a label
+// and a param index (UserPluginCatalog.h:507). A .rea60config embeds
+// bindings.json (SetupBundle.cpp:196-216), which CAN carry keyboard macros
+// and REAPER action IDs, so importing one runs whatever the author put in it.
+// That difference is what makes a map safe to pass between strangers.
+//
+// The extension's own bundle reader is lenient — SetupBundle.cpp:235 only
+// validates `format` when the key is PRESENT. This server is strict in the
+// other direction: exact match required, absence rejected.
+
+import {
+  lookupSlot, denominatorFor, UF8_VPOT_SLOTS, UF8_STRIPS,
+} from './controls.js';
+
+export const MAP_FORMAT = 'rea-sixty-map';
+export const BUNDLE_FORMAT = 'rea-sixty-setup';   // rejected on sight
+export const MAX_BYTES = 2 * 1024 * 1024;         // see the size table in the
+                                                  // plan: pathological is
+                                                  // ~195 KB, so 2 MB is slack.
+
+export class IngestError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/** Envelope keys, verified against serialize_ at UserPluginCatalog.cpp:1395. */
+const ENVELOPE_KEYS = [
+  'format', 'version', 'plugin', 'vendor', 'surfaces',
+  'author', 'description', 'licence', 'created_at', 'map',
+];
+
+const VALID_SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
+const VALID_DOMAINS = new Set(['ChannelStrip', 'BusComp', 'None']);
+
+/**
+ * Count bound UF8 slots.
+ *
+ * TWO TRAPS, both hit while prototyping and both encoded here:
+ *
+ * 1. The ON-DISK keys are `banksByFaderBank` / `stripsByFaderBank`, NOT the
+ *    `banks` / `strips` of the C++ struct (UserPluginCatalog.cpp:497). Reading
+ *    the struct names yields zero and every UF8 map renders 0/0 — which looks
+ *    like "nobody mapped anything" rather than like a bug.
+ *
+ * 2. Do NOT recurse looking for any `vst3Param`. Some slots carry nested
+ *    structures (pushSteps, modLayers, travel) with their own vst3Param, and a
+ *    recursive count returned 130 bound out of a possible 128. A slot is a
+ *    slot: walk the fixed three-level shape and assert. An impossible number
+ *    is what exposed the bug; on a map that happened to stay under the cap it
+ *    would have shipped as a plausible wrong figure.
+ */
+export function uf8Coverage(map) {
+  const u = map.uf8 ?? {};
+  let vpots = 0;
+  for (const faderBank of u.banksByFaderBank ?? []) {
+    for (const vpotBank of faderBank ?? []) {
+      for (const slot of vpotBank ?? []) {
+        if (slot && typeof slot === 'object' && (slot.vst3Param ?? -1) >= 0) vpots++;
+      }
+    }
+  }
+  let strips = 0;
+  for (const faderBank of u.stripsByFaderBank ?? []) {
+    for (const st of faderBank ?? []) {
+      if (st && typeof st === 'object'
+        && ['faderVst3Param', 'soloVst3Param', 'cutVst3Param', 'selVst3Param']
+          .some((k) => (st[k] ?? -1) >= 0)) strips++;
+    }
+  }
+  if (vpots > UF8_VPOT_SLOTS) {
+    throw new IngestError('impossible_coverage',
+      `${vpots} bound V-Pot slots exceeds the ${UF8_VPOT_SLOTS} that exist`);
+  }
+  if (strips > UF8_STRIPS) {
+    throw new IngestError('impossible_coverage',
+      `${strips} bound strips exceeds the ${UF8_STRIPS} that exist`);
+  }
+  return { vpots, strips };
+}
+
+/**
+ * Extract one row per bound control.
+ *
+ * A linkIdx with no UC1 control (Width, Pan, Out Trim, QA1-6, SAT, GRP…) is a
+ * PERFECTLY VALID binding and gets on_face=false rather than being dropped —
+ * dropping them quietly is what would make a thorough map look sparse.
+ */
+export function extractBindings(map) {
+  const domain = map.domain;
+  const paramNames = new Map(
+    (map.paramSnapshot ?? []).map((p) => [p.vst3Param, p.name ?? '']),
+  );
+  const rows = [];
+
+  const push = (linkIdx, vst3Param, modLayer) => {
+    if (!(vst3Param >= 0)) return;
+    const slot = lookupSlot(domain, linkIdx);
+    rows.push({
+      linkIdx,
+      domain,
+      vst3Param,
+      paramName: paramNames.get(vst3Param) ?? '',
+      // No canonical slot at all (an ext:: synthetic the table omits) is still
+      // off-face, not absent.
+      onFace: slot?.on_face === true,
+      slotName: slot?.name ?? null,
+      section: slot?.section ?? null,
+      modLayer,
+    });
+  };
+
+  for (const s of map.slots ?? []) {
+    if (typeof s?.linkIdx !== 'number') continue;
+    push(s.linkIdx, s.vst3Param ?? -1, 'normal');
+    // FX-Learn modifier overlays (v9, additive). A control mapped ONLY on a
+    // modifier layer must look different from an unmapped one, or the Normal
+    // view understates the map.
+    for (const [key, layer] of Object.entries(s.modLayers ?? {})) {
+      if (layer && typeof layer === 'object') push(s.linkIdx, layer.vst3Param ?? -1, key);
+    }
+  }
+  return rows;
+}
+
+/** Coverage, domain-scoped. UF8-only maps use a different denominator entirely. */
+export function computeCoverage(map, bindings) {
+  const isUf8Only = map.domain === 'None';
+  const { vpots, strips } = uf8Coverage(map);
+
+  if (isUf8Only) {
+    return { n: vpots, d: UF8_VPOT_SLOTS, uf8Vpots: vpots, uf8Strips: strips };
+  }
+  // Only Normal-layer, on-face bindings count toward the face denominator;
+  // a modifier-layer binding on an already-counted control must not double it.
+  const covered = new Set(
+    bindings.filter((b) => b.onFace && b.modLayer === 'normal').map((b) => b.linkIdx),
+  );
+  const d = denominatorFor(map.domain);
+  const n = covered.size;
+  if (n > d) {
+    throw new IngestError('impossible_coverage',
+      `${n} covered controls exceeds the ${d} that exist for ${map.domain}`);
+  }
+  return { n, d, uf8Vpots: vpots, uf8Strips: strips };
+}
+
+/**
+ * The single entry point. Takes raw file text, returns everything the DB needs,
+ * or throws IngestError with a code the route can map to a status.
+ */
+export function parseRea60Map(text) {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new IngestError('empty', 'file is empty');
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) {
+    throw new IngestError('too_large', `file exceeds ${MAX_BYTES} bytes`);
+  }
+
+  let root;
+  try {
+    root = JSON.parse(text);
+  } catch {
+    throw new IngestError('not_json', 'file is not valid JSON');
+  }
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) {
+    throw new IngestError('not_object', 'file is not a JSON object');
+  }
+
+  // --- THE SECURITY GATE ------------------------------------------------
+  // Named rejection first, so a user who grabbed the wrong file gets told what
+  // happened rather than a generic parse failure.
+  if (root.format === BUNDLE_FORMAT) {
+    throw new IngestError('bundle_rejected',
+      'This is a .rea60config setup bundle, not a mapping. The exchange hosts '
+      + 'single plug-in mappings only: a bundle embeds bindings.json, which can '
+      + 'carry keyboard macros and REAPER action IDs, so importing one would run '
+      + 'whatever its author put in it. Export the single mapping instead.');
+  }
+  if (root.format !== MAP_FORMAT) {
+    throw new IngestError('wrong_format', 'not a Rea-Sixty mapping file');
+  }
+  if (root.version !== 1) {
+    throw new IngestError('wrong_version', `unsupported envelope version ${root.version}`);
+  }
+
+  const unknown = Object.keys(root).filter((k) => !ENVELOPE_KEYS.includes(k));
+  if (unknown.length) {
+    throw new IngestError('unknown_keys',
+      `envelope carries unexpected keys: ${unknown.join(', ')}`);
+  }
+
+  // --- the payload ------------------------------------------------------
+  // `map` is an ESCAPED JSON STRING, not a nested object — the envelope is
+  // built so the server can index the top level without unescaping, but
+  // coverage needs the payload, so we do parse it here.
+  if (typeof root.map !== 'string' || root.map.length === 0) {
+    throw new IngestError('no_payload', 'file carries no map payload');
+  }
+  let catalog;
+  try {
+    catalog = JSON.parse(root.map);
+  } catch {
+    throw new IngestError('bad_payload', 'map payload is not valid JSON');
+  }
+
+  const maps = catalog?.plugins;
+  if (!Array.isArray(maps)) {
+    throw new IngestError('bad_payload', 'map payload has no plugins array');
+  }
+  // parse_ silently drops entries with an empty match or the invalid
+  // (domain=None, uf8Mode=false) pair, so a syntactically fine file can still
+  // yield nothing. Check the count, do not assume it.
+  if (maps.length !== 1) {
+    throw new IngestError('not_single_map',
+      `expected exactly one map, got ${maps.length}`);
+  }
+  const map = maps[0];
+
+  if (!VALID_DOMAINS.has(map.domain)) {
+    throw new IngestError('bad_domain', `unknown domain ${map.domain}`);
+  }
+  // (domain=None, uf8Mode=false) is the invalid pair the extension filters at
+  // load/save — UserPluginCatalog.h:492-499.
+  if (map.domain === 'None' && map.uf8Mode !== true) {
+    throw new IngestError('bad_domain',
+      'domain None with uf8Mode false is not a valid map');
+  }
+  if (!VALID_SURFACES.has(root.surfaces)) {
+    throw new IngestError('bad_surfaces', `unknown surfaces value ${root.surfaces}`);
+  }
+  if (typeof map.match !== 'string' || map.match.trim() === '') {
+    throw new IngestError('no_match', 'map carries no plug-in match string');
+  }
+
+  const bindings = extractBindings(map);
+  const coverage = computeCoverage(map, bindings);
+
+  return {
+    envelope: {
+      plugin: root.plugin ?? map.match,
+      vendor: (root.vendor ?? '').trim(),
+      surfaces: root.surfaces,
+      author: (root.author ?? '').trim(),
+      description: (root.description ?? '').trim(),
+      licence: (root.licence ?? '').trim(),
+      createdAt: Number(root.created_at) || 0,
+    },
+    map,
+    domain: map.domain,
+    bindings,
+    coverage,
+  };
+}
