@@ -279,14 +279,34 @@ which defeats the point.
 the control.** Not an invention — see the research section. It buys horizontal
 room for a full parameter name and removes the collision class entirely.
 
-**Open risk, must be tested before the exporter is built: density.** A gamepad
-has roughly twenty controls and the leader-line layout is comfortable there.
-The UC1 Channel Strip domain has **33**, in two tight vertical columns. Thirty-
-three leader lines may tangle where twenty do not. Test it on the real
-`kUc1Controls[]` coordinates before committing; if it does not hold, the
-fallbacks are numbered callouts keyed to the table beneath, or labels only on
-hover/focus with the static view showing lit-vs-dim alone. This decision
-changes what the control JSON must carry, so it comes first.
+**Density risk — TESTED, and it holds.** The worry was that a gamepad has
+roughly twenty controls where the UC1 Channel Strip domain has 33 in two tight
+vertical columns, and that thirty-three leaders would tangle where twenty do
+not. Rebuilt the prototype on the margin layout against the real coordinates:
+
+| Map | Bound | Split | Max label shift |
+| --- | --- | --- | --- |
+| `bx_console SSL 4000 G` (CS) | 27 of 33 | 16 L / 11 R | 15 px |
+| `SPL IRON` (CS) | 17 of 33 | 14 L / 3 R | 15 px |
+| `bx_townhouse Buss Compressor` (BC) | 8 of 8 | 4 L / 4 R | 0 px |
+
+Max shift is how far de-collision had to move a label off its control's own
+row. Fifteen pixels at the worst is nothing — the leaders stay near-horizontal
+and no label is truncated. `EQ High Mid Frequency` renders in full, which it
+could not in the stacked version.
+
+**Two things the test changed, both derivable rather than hand-tuned:**
+
+1. **Crop the viewBox to the domain's bounding box.** A BusComp map binds a
+   small central block. Rendering the full 860 × 660 plate for it means ~90 %
+   dimmed pixels and eight leaders dragged across the whole face to reach a
+   margin. Cropping to the in-domain extent plus padding puts the margin beside
+   the controls; the BC case went from long diagonal leaders to short horizontal
+   ones and a 0 px shift. Neighbouring out-of-domain controls stay visible,
+   dimmed, so the crop still reads as a place on the UC1 rather than a diagram.
+2. **Split left/right against the midpoint of the DOMAIN's extent, not the
+   plate's.** The BC block sits entirely right of the plate centre, so a
+   plate-centre split sent all eight labels into the same margin.
 
 ### The index row — no render
 
