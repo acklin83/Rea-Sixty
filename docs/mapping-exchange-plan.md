@@ -54,17 +54,47 @@ action IDs. Importing one executes whatever the author put in it.
 > bundles.** Deciding this now costs nothing; retrofitting it after launch is
 > expensive.
 
-**Vendor does not exist anywhere.** A plugin is identified by a case-sensitive
-*substring* of the FX identity name (`PluginMap.cpp:426-447`, `fxIdentityName`
-→ `original_name`, falling back to `TrackFX_GetFXName`). Real examples from a
-live catalog: `"VST3: bx_console SSL 4000 G"`, `"JS: 4-Band EQ
-[loser/4BandEQ]"`. No manufacturer in either. Vendor has to be captured at
-upload time from a server-side list with alias normalisation, or the corpus
-fragments into "FabFilter" / "Fabfilter" / "FF".
+**Vendor — RESOLVED 2026-07-19. It comes from REAPER, inside the name string.**
 
-> **Open, unverified:** whether REAPER's full `TrackFX_GetFXName` output carries
-> the manufacturer for VST3/AU/CLAP. Check against real plugins before relying
-> on auto-extraction. Do not assume.
+There is **no vendor field in the API.** `TrackFX_GetNamedConfigParm` documents
+exactly five keys — `fx_ident`, `fx_name`, `fx_type`, `original_name`,
+`renamed_name` (checked in `reaper_plugin_functions.h`). None of them is a
+manufacturer.
+
+But REAPER's own plug-in scan caches carry the vendor in the display name, and
+`original_name` — which the extension **already reads**
+(`PluginMap.cpp:426-447`) — is that string. Measured against the caches on the
+dev machine:
+
+| Format | Cache | Convention | Entries | Vendor found |
+| --- | --- | --- | ---: | ---: |
+| VST / VST3 | `reaper-vstplugins_arm64.ini` | `Name (Vendor)` | 635 | **99 %** |
+| AU | `reaper-auplugins_arm64.ini` | `Vendor: Name` | 941 | **100 %** |
+| CLAP | `reaper-clap-macos-aarch64.ini` | `Name (Vendor)` | 14 | **100 %** |
+| JSFX | `reaper-jsfx.ini` | `JS: Name (Vendor) [path]` | 227 | **8 %** |
+| | | | **1817** | **88 %** |
+
+**Three different conventions, so the parser is format-scoped** — read `fx_type`
+(or the `VST:`/`AU:`/`JS:`/`CLAP:` prefix) first, then apply the matching rule.
+A trailing parenthetical is not always the vendor: channel specs like `(2->6ch)`,
+`(32 out)` and the `!!!VSTi` suffix appear in the same position and must be
+skipped. JSFX is the weak case at 8 % — community scripts mostly carry no
+vendor — so JS maps will need the uploader to supply one.
+
+**Do NOT parse `match`.** That is a user-editable substring, often shortened by
+hand: only 8 of the 29 maps in the live catalog carry a recoverable vendor, and
+one of those yields `"mono"` from `"… (SSL) (mono)"`. Capture the vendor at
+**export** time from the live `original_name`, and store it in the envelope —
+which is what the shipped `.rea60map` already has a field for.
+
+**Alias normalisation is not hypothetical.** The same machine produces both
+`Universal Audio (UADx)` (72 plug-ins) and `UADx` (70) as separate vendors. The
+server needs an alias table from day one, exactly as this plan already assumed.
+
+**82 distinct vendors on one machine, over 1817 plug-ins.** A real corpus will
+carry several hundred. So the vendor facet is a **searchable combobox with
+type-ahead, multi-select chips and per-vendor counts** — a checkbox rail cannot
+hold 82 rows, let alone 400.
 
 **Export is whole-catalog only.** `exportToFile()` writes every map. A live
 catalog on the dev machine is 706 KB with 29 maps. Sharing one map needs a new
