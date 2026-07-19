@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.2
+date: v0.3.2
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -28,7 +28,7 @@ What goes out on the USB wire is the same byte protocol SSL 360° uses, re-emitt
 
 ## What you need
 
-- REAPER on macOS (Apple Silicon; Intel via build-from-source), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.71.
+- REAPER on macOS (Apple Silicon or Intel), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.75.
 - An SSL UF8 plugged in over USB-C. UC1 is supported optionally; UF8-only or UC1-only rigs are fine.
 - **ReaImGui** (install via ReaPack from Extensions → ReaPack → Browse packages → ReaImGui). Without ReaImGui the Settings window stays empty, but hardware control still works.
 - **SSL 360° must not be running.** It claims the UF8/UC1 vendor interface exclusively. If it is running when REAPER starts, the surface will not appear and REAPER's Console shows an error.
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.2. Earlier manuals (anything dated before 2026-06-24) are superseded.
+This manual documents Rea-Sixty v0.3.2. Earlier manuals (anything dated before 2026-07-14) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,11 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.3.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.3.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.3.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+
+The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to each release separately — it is not part of the ReaPack package. Download it and double-click it; the Stream Deck app installs it.
 
 ## Enabling the surface
 
@@ -460,7 +462,7 @@ If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their pri
 
 The Settings window is a dockable ReaImGui context. Open with the `360°` key (default), the **Open / Close Rea-Sixty Settings** action, or REAPER's Action `Rea-Sixty: Toggle Settings window`.
 
-Eight sidebar tabs: Device · Appearance · Bindings · Modes · FX Learn · Selection Sets · Parameter Groups · About.
+Ten sidebar tabs: Device · Appearance · Bindings · Modes · FX Learn · Favourites · Selection Sets · Parameter Groups · Manual · About.
 
 ## Device pane
 
@@ -666,7 +668,9 @@ Right-clicking a button in the schematic opens Copy / Paste / Clear options for 
 
 ### Export / Import / Reset
 
-Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names). Per-binding-file export does not exist as a Bindings-pane action.
+Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names).
+
+The Bindings pane itself offers **Save UC1 bindings…** and **Load UC1 bindings…** — these cover only the five UC1 controls. Loading replaces the UC1 bindings and leaves the UF8 bindings untouched.
 
 Bindings storage paths:
 
@@ -1009,7 +1013,7 @@ The pane stacks several sections from top to bottom.
 
 ### Versions
 
-- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.1.8`. Past a tag: `v0.1.8-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
+- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.3.2`. Past a tag: `v0.3.2-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
 - **Build** — date + time of the compiled extension.
 - **REAPER** — the host REAPER version string.
 - **ReaImGui** — the bundled-ABI banner (currently v0.10).
@@ -1044,8 +1048,9 @@ Section appears only when the build is Linux.
 
 ### Logs
 
-- Lists the diagnostic log paths (`/tmp/reaper_uf8_frames.log`, `/tmp/reaper_uf8_colors.log`, etc.).
-- **Reveal /tmp in Finder** button (macOS only — equivalent on other platforms TBD).
+- Lists the diagnostic log paths (`reaper_uf8_frames.log`, `reaper_uf8_colors.log`, and the rest). Logs live in the system temporary folder: `/tmp` on macOS and Linux, `%TEMP%` on Windows. The pane shows the real path for your platform rather than assuming one.
+- **Reveal log folder** button — opens the folder in Finder, Explorer or your file manager.
+- **Console output** checkbox, **off by default**. REAPER pops its Console window open for every message, which is noise when a device simply is not connected. The same text still goes to the log files either way, so nothing is lost — switch it on while diagnosing.
 
 \newpage
 
@@ -1640,7 +1645,7 @@ SSL 360° is running and has claimed the UF8/UC1 vendor interface exclusively. Q
 
 ## Disconnect after sleep / wake or sustained idle (macOS)
 
-Known issue: both UC1 and UF8 IN endpoints can fail within ~3 ms of each other on a sustained host-side USB stack condition. `libusb_reset_device` does not escape it. Physical replug (one or both devices) recovers. Diagnostic logs in `/tmp/rea_sixty_uc1_stale.log` + `/tmp/rea_sixty_uf8_stale.log`.
+Known issue: both UC1 and UF8 IN endpoints can fail within ~3 ms of each other on a sustained host-side USB stack condition. `libusb_reset_device` does not escape it. Physical replug (one or both devices) recovers. Diagnostic logs are `rea_sixty_uc1_stale.log` + `rea_sixty_uf8_stale.log` in the system temporary folder (see *Diagnostics*).
 
 ## Track-colour wrong
 
@@ -1662,9 +1667,13 @@ ReaImGui isn't installed. Install it via ReaPack. Hardware control still works w
 
 ## Diagnostics
 
-- `/tmp/rea_sixty_uc1_stale.log` — UC1 device-handle diagnostics
-- `/tmp/rea_sixty_uf8_stale.log` — UF8 device-handle diagnostics
+Log files live in the system temporary folder — `/tmp` on macOS and Linux, `%TEMP%` on Windows. **Settings → About → Logs** shows the real path and has a button to open the folder.
+
+- `rea_sixty_uc1_stale.log` — UC1 device-handle diagnostics
+- `rea_sixty_uf8_stale.log` — UF8 device-handle diagnostics
 - macOS Console / Windows Event Viewer / Linux journal for in-process errors
+
+Note that **Console output** in Settings → About → Logs is off by default, so REAPER's Console stays quiet. The log files are written either way; turn the checkbox on if you want messages in the Console as well.
 
 \newpage
 
