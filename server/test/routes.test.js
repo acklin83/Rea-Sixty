@@ -38,7 +38,7 @@ function v2({ match, originalName, domain = 'BusComp', slots }) {
 }
 
 // Seed: one plug-in ("Pro-C 2") with two maps that differ on linkIdx 7.
-const app = buildApp();
+const app = await buildApp();
 const db = getDb();
 const acct = Number(db.prepare('INSERT INTO accounts (display_name, created_at) VALUES (?,?)')
   .run('tester', 0).lastInsertRowid);

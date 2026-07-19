@@ -10,8 +10,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "migrate": "node src/db/migrate.js",
-    "ingest": "node src/ingest/cli.js",
+    "mktoken": "node src/tools/mktoken.js",
     "test": "node --test \"test/**/*.test.js\"",
     "check:controls": "python3 ../extension/tools/gen_control_table.py --check"
   },

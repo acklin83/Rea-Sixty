@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 
+-- Device tokens — the extension's credential. Browse and download are
+-- anonymous; only UPLOAD needs a token, pasted once into the extension's
+-- Exchange settings (the "CLI auth" pattern — no WebAuthn in ImGui, no
+-- per-upload browser trip). Issued by the website after a passkey/magic-link
+-- login, or by the mktoken CLI for the admin. We store only the SHA-256 of
+-- the token, never the token itself, so a DB leak cannot be replayed.
+CREATE TABLE IF NOT EXISTS account_tokens (
+  id           INTEGER PRIMARY KEY,
+  account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  token_sha256 TEXT    NOT NULL UNIQUE,
+  label        TEXT,                          -- "MacBook", user-facing
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_account ON account_tokens(account_id);
+
 -- Single-use, short-lived. Covers both magic-link sign-in and the WebAuthn
 -- challenge, which has the same shape: a nonce we minted and must see back.
 CREATE TABLE IF NOT EXISTS auth_challenges (

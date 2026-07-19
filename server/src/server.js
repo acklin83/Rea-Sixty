@@ -9,7 +9,7 @@ import { closeDb } from './db/index.js';
 const PORT = Number(process.env.PORT ?? 8010);
 const HOST = process.env.HOST ?? '127.0.0.1';
 
-const app = buildApp({ logger: true });
+const app = await buildApp({ logger: true });
 
 app.listen({ port: PORT, host: HOST })
   .catch((err) => { app.log.error(err); process.exit(1); });
