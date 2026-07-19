@@ -203,6 +203,33 @@ uc1-controls.json uf8-controls.json   [{linkIdx, domain, kind, cx, cy, r, w, h, 
 The face is identical for every mapping. Only the labels change. So the site
 serves one static SVG and positions text from the JSON.
 
+### Prototype result — the approach works, the labelling does not
+
+Built 2026-07-19 (throwaway, not committed): parse `kUc1Controls[]` out of
+`SettingsScreen.cpp`, render three real maps from the dev machine's live
+catalog. Findings:
+
+**Confirmed.** The geometry lines up with no adjustment, the UC1 layout is
+immediately recognisable from the control positions alone, and the coverage
+number does the job it was specified for — `bx_console SSL 4000 G` at 27/33
+(82 %), `SPL IRON` at 17/33 (52 %), `ReaComp` at 3/8 read as thorough, partial
+and token at a glance, with no reading required. The off-face "also mapped"
+list fired for real on `SPL IRON`, which binds one parameter to a slot with no
+UC1 control.
+
+**Refuted: stacking the parameter name under the silkscreen label.** At the
+real control density the two text lines collide — HF Bell over HF Gain, EQ
+On/Off over EQ Type, the Gate Attack pair. Parameter names also need truncating
+to ~18 characters to fit, which turns "EQ High Mid Frequency" into "EQ High Mid
+Freque". Both make the picture harder to read than the table it sits above,
+which defeats the point.
+
+So the production version needs a different labelling strategy. Options, none
+yet chosen: parameter name on hover/focus with the static view showing only
+lit-vs-dim; short abbreviations sourced from the map's own `customLabel` where
+the author set one; or numbered callouts keyed to the table. **Decide this
+before building the exporter** — it changes what the JSON has to carry.
+
 **The one primitive that is not a mechanical move:** `drawTextCentered_`
 centres by calling `ImGui_CalcTextSize`. An SVG sink has no font metrics — but
 it does not need them, because `text-anchor="middle"` and
