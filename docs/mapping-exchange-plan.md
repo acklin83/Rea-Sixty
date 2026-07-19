@@ -4,9 +4,11 @@ A place where users publish the plugin mappings they built and pick up mappings
 built by others. Sorted by vendor, rated, attributed to an author, with an
 optional short description.
 
-Status: Phase 1 **shipped** 2026-07-19 (`2befc2f`). Phases 2–4 planned. The
-visual preview (see below) is the piece that decides whether the detail page is
-a real service or a file dump.
+Status: Phase 1 **shipped** 2026-07-19 (`2befc2f`); Phase 2 **foundation
+shipped** 2026-07-19 (`2964c83`) — the server domain layer, no HTTP routes yet.
+Phase 2 routes + auth + deploy, and Phases 3–4, planned. The per-plug-in diff
+(screen 2) is the piece that decides whether this is a real service or a file
+dump.
 
 ## The decision: server + website first, in-app browser second
 
@@ -130,7 +132,7 @@ SQLite plus files on disk is the right size of tool.
 | **Rating** | "Works for me" count plus confirmed-plugin-version, not 5 stars. With few votes per item a star average is noise; a version confirmation is the signal that actually helps the next person. |
 | **Licence** | CC0 checkbox at upload, so mappings can be redistributed. Cannot be collected retroactively. |
 | **Scope** | Single plugin maps only. No setup bundles. See the rule above. |
-| **Domain** | `reasixty.com` (verified unregistered 2026-07-19), API at `api.reasixty.com` — matches the existing `api.brandy-barf.app` pattern. |
+| **Domain** | `reasixty.com` **registered 2026-07-19** (Hostinger, expiry 2029). API at `api.reasixty.com` — matches the existing `api.brandy-barf.app` pattern. DNS added by hand in the Hostinger panel; `api` needs A `187.77.89.149` + AAAA `2a02:4780:79:6af5::1`. |
 
 ## Auth — why passkeys, and why email did not go away
 
@@ -358,46 +360,46 @@ Two traps, both hit while prototyping:
 
 ### 3. `/mappings/<id>/<slug>` — one map
 
-Metadata and CTA left; the faceplate — **the only place it appears in the whole
-site** — right; the control → parameter table beneath it.
+Metadata and CTA left; the **coverage strip + section-grouped control table**
+right (per "The faceplate is dropped" above — there is no faceplate on this
+page or anywhere). No SVG face, so nothing here depends on the Phase 2a
+exporter.
 
-**The one primitive that is not a mechanical move:** `drawTextCentered_`
-centres by calling `ImGui_CalcTextSize`. An SVG sink has no font metrics — but
-it does not need them, because `text-anchor="middle"` and
-`dominant-baseline="central"` make the renderer do the centring. The SVG sink
-ignores the measurement entirely. Every other primitive is a straight
-translation.
+### What the detail page shows
 
-### What the preview shows
-
-- The full face, controls **dimmed** by default.
-- Bound controls **lit**, labelled with the parameter name.
-- Out-of-domain sections dimmed — the `domain` field on each control already
-  drives exactly this in the app (`dimDomain` in `drawUc1Face_`), so the rule
-  is inherited rather than reinvented.
+- **The coverage strip** — one small cell per control, grouped by section, lit
+  where bound. No text, so it scales to any width without becoming unreadable.
+  This is the at-a-glance shape of the map.
 - **Coverage, as a number**: "23 of 33 Channel Strip controls mapped".
-  Derivable server-side and probably the single most useful thing on the page
-  for deciding whether to download.
+  Computed at ingest and probably the single most useful thing on the page for
+  deciding whether to download.
 
   **The denominator is domain-scoped, not the table total.** `kUc1Controls[]`
   holds 41 entries — 33 `ChannelStrip`, 8 `BusComp` (counted 2026-07-19). A
   fully-mapped Bus Comp map covers 8 controls; scoring it out of 41 would show
   a complete map as 20 % and make good work look lazy. Take the denominator
-  from the map's own domain.
+  from the map's own domain. **Built and verified against the real catalog —
+  `computeCoverage()` / `denominatorFor()` in `server/src/lib/`.**
+- **The section-grouped control table** — Filters · HF · HMF · EQ · LMF · LF ·
+  Comp · Gate · Channel, each with its own `n/total`, then a row per bound
+  control with its parameter name. This is real HTML: it reflows to any width,
+  it is what a screen reader and a search engine read, and the per-section
+  counts carry the shape of a mapping ("all of the EQ, none of the gate").
 - **Modifier layers.** Slots carry `modLayers[]` (Option / Control /
   Control+Option). Default the view to Normal and offer a layer switch. A
   control mapped *only* on a modifier layer must look different from an
-  unmapped one, or the Normal view understates the map.
+  unmapped one, or the Normal view understates the map. **Carried through
+  ingest as a `mod_layer` column on `map_bindings`.**
 
-### UF8 maps need a different shape — do not force the face metaphor
+### UF8 maps need a different shape
 
-A UF8 map is `banks[2][8][8]` V-Pot slots (128) plus `strips[2][8]`
-fader/solo/cut/sel bindings (16) — verified at `UserPluginCatalog.h:402` and
-`:470`. A hardware face renders the 16 strip bindings well and the 128 V-Pot
-cells badly.
-
-So: face render for the strip bindings, and a compact **8 × 8 grid per V-Pot
-bank** with a bank selector for the rest. Two views, one page.
+A UF8 map is `banksByFaderBank[2][8][8]` V-Pot slots (128) plus
+`stripsByFaderBank[2][8]` fader/solo/cut/sel bindings (16) — verified at
+`UserPluginCatalog.h:402` and `:470`, and against the live catalog in
+`uf8Coverage()`. There is still no face; the V-Pot cells want a compact
+**8 × 8 grid per V-Pot bank** with a bank selector, and the 16 strip bindings
+a small table. Two compact views, one page. (Shape recommended, not yet
+prototyped — see Open.)
 
 ### The failure mode to design against
 
@@ -405,30 +407,24 @@ bank** with a bank selector for the rest. Two views, one page.
 Pan, Width, Output Trim, Bypass, QA1–6, SAT, SAT.I, GRP for CS; Bypass and GRP
 for BC. A map binding those is perfectly valid.
 
-**A linkIdx with no entry in the table must never silently vanish.** It renders
-in an "also mapped" list beneath the face. Dropping it quietly is what would
-make a thorough map look sparse — the exact misjudgement the preview exists to
-prevent.
+**A linkIdx with no on-face control must never silently vanish.** It renders in
+an "also mapped" list, distinct from the coverage table. Dropping it quietly is
+what would make a thorough map look sparse. **Enforced: `extractBindings()`
+tags every binding `on_face` true/false and keeps both; the off-face ones are
+the "also mapped" list.**
 
-Guard it in CI: assert every linkIdx used by the built-in `PluginMap` resolves
-either to a control or to the extras list. Otherwise a future control rename
-blanks part of the preview with a green build — the same class of silent
-failure as `astro build` exiting 0 on a render error.
+Guard it in CI: `extension/tools/gen_control_table.py --check` fails if the
+committed `server/data/uc1-controls.json` drifts from the C++ tables. Otherwise
+a control rename blanks part of the page with a green build — the same class of
+silent failure as `astro build` exiting 0 on a render error. **Built.**
 
 ### Indexing and accessibility
 
-`/mappings` is server-rendered so that search engines see it. An inline SVG
-keeps that property as long as the labels are real `<text>` nodes — which they
-are, since the exporter emits text rather than paths.
-
-Emit the **control → parameter table as real HTML** beneath the preview
-regardless. The picture is the hook; the table is what a screen reader reads,
-what a text search matches, and what survives if the SVG fails to load.
-
-### Where it sits in the phasing
-
-The exporter is **Phase 2a** — it must land before `/mappings` ships, because
-the detail page is not worth publishing without it.
+`/mappings` and the detail page are server-rendered so that search engines see
+them. The coverage strip is an inline SVG with no text (pure decoration); the
+**control → parameter table is real HTML**. The strip is the hook; the table is
+what a screen reader reads, what a text search matches, and what survives if the
+SVG fails to load.
 
 ## Phases
 
@@ -466,29 +462,45 @@ params any slot / cache / macro step / UF8 bank / strip binding actually
 references, and `isDefault` forced off in both directions so a shared map can
 never claim the recipient's Default slot.
 
-### Phase 2a — face exporter (blocks the detail page)
+### Phase 2a — face exporter — **DROPPED from the critical path**
 
-Standalone CLI in `extension/tools/`, no REAPER and no libusb needed. Gives
-`VCanvas` a virtual sink, keeps the current bodies as the ImGui sink, adds an
-SVG sink, and writes `uc1-face.svg` / `uf8-face.svg` plus the two control JSON
-files. Artefacts are committed so the website build stays toolchain-free.
-Full reasoning under **The visual preview** above.
+Superseded by "The faceplate is dropped" (2026-07-19). There is no faceplate
+anywhere in the exchange, so nothing the website ships needs an SVG face, and
+the detail page is **not** blocked on it. The control table the server does
+need — linkIdx → name + section + on-face, per domain — is produced instead by
+`extension/tools/gen_control_table.py` (a small parse of the C++ source of
+truth, committed as `server/data/uc1-controls.json`, `--check` guards drift).
+
+`drawUc1Face_` stays the right picture *inside the app*, at desktop size. If a
+desktop-only "see it on the surface" view is ever wanted, an SVG sink on
+`VCanvas` can come back as an enhancement — but nothing in the exchange depends
+on it.
 
 ### Phase 2 — reasixty.com + api.reasixty.com
 
 Server. Runs on the existing Hostinger VPS; Docker and Caddy are already there.
 
-- SQLite plus files on disk.
+**Foundation shipped 2026-07-19 (`2964c83`)** — `server/`, Node + Fastify +
+better-sqlite3 + SimpleWebAuthn. Domain layer only, no HTTP routes yet:
+ingest + security gate, coverage, per-control diff, vendor/plug-in resolution,
+merge, schema, seed. Verified against the live 29-map catalog. Still to build:
+
+- SQLite plus files on disk. **Done** (`server/src/db/`).
+- Ingest, coverage, diff, seed. **Done and verified** — see the phase-2 notes
+  in `[[mapping-exchange-plan]]` memory.
+- **HTTP routes** (Fastify) — browse by vendor / surface / plugin, plug-in
+  page with the diff selection, one-map detail page, download `.rea60map`.
 - Auth per the **Auth** section: passkey primary, magic-link equal fallback,
   optional recovery email. Privacy policy live before the first sign-up.
-- Detail page carries the visual preview plus the HTML control→parameter table.
-- Upload (login required), browse by vendor / surface / plugin, rate, author,
-  description.
+- Upload (login required), rate ("works for me" + version), author, description.
 - Download serves `.rea60map`; the user imports it via Phase 1.
-- Admin view with unpublish, plus a report button. Not optional — one bad actor
-  otherwise poisons the corpus.
-- **Seed with the 29 maps from the dev machine.** An empty platform reads as a
-  dead one; this one launches with content.
+- Admin view with unpublish + the plug-in merge tool, plus a report button. Not
+  optional — one bad actor otherwise poisons the corpus.
+- **Seed with the 29 maps from the dev machine.** **Done** (`server/src/seed.js`).
+- Deploy: own container in `/opt/reasixty/`, own Caddy block on the host
+  (`/etc/caddy/Caddyfile` — **not** `/home/frank/Caddyfile`), port 8010,
+  `bind`-ing the IPs like every other block. DNS for `api.reasixty.com` is
+  added by hand in the Hostinger panel.
 
 ### Phase 3 — in-app browser (read-only)
 
