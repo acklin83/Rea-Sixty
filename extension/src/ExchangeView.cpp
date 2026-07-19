@@ -41,7 +41,7 @@ std::string g_healthResult;
 int         g_healthColor = 0;
 
 // ---- browse ---------------------------------------------------------------
-enum class View { List, Plugin };
+enum class View { List, Plugin, Map };
 View g_view = View::List;
 
 struct PluginRow {
@@ -62,6 +62,23 @@ std::string g_pluginSlug, g_pluginName, g_pluginVendor;
 std::vector<MapRow> g_maps;
 uint64_t    g_pluginReq = 0;
 std::string g_pluginError;
+
+// ---- one map's detail (screen 3): the control -> parameter mappings --------
+struct CtrlCell { std::string control, param; bool bound = false; };
+struct Section  { std::string name; int total = 0, hit = 0; std::vector<CtrlCell> cells; };
+struct MapDetail {
+    int id = 0;
+    std::string pluginName, vendor, surfaces, domain, author, description, licence;
+    int covN = 0, covD = 0, covPct = 0;
+    bool isUf8 = false;
+    int uf8Vpots = 0, uf8VpotSlots = 0, uf8Strips = 0, uf8StripSlots = 0;
+    std::vector<Section> sections;
+    std::vector<std::pair<int, std::string>> alsoMapped;              // linkIdx, param
+    std::vector<std::pair<std::string, std::string>> modLayers;       // "linkIdx layer", param
+};
+MapDetail   g_mapDetail;
+uint64_t    g_mapReq = 0;
+std::string g_mapError;
 
 // ---- install --------------------------------------------------------------
 uint64_t    g_dlReq = 0;
@@ -96,6 +113,9 @@ std::string jstr(wdl_json_element* o, const char* k) {
 int jint(wdl_json_element* o, const char* k) {
     std::string s = jstr(o, k);
     return s.empty() ? 0 : std::atoi(s.c_str());
+}
+bool jbool(wdl_json_element* o, const char* k) {
+    return jstr(o, k) == "true";
 }
 std::string jarrjoin(wdl_json_element* o, const char* k, const char* sep) {
     auto* a = o ? o->get_item_by_name(k) : nullptr;
@@ -143,6 +163,17 @@ void openPlugin(const std::string& slug) {
     g_view = View::Plugin;
     g_pluginReq = http::begin("GET", baseUrl() + "/v1/plugins/" + urlEncode(slug));
     if (!g_pluginReq) g_pluginError = "Bad server URL.";
+}
+
+void openMap(int mapId) {
+    if (g_mapReq) return;
+    g_mapDetail = MapDetail{};
+    g_mapError.clear();
+    g_installStatus.clear();
+    g_pendingClash = false;
+    g_view = View::Map;
+    g_mapReq = http::begin("GET", baseUrl() + "/v1/maps/" + std::to_string(mapId));
+    if (!g_mapReq) g_mapError = "Bad server URL.";
 }
 
 void startInstall(int mapId) {
@@ -253,6 +284,74 @@ void pumpPlugin() {
     }
 }
 
+void pumpMap() {
+    if (!g_mapReq) return;
+    http::Response r;
+    if (!http::poll(g_mapReq, r)) return;
+    g_mapReq = 0;
+    if (!r.error.empty()) { g_mapError = "Could not reach the server: " + r.error; return; }
+    if (r.status != 200)  { g_mapError = "Server returned HTTP " + std::to_string(r.status); return; }
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    if (!root || !root->is_object()) { g_mapError = "Bad response from server."; return; }
+
+    MapDetail d;
+    d.id       = jint(root, "id");
+    if (auto* pl = root->get_item_by_name("plugin")) d.pluginName = jstr(pl, "name");
+    d.vendor   = jstr(root, "vendor");
+    d.surfaces = jstr(root, "surfaces");
+    d.domain   = jstr(root, "domain");
+    d.author   = jstr(root, "author");
+    d.description = jstr(root, "description");
+    d.licence  = jstr(root, "licence");
+    if (auto* cov = root->get_item_by_name("coverage")) {
+        d.covN = jint(cov, "n"); d.covD = jint(cov, "d"); d.covPct = jint(cov, "pct");
+    }
+    if (auto* u = root->get_item_by_name("uf8"); u && u->is_object()) {
+        d.isUf8 = true;
+        d.uf8Vpots = jint(u, "vpots"); d.uf8VpotSlots = jint(u, "vpotSlots");
+        d.uf8Strips = jint(u, "strips"); d.uf8StripSlots = jint(u, "stripSlots");
+    }
+    if (auto* secs = root->get_item_by_name("sections"); secs && secs->is_array() && secs->m_array) {
+        for (int i = 0; i < secs->m_array->GetSize(); ++i) {
+            wdl_json_element* so = secs->enum_item(i);
+            if (!so || !so->is_object()) continue;
+            Section s;
+            s.name  = jstr(so, "name");
+            s.total = jint(so, "total");
+            s.hit   = jint(so, "hit");
+            if (auto* cells = so->get_item_by_name("cells"); cells && cells->is_array() && cells->m_array) {
+                for (int j = 0; j < cells->m_array->GetSize(); ++j) {
+                    wdl_json_element* co = cells->enum_item(j);
+                    if (!co || !co->is_object()) continue;
+                    CtrlCell c;
+                    c.control = jstr(co, "name");
+                    c.param   = jstr(co, "param");
+                    c.bound   = jbool(co, "bound");
+                    s.cells.push_back(std::move(c));
+                }
+            }
+            d.sections.push_back(std::move(s));
+        }
+    }
+    if (auto* am = root->get_item_by_name("alsoMapped"); am && am->is_array() && am->m_array) {
+        for (int i = 0; i < am->m_array->GetSize(); ++i) {
+            wdl_json_element* o = am->enum_item(i);
+            if (!o || !o->is_object()) continue;
+            d.alsoMapped.emplace_back(jint(o, "linkIdx"), jstr(o, "param"));
+        }
+    }
+    if (auto* ml = root->get_item_by_name("modifierLayers"); ml && ml->is_array() && ml->m_array) {
+        for (int i = 0; i < ml->m_array->GetSize(); ++i) {
+            wdl_json_element* o = ml->enum_item(i);
+            if (!o || !o->is_object()) continue;
+            std::string tag = std::to_string(jint(o, "linkIdx")) + "  " + jstr(o, "layer");
+            d.modLayers.emplace_back(tag, jstr(o, "param"));
+        }
+    }
+    g_mapDetail = std::move(d);
+}
+
 void pumpDownload() {
     if (!g_dlReq) return;
     http::Response r;
@@ -352,7 +451,9 @@ void drawList(ImGui_Context* ctx) {
         ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
         ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
         ImGui_TableSetupColumn(ctx, "Surfaces", &fixed,   &wSurf,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Best",     &fixed,   &wBest,   nullptr);
+        // Best coverage any of this plug-in's maps reaches (the number is a
+        // percentage of the controls that plug-in's surface can bind).
+        ImGui_TableSetupColumn(ctx, "Best coverage", &fixed, &wBest, nullptr);
         ImGui_TableHeadersRow(ctx);
 
         char buf[512];
@@ -413,10 +514,111 @@ void drawPlugin(ImGui_Context* ctx) {
         return;
     }
 
-    // Replace-confirm for a map that clashes with one already in the catalog.
+    ImGui_TextWrapped(ctx, "Click a mapping to see its controls and install it.");
+    ImGui_Spacing(ctx);
+
+    // One row per map; click a row to open its detail (controls + install).
+    // Sticky header via ScrollY + fixed height.
+    double availW = 0.0, availH = 0.0;
+    ImGui_GetContentRegionAvail(ctx, &availW, &availH);
+    if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
+    int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
+               | ImGui_TableFlags_Resizable | ImGui_TableFlags_ScrollY;
+    if (ImGui_BeginTable(ctx, "##exch_maps", 4, &tFlags, nullptr, &availH, nullptr)) {
+        int stretch = ImGui_TableColumnFlags_WidthStretch;
+        int fixed   = ImGui_TableColumnFlags_WidthFixed;
+        double wAuthor = 2.0, wSurf = 96.0, wCov = 150.0, wWorks = 64.0;
+        ImGui_TableSetupColumn(ctx, "Author",   &stretch, &wAuthor, nullptr);
+        ImGui_TableSetupColumn(ctx, "Surface",  &fixed,   &wSurf,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,   &wCov,    nullptr);
+        ImGui_TableSetupColumn(ctx, "Works",    &fixed,   &wWorks,  nullptr);
+        ImGui_TableHeadersRow(ctx);
+
+        char buf[256];
+        for (const auto& m : g_maps) {
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+            ImGui_TableSetColumnIndex(ctx, 0);
+            std::snprintf(buf, sizeof(buf), "%s##exch_m_%d",
+                          m.author.empty() ? "—" : m.author.c_str(), m.id);
+            int selFlags = ImGui_SelectableFlags_SpanAllColumns;
+            if (ImGui_Selectable(ctx, buf, nullptr, &selFlags, nullptr, nullptr))
+                openMap(m.id);
+            if (!m.description.empty() && ImGui_IsItemHovered(ctx, nullptr))
+                ImGui_SetTooltip(ctx, m.description.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 1);
+            ImGui_Text(ctx, m.surfaces.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 2);
+            std::snprintf(buf, sizeof(buf), "%d/%d (%d%%)", m.covN, m.covD, m.covPct);
+            double frac = m.covD > 0 ? (double)m.covN / m.covD : 0.0;
+            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
+
+            ImGui_TableSetColumnIndex(ctx, 3);
+            std::snprintf(buf, sizeof(buf), "%d", m.works);
+            ImGui_Text(ctx, buf);
+        }
+        ImGui_EndTable(ctx);
+    }
+}
+
+// Screen 3 — one map: metadata, coverage, the control -> parameter table
+// grouped by section, the off-face "also mapped" list, and Install.
+void drawMap(ImGui_Context* ctx) {
+    if (ImGui_Button(ctx, "< Back##exch_map_back", nullptr, nullptr)) {
+        g_view = View::Plugin;
+        return;
+    }
+    const MapDetail& d = g_mapDetail;
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    char hdr[384];
+    std::snprintf(hdr, sizeof(hdr), "   %s%s%s",
+                  d.pluginName.c_str(),
+                  d.vendor.empty() ? "" : "  —  ", d.vendor.c_str());
+    ImGui_Text(ctx, hdr);
+
+    if (!g_mapError.empty()) {
+        ImGui_Spacing(ctx);
+        ImGui_TextColored(ctx, 0xCC4444FF, g_mapError.c_str());
+        return;
+    }
+    if (g_mapReq) { ImGui_Spacing(ctx); ImGui_Text(ctx, "Loading…"); return; }
+
+    ImGui_Spacing(ctx);
+    char meta[384];
+    std::snprintf(meta, sizeof(meta), "by %s   ·   %s   ·   %s",
+                  d.author.empty() ? "—" : d.author.c_str(),
+                  d.surfaces.c_str(), d.licence.empty() ? "—" : d.licence.c_str());
+    ImGui_Text(ctx, meta);
+    if (!d.description.empty()) ImGui_TextWrapped(ctx, d.description.c_str());
+
+    // Coverage headline.
+    ImGui_Spacing(ctx);
+    if (d.isUf8) {
+        std::snprintf(meta, sizeof(meta), "%d of %d V-Pot slots   ·   %d of %d strips",
+                      d.uf8Vpots, d.uf8VpotSlots, d.uf8Strips, d.uf8StripSlots);
+        ImGui_Text(ctx, meta);
+    } else {
+        std::snprintf(meta, sizeof(meta), "%d of %d controls mapped", d.covN, d.covD);
+        ImGui_Text(ctx, meta);
+    }
+    {
+        double w = 240.0, h = 0.0;
+        double frac = d.covD > 0 ? (double)d.covN / d.covD : 0.0;
+        if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+        char pct[16]; std::snprintf(pct, sizeof(pct), "%d%%", d.covPct);
+        ImGui_ProgressBar(ctx, frac, &w, &h, pct);
+    }
+
+    // Install + the clash confirm live here now, on the detail page.
+    ImGui_Spacing(ctx);
+    const bool downloading = g_dlReq != 0;
     if (g_pendingClash) {
         ImGui_TextColored(ctx, g_installColor, g_installStatus.c_str());
-        ImGui_TextWrapped(ctx, "Replacing discards your version — there is no undo.");
+        ImGui_TextWrapped(ctx, "You already have a mapping for this plug-in. "
+                               "Replacing discards your version — there is no undo.");
         if (ImGui_Button(ctx, "Replace mine##exch_replace", nullptr, nullptr)) {
             g_pendingClash = false;
             applyInstall(std::move(g_pendingInstall));
@@ -428,63 +630,75 @@ void drawPlugin(ImGui_Context* ctx) {
             g_pendingInstall = {};
             g_installStatus.clear();
         }
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Spacing(ctx);
-    } else if (!g_installStatus.empty()) {
-        ImGui_TextColored(ctx, g_installColor, g_installStatus.c_str());
-        ImGui_Spacing(ctx);
+    } else {
+        if (ImGui_Button(ctx, downloading ? "Installing…##exch_map_inst"
+                                          : "Install this mapping##exch_map_inst",
+                         nullptr, nullptr) && !downloading)
+            startInstall(d.id);
+        if (!g_installStatus.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextColored(ctx, g_installColor ? g_installColor : 0xCCCCCCFF,
+                              g_installStatus.c_str());
+        }
     }
 
-    // One row per map. Install lives in its own column; hover a row's author
-    // to read the description. Sticky header via ScrollY + fixed height.
-    double availW = 0.0, availH = 0.0;
-    ImGui_GetContentRegionAvail(ctx, &availW, &availH);
-    if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
-    int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
-               | ImGui_TableFlags_Resizable | ImGui_TableFlags_ScrollY;
-    if (ImGui_BeginTable(ctx, "##exch_maps", 5, &tFlags, nullptr, &availH, nullptr)) {
-        int stretch = ImGui_TableColumnFlags_WidthStretch;
-        int fixed   = ImGui_TableColumnFlags_WidthFixed;
-        double wInst = 150.0, wAuthor = 2.0, wSurf = 96.0, wCov = 140.0, wWorks = 64.0;
-        ImGui_TableSetupColumn(ctx, "",         &fixed,   &wInst,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Author",   &stretch, &wAuthor, nullptr);
-        ImGui_TableSetupColumn(ctx, "Surface",  &fixed,   &wSurf,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,   &wCov,    nullptr);
-        ImGui_TableSetupColumn(ctx, "Works",    &fixed,   &wWorks,  nullptr);
-        ImGui_TableHeadersRow(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
 
-        const bool blocked = g_dlReq != 0 || g_pendingClash;
-        char buf[256];
-        for (const auto& m : g_maps) {
-            ImGui_TableNextRow(ctx, nullptr, nullptr);
-
-            ImGui_TableSetColumnIndex(ctx, 0);
-            const bool downloading = g_dlReq && g_dlMapId == m.id;
-            std::snprintf(buf, sizeof(buf), "%s##exch_dl_%d",
-                          downloading ? "Installing…" : "Install", m.id);
-            if (ImGui_Button(ctx, buf, nullptr, nullptr) && !blocked)
-                startInstall(m.id);
-
-            ImGui_TableSetColumnIndex(ctx, 1);
-            ImGui_Text(ctx, m.author.empty() ? "—" : m.author.c_str());
-            if (!m.description.empty() && ImGui_IsItemHovered(ctx, nullptr))
-                ImGui_SetTooltip(ctx, m.description.c_str());
-
-            ImGui_TableSetColumnIndex(ctx, 2);
-            ImGui_Text(ctx, m.surfaces.c_str());
-
-            ImGui_TableSetColumnIndex(ctx, 3);
-            std::snprintf(buf, sizeof(buf), "%d/%d (%d%%)", m.covN, m.covD, m.covPct);
-            double frac = m.covD > 0 ? (double)m.covN / m.covD : 0.0;
-            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
-
-            ImGui_TableSetColumnIndex(ctx, 4);
-            std::snprintf(buf, sizeof(buf), "%d", m.works);
-            ImGui_Text(ctx, buf);
+    if (d.isUf8) {
+        ImGui_TextWrapped(ctx, "UF8 V-Pot maps use an 8x8-per-bank grid, not a "
+                               "control list. The per-slot view is coming.");
+    } else {
+        // The control -> parameter table, grouped by section. Bound controls
+        // show their parameter; unbound ones are dimmed with a dash.
+        for (const auto& s : d.sections) {
+            char sh[96];
+            std::snprintf(sh, sizeof(sh), "%s   %d/%d", s.name.c_str(), s.hit, s.total);
+            ImGui_Text(ctx, sh);
+            char tid[64];
+            std::snprintf(tid, sizeof(tid), "##exch_sec_%s", s.name.c_str());
+            int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+            if (ImGui_BeginTable(ctx, tid, 2, &tFlags, nullptr, nullptr, nullptr)) {
+                int stretch = ImGui_TableColumnFlags_WidthStretch;
+                double wA = 1.0, wB = 2.0;
+                ImGui_TableSetupColumn(ctx, "Control",   &stretch, &wA, nullptr);
+                ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wB, nullptr);
+                for (const auto& c : s.cells) {
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    ImGui_TableSetColumnIndex(ctx, 0);
+                    if (c.bound) ImGui_Text(ctx, c.control.c_str());
+                    else         ImGui_TextColored(ctx, 0x808890FF, c.control.c_str());
+                    ImGui_TableSetColumnIndex(ctx, 1);
+                    if (c.bound) ImGui_Text(ctx, c.param.empty() ? "(bound)" : c.param.c_str());
+                    else         ImGui_TextColored(ctx, 0x808890FF, "—");
+                }
+                ImGui_EndTable(ctx);
+            }
+            ImGui_Spacing(ctx);
         }
-        ImGui_EndTable(ctx);
+    }
+
+    // Off-face bindings that have no control on the face — never dropped.
+    if (!d.alsoMapped.empty()) {
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Also mapped (no fixed control):");
+        char row[256];
+        for (const auto& a : d.alsoMapped) {
+            std::snprintf(row, sizeof(row), "    linkIdx %d  ->  %s",
+                          a.first, a.second.empty() ? "(bound)" : a.second.c_str());
+            ImGui_Text(ctx, row);
+        }
+    }
+    if (!d.modLayers.empty()) {
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Modifier layers:");
+        char row[256];
+        for (const auto& m : d.modLayers) {
+            std::snprintf(row, sizeof(row), "    %s  ->  %s",
+                          m.first.c_str(), m.second.c_str());
+            ImGui_Text(ctx, row);
+        }
     }
 }
 
@@ -495,6 +709,7 @@ void ExchangeView::draw(ImGui_Context* ctx) {
     pumpHealth();
     pumpList();
     pumpPlugin();
+    pumpMap();
     pumpDownload();
 
     ImGui_Text(ctx, "Mapping Exchange");
@@ -514,8 +729,9 @@ void ExchangeView::draw(ImGui_Context* ctx) {
     // Auto-load the list the first time the tab is opened.
     if (!g_listedOnce && !g_listReq) fetchList();
 
-    if (g_view == View::List) drawList(ctx);
-    else                      drawPlugin(ctx);
+    if      (g_view == View::List)   drawList(ctx);
+    else if (g_view == View::Plugin) drawPlugin(ctx);
+    else                             drawMap(ctx);
 }
 
 } // namespace uf8
