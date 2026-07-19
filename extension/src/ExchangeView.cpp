@@ -335,20 +335,47 @@ void drawList(ImGui_Context* ctx) {
         return;
     }
 
-    char line[512];
-    for (const auto& p : g_plugins) {
-        std::snprintf(line, sizeof(line), "%s##exch_p_%s",
-                      p.name.c_str(), p.slug.c_str());
-        if (ImGui_Button(ctx, line, nullptr, nullptr))
-            openPlugin(p.slug);
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        char meta[384];
-        std::snprintf(meta, sizeof(meta), "   %s · %d map%s · %s · best %d%%",
-                      p.vendor.empty() ? "—" : p.vendor.c_str(),
-                      p.mapCount, p.mapCount == 1 ? "" : "s",
-                      p.surfaces.empty() ? "—" : p.surfaces.c_str(),
-                      p.bestCoverage);
-        ImGui_Text(ctx, meta);
+    // One row per plug-in. Click a row to open its maps. Columns are
+    // resizable and hideable; the plug-in name stretches, the rest are fixed.
+    int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
+               | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable;
+    if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, nullptr, nullptr)) {
+        int stretch = ImGui_TableColumnFlags_WidthStretch;
+        int fixed   = ImGui_TableColumnFlags_WidthFixed;
+        double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wBest = 54.0;
+        ImGui_TableSetupColumn(ctx, "Plug-in",  &stretch, &wName,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
+        ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Surfaces", &fixed,   &wSurf,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Best",     &fixed,   &wBest,   nullptr);
+        ImGui_TableHeadersRow(ctx);
+
+        char buf[512];
+        for (const auto& p : g_plugins) {
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+            ImGui_TableSetColumnIndex(ctx, 0);
+            std::snprintf(buf, sizeof(buf), "%s##exch_p_%s",
+                          p.name.c_str(), p.slug.c_str());
+            int selFlags = ImGui_SelectableFlags_SpanAllColumns;
+            if (ImGui_Selectable(ctx, buf, nullptr, &selFlags, nullptr, nullptr))
+                openPlugin(p.slug);
+
+            ImGui_TableSetColumnIndex(ctx, 1);
+            ImGui_Text(ctx, p.vendor.empty() ? "—" : p.vendor.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 2);
+            std::snprintf(buf, sizeof(buf), "%d", p.mapCount);
+            ImGui_Text(ctx, buf);
+
+            ImGui_TableSetColumnIndex(ctx, 3);
+            ImGui_Text(ctx, p.surfaces.empty() ? "—" : p.surfaces.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 4);
+            std::snprintf(buf, sizeof(buf), "%d%%", p.bestCoverage);
+            ImGui_Text(ctx, buf);
+        }
+        ImGui_EndTable(ctx);
     }
 }
 
@@ -402,27 +429,50 @@ void drawPlugin(ImGui_Context* ctx) {
         ImGui_Spacing(ctx);
     }
 
-    char btn[64], meta[512];
-    for (const auto& m : g_maps) {
-        const bool downloading = g_dlReq && g_dlMapId == m.id;
-        std::snprintf(btn, sizeof(btn), "%s##exch_dl_%d",
-                      downloading ? "Installing…" : "Download & install", m.id);
-        // Disable further clicks while any download is in flight or a clash
-        // is awaiting the user's decision.
+    // One row per map. Install lives in its own column; hover a row's author
+    // to read the description.
+    int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
+               | ImGui_TableFlags_Resizable;
+    if (ImGui_BeginTable(ctx, "##exch_maps", 5, &tFlags, nullptr, nullptr, nullptr)) {
+        int stretch = ImGui_TableColumnFlags_WidthStretch;
+        int fixed   = ImGui_TableColumnFlags_WidthFixed;
+        double wInst = 150.0, wAuthor = 2.0, wSurf = 96.0, wCov = 110.0, wWorks = 64.0;
+        ImGui_TableSetupColumn(ctx, "",         &fixed,   &wInst,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Author",   &stretch, &wAuthor, nullptr);
+        ImGui_TableSetupColumn(ctx, "Surface",  &fixed,   &wSurf,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,   &wCov,    nullptr);
+        ImGui_TableSetupColumn(ctx, "Works",    &fixed,   &wWorks,  nullptr);
+        ImGui_TableHeadersRow(ctx);
+
         const bool blocked = g_dlReq != 0 || g_pendingClash;
-        if (ImGui_Button(ctx, btn, nullptr, nullptr) && !blocked)
-            startInstall(m.id);
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        std::snprintf(meta, sizeof(meta), "   by %s · %s · %d/%d (%d%%)%s",
-                      m.author.empty() ? "—" : m.author.c_str(),
-                      m.surfaces.c_str(), m.covN, m.covD, m.covPct,
-                      m.works > 0 ? ("  · " + std::to_string(m.works) + " works-for-me").c_str() : "");
-        ImGui_Text(ctx, meta);
-        if (!m.description.empty()) {
-            ImGui_Text(ctx, "      ");
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_TextWrapped(ctx, m.description.c_str());
+        char buf[256];
+        for (const auto& m : g_maps) {
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+            ImGui_TableSetColumnIndex(ctx, 0);
+            const bool downloading = g_dlReq && g_dlMapId == m.id;
+            std::snprintf(buf, sizeof(buf), "%s##exch_dl_%d",
+                          downloading ? "Installing…" : "Install", m.id);
+            if (ImGui_Button(ctx, buf, nullptr, nullptr) && !blocked)
+                startInstall(m.id);
+
+            ImGui_TableSetColumnIndex(ctx, 1);
+            ImGui_Text(ctx, m.author.empty() ? "—" : m.author.c_str());
+            if (!m.description.empty() && ImGui_IsItemHovered(ctx, nullptr))
+                ImGui_SetTooltip(ctx, m.description.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 2);
+            ImGui_Text(ctx, m.surfaces.c_str());
+
+            ImGui_TableSetColumnIndex(ctx, 3);
+            std::snprintf(buf, sizeof(buf), "%d/%d (%d%%)", m.covN, m.covD, m.covPct);
+            ImGui_Text(ctx, buf);
+
+            ImGui_TableSetColumnIndex(ctx, 4);
+            std::snprintf(buf, sizeof(buf), "%d", m.works);
+            ImGui_Text(ctx, buf);
         }
+        ImGui_EndTable(ctx);
     }
 }
 
