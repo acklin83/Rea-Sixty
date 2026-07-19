@@ -1440,6 +1440,12 @@ bool importMapFromFile(const std::string& path, MapShare& out,
         if (errOut) *errOut = "could not read " + path;
         return false;
     }
+    return importMapFromString(contents, out, errOut);
+}
+
+bool importMapFromString(const std::string& contents, MapShare& out,
+                         std::string* errOut)
+{
     wdl_json_parser p;
     wdl_json_element* root = p.parse(contents.c_str(),
                                      static_cast<int>(contents.size()));

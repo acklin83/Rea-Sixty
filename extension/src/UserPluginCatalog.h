@@ -663,6 +663,11 @@ bool exportMapToFile(const std::string& path, const MapShare& share,
 bool importMapFromFile(const std::string& path, MapShare& out,
                        std::string* errOut);
 
+// Same as importMapFromFile but parses bytes already in memory — used by the
+// in-app Exchange download, which has the .rea60map from the API, not a file.
+bool importMapFromString(const std::string& contents, MapShare& out,
+                         std::string* errOut);
+
 // Absolute path where user_plugins.json is persisted.
 std::string configPath();
 
