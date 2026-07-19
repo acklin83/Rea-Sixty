@@ -634,13 +634,14 @@ The Top-Soft-Key labels in the schematic **follow the edit selection**, so you c
 
 In the Sub-Bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this Sub-Bank**, or **Load full set → Layer 1 / Quick 3** to drop all banks into Layer 1 / Quick 3's six sub-banks at once.
 
-The six factory banks are:
+The seven factory banks are:
 
 - **Encoder Modes** — Channel-Encoder mode switches (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Focus Wheel).
 - **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
 - **CS Favourites** — the eight *Switch to CS Favourite N* actions; the labels show each favourite's plug-in short name live (falling back to "CS Fav N" when a slot is empty).
+- **BC Favourites** — the same for the eight Bus-Compressor favourites.
 - **Brightness** — Both / LCDs / LEDs × up / down.
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
@@ -882,7 +883,7 @@ Top bar:
 - **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
 - **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
-- **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS-Switch favourite slots, or clear it. See chapter *Channel-Strip Switch (CS-Switch)*.
+- **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS favourite slots, or clear it. See chapter *Favourites*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
 - **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
 - Breadcrumb **`← All maps`** to leave the editor.
@@ -1181,7 +1182,7 @@ A dockable window showing the focused plug-in's **UC1 control → parameter assi
 - **Right-click → View** switches between the grouped text **List** and a hardware **Mockup** (the UC1/UF8 face). **Right-click → Text size** (Small … Huge); the menus themselves honour your *Appearance → Font Size*. The window size persists globally.
 - **Click a row (or mockup control), then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
 - **Right-click a control** (list row or mockup knob/button) for a per-control menu: **Learn** (wiggle a parameter), **Invert** (flip the control's polarity), **Rename…** (set a custom Display label; empty reverts to the default name), **Unbind**, plus the **knob-travel / curve editor**, **feel presets** and **stepped-parameter** controls — full FX-Learn parity without opening Settings. All act on the active modifier layer; Invert / Rename / Unbind are disabled on an unmapped control, and built-in SSL maps show the factory-fixed hint.
-- The window's **☰ menu** carries a **CS Favourite** submenu — favourite the live Channel-Strip into a CS-Switch slot (greyed when no CS is on the focused track). See chapter *Channel-Strip Switch (CS-Switch)*.
+- The window's **☰ menu** carries a **CS Favourite** submenu — favourite the live Channel-Strip into a favourite slot (greyed when no CS is on the focused track). See chapter *Favourites*.
 
 \newpage
 
@@ -1219,7 +1220,7 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **Encoder Mode → FX Cycle (across tracks)** — Cycle FX across tracks: same cross-track behaviour for every FX.
 - **Encoder Mode → FX Move (in chain)** — move the active FX up / down within the focused track's chain on rotation (within-chain only; hard-stop at the ends).
 - **Encoder Mode → Selection Set Cycle** — step through populated Selection Set slots (off → 1 → 2 → … → off).
-- **Encoder Mode → CS Cycle (favourites)** — Channel-Strip Switch: cycle the active CS through the favourite slots (see chapter *Channel-Strip Switch (CS-Switch)*).
+- **Encoder Mode → CS Cycle (favourites)** — cycle the active CS through the favourite slots (see chapter *Favourites*).
 - **Encoder: dispatch by current mode** — routes rotation to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
@@ -1266,13 +1267,16 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **FX param: step up** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in plug-in map registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to *FX param: step up* and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
 - **FX param: step down** — same as *FX param: step up* with the sign flipped.
 
-## Channel-Strip Switch
+## Favourites
 
-Replace the active Channel-Strip plug-in, carrying values across (see chapter *Channel-Strip Switch (CS-Switch)*). Operate on every selected track, else the surface-focused track.
+Replace or duplicate the active plug-in, carrying values across (see chapter *Favourites*). All of these act on every selected track, else the surface-focused track. Each exists three times: for the Channel Strip, for the Bus Compressor, and in a **Focused Domain** form that follows whichever you are working on.
 
-- **Switch to CS Favourite 1 … Switch to CS Favourite 8** — switch the active CS to favourite slot N. Lit when the focused CS already is that favourite.
-- **Encoder: cycle Channel Strip favourites** — step to the next favourite (wraps, honours the cycle-wrap setting).
-- **Encoder Mode → CS Cycle (favourites)** — Channel-Encoder mode: rotate to cycle favourites (also listed under *Channel Encoder mode toggles*).
+- **Switch to CS Favourite 1 … 8** / **Switch to BC Favourite 1 … 8** / **Switch to Favourite 1 … 8 (Focused Domain)** — replace the active plug-in with favourite N. Lit when it already is that favourite.
+- **Copy to CS Favourite 1 … 8** / **Copy to BC Favourite 1 … 8** / **Copy to Favourite 1 … 8 (Focused Domain)** — insert favourite N below the active plug-in with the values carried, and bypass the original. An instant A/B.
+- **CS Favourite Cycle** / **BC Favourite Cycle** / **Favourite Cycle (Focused Domain)** — step through the favourites; on an encoder, one step per detent.
+- **CS Favourite Copy/Own** / **BC Favourite Copy/Own** / **Favourite Copy/Own (Focused Domain)** — flip that domain between carrying live values and restoring each favourite's own settings.
+
+The cycles are also available as Channel-Encoder modes — **Encoder Mode → CS Cycle (Favourites)**, **→ BC Cycle (Favourites)** and **→ Favourite Cycle (Focused Domain)** (also listed under *Channel Encoder mode toggles*).
 
 ## Instance navigation
 
@@ -1463,35 +1467,101 @@ User-renamed 360° Link instances show the rename instead of the generic "Link" 
 
 \newpage
 
-# Channel-Strip Switch (CS-Switch)
+# Favourites (Channel Strip and Bus Compressor)
 
-Swap the active Channel-Strip plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different channel-strip emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
+Swap the active Channel-Strip or Bus-Compressor plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
+
+## Two domains
+
+**Channel Strip** and **Bus Compressor** favourites are entirely separate: eight slots each, their own set libraries, their own preferences. A track can carry one of each.
+
+Most actions come in three flavours — an explicit CS one, an explicit BC one, and a **Focused Domain** one that follows whichever of the two you are working on at the time. Bind the Focused Domain versions if you want one button that does the right thing on both; bind the explicit ones if you want a button that always means Channel Strip.
 
 ## Requirement — the plug-ins must be mapped
 
-CS-Switch works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
+Favourite switching works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
 
 - The **built-in maps** (SSL CS 2, 4K B / E / G, BC 2, 360 Link) work out of the box — nothing to set up.
-- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells CS-Switch which parameter shares each control.
+- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells Rea-Sixty which parameter shares each control.
 
 Without a map: a track whose active plug-in isn't a recognised Channel Strip is **skipped** (treated as having no CS), and value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
 
-## Favourites
+## Setting favourites
 
-Define up to **8 favourite** Channel-Strip plug-ins. They are stored globally (all projects), in REAPER's ExtState. Set them in either place:
+**Settings → Favourites** is the main place. Each domain has eight numbered slots, and each slot is a searchable dropdown over your mapped plug-ins. One plug-in occupies one slot — putting it in a new slot moves it out of the old one.
 
-- **Settings → FX Learn**, with a Channel-Strip plug-in loaded and its editor open: a **CS Favourite** dropdown assigns the current plug-in to a slot (1–8).
-- **Learn-HUD ☰ menu → CS Favourite** submenu: favourite the live Channel-Strip directly (greyed when no CS is on the focused track).
+Two shortcuts exist for favouriting whatever is in front of you:
 
-One plug-in occupies one slot — assigning it to a new slot moves it.
+- **Settings → FX Learn**, with the plug-in's editor open: a **CS Favourite:** or **BC Favourite:** dropdown assigns it to a slot.
+- **Learn-HUD**, from its menu — favourite the live plug-in directly.
 
-## Switching
+Both of those edit the **base** bank, not a named set.
 
-- **Switch to CS Favourite 1 … Switch to CS Favourite 8** — replace the active CS with favourite N. The action lights when the focused CS already *is* that favourite.
-- **Encoder: cycle Channel Strip favourites** — step to the next favourite, wrapping (honours the global cycle-wrap setting).
-- **Encoder Mode → CS Cycle (favourites)** — a Channel-Encoder mode: rotate to cycle favourites.
+## Sets, and the Base bank
 
-A track with **no** Channel Strip is skipped. With multiple tracks selected, all selected tracks switch in one undo step (else the surface-focused track). The swap preserves the old plug-in's **bypass state** and, if its GUI was open, **reopens the window**.
+Eight slots is not many once you work across genres, so favourites can be grouped into named **sets** — a full bank of eight, saved under a name. Drums might want one set of strips, vocals another.
+
+In **Settings → Favourites** the set library is split into two columns, **Channel Strip sets** and **Bus Compressor sets**, because the libraries are separate. **New** creates a set, **Dup** copies the one you are looking at, **Del** removes it. A set can be renamed in the field beside those buttons.
+
+Sets are assigned **per track**, under **Assign sets to selected tracks**: select tracks, then pick a **CS set** and a **BC set** for them. Each track can hold one of each, independently.
+
+A track with no set assigned uses the **Base** bank — the fallback everything starts on. Base is normally global and shared by every project. Ticking **This project uses its own Favourites** gives the current project its own base bank instead, seeded from the global one, so a project can carry a specific selection without disturbing your usual setup. The dropdown label tells you which you are editing: `Base (global)` or `Base (this project)`.
+
+> When a track *is* assigned a set, that set is the whole story: an empty slot in it stays empty rather than falling back to Base.
+
+Set libraries and the global base bank are stored with Rea-Sixty and shared by all projects. Per-track assignments, the per-project bank, and the remembered values of each favourite live in the project file.
+
+## Copy values, or own settings
+
+There are two ways a swap can behave, and it is worth understanding the difference because it is the heart of the feature.
+
+**Copy values** carries the live settings from the outgoing plug-in onto the incoming one. You keep the sound you have and change the flavour of the box producing it.
+
+**Own settings** does the opposite: each favourite remembers what *it* was last set to on that channel, and switching restores that. The plug-in comes back as you left it.
+
+The two domains default differently, and deliberately so:
+
+| Domain | Default | Toggle in Settings → Favourites |
+|---|---|---|
+| Channel Strip | **Copy values** | `Channel Strip: use own settings (vs copy values)` |
+| Bus Compressor | **Own settings** | `Bus Compressor: use own settings (vs copy values)` |
+
+Carrying live EQ and dynamics onto the next strip is usually what you want; a bus compressor is more often a thing with its own character you return to. Both are toggleable, from Settings or from a bound action — **CS Favourite Copy/Own**, **BC Favourite Copy/Own**, or the domain-following **Favourite Copy/Own (Focused Domain)**.
+
+The setting governs **Switch** and **Cycle**. *Copy to Favourite N*, below, always copies — that is its purpose.
+
+## Switching, copying, cycling
+
+Three things you can do with a favourite, each available for CS, for BC, and for the focused domain:
+
+- **Switch to CS Favourite 1 … 8** — replace the active plug-in with favourite N. The button lights when the focused plug-in already *is* that favourite.
+- **Copy to CS Favourite 1 … 8** — the A/B, described below.
+- **CS Favourite Cycle** — step through the favourites. Bound to an encoder it steps per detent; there is also **Encoder Mode → CS Cycle (Favourites)** to give a channel encoder that job outright.
+
+Cycling starts from wherever the track already sits: if its plug-in is favourite 3, the next detent goes to 4. If its plug-in is not a favourite at all, the first forward step lands on the first favourite. Empty slots are skipped, and whether it wraps at the ends follows the global cycle-wrap setting.
+
+A track with no plug-in in that domain is skipped. The swap preserves the old plug-in's **bypass state**, and if its window was open the new one opens the same way.
+
+## Copy to Favourite N — the A/B
+
+*Switch* replaces the plug-in. **Copy** does not: it inserts favourite N **directly below** the current one, carries the settings onto it, and **bypasses the original**.
+
+You end up with both strips on the track, same settings, one active — so you can flip between them by toggling bypass, and keep the original to go back to. Copy always carries values, whatever the copy/own setting says.
+
+## Which sections carry
+
+On the Channel Strip you can restrict what a swap carries, under **Copy sections (copy mode only):** — four checkboxes, all on by default:
+
+| Box | Covers |
+|---|---|
+| `EQ` | The EQ bands, and the filters, which ride with the EQ on an SSL strip |
+| `Dyn` | Compressor and the sidechain listen |
+| `Gate` | Gate and expander |
+| `Fader` | The strip's fader level |
+
+Anything outside those — input trim, polarity — always carries. The mask applies to Switch, Cycle and Copy alike. **The Bus Compressor has no mask**; it is a single block of eight controls with nothing to divide.
+
+**Favourites remember non-copied sections** (on by default) keeps the parts you did *not* carry. Switch away with `Gate` unticked and back again, and the gate returns as it was rather than as the plug-in's default. This also covers parameters that are unique to a plug-in and have no equivalent anywhere else — the odd character control that only one emulation has — which are remembered per favourite and restored when you come back to it.
 
 ## Value transfer
 
@@ -1500,10 +1570,25 @@ Each control carries its value to the matching control on the new plug-in, match
 - **Numeric values** (gains, frequencies, Q, threshold, ratio, time) transfer by **engineering value**: the search lands the new plug-in on the value whose display matches the source, exactly when achievable. Hz↔kHz and s↔ms scale differences are reconciled automatically; dB / ratio are never rescaled.
 - **Same-family swaps** (e.g. SSL → SSL) stay **bit-exact**.
 - **Discrete states / buttons** (Bell/Shelf, In/Out, Gate/Expander…) transfer by **meaning**: identical label first, else the active/inactive sense (In/On/Engaged/Expander ↔ Out/Off/Bypass/Gate), else the same state position — so a toggle lands correctly even when the two plug-ins label or order it differently.
-- **Unmapped controls** are resolved by parameter **name alias** as a fallback (e.g. a JSFX strip whose high-pass is literally named "High Pass Filter (Hz)"), but a learned mapping always wins.
 - A control the **new** plug-in lacks is remembered, so the value survives a round-trip through a simpler strip and is restored when you cycle back.
+- **The SSL routing order and the EXT FUNCS carry too** — the EQ / filter / dynamics arrangement and the free function assignments follow the swap, matched by what each control *is*, so they survive a move between different strips whose internals are numbered differently.
+- A filter parked **fully open** lands on the destination's own "out" position where it has one, rather than arriving as a real 20 kHz.
+
+**Copy only mapped parameters** (Settings → Favourites, on by default) decides how far the matching goes. On, only parameters mapped to a control carry. Off, Rea-Sixty also matches unmapped parameters by name — which can be useful for an unmapped strip, but can also drag across things you did not mean, such as an auto-makeup-gain control that happens to be named like a makeup gain.
 
 If a value genuinely can't be represented (a frequency far outside the target's range), the control is left at its default rather than slammed to a rail.
+
+## Several tracks at once
+
+Switch, Copy and Cycle act on **every selected track**, in a single undo step — or on the surface-focused track when nothing is selected.
+
+When the selected tracks carry different sets, **Multi-select: unify sets to focused track** (on by default) re-assigns them all to the focused track's set so they end up consistent. Turn it off and each track keeps its own set, switching within it.
+
+## On the surface
+
+Two factory soft-key banks exist, **CS Favourites** and **BC Favourites**, each filling eight keys with that domain's Switch actions. The key labels show each favourite's plug-in short name — resolved through the focused track's assigned set — falling back to `CS Fav N` when a slot is empty.
+
+Cycling on the UC1 shows the same **previous / current / next** carousel the FX and Instance cycles use, headed with the track name, so you can see what you are stepping into. At the ends of a non-wrapping cycle it still shows, sitting on the current favourite.
 
 \newpage
 
