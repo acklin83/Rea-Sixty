@@ -13111,6 +13111,37 @@ void drawFxLearnSchematic_(ImGui_Context* ctx,
     ImGui_Dummy(ctx, W * kScale, H * kScale);
 }
 
+// Capture original_name for a map by finding a live loaded FX that resolves to
+// it. The FX-Learn focus-follow captures only when the user actively changes
+// focus to a mapped FX; a map restored from ExtState (the common case at Share
+// time) never triggers that, so its originalName stays empty. Sharing is the
+// natural second chance: the plug-in is almost always loaded when you export
+// its map. Scans all FX (not just open ones) on the master and every track,
+// stops at the first match. No-op when the plug-in is not currently loaded, in
+// which case the exchange falls back to `match`.
+static void captureOriginalNameForMatch_(const std::string& match)
+{
+    if (match.empty()) return;
+    auto scanTrack = [&](MediaTrack* tr) -> bool {
+        if (!tr) return false;
+        const int n = TrackFX_GetCount(tr);
+        for (int i = 0; i < n; ++i) {
+            char nm[512] = {0};
+            if (!uf8::fxIdentityName(tr, i, nm, sizeof(nm)) || !nm[0]) continue;
+            const auto* um = uf8::user_plugins::lookupOwnedByName(nm);
+            if (um && um->match == match) {
+                uf8::user_plugins::captureOriginalName(match, nm);
+                return true;
+            }
+        }
+        return false;
+    };
+    if (scanTrack(GetMasterTrack(nullptr))) return;
+    const int tc = CountTracks(nullptr);
+    for (int ti = 0; ti < tc; ++ti)
+        if (scanTrack(GetTrack(nullptr, ti))) return;
+}
+
 // Render the Editor-View. Pre-condition: g_editingMatch is non-empty and
 // names a map currently in the catalog. Caller is drawFxLearn.
 void drawFxLearnEditor_(ImGui_Context* ctx)
@@ -13351,6 +13382,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (ImGui_Button(ctx, "Share…##fxl_hdr_share", nullptr, nullptr)) {
         g_shareError.clear();
         g_shareCc0 = false;
+        // Grab the live plug-in factory name now (v2 original_name), so the
+        // export carries it even when the map was restored from ExtState and
+        // never focus-followed this session. No-op if the plug-in isn't loaded.
+        captureOriginalNameForMatch_(g_editingMatch);
         // Author is typed once and reused — it is the attribution that
         // travels with every map this user shares.
         const char* prevAuthor = GetExtState("ReaSixty", "shareAuthor");
