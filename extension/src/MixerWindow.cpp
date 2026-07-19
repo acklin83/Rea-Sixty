@@ -1,6 +1,7 @@
 #include "MixerWindow.h"
 #include "SettingsScreen.h"
 #include "ManualView.h"
+#include "ExchangeView.h"
 #include "ThemeBridge.h"
 
 #include <cstdio>
@@ -50,6 +51,7 @@ enum Section : int {
     kSecFavourites,
     kSecSelectionSets,
     kSecParameterGroups,
+    kSecExchange,
     kSecManual,
     kSecAbout,
     kSecCount,
@@ -71,7 +73,8 @@ constexpr RailEntry kRail[] = {
     { "Favourites",     kSecFavourites,    false, &SettingsScreen::drawFavourites    },
     { "Selection Sets",  kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets },
     { "Parameter Groups",kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
-    { "Manual",          kSecManual,         true,  &ManualView::draw                  },
+    { "Exchange",        kSecExchange,       true,  &ExchangeView::draw                },
+    { "Manual",          kSecManual,         false, &ManualView::draw                  },
     { "About",           kSecAbout,          false, &SettingsScreen::drawAbout         },
 };
 

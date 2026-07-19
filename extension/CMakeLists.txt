@@ -359,6 +359,10 @@ add_library(reaper_uf8 MODULE
     # CS Gate/Comp gain reduction that no REAPER API exposes.
     src/SslMeterProtocol.cpp
     src/SslCoreImpersonator.cpp
+    # Mapping Exchange — async HTTPS client (macOS impl in macos_http.mm; this
+    # is the non-Apple stub) + the in-app Exchange view.
+    src/HttpClient.cpp
+    src/ExchangeView.cpp
 )
 
 if(APPLE)
@@ -378,6 +382,11 @@ if(APPLE)
     target_sources(reaper_uf8 PRIVATE src/macos_pin_fx_gui.mm)
     set_source_files_properties(src/macos_pin_fx_gui.mm PROPERTIES
         COMPILE_FLAGS "-fno-objc-arc")
+    # NSURLSession HTTPS client for the mapping exchange. -fno-objc-arc to
+    # match the other .mm files; the shared state manages task lifetime.
+    target_sources(reaper_uf8 PRIVATE src/macos_http.mm)
+    set_source_files_properties(src/macos_http.mm PROPERTIES
+        COMPILE_FLAGS "-fno-objc-arc")
 endif()
 
 # SWELL's swell-types.h #defines min/max as 2-arg macros, which collide
@@ -392,6 +401,7 @@ if(APPLE)
     target_link_libraries(reaper_uf8 PRIVATE
         "-framework CoreMIDI"
         "-framework CoreFoundation"
+        "-framework Foundation"
         "-framework ApplicationServices"
         "-framework AppKit")
 endif()
