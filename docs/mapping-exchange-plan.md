@@ -87,14 +87,17 @@ one of those yields `"mono"` from `"… (SSL) (mono)"`. Capture the vendor at
 **export** time from the live `original_name`, and store it in the envelope —
 which is what the shipped `.rea60map` already has a field for.
 
-**Alias normalisation is not hypothetical.** The same machine produces both
-`Universal Audio (UADx)` (72 plug-ins) and `UADx` (70) as separate vendors. The
+**Alias normalisation is not hypothetical, and it starts with whitespace.**
+The same machine produces `Universal Audio (UADx)` (72 plug-ins) and `UADx` (70)
+as separate vendors — and two AU vendors (`Celemony `, `Synchro Arts `) carry a
+trailing space, which counted them twice until the extractor stripped it. Trim
+before you alias, then alias. The
 server needs an alias table from day one, exactly as this plan already assumed.
 
-**82 distinct vendors on one machine, over 1817 plug-ins.** A real corpus will
+**80 distinct vendors on one machine, over 1817 plug-ins.** A real corpus will
 carry several hundred. So the vendor facet is a **searchable combobox with
 type-ahead, multi-select chips and per-vendor counts** — a checkbox rail cannot
-hold 82 rows, let alone 400.
+hold 80 rows, let alone 400.
 
 **Export is whole-catalog only.** `exportToFile()` writes every map. A live
 catalog on the dev machine is 706 KB with 29 maps. Sharing one map needs a new
