@@ -275,11 +275,44 @@ to ~18 characters to fit, which turns "EQ High Mid Frequency" into "EQ High Mid
 Freque". Both make the picture harder to read than the table it sits above,
 which defeats the point.
 
-**The replacement is the reWASD layout: labels in the margin, leader lines to
-the control.** Not an invention — see the research section. It buys horizontal
-room for a full parameter name and removes the collision class entirely.
+**Leader lines were tried next and are also rejected.** Labels in the margin
+with a line back to each control (the reWASD layout) does remove the collisions,
+and it survives 33 controls — but on this face it reads as a wiring diagram, and
+the lines are visual noise for something the table beneath already states
+precisely. **Labels go directly on the control. No leaders.**
 
-**Density risk — TESTED, and it holds.** The worry was that a gamepad has
+### The real cause of both failures: drawing from the wrong table
+
+Every prototype up to this point rendered from **`kUc1Controls[]`**. That is the
+**hit-test table** — 41 bare circles and rectangles with a linkIdx each. It has
+no chassis, no column panels, no band dividers, no silkscreen, no GR meter, no
+LCD, no encoders. Rendering it produces a wiring diagram, which is why no amount
+of label placement made it look like hardware: there was no hardware in it.
+
+The drawing code is **`drawUc1Face_` (`SettingsScreen.cpp:2271-2652`)** — 381
+lines, 86 primitive calls: knobs with an outer ring, coloured cap and indicator
+at 12 o'clock; the three column backplates; the stepped SSL-4000E band dividers;
+the Bus Comp GR meter with its blue scale, tick labels and needle; the 7-segment
+readout; the LCD block; the CS/BC encoders; the GR LED ladder. **That is the
+picture, and the plan said to export it from the start.** Transcribing it (a
+Python port, 2026-07-19) produced a face that reads as a UC1 at a glance, with
+the parameter name sitting under each control's own silkscreen label.
+
+Only seven distinct primitives are used — `knob`, `btn`, `rect_`, `circle_`,
+`line_`, `drawText_`, `drawTextCentered_` — which is the whole argument for the
+virtual sink being a small job.
+
+**Placement rules the transcription needed** (the collision class does not
+vanish, it just gets small enough to solve):
+- Knobs: parameter name below the silkscreen label. Row pitch is 68 px
+  minimum, so this always fits.
+- The EQ **IN / TYPE** toggles sit 38 px apart on one row — stagger their two
+  labels vertically or they overlap.
+- Dynamics buttons are stacked 26 px apart, so a label below lands on the next
+  button and on the CHANNEL section label. Put it **beside** the button — right
+  for the gate pair, left for the compressor pair, which is where the room is.
+
+**Density risk — tested on the leader-line layout, which is now superseded by on-control labels. Kept because the measurements still bound the problem.** The worry was that a gamepad has
 roughly twenty controls where the UC1 Channel Strip domain has 33 in two tight
 vertical columns, and that thirty-three leaders would tangle where twenty do
 not. Rebuilt the prototype on the margin layout against the real coordinates:
