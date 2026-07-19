@@ -1649,6 +1649,149 @@ The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalRea
 
 \newpage
 
+# DynaMount mode
+
+DynaMount makes robotic microphone stands. In DynaMount mode the UF8 strips drive up to eight of them over your network — move a mic from the control room, with the fader.
+
+## Setting the mounts up
+
+**Settings → Modes → Dynamount.** Each of the eight rows is one stand:
+
+| Column | What it is |
+|---|---|
+| **On** | Include this mount. Only enabled mounts take a strip. |
+| **Name** | Shown on the scribble strip |
+| **IP address** | The mount's address on your network — you type it; there is no discovery |
+| **Colour** | The strip's colour bar |
+| **Detect** | Check whether that address answers |
+| **Calibrate** | The **Home** button (below) |
+| **Status** | `Gen1`, `Gen2`, `offline`, or `--` when the row is off |
+
+**Fill from left** / **Fill from right** decides which end of the surface the mounts occupy.
+
+## Engaging the mode
+
+Bind **Selection Mode → DynaMount** to a button; it toggles like every other Selection Mode. There is no switch in Settings — the Dynamount tab configures the stands, it does not turn the mode on.
+
+With no mounts enabled the mode does nothing at all, and every strip stays a track.
+
+Enabled mounts pin to one end of the surface and carry no track. The other strips remain ordinary track strips, and the tracks that would have sat under the mounts shift onto them rather than disappearing.
+
+## Driving a mount
+
+| Control | Axis |
+|---|---|
+| Fader | **X** — left and right |
+| Fader with **FLIP** | **Y** — distance, fader up = nearest |
+| V-Pot | **R** — rotation, 0–180° |
+
+The fader **sends when you let go**, not while you move it: the readout follows your hand, the stand moves once on release. The V-Pot behaves similarly — the number changes per detent, but the mount only turns about a second after you stop.
+
+The scribble strip shows the mount's name (or `MOUNT` if you have not named it), `DYNA` in the type zone, and the live position as `X`, `Y` and `R`. The digit is the mount's row number in Settings, not the strip number. A mount that is not answering has **OFF** appended to its value line.
+
+Solo, Cut and Sel have no function on a mount strip and their LEDs stay dark.
+
+## Home
+
+**Home** — the button under *Calibrate* — drives the mount to the reference pose **X50 Y0 R90**: centred, nearest, straight ahead. It also resets Rea-Sixty's idea of where the stand is.
+
+This matters because the protocol is one-way: the stands report no position, so Rea-Sixty knows only what it last told them. Positions are remembered globally and restored on the next launch without re-driving the motors, on the assumption that nothing moved in between. If you move a stand with the DynaMount app, by hand, or after a power cut, the two disagree — press Home and they match again.
+
+Home is a normal move command, so the stand travels to that pose; it is not a hardware homing or self-calibration routine.
+
+## Connection
+
+Rea-Sixty talks to the stands over plain HTTP on your local network, at the addresses you enter. Motor speed is fixed.
+
+**Detect** is a reachability check for an address you have already typed, not a search of the network. On an address with nothing at the other end it can take around six seconds to give up and report `offline`.
+
+> Once a mount has been found offline, Rea-Sixty stops trying it. Faders and V-Pots keep moving the numbers on screen, but the stand will not follow, and the value line shows **OFF**. Press **Detect** again after fixing the network — or edit the address, or restart REAPER. It will not recover on its own.
+
+Every enabled mount is probed once when REAPER starts, so Status is filled in before you open Settings.
+
+> **Only first-generation stands can be driven.** A newer stand is detected and reports `Gen2` in Status, but Rea-Sixty cannot move it — motion is implemented for the Gen1 HTTP protocol only.
+
+\newpage
+
+# Stream Deck and Companion
+
+Rea-Sixty carries a small server — the **bridge** — that external control apps talk to. Two clients use it: an official **Stream Deck plugin**, and a community **Bitfocus Companion module**. Both let you fire any Rea-Sixty action from a button and read live meters back.
+
+Neither is part of the ReaPack package.
+
+## The Stream Deck plugin
+
+Download `com.reasixty.companion.streamDeckPlugin` from the *Assets* of any [release](https://github.com/acklin83/Rea-Sixty/releases/latest) and **double-click it** — the Stream Deck app installs it. There is nothing else to install and nothing to configure; no Node, no separate server. You need the Stream Deck app **6.5 or newer**.
+
+The tiles then appear in the Stream Deck action list under **Rea-Sixty Companion**. Drag one onto a key.
+
+Nine tile types:
+
+| Tile | What it fires |
+|---|---|
+| **Favourite** | Switch and cycle CS / BC favourites |
+| **Layer** | Select binding layer 1 / 2 / 3 |
+| **Hardware Mode** | Surface-wide toggles — Flip, Home, Settings, mirrors, overlays, learn |
+| **Navigation** | Bank and page navigation, zoom |
+| **Plug-in** | FX windows, chain, close-all, Quick-Learn, bypass, offline |
+| **Selection Set** | Recall selection sets |
+| **Surface Target** | What the surface drives — Selection and Encoder modes, sends, Parameter Groups, soft-key banks, SSL |
+| **Any Rea-Sixty Action** | Any built-in at all, or a raw REAPER command |
+| **Meter** | A live readout rather than a button (below) |
+
+Each tile's action list is **pulled live from the running extension**, so it always matches your installed version rather than a list baked into the plugin. The consequence is that the list is empty until REAPER is up — the property panel then reads *"Rea-Sixty not connected — start REAPER with the extension."*
+
+Keys ship blank: no image, no title. Set a **Title**, or tick **Show track** to mirror the selected track's name.
+
+**The Meter tile** shows five sources — `Peak`, `Gain Reduction`, `Gain Reduction — Bus Comp`, `Peak + GR`, and `Peak + GR (Bus Comp)`. Gain Reduction reads the first plug-in on the track that reports it, so any compressor works; the Bus Comp variants target the mapped SSL Bus Compressor.
+
+Point it at the **Selected track**, the **Master track**, a fixed **Track number…** or a **Track name…**. The rest of the options are presentation: **Track name** and **Track colour** to show them, **Name position** (`Bottom` or `Top` — top reads better on an angled deck), **Wrap name** for a second line, and **Font size** (`Small` / `Normal` / `Large` / `Extra large`).
+
+**Smart abbrev.** is on by default and shortens long track names intelligently. Note that it *overrides* the global Track-name mode rather than following it: with the box ticked you get smart abbreviation even if the surface itself is set to plain truncation, and unticking it shows the full, unshortened name.
+
+A meter tile can also fire an action when pressed — see **On press (optional)**.
+
+## The bridge
+
+The bridge listens on **port 49900**, on **loopback only** — so out of the box, only the machine running REAPER can reach it.
+
+To let Companion on another machine connect, open it to the network by running this once in REAPER's ReaScript console and restarting REAPER:
+
+```
+reaper.SetExtState("rea_sixty", "sd_bridge_bind", "lan", true)
+```
+
+The port can be moved the same way with `sd_bridge_port`. Both settings are read once when the extension loads, so a restart is required either way.
+
+> **The bridge has no authentication.** In LAN mode anyone who can reach the port can drive REAPER. Only open it on a network you trust.
+
+Two limitations of the Stream Deck plugin are worth knowing before you plan a setup:
+
+- **It always connects to 127.0.0.1 on port 49900.** There is no host or port setting. So the Stream Deck plugin works on the machine running REAPER only — the LAN option above is useful for Companion, not for it.
+- **Moving the port with `sd_bridge_port` therefore disconnects the Stream Deck plugin** permanently. Only change the port if Companion is your only client, or if something else on the machine already occupies 49900.
+
+If the port cannot be claimed at all, the bridge fails quietly and everything else keeps working — the only evidence is a `StreamDeck bridge FAILED to bind` line in the log.
+
+## The Companion module
+
+> **Community module, provided as-is.** It is not officially supported, and it is not a one-to-one port of the Stream Deck plugin: Companion styles buttons through feedbacks rather than pre-made tiles, and some conveniences — metering a track by name, for one — are not implemented. The source is in the repository for anyone who wants to extend it.
+
+It needs **Bitfocus Companion 4.x** and is installed as a developer module: run `npm install` inside `companion/`, then point Companion's **Developer modules path** at the directory containing that folder and restart the launcher. Rea-Sixty then appears under Connections → Add connection.
+
+> **Do not point the developer path at a symlink.** Companion runs developer modules under Node's permission model, which refuses to read through one. The connection dies at startup with nothing but `Error: Restart forced` in the log — the real reason only appears at debug log level. Use a real directory.
+
+The connection is configured with a **REAPER host** and **Bridge port**, plus which tracks to meter: the selected track, the master, and a comma-separated list of track numbers. Metering is off until you enable it there, and each metered track is polled about fifteen times a second — so list only what you need.
+
+It provides an action for any Rea-Sixty built-in (the list again pulled live), plus REAPER commands by numeric ID or by action string. Feedbacks cover the active binding layer, flip state, a meter-over-threshold test with a configurable dB threshold, and a graphical meter bar. Variables expose the connection state, selected track name and number, active layer, flip, and per-track peak and gain-reduction values. Presets ship grouped by category, with a Meters group and a Status group.
+
+## If the keys go dead
+
+Both clients reconnect by themselves roughly every one and a half seconds, so starting REAPER after the Stream Deck app is fine — the keys come to life on their own, and nothing needs reinstalling.
+
+While the bridge is unreachable, meter keys show a dim dash and **no REAPER** rather than freezing on their last reading, and any track name shown on a key clears. That display *is* the diagnosis: REAPER is closed, the extension is not loaded, or something else has taken the port.
+
+\newpage
+
 # Master track
 
 The REAPER Master bus isn't a normal track — it's excluded from banking and has no track number. Rea-Sixty surfaces it in four places. A Channel Strip on the Master is treated exactly like one on any track (it drops into SSL Strip Mode automatically), and its scribble reads **MASTER**.
