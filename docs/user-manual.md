@@ -319,7 +319,7 @@ Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions *
 |---|---|
 | `PLUGIN` | Toggles SSL Strip Mode (**Toggle SSL Strip Mode**). With Shift held: **Toggle SSL Strip Mode (with GUI)**. |
 | `CHANNEL` | **Home (clear routing toggles)** — clear send / receive routing toggles so V-Pots / faders return to track volume + pan. |
-| `BANK ←` / `BANK →` | Scroll ±8 strips. In UF8 Plug-in Mode → flip between fader-banks A / B (for 16-strip plug-ins). |
+| `BANK ←` / `BANK →` | Scroll ±8 strips. In UF8 Plug-in Mode → flip between fader-banks A / B (for 16-strip plug-ins). In a **"of focused track"** routing view → page the send / receive list by 8 (see *Send and Receive views*). |
 | `PAGE ←` / `PAGE →` | Step the SSL Soft-Key PAGE bank prev / next (6 CS banks + 2 BC banks). |
 | `SEND / PLUGIN 1..8` | 8 buttons. Default **8 sends of focused track** / **8 receives of focused track** (param N) — toggle the matching send / receive view. |
 
@@ -1224,7 +1224,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 - **Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll the surface 8 strips left. In UF8 Plug-in Mode the same button flips between fader-banks A / B (for 16-strip plug-ins) instead.
 - **Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll 8 strips right (same fader-bank flip in UF8 Plug-in Mode).
 - **Bank by 1ch ← (one strip)** / **Bank by 1ch → (one strip)** — scroll one strip at a time.
-- **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan.
+- **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan. Also resets the send-list page to the start.
 - **Page ← (soft-key bank prev)** / **Page → (soft-key bank next)** — step the SSL Soft-Key PAGE bank (prev / next of the 6 CS banks + 2 BC banks).
 
 ## DAW Layer keys
@@ -1239,8 +1239,14 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## Send / Receive
 
-- **8 sends of focused track (param: 0..7)** — toggle the Send view for slot N. With the view active, V-Pots drive that send's level instead of pan.
-- **8 receives of focused track (param: 0..7)** — same for Receive views.
+All of these are toggles, and all take **param: 0 = Faders, 1 = V-Pots** to choose which control the route lands on. In the binding editor that choice is the **Flip** checkbox. See *Send and Receive views* for what the strips then do.
+
+- **8 sends of focused track** — spread the focused track's send list across the eight strips.
+- **8 receives of focused track** — same for its receives.
+- **Send 1 ↦ all tracks** … **Send 8 ↦ all tracks** — eight separate actions. Each keeps every strip on its own banked track and drives that track's send number N.
+- **Receive 1 ↦ all tracks** … **Receive 8 ↦ all tracks** — same for receives.
+
+**Home (clear routing toggles)**, listed above under bank navigation, turns all of them off at once.
 
 ## Selection Sets
 
@@ -1436,6 +1442,100 @@ The modifier follows REAPER's own convention: on **macOS** the Command key (⌘)
 | Cmd / Ctrl + Alt | Exclusive mute (this track only) |
 
 Without a modifier the buttons behave exactly as before. In routing or Plug-in modes — where Solo / Cut already act on a send or a plug-in parameter — the modifiers do not apply; they only affect the plain track solo / mute.
+
+\newpage
+
+# Send and Receive views
+
+A routing view repurposes the eight UF8 strips so they drive **sends** or **receives** instead of tracks. This is a UF8 feature; the UC1 has no routing view.
+
+## Two layouts
+
+There are two ways to spread routing across the strips, and they are opposites.
+
+**"8 sends of focused track"** puts the *focused track's* send list across the eight strips — strip 1 is its first send, strip 2 its second, and so on. Use this to ride one track's sends.
+
+**"Send N ↦ all tracks"** keeps every strip on its own banked track and shows *that track's* send number N. `Send 3 ↦ all tracks` gives you send slot 3 of each of the eight banked tracks. Use this to ride one bus across the whole bank.
+
+Receives work the same way in both layouts.
+
+## Turning a view on
+
+Routing views are surface functions bound to hardware buttons — they are not in REAPER's Action list, so they cannot be triggered from a keyboard shortcut.
+
+Every routing function is a **toggle**: pressing the active one again turns it off. Each binding also chooses **which control owns the route** — the faders or the V-Pots. In the binding editor this is the **Flip** checkbox.
+
+Factory defaults:
+
+| Control | Function |
+|---|---|
+| `SEND / PLUGIN 1..8` | **Send N ↦ all tracks** on the faders |
+| Shift + `SEND / PLUGIN 1..8` | **Receive N ↦ all tracks** on the faders |
+| Long-press `FLIP` | **8 sends of focused track** on the V-Pots |
+| Shift + long-press `FLIP` | **8 receives of focused track** on the V-Pots |
+| `CHANNEL` | **Home** — clears every routing toggle and returns the strips to track volume and pan |
+
+Because faders and V-Pots hold their routing independently, a send view and a receive view can be live at the same time on different controls — sends on the faders while receives sit on the V-Pots, for instance. Two routing modes cannot share one control. When both are active, the fader's route wins for Solo, Cut and the scribble text; the V-Pot's route drives the colour bar.
+
+The view follows the focused track live.
+
+## What the controls do
+
+| Control | With the route on the **faders** | With the route on the **V-Pots** |
+|---|---|---|
+| Fader | Send/receive **volume**; with FLIP, **pan** | Track volume, as normal |
+| V-Pot | Send/receive **pan** (regardless of the PAN button) | Send/receive **volume**; **pan** while PAN is engaged |
+| V-Pot push | Centre the send pan | Reset volume to 0 dB, or centre pan when PAN is engaged |
+| Solo | Solo this send (see below) | Solo this send |
+| Cut | Mute this send or receive | Mute this send or receive |
+| Sel | **Selects the banked track**, not the send | Same |
+
+**Sel is deliberately not routing-aware** — it still selects the track sitting on that strip, so you can change focus without leaving the view.
+
+On the scribble strips the upper line shows the route's name — the destination track for a send, the source track for a receive, abbreviated to fit. The value line shows the send's pan. The colour bar takes the colour of the *other end* of the route, so a strip's colour tells you where the signal is going, not where it came from.
+
+## Paging a long send list
+
+In the **"of focused track"** layouts, `BANK ←` / `BANK →` page the send list by eight instead of scrolling tracks. A track with twenty sends pages through them eight at a time; the window clamps so the last send never scrolls past the right-hand strip. The single-step bank bindings page by one.
+
+In the **"↦ all tracks"** layouts the strips *are* tracks, so `BANK ←` / `BANK →` scroll tracks exactly as they normally do.
+
+The page resets to the start when you press **Home**, when you switch routing mode, and whenever the focused track changes. Nothing on the surface indicates which page you are on, so if a long send list looks wrong, press Home and start again.
+
+## Hardware outputs
+
+In a **Send** view, the track's hardware outputs share the slot list with its track sends, in the same order REAPER's mixer send list shows them. Each has its own fader and pan, and is named after the output channel your audio device reports — for example `Analog 1 / Analog 2`. Long names are abbreviated to fit the scribble strip.
+
+Hardware outputs have no far-end track, so those strips do not take a routed colour.
+
+Receives have no hardware-output equivalent; a Receive view lists receives only.
+
+## Empty slots
+
+REAPER lets a send list contain gaps. An empty slot shows as a **completely blank strip** — no name, no value, colour bar off, V-Pot ring off, and the motor fader parked at the bottom so a gap is obvious at a glance. Buttons and faders on a blank strip do nothing.
+
+Strips past the end of a short list are blank in the same way: a track with four sends fills strips 1–4 and blanks 5–8.
+
+## Solo and Cut on a send
+
+**Cut** toggles the send's or receive's own mute.
+
+**Solo** is an exclusive un-mute: it un-mutes the send you pressed and mutes every other one in the list. In a Send view that includes the hardware outputs; in a Receive view it stays within the receives. Pressing it again un-mutes everything.
+
+> **This discards whatever mute pattern you had before** — the same as the solo button on a console. If you had three sends deliberately muted, soloing and un-soloing leaves all of them open.
+
+While any routing view is active the **Solo LEDs stay dark**, so there is no lit button telling you a send is soloed. The visible cue is the other strips' Cut LEDs coming on. Leaving the view restores the LEDs to the tracks' real solo states.
+
+## Writing automation
+
+Moving a **fader** in a routing view writes the send's volume — and its pan under FLIP — through the same path REAPER uses when you drag the control with the mouse. Whether the move is *recorded* is therefore REAPER's decision and follows the track's automation mode, exactly as it would on screen. Releasing the fader ends the edit.
+
+Two limits are worth knowing:
+
+- **The V-Pot writes pan automation, but V-Pot volume changes the level without recording.** If you want an automated send-level move, use the fader.
+- **A send whose level is already automated reads its written value only after you have touched its fader once** in the session. Before that the strip shows and parks at the underlying trim level. Touch the fader and it corrects itself.
+
+If you add or delete a send on a track that already has send automation, a fader move may change the level without recording it. Leaving the routing view and re-entering it re-establishes the link.
 
 \newpage
 
