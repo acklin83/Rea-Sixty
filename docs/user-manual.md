@@ -1189,6 +1189,8 @@ A dockable window showing the focused plug-in's **UC1 control → parameter assi
 
 Bind any of these to a UF8 / UC1 control in Settings → Bindings → *(button)* → Native. Actions that take a parameter (slot number, soft-key index, etc.) are flagged below.
 
+The picker groups them into categories — Selection Modes, Encoder Modes, Cycle Actions, Plug-in, Layer, Soft-Key Bank, SSL, Master, and so on. **Hardware Modes** is the largest: it collects everything that changes what the surface *is doing* rather than acting on a track — FLIP and PAN, Folder Mode and Show Only Selected, Home, SSL Strip and UF8 Plug-in Mode, the on-screen panel toggles, Touch-to-Learn, the mirror and follow settings below, and Restart. The sections in this chapter are grouped by function rather than by category, so a single category's actions appear in several places.
+
 ## Selection Mode toggles
 
 Switch which Selection Mode is active (see chapter **Selection Modes** for what each one does). Pressing a mode's toggle while it is already active returns to NORM.
@@ -1342,6 +1344,8 @@ All of these are toggles, and all take **param: 0 = Faders, 1 = V-Pots** to choo
 - **Toggle Folder Mode (parents only)** — toggle Folder Mode (only top-level tracks visible; folder children appear on spill).
 - **Toggle Show Only Selected** — toggle Show Only Selected (only currently-selected REAPER tracks appear).
 - **Open / Close Rea-Sixty Settings** — open / close the Rea-Sixty Settings window. Default binding for the `360°` key.
+- **Surface mirrors: TCP** / **Surface mirrors: MCP** — choose which window's track visibility the surface follows: the Arrange view's track panels (TCP) or the Mixer (MCP). Hiding a track in the chosen window removes it from the surface. These are not a toggle but a mutually-exclusive pair, so a bound key sets one mode absolutely and lights while that mode is the active one — which means you can bind both and see at a glance which is on. The choice is remembered between sessions.
+- **TCP follows selection** — toggle whether selecting a track on the surface scrolls the Arrange view to it. Same setting as *Settings → Device → Tracks*.
 
 ## Nav overlay (Markers + Regions)
 
@@ -1401,6 +1405,7 @@ When held, these shift every other binding to its modifier slot. The three match
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Pressing several of the plug-in's buttons in a row while a V-Pot is armed builds a **step cycle** on it (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 - **FX: Quick Learn Project** / **FX: Quick Learn Track** — run the AutoLearn sweep over the whole project / the focused track. Same one-shot as the REAPER actions *Rea-Sixty: Quick Learn …*.
+- **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)
 
@@ -1810,6 +1815,10 @@ Settings → Modes → AUTO → "Hide Trim/Read tracks while in AUTO mode" — w
 \newpage
 
 # Troubleshooting
+
+**Try this first.** If the surface was working and has stopped — dead faders, no scribble text, buttons ignored — run the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)*. It closes and re-opens the devices without the Preferences round-trip and clears most wedged states. Give it a keyboard shortcut; a hardware key is no use when the hardware is what stopped responding.
+
+It re-opens the devices, not the extension, so it will not pick up a newly installed build — that still needs REAPER restarted.
 
 ## Rea-Sixty does not appear in Preferences → Control/OSC/Web → Add
 
