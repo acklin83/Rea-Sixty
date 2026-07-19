@@ -347,10 +347,32 @@ the plug-in; a plug-in carries N user maps.** That relationship is the product,
 and it is what the first draft of this plan missed entirely by designing a
 detail-page rendering before designing the exchange around it.
 
-### 1. `/mappings` — browse
+### 1. `/mappings` — browse. **One row per PLUG-IN, not per map.**
 
-Search box over plug-in name; facet rail (surface · vendor · uses); sort
-(most complete · newest · works for me); rows as specified above.
+The index lists plug-ins. Listing maps means "FabFilter Pro-Q 3" appearing
+fourteen times down the page; at a few hundred maps that is not a list, it is
+noise. One row per plug-in, the map count as a column, the maps themselves one
+click away.
+
+This supersedes "the index row" above, which specified a row per map — it read
+fine against a 29-map corpus and falls apart at the volume the exchange is meant
+to reach.
+
+| Column | Notes |
+| --- | --- |
+| Plug-in | the link; left-aligned and dominant |
+| Vendor | server field, captured at upload |
+| Maps | count |
+| Surfaces | union of UC1 / UF8 / UC1+UF8 across its maps |
+| Best coverage | the best of its maps, with a bar |
+| Works | best "works for me" count |
+
+Search box over plug-in name; facet rail (surface · vendor · uses); sort (A–Z ·
+most mappings · newest); paginated, sticky header.
+
+**No coverage strip on this screen either.** The strip is per-map and this row is
+a plug-in, so it has nothing to show. Verified at 180 rows: ~35 px per row, one
+line each, no thumbnails, no cards — scannable.
 
 ### 2. `/mappings/plugin/<slug>` — several maps for one plug-in
 
@@ -373,6 +395,32 @@ group, columns are the maps, cells are the bound parameter name, and differing
 rows are highlighted, with a headline count ("8 bound controls between them — 6
 identical, 2 different"). Off-face bindings get their own rows rather than being
 dropped.
+
+**Comparison is a selection, not the default view.** A diff table stops being
+readable past about four columns, so a popular plug-in carrying fifteen maps
+cannot diff them all. The screen is a compact list — one row per map, carrying
+the coverage strip, the coverage number, the derived capability tags and the
+author — with checkboxes; tick two or three and diff those. The per-map coverage
+strip belongs here, where the rows genuinely are maps.
+
+### Coverage is domain-scoped, and UF8 has a different denominator entirely
+
+- **UC1 Channel Strip:** out of 33. **Bus Comp:** out of 8.
+- **UF8-only:** out of **128 V-Pot slots** (2 fader banks × 8 V-Pot banks × 8
+  strips) plus 16 strip bindings — `UserPluginCatalog.h:402/:470`.
+
+Two traps, both hit while prototyping:
+
+1. **The on-disk keys are `banksByFaderBank` / `stripsByFaderBank`**, not the
+   `banks` / `strips` of the C++ struct. Reading the struct names yields zero and
+   every UF8 row renders as `0/0` — which looks like "nobody mapped anything"
+   rather than like a bug.
+2. **Do not count by recursing for any `vst3Param` you can find.** Some slots
+   carry nested structures with their own `vst3Param`, so a recursive count
+   returned **130 bound slots out of a possible 128**. A slot is a slot: walk the
+   fixed three-level shape. Assert `n <= d` — the impossible number is what
+   exposed the bug, and it would have shipped as a plausible-looking one on any
+   map that happened to stay under the cap.
 
 ### 3. `/mappings/<id>/<slug>` — one map
 
