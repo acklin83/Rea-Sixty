@@ -13438,9 +13438,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         const char* prevAuthor = GetExtState("ReaSixty", "shareAuthor");
         snprintf(g_shareAuthor, sizeof(g_shareAuthor), "%s",
                  prevAuthor ? prevAuthor : "");
-        const char* prevVendor = GetExtState("ReaSixty", "shareVendorLast");
-        snprintf(g_shareVendor, sizeof(g_shareVendor), "%s",
-                 prevVendor ? prevVendor : "");
+        // Vendor is plug-in-specific, so it starts EMPTY every time — never
+        // carried over from the last share (that would put one plug-in's
+        // vendor on another's map). The server derives it from original_name
+        // anyway; the field is only really needed for JSFX. Frank 2026-07-19.
+        std::memset(g_shareVendor, 0, sizeof(g_shareVendor));
         std::memset(g_shareDesc, 0, sizeof(g_shareDesc));
         g_shareOpen = true;
     }
@@ -16304,8 +16306,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     } else {
                         SetExtState("ReaSixty", "shareAuthor",
                                     g_shareAuthor, true);
-                        SetExtState("ReaSixty", "shareVendorLast",
-                                    g_shareVendor, true);
                         g_lastSaveError = "Shared to " + chosen;
                         g_shareError.clear();
                         ImGui_CloseCurrentPopup(ctx);
@@ -16352,7 +16352,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                         if (!g_uploadReq)
                             g_shareError = "Bad exchange server URL.";
                         SetExtState("ReaSixty", "shareAuthor",   g_shareAuthor, true);
-                        SetExtState("ReaSixty", "shareVendorLast", g_shareVendor, true);
                     }
                 }
             }

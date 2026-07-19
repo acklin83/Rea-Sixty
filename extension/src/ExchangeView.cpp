@@ -68,6 +68,7 @@ struct CtrlCell { std::string control, param; bool bound = false; };
 struct Section  { std::string name; int total = 0, hit = 0; std::vector<CtrlCell> cells; };
 struct Uf8Vpot  { int faderBank = 0, vpotBank = 0, strip = 0; std::string label, param; };
 struct Uf8Strip { int faderBank = 0, strip = 0; std::string kind, param; };
+struct ModBind  { std::string layer, control, param; };
 struct MapDetail {
     int id = 0;
     std::string pluginName, vendor, surfaces, domain, author, description, licence;
@@ -78,7 +79,7 @@ struct MapDetail {
     std::vector<Uf8Vpot>  uf8VpotBindings;
     std::vector<Uf8Strip> uf8StripBindings;
     std::vector<std::pair<int, std::string>> alsoMapped;              // linkIdx, param
-    std::vector<std::pair<std::string, std::string>> modLayers;       // "linkIdx layer", param
+    std::vector<ModBind> modLayers;
 };
 MapDetail   g_mapDetail;
 uint64_t    g_mapReq = 0;
@@ -369,8 +370,11 @@ void pumpMap() {
         for (int i = 0; i < ml->m_array->GetSize(); ++i) {
             wdl_json_element* o = ml->enum_item(i);
             if (!o || !o->is_object()) continue;
-            std::string tag = std::to_string(jint(o, "linkIdx")) + "  " + jstr(o, "layer");
-            d.modLayers.emplace_back(tag, jstr(o, "param"));
+            ModBind mb;
+            mb.layer = jstr(o, "layer");
+            mb.control = jstr(o, "control");
+            mb.param = jstr(o, "param");
+            d.modLayers.push_back(std::move(mb));
         }
     }
     g_mapDetail = std::move(d);
@@ -802,14 +806,42 @@ void drawMap(ImGui_Context* ctx) {
             ImGui_Text(ctx, row);
         }
     }
+    // Modifier layers — one table per modifier (Option / Control /
+    // Control+Option), in the surface's fixed layer order.
     if (!d.modLayers.empty()) {
+        struct Layer { const char* key; const char* title; };
+        static const Layer kLayers[] = {
+            { "option",     "Option" },
+            { "control",    "Control" },
+            { "ctrlOption", "Control + Option" },
+        };
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Modifier layers:");
-        char row[256];
-        for (const auto& m : d.modLayers) {
-            std::snprintf(row, sizeof(row), "    %s  ->  %s",
-                          m.first.c_str(), m.second.c_str());
-            ImGui_Text(ctx, row);
+        ImGui_Text(ctx, "Modifier layers");
+        for (const auto& L : kLayers) {
+            int count = 0;
+            for (const auto& m : d.modLayers) if (m.layer == L.key) ++count;
+            if (!count) continue;
+
+            ImGui_Spacing(ctx);
+            ImGui_Text(ctx, L.title);
+            char tid[64];
+            std::snprintf(tid, sizeof(tid), "##exch_mod_%s", L.key);
+            int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+            if (ImGui_BeginTable(ctx, tid, 2, &tFlags, nullptr, nullptr, nullptr)) {
+                int stretch = ImGui_TableColumnFlags_WidthStretch;
+                double wA = 1.0, wB = 2.0;
+                ImGui_TableSetupColumn(ctx, "Control",   &stretch, &wA, nullptr);
+                ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wB, nullptr);
+                for (const auto& m : d.modLayers) {
+                    if (m.layer != L.key) continue;
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    ImGui_TableSetColumnIndex(ctx, 0);
+                    ImGui_Text(ctx, m.control.c_str());
+                    ImGui_TableSetColumnIndex(ctx, 1);
+                    ImGui_Text(ctx, m.param.empty() ? "(bound)" : m.param.c_str());
+                }
+                ImGui_EndTable(ctx);
+            }
         }
     }
 }

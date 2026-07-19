@@ -7,7 +7,7 @@
 // in a separate "also mapped" list.
 
 import { getDb } from '../db/index.js';
-import { faceSlots, denominatorFor, SECTION_ORDER, UF8_VPOT_SLOTS, UF8_STRIPS } from '../lib/controls.js';
+import { faceSlots, denominatorFor, lookupSlot, SECTION_ORDER, UF8_VPOT_SLOTS, UF8_STRIPS } from '../lib/controls.js';
 
 /** Normal-layer bindings for a map, keyed by linkIdx. */
 function normalBindings(db, mapId) {
@@ -60,14 +60,23 @@ export function alsoMapped(mapId) {
   ).all(mapId).map((r) => ({ linkIdx: r.link_idx, param: r.param_name }));
 }
 
-/** Modifier-layer bindings, so a control mapped only on a layer is not hidden. */
-function modifierBindings(mapId) {
+/** Modifier-layer bindings, so a control mapped only on a layer is not hidden.
+ *  Carries the resolved control name so the detail page can table them. */
+function modifierBindings(mapId, domain) {
   const db = getDb();
   return db.prepare(
     `SELECT link_idx, mod_layer, param_name FROM map_bindings
       WHERE map_id = ? AND mod_layer != 'normal'
       ORDER BY mod_layer, link_idx`,
-  ).all(mapId).map((r) => ({ linkIdx: r.link_idx, layer: r.mod_layer, param: r.param_name }));
+  ).all(mapId).map((r) => {
+    const slot = lookupSlot(domain, r.link_idx);
+    return {
+      linkIdx: r.link_idx,
+      layer: r.mod_layer,
+      control: slot?.name ?? `linkIdx ${r.link_idx}`,
+      param: r.param_name,
+    };
+  });
 }
 
 function coverageOf(row) {
@@ -143,7 +152,7 @@ export function getMap(id) {
     uf8: isUf8 ? uf8Grid(m.id, m.uf8_vpots, m.uf8_strips) : null,
     sections: isUf8 ? [] : coverageSections(m.id, m.domain),
     alsoMapped: alsoMapped(m.id),
-    modifierLayers: modifierBindings(m.id),
+    modifierLayers: modifierBindings(m.id, m.domain),
   };
 }
 
