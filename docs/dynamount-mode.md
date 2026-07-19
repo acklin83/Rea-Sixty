@@ -27,9 +27,10 @@ Protocol was reverse-engineered & live-verified; reference material lives in the
   `isDynaStrip`), fill Left/Right, calibration fader mapping (`setDistance`/`setHorizontal`/
   `nudgeRotation`, `faderNorm`), async `requestDetect`, `serialize`/`deserialize`.
   Process-wide singleton `uf8::dynamount::manager()` (lazy socket init + worker start).
-- `extension/src/SettingsScreen.cpp` — "DYNA" sub-tab under Modes: per-mount enable/name/IP/
-  color/Detect + fill-direction toggle. Persists to ExtState `rea_sixty`/`dynamount_devices`
-  (+ `_fill`); SetupBundle captures it.
+- `extension/src/SettingsScreen.cpp` — **"Dynamount"** sub-tab under Modes (that is the tab
+  label; "DYNA" is only the 4-char channel-strip-type text on the scribble strip): per-mount
+  enable/name/IP/color/Detect + fill-direction toggle. Persists to ExtState
+  `rea_sixty`/`dynamount_devices` (+ `_fill`); SetupBundle captures it.
 - `extension/tests/test_dynamount.cpp` — pure-logic unit tests (wire format, clamping, strip
   mapping, fill, calibration, serialize round-trip). CMake target `test_dynamount`.
 
@@ -46,10 +47,12 @@ Built + compiles clean + tests pass + deployed; **awaiting Frank HW test.**
   the rest show tracks PUSHED past the reserved block (the AUTO-fill analogue).
 - Fader input is **send-on-release** (Frank 2026-06-28: open-loop mount shouldn't chase
   every drag frame). FF 21 03 only caches the latest norm (`g_dynFaderPendingNorm`);
-  the FF 20 02 touch-OFF edge pushes it ONCE → `setDistance` (FLIP off, h) /
-  `setHorizontal` (FLIP on, v). Echo keeps the fader's own firmware buffer synced so
+  the FF 20 02 touch-OFF edge pushes it ONCE → `setHorizontal` (FLIP off, X) /
+  `setDistance` (FLIP on, Y). Echo keeps the fader's own firmware buffer synced so
   it doesn't jump on release. Called from the input thread (atomic setters, no REAPER API).
-- V-Pot input intercept: mount strip → `nudgeRotation` (always r) — still live per detent.
+- V-Pot input intercept: mount strip → `nudgeRotation` (always r). The readout updates per
+  detent, but the SEND is debounced 1 s after the last detent (`DynaMountManager.cpp:141-149`
+  promotes, `:280-284` fires) — the mount only turns once you stop moving the knob.
 - FLIP re-park fix: the dyna motor feedback re-engages a LIMP fader (bit-7 echo +
   motor-enable) before driving, so toggling FLIP after a touch actually moves the fader
   to the new axis (it was staying limp → plain frames discarded by firmware).
@@ -65,13 +68,13 @@ Built + compiles clean + tests pass + deployed; **awaiting Frank HW test.**
 - FLIP: no handler change needed — the per-tick feedback reads `g_flip` so the motor
   fader re-drives to the new axis automatically; V-Pot stays rotation.
 
-Settings DYNA tab reworked 2026-06-28: labelled table (On/Name/IP/Colour/Detect/Status)
+Settings Dynamount tab reworked 2026-06-28: labelled table (On/Name/IP/Colour/Detect/Status)
 + colour SWATCH picker (was an unlabelled "col N" slider) + input-field hints.
 
 ### Phase-4 HW-test checklist (Frank)
 - Bind a button to `selection_mode_dynamount`; enter mode → N strips pin to the
   Fill side, rest show tracks banked past them.
-- Fader moves distance; FLIP → fader moves left/right; V-Pot turns rotation.
+- Fader moves left/right (X); FLIP → fader moves distance (Y, top = nearest); V-Pot turns rotation.
 - Scribbles show name + H/V/R; colour bar = mount colour; offline shows OFF/OFFLINE.
 - Calibration is still defaults (Phase 5) — travel maps 0..1 → full h/v range.
 
@@ -114,14 +117,18 @@ Integration hooks (from a prior code map, verify against current `main.cpp`):
 
 Nomenclature (DynaMount terms, 2026-06-28): **X** = left/right (device v, 50 = centre),
 **Y** = distance (device h, 0 = nearest), **R** = rotation (device r, 90 = straight).
-Display + Settings use X/Y/R. Fader = Y, FLIP = X, V-Pot = R.
+Display + Settings use X/Y/R. **Fader = X, FLIP = Y, V-Pot = R.**
 
 Fader inversion: the Y fader is INVERTED — fader TOP = nearest (h-min). Handled in
 `setDistance` (maps 1-f01), `faderNorm` (returns 1-n for distance) and the live-display
 calc in main.cpp. X stays direct.
 
+*(Corrected 2026-07-19: this line and the send-on-release bullet below both had the
+fader axis the wrong way round. Code is authoritative — `main.cpp:14729-14733` and
+`:16877`; the Settings footer at `SettingsScreen.cpp:16208` always said it correctly.)*
+
 Calibration (simple, shipped 2026-06-28 — NOT the wizard): a per-mount **Home** button in
-Settings → DYNA drives the mount to the reference pose X50 Y0 R90 (`manager().home`) and
+Settings → Dynamount drives the mount to the reference pose X50 Y0 R90 (`manager().home`) and
 syncs our state. Live positions (h/r/v) are saved GLOBALLY every tick by `persistDynaState_`
 → ExtState `rea_sixty`/`dynamount_state` ("idx,h,r,v;"), restored on launch with
 markDirty=false (the mount already holds the pose). So positions stay correct across

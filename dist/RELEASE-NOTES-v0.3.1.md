@@ -26,6 +26,9 @@ First-run setup buttons (`Settings → About`):
 - Provided **as-is / community-supported** — it is not a 1:1 port of the Stream Deck plugin (Companion styles buttons via feedbacks). Source is in the repo's `companion/` folder.
 
 ### Reach the bridge over the LAN
+
+> **Correction (2026-07-19):** the line below is wrong about the Stream Deck plugin. The plugin dials `127.0.0.1:49900` and has no host or port setting (`streamdeck/.../plugin.js:173-174`), so it cannot reach REAPER on another machine and cannot follow a changed `sd_bridge_port`. LAN binding is useful for the **Companion module** only. Left in place rather than rewritten, since this note went out with the release.
+
 - The Rea-Sixty bridge can now bind to all interfaces so **Companion (or the Stream Deck plugin) on a separate machine** can reach REAPER. Off by default (loopback only). Opt in on a trusted network:
   ```lua
   reaper.SetExtState("rea_sixty", "sd_bridge_bind", "lan", true)

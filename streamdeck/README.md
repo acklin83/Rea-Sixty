@@ -54,7 +54,14 @@ title in the panel if you want one).
 
 - **Source:** Peak, Gain Reduction, Bus-Comp GR, or a combined Peak + GR view.
 - **Track:** the selected track, the master, or a fixed track by number / name.
-- **Show track name** and **Track colour** (tints the key) are optional.
+- **Track name** and **Track colour** (tints the key) are optional.
+- **Smart abbrev.** (on by default) shortens long names. It *overrides* the
+  global Track-name mode rather than following it — ticked gives you smart
+  abbreviation even when the surface is set to plain truncation, unticked shows
+  the full name.
+- **Name position** (Bottom / Top — top reads better on an angled deck) and
+  **Wrap name** (allow a second line).
+- **Font size:** Small / Normal / Large / Extra large.
 - **On press** can fire any Rea-Sixty action — so a meter key can double as a
   button.
 
@@ -70,6 +77,15 @@ and restart REAPER — in the ReaScript console or a script:
 ```lua
 reaper.SetExtState("rea_sixty", "sd_bridge_port", "49901", true)
 ```
+
+> **This plugin cannot follow the port.** It dials `127.0.0.1:49900` and has no
+> host or port setting (`plugin.js:173-174`), so moving the bridge disconnects
+> the Stream Deck keys for good. Only change the port if the Companion module —
+> which does have host and port fields — is your only client.
+
+**Same machine only.** For the same reason, opening the bridge to the LAN
+(`sd_bridge_bind = lan`) does nothing for this plugin: it always connects to
+localhost. That option is for Companion on another machine.
 
 ## Build / package from source (developers)
 
