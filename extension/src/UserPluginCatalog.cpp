@@ -1369,8 +1369,8 @@ const char* surfaceScope(const UserPluginMap& m)
     return m.uf8Mode ? "uc1+uf8" : "uc1";
 }
 
-bool exportMapToFile(const std::string& path, const MapShare& share,
-                     std::string* errOut)
+bool serializeMapShare(const MapShare& share, std::string& out,
+                       std::string* errOut)
 {
     if (share.map.match.empty()) {
         if (errOut) *errOut = "map has no match string";
@@ -1425,7 +1425,16 @@ bool exportMapToFile(const std::string& path, const MapShare& share,
     os << "  \"map\": ";         appendEscaped_(os, mapJson);           os << "\n";
     os << "}\n";
 
-    if (!writeFileAtomic_(path, os.str())) {
+    out = os.str();
+    return true;
+}
+
+bool exportMapToFile(const std::string& path, const MapShare& share,
+                     std::string* errOut)
+{
+    std::string envelope;
+    if (!serializeMapShare(share, envelope, errOut)) return false;
+    if (!writeFileAtomic_(path, envelope)) {
         if (errOut) *errOut = "could not write " + path;
         return false;
     }

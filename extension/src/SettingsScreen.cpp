@@ -25,6 +25,7 @@
 #include "UC1PluginMap.h"   // uc1::lookupBindingsByName / hudParamForControl (Learn-HUD)
 #include "Protocol.h"
 #include "UserPluginCatalog.h"
+#include "HttpClient.h"     // in-app "Publish to exchange" upload
 #include "reaper_imgui_functions.h"
 #include "reaper_plugin_functions.h"
 
@@ -5810,6 +5811,13 @@ bool        g_shareOpen        = false;
 std::string g_shareError;
 uf8::user_plugins::MapShare g_pendingImport;      // loaded, not yet applied
 bool        g_pendingImportOpen = false;          // name clash → confirm
+
+// In-app "Publish to exchange" — POST the same envelope the file Share writes
+// to api.reasixty.com, using the device token from the Exchange tab. One
+// upload in flight at a time.
+uint64_t    g_uploadReq   = 0;
+std::string g_uploadStatus;
+int         g_uploadColor = 0;
 
 // Master-view filter + sort state. Filter is a case-insensitive
 // substring matched against either the map's `match` (FX name) or
@@ -13142,6 +13150,42 @@ static void captureOriginalNameForMatch_(const std::string& match)
         if (scanTrack(GetTrack(nullptr, ti))) return;
 }
 
+// Exchange server URL + device token, persisted by the Exchange tab
+// (ExchangeView.cpp) under the same ExtState keys.
+static std::string exchangeBaseUrl_() {
+    const char* u = GetExtState("rea_sixty", "exchange_api_url");
+    std::string s = (u && *u) ? u : "http://127.0.0.1:8010";
+    while (!s.empty() && s.back() == '/') s.pop_back();
+    return s;
+}
+static std::string exchangeToken_() {
+    const char* t = GetExtState("rea_sixty", "exchange_token");
+    return t ? std::string(t) : std::string();
+}
+
+// Poll an in-flight "Publish to exchange" upload; stash the outcome for the
+// Share popup to show.
+static void pumpUpload_() {
+    if (!g_uploadReq) return;
+    reasixty::http::Response r;
+    if (!reasixty::http::poll(g_uploadReq, r)) return;
+    g_uploadReq = 0;
+    if (!r.error.empty()) {
+        g_uploadStatus = "Upload failed: " + r.error;
+        g_uploadColor  = 0xCC4444FF;
+    } else if (r.status == 201) {
+        g_uploadStatus = "Published to the exchange.";
+        g_uploadColor  = 0x44AA44FF;
+    } else if (r.status == 401) {
+        g_uploadStatus = "Rejected — bad or missing device token "
+                         "(set it in the Exchange tab).";
+        g_uploadColor  = 0xCC4444FF;
+    } else {
+        g_uploadStatus = "Upload failed: HTTP " + std::to_string(r.status);
+        g_uploadColor  = 0xCC8844FF;
+    }
+}
+
 // Render the Editor-View. Pre-condition: g_editingMatch is non-empty and
 // names a map currently in the catalog. Caller is drawFxLearn.
 void drawFxLearnEditor_(ImGui_Context* ctx)
@@ -16201,6 +16245,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             if (ImGui_Button(ctx, "Close##fxl_share_none", nullptr, nullptr))
                 ImGui_CloseCurrentPopup(ctx);
         } else {
+            pumpUpload_();
             char line[320];
             snprintf(line, sizeof(line), "%s   [%s]", src->match.c_str(),
                      user_plugins::surfaceScope(*src));
@@ -16264,10 +16309,61 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     }
                 }
             }
+            // Publish straight to the exchange — same envelope, no file. Needs
+            // the device token from the Exchange tab. Shares the CC0 + author
+            // validation with Save file.
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            const bool uploading = g_uploadReq != 0;
+            if (ImGui_Button(ctx, uploading ? "Publishing…##fxl_share_pub"
+                                            : "Publish to exchange##fxl_share_pub",
+                             nullptr, nullptr) && !uploading) {
+                if (!g_shareCc0) {
+                    g_shareError = "Tick the licence box — a mapping cannot be "
+                                   "passed on without one.";
+                } else if (g_shareAuthor[0] == '\0') {
+                    g_shareError = "Enter a name so the mapping is attributed.";
+                } else if (exchangeToken_().empty()) {
+                    g_shareError = "Set your device token in the Exchange tab "
+                                   "first (Settings → Exchange → Server settings).";
+                } else {
+                    uf8::user_plugins::MapShare share;
+                    share.map         = *src;
+                    share.vendor      = g_shareVendor;
+                    share.author      = g_shareAuthor;
+                    share.description = g_shareDesc;
+                    share.licence     = "CC0-1.0";
+                    share.createdAt   = static_cast<int64_t>(std::time(nullptr));
+
+                    std::string envelope, err;
+                    if (!user_plugins::serializeMapShare(share, envelope, &err)) {
+                        g_shareError = "Could not build the mapping: " + err;
+                    } else {
+                        const std::vector<std::string> headers = {
+                            "Authorization: Bearer " + exchangeToken_(),
+                            "Content-Type: application/octet-stream",
+                        };
+                        g_shareError.clear();
+                        g_uploadStatus.clear();
+                        g_uploadReq = reasixty::http::begin(
+                            "POST", exchangeBaseUrl_() + "/v1/maps", headers, envelope);
+                        if (!g_uploadReq)
+                            g_shareError = "Bad exchange server URL.";
+                        SetExtState("ReaSixty", "shareAuthor",   g_shareAuthor, true);
+                        SetExtState("ReaSixty", "shareVendorLast", g_shareVendor, true);
+                    }
+                }
+            }
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_Button(ctx, "Cancel##fxl_share_cancel", nullptr, nullptr)) {
                 g_shareError.clear();
+                g_uploadStatus.clear();
                 ImGui_CloseCurrentPopup(ctx);
+            }
+
+            if (!g_uploadStatus.empty()) {
+                ImGui_Spacing(ctx);
+                ImGui_TextColored(ctx, g_uploadColor ? g_uploadColor : 0xCCCCCCFF,
+                                  g_uploadStatus.c_str());
             }
         }
         ImGui_EndPopup(ctx);

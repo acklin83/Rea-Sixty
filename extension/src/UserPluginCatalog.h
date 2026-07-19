@@ -656,6 +656,12 @@ const char* surfaceScope(const UserPluginMap& m);
 bool exportMapToFile(const std::string& path, const MapShare& share,
                      std::string* errOut);
 
+// Build the .rea60map envelope into `out` without writing a file — used by the
+// in-app "Publish to exchange" upload, which POSTs the bytes. Same pruning and
+// isDefault handling as exportMapToFile (which now delegates here).
+bool serializeMapShare(const MapShare& share, std::string& out,
+                       std::string* errOut);
+
 // Read a .rea60map WITHOUT applying it — the caller decides what to do when
 // the match already exists (upsert overwrites wholesale) or collides with a
 // built-in (which would make save() refuse the WHOLE catalog). Returns false
