@@ -335,14 +335,19 @@ void drawList(ImGui_Context* ctx) {
         return;
     }
 
-    // One row per plug-in. Click a row to open its maps. Columns are
-    // resizable and hideable; the plug-in name stretches, the rest are fixed.
+    // One row per plug-in. Click a row to open its maps. ScrollY + a fixed
+    // outer height keeps the header row sticky while the body scrolls; columns
+    // are resizable and hideable; the plug-in name stretches, the rest fixed.
+    double availW = 0.0, availH = 0.0;
+    ImGui_GetContentRegionAvail(ctx, &availW, &availH);
+    if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
     int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
-               | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable;
-    if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, nullptr, nullptr)) {
+               | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable
+               | ImGui_TableFlags_ScrollY;
+    if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, &availH, nullptr)) {
         int stretch = ImGui_TableColumnFlags_WidthStretch;
         int fixed   = ImGui_TableColumnFlags_WidthFixed;
-        double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wBest = 54.0;
+        double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wBest = 96.0;
         ImGui_TableSetupColumn(ctx, "Plug-in",  &stretch, &wName,   nullptr);
         ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
         ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
@@ -373,7 +378,9 @@ void drawList(ImGui_Context* ctx) {
 
             ImGui_TableSetColumnIndex(ctx, 4);
             std::snprintf(buf, sizeof(buf), "%d%%", p.bestCoverage);
-            ImGui_Text(ctx, buf);
+            double frac = p.bestCoverage / 100.0;
+            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
         }
         ImGui_EndTable(ctx);
     }
@@ -430,13 +437,16 @@ void drawPlugin(ImGui_Context* ctx) {
     }
 
     // One row per map. Install lives in its own column; hover a row's author
-    // to read the description.
+    // to read the description. Sticky header via ScrollY + fixed height.
+    double availW = 0.0, availH = 0.0;
+    ImGui_GetContentRegionAvail(ctx, &availW, &availH);
+    if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
     int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
-               | ImGui_TableFlags_Resizable;
-    if (ImGui_BeginTable(ctx, "##exch_maps", 5, &tFlags, nullptr, nullptr, nullptr)) {
+               | ImGui_TableFlags_Resizable | ImGui_TableFlags_ScrollY;
+    if (ImGui_BeginTable(ctx, "##exch_maps", 5, &tFlags, nullptr, &availH, nullptr)) {
         int stretch = ImGui_TableColumnFlags_WidthStretch;
         int fixed   = ImGui_TableColumnFlags_WidthFixed;
-        double wInst = 150.0, wAuthor = 2.0, wSurf = 96.0, wCov = 110.0, wWorks = 64.0;
+        double wInst = 150.0, wAuthor = 2.0, wSurf = 96.0, wCov = 140.0, wWorks = 64.0;
         ImGui_TableSetupColumn(ctx, "",         &fixed,   &wInst,   nullptr);
         ImGui_TableSetupColumn(ctx, "Author",   &stretch, &wAuthor, nullptr);
         ImGui_TableSetupColumn(ctx, "Surface",  &fixed,   &wSurf,   nullptr);
@@ -466,7 +476,9 @@ void drawPlugin(ImGui_Context* ctx) {
 
             ImGui_TableSetColumnIndex(ctx, 3);
             std::snprintf(buf, sizeof(buf), "%d/%d (%d%%)", m.covN, m.covD, m.covPct);
-            ImGui_Text(ctx, buf);
+            double frac = m.covD > 0 ? (double)m.covN / m.covD : 0.0;
+            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
 
             ImGui_TableSetColumnIndex(ctx, 4);
             std::snprintf(buf, sizeof(buf), "%d", m.works);
