@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS uf8_slots (
   strip       INTEGER NOT NULL,   -- 0..7
   label       TEXT,               -- the user's own V-Pot label
   param_name  TEXT,
-  vst3_param  INTEGER NOT NULL
+  vst3_param  INTEGER NOT NULL,
+  mode        TEXT                 -- V-Pot only: Value | StepCycle | Toggle
 );
 CREATE INDEX IF NOT EXISTS idx_uf8_map ON uf8_slots(map_id);
 

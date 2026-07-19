@@ -67,7 +67,7 @@ std::string g_pluginError;
 // ---- one map's detail (screen 3): the control -> parameter mappings --------
 struct CtrlCell { std::string control, param; bool bound = false; };
 struct Section  { std::string name; int total = 0, hit = 0; std::vector<CtrlCell> cells; };
-struct Uf8Vpot  { int faderBank = 0, vpotBank = 0, strip = 0; std::string label, param; };
+struct Uf8Vpot  { int faderBank = 0, vpotBank = 0, strip = 0; std::string label, param, mode; };
 struct Uf8Strip { int faderBank = 0, strip = 0; std::string kind, param; };
 struct ModBind  { std::string layer, control, param; };
 struct MapDetail {
@@ -324,6 +324,7 @@ void pumpMap() {
                 Uf8Vpot v;
                 v.faderBank = jint(o, "faderBank"); v.vpotBank = jint(o, "vpotBank");
                 v.strip = jint(o, "strip"); v.label = jstr(o, "label"); v.param = jstr(o, "param");
+                v.mode = jstr(o, "mode");
                 d.uf8VpotBindings.push_back(std::move(v));
             }
         }
@@ -597,73 +598,105 @@ void drawPlugin(ImGui_Context* ctx) {
 // columns = strip), every bank shown, each bound cell carrying its V-Pot label
 // with the parameter on the tooltip. Then the fader/solo/cut/sel strip
 // bindings. 2 fader banks × 8 V-Pot banks × 8 strips = 128 slots.
-void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
-    // Grouped by V-Pot bank (the page you cycle to), like the CS section
-    // tables: one compact table per bank, only the BOUND slots — no 8×8 sea of
-    // empty cells. Strip is the global 1–16 (fader bank folded in).
-    char h[64], buf[64];
-    for (int vb = 0; vb < 8; ++vb) {
-        // Collect this bank's bound slots, sorted by global strip.
-        std::vector<const Uf8Vpot*> inBank;
-        for (const auto& v : d.uf8VpotBindings)
-            if (v.vpotBank == vb) inBank.push_back(&v);
-        if (inBank.empty()) continue;
-        std::sort(inBank.begin(), inBank.end(), [](const Uf8Vpot* a, const Uf8Vpot* b) {
-            return a->faderBank * 8 + a->strip < b->faderBank * 8 + b->strip;
-        });
+// Value / StepCycle / Toggle -> a short lower-case tag next to the V-Pot param.
+const char* vpotModeTag(const std::string& m) {
+    if (m == "Toggle")    return "toggle";
+    if (m == "StepCycle") return "step";
+    return "turn";
+}
 
-        std::snprintf(h, sizeof(h), "V-Pot bank %d   (%d)", vb + 1, (int)inBank.size());
+void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
+    // The UF8 is 8 channel strips side by side. So: one block per fader bank,
+    // 8 strips as COLUMNS; the strip controls (Fader/Solo/Mute/Sel) are the
+    // first rows, then one row per V-Pot bank. Only banks/rows with content
+    // are drawn. ScrollX keeps all 8 strips beside each other on a narrow pane.
+    //
+    // Lookups: strip[fb][strip][kind] and vpot[fb][vpotBank][strip].
+    const char* kKinds[4] = { "fader", "solo", "cut", "sel" };
+    const char* kKindLabel[4] = { "Fader", "Solo", "Mute", "Sel" };
+
+    const Uf8Strip* strip[2][8][4] = {};
+    for (const auto& s : d.uf8StripBindings) {
+        int ki = -1;
+        for (int k = 0; k < 4; ++k) if (s.kind == kKinds[k]) { ki = k; break; }
+        if (ki >= 0 && s.faderBank < 2 && s.strip < 8) strip[s.faderBank][s.strip][ki] = &s;
+    }
+    const Uf8Vpot* vpot[2][8][8] = {};
+    for (const auto& v : d.uf8VpotBindings)
+        if (v.faderBank < 2 && v.vpotBank < 8 && v.strip < 8) vpot[v.faderBank][v.vpotBank][v.strip] = &v;
+
+    for (int fb = 0; fb < 2; ++fb) {
+        // Skip a fader bank with nothing on it.
+        bool anyFb = false;
+        for (int s = 0; s < 8 && !anyFb; ++s) {
+            for (int k = 0; k < 4; ++k) if (strip[fb][s][k]) anyFb = true;
+            for (int vb = 0; vb < 8; ++vb) if (vpot[fb][vb][s]) anyFb = true;
+        }
+        if (!anyFb) continue;
+
+        char h[96];
+        std::snprintf(h, sizeof(h), "Fader bank %d   (strips %d–%d)",
+                      fb + 1, fb * 8 + 1, fb * 8 + 8);
         ImGui_Text(ctx, h);
 
         char tid[32];
-        std::snprintf(tid, sizeof(tid), "##uf8_bank_%d", vb);
-        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
-        if (ImGui_BeginTable(ctx, tid, 3, &tFlags, nullptr, nullptr, nullptr)) {
+        std::snprintf(tid, sizeof(tid), "##uf8_fb_%d", fb);
+        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
+                   | ImGui_TableFlags_ScrollX;
+        // Bound the table width so ScrollX engages; height auto-fits the rows.
+        double outW = 0.0, outH = 0.0;
+        ImGui_GetContentRegionAvail(ctx, &outW, &outH);
+        double th = 0.0;
+        if (ImGui_BeginTable(ctx, tid, 9, &tFlags, &outW, &th, nullptr)) {
             int fixed = ImGui_TableColumnFlags_WidthFixed;
-            int stretch = ImGui_TableColumnFlags_WidthStretch;
-            double wStrip = 56.0, wCtrl = 1.0, wParam = 2.0;
-            ImGui_TableSetupColumn(ctx, "Strip",     &fixed,   &wStrip, nullptr);
-            ImGui_TableSetupColumn(ctx, "V-Pot",     &stretch, &wCtrl,  nullptr);
-            ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wParam, nullptr);
+            double wLbl = 78.0, wCol = 116.0;
+            ImGui_TableSetupColumn(ctx, "", &fixed, &wLbl, nullptr);
+            for (int s = 0; s < 8; ++s) {
+                char cn[8]; std::snprintf(cn, sizeof(cn), "Strip %d", fb * 8 + s + 1);
+                ImGui_TableSetupColumn(ctx, cn, &fixed, &wCol, nullptr);
+            }
             ImGui_TableHeadersRow(ctx);
-            for (const auto* v : inBank) {
+
+            auto cellText = [&](const std::string& p) {
+                if (!p.empty()) ImGui_Text(ctx, p.c_str());
+            };
+
+            // Strip controls first — Fader / Solo / Mute / Sel.
+            for (int k = 0; k < 4; ++k) {
                 ImGui_TableNextRow(ctx, nullptr, nullptr);
                 ImGui_TableSetColumnIndex(ctx, 0);
-                std::snprintf(buf, sizeof(buf), "%d", v->faderBank * 8 + v->strip + 1);
-                ImGui_Text(ctx, buf);
-                ImGui_TableSetColumnIndex(ctx, 1);
-                ImGui_Text(ctx, v->label.empty() ? "—" : v->label.c_str());
-                ImGui_TableSetColumnIndex(ctx, 2);
-                ImGui_Text(ctx, v->param.empty() ? "(bound)" : v->param.c_str());
+                ImGui_Text(ctx, kKindLabel[k]);
+                for (int s = 0; s < 8; ++s) {
+                    ImGui_TableSetColumnIndex(ctx, s + 1);
+                    if (strip[fb][s][k]) cellText(strip[fb][s][k]->param.empty()
+                                                 ? std::string("(bound)")
+                                                 : strip[fb][s][k]->param);
+                }
+            }
+
+            // Then one row per V-Pot bank that has any binding on this fader bank.
+            for (int vb = 0; vb < 8; ++vb) {
+                bool anyVb = false;
+                for (int s = 0; s < 8 && !anyVb; ++s) if (vpot[fb][vb][s]) anyVb = true;
+                if (!anyVb) continue;
+                ImGui_TableNextRow(ctx, nullptr, nullptr);
+                ImGui_TableSetColumnIndex(ctx, 0);
+                char rl[24]; std::snprintf(rl, sizeof(rl), "V-Pot B%d", vb + 1);
+                ImGui_Text(ctx, rl);
+                for (int s = 0; s < 8; ++s) {
+                    ImGui_TableSetColumnIndex(ctx, s + 1);
+                    const Uf8Vpot* v = vpot[fb][vb][s];
+                    if (!v) continue;
+                    ImGui_Text(ctx, v->param.empty() ? "(bound)" : v->param.c_str());
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    ImGui_TextColored(ctx, 0x8892A0FF, vpotModeTag(v->mode));
+                    if (!v->label.empty() && ImGui_IsItemHovered(ctx, nullptr))
+                        ImGui_SetTooltip(ctx, v->label.c_str());
+                }
             }
             ImGui_EndTable(ctx);
         }
         ImGui_Spacing(ctx);
-    }
-
-    if (!d.uf8StripBindings.empty()) {
-        ImGui_Text(ctx, "Strip bindings (fader / solo / cut / sel)");
-        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
-        if (ImGui_BeginTable(ctx, "##uf8_strips", 3, &tFlags, nullptr, nullptr, nullptr)) {
-            int fixed = ImGui_TableColumnFlags_WidthFixed;
-            int stretch = ImGui_TableColumnFlags_WidthStretch;
-            double wStrip = 56.0, wKind = 1.0, wParam = 2.0;
-            ImGui_TableSetupColumn(ctx, "Strip",     &fixed,   &wStrip, nullptr);
-            ImGui_TableSetupColumn(ctx, "Control",   &stretch, &wKind,  nullptr);
-            ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wParam, nullptr);
-            ImGui_TableHeadersRow(ctx);
-            for (const auto& s : d.uf8StripBindings) {
-                ImGui_TableNextRow(ctx, nullptr, nullptr);
-                ImGui_TableSetColumnIndex(ctx, 0);
-                std::snprintf(buf, sizeof(buf), "%d", s.faderBank * 8 + s.strip + 1);
-                ImGui_Text(ctx, buf);
-                ImGui_TableSetColumnIndex(ctx, 1);
-                ImGui_Text(ctx, s.kind.c_str());
-                ImGui_TableSetColumnIndex(ctx, 2);
-                ImGui_Text(ctx, s.param.empty() ? "(bound)" : s.param.c_str());
-            }
-            ImGui_EndTable(ctx);
-        }
     }
 }
 

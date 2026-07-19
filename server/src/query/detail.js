@@ -160,14 +160,14 @@ export function getMap(id) {
 function uf8Grid(mapId, vpots, strips) {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT kind, fader_bank, vpot_bank, strip, label, param_name
+    `SELECT kind, fader_bank, vpot_bank, strip, label, param_name, mode
        FROM uf8_slots WHERE map_id = ? ORDER BY fader_bank, vpot_bank, strip`,
   ).all(mapId);
   return {
     vpots, vpotSlots: UF8_VPOT_SLOTS, strips, stripSlots: UF8_STRIPS,
     vpotBindings: rows.filter((r) => r.kind === 'vpot').map((r) => ({
       faderBank: r.fader_bank, vpotBank: r.vpot_bank, strip: r.strip,
-      label: r.label ?? '', param: r.param_name ?? '',
+      label: r.label ?? '', param: r.param_name ?? '', mode: r.mode ?? 'Value',
     })),
     stripBindings: rows.filter((r) => r.kind !== 'vpot').map((r) => ({
       faderBank: r.fader_bank, strip: r.strip, kind: r.kind,

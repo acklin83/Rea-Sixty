@@ -172,14 +172,14 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
 
     // UF8 grid bindings, one row per bound slot.
     const insU = db.prepare(`
-      INSERT INTO uf8_slots (map_id, kind, fader_bank, vpot_bank, strip, label, param_name, vst3_param)
-      VALUES (?,?,?,?,?,?,?,?)
+      INSERT INTO uf8_slots (map_id, kind, fader_bank, vpot_bank, strip, label, param_name, vst3_param, mode)
+      VALUES (?,?,?,?,?,?,?,?,?)
     `);
     for (const v of uf8?.vpots ?? []) {
-      insU.run(mapId, 'vpot', v.faderBank, v.vpotBank, v.strip, v.label, v.paramName, v.vst3Param);
+      insU.run(mapId, 'vpot', v.faderBank, v.vpotBank, v.strip, v.label, v.paramName, v.vst3Param, v.mode);
     }
     for (const s of uf8?.strips ?? []) {
-      insU.run(mapId, s.kind, s.faderBank, null, s.strip, s.label, s.paramName, s.vst3Param);
+      insU.run(mapId, s.kind, s.faderBank, null, s.strip, s.label, s.paramName, s.vst3Param, null);
     }
 
     if (replacesId) {

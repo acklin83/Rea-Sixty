@@ -115,7 +115,12 @@ export function extractUf8(map) {
       (vpotBank ?? []).forEach((slot, strip) => {
         const v = slot?.vst3Param ?? -1;
         if (v >= 0) {
-          vpots.push({ faderBank: fb, vpotBank: vb, strip, label: slot.label ?? '', vst3Param: v, paramName: nameOf(v) });
+          vpots.push({
+            faderBank: fb, vpotBank: vb, strip,
+            label: slot.label ?? '', vst3Param: v, paramName: nameOf(v),
+            // How the V-Pot behaves: Value (turn), StepCycle (step), Toggle.
+            mode: slot.vpotMode ?? 'Value',
+          });
         }
       });
     });
