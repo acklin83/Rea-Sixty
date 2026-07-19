@@ -382,6 +382,11 @@ std::string reasixty_fxLearnExportViaDialog(std::string* errOut);
 bool reasixty_fxLearnImportViaDialog(std::string* errOut);
 std::string reasixty_setupExportViaDialog(std::string* errOut);
 bool reasixty_setupImportViaDialog(std::string* errOut);
+// Single shared mapping (.rea60map) — one map, never a setup bundle.
+std::string reasixty_mapShareExportViaDialog(
+    const uf8::user_plugins::MapShare& share, std::string* errOut);
+bool reasixty_mapShareImportViaDialog(uf8::user_plugins::MapShare* out,
+                                      std::string* errOut);
 bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
 #ifdef _WIN32
 bool reasixty_installWinUsbDriver(std::string* errOut);
@@ -5791,6 +5796,20 @@ std::string g_pendingModeMatch;
 int         g_pendingModePrimary = 0;    // 1=CS, 2=BC, 3=UF8-only
 bool        g_pendingModeOpen    = false;
 std::string g_lastSaveError;             // last persistence error, sticky until next save
+
+// Single-mapping sharing (.rea60map). The Share popup collects the metadata
+// the exchange needs before writing the file; the import staging area holds a
+// loaded map until the user resolves a name clash. Both follow the delete/mode
+// pattern above — staged here, opened/closed at the outer scope so the popup
+// ID-stack matches BeginPopupModal. See docs/mapping-exchange-plan.md.
+char        g_shareVendor[128] = {0};
+char        g_shareAuthor[128] = {0};
+char        g_shareDesc[512]   = {0};
+bool        g_shareCc0         = false;  // must be ticked to write the file
+bool        g_shareOpen        = false;
+std::string g_shareError;
+uf8::user_plugins::MapShare g_pendingImport;      // loaded, not yet applied
+bool        g_pendingImportOpen = false;          // name clash → confirm
 
 // Master-view filter + sort state. Filter is a case-insensitive
 // substring matched against either the map's `match` (FX name) or
@@ -13170,14 +13189,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
     // Map switcher — combo with search + developer-tree popup. The
     // master view is gone; this picker is the only navigation. Reserve
-    // pixel width on the right so the +New / Delete / Export / Import
-    // buttons land on the same line.
+    // pixel width on the right so the +New / Delete / Export / Import /
+    // Share… / Import map… buttons land on the same line.
     char preview[200];
     snprintf(preview, sizeof(preview), "  %s  [%s]",
                   editing->match.c_str(),
                   modeLabel_(editing->domain, editing->uf8Mode));
     {
-        const double trailingW = scaleW_(ctx, 290.0);  // 4 action buttons
+        const double trailingW = scaleW_(ctx, 460.0);  // 6 action buttons
         double availX = 0, availY = 0;
         ImGui_GetContentRegionAvail(ctx, &availX, &availY);
         double pickerW = availX - trailingW;
@@ -13324,6 +13343,66 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         } else if (!err.empty()) {
             g_lastSaveError = "Import failed: " + err;
         }
+    }
+    // ---- Single-mapping sharing --------------------------------------
+    // Export/Import above move the WHOLE catalog (backup). These two move
+    // ONE map, which is what you hand to another user.
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Share…##fxl_hdr_share", nullptr, nullptr)) {
+        g_shareError.clear();
+        g_shareCc0 = false;
+        // Author is typed once and reused — it is the attribution that
+        // travels with every map this user shares.
+        const char* prevAuthor = GetExtState("ReaSixty", "shareAuthor");
+        snprintf(g_shareAuthor, sizeof(g_shareAuthor), "%s",
+                 prevAuthor ? prevAuthor : "");
+        const char* prevVendor = GetExtState("ReaSixty", "shareVendorLast");
+        snprintf(g_shareVendor, sizeof(g_shareVendor), "%s",
+                 prevVendor ? prevVendor : "");
+        std::memset(g_shareDesc, 0, sizeof(g_shareDesc));
+        g_shareOpen = true;
+    }
+    if (ImGui_IsItemHovered(ctx, nullptr)) {
+        ImGui_SetTooltip(ctx,
+            "Write this ONE mapping to a .rea60map file you can pass on.\n"
+            "Plug-in maps are pure data — no actions, no keyboard macros.");
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Import map…##fxl_hdr_getshared", nullptr, nullptr)) {
+        std::string err;
+        uf8::user_plugins::MapShare in;
+        if (reasixty_mapShareImportViaDialog(&in, &err)) {
+            // A match that shadows a built-in makes save() refuse the WHOLE
+            // catalog, so one bad shared file would block every later save.
+            // Reject it here rather than stage it.
+            if (user_plugins::collidesWithBuiltin(in.map.match)) {
+                g_lastSaveError = "Import refused: \"" + in.map.match
+                                + "\" collides with a built-in plug-in map.";
+            } else {
+                bool exists = false;
+                for (const auto& m : user_plugins::get().maps) {
+                    if (m.match == in.map.match) { exists = true; break; }
+                }
+                if (exists) {
+                    g_pendingImport     = std::move(in);
+                    g_pendingImportOpen = true;
+                } else {
+                    g_editingMatch = in.map.match;
+                    SetExtState("ReaSixty", "fxLearnLastMatch",
+                                g_editingMatch.c_str(), true);
+                    user_plugins::upsert(std::move(in.map));
+                    persistAndReport_();
+                    return;   // re-resolve editing pointer next frame
+                }
+            }
+        } else if (!err.empty()) {
+            g_lastSaveError = "Import failed: " + err;
+        }
+    }
+    if (ImGui_IsItemHovered(ctx, nullptr)) {
+        ImGui_SetTooltip(ctx,
+            "Load a single .rea60map into the catalog.\n"
+            "Your other maps are left alone.");
     }
     if (!g_lastSaveError.empty()) {
         ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
@@ -15480,6 +15559,28 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_lastSaveError = "Import failed: " + err;
             }
         }
+        // Landing someone else's single mapping — the likely first move for a
+        // new user. No clash check needed: the catalog is empty here.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Import map…##fxl_getshared_welcome",
+                         nullptr, nullptr)) {
+            std::string err;
+            uf8::user_plugins::MapShare in;
+            if (reasixty_mapShareImportViaDialog(&in, &err)) {
+                if (user_plugins::collidesWithBuiltin(in.map.match)) {
+                    g_lastSaveError = "Import refused: \"" + in.map.match
+                                    + "\" collides with a built-in plug-in map.";
+                } else {
+                    g_editingMatch = in.map.match;
+                    SetExtState("ReaSixty", "fxLearnLastMatch",
+                                g_editingMatch.c_str(), true);
+                    user_plugins::upsert(std::move(in.map));
+                    persistAndReport_();
+                }
+            } else if (!err.empty()) {
+                g_lastSaveError = "Import failed: " + err;
+            }
+        }
         if (!g_lastSaveError.empty()) {
             ImGui_Spacing(ctx);
             ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
@@ -15604,6 +15705,15 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     if (g_pendingDeleteOpen) {
         ImGui_OpenPopup(ctx, "Delete learned FX###fxl_del_popup", nullptr);
         g_pendingDeleteOpen = false;
+    }
+    if (g_shareOpen) {
+        ImGui_OpenPopup(ctx, "Share Plug-in Mapping###fxl_share_popup", nullptr);
+        g_shareOpen = false;
+    }
+    if (g_pendingImportOpen) {
+        ImGui_OpenPopup(ctx, "Mapping already exists###fxl_getshared_popup",
+                        nullptr);
+        g_pendingImportOpen = false;
     }
 
     // ---- "+ New" popup ----------------------------------------------------
@@ -16025,6 +16135,142 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Cancel##fxl_del_cancel", nullptr, nullptr)) {
             g_pendingDeleteMatch.clear();
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Share ONE mapping (.rea60map) ------------------------------------
+    // Collects the metadata the exchange indexes on. Vendor is asked for
+    // because it exists nowhere in the catalog — a map is keyed by a
+    // substring of the FX name, which carries no manufacturer.
+    {
+        int condAlways = ImGui_Cond_Always;
+        centerNextPopupOnDisplay_(ctx);
+        ImGui_SetNextWindowSize(ctx, 560.0, 0.0, &condAlways);
+    }
+    if (ImGui_BeginPopupModal(ctx, "Share Plug-in Mapping###fxl_share_popup",
+                              nullptr, nullptr)) {
+        const UserPluginMap* src = nullptr;
+        for (const auto& m : user_plugins::get().maps) {
+            if (m.match == g_editingMatch) { src = &m; break; }
+        }
+        if (!src) {
+            ImGui_Text(ctx, "No mapping selected.");
+            if (ImGui_Button(ctx, "Close##fxl_share_none", nullptr, nullptr))
+                ImGui_CloseCurrentPopup(ctx);
+        } else {
+            char line[320];
+            snprintf(line, sizeof(line), "%s   [%s]", src->match.c_str(),
+                     user_plugins::surfaceScope(*src));
+            ImGui_Text(ctx, line);
+            ImGui_Spacing(ctx);
+
+            int inFlags = 0;
+            ImGui_Text(ctx, "Vendor");
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            ImGui_InputText(ctx, "##fxl_share_vendor", g_shareVendor,
+                            sizeof(g_shareVendor), &inFlags, nullptr);
+            ImGui_Text(ctx, "Your name");
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            ImGui_InputText(ctx, "##fxl_share_author", g_shareAuthor,
+                            sizeof(g_shareAuthor), &inFlags, nullptr);
+            ImGui_Text(ctx, "Description (optional)");
+            {
+                double descW = -1.0, descH = 64.0;
+                ImGui_InputTextMultiline(ctx, "##fxl_share_desc", g_shareDesc,
+                                         sizeof(g_shareDesc), &descW, &descH,
+                                         &inFlags);
+            }
+            ImGui_Spacing(ctx);
+            ImGui_Checkbox(ctx, "Release under CC0 — anyone may use and "
+                                "redistribute this mapping", &g_shareCc0);
+            ImGui_Spacing(ctx);
+
+            if (!g_shareError.empty())
+                ImGui_TextColored(ctx, 0xCC4444FF, g_shareError.c_str());
+
+            if (ImGui_Button(ctx, "Save file…##fxl_share_ok", nullptr, nullptr)) {
+                if (!g_shareCc0) {
+                    g_shareError = "Tick the licence box — a mapping cannot be "
+                                   "passed on without one.";
+                } else if (g_shareAuthor[0] == '\0') {
+                    g_shareError = "Enter a name so the mapping is attributed.";
+                } else {
+                    uf8::user_plugins::MapShare share;
+                    share.map         = *src;
+                    share.vendor      = g_shareVendor;
+                    share.author      = g_shareAuthor;
+                    share.description = g_shareDesc;
+                    share.licence     = "CC0-1.0";
+                    share.createdAt   = static_cast<int64_t>(std::time(nullptr));
+
+                    std::string err;
+                    const std::string chosen =
+                        reasixty_mapShareExportViaDialog(share, &err);
+                    if (chosen.empty()) {
+                        // Empty with no error == user cancelled the file
+                        // dialog; leave the popup up so their typing survives.
+                        if (!err.empty()) g_shareError = err;
+                    } else {
+                        SetExtState("ReaSixty", "shareAuthor",
+                                    g_shareAuthor, true);
+                        SetExtState("ReaSixty", "shareVendorLast",
+                                    g_shareVendor, true);
+                        g_lastSaveError = "Shared to " + chosen;
+                        g_shareError.clear();
+                        ImGui_CloseCurrentPopup(ctx);
+                    }
+                }
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Cancel##fxl_share_cancel", nullptr, nullptr)) {
+                g_shareError.clear();
+                ImGui_CloseCurrentPopup(ctx);
+            }
+        }
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Imported mapping clashes with an existing one --------------------
+    // upsert() overwrites wholesale, so this has to be the user's call.
+    {
+        int condAlways = ImGui_Cond_Always;
+        centerNextPopupOnDisplay_(ctx);
+        ImGui_SetNextWindowSize(ctx, 520.0, 0.0, &condAlways);
+    }
+    if (ImGui_BeginPopupModal(ctx, "Mapping already exists###fxl_getshared_popup",
+                              nullptr, nullptr)) {
+        char line[320];
+        snprintf(line, sizeof(line), "match: %s",
+                 g_pendingImport.map.match.c_str());
+        ImGui_Text(ctx, line);
+        if (!g_pendingImport.author.empty()) {
+            char by[256];
+            snprintf(by, sizeof(by), "by %s", g_pendingImport.author.c_str());
+            ImGui_Text(ctx, by);
+        }
+        if (!g_pendingImport.description.empty())
+            ImGui_TextWrapped(ctx, g_pendingImport.description.c_str());
+        ImGui_Spacing(ctx);
+        ImGui_TextWrapped(ctx,
+            "You already have a mapping for this plug-in. Replacing it "
+            "discards your version — there is no undo.");
+        ImGui_Spacing(ctx);
+
+        if (ImGui_Button(ctx, "Replace##fxl_getshared_ok", nullptr, nullptr)) {
+            g_editingMatch = g_pendingImport.map.match;
+            SetExtState("ReaSixty", "fxLearnLastMatch",
+                        g_editingMatch.c_str(), true);
+            user_plugins::upsert(std::move(g_pendingImport.map));
+            g_pendingImport = {};
+            persistAndReport_();
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Keep mine##fxl_getshared_cancel",
+                         nullptr, nullptr)) {
+            g_pendingImport = {};
             ImGui_CloseCurrentPopup(ctx);
         }
         ImGui_EndPopup(ctx);

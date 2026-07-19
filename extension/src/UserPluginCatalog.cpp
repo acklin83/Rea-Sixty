@@ -16,9 +16,11 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <list>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -1297,6 +1299,171 @@ bool importFromFile(const std::string& path, std::string* errOut)
     }
     rebuildViewCache_();
     g_generation.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+// ----- Single-map sharing (.rea60map) --------------------------------------
+
+namespace {
+
+// Every VST3 param index the map actually references — across the base layer,
+// the modifier overlays, both domain slot caches, the metering pick, the UC1
+// EXT FUNCS list, the UF8 V-Pot banks and the UF8 strip bindings, including
+// macro/push-cycle steps. Anything not in here is noise in a shared file.
+void collectUsedParams_(const UserPluginMap& m, std::set<int>& used)
+{
+    auto addLayer = [&](const SlotLayer& L) {
+        if (L.vst3Param >= 0) used.insert(L.vst3Param);
+        for (const auto& ps : L.pushSteps)
+            if (ps.vst3Param >= 0) used.insert(ps.vst3Param);
+    };
+    auto addSlots = [&](const std::vector<UserLinkSlot>& v) {
+        for (const auto& s : v) {
+            addLayer(s);
+            for (int i = 0; i < kNumFxLayers - 1; ++i) addLayer(s.modLayers[i]);
+        }
+    };
+    addSlots(m.slots);
+    addSlots(m.csSlotCache);
+    addSlots(m.bcSlotCache);
+
+    if (m.metering.grVst3Param >= 0) used.insert(m.metering.grVst3Param);
+    for (const auto& e : m.extFuncs)
+        if (e.vst3Param >= 0) used.insert(e.vst3Param);
+
+    for (int fb = 0; fb < kUserUf8FaderBankCount; ++fb) {
+        for (int vb = 0; vb < kUserUf8VpotBankCount; ++vb) {
+            for (int s = 0; s < 8; ++s) {
+                const auto& bs = m.uf8.banks.banks[fb][vb][s];
+                if (bs.vst3Param >= 0) used.insert(bs.vst3Param);
+                for (const auto& ps : bs.vpotSteps)
+                    if (ps.vst3Param >= 0) used.insert(ps.vst3Param);
+            }
+        }
+        for (int s = 0; s < 8; ++s) {
+            const auto& sb = m.uf8.strips[fb][s];
+            if (sb.faderVst3Param >= 0) used.insert(sb.faderVst3Param);
+            if (sb.soloVst3Param  >= 0) used.insert(sb.soloVst3Param);
+            if (sb.cutVst3Param   >= 0) used.insert(sb.cutVst3Param);
+            if (sb.selVst3Param   >= 0) used.insert(sb.selVst3Param);
+        }
+    }
+}
+
+} // namespace
+
+const char* surfaceScope(const UserPluginMap& m)
+{
+    if (m.domain == Domain::None) return m.uf8Mode ? "uf8" : "";
+    return m.uf8Mode ? "uc1+uf8" : "uc1";
+}
+
+bool exportMapToFile(const std::string& path, const MapShare& share,
+                     std::string* errOut)
+{
+    if (share.map.match.empty()) {
+        if (errOut) *errOut = "map has no match string";
+        return false;
+    }
+    const char* scope = surfaceScope(share.map);
+    if (!*scope) {
+        if (errOut) *errOut = "map has no surface (domain None with uf8Mode off)";
+        return false;
+    }
+
+    UserPluginMap m = share.map;
+    {
+        std::set<int> used;
+        collectUsedParams_(m, used);
+        std::vector<UserParamInfo> keep;
+        keep.reserve(used.size());
+        for (const auto& pi : m.paramSnapshot)
+            if (used.count(pi.vst3Param)) keep.push_back(pi);
+        m.paramSnapshot = std::move(keep);
+    }
+    // A shared map must never arrive as someone's Default: upsert() clears
+    // isDefault on the recipient's own map in that domain bucket.
+    m.isDefault = false;
+
+    // serialize_ takes the catalog by const ref, so a one-entry catalog gives
+    // us a single-map payload with zero serializer duplication.
+    UserPluginCatalog one;
+    one.formatVersion = kCurrentFormatVersion;
+    one.maps.push_back(std::move(m));
+    const std::string mapJson = serialize_(one);
+
+    std::ostringstream os;
+    os << "{\n";
+    os << "  \"format\": \"rea-sixty-map\",\n";
+    os << "  \"version\": 1,\n";
+    // Envelope-level copies so the exchange can index without unescaping the
+    // payload. `plugin` mirrors the map's own `match`.
+    os << "  \"plugin\": ";      appendEscaped_(os, share.map.match);   os << ",\n";
+    os << "  \"vendor\": ";      appendEscaped_(os, share.vendor);      os << ",\n";
+    os << "  \"surfaces\": ";    appendEscaped_(os, scope);             os << ",\n";
+    os << "  \"author\": ";      appendEscaped_(os, share.author);      os << ",\n";
+    os << "  \"description\": "; appendEscaped_(os, share.description); os << ",\n";
+    os << "  \"licence\": ";     appendEscaped_(os, share.licence);     os << ",\n";
+    os << "  \"created_at\": " << static_cast<long long>(share.createdAt) << ",\n";
+    os << "  \"map\": ";         appendEscaped_(os, mapJson);           os << "\n";
+    os << "}\n";
+
+    if (!writeFileAtomic_(path, os.str())) {
+        if (errOut) *errOut = "could not write " + path;
+        return false;
+    }
+    return true;
+}
+
+bool importMapFromFile(const std::string& path, MapShare& out,
+                       std::string* errOut)
+{
+    std::string contents;
+    if (!readFile_(path, contents)) {
+        if (errOut) *errOut = "could not read " + path;
+        return false;
+    }
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(contents.c_str(),
+                                     static_cast<int>(contents.size()));
+    if (!root || !root->is_object()) {
+        if (errOut) *errOut = "not a JSON object";
+        return false;
+    }
+    std::string fmt;
+    if (!getStrI_(root, "format", fmt) || fmt != "rea-sixty-map") {
+        if (errOut) *errOut = "not a Rea-Sixty mapping file";
+        return false;
+    }
+    std::string mapJson;
+    if (!getStrI_(root, "map", mapJson) || mapJson.empty()) {
+        if (errOut) *errOut = "file carries no map payload";
+        return false;
+    }
+    UserPluginCatalog tmp;
+    tmp.formatVersion = kCurrentFormatVersion;
+    if (!parse_(mapJson, tmp)) {
+        if (errOut) *errOut = "map payload is not a valid catalog";
+        return false;
+    }
+    // parse_ silently drops entries with an empty match or the invalid
+    // (domain=None, uf8Mode=false) pair, so a syntactically fine file can
+    // still yield nothing. Check the count, don't assume it.
+    if (tmp.maps.size() != 1) {
+        if (errOut) *errOut = "expected exactly one map, got "
+                              + std::to_string(tmp.maps.size());
+        return false;
+    }
+    out.map = std::move(tmp.maps[0]);
+    out.map.isDefault = false;
+    getStrI_(root, "vendor",      out.vendor);
+    getStrI_(root, "author",      out.author);
+    getStrI_(root, "description", out.description);
+    getStrI_(root, "licence",     out.licence);
+    out.createdAt = 0;
+    if (auto* el = root->get_item_by_name("created_at")) {
+        if (const char* s = el->get_string_value(true)) out.createdAt = atoll(s);
+    }
     return true;
 }
 

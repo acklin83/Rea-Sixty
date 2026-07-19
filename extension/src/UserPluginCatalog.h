@@ -619,6 +619,42 @@ bool exportToFile(const std::string& path, std::string* errOut);
 // non-null) carries a short reason.
 bool importFromFile(const std::string& path, std::string* errOut);
 
+// ----- Single-map sharing (.rea60map) --------------------------------------
+// One map plus the metadata the mapping exchange needs, so a file exported
+// today is still a valid upload later. Deliberately NOT a setup bundle: a
+// .rea60config embeds bindings.json, which can carry REAPER action IDs and
+// keyboard macros, so importing one runs whatever the author put in it. A
+// plugin map is pure data — param indices, labels, curves, colours — which is
+// what makes it safe to pass between strangers. See docs/mapping-exchange-plan.md.
+struct MapShare {
+    UserPluginMap map;
+    std::string   vendor;       // not derivable from `match`; user-entered
+    std::string   author;       // free text until the exchange has accounts
+    std::string   description;  // optional, a line or two
+    std::string   licence;      // SPDX id; "CC0-1.0" for exchange uploads
+    int64_t       createdAt = 0;  // unix seconds, 0 = unknown
+};
+
+// Surface scope a map applies to, derived from (domain, uf8Mode):
+// "uc1", "uf8", "uc1+uf8". Empty string for the invalid combination
+// (domain=None, uf8Mode=false), which the catalog filters at load/save.
+const char* surfaceScope(const UserPluginMap& m);
+
+// Write ONE map as a .rea60map envelope. `paramSnapshot` is pruned to the
+// params the map actually binds — an unpruned snapshot runs to thousands of
+// entries on plug-ins like the UADx range, which is dead weight in a file
+// meant to be passed around. `isDefault` is forced off: a shared map must not
+// claim the recipient's Default slot.
+bool exportMapToFile(const std::string& path, const MapShare& share,
+                     std::string* errOut);
+
+// Read a .rea60map WITHOUT applying it — the caller decides what to do when
+// the match already exists (upsert overwrites wholesale) or collides with a
+// built-in (which would make save() refuse the WHOLE catalog). Returns false
+// with a short reason in `*errOut` on any malformed input.
+bool importMapFromFile(const std::string& path, MapShare& out,
+                       std::string* errOut);
+
 // Absolute path where user_plugins.json is persisted.
 std::string configPath();
 
