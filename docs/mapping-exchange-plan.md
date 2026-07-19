@@ -196,182 +196,50 @@ uploader is a non-starter here. Someone sharing a Pro-Q mapping will not draw a
 banner, and a corpus where most entries have a blank thumbnail looks deader
 than one with no thumbnails at all.
 
-## The visual preview
+## The faceplate is dropped. Decided 2026-07-19 on mobile.
 
-The single feature that decides whether `/mappings/<id>/<slug>` is a service or
-a file dump. Without it, downloading is an act of faith: you cannot tell a
-thorough 27-slot map from someone's three-knob experiment until you have
-imported it and clicked around.
+Four prototypes went into a rendered UC1 face — from the hit-test table, then
+from `drawUc1Face_`; with stacked labels, then leader lines, then labels on the
+control. The last one looked right on a desktop. It does not survive a phone,
+and the arithmetic is not close:
 
-**But it belongs on the detail page and nowhere else.** The index gets no
-surface render per row. What the index needs instead is the *number* — "27 of
-33 Channel Strip controls" — which answers the thorough-vs-token question on
-its own, in one line of text, at a cost that scales to hundreds of rows.
+| Viewport | Face renders at | 9 px silkscreen becomes |
+| --- | --- | --- |
+| 980 px (tablet) | 633 px | **6.6 px** |
+| 390 px (phone) | ~342 px | **3.6 px** |
 
-### It does not need to be drawn — the geometry already exists, twice
+The face is an 860 × 660 drawing. There is no label strategy that fixes an
+unreadable font size, and a horizontally-scrolling faceplate on a phone is worse
+than no picture. Shrinking the drawing is not an option either — it is a
+transcription of the hardware, and the parts that make it legible as a UC1 (the
+silkscreen, the band labels, the meter scale) are exactly the parts that vanish
+first.
 
-This is the load-bearing find, and it means the preview is an export job rather
-than a design job:
+**So there is no faceplate anywhere in the exchange.** Not on the index, not on
+the plug-in page, not on the detail page.
 
-- **`drawUc1Face_`** (`SettingsScreen.cpp:2271`) paints the whole UC1 face into
-  a `VCanvas` (`SettingsScreen.cpp:1455`) using exactly five primitives:
-  `drawText_`, `drawTextCentered_`, `rect_`, `circle_`, `line_`. All
-  coordinates are in a fixed **860 × 660** canvas space.
-- **`kUc1Controls[]`** (`SettingsScreen.cpp:8361`) is already the join table a
-  preview needs: `{kind, linkIdx, domain, cx, cy, r, w, h, cap, label}` — one
-  entry per control, each bound to an SSL 360 Link slot. A map's
-  `slots[].linkIdx` indexes straight into it. Nothing has to be invented.
-- **`drawUf8Vector`** (`SettingsScreen.cpp:1686`) does the same for the UF8, in
-  a **1000 × 490** canvas.
+### What carries the picture instead
 
-### The decision: export the geometry once, never re-implement it
+1. **The coverage strip** — one small cell per control, grouped by section, lit
+   where bound. ~200 px, scales down without losing meaning because it has no
+   text in it. Lives on the map rows and on the detail page.
+2. **The section-grouped control table** — Filters · HF · HMF · EQ · LMF · LF ·
+   Comp · Gate · Channel, each with its own `n/total`. This is the detail view
+   now. It reflows to any width, it is what a screen reader and a search engine
+   read, and the per-section counts carry the shape of a mapping ("all of the
+   EQ, none of the gate") in a way the drawing only ever implied.
+3. **The coverage number**, domain-scoped, for everything above that.
 
-Two tempting approaches are both wrong:
+Verified at 390 px across all screens: no horizontal overflow, smallest rendered
+font 10.6 px — against 3.6 px for the faceplate it replaced.
 
-1. **Re-draw the faces by hand in SVG on the server.** Two sources of truth for
-   the same picture. They drift, and the drift shows up as a website UC1 that
-   does not match the UC1 in the app. This is precisely the failure the whole
-   generate-from-the-repo arrangement exists to prevent — see
-   `docs/website-plan.md`.
-2. **Render at request time in C++.** The server does not have the extension,
-   and would not gain anything if it did.
+### Keep for the app, not the web
 
-Instead: a **build-time exporter**. Give `VCanvas` a virtual sink — it
-currently holds `ImGui_Context*` / `ImGui_DrawList*` directly — keep the
-existing bodies as the ImGui sink, and add an SVG sink beside it. Then run
-`drawUc1Face_` and `drawUf8Vector` once from a standalone CLI tool.
-`extension/tools/` is already the home for exactly this kind of thing (the
-libusb-only probes build without REAPER).
-
-Output, committed to the repo as generated artefacts so the website build never
-needs a C++ toolchain:
-
-```
-uc1-face.svg      uf8-face.svg        the face, no labels
-uc1-controls.json uf8-controls.json   [{linkIdx, domain, kind, cx, cy, r, w, h, label}]
-```
-
-The face is identical for every mapping. Only the labels change. So the site
-serves one static SVG and positions text from the JSON.
-
-### Prototype result — the approach works, the labelling does not
-
-Built 2026-07-19 (throwaway, not committed): parse `kUc1Controls[]` out of
-`SettingsScreen.cpp`, render three real maps from the dev machine's live
-catalog. Findings:
-
-**Confirmed.** The geometry lines up with no adjustment, the UC1 layout is
-immediately recognisable from the control positions alone, and the coverage
-number does the job it was specified for — `bx_console SSL 4000 G` at 27/33
-(82 %), `SPL IRON` at 17/33 (52 %), `ReaComp` at 3/8 read as thorough, partial
-and token at a glance, with no reading required. The off-face "also mapped"
-list fired for real on `SPL IRON`, which binds one parameter to a slot with no
-UC1 control.
-
-**Refuted: stacking the parameter name under the silkscreen label.** At the
-real control density the two text lines collide — HF Bell over HF Gain, EQ
-On/Off over EQ Type, the Gate Attack pair. Parameter names also need truncating
-to ~18 characters to fit, which turns "EQ High Mid Frequency" into "EQ High Mid
-Freque". Both make the picture harder to read than the table it sits above,
-which defeats the point.
-
-**Leader lines were tried next and are also rejected.** Labels in the margin
-with a line back to each control (the reWASD layout) does remove the collisions,
-and it survives 33 controls — but on this face it reads as a wiring diagram, and
-the lines are visual noise for something the table beneath already states
-precisely. **Labels go directly on the control. No leaders.**
-
-### The real cause of both failures: drawing from the wrong table
-
-Every prototype up to this point rendered from **`kUc1Controls[]`**. That is the
-**hit-test table** — 41 bare circles and rectangles with a linkIdx each. It has
-no chassis, no column panels, no band dividers, no silkscreen, no GR meter, no
-LCD, no encoders. Rendering it produces a wiring diagram, which is why no amount
-of label placement made it look like hardware: there was no hardware in it.
-
-The drawing code is **`drawUc1Face_` (`SettingsScreen.cpp:2271-2652`)** — 381
-lines, 86 primitive calls: knobs with an outer ring, coloured cap and indicator
-at 12 o'clock; the three column backplates; the stepped SSL-4000E band dividers;
-the Bus Comp GR meter with its blue scale, tick labels and needle; the 7-segment
-readout; the LCD block; the CS/BC encoders; the GR LED ladder. **That is the
-picture, and the plan said to export it from the start.** Transcribing it (a
-Python port, 2026-07-19) produced a face that reads as a UC1 at a glance, with
-the parameter name sitting under each control's own silkscreen label.
-
-Only seven distinct primitives are used — `knob`, `btn`, `rect_`, `circle_`,
-`line_`, `drawText_`, `drawTextCentered_` — which is the whole argument for the
-virtual sink being a small job.
-
-**Placement rules the transcription needed** (the collision class does not
-vanish, it just gets small enough to solve):
-- Knobs: parameter name below the silkscreen label. Row pitch is 68 px
-  minimum, so this always fits.
-- The EQ **IN / TYPE** toggles sit 38 px apart on one row — stagger their two
-  labels vertically or they overlap.
-- Dynamics buttons are stacked 26 px apart, so a label below lands on the next
-  button and on the CHANNEL section label. Put it **beside** the button — right
-  for the gate pair, left for the compressor pair, which is where the room is.
-
-**Density risk — tested on the leader-line layout, which is now superseded by on-control labels. Kept because the measurements still bound the problem.** The worry was that a gamepad has
-roughly twenty controls where the UC1 Channel Strip domain has 33 in two tight
-vertical columns, and that thirty-three leaders would tangle where twenty do
-not. Rebuilt the prototype on the margin layout against the real coordinates:
-
-| Map | Bound | Split | Max label shift |
-| --- | --- | --- | --- |
-| `bx_console SSL 4000 G` (CS) | 27 of 33 | 16 L / 11 R | 15 px |
-| `SPL IRON` (CS) | 17 of 33 | 14 L / 3 R | 15 px |
-| `bx_townhouse Buss Compressor` (BC) | 8 of 8 | 4 L / 4 R | 0 px |
-
-Max shift is how far de-collision had to move a label off its control's own
-row. Fifteen pixels at the worst is nothing — the leaders stay near-horizontal
-and no label is truncated. `EQ High Mid Frequency` renders in full, which it
-could not in the stacked version.
-
-**Two things the test changed, both derivable rather than hand-tuned:**
-
-1. **Crop the viewBox to the domain's bounding box.** A BusComp map binds a
-   small central block. Rendering the full 860 × 660 plate for it means ~90 %
-   dimmed pixels and eight leaders dragged across the whole face to reach a
-   margin. Cropping to the in-domain extent plus padding puts the margin beside
-   the controls; the BC case went from long diagonal leaders to short horizontal
-   ones and a 0 px shift. Neighbouring out-of-domain controls stay visible,
-   dimmed, so the crop still reads as a place on the UC1 rather than a diagram.
-2. **Split left/right against the midpoint of the DOMAIN's extent, not the
-   plate's.** The BC block sits entirely right of the plate centre, so a
-   plate-centre split sent all eight labels into the same margin.
-
-### The index row — no render
-
-Following reWASD's row rather than Elgato's card, because we cannot ask
-uploaders for artwork:
-
-| Element | Source |
-| --- | --- |
-| Plug-in name | envelope `plugin` |
-| Vendor | envelope `vendor`, normalised |
-| Author | account display name |
-| Surface badges — UC1 / UF8 / UC1+UF8 | envelope `surfaces`; the direct analogue of "Perfect for:" |
-| **Coverage** — "27 of 33 Channel Strip" + bar | derived; does the thumbnail's job in one line |
-| "Works for me" count | ratings |
-| Description, first line | envelope `description` |
-| Download | — |
-
-**Facets follow reWASD's capability model, not a category tree** — and every one
-is derivable from the map, so nothing extra is asked of the uploader: *uses
-modifier layers* (`modLayers` populated), *has push-cycles* (`pushSteps`),
-*custom knob curves* (`curvePoints`), *custom ranges*, *EXT FUNCS populated*,
-*UF8 strip bindings*, *off-face bindings*. Plus vendor and surface as plain
-facets.
-
-**The list-level visual is a coverage strip, not a shrunken faceplate.** One
-small cell per control, ordered and grouped by section (Filters · HF · HMF · EQ
-· LMF · LF · Comp · Gate · Channel), lit where the map binds it — roughly 200 px
-wide, and comparable down a column of rows. It answers the question the list has
-to answer ("does this cover the part I care about") which a miniature mockup
-cannot. A useful side effect fell out of it: a Bus Comp map's strip is 8 cells
-where a Channel Strip map's is 33, so the domain is legible before you read the
-badge.
+None of this argues against `drawUc1Face_` itself; it is the right picture *in
+the extension*, at desktop size, where it already lives. The Phase 2a exporter is
+therefore **dropped from the exchange's critical path**. If a desktop-only
+"see it on the surface" view is ever wanted it can come back as an enhancement,
+but nothing in the exchange should depend on it.
 
 ## The three screens
 
