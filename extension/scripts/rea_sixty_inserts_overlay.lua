@@ -69,12 +69,11 @@ reaper.SetExtState("rea_sixty", "overlay_build", BUILD, true)   -- persist: read
 -- overlay ACTUALLY decides — the measured list bounds and every row's verdict —
 -- to /tmp/rea_sixty_overlay.log. Reasoning about this from the outside has been
 -- wrong three times running; the code has to say it itself.
--- FORCED ON for the 2026-07-19-rowmap diagnostic build: there is no interactive
--- console in REAPER, so requiring an ExtState means shipping a script just to
--- flip a flag. Capped at DBG_MAX lines so it cannot grow without bound or cost
--- anything once it has said what it needs to. Revert to the ExtState read once
--- the row-map path is confirmed.
-local DBG = true
+-- NOTE for the next person who needs this: REAPER has no interactive console,
+-- so there is no quick way to flip the ExtState from outside — set it in
+-- Settings, or temporarily hard-code `true` here and rebuild. The cap stays so
+-- an accidental `true` cannot fill the disk.
+local DBG = reaper.GetExtState("rea_sixty", "overlay_debug") == "1"
 local DBG_MAX, dbgCount = 400, 0
 local dbgFile = (reaper.GetOS():find("Win") and (os.getenv("TEMP") or "C:\\Windows\\Temp") .. "\\"
                                              or "/tmp/") .. "rea_sixty_overlay.log"
@@ -235,26 +234,66 @@ local function refineMcpColumn(px, py, track, hwnd)
   if hwnd then
     rows = {}
     local yLo, yHi = math.min(eA, eB), math.max(eA, eB)
-    -- Rows are 17 px and contiguous (measured), so a 4 px step cannot skip one
-    -- while keeping the probe count low (~25 for a typical list).
-    local STEP = 4
-    for y = yLo, yHi, STEP do
-      local _, info = reaper.GetThingFromPoint(px, y)
-      if info and not info:match("param:") then
-        local fx = info:match("^mcp%.fxlist%s+%d+%s+fx:(%d+)")
-        if fx then
-          fx = tonumber(fx)
-          local _, cy = reaper.JS_Window_ScreenToClient(hwnd, px, y)
-          if cy then
-            local e = rows[fx]
-            if e then
-              if cy < e.lo then e.lo = cy end
-              if cy > e.hi then e.hi = cy end
-            else
-              rows[fx] = { lo = cy, hi = cy }
-            end
-          end
+    -- Step 1 px, not 4. A coarse step only brackets the row, which then needs
+    -- snapping to a grid — and the grid I used (cTop + topPad) double-counted
+    -- topPad, because cTop IS already the measured top of the list. Frank runs
+    -- overlay_toppad=2, so every row came out 2 px low. Sampling every pixel
+    -- gives the row's true bounds and removes the whole question: no grid, no
+    -- topPad, no cTop in the answer. The extent is ~225 px, so this is ~225
+    -- probes per REBUILD (not per frame), which is the same order as the
+    -- edge/column walks already done above.
+    -- Do NOT scan the edge() extent. That walk stops at the first pixel that is
+    -- not "mcp.fxlist", so anything interrupting the column — measured
+    -- 2026-07-19: chain=4 but the extent ended at client 95, mid-list, and FX 3
+    -- was never seen — truncates the list and takes the rows below it with it.
+    --
+    -- The rows identify themselves, so no contiguous extent is needed. Walk
+    -- outward from the hit and tolerate gaps: only give up after GAP pixels with
+    -- no row at all. Empty slots, separators and whatever else sits between the
+    -- inserts are simply stepped over.
+    local scr = {}
+    local function note(y, fx)
+      local e = scr[fx]
+      if e then
+        if y < e.lo then e.lo = y end
+        if y > e.hi then e.hi = y end
+      else
+        scr[fx] = { lo = y, hi = y }
+      end
+    end
+    local GAP, LIMIT2 = 40, 2000
+    local function sweep(dir)
+      local miss = 0
+      local y = py
+      while miss < GAP and math.abs(y - py) < LIMIT2 do
+        local _, info = reaper.GetThingFromPoint(px, y)
+        local fx = nil
+        if info and not info:match("param:") then
+          fx = info:match("^mcp%.fxlist%s+%d+%s+fx:(%d+)")
         end
+        -- Any fxlist row (occupied, empty slot or tail) keeps the sweep alive;
+        -- only a genuinely foreign region counts towards the gap.
+        if info and isFxList_(info) and reaper.GetTrackFromPoint(px, y) == track then
+          miss = 0
+          if fx then note(y, tonumber(fx)) end
+        else
+          miss = miss + 1
+        end
+        y = y + dir
+      end
+    end
+    sweep(-1)
+    sweep(1)
+    -- Convert each row's screen bounds to client once, and keep the smaller as
+    -- the top (screen y is y-UP here, client y-DOWN — min/max sorts it without
+    -- assuming a direction).
+    for fx, e in pairs(scr) do
+      local _, ca = reaper.JS_Window_ScreenToClient(hwnd, px, e.lo)
+      local _, cb = reaper.JS_Window_ScreenToClient(hwnd, px, e.hi)
+      -- Keep the SCREEN y too: rowsStale_ re-probes it later to notice that the
+      -- list has been re-laid out under us (see there).
+      if ca and cb then
+        rows[fx] = { top = math.min(ca, cb), bot = math.max(ca, cb), sy = e.lo }
       end
     end
     if not next(rows) then rows = nil end   -- nothing read -> fall back
@@ -300,13 +339,16 @@ local function addHit(byGuid, seen, want, kind, tr, x, y)
     -- draw time. sy = a screen y inside the window for the ScreenToClient call.
     local sl, sr, cTop, cBot, rows = refineMcpColumn(x, y, tr, h)
     local _, hitInfo = reaper.GetThingFromPoint(x, y)
-    local nRows = 0
-    if rows then for _ in pairs(rows) do nRows = nRows + 1 end end
-    dbg("addHit  track=%s  hit=(%d,%d) info=%q  ch=%d  cTop=%s cBot=%s  rows=%d",
-        select(2, reaper.GetTrackName(tr)) or "?", x, y, tostring(hitInfo), ch or -1,
-        tostring(cTop), tostring(cBot), nRows)
+    local tname = select(2, reaper.GetTrackName(tr)) or "?"
+    local have = {}
+    if rows then for k in pairs(rows) do have[#have + 1] = k end table.sort(have) end
+    dbg("addHit  track=%s  hit=(%d,%d) info=%q  ch=%d  cTop=%s cBot=%s  chain=%d  rows=[%s]",
+        tname, x, y, tostring(hitInfo), ch or -1,
+        tostring(cTop), tostring(cBot), reaper.TrackFX_GetCount(tr),
+        table.concat(have, ","))
     byGuid[g][#byGuid[g] + 1] =
       { kind = "mcp", hwnd = h, ch = ch, count = reaper.TrackFX_GetCount(tr),
+        tname = tname, track = tr, probeX = x,
         sl = sl, sw = sr - sl, sy = y, cTop = cTop, cBot = cBot, rows = rows }
   else
     local l, t, r = refineTcp(x, y, tr)
@@ -497,28 +539,26 @@ local function drawBlockRow(block, fxIdx, col)
     if block.rows then
       local e = block.rows[fxIdx]
       if not e then
-        -- The list was read successfully and this FX is not in it — genuinely
-        -- scrolled out or past the visible end. Drawing anywhere would be a lie.
-        dbg("row fx=%d -> not in the visible list (%d rows read) -> SKIP", fxIdx,
-            (function() local n = 0 for _ in pairs(block.rows) do n = n + 1 end return n end)())
+        -- The list was read and this FX is not in it. With grouped parameters a
+        -- plug-in can take 1 + n rows, so a chain that fits normally can run
+        -- past the list's visible end — REAPER simply is not drawing that FX,
+        -- and there is no row to mark. Logged with the track, because the same
+        -- line for two different strips is unreadable otherwise.
+        local have = {}
+        for k in pairs(block.rows) do have[#have + 1] = k end
+        table.sort(have)
+        dbg("row fx=%d  track=%s -> NOT in the visible list (have: %s) -> SKIP",
+            fxIdx, block.tname or "?", table.concat(have, ","))
         return
       end
-      -- The 4 px sampling brackets the row but does not pin its top, so snap to
-      -- the row grid the list actually uses: rows are contiguous and exactly
-      -- rowH tall from cTop + topPad (measured — with cTop=1 and topPad=1 the
-      -- rows come out at client 2, 19, 36 …, which is what the profile shows).
-      -- Falls back to the sampled top if the extent is unusable.
-      local y = e.lo
-      if block.cTop then
-        local mid  = (e.lo + e.hi) / 2
-        local base = block.cTop + topPad
-        local k    = math.floor((mid - base) / rowH + 0.5)
-        if k >= 0 then y = base + k * rowH end
-      end
-      dbg("row fx=%d -> sampled %d..%d, snapped y=%d -> ZEICHNEN", fxIdx, e.lo, e.hi, y)
+      -- Measured at 1 px, so this IS the row's top — nothing to snap, and the
+      -- rowH/topPad tuning does not enter into it.
+      local y = e.top
+      dbg("row fx=%d  track=%s -> client y %d..%d -> ZEICHNEN",
+          fxIdx, block.tname or "?", e.top, e.bot)
       local cx = reaper.JS_Window_ScreenToClient(block.hwnd, block.sl, block.sy)
       composite(block.hwnd, math.floor(cx + 0.5), math.floor(y + 0.5),
-                math.floor(block.sw + 0.5), math.floor(rowH + 0.5), col)
+                math.floor(block.sw + 0.5), math.floor(e.bot - e.top + 1 + 0.5), col)
       return
     end
 
@@ -561,6 +601,39 @@ local function drawBlockRow(block, fxIdx, col)
     end
     composite(block.hwnd, cx, yd, block.sw, rowH, col)
   end
+end
+
+-- Has the FX list been re-laid out since we mapped it?
+--
+-- The rebuild triggers are all about WHICH tracks/windows are in play (want-set,
+-- track count, dead windows). None of them fires when a strip's list is
+-- rearranged in place — and toggling REAPER's "show FX parameters" does exactly
+-- that: the same track, the same window, but every row after the first plug-in
+-- moves. Measured 2026-07-19: the overlay kept drawing from the map it built
+-- before the parameters appeared, so the highlight sat on a parameter row.
+--
+-- Cheap re-check: two of the rows we recorded must still report the chain index
+-- we recorded them for. Two probes per strip, on the existing ~1 Hz liveness
+-- tick — not per frame.
+local function rowsStale_(block)
+  local rows = block.rows
+  if not rows or not block.probeX then return false end   -- nothing to verify
+  local lo, hi
+  for fx in pairs(rows) do
+    if not lo or fx < lo then lo = fx end
+    if not hi or fx > hi then hi = fx end
+  end
+  if not lo then return false end
+  for _, fx in ipairs({ lo, hi }) do
+    local e = rows[fx]
+    if e and e.sy then
+      local _, info = reaper.GetThingFromPoint(block.probeX, e.sy)
+      local seen = info and not info:match("param:")
+                   and info:match("^mcp%.fxlist%s+%d+%s+fx:(%d+)")
+      if tonumber(seen) ~= fx then return true end
+    end
+  end
+  return false
 end
 
 local function rebuildDraw(byGuid, blocks)
@@ -744,6 +817,27 @@ local function loop()
           if g_liveTick >= 30 then
             g_liveTick = 0
             if not blocksLive(byGuid, g_blocks) then need = true end
+            -- …and re-verify the row maps: the list can be rearranged in place
+            -- (FX parameters shown/hidden/grouped, a plug-in added or removed)
+            -- with the window and the want-set unchanged, which no other
+            -- trigger notices. See rowsStale_.
+            -- Setting `need` is NOT enough on its own: the rescan below reuses
+            -- g_blockCache for any guid whose window is still alive, and that
+            -- cached block carries the stale row map — so the re-measure never
+            -- happens and only a track change (a guid the cache lacks) fixes it.
+            -- Drop the cache entry for the affected track too. Frank 2026-07-19.
+            if not need then
+              for guid, list in pairs(g_blocks) do
+                for _, b in ipairs(list) do
+                  if b.kind == "mcp" and rowsStale_(b) then
+                    dbg("rowsStale track=%s -> drop cache + RESCAN", b.tname or "?")
+                    g_blockCache[guid] = nil
+                    need = true
+                    break
+                  end
+                end
+              end
+            end
           end
         end
       end

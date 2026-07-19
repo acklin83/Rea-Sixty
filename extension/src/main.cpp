@@ -9713,15 +9713,24 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, int selFx, std::str
     if (!tr || (csFx < 0 && bcFx < 0 && selFx < 0)) return;
     const std::string guid = uc1::trackGuid(tr);
     if (guid.empty()) return;
-    // Publish the visual SLOT, not the chain index: REAPER 7.75 lets the MCP/TCP
-    // FX list leave empty slots, so the overlay (row = topPad + N*rowH) needs the
-    // visual slot. fxChainIndexToSlot_ (defined up by applyFxMoveSlotAware_) maps
-    // chain index -> effective 0-based slot; index unchanged on pre-7.75.
-    const int csSlot  = (csFx  >= 0) ? fxChainIndexToSlot_(tr, csFx)  : -1;
-    const int bcSlot  = (bcFx  >= 0) ? fxChainIndexToSlot_(tr, bcFx)  : -1;
-    const int selSlot = (selFx >= 0) ? fxChainIndexToSlot_(tr, selFx) : -1;
+    // Publish the real CHAIN index. This used to publish the visual SLOT
+    // (fxChainIndexToSlot_) because the overlay drew at topPad + N*rowH and so
+    // needed a row number. As of 2026-07-19 the overlay no longer computes the
+    // row: it reads the MCP list, where every occupied row identifies itself as
+    // "mcp.fxlist <slot> fx:<chainIndex>", and looks the row up by chain index.
+    // It has to, because slot == row only holds when nothing else shares the
+    // list — grouped FX parameters take a row each and empty slots take a row
+    // without taking a chain index, so no single number can mean both.
+    //
+    // Sending the slot while the overlay resolves a chain index put the
+    // highlight one insert too low whenever the chain had a gap (Frank
+    // 2026-07-19: on the 3rd FX, drawn on the 4th).
+    //
+    // Only the overlay script consumes this body. The panel's plug-in names and
+    // its click-to-open target are published separately, already from the chain
+    // index, precisely because reading this field as one used to break them.
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "%s,%d,%d,%d;", guid.c_str(), csSlot, bcSlot, selSlot);
+    std::snprintf(buf, sizeof(buf), "%s,%d,%d,%d;", guid.c_str(), csFx, bcFx, selFx);
     out += buf;
 }
 
