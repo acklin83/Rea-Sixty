@@ -480,27 +480,33 @@ on it.
 
 Server. Runs on the existing Hostinger VPS; Docker and Caddy are already there.
 
-**Foundation shipped 2026-07-19 (`2964c83`)** — `server/`, Node + Fastify +
-better-sqlite3 + SimpleWebAuthn. Domain layer only, no HTTP routes yet:
-ingest + security gate, coverage, per-control diff, vendor/plug-in resolution,
-merge, schema, seed. Verified against the live 29-map catalog. Still to build:
+**In progress 2026-07-19** — `server/`, Node + Fastify + better-sqlite3 +
+SimpleWebAuthn. Commits: foundation `2964c83`, envelope v2 `aaa5559`, read
+routes `4ef0f48`. Verified against the live 29-map catalog.
 
 - SQLite plus files on disk. **Done** (`server/src/db/`).
-- Ingest, coverage, diff, seed. **Done and verified** — see the phase-2 notes
-  in `[[mapping-exchange-plan]]` memory.
-- **HTTP routes** (Fastify) — browse by vendor / surface / plugin, plug-in
-  page with the diff selection, one-map detail page, download `.rea60map`.
+- Ingest, coverage, diff, merge, seed. **Done and verified.**
+- **Envelope v2 — `original_name`. Done** (`aaa5559`). The extension captures
+  REAPER's full factory name at FX-Learn focus-follow and carries it in the
+  envelope; the server prefers it over `match` for vendor and identity, so the
+  Pro-C 2 split auto-merges. The v1 envelope below still loads (importer keys on
+  `format`, not `version`).
+- **HTTP read routes (Fastify). Done** (`4ef0f48`) — `GET /v1/plugins`
+  (browse: search, vendor + surface facets, sort, page), `/v1/vendors`
+  (combobox), `/v1/plugins/:slug` (+ `/diff?maps=a,b`), `/v1/maps/:id`
+  (+ `/download`). Binds `127.0.0.1:8010`.
 - Auth per the **Auth** section: passkey primary, magic-link equal fallback,
-  optional recovery email. Privacy policy live before the first sign-up.
-- Upload (login required), rate ("works for me" + version), author, description.
-- Download serves `.rea60map`; the user imports it via Phase 1.
+  optional recovery email. Privacy policy live before the first sign-up. **TODO.**
+- **Write routes: upload** (login required), rate ("works for me" + version),
+  report. **TODO.**
 - Admin view with unpublish + the plug-in merge tool, plus a report button. Not
-  optional — one bad actor otherwise poisons the corpus.
+  optional — one bad actor otherwise poisons the corpus. **TODO** (merge logic
+  built, no route yet).
 - **Seed with the 29 maps from the dev machine.** **Done** (`server/src/seed.js`).
 - Deploy: own container in `/opt/reasixty/`, own Caddy block on the host
   (`/etc/caddy/Caddyfile` — **not** `/home/frank/Caddyfile`), port 8010,
   `bind`-ing the IPs like every other block. DNS for `api.reasixty.com` is
-  added by hand in the Hostinger panel.
+  added by hand in the Hostinger panel. **TODO.**
 
 ### Phase 3 — in-app browser (read-only)
 
