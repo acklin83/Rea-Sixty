@@ -25,6 +25,15 @@ export function migrate() {
   return d;
 }
 
+/** Close the connection and drop the singleton — for graceful shutdown and
+ *  for tests that recreate DATA_DIR between cases. */
+export function closeDb() {
+  if (db) {
+    db.close();
+    db = undefined;
+  }
+}
+
 export function now() {
   return Math.floor(Date.now() / 1000);
 }

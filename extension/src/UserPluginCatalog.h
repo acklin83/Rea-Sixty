@@ -538,6 +538,14 @@ struct UserPluginMap {
     // slot (linkIdx 5), like any other CS button. Additive — old files
     // default to true. Frank 2026-06-02.
     bool useReaperTrackPolarity = true;
+    // Full plug-in factory name — REAPER's `original_name` — captured live
+    // when the FX-Learn view follows the focused FX. `match` is a user-editable
+    // substring and carries no manufacturer; this string does ("Name (Vendor)"
+    // for VST/CLAP, "Vendor: Name" for AU), which is what lets the mapping
+    // exchange resolve the vendor and the plug-in identity server-side.
+    // Additive — empty until captured; the exchange falls back to `match`.
+    // Frank 2026-07-19.
+    std::string originalName;
 };
 
 struct UserPluginCatalog {
@@ -668,6 +676,16 @@ const UserPluginCatalog& get();
 void setAll(UserPluginCatalog c);
 void upsert(UserPluginMap m);              // matches by `match` field
 bool removeByMatch(std::string_view match);
+
+// Record the live plug-in factory name (`original_name`) onto an existing
+// map, keyed by `match`. Called when the FX-Learn view follows a focused
+// live FX that resolves to an owned map — that is the one moment the full
+// name (which carries the vendor) is available; `match` alone never is.
+// Persists (save()) ONLY when the value actually changes, so the
+// focus-follow hot path costs nothing after the first capture. No-op when
+// the match is not in the catalog or `originalName` is empty. Returns true
+// when it changed and was saved.
+bool captureOriginalName(std::string_view match, std::string_view originalName);
 
 // Lookup by match-substring on an FX name. Mirrors built-in lookup
 // semantics — first hit on substring wins. Returns a synthesised

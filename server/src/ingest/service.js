@@ -78,10 +78,16 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
   const db = getDb();
 
   const { envelope, map, bindings, coverage } = parsed;
-  const fxType = fxTypeOf(map.match);
-  // Envelope vendor is authoritative (captured at export from original_name).
-  // Fall back to parsing the match only when the file carries none.
-  const vendorName = envelope.vendor || vendorFromName(map.match, fxType);
+
+  // Identity source, best-first: the v2 `original_name` is the full factory
+  // name and carries the vendor; `match` is a user-editable substring that may
+  // be shortened ("Pro-C 2") or truncated mid-vendor. Prefer original_name for
+  // both the fx_type and the derived name/vendor; fall back to match on v1.
+  const identityName = envelope.originalName || map.match;
+  const fxType = fxTypeOf(identityName);
+  // Envelope vendor wins if the user typed one (JSFX has no vendor in the
+  // name); otherwise derive it from original_name, then match.
+  const vendorName = envelope.vendor || vendorFromName(identityName, fxType);
 
   const sha = createHash('sha256').update(text, 'utf8').digest('hex');
   const bytes = Buffer.byteLength(text, 'utf8');
@@ -89,7 +95,11 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
   const tx = db.transaction(() => {
     const vendorId = resolveVendor(db, vendorName);
     const pluginId = resolvePlugin(db, {
-      match: map.match, preferredName: preferredPluginName, vendorId, fxType,
+      // Derive the plug-in name from original_name when present — it is the
+      // full factory name, so "SSL Native Channel Strip 2 (SSL)" beats the
+      // shortened "match" the user may have typed. preferredName (upload form)
+      // still wins over both.
+      match: identityName, preferredName: preferredPluginName, vendorId, fxType,
     });
 
     const ts = now();

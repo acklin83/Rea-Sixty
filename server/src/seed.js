@@ -26,9 +26,12 @@ function surfaceScope(map) {
 function envelopeFor(map, author) {
   return JSON.stringify({
     format: 'rea-sixty-map',
-    version: 1,
+    version: 2,
     plugin: map.match,
-    vendor: '',                       // seed maps predate vendor capture
+    // Passthrough: empty on a catalog written before the extension captured
+    // original_name; populated once the user has focused each plug-in live.
+    original_name: map.originalName ?? '',
+    vendor: '',
     surfaces: surfaceScope(map),
     author,
     description: '',

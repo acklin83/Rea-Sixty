@@ -305,6 +305,13 @@ std::string serialize_(const UserPluginCatalog& c)
             os << "      \"useReaperTrackPolarity\": false,\n";
         if (m.snapshotTakenAt > 0)
             os << "      \"snapshotTakenAt\": " << m.snapshotTakenAt << ",\n";
+        // Additive (Frank 2026-07-19) — the live plug-in factory name, written
+        // only once captured so pre-feature catalogs stay byte-identical.
+        if (!m.originalName.empty()) {
+            os << "      \"original_name\": ";
+            appendEscaped_(os, m.originalName);
+            os << ",\n";
+        }
         // Emit the optional knob-travel fields (range / sensitivity / curve
         // points). All are additive — only written when non-default so
         // existing files stay byte-identical until the user actually
@@ -716,6 +723,10 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         int snapTs = 0;
         if (getIntI_(po, "snapshotTakenAt", snapTs))
             m.snapshotTakenAt = snapTs;
+        // Additive; missing key leaves it empty (the exchange falls back to
+        // `match`). Round-trips through a shared .rea60map so an imported map
+        // keeps the identity of the plug-in it was learned from.
+        getStrI_(po, "original_name", m.originalName);
 
         // Parse the mutable mapping fields of one SlotLayer from object `so`.
         // Shared by the base slot (Normal layer) and the per-modifier overlay
@@ -1395,11 +1406,17 @@ bool exportMapToFile(const std::string& path, const MapShare& share,
     std::ostringstream os;
     os << "{\n";
     os << "  \"format\": \"rea-sixty-map\",\n";
-    os << "  \"version\": 1,\n";
+    // v2 (2026-07-19) adds `original_name`. Additive: the importer keys on
+    // `format`, never `version`, so a v2 file loads in any build; the server
+    // accepts v1 and v2 alike.
+    os << "  \"version\": 2,\n";
     // Envelope-level copies so the exchange can index without unescaping the
-    // payload. `plugin` mirrors the map's own `match`.
-    os << "  \"plugin\": ";      appendEscaped_(os, share.map.match);   os << ",\n";
-    os << "  \"vendor\": ";      appendEscaped_(os, share.vendor);      os << ",\n";
+    // payload. `plugin` mirrors the map's own `match`; `original_name` is the
+    // full factory name (carries the vendor), captured live — empty on maps
+    // learned before v2, in which case the server falls back to `plugin`.
+    os << "  \"plugin\": ";        appendEscaped_(os, share.map.match);        os << ",\n";
+    os << "  \"original_name\": "; appendEscaped_(os, share.map.originalName); os << ",\n";
+    os << "  \"vendor\": ";        appendEscaped_(os, share.vendor);           os << ",\n";
     os << "  \"surfaces\": ";    appendEscaped_(os, scope);             os << ",\n";
     os << "  \"author\": ";      appendEscaped_(os, share.author);      os << ",\n";
     os << "  \"description\": "; appendEscaped_(os, share.description); os << ",\n";
@@ -1530,6 +1547,32 @@ void upsert(UserPluginMap m)
     else                            g_catalog.maps.push_back(std::move(m));
     rebuildViewCache_();
     g_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool captureOriginalName(std::string_view match, std::string_view originalName)
+{
+    if (match.empty() || originalName.empty()) return false;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        for (auto& m : g_catalog.maps) {
+            if (m.match == match) {
+                if (m.originalName.compare(0, std::string::npos,
+                                          originalName.data(),
+                                          originalName.size()) != 0) {
+                    m.originalName.assign(originalName.data(), originalName.size());
+                    changed = true;
+                }
+                break;
+            }
+        }
+    }
+    // save() takes g_mutex itself, so it is called AFTER the guard above is
+    // released. Only on a real change — the focus-follow path fires often and
+    // must not write the catalog every frame. The view cache does not depend
+    // on originalName, so no rebuild / generation bump is needed.
+    if (changed) save();
+    return changed;
 }
 
 bool removeByMatch(std::string_view match)

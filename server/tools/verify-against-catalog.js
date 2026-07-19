@@ -28,8 +28,9 @@ function envelopeFor(map) {
   const one = { format_version: 10, plugins: [{ ...map, isDefault: false }] };
   return JSON.stringify({
     format: 'rea-sixty-map',
-    version: 1,
+    version: 2,
     plugin: map.match,
+    original_name: map.originalName ?? '',
     vendor: '',
     surfaces: surfaceScope(map),
     author: 'seed',

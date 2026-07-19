@@ -29,9 +29,16 @@ export class IngestError extends Error {
   }
 }
 
-/** Envelope keys, verified against serialize_ at UserPluginCatalog.cpp:1395. */
+/** Highest envelope version this server understands. */
+export const MAX_VERSION = 2;
+
+/**
+ * Envelope keys, verified against serialize_ at UserPluginCatalog.cpp:1395.
+ * `original_name` is v2 (additive); v1 files simply omit it and fall back to
+ * `plugin` (= the map's `match`).
+ */
 const ENVELOPE_KEYS = [
-  'format', 'version', 'plugin', 'vendor', 'surfaces',
+  'format', 'version', 'plugin', 'original_name', 'vendor', 'surfaces',
   'author', 'description', 'licence', 'created_at', 'map',
 ];
 
@@ -185,7 +192,10 @@ export function parseRea60Map(text) {
   if (root.format !== MAP_FORMAT) {
     throw new IngestError('wrong_format', 'not a Rea-Sixty mapping file');
   }
-  if (root.version !== 1) {
+  // Accept v1 and v2. The envelope is deliberately forward-compatible — v2 only
+  // adds `original_name` — so a stricter check than "known range" would reject
+  // files needlessly. A version above what we know is the real error.
+  if (!Number.isInteger(root.version) || root.version < 1 || root.version > MAX_VERSION) {
     throw new IngestError('wrong_version', `unsupported envelope version ${root.version}`);
   }
 
@@ -244,6 +254,10 @@ export function parseRea60Map(text) {
   return {
     envelope: {
       plugin: root.plugin ?? map.match,
+      // The full factory name (v2). Empty on v1 files and on maps learned
+      // before the extension captured it — the server falls back to `plugin`
+      // for both vendor and identity in that case.
+      originalName: (root.original_name ?? '').trim(),
       vendor: (root.vendor ?? '').trim(),
       surfaces: root.surfaces,
       author: (root.author ?? '').trim(),

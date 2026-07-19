@@ -15669,6 +15669,12 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     if (const auto* um =
                             uf8::user_plugins::lookupOwnedByName(fxName)) {
                         g_editingMatch = um->match;
+                        // `fxName` IS the live original_name here (fxIdentityName
+                        // returns it) and `um` is the owned map — the one moment
+                        // the full plug-in name is available to attach. Persists
+                        // only on first capture; carries the vendor to the
+                        // exchange. Must not deref `um` after this (save()).
+                        uf8::user_plugins::captureOriginalName(um->match, fxName);
                         SetExtState("ReaSixty", "fxLearnLastMatch",
                                     g_editingMatch.c_str(), true);
                         char keybuf[32];
