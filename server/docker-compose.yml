@@ -49,6 +49,15 @@ services:
       # --delete` of var, or a restore that clears it, must not take the
       # backups with it.
       - ./backups:/backups
+    networks:
+      # Shared with the website's container so the site can render exchange
+      # pages server-side. It CANNOT go through the host's 127.0.0.1:8010
+      # publish above — a container's loopback is its own, not the host's, and
+      # that is exactly what "unreachable" looked like on the first deploy.
+      # The published port stays loopback-only for Caddy; this is a second,
+      # host-internal path, not a wider exposure.
+      - reasixty
+      - default
     healthcheck:
       # No curl or wget in node:slim, so ask Node itself.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -56,3 +65,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+networks:
+  reasixty:
+    external: true
