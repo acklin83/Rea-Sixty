@@ -57,7 +57,7 @@ export function listPlugins({
 
   const rows = db.prepare(`
     SELECT p.id, p.slug, p.name, p.fx_type, p.vendor,
-           p.map_count, p.best_coverage, p.works_count, p.surfaces
+           p.map_count, p.best_coverage, p.best_param_coverage, p.works_count, p.surfaces
       FROM plugin_index p
       ${whereSql}
      ORDER BY ${orderSql}
@@ -74,6 +74,7 @@ export function listPlugins({
       // surfaces is a GROUP_CONCAT of DISTINCT values — split to an array.
       surfaces: r.surfaces ? [...new Set(r.surfaces.split(','))].sort() : [],
       bestCoverage: r.best_coverage == null ? null : Math.round(r.best_coverage * 100),
+      bestParamCoverage: r.best_param_coverage == null ? null : Math.round(r.best_param_coverage * 100),
       worksCount: r.works_count,
     })),
     total,

@@ -546,6 +546,13 @@ struct UserPluginMap {
     // Additive — empty until captured; the exchange falls back to `match`.
     // Frank 2026-07-19.
     std::string originalName;
+    // Count of the plug-in's FUNCTIONAL parameters at snapshot time: total
+    // params minus REAPER's MIDI-learn junk (2080 on some UADx plug-ins),
+    // minus the :wet/:bypass/:delta wrapper params, minus anything the plug-in
+    // marks non-automatable. This is the denominator for the exchange's
+    // "parameter coverage" (how much of the plug-in the map controls), which
+    // the pruned paramSnapshot can't provide. -1 = not captured. Frank 2026-07-20.
+    int functionalParamCount = -1;
 };
 
 struct UserPluginCatalog {

@@ -104,7 +104,7 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
   const parsed = parseRea60Map(text);
   const db = getDb();
 
-  const { envelope, map, bindings, coverage, uf8 } = parsed;
+  const { envelope, map, bindings, coverage, uf8, paramCoverage } = parsed;
 
   // Identity source, best-first: the v2 `original_name` is the full factory
   // name and carries the vendor; `match` is a user-editable substring that may
@@ -147,13 +147,15 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
       INSERT INTO maps (plugin_id, account_id, replaces_id, surfaces, domain,
                         author_name, description, licence, created_at, uploaded_at,
                         coverage_n, coverage_d, uf8_vpots, uf8_strips,
+                        param_cov_n, param_cov_d,
                         file_path, file_sha256, file_bytes, content_hash)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       pluginId, accountId, replacesId, envelope.surfaces, map.domain,
       envelope.author, envelope.description, envelope.licence || 'CC0-1.0',
       envelope.createdAt || ts, ts,
       coverage.n, coverage.d, coverage.uf8Vpots, coverage.uf8Strips,
+      paramCoverage?.n ?? null, paramCoverage?.d ?? null,
       '', sha, bytes, contentHash,
     );
     const mapId = Number(info.lastInsertRowid);

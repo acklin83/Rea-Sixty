@@ -24,10 +24,26 @@ function surfaceScope(map) {
   return map.uf8Mode ? 'uc1+uf8' : 'uc1';
 }
 
+// Seed maps predate v3, so estimate the functional param count from the FULL
+// local paramSnapshot by name (no automatable flag available offline): drop
+// REAPER's MIDI-learn junk and the Bypass/Wet/Delta/Dry wrapper params. The
+// extension does this properly (automatable + ident) at capture time.
+const WRAP_NAME = /^(bypass|wet|delta|dry)$/i;
+function functionalParamCount(map) {
+  const ps = map.paramSnapshot ?? [];
+  if (!ps.length) return -1;   // no snapshot (e.g. Acustica) -> unknown
+  return ps.filter((p) => {
+    const n = String(p.name ?? '').trim();
+    if (n.startsWith('MIDI ')) return false;
+    if (WRAP_NAME.test(n)) return false;
+    return true;
+  }).length;
+}
+
 function envelopeFor(map, author) {
   return JSON.stringify({
     format: 'rea-sixty-map',
-    version: 2,
+    version: 3,
     plugin: map.match,
     // Passthrough: empty on a catalog written before the extension captured
     // original_name; populated once the user has focused each plug-in live.
@@ -36,6 +52,8 @@ function envelopeFor(map, author) {
     // (what REAPER shows as "Developer") — otherwise these all read null.
     // Empty when the cache can't resolve it (e.g. author-less JSFX).
     vendor: developerForMatch(map.match) ?? '',
+    // Estimated functional param count for parameter coverage (see above).
+    functional_params: functionalParamCount(map),
     surfaces: surfaceScope(map),
     author,
     description: '',

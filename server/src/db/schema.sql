@@ -172,6 +172,12 @@ CREATE TABLE IF NOT EXISTS maps (
   uf8_vpots      INTEGER NOT NULL DEFAULT 0,
   uf8_strips     INTEGER NOT NULL DEFAULT 0,
 
+  -- Parameter coverage (v3): distinct plug-in params the map controls, out of
+  -- the plug-in's functional params. NULL when the file carries no functional
+  -- param count (pre-v3, or Acustica where it wasn't captured).
+  param_cov_n    INTEGER,
+  param_cov_d    INTEGER,
+
   file_path      TEXT    NOT NULL,          -- relative to DATA_DIR
   file_sha256    TEXT    NOT NULL,
   file_bytes     INTEGER NOT NULL,
@@ -258,6 +264,8 @@ SELECT
   v.name AS vendor,
   COUNT(m.id) AS map_count,
   MAX(CAST(m.coverage_n AS REAL) / m.coverage_d) AS best_coverage,
+  MAX(CASE WHEN m.param_cov_d > 0
+           THEN CAST(m.param_cov_n AS REAL) / m.param_cov_d END) AS best_param_coverage,
   (SELECT COUNT(*) FROM works_for_me w
      JOIN maps m2 ON m2.id = w.map_id
     WHERE m2.plugin_id = p.id) AS works_count,

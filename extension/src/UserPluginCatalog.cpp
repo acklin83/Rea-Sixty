@@ -312,6 +312,10 @@ std::string serialize_(const UserPluginCatalog& c)
             appendEscaped_(os, m.originalName);
             os << ",\n";
         }
+        // Additive (Frank 2026-07-20) — functional param count for the
+        // exchange's parameter coverage. Only written once captured (>= 0).
+        if (m.functionalParamCount >= 0)
+            os << "      \"functional_params\": " << m.functionalParamCount << ",\n";
         // Emit the optional knob-travel fields (range / sensitivity / curve
         // points). All are additive — only written when non-default so
         // existing files stay byte-identical until the user actually
@@ -727,6 +731,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         // `match`). Round-trips through a shared .rea60map so an imported map
         // keeps the identity of the plug-in it was learned from.
         getStrI_(po, "original_name", m.originalName);
+        int fpc = -1;
+        if (getIntI_(po, "functional_params", fpc)) m.functionalParamCount = fpc;
 
         // Parse the mutable mapping fields of one SlotLayer from object `so`.
         // Shared by the base slot (Normal layer) and the per-modifier overlay
@@ -1406,16 +1412,19 @@ bool serializeMapShare(const MapShare& share, std::string& out,
     std::ostringstream os;
     os << "{\n";
     os << "  \"format\": \"rea-sixty-map\",\n";
-    // v2 (2026-07-19) adds `original_name`. Additive: the importer keys on
-    // `format`, never `version`, so a v2 file loads in any build; the server
-    // accepts v1 and v2 alike.
-    os << "  \"version\": 2,\n";
+    // v2 (2026-07-19) adds `original_name`; v3 (2026-07-20) adds
+    // `functional_params`. Additive: the importer keys on `format`, never
+    // `version`, so any version loads in any build; the server accepts them all.
+    os << "  \"version\": 3,\n";
     // Envelope-level copies so the exchange can index without unescaping the
     // payload. `plugin` mirrors the map's own `match`; `original_name` is the
     // full factory name (carries the vendor), captured live — empty on maps
     // learned before v2, in which case the server falls back to `plugin`.
     os << "  \"plugin\": ";        appendEscaped_(os, share.map.match);        os << ",\n";
     os << "  \"original_name\": "; appendEscaped_(os, share.map.originalName); os << ",\n";
+    // Functional param count (v3) — the denominator for parameter coverage.
+    // -1 when not captured; the server then shows no parameter coverage.
+    os << "  \"functional_params\": " << share.map.functionalParamCount << ",\n";
     os << "  \"vendor\": ";        appendEscaped_(os, share.vendor);           os << ",\n";
     os << "  \"surfaces\": ";    appendEscaped_(os, scope);             os << ",\n";
     os << "  \"author\": ";      appendEscaped_(os, share.author);      os << ",\n";

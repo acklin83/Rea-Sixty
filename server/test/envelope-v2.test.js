@@ -81,7 +81,7 @@ test('v1 envelope (no original_name) still accepted', () => {
 
 test('a version above MAX_VERSION is rejected', () => {
   const bad = JSON.parse(v2Envelope({ match: 'x', originalName: 'y' }));
-  bad.version = 3;
+  bad.version = 4;   // one past the current MAX_VERSION (3)
   assert.throws(() => parseRea60Map(JSON.stringify(bad)), /unsupported envelope version/);
 });
 

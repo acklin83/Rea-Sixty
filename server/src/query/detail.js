@@ -84,6 +84,16 @@ function coverageOf(row) {
   return { n: row.coverage_n, d: row.coverage_d, pct };
 }
 
+// Parameter coverage — how much of the plug-in the map controls. Null when the
+// file predates v3 (no functional param count).
+function paramCoverageOf(row) {
+  if (row.param_cov_d == null || row.param_cov_d <= 0) return null;
+  return {
+    n: row.param_cov_n, d: row.param_cov_d,
+    pct: Math.round((100 * row.param_cov_n) / row.param_cov_d),
+  };
+}
+
 /** Screen 2 — one plug-in and its maps (the diff SELECTION list). */
 export function getPlugin(slug) {
   const db = getDb();
@@ -96,7 +106,8 @@ export function getPlugin(slug) {
 
   const maps = db.prepare(`
     SELECT m.id, m.surfaces, m.domain, m.author_name, m.description,
-           m.coverage_n, m.coverage_d, m.uf8_vpots, m.uf8_strips, m.uploaded_at,
+           m.coverage_n, m.coverage_d, m.param_cov_n, m.param_cov_d,
+           m.uf8_vpots, m.uf8_strips, m.uploaded_at,
            (SELECT COUNT(*) FROM works_for_me w WHERE w.map_id = m.id) AS works
       FROM maps m
      WHERE m.plugin_id = ? AND m.published = 1
@@ -115,6 +126,7 @@ export function getPlugin(slug) {
       author: m.author_name,
       description: m.description,
       coverage: coverageOf(m),
+      paramCoverage: paramCoverageOf(m),
       uf8: m.domain === 'None' ? { vpots: m.uf8_vpots, strips: m.uf8_strips } : null,
       works: m.works,
       // The per-map strip belongs here, where rows genuinely are maps.
@@ -149,6 +161,7 @@ export function getMap(id) {
     uploadedAt: m.uploaded_at,
     fileBytes: m.file_bytes,
     coverage: coverageOf(m),
+    paramCoverage: paramCoverageOf(m),
     uf8: isUf8 ? uf8Grid(m.id, m.uf8_vpots, m.uf8_strips) : null,
     sections: isUf8 ? [] : coverageSections(m.id, m.domain),
     alsoMapped: alsoMapped(m.id),

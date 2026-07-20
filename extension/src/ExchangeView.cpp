@@ -47,7 +47,7 @@ View g_view = View::List;
 
 struct PluginRow {
     std::string slug, name, vendor, surfaces;
-    int mapCount = 0, bestCoverage = 0;
+    int mapCount = 0, bestCoverage = 0, bestParamCoverage = -1;
 };
 std::vector<PluginRow> g_plugins;
 uint64_t    g_listReq = 0;
@@ -74,6 +74,7 @@ struct MapDetail {
     int id = 0;
     std::string pluginName, vendor, surfaces, domain, author, description, licence;
     int covN = 0, covD = 0, covPct = 0;
+    int paramN = -1, paramD = -1, paramPct = 0;   // paramD < 0 = not available
     bool isUf8 = false;
     int uf8Vpots = 0, uf8VpotSlots = 0, uf8Strips = 0, uf8StripSlots = 0;
     std::vector<Section> sections;
@@ -253,6 +254,9 @@ void pumpList() {
             pr.surfaces = jarrjoin(o, "surfaces", "+");
             pr.mapCount = jint(o, "mapCount");
             pr.bestCoverage = jint(o, "bestCoverage");
+            // null when no map carries a functional param count (pre-v3).
+            pr.bestParamCoverage = jstr(o, "bestParamCoverage").empty()
+                                 ? -1 : jint(o, "bestParamCoverage");
             g_plugins.push_back(std::move(pr));
         }
     }
@@ -314,6 +318,9 @@ void pumpMap() {
     d.licence  = jstr(root, "licence");
     if (auto* cov = root->get_item_by_name("coverage")) {
         d.covN = jint(cov, "n"); d.covD = jint(cov, "d"); d.covPct = jint(cov, "pct");
+    }
+    if (auto* pc = root->get_item_by_name("paramCoverage"); pc && pc->is_object()) {
+        d.paramN = jint(pc, "n"); d.paramD = jint(pc, "d"); d.paramPct = jint(pc, "pct");
     }
     if (auto* u = root->get_item_by_name("uf8"); u && u->is_object()) {
         d.isUf8 = true;
@@ -475,20 +482,28 @@ void drawList(ImGui_Context* ctx) {
     int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
                | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable
                | ImGui_TableFlags_ScrollY;
-    if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, &availH, nullptr)) {
+    if (ImGui_BeginTable(ctx, "##exch_plugins", 6, &tFlags, nullptr, &availH, nullptr)) {
         int stretch = ImGui_TableColumnFlags_WidthStretch;
         int fixed   = ImGui_TableColumnFlags_WidthFixed;
-        double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wBest = 96.0;
+        double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wPlug = 96.0, wBest = 96.0;
         ImGui_TableSetupColumn(ctx, "Plug-in",  &stretch, &wName,   nullptr);
         ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
         ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
         ImGui_TableSetupColumn(ctx, "Surfaces", &fixed,   &wSurf,   nullptr);
-        // Best coverage any of this plug-in's maps reaches (the number is a
-        // percentage of the controls that plug-in's surface can bind).
-        ImGui_TableSetupColumn(ctx, "Best coverage", &fixed, &wBest, nullptr);
+        // Two "best of this plug-in's maps" coverages: how much of the PLUG-IN
+        // is controlled, and how much of the SURFACE is used. Different stories.
+        ImGui_TableSetupColumn(ctx, "Plug-in cov", &fixed, &wPlug, nullptr);
+        ImGui_TableSetupColumn(ctx, "Surface cov", &fixed, &wBest, nullptr);
         ImGui_TableHeadersRow(ctx);
 
         char buf[512];
+        auto covBar = [&](int pct) {
+            if (pct < 0) { ImGui_Text(ctx, "—"); return; }
+            char lbl[16]; std::snprintf(lbl, sizeof(lbl), "%d%%", pct);
+            double frac = pct / 100.0;
+            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, lbl);
+        };
         for (const auto& p : g_plugins) {
             ImGui_TableNextRow(ctx, nullptr, nullptr);
 
@@ -510,10 +525,10 @@ void drawList(ImGui_Context* ctx) {
             ImGui_Text(ctx, p.surfaces.empty() ? "—" : p.surfaces.c_str());
 
             ImGui_TableSetColumnIndex(ctx, 4);
-            std::snprintf(buf, sizeof(buf), "%d%%", p.bestCoverage);
-            double frac = p.bestCoverage / 100.0;
-            if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-            ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
+            covBar(p.bestParamCoverage);
+
+            ImGui_TableSetColumnIndex(ctx, 5);
+            covBar(p.bestCoverage);
         }
         ImGui_EndTable(ctx);
     }
@@ -735,23 +750,25 @@ void drawMap(ImGui_Context* ctx) {
     ImGui_Text(ctx, meta);
     if (!d.description.empty()) ImGui_TextWrapped(ctx, d.description.c_str());
 
-    // Coverage headline.
-    ImGui_Spacing(ctx);
-    if (d.isUf8) {
-        std::snprintf(meta, sizeof(meta), "%d of %d V-Pot slots   ·   %d of %d strips",
-                      d.uf8Vpots, d.uf8VpotSlots, d.uf8Strips, d.uf8StripSlots);
-        ImGui_Text(ctx, meta);
-    } else {
-        std::snprintf(meta, sizeof(meta), "%d of %d controls mapped", d.covN, d.covD);
-        ImGui_Text(ctx, meta);
-    }
-    {
+    // Coverage — two numbers. Plug-in: how much of the plug-in the map
+    // controls (functional params). Surface: how much of the UC1/UF8 it uses.
+    auto covLine = [&](const char* label, int n, int d2, int pct) {
+        char lbl[96]; std::snprintf(lbl, sizeof(lbl), "%s: %d of %d", label, n, d2);
+        ImGui_Text(ctx, lbl);
         double w = 240.0, h = 0.0;
-        double frac = d.covD > 0 ? (double)d.covN / d.covD : 0.0;
+        double frac = d2 > 0 ? (double)n / d2 : 0.0;
         if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-        char pct[16]; std::snprintf(pct, sizeof(pct), "%d%%", d.covPct);
-        ImGui_ProgressBar(ctx, frac, &w, &h, pct);
-    }
+        char p[16]; std::snprintf(p, sizeof(p), "%d%%", pct);
+        ImGui_ProgressBar(ctx, frac, &w, &h, p);
+    };
+    ImGui_Spacing(ctx);
+    if (d.paramD >= 0)
+        covLine("Plug-in params", d.paramN, d.paramD, d.paramPct);
+    if (d.isUf8)
+        covLine("Surface V-Pots", d.uf8Vpots, d.uf8VpotSlots, d.uf8VpotSlots
+                ? (int)(100.0 * d.uf8Vpots / d.uf8VpotSlots + 0.5) : 0);
+    else
+        covLine("Surface controls", d.covN, d.covD, d.covPct);
 
     // Install + the clash confirm live here now, on the detail page.
     ImGui_Spacing(ctx);

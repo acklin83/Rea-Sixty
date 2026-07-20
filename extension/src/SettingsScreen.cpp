@@ -6691,6 +6691,47 @@ inline bool isReaperMidiParam_(const char* name)
     return name && std::strncmp(name, "MIDI ", 5) == 0;
 }
 
+// A parameter REAPER can automate (VST3 kCanAutomate). `param.N.automatable`
+// via GetNamedConfigParm returns "1"/"0"; older REAPER (< v7.62) doesn't know
+// the key, in which case we assume automatable rather than over-filter.
+inline bool isParamAutomatable_(MediaTrack* tr, int fx, int p)
+{
+    char key[40], buf[16] = {0};
+    snprintf(key, sizeof(key), "param.%d.automatable", p);
+    if (TrackFX_GetNamedConfigParm(tr, fx, key, buf, sizeof(buf)))
+        return buf[0] != '0';
+    return true;
+}
+
+// REAPER's own wrapper params (:bypass, :wet, :delta) have colon-prefixed
+// idents; the plug-in's real params return a numeric ident. Not the plug-in's
+// function, so they don't count toward parameter coverage.
+inline bool isWrapperParam_(MediaTrack* tr, int fx, int p)
+{
+    char id[64] = {0};
+    if (TrackFX_GetParamIdent(tr, fx, p, id, sizeof(id))) return id[0] == ':';
+    return false;
+}
+
+// Count a plug-in's FUNCTIONAL parameters — the denominator for parameter
+// coverage. Walks all params, excluding MIDI-learn junk, non-automatable and
+// wrapper params. Runs against the live FX at snapshot time.
+inline int countFunctionalParams_(MediaTrack* tr, int fx)
+{
+    const int n = TrackFX_GetNumParams(tr, fx);
+    char name[256];
+    int functional = 0;
+    for (int p = 0; p < n; ++p) {
+        name[0] = 0;
+        TrackFX_GetParamName(tr, fx, p, name, sizeof(name));
+        if (isReaperMidiParam_(name)) continue;
+        if (isWrapperParam_(tr, fx, p)) continue;
+        if (!isParamAutomatable_(tr, fx, p)) continue;
+        ++functional;
+    }
+    return functional;
+}
+
 void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
 {
     if (match.empty() || !fx.ok) return;
@@ -6721,6 +6762,7 @@ void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
             pi.wasEnum = isToggle || step >= 0.5;
             m.paramSnapshot.push_back(std::move(pi));
         }
+        m.functionalParamCount = countFunctionalParams_(fx.tr, fx.fxIdx);
         m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
         uf8::user_plugins::upsert(m);
         persistAndReport_();
@@ -8991,6 +9033,7 @@ bool hudUf8CreateAndBind_(MediaTrack* tr, int fx, int kind, int fb, int vb,
             pi.wasEnum = isToggle || step >= 0.5;
             m.paramSnapshot.push_back(std::move(pi));
         }
+        m.functionalParamCount = countFunctionalParams_(tr, fx);
         m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
     }
 
@@ -9730,6 +9773,7 @@ bool hudLearnCreateAndBind_(MediaTrack* tr, int fx, uf8::Domain domain,
             pi.wasEnum = isToggle || step >= 0.5;
             m.paramSnapshot.push_back(std::move(pi));
         }
+        m.functionalParamCount = countFunctionalParams_(tr, fx);
         m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
     }
 

@@ -30,16 +30,16 @@ export class IngestError extends Error {
 }
 
 /** Highest envelope version this server understands. */
-export const MAX_VERSION = 2;
+export const MAX_VERSION = 3;
 
 /**
  * Envelope keys, verified against serialize_ at UserPluginCatalog.cpp:1395.
- * `original_name` is v2 (additive); v1 files simply omit it and fall back to
- * `plugin` (= the map's `match`).
+ * `original_name` is v2, `functional_params` is v3 (both additive); older files
+ * simply omit them and the server falls back.
  */
 const ENVELOPE_KEYS = [
-  'format', 'version', 'plugin', 'original_name', 'vendor', 'surfaces',
-  'author', 'description', 'licence', 'created_at', 'map',
+  'format', 'version', 'plugin', 'original_name', 'functional_params',
+  'vendor', 'surfaces', 'author', 'description', 'licence', 'created_at', 'map',
 ];
 
 const VALID_SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
@@ -304,6 +304,19 @@ export function parseRea60Map(text) {
   // the `slots` array — extract them so the detail page can draw every bank.
   const uf8 = map.domain === 'None' ? extractUf8(map) : { vpots: [], strips: [] };
 
+  // Parameter coverage: how many distinct plug-in params the map controls, out
+  // of the plug-in's functional params (v3 envelope). The pruned paramSnapshot
+  // can't give the denominator, so it rides in the envelope; null when absent.
+  const mappedParams = new Set();
+  for (const b of bindings) if (b.vst3Param >= 0) mappedParams.add(b.vst3Param);
+  for (const v of uf8.vpots) if (v.vst3Param >= 0) mappedParams.add(v.vst3Param);
+  for (const s of uf8.strips) if (s.vst3Param >= 0) mappedParams.add(s.vst3Param);
+  const functionalParams = Number.isInteger(root.functional_params) && root.functional_params > 0
+    ? root.functional_params : null;
+  const paramCoverage = functionalParams
+    ? { n: Math.min(mappedParams.size, functionalParams), d: functionalParams }
+    : null;
+
   return {
     envelope: {
       plugin: root.plugin ?? map.match,
@@ -323,5 +336,6 @@ export function parseRea60Map(text) {
     bindings,
     uf8,
     coverage,
+    paramCoverage,
   };
 }
