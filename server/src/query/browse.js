@@ -9,7 +9,8 @@ const SORTS = {
   name: 'p.name COLLATE NOCASE ASC',
   maps: 'map_count DESC, p.name COLLATE NOCASE ASC',
   newest: 'newest_at DESC, p.name COLLATE NOCASE ASC',
-  coverage: 'best_coverage DESC, p.name COLLATE NOCASE ASC',
+  // "coverage" sorts by the displayed metric — plug-in (parameter) coverage.
+  coverage: 'best_param_coverage DESC, p.name COLLATE NOCASE ASC',
 };
 
 const SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
@@ -30,10 +31,15 @@ export function listPlugins({
   const where = ['p.id IN (SELECT plugin_id FROM maps WHERE published = 1)'];
   const params = {};
 
-  if (search.trim()) {
-    where.push('p.name LIKE :q');
-    params.q = `%${search.trim()}%`;
-  }
+  // Additive, token-based search across BOTH name and vendor: every token must
+  // match one or the other. So "fab" finds all FabFilter plug-ins (the vendor
+  // carries "FabFilter" even when the name is just "Pro-L 2"), and "fab Q"
+  // finds "FabFilter Pro-Q" (fab -> vendor, Q -> name).
+  const tokens = search.trim().split(/\s+/).filter(Boolean).slice(0, 8);
+  tokens.forEach((tok, i) => {
+    where.push(`(p.name LIKE :t${i} ESCAPE '\\' OR COALESCE(p.vendor, '') LIKE :t${i} ESCAPE '\\')`);
+    params[`t${i}`] = `%${tok.replace(/[\\%_]/g, '\\$&')}%`;
+  });
   if (vendor != null) {
     where.push('p.vendor_id = :vendor');
     params.vendor = vendor;

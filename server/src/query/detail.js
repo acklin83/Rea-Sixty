@@ -111,7 +111,9 @@ export function getPlugin(slug) {
            (SELECT COUNT(*) FROM works_for_me w WHERE w.map_id = m.id) AS works
       FROM maps m
      WHERE m.plugin_id = ? AND m.published = 1
-     ORDER BY (CAST(m.coverage_n AS REAL) / m.coverage_d) DESC, m.uploaded_at DESC
+     ORDER BY (CASE WHEN m.param_cov_d > 0
+                    THEN CAST(m.param_cov_n AS REAL) / m.param_cov_d END) DESC,
+              (CAST(m.coverage_n AS REAL) / m.coverage_d) DESC, m.uploaded_at DESC
   `).all(plugin.id);
 
   return {
