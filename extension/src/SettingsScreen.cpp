@@ -16446,14 +16446,14 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             SetExtState("ReaSixty", "fxLearnLastMatch",
                         g_editingMatch.c_str(), true);
             user_plugins::upsert(std::move(g_pendingImport.map));
-            g_pendingImport = {};
+            g_pendingImport = user_plugins::MapShare();
             persistAndReport_();
             ImGui_CloseCurrentPopup(ctx);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Keep mine##fxl_getshared_cancel",
                          nullptr, nullptr)) {
-            g_pendingImport = {};
+            g_pendingImport = user_plugins::MapShare();
             ImGui_CloseCurrentPopup(ctx);
         }
         ImGui_EndPopup(ctx);

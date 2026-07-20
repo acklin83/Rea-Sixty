@@ -20,6 +20,16 @@
 #include "UserPluginCatalog.h"
 #include "WDL/jsonparse.h"
 
+// jsonparse.h drags in wdlcstring.h, which on MSVC does `#define snprintf
+// WDL_snprintf` to paper over pre-2015 MSVC's non-terminating _snprintf. Every
+// `std::snprintf` below that point then macro-expands to `std::WDL_snprintf`,
+// which does not exist — the Windows build died on 21 of them. We build with
+// MSVC 2022, whose std::snprintf is conforming, so drop the shim in this TU.
+// No other file hits this: it is the only one that includes jsonparse.h.
+#ifdef snprintf
+#undef snprintf
+#endif
+
 namespace uf8 {
 namespace {
 
@@ -817,12 +827,12 @@ void drawMap(ImGui_Context* ctx) {
         if (ImGui_Button(ctx, "Replace mine##exch_replace", nullptr, nullptr)) {
             g_pendingClash = false;
             applyInstall(std::move(g_pendingInstall));
-            g_pendingInstall = {};
+            g_pendingInstall = up::MapShare();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Keep mine##exch_keep", nullptr, nullptr)) {
             g_pendingClash = false;
-            g_pendingInstall = {};
+            g_pendingInstall = up::MapShare();
             g_installStatus.clear();
         }
     } else {
