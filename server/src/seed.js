@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { getDb, migrate, now, DATA_DIR } from './db/index.js';
 import { ingestMap } from './ingest/service.js';
 import { IngestError } from './lib/rea60map.js';
+import { developerForMatch } from './lib/reaper-scan.js';
 
 const CATALOG = process.env.CATALOG
   ?? join(homedir(), 'Library/Application Support/REAPER/rea_sixty/user_plugins.json');
@@ -31,7 +32,10 @@ function envelopeFor(map, author) {
     // Passthrough: empty on a catalog written before the extension captured
     // original_name; populated once the user has focused each plug-in live.
     original_name: map.originalName ?? '',
-    vendor: '',
+    // Seed maps predate v2, so recover the developer from REAPER's scan caches
+    // (what REAPER shows as "Developer") — otherwise these all read null.
+    // Empty when the cache can't resolve it (e.g. author-less JSFX).
+    vendor: developerForMatch(map.match) ?? '',
     surfaces: surfaceScope(map),
     author,
     description: '',
