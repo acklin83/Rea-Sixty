@@ -178,7 +178,11 @@ CREATE TABLE IF NOT EXISTS maps (
   param_cov_n    INTEGER,
   param_cov_d    INTEGER,
 
-  file_path      TEXT    NOT NULL,          -- relative to DATA_DIR
+  -- Relative to MAPS_DIR (= DATA_DIR/maps), NOT to DATA_DIR — the shape is
+  -- "<mapId/1000>/<mapId>.rea60map", e.g. "0/1.rea60map". This comment said
+  -- DATA_DIR until 2026-07-20 and a cleanup tool believed it, silently found
+  -- no files and reported "0 removed", which reads as "there were none".
+  file_path      TEXT    NOT NULL,
   file_sha256    TEXT    NOT NULL,
   file_bytes     INTEGER NOT NULL,
 
