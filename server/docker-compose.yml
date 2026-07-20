@@ -20,8 +20,16 @@ services:
     # compose file*; it puts nothing into the container. Without this line the
     # password is set correctly on disk and the server still starts with no
     # transport — which it now refuses to do, so at least it fails loudly.
+    #
+    # required:false is not laziness. With a bare `- .env` a missing file makes
+    # EVERY compose command fail — including the `docker compose exec` the
+    # nightly backup runs at 03:17. Deploying this before the credentials
+    # existed did exactly that. The absence of SMTP must fail where it means
+    # something (the server refuses to start, loudly, with instructions), not
+    # by taking the backups down with it.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
       # 0.0.0.0 INSIDE the container. The loopback restriction is the port
