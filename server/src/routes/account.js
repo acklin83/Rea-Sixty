@@ -210,6 +210,70 @@ export async function registerAccountRoutes(app) {
     return { ok: true };
   });
 
+  // -------------------------------------------------- device authorisation
+  //
+  // ⚠ THE PHISHING SHAPE OF THIS FLOW. An attacker can start a grant on their
+  // own machine and send YOU the code; approving it hands them a token on your
+  // account. That is inherent to every device flow, and the only real defence
+  // is that the human is told plainly what they are approving. Hence the
+  // lookup endpoint: the page shows what the code is for BEFORE the button,
+  // and the button is never pre-clicked by a link.
+
+  app.get('/device/:code', async (req, reply) => {
+    const code = String(req.params.code ?? '').toUpperCase();
+    const row = getDb().prepare(
+      "SELECT user_code, label, state, created_at, expires_at FROM device_grants WHERE user_code = ?",
+    ).get(code);
+
+    if (!row || row.expires_at <= now()) {
+      return reply.code(404).send({ error: 'unknown_code', detail: 'that code is unknown or has expired' });
+    }
+    if (row.state !== 'pending') {
+      return reply.code(409).send({ error: 'already_decided', detail: 'that code has already been dealt with' });
+    }
+    return {
+      userCode: row.user_code,
+      label: row.label,
+      requestedAt: row.created_at,
+      expiresAt: row.expires_at,
+    };
+  });
+
+  app.post('/device/:code/approve', {
+    // A human clicking a button. The cap is here to blunt code guessing, which
+    // is the one way this endpoint could be abused from a stolen session.
+    config: { rateLimit: { max: 20, timeWindow: '10 minutes' } },
+  }, async (req, reply) => {
+    const code = String(req.params.code ?? '').toUpperCase();
+    const deny = req.body?.deny === true;
+    const db = getDb();
+
+    const row = db.prepare('SELECT * FROM device_grants WHERE user_code = ?').get(code);
+    if (!row || row.expires_at <= now()) {
+      return reply.code(404).send({ error: 'unknown_code' });
+    }
+    if (row.state !== 'pending') {
+      return reply.code(409).send({ error: 'already_decided' });
+    }
+
+    if (deny) {
+      db.prepare("UPDATE device_grants SET state = 'denied' WHERE user_code = ?").run(code);
+      return { ok: true, state: 'denied' };
+    }
+
+    // The label is the user's chance to say which machine this is; it becomes
+    // the token's name on the account page, where it is the only way to tell
+    // two tokens apart when revoking one.
+    const label = String(req.body?.label ?? '').trim().slice(0, 60) || row.label || 'REAPER';
+    db.prepare(
+      "UPDATE device_grants SET state = 'approved', account_id = ?, label = ?, approved_at = ? WHERE user_code = ?",
+    ).run(req.account.id, label, now(), code);
+
+    // No token in the response. The extension collects it by polling with the
+    // device code it has held all along — this browser never touches it.
+    return { ok: true, state: 'approved', label };
+  });
+
   app.post('/close-all-sessions', async (req, reply) => {
     destroyAccountSessions(req.account.id);
     reply.clearCookie('rs_session', { path: '/' });

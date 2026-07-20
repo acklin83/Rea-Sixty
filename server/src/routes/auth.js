@@ -32,9 +32,41 @@ import {
 } from '../lib/session.js';
 import { rpID, rpName, expectedOrigins } from '../lib/webauthn.js';
 import { sendMagicLink } from '../lib/mail.js';
+import { issueToken } from '../lib/auth.js';
 
 const MAGIC_TTL = 15 * 60;          // 15 minutes
 const WEBAUTHN_TTL = 5 * 60;        // the browser prompt is on screen; short
+// Ten minutes is long enough to walk to another machine and short enough that
+// an abandoned code is not sitting there to be guessed.
+const DEVICE_TTL = 10 * 60;
+
+// No 0/O, no 1/I/L: the code is read off one screen and typed on another, and
+// those are the pairs people get wrong. 8 characters from a 31-symbol alphabet
+// is ~39 bits, which against a ten-minute window and a rate limit is plenty.
+const USER_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+function newUserCode() {
+  const b = randomBytes(8);
+  let out = '';
+  for (let i = 0; i < 8; i++) {
+    if (i === 4) out += '-';
+    out += USER_CODE_ALPHABET[b[i] % USER_CODE_ALPHABET.length];
+  }
+  return out;
+}
+
+/** A post-sign-in destination, or ''. SAME-SITE PATHS ONLY: this value ends up
+ *  in a redirect, and an unchecked one is an open redirect — in a link we mail
+ *  to people, which is the worst place to have one. A single leading slash and
+ *  no second one; "//evil.example" is a protocol-relative URL, not a path. */
+function safeNext(raw) {
+  const v = String(raw ?? '');
+  return /^\/(?!\/)/.test(v) && v.length <= 300 ? v : '';
+}
+
+function sweepDeviceGrants() {
+  getDb().prepare('DELETE FROM device_grants WHERE expires_at <= ?').run(now());
+}
 
 const PLACEHOLDER_RE = /^new-user-[0-9a-f]{8}$/;
 
@@ -136,7 +168,13 @@ export async function registerAuthRoutes(app) {
 
     sweepExpiredChallenges();
     const token = insertChallenge({ kind: 'magic_link', email, ttl: MAGIC_TTL });
-    const url = `${siteOrigin()}/auth/email/callback?token=${encodeURIComponent(token)}`;
+    // `next` rides in the URL rather than the challenge row: auth_challenges
+    // has no column for it, and migrate() cannot ALTER an existing table. The
+    // link goes to the address being proved, and the value is re-validated on
+    // the way back, so carrying it here costs nothing.
+    const next = safeNext(req.body?.next);
+    const url = `${siteOrigin()}/auth/email/callback?token=${encodeURIComponent(token)}`
+      + (next ? `&next=${encodeURIComponent(next)}` : '');
 
     const result = await sendMagicLink({ to: email, url, log: req.log });
 
@@ -158,9 +196,13 @@ export async function registerAuthRoutes(app) {
       return reply.redirect(`${siteOrigin()}/login?error=suspended`);
     }
     signIn(reply, account.id);
-    return reply.redirect(
-      `${siteOrigin()}${created || needsDisplayName(account.display_name) ? '/welcome' : '/account'}`,
-    );
+
+    // Naming yourself comes first — a placeholder byline must not reach a
+    // publish action. Otherwise go where the visitor was heading.
+    if (created || needsDisplayName(account.display_name)) {
+      return reply.redirect(`${siteOrigin()}/welcome`);
+    }
+    return reply.redirect(`${siteOrigin()}${safeNext(req.query?.next) || '/account'}`);
   });
 
   // --------------------------------------------------------------- passkey
@@ -312,6 +354,71 @@ export async function registerAuthRoutes(app) {
     signIn(reply, cred.account_id);
     const account = db.prepare('SELECT display_name FROM accounts WHERE id = ?').get(cred.account_id);
     return { ok: true, next: needsDisplayName(account.display_name) ? '/welcome' : '/account' };
+  });
+
+  // ----------------------------------------------------- device authorisation
+  //
+  // The extension cannot run a browser, so it cannot sign in — the same problem
+  // a TV has. RFC 8628's answer: the device shows a short code, the human
+  // approves it somewhere they ARE signed in, and the device collects the
+  // credential itself. Nobody copies a secret, and nothing is ever mailed.
+
+  app.post('/device/start', {
+    config: { rateLimit: { max: 10, timeWindow: '10 minutes' } },
+  }, async (req) => {
+    sweepDeviceGrants();
+
+    const label = String(req.body?.label ?? '').trim().slice(0, 60) || 'REAPER';
+    const deviceCode = randomBytes(32).toString('base64url');
+    const userCode = newUserCode();
+    const t = now();
+
+    getDb().prepare(
+      `INSERT INTO device_grants (device_code, user_code, label, state, created_at, expires_at)
+       VALUES (?,?,?, 'pending', ?, ?)`,
+    ).run(deviceCode, userCode, label, t, t + DEVICE_TTL);
+
+    const origin = siteOrigin();
+    return {
+      deviceCode,
+      userCode,
+      verificationUri: `${origin}/link`,
+      // Prefilled, so the usual case is one click and one confirm. The page
+      // still asks for an explicit confirmation — see the warning there.
+      verificationUriComplete: `${origin}/link?code=${encodeURIComponent(userCode)}`,
+      expiresIn: DEVICE_TTL,
+      interval: 2,
+    };
+  });
+
+  app.post('/device/poll', {
+    // Generous: the extension polls every 2s for up to 10 minutes.
+    config: { rateLimit: { max: 400, timeWindow: '10 minutes' } },
+  }, async (req, reply) => {
+    const code = String(req.body?.deviceCode ?? '');
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM device_grants WHERE device_code = ?').get(code);
+
+    if (!row) return reply.code(404).send({ status: 'unknown' });
+    if (row.collected_at) return reply.code(410).send({ status: 'used' });
+    if (row.expires_at <= now()) {
+      db.prepare('DELETE FROM device_grants WHERE device_code = ?').run(code);
+      return reply.code(410).send({ status: 'expired' });
+    }
+    if (row.state === 'denied') {
+      db.prepare('DELETE FROM device_grants WHERE device_code = ?').run(code);
+      return { status: 'denied' };
+    }
+    if (row.state !== 'approved') return { status: 'pending' };
+
+    // THE TOKEN IS MINTED HERE, not at approval time. Nothing plaintext ever
+    // rests in a row waiting to be picked up — which is the point of storing
+    // only the hash in the first place.
+    const { token } = issueToken(row.account_id, row.label);
+    db.prepare('UPDATE device_grants SET collected_at = ? WHERE device_code = ?').run(now(), code);
+
+    const account = db.prepare('SELECT display_name FROM accounts WHERE id = ?').get(row.account_id);
+    return { status: 'ok', token, label: row.label, displayName: account?.display_name ?? '' };
   });
 
   // ----------------------------------------------------------------- misc

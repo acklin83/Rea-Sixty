@@ -30,6 +30,11 @@
 #undef snprintf
 #endif
 
+// Defined in main.cpp. Declared here rather than in a header for the same
+// reason ManualView.cpp and SettingsScreen.cpp do it: one free function, no
+// header worth creating for it.
+void reasixty_openUrl(const char* url);
+
 namespace uf8 {
 namespace {
 
@@ -132,6 +137,22 @@ bool        g_worksUndo = false;          // which way the in-flight call goes
 std::string g_worksStatus;
 int         g_worksColor = 0;
 char        g_worksVersion[64] = {0};     // plug-in version being confirmed
+
+// ---- linking this machine -------------------------------------------------
+// The extension cannot run a browser, so it cannot sign in. It asks the server
+// for a grant, shows a short code, and collects the token itself once a human
+// has approved it somewhere they ARE signed in. Nothing is copied by hand and
+// no credential is ever mailed.
+uint64_t    g_linkStartReq = 0;
+uint64_t    g_linkPollReq  = 0;
+std::string g_linkDeviceCode;             // secret; never shown on screen
+std::string g_linkUserCode;               // short; the whole point of showing it
+std::string g_linkUrl;
+std::string g_linkStatus;
+int         g_linkColor = 0;
+std::chrono::steady_clock::time_point g_linkNextPoll;
+std::chrono::steady_clock::time_point g_linkExpires;
+bool        g_linking = false;
 
 void loadOnce() {
     if (g_loaded) return;
@@ -243,6 +264,120 @@ void startInstall(int mapId) {
 // actually helps the next person. It is typed rather than detected — REAPER
 // exposes no plug-in version string, and inventing one would be worse than
 // leaving it blank.
+// Ask the server for a grant. The reply carries a short code for the human and
+// a long one for us; only the short one ever appears on screen.
+void startLink() {
+    if (g_linkStartReq || g_linkPollReq) return;
+    g_linkStatus.clear();
+    g_linkColor = 0;
+    g_linkUserCode.clear();
+    g_linkDeviceCode.clear();
+    g_linkUrl.clear();
+
+    const std::vector<std::string> headers = { "Content-Type: application/json" };
+    g_linkStartReq = http::begin("POST", baseUrl() + "/auth/device/start",
+                                 headers, "{\"label\":\"REAPER\"}");
+    if (!g_linkStartReq) {
+        g_linkStatus = "Bad server URL.";
+        g_linkColor = 0xCC4444FF;
+        return;
+    }
+    g_linking = true;
+    g_linkStatus = "Asking the server…";
+}
+
+void stopLink(const std::string& msg, int color) {
+    if (g_linkPollReq)  { http::cancel(g_linkPollReq);  g_linkPollReq = 0; }
+    if (g_linkStartReq) { http::cancel(g_linkStartReq); g_linkStartReq = 0; }
+    g_linking = false;
+    g_linkDeviceCode.clear();
+    g_linkUserCode.clear();
+    g_linkUrl.clear();
+    g_linkStatus = msg;
+    g_linkColor = color;
+}
+
+void pumpLinkStart() {
+    if (!g_linkStartReq) return;
+    http::Response r;
+    if (!http::poll(g_linkStartReq, r)) return;
+    g_linkStartReq = 0;
+
+    if (!r.error.empty()) { stopLink("Could not reach the server: " + r.error, 0xCC4444FF); return; }
+    if (r.status != 200)  { stopLink("Server returned HTTP " + std::to_string(r.status), 0xCC4444FF); return; }
+
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    if (!root || !root->is_object()) { stopLink("Bad response from server.", 0xCC4444FF); return; }
+
+    g_linkDeviceCode = jstr(root, "deviceCode");
+    g_linkUserCode   = jstr(root, "userCode");
+    g_linkUrl        = jstr(root, "verificationUriComplete");
+    const int ttl    = jint(root, "expiresIn");
+    if (g_linkDeviceCode.empty() || g_linkUserCode.empty()) {
+        stopLink("Bad response from server.", 0xCC4444FF);
+        return;
+    }
+
+    const auto nowT = std::chrono::steady_clock::now();
+    g_linkExpires  = nowT + std::chrono::seconds(ttl > 0 ? ttl : 600);
+    g_linkNextPoll = nowT;                 // first poll immediately
+    g_linkStatus   = "Waiting for you to approve it in the browser…";
+    g_linkColor    = 0;
+
+    if (!g_linkUrl.empty()) reasixty_openUrl(g_linkUrl.c_str());
+}
+
+// Poll on a timer rather than every frame: the UI runs at REAPER's timer rate,
+// and hammering the endpoint would be both rude and rate-limited.
+void pumpLink() {
+    pumpLinkStart();
+    if (!g_linking || g_linkDeviceCode.empty()) return;
+
+    const auto nowT = std::chrono::steady_clock::now();
+    if (nowT >= g_linkExpires) {
+        stopLink("That code expired. Start again.", 0xCC4444FF);
+        return;
+    }
+
+    if (!g_linkPollReq) {
+        if (nowT < g_linkNextPoll) return;
+        const std::vector<std::string> headers = { "Content-Type: application/json" };
+        g_linkPollReq = http::begin("POST", baseUrl() + "/auth/device/poll", headers,
+                                    "{\"deviceCode\":\"" + g_linkDeviceCode + "\"}");
+        g_linkNextPoll = nowT + std::chrono::seconds(2);
+        return;
+    }
+
+    http::Response r;
+    if (!http::poll(g_linkPollReq, r)) return;
+    g_linkPollReq = 0;
+
+    if (!r.error.empty()) return;          // transient; the next tick retries
+
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    const std::string state = (root && root->is_object()) ? jstr(root, "status") : "";
+
+    if (state == "pending") return;
+    if (state == "denied")  { stopLink("Refused in the browser.", 0xCC4444FF); return; }
+    if (state == "expired") { stopLink("That code expired. Start again.", 0xCC4444FF); return; }
+    if (state != "ok") {
+        stopLink("Linking failed (HTTP " + std::to_string(r.status) + ").", 0xCC4444FF);
+        return;
+    }
+
+    const std::string token = jstr(root, "token");
+    if (token.empty()) { stopLink("The server sent no token.", 0xCC4444FF); return; }
+
+    std::snprintf(g_token, sizeof(g_token), "%s", token.c_str());
+    SetExtState(kExtSection, kKeyApiToken, g_token, true);
+
+    const std::string who = jstr(root, "displayName");
+    stopLink(who.empty() ? "Linked. You can upload now."
+                         : "Linked as " + who + ". You can upload now.", 0);
+}
+
 void toggleWorks(int mapId, bool undo) {
     if (g_worksReq) return;
     g_worksStatus.clear();
@@ -569,6 +704,34 @@ void drawSettings(ImGui_Context* ctx) {
     ImGui_SetNextItemWidth(ctx, -1.0);
     if (ImGui_InputText(ctx, "##exch_token", g_token, sizeof(g_token), &tokFlags, nullptr))
         SetExtState(kExtSection, kKeyApiToken, g_token, true);
+
+    // ---- link this machine ------------------------------------------------
+    // The whole reason the field above can stay empty. Pressing this opens the
+    // browser, you confirm once, and the token arrives here by itself — it is
+    // never copied, never in the clipboard and never in an email.
+    ImGui_Spacing(ctx);
+    if (!g_linking) {
+        if (ImGui_Button(ctx, g_token[0] ? "Link this machine again…##exch_link"
+                                         : "Link this machine…##exch_link",
+                         nullptr, nullptr))
+            startLink();
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextColored(ctx, 0x999999FF, "opens your browser — no copying");
+    } else {
+        char code[96];
+        std::snprintf(code, sizeof(code), "Code:  %s", g_linkUserCode.c_str());
+        ImGui_Text(ctx, g_linkUserCode.empty() ? "Starting…" : code);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (!g_linkUrl.empty()
+            && ImGui_Button(ctx, "Open the page again##exch_link_open", nullptr, nullptr))
+            reasixty_openUrl(g_linkUrl.c_str());
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##exch_link_cancel", nullptr, nullptr))
+            stopLink("Cancelled.", 0);
+    }
+    if (!g_linkStatus.empty()) {
+        ImGui_TextColored(ctx, g_linkColor ? g_linkColor : 0xCCCCCCFF, g_linkStatus.c_str());
+    }
 
     ImGui_Spacing(ctx);
     const bool busy = g_healthReq != 0;
@@ -1090,6 +1253,7 @@ void ExchangeView::draw(ImGui_Context* ctx) {
     pumpMap();
     pumpDownload();
     pumpWorks();
+    pumpLink();
 
     ImGui_Text(ctx, "Mapping Exchange");
     ImGui_SameLine(ctx, nullptr, nullptr);

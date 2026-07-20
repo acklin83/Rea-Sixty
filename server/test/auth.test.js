@@ -376,6 +376,179 @@ test('a device token counts as the same person as the browser session', async ()
   assert.equal(seen.json().worksMine, true);
 });
 
+test('the sign-in link honours a same-site next, and refuses anything else', async () => {
+  const ask = async (next) => {
+    const r = await app.inject({
+      method: 'POST', url: '/auth/email/request',
+      payload: { email: `next-${encodeURIComponent(String(next))}@example.com`, next },
+    });
+    return r.json().devLink;
+  };
+
+  const good = await ask('/link?code=ABCD-EFGH');
+  assert.match(good, /next=%2Flink/);
+
+  // An open redirect in a link we MAIL to people is the worst place to have
+  // one, so anything that is not a plain local path must be dropped.
+  for (const bad of ['//evil.example/x', 'https://evil.example', 'javascript:alert(1)', 'evil']) {
+    const link = await ask(bad);
+    assert.ok(!link.includes('next='), `must not carry ${bad}`);
+  }
+
+  // And it is honoured on the way back — but only once the account has a real
+  // name. Naming yourself comes before publishing under a placeholder byline,
+  // so the FIRST sign-in still goes to /welcome no matter what next says.
+  const linkFor = async (email, next) => (await app.inject({
+    method: 'POST', url: '/auth/email/request', payload: { email, next },
+  })).json().devLink;
+
+  const email = 'nexthop@example.com';
+  const first = await linkFor(email, '/link?code=ABCD-EFGH');
+  const cb1 = await app.inject({ method: 'GET', url: first.replace('http://localhost:4321', '') });
+  assert.equal(cb1.statusCode, 302);
+  assert.match(cb1.headers.location, /\/welcome$/, 'first sign-in names you before anything else');
+
+  const cookie = `rs_session=${cb1.cookies.find((c) => c.name === 'rs_session').value}`;
+  await app.inject({
+    method: 'POST', url: '/v1/account/name', headers: { cookie }, payload: { displayName: 'Next Hop' },
+  });
+
+  const second = await linkFor(email, '/link?code=ABCD-EFGH');
+  const cb2 = await app.inject({ method: 'GET', url: second.replace('http://localhost:4321', '') });
+  assert.match(cb2.headers.location, /\/link\?code=ABCD-EFGH$/);
+});
+
+// ------------------------------------------------- device authorisation
+
+test('device flow: start, approve in the browser, collect in the extension', async () => {
+  const { cookie } = await signIn('device@example.com');
+  await app.inject({
+    method: 'POST', url: '/v1/account/name', headers: auth(cookie), payload: { displayName: 'Device User' },
+  });
+
+  const started = (await app.inject({
+    method: 'POST', url: '/auth/device/start', payload: { label: 'Studio Mac' },
+  })).json();
+  assert.match(started.userCode, /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/);
+  assert.ok(started.deviceCode.length > 30);
+  assert.match(started.verificationUriComplete, /\/link\?code=/);
+
+  // Before approval the extension is told to keep waiting — and is given
+  // nothing it could mistake for a credential.
+  const pending = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: started.deviceCode },
+  });
+  assert.equal(pending.json().status, 'pending');
+  assert.equal(pending.json().token, undefined);
+
+  // The browser can see what it is about to approve.
+  const look = await app.inject({
+    method: 'GET', url: `/v1/account/device/${started.userCode}`, headers: auth(cookie),
+  });
+  assert.equal(look.statusCode, 200);
+  assert.equal(look.json().label, 'Studio Mac');
+
+  const approved = await app.inject({
+    method: 'POST', url: `/v1/account/device/${started.userCode}/approve`,
+    headers: auth(cookie), payload: { label: 'Studio Mac' },
+  });
+  assert.equal(approved.statusCode, 200);
+  // The approving browser must NOT receive the token — only the device does.
+  assert.equal(approved.json().token, undefined);
+
+  const collected = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: started.deviceCode },
+  });
+  assert.equal(collected.json().status, 'ok');
+  assert.match(collected.json().token, /^rsx_/);
+
+  // And it actually works as a credential.
+  const up = await app.inject({
+    method: 'POST', url: '/v1/maps',
+    headers: { authorization: `Bearer ${collected.json().token}`, 'content-type': 'application/octet-stream' },
+    payload: mapFile('Device Flow Plugin'),
+  });
+  assert.equal(up.statusCode, 201);
+});
+
+test('device flow: a grant is collectable exactly once', async () => {
+  const { cookie } = await signIn('device2@example.com');
+  const started = (await app.inject({ method: 'POST', url: '/auth/device/start', payload: {} })).json();
+  await app.inject({
+    method: 'POST', url: `/v1/account/device/${started.userCode}/approve`, headers: auth(cookie), payload: {},
+  });
+
+  const first = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: started.deviceCode },
+  });
+  assert.equal(first.json().status, 'ok');
+
+  // A replayed device code must not mint a second token.
+  const second = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: started.deviceCode },
+  });
+  assert.equal(second.statusCode, 410);
+  assert.equal(second.json().status, 'used');
+});
+
+test('device flow: the token is never stored, only its hash', async () => {
+  const { cookie } = await signIn('device3@example.com');
+  const started = (await app.inject({ method: 'POST', url: '/auth/device/start', payload: {} })).json();
+  await app.inject({
+    method: 'POST', url: `/v1/account/device/${started.userCode}/approve`, headers: auth(cookie), payload: {},
+  });
+  const { token } = (await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: started.deviceCode },
+  })).json();
+
+  // Nothing anywhere in the grants table may contain the plaintext — the whole
+  // reason the token is minted at collection time rather than at approval.
+  const dump = JSON.stringify(getDb().prepare('SELECT * FROM device_grants').all());
+  assert.ok(!dump.includes(token), 'a plaintext token must never rest in device_grants');
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) c FROM account_tokens WHERE token_sha256 = ?').get(token).c, 0,
+    'the raw token must not be what is stored',
+  );
+});
+
+test('device flow: expiry is enforced, and a denial is final', async () => {
+  const { cookie } = await signIn('device4@example.com');
+
+  const stale = (await app.inject({ method: 'POST', url: '/auth/device/start', payload: {} })).json();
+  getDb().prepare('UPDATE device_grants SET expires_at = ? WHERE device_code = ?')
+    .run(now() - 1, stale.deviceCode);
+  const gone = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: stale.deviceCode },
+  });
+  assert.equal(gone.statusCode, 410);
+  assert.equal(gone.json().status, 'expired');
+
+  const denied = (await app.inject({ method: 'POST', url: '/auth/device/start', payload: {} })).json();
+  await app.inject({
+    method: 'POST', url: `/v1/account/device/${denied.userCode}/approve`,
+    headers: auth(cookie), payload: { deny: true },
+  });
+  const after = await app.inject({
+    method: 'POST', url: '/auth/device/poll', payload: { deviceCode: denied.deviceCode },
+  });
+  assert.equal(after.json().status, 'denied');
+});
+
+test('device flow: approving needs a signed-in browser, and an unknown code 404s', async () => {
+  const started = (await app.inject({ method: 'POST', url: '/auth/device/start', payload: {} })).json();
+
+  const anon = await app.inject({
+    method: 'POST', url: `/v1/account/device/${started.userCode}/approve`, payload: {},
+  });
+  assert.equal(anon.statusCode, 401);
+
+  const { cookie } = await signIn('device5@example.com');
+  const bogus = await app.inject({
+    method: 'GET', url: '/v1/account/device/ZZZZ-ZZZZ', headers: auth(cookie),
+  });
+  assert.equal(bogus.statusCode, 404);
+});
+
 // ------------------------------------------------------------------ setup
 
 let seeded = 0;

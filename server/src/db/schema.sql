@@ -260,6 +260,38 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_open ON reports(resolved_at);
 
+-- ------------------------------------------------------ device authorisation
+
+-- How REAPER gets an upload token WITHOUT anybody copying a secret around.
+-- The extension asks for a grant, shows the human a short code, the human
+-- approves it once in a browser where they are signed in, and the extension
+-- collects the token itself. Same shape as the "enter this code on your TV"
+-- flow (RFC 8628), and for the same reason: the device cannot run a browser.
+--
+-- THE TOKEN IS NEVER STORED HERE. It is minted at collection time, handed over
+-- in that one response, and only its SHA-256 lands in account_tokens. Parking
+-- a plaintext credential in a row "until someone picks it up" would undo the
+-- whole point of hashing it.
+--
+-- A new TABLE is fine on existing databases — migrate() is a plain schema.sql
+-- exec and CREATE TABLE IF NOT EXISTS applies. A new *column* would not be;
+-- that is why this is not folded into auth_challenges, whose kind CHECK would
+-- also have had to change.
+CREATE TABLE IF NOT EXISTS device_grants (
+  device_code  TEXT    PRIMARY KEY,        -- long secret, held by the extension
+  user_code    TEXT    NOT NULL UNIQUE,    -- short, read aloud off the screen
+  account_id   INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+  label        TEXT,                       -- names the token that comes out
+  state        TEXT    NOT NULL DEFAULT 'pending'
+                       CHECK (state IN ('pending', 'approved', 'denied')),
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,           -- short: minutes, not hours
+  approved_at  INTEGER,
+  collected_at INTEGER                     -- set when the token was handed over
+);
+CREATE INDEX IF NOT EXISTS idx_device_grants_user_code ON device_grants(user_code);
+CREATE INDEX IF NOT EXISTS idx_device_grants_expiry ON device_grants(expires_at);
+
 -- Convenience view for /mappings: one row per plug-in, which is the unit the
 -- index lists. Kept as a view so the row shape lives next to the schema.
 CREATE VIEW IF NOT EXISTS plugin_index AS
