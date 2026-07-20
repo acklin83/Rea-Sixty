@@ -25,22 +25,38 @@ function getTransport(log) {
     return transport;
   }
 
-  const port = Number(process.env.SMTP_PORT ?? 465);
+  // 587 is the default because that is what Hostpoint offers
+  // (asmtp.mail.hostpoint.ch advertises STARTTLS and AUTH PLAIN LOGIN, checked
+  // against the live server). 465 stays supported for hosts that do implicit
+  // TLS instead.
+  const port = Number(process.env.SMTP_PORT ?? 587);
   transport = createTransport({
     host: process.env.SMTP_HOST,
     port,
-    // Hostinger: 465 is implicit TLS, 587 is STARTTLS. `secure` means "TLS from
-    // the first byte", so it tracks the port rather than being a separate knob
-    // someone can set inconsistently.
+    // `secure` means "TLS from the first byte", so it tracks the port rather
+    // than being a separate knob someone can set inconsistently: 465 implicit,
+    // 587 STARTTLS.
     secure: port === 465,
+    // NOT optional on 587. Without it nodemailer treats STARTTLS as
+    // best-effort and will happily continue in cleartext if the upgrade fails
+    // — and the very next thing on the wire is AUTH PLAIN, i.e. the mailbox
+    // password. Fail the send instead.
+    requireTLS: port !== 465,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
   log?.info({ host: process.env.SMTP_HOST, port }, 'mail: SMTP transport ready');
   return transport;
 }
 
+// info@stoersender-studio.ch, NOT an address at reasixty.com. That mailbox is
+// an established one at Hostpoint whose SPF already redirects to
+// spf.mail.hostpoint.ch, so mail sent through their SMTP is aligned on day one.
+// A fresh reasixty.com sender would need its own SPF, DKIM and reputation
+// before sign-in links stopped landing in spam — and a sign-in link in spam is
+// an account nobody can create. The link inside still points at reasixty.com;
+// the From domain and the link domain differing is normal and costs nothing.
 export function mailFrom() {
-  return process.env.MAIL_FROM ?? 'Rea-Sixty <frank@reasixty.com>';
+  return process.env.MAIL_FROM ?? 'Rea-Sixty <info@stoersender-studio.ch>';
 }
 
 /**

@@ -100,6 +100,38 @@ certificate is issued on the next retry. Force it with
 This step needs the Hostinger panel password, so it is Frank's to do — Claude
 does not enter credentials anywhere, authorised or not.
 
+## Mail — Hostpoint, not Hostinger
+
+Sign-in links go out as **`info@stoersender-studio.ch` via Hostpoint**. That is
+a different provider from the one hosting the domain, and it is deliberate: the
+mailbox exists, and SPF for `stoersender-studio.ch` already redirects to
+`spf.mail.hostpoint.ch`, so mail is aligned from the first send. A fresh sender
+at `reasixty.com` would need its own SPF, DKIM and reputation first — and a
+sign-in link in someone's spam folder is an account that never gets created.
+
+```
+SMTP_HOST=asmtp.mail.hostpoint.ch
+SMTP_PORT=587
+SMTP_USER=info@stoersender-studio.ch
+SMTP_PASS=…                      # Frank sets this; never in git
+MAIL_FROM=Rea-Sixty <info@stoersender-studio.ch>
+```
+
+Verified against the live server: port 587 answers `ESMTP Exim`, advertises
+`STARTTLS` and `AUTH PLAIN LOGIN`.
+
+**587 means `requireTLS`.** `lib/mail.js` sets it whenever the port is not 465.
+Without it nodemailer treats STARTTLS as best-effort and will continue in
+cleartext if the upgrade fails — and the next thing on the wire is `AUTH PLAIN`,
+the mailbox password. It fails the send instead.
+
+Put these in an env file the container reads (`/opt/reasixty/.env`, gitignored),
+never in `docker-compose.yml`.
+
+**The server refuses to start without them** unless `MAIL_DEV_LOG=1`. That is
+not pedantry: with no transport the code logs the link and reports success, so a
+production box would look healthy while nobody could sign in.
+
 ## Upload tokens
 
 Browse and download are anonymous. Uploading needs a device token:
