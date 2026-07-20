@@ -27,32 +27,56 @@ VPS=${VPS:-srv1401714.hstgr.cloud}             # NOT the tailnet IP — see abov
 KEY=${KEY:-/volume1/homes/Frank/.ssh/reasixty_nas_key}
 DEST=${DEST:-/volume1/Franks Cloud/Backups/reasixty}
 KEEP_DAYS=${KEEP_DAYS:-90}
+LOG=${LOG:-$DEST/pull.log}
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 OUT=$DEST/reasixty-$STAMP.tar.gz
 
 mkdir -p "$DEST"
 
+# EVERY run leaves a line in $LOG, success or failure. Without this a broken
+# backup breaks silently: DSM's scheduler log is root-only, its per-task output
+# is off unless you tick a box, and this script deletes its own partial file on
+# failure — so a failed run used to leave no trace at all in a place anyone
+# would look. Nobody notices a missing backup until the day they need it.
+say() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >> "$LOG" 2>/dev/null || true; echo "$*"; }
+
+# Fires on any exit path, including the ones `set -e` takes. Only speaks up
+# when something actually went wrong — a plain `trap … EXIT` would also report
+# success as a failure.
+on_exit() {
+    rc=$?
+    [ "$rc" -eq 0 ] || say "FAILED rc=$rc"
+    return "$rc"
+}
+trap on_exit EXIT
+
+say "start -> $VPS as $(id -un) (uid $(id -u))"
+
+[ -r "$KEY" ] || { say "FAILED: key not readable: $KEY"; exit 1; }
+
 # Write to a .part first: ssh propagates the far end's exit status, so a failed
 # or truncated transfer must not be left sitting there looking like a backup.
-if ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "reasixty-backup@$VPS" > "$OUT.part"; then
+# -T: no pseudo-terminal. We want a byte stream, and without it ssh writes
+# "Pseudo-terminal will not be allocated…" into the log every single night.
+if ssh -T -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+       -o ConnectTimeout=20 "reasixty-backup@$VPS" > "$OUT.part" 2>>"$LOG"; then
     mv "$OUT.part" "$OUT"
 else
     rc=$?
     rm -f "$OUT.part"
-    echo "reasixty backup pull FAILED (ssh exit $rc)" >&2
+    say "FAILED: ssh exit $rc"
     exit "$rc"
 fi
 
 # A tar that will not list is a tar that will not restore. Cheaper to find out
 # now than on the day it is needed.
 if ! tar tzf "$OUT" >/dev/null 2>&1; then
-    echo "reasixty backup pull produced an unreadable archive: $OUT" >&2
+    say "FAILED: unreadable archive, removed: $OUT"
     rm -f "$OUT"
     exit 1
 fi
 
 find "$DEST" -maxdepth 1 -type f -name 'reasixty-*.tar.gz' -mtime "+$KEEP_DAYS" -delete
 
-echo "reasixty backup pulled: $OUT ($(du -h "$OUT" | cut -f1)), keeping ${KEEP_DAYS}d"
+say "ok $OUT ($(du -h "$OUT" | cut -f1)), keeping ${KEEP_DAYS}d"
