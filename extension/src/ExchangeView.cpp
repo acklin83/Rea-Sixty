@@ -848,10 +848,11 @@ void drawList(ImGui_Context* ctx) {
             if (p.bestParamCoverage < 0) {
                 ImGui_Text(ctx, "—");
             } else {
+                // Plain number, no bar. The index row only carries a
+                // percentage — n/d exists per MAP, and this row is one
+                // PLUG-IN, which may have several with different totals.
                 char lbl[16]; std::snprintf(lbl, sizeof(lbl), "%d%%", p.bestParamCoverage);
-                double frac = p.bestParamCoverage / 100.0;
-                if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-                ImGui_ProgressBar(ctx, frac, nullptr, nullptr, lbl);
+                ImGui_Text(ctx, lbl);
             }
         }
         ImGui_EndTable(ctx);
@@ -925,10 +926,8 @@ void drawPlugin(ImGui_Context* ctx) {
             if (m.paramD < 0) {
                 ImGui_Text(ctx, "—");
             } else {
-                std::snprintf(buf, sizeof(buf), "%d/%d (%d%%)", m.paramN, m.paramD, m.paramPct);
-                double frac = m.paramD > 0 ? (double)m.paramN / m.paramD : 0.0;
-                if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-                ImGui_ProgressBar(ctx, frac, nullptr, nullptr, buf);
+                std::snprintf(buf, sizeof(buf), "%d/%d", m.paramN, m.paramD);
+                ImGui_Text(ctx, buf);
             }
 
             ImGui_TableSetColumnIndex(ctx, 3);
@@ -1084,11 +1083,6 @@ void drawMap(ImGui_Context* ctx) {
         char lbl[96]; std::snprintf(lbl, sizeof(lbl), "Coverage: %d of %d plug-in params",
                                     d.paramN, d.paramD);
         ImGui_Text(ctx, lbl);
-        double w = 240.0, h = 0.0;
-        double frac = d.paramD > 0 ? (double)d.paramN / d.paramD : 0.0;
-        if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
-        char p[16]; std::snprintf(p, sizeof(p), "%d%%", d.paramPct);
-        ImGui_ProgressBar(ctx, frac, &w, &h, p);
     }
 
     // Install + the clash confirm live here now, on the detail page.
