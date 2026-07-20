@@ -125,8 +125,66 @@ Without it nodemailer treats STARTTLS as best-effort and will continue in
 cleartext if the upgrade fails — and the next thing on the wire is `AUTH PLAIN`,
 the mailbox password. It fails the send instead.
 
-Put these in an env file the container reads (`/opt/reasixty/.env`, gitignored),
-never in `docker-compose.yml`.
+### Writing the credentials without leaking them
+
+On the box, in an **interactive** session (the `read` prompt needs a terminal):
+
+```sh
+ssh root@srv1401714.hstgr.cloud
+
+umask 077                       # the file is created 600 from the start,
+                                # not chmod'd afterwards — no window where it
+                                # is world-readable
+cd /opt/reasixty
+
+read -rs -p 'SMTP password: ' RS_SMTP_PASS; echo
+
+printf '%s\n' \
+  'SMTP_HOST=asmtp.mail.hostpoint.ch' \
+  'SMTP_PORT=587' \
+  'SMTP_USER=info@stoersender-studio.ch' \
+  "SMTP_PASS=$RS_SMTP_PASS" \
+  'MAIL_FROM=Rea-Sixty <info@stoersender-studio.ch>' \
+  'SITE_ORIGIN=https://reasixty.com' > .env
+
+unset RS_SMTP_PASS
+chown root:root .env && ls -l .env      # expect -rw-------
+```
+
+`read -rs` keeps the password out of the shell history and off the screen;
+typing it inside the `printf` instead would put it in `~/.bash_history` and in
+the process list for every user on the box. `-r` stops backslashes being eaten.
+
+Then restart and confirm the transport actually came up:
+
+```sh
+docker compose up -d
+docker compose logs --tail 20 | grep -i mail
+```
+
+Expect `mail: SMTP transport ready`. If the container exits instead, read the
+message: the server refuses to start with no credentials rather than pretending.
+
+**`env_file: .env` in `docker-compose.yml` is what passes these in.** Compose
+also auto-reads a `.env` in the project directory, but that one only substitutes
+`${VARS}` *inside the compose file* — it puts nothing into the container. The
+two are easy to confuse and the failure is silent.
+
+### Proving it works
+
+Not "the logs look fine" — send one:
+
+```sh
+curl -s -X POST https://reasixty.com/auth/email/request \
+  -H 'content-type: application/json' \
+  -d '{"email":"frank@reasixty.com"}'
+```
+
+The reply is always the same non-committal sentence (by design — the endpoint
+must not reveal who has an account). The real check is whether the mail lands,
+and whether its headers show `spf=pass` for `stoersender-studio.ch`.
+
+Locally you need none of this: `MAIL_DEV_LOG=1` prints the link instead.
 
 **The server refuses to start without them** unless `MAIL_DEV_LOG=1`. That is
 not pedantry: with no transport the code logs the link and reports success, so a

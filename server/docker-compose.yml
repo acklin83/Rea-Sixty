@@ -12,6 +12,16 @@ services:
       # the pattern the newer services on the box follow (ddl-website:3100,
       # listmonk), unlike the older ones that still expose 0.0.0.0.
       - "127.0.0.1:8010:8010"
+    # SMTP credentials and SITE_ORIGIN live here, never in this file — this one
+    # is in git. `.env` is gitignored, mode 600, and written on the box.
+    #
+    # env_file IS REQUIRED and is NOT the same thing as the `.env` Compose picks
+    # up on its own. That automatic one only substitutes ${VARS} *inside this
+    # compose file*; it puts nothing into the container. Without this line the
+    # password is set correctly on disk and the server still starts with no
+    # transport — which it now refuses to do, so at least it fails loudly.
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       # 0.0.0.0 INSIDE the container. The loopback restriction is the port
