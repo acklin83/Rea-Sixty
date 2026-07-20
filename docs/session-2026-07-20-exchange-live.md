@@ -112,6 +112,37 @@ Zone moved to Cloudflare, **DNS-only (grey cloud)**. Orange would make
 Cloudflare terminate TLS, and Caddy's TLS-ALPN renewal would then never reach
 the box — failing ~60 days later, silently.
 
+## Added after the first write-up
+
+**Linking a machine** (`dcd4a35`) — the normal way to get an upload token now.
+REAPER shows a short code, opens the browser, you confirm once, and the token
+arrives in the extension by itself. RFC 8628's shape, for its reason: the
+device cannot run a browser. Emailing the token was refused — it is a
+credential, and it would sit in a mailbox and every backup of it.
+
+The token is minted at COLLECTION, not at approval, so nothing plaintext ever
+rests in a row waiting to be picked up and the approving browser never sees it.
+
+Every device flow is phishable: somebody starts a grant, sends you the code,
+your approval hands them a token on your account. The `/link` page is the whole
+defence — it names the machine, states what is granted in the second person,
+and never approves from a link alone. Do not add a one-click auto-approve.
+
+That opened a hole which is now closed: `/link` bounces anonymous visitors to
+`/login?next=…`, so `next` had to exist, and an unchecked one is an open
+redirect travelling in a mailed link. Same-site paths only, checked at both
+ends.
+
+**"Works for me" in the extension** (`ea59526`) — the API always accepted either
+credential for it; nothing in REAPER used it. `worksMine` is a tristate and
+`null` is not `false`; wdl_json has no `is_null()`, so a JSON null reads back as
+the literal string `"null"`.
+
+**No coverage bars** (`f25946c`, Frank) — the figure alone. The plug-in index
+keeps a percentage because that row is a plug-in and `x/y` belongs to a map.
+
+87 server tests.
+
 ## Still open
 
 1. **Frank is not a moderator on production.** After the first real sign-in:
