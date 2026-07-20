@@ -1,6 +1,7 @@
 #include "ExchangeView.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -35,6 +36,14 @@ char g_token[256]  = {0};
 char g_search[128] = {0};
 bool g_loaded      = false;
 bool g_showSettings = false;
+
+// Live search: refetch a short beat after the last keystroke, not on Enter.
+bool g_searchDirty = false;
+std::chrono::steady_clock::time_point g_searchDirtyAt;
+
+// Sort, driven by the index table's clickable headers.
+std::string g_sort = "name";
+bool        g_sortAsc = true;
 
 // ---- connection test ------------------------------------------------------
 uint64_t    g_healthReq = 0;
@@ -157,6 +166,7 @@ void fetchList() {
     g_listError.clear();
     std::string url = baseUrl() + "/v1/plugins?pageSize=200";
     if (g_search[0]) url += "&search=" + urlEncode(g_search);
+    url += "&sort=" + g_sort + "&dir=" + (g_sortAsc ? "asc" : "desc");
     g_listReq = http::begin("GET", url);
     if (!g_listReq) g_listError = "Bad server URL.";
     g_listedOnce = true;
@@ -453,13 +463,20 @@ void drawSettings(ImGui_Context* ctx) {
 }
 
 void drawList(ImGui_Context* ctx) {
-    // Search + refresh.
+    // Live search — filter as you type, debounced so a fast typist doesn't fire
+    // a request per keystroke.
     ImGui_SetNextItemWidth(ctx, 260.0);
-    int sFlags = ImGui_InputTextFlags_EnterReturnsTrue;
-    if (ImGui_InputText(ctx, "##exch_search", g_search, sizeof(g_search), &sFlags, nullptr))
-        fetchList();
+    if (ImGui_InputText(ctx, "##exch_search", g_search, sizeof(g_search), nullptr, nullptr)) {
+        g_searchDirty = true;
+        g_searchDirtyAt = std::chrono::steady_clock::now();
+    }
+    if (g_searchDirty && !g_listReq) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - g_searchDirtyAt).count();
+        if (ms >= 180) { g_searchDirty = false; fetchList(); }
+    }
     ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, g_listReq ? "Loading…##exch_refresh" : "Search / Refresh##exch_refresh", nullptr, nullptr) && !g_listReq)
+    if (ImGui_Button(ctx, g_listReq ? "Loading…##exch_refresh" : "Refresh##exch_refresh", nullptr, nullptr) && !g_listReq)
         fetchList();
 
     if (!g_listError.empty()) {
@@ -473,31 +490,48 @@ void drawList(ImGui_Context* ctx) {
 
     if (g_plugins.empty()) {
         ImGui_TextWrapped(ctx, g_listReq ? "Loading plug-ins…"
-                                         : "No plug-ins found. Try Search / Refresh.");
+                                         : "No plug-ins found.");
         return;
     }
 
-    // One row per plug-in. Click a row to open its maps. ScrollY + a fixed
-    // outer height keeps the header row sticky while the body scrolls; columns
-    // are resizable and hideable; the plug-in name stretches, the rest fixed.
+    // One row per plug-in. Click a row to open its maps; click a column header
+    // to sort. ScrollY + a fixed outer height keeps the header sticky.
     double availW = 0.0, availH = 0.0;
     ImGui_GetContentRegionAvail(ctx, &availW, &availH);
     if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
     int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
                | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable
-               | ImGui_TableFlags_ScrollY;
+               | ImGui_TableFlags_Sortable | ImGui_TableFlags_ScrollY;
     if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, &availH, nullptr)) {
         int stretch = ImGui_TableColumnFlags_WidthStretch;
         int fixed   = ImGui_TableColumnFlags_WidthFixed;
+        int noSort  = ImGui_TableColumnFlags_NoSort;
+        int nameFlags = stretch | ImGui_TableColumnFlags_DefaultSort;
+        int surfFlags = fixed | noSort;
         double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wCov = 100.0;
-        ImGui_TableSetupColumn(ctx, "Plug-in",  &stretch, &wName,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
-        ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Surfaces", &fixed,   &wSurf,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Plug-in",  &nameFlags, &wName,   nullptr);  // col 0 -> name
+        ImGui_TableSetupColumn(ctx, "Vendor",   &stretch,   &wVendor, nullptr);  // col 1 -> vendor
+        ImGui_TableSetupColumn(ctx, "Maps",     &fixed,     &wMaps,   nullptr);  // col 2 -> maps
+        ImGui_TableSetupColumn(ctx, "Surfaces", &surfFlags, &wSurf,   nullptr);  // col 3 -> (no sort)
         // Best coverage = how much of the PLUG-IN a map controls (functional
         // params), the best of this plug-in's maps.
-        ImGui_TableSetupColumn(ctx, "Coverage", &fixed, &wCov, nullptr);
+        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,     &wCov,    nullptr);  // col 4 -> coverage
         ImGui_TableHeadersRow(ctx);
+
+        // Re-fetch when the user changes the sort (column header click).
+        bool hasSpecs = false;
+        if (ImGui_TableNeedSort(ctx, &hasSpecs) && hasSpecs) {
+            int userId = 0, colIdx = 0, order = 0, sortDir = ImGui_SortDirection_Ascending;
+            if (ImGui_TableGetColumnSortSpecs(ctx, 0, &userId, &colIdx, &order, &sortDir)) {
+                const char* key = colIdx == 0 ? "name"   : colIdx == 1 ? "vendor"
+                                : colIdx == 2 ? "maps"   : colIdx == 4 ? "coverage" : nullptr;
+                const bool asc = sortDir != ImGui_SortDirection_Descending;
+                if (key && (g_sort != key || g_sortAsc != asc) && !g_listReq) {
+                    g_sort = key; g_sortAsc = asc;
+                    fetchList();
+                }
+            }
+        }
 
         char buf[512];
         for (const auto& p : g_plugins) {

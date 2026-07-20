@@ -8,7 +8,8 @@ const browseQuery = z.object({
   search: z.string().max(120).optional().default(''),
   vendor: z.coerce.number().int().positive().optional(),
   surface: z.enum(['uc1', 'uf8', 'uc1+uf8']).optional(),
-  sort: z.enum(['name', 'maps', 'newest', 'coverage']).optional().default('name'),
+  sort: z.enum(['name', 'vendor', 'maps', 'newest', 'coverage']).optional().default('name'),
+  dir: z.enum(['asc', 'desc']).optional(),
   page: z.coerce.number().int().positive().optional().default(1),
   pageSize: z.coerce.number().int().positive().max(200).optional().default(60),
 });
@@ -19,7 +20,7 @@ export async function registerBrowseRoutes(app) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'bad_query', detail: parsed.error.issues });
     }
-    const { search, vendor, surface, sort, page, pageSize } = parsed.data;
+    const { search, vendor, surface, sort, dir, page, pageSize } = parsed.data;
 
     // A vendor filter must name a real vendor — an unknown id would silently
     // return an empty page and read as "no maps" rather than "bad filter".
@@ -28,7 +29,7 @@ export async function registerBrowseRoutes(app) {
       if (!exists) return reply.code(404).send({ error: 'unknown_vendor' });
     }
 
-    return listPlugins({ search, vendor: vendor ?? null, surface: surface ?? null, sort, page, pageSize });
+    return listPlugins({ search, vendor: vendor ?? null, surface: surface ?? null, sort, dir, page, pageSize });
   });
 
   app.get('/vendors', async (req) => {

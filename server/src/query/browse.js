@@ -5,15 +5,29 @@
 
 import { getDb } from '../db/index.js';
 
-const SORTS = {
-  name: 'p.name COLLATE NOCASE ASC',
-  maps: 'map_count DESC, p.name COLLATE NOCASE ASC',
-  newest: 'newest_at DESC, p.name COLLATE NOCASE ASC',
-  // "coverage" sorts by the displayed metric — plug-in (parameter) coverage.
-  coverage: 'best_param_coverage DESC, p.name COLLATE NOCASE ASC',
+// Sort columns → the expression to order by. Direction (asc/desc) is applied
+// separately so column headers can toggle it; every sort tie-breaks on name.
+const SORT_COLS = {
+  name: 'p.name COLLATE NOCASE',
+  vendor: "COALESCE(p.vendor, '') COLLATE NOCASE",
+  maps: 'p.map_count',
+  coverage: 'p.best_param_coverage',
+  newest: 'p.newest_at',
 };
 
+// Default direction per column (used when the caller doesn't pass one).
+const SORT_DEFAULT_DIR = { name: 'ASC', vendor: 'ASC', maps: 'DESC', coverage: 'DESC', newest: 'DESC' };
+
 const SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
+
+function orderBy(sort, dir) {
+  const col = SORT_COLS[sort] ?? SORT_COLS.name;
+  const key = SORT_COLS[sort] ? sort : 'name';
+  const d = dir === 'asc' ? 'ASC' : dir === 'desc' ? 'DESC' : SORT_DEFAULT_DIR[key];
+  // Coverage/maps can be NULL; DESC already sorts NULLs last in SQLite. Always
+  // tie-break on name so the order is stable.
+  return key === 'name' ? `${col} ${d}` : `${col} ${d}, p.name COLLATE NOCASE ASC`;
+}
 
 /**
  * Browse plug-ins.
@@ -24,7 +38,7 @@ const SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
  * an id first). Returns { rows, total, page, pageSize }.
  */
 export function listPlugins({
-  search = '', vendor = null, surface = null, sort = 'name',
+  search = '', vendor = null, surface = null, sort = 'name', dir = null,
   page = 1, pageSize = 60,
 } = {}) {
   const db = getDb();
@@ -53,7 +67,7 @@ export function listPlugins({
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const orderSql = SORTS[sort] ?? SORTS.name;
+  const orderSql = orderBy(sort, dir);
   const size = Math.min(Math.max(1, pageSize | 0), 200);
   const p = Math.max(1, page | 0);
 
