@@ -359,9 +359,14 @@ add_library(reaper_uf8 MODULE
     # CS Gate/Comp gain reduction that no REAPER API exposes.
     src/SslMeterProtocol.cpp
     src/SslCoreImpersonator.cpp
-    # Mapping Exchange — async HTTPS client (macOS impl in macos_http.mm; this
-    # is the non-Apple stub) + the in-app Exchange view.
+    # Mapping Exchange — async HTTPS client + the in-app Exchange view. One
+    # implementation per platform, each self-guarded by its own #if, so the
+    # three compile to nothing where they don't apply: macos_http.mm
+    # (NSURLSession, added under APPLE below), win_http.cpp (WinHTTP),
+    # linux_http.cpp (libcurl via dlopen), HttpClient.cpp (the fallback stub).
     src/HttpClient.cpp
+    src/win_http.cpp
+    src/linux_http.cpp
     src/ExchangeView.cpp
 )
 
@@ -419,7 +424,16 @@ if(WIN32)
         "/DELAYLOAD:hidapi.dll")
     # comdlg32 = Win32 GetSaveFileName (native Save-As; REAPER has no
     # BrowseForSaveFile on Windows — that is a SWELL-only symbol).
-    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib)
+    # winhttp = the mapping exchange's HTTPS client (src/win_http.cpp). Ships
+    # with Windows, so nothing extra to package.
+    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib winhttp.lib)
+endif()
+
+if(UNIX AND NOT APPLE)
+    # dlopen for the mapping exchange's libcurl loader (src/linux_http.cpp).
+    # Folded into libc from glibc 2.34, but older distributions still need -ldl
+    # and CMAKE_DL_LIBS is empty where it isn't wanted.
+    target_link_libraries(reaper_uf8 PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)

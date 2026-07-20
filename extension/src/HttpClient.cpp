@@ -1,12 +1,12 @@
-// Non-macOS stub for reasixty::http. macOS is implemented in macos_http.mm;
-// Windows (WinHTTP) and Linux (libcurl via dlopen) are not built yet. The stub
-// keeps the extension compiling and linking on those platforms, and returns a
-// clear error so the Exchange UI can say "in-app browsing is macOS-only for
-// now" rather than silently hang.
+// Last-resort stub for reasixty::http on a platform with no native client.
+// macOS is macos_http.mm (NSURLSession), Windows is win_http.cpp (WinHTTP),
+// Linux is linux_http.cpp (libcurl via dlopen) — this file covers whatever is
+// left, and returns a clear error so the Exchange UI says so rather than
+// silently hanging. It compiles to nothing on the three shipped platforms.
 
 #include "HttpClient.h"
 
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__linux__)
 
 namespace reasixty::http {
 
@@ -27,4 +27,4 @@ void cancel(uint64_t) {}
 
 } // namespace reasixty::http
 
-#endif // !__APPLE__
+#endif // no native client on this platform
