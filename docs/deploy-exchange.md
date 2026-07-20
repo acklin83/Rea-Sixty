@@ -148,8 +148,11 @@ Three things about that script are load-bearing:
 
 ### Off the VPS — the NAS pulls, the VPS never pushes
 
-`server/nas-pull-reasixty.sh` runs on the Synology from DSM's Task Scheduler and
-fetches the newest run over Tailscale.
+`nas-pull-reasixty.sh` lives on the Synology at
+`/volume1/homes/Frank/scripts/nas-pull-reasixty.sh` and drops archives into
+`/volume1/Franks Cloud/Backups/reasixty/`, 90 days. (There is no
+`/volume1/backup` share on that box — check `ls -d /volume1/*/` before
+inventing a path.)
 
 Pull, not push, on purpose: the VPS holds no credential that can write to the
 NAS, so taking the VPS does not get you the backups. The key is locked to a
@@ -168,22 +171,45 @@ A tar stream rather than rsync or scp because the far end needs nothing but an
 ssh client — and the Synology's rsync has already refused to cooperate once in
 this setup.
 
-**One-time setup, on Frank's side** (the private key must leave the VPS):
+#### ⚠ Use the public hostname, never the tailnet IP
+
+The obvious address for this is the VPS's Tailscale IP. It does not work, and
+it fails in the worst way — *quietly, with the security gone*.
+
+The VPS runs **Tailscale SSH** (`tailscale debug prefs` → `"RunSSH": true`).
+Tailscaled intercepts port 22 on the tailnet address and authenticates by
+tailnet identity: the connection never reaches the system sshd, so
+`authorized_keys` — and the forced command with it — is never consulted. What
+you get is a full login shell as `reasixty-backup`, and `ssh -v` says
+`Authentication succeeded (none)` while the VPS's auth log stays empty, because
+sshd was never involved. The key is not used at all.
+
+For this script that is not only a lost restriction, it is a break: with no
+forced command, `ssh … > file` opens a login shell instead of writing a tar.
+
+So the script talks to `srv1401714.hstgr.cloud`. The system sshd is then back
+in the path and the restriction holds — verified from the NAS: `list` returns
+run names, `cat /etc/shadow` is refused. Port 22 is publicly reachable either
+way, and the account is *not* reachable from the internet without the key
+(`Permission denied (publickey,password)`; the password is locked, `!`).
+
+#### State
+
+Done: the key is on the NAS at `/volume1/homes/Frank/.ssh/reasixty_nas_key`
+(600), the VPS's copy is shredded, the script is in place, and a real pull has
+run — the archive on the NAS is byte-identical to the source
+(`sha256sum` matched on both ends).
+
+Remaining: the **DSM scheduled task**. Control Panel → Task Scheduler → Create
+→ Scheduled Task → User-defined script; user `root`, daily ~04:00 (after the
+VPS's 03:17 UTC run), command:
 
 ```sh
-# on the Mac — move the key to the NAS, then destroy the VPS's copy
-scp root@srv1401714.hstgr.cloud:/var/lib/reasixty-backup/nas_key /tmp/k
-scp -O /tmp/k Frank@192.168.177.3:/volume1/homes/Frank/.ssh/reasixty_nas_key
-rm /tmp/k
-ssh root@srv1401714.hstgr.cloud 'shred -u /var/lib/reasixty-backup/nas_key'
-
-# on the NAS
-chmod 600 /volume1/homes/Frank/.ssh/reasixty_nas_key
+/bin/sh /volume1/homes/Frank/scripts/nas-pull-reasixty.sh
 ```
 
-Then a DSM scheduled task (root, daily ~04:00) running
-`nas-pull-reasixty.sh`. Check it by hand first:
-`ssh -i <key> reasixty-backup@100.91.69.11 list`.
+Check by hand any time with
+`ssh -i /volume1/homes/Frank/.ssh/reasixty_nas_key reasixty-backup@srv1401714.hstgr.cloud list`.
 
 ### Restore
 

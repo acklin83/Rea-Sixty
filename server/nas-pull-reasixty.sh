@@ -11,14 +11,21 @@
 # fetch): it can fetch the newest backup and list run names, and nothing else —
 # no shell, no scp, no other path. Verified, not assumed.
 #
-# The VPS is addressed by its TAILSCALE address, so the transfer never touches
-# the public internet.
+# ⚠ THE VPS IS ADDRESSED BY ITS PUBLIC HOSTNAME, NOT ITS TAILSCALE IP, AND
+# THAT IS DELIBERATE. The VPS runs Tailscale SSH (`RunSSH: true`), which
+# intercepts port 22 on the tailnet address and authenticates by tailnet
+# identity — the connection never reaches the system sshd, so authorized_keys
+# and the forced command with it are simply not consulted. Over the tailnet
+# this script does not merely lose its restriction, it breaks: with no forced
+# command, `ssh … > file` opens a login shell instead of writing a tar. Going
+# through the public hostname puts the system sshd back in the path. The
+# traffic is SSH either way and port 22 is publicly reachable regardless.
 
 set -eu
 
-VPS=${VPS:-100.91.69.11}                       # srv1401714 on the tailnet
+VPS=${VPS:-srv1401714.hstgr.cloud}             # NOT the tailnet IP — see above
 KEY=${KEY:-/volume1/homes/Frank/.ssh/reasixty_nas_key}
-DEST=${DEST:-/volume1/backup/reasixty}
+DEST=${DEST:-/volume1/Franks Cloud/Backups/reasixty}
 KEEP_DAYS=${KEEP_DAYS:-90}
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
