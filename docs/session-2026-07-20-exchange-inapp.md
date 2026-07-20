@@ -51,13 +51,61 @@ against Frank's feedback. Branch `mapping-exchange` (local-only, no upstream).
 - ReaImGui table sort specs (`TableGetColumnSortSpecs`/`TableNeedSort`) did not
   drive a refetch reliably — custom Selectable headers instead.
 
+## Win/Linux HTTP clients (later the same day)
+
+`reasixty::http` is no longer macOS-only. Same interface, one implementation
+per platform, each self-guarded so the others compile to nothing:
+
+| Platform | File | Mechanism |
+| --- | --- | --- |
+| macOS | `macos_http.mm` | NSURLSession, `-fno-objc-arc` |
+| Windows | `win_http.cpp` | WinHTTP (`winhttp.lib`, ships with the OS) |
+| Linux | `linux_http.cpp` | libcurl **dlopen'd**, not linked |
+| other | `HttpClient.cpp` | stub returning a clear error |
+
+- **Linux dlopens libcurl on purpose.** Linking it would make the whole
+  `reaper_rea-sixty.so` fail to load on a machine without the matching soname
+  — killing UF8/UC1 support over a feature most users never touch — and would
+  make `libcurl4-openssl-dev` a build requirement for everyone building from
+  source. Missing libcurl now degrades to a readable error. Consequence: no
+  curl headers at build time, so the `CURLOPT_*` ids are spelled out in the
+  file. They were read out of a real `curl.h`, and curl never renumbers an
+  option.
+- **Both use a thread per request** running the synchronous native calls and
+  dropping the `Response` into a mutex-guarded map that `poll()` drains on the
+  main thread — the same fire-and-poll shape as macOS, so the UI never blocks.
+  `cancel()` detaches: neither `curl_easy_perform` nor a synchronous WinHTTP
+  call can be interrupted from outside, so the request runs to its timeout and
+  nobody waits for it.
+- **CI is the only verification.** All four jobs green on `566ceea`
+  (linux-x86_64, windows-x64, macos-arm64, macos-x86_64). That is a *compile*
+  guarantee — **nobody has run the exchange on Windows or Linux yet.**
+
+### Two cross-platform breaks CI found in the existing exchange UI
+
+Neither was in the new HTTP files; both were in code written and tested on
+macOS only, in a repo whose workflow builds nothing but `main`.
+
+- **MSVC:** `ExchangeView.cpp` is the only TU that includes `WDL/jsonparse.h`,
+  which pulls `wdlcstring.h`, which does `#define snprintf WDL_snprintf` on
+  MSVC. Every `std::snprintf` after that include expanded to
+  `std::WDL_snprintf` — 21 hard errors. The shim is now `#undef`'d in that TU
+  (MSVC 2022's `std::snprintf` is conforming). Same family as the
+  `std::min`/`std::max` NOMINMAX trap: a Windows-side macro poisoning a
+  `std::`-qualified name.
+- **GCC:** `mapShare = {}` is rejected ("no known conversion from
+  `<brace-enclosed initializer list>`") where Clang accepts it. Four sites,
+  all resetting a pending `MapShare`. Now an explicit `MapShare()` temporary,
+  which both accept.
+
 ## Current state / how to run
 
 - Local server: `cd server && node src/seed.js --reset && PORT=8010 node src/server.js`.
   Seed fills vendors from REAPER caches + estimates `functional_params` by name.
 - Tests: `cd server && node --test "test/**/*.test.js"` → **57 pass**.
 - Extension: built + deployed to `~/Library/.../UserPlugins/reaper_rea-sixty.dylib`.
-  macOS only for HTTP; needs REAPER v7.62+ for the automatable filter.
+  HTTP now on all three platforms (see above); needs REAPER v7.62+ for the
+  automatable filter.
 - Device token for uploads: `npm run mktoken -- --account Frank` (paste into
   Exchange → Server settings; old tokens die on `--reset`).
 
@@ -69,6 +117,7 @@ against Frank's feedback. Branch `mapping-exchange` (local-only, no upstream).
    (Frank does it by hand in Hostinger; currently on parking NS).
 2. **Website** (`reasixty.com`) — the passkey/magic-link login that issues
    tokens to normal users. Admin uses `mktoken` for now.
-3. **Win/Linux HTTP shims** (WinHTTP / dlopen libcurl) — macOS-only today.
+3. ~~Win/Linux HTTP shims~~ — **built, and CI-green on all four jobs.** Still
+   needs a *runtime* test on an actual Windows and Linux box.
 4. Verify the extension's live capture (`functional_params`, `original_name`)
    on a freshly-learned map in REAPER (seed uses offline estimates).
