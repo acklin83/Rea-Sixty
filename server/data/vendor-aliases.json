@@ -1,0 +1,17 @@
+{
+  "_comment": "Known vendor aliases: REAPER's Developer field spells some vendors more than one way, and some companies ship under a product-line name. Each group folds its aliases into one canonical display name at ingest. Edit freely — matching is case- and whitespace-insensitive.",
+  "groups": [
+    {
+      "canonical": "Universal Audio",
+      "aliases": ["UADx", "Universal Audio (UADx)"]
+    },
+    {
+      "canonical": "Acustica Audio",
+      "aliases": ["Acustica", "Acqua"]
+    },
+    {
+      "canonical": "Valhalla DSP",
+      "aliases": ["Valhalla DSP, LLC"]
+    }
+  ]
+}

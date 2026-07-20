@@ -21,6 +21,8 @@
 // `ch$` alone is too greedy and it bites: it rejects the real JSFX vendor
 // "DocShadrach" because the name happens to end in "ch". A channel count is
 // always digit-led ("6ch", "2->6ch"), so require the digits.
+import { readFileSync } from 'node:fs';
+
 const CHANNEL_SPEC = /^\d+\s*(out|in)$|->|^\d+\s*ch$|^mono$|^stereo$/i;
 
 const FX_TYPE_PREFIX = /^(VST3|VST|AU|CLAP|JS):\s*/i;
@@ -78,6 +80,37 @@ export function normVendor(name) {
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+// Known vendor aliases (data/vendor-aliases.json): REAPER spells some vendors
+// more than one way ("UADx" vs "Universal Audio (UADx)"), and some companies
+// ship under a product-line name (Acustica's "Acqua"). Fold each to one
+// canonical display name. Built once, keyed by normalised alias.
+const VENDOR_ALIASES = (() => {
+  try {
+    const cfg = JSON.parse(
+      readFileSync(new URL('../../data/vendor-aliases.json', import.meta.url), 'utf8'),
+    );
+    const map = new Map();
+    for (const g of cfg.groups ?? []) {
+      // The canonical name is its own alias, so it always resolves to itself.
+      for (const a of [g.canonical, ...(g.aliases ?? [])]) {
+        map.set(normVendor(a), g.canonical);
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+})();
+
+/**
+ * Canonical display name for a vendor, applying the known-alias table. Returns
+ * the trimmed input unchanged when it is not a known alias.
+ */
+export function canonicalVendor(name) {
+  const trimmed = String(name ?? '').trim().replace(/\s+/g, ' ');
+  return VENDOR_ALIASES.get(normVendor(trimmed)) ?? trimmed;
 }
 
 /**

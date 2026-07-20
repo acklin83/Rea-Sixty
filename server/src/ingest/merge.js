@@ -15,7 +15,7 @@
 // upload form, and an admin merges what slips through. This is that merge.
 
 import { getDb } from '../db/index.js';
-import { normPlugin } from '../lib/vendor.js';
+import { normPlugin, normVendor } from '../lib/vendor.js';
 
 /**
  * Fold `sourceId` into `targetId`: move its maps, repoint its aliases, and
@@ -53,6 +53,36 @@ export function mergePlugins(targetId, sourceId) {
     const aliases = db.prepare('SELECT COUNT(*) c FROM plugin_aliases WHERE plugin_id = ?')
       .get(targetId).c;
     return { movedMaps: moved, aliases };
+  });
+
+  return tx();
+}
+
+/**
+ * Fold vendor `sourceId` into `targetId`: move its plug-ins, and leave a
+ * dynamic alias (source name -> target) so a later upload of the source name
+ * resolves to the target. For dupes the static vendor-aliases.json didn't
+ * catch. Returns { movedPlugins }.
+ */
+export function mergeVendors(targetId, sourceId) {
+  const db = getDb();
+  if (targetId === sourceId) throw new Error('cannot merge a vendor into itself');
+
+  const tx = db.transaction(() => {
+    const target = db.prepare('SELECT * FROM vendors WHERE id = ?').get(targetId);
+    const source = db.prepare('SELECT * FROM vendors WHERE id = ?').get(sourceId);
+    if (!target) throw new Error(`no vendor ${targetId}`);
+    if (!source) throw new Error(`no vendor ${sourceId}`);
+
+    const moved = db.prepare('UPDATE plugins SET vendor_id = ? WHERE vendor_id = ?')
+      .run(targetId, sourceId).changes;
+
+    // The source's name becomes a dynamic alias of the target.
+    db.prepare('INSERT OR REPLACE INTO vendor_aliases (norm, vendor_id) VALUES (?, ?)')
+      .run(normVendor(source.name), targetId);
+
+    db.prepare('DELETE FROM vendors WHERE id = ?').run(sourceId);
+    return { movedPlugins: moved };
   });
 
   return tx();

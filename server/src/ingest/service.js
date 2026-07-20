@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { getDb, now, MAPS_DIR } from '../db/index.js';
 import { parseRea60Map, IngestError } from '../lib/rea60map.js';
 import {
-  vendorFromName, normVendor, pluginNameFromMatch, normPlugin, slugify, fxTypeOf,
+  vendorFromName, normVendor, canonicalVendor, pluginNameFromMatch, normPlugin, slugify, fxTypeOf,
 } from '../lib/vendor.js';
 
 /**
@@ -37,11 +37,16 @@ export function mappingFingerprint(domain, bindings, uf8) {
 
 /** Resolve or create a vendor, honouring the alias table. */
 export function resolveVendor(db, rawName) {
-  const name = String(rawName ?? '').trim().replace(/\s+/g, ' ');
+  // Fold known aliases to one canonical name first ("UADx" / "Universal Audio
+  // (UADx)" -> "Universal Audio"), so they land on one vendor row.
+  const name = canonicalVendor(rawName);
   if (!name) return null;
   const norm = normVendor(name);
 
-  const alias = db.prepare('SELECT vendor_id FROM vendor_aliases WHERE norm = ?').get(norm);
+  // Dynamic aliases from admin vendor merges (mergeVendors) — the raw name's
+  // norm may point at a canonical vendor even if it's not in the static table.
+  const alias = db.prepare('SELECT vendor_id FROM vendor_aliases WHERE norm = ?')
+    .get(normVendor(rawName));
   if (alias) return alias.vendor_id;
 
   const hit = db.prepare('SELECT id FROM vendors WHERE norm = ?').get(norm);
