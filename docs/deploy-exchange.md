@@ -190,6 +190,30 @@ Locally you need none of this: `MAIL_DEV_LOG=1` prints the link instead.
 not pedantry: with no transport the code logs the link and reports success, so a
 production box would look healthy while nobody could sign in.
 
+## Becoming a moderator
+
+Signing in creates a NEW account keyed on the address — the server has no way to
+know it is you. So the first real sign-in lands on an ordinary account, and
+moderator rights are granted from the box:
+
+```sh
+ssh root@srv1401714.hstgr.cloud
+cd /opt/reasixty
+docker compose exec -T exchange node src/tools/mkadmin.js --email info@stoersender.ch
+```
+
+**Inside the container.** There is no `node_modules` on the host — the app only
+exists in the image, and running the tool directly gives
+`Cannot find package 'better-sqlite3'`.
+
+Deliberately a CLI: an admin who can appoint other admins over the web is a much
+larger blast radius than this site needs. `--revoke` takes it away again.
+
+**`mktoken` creates an account if the name is unknown, and marks it admin.**
+That is how a login-less admin row appeared on production during the deploy —
+it had a device token but no credential, so nobody could sign into it. Deleted
+2026-07-20. Prefer minting tokens from the account page.
+
 ## Upload tokens
 
 Browse and download are anonymous. Uploading needs a device token:
