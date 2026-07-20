@@ -85,6 +85,7 @@ struct MapDetail {
 MapDetail   g_mapDetail;
 uint64_t    g_mapReq = 0;
 std::string g_mapError;
+int         g_uf8FaderSel = 0;   // which fader bank the UF8 view shows
 
 // ---- install --------------------------------------------------------------
 uint64_t    g_dlReq = 0;
@@ -177,6 +178,7 @@ void openMap(int mapId) {
     g_mapError.clear();
     g_installStatus.clear();
     g_pendingClash = false;
+    g_uf8FaderSel = 0;               // start on fader bank 1 for each map
     g_view = View::Map;
     g_mapReq = http::begin("GET", baseUrl() + "/v1/maps/" + std::to_string(mapId));
     if (!g_mapReq) g_mapError = "Bad server URL.";
@@ -606,12 +608,10 @@ const char* vpotModeTag(const std::string& m) {
 }
 
 void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
-    // The UF8 is 8 channel strips side by side. So: one block per fader bank,
-    // 8 strips as COLUMNS; the strip controls (Fader/Solo/Mute/Sel) are the
-    // first rows, then one row per V-Pot bank. Only banks/rows with content
-    // are drawn. ScrollX keeps all 8 strips beside each other on a narrow pane.
-    //
-    // Lookups: strip[fb][strip][kind] and vpot[fb][vpotBank][strip].
+    // The UF8 is 8 channel strips side by side. One fader bank shown at a time
+    // (like the hardware's BANK button): strips are COLUMNS, strip controls
+    // (Fader/Solo/Mute/Sel) are the first rows, then one row per V-Pot bank.
+    // A selector switches to the second fader bank when it carries bindings.
     const char* kKinds[4] = { "fader", "solo", "cut", "sel" };
     const char* kKindLabel[4] = { "Fader", "Solo", "Mute", "Sel" };
 
@@ -625,78 +625,83 @@ void drawUf8Grids(ImGui_Context* ctx, const MapDetail& d) {
     for (const auto& v : d.uf8VpotBindings)
         if (v.faderBank < 2 && v.vpotBank < 8 && v.strip < 8) vpot[v.faderBank][v.vpotBank][v.strip] = &v;
 
-    for (int fb = 0; fb < 2; ++fb) {
-        // Skip a fader bank with nothing on it.
-        bool anyFb = false;
-        for (int s = 0; s < 8 && !anyFb; ++s) {
-            for (int k = 0; k < 4; ++k) if (strip[fb][s][k]) anyFb = true;
-            for (int vb = 0; vb < 8; ++vb) if (vpot[fb][vb][s]) anyFb = true;
+    bool has[2] = { false, false };
+    for (int fb = 0; fb < 2; ++fb)
+        for (int s = 0; s < 8; ++s) {
+            for (int k = 0; k < 4; ++k) if (strip[fb][s][k]) has[fb] = true;
+            for (int vb = 0; vb < 8; ++vb) if (vpot[fb][vb][s]) has[fb] = true;
         }
-        if (!anyFb) continue;
+    if (!has[0] && !has[1]) return;
 
-        char h[96];
-        std::snprintf(h, sizeof(h), "Fader bank %d   (strips %d–%d)",
-                      fb + 1, fb * 8 + 1, fb * 8 + 8);
-        ImGui_Text(ctx, h);
+    // Keep the selection on a bank that exists.
+    if (!has[g_uf8FaderSel]) g_uf8FaderSel = has[0] ? 0 : 1;
 
-        char tid[32];
-        std::snprintf(tid, sizeof(tid), "##uf8_fb_%d", fb);
-        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
-                   | ImGui_TableFlags_ScrollX;
-        // Bound the table width so ScrollX engages; height auto-fits the rows.
-        double outW = 0.0, outH = 0.0;
-        ImGui_GetContentRegionAvail(ctx, &outW, &outH);
-        double th = 0.0;
-        if (ImGui_BeginTable(ctx, tid, 9, &tFlags, &outW, &th, nullptr)) {
-            int fixed = ImGui_TableColumnFlags_WidthFixed;
-            double wLbl = 78.0, wCol = 116.0;
-            ImGui_TableSetupColumn(ctx, "", &fixed, &wLbl, nullptr);
-            for (int s = 0; s < 8; ++s) {
-                char cn[8]; std::snprintf(cn, sizeof(cn), "Strip %d", fb * 8 + s + 1);
-                ImGui_TableSetupColumn(ctx, cn, &fixed, &wCol, nullptr);
-            }
-            ImGui_TableHeadersRow(ctx);
-
-            auto cellText = [&](const std::string& p) {
-                if (!p.empty()) ImGui_Text(ctx, p.c_str());
-            };
-
-            // Strip controls first — Fader / Solo / Mute / Sel.
-            for (int k = 0; k < 4; ++k) {
-                ImGui_TableNextRow(ctx, nullptr, nullptr);
-                ImGui_TableSetColumnIndex(ctx, 0);
-                ImGui_Text(ctx, kKindLabel[k]);
-                for (int s = 0; s < 8; ++s) {
-                    ImGui_TableSetColumnIndex(ctx, s + 1);
-                    if (strip[fb][s][k]) cellText(strip[fb][s][k]->param.empty()
-                                                 ? std::string("(bound)")
-                                                 : strip[fb][s][k]->param);
-                }
-            }
-
-            // Then one row per V-Pot bank that has any binding on this fader bank.
-            for (int vb = 0; vb < 8; ++vb) {
-                bool anyVb = false;
-                for (int s = 0; s < 8 && !anyVb; ++s) if (vpot[fb][vb][s]) anyVb = true;
-                if (!anyVb) continue;
-                ImGui_TableNextRow(ctx, nullptr, nullptr);
-                ImGui_TableSetColumnIndex(ctx, 0);
-                char rl[24]; std::snprintf(rl, sizeof(rl), "V-Pot B%d", vb + 1);
-                ImGui_Text(ctx, rl);
-                for (int s = 0; s < 8; ++s) {
-                    ImGui_TableSetColumnIndex(ctx, s + 1);
-                    const Uf8Vpot* v = vpot[fb][vb][s];
-                    if (!v) continue;
-                    ImGui_Text(ctx, v->param.empty() ? "(bound)" : v->param.c_str());
-                    ImGui_SameLine(ctx, nullptr, nullptr);
-                    ImGui_TextColored(ctx, 0x8892A0FF, vpotModeTag(v->mode));
-                    if (!v->label.empty() && ImGui_IsItemHovered(ctx, nullptr))
-                        ImGui_SetTooltip(ctx, v->label.c_str());
-                }
-            }
-            ImGui_EndTable(ctx);
+    // Selector — only when both fader banks carry bindings.
+    if (has[0] && has[1]) {
+        for (int fb = 0; fb < 2; ++fb) {
+            char b[32];
+            std::snprintf(b, sizeof(b), "%sFader bank %d##uf8fbsel%d",
+                          fb == g_uf8FaderSel ? "▸ " : "", fb + 1, fb);
+            if (ImGui_Button(ctx, b, nullptr, nullptr)) g_uf8FaderSel = fb;
+            if (fb == 0) ImGui_SameLine(ctx, nullptr, nullptr);
         }
         ImGui_Spacing(ctx);
+    }
+
+    const int fb = g_uf8FaderSel;
+    char h[96];
+    std::snprintf(h, sizeof(h), "Fader bank %d   (strips %d–%d)",
+                  fb + 1, fb * 8 + 1, fb * 8 + 8);
+    ImGui_Text(ctx, h);
+
+    int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
+               | ImGui_TableFlags_ScrollX;
+    double outW = 0.0, outH = 0.0;
+    ImGui_GetContentRegionAvail(ctx, &outW, &outH);
+    double th = 0.0;
+    if (ImGui_BeginTable(ctx, "##uf8_fb", 9, &tFlags, &outW, &th, nullptr)) {
+        int fixed = ImGui_TableColumnFlags_WidthFixed;
+        double wLbl = 78.0, wCol = 116.0;
+        ImGui_TableSetupColumn(ctx, "", &fixed, &wLbl, nullptr);
+        for (int s = 0; s < 8; ++s) {
+            char cn[12]; std::snprintf(cn, sizeof(cn), "Strip %d", fb * 8 + s + 1);
+            ImGui_TableSetupColumn(ctx, cn, &fixed, &wCol, nullptr);
+        }
+        ImGui_TableHeadersRow(ctx);
+
+        // Strip controls first — Fader / Solo / Mute / Sel.
+        for (int k = 0; k < 4; ++k) {
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+            ImGui_TableSetColumnIndex(ctx, 0);
+            ImGui_Text(ctx, kKindLabel[k]);
+            for (int s = 0; s < 8; ++s) {
+                ImGui_TableSetColumnIndex(ctx, s + 1);
+                const Uf8Strip* sb = strip[fb][s][k];
+                if (sb) ImGui_Text(ctx, sb->param.empty() ? "(bound)" : sb->param.c_str());
+            }
+        }
+
+        // Then one row per V-Pot bank that has any binding on this fader bank.
+        for (int vb = 0; vb < 8; ++vb) {
+            bool anyVb = false;
+            for (int s = 0; s < 8 && !anyVb; ++s) if (vpot[fb][vb][s]) anyVb = true;
+            if (!anyVb) continue;
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+            ImGui_TableSetColumnIndex(ctx, 0);
+            char rl[24]; std::snprintf(rl, sizeof(rl), "V-Pot B%d", vb + 1);
+            ImGui_Text(ctx, rl);
+            for (int s = 0; s < 8; ++s) {
+                ImGui_TableSetColumnIndex(ctx, s + 1);
+                const Uf8Vpot* v = vpot[fb][vb][s];
+                if (!v) continue;
+                ImGui_Text(ctx, v->param.empty() ? "(bound)" : v->param.c_str());
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                ImGui_TextColored(ctx, 0x8892A0FF, vpotModeTag(v->mode));
+                if (!v->label.empty() && ImGui_IsItemHovered(ctx, nullptr))
+                    ImGui_SetTooltip(ctx, v->label.c_str());
+            }
+        }
+        ImGui_EndTable(ctx);
     }
 }
 
