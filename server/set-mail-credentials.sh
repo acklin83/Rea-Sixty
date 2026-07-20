@@ -23,6 +23,11 @@ SMTP_PORT=${SMTP_PORT:-587}
 SMTP_USER=${SMTP_USER:-info@stoersender-studio.ch}
 MAIL_FROM=${MAIL_FROM:-Rea-Sixty <info@stoersender-studio.ch>}
 SITE_ORIGIN=${SITE_ORIGIN:-https://reasixty.com}
+# The name announced in EHLO. Must be a hostname whose forward and reverse DNS
+# both agree with the IP the mail leaves from, or receivers treat it as a spam
+# signal. Without it nodemailer announces the container's hostname, which came
+# out as the literal [127.0.0.1] in a real delivery.
+SMTP_HELO=${SMTP_HELO:-$(hostname -f 2>/dev/null || hostname)}
 
 cd "$APP_DIR"
 
@@ -52,6 +57,7 @@ printf '%s\n' \
     "SMTP_USER=$SMTP_USER" \
     "SMTP_PASS=$PASS" \
     "MAIL_FROM=$MAIL_FROM" \
+    "SMTP_HELO=$SMTP_HELO" \
     "SITE_ORIGIN=$SITE_ORIGIN" > "$ENV_FILE"
 PASS=
 chown root:root "$ENV_FILE"

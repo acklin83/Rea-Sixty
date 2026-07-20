@@ -42,6 +42,15 @@ function getTransport(log) {
     // — and the very next thing on the wire is AUTH PLAIN, i.e. the mailbox
     // password. Fail the send instead.
     requireTLS: port !== 465,
+    // The name announced in EHLO. Without it nodemailer falls back to the
+    // machine's own hostname, and inside a container that came out as
+    // `EHLO [127.0.0.1]` — visible in a real delivery's Received header. An IP
+    // literal, and localhost at that, is a textbook spam signal. Hostpoint let
+    // it through because we authenticate, but strangers' filters will not be
+    // as forgiving, and these are sign-in links under a DMARC p=quarantine
+    // policy. Set it to a name whose forward and reverse DNS agree with the
+    // sending address (srv1401714.hstgr.cloud ↔ 187.77.89.149 do).
+    name: process.env.SMTP_HELO || undefined,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
   log?.info({ host: process.env.SMTP_HOST, port }, 'mail: SMTP transport ready');

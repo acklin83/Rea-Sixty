@@ -23,13 +23,30 @@ if (!mailConfigured()) {
   process.exit(2);
 }
 
+// Shows the EHLO line and nothing else. An ALLOWLIST, not a filter on things
+// that look secret: nodemailer's debug log contains `AUTH PLAIN <base64>`, and
+// base64 is not encryption — one careless log line would put the mailbox
+// password in a terminal, a CI log or a screenshot. Anything that is not
+// literally an EHLO is dropped unread.
+const ehloOnly = {
+  debug(...args) {
+    const line = args.map((a) => (typeof a === 'string' ? a : '')).join(' ');
+    const m = /\bEHLO\s+(\S+)/.exec(line);
+    if (m) console.log(`EHLO   ${m[1]}`);
+  },
+  info() {}, warn() {}, error() {},
+};
+
 const port = Number(process.env.SMTP_PORT ?? 587);
 const transport = createTransport({
   host: process.env.SMTP_HOST,
   port,
   secure: port === 465,
   requireTLS: port !== 465,
+  name: process.env.SMTP_HELO || undefined,
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  logger: ehloOnly,
+  debug: true,
 });
 
 console.log(`host   ${process.env.SMTP_HOST}:${port} (${port === 465 ? 'implicit TLS' : 'STARTTLS, required'})`);
