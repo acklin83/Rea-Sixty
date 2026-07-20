@@ -32,7 +32,7 @@ jobs; **never RUN on Windows or Linux**.
 **Accounts, sign-in, moderation** (`35a41c7`, `7ce2d31`) — passkey and magic
 link as EQUAL credentials (Linux has no OS passkey store and Linux ships), 30-day
 sessions, an account page that issues the device tokens REAPER uploads with, web
-upload, a report queue, suspension, merge tools. 79 server tests.
+upload, a report queue, suspension, merge tools.
 
 **The website** (`547fb67`, `ee10355`, `fa021e5` on `website`) — `/mappings` and
 its two detail screens, `/login`, `/welcome`, `/account`, `/upload`, `/admin`.
@@ -145,8 +145,12 @@ keeps a percentage because that row is a plug-in and `x/y` belongs to a map.
 
 ## Still open
 
-1. **Frank is not a moderator on production.** After the first real sign-in:
-   `npm run mkadmin -- --email info@stoersender.ch`.
+1. ~~Frank is not a moderator on production~~ — done. Note for next time: the
+   tools live in the image, so it is
+   `docker compose exec -T exchange node src/tools/mkadmin.js --email …`.
+   Running it on the host gives `Cannot find package 'better-sqlite3'`. And
+   `mktoken` CREATES an account when the name is unknown, marked admin — that
+   is how a login-less admin row appeared on production and had to be deleted.
 2. **No mappings published yet** — the corpus is empty by design.
 3. **The `website` branch has no backup.** It exists on one machine. A private
    second repo or a copy on the NAS would both work; not decided.
