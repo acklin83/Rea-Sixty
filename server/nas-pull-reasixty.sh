@@ -2,8 +2,9 @@
 # Pull the newest mapping-exchange backup from the VPS onto the Synology.
 #
 # Runs ON THE NAS, from DSM's Task Scheduler (Control Panel -> Task Scheduler ->
-# Create -> Scheduled Task -> User-defined script), as user root, nightly a
-# little after the VPS's own 03:17 UTC backup.
+# Create -> Scheduled Task -> User-defined script) as user Frank, nightly a
+# little after the VPS's own 03:17 UTC backup. Not root on purpose: the key is
+# Frank's, the destination share is Frank's, and nothing here needs privilege.
 #
 # The VPS never reaches out to the NAS. It holds no credential pointing here,
 # so taking the VPS does not get you the backups. The key this script uses is

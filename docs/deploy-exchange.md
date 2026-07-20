@@ -200,15 +200,37 @@ Done: the key is on the NAS at `/volume1/homes/Frank/.ssh/reasixty_nas_key`
 run — the archive on the NAS is byte-identical to the source
 (`sha256sum` matched on both ends).
 
-Remaining: the **DSM scheduled task**. Control Panel → Task Scheduler → Create
-→ Scheduled Task → User-defined script; user `root`, daily ~04:00 (after the
-VPS's 03:17 UTC run), command:
+The **DSM scheduled task** is in place and has run green end to end — Control
+Panel → Task Scheduler → User-defined script, daily ~04:00 (after the VPS's
+03:17 UTC run):
 
 ```sh
 /bin/sh /volume1/homes/Frank/scripts/nas-pull-reasixty.sh
 ```
 
-Check by hand any time with
+**It runs as `Frank`, not root**, and should stay that way: the key is Frank's,
+the destination share is Frank's, and nothing here needs privilege. `pull.log`
+records the user precisely so this cannot drift unnoticed.
+
+Proven, not assumed: the archive the task itself produced unpacks to an
+`exchange.db` whose sha256 matches the file on the VPS byte for byte.
+
+#### Every run leaves a line
+
+`/volume1/Franks Cloud/Backups/reasixty/pull.log`:
+
+```
+2026-07-20T11:59:06Z start -> srv1401714.hstgr.cloud as Frank (uid 1026)
+2026-07-20T11:59:06Z ok …/reasixty-20260720T115906Z.tar.gz (8.0K), keeping 90d
+```
+
+This exists because the first version failed **silently**: DSM's scheduler log
+is root-only, per-task output is off unless you tick a box, and the script
+deletes its own `.part` on failure — so a broken nightly backup left no trace
+anywhere a human would look. Read this file, not the DSM UI, to answer "is the
+backup still running".
+
+Check the far end by hand any time with
 `ssh -i /volume1/homes/Frank/.ssh/reasixty_nas_key reasixty-backup@srv1401714.hstgr.cloud list`.
 
 ### Restore
