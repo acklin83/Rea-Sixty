@@ -44,6 +44,7 @@ std::chrono::steady_clock::time_point g_searchDirtyAt;
 // Sort, driven by the index table's clickable headers.
 std::string g_sort = "name";
 bool        g_sortAsc = true;
+bool        g_sortPending = false;   // a header changed the sort; refetch when free
 
 // ---- connection test ------------------------------------------------------
 uint64_t    g_healthReq = 0;
@@ -475,6 +476,8 @@ void drawList(ImGui_Context* ctx) {
             std::chrono::steady_clock::now() - g_searchDirtyAt).count();
         if (ms >= 180) { g_searchDirty = false; fetchList(); }
     }
+    // A header click changed the sort — refetch as soon as no request is in flight.
+    if (g_sortPending && !g_listReq) { g_sortPending = false; fetchList(); }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, g_listReq ? "Loading…##exch_refresh" : "Refresh##exch_refresh", nullptr, nullptr) && !g_listReq)
         fetchList();
@@ -518,18 +521,17 @@ void drawList(ImGui_Context* ctx) {
         ImGui_TableSetupColumn(ctx, "Coverage", &fixed,     &wCov,    nullptr);  // col 4 -> coverage
         ImGui_TableHeadersRow(ctx);
 
-        // Re-fetch when the user changes the sort (column header click).
-        bool hasSpecs = false;
-        if (ImGui_TableNeedSort(ctx, &hasSpecs) && hasSpecs) {
-            int userId = 0, colIdx = 0, order = 0, sortDir = ImGui_SortDirection_Ascending;
-            if (ImGui_TableGetColumnSortSpecs(ctx, 0, &userId, &colIdx, &order, &sortDir)) {
-                const char* key = colIdx == 0 ? "name"   : colIdx == 1 ? "vendor"
-                                : colIdx == 2 ? "maps"   : colIdx == 4 ? "coverage" : nullptr;
-                const bool asc = sortDir != ImGui_SortDirection_Descending;
-                if (key && (g_sort != key || g_sortAsc != asc) && !g_listReq) {
-                    g_sort = key; g_sortAsc = asc;
-                    fetchList();
-                }
+        // Read the CURRENT sort every frame and compare — don't rely on the
+        // dirty flag. On a real change, flag a refetch (deferred to the top of
+        // the next draw so it also fires if a request is currently in flight).
+        int userId = 0, colIdx = -1, order = 0, sortDir = ImGui_SortDirection_Ascending;
+        if (ImGui_TableGetColumnSortSpecs(ctx, 0, &userId, &colIdx, &order, &sortDir)) {
+            const char* key = colIdx == 0 ? "name"   : colIdx == 1 ? "vendor"
+                            : colIdx == 2 ? "maps"   : colIdx == 4 ? "coverage" : nullptr;
+            const bool asc = sortDir != ImGui_SortDirection_Descending;
+            if (key && (g_sort != key || g_sortAsc != asc)) {
+                g_sort = key; g_sortAsc = asc;
+                g_sortPending = true;
             }
         }
 
