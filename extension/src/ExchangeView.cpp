@@ -504,33 +504,37 @@ void drawList(ImGui_Context* ctx) {
     if (availH < 160.0) availH = 160.0;   // never collapse in a short pane
     int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_Borders
                | ImGui_TableFlags_Resizable | ImGui_TableFlags_Hideable
-               | ImGui_TableFlags_Sortable | ImGui_TableFlags_ScrollY;
+               | ImGui_TableFlags_ScrollY;
     if (ImGui_BeginTable(ctx, "##exch_plugins", 5, &tFlags, nullptr, &availH, nullptr)) {
         int stretch = ImGui_TableColumnFlags_WidthStretch;
         int fixed   = ImGui_TableColumnFlags_WidthFixed;
-        int noSort  = ImGui_TableColumnFlags_NoSort;
-        int nameFlags = stretch | ImGui_TableColumnFlags_DefaultSort;
-        int surfFlags = fixed | noSort;
         double wName = 3.0, wVendor = 2.0, wMaps = 46.0, wSurf = 100.0, wCov = 100.0;
-        ImGui_TableSetupColumn(ctx, "Plug-in",  &nameFlags, &wName,   nullptr);  // col 0 -> name
-        ImGui_TableSetupColumn(ctx, "Vendor",   &stretch,   &wVendor, nullptr);  // col 1 -> vendor
-        ImGui_TableSetupColumn(ctx, "Maps",     &fixed,     &wMaps,   nullptr);  // col 2 -> maps
-        ImGui_TableSetupColumn(ctx, "Surfaces", &surfFlags, &wSurf,   nullptr);  // col 3 -> (no sort)
-        // Best coverage = how much of the PLUG-IN a map controls (functional
-        // params), the best of this plug-in's maps.
-        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,     &wCov,    nullptr);  // col 4 -> coverage
-        ImGui_TableHeadersRow(ctx);
+        ImGui_TableSetupColumn(ctx, "Plug-in",  &stretch, &wName,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Vendor",   &stretch, &wVendor, nullptr);
+        ImGui_TableSetupColumn(ctx, "Maps",     &fixed,   &wMaps,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Surfaces", &fixed,   &wSurf,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Coverage", &fixed,   &wCov,    nullptr);
 
-        // Read the CURRENT sort every frame and compare — don't rely on the
-        // dirty flag. On a real change, flag a refetch (deferred to the top of
-        // the next draw so it also fires if a request is currently in flight).
-        int userId = 0, colIdx = -1, order = 0, sortDir = ImGui_SortDirection_Ascending;
-        if (ImGui_TableGetColumnSortSpecs(ctx, 0, &userId, &colIdx, &order, &sortDir)) {
-            const char* key = colIdx == 0 ? "name"   : colIdx == 1 ? "vendor"
-                            : colIdx == 2 ? "maps"   : colIdx == 4 ? "coverage" : nullptr;
-            const bool asc = sortDir != ImGui_SortDirection_Descending;
-            if (key && (g_sort != key || g_sortAsc != asc)) {
-                g_sort = key; g_sortAsc = asc;
+        // Custom clickable header row — ReaImGui's built-in Sortable never
+        // drove our refetch, so we own the sort: click a column to sort by it,
+        // click the same one again to flip direction. The active column shows
+        // ^ (ascending) or v (descending).
+        struct Hdr { int col; const char* label; const char* key; };
+        static const Hdr kHdr[5] = {
+            { 0, "Plug-in", "name" }, { 1, "Vendor", "vendor" }, { 2, "Maps", "maps" },
+            { 3, "Surfaces", nullptr }, { 4, "Coverage", "coverage" },
+        };
+        int headerRow = ImGui_TableRowFlags_Headers;
+        ImGui_TableNextRow(ctx, &headerRow, nullptr);
+        for (const auto& h : kHdr) {
+            ImGui_TableSetColumnIndex(ctx, h.col);
+            if (!h.key) { ImGui_TableHeader(ctx, h.label); continue; }
+            char lbl[64];
+            const char* arrow = (g_sort == h.key) ? (g_sortAsc ? " ^" : " v") : "";
+            std::snprintf(lbl, sizeof(lbl), "%s%s##hdr%d", h.label, arrow, h.col);
+            if (ImGui_Selectable(ctx, lbl, nullptr, nullptr, nullptr, nullptr)) {
+                if (g_sort == h.key) g_sortAsc = !g_sortAsc;
+                else { g_sort = h.key; g_sortAsc = true; }
                 g_sortPending = true;
             }
         }
