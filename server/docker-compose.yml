@@ -25,6 +25,12 @@ services:
       # is the same name the repo uses for it locally. Must be owned by uid
       # 1000 on the host — the image runs as the unprivileged `node` user.
       - ./var:/data
+      # Backup drop point. src/tools/backup.js writes the nightly database
+      # snapshot here from inside the container; backup.sh prunes the same
+      # directory from the host. Kept OUT of var/ on purpose — a `rsync
+      # --delete` of var, or a restore that clears it, must not take the
+      # backups with it.
+      - ./backups:/backups
     healthcheck:
       # No curl or wget in node:slim, so ask Node itself.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]

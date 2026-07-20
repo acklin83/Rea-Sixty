@@ -116,10 +116,106 @@ REAPER: Settings → Exchange → Server settings, together with the URL
 The website that issues tokens to normal users (passkey / magic-link) is not
 built yet; `mktoken` is the admin path.
 
+## Backups
+
+Two layers. The on-box one covers mistakes (a bad deploy, an accidental
+`seed.js --reset`); the off-box one covers losing the VPS.
+
+### On the VPS — nightly, 03:17 UTC
+
+`/etc/cron.d/reasixty-backup` runs `/opt/reasixty/backup.sh`, logging one line
+per run to `/var/log/reasixty-backup.log`. Output:
+
+```
+/opt/reasixty/backups/<stamp>/exchange.db     online snapshot of the database
+/opt/reasixty/backups/<stamp>/maps.tar.gz     the uploaded .rea60map blobs
+```
+
+Three things about that script are load-bearing:
+
+- **The database is never `cp`'d.** It runs in WAL mode, so the main file on
+  its own is missing recent commits. `src/tools/backup.js` uses SQLite's online
+  backup API (`db.backup()`), which reads a consistent image of a database that
+  is being written to and writes one self-contained file.
+- **Database first, blobs second.** A map uploaded between the two steps leaves
+  a blob the database does not reference — a harmless orphan. The other order
+  leaves the database referencing a blob that is not in the archive, which is a
+  restore that comes back broken.
+- **Retention prunes whole directories, never files.** An SQLite file grows
+  `-wal`/`-shm` siblings the moment anything opens it, including opening a
+  backup to verify it. A rule matching `exchange-*.db` deletes the database and
+  leaves the sidecars for ever.
+
+### Off the VPS — the NAS pulls, the VPS never pushes
+
+`server/nas-pull-reasixty.sh` runs on the Synology from DSM's Task Scheduler and
+fetches the newest run over Tailscale.
+
+Pull, not push, on purpose: the VPS holds no credential that can write to the
+NAS, so taking the VPS does not get you the backups. The key is locked to a
+forced command on the VPS side:
+
+```
+# /var/lib/reasixty-backup/.ssh/authorized_keys
+command="/usr/local/bin/reasixty-backup-fetch",restrict ssh-ed25519 AAAA…
+```
+
+Verified on the box, not assumed: the default invocation returns the tar,
+`list` prints run names, any other command exits 2, and `scp` is refused
+outright (255).
+
+A tar stream rather than rsync or scp because the far end needs nothing but an
+ssh client — and the Synology's rsync has already refused to cooperate once in
+this setup.
+
+**One-time setup, on Frank's side** (the private key must leave the VPS):
+
+```sh
+# on the Mac — move the key to the NAS, then destroy the VPS's copy
+scp root@srv1401714.hstgr.cloud:/var/lib/reasixty-backup/nas_key /tmp/k
+scp -O /tmp/k Frank@192.168.177.3:/volume1/homes/Frank/.ssh/reasixty_nas_key
+rm /tmp/k
+ssh root@srv1401714.hstgr.cloud 'shred -u /var/lib/reasixty-backup/nas_key'
+
+# on the NAS
+chmod 600 /volume1/homes/Frank/.ssh/reasixty_nas_key
+```
+
+Then a DSM scheduled task (root, daily ~04:00) running
+`nas-pull-reasixty.sh`. Check it by hand first:
+`ssh -i <key> reasixty-backup@100.91.69.11 list`.
+
+### Restore
+
+```sh
+cd /opt/reasixty
+docker compose down
+tar xzf <run>.tar.gz                       # or take it from backups/<stamp>/
+cp <stamp>/exchange.db var/exchange.db
+rm -f var/exchange.db-wal var/exchange.db-shm   # stale sidecars beat the restore
+tar xzf <stamp>/maps.tar.gz -C var
+chown -R 1000:1000 var
+docker compose up -d
+```
+
+Verify before believing it:
+
+```sh
+docker compose exec -T exchange node -e "
+const D=require('better-sqlite3');const d=new D('/data/exchange.db',{readonly:true});
+console.log(d.pragma('integrity_check',{simple:true}),
+            d.prepare(\"SELECT count(*) c FROM sqlite_master WHERE type='table'\").get().c);"
+```
+Expect `ok 14`.
+
+**Never `rm -rf` a bind-mounted directory** (`var/`, `backups/`) while the
+container runs — that replaces the inode and the container keeps writing to the
+deleted one, which shows up as `Cannot save backup because the directory does
+not exist`. `docker compose up -d --force-recreate` re-binds it.
+
 ## What is NOT deployed
 
 - The production database starts **empty**. Frank's 29 local maps are not
   published — `src/seed.js` seeds a *development* database from his on-disk
   catalog and reads his REAPER scan caches for vendors. Publishing those is a
   decision, not a deploy step.
-- No backup of `/opt/reasixty/var/` is configured yet.
