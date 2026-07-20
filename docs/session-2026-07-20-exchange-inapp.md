@@ -111,10 +111,13 @@ macOS only, in a repo whose workflow builds nothing but `main`.
 
 ## NOT done — the remaining Phase 2/3/4 work
 
-1. **Deploy to the VPS** — own container `/opt/reasixty/`, Caddy block on host
-   `/etc/caddy/Caddyfile` (NOT `/home/frank/Caddyfile`), port 8010, `bind` the
-   IPs. DNS `api.reasixty.com` → A `187.77.89.149` + AAAA `2a02:4780:79:6af5::1`
-   (Frank does it by hand in Hostinger; currently on parking NS).
+1. ~~Deploy to the VPS~~ — **done**, container live and healthy on
+   `127.0.0.1:8010`, Caddy block in `/etc/caddy/Caddyfile`. Runbook:
+   `docs/deploy-exchange.md`. **Still blocked on DNS:** `api.reasixty.com`
+   needs A `187.77.89.149` + AAAA `2a02:4780:79:6af5::1` in Hostinger (still
+   on parking NS). Caddy retries ACME every 60 s for 30 days, so the cert
+   appears on its own once the records land. Production DB is empty on
+   purpose. No backup of `/opt/reasixty/var/` yet.
 2. **Website** (`reasixty.com`) — the passkey/magic-link login that issues
    tokens to normal users. Admin uses `mktoken` for now.
 3. ~~Win/Linux HTTP shims~~ — **built, and CI-green on all four jobs.** Still
