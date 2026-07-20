@@ -97,7 +97,7 @@ test('display name: placeholder is reported as needing a name, then cleared', as
   assert.equal(before.json().account.needsDisplayName, true);
 
   const set = await app.inject({
-    method: 'POST', url: '/account/name', headers: auth(cookie), payload: { displayName: 'Namer' },
+    method: 'POST', url: '/v1/account/name', headers: auth(cookie), payload: { displayName: 'Namer' },
   });
   assert.equal(set.statusCode, 200);
 
@@ -109,7 +109,7 @@ test('display name: placeholder is reported as needing a name, then cleared', as
 test('display name: a taken name is a 409, not a 500', async () => {
   const { cookie } = await signIn('clash@example.com');
   const r = await app.inject({
-    method: 'POST', url: '/account/name', headers: auth(cookie), payload: { displayName: 'Namer' },
+    method: 'POST', url: '/v1/account/name', headers: auth(cookie), payload: { displayName: 'Namer' },
   });
   assert.equal(r.statusCode, 409);
   assert.equal(r.json().error, 'name_taken');
@@ -119,7 +119,7 @@ test('display name: rejects control characters and over-long names', async () =>
   const { cookie } = await signIn('bad-name@example.com');
   for (const displayName of ['a', 'x'.repeat(41), 'we‮ird', '  ']) {
     const r = await app.inject({
-      method: 'POST', url: '/account/name', headers: auth(cookie), payload: { displayName },
+      method: 'POST', url: '/v1/account/name', headers: auth(cookie), payload: { displayName },
     });
     assert.equal(r.statusCode, 400, `should reject ${JSON.stringify(displayName)}`);
   }
@@ -154,13 +154,13 @@ test('an expired session is refused and swept', async () => {
 test('device token: shown exactly once, never retrievable afterwards', async () => {
   const { cookie } = await signIn('tokens@example.com');
   const made = await app.inject({
-    method: 'POST', url: '/account/tokens', headers: auth(cookie), payload: { label: 'MacBook' },
+    method: 'POST', url: '/v1/account/tokens', headers: auth(cookie), payload: { label: 'MacBook' },
   });
   assert.equal(made.statusCode, 200);
   const { token } = made.json();
   assert.ok(token && token.length > 20);
 
-  const list = await app.inject({ method: 'GET', url: '/account/tokens', headers: auth(cookie) });
+  const list = await app.inject({ method: 'GET', url: '/v1/account/tokens', headers: auth(cookie) });
   const body = JSON.stringify(list.json());
   assert.ok(!body.includes(token), 'the plaintext token must never come back from the list');
   assert.equal(getDb().prepare('SELECT COUNT(*) c FROM account_tokens WHERE token_sha256 = ?').get(token).c, 0,
@@ -170,10 +170,10 @@ test('device token: shown exactly once, never retrievable afterwards', async () 
 test('device token: authenticates an upload, and stops working once revoked', async () => {
   const { cookie } = await signIn('uploader@example.com');
   await app.inject({
-    method: 'POST', url: '/account/name', headers: auth(cookie), payload: { displayName: 'Uploader' },
+    method: 'POST', url: '/v1/account/name', headers: auth(cookie), payload: { displayName: 'Uploader' },
   });
   const made = await app.inject({
-    method: 'POST', url: '/account/tokens', headers: auth(cookie), payload: { label: 'box' },
+    method: 'POST', url: '/v1/account/tokens', headers: auth(cookie), payload: { label: 'box' },
   });
   const { token } = made.json();
   const id = getDb().prepare(
@@ -187,7 +187,7 @@ test('device token: authenticates an upload, and stops working once revoked', as
   });
   assert.equal(ok.statusCode, 201);
 
-  await app.inject({ method: 'DELETE', url: `/account/tokens/${id}`, headers: auth(cookie) });
+  await app.inject({ method: 'DELETE', url: `/v1/account/tokens/${id}`, headers: auth(cookie) });
 
   const denied = await app.inject({
     method: 'POST', url: '/v1/maps',
@@ -201,9 +201,9 @@ test('device token: authenticates an upload, and stops working once revoked', as
 
 test('the last credential cannot be removed — that would be an unrecoverable lockout', async () => {
   const { cookie } = await signIn('lonely@example.com');
-  const me = await app.inject({ method: 'GET', url: '/account/me', headers: auth(cookie) });
+  const me = await app.inject({ method: 'GET', url: '/v1/account/me', headers: auth(cookie) });
   const [only] = me.json().credentials;
-  const r = await app.inject({ method: 'DELETE', url: `/account/credentials/${only.id}`, headers: auth(cookie) });
+  const r = await app.inject({ method: 'DELETE', url: `/v1/account/credentials/${only.id}`, headers: auth(cookie) });
   assert.equal(r.statusCode, 409);
   assert.equal(r.json().error, 'last_credential');
 });
@@ -212,23 +212,23 @@ test('the last credential cannot be removed — that would be an unrecoverable l
 
 test('the admin surface answers 404 to a non-admin, never 403', async () => {
   const { cookie } = await signIn('curious@example.com');
-  for (const url of ['/admin/overview', '/admin/reports', '/admin/accounts']) {
+  for (const url of ['/v1/admin/overview', '/v1/admin/reports', '/v1/admin/accounts']) {
     const r = await app.inject({ method: 'GET', url, headers: auth(cookie) });
     assert.equal(r.statusCode, 404, `${url} must not confirm it exists`);
   }
-  const anon = await app.inject({ method: 'GET', url: '/admin/overview' });
+  const anon = await app.inject({ method: 'GET', url: '/v1/admin/overview' });
   assert.equal(anon.statusCode, 404);
 });
 
 test('unpublishing requires a note, because the author is shown it', async () => {
   const { cookie: adminCookie, mapId } = await seedAdminAndMap();
   const bare = await app.inject({
-    method: 'POST', url: `/admin/maps/${mapId}/unpublish`, headers: auth(adminCookie), payload: {},
+    method: 'POST', url: `/v1/admin/maps/${mapId}/unpublish`, headers: auth(adminCookie), payload: {},
   });
   assert.equal(bare.statusCode, 400);
 
   const withNote = await app.inject({
-    method: 'POST', url: `/admin/maps/${mapId}/unpublish`,
+    method: 'POST', url: `/v1/admin/maps/${mapId}/unpublish`,
     headers: auth(adminCookie), payload: { note: 'duplicate of #3' },
   });
   assert.equal(withNote.statusCode, 200);
@@ -238,11 +238,11 @@ test('unpublishing requires a note, because the author is shown it', async () =>
 test('an author cannot republish over a moderator decision', async () => {
   const { cookie: adminCookie, mapId, ownerCookie } = await seedAdminAndMap();
   await app.inject({
-    method: 'POST', url: `/admin/maps/${mapId}/unpublish`,
+    method: 'POST', url: `/v1/admin/maps/${mapId}/unpublish`,
     headers: auth(adminCookie), payload: { note: 'not a real mapping' },
   });
   const r = await app.inject({
-    method: 'POST', url: `/account/maps/${mapId}/republish`, headers: auth(ownerCookie),
+    method: 'POST', url: `/v1/account/maps/${mapId}/republish`, headers: auth(ownerCookie),
   });
   assert.equal(r.statusCode, 403);
   assert.equal(r.json().error, 'moderated');
@@ -250,9 +250,9 @@ test('an author cannot republish over a moderator decision', async () => {
 
 test('an author CAN undo their own withdrawal', async () => {
   const { mapId, ownerCookie } = await seedAdminAndMap();
-  await app.inject({ method: 'POST', url: `/account/maps/${mapId}/withdraw`, headers: auth(ownerCookie) });
+  await app.inject({ method: 'POST', url: `/v1/account/maps/${mapId}/withdraw`, headers: auth(ownerCookie) });
   assert.equal(getDb().prepare('SELECT published FROM maps WHERE id = ?').get(mapId).published, 0);
-  const back = await app.inject({ method: 'POST', url: `/account/maps/${mapId}/republish`, headers: auth(ownerCookie) });
+  const back = await app.inject({ method: 'POST', url: `/v1/account/maps/${mapId}/republish`, headers: auth(ownerCookie) });
   assert.equal(back.statusCode, 200);
   assert.equal(getDb().prepare('SELECT published FROM maps WHERE id = ?').get(mapId).published, 1);
 });
@@ -266,7 +266,7 @@ test('suspension is not cosmetic: existing sessions die and writes are refused',
   assert.equal((await app.inject({ method: 'GET', url: '/auth/me', headers: auth(victim) })).json().signedIn, true);
 
   const r = await app.inject({
-    method: 'POST', url: `/admin/accounts/${victimId}/suspend`, headers: auth(adminCookie),
+    method: 'POST', url: `/v1/admin/accounts/${victimId}/suspend`, headers: auth(adminCookie),
   });
   assert.equal(r.statusCode, 200);
 
@@ -279,7 +279,7 @@ test('an admin cannot suspend themselves out of the console', async () => {
   const adminId = getDb().prepare('SELECT account_id a FROM sessions WHERE token = ?')
     .get(adminCookie.split('=')[1]).a;
   const r = await app.inject({
-    method: 'POST', url: `/admin/accounts/${adminId}/suspend`, headers: auth(adminCookie),
+    method: 'POST', url: `/v1/admin/accounts/${adminId}/suspend`, headers: auth(adminCookie),
   });
   assert.equal(r.statusCode, 400);
 });
@@ -320,7 +320,7 @@ test('a report reaches the moderation queue exactly once per reporter', async ()
     });
     assert.equal(r.statusCode, 200);
   }
-  const queue = await app.inject({ method: 'GET', url: '/admin/reports', headers: auth(adminCookie) });
+  const queue = await app.inject({ method: 'GET', url: '/v1/admin/reports', headers: auth(adminCookie) });
   const mine = queue.json().reports.filter((x) => x.map.id === mapId);
   assert.equal(mine.length, 1, 'a second report from the same person must not queue twice');
 });

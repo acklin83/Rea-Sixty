@@ -75,8 +75,13 @@ export async function buildApp({ logger = false, rateLimits = true } = {}) {
   app.register(registerCommunityRoutes, { prefix: '/v1' });
 
   app.register(registerAuthRoutes, { prefix: '/auth' });
-  app.register(registerAccountRoutes, { prefix: '/account' });
-  app.register(registerAdminRoutes, { prefix: '/admin' });
+  // Under /v1, NOT /account and /admin. The website has PAGES at those paths,
+  // and the browser reaches this API through the same origin — so a bare
+  // /account here would collide with the account page and one of the two would
+  // shadow the other depending on proxy-rule order. One API namespace, and the
+  // page namespace stays the site's.
+  app.register(registerAccountRoutes, { prefix: '/v1/account' });
+  app.register(registerAdminRoutes, { prefix: '/v1/admin' });
 
   return app;
 }

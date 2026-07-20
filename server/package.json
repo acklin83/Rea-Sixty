@@ -11,6 +11,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "mktoken": "node src/tools/mktoken.js",
+    "mkadmin": "node src/tools/mkadmin.js",
     "test": "node --test \"test/**/*.test.js\"",
     "check:controls": "python3 ../extension/tools/gen_control_table.py --check"
   },
