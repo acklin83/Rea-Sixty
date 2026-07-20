@@ -5,11 +5,24 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { getPlugin, getMap, getMapFile } from '../query/detail.js';
 import { diffMaps, MAX_DIFF_COLUMNS } from '../query/diff.js';
-import { MAPS_DIR } from '../db/index.js';
+import { MAPS_DIR, getDb } from '../db/index.js';
+import { accountForSession, SESSION_COOKIE } from '../lib/session.js';
+import { accountForToken } from '../lib/auth.js';
 
 const diffQuery = z.object({
   maps: z.string().regex(/^\d+(,\d+)*$/, 'maps must be comma-separated ids'),
 });
+
+/** The account behind this request, or null. Accepts either credential — the
+ *  browser sends a session cookie, the extension a bearer token, and both are
+ *  the same account underneath. */
+function viewerAccountId(req) {
+  const session = accountForSession(req.cookies?.[SESSION_COOKIE]);
+  if (session) return session.accountId;
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
+  const tok = m ? accountForToken(m[1].trim()) : null;
+  return tok ? tok.accountId : null;
+}
 
 export async function registerMapRoutes(app) {
   // Screen 2 — one plug-in, its maps, ready to tick 2-3 and diff.
@@ -56,6 +69,19 @@ export async function registerMapRoutes(app) {
     if (!Number.isInteger(id) || id < 1) return reply.code(400).send({ error: 'bad_id' });
     const map = getMap(id);
     if (!map) return reply.code(404).send({ error: 'unknown_map' });
+
+    // "Have I already confirmed this?" is the one field the query cannot
+    // answer — only the request knows who is asking. Resolved here from
+    // whichever credential is present (browser cookie or the extension's
+    // device token), and left null when the caller is anonymous, so a client
+    // can tell "not confirmed" apart from "we don't know who you are".
+    const who = viewerAccountId(req);
+    map.worksMine = who == null
+      ? null
+      : !!getDb().prepare(
+          'SELECT 1 FROM works_for_me WHERE map_id = ? AND account_id = ?',
+        ).get(id, who);
+
     return map;
   });
 

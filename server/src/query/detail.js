@@ -141,7 +141,8 @@ export function getPlugin(slug) {
 export function getMap(id) {
   const db = getDb();
   const m = db.prepare(`
-    SELECT m.*, p.slug AS plugin_slug, p.name AS plugin_name, v.name AS vendor
+    SELECT m.*, p.slug AS plugin_slug, p.name AS plugin_name, v.name AS vendor,
+           (SELECT COUNT(*) FROM works_for_me w WHERE w.map_id = m.id) AS works
       FROM maps m
       JOIN plugins p ON p.id = m.plugin_id
       LEFT JOIN vendors v ON v.id = p.vendor_id
@@ -162,6 +163,10 @@ export function getMap(id) {
     createdAt: m.created_at,
     uploadedAt: m.uploaded_at,
     fileBytes: m.file_bytes,
+    // The plug-in page already showed this per map; the detail page did not, so
+    // neither the website nor the extension could say how many people had
+    // confirmed the mapping — nor render a button in the right state.
+    works: m.works,
     coverage: coverageOf(m),
     paramCoverage: paramCoverageOf(m),
     uf8: isUf8 ? uf8Grid(m.id, m.uf8_vpots, m.uf8_strips) : null,

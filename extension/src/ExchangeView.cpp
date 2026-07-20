@@ -103,6 +103,12 @@ struct MapDetail {
     std::vector<Uf8Strip> uf8StripBindings;
     std::vector<std::pair<int, std::string>> alsoMapped;              // linkIdx, param
     std::vector<ModBind> modLayers;
+    // "Works for me" — the count everyone sees, and whether THIS account is
+    // one of them. -1 means the server could not say because we sent no token,
+    // which is NOT the same as "no": showing an un-pressed button to someone
+    // with no credential would invite a click that can only fail.
+    int works = 0;
+    int worksMine = -1;
 };
 MapDetail   g_mapDetail;
 uint64_t    g_mapReq = 0;
@@ -116,6 +122,16 @@ std::string g_installStatus;
 int         g_installColor = 0;
 up::MapShare g_pendingInstall;     // downloaded, awaiting a replace-confirm
 bool        g_pendingClash = false;
+
+// ---- "works for me" -------------------------------------------------------
+// The only write the browse surface performs. It needs the upload token: the
+// API accepts a session cookie OR a bearer token, and an ImGui window has no
+// cookies.
+uint64_t    g_worksReq = 0;
+bool        g_worksUndo = false;          // which way the in-flight call goes
+std::string g_worksStatus;
+int         g_worksColor = 0;
+char        g_worksVersion[64] = {0};     // plug-in version being confirmed
 
 void loadOnce() {
     if (g_loaded) return;
@@ -198,6 +214,8 @@ void openPlugin(const std::string& slug) {
 void openMap(int mapId) {
     if (g_mapReq) return;
     g_mapDetail = MapDetail{};
+    g_worksStatus.clear();
+    g_worksColor = 0;
     g_mapError.clear();
     g_installStatus.clear();
     g_pendingClash = false;
@@ -218,6 +236,51 @@ void startInstall(int mapId) {
 }
 
 // Actually apply a downloaded map to the catalog.
+// Confirm (or withdraw) "this mapping works for me". `undo` sends DELETE.
+//
+// The version is optional and is the entire point of the feature: with a
+// handful of votes a star average is noise, while "worked on 2.1.4" is what
+// actually helps the next person. It is typed rather than detected — REAPER
+// exposes no plug-in version string, and inventing one would be worse than
+// leaving it blank.
+void toggleWorks(int mapId, bool undo) {
+    if (g_worksReq) return;
+    g_worksStatus.clear();
+    g_worksColor = 0;
+
+    if (!g_token[0]) {
+        g_worksStatus = "Paste your device token under \"Server settings\" first.";
+        g_worksColor = 0xCC4444FF;
+        return;
+    }
+
+    const std::vector<std::string> headers = {
+        std::string("Authorization: Bearer ") + g_token,
+        "Content-Type: application/json",
+    };
+    const std::string url = baseUrl() + "/v1/maps/" + std::to_string(mapId) + "/works";
+
+    std::string body;
+    if (!undo) {
+        // Hand-built rather than pulled in a JSON writer for one field. The
+        // version is user text, so the quotes and backslashes it may contain
+        // have to be escaped or the request is malformed.
+        std::string v;
+        for (const char* c = g_worksVersion; *c; ++c) {
+            if (*c == '"' || *c == '\\') v += '\\';
+            if ((unsigned char)*c >= 0x20) v += *c;
+        }
+        body = "{\"pluginVersion\":\"" + v + "\"}";
+    }
+
+    g_worksUndo = undo;
+    g_worksReq = http::begin(undo ? "DELETE" : "POST", url, headers, body);
+    if (!g_worksReq) {
+        g_worksStatus = "Bad server URL.";
+        g_worksColor = 0xCC4444FF;
+    }
+}
+
 void applyInstall(up::MapShare&& share) {
     const std::string match = share.map.match;
     if (up::collidesWithBuiltin(match)) {
@@ -347,6 +410,16 @@ void pumpMap() {
     if (auto* pc = root->get_item_by_name("paramCoverage"); pc && pc->is_object()) {
         d.paramN = jint(pc, "n"); d.paramD = jint(pc, "d"); d.paramPct = jint(pc, "pct");
     }
+    d.works = jint(root, "works");
+    // worksMine is a TRISTATE and the JSON carries it as true / false / null.
+    // wdl_json has no is_null(): m_value holds the raw token, so a JSON null
+    // reads back as the literal string "null". Matching on the three spellings
+    // is the whole check — jbool() alone would fold null into false and offer
+    // an un-pressed button to someone with no token, i.e. a guaranteed 401.
+    const std::string wm = jstr(root, "worksMine");
+    if      (wm == "true")  d.worksMine = 1;
+    else if (wm == "false") d.worksMine = 0;
+    else                    d.worksMine = -1;   // "null", or the field is absent
     if (auto* u = root->get_item_by_name("uf8"); u && u->is_object()) {
         d.isUf8 = true;
         d.uf8Vpots = jint(u, "vpots"); d.uf8VpotSlots = jint(u, "vpotSlots");
@@ -414,6 +487,44 @@ void pumpMap() {
         }
     }
     g_mapDetail = std::move(d);
+}
+
+void pumpWorks() {
+    if (!g_worksReq) return;
+    http::Response r;
+    if (!http::poll(g_worksReq, r)) return;
+    g_worksReq = 0;
+
+    if (!r.error.empty()) {
+        g_worksStatus = "Could not reach the server: " + r.error;
+        g_worksColor = 0xCC4444FF;
+        return;
+    }
+    if (r.status == 401) {
+        g_worksStatus = "That device token was refused. Check it under \"Server settings\".";
+        g_worksColor = 0xCC4444FF;
+        return;
+    }
+    if (r.status == 403) {
+        g_worksStatus = "This account cannot post.";
+        g_worksColor = 0xCC4444FF;
+        return;
+    }
+    if (r.status != 200) {
+        g_worksStatus = "Server returned HTTP " + std::to_string(r.status);
+        g_worksColor = 0xCC4444FF;
+        return;
+    }
+
+    // The reply carries the fresh count, so the screen updates without
+    // refetching the whole map.
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    if (root && root->is_object()) g_mapDetail.works = jint(root, "worksCount");
+    g_mapDetail.worksMine = g_worksUndo ? 0 : 1;
+
+    g_worksStatus = g_worksUndo ? "Withdrawn." : "Thanks — noted.";
+    g_worksColor = 0;
 }
 
 void pumpDownload() {
@@ -847,6 +958,43 @@ void drawMap(ImGui_Context* ctx) {
         }
     }
 
+    // ---- works for me -----------------------------------------------------
+    // Deliberately on this screen and not the map list: confirming is a claim
+    // about a mapping you have actually looked at.
+    ImGui_Spacing(ctx);
+    {
+        char lbl[96];
+        if (d.works > 0)
+            std::snprintf(lbl, sizeof(lbl), "Works for %d %s",
+                          d.works, d.works == 1 ? "person" : "people");
+        else
+            std::snprintf(lbl, sizeof(lbl), "Nobody has confirmed this yet");
+        ImGui_Text(ctx, lbl);
+
+        const bool busy = g_worksReq != 0;
+        ImGui_SameLine(ctx, nullptr, nullptr);
+
+        if (d.worksMine == 1) {
+            if (ImGui_Button(ctx, busy ? "…##exch_works" : "Withdraw my confirmation##exch_works",
+                             nullptr, nullptr) && !busy)
+                toggleWorks(d.id, /*undo*/ true);
+        } else {
+            if (ImGui_Button(ctx, busy ? "…##exch_works" : "This works for me##exch_works",
+                             nullptr, nullptr) && !busy)
+                toggleWorks(d.id, /*undo*/ false);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, 130.0);
+            ImGui_InputTextWithHint(ctx, "##exch_works_ver", "plug-in version",
+                                    g_worksVersion, sizeof(g_worksVersion), nullptr, nullptr);
+        }
+
+        if (!g_worksStatus.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextColored(ctx, g_worksColor ? g_worksColor : 0xCCCCCCFF,
+                              g_worksStatus.c_str());
+        }
+    }
+
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
@@ -941,6 +1089,7 @@ void ExchangeView::draw(ImGui_Context* ctx) {
     pumpPlugin();
     pumpMap();
     pumpDownload();
+    pumpWorks();
 
     ImGui_Text(ctx, "Mapping Exchange");
     ImGui_SameLine(ctx, nullptr, nullptr);

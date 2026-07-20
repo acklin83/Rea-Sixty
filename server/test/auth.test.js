@@ -325,6 +325,57 @@ test('a report reaches the moderation queue exactly once per reporter', async ()
   assert.equal(mine.length, 1, 'a second report from the same person must not queue twice');
 });
 
+test('the map detail reports the works count and whether YOU confirmed', async () => {
+  const { mapId } = await seedAdminAndMap();
+  const { cookie } = await signIn(`confirmer-${mapId}@example.com`);
+
+  // Anonymous: the count is public, "did I confirm" is unknowable — and null
+  // must NOT read as false, or a client shows an un-pressed button to someone
+  // who has no account.
+  const anon = await app.inject({ method: 'GET', url: `/v1/maps/${mapId}` });
+  assert.equal(anon.json().works, 0);
+  assert.equal(anon.json().worksMine, null);
+
+  const before = await app.inject({ method: 'GET', url: `/v1/maps/${mapId}`, headers: auth(cookie) });
+  assert.equal(before.json().worksMine, false);
+
+  await app.inject({
+    method: 'POST', url: `/v1/maps/${mapId}/works`, headers: auth(cookie),
+    payload: { pluginVersion: '1.2.3' },
+  });
+
+  const after = await app.inject({ method: 'GET', url: `/v1/maps/${mapId}`, headers: auth(cookie) });
+  assert.equal(after.json().works, 1);
+  assert.equal(after.json().worksMine, true);
+
+  // Somebody else sees the count but not my confirmation as theirs.
+  const { cookie: other } = await signIn(`other-${mapId}@example.com`);
+  const theirs = await app.inject({ method: 'GET', url: `/v1/maps/${mapId}`, headers: auth(other) });
+  assert.equal(theirs.json().works, 1);
+  assert.equal(theirs.json().worksMine, false);
+});
+
+test('a device token counts as the same person as the browser session', async () => {
+  const { mapId } = await seedAdminAndMap();
+  const { cookie } = await signIn(`dual-${mapId}@example.com`);
+  const made = await app.inject({
+    method: 'POST', url: '/v1/account/tokens', headers: auth(cookie), payload: { label: 'reaper' },
+  });
+  const { token } = made.json();
+
+  // Confirm from the extension...
+  const posted = await app.inject({
+    method: 'POST', url: `/v1/maps/${mapId}/works`,
+    headers: { authorization: `Bearer ${token}` }, payload: {},
+  });
+  assert.equal(posted.statusCode, 200);
+
+  // ...and the browser must see it as already confirmed, not as a second vote.
+  const seen = await app.inject({ method: 'GET', url: `/v1/maps/${mapId}`, headers: auth(cookie) });
+  assert.equal(seen.json().works, 1);
+  assert.equal(seen.json().worksMine, true);
+});
+
 // ------------------------------------------------------------------ setup
 
 let seeded = 0;
