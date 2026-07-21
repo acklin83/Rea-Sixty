@@ -1,0 +1,71 @@
+# Deployed to /opt/reasixty/ on the Hostinger VPS (srv1401714.hstgr.cloud).
+# Caddy runs on the HOST, not in Docker, so a new service here is a container
+# publishing to loopback plus a reverse_proxy block in /etc/caddy/Caddyfile —
+# never a docker-network attach. See docs/deploy-exchange.md.
+
+services:
+  exchange:
+    build: .
+    restart: unless-stopped
+    ports:
+      # Loopback only. The host Caddy is the single public listener; this is
+      # the pattern the newer services on the box follow (ddl-website:3100,
+      # listmonk), unlike the older ones that still expose 0.0.0.0.
+      - "127.0.0.1:8010:8010"
+    # SMTP credentials and SITE_ORIGIN live here, never in this file — this one
+    # is in git. `.env` is gitignored, mode 600, and written on the box.
+    #
+    # env_file IS REQUIRED and is NOT the same thing as the `.env` Compose picks
+    # up on its own. That automatic one only substitutes ${VARS} *inside this
+    # compose file*; it puts nothing into the container. Without this line the
+    # password is set correctly on disk and the server still starts with no
+    # transport — which it now refuses to do, so at least it fails loudly.
+    #
+    # required:false is not laziness. With a bare `- .env` a missing file makes
+    # EVERY compose command fail — including the `docker compose exec` the
+    # nightly backup runs at 03:17. Deploying this before the credentials
+    # existed did exactly that. The absence of SMTP must fail where it means
+    # something (the server refuses to start, loudly, with instructions), not
+    # by taking the backups down with it.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      # 0.0.0.0 INSIDE the container. The loopback restriction is the port
+      # publish above — binding 127.0.0.1 in here would make the service
+      # unreachable from the host, which is the classic way to lose an hour.
+      HOST: 0.0.0.0
+      PORT: 8010
+      DATA_DIR: /data
+    volumes:
+      # The only state: exchange.db plus the uploaded .rea60map blobs. `var/`
+      # is the same name the repo uses for it locally. Must be owned by uid
+      # 1000 on the host — the image runs as the unprivileged `node` user.
+      - ./var:/data
+      # Backup drop point. src/tools/backup.js writes the nightly database
+      # snapshot here from inside the container; backup.sh prunes the same
+      # directory from the host. Kept OUT of var/ on purpose — a `rsync
+      # --delete` of var, or a restore that clears it, must not take the
+      # backups with it.
+      - ./backups:/backups
+    networks:
+      # Shared with the website's container so the site can render exchange
+      # pages server-side. It CANNOT go through the host's 127.0.0.1:8010
+      # publish above — a container's loopback is its own, not the host's, and
+      # that is exactly what "unreachable" looked like on the first deploy.
+      # The published port stays loopback-only for Caddy; this is a second,
+      # host-internal path, not a wider exposure.
+      - reasixty
+      - default
+    healthcheck:
+      # No curl or wget in node:slim, so ask Node itself.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  reasixty:
+    external: true

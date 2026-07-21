@@ -359,6 +359,15 @@ add_library(reaper_uf8 MODULE
     # CS Gate/Comp gain reduction that no REAPER API exposes.
     src/SslMeterProtocol.cpp
     src/SslCoreImpersonator.cpp
+    # Mapping Exchange — async HTTPS client + the in-app Exchange view. One
+    # implementation per platform, each self-guarded by its own #if, so the
+    # three compile to nothing where they don't apply: macos_http.mm
+    # (NSURLSession, added under APPLE below), win_http.cpp (WinHTTP),
+    # linux_http.cpp (libcurl via dlopen), HttpClient.cpp (the fallback stub).
+    src/HttpClient.cpp
+    src/win_http.cpp
+    src/linux_http.cpp
+    src/ExchangeView.cpp
 )
 
 if(APPLE)
@@ -378,6 +387,11 @@ if(APPLE)
     target_sources(reaper_uf8 PRIVATE src/macos_pin_fx_gui.mm)
     set_source_files_properties(src/macos_pin_fx_gui.mm PROPERTIES
         COMPILE_FLAGS "-fno-objc-arc")
+    # NSURLSession HTTPS client for the mapping exchange. -fno-objc-arc to
+    # match the other .mm files; the shared state manages task lifetime.
+    target_sources(reaper_uf8 PRIVATE src/macos_http.mm)
+    set_source_files_properties(src/macos_http.mm PROPERTIES
+        COMPILE_FLAGS "-fno-objc-arc")
 endif()
 
 # SWELL's swell-types.h #defines min/max as 2-arg macros, which collide
@@ -392,6 +406,7 @@ if(APPLE)
     target_link_libraries(reaper_uf8 PRIVATE
         "-framework CoreMIDI"
         "-framework CoreFoundation"
+        "-framework Foundation"
         "-framework ApplicationServices"
         "-framework AppKit")
 endif()
@@ -409,7 +424,16 @@ if(WIN32)
         "/DELAYLOAD:hidapi.dll")
     # comdlg32 = Win32 GetSaveFileName (native Save-As; REAPER has no
     # BrowseForSaveFile on Windows — that is a SWELL-only symbol).
-    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib)
+    # winhttp = the mapping exchange's HTTPS client (src/win_http.cpp). Ships
+    # with Windows, so nothing extra to package.
+    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib winhttp.lib)
+endif()
+
+if(UNIX AND NOT APPLE)
+    # dlopen for the mapping exchange's libcurl loader (src/linux_http.cpp).
+    # Folded into libc from glibc 2.34, but older distributions still need -ldl
+    # and CMAKE_DL_LIBS is empty where it isn't wanted.
+    target_link_libraries(reaper_uf8 PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)

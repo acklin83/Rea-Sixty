@@ -1,0 +1,460 @@
+{
+  "_generated_by": "extension/tools/gen_control_table.py — do not hand-edit",
+  "_sources": [
+    "extension/src/PluginMap.cpp",
+    "extension/src/SettingsScreen.cpp"
+  ],
+  "_note": "linkIdx is namespaced PER DOMAIN: CS 1 is FaderLevel, BC 1 is Threshold. Always key by (domain, linkIdx).",
+  "domains": {
+    "ChannelStrip": {
+      "denominator": 33,
+      "slots": {
+        "0": {
+          "id": "Bypass",
+          "name": "Bypass",
+          "legend": "BYP",
+          "section": "Channel",
+          "on_face": true,
+          "face_label": "IN"
+        },
+        "1": {
+          "id": "FaderLevel",
+          "name": "Fader Level",
+          "legend": "FDR",
+          "section": "Channel",
+          "on_face": true,
+          "face_label": "OUT G"
+        },
+        "2": {
+          "id": "Width",
+          "name": "Width",
+          "legend": "WID",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "3": {
+          "id": "Pan",
+          "name": "Pan",
+          "legend": "PAN",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "4": {
+          "id": "InputTrim",
+          "name": "Input Trim",
+          "legend": "IN",
+          "section": "Channel",
+          "on_face": true,
+          "face_label": "IN G"
+        },
+        "5": {
+          "id": "Phase",
+          "name": "Polarity",
+          "legend": "POL",
+          "section": "Channel",
+          "on_face": true,
+          "face_label": "POL"
+        },
+        "6": {
+          "id": "LowPassFreq",
+          "name": "LPF",
+          "legend": "LPF",
+          "section": "Filters",
+          "on_face": true,
+          "face_label": "LPF"
+        },
+        "7": {
+          "id": "HighPassFreq",
+          "name": "HPF",
+          "legend": "HPF",
+          "section": "Filters",
+          "on_face": true,
+          "face_label": "HPF"
+        },
+        "8": {
+          "id": "HighEqBell",
+          "name": "HF Type",
+          "legend": "BELL",
+          "section": "HF",
+          "on_face": true,
+          "face_label": "HFBL"
+        },
+        "9": {
+          "id": "HighEqGain",
+          "name": "HF Gain",
+          "legend": "GAIN",
+          "section": "HF",
+          "on_face": true,
+          "face_label": "HFGN"
+        },
+        "10": {
+          "id": "HighEqFreq",
+          "name": "HF Freq",
+          "legend": "FREQ",
+          "section": "HF",
+          "on_face": true,
+          "face_label": "HFFQ"
+        },
+        "11": {
+          "id": "HighMidEqGain",
+          "name": "HMF Gain",
+          "legend": "GAIN",
+          "section": "HMF",
+          "on_face": true,
+          "face_label": "HMFG"
+        },
+        "12": {
+          "id": "HighMidEqFreq",
+          "name": "HMF Freq",
+          "legend": "FREQ",
+          "section": "HMF",
+          "on_face": true,
+          "face_label": "HMFF"
+        },
+        "13": {
+          "id": "HighMidEqQ",
+          "name": "HMF Q",
+          "legend": "Q",
+          "section": "HMF",
+          "on_face": true,
+          "face_label": "HMFQ"
+        },
+        "14": {
+          "id": "EqType",
+          "name": "EQ Type",
+          "legend": "TYPE",
+          "section": "EQ",
+          "on_face": true,
+          "face_label": "EQTY"
+        },
+        "15": {
+          "id": "EqIn",
+          "name": "EQ In",
+          "legend": "EQ",
+          "section": "EQ",
+          "on_face": true,
+          "face_label": "EQIN"
+        },
+        "16": {
+          "id": "LowMidEqGain",
+          "name": "LMF Gain",
+          "legend": "GAIN",
+          "section": "LMF",
+          "on_face": true,
+          "face_label": "LMFG"
+        },
+        "17": {
+          "id": "LowMidEqFreq",
+          "name": "LMF Freq",
+          "legend": "FREQ",
+          "section": "LMF",
+          "on_face": true,
+          "face_label": "LMFF"
+        },
+        "18": {
+          "id": "LowMidEqQ",
+          "name": "LMF Q",
+          "legend": "Q",
+          "section": "LMF",
+          "on_face": true,
+          "face_label": "LMFQ"
+        },
+        "19": {
+          "id": "LowEqFreq",
+          "name": "LF Freq",
+          "legend": "FREQ",
+          "section": "LF",
+          "on_face": true,
+          "face_label": "LFFQ"
+        },
+        "20": {
+          "id": "LowEqGain",
+          "name": "LF Gain",
+          "legend": "GAIN",
+          "section": "LF",
+          "on_face": true,
+          "face_label": "LFGN"
+        },
+        "21": {
+          "id": "LowEqBell",
+          "name": "LF Type",
+          "legend": "BELL",
+          "section": "LF",
+          "on_face": true,
+          "face_label": "LFBL"
+        },
+        "22": {
+          "id": "DynamicsIn",
+          "name": "Dynamics In",
+          "legend": "DYN",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "DYN"
+        },
+        "23": {
+          "id": "CompMix",
+          "name": "Comp Mix",
+          "legend": "MIX",
+          "section": "Comp",
+          "on_face": false,
+          "face_label": null
+        },
+        "24": {
+          "id": "CompFastAttack",
+          "name": "Comp F.Atk",
+          "legend": "F.ATK",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "C ATK"
+        },
+        "25": {
+          "id": "CompPeak",
+          "name": "Comp Peak",
+          "legend": "PEAK",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "C PK"
+        },
+        "26": {
+          "id": "CompRatio",
+          "name": "Comp Ratio",
+          "legend": "RATIO",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "C RAT"
+        },
+        "27": {
+          "id": "CompThreshold",
+          "name": "Comp Thr",
+          "legend": "THR",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "C THR"
+        },
+        "28": {
+          "id": "CompRelease",
+          "name": "Comp Rel",
+          "legend": "REL",
+          "section": "Comp",
+          "on_face": true,
+          "face_label": "C REL"
+        },
+        "29": {
+          "id": "GateRange",
+          "name": "Gate Range",
+          "legend": "RNG",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G RNG"
+        },
+        "30": {
+          "id": "GateThreshold",
+          "name": "Gate Thr",
+          "legend": "THR",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G THR"
+        },
+        "31": {
+          "id": "GateRelease",
+          "name": "Gate Rel",
+          "legend": "REL",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G REL"
+        },
+        "32": {
+          "id": "GateHold",
+          "name": "Gate Hold",
+          "legend": "HOLD",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G HLD"
+        },
+        "33": {
+          "id": "GateExpander",
+          "name": "Gate/Exp",
+          "legend": "G/E",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G/E"
+        },
+        "34": {
+          "id": "GateAttack",
+          "name": "Gate F.Atk",
+          "legend": "F.ATK",
+          "section": "Gate",
+          "on_face": true,
+          "face_label": "G ATK"
+        },
+        "36": {
+          "id": "Listen",
+          "name": "S/C Listen",
+          "legend": "LST",
+          "section": "Channel",
+          "on_face": true,
+          "face_label": "S/C L"
+        },
+        "37": {
+          "id": "OutputTrim",
+          "name": "Out Trim",
+          "legend": "OUT",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "38": {
+          "id": "QuickAccess1",
+          "name": "Quick 1",
+          "legend": "QA1",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "39": {
+          "id": "QuickAccess2",
+          "name": "Quick 2",
+          "legend": "QA2",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "40": {
+          "id": "QuickAccess3",
+          "name": "Quick 3",
+          "legend": "QA3",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "41": {
+          "id": "QuickAccess4",
+          "name": "Quick 4",
+          "legend": "QA4",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "42": {
+          "id": "QuickAccess5",
+          "name": "Quick 5",
+          "legend": "QA5",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "43": {
+          "id": "QuickAccess6",
+          "name": "Quick 6",
+          "legend": "QA6",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "44": {
+          "id": "SaturationAmount",
+          "name": "Saturation",
+          "legend": "SAT",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "45": {
+          "id": "SaturationIn",
+          "name": "Sat In",
+          "legend": "SAT.I",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        },
+        "46": {
+          "id": "GroupSense",
+          "name": "GroupSense",
+          "legend": "GRP",
+          "section": "Channel",
+          "on_face": false,
+          "face_label": null
+        }
+      }
+    },
+    "BusComp": {
+      "denominator": 8,
+      "slots": {
+        "0": {
+          "id": "CompBypass",
+          "name": "Bypass",
+          "legend": "BYP",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "IN"
+        },
+        "1": {
+          "id": "Threshold",
+          "name": "Threshold",
+          "legend": "THR",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "THR"
+        },
+        "2": {
+          "id": "MakeupGain",
+          "name": "Makeup",
+          "legend": "MAKE",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "MAKE"
+        },
+        "3": {
+          "id": "Attack",
+          "name": "Attack",
+          "legend": "ATK",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "ATK"
+        },
+        "4": {
+          "id": "Release",
+          "name": "Release",
+          "legend": "REL",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "REL"
+        },
+        "5": {
+          "id": "Ratio",
+          "name": "Ratio",
+          "legend": "RATIO",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "RAT"
+        },
+        "6": {
+          "id": "SidechainHPF",
+          "name": "S/C HPF",
+          "legend": "HPF",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "S/C"
+        },
+        "7": {
+          "id": "DryWetMix",
+          "name": "Mix",
+          "legend": "MIX",
+          "section": "Bus Comp",
+          "on_face": true,
+          "face_label": "MIX"
+        },
+        "46": {
+          "id": "GroupSense",
+          "name": "GroupSense",
+          "legend": "GRP",
+          "section": "Bus Comp",
+          "on_face": false,
+          "face_label": null
+        }
+      }
+    }
+  }
+}

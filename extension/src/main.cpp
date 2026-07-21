@@ -26469,6 +26469,65 @@ bool reasixty_fxLearnImportViaDialog(std::string* errOut)
     return uf8::user_plugins::importFromFile(chosen, errOut);
 }
 
+// A single shared mapping (.rea60map) — one map, not the whole catalog.
+// Deliberately never offers .rea60config: a setup bundle carries bindings,
+// which can hold REAPER action IDs and keyboard macros. See
+// docs/mapping-exchange-plan.md.
+
+// `match` strings carry the plug-in format prefix and arbitrary punctuation
+// ("VST3: bx_console SSL 4000 G", "JS: 4-Band EQ [loser/4BandEQ]"), so they
+// are not filename-safe as-is.
+static std::string reasixtyMapFileName_(const std::string& match)
+{
+    std::string s = match;
+    for (char& c : s) {
+        if (strchr("/\\:*?\"<>|", c)) c = '-';
+    }
+    // Collapse the runs the substitution leaves behind, and trim.
+    std::string out;
+    for (char c : s) {
+        if (c == '-' && !out.empty() && out.back() == '-') continue;
+        if (c == ' ' && out.empty()) continue;
+        out += c;
+    }
+    while (!out.empty() && (out.back() == ' ' || out.back() == '-')) out.pop_back();
+    if (out.empty()) out = "mapping";
+    return out + ".rea60map";
+}
+
+// Export ONE map. Returns the chosen path on success, "" on cancel/error.
+std::string reasixty_mapShareExportViaDialog(
+    const uf8::user_plugins::MapShare& share, std::string* errOut)
+{
+    const std::string defName = reasixtyMapFileName_(share.map.match);
+    std::string chosen = reasixtySaveDialog_(
+        "Share Plug-in Mapping", defName.c_str(), "rea60map",
+        "Rea-Sixty mapping (*.rea60map)\0*.rea60map\0\0");
+    if (chosen.empty()) return "";   // user cancel → no error message
+    if (!uf8::user_plugins::exportMapToFile(chosen, share, errOut)) return "";
+    return chosen;
+}
+
+// Load ONE shared map. Does NOT apply it — the caller inspects `out` and
+// decides (the match may already exist, or collide with a built-in).
+bool reasixty_mapShareImportViaDialog(uf8::user_plugins::MapShare* out,
+                                      std::string* errOut)
+{
+    if (!out) return false;
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosOpenDialog("Import Plug-in Mapping", "rea60map");
+#else
+    char buf[4096] = {0};
+    if (!GetUserFileNameForRead(buf, "Import Plug-in Mapping", "rea60map")) {
+        return false;
+    }
+    chosen = buf;
+#endif
+    if (chosen.empty()) return false;
+    return uf8::user_plugins::importMapFromFile(chosen, *out, errOut);
+}
+
 // Per-layer import — Open dialog → parse + replace named layer. Returns
 // false on cancel or parse error.
 bool reasixty_importLayerViaDialog(int layer)
