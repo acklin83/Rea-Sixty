@@ -1599,6 +1599,32 @@ bool captureOriginalName(std::string_view match, std::string_view originalName)
     return changed;
 }
 
+// Sibling of captureOriginalName for the v3 functional-param count. Same reason
+// to exist: the count is only set when a paramSnapshot is (re)taken (learn /
+// focus / create-bind), so a map learned before v3 — or restored from ExtState
+// and never re-snapshotted — ships functionalParamCount == -1 and the exchange
+// records NO parameter coverage. Called from the Share-time FX scan (which has
+// the live plug-in in hand) so a re-Share fills it, exactly as original_name is.
+bool captureFunctionalParamCount(std::string_view match, int count)
+{
+    if (match.empty() || count < 0) return false;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        for (auto& m : g_catalog.maps) {
+            if (m.match == match) {
+                if (m.functionalParamCount != count) {
+                    m.functionalParamCount = count;
+                    changed = true;
+                }
+                break;
+            }
+        }
+    }
+    if (changed) save();
+    return changed;
+}
+
 bool removeByMatch(std::string_view match)
 {
     std::lock_guard<std::mutex> lk(g_mutex);

@@ -106,6 +106,7 @@ void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                                    bool focus, std::string& stateOut, std::string& assignOut,
                                    std::string& banksOut, std::string& stripColsOut);
 bool        reasixty_hudUf8FillStripColours(unsigned int rgb, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8SetStripColour(int strip, unsigned int rgb, int fb, int vb, void* tr, int fx);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
 bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
@@ -21519,6 +21520,26 @@ void onTimer()
                 if (reasixty_hudUf8FillStripColours(rgb, fb, vb, tr, fx)) {
                     g_hudUf8StripColsPublished.clear();
                     publishHud_();
+                }
+            } else if (s.rfind("uf8stripcol;", 0) == 0) {
+                // "uf8stripcol;<strip>;<RRGGBB>" — set ONE strip's display
+                // colour bar (HUD colour-bar left-click). 0 = clear. Right-click
+                // fills all via uf8stripcolfill above.
+                const auto semi = s.find(';', 12);
+                if (semi != std::string::npos) {
+                    const int strip = std::atoi(s.c_str() + 12);
+                    const unsigned int rgb = static_cast<unsigned int>(
+                        std::strtoul(s.c_str() + semi + 1, nullptr, 16)) & 0x00FFFFFFu;
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8SetStripColour(strip, rgb, fb, vb, tr, fx)) {
+                        g_hudUf8StripColsPublished.clear();
+                        publishHud_();
+                    }
                 }
             } else if (s.rfind("uf8cancel", 0) == 0) {
                 reasixty_hudUf8CancelLearn();

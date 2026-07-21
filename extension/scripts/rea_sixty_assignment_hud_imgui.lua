@@ -159,10 +159,12 @@ local ctxCtrlLayer = 0    -- active modifier layer captured AT right-click (the
 -- UF8 device tab (Phase 2): interactive strip-grid.
 local uf8Rects     = {}   -- per-cell hit-rects {kind, strip, x, y, w, h}
 local uf8BankRects = {}   -- V-Pot bank selector hit-rects {b, x, y, w, h}
+local uf8ColRects  = {}   -- per-strip colour-bar hit-rects {s, x, y, w, h} (mockup)
 local uf8Learn     = -1   -- armed cell, encoded kind*8+strip (hud_uf8_learn), -1 none
 local ctxUf8Kind   = -1   -- cell under a right-click → UF8 cell context menu
 local ctxUf8Strip  = -1
 local ctxUf8Bank   = -1   -- V-Pot bank under a right-click → bank rename menu
+local ctxUf8ColStrip = -1 -- strip whose colour bar was clicked → palette popup
 local nameRect     = nil  -- LCD / UF8-header click target → edit plug-in Kurzname
 local csFavRect    = nil  -- CS-Favourite dropdown box (CS tab) hit-rect
 local bcFavRect    = nil  -- BC-Favourite dropdown box (BC tab) hit-rect
@@ -788,6 +790,16 @@ local function uf8BankAt(mx, my)
   return nil
 end
 
+-- Display colour-bar under (mx,my) → strip index 0..7, or nil (mockup only).
+local function uf8ColAt(mx, my)
+  for _, h in ipairs(uf8ColRects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      return h.s
+    end
+  end
+  return nil
+end
+
 local function handleControlClick(mx, my)
   local idx = controlAt(mx, my)
   if not idx then
@@ -1388,6 +1400,7 @@ local UF8_ACCENT = 0x4A90D8
 local function renderUf8Grid(ust, uasn)
   ctrlRects = {}                                  -- no UC1 hit-rects on this tab
   uf8Rects  = {}
+  uf8ColRects = {}                                -- colour bars are mockup-only
   local availW = WW - RW
   local top    = bodyTop()
   local hpx    = floor(13 * fontScale() + 0.5)
@@ -1505,6 +1518,7 @@ local function renderUf8Face(ust, uasn)
   ctrlRects    = {}
   uf8Rects     = {}
   uf8BankRects = {}
+  uf8ColRects  = {}
   uf8Banks, uf8BankCols = readUf8Banks()
   uf8StripCols = readUf8StripCols()
 
@@ -1614,11 +1628,15 @@ local function renderUf8Face(ust, uasn)
       end
     end
     -- Display colour bar — per-strip stripColour (RGBA 0xRRGGBBAA), dim grey
-    -- when unset. Right-click the bank menu → "Bar colour (all)" to set them.
+    -- when unset. Clickable like the FX-Learn mockup: left-click picks THIS
+    -- strip's colour, right-click fills all 8 strips of the active bank.
     do
       local bar = uf8StripCols and uf8StripCols[s]
       local bfill = (bar and bar ~= 0) and ((bar << 8) | 0xFF) or col(0x404040, 0.5)
-      sr(colX + 6, SCR_Y + SCR_H - BAR_H - 2, STRIPW - 12, BAR_H, bfill, nil, 0)
+      local bx, by = colX + 6, SCR_Y + SCR_H - BAR_H - 2
+      sr(bx, by, STRIPW - 12, BAR_H, bfill, nil, 0)
+      uf8ColRects[#uf8ColRects + 1] =
+        { s = s, x = px(bx), y = py(by), w = (STRIPW - 12) * sc, h = BAR_H * sc }
     end
 
     -- V-Pot ring (kind 0)
@@ -1968,6 +1986,8 @@ local POPUP          = "##hud_ctx"
 local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
+local UF8_STRIPCOL_POPUP      = "##hud_uf8_stripcol"       -- left-click: this strip
+local UF8_STRIPCOL_FILL_POPUP = "##hud_uf8_stripcol_fill"  -- right-click: fill all
 local CS_FAV_POPUP   = "##hud_cs_fav_ctx"
 local BC_FAV_POPUP   = "##hud_bc_fav_ctx"
 local CURVE_POPUP    = "Curve editor###hud_curve_editor"
@@ -2990,6 +3010,59 @@ local function drawUf8BankContextMenu()
   reaper.ImGui_PopStyleVar(ctx, 3)
 end
 
+-- Display colour-bar popups (mockup view) — mirrors FX-Learn's
+-- drawFxLearnUf8StripBars_: left-click a strip's bar opens a per-strip palette
+-- (writes uf8stripcol;<strip>;<rgb>), right-click opens a fill-all palette
+-- (uf8stripcolfill;<rgb>). Both use the 10 SSL DAW-Colour swatches; "Default"/
+-- "Clear all" send 000000 = no override (back to the track-colour fallback).
+local function drawUf8StripColPopups()
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 8, 6)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 6, 4)
+
+  -- Left-click → this strip only.
+  if reaper.ImGui_BeginPopup(ctx, UF8_STRIPCOL_POPUP) then
+    reaper.ImGui_BeginDisabled(ctx)
+    reaper.ImGui_MenuItem(ctx, "Strip " .. (ctxUf8ColStrip + 1) .. " bar colour")
+    reaper.ImGui_EndDisabled(ctx)
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Default##stripcoldef") then
+      sendCmd("uf8stripcol;" .. ctxUf8ColStrip .. ";000000")
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    for i, rgb in ipairs(UF8_BANK_PALETTE) do
+      if reaper.ImGui_ColorButton(ctx, "##scp" .. i, (rgb << 8) | 0xFF, 0, 20, 20) then
+        sendCmd(string.format("uf8stripcol;%d;%06X", ctxUf8ColStrip, rgb))
+        reaper.ImGui_CloseCurrentPopup(ctx)
+      end
+      if i % 5 ~= 0 then reaper.ImGui_SameLine(ctx) end
+    end
+    reaper.ImGui_EndPopup(ctx)
+  end
+
+  -- Right-click → fill all 8 strips of the active bank.
+  if reaper.ImGui_BeginPopup(ctx, UF8_STRIPCOL_FILL_POPUP) then
+    reaper.ImGui_BeginDisabled(ctx)
+    reaper.ImGui_MenuItem(ctx, "Fill all strips (this bank)")
+    reaper.ImGui_EndDisabled(ctx)
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_SmallButton(ctx, "Clear all##stripcolclr") then
+      sendCmd("uf8stripcolfill;000000")
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    for i, rgb in ipairs(UF8_BANK_PALETTE) do
+      if reaper.ImGui_ColorButton(ctx, "##scfp" .. i, (rgb << 8) | 0xFF, 0, 20, 20) then
+        sendCmd(string.format("uf8stripcolfill;%06X", rgb))
+        reaper.ImGui_CloseCurrentPopup(ctx)
+      end
+      if i % 5 ~= 0 then reaper.ImGui_SameLine(ctx) end
+    end
+    reaper.ImGui_EndPopup(ctx)
+  end
+
+  reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
 ------------------------------------------------------------------------
 -- Geometry persistence (own keys → coexists with gfx HUD).
 ------------------------------------------------------------------------
@@ -3059,11 +3132,15 @@ local function loop()
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
         if activeTab == "uf8" then
-          -- Over a V-Pot bank → rename menu; over a grid cell → per-cell menu;
-          -- else the main HUD menu.
+          -- Over a colour bar → fill-all palette; over a V-Pot bank → rename
+          -- menu; over a grid cell → per-cell menu; else the main HUD menu.
+          local cs = uf8ColAt(lx, ly)
           local bk = uf8BankAt(lx, ly)
           local k, s = uf8CellAt(lx, ly)
-          if bk then
+          if cs ~= nil then
+            ctxUf8ColStrip = cs
+            reaper.ImGui_OpenPopup(ctx, UF8_STRIPCOL_FILL_POPUP)
+          elseif bk then
             ctxUf8Bank = bk
             reaper.ImGui_OpenPopup(ctx, UF8_BANK_POPUP)
           elseif k then
@@ -3106,8 +3183,13 @@ local function loop()
           elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
             handleParamClick(lx, ly)
           else
-            local b = uf8BankAt(lx, ly)
-            if b then sendCmd("uf8bank;" .. b)
+            local cs = uf8ColAt(lx, ly)
+            local b  = uf8BankAt(lx, ly)
+            if cs ~= nil then
+              -- Colour bar → per-strip palette (left-click picks this strip).
+              ctxUf8ColStrip = cs
+              reaper.ImGui_OpenPopup(ctx, UF8_STRIPCOL_POPUP)
+            elseif b then sendCmd("uf8bank;" .. b)
             elseif not handleUf8CellClick(lx, ly) then
               if uf8Learn >= 0 then sendCmd("uf8cancel") end
             end
@@ -3174,6 +3256,7 @@ local function loop()
     drawCurveEditor()
     drawUf8ControlContextMenu()
     drawUf8BankContextMenu()
+    drawUf8StripColPopups()
 
     -- Persist geometry on change.
     local px, py = reaper.ImGui_GetWindowPos(ctx)

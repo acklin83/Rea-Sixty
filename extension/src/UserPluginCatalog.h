@@ -705,6 +705,12 @@ bool removeByMatch(std::string_view match);
 // when it changed and was saved.
 bool captureOriginalName(std::string_view match, std::string_view originalName);
 
+// Sibling for the v3 functional-param count (parameter coverage). Same persist-
+// on-change contract; no-op when the match is absent or `count` < 0. Called from
+// the Share-time FX scan so a re-Share records the count for maps learned before
+// v3 or never re-snapshotted this session.
+bool captureFunctionalParamCount(std::string_view match, int count);
+
 // Lookup by match-substring on an FX name. Mirrors built-in lookup
 // semantics — first hit on substring wins. Returns a synthesised
 // PluginMap view (lifetime: until the next mutation). Slot list and

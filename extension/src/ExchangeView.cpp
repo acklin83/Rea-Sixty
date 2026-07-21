@@ -44,7 +44,10 @@ namespace http = reasixty::http;
 constexpr const char* kExtSection  = "rea_sixty";
 constexpr const char* kKeyApiUrl   = "exchange_api_url";
 constexpr const char* kKeyApiToken = "exchange_token";
-constexpr const char* kDefaultApiUrl = "http://127.0.0.1:8010";
+// Production exchange. Shipped users never touch the URL field — it must point
+// at the live server, not a dev loopback nobody is running. For local testing,
+// set exchange_api_url to http://127.0.0.1:8010 in Settings → Exchange.
+constexpr const char* kDefaultApiUrl = "https://api.reasixty.com";
 
 char g_apiUrl[512] = {0};
 char g_token[256]  = {0};
@@ -173,8 +176,17 @@ std::string baseUrl() {
 std::string jstr(wdl_json_element* o, const char* k) {
     if (!o) return "";
     auto* v = o->get_item_by_name(k);
-    const char* s = v ? v->get_string_value(true) : nullptr;
-    return s ? std::string(s) : std::string();
+    if (!v) return "";
+    const char* s = v->get_string_value(true);
+    if (!s) return "";
+    // A JSON null arrives as the UNQUOTED literal "null" (m_value_string=false),
+    // NOT as an absent field or an empty string — wdl_json has no is_null(). Left
+    // as "null" it defeats every `.empty()`/`jint` guard downstream: atoi("null")
+    // is 0, so a null bestParamCoverage rendered as "0%" on the plug-in index
+    // instead of "—" (Frank's UF8-only "delta 16" map, 2026-07-21). A genuine
+    // quoted "null" string keeps m_value_string=true and is preserved.
+    if (!v->m_value_string && std::strcmp(s, "null") == 0) return "";
+    return std::string(s);
 }
 int jint(wdl_json_element* o, const char* k) {
     std::string s = jstr(o, k);

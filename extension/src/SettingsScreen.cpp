@@ -5858,13 +5858,15 @@ std::unordered_map<std::string, std::vector<size_t>> g_pickerBuckets; // vendor 
 //     (UADx)". Naïve rfind would clip the closing paren and return
 //     "UADx)". We balance-match the outer parens by counting depth
 //     from the right so nested vendor parens come through intact.
-std::string fxlMasterDeveloperFor_(const std::string& match)
+// Parse the vendor from the trailing "(Vendor)" of a plug-in name, skipping the
+// channel-format trailer REAPER appends to VST3 names ("… (SSL) (mono)" → "SSL").
+// Balance-matches nested parens from the right so a vendor that itself contains
+// parens ("Universal Audio (UADx)") survives. Empty when there is no parens
+// vendor (AU "Vendor: Name" and JSFX are the server's job, from original_name).
+std::string tailVendorOf_(std::string name)
 {
-    if (match.empty()) return {};
-
-    // Channel-format markers REAPER appends after the vendor on VST3
-    // names. "mono" / "stereo" / "quad" plus the "Nch" / "N.M" family
-    // (5.1, 7.1, 8ch, 16ch, …).
+    // Channel-format markers REAPER appends after the vendor on VST3 names:
+    // "mono" / "stereo" / "quad" plus the "Nch" / "N.M" family (5.1, 7.1, 8ch…).
     auto isChannelMarker = [](const std::string& s) {
         if (s == "mono" || s == "stereo" || s == "quad") return true;
         bool hasDigit = false;
@@ -5875,32 +5877,36 @@ std::string fxlMasterDeveloperFor_(const std::string& match)
         }
         return hasDigit;
     };
-
-    // Walk parens from the right with depth balancing. Skip trailing
-    // channel-format parens and retry on the remainder. Up to 4 tries
-    // (defensive — REAPER never tacks on more than one format marker).
-    auto extractTailVendor = [&](std::string name) -> std::string {
-        for (int tries = 0; tries < 4; ++tries) {
-            const auto end = name.rfind(')');
-            if (end == std::string::npos) break;
-            int depth = 1;
-            ptrdiff_t i = static_cast<ptrdiff_t>(end) - 1;
-            while (i >= 0) {
-                if      (name[i] == ')') ++depth;
-                else if (name[i] == '(') { if (--depth == 0) break; }
-                --i;
-            }
-            if (i < 1 || name[i - 1] != ' ') break;
-            const size_t open = static_cast<size_t>(i);
-            std::string content = name.substr(open + 1, end - open - 1);
-            if (isChannelMarker(content)) {
-                name.resize(open - 1);   // strip " (marker)" suffix
-                continue;
-            }
-            return content;
+    // Walk parens from the right with depth balancing. Skip a trailing channel-
+    // format parens and retry on the remainder. Up to 4 tries (defensive —
+    // REAPER never tacks on more than one format marker).
+    for (int tries = 0; tries < 4; ++tries) {
+        const auto end = name.rfind(')');
+        if (end == std::string::npos) break;
+        int depth = 1;
+        ptrdiff_t i = static_cast<ptrdiff_t>(end) - 1;
+        while (i >= 0) {
+            if      (name[i] == ')') ++depth;
+            else if (name[i] == '(') { if (--depth == 0) break; }
+            --i;
         }
-        return {};
-    };
+        if (i < 1 || name[i - 1] != ' ') break;
+        const size_t open = static_cast<size_t>(i);
+        std::string content = name.substr(open + 1, end - open - 1);
+        if (isChannelMarker(content)) {
+            name.resize(open - 1);   // strip " (marker)" suffix
+            continue;
+        }
+        return content;
+    }
+    return {};
+}
+
+std::string fxlMasterDeveloperFor_(const std::string& match)
+{
+    if (match.empty()) return {};
+
+    auto extractTailVendor = [](const std::string& name) { return tailVendorOf_(name); };
 
     // 1) Try the match string itself — many user maps were captured
     //    with the trailing "(Vendor)" already baked in (the picker
@@ -7751,6 +7757,35 @@ void unbindUf8_(int kind, int strip, int bank)
     });
 }
 
+// Step a user-entered scribble label's first digit run by `delta` so a Fill
+// carries the LABEL sequentially too, not just the param ("Ch 1"→"Ch 2",
+// "CH01"→"CH02"; Frank 2026-07-21). The original digit width is kept where the
+// stepped number still fits. A label with NO digit run is returned verbatim (the
+// pre-2026-07-21 behaviour — the same label is copied to every overflow strip).
+// Result is capped at the 7-char scribble limit, matching setUf8FaderLabel_/
+// setUf8Label_ so a Fill can never store a longer label than a manual rename.
+std::string bumpLabelDigits_(const std::string& label, int delta)
+{
+    if (label.empty() || delta == 0) return label;
+    size_t ds = std::string::npos, de = 0;
+    for (size_t i = 0; i < label.size(); ++i) {
+        if (std::isdigit(static_cast<unsigned char>(label[i]))) {
+            ds = i; de = i + 1;
+            while (de < label.size() &&
+                   std::isdigit(static_cast<unsigned char>(label[de]))) ++de;
+            break;
+        }
+    }
+    if (ds == std::string::npos) return label;   // no number → leave unchanged
+    int next = std::atoi(label.substr(ds, de - ds).c_str()) + delta;
+    if (next < 0) next = 0;
+    char numBuf[16];
+    snprintf(numBuf, sizeof(numBuf), "%0*d", static_cast<int>(de - ds), next);
+    std::string out = label.substr(0, ds) + numBuf + label.substr(de);
+    if (out.size() > 7) out.resize(7);
+    return out;
+}
+
 // "Fill sequential" — when a UF8 control is mapped to a parameter whose
 // name carries a digit run (e.g. "CH1 Volume"), populate strips to the
 // right with params whose names match the same pattern at successive
@@ -7846,7 +7881,9 @@ int fillSequentialUf8_(int kind, int strip, int bank,
             case 0:
                 u.strips[curFb][s].faderVst3Param = found;
                 u.strips[curFb][s].faderInverted  = srcFaderInverted;
-                u.strips[curFb][s].faderLabel     = srcFaderLabel;
+                // Step the scribble label too (Ch 1 → Ch 2 …), not copy verbatim.
+                u.strips[curFb][s].faderLabel     =
+                    bumpLabelDigits_(srcFaderLabel, g - srcGlobal);
                 break;
             case 3:
                 u.strips[curFb][s].soloVst3Param  = found;
@@ -7866,10 +7903,12 @@ int fillSequentialUf8_(int kind, int strip, int bank,
             case 1:
             case 2: {
                 // Whole-slot copy → carries mode + step-cycle list + feel/range/
-                // curve/polarity/default/colour/label. Only the bound param differs.
+                // curve/polarity/default/colour/label. Only the bound param and
+                // the stepped scribble label (V1 → V2 …) differ.
                 auto& bs = u.banks.banks[curFb][bank][s];
                 bs = srcVpotSlot;
                 bs.vst3Param = found;
+                bs.label = bumpLabelDigits_(srcVpotSlot.label, g - srcGlobal);
                 break;
             }
             default: continue;
@@ -9280,6 +9319,28 @@ bool hudUf8FillStripColours_(uint32_t rgb, int fb, int vb, void* trV, int fx)
     }
     return false;
 }
+// Display colour-bar single-strip setter — the HUD colour bar's left-click
+// destination (right-click fills all via hudUf8FillStripColours_). Mirrors the
+// FX-Learn per-strip picker (setUf8StripColour_) but targets the focused map.
+bool hudUf8SetStripColour_(int strip, uint32_t rgb, int fb, int vb,
+                           void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    if (strip < 0 || strip > 7) return false;
+    if (fb < 0 || fb >= uf8::kUserUf8FaderBankCount) return false;
+    if (vb < 0 || vb >= uf8::kUserUf8VpotBankCount)  return false;
+    rgb &= 0x00FFFFFFu;
+    auto cat = uf8::user_plugins::get();   // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        m.uf8.banks.banks[fb][vb][strip].stripColour = rgb;
+        uf8::user_plugins::upsert(m);
+        uf8::user_plugins::save();
+        return true;
+    }
+    return false;
+}
 
 // "Fill sequential" for a UF8 row — when cell (kind, strip) is mapped to a
 // param whose name carries a digit run ("CH1 Volume"), bind strips to the right
@@ -9366,10 +9427,13 @@ int hudUf8FillSeq_(int kind, int strip, int fb, int vb, void* trV, int fx)
         // encoding: V-Pot 0, Fader 1, Solo 2, Cut 3, Sel 4).
         switch (kind) {
             case 0: { auto& bs = editing->uf8.banks.banks[curFb][vb][s];
-                      bs = srcVpotSlot; bs.vst3Param = found; break; }
+                      bs = srcVpotSlot; bs.vst3Param = found;
+                      bs.label = bumpLabelDigits_(srcVpotSlot.label, g - srcGlobal);
+                      break; }
             case 1: { auto& ds = editing->uf8.strips[curFb][s];
                       ds.faderVst3Param = found; ds.faderInverted = srcStripB.faderInverted;
-                      ds.faderLabel = srcStripB.faderLabel; break; }
+                      ds.faderLabel = bumpLabelDigits_(srcStripB.faderLabel, g - srcGlobal);
+                      break; }
             case 2: { auto& ds = editing->uf8.strips[curFb][s];
                       ds.soloVst3Param = found; ds.soloColour = srcStripB.soloColour;
                       ds.soloInvert = srcStripB.soloInvert; break; }
@@ -13183,6 +13247,12 @@ static void captureOriginalNameForMatch_(const std::string& match)
             const auto* um = uf8::user_plugins::lookupOwnedByName(nm);
             if (um && um->match == match) {
                 uf8::user_plugins::captureOriginalName(match, nm);
+                // Also record the v3 functional-param count while the plug-in is
+                // in hand — else a map learned before v3 (or never re-snapshotted)
+                // ships functionalParamCount == -1 and the exchange shows NO
+                // parameter coverage, even though it maps plenty of params.
+                uf8::user_plugins::captureFunctionalParamCount(
+                    match, countFunctionalParams_(tr, i));
                 return true;
             }
         }
@@ -13198,7 +13268,10 @@ static void captureOriginalNameForMatch_(const std::string& match)
 // (ExchangeView.cpp) under the same ExtState keys.
 static std::string exchangeBaseUrl_() {
     const char* u = GetExtState("rea_sixty", "exchange_api_url");
-    std::string s = (u && *u) ? u : "http://127.0.0.1:8010";
+    // Same production default as ExchangeView's kDefaultApiUrl — a shipped user
+    // who never opened the URL field still uploads to the live server, not a
+    // dev loopback. Frank overrides with 127.0.0.1:8010 in ExtState for testing.
+    std::string s = (u && *u) ? u : "https://api.reasixty.com";
     while (!s.empty() && s.back() == '/') s.pop_back();
     return s;
 }
@@ -13482,11 +13555,22 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         const char* prevAuthor = GetExtState("ReaSixty", "shareAuthor");
         snprintf(g_shareAuthor, sizeof(g_shareAuthor), "%s",
                  prevAuthor ? prevAuthor : "");
-        // Vendor is plug-in-specific, so it starts EMPTY every time — never
-        // carried over from the last share (that would put one plug-in's
-        // vendor on another's map). The server derives it from original_name
-        // anyway; the field is only really needed for JSFX. Frank 2026-07-19.
+        // Vendor: prefill from THIS plug-in's factory name (original_name, just
+        // captured above), which is exactly what the server derives it from — so
+        // the common VST3/CLAP case shows the vendor already ("SSL" for Delta
+        // Control 16) instead of an empty field the user is left wondering about
+        // (Frank 2026-07-21). Parsed per-map, never carried over from the last
+        // share. Stays empty for AU "Vendor: Name" / JSFX names with no trailing
+        // "(Vendor)" — the server derives those from original_name too.
         std::memset(g_shareVendor, 0, sizeof(g_shareVendor));
+        for (const auto& m : user_plugins::get().maps) {
+            if (m.match != g_editingMatch) continue;
+            const std::string v = tailVendorOf_(
+                m.originalName.empty() ? m.match : m.originalName);
+            if (!v.empty())
+                snprintf(g_shareVendor, sizeof(g_shareVendor), "%s", v.c_str());
+            break;
+        }
         std::memset(g_shareDesc, 0, sizeof(g_shareDesc));
         g_shareOpen = true;
     }
@@ -15147,6 +15231,24 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (s_mockup == 1) {
         g_fxLearnEditLayer = uf8::FxLayer::Normal;
     } else {
+        // Switch layers by TAPPING the modifier, like a toggle (Frank
+        // 2026-07-21): tap Ctrl / Opt / Ctrl+Opt to jump to that overlay, tap the
+        // SAME combo again to drop back to Normal — so you never have to reach for
+        // the Normal radio. Edge-triggered on ENGAGING more modifiers (live layer
+        // rising above the previous frame's), which means: (a) releasing never
+        // toggles, so a rename — whose native dialog releases the modifier — keeps
+        // the layer you switched to; and (b) a staggered Ctrl-then-Opt climbs to
+        // Ctrl+Opt instead of stopping on whichever key landed first. Uses the same
+        // live resolver the HUD badge reads, so a DISABLED layer (enable toggle
+        // off) reports Normal and can't be tabbed to. Radios still work manually.
+        static int s_prevLiveLayer = uf8::FxLayer::Normal;
+        const int liveLayer = reasixty_fxLearnActiveLayer();
+        if (liveLayer > s_prevLiveLayer
+            && liveLayer > uf8::FxLayer::Normal && liveLayer < kNumFxLayers) {
+            g_fxLearnEditLayer = (g_fxLearnEditLayer == liveLayer)
+                               ? uf8::FxLayer::Normal : liveLayer;
+        }
+        s_prevLiveLayer = liveLayer;
         ImGui_TextDisabled(ctx, "Layer:");
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "Normal##fxl_layer_norm",
@@ -15499,6 +15601,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                                   "UF8 Sel fb %d str %d",   fb + 1, s + 1);
                     noteUse_(sb.selVst3Param,  buf);
                 }
+            }
+            // UC1 EXT FUNCS (v8, CS mode) — the hidden BACK-menu slots. Stored
+            // in `extFuncs`, DECOUPLED from `slots` (an EXT FUNCS param need not
+            // be on any physical control, UserPluginCatalog.h:505), so they were
+            // missing from this reverse-map and their params showed as free in
+            // the list even when curated (Frank 2026-07-21). Empty array on a
+            // non-CS map, so the guard alone skips it there.
+            for (const auto& e : editing->extFuncs) {
+                if (e.vst3Param < 0) continue;
+                std::string lbl = e.name.empty() ? "EXT FUNCS"
+                                                  : ("EXT: " + e.name);
+                noteUse_(e.vst3Param, std::move(lbl));
             }
 
             const int paramCount = paramCountFor_(*editing, fx);
@@ -16275,9 +16389,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     }
 
     // ---- Share ONE mapping (.rea60map) ------------------------------------
-    // Collects the metadata the exchange indexes on. Vendor is asked for
-    // because it exists nowhere in the catalog — a map is keyed by a
-    // substring of the FX name, which carries no manufacturer.
+    // Collects the metadata the exchange indexes on. Vendor is PREFILLED from the
+    // plug-in's factory name (original_name) when the popup opens — the same
+    // source the server derives it from — so it is editable but rarely needs
+    // touching (empty only for AU/JSFX names with no trailing "(Vendor)").
     {
         int condAlways = ImGui_Cond_Always;
         centerNextPopupOnDisplay_(ctx);
@@ -18601,6 +18716,11 @@ bool reasixty_hudUf8BankColour(int bank, unsigned int rgb, void* tr, int fx)
 bool reasixty_hudUf8FillStripColours(unsigned int rgb, int fb, int vb, void* tr, int fx)
 {
     return uf8::hudUf8FillStripColours_(rgb, fb, vb, tr, fx);
+}
+bool reasixty_hudUf8SetStripColour(int strip, unsigned int rgb, int fb, int vb,
+                                   void* tr, int fx)
+{
+    return uf8::hudUf8SetStripColour_(strip, rgb, fb, vb, tr, fx);
 }
 
 // Map a touched UC1 control (SSL Link slot + domain: 0 = CS, 1 = BC) to its
