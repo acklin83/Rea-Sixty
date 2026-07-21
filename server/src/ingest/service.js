@@ -100,7 +100,7 @@ export function resolvePlugin(db, { match, preferredName, vendorId, fxType }) {
  * Ingest one file. Returns { mapId, pluginId, coverage }.
  * Throws IngestError (from parseRea60Map) on anything malformed or unsafe.
  */
-export function ingestMap(text, { accountId, preferredPluginName = null, replacesId = null } = {}) {
+export function ingestMap(text, { accountId, preferredPluginName = null, replacesId = null, replaceMine = false } = {}) {
   const parsed = parseRea60Map(text);
   const db = getDb();
 
@@ -129,6 +129,22 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
       // still wins over both.
       match: identityName, preferredName: preferredPluginName, vendorId, fxType,
     });
+
+    // Opt-in auto-replace (`replaceMine`, the extension's ?replace_mine=1): the
+    // in-app "Publish" has no map-picker, so it declares "this is an UPDATE of my
+    // map for this plug-in" and the server finds the map to replace. Without it
+    // the extension gets a 409 on an unchanged re-upload and spawns a duplicate on
+    // a changed one. Gated on the flag ON PURPOSE — the seed and the diff feature
+    // keep multiple maps per plug-in under one account (they don't send it); an
+    // explicit ?replaces still wins over this.
+    if (replacesId == null && replaceMine) {
+      const mine = db.prepare(
+        `SELECT id FROM maps
+          WHERE plugin_id = ? AND account_id = ? AND published = 1
+          ORDER BY id DESC LIMIT 1`,
+      ).get(pluginId, accountId);
+      if (mine) replacesId = mine.id;
+    }
 
     // Reject a duplicate: an identical mapping of the SAME plug-in already
     // published (by anyone). A user replacing their own map is exempt for that

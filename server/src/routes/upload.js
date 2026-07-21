@@ -52,12 +52,16 @@ export async function registerUploadRoutes(app) {
       if (!owned) return reply.code(400).send({ error: 'replaces_not_yours' });
       replacesId = rid;
     }
+    // The in-app Publish has no map-picker, so it sets replace_mine=1 to mean
+    // "update my existing map for this plug-in" (ingest finds which one).
+    const replaceMine = req.query.replace_mine === '1' || req.query.replace_mine === 'true';
 
     try {
       const { mapId, pluginId, coverage } = ingestMap(text, {
         accountId: req.account.accountId,
         preferredPluginName,
         replacesId,
+        replaceMine,
       });
       const slug = getDb().prepare('SELECT slug FROM plugins WHERE id = ?').get(pluginId).slug;
       return reply.code(201).send({

@@ -16566,8 +16566,13 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                         };
                         g_shareError.clear();
                         g_uploadStatus.clear();
+                        // replace_mine=1: "update MY map for this plug-in" — the
+                        // in-app Publish has no map-picker, so a re-publish updates
+                        // the user's existing map instead of 409-ing (identical) or
+                        // spawning a duplicate (changed). Server finds which one.
                         g_uploadReq = reasixty::http::begin(
-                            "POST", exchangeBaseUrl_() + "/v1/maps", headers, envelope);
+                            "POST", exchangeBaseUrl_() + "/v1/maps?replace_mine=1",
+                            headers, envelope);
                         if (!g_uploadReq)
                             g_shareError = "Bad exchange server URL.";
                         SetExtState("ReaSixty", "shareAuthor",   g_shareAuthor, true);

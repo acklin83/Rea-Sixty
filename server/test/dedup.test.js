@@ -73,6 +73,32 @@ test('same bindings on a DIFFERENT plug-in are allowed', () => {
   assert.equal(db.prepare('SELECT COUNT(*) c FROM maps').get().c, 2);
 });
 
+test('replace_mine updates your own map instead of duplicating (changed bindings)', () => {
+  const { acct, db } = fresh();
+  const first = ingestMap(envelope({ p7: 7 }), { accountId: acct });
+  ingestMap(envelope({ p7: 8 }), { accountId: acct, replaceMine: true });
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM maps WHERE published = 1').get().c, 1);
+  assert.equal(db.prepare('SELECT published FROM maps WHERE id = ?').get(first.mapId).published, 0);
+});
+
+test('replace_mine on an unchanged re-upload refreshes rather than 409', () => {
+  const { acct, db } = fresh();
+  ingestMap(envelope(), { accountId: acct });
+  ingestMap(envelope(), { accountId: acct, replaceMine: true });   // no throw
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM maps WHERE published = 1').get().c, 1);
+});
+
+test('replace_mine still rejects a DIFFERENT account\'s identical map', () => {
+  const { acct, db } = fresh();
+  ingestMap(envelope(), { accountId: acct });
+  const other = Number(db.prepare('INSERT INTO accounts (display_name, created_at) VALUES (?,?)')
+    .run('b', 0).lastInsertRowid);
+  assert.throws(
+    () => ingestMap(envelope(), { accountId: other, replaceMine: true }),
+    (e) => e.code === 'duplicate_mapping',
+  );
+});
+
 test('replacing your own map with an identical one is allowed', () => {
   const { acct, db } = fresh();
   const first = ingestMap(envelope(), { accountId: acct });
