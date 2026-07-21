@@ -22,8 +22,12 @@ const del = db.prepare('DELETE FROM ext_funcs WHERE map_id = ?');
 const ins = db.prepare(
   'INSERT INTO ext_funcs (map_id, slot, name, param_name, vst3_param) VALUES (?,?,?,?,?)',
 );
+// Recompute parameter coverage too: it was frozen at ingest and did NOT count
+// EXT FUNCS params, so a re-parse (which now does) is the up-to-date figure. The
+// plug-in index's bestParamCoverage is a VIEW over this, so it follows for free.
+const upCov = db.prepare('UPDATE maps SET param_cov_n = ?, param_cov_d = ? WHERE id = ?');
 
-let mapsWith = 0, rows = 0, skipped = 0;
+let mapsWith = 0, rows = 0, covUpdated = 0, skipped = 0;
 for (const m of maps) {
   let parsed;
   try {
@@ -34,14 +38,18 @@ for (const m of maps) {
     continue;
   }
   const ef = parsed.extFuncs ?? [];
+  const pc = parsed.paramCoverage;   // null when the file has no functional_params
   db.transaction(() => {
     del.run(m.id);
     for (const e of ef) ins.run(m.id, e.slot, e.name, e.param, e.vst3Param);
+    upCov.run(pc ? pc.n : null, pc ? pc.d : null, m.id);
   })();
   if (ef.length) { mapsWith++; rows += ef.length; }
+  covUpdated++;
 }
 
 console.log(
   `backfill-extfuncs: ${maps.length} maps scanned, ${mapsWith} carry EXT FUNCS, `
-  + `${rows} rows written${skipped ? `, ${skipped} skipped` : ''}.`,
+  + `${rows} rows written, ${covUpdated} param-coverage figures refreshed`
+  + `${skipped ? `, ${skipped} skipped` : ''}.`,
 );
