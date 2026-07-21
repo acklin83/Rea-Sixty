@@ -142,6 +142,28 @@ export function extractUf8(map) {
 }
 
 /**
+ * Extract the curated UC1 EXT FUNCS — the hidden BACK-menu the user fills with
+ * up to 10 plug-in params (CS mode). DECOUPLED from `slots` (an EXT FUNCS param
+ * need not be on any physical control), so the bindings extractor never sees
+ * them; without this they vanish from the exchange entirely, which is exactly
+ * how they went missing until 2026-07-21. Each entry is `{name, vst3Param}`;
+ * empty slots (vst3Param < 0) are skipped. Param name resolved via paramSnapshot,
+ * `slot` kept so the grid order is stable.
+ */
+export function extractExtFuncs(map) {
+  const paramNames = new Map(
+    (map.paramSnapshot ?? []).map((p) => [p.vst3Param, p.name ?? '']),
+  );
+  const out = [];
+  (map.extFuncs ?? []).forEach((e, i) => {
+    const vp = e?.vst3Param ?? -1;
+    if (!(vp >= 0)) return;
+    out.push({ slot: i, name: e.name ?? '', vst3Param: vp, param: paramNames.get(vp) ?? '' });
+  });
+  return out;
+}
+
+/**
  * Extract one row per bound control.
  *
  * A linkIdx with no UC1 control (Width, Pan, Out Trim, QA1-6, SAT, GRP…) is a
@@ -303,6 +325,9 @@ export function parseRea60Map(text) {
   // UF8 maps (domain None) carry their bindings in the V-Pot/strip grid, not
   // the `slots` array — extract them so the detail page can draw every bank.
   const uf8 = map.domain === 'None' ? extractUf8(map) : { vpots: [], strips: [] };
+  // The curated UC1 EXT FUNCS (CS mode) — separate from `slots`, so extracted
+  // on their own and counted toward parameter coverage below.
+  const extFuncs = extractExtFuncs(map);
 
   // Parameter coverage: how many distinct plug-in params the map controls, out
   // of the plug-in's functional params (v3 envelope). The pruned paramSnapshot
@@ -311,6 +336,7 @@ export function parseRea60Map(text) {
   for (const b of bindings) if (b.vst3Param >= 0) mappedParams.add(b.vst3Param);
   for (const v of uf8.vpots) if (v.vst3Param >= 0) mappedParams.add(v.vst3Param);
   for (const s of uf8.strips) if (s.vst3Param >= 0) mappedParams.add(s.vst3Param);
+  for (const e of extFuncs) mappedParams.add(e.vst3Param);
   const functionalParams = Number.isInteger(root.functional_params) && root.functional_params > 0
     ? root.functional_params : null;
   const paramCoverage = functionalParams
@@ -335,6 +361,7 @@ export function parseRea60Map(text) {
     domain: map.domain,
     bindings,
     uf8,
+    extFuncs,
     coverage,
     paramCoverage,
   };

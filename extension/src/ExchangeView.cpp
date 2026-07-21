@@ -99,6 +99,7 @@ struct Section  { std::string name; int total = 0, hit = 0; std::vector<CtrlCell
 struct Uf8Vpot  { int faderBank = 0, vpotBank = 0, strip = 0; std::string label, param, mode; };
 struct Uf8Strip { int faderBank = 0, strip = 0; std::string kind, param; };
 struct ModBind  { std::string layer, control, param; };
+struct ExtFunc  { std::string name, param; };   // UC1 EXT FUNCS (hidden BACK-menu)
 struct MapDetail {
     int id = 0;
     std::string pluginName, vendor, surfaces, domain, author, description, licence;
@@ -111,6 +112,7 @@ struct MapDetail {
     std::vector<Uf8Strip> uf8StripBindings;
     std::vector<std::pair<int, std::string>> alsoMapped;              // linkIdx, param
     std::vector<ModBind> modLayers;
+    std::vector<ExtFunc> extFuncs;                                    // UC1 EXT FUNCS
     // "Works for me" — the count everyone sees, and whether THIS account is
     // one of them. -1 means the server could not say because we sent no token,
     // which is NOT the same as "no": showing an un-pressed button to someone
@@ -631,6 +633,13 @@ void pumpMap() {
             mb.control = jstr(o, "control");
             mb.param = jstr(o, "param");
             d.modLayers.push_back(std::move(mb));
+        }
+    }
+    if (auto* ef = root->get_item_by_name("extFuncs"); ef && ef->is_array() && ef->m_array) {
+        for (int i = 0; i < ef->m_array->GetSize(); ++i) {
+            wdl_json_element* o = ef->enum_item(i);
+            if (!o || !o->is_object()) continue;
+            d.extFuncs.push_back({ jstr(o, "name"), jstr(o, "param") });
         }
     }
     g_mapDetail = std::move(d);
@@ -1245,6 +1254,27 @@ void drawMap(ImGui_Context* ctx) {
                 }
                 ImGui_EndTable(ctx);
             }
+        }
+    }
+    // UC1 EXT FUNCS — the hidden BACK-menu (CS mode). Curated by the author,
+    // decoupled from the face controls, so shown as its own name -> param table.
+    if (!d.extFuncs.empty()) {
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "EXT FUNCS (UC1 hidden menu)");
+        int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+        if (ImGui_BeginTable(ctx, "##exch_extfuncs", 2, &tFlags, nullptr, nullptr, nullptr)) {
+            int stretch = ImGui_TableColumnFlags_WidthStretch;
+            double wA = 1.0, wB = 2.0;
+            ImGui_TableSetupColumn(ctx, "Name",      &stretch, &wA, nullptr);
+            ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wB, nullptr);
+            for (const auto& e : d.extFuncs) {
+                ImGui_TableNextRow(ctx, nullptr, nullptr);
+                ImGui_TableSetColumnIndex(ctx, 0);
+                ImGui_Text(ctx, e.name.empty() ? "(unnamed)" : e.name.c_str());
+                ImGui_TableSetColumnIndex(ctx, 1);
+                ImGui_Text(ctx, e.param.empty() ? "(bound)" : e.param.c_str());
+            }
+            ImGui_EndTable(ctx);
         }
     }
 }

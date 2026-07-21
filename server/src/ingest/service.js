@@ -104,7 +104,7 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
   const parsed = parseRea60Map(text);
   const db = getDb();
 
-  const { envelope, map, bindings, coverage, uf8, paramCoverage } = parsed;
+  const { envelope, map, bindings, coverage, uf8, extFuncs, paramCoverage } = parsed;
 
   // Identity source, best-first: the v2 `original_name` is the full factory
   // name and carries the vendor; `match` is a user-editable substring that may
@@ -187,6 +187,16 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
     }
     for (const s of uf8?.strips ?? []) {
       insU.run(mapId, s.kind, s.faderBank, null, s.strip, s.label, s.paramName, s.vst3Param, null);
+    }
+
+    // UC1 EXT FUNCS — the hidden BACK-menu slots (CS mode). One row per curated
+    // slot; empty slots were already dropped in extractExtFuncs.
+    const insE = db.prepare(`
+      INSERT INTO ext_funcs (map_id, slot, name, param_name, vst3_param)
+      VALUES (?,?,?,?,?)
+    `);
+    for (const e of extFuncs ?? []) {
+      insE.run(mapId, e.slot, e.name, e.param, e.vst3Param);
     }
 
     if (replacesId) {

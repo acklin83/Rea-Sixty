@@ -79,6 +79,19 @@ function modifierBindings(mapId, domain) {
   });
 }
 
+/** Curated UC1 EXT FUNCS for a map (CS mode) — the hidden BACK-menu list.
+ *  Empty for UF8-only maps. Decoupled from the slot tables, so returned on its
+ *  own; without this they never reach the detail page. */
+function extFuncsOf(mapId) {
+  const db = getDb();
+  return db.prepare(
+    `SELECT slot, name, param_name, vst3_param FROM ext_funcs
+      WHERE map_id = ? ORDER BY slot`,
+  ).all(mapId).map((r) => ({
+    slot: r.slot, name: r.name ?? '', param: r.param_name ?? '', vst3Param: r.vst3_param,
+  }));
+}
+
 function coverageOf(row) {
   const pct = row.coverage_d ? Math.round((100 * row.coverage_n) / row.coverage_d) : 0;
   return { n: row.coverage_n, d: row.coverage_d, pct };
@@ -173,6 +186,7 @@ export function getMap(id) {
     sections: isUf8 ? [] : coverageSections(m.id, m.domain),
     alsoMapped: alsoMapped(m.id),
     modifierLayers: modifierBindings(m.id, m.domain),
+    extFuncs: extFuncsOf(m.id),
   };
 }
 

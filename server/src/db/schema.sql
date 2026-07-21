@@ -236,6 +236,21 @@ CREATE TABLE IF NOT EXISTS uf8_slots (
 );
 CREATE INDEX IF NOT EXISTS idx_uf8_map ON uf8_slots(map_id);
 
+-- Curated UC1 EXT FUNCS (the hidden BACK-menu, CS mode). Decoupled from
+-- map_bindings on purpose — an EXT FUNCS param need not be on any physical
+-- control — so they get their own rows or they vanish from the exchange
+-- entirely (they did until 2026-07-21). A new TABLE reaches existing databases
+-- because this file is exec'd with CREATE TABLE IF NOT EXISTS; a new COLUMN on
+-- maps would not, which is why this is a table.
+CREATE TABLE IF NOT EXISTS ext_funcs (
+  map_id      INTEGER NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+  slot        INTEGER NOT NULL,   -- 0..9, the 2x5 grid position (display order)
+  name        TEXT,               -- the user's label ("3D Flux")
+  param_name  TEXT,               -- resolved via paramSnapshot
+  vst3_param  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_extfuncs_map ON ext_funcs(map_id);
+
 -- ------------------------------------------------------- rating + moderation
 
 -- "Works for me" plus a confirmed plug-in version, NOT 5 stars. With few votes
