@@ -15296,6 +15296,66 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
         }
 
+        // -------- Off-face "also mapped" bindings (Frank 2026-07-21) -------
+        // SSL 360 Link slots with NO control on the UC1 face — Fader, Pan, the
+        // quick-access buttons, Comp Mix, SAT, GRP… They bind legitimately but
+        // never appear on the mockup, so before this there was no way to see or
+        // clear a stray one (Frank's Comp Mix double-bound to the LMF Freq param
+        // — invisible, un-clearable). List every off-face normal-layer binding
+        // with a Clear button. UC1 only; UF8 has no Link slots. on-face = the
+        // linkIdx has a control in kUc1Controls for this domain (the same table
+        // the schematic draws from).
+        if (s_mockup != 1 && topo) {
+            auto onFace = [&](int li) {
+                for (const auto& c : kUc1Controls)
+                    if (c.domain == editing->domain && c.linkIdx == li) return true;
+                return false;
+            };
+            std::vector<int> offFace;
+            for (const auto& slt : editing->slots) {
+                if (slt.vst3Param < 0) continue;      // base layer unbound
+                if (onFace(slt.linkIdx)) continue;    // shown on the face already
+                offFace.push_back(slt.linkIdx);
+            }
+            if (!offFace.empty()) {
+                ImGui_Spacing(ctx);
+                ImGui_Separator(ctx);
+                ImGui_Spacing(ctx);
+                ImGui_Text(ctx, "Also mapped — off-face (no UC1 knob)");
+                ImGui_TextDisabled(ctx,
+                    "SSL Link slots with no control on the face (Fader, Pan, QA, "
+                    "Comp Mix, SAT…). Real bindings — Clear a stray one here.");
+                char pn[128];
+                for (int li : offFace) {
+                    const LinkSlot* bs = findSlotByLinkIdx(*topo, li);
+                    int vp = -1;
+                    for (const auto& slt : editing->slots)
+                        if (slt.linkIdx == li) { vp = slt.vst3Param; break; }
+                    pn[0] = 0;
+                    if (vp >= 0) paramNameFor_(*editing, fx, vp, pn, sizeof(pn));
+                    char row[256];
+                    snprintf(row, sizeof(row), "    %s  ->  %s",
+                             (bs && bs->name) ? bs->name : "(slot)",
+                             pn[0] ? pn : "(bound)");
+                    ImGui_Text(ctx, row);
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    char bid[48];
+                    snprintf(bid, sizeof(bid), "Clear##fxl_offface_%d", li);
+                    if (ImGui_Button(ctx, bid, nullptr, nullptr)) {
+                        // Clear the WHOLE slot (all layers), independent of the
+                        // held-modifier edit layer — this is a removal, not an
+                        // overlay tweak.
+                        const int savedLayer = g_fxLearnEditLayer;
+                        g_fxLearnEditLayer = uf8::FxLayer::Normal;
+                        if (g_listeningLinkIdx == li) g_listeningLinkIdx = -1;
+                        unbindSlot_(li);
+                        g_fxLearnEditLayer = savedLayer;
+                        break;   // offFace is now stale — re-render next frame
+                    }
+                }
+            }
+        }
+
         // -------- UC1 EXT FUNCS curation (Frank 2026-06-01) ----------
         // The UC1's hidden BACK-button menu (CS mode). For a user-mapped
         // (non-SSL) CS plug-in the user fills 10 slots (2×5 grid, same
