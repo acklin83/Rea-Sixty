@@ -393,16 +393,20 @@ std::atomic<int>      g_uf1MeterScreen{0};
 // Meter (the impersonator doesn't surface PluginType yet).
 constexpr int kUf1MeterScreenCycle = 3;
 
-// Which V-Pot parameter PAGE is active within the current Meter screen. The UF1
-// User Guide Rev4.0 (S.189-191) gives each meter screen multiple pages of V-Pot
-// assignments (Overview 2, Analogue 2, RTA 3); the manual doesn't document how
-// SSL switches pages, so we cycle them with Display soft-key 2 (0x1A) while in
-// Meter view. Set from the input worker (atomic store only), read by the
-// main-thread V-Pot handler + painter. Reset to 0 on a screen change.
+// Which V-Pot parameter PAGE is active within the current Meter screen. Each
+// meter screen has 3 pages of V-Pot assignments (verified on Meter Pro hardware
+// 2026-07-22; the manual Rev4.0's 2-page Overview/Analogue is outdated). The
+// manual doesn't document how SSL switches pages, so we cycle them with Display
+// soft-key 2 (0x1A) while in Meter view. Set from the input worker (atomic store
+// only), read by the main-thread V-Pot handler + painter. Reset to 0 on a screen
+// change.
 std::atomic<int>      g_uf1MeterPage{0};
 // Pages per meter screen, indexed by g_uf1MeterScreen (0 Overview, 1 Analogue,
-// 2 RTA). See uf1-vpot-operator-spec.md / manual S.189-191.
-constexpr int kUf1MeterPageCount[3] = { 2, 2, 3 };
+// 2 RTA). VERIFIED on the hardware (Meter Pro, Frank's page walk-through
+// 2026-07-22): every screen has 3 pages. The manual Rev4.0 (2 Overview/Analogue
+// pages) is OUTDATED — it predates Meter Pro. See
+// docs/session-2026-07-22-uf1-meter-capture.md.
+constexpr int kUf1MeterPageCount[3] = { 3, 3, 3 };
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -11061,27 +11065,29 @@ struct Uf1MeterVPot {
                        // value comes from TrackFX_GetFormattedParamValue.
 };
 struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
-// [screen][page].  screen: 0 Overview, 1 Analogue, 2 RTA.  Param indices from the
-// dump: 6 Digital Type(3), 5 RMS Integration, 16 Lissajous Fade, 3 Peak Hold(3),
-// 4 True Peak(2); 8 Analogue Mode(2), 11 0 VU Line-Up(3), 9 Reference Level,
-// 10 Max Needle(3), 12 Dual Format(3), 1 Global Delay; 51 RTA Band, 22 Scale Top,
-// 23 Scale Bottom, 18 RTA Peak Hold(3), 20 Weighting(3), 21 Averaging(3),
-// 19 Analysis Source.
+// [screen][page]. screen: 0 Overview, 1 Analogue, 2 RTA. `param` = the TrackFX
+// param number from the 57-param dump docs/ssl-native-params/VST3__SSL_Meter_Pro_
+// (SSL).md. The per-page V-Pot ASSIGNMENT + the short labels are verified against
+// the hardware (Meter Pro, Frank's page walk-through 2026-07-22 + captures cap103-
+// 109; the manual Rev4.0 layout is OUTDATED — pre-Meter-Pro). `steps` = enum value
+// count (one detent = one value) from that walk-through; 0 = continuous fine dial
+// for large/variable enums (RTA freq/scale, Custom channel source, Overload,
+// Delay & RMS times). See docs/session-2026-07-22-uf1-meter-capture.md.
 const Uf1MeterPage kUf1MeterVPots[3][3] = {
     { // Overview
-        { {6,3,"Type"},    {5,0,"RMS"},     {16,7,"Fade"}   },  // Fade = 7-step enum (kFadeSteps)
-        { {3,3,"PkHold"},  {4,2,"TruePk"},  {-1,0,nullptr}  },
-        { {-1,0,nullptr},  {-1,0,nullptr},  {-1,0,nullptr}  },   // no page 3
+        { {4,2,"TruePk"},  {6,7,"Type"},    {16,7,"Fade"}  },  // P1 Digital True Peak / Digital Type / Lissajous Fade
+        { {-1,0,nullptr},  {3,5,"PkHld"},   {5,0,"Int"}    },  // P2 — / Peak Hold / RMS Integration
+        { {2,2,"TPkHQ"},   {17,2,"SmCp"},   {1,0,"Delay"}  },  // P3 True Peak HQ / Sum Compensation / Global Delay
     },
     { // Analogue
-        { {8,2,"Mode"},    {11,3,"0 VU"},   {9,3,"Ref"}     },  // Ref = 3-step enum (-36/-18/0)
-        { {10,3,"MaxNdl"}, {12,3,"Format"}, {1,0,"Delay"}   },
-        { {-1,0,nullptr},  {-1,0,nullptr},  {-1,0,nullptr}  },   // no page 3
+        { {8,2,"Mode"},    {11,3,"0 VU"},   {9,3,"Ref"}    },  // P1 Analogue Mode / 0 VU Line-Up / Reference Level
+        { {12,3,"Format"}, {13,0,"Cust L"}, {14,0,"Cust R"}},  // P2 Dual Format / Custom Left / Custom Right
+        { {10,3,"MaxN"},   {15,0,"Overld"}, {-1,0,nullptr} },  // P3 Max Needle / LED Overload / —
     },
     { // RTA
-        { {51,0,"SelFreq"},{22,0,"SclTop"}, {23,0,"SclBtm"} },
-        { {18,3,"PkHold"}, {20,3,"Weight"}, {21,3,"Avg"}    },
-        { {19,3,"Source"}, {-1,0,nullptr},  {-1,0,nullptr}  },  // Source = 3-step enum
+        { {51,0,"SlFreq"}, {22,0,"SclTop"}, {23,0,"SclBtm"}},  // P1 Selected Band / Scale Top / Scale Bottom
+        { {18,8,"PkHld"},  {20,3,"Wght"},   {21,5,"Avg"}   },  // P2 RTA Peak Hold / Weighting / Averaging
+        { {19,0,"Source"}, {-1,0,nullptr},  {-1,0,nullptr} },  // P3 Analysis Source / — / —
     },
 };
 // Continuous params move this much normalised per detent (fine — a full sweep is
