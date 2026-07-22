@@ -11148,6 +11148,35 @@ void uf1EmitMeterInstanceLabel_()
                     std::span<const uint8_t>(p.data(), p.size())));
 }
 
+// The Overview bargraph SCALE (Digital Type) and the Analogue faceplate (VU vs
+// PPM) graphics live in the UF1 firmware; SSL selects one with a 1-byte 0x011a
+// element, sent alongside the label group on screen entry and whenever the scale
+// param changes (StoerPC USBPcap 2026-07-22: cap105 Digital Type, cap107 VU/PPM;
+// cap104 proved value-only params send NO 0x011a). RTA & Loudness are data-driven
+// (no 0x011a). The value→selector bytes are byte-exact from the captures; the enum
+// ORDER is confirmed by the 57-param dump (@0.5 Digital Type = "Linear 2x" = idx 3).
+// Deduped on (screen, selector) so a non-scale param turn does not re-send, but a
+// screen change always re-asserts. Main-thread only (TrackFX + g_uf1_dev).
+void uf1EmitMeterScaleSelector_(MediaTrack* tr, int fx, int screen)
+{
+    if (!g_uf1_dev || !tr || fx < 0) return;
+    static const uint8_t kDigitalTypeSel[7] = {0x07,0x08,0x03,0x04,0x0e,0x0c,0x0a};
+    static const uint8_t kAnalogueModeSel[2] = {0x02,0x04};
+    static int     sLastScreen = -1;
+    static uint8_t sLastSel     = 0xFF;
+    int param = -1, n = 0; const uint8_t* map = nullptr;
+    if      (screen == 0) { param = 6; map = kDigitalTypeSel;  n = 7; }  // Overview: Digital Type
+    else if (screen == 1) { param = 8; map = kAnalogueModeSel; n = 2; }  // Analogue: VU/PPM
+    else { sLastScreen = screen; sLastSel = 0xFF; return; }              // RTA/Loudness: data-driven
+    const double nv = TrackFX_GetParamNormalized(tr, fx, param);
+    const int idx = std::clamp(int(nv * (n - 1) + 0.5), 0, n - 1);
+    const uint8_t sel = map[idx];
+    if (screen == sLastScreen && sel == sLastSel) return;   // already selected
+    sLastScreen = screen; sLastSel = sel;
+    g_uf1_dev->send(uf1::buildScreen(0x011a,
+                    std::span<const uint8_t>(&sel, 1)));
+}
+
 // Emit the 0x010e name/value labels for V-Pot2/3/4 on the current meter page,
 // with the plug-in's LIVE formatted value — so turning a V-Pot updates what you
 // see. Also replaces the entry burst's STATIC labels, which on some screens name
@@ -11186,6 +11215,10 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
         g_uf1_dev->send(uf1::buildScreen(0x010e,
                         std::span<const uint8_t>(p.data(), p.size())));
     }
+    // The scale/faceplate selector (0x011a) follows the label group, exactly as
+    // SSL sends it — so Digital Type (Overview) and VU/PPM (Analogue) switch the
+    // firmware scale, not just the label. No-op (deduped) on non-scale screens.
+    uf1EmitMeterScaleSelector_(tr, fx, screen);
 }
 
 // Apply a Meter-view V-Pot detent. id = uf1::enc::kVpot1..kVpot4. Main-thread
