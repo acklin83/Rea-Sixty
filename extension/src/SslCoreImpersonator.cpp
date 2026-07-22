@@ -38,6 +38,10 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <deque>
+#include <set>
+#include <algorithm>
+#include <climits>
 #include <utility>
 
 namespace sslcore {
@@ -113,6 +117,27 @@ std::map<uint16_t, Instance> g_inst;      // key = UDP source port = one plug-in
 // DataType comes from the SAME plug-in and the choice cannot flap; see getMeter.
 // 0 = none chosen yet. Guarded by g_meterMx.
 uint16_t                     g_srcPort = 0;
+// UF1 V-Pot1 instance PIN: -1 = auto (the liveness pick in getMeter); >= 0 pins
+// the g_meterSel-th Meter instance in port order, overriding the auto-pick.
+// Guarded by g_meterMx.
+int                          g_meterSel = -1;
+
+// Instance identity mapping for the V-Pot1 label + cycle order. Each plug-in
+// announces, on its own control connection at connect, its HostTrackName AND
+// HostTrackIndex — but the UDP datagram carries no track id, so we CORRELATE BY
+// TIMING: once a client has announced BOTH, queue {name,index}; the next NEW UDP
+// source port claims the front (g_portName / g_portIndex). The index is what
+// orders the instances so V-Pot1 cycles in TRACK order, not arbitrary port
+// order. Per-client temp state + the queue are touched only on the worker's
+// select-loop thread; g_portName/g_portIndex are read by the label thread too,
+// guarded by g_meterMx. See [[uf1-meter-instance-track-mapping]].
+struct PendingInst { std::string name; int index; };
+std::deque<PendingInst>          g_pending;        // announced, not yet tied to a port
+std::set<socket_t>               g_namedClients;   // clients already queued
+std::map<socket_t, std::string>  g_clientName;     // per-client, awaiting its index
+std::map<socket_t, int>          g_clientIndex;    // per-client, awaiting its name
+std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g_meterMx)
+std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 
 // Classify an instance from what it emits. ChannelStripMeterType only spans
 // 0..6, so ANY DataType >= 7 can only be a Meter/MeterPro plug-in (Rta,
@@ -439,7 +464,19 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 if (sslmeter::parseDatagram(buf, size_t(n), ups) > 0) {
                     g_lastDataMs.store(nowMs());
                     std::lock_guard<std::mutex> lk(g_meterMx);
-                    Instance& inst = g_inst[ntohs(from.sin_port)];
+                    const uint16_t sp = ntohs(from.sin_port);
+                    if (g_inst.find(sp) == g_inst.end()) {
+                        // NEW instance. The datagram carries no track id, so tie
+                        // this port to the {name,index} the just-connected plug-in
+                        // announced on the control socket (queued in connect order
+                        // above) — the timing correlation.
+                        if (!g_pending.empty()) {
+                            g_portName[sp]  = g_pending.front().name;
+                            g_portIndex[sp] = g_pending.front().index;
+                            g_pending.pop_front();
+                        }
+                    }
+                    Instance& inst = g_inst[sp];
                     inst.lastMs = nowMs();
                     // Signal detector for instance preference: any level-type
                     // meter (VuPpm..TextRms, 0..5) above -120 dBFS = live.
@@ -647,7 +684,9 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             socket_t c = clients[i];
             if (FD_ISSET(c, &rset)) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
-                if (n == 0) { SC_CLOSE(c); clients.erase(clients.begin() + long(i)); continue; }
+                if (n == 0) { SC_CLOSE(c); g_namedClients.erase(c);
+                              g_clientName.erase(c); g_clientIndex.erase(c);
+                              clients.erase(clients.begin() + long(i)); continue; }
                 // The plug-in TALKS BACK here, and we used to bin it unread
                 // ("we don't need their content yet"). It does need reading: the
                 // frames it sends carry the object ids it has registered, which
@@ -663,7 +702,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 //   efbc5100 | len32 | 12-B hdr | paylen32 | type32 | payload
                 //   type 2 = register, 18 = subscribe, 17 = prepare (names the
                 //   meter), 19 = data-port assignment. payload = 8-B objId + pb.
-                if (n > 0 && g_trace) {
+                if (n > 0) {
                     static std::map<socket_t, std::vector<uint8_t>> sAcc;
                     auto& acc = sAcc[c];
                     acc.insert(acc.end(), buf, buf + n);
@@ -682,30 +721,67 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             uint32_t paylen = 0, ftype = 0;
                             std::memcpy(&paylen, body + 12, 4);
                             std::memcpy(&ftype,  body + 16, 4);
-                            char line[512]; int o = 0;
-                            o += std::snprintf(line + o, sizeof(line) - o,
-                                               "[%.1f] PLUGIN->us type=%-3u paylen=%-4u", t,
-                                               unsigned(ftype), unsigned(paylen));
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
-                            if (avail >= 8) {
-                                o += std::snprintf(line + o, sizeof(line) - o, " obj=");
-                                for (int k = 0; k < 8; ++k)
-                                    o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
+
+                            // ── Instance NAME correlation ──────────────────────
+                            // Each plug-in SETs (type 18) its own HostTrackName
+                            // (obj f0630f41c7667f0c, pb 0a <len> <ascii>) over its
+                            // connection at connect. Take it ONCE per client and
+                            // queue it; the next new UDP source port claims it (the
+                            // datagram carries no track id). Later re-sends of the
+                            // shared object (on selection change) are ignored via
+                            // g_namedClients so a name is only tied at connect.
+                            static const uint8_t kHostTrackNameObj[8] =
+                                { 0xf0,0x63,0x0f,0x41,0xc7,0x66,0x7f,0x0c };
+                            static const uint8_t kHostTrackIndexObj[8] =
+                                { 0xcb,0x39,0xda,0x8c,0x9c,0x8c,0x43,0xee };
+                            if (ftype == 18 && avail >= 10 &&
+                                g_namedClients.find(c) == g_namedClients.end()) {
+                                if (std::memcmp(pay, kHostTrackNameObj, 8) == 0 &&
+                                    pay[8] == 0x0a) {                 // pb: 0a <len> <ascii>
+                                    const size_t slen = pay[9];
+                                    if (10 + slen <= avail && slen > 0)
+                                        g_clientName[c].assign(
+                                            reinterpret_cast<const char*>(pay + 10), slen);
+                                } else if (std::memcmp(pay, kHostTrackIndexObj, 8) == 0 &&
+                                           pay[8] == 0x08) {          // pb: 08 <varint>
+                                    g_clientIndex[c] = int(pay[9] & 0x7f);  // 1-based track idx
+                                }
+                                // Queue once this client has announced BOTH; the
+                                // port claim below ties them to the next new port.
+                                auto itN = g_clientName.find(c);
+                                auto itI = g_clientIndex.find(c);
+                                if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
+                                    g_pending.push_back({ itN->second, itI->second });
+                                    g_namedClients.insert(c);
+                                    g_clientName.erase(itN);
+                                    g_clientIndex.erase(itI);
+                                }
                             }
-                            // Remaining protobuf, hex + any printable run (the
-                            // type-17 prepares carry meter NAMES in clear text).
-                            if (avail > 8) {
-                                o += std::snprintf(line + o, sizeof(line) - o, " pb=");
-                                for (size_t k = 8; k < avail && o < int(sizeof(line)) - 96; ++k)
-                                    o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
-                                std::string txt;
-                                for (size_t k = 8; k < avail; ++k)
-                                    txt += (pay[k] >= 0x20 && pay[k] < 0x7f)
-                                             ? char(pay[k]) : '.';
-                                o += std::snprintf(line + o, sizeof(line) - o, " |%s|", txt.c_str());
+
+                            if (g_trace) {
+                                char line[512]; int o = 0;
+                                o += std::snprintf(line + o, sizeof(line) - o,
+                                                   "[%.1f] PLUGIN->us type=%-3u paylen=%-4u", t,
+                                                   unsigned(ftype), unsigned(paylen));
+                                if (avail >= 8) {
+                                    o += std::snprintf(line + o, sizeof(line) - o, " obj=");
+                                    for (int k = 0; k < 8; ++k)
+                                        o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
+                                }
+                                if (avail > 8) {
+                                    o += std::snprintf(line + o, sizeof(line) - o, " pb=");
+                                    for (size_t k = 8; k < avail && o < int(sizeof(line)) - 96; ++k)
+                                        o += std::snprintf(line + o, sizeof(line) - o, "%02x", pay[k]);
+                                    std::string txt;
+                                    for (size_t k = 8; k < avail; ++k)
+                                        txt += (pay[k] >= 0x20 && pay[k] < 0x7f)
+                                                 ? char(pay[k]) : '.';
+                                    o += std::snprintf(line + o, sizeof(line) - o, " |%s|", txt.c_str());
+                                }
+                                slog("%s", line);
                             }
-                            slog("%s", line);
                         }
                         off += 8 + flen;
                     }
@@ -756,10 +832,92 @@ void setView(int view)
     if (g_view.exchange(view) != view) g_viewDirty.store(true);
 }
 
+// Alive Meter instances — those that streamed within the last 3 s — in port
+// order. A loaded Meter plug-in streams ~25 Hz even when silent, so a STALE
+// entry (a plug-in that changed socket, was removed, or a port g_inst never
+// evicted) has an old lastMs and drops out. Without this, a dead port still
+// counted and the UF1 showed "1/3" for two real meters (Frank, 2026-07-22).
+// Caller holds g_meterMx.
+static std::vector<uint16_t> aliveMeterPorts_() {
+    const long long cutoff = nowMs() - 3000;
+    std::vector<uint16_t> out;
+    for (const auto& kv : g_inst)
+        if (kv.second.kind == Kind::Meter && kv.second.lastMs >= cutoff)
+            out.push_back(kv.first);
+    // Order by the plug-in's HostTrackIndex so V-Pot1 cycles in TRACK order, not
+    // by the arbitrary UDP source-port number (that was "content right, ORDER
+    // wrong"). Ports with no known index sort last, stable by port.
+    std::sort(out.begin(), out.end(), [](uint16_t a, uint16_t b) {
+        auto ia = g_portIndex.find(a), ib = g_portIndex.find(b);
+        const int va = (ia != g_portIndex.end()) ? ia->second : INT_MAX;
+        const int vb = (ib != g_portIndex.end()) ? ib->second : INT_MAX;
+        return (va != vb) ? (va < vb) : (a < b);
+    });
+    return out;
+}
+
+// The user-pinned Meter instance (g_meterSel-th ALIVE Meter in port order), or
+// nullptr when auto (-1) or the pin is out of range. Sets g_srcPort so the
+// overload path reads the same instance. Caller MUST hold g_meterMx.
+static Instance* pinnedMeterInstance_() {
+    if (g_meterSel < 0) return nullptr;
+    const auto ports = aliveMeterPorts_();
+    if (g_meterSel >= int(ports.size())) return nullptr;   // pin out of range → auto
+    g_srcPort = ports[g_meterSel];
+    return &g_inst[ports[g_meterSel]];
+}
+
+int meterInstanceCount() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    return int(aliveMeterPorts_().size());
+}
+
+int meterSelection() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    return g_meterSel;
+}
+
+void cycleMeterSelection(int delta) {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const int n = int(aliveMeterPorts_().size());
+    if (n <= 1) { g_meterSel = -1; return; }   // nothing to choose between
+    // States [auto(-1), 0, 1, .., n-1] map to indices 0..n; advance and wrap.
+    int idx = (g_meterSel < 0) ? 0 : (g_meterSel + 1);
+    idx = ((idx + delta) % (n + 1) + (n + 1)) % (n + 1);
+    g_meterSel = (idx == 0) ? -1 : (idx - 1);
+}
+
+std::string currentMeterName() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    uint16_t port = 0;
+    if (g_meterSel >= 0) {
+        const auto ports = aliveMeterPorts_();
+        if (g_meterSel < int(ports.size())) port = ports[g_meterSel];
+    } else {
+        port = g_srcPort;                     // the auto-picked instance
+        // On view entry the auto-pick has not run yet (g_srcPort stale/unset), so
+        // the label would flash a bare "AUTO" until the first scroll. Fall back to
+        // the first instance (Track order) so a name shows immediately instead.
+        if (g_portName.find(port) == g_portName.end()) {
+            const auto ports = aliveMeterPorts_();
+            if (!ports.empty()) port = ports.front();
+        }
+    }
+    auto it = g_portName.find(port);
+    return (it != g_portName.end()) ? it->second : std::string();
+}
+
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
               uint64_t* seq) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
+    // User pinned a specific instance (UF1 V-Pot1) — read ONLY that one, never
+    // leak another instance's data into the pinned view.
+    if (Instance* pin = pinnedMeterInstance_()) {
+        const Slot& s = pin->meter[dataType];
+        if (s.have) { current = s.current; peak = s.peak; if (seq) *seq = s.seq; return true; }
+        return false;
+    }
     // Prefer a positively-identified Meter plug-in: a channel strip on the same
     // track publishes Output(2)/OutputRms(3) into the very indices the UF1 meter
     // view reads as BarPeak(2)/BarRms(3), so taking "whatever arrived last"
@@ -828,6 +986,12 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
 bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
+    // Same pin as getMeter — the overload LEDs must come from the pinned instance.
+    if (Instance* pin = pinnedMeterInstance_()) {
+        const Slot& s = pin->meter[dataType];
+        if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
+        return false;
+    }
     // Same STICKY instance as getMeter (see there) — the overload LEDs must
     // come from the plug-in whose meters are on screen, not from whichever one
     // happens to be first in port order this millisecond.

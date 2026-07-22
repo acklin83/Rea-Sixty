@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace sslcore {
 
@@ -64,6 +65,18 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
 // the plug-in doesn't compute VuPpm there. Matches the property name the plug-in
 // announces in clear text: AnalogueMetersLedOverload.
 bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& ovlHold);
+
+// UF1 V-Pot1 instance selector — SESSION-WIDE, not per track. The plug-in
+// streams one Meter instance per loaded plug-in (on ANY track); getMeter /
+// getOverload normally AUTO-pick the live one. These let the surface override
+// that: cycle a pin through the streaming instances, and the pinned one's data
+// is what every meter/goniometer read returns. Thread-safe.
+int  meterInstanceCount();            // Meter instances currently streaming
+int  meterSelection();                // -1 = auto, else 0-based pinned ordinal
+void cycleMeterSelection(int delta);  // advance the pin over [auto, 0..N-1], wrapping
+// Track name of the instance currently being READ (the pin, or the auto-picked
+// one). Empty if not yet correlated. For the UF1 V-Pot1 label.
+std::string currentMeterName();
 
 // ChannelStripMeterType (AssignerArgsTypes.proto). An SSL channel strip numbers
 // its meters with THIS vocabulary, not MeterPluginDataType — the two overlap on
