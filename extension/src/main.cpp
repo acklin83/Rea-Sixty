@@ -11153,6 +11153,13 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
     if (!g_uf1_dev || !tr || fx < 0) return;
     screen = std::clamp(screen, 0, 2);
     page   = std::clamp(page, 0, kUf1MeterPageCount[screen] - 1);
+    // The UF1 only REPAINTS the V-Pot label strip when it receives the FULL
+    // 0x010e group starting with index 0. Proven on the wire (StoerPC USBPcap
+    // 2026-07-22, cap103/104): SSL always sends 0→1→2→3 on every change; a stream
+    // of just 1/2/3 updates the device's buffer but never repaints, so the value
+    // never changed on screen. Lead with index 0 (the instance label), exactly as
+    // SSL does. See docs/session-2026-07-22-uf1-meter-capture.md.
+    uf1EmitMeterInstanceLabel_();
     const Uf1MeterPage& pg = kUf1MeterVPots[screen][page];
     const Uf1MeterVPot* vs[3] = { &pg.v2, &pg.v3, &pg.v4 };
     for (int i = 0; i < 3; ++i) {
