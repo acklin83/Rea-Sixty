@@ -11112,20 +11112,67 @@ bool uf1FindMeterFx_(MediaTrack* tr, int sel, int& fxOut, int& countOut)
     return true;
 }
 
+// Show the selected Meter instance as V-Pot1's on-screen label — the TRACK NAME
+// (manual p189-191: "◄ MIX BUS ►"), which the impersonator correlates from each
+// plug-in's HostTrackName announcement. Falls back to MASTER (one instance) /
+// AUTO (several, none pinned) / "n/N" until a name has been correlated. 0x010e
+// index 0 is V-Pot1's name field (name-only form, as the entry burst's "MASTER").
+// Main-thread only (g_uf1_dev). The selection also routes which instance's
+// meters getMeter/getOverload return, so the name tracks what is on screen.
+void uf1EmitMeterInstanceLabel_()
+{
+    if (!g_uf1_dev) return;
+    const int count = sslcore::meterInstanceCount();
+    const std::string nm = sslcore::currentMeterName();
+    char lbl[16] = {0};
+    if (!nm.empty())
+        std::snprintf(lbl, sizeof(lbl), "%.9s", nm.c_str());
+    else if (count <= 1)
+        std::snprintf(lbl, sizeof(lbl), "MASTER");
+    else if (sslcore::meterSelection() < 0)
+        std::snprintf(lbl, sizeof(lbl), "AUTO");
+    else
+        std::snprintf(lbl, sizeof(lbl), "%d/%d", sslcore::meterSelection() + 1, count);
+    std::vector<uint8_t> p;
+    p.push_back(0x00);                                // V-Pot1 index
+    for (const char* c = lbl; *c; ++c) p.push_back(uint8_t(*c));
+    g_uf1_dev->send(uf1::buildScreen(0x010e,
+                    std::span<const uint8_t>(p.data(), p.size())));
+}
+
 // Apply a Meter-view V-Pot detent. id = uf1::enc::kVpot1..kVpot4. Main-thread
 // only (drained). No-op when not in Meter view or no SSL Meter plug-in is found.
 void applyUf1MeterVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
-    MediaTrack* tr = uf1FocusedTrack_();
-    if (!tr) return;
     const int screen = std::clamp(g_uf1MeterScreen.load(), 0, 2);
     const int page   = std::clamp(g_uf1MeterPage.load(), 0,
                                   kUf1MeterPageCount[screen] - 1);
 
-    int sel = g_uf1MeterFxSel.load();
+    // V-Pot1 = SESSION-WIDE Meter instance selector. It pins which streaming
+    // Meter instance the WHOLE meter view reads, across ALL tracks — the
+    // instances live on different tracks, so it must NOT depend on a Meter
+    // plug-in being on the focused track. Handled before the focused-track
+    // lookup that only the parameter V-Pots (V2/3/4) below need. The pin lives
+    // in the impersonator (it owns the per-instance streams); we just cycle it.
+    if (id == uf1::enc::kVpot1) {
+        static double sSelAccum = 0;
+        sSelAccum += step / kChannelEncoderScale;
+        int d = 0;
+        if (sSelAccum >= 1.0 || sSelAccum <= -1.0) d = int(sSelAccum);
+        if (d != 0) {
+            sSelAccum -= d;
+            sslcore::cycleMeterSelection(d);
+            uf1EmitMeterInstanceLabel_();          // reflect it on V-Pot1
+        }
+        return;
+    }
+
+    MediaTrack* tr = uf1FocusedTrack_();
+    if (!tr) return;
     int fx = -1, count = 0;
-    if (!uf1FindMeterFx_(tr, sel, fx, count)) return;
+    if (!uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), fx, count)) return;
+    (void)count;   // V2/3/4 target `fx`; instance count is the impersonator's now
 
     // Per-target detent accumulators so one physical click = one enum notch even
     // though the encoder emits ~4 raw counts/click. Reset when the addressed
@@ -11134,23 +11181,6 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     static int    sScreen = -1, sPage = -1;
     if (screen != sScreen || page != sPage) {
         sAccum[0]=sAccum[1]=sAccum[2]=sAccum[3]=0; sScreen=screen; sPage=page;
-    }
-
-    if (id == uf1::enc::kVpot1) {
-        // Instance select: accumulate, step whole instances, wrap.
-        static double sSelAccum = 0;
-        sSelAccum += step / kChannelEncoderScale;
-        int d = 0;
-        if (sSelAccum >=  1.0) { d = int(sSelAccum); }
-        if (sSelAccum <= -1.0) { d = int(sSelAccum); }
-        if (d != 0) {
-            sSelAccum -= d;
-            if (count > 0) {
-                sel = ((sel + d) % count + count) % count;
-                g_uf1MeterFxSel.store(sel);
-            }
-        }
-        return;
     }
 
     const int vi = (id == uf1::enc::kVpot2) ? 0 :
@@ -15735,24 +15765,19 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
         {
             {0x0100, {0x04,0x01}},
             {0x0102, {0x01}},
-            // 0x0009 = current-number colour, 0x0015/0x0016 = peak-number colour,
-            // per channel. MEASURED 2026-07-15 via Frank's symptom + capture
-            // cross-check: seeding cap80's values (0009=1e1e, 0015/16=00) gave
-            // "peak always red, current flashing red in sync with the overload
-            // LED" — cap80 is a session whose numbers WERE red (its 0009
-            // flickers 1e/1f with the clipping music, its 0015/16 sit at 00 for
-            // the whole capture). SSL on Frank's own sessions shows white
-            // always, and cap88 + cap94 + cap101 unanimously hold the ff-state:
-            // 0009=ffff0000, 000a=00000000, 0015=ff, 0016=ff — across Analogue,
-            // Overview AND channel. (An earlier note here warned ff "recoloured
-            // the VU readout" — that observation was made while OTHER elements
-            // were also wrong; the unanimous captures + the red-numbers fix win.)
+            // 0x0009 / 0x0015 / 0x0016: values matched to cap80 (SSL, Analogue,
+            // clipping). These do NOT control the VU number colour — PROVEN
+            // 2026-07-22: streaming SSL's exact cap80 bytes (1e1e / 00 / 00) still
+            // reddens the numbers at high level. The "current-number colour" /
+            // "peak-number colour" labels an earlier pass gave them are WRONG. The
+            // red is the hardware's own VU red-zone tint on the value; PARKED as
+            // cosmetic. Do not chase these three again — see the memory note.
             // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
-            {0x0009, {0xff,0xff,0x00,0x00}},
+            {0x0009, {0x1e,0x1e,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
             {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
-            {0x0015, {0xff}},
-            {0x0016, {0xff}},
+            {0x0015, {0x00}},
+            {0x0016, {0x00}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
@@ -16097,60 +16122,19 @@ bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
     return true;
 }
 
-// Appends the 35 image chunks to `burst` (does not send) so the caller can emit
-// the WHOLE Overview cycle — image + trailer elements — as one atomic burst,
-// exactly the unit SSL emits at 24.5 Hz in cap89.
-// ★ THE TRAIL IS OURS TO DRAW (2026-07-18, measured). The plug-in's t10 is the
-// INSTANTANEOUS raster — on transport stop the trace shows 5039 cells going to
-// zero within one logging second and nothing after it, while the plug-in's own
-// window keeps a cloud fading for seconds ("wenn ich stop drücke, dann bleibt
-// die wolke im plugin wie sie ist und fadet so langsam aus"). So the plug-in
-// renders its persistence in its GUI, hands us the bare frame, and SSL 360
-// accumulates before it ships the image — which is also why SSL's images carry
-// 14% of their pixels in the faintest byte class where ours had 2%.
-//
-// Exponential decay to ~1/255 (one code, i.e. invisible) after `fadeSec`, timed
-// off the real interval between paints rather than a frame count, because the
-// painter rides REAPER's timer and that is not a metronome.
-void uf1GonioTrail_(const std::vector<float>& src, double fadeSec,
-                    std::vector<float>& out)
-{
-    using namespace std::chrono;
-    static std::vector<float> trail;
-    static steady_clock::time_point last{};
-    const auto now = steady_clock::now();
-
-    if (fadeSec <= 0.0) { trail.clear(); last = now; out = src; return; }
-    if (trail.size() != src.size()) { trail.assign(src.size(), 0.f); last = now; }
-
-    const double dt = last.time_since_epoch().count()
-                    ? duration<double>(now - last).count() : 0.0;
-    last = now;
-    // ln(255) = 5.541: the time constant that takes 1.0 down to one code in
-    // fadeSec. Guard the first call and any scheduling hiccup.
-    const double k = (dt > 0.0 && dt < 1.0)
-                   ? std::exp(-dt * 5.541 / fadeSec) : 1.0;
-    for (size_t i = 0; i < src.size(); ++i) {
-        float v = trail[i] * float(k);
-        if (v < 1.f / 255.f) v = 0.f;          // below one code = off, not a haze
-        trail[i] = src[i] > v ? src[i] : v;
-    }
-    out = trail;
-}
-
-void uf1PaintGoniometer_(const std::vector<float>& src, double fadeSec,
+// Paints the plug-in's t10 Lissajous raster into the 8560-byte 0x0122 image.
+// NO trail accumulator: the persistence is ALREADY in t10 (the plug-in renders
+// its own fade; a "5039 cells at once on stop" trace line that once suggested
+// otherwise samples only once a SECOND — the full-rate log shows the shape
+// holding still while it dims). Accumulating again just fades everything twice.
+// The Lissajous-Fade-Time V-Pot sets the plug-in param, which flows into t10 and
+// thus into our render for free — so there is nothing to read or apply here.
+// (The dead uf1GonioTrail_ accumulator + a no-op fade read were removed
+// 2026-07-22.)
+void uf1PaintGoniometer_(const std::vector<float>& src,
                          std::vector<std::vector<uint8_t>>& burst)
 {
     if (!g_uf1_dev || src.empty()) return;
-    // NO trail accumulator here. It was added on 2026-07-18 on the strength of
-    // one trace line that showed 5039 cells going out "at once" on transport
-    // stop — but that line samples once a SECOND, and the full-rate log shows
-    // the plug-in's own fade ramping down over ~3 s with on=0 throughout, i.e.
-    // the shape holding still while it dims. The persistence is already in
-    // t10; accumulating again just fades everything twice. uf1GonioTrail_ and
-    // the Lissajous-Fade-Time read stay in the tree because the parameter is a
-    // V-Pot binding we still owe, but nothing calls the accumulator.
-    (void)fadeSec;
 
     // ★ THE CODEC, derived 2026-07-18 from cap92 (see uf1DiamondWidths_ for the
     // derivation and why the 4-bit reading was wrong): ONE BYTE PER PIXEL over
@@ -16667,52 +16651,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // cycle per distinct value, which is how SSL's motion stays clean.
         parts->seq = lseq;
         if (haveLiss) {
-            // The trail length is the plug-in's OWN setting — param idx 16
-            // "Lissajous Fade Time", 7 steps 0/0.25/0.5/1/2/3/5 s over the
-            // normalised range (dump: 2 s at 0.6667 = step 4 of 6). Read it
-            // live so the UF1 follows the fade set in the plug-in GUI, exactly
-            // as the Analogue screen already does for the reference level.
-            // Default 2 s = the plug-in's own default, for when no Meter FX
-            // resolves (impersonator off, REAPER-peak fallback).
-            static const double kFadeSteps[7] = {0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0};
-            double fadeSec = 2.0;
-            int mfx = -1, mcnt = 0;
-            if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt)) {
-                // BY NAME, with 16 only as a hint. The index comes from a VST3
-                // dump (docs/ssl-native-params); another format numbers its
-                // params differently, and reading the wrong one returned 0.0 =
-                // step 0 = "0 sec" — which silently disabled the trail
-                // altogether and looked exactly like the bug it was meant to
-                // fix. A wrong index must not be able to masquerade as a
-                // setting.
-                int pi = -1;
-                char nm[128];
-                if (TrackFX_GetParamName(tr, mfx, 16, nm, sizeof(nm))
-                    && !std::strcmp(nm, "Lissajous Fade Time")) {
-                    pi = 16;
-                } else {
-                    const int np = TrackFX_GetNumParams(tr, mfx);
-                    for (int p = 0; p < np; ++p)
-                        if (TrackFX_GetParamName(tr, mfx, p, nm, sizeof(nm))
-                            && !std::strcmp(nm, "Lissajous Fade Time")) { pi = p; break; }
-                }
-                if (pi >= 0) {
-                    const double nv = TrackFX_GetParamNormalized(tr, mfx, pi);
-                    const int step = int(std::lround(std::clamp(nv, 0.0, 1.0) * 6.0));
-                    fadeSec = kFadeSteps[step < 0 ? 0 : (step > 6 ? 6 : step)];
-                }
-                static int sLoggedPi = -2;
-                if (pi != sLoggedPi) {
-                    sLoggedPi = pi;
-                    if (FILE* f = std::fopen(uf8::logPath("reasixty_gonio.log").c_str(), "a"))
-                    { std::fprintf(f, "fade: param idx=%d -> %.2f s\n", pi, fadeSec);
-                      std::fclose(f); }
-                }
-            }
             // Diagnostic replay of cap101's own images when the replay file
-            // exists (see uf1GonioReplayNext_); live rendering otherwise.
+            // exists (see uf1GonioReplayNext_); live rendering otherwise. The
+            // Lissajous fade is the plug-in's own setting (param "Lissajous Fade
+            // Time", set via the Overview V-Pot) and is already baked into the
+            // t10 raster `liss` — nothing for us to read or apply here.
             if (!uf1GonioReplayNext_(parts->img))
-                uf1PaintGoniometer_(liss, fadeSec, parts->img);
+                uf1PaintGoniometer_(liss, parts->img);
         }
         static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
         static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
@@ -16827,6 +16772,24 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             g_uf1_dev->send(uf1::buildScreen(addr,
                 std::span<const uint8_t>(v.data(), v.size())));
         };
+        // Re-assert the colour group per cycle with cap80's values (SSL driving
+        // the UF1, Analogue, clipping music: 0x0009=1e1e~1f1f, 0015/16=00). This
+        // matches SSL's stream faithfully — but it does NOT fix the "red numbers
+        // at high level" (current reddens hot, max latches red). PROVEN 2026-07-22:
+        // we streamed SSL's EXACT cap80 bytes and the numbers still redden. So
+        // 0x0009/0x0015/0x0016 do NOT gate the colour — the red is the hardware's
+        // own VU red-zone tint, tracking the value (our needle pegs at 0xb4/+3 VU
+        // far more than SSL's, which dances ~0x94). PARKED as cosmetic. Do not
+        // chase these three elements again — see the memory note.
+        {
+            static const uint8_t kColCur[4]  = {0x1e, 0x1e, 0x00, 0x00};
+            static const uint8_t kColZero[4] = {0x00, 0x00, 0x00, 0x00};
+            static const uint8_t kColOff     = 0x00;
+            g_uf1_dev->send(uf1::buildScreen(0x0009, std::span<const uint8_t>(kColCur, 4)));
+            g_uf1_dev->send(uf1::buildScreen(0x000a, std::span<const uint8_t>(kColZero, 4)));
+            g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kColOff, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kColOff, 1)));
+        }
         // Unconditional, as on Overview — see the note there. The dedup that was
         // here is precisely why this screen painted one frame and then froze.
         putNdl(0x0125, ndl);
@@ -17285,6 +17248,7 @@ void uf1PaintChannel_()
                 g_uf1CycleActive.store(false, std::memory_order_relaxed);
                 for (const auto& f : uf1MeterScreenBurst_(meterScreen))
                     g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+                uf1EmitMeterInstanceLabel_();   // V-Pot1 label w/ current selection
             }
 
             // The cap75-derived view-entry extras that used to sit here are
@@ -28807,14 +28771,17 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
 //      O-Series tiles (VID_31E9 PID_0024..0028). Deleting it (as older
 //      builds did) silently broke the UF1 in SSL 360° with a Code 28
 //      "no driver installed". We coexist with sslbus instead.
-//   5. Force-binds ONLY the UF8 (PID_0021) + UC1 (PID_0023) interfaces to
-//      our WinUSB INF via newdev's UpdateDriverForPlugAndPlayDevices with
-//      INSTALLFLAG_FORCE — the same call Zadig uses. pnputil's /install
-//      uses rank-based selection and refuses to swap a device that is
-//      already working on sslbus, so a plain /install can't move a UF8
-//      that SSL 360° already claimed; the FORCE call overrides the current
-//      binding. UF1/O-Series hardware ids are never named here, so they
-//      keep their sslbus binding and SSL 360° keeps working alongside us.
+//   5. Force-binds the UF8 (PID_0021) + UC1 (PID_0023) + UF1 (PID_0025)
+//      interfaces to our WinUSB INF via newdev's
+//      UpdateDriverForPlugAndPlayDevices with INSTALLFLAG_FORCE — the same
+//      call Zadig uses. pnputil's /install uses rank-based selection and
+//      refuses to swap a device that is already working on sslbus, so a
+//      plain /install can't move a UF8 that SSL 360° already claimed; the
+//      FORCE call overrides the current binding. After install SSL 360°
+//      stops seeing the UF1 — intended: the Rea-Sixty native build drives
+//      the UF1 directly. Only the three device INTERFACES are rebound;
+//      sslbus itself is left in place, so O-Series tiles (PID_0024/0026..
+//      0028), which we never name, keep their sslbus binding.
 //
 // This wraps the full Zadig-equivalent flow into a single UAC prompt.
 // The Settings "uninstall" button removes our INF + cert (one staged copy
@@ -28911,7 +28878,9 @@ foreach ($line in (pnputil /enum-drivers)) {
 # device already working on sslbus, so go through newdev's
 # UpdateDriverForPlugAndPlayDevices with INSTALLFLAG_FORCE (the mechanism
 # Zadig uses) which overrides the current binding for a hardware id.
-# UF1 / O-Series ids are never named here -> they stay on sslbus.
+# UF8/UC1/UF1 are force-bound; O-Series ids are never named -> they stay on
+# sslbus. sslbus is left installed, so O-Series keeps working; only the UF1
+# interface moves to WinUSB (SSL 360 then stops seeing the UF1, as intended).
 $nd = @'
 using System;
 using System.Runtime.InteropServices;
@@ -28929,14 +28898,14 @@ $INSTALLFLAG_FORCE = 0x1
 # sslbus in the store it may land on sslbus, so the user re-runs this with
 # the device attached. (The old delete-sslbus path auto-bound late hotplugs
 # but at the cost of breaking UF1 — this trade is deliberate.)
-foreach ($hwid in @('USB\VID_31E9&PID_0021','USB\VID_31E9&PID_0023')) {
+foreach ($hwid in @('USB\VID_31E9&PID_0021','USB\VID_31E9&PID_0023','USB\VID_31E9&PID_0025')) {
     $reboot = $false
     try {
         [void][RsNewDev]::UpdateDriverForPlugAndPlayDevices(
             [IntPtr]::Zero, $hwid, $ourInf, $INSTALLFLAG_FORCE, [ref]$reboot)
     } catch { }
     # An absent device is a benign no-op (returns FALSE, no swap); only a
-    # currently-attached UF8/UC1 is rebound to WinUSB.
+    # currently-attached UF8/UC1/UF1 is rebound to WinUSB.
 }
 )PS";
 

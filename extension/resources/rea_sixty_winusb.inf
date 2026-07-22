@@ -1,6 +1,7 @@
-; Rea-Sixty WinUSB driver binding for SSL UF8 + UC1.
+; Rea-Sixty WinUSB driver binding for SSL UF8 + UC1 + UF1.
 ; Installed via pnputil from the Rea-Sixty REAPER extension. Binds the
-; SSL UF8 (VID_31E9 PID_0021) and SSL UC1 (VID_31E9 PID_0023)
+; SSL UF8 (VID_31E9 PID_0021), SSL UC1 (VID_31E9 PID_0023) and
+; SSL UF1 (VID_31E9 PID_0025)
 ; vendor-USB interfaces to Microsoft's signed WinUSB driver so libusb
 ; can claim them directly. Replaces SSL 360°'s own kernel driver
 ; binding — SSL 360° will stop seeing the devices after install.
@@ -23,6 +24,7 @@ DriverVer   = 05/19/2026,1.0.0.0
 [Standard.NTamd64]
 %UF8.DeviceDesc% = USB_Install, USB\VID_31E9&PID_0021
 %UC1.DeviceDesc% = USB_Install, USB\VID_31E9&PID_0023
+%UF1.DeviceDesc% = USB_Install, USB\VID_31E9&PID_0025
 
 [USB_Install]
 Include = winusb.inf
@@ -61,3 +63,4 @@ HKR,,CoInstallers32,0x00010000,"WdfCoInstaller01011.dll,WdfCoInstaller"
 ProviderName   = "Rea-Sixty"
 UF8.DeviceDesc = "SSL UF8 (Rea-Sixty / WinUSB)"
 UC1.DeviceDesc = "SSL UC1 (Rea-Sixty / WinUSB)"
+UF1.DeviceDesc = "SSL UF1 (Rea-Sixty / WinUSB)"
