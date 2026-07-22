@@ -11057,6 +11057,8 @@ struct Uf1MeterVPot {
     int param;   // TrackFX param index; -1 = this V-Pot is unassigned on this page
     int steps;   // >=2: discrete enum, one notch = 1/(steps-1) normalised;
                  //  0 : continuous — fine dial (kUf1MeterContStep per notch)
+    const char* name;  // short label above the V-Pot (manual p189-191); the live
+                       // value comes from TrackFX_GetFormattedParamValue.
 };
 struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 // [screen][page].  screen: 0 Overview, 1 Analogue, 2 RTA.  Param indices from the
@@ -11067,19 +11069,19 @@ struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 // 19 Analysis Source.
 const Uf1MeterPage kUf1MeterVPots[3][3] = {
     { // Overview
-        { {6,3},  {5,0},  {16,0} },
-        { {3,3},  {4,2},  {-1,0} },
-        { {-1,0}, {-1,0}, {-1,0} },   // no page 3
+        { {6,3,"Type"},    {5,0,"RMS"},     {16,7,"Fade"}   },  // Fade = 7-step enum (kFadeSteps)
+        { {3,3,"PkHold"},  {4,2,"TruePk"},  {-1,0,nullptr}  },
+        { {-1,0,nullptr},  {-1,0,nullptr},  {-1,0,nullptr}  },   // no page 3
     },
     { // Analogue
-        { {8,2},  {11,3}, {9,0}  },
-        { {10,3}, {12,3}, {1,0}  },
-        { {-1,0}, {-1,0}, {-1,0} },   // no page 3
+        { {8,2,"Mode"},    {11,3,"0 VU"},   {9,3,"Ref"}     },  // Ref = 3-step enum (-36/-18/0)
+        { {10,3,"MaxNdl"}, {12,3,"Format"}, {1,0,"Delay"}   },
+        { {-1,0,nullptr},  {-1,0,nullptr},  {-1,0,nullptr}  },   // no page 3
     },
     { // RTA
-        { {51,0}, {22,0}, {23,0} },
-        { {18,3}, {20,3}, {21,3} },
-        { {19,0}, {-1,0}, {-1,0} },
+        { {51,0,"SelFreq"},{22,0,"SclTop"}, {23,0,"SclBtm"} },
+        { {18,3,"PkHold"}, {20,3,"Weight"}, {21,3,"Avg"}    },
+        { {19,3,"Source"}, {-1,0,nullptr},  {-1,0,nullptr}  },  // Source = 3-step enum
     },
 };
 // Continuous params move this much normalised per detent (fine — a full sweep is
@@ -11138,6 +11140,39 @@ void uf1EmitMeterInstanceLabel_()
     for (const char* c = lbl; *c; ++c) p.push_back(uint8_t(*c));
     g_uf1_dev->send(uf1::buildScreen(0x010e,
                     std::span<const uint8_t>(p.data(), p.size())));
+}
+
+// Emit the 0x010e name/value labels for V-Pot2/3/4 on the current meter page,
+// with the plug-in's LIVE formatted value — so turning a V-Pot updates what you
+// see. Also replaces the entry burst's STATIC labels, which on some screens name
+// a different param than the V-Pot actually drives (Overview "TruePk"/"Non-Linear"
+// vs the Type/RMS the table controls). SSL's layout: {index, name padded to 9,
+// value padded to 10}. Main-thread only (TrackFX + g_uf1_dev).
+void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
+{
+    if (!g_uf1_dev || !tr || fx < 0) return;
+    screen = std::clamp(screen, 0, 2);
+    page   = std::clamp(page, 0, kUf1MeterPageCount[screen] - 1);
+    const Uf1MeterPage& pg = kUf1MeterVPots[screen][page];
+    const Uf1MeterVPot* vs[3] = { &pg.v2, &pg.v3, &pg.v4 };
+    for (int i = 0; i < 3; ++i) {
+        std::vector<uint8_t> p;
+        p.push_back(uint8_t(i + 1));            // V-Pot2/3/4 = 0x010e index 1/2/3
+        auto put = [&](const char* s, int width) {
+            int n = 0;
+            for (; s && s[n] && n < width; ++n) p.push_back(uint8_t(s[n]));
+            for (; n < width; ++n) p.push_back(0x00);
+        };
+        if (vs[i]->param < 0) { put("", 9); put("", 10); }
+        else {
+            put(vs[i]->name, 9);
+            char val[64] = {0};
+            TrackFX_GetFormattedParamValue(tr, fx, vs[i]->param, val, int(sizeof(val)));
+            put(val, 10);
+        }
+        g_uf1_dev->send(uf1::buildScreen(0x010e,
+                        std::span<const uint8_t>(p.data(), p.size())));
+    }
 }
 
 // Apply a Meter-view V-Pot detent. id = uf1::enc::kVpot1..kVpot4. Main-thread
@@ -11205,6 +11240,8 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     if (nv < 0.0) nv = 0.0;
     if (nv > 1.0) nv = 1.0;
     if (nv != cur) TrackFX_SetParamNormalized(tr, fx, v.param, nv);
+    // Refresh the on-screen name/value so the readout tracks the turn.
+    uf1EmitMeterParamLabels_(tr, fx, screen, page);
 }
 
 // Forward decls: diag helpers live OUTSIDE this anonymous namespace
@@ -17164,6 +17201,7 @@ void uf1PaintChannel_()
     static uint32_t    sColor = 0xFFFFFFFFu;
     static bool        sMeterView = false;
     static int         sMeterScreen = -1;   // −1 = unset, forces the first burst
+    static int         sMeterPage = -1;     // −1 = unset, forces the first labels
 
     // ★ A REOPENED DEVICE IS A BLANK DEVICE (2026-07-18). Every static above is
     // "what the UF1 already shows", and everything here is send-on-change. They
@@ -17198,6 +17236,11 @@ void uf1PaintChannel_()
     const int  meterScreen   = g_uf1MeterScreen.load();
     const bool screenChanged = meterView && (meterScreen != sMeterScreen);
     sMeterScreen = meterScreen;
+    const int  meterPage = meterView
+        ? std::clamp(g_uf1MeterPage.load(), 0,
+                     kUf1MeterPageCount[std::clamp(meterScreen, 0, 2)] - 1) : 0;
+    const bool pageChanged = meterView && (meterPage != sMeterPage);
+    sMeterPage = meterPage;
     const bool changed = (tr != sTr) || viewChanged || screenChanged;
     sTr = tr;
 
@@ -17290,6 +17333,16 @@ void uf1PaintChannel_()
             // cap66 replay leaves a 2-byte 00 00 in it.
             put(0x011b, {});
         }
+    }
+
+    // V-Pot2/3/4 name+value labels track view/screen/PAGE change with the plug-in's
+    // LIVE formatted values (the entry burst above only sets page-1 statics, and on
+    // some screens those name a different param than the V-Pot drives). On a page
+    // change the burst does not re-fire, so this is the sole updater for pages 2/3.
+    if (meterView && (viewChanged || screenChanged || pageChanged)) {
+        int mfx = -1, mcnt = 0;
+        if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
+            uf1EmitMeterParamLabels_(tr, mfx, meterScreen, meterPage);
     }
 
     if (meterView) {
