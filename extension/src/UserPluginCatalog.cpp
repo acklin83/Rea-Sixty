@@ -16,9 +16,11 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <list>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -303,6 +305,17 @@ std::string serialize_(const UserPluginCatalog& c)
             os << "      \"useReaperTrackPolarity\": false,\n";
         if (m.snapshotTakenAt > 0)
             os << "      \"snapshotTakenAt\": " << m.snapshotTakenAt << ",\n";
+        // Additive (Frank 2026-07-19) — the live plug-in factory name, written
+        // only once captured so pre-feature catalogs stay byte-identical.
+        if (!m.originalName.empty()) {
+            os << "      \"original_name\": ";
+            appendEscaped_(os, m.originalName);
+            os << ",\n";
+        }
+        // Additive (Frank 2026-07-20) — functional param count for the
+        // exchange's parameter coverage. Only written once captured (>= 0).
+        if (m.functionalParamCount >= 0)
+            os << "      \"functional_params\": " << m.functionalParamCount << ",\n";
         // Emit the optional knob-travel fields (range / sensitivity / curve
         // points). All are additive — only written when non-default so
         // existing files stay byte-identical until the user actually
@@ -714,6 +727,12 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         int snapTs = 0;
         if (getIntI_(po, "snapshotTakenAt", snapTs))
             m.snapshotTakenAt = snapTs;
+        // Additive; missing key leaves it empty (the exchange falls back to
+        // `match`). Round-trips through a shared .rea60map so an imported map
+        // keeps the identity of the plug-in it was learned from.
+        getStrI_(po, "original_name", m.originalName);
+        int fpc = -1;
+        if (getIntI_(po, "functional_params", fpc)) m.functionalParamCount = fpc;
 
         // Parse the mutable mapping fields of one SlotLayer from object `so`.
         // Shared by the base slot (Normal layer) and the per-modifier overlay
@@ -1300,6 +1319,195 @@ bool importFromFile(const std::string& path, std::string* errOut)
     return true;
 }
 
+// ----- Single-map sharing (.rea60map) --------------------------------------
+
+namespace {
+
+// Every VST3 param index the map actually references — across the base layer,
+// the modifier overlays, both domain slot caches, the metering pick, the UC1
+// EXT FUNCS list, the UF8 V-Pot banks and the UF8 strip bindings, including
+// macro/push-cycle steps. Anything not in here is noise in a shared file.
+void collectUsedParams_(const UserPluginMap& m, std::set<int>& used)
+{
+    auto addLayer = [&](const SlotLayer& L) {
+        if (L.vst3Param >= 0) used.insert(L.vst3Param);
+        for (const auto& ps : L.pushSteps)
+            if (ps.vst3Param >= 0) used.insert(ps.vst3Param);
+    };
+    auto addSlots = [&](const std::vector<UserLinkSlot>& v) {
+        for (const auto& s : v) {
+            addLayer(s);
+            for (int i = 0; i < kNumFxLayers - 1; ++i) addLayer(s.modLayers[i]);
+        }
+    };
+    addSlots(m.slots);
+    addSlots(m.csSlotCache);
+    addSlots(m.bcSlotCache);
+
+    if (m.metering.grVst3Param >= 0) used.insert(m.metering.grVst3Param);
+    for (const auto& e : m.extFuncs)
+        if (e.vst3Param >= 0) used.insert(e.vst3Param);
+
+    for (int fb = 0; fb < kUserUf8FaderBankCount; ++fb) {
+        for (int vb = 0; vb < kUserUf8VpotBankCount; ++vb) {
+            for (int s = 0; s < 8; ++s) {
+                const auto& bs = m.uf8.banks.banks[fb][vb][s];
+                if (bs.vst3Param >= 0) used.insert(bs.vst3Param);
+                for (const auto& ps : bs.vpotSteps)
+                    if (ps.vst3Param >= 0) used.insert(ps.vst3Param);
+            }
+        }
+        for (int s = 0; s < 8; ++s) {
+            const auto& sb = m.uf8.strips[fb][s];
+            if (sb.faderVst3Param >= 0) used.insert(sb.faderVst3Param);
+            if (sb.soloVst3Param  >= 0) used.insert(sb.soloVst3Param);
+            if (sb.cutVst3Param   >= 0) used.insert(sb.cutVst3Param);
+            if (sb.selVst3Param   >= 0) used.insert(sb.selVst3Param);
+        }
+    }
+}
+
+} // namespace
+
+const char* surfaceScope(const UserPluginMap& m)
+{
+    if (m.domain == Domain::None) return m.uf8Mode ? "uf8" : "";
+    return m.uf8Mode ? "uc1+uf8" : "uc1";
+}
+
+bool serializeMapShare(const MapShare& share, std::string& out,
+                       std::string* errOut)
+{
+    if (share.map.match.empty()) {
+        if (errOut) *errOut = "map has no match string";
+        return false;
+    }
+    const char* scope = surfaceScope(share.map);
+    if (!*scope) {
+        if (errOut) *errOut = "map has no surface (domain None with uf8Mode off)";
+        return false;
+    }
+
+    UserPluginMap m = share.map;
+    {
+        std::set<int> used;
+        collectUsedParams_(m, used);
+        std::vector<UserParamInfo> keep;
+        keep.reserve(used.size());
+        for (const auto& pi : m.paramSnapshot)
+            if (used.count(pi.vst3Param)) keep.push_back(pi);
+        m.paramSnapshot = std::move(keep);
+    }
+    // A shared map must never arrive as someone's Default: upsert() clears
+    // isDefault on the recipient's own map in that domain bucket.
+    m.isDefault = false;
+
+    // serialize_ takes the catalog by const ref, so a one-entry catalog gives
+    // us a single-map payload with zero serializer duplication.
+    UserPluginCatalog one;
+    one.formatVersion = kCurrentFormatVersion;
+    one.maps.push_back(std::move(m));
+    const std::string mapJson = serialize_(one);
+
+    std::ostringstream os;
+    os << "{\n";
+    os << "  \"format\": \"rea-sixty-map\",\n";
+    // v2 (2026-07-19) adds `original_name`; v3 (2026-07-20) adds
+    // `functional_params`. Additive: the importer keys on `format`, never
+    // `version`, so any version loads in any build; the server accepts them all.
+    os << "  \"version\": 3,\n";
+    // Envelope-level copies so the exchange can index without unescaping the
+    // payload. `plugin` mirrors the map's own `match`; `original_name` is the
+    // full factory name (carries the vendor), captured live — empty on maps
+    // learned before v2, in which case the server falls back to `plugin`.
+    os << "  \"plugin\": ";        appendEscaped_(os, share.map.match);        os << ",\n";
+    os << "  \"original_name\": "; appendEscaped_(os, share.map.originalName); os << ",\n";
+    // Functional param count (v3) — the denominator for parameter coverage.
+    // -1 when not captured; the server then shows no parameter coverage.
+    os << "  \"functional_params\": " << share.map.functionalParamCount << ",\n";
+    os << "  \"vendor\": ";        appendEscaped_(os, share.vendor);           os << ",\n";
+    os << "  \"surfaces\": ";    appendEscaped_(os, scope);             os << ",\n";
+    os << "  \"author\": ";      appendEscaped_(os, share.author);      os << ",\n";
+    os << "  \"description\": "; appendEscaped_(os, share.description); os << ",\n";
+    os << "  \"licence\": ";     appendEscaped_(os, share.licence);     os << ",\n";
+    os << "  \"created_at\": " << static_cast<long long>(share.createdAt) << ",\n";
+    os << "  \"map\": ";         appendEscaped_(os, mapJson);           os << "\n";
+    os << "}\n";
+
+    out = os.str();
+    return true;
+}
+
+bool exportMapToFile(const std::string& path, const MapShare& share,
+                     std::string* errOut)
+{
+    std::string envelope;
+    if (!serializeMapShare(share, envelope, errOut)) return false;
+    if (!writeFileAtomic_(path, envelope)) {
+        if (errOut) *errOut = "could not write " + path;
+        return false;
+    }
+    return true;
+}
+
+bool importMapFromFile(const std::string& path, MapShare& out,
+                       std::string* errOut)
+{
+    std::string contents;
+    if (!readFile_(path, contents)) {
+        if (errOut) *errOut = "could not read " + path;
+        return false;
+    }
+    return importMapFromString(contents, out, errOut);
+}
+
+bool importMapFromString(const std::string& contents, MapShare& out,
+                         std::string* errOut)
+{
+    wdl_json_parser p;
+    wdl_json_element* root = p.parse(contents.c_str(),
+                                     static_cast<int>(contents.size()));
+    if (!root || !root->is_object()) {
+        if (errOut) *errOut = "not a JSON object";
+        return false;
+    }
+    std::string fmt;
+    if (!getStrI_(root, "format", fmt) || fmt != "rea-sixty-map") {
+        if (errOut) *errOut = "not a Rea-Sixty mapping file";
+        return false;
+    }
+    std::string mapJson;
+    if (!getStrI_(root, "map", mapJson) || mapJson.empty()) {
+        if (errOut) *errOut = "file carries no map payload";
+        return false;
+    }
+    UserPluginCatalog tmp;
+    tmp.formatVersion = kCurrentFormatVersion;
+    if (!parse_(mapJson, tmp)) {
+        if (errOut) *errOut = "map payload is not a valid catalog";
+        return false;
+    }
+    // parse_ silently drops entries with an empty match or the invalid
+    // (domain=None, uf8Mode=false) pair, so a syntactically fine file can
+    // still yield nothing. Check the count, don't assume it.
+    if (tmp.maps.size() != 1) {
+        if (errOut) *errOut = "expected exactly one map, got "
+                              + std::to_string(tmp.maps.size());
+        return false;
+    }
+    out.map = std::move(tmp.maps[0]);
+    out.map.isDefault = false;
+    getStrI_(root, "vendor",      out.vendor);
+    getStrI_(root, "author",      out.author);
+    getStrI_(root, "description", out.description);
+    getStrI_(root, "licence",     out.licence);
+    out.createdAt = 0;
+    if (auto* el = root->get_item_by_name("created_at")) {
+        if (const char* s = el->get_string_value(true)) out.createdAt = atoll(s);
+    }
+    return true;
+}
+
 SaveResult save()
 {
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -1363,6 +1571,58 @@ void upsert(UserPluginMap m)
     else                            g_catalog.maps.push_back(std::move(m));
     rebuildViewCache_();
     g_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool captureOriginalName(std::string_view match, std::string_view originalName)
+{
+    if (match.empty() || originalName.empty()) return false;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        for (auto& m : g_catalog.maps) {
+            if (m.match == match) {
+                if (m.originalName.compare(0, std::string::npos,
+                                          originalName.data(),
+                                          originalName.size()) != 0) {
+                    m.originalName.assign(originalName.data(), originalName.size());
+                    changed = true;
+                }
+                break;
+            }
+        }
+    }
+    // save() takes g_mutex itself, so it is called AFTER the guard above is
+    // released. Only on a real change — the focus-follow path fires often and
+    // must not write the catalog every frame. The view cache does not depend
+    // on originalName, so no rebuild / generation bump is needed.
+    if (changed) save();
+    return changed;
+}
+
+// Sibling of captureOriginalName for the v3 functional-param count. Same reason
+// to exist: the count is only set when a paramSnapshot is (re)taken (learn /
+// focus / create-bind), so a map learned before v3 — or restored from ExtState
+// and never re-snapshotted — ships functionalParamCount == -1 and the exchange
+// records NO parameter coverage. Called from the Share-time FX scan (which has
+// the live plug-in in hand) so a re-Share fills it, exactly as original_name is.
+bool captureFunctionalParamCount(std::string_view match, int count)
+{
+    if (match.empty() || count < 0) return false;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        for (auto& m : g_catalog.maps) {
+            if (m.match == match) {
+                if (m.functionalParamCount != count) {
+                    m.functionalParamCount = count;
+                    changed = true;
+                }
+                break;
+            }
+        }
+    }
+    if (changed) save();
+    return changed;
 }
 
 bool removeByMatch(std::string_view match)

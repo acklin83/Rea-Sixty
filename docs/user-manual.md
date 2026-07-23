@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.2
+date: v0.3.2
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -28,7 +28,7 @@ What goes out on the USB wire is the same byte protocol SSL 360° uses, re-emitt
 
 ## What you need
 
-- REAPER on macOS (Apple Silicon; Intel via build-from-source), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.71.
+- REAPER on macOS (Apple Silicon or Intel), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.75.
 - An SSL UF8 plugged in over USB-C. UC1 is supported optionally; UF8-only or UC1-only rigs are fine.
 - **ReaImGui** (install via ReaPack from Extensions → ReaPack → Browse packages → ReaImGui). Without ReaImGui the Settings window stays empty, but hardware control still works.
 - **SSL 360° must not be running.** It claims the UF8/UC1 vendor interface exclusively. If it is running when REAPER starts, the surface will not appear and REAPER's Console shows an error.
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.2. Earlier manuals (anything dated before 2026-06-24) are superseded.
+This manual documents Rea-Sixty v0.3.2. Earlier manuals (anything dated before 2026-07-14) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -65,9 +65,11 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Mac:** `rea-sixty-mac-v0.3.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.3.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v0.3.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+
+The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to each release separately — it is not part of the ReaPack package. Download it and double-click it; the Stream Deck app installs it.
 
 ## Enabling the surface
 
@@ -317,7 +319,7 @@ Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions *
 |---|---|
 | `PLUGIN` | Toggles SSL Strip Mode (**Toggle SSL Strip Mode**). With Shift held: **Toggle SSL Strip Mode (with GUI)**. |
 | `CHANNEL` | **Home (clear routing toggles)** — clear send / receive routing toggles so V-Pots / faders return to track volume + pan. |
-| `BANK ←` / `BANK →` | Scroll ±8 strips. In UF8 Plug-in Mode → flip between fader-banks A / B (for 16-strip plug-ins). |
+| `BANK ←` / `BANK →` | Scroll ±8 strips. In UF8 Plug-in Mode → flip between fader-banks A / B (for 16-strip plug-ins). In a **"of focused track"** routing view → page the send / receive list by 8 (see *Send and Receive views*). |
 | `PAGE ←` / `PAGE →` | Step the SSL Soft-Key PAGE bank prev / next (6 CS banks + 2 BC banks). |
 | `SEND / PLUGIN 1..8` | 8 buttons. Default **8 sends of focused track** / **8 receives of focused track** (param N) — toggle the matching send / receive view. |
 
@@ -460,7 +462,7 @@ If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their pri
 
 The Settings window is a dockable ReaImGui context. Open with the `360°` key (default), the **Open / Close Rea-Sixty Settings** action, or REAPER's Action `Rea-Sixty: Toggle Settings window`.
 
-Eight sidebar tabs: Device · Appearance · Bindings · Modes · FX Learn · Selection Sets · Parameter Groups · About.
+Ten sidebar tabs: Device · Appearance · Bindings · Modes · FX Learn · Favourites · Selection Sets · Parameter Groups · Manual · About.
 
 ## Device pane
 
@@ -632,16 +634,99 @@ The Top-Soft-Key labels in the schematic **follow the edit selection**, so you c
 
 In the Sub-Bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this Sub-Bank**, or **Load full set → Layer 1 / Quick 3** to drop all banks into Layer 1 / Quick 3's six sub-banks at once.
 
-The six factory banks are:
+The seven factory banks are:
 
 - **Encoder Modes** — Channel-Encoder mode switches (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Focus Wheel).
 - **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
 - **CS Favourites** — the eight *Switch to CS Favourite N* actions; the labels show each favourite's plug-in short name live (falling back to "CS Fav N" when a slot is empty).
+- **BC Favourites** — the same for the eight Bus-Compressor favourites.
 - **Brightness** — Both / LCDs / LEDs × up / down.
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
+
+### Dynamic sub-banks
+
+A normal Sub-Bank holds eight fixed assignments. A **dynamic** Sub-Bank computes its eight keys live from whatever track you are looking at — its plug-ins, for instance — so the keys change as you move around the session.
+
+Open a Sub-Bank cell in the UF8 schematic and look for the **Dynamic bank** section. The dropdown offers:
+
+| Setting | What the eight keys become |
+|---|---|
+| `Off (static slots)` | Normal behaviour — the eight slots you assigned |
+| `FX (focused track, paged)` | The focused track's plug-ins |
+| `Parameter Groups` | Parameter Groups 1–8 |
+| `Track Colours` | Your eight-colour palette |
+
+The choice is stored per Sub-Bank, so each of the six Sub-Banks under each Quick can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
+
+Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
+
+Dynamic banks are a UF8 feature and are inactive while UF8 Plug-in Mode is engaged.
+
+**Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
+
+**The FX bank**
+
+Each key takes one plug-in from the focused track's chain, labelled with its name — the format prefix (`VST3:`, `JS:`) and the trailing vendor suffix are stripped so the name fits.
+
+The LEDs read at a glance:
+
+| LED | Meaning |
+|---|---|
+| Bright | The focused plug-in — the one the surface is following |
+| Dim | Present and running |
+| Dark | Bypassed, offline, or no plug-in in that position |
+
+A track you have not touched yet shows its **first** plug-in bright, because that is where the surface's plug-in cursor starts.
+
+Populated keys take their colour from the colour stored on the underlying static slot, so if you want your FX keys a particular colour, set it on the slots underneath.
+
+**Paging.** A track can hold more than eight plug-ins. The **Page with** dropdown chooses what pages the bank:
+
+| Setting | Control |
+|---|---|
+| `(no paging — stays on 1-8)` | **Default** — the bank shows the first eight only |
+| `UF8 encoder` | The UF8 Channel encoder |
+| `UC1 Encoder 1` / `UC1 Encoder 2` | Either UC1 encoder |
+| `UF8 Bank ◄ ►` | The UF8 bank keys |
+
+Note the default: **out of the box an FX bank does not page**, so a track with twelve plug-ins shows only the first eight until you pick a paging control. The chosen control only pages while this Sub-Bank is the engaged one; the rest of the time it does its normal job. Paging returns to the first page whenever the focused track changes.
+
+**What a key press does** is configurable per gesture, and the setting is **global — it applies to every FX bank you create**, not to one bank:
+
+| Gesture | Default |
+|---|---|
+| Push | Focus FX (surface follows) |
+| +Shift | Float/close FX window |
+| +Cmd | Bypass toggle |
+| +Ctrl | FX solo (bypass others) |
+| Long-press | Offline toggle |
+
+The full set also includes **Delete FX**, **Move FX up** and **Move FX down**.
+
+A long press is half a second and fires when you let go. Long-press *replaces* the modifier rather than combining with it — Shift plus a long press runs the Long-press action, not the +Shift one.
+
+> **Delete FX removes the plug-in immediately, with no confirmation.** Think before you put it on Push.
+
+*Focus FX* moves the surface onto that plug-in and re-points an already-open plug-in window at it. It does not open a window that was closed — use *Float* for that.
+
+*FX solo* bypasses every other plug-in on the track and remembers what was on; pressing the same key again, or soloing another plug-in, puts them all back.
+
+**Parameter Groups and Track Colours**
+
+For these two the FX gesture table does not apply. Only short versus long press matters, and modifiers make no difference.
+
+**Parameter Groups** — the eight keys are the eight groups, labelled with your group names (falling back to `Grp 1`…`Grp 8`). A key is bright when the focused track belongs to that group. A short press toggles membership across every selected track; a long press toggles whether the group is broadcasting at all. Group names are edited in the separate **Parameter Groups** Settings section, not here. Membership is stored in the project; group names and their on/off state are global.
+
+**Track Colours** — the keys are labelled `Col 1`…`Col 8` and each glows its own palette colour, brightening when the focused track wears it. A short press paints every selected track; a long press clears the custom colour instead. The palette itself is edited right below the dropdown as eight swatches, and is global.
+
+**If a bank stays blank**
+
+With no track focused or selected, every dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from.
+
+One historical case: Rea-Sixty briefly had a **Sends** dynamic bank, which was removed. A configuration saved while it existed still loads, but the bank stays permanently blank. Set it to something else, or back to `Off (static slots)`.
 
 ### Binding visibility in the schematic
 
@@ -666,7 +751,9 @@ Right-clicking a button in the schematic opens Copy / Paste / Clear options for 
 
 ### Export / Import / Reset
 
-Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names). Per-binding-file export does not exist as a Bindings-pane action.
+Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names).
+
+The Bindings pane itself offers **Save UC1 bindings…** and **Load UC1 bindings…** — these cover only the five UC1 controls. Loading replaces the UC1 bindings and leaves the UF8 bindings untouched.
 
 Bindings storage paths:
 
@@ -796,7 +883,7 @@ Top bar:
 - **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
 - **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
-- **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS-Switch favourite slots, or clear it. See chapter *Channel-Strip Switch (CS-Switch)*.
+- **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS favourite slots, or clear it. See chapter *Favourites*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
 - **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
 - Breadcrumb **`← All maps`** to leave the editor.
@@ -1009,7 +1096,7 @@ The pane stacks several sections from top to bottom.
 
 ### Versions
 
-- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.1.8`. Past a tag: `v0.1.8-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
+- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.3.2`. Past a tag: `v0.3.2-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
 - **Build** — date + time of the compiled extension.
 - **REAPER** — the host REAPER version string.
 - **ReaImGui** — the bundled-ABI banner (currently v0.10).
@@ -1044,8 +1131,9 @@ Section appears only when the build is Linux.
 
 ### Logs
 
-- Lists the diagnostic log paths (`/tmp/reaper_uf8_frames.log`, `/tmp/reaper_uf8_colors.log`, etc.).
-- **Reveal /tmp in Finder** button (macOS only — equivalent on other platforms TBD).
+- Lists the diagnostic log paths (`reaper_uf8_frames.log`, `reaper_uf8_colors.log`, and the rest). Logs live in the system temporary folder: `/tmp` on macOS and Linux, `%TEMP%` on Windows. The pane shows the real path for your platform rather than assuming one.
+- **Reveal log folder** button — opens the folder in Finder, Explorer or your file manager.
+- **Console output** checkbox, **off by default**. REAPER pops its Console window open for every message, which is noise when a device simply is not connected. The same text still goes to the log files either way, so nothing is lost — switch it on while diagnosing.
 
 \newpage
 
@@ -1094,13 +1182,15 @@ A dockable window showing the focused plug-in's **UC1 control → parameter assi
 - **Right-click → View** switches between the grouped text **List** and a hardware **Mockup** (the UC1/UF8 face). **Right-click → Text size** (Small … Huge); the menus themselves honour your *Appearance → Font Size*. The window size persists globally.
 - **Click a row (or mockup control), then wiggle that plug-in's parameter** to learn it onto the control (user maps only — built-in SSL maps are factory-fixed and show a hint instead).
 - **Right-click a control** (list row or mockup knob/button) for a per-control menu: **Learn** (wiggle a parameter), **Invert** (flip the control's polarity), **Rename…** (set a custom Display label; empty reverts to the default name), **Unbind**, plus the **knob-travel / curve editor**, **feel presets** and **stepped-parameter** controls — full FX-Learn parity without opening Settings. All act on the active modifier layer; Invert / Rename / Unbind are disabled on an unmapped control, and built-in SSL maps show the factory-fixed hint.
-- The window's **☰ menu** carries a **CS Favourite** submenu — favourite the live Channel-Strip into a CS-Switch slot (greyed when no CS is on the focused track). See chapter *Channel-Strip Switch (CS-Switch)*.
+- The window's **☰ menu** carries a **CS Favourite** submenu — favourite the live Channel-Strip into a favourite slot (greyed when no CS is on the focused track). See chapter *Favourites*.
 
 \newpage
 
 # Native actions
 
 Bind any of these to a UF8 / UC1 control in Settings → Bindings → *(button)* → Native. Actions that take a parameter (slot number, soft-key index, etc.) are flagged below.
+
+The picker groups them into categories — Selection Modes, Encoder Modes, Cycle Actions, Plug-in, Layer, Soft-Key Bank, SSL, Master, and so on. **Hardware Modes** is the largest: it collects everything that changes what the surface *is doing* rather than acting on a track — FLIP and PAN, Folder Mode and Show Only Selected, Home, SSL Strip and UF8 Plug-in Mode, the on-screen panel toggles, Touch-to-Learn, the mirror and follow settings below, and Restart. The sections in this chapter are grouped by function rather than by category, so a single category's actions appear in several places.
 
 ## Selection Mode toggles
 
@@ -1130,7 +1220,7 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **Encoder Mode → FX Cycle (across tracks)** — Cycle FX across tracks: same cross-track behaviour for every FX.
 - **Encoder Mode → FX Move (in chain)** — move the active FX up / down within the focused track's chain on rotation (within-chain only; hard-stop at the ends).
 - **Encoder Mode → Selection Set Cycle** — step through populated Selection Set slots (off → 1 → 2 → … → off).
-- **Encoder Mode → CS Cycle (favourites)** — Channel-Strip Switch: cycle the active CS through the favourite slots (see chapter *Channel-Strip Switch (CS-Switch)*).
+- **Encoder Mode → CS Cycle (favourites)** — cycle the active CS through the favourite slots (see chapter *Favourites*).
 - **Encoder: dispatch by current mode** — routes rotation to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
@@ -1177,13 +1267,16 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **FX param: step up** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in plug-in map registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to *FX param: step up* and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
 - **FX param: step down** — same as *FX param: step up* with the sign flipped.
 
-## Channel-Strip Switch
+## Favourites
 
-Replace the active Channel-Strip plug-in, carrying values across (see chapter *Channel-Strip Switch (CS-Switch)*). Operate on every selected track, else the surface-focused track.
+Replace or duplicate the active plug-in, carrying values across (see chapter *Favourites*). All of these act on every selected track, else the surface-focused track. Each exists three times: for the Channel Strip, for the Bus Compressor, and in a **Focused Domain** form that follows whichever you are working on.
 
-- **Switch to CS Favourite 1 … Switch to CS Favourite 8** — switch the active CS to favourite slot N. Lit when the focused CS already is that favourite.
-- **Encoder: cycle Channel Strip favourites** — step to the next favourite (wraps, honours the cycle-wrap setting).
-- **Encoder Mode → CS Cycle (favourites)** — Channel-Encoder mode: rotate to cycle favourites (also listed under *Channel Encoder mode toggles*).
+- **Switch to CS Favourite 1 … 8** / **Switch to BC Favourite 1 … 8** / **Switch to Favourite 1 … 8 (Focused Domain)** — replace the active plug-in with favourite N. Lit when it already is that favourite.
+- **Copy to CS Favourite 1 … 8** / **Copy to BC Favourite 1 … 8** / **Copy to Favourite 1 … 8 (Focused Domain)** — insert favourite N below the active plug-in with the values carried, and bypass the original. An instant A/B.
+- **CS Favourite Cycle** / **BC Favourite Cycle** / **Favourite Cycle (Focused Domain)** — step through the favourites; on an encoder, one step per detent.
+- **CS Favourite Copy/Own** / **BC Favourite Copy/Own** / **Favourite Copy/Own (Focused Domain)** — flip that domain between carrying live values and restoring each favourite's own settings.
+
+The cycles are also available as Channel-Encoder modes — **Encoder Mode → CS Cycle (Favourites)**, **→ BC Cycle (Favourites)** and **→ Favourite Cycle (Focused Domain)** (also listed under *Channel Encoder mode toggles*).
 
 ## Instance navigation
 
@@ -1219,7 +1312,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 - **Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll the surface 8 strips left. In UF8 Plug-in Mode the same button flips between fader-banks A / B (for 16-strip plug-ins) instead.
 - **Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll 8 strips right (same fader-bank flip in UF8 Plug-in Mode).
 - **Bank by 1ch ← (one strip)** / **Bank by 1ch → (one strip)** — scroll one strip at a time.
-- **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan.
+- **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan. Also resets the send-list page to the start.
 - **Page ← (soft-key bank prev)** / **Page → (soft-key bank next)** — step the SSL Soft-Key PAGE bank (prev / next of the 6 CS banks + 2 BC banks).
 
 ## DAW Layer keys
@@ -1234,8 +1327,14 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## Send / Receive
 
-- **8 sends of focused track (param: 0..7)** — toggle the Send view for slot N. With the view active, V-Pots drive that send's level instead of pan.
-- **8 receives of focused track (param: 0..7)** — same for Receive views.
+All of these are toggles, and all take **param: 0 = Faders, 1 = V-Pots** to choose which control the route lands on. In the binding editor that choice is the **Flip** checkbox. See *Send and Receive views* for what the strips then do.
+
+- **8 sends of focused track** — spread the focused track's send list across the eight strips.
+- **8 receives of focused track** — same for its receives.
+- **Send 1 ↦ all tracks** … **Send 8 ↦ all tracks** — eight separate actions. Each keeps every strip on its own banked track and drives that track's send number N.
+- **Receive 1 ↦ all tracks** … **Receive 8 ↦ all tracks** — same for receives.
+
+**Home (clear routing toggles)**, listed above under bank navigation, turns all of them off at once.
 
 ## Selection Sets
 
@@ -1249,6 +1348,8 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 - **Toggle Folder Mode (parents only)** — toggle Folder Mode (only top-level tracks visible; folder children appear on spill).
 - **Toggle Show Only Selected** — toggle Show Only Selected (only currently-selected REAPER tracks appear).
 - **Open / Close Rea-Sixty Settings** — open / close the Rea-Sixty Settings window. Default binding for the `360°` key.
+- **Surface mirrors: TCP** / **Surface mirrors: MCP** — choose which window's track visibility the surface follows: the Arrange view's track panels (TCP) or the Mixer (MCP). Hiding a track in the chosen window removes it from the surface. These are not a toggle but a mutually-exclusive pair, so a bound key sets one mode absolutely and lights while that mode is the active one — which means you can bind both and see at a glance which is on. The choice is remembered between sessions.
+- **TCP follows selection** — toggle whether selecting a track on the surface scrolls the Arrange view to it. Same setting as *Settings → Device → Tracks*.
 
 ## Nav overlay (Markers + Regions)
 
@@ -1308,6 +1409,7 @@ When held, these shift every other binding to its modifier slot. The three match
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Pressing several of the plug-in's buttons in a row while a V-Pot is armed builds a **step cycle** on it (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 - **FX: Quick Learn Project** / **FX: Quick Learn Track** — run the AutoLearn sweep over the whole project / the focused track. Same one-shot as the REAPER actions *Rea-Sixty: Quick Learn …*.
+- **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)
 
@@ -1365,35 +1467,101 @@ User-renamed 360° Link instances show the rename instead of the generic "Link" 
 
 \newpage
 
-# Channel-Strip Switch (CS-Switch)
+# Favourites (Channel Strip and Bus Compressor)
 
-Swap the active Channel-Strip plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different channel-strip emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
+Swap the active Channel-Strip or Bus-Compressor plug-in on a track for a different one **in place**, carrying the values of every shared control across. Use it to audition the same EQ / dynamics moves through different emulations (SSL 4K E / G / B, API, bx, a JSFX strip…) without re-dialling anything.
+
+## Two domains
+
+**Channel Strip** and **Bus Compressor** favourites are entirely separate: eight slots each, their own set libraries, their own preferences. A track can carry one of each.
+
+Most actions come in three flavours — an explicit CS one, an explicit BC one, and a **Focused Domain** one that follows whichever of the two you are working on at the time. Bind the Focused Domain versions if you want one button that does the right thing on both; bind the explicit ones if you want a button that always means Channel Strip.
 
 ## Requirement — the plug-ins must be mapped
 
-CS-Switch works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
+Favourite switching works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
 
 - The **built-in maps** (SSL CS 2, 4K B / E / G, BC 2, 360 Link) work out of the box — nothing to set up.
-- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells CS-Switch which parameter shares each control.
+- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells Rea-Sixty which parameter shares each control.
 
 Without a map: a track whose active plug-in isn't a recognised Channel Strip is **skipped** (treated as having no CS), and value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
 
-## Favourites
+## Setting favourites
 
-Define up to **8 favourite** Channel-Strip plug-ins. They are stored globally (all projects), in REAPER's ExtState. Set them in either place:
+**Settings → Favourites** is the main place. Each domain has eight numbered slots, and each slot is a searchable dropdown over your mapped plug-ins. One plug-in occupies one slot — putting it in a new slot moves it out of the old one.
 
-- **Settings → FX Learn**, with a Channel-Strip plug-in loaded and its editor open: a **CS Favourite** dropdown assigns the current plug-in to a slot (1–8).
-- **Learn-HUD ☰ menu → CS Favourite** submenu: favourite the live Channel-Strip directly (greyed when no CS is on the focused track).
+Two shortcuts exist for favouriting whatever is in front of you:
 
-One plug-in occupies one slot — assigning it to a new slot moves it.
+- **Settings → FX Learn**, with the plug-in's editor open: a **CS Favourite:** or **BC Favourite:** dropdown assigns it to a slot.
+- **Learn-HUD**, from its menu — favourite the live plug-in directly.
 
-## Switching
+Both of those edit the **base** bank, not a named set.
 
-- **Switch to CS Favourite 1 … Switch to CS Favourite 8** — replace the active CS with favourite N. The action lights when the focused CS already *is* that favourite.
-- **Encoder: cycle Channel Strip favourites** — step to the next favourite, wrapping (honours the global cycle-wrap setting).
-- **Encoder Mode → CS Cycle (favourites)** — a Channel-Encoder mode: rotate to cycle favourites.
+## Sets, and the Base bank
 
-A track with **no** Channel Strip is skipped. With multiple tracks selected, all selected tracks switch in one undo step (else the surface-focused track). The swap preserves the old plug-in's **bypass state** and, if its GUI was open, **reopens the window**.
+Eight slots is not many once you work across genres, so favourites can be grouped into named **sets** — a full bank of eight, saved under a name. Drums might want one set of strips, vocals another.
+
+In **Settings → Favourites** the set library is split into two columns, **Channel Strip sets** and **Bus Compressor sets**, because the libraries are separate. **New** creates a set, **Dup** copies the one you are looking at, **Del** removes it. A set can be renamed in the field beside those buttons.
+
+Sets are assigned **per track**, under **Assign sets to selected tracks**: select tracks, then pick a **CS set** and a **BC set** for them. Each track can hold one of each, independently.
+
+A track with no set assigned uses the **Base** bank — the fallback everything starts on. Base is normally global and shared by every project. Ticking **This project uses its own Favourites** gives the current project its own base bank instead, seeded from the global one, so a project can carry a specific selection without disturbing your usual setup. The dropdown label tells you which you are editing: `Base (global)` or `Base (this project)`.
+
+> When a track *is* assigned a set, that set is the whole story: an empty slot in it stays empty rather than falling back to Base.
+
+Set libraries and the global base bank are stored with Rea-Sixty and shared by all projects. Per-track assignments, the per-project bank, and the remembered values of each favourite live in the project file.
+
+## Copy values, or own settings
+
+There are two ways a swap can behave, and it is worth understanding the difference because it is the heart of the feature.
+
+**Copy values** carries the live settings from the outgoing plug-in onto the incoming one. You keep the sound you have and change the flavour of the box producing it.
+
+**Own settings** does the opposite: each favourite remembers what *it* was last set to on that channel, and switching restores that. The plug-in comes back as you left it.
+
+The two domains default differently, and deliberately so:
+
+| Domain | Default | Toggle in Settings → Favourites |
+|---|---|---|
+| Channel Strip | **Copy values** | `Channel Strip: use own settings (vs copy values)` |
+| Bus Compressor | **Own settings** | `Bus Compressor: use own settings (vs copy values)` |
+
+Carrying live EQ and dynamics onto the next strip is usually what you want; a bus compressor is more often a thing with its own character you return to. Both are toggleable, from Settings or from a bound action — **CS Favourite Copy/Own**, **BC Favourite Copy/Own**, or the domain-following **Favourite Copy/Own (Focused Domain)**.
+
+The setting governs **Switch** and **Cycle**. *Copy to Favourite N*, below, always copies — that is its purpose.
+
+## Switching, copying, cycling
+
+Three things you can do with a favourite, each available for CS, for BC, and for the focused domain:
+
+- **Switch to CS Favourite 1 … 8** — replace the active plug-in with favourite N. The button lights when the focused plug-in already *is* that favourite.
+- **Copy to CS Favourite 1 … 8** — the A/B, described below.
+- **CS Favourite Cycle** — step through the favourites. Bound to an encoder it steps per detent; there is also **Encoder Mode → CS Cycle (Favourites)** to give a channel encoder that job outright.
+
+Cycling starts from wherever the track already sits: if its plug-in is favourite 3, the next detent goes to 4. If its plug-in is not a favourite at all, the first forward step lands on the first favourite. Empty slots are skipped, and whether it wraps at the ends follows the global cycle-wrap setting.
+
+A track with no plug-in in that domain is skipped. The swap preserves the old plug-in's **bypass state**, and if its window was open the new one opens the same way.
+
+## Copy to Favourite N — the A/B
+
+*Switch* replaces the plug-in. **Copy** does not: it inserts favourite N **directly below** the current one, carries the settings onto it, and **bypasses the original**.
+
+You end up with both strips on the track, same settings, one active — so you can flip between them by toggling bypass, and keep the original to go back to. Copy always carries values, whatever the copy/own setting says.
+
+## Which sections carry
+
+On the Channel Strip you can restrict what a swap carries, under **Copy sections (copy mode only):** — four checkboxes, all on by default:
+
+| Box | Covers |
+|---|---|
+| `EQ` | The EQ bands, and the filters, which ride with the EQ on an SSL strip |
+| `Dyn` | Compressor and the sidechain listen |
+| `Gate` | Gate and expander |
+| `Fader` | The strip's fader level |
+
+Anything outside those — input trim, polarity — always carries. The mask applies to Switch, Cycle and Copy alike. **The Bus Compressor has no mask**; it is a single block of eight controls with nothing to divide.
+
+**Favourites remember non-copied sections** (on by default) keeps the parts you did *not* carry. Switch away with `Gate` unticked and back again, and the gate returns as it was rather than as the plug-in's default. This also covers parameters that are unique to a plug-in and have no equivalent anywhere else — the odd character control that only one emulation has — which are remembered per favourite and restored when you come back to it.
 
 ## Value transfer
 
@@ -1402,10 +1570,25 @@ Each control carries its value to the matching control on the new plug-in, match
 - **Numeric values** (gains, frequencies, Q, threshold, ratio, time) transfer by **engineering value**: the search lands the new plug-in on the value whose display matches the source, exactly when achievable. Hz↔kHz and s↔ms scale differences are reconciled automatically; dB / ratio are never rescaled.
 - **Same-family swaps** (e.g. SSL → SSL) stay **bit-exact**.
 - **Discrete states / buttons** (Bell/Shelf, In/Out, Gate/Expander…) transfer by **meaning**: identical label first, else the active/inactive sense (In/On/Engaged/Expander ↔ Out/Off/Bypass/Gate), else the same state position — so a toggle lands correctly even when the two plug-ins label or order it differently.
-- **Unmapped controls** are resolved by parameter **name alias** as a fallback (e.g. a JSFX strip whose high-pass is literally named "High Pass Filter (Hz)"), but a learned mapping always wins.
 - A control the **new** plug-in lacks is remembered, so the value survives a round-trip through a simpler strip and is restored when you cycle back.
+- **The SSL routing order and the EXT FUNCS carry too** — the EQ / filter / dynamics arrangement and the free function assignments follow the swap, matched by what each control *is*, so they survive a move between different strips whose internals are numbered differently.
+- A filter parked **fully open** lands on the destination's own "out" position where it has one, rather than arriving as a real 20 kHz.
+
+**Copy only mapped parameters** (Settings → Favourites, on by default) decides how far the matching goes. On, only parameters mapped to a control carry. Off, Rea-Sixty also matches unmapped parameters by name — which can be useful for an unmapped strip, but can also drag across things you did not mean, such as an auto-makeup-gain control that happens to be named like a makeup gain.
 
 If a value genuinely can't be represented (a frequency far outside the target's range), the control is left at its default rather than slammed to a rail.
+
+## Several tracks at once
+
+Switch, Copy and Cycle act on **every selected track**, in a single undo step — or on the surface-focused track when nothing is selected.
+
+When the selected tracks carry different sets, **Multi-select: unify sets to focused track** (on by default) re-assigns them all to the focused track's set so they end up consistent. Turn it off and each track keeps its own set, switching within it.
+
+## On the surface
+
+Two factory soft-key banks exist, **CS Favourites** and **BC Favourites**, each filling eight keys with that domain's Switch actions. The key labels show each favourite's plug-in short name — resolved through the focused track's assigned set — falling back to `CS Fav N` when a slot is empty.
+
+Cycling on the UC1 shows the same **previous / current / next** carousel the FX and Instance cycles use, headed with the track name, so you can see what you are stepping into. At the ends of a non-wrapping cycle it still shows, sitting on the current favourite.
 
 \newpage
 
@@ -1434,6 +1617,100 @@ Without a modifier the buttons behave exactly as before. In routing or Plug-in m
 
 \newpage
 
+# Send and Receive views
+
+A routing view repurposes the eight UF8 strips so they drive **sends** or **receives** instead of tracks. This is a UF8 feature; the UC1 has no routing view.
+
+## Two layouts
+
+There are two ways to spread routing across the strips, and they are opposites.
+
+**"8 sends of focused track"** puts the *focused track's* send list across the eight strips — strip 1 is its first send, strip 2 its second, and so on. Use this to ride one track's sends.
+
+**"Send N ↦ all tracks"** keeps every strip on its own banked track and shows *that track's* send number N. `Send 3 ↦ all tracks` gives you send slot 3 of each of the eight banked tracks. Use this to ride one bus across the whole bank.
+
+Receives work the same way in both layouts.
+
+## Turning a view on
+
+Routing views are surface functions bound to hardware buttons — they are not in REAPER's Action list, so they cannot be triggered from a keyboard shortcut.
+
+Every routing function is a **toggle**: pressing the active one again turns it off. Each binding also chooses **which control owns the route** — the faders or the V-Pots. In the binding editor this is the **Flip** checkbox.
+
+Factory defaults:
+
+| Control | Function |
+|---|---|
+| `SEND / PLUGIN 1..8` | **Send N ↦ all tracks** on the faders |
+| Shift + `SEND / PLUGIN 1..8` | **Receive N ↦ all tracks** on the faders |
+| Long-press `FLIP` | **8 sends of focused track** on the V-Pots |
+| Shift + long-press `FLIP` | **8 receives of focused track** on the V-Pots |
+| `CHANNEL` | **Home** — clears every routing toggle and returns the strips to track volume and pan |
+
+Because faders and V-Pots hold their routing independently, a send view and a receive view can be live at the same time on different controls — sends on the faders while receives sit on the V-Pots, for instance. Two routing modes cannot share one control. When both are active, the fader's route wins for Solo, Cut and the scribble text; the V-Pot's route drives the colour bar.
+
+The view follows the focused track live.
+
+## What the controls do
+
+| Control | With the route on the **faders** | With the route on the **V-Pots** |
+|---|---|---|
+| Fader | Send/receive **volume**; with FLIP, **pan** | Track volume, as normal |
+| V-Pot | Send/receive **pan** (regardless of the PAN button) | Send/receive **volume**; **pan** while PAN is engaged |
+| V-Pot push | Centre the send pan | Reset volume to 0 dB, or centre pan when PAN is engaged |
+| Solo | Solo this send (see below) | Solo this send |
+| Cut | Mute this send or receive | Mute this send or receive |
+| Sel | **Selects the banked track**, not the send | Same |
+
+**Sel is deliberately not routing-aware** — it still selects the track sitting on that strip, so you can change focus without leaving the view.
+
+On the scribble strips the upper line shows the route's name — the destination track for a send, the source track for a receive, abbreviated to fit. The value line shows the send's pan. The colour bar takes the colour of the *other end* of the route, so a strip's colour tells you where the signal is going, not where it came from.
+
+## Paging a long send list
+
+In the **"of focused track"** layouts, `BANK ←` / `BANK →` page the send list by eight instead of scrolling tracks. A track with twenty sends pages through them eight at a time; the window clamps so the last send never scrolls past the right-hand strip. The single-step bank bindings page by one.
+
+In the **"↦ all tracks"** layouts the strips *are* tracks, so `BANK ←` / `BANK →` scroll tracks exactly as they normally do.
+
+The page resets to the start when you press **Home**, when you switch routing mode, and whenever the focused track changes. Nothing on the surface indicates which page you are on, so if a long send list looks wrong, press Home and start again.
+
+## Hardware outputs
+
+In a **Send** view, the track's hardware outputs share the slot list with its track sends, in the same order REAPER's mixer send list shows them. Each has its own fader and pan, and is named after the output channel your audio device reports — for example `Analog 1 / Analog 2`. Long names are abbreviated to fit the scribble strip.
+
+Hardware outputs have no far-end track, so those strips do not take a routed colour.
+
+Receives have no hardware-output equivalent; a Receive view lists receives only.
+
+## Empty slots
+
+REAPER lets a send list contain gaps. An empty slot shows as a **completely blank strip** — no name, no value, colour bar off, V-Pot ring off, and the motor fader parked at the bottom so a gap is obvious at a glance. Buttons and faders on a blank strip do nothing.
+
+Strips past the end of a short list are blank in the same way: a track with four sends fills strips 1–4 and blanks 5–8.
+
+## Solo and Cut on a send
+
+**Cut** toggles the send's or receive's own mute.
+
+**Solo** is an exclusive un-mute: it un-mutes the send you pressed and mutes every other one in the list. In a Send view that includes the hardware outputs; in a Receive view it stays within the receives. Pressing it again un-mutes everything.
+
+> **This discards whatever mute pattern you had before** — the same as the solo button on a console. If you had three sends deliberately muted, soloing and un-soloing leaves all of them open.
+
+While any routing view is active the **Solo LEDs stay dark**, so there is no lit button telling you a send is soloed. The visible cue is the other strips' Cut LEDs coming on. Leaving the view restores the LEDs to the tracks' real solo states.
+
+## Writing automation
+
+Moving a **fader** in a routing view writes the send's volume — and its pan under FLIP — through the same path REAPER uses when you drag the control with the mouse. Whether the move is *recorded* is therefore REAPER's decision and follows the track's automation mode, exactly as it would on screen. Releasing the fader ends the edit.
+
+Two limits are worth knowing:
+
+- **The V-Pot writes pan automation, but V-Pot volume changes the level without recording.** If you want an automated send-level move, use the fader.
+- **A send whose level is already automated reads its written value only after you have touched its fader once** in the session. Before that the strip shows and parks at the underlying trim level. Touch the fader and it corrects itself.
+
+If you add or delete a send on a track that already has send automation, a fader move may change the level without recording it. Leaving the routing view and re-entering it re-establishes the link.
+
+\newpage
+
 # REC + RME (TotalReaper) integration
 
 Requires the **TotalReaper** extension (separate ReaPack package) and an RME interface supporting TotalMix FX 2.1 Global OSC.
@@ -1454,6 +1731,149 @@ Strip colour bar shows the input channel name ("Mic 1", "Line 3") instead of the
 Hardware inputs only — MIDI / multichannel inputs leave the original colour-bar label intact.
 
 The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalReaper isn't installed the integration silently no-ops.
+
+\newpage
+
+# DynaMount mode
+
+DynaMount makes robotic microphone stands. In DynaMount mode the UF8 strips drive up to eight of them over your network — move a mic from the control room, with the fader.
+
+## Setting the mounts up
+
+**Settings → Modes → Dynamount.** Each of the eight rows is one stand:
+
+| Column | What it is |
+|---|---|
+| **On** | Include this mount. Only enabled mounts take a strip. |
+| **Name** | Shown on the scribble strip |
+| **IP address** | The mount's address on your network — you type it; there is no discovery |
+| **Colour** | The strip's colour bar |
+| **Detect** | Check whether that address answers |
+| **Calibrate** | The **Home** button (below) |
+| **Status** | `Gen1`, `Gen2`, `offline`, or `--` when the row is off |
+
+**Fill from left** / **Fill from right** decides which end of the surface the mounts occupy.
+
+## Engaging the mode
+
+Bind **Selection Mode → DynaMount** to a button; it toggles like every other Selection Mode. There is no switch in Settings — the Dynamount tab configures the stands, it does not turn the mode on.
+
+With no mounts enabled the mode does nothing at all, and every strip stays a track.
+
+Enabled mounts pin to one end of the surface and carry no track. The other strips remain ordinary track strips, and the tracks that would have sat under the mounts shift onto them rather than disappearing.
+
+## Driving a mount
+
+| Control | Axis |
+|---|---|
+| Fader | **X** — left and right |
+| Fader with **FLIP** | **Y** — distance, fader up = nearest |
+| V-Pot | **R** — rotation, 0–180° |
+
+The fader **sends when you let go**, not while you move it: the readout follows your hand, the stand moves once on release. The V-Pot behaves similarly — the number changes per detent, but the mount only turns about a second after you stop.
+
+The scribble strip shows the mount's name (or `MOUNT` if you have not named it), `DYNA` in the type zone, and the live position as `X`, `Y` and `R`. The digit is the mount's row number in Settings, not the strip number. A mount that is not answering has **OFF** appended to its value line.
+
+Solo, Cut and Sel have no function on a mount strip and their LEDs stay dark.
+
+## Home
+
+**Home** — the button under *Calibrate* — drives the mount to the reference pose **X50 Y0 R90**: centred, nearest, straight ahead. It also resets Rea-Sixty's idea of where the stand is.
+
+This matters because the protocol is one-way: the stands report no position, so Rea-Sixty knows only what it last told them. Positions are remembered globally and restored on the next launch without re-driving the motors, on the assumption that nothing moved in between. If you move a stand with the DynaMount app, by hand, or after a power cut, the two disagree — press Home and they match again.
+
+Home is a normal move command, so the stand travels to that pose; it is not a hardware homing or self-calibration routine.
+
+## Connection
+
+Rea-Sixty talks to the stands over plain HTTP on your local network, at the addresses you enter. Motor speed is fixed.
+
+**Detect** is a reachability check for an address you have already typed, not a search of the network. On an address with nothing at the other end it can take around six seconds to give up and report `offline`.
+
+> Once a mount has been found offline, Rea-Sixty stops trying it. Faders and V-Pots keep moving the numbers on screen, but the stand will not follow, and the value line shows **OFF**. Press **Detect** again after fixing the network — or edit the address, or restart REAPER. It will not recover on its own.
+
+Every enabled mount is probed once when REAPER starts, so Status is filled in before you open Settings.
+
+> **Only first-generation stands can be driven.** A newer stand is detected and reports `Gen2` in Status, but Rea-Sixty cannot move it — motion is implemented for the Gen1 HTTP protocol only.
+
+\newpage
+
+# Stream Deck and Companion
+
+Rea-Sixty carries a small server — the **bridge** — that external control apps talk to. Two clients use it: an official **Stream Deck plugin**, and a community **Bitfocus Companion module**. Both let you fire any Rea-Sixty action from a button and read live meters back.
+
+Neither is part of the ReaPack package.
+
+## The Stream Deck plugin
+
+Download `com.reasixty.companion.streamDeckPlugin` from the *Assets* of any [release](https://github.com/acklin83/Rea-Sixty/releases/latest) and **double-click it** — the Stream Deck app installs it. There is nothing else to install and nothing to configure; no Node, no separate server. You need the Stream Deck app **6.5 or newer**.
+
+The tiles then appear in the Stream Deck action list under **Rea-Sixty Companion**. Drag one onto a key.
+
+Nine tile types:
+
+| Tile | What it fires |
+|---|---|
+| **Favourite** | Switch and cycle CS / BC favourites |
+| **Layer** | Select binding layer 1 / 2 / 3 |
+| **Hardware Mode** | Surface-wide toggles — Flip, Home, Settings, mirrors, overlays, learn |
+| **Navigation** | Bank and page navigation, zoom |
+| **Plug-in** | FX windows, chain, close-all, Quick-Learn, bypass, offline |
+| **Selection Set** | Recall selection sets |
+| **Surface Target** | What the surface drives — Selection and Encoder modes, sends, Parameter Groups, soft-key banks, SSL |
+| **Any Rea-Sixty Action** | Any built-in at all, or a raw REAPER command |
+| **Meter** | A live readout rather than a button (below) |
+
+Each tile's action list is **pulled live from the running extension**, so it always matches your installed version rather than a list baked into the plugin. The consequence is that the list is empty until REAPER is up — the property panel then reads *"Rea-Sixty not connected — start REAPER with the extension."*
+
+Keys ship blank: no image, no title. Set a **Title**, or tick **Show track** to mirror the selected track's name.
+
+**The Meter tile** shows five sources — `Peak`, `Gain Reduction`, `Gain Reduction — Bus Comp`, `Peak + GR`, and `Peak + GR (Bus Comp)`. Gain Reduction reads the first plug-in on the track that reports it, so any compressor works; the Bus Comp variants target the mapped SSL Bus Compressor.
+
+Point it at the **Selected track**, the **Master track**, a fixed **Track number…** or a **Track name…**. The rest of the options are presentation: **Track name** and **Track colour** to show them, **Name position** (`Bottom` or `Top` — top reads better on an angled deck), **Wrap name** for a second line, and **Font size** (`Small` / `Normal` / `Large` / `Extra large`).
+
+**Smart abbrev.** is on by default and shortens long track names intelligently. Note that it *overrides* the global Track-name mode rather than following it: with the box ticked you get smart abbreviation even if the surface itself is set to plain truncation, and unticking it shows the full, unshortened name.
+
+A meter tile can also fire an action when pressed — see **On press (optional)**.
+
+## The bridge
+
+The bridge listens on **port 49900**, on **loopback only** — so out of the box, only the machine running REAPER can reach it.
+
+To let Companion on another machine connect, open it to the network by running this once in REAPER's ReaScript console and restarting REAPER:
+
+```
+reaper.SetExtState("rea_sixty", "sd_bridge_bind", "lan", true)
+```
+
+The port can be moved the same way with `sd_bridge_port`. Both settings are read once when the extension loads, so a restart is required either way.
+
+> **The bridge has no authentication.** In LAN mode anyone who can reach the port can drive REAPER. Only open it on a network you trust.
+
+Two limitations of the Stream Deck plugin are worth knowing before you plan a setup:
+
+- **It always connects to 127.0.0.1 on port 49900.** There is no host or port setting. So the Stream Deck plugin works on the machine running REAPER only — the LAN option above is useful for Companion, not for it.
+- **Moving the port with `sd_bridge_port` therefore disconnects the Stream Deck plugin** permanently. Only change the port if Companion is your only client, or if something else on the machine already occupies 49900.
+
+If the port cannot be claimed at all, the bridge fails quietly and everything else keeps working — the only evidence is a `StreamDeck bridge FAILED to bind` line in the log.
+
+## The Companion module
+
+> **Community module, provided as-is.** It is not officially supported, and it is not a one-to-one port of the Stream Deck plugin: Companion styles buttons through feedbacks rather than pre-made tiles, and some conveniences — metering a track by name, for one — are not implemented. The source is in the repository for anyone who wants to extend it.
+
+It needs **Bitfocus Companion 4.x** and is installed as a developer module: run `npm install` inside `companion/`, then point Companion's **Developer modules path** at the directory containing that folder and restart the launcher. Rea-Sixty then appears under Connections → Add connection.
+
+> **Do not point the developer path at a symlink.** Companion runs developer modules under Node's permission model, which refuses to read through one. The connection dies at startup with nothing but `Error: Restart forced` in the log — the real reason only appears at debug log level. Use a real directory.
+
+The connection is configured with a **REAPER host** and **Bridge port**, plus which tracks to meter: the selected track, the master, and a comma-separated list of track numbers. Metering is off until you enable it there, and each metered track is polled about fifteen times a second — so list only what you need.
+
+It provides an action for any Rea-Sixty built-in (the list again pulled live), plus REAPER commands by numeric ID or by action string. Feedbacks cover the active binding layer, flip state, a meter-over-threshold test with a configurable dB threshold, and a graphical meter bar. Variables expose the connection state, selected track name and number, active layer, flip, and per-track peak and gain-reduction values. Presets ship grouped by category, with a Meters group and a Status group.
+
+## If the keys go dead
+
+Both clients reconnect by themselves roughly every one and a half seconds, so starting REAPER after the Stream Deck app is fine — the keys come to life on their own, and nothing needs reinstalling.
+
+While the bridge is unreachable, meter keys show a dim dash and **no REAPER** rather than freezing on their last reading, and any track name shown on a key clears. That display *is* the diagnosis: REAPER is closed, the extension is not loaded, or something else has taken the port.
 
 \newpage
 
@@ -1624,6 +2044,10 @@ Settings → Modes → AUTO → "Hide Trim/Read tracks while in AUTO mode" — w
 
 # Troubleshooting
 
+**Try this first.** If the surface was working and has stopped — dead faders, no scribble text, buttons ignored — run the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)*. It closes and re-opens the devices without the Preferences round-trip and clears most wedged states. Give it a keyboard shortcut; a hardware key is no use when the hardware is what stopped responding.
+
+It re-opens the devices, not the extension, so it will not pick up a newly installed build — that still needs REAPER restarted.
+
 ## Rea-Sixty does not appear in Preferences → Control/OSC/Web → Add
 
 The dylib / dll / so didn't load. Check:
@@ -1640,7 +2064,7 @@ SSL 360° is running and has claimed the UF8/UC1 vendor interface exclusively. Q
 
 ## Disconnect after sleep / wake or sustained idle (macOS)
 
-Known issue: both UC1 and UF8 IN endpoints can fail within ~3 ms of each other on a sustained host-side USB stack condition. `libusb_reset_device` does not escape it. Physical replug (one or both devices) recovers. Diagnostic logs in `/tmp/rea_sixty_uc1_stale.log` + `/tmp/rea_sixty_uf8_stale.log`.
+Known issue: both UC1 and UF8 IN endpoints can fail within ~3 ms of each other on a sustained host-side USB stack condition. `libusb_reset_device` does not escape it. Physical replug (one or both devices) recovers. Diagnostic logs are `rea_sixty_uc1_stale.log` + `rea_sixty_uf8_stale.log` in the system temporary folder (see *Diagnostics*).
 
 ## Track-colour wrong
 
@@ -1662,9 +2086,13 @@ ReaImGui isn't installed. Install it via ReaPack. Hardware control still works w
 
 ## Diagnostics
 
-- `/tmp/rea_sixty_uc1_stale.log` — UC1 device-handle diagnostics
-- `/tmp/rea_sixty_uf8_stale.log` — UF8 device-handle diagnostics
+Log files live in the system temporary folder — `/tmp` on macOS and Linux, `%TEMP%` on Windows. **Settings → About → Logs** shows the real path and has a button to open the folder.
+
+- `rea_sixty_uc1_stale.log` — UC1 device-handle diagnostics
+- `rea_sixty_uf8_stale.log` — UF8 device-handle diagnostics
 - macOS Console / Windows Event Viewer / Linux journal for in-process errors
+
+Note that **Console output** in Settings → About → Logs is off by default, so REAPER's Console stays quiet. The log files are written either way; turn the checkbox on if you want messages in the Console as well.
 
 \newpage
 

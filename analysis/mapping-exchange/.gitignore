@@ -1,0 +1,6 @@
+# Generated output — regenerate with `python3 gen_exchange.py`.
+exchange.html
+exchange-s*.html
+# Extracted from the local machine's REAPER install. NOT committed: it lists
+# every plug-in vendor installed here, which is nobody else's business.
+vendors.json

@@ -538,6 +538,21 @@ struct UserPluginMap {
     // slot (linkIdx 5), like any other CS button. Additive — old files
     // default to true. Frank 2026-06-02.
     bool useReaperTrackPolarity = true;
+    // Full plug-in factory name — REAPER's `original_name` — captured live
+    // when the FX-Learn view follows the focused FX. `match` is a user-editable
+    // substring and carries no manufacturer; this string does ("Name (Vendor)"
+    // for VST/CLAP, "Vendor: Name" for AU), which is what lets the mapping
+    // exchange resolve the vendor and the plug-in identity server-side.
+    // Additive — empty until captured; the exchange falls back to `match`.
+    // Frank 2026-07-19.
+    std::string originalName;
+    // Count of the plug-in's FUNCTIONAL parameters at snapshot time: total
+    // params minus REAPER's MIDI-learn junk (2080 on some UADx plug-ins),
+    // minus the :wet/:bypass/:delta wrapper params, minus anything the plug-in
+    // marks non-automatable. This is the denominator for the exchange's
+    // "parameter coverage" (how much of the plug-in the map controls), which
+    // the pruned paramSnapshot can't provide. -1 = not captured. Frank 2026-07-20.
+    int functionalParamCount = -1;
 };
 
 struct UserPluginCatalog {
@@ -619,6 +634,53 @@ bool exportToFile(const std::string& path, std::string* errOut);
 // non-null) carries a short reason.
 bool importFromFile(const std::string& path, std::string* errOut);
 
+// ----- Single-map sharing (.rea60map) --------------------------------------
+// One map plus the metadata the mapping exchange needs, so a file exported
+// today is still a valid upload later. Deliberately NOT a setup bundle: a
+// .rea60config embeds bindings.json, which can carry REAPER action IDs and
+// keyboard macros, so importing one runs whatever the author put in it. A
+// plugin map is pure data — param indices, labels, curves, colours — which is
+// what makes it safe to pass between strangers. See docs/mapping-exchange-plan.md.
+struct MapShare {
+    UserPluginMap map;
+    std::string   vendor;       // not derivable from `match`; user-entered
+    std::string   author;       // free text until the exchange has accounts
+    std::string   description;  // optional, a line or two
+    std::string   licence;      // SPDX id; "CC0-1.0" for exchange uploads
+    int64_t       createdAt = 0;  // unix seconds, 0 = unknown
+};
+
+// Surface scope a map applies to, derived from (domain, uf8Mode):
+// "uc1", "uf8", "uc1+uf8". Empty string for the invalid combination
+// (domain=None, uf8Mode=false), which the catalog filters at load/save.
+const char* surfaceScope(const UserPluginMap& m);
+
+// Write ONE map as a .rea60map envelope. `paramSnapshot` is pruned to the
+// params the map actually binds — an unpruned snapshot runs to thousands of
+// entries on plug-ins like the UADx range, which is dead weight in a file
+// meant to be passed around. `isDefault` is forced off: a shared map must not
+// claim the recipient's Default slot.
+bool exportMapToFile(const std::string& path, const MapShare& share,
+                     std::string* errOut);
+
+// Build the .rea60map envelope into `out` without writing a file — used by the
+// in-app "Publish to exchange" upload, which POSTs the bytes. Same pruning and
+// isDefault handling as exportMapToFile (which now delegates here).
+bool serializeMapShare(const MapShare& share, std::string& out,
+                       std::string* errOut);
+
+// Read a .rea60map WITHOUT applying it — the caller decides what to do when
+// the match already exists (upsert overwrites wholesale) or collides with a
+// built-in (which would make save() refuse the WHOLE catalog). Returns false
+// with a short reason in `*errOut` on any malformed input.
+bool importMapFromFile(const std::string& path, MapShare& out,
+                       std::string* errOut);
+
+// Same as importMapFromFile but parses bytes already in memory — used by the
+// in-app Exchange download, which has the .rea60map from the API, not a file.
+bool importMapFromString(const std::string& contents, MapShare& out,
+                         std::string* errOut);
+
 // Absolute path where user_plugins.json is persisted.
 std::string configPath();
 
@@ -632,6 +694,22 @@ const UserPluginCatalog& get();
 void setAll(UserPluginCatalog c);
 void upsert(UserPluginMap m);              // matches by `match` field
 bool removeByMatch(std::string_view match);
+
+// Record the live plug-in factory name (`original_name`) onto an existing
+// map, keyed by `match`. Called when the FX-Learn view follows a focused
+// live FX that resolves to an owned map — that is the one moment the full
+// name (which carries the vendor) is available; `match` alone never is.
+// Persists (save()) ONLY when the value actually changes, so the
+// focus-follow hot path costs nothing after the first capture. No-op when
+// the match is not in the catalog or `originalName` is empty. Returns true
+// when it changed and was saved.
+bool captureOriginalName(std::string_view match, std::string_view originalName);
+
+// Sibling for the v3 functional-param count (parameter coverage). Same persist-
+// on-change contract; no-op when the match is absent or `count` < 0. Called from
+// the Share-time FX scan so a re-Share records the count for maps learned before
+// v3 or never re-snapshotted this session.
+bool captureFunctionalParamCount(std::string_view match, int count);
 
 // Lookup by match-substring on an FX name. Mirrors built-in lookup
 // semantics — first hit on substring wins. Returns a synthesised

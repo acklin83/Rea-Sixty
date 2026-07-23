@@ -1,0 +1,109 @@
+// Outbound mail — magic-link sign-in only. Nothing else on this site sends
+// email, and nothing here is a mailing list.
+//
+// WHY IT DEGRADES TO THE LOG INSTEAD OF FAILING. Without SMTP credentials the
+// transport logs the link and reports success, so the whole sign-in flow can be
+// exercised locally with no mail server and no secrets on disk. That is a
+// development convenience with one sharp edge, so it is loud: the server refuses
+// to start in this mode unless MAIL_DEV_LOG is set explicitly (see server.js).
+// A production box that quietly "sent" every login link to its own log would be
+// a silent outage of the only way in.
+
+import { createTransport } from 'nodemailer';
+
+let transport;          // lazily built; undefined = not built yet, null = dev mode
+
+export function mailConfigured() {
+  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+}
+
+function getTransport(log) {
+  if (transport !== undefined) return transport;
+
+  if (!mailConfigured()) {
+    transport = null;
+    return transport;
+  }
+
+  // 587 is the default because that is what Hostpoint offers
+  // (asmtp.mail.hostpoint.ch advertises STARTTLS and AUTH PLAIN LOGIN, checked
+  // against the live server). 465 stays supported for hosts that do implicit
+  // TLS instead.
+  const port = Number(process.env.SMTP_PORT ?? 587);
+  transport = createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    // `secure` means "TLS from the first byte", so it tracks the port rather
+    // than being a separate knob someone can set inconsistently: 465 implicit,
+    // 587 STARTTLS.
+    secure: port === 465,
+    // NOT optional on 587. Without it nodemailer treats STARTTLS as
+    // best-effort and will happily continue in cleartext if the upgrade fails
+    // — and the very next thing on the wire is AUTH PLAIN, i.e. the mailbox
+    // password. Fail the send instead.
+    requireTLS: port !== 465,
+    // The name announced in EHLO. Without it nodemailer falls back to the
+    // machine's own hostname, and inside a container that came out as
+    // `EHLO [127.0.0.1]` — visible in a real delivery's Received header. An IP
+    // literal, and localhost at that, is a textbook spam signal. Hostpoint let
+    // it through because we authenticate, but strangers' filters will not be
+    // as forgiving, and these are sign-in links under a DMARC p=quarantine
+    // policy. Set it to a name whose forward and reverse DNS agree with the
+    // sending address (srv1401714.hstgr.cloud ↔ 187.77.89.149 do).
+    name: process.env.SMTP_HELO || undefined,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+  log?.info({ host: process.env.SMTP_HOST, port }, 'mail: SMTP transport ready');
+  return transport;
+}
+
+// info@stoersender-studio.ch, NOT an address at reasixty.com. That mailbox is
+// an established one at Hostpoint whose SPF already redirects to
+// spf.mail.hostpoint.ch, so mail sent through their SMTP is aligned on day one.
+// A fresh reasixty.com sender would need its own SPF, DKIM and reputation
+// before sign-in links stopped landing in spam — and a sign-in link in spam is
+// an account nobody can create. The link inside still points at reasixty.com;
+// the From domain and the link domain differing is normal and costs nothing.
+export function mailFrom() {
+  return process.env.MAIL_FROM ?? 'Rea-Sixty <info@stoersender-studio.ch>';
+}
+
+/**
+ * Send a sign-in link. Returns { sent: true } on delivery, or
+ * { sent: false, devLink } when running without SMTP so the caller can decide
+ * whether to surface the link (it does so only outside production).
+ */
+export async function sendMagicLink({ to, url, log }) {
+  const t = getTransport(log);
+
+  if (!t) {
+    log?.warn({ to, url }, 'mail: no SMTP configured — sign-in link NOT sent, logged instead');
+    return { sent: false, devLink: url };
+  }
+
+  await t.sendMail({
+    from: mailFrom(),
+    to,
+    subject: 'Your Rea-Sixty sign-in link',
+    // Plain text only. An HTML mail from a project whose whole pitch is "no
+    // telemetry" invites tracking-pixel questions it does not need to answer,
+    // and a sign-in link is one sentence.
+    text: [
+      'Sign in to the Rea-Sixty mapping exchange:',
+      '',
+      url,
+      '',
+      'The link works once and expires in 15 minutes.',
+      'If you did not ask for it, ignore this message — nothing happens until',
+      'the link is opened.',
+    ].join('\n'),
+  });
+
+  log?.info({ to }, 'mail: sign-in link sent');
+  return { sent: true };
+}
+
+/** Test seam: forget the cached transport so a test can flip the env. */
+export function resetMailTransport() {
+  transport = undefined;
+}

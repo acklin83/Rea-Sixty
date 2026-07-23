@@ -74,3 +74,14 @@ docs/.obsidian/
 # Local RE probes — tools for one experiment, not shipped to users.
 # They stay on disk; they just do not belong in the public repo (Frank 2026-07-14).
 analysis/*.lua
+
+# Website source — private, ours only (Frank 2026-07-19).
+# The reasixty.com Astro project lives on the local-only `website` branch and
+# must never reach the public repo. Ignoring it here stops the stray web/
+# working-tree directory from being swept into a `git add .` on main.
+#
+# DO NOT let this line propagate to the `website` branch: web/ is TRACKED
+# there, and while an ignore cannot untrack it, any NEW file added under web/
+# would be silently skipped by `git add`. On a main -> website merge, drop
+# this block on the website side.
+/web/

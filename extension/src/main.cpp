@@ -106,6 +106,7 @@ void        reasixty_hudPublishUf8(void* tr, int fxIdx, const void* map,
                                    bool focus, std::string& stateOut, std::string& assignOut,
                                    std::string& banksOut, std::string& stripColsOut);
 bool        reasixty_hudUf8FillStripColours(unsigned int rgb, int fb, int vb, void* tr, int fx);
+bool        reasixty_hudUf8SetStripColour(int strip, unsigned int rgb, int fb, int vb, void* tr, int fx);
 void        reasixty_hudArmLearn(int idx, void* csTr, int csFx, void* bcTr, int bcFx);
 int         reasixty_hudIdxForLinkIdx(int linkIdx, int domain);
 bool        reasixty_hudBindParam(int idx, int vst3Param, int layer,
@@ -9785,15 +9786,24 @@ void appendOverlayEntry_(MediaTrack* tr, int csFx, int bcFx, int selFx, std::str
     if (!tr || (csFx < 0 && bcFx < 0 && selFx < 0)) return;
     const std::string guid = uc1::trackGuid(tr);
     if (guid.empty()) return;
-    // Publish the visual SLOT, not the chain index: REAPER 7.75 lets the MCP/TCP
-    // FX list leave empty slots, so the overlay (row = topPad + N*rowH) needs the
-    // visual slot. fxChainIndexToSlot_ (defined up by applyFxMoveSlotAware_) maps
-    // chain index -> effective 0-based slot; index unchanged on pre-7.75.
-    const int csSlot  = (csFx  >= 0) ? fxChainIndexToSlot_(tr, csFx)  : -1;
-    const int bcSlot  = (bcFx  >= 0) ? fxChainIndexToSlot_(tr, bcFx)  : -1;
-    const int selSlot = (selFx >= 0) ? fxChainIndexToSlot_(tr, selFx) : -1;
+    // Publish the real CHAIN index. This used to publish the visual SLOT
+    // (fxChainIndexToSlot_) because the overlay drew at topPad + N*rowH and so
+    // needed a row number. As of 2026-07-19 the overlay no longer computes the
+    // row: it reads the MCP list, where every occupied row identifies itself as
+    // "mcp.fxlist <slot> fx:<chainIndex>", and looks the row up by chain index.
+    // It has to, because slot == row only holds when nothing else shares the
+    // list — grouped FX parameters take a row each and empty slots take a row
+    // without taking a chain index, so no single number can mean both.
+    //
+    // Sending the slot while the overlay resolves a chain index put the
+    // highlight one insert too low whenever the chain had a gap (Frank
+    // 2026-07-19: on the 3rd FX, drawn on the 4th).
+    //
+    // Only the overlay script consumes this body. The panel's plug-in names and
+    // its click-to-open target are published separately, already from the chain
+    // index, precisely because reading this field as one used to break them.
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "%s,%d,%d,%d;", guid.c_str(), csSlot, bcSlot, selSlot);
+    std::snprintf(buf, sizeof(buf), "%s,%d,%d,%d;", guid.c_str(), csFx, bcFx, selFx);
     out += buf;
 }
 
@@ -24242,6 +24252,26 @@ void onTimer()
                     g_hudUf8StripColsPublished.clear();
                     publishHud_();
                 }
+            } else if (s.rfind("uf8stripcol;", 0) == 0) {
+                // "uf8stripcol;<strip>;<RRGGBB>" — set ONE strip's display
+                // colour bar (HUD colour-bar left-click). 0 = clear. Right-click
+                // fills all via uf8stripcolfill above.
+                const auto semi = s.find(';', 12);
+                if (semi != std::string::npos) {
+                    const int strip = std::atoi(s.c_str() + 12);
+                    const unsigned int rgb = static_cast<unsigned int>(
+                        std::strtoul(s.c_str() + semi + 1, nullptr, 16)) & 0x00FFFFFFu;
+                    MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
+                    resolveFocusedUf8Target_(tr, fx, mp);
+                    const int fb = std::clamp(g_uf8FaderBank.load(),
+                                              0, uf8::kUserUf8FaderBankCount - 1);
+                    const int vb = std::clamp(g_softKeyBank.load(),
+                                              0, uf8::kUserUf8VpotBankCount - 1);
+                    if (reasixty_hudUf8SetStripColour(strip, rgb, fb, vb, tr, fx)) {
+                        g_hudUf8StripColsPublished.clear();
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("uf8cancel", 0) == 0) {
                 reasixty_hudUf8CancelLearn();
             } else if (s.rfind("uf8bank;", 0) == 0) {
@@ -29222,6 +29252,65 @@ bool reasixty_fxLearnImportViaDialog(std::string* errOut)
 #endif
     if (chosen.empty()) return false;
     return uf8::user_plugins::importFromFile(chosen, errOut);
+}
+
+// A single shared mapping (.rea60map) — one map, not the whole catalog.
+// Deliberately never offers .rea60config: a setup bundle carries bindings,
+// which can hold REAPER action IDs and keyboard macros. See
+// docs/mapping-exchange-plan.md.
+
+// `match` strings carry the plug-in format prefix and arbitrary punctuation
+// ("VST3: bx_console SSL 4000 G", "JS: 4-Band EQ [loser/4BandEQ]"), so they
+// are not filename-safe as-is.
+static std::string reasixtyMapFileName_(const std::string& match)
+{
+    std::string s = match;
+    for (char& c : s) {
+        if (strchr("/\\:*?\"<>|", c)) c = '-';
+    }
+    // Collapse the runs the substitution leaves behind, and trim.
+    std::string out;
+    for (char c : s) {
+        if (c == '-' && !out.empty() && out.back() == '-') continue;
+        if (c == ' ' && out.empty()) continue;
+        out += c;
+    }
+    while (!out.empty() && (out.back() == ' ' || out.back() == '-')) out.pop_back();
+    if (out.empty()) out = "mapping";
+    return out + ".rea60map";
+}
+
+// Export ONE map. Returns the chosen path on success, "" on cancel/error.
+std::string reasixty_mapShareExportViaDialog(
+    const uf8::user_plugins::MapShare& share, std::string* errOut)
+{
+    const std::string defName = reasixtyMapFileName_(share.map.match);
+    std::string chosen = reasixtySaveDialog_(
+        "Share Plug-in Mapping", defName.c_str(), "rea60map",
+        "Rea-Sixty mapping (*.rea60map)\0*.rea60map\0\0");
+    if (chosen.empty()) return "";   // user cancel → no error message
+    if (!uf8::user_plugins::exportMapToFile(chosen, share, errOut)) return "";
+    return chosen;
+}
+
+// Load ONE shared map. Does NOT apply it — the caller inspects `out` and
+// decides (the match may already exist, or collide with a built-in).
+bool reasixty_mapShareImportViaDialog(uf8::user_plugins::MapShare* out,
+                                      std::string* errOut)
+{
+    if (!out) return false;
+    std::string chosen;
+#ifdef __APPLE__
+    chosen = uf8::macosOpenDialog("Import Plug-in Mapping", "rea60map");
+#else
+    char buf[4096] = {0};
+    if (!GetUserFileNameForRead(buf, "Import Plug-in Mapping", "rea60map")) {
+        return false;
+    }
+    chosen = buf;
+#endif
+    if (chosen.empty()) return false;
+    return uf8::user_plugins::importMapFromFile(chosen, *out, errOut);
 }
 
 // Per-layer import — Open dialog → parse + replace named layer. Returns
