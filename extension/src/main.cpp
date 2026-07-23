@@ -16579,17 +16579,22 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 rmsL = rc[0]; rmsR = rc[1]; haveRms = true;
             }
         } else {
-            // Fall back to REAPER's own peaks off the SELECTED instance's track,
-            // not the focused one — a silent instance fails the ok() test above and
-            // lands here, and reading the focused track then painted ITS signal on
-            // the Overview bars while the (silent) instance's numbers/gonio stayed
-            // correctly quiet (Frank 2026-07-23). The pinned track's peak matches
-            // the instance (silent → empty), and is stable across the plug-in's
-            // ~1-in-5 NaN ticks. Falls back to the focused track only if unpinned.
+            // Silent/absent BarPeak (fails the ok() test above). Read REAPER's own
+            // peaks off the SELECTED instance's track — its peak matches the
+            // instance (silent → empty) and is stable across the plug-in's ~1-in-5
+            // NaN ticks. Reading the FOCUSED track here painted its signal on a
+            // silent/unresolved instance's bars (Frank 2026-07-23). While the
+            // plug-in is running but no instance is resolved yet (auto mode, before
+            // the first V-Pot1 step), leave the bars EMPTY rather than borrow the
+            // focused track; only use the focused track when the plug-in is off.
             MediaTrack* ptr = nullptr; int pfx = -1;
-            MediaTrack* peakTr = uf1PinnedMeterTrackFx_(ptr, pfx) ? ptr : tr;
-            dbL = peakToDb(Track_GetPeakInfo(peakTr, 0));
-            dbR = peakToDb(Track_GetPeakInfo(peakTr, 1));
+            if (uf1PinnedMeterTrackFx_(ptr, pfx)) {
+                dbL = peakToDb(Track_GetPeakInfo(ptr, 0));
+                dbR = peakToDb(Track_GetPeakInfo(ptr, 1));
+            } else if (!sslcore::isRunning()) {
+                dbL = peakToDb(Track_GetPeakInfo(tr, 0));
+                dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+            }
         }
     }
     const float peak = (dbL > dbR) ? dbL : dbR;   // no std::max — MSVC macro trap
