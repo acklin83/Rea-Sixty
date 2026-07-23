@@ -16579,8 +16579,17 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 rmsL = rc[0]; rmsR = rc[1]; haveRms = true;
             }
         } else {
-            dbL = peakToDb(Track_GetPeakInfo(tr, 0));
-            dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+            // Fall back to REAPER's own peaks off the SELECTED instance's track,
+            // not the focused one — a silent instance fails the ok() test above and
+            // lands here, and reading the focused track then painted ITS signal on
+            // the Overview bars while the (silent) instance's numbers/gonio stayed
+            // correctly quiet (Frank 2026-07-23). The pinned track's peak matches
+            // the instance (silent → empty), and is stable across the plug-in's
+            // ~1-in-5 NaN ticks. Falls back to the focused track only if unpinned.
+            MediaTrack* ptr = nullptr; int pfx = -1;
+            MediaTrack* peakTr = uf1PinnedMeterTrackFx_(ptr, pfx) ? ptr : tr;
+            dbL = peakToDb(Track_GetPeakInfo(peakTr, 0));
+            dbR = peakToDb(Track_GetPeakInfo(peakTr, 1));
         }
     }
     const float peak = (dbL > dbR) ? dbL : dbR;   // no std::max — MSVC macro trap
@@ -16876,9 +16885,17 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         bool  haveVuHold = false;
         {
             std::vector<float> cur, pk;
+            // Use the plug-in's VuPpm whenever it STREAMS it (getMeter true) — even
+            // at the -36 floor, which is the correct reading for a SILENT instance
+            // (needle at the bottom). The old `cur[0] > -35.9f` gate dated from when
+            // we never asked for the Analogue view so VuPpm sat PARKED at -36; with
+            // setView(1) it is live, and the gate then mis-read a live-silent -36 as
+            // "not live" → dropped into the BarPeak fallback, which pegged a silent
+            // track (Frank 2026-07-23, instance A). Fall back only when the plug-in
+            // sends NO VuPpm at all (impersonator off / REAPER-peaks mode).
             const bool haveVu =
                 sslcore::getMeter(int(sslmeter::DataType::VuPpm), cur, pk) &&
-                cur.size() >= 2 && cur[0] > -35.9f;
+                cur.size() >= 2;
             if (haveVu) {
                 vuL = cur[0]; vuR = cur[1];
                 // The lagging needle is VuPpm's OWN f4 — measured (cap98): a
