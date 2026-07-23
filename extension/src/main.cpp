@@ -11087,7 +11087,7 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
         { {2,2,"TPkHQ"},   {17,2,"SmCp"},   {1,0,"Delay"}  },  // P3 True Peak HQ / Sum Compensation / Global Delay
     },
     { // Analogue
-        { {8,2,"Mode",true},{11,3,"0 VU"},  {9,3,"Ref"}    },  // P1 Analogue Mode(name-only) / 0 VU Line-Up / Reference Level
+        { {8,2,"Mode",true},{11,3,"0 VU"},  {9,0,"Ref"}    },  // P1 Analogue Mode(name-only) / 0 VU Line-Up(+4/0/-2) / Reference Level(continuous, fine)
         { {12,3,"Format"}, {13,0,"Cust L"}, {14,0,"Cust R"}},  // P2 Dual Format / Custom Left / Custom Right
         { {10,3,"MaxN"},   {15,0,"Overld"}, {-1,0,nullptr} },  // P3 Max Needle / LED Overload / —
     },
@@ -17414,6 +17414,16 @@ void uf1PaintChannel_()
         int mfx = -1, mcnt = 0;
         if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
             uf1EmitMeterParamLabels_(tr, mfx, meterScreen, meterPage);
+    }
+    // Page-arrow LEDs — SSL lights ► when a next page exists and ◄ when a previous
+    // one does, so only the reachable directions glow. LED id↔arrow correlated in
+    // cap106 (arrow-press IN vs LED OUT timing): 0x0e = ► (right), 0x0c = ◄ (left).
+    // buildLed = FF 3B 03 <id> 00 <on>. Both dark outside meter view. Gated on a
+    // view/screen/page change so it is not re-sent every frame.
+    if (g_uf1_dev && (viewChanged || screenChanged || pageChanged)) {
+        const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 2)];
+        g_uf1_dev->send(uf1::buildLed(0x0e, meterView && meterPage < pgN - 1));
+        g_uf1_dev->send(uf1::buildLed(0x0c, meterView && meterPage > 0));
     }
 
     if (meterView) {
