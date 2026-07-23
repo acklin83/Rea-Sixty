@@ -907,6 +907,27 @@ std::string currentMeterName() {
     return (it != g_portName.end()) ? it->second : std::string();
 }
 
+// The 1-based HostTrackIndex of the instance currently being READ (the pin, or the
+// auto-picked one) — mirrors currentMeterName() so the UF1 can route V-Pot2/3/4
+// edits + their displayed values to the SAME instance V-Pot1 selected, instead of
+// whatever track happens to be focused. 0 = unknown/none. Thread-safe.
+int currentMeterTrackIndex() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    uint16_t port = 0;
+    if (g_meterSel >= 0) {
+        const auto ports = aliveMeterPorts_();
+        if (g_meterSel < int(ports.size())) port = ports[g_meterSel];
+    } else {
+        port = g_srcPort;
+        if (g_portIndex.find(port) == g_portIndex.end()) {
+            const auto ports = aliveMeterPorts_();
+            if (!ports.empty()) port = ports.front();
+        }
+    }
+    auto it = g_portIndex.find(port);
+    return (it != g_portIndex.end()) ? it->second : 0;
+}
+
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
               uint64_t* seq) {
     if (dataType < 0 || dataType >= int(sslmeter::DataType::Count)) return false;

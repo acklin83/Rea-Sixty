@@ -11113,7 +11113,8 @@ constexpr double kUf1MeterContStep = 0.02;
 // The device's V-Pots emit ~4 raw counts per physical click (cap58, same encoder
 // hardware as the channel encoder → kChannelEncoderScale). Accumulate so one
 // click = exactly one enum notch regardless of the raw count granularity.
-std::atomic<int> g_uf1MeterFxSel{0};   // which SSL Meter instance V-Pot1 picked
+// (The old g_uf1MeterFxSel focused-track FX selector is gone — V-Pot2/3/4 now
+// resolve the instance V-Pot1 pinned via uf1PinnedMeterTrackFx_.)
 
 // Find the SSL Meter (Pro) plug-in on `tr`. `sel` picks the sel-th match (V-Pot1
 // instance select), clamped. Returns the FX index and the total match count.
@@ -11134,6 +11135,25 @@ bool uf1FindMeterFx_(MediaTrack* tr, int sel, int& fxOut, int& countOut)
     }
     if (countOut == 0) return false;
     if (fxOut < 0) fxOut = matchIdx;                  // sel out of range → first
+    return true;
+}
+
+// Resolve the track + SSL Meter FX of the instance V-Pot1 PINNED. The impersonator
+// owns the selection (ordered by the plug-ins' 1-based HostTrackIndex); V-Pot2/3/4
+// EDITS, the values they DISPLAY, and the VU-needle reference must all target THIS
+// instance — not uf1FocusedTrack_(), which drifted them onto whatever track was
+// focused so every param hit one fixed instance (Frank 2026-07-23). Main-thread
+// only (GetTrack/TrackFX). Returns false when no instance is correlated yet.
+bool uf1PinnedMeterTrackFx_(MediaTrack*& trOut, int& fxOut)
+{
+    trOut = nullptr; fxOut = -1;
+    const int idx1 = sslcore::currentMeterTrackIndex();   // 1-based HostTrackIndex
+    if (idx1 <= 0) return false;
+    MediaTrack* tr = GetTrack(nullptr, idx1 - 1);
+    if (!tr) return false;
+    int cnt = 0;
+    if (!uf1FindMeterFx_(tr, 0, fxOut, cnt)) return false;  // the (usually sole) Meter on that track
+    trOut = tr;
     return true;
 }
 
@@ -11278,15 +11298,22 @@ void applyUf1MeterVpot_(uint8_t id, int step)
             sSelAccum -= d;
             sslcore::cycleMeterSelection(d);
             uf1EmitMeterInstanceLabel_();          // reflect it on V-Pot1
+            // The V-Pot2/3/4 VALUE labels must follow the new instance too — the
+            // paint path only re-emits on a view/screen/page change, so without
+            // this a selection change left the values on the old instance
+            // (Frank 2026-07-23).
+            MediaTrack* ptr = nullptr; int pfx = -1;
+            if (uf1PinnedMeterTrackFx_(ptr, pfx))
+                uf1EmitMeterParamLabels_(ptr, pfx, screen, page);
         }
         return;
     }
 
-    MediaTrack* tr = uf1FocusedTrack_();
-    if (!tr) return;
-    int fx = -1, count = 0;
-    if (!uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), fx, count)) return;
-    (void)count;   // V2/3/4 target `fx`; instance count is the impersonator's now
+    // V2/3/4 edit the instance V-Pot1 selected (the impersonator's pin), NOT the
+    // focused track — otherwise every turn landed on one fixed instance regardless
+    // of the selection (Frank 2026-07-23).
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (!uf1PinnedMeterTrackFx_(tr, fx)) return;
 
     // Per-target detent accumulators so one physical click = one enum notch even
     // though the encoder emits ~4 raw counts/click. Reset when the addressed
@@ -16864,10 +16891,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 }
             }
             else {
+                // Reference the fallback needle against the SAME instance the peak
+                // values come from (the pin), not the focused track — else B's peak
+                // met a wrong/default ref and pegged the needle (Frank 2026-07-23).
                 float kVuRef = -18.f;
-                int mfx = -1, mcnt = 0;
-                if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
-                    kVuRef = float(-36.0 + TrackFX_GetParamNormalized(tr, mfx, 9) * 36.0);
+                MediaTrack* mtr = nullptr; int mfx = -1;
+                if (uf1PinnedMeterTrackFx_(mtr, mfx))
+                    kVuRef = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
                 vuL = dbL - kVuRef; vuR = dbR - kVuRef;
             }
         }
@@ -17421,9 +17451,11 @@ void uf1PaintChannel_()
     // some screens those name a different param than the V-Pot drives). On a page
     // change the burst does not re-fire, so this is the sole updater for pages 2/3.
     if (meterView && (viewChanged || screenChanged || pageChanged)) {
-        int mfx = -1, mcnt = 0;
-        if (uf1FindMeterFx_(tr, g_uf1MeterFxSel.load(), mfx, mcnt))
-            uf1EmitMeterParamLabels_(tr, mfx, meterScreen, meterPage);
+        // Read the values off the instance V-Pot1 selected (the pin), not the
+        // focused track — so the displayed values follow the selection.
+        MediaTrack* mtr = nullptr; int mfx = -1;
+        if (uf1PinnedMeterTrackFx_(mtr, mfx))
+            uf1EmitMeterParamLabels_(mtr, mfx, meterScreen, meterPage);
     }
     // Page-arrow LEDs — SSL lights ► when a next page exists and ◄ when a previous
     // one does, so only the reachable directions glow. LED id↔arrow correlated in
@@ -17432,8 +17464,17 @@ void uf1PaintChannel_()
     // view/screen/page change so it is not re-sent every frame.
     if (g_uf1_dev && (viewChanged || screenChanged || pageChanged)) {
         const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 2)];
-        g_uf1_dev->send(uf1::buildLed(0x0e, meterView && meterPage < pgN - 1));
-        g_uf1_dev->send(uf1::buildLed(0x0c, meterView && meterPage > 0));
+        auto arrowLed = [&](uint8_t id, bool on) {
+            // The nav-arrow LEDs need the FF38+FF39 PAIR (level 0x11 lit / 0x00
+            // off) — FF3B ALONE is inert for them (cap106: SSL sends FF38, FF39
+            // AND FF3B per arrow; Solo lights on FF3B alone but these do not).
+            const uint8_t lvl = on ? 0x11 : 0x00;
+            g_uf1_dev->send(uf1::buildLedPrimary(id, lvl));
+            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));
+            g_uf1_dev->send(uf1::buildLed(id, on));
+        };
+        arrowLed(0x0e, meterView && meterPage < pgN - 1);   // ► right: next page exists
+        arrowLed(0x0c, meterView && meterPage > 0);          // ◄ left: previous page exists
     }
 
     if (meterView) {

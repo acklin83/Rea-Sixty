@@ -77,6 +77,9 @@ void cycleMeterSelection(int delta);  // advance the pin over [auto, 0..N-1], wr
 // Track name of the instance currently being READ (the pin, or the auto-picked
 // one). Empty if not yet correlated. For the UF1 V-Pot1 label.
 std::string currentMeterName();
+// 1-based HostTrackIndex of that same instance (0 = unknown), so V-Pot2/3/4 edit
+// and read the instance V-Pot1 selected, not the focused track.
+int currentMeterTrackIndex();
 
 // ChannelStripMeterType (AssignerArgsTypes.proto). An SSL channel strip numbers
 // its meters with THIS vocabulary, not MeterPluginDataType — the two overlap on
