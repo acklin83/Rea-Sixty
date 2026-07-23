@@ -11063,6 +11063,13 @@ struct Uf1MeterVPot {
                  //  0 : continuous — fine dial (kUf1MeterContStep per notch)
     const char* name;  // short label above the V-Pot (manual p189-191); the live
                        // value comes from TrackFX_GetFormattedParamValue.
+    bool nameOnly = false;  // true = SSL shows the value string ALONE (an enum
+                       // whose value IS the label: Digital Type, Analogue Mode,
+                       // Analysis Source). These render as a name-only 0x010e frame
+                       // (idx + value, like V-Pot1) — the ONLY form the UF1
+                       // repaints for such slots; a name+value frame leaves the
+                       // value static (HW-verified 2026-07-23: name+value params
+                       // repaint after the width fix, enum params did NOT).
 };
 struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 // [screen][page]. screen: 0 Overview, 1 Analogue, 2 RTA. `param` = the TrackFX
@@ -11075,19 +11082,19 @@ struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 // Delay & RMS times). See docs/session-2026-07-22-uf1-meter-capture.md.
 const Uf1MeterPage kUf1MeterVPots[3][3] = {
     { // Overview
-        { {4,2,"TruePk"},  {6,7,"Type"},    {16,7,"Fade"}  },  // P1 Digital True Peak / Digital Type / Lissajous Fade
+        { {4,2,"TruePk"},  {6,7,"Type",true},{16,7,"Fade"} },  // P1 Digital True Peak / Digital Type(name-only) / Lissajous Fade
         { {-1,0,nullptr},  {3,5,"PkHld"},   {5,0,"Int"}    },  // P2 — / Peak Hold / RMS Integration
         { {2,2,"TPkHQ"},   {17,2,"SmCp"},   {1,0,"Delay"}  },  // P3 True Peak HQ / Sum Compensation / Global Delay
     },
     { // Analogue
-        { {8,2,"Mode"},    {11,3,"0 VU"},   {9,3,"Ref"}    },  // P1 Analogue Mode / 0 VU Line-Up / Reference Level
+        { {8,2,"Mode",true},{11,3,"0 VU"},  {9,3,"Ref"}    },  // P1 Analogue Mode(name-only) / 0 VU Line-Up / Reference Level
         { {12,3,"Format"}, {13,0,"Cust L"}, {14,0,"Cust R"}},  // P2 Dual Format / Custom Left / Custom Right
         { {10,3,"MaxN"},   {15,0,"Overld"}, {-1,0,nullptr} },  // P3 Max Needle / LED Overload / —
     },
     { // RTA
         { {51,0,"SlFreq"}, {22,0,"SclTop"}, {23,0,"SclBtm"}},  // P1 Selected Band / Scale Top / Scale Bottom
         { {18,8,"PkHld"},  {20,3,"Wght"},   {21,5,"Avg"}   },  // P2 RTA Peak Hold / Weighting / Averaging
-        { {19,0,"Source"}, {-1,0,nullptr},  {-1,0,nullptr} },  // P3 Analysis Source / — / —
+        { {19,0,"Source",true},{-1,0,nullptr},{-1,0,nullptr}},  // P3 Analysis Source(name-only) / — / —
     },
 };
 // Continuous params move this much normalised per detent (fine — a full sweep is
@@ -11205,9 +11212,25 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
             for (; s && s[n] && n < width; ++n) p.push_back(uint8_t(s[n]));
             for (; n < width; ++n) p.push_back(0x00);
         };
-        if (vs[i]->param < 0) { put("", 9); put("", 10); }
+        if (vs[i]->param < 0) { put("", 8); put("", 10); }
+        else if (vs[i]->nameOnly) {
+            // Enum shown as the value ALONE (Digital Type / Analogue Mode /
+            // Analysis Source): a NAME-ONLY frame — idx + value, variable, no
+            // fields — exactly as SSL sends it (cap103/105/107) and as V-Pot1's
+            // instance label does. This is the ONLY form the UF1 repaints for such
+            // a slot; a name+value frame leaves the value static (HW 2026-07-23).
+            char val[64] = {0};
+            TrackFX_GetFormattedParamValue(tr, fx, vs[i]->param, val, int(sizeof(val)));
+            for (const char* c = val; *c; ++c) p.push_back(uint8_t(*c));
+        }
         else {
-            put(vs[i]->name, 9);
+            // Name field = 8, value field = 10 (total 19 B), BYTE-IDENTICAL to
+            // SSL. The UF1 reads the value at a FIXED offset (1 + 8 = 9) and only
+            // REPAINTS it there; our old name-9 pushed the value to offset 10, so
+            // the name showed but the value never re-rendered on a V-Pot turn.
+            // Proven by tracing our own output (REASIXTY_UF1_TRACE) vs SSL's
+            // cap104: our "TruePk"+3pad vs SSL's "TruePk"+2pad. 2026-07-23.
+            put(vs[i]->name, 8);
             char val[64] = {0};
             TrackFX_GetFormattedParamValue(tr, fx, vs[i]->param, val, int(sizeof(val)));
             put(val, 10);
@@ -15637,15 +15660,17 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
                 break;
             }
-            // Display soft-key 2 cycles the V-Pot parameter PAGE within the current
-            // meter screen (manual S.189-191 gives each screen multiple pages;
-            // Overview/Analogue 2, RTA 3). Meter view only; a normal bindable
-            // soft-key in Channel view. Atomic store only (threading rule).
-            if (ev.id == uf1::btn::kDisplaySoft2 && ev.pressed &&
-                g_uf1MeterView.load()) {
+            // Nav arrow keys ◄ ► page BIDIRECTIONALLY through the V-Pot parameter
+            // pages of the current meter screen (3 pages/screen, HW-verified
+            // 2026-07-22). Meter view only; in Channel view the arrows stay
+            // user-bindable. Atomic store only (threading rule). This frees Display
+            // soft-key 2 for its real Reset job (manual: soft-2 = RESET).
+            if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
+                && ev.pressed && g_uf1MeterView.load()) {
                 const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 2);
-                g_uf1MeterPage.store((g_uf1MeterPage.load() + 1) %
-                                     kUf1MeterPageCount[scr]);
+                const int n   = kUf1MeterPageCount[scr];
+                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (n - 1);
+                g_uf1MeterPage.store((g_uf1MeterPage.load() + dir) % n);
                 break;
             }
             // All other UF1 buttons route through the shared Bindings
