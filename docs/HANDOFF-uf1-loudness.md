@@ -85,19 +85,26 @@ still on the StoerPC.**
 - **setView guard:** Loudness stays on `setView(0)` (readouts stream on ALL views; view-3
   acceptance is unproven — a bad setView(3) could starve the readouts).
 
-### TODO — remaining (need live data; do NOT guess — Frank's capture-first rule)
-- **History graphic (`0x0122` sub-frames) — needs a Mac `ssl_core_probe` trace at view 3.**
-  Law is SOLVED (cap120/121/122): sf1 = short-term history LINE, `byte = clamp((axisLU −
-  rangeBottom)·180/span, 0,180)`, rangeBottom∈{−18,−36,−54}, span∈{27,54,81} from **param 47**.
-  ⚠ **Unresolved offset:** the byte-law measured `axisLU = LUFS + 31.6`, but the sf0 axis tick
-  labels (cap120: −14…−41 for range −18..+9, Absolute) imply a **−23 LKFS target (+23)** — an
-  8.6 LU disagreement. Resolve by tracing the plug-in's `LoudScrollableHistory`(26) floats at
-  view 3 and comparing to the `0x011c` Short-Term readout: the floats may already be axis-LU
-  (map direct, offset moot) or absolute LUFS. Also confirm the plug-in ACCEPTS view 3 before
-  flipping the setView guard. **sf2 = TWO parts:** cols 0–63 a SECOND live history curve (same
-  law), cols 64–91 static target-band. **sf0 = Y-axis text labels** (per-range static, replay).
-  Rendering approach TBD once the floats are seen — could scroll our own DT16 ring buffer OR
-  replay the plug-in's history array directly.
+### ✅ DONE 2026-07-24 — History graphic (`0x0122`), scrolling short-term line (HW-verified `4955331`)
+Resolved by a Mac `ssl_core_probe` **view-3 trace** (view 3 PROVEN accepted — 25/26 stream,
+readouts keep flowing; Loudness now on `setView(3)`, `REASIXTY_FORCE_VIEW` env override added).
+- **`LoudScrollableHistory`(26) IS the scrolling Short-Term LUFS series** (idx 0 oldest .. high
+  newest, floor −100, + a 13-float metadata trailer with the Integrated Target + counters).
+- **The plot is TARGET-RELATIVE** — that dissolves the +31.6-vs-+23 puzzle:
+  `axisLU = LUFS − target`, `byte = clamp((axisLU − rangeBottom)·180/span, 0,180)`,
+  target = **param 36** (Integrated Target), rangeBottom/span = **param 47**. cap120 measured
+  +31.6 because that session's target was −31.6; a −23 target gives +23. Nothing hardcoded.
+- **Wire:** the UF1 needs the FULL sub-frame set (sf1 alone draws NOTHING). sf1 = the live line
+  (newest anchored to the RIGHT edge, scrolls LEFT — HW-verified column order); sf0/sf2/sf3 =
+  per-range chrome from cap120/121/122, selected by param 47 (`extension/src/uf1_loudness_chrome.h`).
+
+### ★ REMAINING — sf2 momentary "now" region is FROZEN (live-render follow-up)
+The right-hand ~20% of the plot (sf2) is the momentary/now region; it is currently the CAPTURED
+snapshot (static). The scrolling short-term history + axis + readouts + V-Pot layer are correct.
+To finish: render sf2's momentary region live (needs its encoding — likely DataType 11
+LoudMomentary; its left/right split within sf2 TBD). Do this FRESH, not at the end of a long
+session (Frank 2026-07-24 — the history column-order/direction cost many HW round-trips; the
+now-point-at-80% turned out to be the frozen sf2 region, NOT an sf1 bug).
 - **V-Pot operator layer — ALL 10 pages BUILT (`kUf1LoudnessVPots[10]`, `kUf1MeterPageCount[3]=10`).**
   Decoded the 0x010e label groups; every param index is a real TrackFX index from the Meter
   Pro dump (nothing guessed). `nameOnly` per slot mirrors SSL's wire form (value-alone vs the
