@@ -66,44 +66,44 @@ The UF1 shows Readout slots 1–4; the plug-in supplies name+unit per slot in th
 (also: Readout7=21 Loudness Range LU, Readout9=23 Momentary, Readout10=24 Momentary Max).
 Build `0x011c` = 4×25B "value unit caption" from DataTypes 15/16/17/18 of the PRO instance.
 
-### TODO — task #3 (rendering + cycle + V-Pot layer)
-- **Cycle:** make the Screen-Selector cap dynamic — `kUf1MeterScreenCycle` is a
-  `constexpr int = 3` (main.cpp ~395; used at ~15696 + the selector). Replace with
-  `meterProAvailable() ? 4 : 3` so Loudness (kUf1MeterScreens[3], already built) joins
-  only for Meter Pro. Reset page on entry. Also: line ~15707 clamps the page-nav screen
-  to 0..2 (RTA) — extend to 3; `kUf1MeterPageCount` needs a Loudness entry (10).
-- **Readouts (`0x011c`, 4×25):** DataTypes 15/16/17/18 (RESOLVED above), from the PRO instance.
-- **History LINE (`0x0122` sub-frame 1, 250 cols, byte 0..180):** from
-  `LoudScrollableHistory`(26)/`LoudCompleteHistory`(25) floats. **View-gated: set
-  `setView(3)` and re-trace to see 25/26 stream + resolve the +31.6 (axisLU vs LUFS) and
-  whether the plug-in accepts view 3.** Law (SOLVED, cap120/121/122):
+### ✅ DONE 2026-07-24 (Mac, uf1-native-build) — cycle + plumbing + readouts
+Built, compiled, deployed (atomic mv, mtime-verified). **Not HW-verified — the UF1 is
+still on the StoerPC.**
+- **Cycle:** the Screen-Selector adds Loudness dynamically — `kUf1MeterScreenCycle`
+  (=3, plain-Meter base) `+1` when `sslcore::meterProAvailable()` (main.cpp kDisplaySoft1
+  handler). Page resets to 0 on screen change (already existed). Page-nav clamp + the two
+  paint clamps extended 0..2 → 0..3; `kUf1MeterPageCount` is now `[4] = {3,3,3,1}`
+  (Loudness 1 page until its V-Pot table lands).
+- **Readouts (`0x011c`, 4×25 — byte-exact from cap120/121/122):** `uf1BuildLoudnessReadouts_()`.
+  Each field = `[value:6][unit:4][caption:14][style:1]`; caption + unit are BAKED INTO the
+  readout, style 0x01 (LUFS) / 0x02 (dBFS). F0 Integrated·LUFS·DT15 · F1 Short-Term·LUFS·DT16 ·
+  F2 True Peak Max·dBFS·DT17 · F3 Short-TermMax·LUFS·DT18. Values from `getMeter(15..18)`
+  (auto mode resolves the Pro instance since only a Pro streams DT≥11). Units are Absolute +
+  LU(FS) (params 48/49 = 0, the capture state) — Relative/LK(FS) variants NOT captured, TODO.
+- **V-Pot screen-3 guard:** `uf1MeterVPotPage_()` returns an all-unassigned page for screen 3
+  so V-Pot2/3/4 stay blank (no RTA-label bleed, no OOB) until the real table exists.
+- **setView guard:** Loudness stays on `setView(0)` (readouts stream on ALL views; view-3
+  acceptance is unproven — a bad setView(3) could starve the readouts).
 
-### TODO — task #3 (rendering + cycle + V-Pot layer)
-- **Cycle:** make the Screen-Selector cap dynamic — `kUf1MeterScreenCycle` is a
-  `constexpr int = 3` (main.cpp ~395; used at ~15696 + the selector). Replace with
-  `meterProAvailable() ? 4 : 3` so Loudness (kUf1MeterScreens[3], already built) joins
-  only for Meter Pro. Reset page on entry.
-- **Readouts (`0x011c`, 4×25):** `[Integrated][Short-Term][True Peak Max][Short-Term Max]`
-  from the Loud DataTypes. Map which DataType feeds each field (LoudShortTerm=12 for
-  Short-Term; Integrated/TruePkMax/ShortTermMax are among LoudReadout1..10=15..24 —
-  confirm on the Mac against the clear-text object names, don't guess).
-- **History LINE (`0x0122` sub-frame 1, 250 cols, byte 0..180):** from
-  `LoudScrollableHistory`(26)/`LoudCompleteHistory`(25) floats. Law (SOLVED, cap120/121/122):
-  `byte = clamp((axisLU − rangeBottom)·180/span, 0, 180)`, rangeBottom∈{−18,−36,−54},
-  span∈{27,54,81} from **param 47** (Scale Range). `axisLU = LUFS + 31.6` — **resolve the
-  +31.6 on the Mac**: compare the plug-in's history floats to the `0x011c` readout; the
-  floats may already be axis-LU (map direct) or absolute LUFS (add offset).
-  **sf2 is TWO parts** (manual cross-check 2026-07-24): cols 0–63 = a SECOND scrolling
-  history curve (momentary vs short-term window?) using the SAME byte law → render it
-  from the matching plug-in history array; cols 64–91 = static target-band/legend,
-  replay per range. **sf0 = Y-axis TEXT labels** (per-range static, replay). sf3 = a
-  near-empty "now" cursor. So the screen has TWO live history traces, not one.
-- **V-Pot 10-page operator layer:** extend `kUf1MeterVPots` + the per-screen page count
-  to Loudness (10 pages) using cap109 names + the Meter Pro param dump
-  (`docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md`: param 24 Play mode, 25 History
-  Window, 47 Scale Range, 48 Display, 49 Terminology, 50 Play/Pause, …). Labels via the
-  same 0x010e name/value / name-only path ([[uf1-meter-operator-layer]]). Soft-key 2 =
-  PLAY on Loudness (already in the burst).
+### TODO — remaining (need live data; do NOT guess — Frank's capture-first rule)
+- **History graphic (`0x0122` sub-frames) — needs a Mac `ssl_core_probe` trace at view 3.**
+  Law is SOLVED (cap120/121/122): sf1 = short-term history LINE, `byte = clamp((axisLU −
+  rangeBottom)·180/span, 0,180)`, rangeBottom∈{−18,−36,−54}, span∈{27,54,81} from **param 47**.
+  ⚠ **Unresolved offset:** the byte-law measured `axisLU = LUFS + 31.6`, but the sf0 axis tick
+  labels (cap120: −14…−41 for range −18..+9, Absolute) imply a **−23 LKFS target (+23)** — an
+  8.6 LU disagreement. Resolve by tracing the plug-in's `LoudScrollableHistory`(26) floats at
+  view 3 and comparing to the `0x011c` Short-Term readout: the floats may already be axis-LU
+  (map direct, offset moot) or absolute LUFS. Also confirm the plug-in ACCEPTS view 3 before
+  flipping the setView guard. **sf2 = TWO parts:** cols 0–63 a SECOND live history curve (same
+  law), cols 64–91 static target-band. **sf0 = Y-axis text labels** (per-range static, replay).
+  Rendering approach TBD once the floats are seen — could scroll our own DT16 ring buffer OR
+  replay the plug-in's history array directly.
+- **V-Pot 10-page operator layer — decode `captures/cap109_tier5_loudness.pcap` (LOCAL).**
+  The 0x010e label groups per page give the exact per-page V2/V3/V4 assignment; map each
+  short-name → param index via `docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md` (24 Play
+  mode, 25 History Window, 47 Scale Range, 48 Display, 49 Terminology, 50 Play/Pause, …). Then
+  add `kUf1LoudnessVPots[10]`, wire it into `uf1MeterVPotPage_()`, and bump `kUf1MeterPageCount[3]`
+  to 10. Soft-key 2 = PLAY on Loudness (already in the burst). Labels via the same 0x010e path.
 - Full capture record + the law: `docs/session-2026-07-24-uf1-loudness-capture.md`.
 
 ## Context to load in the fresh session

@@ -387,11 +387,12 @@ std::atomic<bool>     g_uf1MeterView{false};
 // firmware lands in (cap75/cap76 0x0100 = 04 00).
 std::atomic<int>      g_uf1MeterScreen{0};
 
-// How many screens the selector cycles through. The soft-key walks the first
-// three of kUf1MeterScreens (Overview/Analogue/RTA) — the set the UF1 User Guide
-// Rev4.0 documents. Loudness is a Meter-Pro-only extra: its burst is captured in
-// the table but stays out of the cycle until we can tell a Meter Pro from a plain
-// Meter (the impersonator doesn't surface PluginType yet).
+// How many screens the selector cycles through for a PLAIN Meter — the first three
+// of kUf1MeterScreens (Overview/Analogue/RTA), the set the UF1 User Guide Rev4.0
+// documents. Loudness (kUf1MeterScreens[3]) is a Meter-Pro-only extra: the selector
+// adds it dynamically (cycle+1) when sslcore::meterProAvailable() reports a Pro
+// instance streaming Loudness DataTypes — there is no PluginType on the wire, so the
+// Loudness DataTypes themselves are the tell. See the kDisplaySoft1 handler.
 constexpr int kUf1MeterScreenCycle = 3;
 
 // Which V-Pot parameter PAGE is active within the current Meter screen. Each
@@ -403,11 +404,15 @@ constexpr int kUf1MeterScreenCycle = 3;
 // change.
 std::atomic<int>      g_uf1MeterPage{0};
 // Pages per meter screen, indexed by g_uf1MeterScreen (0 Overview, 1 Analogue,
-// 2 RTA). VERIFIED on the hardware (Meter Pro, Frank's page walk-through
-// 2026-07-22): every screen has 3 pages. The manual Rev4.0 (2 Overview/Analogue
-// pages) is OUTDATED — it predates Meter Pro. See
+// 2 RTA, 3 Loudness). VERIFIED on the hardware (Meter Pro, Frank's page walk-through
+// 2026-07-22): Overview/Analogue/RTA have 3 pages each. The manual Rev4.0 (2
+// Overview/Analogue pages) is OUTDATED — it predates Meter Pro. See
 // docs/session-2026-07-22-uf1-meter-capture.md.
-constexpr int kUf1MeterPageCount[3] = { 3, 3, 3 };
+//
+// Loudness has 10 V-Pot pages on SSL (cap109) but its per-page V-Pot table is not
+// decoded yet, so it stays at 1 page here — no point paging through 9 blank pages.
+// Bump to 10 when kUf1LoudnessVPots lands (see the V-Pot accessor below).
+constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 1 };
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -11107,6 +11112,19 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
         { {19,0,"Source",true},{-1,0,nullptr},{-1,0,nullptr}},  // P3 Analysis Source(name-only) / — / —
     },
 };
+// Loudness (screen 3) has no V-Pot table yet — its 10-page param grouping needs the
+// cap109 decode (docs/session-2026-07-22-uf1-meter-capture.md lists the short-names
+// but not the per-page V2/V3/V4 assignment, and Frank's rule forbids guessing param
+// indices). Until then screen 3 resolves to an all-unassigned page so V-Pot2/3/4 stay
+// blank rather than bleeding RTA's labels/params. Screens 0-2 index the real table.
+inline const Uf1MeterPage& uf1MeterVPotPage_(int screen, int page) {
+    static const Uf1MeterPage kUnassigned = {
+        {-1,0,nullptr}, {-1,0,nullptr}, {-1,0,nullptr} };
+    if (screen < 0 || screen > 2) return kUnassigned;
+    page = std::clamp(page, 0, kUf1MeterPageCount[screen] - 1);
+    return kUf1MeterVPots[screen][page];
+}
+
 // Continuous params move this much normalised per detent (fine — a full sweep is
 // ~50 clicks). HW-tunable, no correctness impact (enum params use their notch).
 constexpr double kUf1MeterContStep = 0.02;
@@ -11223,7 +11241,7 @@ void uf1EmitMeterScaleSelector_(MediaTrack* tr, int fx, int screen)
 void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
 {
     if (!g_uf1_dev || !tr || fx < 0) return;
-    screen = std::clamp(screen, 0, 2);
+    screen = std::clamp(screen, 0, 3);
     page   = std::clamp(page, 0, kUf1MeterPageCount[screen] - 1);
     // The UF1 only REPAINTS the V-Pot label strip when it receives the FULL
     // 0x010e group starting with index 0. Proven on the wire (StoerPC USBPcap
@@ -11232,7 +11250,7 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
     // never changed on screen. Lead with index 0 (the instance label), exactly as
     // SSL does. See docs/session-2026-07-22-uf1-meter-capture.md.
     uf1EmitMeterInstanceLabel_();
-    const Uf1MeterPage& pg = kUf1MeterVPots[screen][page];
+    const Uf1MeterPage& pg = uf1MeterVPotPage_(screen, page);
     const Uf1MeterVPot* vs[3] = { &pg.v2, &pg.v3, &pg.v4 };
     for (int i = 0; i < 3; ++i) {
         std::vector<uint8_t> p;
@@ -11279,7 +11297,7 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
 void applyUf1MeterVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
-    const int screen = std::clamp(g_uf1MeterScreen.load(), 0, 2);
+    const int screen = std::clamp(g_uf1MeterScreen.load(), 0, 3);
     const int page   = std::clamp(g_uf1MeterPage.load(), 0,
                                   kUf1MeterPageCount[screen] - 1);
 
@@ -11328,10 +11346,9 @@ void applyUf1MeterVpot_(uint8_t id, int step)
                    (id == uf1::enc::kVpot3) ? 1 :
                    (id == uf1::enc::kVpot4) ? 2 : -1;
     if (vi < 0) return;
-    const Uf1MeterVPot& v = (vi == 0) ? kUf1MeterVPots[screen][page].v2 :
-                            (vi == 1) ? kUf1MeterVPots[screen][page].v3 :
-                                        kUf1MeterVPots[screen][page].v4;
-    if (v.param < 0) return;
+    const Uf1MeterPage& mpg = uf1MeterVPotPage_(screen, page);
+    const Uf1MeterVPot& v = (vi == 0) ? mpg.v2 : (vi == 1) ? mpg.v3 : mpg.v4;
+    if (v.param < 0) return;   // Loudness / unassigned slot → no-op
 
     sAccum[vi+1] += step / kChannelEncoderScale;   // +1: slot 0 reserved for sel
     int notches = 0;
@@ -15692,8 +15709,13 @@ void onUf1Event(const uf1::InputEvent& ev)
             // painter does the repaint on the main thread (threading rule).
             if (ev.id == uf1::btn::kDisplaySoft1 && ev.pressed &&
                 g_uf1MeterView.load()) {
-                g_uf1MeterScreen.store((g_uf1MeterScreen.load() + 1) %
-                                       kUf1MeterScreenCycle);
+                // Loudness (kUf1MeterScreens[3]) joins the cycle ONLY for a Meter Pro
+                // — a plain Meter never streams the Loudness DataTypes, so there is
+                // nothing to show. meterProAvailable() is thread-safe (read from this
+                // input worker). Plain Meter → 3 screens; Meter Pro → 4.
+                const int cycle = sslcore::meterProAvailable()
+                                      ? kUf1MeterScreenCycle + 1 : kUf1MeterScreenCycle;
+                g_uf1MeterScreen.store((g_uf1MeterScreen.load() + 1) % cycle);
                 g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
                 break;
             }
@@ -15704,7 +15726,7 @@ void onUf1Event(const uf1::InputEvent& ev)
             // soft-key 2 for its real Reset job (manual: soft-2 = RESET).
             if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
                 && ev.pressed && g_uf1MeterView.load()) {
-                const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 2);
+                const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 3);
                 const int n   = kUf1MeterPageCount[scr];
                 const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (n - 1);
                 g_uf1MeterPage.store((g_uf1MeterPage.load() + dir) % n);
@@ -16586,6 +16608,54 @@ std::string uf1FormatMeterDb_(float db)
     return std::string(buf);
 }
 
+// Loudness readout row (element 0x011c) — 4×25 B, BYTE-EXACT from the StoerPC
+// SSL->UF1 USBPcap captures cap120/121/122 (2026-07-24). Each 25-B field is
+// [value:6][unit:4][caption:14][style:1] — the caption + unit are baked into the
+// readout, NOT separate chrome. The trailing style byte was 0x01 for the three
+// LUFS slots and 0x02 for the dBFS one (fixed as captured). Values come from the
+// SSL Meter PRO's Loudness DataTypes; only a Pro streams DataType>=11, so
+// getMeter resolves to the Pro instance in auto mode even when a plain Meter is
+// the live/sticky source:
+//   F0 Integrated     LUFS  DataType 15 (LoudReadout1)   style 0x01
+//   F1 Short-Term     LUFS  DataType 16 (LoudReadout2)   style 0x01
+//   F2 True Peak Max  dBFS  DataType 17 (LoudReadout3)   style 0x02
+//   F3 Short-TermMax  LUFS  DataType 18 (LoudReadout4)   style 0x01
+// Units are those of Absolute display + LU(FS) terminology (params 48/49 = 0, the
+// capture state). Relative display / LK(FS) change the unit string + the reference
+// — captured only in Absolute/LU(FS), so those variants are a TODO once traced.
+// Pin caveat: if V-Pot1 pins a PLAIN Meter, getMeter(15..18) has no data and the
+// slots blank (auto mode reads the Pro; an explicit plain-Meter pin does not).
+std::vector<uint8_t> uf1BuildLoudnessReadouts_()
+{
+    struct LoudSlot { int dt; const char* unit; const char* caption; uint8_t style; };
+    static const LoudSlot kSlots[4] = {
+        { int(sslmeter::DataType::LoudReadout1), "LUFS", "Integrated",    0x01 },
+        { int(sslmeter::DataType::LoudReadout2), "LUFS", "Short-Term",    0x01 },
+        { int(sslmeter::DataType::LoudReadout3), "dBFS", "True Peak Max", 0x02 },
+        { int(sslmeter::DataType::LoudReadout4), "LUFS", "Short-TermMax", 0x01 },
+    };
+    std::vector<uint8_t> p;
+    p.reserve(4 * 25);
+    auto put = [&](const char* str, int width) {
+        int n = 0;
+        for (; str && str[n] && n < width; ++n) p.push_back(static_cast<uint8_t>(str[n]));
+        for (; n < width; ++n) p.push_back(0x00);
+    };
+    for (const auto& s : kSlots) {
+        std::string val;
+        std::vector<float> cur, pk;
+        if (sslcore::isRunning() && sslcore::getMeter(s.dt, cur, pk) &&
+            !cur.empty() && std::isfinite(cur[0]))
+            val = uf1FormatMeterDb_(cur[0]);
+        // else: leave the value blank (no Pro data / silent) rather than invent one.
+        put(val.c_str(), 6);   // value, left-justified in the 6-B zone
+        put(s.unit, 4);        // "LUFS" / "dBFS"
+        put(s.caption, 14);    // caption, left-justified + NUL-padded
+        p.push_back(s.style);  // per-slot style byte (0x01 LUFS / 0x02 dBFS)
+    }
+    return p;
+}
+
 // Phase 3 Meter-Bridge: paint the Meter-view readout row (element 0x011c). Six
 // 25-byte ASCII fields, NO 0x00 prefix (unlike the channel-info plane). SSL's
 // layout (cap76) is [Peak hold | Peak L | Peak R | RMS hold | RMS L | RMS R].
@@ -16728,6 +16798,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // which is what the NUMBER must print). Reading the needle type here would
     // print a number pinned at 3.0.
     const int screenNow = g_uf1MeterScreen.load();
+    std::vector<uint8_t> p;
+    if (screenNow == 3) {
+        // Loudness: the readout row is 4×25 B [value|unit|caption|style] and does
+        // NOT use the peak/RMS/VU logic below — build it directly (byte-exact,
+        // cap120/121/122; DataTypes 15/16/17/18 of the Pro instance).
+        p = uf1BuildLoudnessReadouts_();
+    } else {
     std::array<std::string, 6> fields;
     if (screenNow == 1) {
         float vc0 = -120.f, vc1 = -120.f, vp0 = -120.f, vp1 = -120.f;
@@ -16761,11 +16838,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             haveTr ? uf1FormatMeterDb_(trR) : std::string(),   // RMS R
         };
     }
-    std::vector<uint8_t> p;
     p.reserve(6 * 25);
     for (const auto& s : fields)
         for (size_t k = 0; k < 25; ++k)
             p.push_back(k < s.size() ? static_cast<uint8_t>(s[k]) : 0x00);
+    }   // end non-Loudness readout build
 
     // ---- Per-screen graphic ------------------------------------------------
     // Drive each screen's decoded graphic from the same plugin floats. Only the
@@ -16795,7 +16872,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // streams and the RTA (t8/t9) does not; on view 2 it is the other way round.
     // Proven 2026-07-15: this call is what finally made t8[31]/t9[31] arrive.
     // Cheap — setView() only stores, and only sends on an actual change.
-    sslcore::setView(screen);
+    //
+    // Loudness (screen 3): the readout DataTypes (11..24) stream on ALL views incl.
+    // Overview (Mac trace 2026-07-24), while the history (25/26) is view-3-gated but
+    // NOT built yet — and whether the plug-in even ACCEPTS view 3 is still unproven.
+    // So keep Loudness on view 0 for now: a bad setView(3) could starve the readouts.
+    // Switch to view 3 only once the history trace confirms the plug-in accepts it.
+    sslcore::setView(screen == 3 ? 0 : screen);
 
     if (screen == 0) {
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
@@ -17122,6 +17205,18 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             g_uf1_dev->send(uf1::buildScreen(0x0122,
                 std::span<const uint8_t>(rta.data(), rta.size())));
         }
+    }
+    else if (screen == 3) {
+        // Loudness history graphic (0x0122 sub-frames) — NOT rendered yet. The byte
+        // law is SOLVED (docs/session-2026-07-24-uf1-loudness-capture.md: sf1 = the
+        // short-term history LINE, byte = clamp((axisLU-rangeBottom)*180/span)), but
+        // the +31.6 axisLU offset vs the plug-in's LoudScrollableHistory(26) floats
+        // is UNRESOLVED — the axis tick labels imply a -23 LKFS target (+23 offset)
+        // while the measured byte-law gives +31.6, an 8.6 LU disagreement. Resolving
+        // it needs a Mac ssl_core_probe trace at view 3 to read the actual history
+        // floats. Until then the readouts (above) are correct and the history area
+        // is left untouched. Do NOT hardcode either offset — Frank's capture-first
+        // rule. See docs/HANDOFF-uf1-loudness.md task #3.
     }
 }
 
@@ -17450,7 +17545,7 @@ void uf1PaintChannel_()
     sMeterScreen = meterScreen;
     const int  meterPage = meterView
         ? std::clamp(g_uf1MeterPage.load(), 0,
-                     kUf1MeterPageCount[std::clamp(meterScreen, 0, 2)] - 1) : 0;
+                     kUf1MeterPageCount[std::clamp(meterScreen, 0, 3)] - 1) : 0;
     const bool pageChanged = meterView && (meterPage != sMeterPage);
     sMeterPage = meterPage;
     const bool changed = (tr != sTr) || viewChanged || screenChanged;
@@ -17564,7 +17659,7 @@ void uf1PaintChannel_()
     // buildLed = FF 3B 03 <id> 00 <on>. Both dark outside meter view. Gated on a
     // view/screen/page change so it is not re-sent every frame.
     if (g_uf1_dev && (viewChanged || screenChanged || pageChanged)) {
-        const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 2)];
+        const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 3)];
         auto arrowLed = [&](uint8_t id, bool on) {
             // The nav-arrow LEDs need the FF38+FF39 PAIR (level 0x11 lit / 0x00
             // off) — FF3B ALONE is inert for them (cap106: SSL sends FF38, FF39
