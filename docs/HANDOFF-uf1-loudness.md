@@ -48,10 +48,35 @@ steps below are historical — the data is in hand.
 ### ✅ DONE — Meter-Pro detection (`sslcore::meterProAvailable()`, built + compiles)
 Instance gains `isPro`, set in `classify_` when a DataType ≥ `LoudMomentary`(11) is
 seen (plain Meter never streams those; PluginType is absent on the wire). Public
-`meterProAvailable()` = the read instance (pin/sticky/front) is Pro, else any live
-Pro. SslCoreImpersonator.{h,cpp}. **VERIFY ON THE MAC FIRST:** does the plug-in stream
-Loudness DataTypes on ALL views, or only while the Loudness view is selected? (ssl_core
-trace on the Mac with a Meter Pro.) If view-gated, add control-socket object detection.
+`meterProAvailable()` = the read instance (pin/sticky/front) is Pro, else any live Pro.
+**VERIFIED on the Mac (ssl_core trace 2026-07-24):** the Meter Pro streams Loudness
+DataTypes (11–24) on ALL views incl. Overview(0) — so detection works before entering
+Loudness. Detection is sound. ⚠ **Instance caveat:** with 3 Meter instances loaded, only
+the PRO streams 11–24 and it may be the SILENT one (auto-pick prefers the live plain
+Meter). The Loudness screen MUST read the Pro instance (the one with DataType≥11), not
+the auto-picked live one — else readouts/history are empty. History (25/26) is view-gated.
+
+### ✅ RESOLVED on the Mac trace 2026-07-24 — the 4 readouts (double-confirmed)
+type-17 prepare frames give name→DataType, and the floor values confirm the units:
+- Field 0 **Integrated = DataType 15** (LoudReadout1, LUFS)
+- Field 1 **Short-Term = DataType 16** (LoudReadout2, LUFS)
+- Field 2 **True Peak Max = DataType 17** (LoudReadout3, **dBFS** — floor −139.2, not −70)
+- Field 3 **Short-Term Max = DataType 18** (LoudReadout4, LUFS)
+The UF1 shows Readout slots 1–4; the plug-in supplies name+unit per slot in the type-17
+(also: Readout7=21 Loudness Range LU, Readout9=23 Momentary, Readout10=24 Momentary Max).
+Build `0x011c` = 4×25B "value unit caption" from DataTypes 15/16/17/18 of the PRO instance.
+
+### TODO — task #3 (rendering + cycle + V-Pot layer)
+- **Cycle:** make the Screen-Selector cap dynamic — `kUf1MeterScreenCycle` is a
+  `constexpr int = 3` (main.cpp ~395; used at ~15696 + the selector). Replace with
+  `meterProAvailable() ? 4 : 3` so Loudness (kUf1MeterScreens[3], already built) joins
+  only for Meter Pro. Reset page on entry. Also: line ~15707 clamps the page-nav screen
+  to 0..2 (RTA) — extend to 3; `kUf1MeterPageCount` needs a Loudness entry (10).
+- **Readouts (`0x011c`, 4×25):** DataTypes 15/16/17/18 (RESOLVED above), from the PRO instance.
+- **History LINE (`0x0122` sub-frame 1, 250 cols, byte 0..180):** from
+  `LoudScrollableHistory`(26)/`LoudCompleteHistory`(25) floats. **View-gated: set
+  `setView(3)` and re-trace to see 25/26 stream + resolve the +31.6 (axisLU vs LUFS) and
+  whether the plug-in accepts view 3.** Law (SOLVED, cap120/121/122):
 
 ### TODO — task #3 (rendering + cycle + V-Pot layer)
 - **Cycle:** make the Screen-Selector cap dynamic — `kUf1MeterScreenCycle` is a
