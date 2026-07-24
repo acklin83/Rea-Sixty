@@ -256,6 +256,10 @@ std::vector<uint8_t> fromHex(const char* hx) {
 // why this gates the data rather than just the plug-in's own GUI.
 std::atomic<int>  g_view{0};
 std::atomic<bool> g_viewDirty{false};
+// REASIXTY_FORCE_VIEW: pin the meter view the plug-in computes, overriding whatever the
+// UF1 screen asks for. Trace tool — drives view 3 (Loudness history, DataTypes 25/26)
+// without a UF1 sitting on that screen. -1 = off (normal setView behaviour).
+int g_forceView = -1;
 
 // Lissajous geometry dump (REASIXTY_T10_DUMP). Separate from the trace flag: it
 // writes every frame at ~25 Hz, which is the point — see the dump site.
@@ -820,6 +824,10 @@ bool start(uint16_t tcpPort, uint16_t dataPort) {
     if (g_running.load()) return true;
     g_trace   = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
     g_t10Dump = std::getenv("REASIXTY_T10_DUMP") != nullptr;
+    if (const char* fv = std::getenv("REASIXTY_FORCE_VIEW")) {
+        g_forceView = std::atoi(fv);
+        g_view.store(g_forceView); g_viewDirty.store(true);
+    }
     { std::lock_guard<std::mutex> lk(g_meterMx); g_inst.clear(); }
     g_lastDataMs.store(0);
     g_running.store(true);
@@ -839,6 +847,7 @@ bool pluginConnected(){ return g_connected.load(); }
 
 void setView(int view)
 {
+    if (g_forceView >= 0) return;   // pinned by REASIXTY_FORCE_VIEW (trace tool)
     if (view < 0) view = 0;
     if (g_view.exchange(view) != view) g_viewDirty.store(true);
 }

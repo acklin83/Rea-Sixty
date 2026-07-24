@@ -71,6 +71,7 @@
 #include "DynaMountManager.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
+#include "uf1_loudness_chrome.h"
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
@@ -16699,6 +16700,10 @@ std::vector<uint8_t> uf1BuildLoudnessReadouts_()
     return p;
 }
 
+// Loudness history CHROME sub-frames (sf0 axis+grid / sf2 target-band / sf3 cursor),
+// per Scale Range, live in extension/src/uf1_loudness_chrome.h (kLoudR{0,1,2}{Sf0,Sf2,Sf3}).
+// The UF1 needs the full sub-frame set to draw the plot; sf1 (the live line) is below.
+
 // Phase 3 Meter-Bridge: paint the Meter-view readout row (element 0x011c). Six
 // 25-byte ASCII fields, NO 0x00 prefix (unlike the channel-info plane). SSL's
 // layout (cap76) is [Peak hold | Peak L | Peak R | RMS hold | RMS L | RMS R].
@@ -16916,12 +16921,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // Proven 2026-07-15: this call is what finally made t8[31]/t9[31] arrive.
     // Cheap — setView() only stores, and only sends on an actual change.
     //
-    // Loudness (screen 3): the readout DataTypes (11..24) stream on ALL views incl.
-    // Overview (Mac trace 2026-07-24), while the history (25/26) is view-3-gated but
-    // NOT built yet — and whether the plug-in even ACCEPTS view 3 is still unproven.
-    // So keep Loudness on view 0 for now: a bad setView(3) could starve the readouts.
-    // Switch to view 3 only once the history trace confirms the plug-in accepts it.
-    sslcore::setView(screen == 3 ? 0 : screen);
+    // Loudness (screen 3) uses view 3: PROVEN accepted by the plug-in (Mac view-3 trace
+    // 2026-07-24 — DataTypes 25/26 history stream and the readouts keep flowing). View 3
+    // is required for the history line below (LoudScrollableHistory only streams there).
+    sslcore::setView(screen);
 
     if (screen == 0) {
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
@@ -17250,16 +17253,86 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         }
     }
     else if (screen == 3) {
-        // Loudness history graphic (0x0122 sub-frames) — NOT rendered yet. The byte
-        // law is SOLVED (docs/session-2026-07-24-uf1-loudness-capture.md: sf1 = the
-        // short-term history LINE, byte = clamp((axisLU-rangeBottom)*180/span)), but
-        // the +31.6 axisLU offset vs the plug-in's LoudScrollableHistory(26) floats
-        // is UNRESOLVED — the axis tick labels imply a -23 LKFS target (+23 offset)
-        // while the measured byte-law gives +31.6, an 8.6 LU disagreement. Resolving
-        // it needs a Mac ssl_core_probe trace at view 3 to read the actual history
-        // floats. Until then the readouts (above) are correct and the history area
-        // is left untouched. Do NOT hardcode either offset — Frank's capture-first
-        // rule. See docs/HANDOFF-uf1-loudness.md task #3.
+        // Loudness history LINE (0x0122 sub-frame 1, 250 cols, byte 0..180). RESOLVED by
+        // the Mac view-3 trace 2026-07-24: the plug-in's LoudScrollableHistory (DataType
+        // 26) IS the scrolling Short-Term LUFS series — idx 0 = oldest .. newest, floor
+        // -100, then a 13-float metadata trailer (Integrated Target, sample counters).
+        // The plot is TARGET-RELATIVE, which is what the old +31.6-vs-+23 puzzle was:
+        //   axisLU = LUFS - target ;  byte = clamp((axisLU - rangeBottom)*180/span, 0,180)
+        // target = Integrated Target (param 36), rangeBottom/span = Scale Range (param 47).
+        // cap120 measured +31.6 because that session's target was -31.6; here it is -23.
+        // sf0 axis-labels + sf2 target-band chrome still TBD (need the cap120 sub-frames).
+        std::vector<float> hist, hp;
+        const bool haveHist = sslcore::isRunning() &&
+            sslcore::getMeter(int(sslmeter::DataType::LoudScrollableHistory), hist, hp) &&
+            hist.size() > 16;
+        // Params are BEST-EFFORT: the readouts don't need an instance, so the history
+        // must not either. Prefer the pinned Meter FX (param 36 target / 47 range); when
+        // no instance is pinned yet, fall back to the target the plug-in ships in the
+        // history trailer (float [n-10]) + the default scale range.
+        double target = -23.0;
+        int ri = 0;   // Scale Range index (param 47): 0 -18..+9, 1 -36..+18, 2 -54..+27
+        MediaTrack* mtr = nullptr; int mfx = -1;
+        const bool havePin = haveHist && uf1PinnedMeterTrackFx_(mtr, mfx);
+        if (havePin) {
+            char tv[64] = {0};
+            TrackFX_GetFormattedParamValue(mtr, mfx, 36, tv, int(sizeof(tv)));
+            target = std::atof(tv);                           // "-23 LUFS" -> -23.0
+            ri = std::clamp(int(TrackFX_GetParamNormalized(mtr, mfx, 47) * 2.0 + 0.5), 0, 2);
+        } else if (haveHist) {
+            const float tt = hist[hist.size() - 10];          // trailer |target|
+            if (tt > 0.f && tt < 100.f) target = -double(tt);
+        }
+        static const double kBottom[3] = { -18.0, -36.0, -54.0 };
+        static const double kSpan[3]   = {  27.0,  54.0,  81.0 };
+        const double rb = kBottom[ri], span = kSpan[ri];
+        if (haveHist) {
+            // Strip the 13-float trailer; guard against a stray counter leaking in.
+            const size_t histLen = hist.size() > 13 ? hist.size() - 13 : hist.size();
+            std::array<uint8_t, 251> sf{};
+            sf[0] = 0x01;                                     // sub-frame 1
+            // The "NOW" is the newest written sample. The array's high end past it is an
+            // empty look-ahead region — mapping it to the right edge left ~20% of the plot
+            // blank with the now-point drawn INSIDE the image (Frank 2026-07-24). Find the
+            // last real sample (scan from the top) and anchor IT to the RIGHT edge; the
+            // 30 s window extends left from there, floor (pre-signal) on the LEFT.
+            // sf byte index 1 = LEFT column, 250 = RIGHT (UF1 photo).
+            size_t nowIdx = 0;
+            for (size_t q = histLen; q-- > 0; )
+                if (hist[q] > -99.f && hist[q] < 60.f) { nowIdx = q; break; }
+            const double step = double(histLen) / 250.0;
+            for (int c = 0; c < 250; ++c) {
+                const long ai = long(nowIdx) - std::llround(double(249 - c) * step);
+                uint8_t b = 0;                                // off-window / floor -> bottom
+                if (ai >= 0) {
+                    const float lufs = hist[size_t(ai)];
+                    if (std::isfinite(lufs) && lufs > -99.f && lufs < 60.f) {
+                        const double y = (double(lufs) - target - rb) * 180.0 / span;
+                        b = uint8_t(std::clamp(int(std::llround(y)), 0, 180));
+                    }
+                }
+                sf[size_t(1 + c)] = b;
+            }
+            // Per-range chrome (kLoudR{0,1,2}{Sf0,Sf2,Sf3}, uf1_loudness_chrome.h). sf0 =
+            // axis+grid (sets up the plot), sf1 = the live short-term history line (rendered
+            // above), sf2 = the right-hand "now"/momentary region + target band, sf3 = cursor.
+            // ⚠ sf2/sf3 are the CAPTURED cap120/121/122 SNAPSHOTS — the momentary region is
+            // FROZEN (not live). HW-verified 2026-07-24: the sf1 history scrolls correctly;
+            // making sf2's momentary region live is the remaining follow-up (see the handoff).
+            const uint8_t* csf0 = (ri == 0) ? kLoudR0Sf0 : (ri == 1) ? kLoudR1Sf0 : kLoudR2Sf0;
+            const uint8_t* csf2 = (ri == 0) ? kLoudR0Sf2 : (ri == 1) ? kLoudR1Sf2 : kLoudR2Sf2;
+            const uint8_t* csf3 = (ri == 0) ? kLoudR0Sf3 : (ri == 1) ? kLoudR1Sf3 : kLoudR2Sf3;
+            static std::array<uint8_t, 251> sLoudSf{};
+            static int sLoudRi = -1;
+            if (force || sf != sLoudSf || ri != sLoudRi) {
+                sLoudSf = sf; sLoudRi = ri;
+                g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf0, 251)));
+                g_uf1_dev->send(uf1::buildScreen(0x0122,
+                    std::span<const uint8_t>(sf.data(), sf.size())));
+                g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf2, 251)));
+                g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf3, 208)));
+            }
+        }
     }
 }
 
