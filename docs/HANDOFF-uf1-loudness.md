@@ -2,8 +2,16 @@
 
 Fresh-context entry point. The meter operator layer (Overview/Analogue/RTA) is
 DONE + HW-verified; Bug D (per-Digital-Type Overview bar scales) shipped `4cc9177`.
-**Loudness is the one meter screen NOT yet built** and is the next job. The StoerPC
-capture rig is UP — grab Loudness data now before it's freed.
+**Loudness is the one meter screen NOT yet built** and is the next job.
+
+## ✅ CAPTURE DONE 2026-07-24 — read `docs/session-2026-07-24-uf1-loudness-capture.md`
+All 3 Scale Ranges captured (cap120/121/122); the history byte-law is SOLVED:
+history LINE = `0x0122` **sub-frame 1** (250 cols, byte 0..180);
+`byte = clamp((axisLU − rangeBottom)·180/span, 0, 180)`, rangeBottom∈{−18,−36,−54},
+span∈{27,54,81}, `axisLU = LUFS + 31.6` (resolve the +31.6 on the Mac vs the plug-in
+floats). Readouts = `0x011c` 4×25 `[Integrated][Short-Term][TruePkMax][ShortTermMax]`.
+**Remaining = BUILD (Mac; UF1 must move back from StoerPC) + HW-verify.** The capture
+steps below are historical — the data is in hand.
 
 ## Rig state (VERIFY FIRST)
 - StoerPC LAN IP is now **`192.168.177.198`** (DHCP moved it off .197 — always
@@ -36,14 +44,42 @@ capture rig is UP — grab Loudness data now before it's freed.
 4. **History plot:** confirm the `0x0122` sub-frame codec for the loudness history
    graph ([[uf1-meter-codec-decoded]] notes 0x0122 sub-frames).
 
-## Then build (Mac)
-- Add Loudness to `kUf1MeterScreenCycle` (currently 3 = OV/AN/RTA). It needs
-  **Meter-Pro detection** — the impersonator doesn't surface PluginType yet; see
-  [[ssl360-plugin-protobuf-protocol]] / [[gr-meter-source-search]] (DataType is a
-  bare int32, PluginType ABSENT). Figure out how to tell Meter vs Meter Pro.
-- Render the Loudness screen (entry burst + per-screen readout + history + bars per
-  the captured scale). V-Pot operator layer for the 10 pages (labels via the same
-  0x010e name/value / name-only path — see [[uf1-meter-operator-layer]]).
+## BUILD (Mac) — remaining. UF1 must move back from the StoerPC for HW-verify.
+### ✅ DONE — Meter-Pro detection (`sslcore::meterProAvailable()`, built + compiles)
+Instance gains `isPro`, set in `classify_` when a DataType ≥ `LoudMomentary`(11) is
+seen (plain Meter never streams those; PluginType is absent on the wire). Public
+`meterProAvailable()` = the read instance (pin/sticky/front) is Pro, else any live
+Pro. SslCoreImpersonator.{h,cpp}. **VERIFY ON THE MAC FIRST:** does the plug-in stream
+Loudness DataTypes on ALL views, or only while the Loudness view is selected? (ssl_core
+trace on the Mac with a Meter Pro.) If view-gated, add control-socket object detection.
+
+### TODO — task #3 (rendering + cycle + V-Pot layer)
+- **Cycle:** make the Screen-Selector cap dynamic — `kUf1MeterScreenCycle` is a
+  `constexpr int = 3` (main.cpp ~395; used at ~15696 + the selector). Replace with
+  `meterProAvailable() ? 4 : 3` so Loudness (kUf1MeterScreens[3], already built) joins
+  only for Meter Pro. Reset page on entry.
+- **Readouts (`0x011c`, 4×25):** `[Integrated][Short-Term][True Peak Max][Short-Term Max]`
+  from the Loud DataTypes. Map which DataType feeds each field (LoudShortTerm=12 for
+  Short-Term; Integrated/TruePkMax/ShortTermMax are among LoudReadout1..10=15..24 —
+  confirm on the Mac against the clear-text object names, don't guess).
+- **History LINE (`0x0122` sub-frame 1, 250 cols, byte 0..180):** from
+  `LoudScrollableHistory`(26)/`LoudCompleteHistory`(25) floats. Law (SOLVED, cap120/121/122):
+  `byte = clamp((axisLU − rangeBottom)·180/span, 0, 180)`, rangeBottom∈{−18,−36,−54},
+  span∈{27,54,81} from **param 47** (Scale Range). `axisLU = LUFS + 31.6` — **resolve the
+  +31.6 on the Mac**: compare the plug-in's history floats to the `0x011c` readout; the
+  floats may already be axis-LU (map direct) or absolute LUFS (add offset).
+  **sf2 is TWO parts** (manual cross-check 2026-07-24): cols 0–63 = a SECOND scrolling
+  history curve (momentary vs short-term window?) using the SAME byte law → render it
+  from the matching plug-in history array; cols 64–91 = static target-band/legend,
+  replay per range. **sf0 = Y-axis TEXT labels** (per-range static, replay). sf3 = a
+  near-empty "now" cursor. So the screen has TWO live history traces, not one.
+- **V-Pot 10-page operator layer:** extend `kUf1MeterVPots` + the per-screen page count
+  to Loudness (10 pages) using cap109 names + the Meter Pro param dump
+  (`docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md`: param 24 Play mode, 25 History
+  Window, 47 Scale Range, 48 Display, 49 Terminology, 50 Play/Pause, …). Labels via the
+  same 0x010e name/value / name-only path ([[uf1-meter-operator-layer]]). Soft-key 2 =
+  PLAY on Loudness (already in the burst).
+- Full capture record + the law: `docs/session-2026-07-24-uf1-loudness-capture.md`.
 
 ## Context to load in the fresh session
 - [[uf1-meter-operator-layer]] — the operator layer + all the wire facts.

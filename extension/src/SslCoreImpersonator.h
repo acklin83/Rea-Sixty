@@ -81,6 +81,12 @@ std::string currentMeterName();
 // and read the instance V-Pot1 selected, not the focused track.
 int currentMeterTrackIndex();
 
+// True if the meter instance being read is an SSL Meter PRO — i.e. it has streamed
+// a Loudness DataType (LoudMomentary=11 .. Histogram=27); a plain Meter never does.
+// The UF1 uses this to include the Loudness screen in the Screen-Selector cycle only
+// for Meter Pro (there is no PluginType on the wire — MEASURED absent). Thread-safe.
+bool meterProAvailable();
+
 // ChannelStripMeterType (AssignerArgsTypes.proto). An SSL channel strip numbers
 // its meters with THIS vocabulary, not MeterPluginDataType — the two overlap on
 // the wire and are told apart per plug-in instance (see SslCoreImpersonator.cpp).

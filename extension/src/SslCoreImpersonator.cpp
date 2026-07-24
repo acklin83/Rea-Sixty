@@ -102,6 +102,15 @@ enum class Kind : uint8_t { Unknown, Meter, ChannelStrip };
 struct Instance {
     std::array<Slot, int(sslmeter::DataType::Count)> meter;
     Kind      kind   = Kind::Unknown;
+    // A Meter PRO instance streams Loudness DataTypes (LoudMomentary=11 .. Histogram
+    // =27); a plain Meter (and a channel strip) never does. Sticky once seen — it is
+    // what tells the UF1 whether to offer the Loudness screen in the Screen-Selector
+    // cycle (there is no PluginType on the wire; MEASURED absent, see the classify
+    // note below). Whether the plug-in streams Loudness on ALL views or only while
+    // the Loudness view is selected is verified on the Mac; if the latter, detection
+    // would need the control-socket object announcement instead (flagged in the
+    // loudness memory). The UDP-DataType route is what's wired here.
+    bool      isPro  = false;
     long long lastMs = 0;
     // Last time this instance carried actual SIGNAL (any level meter above the
     // silence floor). With several Meter instances loaded, the silent ones
@@ -147,6 +156,8 @@ std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex
 // unclassified, so a late DataType>=7 still wins.
 void classify_(Instance& in, int dataType, size_t nvals)
 {
+    // Any Loudness DataType marks a Meter PRO (plain Meter never streams these).
+    if (dataType >= int(sslmeter::DataType::LoudMomentary)) in.isPro = true;
     if (dataType >= 7) { in.kind = Kind::Meter; return; }
     if (in.kind == Kind::Unknown && (dataType == 4 || dataType == 5) && nvals == 1)
         in.kind = Kind::ChannelStrip;
@@ -926,6 +937,28 @@ int currentMeterTrackIndex() {
     }
     auto it = g_portIndex.find(port);
     return (it != g_portIndex.end()) ? it->second : 0;
+}
+
+bool meterProAvailable() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    // Prefer the instance the meter view is actually reading (pin, else the sticky
+    // source, else the first alive Meter) — same resolution as currentMeterTrackIndex.
+    uint16_t port = 0;
+    if (g_meterSel >= 0) {
+        const auto ports = aliveMeterPorts_();
+        if (g_meterSel < int(ports.size())) port = ports[g_meterSel];
+    } else {
+        port = g_srcPort;
+        if (!port) { const auto ports = aliveMeterPorts_(); if (!ports.empty()) port = ports.front(); }
+    }
+    auto it = g_inst.find(port);
+    if (it != g_inst.end() && it->second.isPro) return true;
+    // Fallback so the Loudness screen is offered even before the pin/sticky settles:
+    // any Meter Pro instance that is still streaming.
+    const long long cut = nowMs() - 2000;
+    for (const auto& kv : g_inst)
+        if (kv.second.isPro && kv.second.lastMs >= cut) return true;
+    return false;
 }
 
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
