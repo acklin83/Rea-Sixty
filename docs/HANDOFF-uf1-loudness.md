@@ -98,12 +98,26 @@ still on the StoerPC.**
   law), cols 64–91 static target-band. **sf0 = Y-axis text labels** (per-range static, replay).
   Rendering approach TBD once the floats are seen — could scroll our own DT16 ring buffer OR
   replay the plug-in's history array directly.
-- **V-Pot 10-page operator layer — decode `captures/cap109_tier5_loudness.pcap` (LOCAL).**
-  The 0x010e label groups per page give the exact per-page V2/V3/V4 assignment; map each
-  short-name → param index via `docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md` (24 Play
-  mode, 25 History Window, 47 Scale Range, 48 Display, 49 Terminology, 50 Play/Pause, …). Then
-  add `kUf1LoudnessVPots[10]`, wire it into `uf1MeterVPotPage_()`, and bump `kUf1MeterPageCount[3]`
-  to 10. Soft-key 2 = PLAY on Loudness (already in the burst). Labels via the same 0x010e path.
+- **V-Pot operator layer — 7 of 10 pages BUILT from cap109 (`kUf1LoudnessVPots[7]`).**
+  Decoded the 0x010e label groups; every param index is a real TrackFX index from the Meter
+  Pro dump (nothing guessed). `nameOnly` per slot mirrors SSL's wire form (value-alone vs the
+  8-B name field). Pages built:
+  - P0 24 Play mode · 25 History Window · **[V4 = "Scroll Timeline" — NO matching param in the
+    dump; a GUI scroll action, left unassigned; do NOT guess]**
+  - P1 47 Scale Range · 48 Display · 26 History Scroll
+  - P2 30 Int Gating · 36 Integrated Target · 28 Dialogue Detection
+  - P3 37 Target Variance · 33 Short-Term Int · 32 Momentary Int
+  - P4 29 Min Dialogue · 34 Loudness Mode · 35 Surround Weighting
+  - P5 27 Loudness True Peak · 49 Terminology · 31 Integrated Overlap
+  - P6 38 Int Loudness Alert · 39 Int Dialogue Alert · 46 True Peak Max Alert
+  **★ Pages 8-10 MISSING — need a re-capture.** cap109's 115 s window closed at page 7 (last
+  0x010e at 114.7 s; the dwell trace ends cleanly at P6). Frank DID page all 10 on HW, but the
+  fixed-duration capture cut off. The remaining params (40 Short-Term-Max, 41 Momentary-Max,
+  42/43 Loudness-Range Min/Max, 44/45 Dialogue-Range Min/Max alerts, 50 Play/Pause) never
+  appear in cap109 or cap82/cap95 (those have 0 0x010e). **To finish:** capture the UF1 while
+  paging pages 8→9→10 (≥40 s), decode the 3 groups, extend the table to `[10]`, bump
+  `kUf1MeterPageCount[3]` to 10. Page ORDER (P0-P6) is capture-derived (forward paging) —
+  HW-verify. Soft-key 2 = PLAY on Loudness (already in the burst).
 - Full capture record + the law: `docs/session-2026-07-24-uf1-loudness-capture.md`.
 
 ## Context to load in the fresh session

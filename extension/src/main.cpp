@@ -409,10 +409,12 @@ std::atomic<int>      g_uf1MeterPage{0};
 // Overview/Analogue pages) is OUTDATED — it predates Meter Pro. See
 // docs/session-2026-07-22-uf1-meter-capture.md.
 //
-// Loudness has 10 V-Pot pages on SSL (cap109) but its per-page V-Pot table is not
-// decoded yet, so it stays at 1 page here — no point paging through 9 blank pages.
-// Bump to 10 when kUf1LoudnessVPots lands (see the V-Pot accessor below).
-constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 1 };
+// Loudness has 10 V-Pot pages on SSL. cap109 captured 7 of them (the 115 s window
+// closed at page 7); kUf1LoudnessVPots holds those 7, decoded byte-for-byte. Pages
+// 8-10 (params 40-45 Short-Term/Momentary-Max + Loudness/Dialogue-Range alerts,
+// 50 Play/Pause) were paged past the capture end — bump this to 10 + extend the table
+// once they are re-captured. Kept at 7 so paging never lands on an unmapped page.
+constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 7 };
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -11112,14 +11114,51 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
         { {19,0,"Source",true},{-1,0,nullptr},{-1,0,nullptr}},  // P3 Analysis Source(name-only) / — / —
     },
 };
-// Loudness (screen 3) has no V-Pot table yet — its 10-page param grouping needs the
-// cap109 decode (docs/session-2026-07-22-uf1-meter-capture.md lists the short-names
-// but not the per-page V2/V3/V4 assignment, and Frank's rule forbids guessing param
-// indices). Until then screen 3 resolves to an all-unassigned page so V-Pot2/3/4 stay
-// blank rather than bleeding RTA's labels/params. Screens 0-2 index the real table.
+// LOUDNESS (screen 3) V-Pot pages — DECODED from captures/cap109_tier5_loudness.pcap
+// (SSL->UF1 0x010e label groups; every param index is a real TrackFX index from
+// docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md, nothing guessed). Frank paged
+// through 7 of the screen's 10 pages, so ONLY 7 are known — pages 7-9 (Play/Pause 50,
+// the Short-Term/Momentary-Max + Loudness/Dialogue-Range alerts 40-45) were not walked
+// in cap109 and are a follow-up capture; do NOT invent them.
+//
+// `nameOnly` mirrors exactly how SSL rendered each slot on the wire: value-alone
+// (no 8-byte name field) for the enum-is-label params, name+value ("Var␀␀␀␀␀0.0LK")
+// for the rest — the same name-only-repaints rule as the other screens ([[uf1-meter-
+// operator-layer]]). `steps` = the observed discrete value count (one detent = one
+// value); 0 = continuous fine dial for the many-valued params (History Window, Target,
+// Variance, Short/Momentary integration, Min-Dialogue, TP-Max).
+//
+// ⚠ Page 0 V4 = "Scroll Timeline": a static, value-less label with NO matching param
+// in the dump (it is an SSL GUI scroll ACTION, not an automatable param) — left
+// unassigned rather than guessed. HW-verify the page ORDER (capture-derived, forward
+// paging assumed).
+const Uf1MeterPage kUf1LoudnessVPots[7] = {
+    // [0]
+    { {24,5,"PlayMd",true}, {25,0,"HistWin",true}, {-1,0,nullptr} },   // Play mode / History Window / (Scroll Timeline — no param)
+    // [1]
+    { {47,3,"Range",true},  {48,2,"Disp",true},    {26,2,"Scroll",true} }, // Scale Range / Display Type / History Scroll
+    // [2]
+    { {30,3,"Gate",true},   {36,0,"Target",true},  {28,2,"Dial"} },    // Int Gating Mode / Integrated Target / Dialogue Detection
+    // [3]
+    { {37,0,"Var"},         {33,0,"Short"},        {32,0,"Mom"} },     // Target Variance / Short-Term Integration / Momentary Integration
+    // [4]
+    { {29,0,"MinDia"},      {34,2,"Mode"},         {35,7,"Surr"} },    // Min Dialogue Content / Loudness Mode / Surround Weighting
+    // [5]
+    { {27,2,"TrueP"},       {49,2,"Term",true},    {31,2,"Ovrlp"} },   // Loudness True Peak / Terminology / Integrated Overlap
+    // [6]
+    { {38,2,"LdIntA"},      {39,2,"IDAlrt"},       {46,0,"TPMax"} },   // Int Loudness Alert / Int Dialogue Alert / True Peak Max Alert
+};
+
+// [screen][page] V-Pot lookup. Screens 0-2 index kUf1MeterVPots[3][3]; screen 3 indexes
+// kUf1LoudnessVPots (7 known pages). Any other screen → an all-unassigned page so the
+// caller never reads out of bounds and V-Pot2/3/4 stay blank.
 inline const Uf1MeterPage& uf1MeterVPotPage_(int screen, int page) {
     static const Uf1MeterPage kUnassigned = {
         {-1,0,nullptr}, {-1,0,nullptr}, {-1,0,nullptr} };
+    if (screen == 3) {   // Loudness
+        page = std::clamp(page, 0, kUf1MeterPageCount[3] - 1);
+        return kUf1LoudnessVPots[page];
+    }
     if (screen < 0 || screen > 2) return kUnassigned;
     page = std::clamp(page, 0, kUf1MeterPageCount[screen] - 1);
     return kUf1MeterVPots[screen][page];
