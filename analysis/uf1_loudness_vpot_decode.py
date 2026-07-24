@@ -36,10 +36,9 @@ KNOWN = {
     # --- name+value (8-byte name field) ---
     "Var": 37, "Short": 33, "Mom": 32, "MinDia": 29, "Mode": 34, "Surr": 35,
     "TrueP": 27, "Ovrlp": 31, "Dial": 28, "LdIntA": 38, "IDAlrt": 39, "TPMax": 46,
-    # --- EXPECTED on pages 8-10 (unconfirmed abbreviations — update when captured) ---
-    # 40 Short Term Max Alert, 41 Momentary Max Alert, 42/43 Loudness Range Min/Max,
-    # 44/45 Dialogue Range Min/Max, 50 Play/Pause ("Play"/"Pause").
-    "Play": 50, "Pause": 50,
+    # pages 7-9 (captures/loud_8_10.pcap, confirmed):
+    "Smax": 40, "Mmax": 41, "Rgmin": 42, "Rgmax": 43, "RDmin": 44, "RDmax": 45,
+    "Save": 52,
 }
 # value-vocabulary fallbacks for name-only numeric enums (History Window / Int Target).
 def classify(value):
@@ -134,8 +133,16 @@ def main():
     prev = {1: None, 2: None, 3: None}; pages = []
     for g in groups:
         st = {k: g.get(k, prev[k]) for k in (1, 2, 3)}
-        pid = {k: (classify(st[k])[0] if st[k] is not None else None) for k in (1, 2, 3)}
-        trip = (pid[1], pid[2], pid[3])
+        # Page identity = the PARAM ID when known (stable across a name-only enum's value
+        # changes, e.g. Play-mode DAW Sync->SystemClk stays param 24), else the NAME-KEY
+        # so a not-yet-mapped param ("Smax", …) still separates instead of collapsing to
+        # id None. Blank slots collapse together via their '<blank>' key.
+        def ident(v):
+            if v is None:
+                return None
+            p, nm = classify(v)
+            return p if isinstance(p, int) else ("?", nm)
+        trip = tuple(ident(st[k]) for k in (1, 2, 3))
         if not pages or pages[-1][0] != trip:
             pages.append((trip, {k: st[k] for k in (1, 2, 3)}))
         prev = st
@@ -144,8 +151,7 @@ def main():
     for i, (trip, sample) in enumerate(distinct):
         cells = []
         for k in (1, 2, 3):
-            p = trip[k - 1]
-            _, nm = classify(sample[k]) if sample[k] is not None else (None, "-")
+            p, nm = classify(sample[k]) if sample[k] is not None else (None, "-")
             tag = f"param {p}" if isinstance(p, int) and p >= 0 else \
                   ("NO-PARAM" if p == -100 else "?? UNKNOWN — map me")
             v = (sample[k] or "").replace("\x00", "·")

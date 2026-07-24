@@ -409,12 +409,10 @@ std::atomic<int>      g_uf1MeterPage{0};
 // Overview/Analogue pages) is OUTDATED — it predates Meter Pro. See
 // docs/session-2026-07-22-uf1-meter-capture.md.
 //
-// Loudness has 10 V-Pot pages on SSL. cap109 captured 7 of them (the 115 s window
-// closed at page 7); kUf1LoudnessVPots holds those 7, decoded byte-for-byte. Pages
-// 8-10 (params 40-45 Short-Term/Momentary-Max + Loudness/Dialogue-Range alerts,
-// 50 Play/Pause) were paged past the capture end — bump this to 10 + extend the table
-// once they are re-captured. Kept at 7 so paging never lands on an unmapped page.
-constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 7 };
+// Loudness has 10 V-Pot pages on SSL — all decoded (cap109 pages 0-6 + loud_8_10 pages
+// 7-9, 2026-07-24) into kUf1LoudnessVPots. Page 9 (Save Loudness History) has blank
+// V3/V4. Page 0 V4 ("Scroll Timeline") is a GUI action with no param → unassigned.
+constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 10 };
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -11114,12 +11112,12 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
         { {19,0,"Source",true},{-1,0,nullptr},{-1,0,nullptr}},  // P3 Analysis Source(name-only) / — / —
     },
 };
-// LOUDNESS (screen 3) V-Pot pages — DECODED from captures/cap109_tier5_loudness.pcap
-// (SSL->UF1 0x010e label groups; every param index is a real TrackFX index from
-// docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md, nothing guessed). Frank paged
-// through 7 of the screen's 10 pages, so ONLY 7 are known — pages 7-9 (Play/Pause 50,
-// the Short-Term/Momentary-Max + Loudness/Dialogue-Range alerts 40-45) were not walked
-// in cap109 and are a follow-up capture; do NOT invent them.
+// LOUDNESS (screen 3) V-Pot pages — DECODED from the SSL->UF1 0x010e label groups
+// (every param index is a real TrackFX index from docs/ssl-native-params/
+// VST3__SSL_Meter_Pro_(SSL).md, nothing guessed). ALL 10 pages captured:
+// pages 0-6 = captures/cap109_tier5_loudness.pcap, pages 7-9 = captures/loud_8_10.pcap
+// (both 2026-07-24). Page 9 V3/V4 arrived as EMPTY payloads on the wire → genuinely
+// blank slots (like RTA page 3), not un-captured.
 //
 // `nameOnly` mirrors exactly how SSL rendered each slot on the wire: value-alone
 // (no 8-byte name field) for the enum-is-label params, name+value ("Var␀␀␀␀␀0.0LK")
@@ -11131,8 +11129,8 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
 // ⚠ Page 0 V4 = "Scroll Timeline": a static, value-less label with NO matching param
 // in the dump (it is an SSL GUI scroll ACTION, not an automatable param) — left
 // unassigned rather than guessed. HW-verify the page ORDER (capture-derived, forward
-// paging assumed).
-const Uf1MeterPage kUf1LoudnessVPots[7] = {
+// paging).
+const Uf1MeterPage kUf1LoudnessVPots[10] = {
     // [0]
     { {24,5,"PlayMd",true}, {25,0,"HistWin",true}, {-1,0,nullptr} },   // Play mode / History Window / (Scroll Timeline — no param)
     // [1]
@@ -11147,6 +11145,12 @@ const Uf1MeterPage kUf1LoudnessVPots[7] = {
     { {27,2,"TrueP"},       {49,2,"Term",true},    {31,2,"Ovrlp"} },   // Loudness True Peak / Terminology / Integrated Overlap
     // [6]
     { {38,2,"LdIntA"},      {39,2,"IDAlrt"},       {46,0,"TPMax"} },   // Int Loudness Alert / Int Dialogue Alert / True Peak Max Alert
+    // [7]  captures/loud_8_10.pcap
+    { {40,0,"Smax"},        {42,0,"Rgmin"},        {43,0,"Rgmax"} },   // Short-Term Max Alert / Loudness Range Min Alert / Loudness Range Max Alert
+    // [8]
+    { {41,0,"Mmax"},        {44,0,"RDmin"},        {45,0,"RDmax"} },   // Momentary Max Alert / Dialogue Range Min Alert / Dialogue Range Max Alert
+    // [9]
+    { {52,2,"Save"},        {-1,0,nullptr},        {-1,0,nullptr} },   // Save Loudness History / (blank) / (blank)
 };
 
 // [screen][page] V-Pot lookup. Screens 0-2 index kUf1MeterVPots[3][3]; screen 3 indexes
