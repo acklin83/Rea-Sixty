@@ -15999,9 +15999,15 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
 // never from DSP we compute (Frank's hard rule).
 
 // Overview bargraph scale: dBFS -> bar byte. index = round(dBFS) + 93, covering
-// -93..0 dBFS (cap89 + cap93, every overlapping count identical). Non-linear —
-// a table, not a formula. Below -93 the bar is empty (0).
-constexpr uint8_t kUf1BarScale[94] = {
+// -93..0 dBFS. Each DIGITAL TYPE (param 6) is its OWN scale — the K-System and
+// Linear/2x variants map dBFS to a different bar height than Non-Linear, so with
+// one fixed table the bars mis-aligned under K-modes ("garbage", Frank 2026-07-24).
+// Measured per type by ramping a signal on the StoerPC while correlating the
+// plug-in's dB readout (0x011c field 1) with the peak-bar byte (0x0126):
+// cap110/118/116/117/111/119/113. K-mode readouts are the K-scale value; converted
+// back to dBFS (dBFS = K-scale − 20/14/12) before tabulating. kUf1BarScale below is
+// Non-Linear (unchanged, cap89-verified). See docs/session-2026-07-24-uf1-bugd.md.
+constexpr uint8_t kUf1BarScale[94] = {       // Digital Type 0: Non-Linear
       9,  10,  10,  11,  11,  12,  12,  12,  12,  13,  13,  13,  14,  14,  15,  15,
      16,  16,  16,  16,  17,  17,  17,  18,  18,  18,  19,  19,  19,  20,  20,  20,
      21,  21,  22,  24,  25,  27,  28,  30,  31,  33,  34,  35,  36,  38,  39,  40,
@@ -16009,15 +16015,78 @@ constexpr uint8_t kUf1BarScale[94] = {
      80,  83,  86,  89,  92,  95,  98, 101, 104, 107, 111, 115, 119, 123, 126, 130,
     134, 138, 142, 147, 151, 156, 162, 167, 172, 178, 183, 188, 194, 199,
 };
+constexpr uint8_t kUf1BarNonLin2x[94] = {    // Digital Type 1: Non-Linear 2x
+      8,   8,   8,   8,   8,   8,   9,   9,   9,  10,  10,  10,  10,  10,  11,  11,
+     11,  12,  12,  12,  12,  12,  12,  13,  13,  14,  14,  14,  14,  15,  15,  15,
+     15,  15,  15,  15,  16,  16,  16,  16,  17,  17,  17,  18,  18,  18,  18,  18,
+     19,  19,  19,  19,  19,  20,  20,  20,  20,  21,  21,  22,  22,  23,  24,  25,
+     28,  30,  32,  34,  36,  39,  42,  44,  46,  50,  55,  61,  67,  73,  80,  86,
+     92,  97, 103, 109, 115, 118, 124, 137, 148, 159, 168, 178, 190, 199,
+};
+constexpr uint8_t kUf1BarLinear[94] = {      // Digital Type 2: Linear
+     44,  45,  46,  47,  48,  50,  51,  52,  54,  55,  56,  58,  59,  60,  61,  63,
+     64,  66,  67,  68,  70,  71,  72,  73,  74,  76,  77,  79,  80,  82,  83,  84,
+     86,  87,  88,  89,  90,  91,  93,  94,  95,  96,  98, 100, 101, 102, 104, 105,
+    106, 107, 109, 110, 111, 112, 114, 115, 116, 117, 118, 120, 121, 122, 124, 125,
+    127, 128, 129, 130, 132, 133, 134, 135, 136, 138, 139, 140, 142, 143, 145, 147,
+    149, 152, 156, 160, 164, 169, 173, 176, 180, 183, 187, 191, 194, 199,
+};
+constexpr uint8_t kUf1BarLinear2x[94] = {    // Digital Type 3: Linear 2x
+      3,   3,   3,   3,   4,   4,   5,   5,   5,   6,   6,   7,   7,   8,   8,   8,
+      9,   9,  10,  10,  10,  11,  11,  12,  12,  12,  13,  13,  14,  14,  14,  15,
+     15,  16,  16,  16,  17,  17,  17,  18,  18,  19,  19,  19,  20,  20,  21,  21,
+     21,  22,  22,  23,  23,  23,  24,  24,  25,  25,  25,  26,  26,  26,  27,  27,
+     28,  28,  28,  29,  30,  30,  30,  33,  39,  46,  52,  58,  66,  74,  82,  90,
+     98, 106, 114, 121, 128, 134, 141, 150, 159, 166, 172, 181, 190, 199,
+};
+constexpr uint8_t kUf1BarK20[94] = {         // Digital Type 4: K-20
+     51,  52,  54,  55,  56,  57,  58,  58,  59,  60,  61,  62,  63,  64,  65,  66,
+     68,  69,  70,  71,  72,  73,  74,  75,  76,  77,  78,  79,  80,  81,  82,  83,
+     84,  85,  86,  87,  89,  90,  91,  92,  93,  94,  95,  96,  97,  98,  99, 100,
+    101, 102, 103, 104, 105, 106, 107, 108, 109, 111, 112, 113, 114, 115, 116, 117,
+    118, 119, 120, 121, 121, 121, 122, 122, 122, 122, 123, 123, 124, 128, 132, 136,
+    140, 144, 149, 154, 159, 163, 168, 172, 176, 180, 186, 190, 194, 199,
+};
+constexpr uint8_t kUf1BarK14[94] = {         // Digital Type 5: K-14
+     33,  34,  34,  35,  36,  37,  37,  38,  39,  40,  40,  41,  42,  43,  45,  46,
+     47,  48,  48,  49,  50,  50,  51,  52,  53,  53,  54,  55,  56,  57,  58,  59,
+     60,  60,  61,  62,  63,  64,  64,  65,  66,  66,  67,  68,  69,  70,  70,  71,
+     72,  73,  74,  74,  75,  76,  77,  78,  79,  79,  80,  81,  82,  82,  83,  84,
+     85,  86,  87,  88,  89,  90,  91,  92,  94,  96, 101, 106, 112, 117, 121, 126,
+    132, 138, 143, 148, 153, 158, 162, 166, 172, 177, 182, 188, 193, 199,
+};
+constexpr uint8_t kUf1BarK12[94] = {         // Digital Type 6: K-12
+     45,  45,  45,  45,  45,  46,  47,  48,  49,  51,  52,  53,  54,  54,  55,  56,
+     57,  58,  59,  60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,
+     73,  74,  75,  76,  78,  79,  80,  81,  82,  82,  83,  84,  85,  86,  87,  88,
+     90,  91,  92,  93,  94,  95,  96,  96,  97,  98,  99, 100, 101, 102, 104, 105,
+    106, 107, 108, 109, 110, 110, 111, 112, 113, 113, 114, 115, 116, 116, 117, 120,
+    126, 132, 138, 144, 149, 153, 160, 165, 170, 177, 183, 188, 193, 200,
+};
 
-// dBFS -> Overview bar byte (0 = empty below the scale floor).
-uint8_t uf1BarByte_(float dbfs)
+// The bar scale for a Digital Type param value (param 6, enum 0..6 in the order
+// above). Out-of-range -> Non-Linear.
+inline const uint8_t* uf1BarScaleFor_(int digitalType)
+{
+    switch (digitalType) {
+        case 1:  return kUf1BarNonLin2x;
+        case 2:  return kUf1BarLinear;
+        case 3:  return kUf1BarLinear2x;
+        case 4:  return kUf1BarK20;
+        case 5:  return kUf1BarK14;
+        case 6:  return kUf1BarK12;
+        default: return kUf1BarScale;        // 0 = Non-Linear
+    }
+}
+
+// dBFS -> Overview bar byte for the given scale table (0 = empty below the floor).
+uint8_t uf1BarByte_(float dbfs, const uint8_t* tbl)
 {
     if (!(dbfs > -93.f)) return 0;          // includes -inf/NaN
     int idx = static_cast<int>(std::lround(dbfs)) + 93;
     if (idx < 0)  idx = 0;
-    if (idx > 93) idx = 93;                  // pins at 0 dBFS -> 199
-    return kUf1BarScale[idx];
+    if (idx > 93) idx = 93;                  // pins at 0 dBFS -> top
+    return tbl[idx];
 }
 
 // Analogue VU faceplate scale: VU units -> needle byte (cap88). index = VU + 20,
@@ -16744,12 +16813,22 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         const float barHoldL = haveHold ? holdL : sBarHold.l;
         const float barHoldR = haveHold ? holdR : sBarHold.r;
 
+        // The bargraph scale depends on Digital Type (param 6) — each type maps
+        // dBFS to a different bar height (StoerPC 2026-07-24). Pick the pinned
+        // instance's table; rms/peak/hold all ride the same scale.
+        const uint8_t* barScale = kUf1BarScale;
+        {
+            MediaTrack* dtr = nullptr; int dfx = -1;
+            if (uf1PinnedMeterTrackFx_(dtr, dfx))
+                barScale = uf1BarScaleFor_(
+                    std::clamp(int(TrackFX_GetParamNormalized(dtr, dfx, 6) * 6 + 0.5), 0, 6));
+        }
         const std::array<uint8_t, 2> rmsBar {
-            uf1BarByte_(haveRms ? rmsL : -120.f),
-            uf1BarByte_(haveRms ? rmsR : -120.f) };
-        const std::array<uint8_t, 2> peakBar { uf1BarByte_(dbL), uf1BarByte_(dbR) };
+            uf1BarByte_(haveRms ? rmsL : -120.f, barScale),
+            uf1BarByte_(haveRms ? rmsR : -120.f, barScale) };
+        const std::array<uint8_t, 2> peakBar { uf1BarByte_(dbL, barScale), uf1BarByte_(dbR, barScale) };
         const std::array<uint8_t, 2> holdBar {
-            uf1BarByte_(barHoldL), uf1BarByte_(barHoldR) };
+            uf1BarByte_(barHoldL, barScale), uf1BarByte_(barHoldR, barScale) };
 
         // ---- The Overview image cycle: DATA-driven, ONE atomic burst --------
         // SSL's Overview steady state is one repeating unit at the plugin's own
