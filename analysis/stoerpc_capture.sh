@@ -35,6 +35,7 @@ remote_capture() {
   local body
   body=$(cat <<'PS'
 $ErrorActionPreference='Continue'
+$ProgressPreference='SilentlyContinue'
 $dev = "\\.\USBPcap$IFNUM"
 $out = "C:\Users\claude\ufcap_$NAME.pcap"
 if (Test-Path $out) { Remove-Item $out -Force }
