@@ -336,6 +336,9 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+int      reasixty_overlayCsColor();   // Inserts-overlay palette (0xRRGGBB) —
+int      reasixty_overlayBcColor();   // shared with the FX-bank key colours so
+int      reasixty_overlaySelColor();  // the surface mirrors the MCP overlay.
 int      reasixty_dynBankCtrl(int kind);             // banking control per kind
 void     reasixty_setDynBankCtrl(int kind, int ctrl);
 // Page a bankable dynamic bank from a UC1 encoder (main thread). Returns true
@@ -4914,6 +4917,36 @@ static void fxBankRetargetFocusGui_(MediaTrack* tr, int fxIdx)
     g_focusedGuiShownFx = fxIdx;
 }
 
+// Classify one FX for the FX dynamic-bank key colour, mirroring
+// buildInstanceHits_: CS / BC via the plug-in map, UF8-only via the owned
+// user-plugin record. Returns true + the overlay-configured 0xRRGGBB for a
+// surface-mapped Instance (CS yellow / BC red / UF8-mapped blue); false for a
+// plain FX, which keeps the default white key. Main-thread only.
+static bool dynFxBankColour_(MediaTrack* tr, int fxIdx, uint32_t& rgbOut)
+{
+    char fxName[256];
+    if (!tr || !uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName)))
+        return false;
+    if (const auto* pm = uf8::lookupPluginMapByName(fxName)) {
+        if (pm->domain == uf8::Domain::ChannelStrip) {
+            rgbOut = static_cast<uint32_t>(reasixty_overlayCsColor()) & 0xFFFFFFu;
+            return true;
+        }
+        if (pm->domain == uf8::Domain::BusComp) {
+            rgbOut = static_cast<uint32_t>(reasixty_overlayBcColor()) & 0xFFFFFFu;
+            return true;
+        }
+    }
+    // UF8-only user maps surface via lookupPluginMapByName with Domain::None
+    // (rejected above) — confirm the uf8Mode flag on the owned record.
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+        rgbOut = static_cast<uint32_t>(reasixty_overlaySelColor()) & 0xFFFFFFu;
+        return true;
+    }
+    return false;
+}
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -4943,6 +4976,14 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             if (!enabled || offline)                    info.led = 0;
             else if (fxIdx == stripInstanceActiveFx_(tr)) info.led = 2;
             else                                          info.led = 1;
+            // Colour the key by SSL class so the surface mirrors the MCP
+            // inserts overlay (CS yellow / BC red / UF8-mapped blue); plain
+            // FX keep the default white. Independent of brightness above.
+            uint32_t clsRgb = 0;
+            if (dynFxBankColour_(tr, fxIdx, clsRgb)) {
+                info.hasRgb = true;
+                info.rgb    = clsRgb;
+            }
             return info;
         }
         case DK::ParamGroups: {
