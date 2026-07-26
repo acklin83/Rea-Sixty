@@ -4300,11 +4300,19 @@ void UC1Surface::pollGainReduction_()
     // and SSL 360° quit). Stays 0 = dark otherwise, exactly as before — no
     // mirroring of Comp GR onto the gate strip.
     // Sign: the wire is 0..negative; the meters take magnitude (as above).
+    // Keyed to the FOCUSED track's channel strip (via the impersonator's
+    // per-instance HostTrackIndex correlation) — otherwise, with several SSL
+    // CS instances connected, the first-published one's gate GR showed on every
+    // channel regardless of selection (Frank 2026-07-26: gate on Toms, Snare's
+    // GR displayed). Dark when the focused track has no correlated CS strip.
     float csGateGr = 0.0f;
-    if (sslcore::isRunning()) {
+    if (sslcore::isRunning() && csTr) {
+        const int trackIdx =
+            static_cast<int>(GetMediaTrackInfo_Value(csTr, "IP_TRACKNUMBER"));
         std::vector<float> gg;
-        if (sslcore::getChannelStripMeter(
-                int(sslcore::ChannelStripMeter::GateGain), gg) && !gg.empty()) {
+        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
+                int(sslcore::ChannelStripMeter::GateGain), trackIdx, gg)
+            && !gg.empty()) {
             csGateGr = std::abs(gg[0]);
         }
     }

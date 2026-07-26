@@ -37,6 +37,8 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <deque>
+#include <set>
 #include <utility>
 
 namespace sslcore {
@@ -64,6 +66,11 @@ std::atomic<bool>      g_running{false};
 std::thread            g_worker;
 std::atomic<bool>      g_connected{false};
 std::atomic<long long> g_lastDataMs{0};
+// Timestamp of the most recent NEW plugin TCP connection. A project load makes
+// every SSL plug-in connect in a ~1/s burst, and each one selects its own track
+// on connect → REAPER's selection "counts through" the channels. The extension
+// watches this to freeze the selection during the burst. 0 = none yet.
+std::atomic<long long> g_lastNewConnMs{0};
 
 struct Slot { std::vector<float> current, peak; bool have = false; };
 
@@ -88,6 +95,23 @@ struct Instance {
 };
 std::mutex                   g_meterMx;
 std::map<uint16_t, Instance> g_inst;      // key = UDP source port = one plug-in
+
+// Per-instance track identity — the fix for "GR follows the wrong channel".
+// Each plug-in announces, on its OWN TCP control connection at connect, its
+// HostTrackName + HostTrackIndex, but the UDP meter datagram carries no track
+// id (see the Instance comment). So we CORRELATE BY TIMING: capture {name,index}
+// per client, queue it once both are in, and the next NEW UDP source port claims
+// the front of the queue → g_portName / g_portIndex. That lets a track-keyed
+// getChannelStripMeter pick the FOCUSED track's channel strip instead of just
+// the first one. g_client*/g_pending/g_namedClients are worker-thread-only
+// (the select loop); g_portName/g_portIndex are read under g_meterMx.
+struct PendingInst { std::string name; int index; };
+std::deque<PendingInst>          g_pending;        // announced, not yet port-tied
+std::set<socket_t>               g_namedClients;   // clients already queued
+std::map<socket_t, std::string>  g_clientName;     // per-client, awaiting its index
+std::map<socket_t, int>          g_clientIndex;    // per-client, awaiting its name
+std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g_meterMx)
+std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 
 // Classify an instance from what it emits. ChannelStripMeterType only spans
 // 0..6, so ANY DataType >= 7 can only be a Meter/MeterPro plug-in (Rta,
@@ -152,8 +176,17 @@ std::vector<uint8_t> openingSequence(int dataPort) {
     std::vector<uint8_t> out;
     auto add = [&](const std::vector<uint8_t>& f){ out.insert(out.end(), f.begin(), f.end()); };
     add(serverConfig(-1));
-    add(ctrlFrame(6, {}));
-    { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, 0x9abc); add(ctrlFrame(7, pb)); }
+    // FIX 2026-07-26 (Frank HW-confirmed): DROP the two non-config "command"
+    // frames ctrlFrame(6) + ctrlFrame(7). One of them is a "focus/activate this
+    // channel" command; replaying it verbatim to EVERY connecting plug-in made
+    // each select its OWN track in REAPER → the arrange "counted through" the
+    // channels 14→2 at project load. Real Core presumably sends it to only the
+    // one focused channel. Port assignment (serverConfig) + the meter subscribes
+    // remain, so metering is unaffected (verified: ChanStrip CompGain/GateGain
+    // still stream). NOT isolated to 6 vs 7 — both dropped; both proven
+    // unnecessary for meters. See memory REGRESSION-load-countdown-2026-07-26.
+    // add(ctrlFrame(6, {}));
+    // { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, 0x9abc); add(ctrlFrame(7, pb)); }
     add(serverConfig(dataPort));
     return out;
 }
@@ -345,6 +378,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
                 clients.push_back(c);
                 g_connected.store(true);
+                g_lastNewConnMs.store(nowMs());
                 slog("[%.1f] plugin CONNECTED (fd=%d), sent opening (%zu B) + subscribe "
                      "(%zu B), data port %u", t, int(c), seq.size(), sub.size(), unsigned(dataPort));
             }
@@ -361,7 +395,18 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 if (sslmeter::parseDatagram(buf, size_t(n), ups) > 0) {
                     g_lastDataMs.store(nowMs());
                     std::lock_guard<std::mutex> lk(g_meterMx);
-                    Instance& inst = g_inst[ntohs(from.sin_port)];
+                    const uint16_t sp = ntohs(from.sin_port);
+                    if (g_inst.find(sp) == g_inst.end() && !g_pending.empty()) {
+                        // NEW instance. The datagram carries no track id, so tie
+                        // this port to the {name,index} the just-connected plug-in
+                        // announced on its control socket (queued in connect order).
+                        g_portName[sp]  = g_pending.front().name;
+                        g_portIndex[sp] = g_pending.front().index;
+                        slog("[corr] UDP src=%u -> track %d (%s)", unsigned(sp),
+                             g_pending.front().index, g_pending.front().name.c_str());
+                        g_pending.pop_front();
+                    }
+                    Instance& inst = g_inst[sp];
                     inst.lastMs = nowMs();
                     for (auto& u : ups) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
@@ -406,8 +451,79 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             socket_t c = clients[i];
             if (FD_ISSET(c, &rset)) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
-                if (n == 0) { SC_CLOSE(c); clients.erase(clients.begin() + long(i)); continue; }
-                // else: drain plugin control frames; we don't need their content yet.
+                if (n == 0) {
+                    SC_CLOSE(c);
+                    g_namedClients.erase(c);
+                    g_clientName.erase(c);
+                    g_clientIndex.erase(c);
+                    clients.erase(clients.begin() + long(i));
+                    continue;
+                }
+                // The plug-in announces its HostTrackName + HostTrackIndex over
+                // this control connection at connect. We used to bin these unread;
+                // capture them so a UDP source port can be tied to a REAPER track
+                // (the datagram itself carries no track id). TCP is a stream, so
+                // accumulate per client and only parse whole frames. Frame layout
+                // (matches subscribeInitial): efbc5100 | len32 | 12-B hdr |
+                // paylen32 | type32 | payload(8-B objId + protobuf).
+                if (n > 0) {
+                    static std::map<socket_t, std::vector<uint8_t>> sAcc;
+                    auto& acc = sAcc[c];
+                    acc.insert(acc.end(), buf, buf + n);
+                    size_t off = 0;
+                    for (;;) {
+                        if (acc.size() - off < 8) break;
+                        // resync: the stream must start on the frame magic
+                        if (!(acc[off] == 0xef && acc[off+1] == 0xbc &&
+                              acc[off+2] == 0x51 && acc[off+3] == 0x00)) { ++off; continue; }
+                        uint32_t flen = 0;
+                        std::memcpy(&flen, &acc[off + 4], 4);
+                        if (flen > 65536) { ++off; continue; }          // junk guard
+                        if (acc.size() - off < size_t(8 + flen)) break;  // incomplete
+                        const uint8_t* body = &acc[off + 8];
+                        if (flen >= 20) {
+                            uint32_t ftype = 0;
+                            std::memcpy(&ftype, body + 16, 4);
+                            const uint8_t* pay = body + 20;
+                            const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
+                            // type-18 SET of HostTrackName (obj f0630f41c7667f0c,
+                            // pb 0a<len><ascii>) + HostTrackIndex (obj cb39da8c9c8c43ee,
+                            // pb 08<varint>, 1-based). Take each ONCE per client;
+                            // g_namedClients gates later re-sends (on selection change)
+                            // so identity is tied only at connect.
+                            static const uint8_t kHostTrackNameObj[8] =
+                                { 0xf0,0x63,0x0f,0x41,0xc7,0x66,0x7f,0x0c };
+                            static const uint8_t kHostTrackIndexObj[8] =
+                                { 0xcb,0x39,0xda,0x8c,0x9c,0x8c,0x43,0xee };
+                            if (ftype == 18 && avail >= 10 &&
+                                g_namedClients.find(c) == g_namedClients.end()) {
+                                if (std::memcmp(pay, kHostTrackNameObj, 8) == 0 &&
+                                    pay[8] == 0x0a) {                 // 0a <len> <ascii>
+                                    const size_t slen = pay[9];
+                                    if (10 + slen <= avail && slen > 0)
+                                        g_clientName[c].assign(
+                                            reinterpret_cast<const char*>(pay + 10), slen);
+                                } else if (std::memcmp(pay, kHostTrackIndexObj, 8) == 0 &&
+                                           pay[8] == 0x08) {          // 08 <varint>
+                                    g_clientIndex[c] = int(pay[9] & 0x7f);   // 1-based
+                                }
+                                // Queue once this client announced BOTH; the UDP
+                                // block above ties them to the next new port.
+                                auto itN = g_clientName.find(c);
+                                auto itI = g_clientIndex.find(c);
+                                if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
+                                    g_pending.push_back({ itN->second, itI->second });
+                                    g_namedClients.insert(c);
+                                    g_clientName.erase(itN);
+                                    g_clientIndex.erase(itI);
+                                }
+                            }
+                        }
+                        off += 8 + flen;
+                    }
+                    acc.erase(acc.begin(), acc.begin() + long(off));
+                    if (acc.size() > (1u << 20)) acc.clear();   // runaway guard
+                }
             }
             ++i;
         }
@@ -481,8 +597,31 @@ bool getChannelStripMeter(int csType, std::vector<float>& current) {
     return false;
 }
 
+bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
+                                       std::vector<float>& current) {
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    if (trackIndex <= 0) return false;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    for (const auto& kv : g_inst) {
+        if (kv.second.kind != Kind::ChannelStrip) continue;
+        // Only the channel strip that announced THIS (1-based) track index —
+        // so the GR follows the focused channel instead of the first instance.
+        auto pi = g_portIndex.find(kv.first);
+        if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+        const Slot& s = kv.second.meter[csType];
+        if (s.have && !s.current.empty()) { current = s.current; return true; }
+    }
+    return false;
+}
+
 long long msSinceLastData() {
     const long long last = g_lastDataMs.load();
+    if (last == 0) return INT64_MAX;
+    return nowMs() - last;
+}
+
+long long msSinceLastNewConn() {
+    const long long last = g_lastNewConnMs.load();
     if (last == 0) return INT64_MAX;
     return nowMs() - last;
 }
