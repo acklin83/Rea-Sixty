@@ -11133,7 +11133,11 @@ void drainInputQueue()
                     && (ov.viewLock() == uf8::nav::ViewLock::None)
                     && !uc1Indep;
                 if (doJump) {
-                    GoToRegion(nullptr, it.idx, false);
+                    // GoToRegion only smooth-seeks during PLAYBACK; stopped it
+                    // does nothing, so the soft-key region jump looked dead.
+                    // Move the edit cursor to the region start when stopped.
+                    if (GetPlayState() & 1) GoToRegion(nullptr, it.idx, false);
+                    else                    SetEditCurPos(it.pos, true, true);
                 }
                 if (doDrill) {
                     ov.drillIntoRegion(idx);
@@ -14374,8 +14378,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // 2026-05-13: "die Quick Buttons dürfen nichts an den
             // Soft-Keys ändern, sonst kommt man nicht mehr auf die
             // gelearnten Parameter").
+            // Nav Mode owns the top-soft-keys while its overlay is active
+            // (and UF8 shows it): the strip's marker/region jump must win over
+            // an engaged user-Quick / SSL free-slot press. Without this guard a
+            // pinned startup bank (or any engaged Quick) claims the key first
+            // (handledNatively) and the nav intercept below never runs — the
+            // soft-key jump silently did nothing (Frank 2026-07-27).
+            const bool navOwnsSoftKey =
+                (id >= 0x18 && id <= 0x1F
+                 && uf8::nav::Overlay::instance().active()
+                 && g_navUf8Show.load());
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
-                && !handledNatively) {
+                && !handledNatively && !navOwnsSoftKey) {
                 const int layer = uf8::bindings::getActiveLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
@@ -14406,7 +14420,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // (Frank 2026-06-23). Occupied slots / empty user slots fall
             // through to the normal bindings::dispatch (ssl_softkey).
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
-                && !handledNatively
+                && !handledNatively && !navOwnsSoftKey
                 && uf8::bindings::getActiveLayer() == 0)
             {
                 // Use the latched soft-key domain (not the raw focused param)
@@ -16043,6 +16057,11 @@ void pushUc1NavCarousel()
         const uint32_t rgb = static_cast<uint32_t>(items[ci].color) & 0x00FFFFFFu;
         if (rgb != 0) palette = uf8::quantize(rgb);
     }
+    // Uncoloured / grey markers+regions quantize to 0x00 (LED-off) = dim on the
+    // carousel. Show them at a bright neutral instead so the nav display is
+    // always legible (Frank 2026-07-27 "hell gerne"). The LCD palette has no
+    // white anchor; 0x01 (A0A0FF) is the least-saturated bright entry.
+    if (palette == 0x00) palette = 0x01;
 
     g_uc1_surface->showNavCarousel(prev, curr, next, header, palette);
 }
