@@ -71,6 +71,12 @@ std::atomic<long long> g_lastDataMs{0};
 // on connect → REAPER's selection "counts through" the channels. The extension
 // watches this to freeze the selection during the burst. 0 = none yet.
 std::atomic<long long> g_lastNewConnMs{0};
+// Per-connection unique object id for the type-7 handshake frame. Real Core
+// assigns a DISTINCT id to every plug-in (CAPTURED 2026-07-27, real SSL 360 on
+// lo0: 12 plug-ins → 12 different type-7 payloads). Our old hardcoded 0x9abc
+// went to every plug-in → all thought they were the SAME focused object and each
+// selected its own track = the load countdown. A fresh id per connect matches Core.
+std::atomic<uint32_t>  g_connIdCounter{0};
 
 struct Slot { std::vector<float> current, peak; bool have = false; };
 
@@ -172,21 +178,26 @@ std::vector<uint8_t> serverConfig(int port) {
     putVarint(pb, (3 << 3) | 0); putVarint(pb, 1);
     return ctrlFrame(19, pb);
 }
-std::vector<uint8_t> openingSequence(int dataPort) {
+std::vector<uint8_t> openingSequence(int dataPort, uint32_t connId) {
     std::vector<uint8_t> out;
     auto add = [&](const std::vector<uint8_t>& f){ out.insert(out.end(), f.begin(), f.end()); };
     add(serverConfig(-1));
-    // FIX 2026-07-26 (Frank HW-confirmed): DROP the two non-config "command"
-    // frames ctrlFrame(6) + ctrlFrame(7). One of them is a "focus/activate this
-    // channel" command; replaying it verbatim to EVERY connecting plug-in made
-    // each select its OWN track in REAPER → the arrange "counted through" the
-    // channels 14→2 at project load. Real Core presumably sends it to only the
-    // one focused channel. Port assignment (serverConfig) + the meter subscribes
-    // remain, so metering is unaffected (verified: ChanStrip CompGain/GateGain
-    // still stream). NOT isolated to 6 vs 7 — both dropped; both proven
-    // unnecessary for meters. See memory REGRESSION-load-countdown-2026-07-26.
-    // add(ctrlFrame(6, {}));
-    // { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, 0x9abc); add(ctrlFrame(7, pb)); }
+    // Opening handshake: BOTH ctrlFrame(6) + ctrlFrame(7) are required before the
+    // plug-in streams meter UDP (proven: dropping them → 0 datagrams, dark gate LED).
+    // ctrlFrame(6) is empty and identical for every plug-in — matches real Core
+    // byte-for-byte (CAPTURED 2026-07-27, real SSL 360 on lo0).
+    add(ctrlFrame(6, {}));
+    // ctrlFrame(7) carries a per-connection UNIQUE object id (field 1 varint) and
+    // its frame seq = that id. Real Core assigns a DISTINCT id to each plug-in (the
+    // capture showed 12 plug-ins → 12 different type-7 payloads). Our old hardcoded
+    // 0x9abc went to EVERY plug-in — that value was one focused channel's id from
+    // the original capture, so every plug-in thought it was THE focused object and
+    // each selected its own track in REAPER = the load-time countdown. A fresh
+    // connId per connection matches Core and removes the collision. (Real Core also
+    // sends type-7 AFTER the plug-in's type-4/5; we still send it in the opening —
+    // if the countdown persists, reorder to respond post-type-4.)
+    { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, connId);
+      add(ctrlFrame(7, pb, connId)); }
     add(serverConfig(dataPort));
     return out;
 }
@@ -331,6 +342,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     socket_t annFd = makeUdp(0, false);
 
     std::vector<socket_t> clients;
+    // Clients we've already replied to. Real Core does NOT speak first: the
+    // plug-in sends type-4/type-5 (its identity), THEN Core sends the opening.
+    // We defer our opening until a client's first bytes arrive (see recv loop).
+    std::set<socket_t>    greeted;
     const std::vector<uint8_t> hb  = heartbeat();
     const std::vector<uint8_t> ann = announcement(actualTcp);
     double lastAnn = 0, lastHb = 0, lastSub = 0;
@@ -339,7 +354,15 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 
     while (g_running.load()) {
         const double t = secs();
-        if (annFd != kInvalid && t - lastAnn > 1.0) {
+        // Announce fast (was 1.0s). The plug-ins connect on the announce, so a
+        // 1 s cadence spaced their connects exactly 1 s apart → each selected its
+        // track 1/s = the visible ~12 s load countdown. Real Core's plug-ins
+        // connect ~40 ms apart. Announcing ~20/s compresses the connect burst so
+        // the selection sweep (which we can't suppress at the surface layer — the
+        // plug-in selects externally and REAPER paints it immediately) collapses
+        // into a brief flash instead of a slow count. Just more loopback UDP;
+        // does not touch metering or cause reconnects.
+        if (annFd != kInvalid && t - lastAnn > 0.05) {
             lastAnn = t;
             for (uint16_t dp : {16008, 16009}) {
                 sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(dp); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -372,15 +395,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             if (c != kInvalid) {
                 setNonBlocking(c);
                 int one = 1; setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&one), sizeof(one));
-                auto seq = openingSequence(dataPort);
-                ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
-                auto sub = subscribeInitial();
-                ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
                 clients.push_back(c);
-                g_connected.store(true);
-                g_lastNewConnMs.store(nowMs());
-                slog("[%.1f] plugin CONNECTED (fd=%d), sent opening (%zu B) + subscribe "
-                     "(%zu B), data port %u", t, int(c), seq.size(), sub.size(), unsigned(dataPort));
+                // REACTIVE handshake (2026-07-27, CAPTURED from real Core): do NOT
+                // send the opening here. Real Core waits for the plug-in's type-4/
+                // type-5 hello, then replies. Sending type-7 ("you are object X")
+                // BEFORE the plug-in registers made every plug-in activate in the
+                // default context and select its track = the load countdown. We
+                // greet on the client's first bytes below instead.
+                slog("[%.1f] plugin CONNECTED (fd=%d), awaiting hello", t, int(c));
             }
         }
         for (socket_t d : dataFds) {
@@ -453,11 +475,27 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
                 if (n == 0) {
                     SC_CLOSE(c);
+                    greeted.erase(c);
                     g_namedClients.erase(c);
                     g_clientName.erase(c);
                     g_clientIndex.erase(c);
                     clients.erase(clients.begin() + long(i));
                     continue;
+                }
+                // First bytes from this client = the plug-in's type-4/type-5
+                // hello. Reply with the opening NOW (reactive handshake, like real
+                // Core) — this is what keeps the plug-in from selecting its track.
+                if (n > 0 && greeted.find(c) == greeted.end()) {
+                    const uint32_t connId = 0x20000000u + g_connIdCounter.fetch_add(1);
+                    auto seq = openingSequence(dataPort, connId);
+                    ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
+                    auto sub = subscribeInitial();
+                    ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+                    greeted.insert(c);
+                    g_connected.store(true);
+                    g_lastNewConnMs.store(nowMs());
+                    slog("[%.1f] greeted fd=%d connId=0x%08x (opening %zu B + subscribe %zu B), data port %u",
+                         t, int(c), connId, seq.size(), sub.size(), unsigned(dataPort));
                 }
                 // The plug-in announces its HostTrackName + HostTrackIndex over
                 // this control connection at connect. We used to bin these unread;
@@ -602,16 +640,30 @@ bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
     if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
     if (trackIndex <= 0) return false;
     std::lock_guard<std::mutex> lk(g_meterMx);
+    // Reconnect churn (MEASURED in /tmp/reaper_sslcore.log 2026-07-27): over a
+    // session the SAME track gets tied to 6-7 different UDP source ports as its
+    // plug-in reconnects, and dead ports LINGER in g_inst frozen at their last
+    // value (they're never pruned — the TCP close handler has no socket->port
+    // map). Taking the FIRST match returned the lowest-numbered port, which was
+    // usually a DEAD reconnect-orphan stuck at 0.0 → the gate LED stayed dark
+    // though the LIVE port for that track was streaming real reduction. So among
+    // all channel strips announcing THIS (1-based) track index, pick the
+    // FRESHEST (max lastMs) and require it to be recent — that is the instance
+    // actually streaming now; the gate GR then follows the focused channel.
+    const long long now = nowMs();
+    const Slot* best = nullptr;
+    long long   bestMs = -1;
     for (const auto& kv : g_inst) {
         if (kv.second.kind != Kind::ChannelStrip) continue;
-        // Only the channel strip that announced THIS (1-based) track index —
-        // so the GR follows the focused channel instead of the first instance.
         auto pi = g_portIndex.find(kv.first);
         if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
         const Slot& s = kv.second.meter[csType];
-        if (s.have && !s.current.empty()) { current = s.current; return true; }
+        if (!s.have || s.current.empty()) continue;
+        if (kv.second.lastMs > bestMs) { bestMs = kv.second.lastMs; best = &s; }
     }
-    return false;
+    if (!best || now - bestMs > 1000) return false;   // none, or all stale
+    current = best->current;
+    return true;
 }
 
 long long msSinceLastData() {

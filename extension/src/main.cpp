@@ -19288,6 +19288,7 @@ std::chrono::steady_clock::time_point g_lastVuPushTime{};
 // at full GR. Only the strip that hosts the focused CS plug-in carries
 // nonzero values; other strips stay at 0x00 (cleared each tick).
 std::array<uint8_t, 8> g_uf8GrBytes{};
+std::array<uint8_t, 8> g_uf8GateGrBytes{};   // ballistics holder for the gate GR row
 
 void pushVuMeter()
 {
@@ -22331,6 +22332,7 @@ void onTimer()
     // byte swings several positions per audio beat without rate-limit.
     {
         std::array<uint8_t, 8> targetBytes{};  // all zero by default
+        std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
         int focStrip = -1;
         if (g_uc1_surface) {
             if (auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())) {
@@ -22491,16 +22493,70 @@ void onTimer()
                         else if (held > newByte) --held;
                         targetBytes[focStrip] = held;
                     }
+                    // Gate GR row (FF 66 09 16) — the focused track's SSL gate
+                    // attenuation from the impersonator (ChannelStripMeterType_
+                    // GateGain), rendered on the same focused strip as Comp GR
+                    // and in lock-step with the UC1 gate strip. Independent of
+                    // the comp `gotIt` above (a gate can close with no comp
+                    // reduction). Dark unless the impersonator runs and the
+                    // focused track has a correlated SSL channel strip.
+                    double ggr = 0.0;
+                    if (sslcore::isRunning()) {
+                        const int trackIdx = static_cast<int>(
+                            GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+                        std::vector<float> gg;
+                        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
+                                static_cast<int>(sslcore::ChannelStripMeter::GateGain),
+                                trackIdx, gg) && !gg.empty()) {
+                            ggr = std::fabs(gg[0]);
+                        }
+                    }
+                    // Device CS-LED trim (same as Comp GR) so both rows align;
+                    // BC calibration test silences the GR rows.
+                    {
+                        double devCalG[5];
+                        for (int i = 0; i < 5; ++i)
+                            devCalG[i] = kUc1CsLedsFactory[i] + g_uc1CsLedsCal[i].load();
+                        ggr = uf8::applyGrCalibration(ggr, uf8::kLedsBpDb, devCalG, 5);
+                        if (ggr < 0) ggr = 0;
+                        const int testT = g_uc1CalActiveTest.load();
+                        if (testT >= 0 && testT < 6) ggr = 0.0;
+                    }
+                    if (ggr > 20.0) ggr = 20.0;
+                    double sg;
+                    if      (ggr <=  3.0) sg =        (ggr       ) * (6.0 / 3.0);
+                    else if (ggr <=  6.0) sg =  6.0 + (ggr -  3.0) * (6.0 / 3.0);
+                    else if (ggr <= 10.0) sg = 12.0 + (ggr -  6.0) * (6.0 / 4.0);
+                    else if (ggr <= 14.0) sg = 18.0 + (ggr - 10.0) * (6.0 / 4.0);
+                    else                   sg = 24.0 + (ggr - 14.0) * (6.0 / 6.0);
+                    int subg = static_cast<int>(std::lround(sg));
+                    if (subg < 0)  subg = 0;
+                    if (subg > 30) subg = 30;
+                    const uint8_t newByteG = (subg == 0)
+                        ? uint8_t(0x00)
+                        : static_cast<uint8_t>(
+                            std::lround(0x02 + subg * (22.0 / 30.0)));
+                    // Follow the gate value DIRECTLY (up AND down, no ramp) so
+                    // the row tracks the plug-in's fast gate attack/release in
+                    // lock-step with the UC1 gate LEDs — pushGainReduction renders
+                    // the dB value each tick with no decay. The comp row's
+                    // 1-byte/tick down-smoothing (inherited here at first) lagged
+                    // badly on the snappy gate (Frank 2026-07-27: "viel langsamer
+                    // als die UC1 LED"). The gate's own ballistics are already in
+                    // the GateGain value, so no extra smoothing is wanted.
+                    g_uf8GateGrBytes[focStrip] = newByteG;
+                    gateBytes[focStrip] = newByteG;
                 }
             }
         }
         // Clear holders for non-focused strips so a previously-focused
         // strip doesn't keep displaying its last GR after focus moves.
         for (int s = 0; s < 8; ++s) {
-            if (s != focStrip) g_uf8GrBytes[s] = 0;
+            if (s != focStrip) { g_uf8GrBytes[s] = 0; g_uf8GateGrBytes[s] = 0; }
         }
         if (g_dev && g_dev->isOpen()) {
             g_dev->setGrBytes(targetBytes);
+            g_dev->setGateGrBytes(gateBytes);
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
