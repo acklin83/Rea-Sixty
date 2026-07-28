@@ -4300,11 +4300,26 @@ void UC1Surface::pollGainReduction_()
     // and SSL 360° quit). Stays 0 = dark otherwise, exactly as before — no
     // mirroring of Comp GR onto the gate strip.
     // Sign: the wire is 0..negative; the meters take magnitude (as above).
+    // Keyed to the FOCUSED track's channel strip (via the impersonator's
+    // per-instance HostTrackIndex correlation) so the gate GR follows the
+    // selected channel — gate GR is PER-CHANNEL, only the closing gate's strip
+    // reads negative, all others 0. Showing "the first strip" (old behaviour)
+    // meant a near-random channel that's usually open = dark, or Snare's GR on
+    // the Toms (Frank 2026-07-26). No un-keyed fallback: it takes the first
+    // g_inst entry = lowest UDP port = usually a DEAD reconnect-orphan frozen at
+    // its last value, so it would show a stale wrong channel — worse than dark.
+    // getChannelStripMeterForTrackIndex now picks the FRESHEST live instance for
+    // the track (2026-07-27 fix; the correlation itself was verified working in
+    // the trace, the dead-lowest-port pick was the real bug behind the dark LED).
     float csGateGr = 0.0f;
-    if (sslcore::isRunning()) {
+    if (sslcore::isRunning() && csTr) {
+        const int trackIdx =
+            static_cast<int>(GetMediaTrackInfo_Value(csTr, "IP_TRACKNUMBER"));
+        const int gateType = int(sslcore::ChannelStripMeter::GateGain);
         std::vector<float> gg;
-        if (sslcore::getChannelStripMeter(
-                int(sslcore::ChannelStripMeter::GateGain), gg) && !gg.empty()) {
+        if (trackIdx > 0 &&
+            sslcore::getChannelStripMeterForTrackIndex(gateType, trackIdx, gg) &&
+            !gg.empty()) {
             csGateGr = std::abs(gg[0]);
         }
     }

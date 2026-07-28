@@ -68,6 +68,17 @@ public:
         grBytes_.store(packed, std::memory_order_relaxed);
     }
 
+    // Per-strip GATE GR bytes carried in the sibling FF 66 09 16 heartbeat
+    // frame (hb4) — the second 5-LED GR row next to the Comp GR row. Same
+    // 13-byte layout + checksum as FF 66 09 15; same byte encoding. Worker
+    // stamps these into hb4 every 20 ms cycle.
+    void setGateGrBytes(const std::array<uint8_t, 8>& bytes) {
+        uint64_t packed = 0;
+        for (int i = 0; i < 8; ++i)
+            packed |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+        gateGrBytes_.store(packed, std::memory_order_relaxed);
+    }
+
     const std::string& lastError() const { return lastError_; }
 
     // USB iSerialNumber string descriptor, populated on successful open().
@@ -111,6 +122,7 @@ private:
     std::atomic<bool>     shuttingDown_{false};
     std::atomic<bool>     frameTrace_{false};
     std::atomic<uint64_t> grBytes_{0};
+    std::atomic<uint64_t> gateGrBytes_{0};   // FF 66 09 16 row (gate GR)
     // True while runInitOnInitThread_() is replaying the boot sequence
     // (handshake → 96-cell zero-fill → fader-tanz → LCD/colour init →
     // motor re-engage). The worker thread skips draining the user-send

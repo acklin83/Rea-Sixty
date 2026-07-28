@@ -368,6 +368,9 @@ int                reasixty_activeUserBank();
 int                reasixty_activeQuickFor(int layer);
 int                reasixty_activeSubBankFor(int layer);
 int                reasixty_engagedQuickFor(int layer);
+// Pinned startup soft-key bank (fixed user-Quick engaged at boot).
+bool               reasixty_startupBank(int* layer, int* quick, int* sub);
+void               reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // Currently active SSL soft-key PAGE bank — used by the schematic
 // to highlight the matching V-POT/Bank tile and by the per-binding
@@ -708,6 +711,102 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Parameter change switches soft-key bank",
                        &pssb)) {
         reasixty_setParamSwitchesSoftKeyBank(pssb);
+    }
+
+    // Startup soft-key bank — engage a fixed user-Quick (Layer + Quick +
+    // Sub-bank) on every fresh REAPER session instead of the plug-in-driven
+    // default. "Use current hardware bank" captures whatever is engaged on
+    // the UF8 right now. Layer-1 Q1/Q2 are excluded (hardcoded SSL CS/BC
+    // focus, no user-Quick slots).
+    {
+        static const char* kSbLayer[3] = { "Layer 1", "Layer 2", "Layer 3" };
+        static const char* kSbQuick[3] = { "Q1", "Q2", "Q3" };
+        static const char* kSbSub[6]   = {
+            "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5" };
+
+        int sbL = 1, sbQ = 0, sbS = 0;
+        const bool sbOn = reasixty_startupBank(&sbL, &sbQ, &sbS);
+        bool on = sbOn;
+        if (ImGui_Checkbox(ctx, "Engage a fixed soft-key bank at startup",
+                           &on)) {
+            if (on) {
+                // Seed from the live engaged bank; fall back to a valid
+                // user-Quick when nothing usable is engaged.
+                int lv = uf8::bindings::getActiveLayer();
+                if (lv < 0 || lv > 2) lv = 1;
+                int lq = reasixty_activeQuickFor(lv);
+                int ls = reasixty_activeSubBankFor(lv);
+                if (lq < 0) lq = (lv == 0) ? 2 : 0;
+                if (lv == 0 && lq <= 1) lq = 2;
+                if (ls < 0 || ls > 5) ls = 0;
+                reasixty_setStartupBank(true, lv, lq, ls);
+                sbL = lv; sbQ = lq; sbS = ls;
+            } else {
+                reasixty_setStartupBank(false, 0, 0, 0);
+            }
+        }
+        if (on) {
+            auto commit = [&]() {
+                if (sbL == 0 && sbQ <= 1) sbQ = 2;   // L1 → only Q3 is user
+                reasixty_setStartupBank(true, sbL, sbQ, sbS);
+            };
+            ImGui_Indent(ctx, /*indent_w*/ nullptr);
+            ImGui_SetNextItemWidth(ctx, 110.0);
+            if (ImGui_BeginCombo(ctx, "##sb_layer", kSbLayer[sbL], nullptr)) {
+                for (int i = 0; i < 3; ++i) {
+                    bool s = (sbL == i);
+                    if (ImGui_Selectable(ctx, kSbLayer[i], &s,
+                                         nullptr, nullptr, nullptr)) {
+                        sbL = i; commit();
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, 70.0);
+            if (ImGui_BeginCombo(ctx, "##sb_quick", kSbQuick[sbQ], nullptr)) {
+                for (int i = 0; i < 3; ++i) {
+                    if (sbL == 0 && i <= 1) {
+                        ImGui_TextDisabled(ctx, kSbQuick[i]);  // L1 CS/BC
+                        continue;
+                    }
+                    bool s = (sbQ == i);
+                    if (ImGui_Selectable(ctx, kSbQuick[i], &s,
+                                         nullptr, nullptr, nullptr)) {
+                        sbQ = i; commit();
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, 110.0);
+            if (ImGui_BeginCombo(ctx, "##sb_sub", kSbSub[sbS], nullptr)) {
+                for (int i = 0; i < 6; ++i) {
+                    bool s = (sbS == i);
+                    if (ImGui_Selectable(ctx, kSbSub[i], &s,
+                                         nullptr, nullptr, nullptr)) {
+                        sbS = i; commit();
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Use current hardware bank",
+                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                int lv = uf8::bindings::getActiveLayer();
+                if (lv < 0 || lv > 2) lv = 1;
+                int lq = reasixty_activeQuickFor(lv);
+                int ls = reasixty_activeSubBankFor(lv);
+                if (lq < 0) lq = (lv == 0) ? 2 : 0;
+                if (lv == 0 && lq <= 1) lq = 2;
+                if (ls < 0 || ls > 5) ls = 0;
+                sbL = lv; sbQ = lq; sbS = ls;
+                reasixty_setStartupBank(true, sbL, sbQ, sbS);
+            }
+            ImGui_TextDisabled(ctx,
+                "Ignored while UF8 Plugin Mode is on (it owns the soft-keys).");
+            ImGui_Unindent(ctx, /*indent_w*/ nullptr);
+        }
     }
 
     // Touch a UF8 fader → that strip's track becomes the only selected

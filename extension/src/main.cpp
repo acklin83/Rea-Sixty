@@ -338,8 +338,16 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+int      reasixty_overlayCsColor();   // Inserts-overlay palette (0xRRGGBB) —
+int      reasixty_overlayBcColor();   // shared with the FX-bank key colours so
+int      reasixty_overlaySelColor();  // the surface mirrors the MCP overlay.
 int      reasixty_dynBankCtrl(int kind);             // banking control per kind
 void     reasixty_setDynBankCtrl(int kind, int ctrl);
+// Pinned "startup soft-key bank" — a fixed user-Quick (Layer+Quick+Sub-bank)
+// engaged once on the first timer tick so a fresh REAPER session boots on it
+// instead of the plug-in-driven default. get returns true when a pin is set.
+bool     reasixty_startupBank(int* layer, int* quick, int* sub);
+void     reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 // Page a bankable dynamic bank from a UC1 encoder (main thread). Returns true
 // when the engaged sub-bank is bankable AND its configured control matches —
 // the caller then skips the encoder's normal action. control: see BankControl.
@@ -750,6 +758,14 @@ std::atomic<bool> g_inSelectionSwap{false};
 std::atomic<void*> g_selAnchorTrack{nullptr};
 std::atomic<void*> g_selCursorTrack{nullptr};
 std::atomic<bool>  g_inRangeSelect{false};
+
+// Load-sweep freeze anchor. While the SSL plug-ins connect in a burst at project
+// load, each selects its OWN track on connect → REAPER's selection would count
+// through the channels. We hold selection at this anchor: onTimer maintains it
+// (= the user's stable selection between bursts) and does a late fallback revert;
+// the fast SYNCHRONOUS revert lives in SetSurfaceSelected (before the repaint).
+// nullptr = none yet.
+std::atomic<void*> g_loadFreezeAnchor{nullptr};
 
 // When the user hits the PAN button, we globally override every strip's
 // V-Pot to act as pan control regardless of whether the track hosts an
@@ -4988,6 +5004,36 @@ static void fxBankRetargetFocusGui_(MediaTrack* tr, int fxIdx)
     g_focusedGuiShownFx = fxIdx;
 }
 
+// Classify one FX for the FX dynamic-bank key colour, mirroring
+// buildInstanceHits_: CS / BC via the plug-in map, UF8-only via the owned
+// user-plugin record. Returns true + the overlay-configured 0xRRGGBB for a
+// surface-mapped Instance (CS yellow / BC red / UF8-mapped blue); false for a
+// plain FX, which keeps the default white key. Main-thread only.
+static bool dynFxBankColour_(MediaTrack* tr, int fxIdx, uint32_t& rgbOut)
+{
+    char fxName[256];
+    if (!tr || !uf8::fxIdentityName(tr, fxIdx, fxName, sizeof(fxName)))
+        return false;
+    if (const auto* pm = uf8::lookupPluginMapByName(fxName)) {
+        if (pm->domain == uf8::Domain::ChannelStrip) {
+            rgbOut = static_cast<uint32_t>(reasixty_overlayCsColor()) & 0xFFFFFFu;
+            return true;
+        }
+        if (pm->domain == uf8::Domain::BusComp) {
+            rgbOut = static_cast<uint32_t>(reasixty_overlayBcColor()) & 0xFFFFFFu;
+            return true;
+        }
+    }
+    // UF8-only user maps surface via lookupPluginMapByName with Domain::None
+    // (rejected above) — confirm the uf8Mode flag on the owned record.
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (um && um->domain == uf8::Domain::None && um->uf8Mode) {
+        rgbOut = static_cast<uint32_t>(reasixty_overlaySelColor()) & 0xFFFFFFu;
+        return true;
+    }
+    return false;
+}
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -5017,6 +5063,14 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             if (!enabled || offline)                    info.led = 0;
             else if (fxIdx == stripInstanceActiveFx_(tr)) info.led = 2;
             else                                          info.led = 1;
+            // Colour the key by SSL class so the surface mirrors the MCP
+            // inserts overlay (CS yellow / BC red / UF8-mapped blue); plain
+            // FX keep the default white. Independent of brightness above.
+            uint32_t clsRgb = 0;
+            if (dynFxBankColour_(tr, fxIdx, clsRgb)) {
+                info.hasRgb = true;
+                info.rgb    = clsRgb;
+            }
             return info;
         }
         case DK::ParamGroups: {
@@ -11608,7 +11662,11 @@ void drainInputQueue()
                     && (ov.viewLock() == uf8::nav::ViewLock::None)
                     && !uc1Indep;
                 if (doJump) {
-                    GoToRegion(nullptr, it.idx, false);
+                    // GoToRegion only smooth-seeks during PLAYBACK; stopped it
+                    // does nothing, so the soft-key region jump looked dead.
+                    // Move the edit cursor to the region start when stopped.
+                    if (GetPlayState() & 1) GoToRegion(nullptr, it.idx, false);
+                    else                    SetEditCurPos(it.pos, true, true);
                 }
                 if (doDrill) {
                     ov.drillIntoRegion(idx);
@@ -14028,6 +14086,25 @@ void ReaSixtySurface::SetSurfaceMute(MediaTrack* tr, bool mute)
 }
 void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
 {
+    // Load-sweep freeze (SYNCHRONOUS). While the SSL plug-ins connect in a burst
+    // at project load, each selects its OWN track → the selection would count
+    // through the channels (Frank 2026-07-26). Revert HERE — inside the
+    // selection-change callback, before REAPER repaints the arrange — so the
+    // sweep never becomes visible (the onTimer fallback was one tick / ~30 ms
+    // late → the flash stayed visible). Reuses g_inSelectionSwap as the
+    // reentrancy guard: our SetOnlyTrackSelected echoes back through here.
+    // Same family as the selection-burst coalescer below.
+    if (sel && !g_inSelectionSwap.load()) {
+        void* anchor = g_loadFreezeAnchor.load();
+        if (anchor && anchor != static_cast<void*>(tr)
+            && sslcore::isRunning() && sslcore::msSinceLastNewConn() < 2500
+            && ValidatePtr2(nullptr, anchor, "MediaTrack*")) {
+            g_inSelectionSwap.store(true);
+            SetOnlyTrackSelected(static_cast<MediaTrack*>(anchor));
+            g_inSelectionSwap.store(false);
+            return;   // swept track never reaches the LED / coalescer
+        }
+    }
     sendLed(LedClass::Sel, tr, sel);
     // Coalesce sel=true bursts so multi-track actions ("Select all → set
     // heights → restore selection") don't make UC1 count through every
@@ -14964,8 +15041,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // 2026-05-13: "die Quick Buttons dürfen nichts an den
             // Soft-Keys ändern, sonst kommt man nicht mehr auf die
             // gelearnten Parameter").
+            // Nav Mode owns the top-soft-keys while its overlay is active
+            // (and UF8 shows it): the strip's marker/region jump must win over
+            // an engaged user-Quick / SSL free-slot press. Without this guard a
+            // pinned startup bank (or any engaged Quick) claims the key first
+            // (handledNatively) and the nav intercept below never runs — the
+            // soft-key jump silently did nothing (Frank 2026-07-27).
+            const bool navOwnsSoftKey =
+                (id >= 0x18 && id <= 0x1F
+                 && uf8::nav::Overlay::instance().active()
+                 && g_navUf8Show.load());
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
-                && !handledNatively) {
+                && !handledNatively && !navOwnsSoftKey) {
                 const int layer = uf8::bindings::getActiveLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
@@ -14996,7 +15083,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // (Frank 2026-06-23). Occupied slots / empty user slots fall
             // through to the normal bindings::dispatch (ssl_softkey).
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
-                && !handledNatively
+                && !handledNatively && !navOwnsSoftKey
                 && uf8::bindings::getActiveLayer() == 0)
             {
                 // Use the latched soft-key domain (not the raw focused param)
@@ -19054,6 +19141,11 @@ void pushUc1NavCarousel()
         const uint32_t rgb = static_cast<uint32_t>(items[ci].color) & 0x00FFFFFFu;
         if (rgb != 0) palette = uf8::quantize(rgb);
     }
+    // Uncoloured / grey markers+regions quantize to 0x00 (LED-off) = dim on the
+    // carousel. Show them at a bright neutral instead so the nav display is
+    // always legible (Frank 2026-07-27 "hell gerne"). The LCD palette has no
+    // white anchor; 0x01 (A0A0FF) is the least-saturated bright entry.
+    if (palette == 0x00) palette = 0x01;
 
     g_uc1_surface->showNavCarousel(prev, curr, next, header, palette);
 }
@@ -22299,6 +22391,7 @@ std::chrono::steady_clock::time_point g_lastVuPushTime{};
 // at full GR. Only the strip that hosts the focused CS plug-in carries
 // nonzero values; other strips stay at 0x00 (cleared each tick).
 std::array<uint8_t, 8> g_uf8GrBytes{};
+std::array<uint8_t, 8> g_uf8GateGrBytes{};   // ballistics holder for the gate GR row
 
 void pushVuMeter()
 {
@@ -23798,9 +23891,67 @@ static void sdBridgeTick_()
     uf8::sdbridge::broadcast(line);
 }
 
+// Engage the user's pinned "startup soft-key bank" (Settings → General): a
+// fixed Layer+Quick+Sub-bank, so a fresh REAPER session boots with that
+// user-Quick engaged instead of the plug-in-driven default. Called once from
+// onTimer after the UF8 is up. No-op when unset, when UF8 Plugin Mode owns
+// the soft-keys, or for Layer-1 Q1/Q2 (hardcoded SSL CS/BC focus, which carry
+// no user-Quick slots). Mirrors the softkey_bank_N builtin's engage path.
+static void applyStartupBank_()
+{
+    int layer = -1, quick = -1, sub = 0;
+    if (!reasixty_startupBank(&layer, &quick, &sub)) return;
+    if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return;
+    if (layer == 0 && quick <= 1) return;            // L1 Q1/Q2 = SSL CS/BC
+    if (g_uf8PluginMode.load()) return;
+    if (uf8::bindings::getActiveLayer() != layer) {
+        uf8::bindings::setActiveLayer(layer);
+        pushLayerLeds(layer);
+    }
+    g_activeQuick[layer].store(quick);
+    g_activeSubBank[layer].store(sub);
+    g_bankDirty.store(true);
+    g_softKeyDirty.store(true);
+}
+
 void onTimer()
 {
     ++g_tickCounter;
+
+    // One-shot: engage the pinned startup soft-key bank once the UF8 is up
+    // (so pushLayerLeds reaches hardware). Cheap re-check each tick until a
+    // device appears — covers hot-plug after a device-less boot.
+    {
+        static bool s_startupBankDone = false;
+        if (!s_startupBankDone && g_dev) {
+            s_startupBankDone = true;
+            applyStartupBank_();
+        }
+    }
+
+    // Load-sweep selection safety net. Root cause is fixed at the source (the
+    // impersonator no longer sends the "activate this channel" command frames
+    // that made every connecting SSL plug-in select its own track → the load
+    // countdown). This holds the selection at its pre-burst value while plug-ins
+    // connect, mopping up any residual stray selection. The primary revert is
+    // synchronous in SetSurfaceSelected; this is the late fallback. Only active
+    // while the impersonator is streaming a connect burst; else a no-op.
+    {
+        const bool burst = sslcore::isRunning()
+                        && sslcore::msSinceLastNewConn() < 2500;
+        MediaTrack* cur = GetSelectedTrack(nullptr, 0);
+        void* anchor = g_loadFreezeAnchor.load();
+        if (!burst) {
+            g_loadFreezeAnchor.store(cur);     // between bursts: the user's pick
+        } else {
+            if (!anchor || !ValidatePtr2(nullptr, anchor, "MediaTrack*")) {
+                g_loadFreezeAnchor.store(cur);
+                anchor = cur;
+            }
+            if (anchor && cur != anchor)
+                SetOnlyTrackSelected(static_cast<MediaTrack*>(anchor));
+        }
+    }
 
     // Restart before anything else touches a device this tick — the pointers are
     // replaced wholesale here. Retried across ticks: the first open() after a
@@ -25297,6 +25448,7 @@ void onTimer()
     // byte swings several positions per audio beat without rate-limit.
     {
         std::array<uint8_t, 8> targetBytes{};  // all zero by default
+        std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
         int focStrip = -1;
         if (g_uc1_surface) {
             if (auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())) {
@@ -25457,16 +25609,70 @@ void onTimer()
                         else if (held > newByte) --held;
                         targetBytes[focStrip] = held;
                     }
+                    // Gate GR row (FF 66 09 16) — the focused track's SSL gate
+                    // attenuation from the impersonator (ChannelStripMeterType_
+                    // GateGain), rendered on the same focused strip as Comp GR
+                    // and in lock-step with the UC1 gate strip. Independent of
+                    // the comp `gotIt` above (a gate can close with no comp
+                    // reduction). Dark unless the impersonator runs and the
+                    // focused track has a correlated SSL channel strip.
+                    double ggr = 0.0;
+                    if (sslcore::isRunning()) {
+                        const int trackIdx = static_cast<int>(
+                            GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+                        std::vector<float> gg;
+                        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
+                                static_cast<int>(sslcore::ChannelStripMeter::GateGain),
+                                trackIdx, gg) && !gg.empty()) {
+                            ggr = std::fabs(gg[0]);
+                        }
+                    }
+                    // Device CS-LED trim (same as Comp GR) so both rows align;
+                    // BC calibration test silences the GR rows.
+                    {
+                        double devCalG[5];
+                        for (int i = 0; i < 5; ++i)
+                            devCalG[i] = kUc1CsLedsFactory[i] + g_uc1CsLedsCal[i].load();
+                        ggr = uf8::applyGrCalibration(ggr, uf8::kLedsBpDb, devCalG, 5);
+                        if (ggr < 0) ggr = 0;
+                        const int testT = g_uc1CalActiveTest.load();
+                        if (testT >= 0 && testT < 6) ggr = 0.0;
+                    }
+                    if (ggr > 20.0) ggr = 20.0;
+                    double sg;
+                    if      (ggr <=  3.0) sg =        (ggr       ) * (6.0 / 3.0);
+                    else if (ggr <=  6.0) sg =  6.0 + (ggr -  3.0) * (6.0 / 3.0);
+                    else if (ggr <= 10.0) sg = 12.0 + (ggr -  6.0) * (6.0 / 4.0);
+                    else if (ggr <= 14.0) sg = 18.0 + (ggr - 10.0) * (6.0 / 4.0);
+                    else                   sg = 24.0 + (ggr - 14.0) * (6.0 / 6.0);
+                    int subg = static_cast<int>(std::lround(sg));
+                    if (subg < 0)  subg = 0;
+                    if (subg > 30) subg = 30;
+                    const uint8_t newByteG = (subg == 0)
+                        ? uint8_t(0x00)
+                        : static_cast<uint8_t>(
+                            std::lround(0x02 + subg * (22.0 / 30.0)));
+                    // Follow the gate value DIRECTLY (up AND down, no ramp) so
+                    // the row tracks the plug-in's fast gate attack/release in
+                    // lock-step with the UC1 gate LEDs — pushGainReduction renders
+                    // the dB value each tick with no decay. The comp row's
+                    // 1-byte/tick down-smoothing (inherited here at first) lagged
+                    // badly on the snappy gate (Frank 2026-07-27: "viel langsamer
+                    // als die UC1 LED"). The gate's own ballistics are already in
+                    // the GateGain value, so no extra smoothing is wanted.
+                    g_uf8GateGrBytes[focStrip] = newByteG;
+                    gateBytes[focStrip] = newByteG;
                 }
             }
         }
         // Clear holders for non-focused strips so a previously-focused
         // strip doesn't keep displaying its last GR after focus moves.
         for (int s = 0; s < 8; ++s) {
-            if (s != focStrip) g_uf8GrBytes[s] = 0;
+            if (s != focStrip) { g_uf8GrBytes[s] = 0; g_uf8GateGrBytes[s] = 0; }
         }
         if (g_dev && g_dev->isOpen()) {
             g_dev->setGrBytes(targetBytes);
+            g_dev->setGateGrBytes(gateBytes);
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
@@ -27348,6 +27554,31 @@ bool reasixty_dynBankPageControl(int control, int delta)
     if (g_dynBankCtrl[k].load() != control) return false;
     pageDynBank_(k, delta > 0 ? 1 : (delta < 0 ? -1 : 0));
     return true;
+}
+
+// Pinned startup soft-key bank (Settings → General). Stored as ExtState
+// "L,Q,S" (empty/absent = no pin). Applied once by applyStartupBank_ on the
+// first timer tick. layer 0..2, quick 0..2, sub 0..5.
+bool reasixty_startupBank(int* layer, int* quick, int* sub)
+{
+    const char* v = GetExtState("rea_sixty", "startup_bank");
+    if (!v || !*v) return false;
+    int L = -1, Q = -1, S = 0;
+    if (std::sscanf(v, "%d,%d,%d", &L, &Q, &S) < 2) return false;
+    if (L < 0 || L > 2 || Q < 0 || Q > 2) return false;
+    if (S < 0 || S > 5) S = 0;
+    if (layer) *layer = L;
+    if (quick) *quick = Q;
+    if (sub)   *sub   = S;
+    return true;
+}
+void reasixty_setStartupBank(bool on, int layer, int quick, int sub)
+{
+    if (!on) { SetExtState("rea_sixty", "startup_bank", "", true); return; }
+    if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return;
+    if (sub < 0 || sub > 5) sub = 0;
+    char b[24]; std::snprintf(b, sizeof(b), "%d,%d,%d", layer, quick, sub);
+    SetExtState("rea_sixty", "startup_bank", b, true);
 }
 
 // Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /

@@ -107,7 +107,20 @@ enum class ChannelStripMeter : int {
 // (closed) with the ramp in between, CompGain tracked the compressor.
 bool getChannelStripMeter(int csType, std::vector<float>& current);
 
+// Like getChannelStripMeter, but only the channel-strip instance that announced
+// the given 1-based REAPER track index (HostTrackIndex, correlated per UDP source
+// port at connect). Returns false when no strip on that track has published —
+// so the caller's GR goes dark rather than showing another channel's reduction.
+bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
+                                       std::vector<float>& current);
+
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();
+
+// Milliseconds since the most recent NEW plugin connection (INT64_MAX if none).
+// A project load makes every plug-in connect in a burst — the surface uses this
+// to freeze REAPER's track selection so the channels don't "count through" as
+// each connecting plug-in selects its own track.
+long long msSinceLastNewConn();
 
 } // namespace sslcore

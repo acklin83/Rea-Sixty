@@ -69,6 +69,17 @@ std::atomic<bool>      g_running{false};
 std::thread            g_worker;
 std::atomic<bool>      g_connected{false};
 std::atomic<long long> g_lastDataMs{0};
+// Timestamp of the most recent NEW plugin TCP connection. A project load makes
+// every SSL plug-in connect in a ~1/s burst, and each one selects its own track
+// on connect → REAPER's selection "counts through" the channels. The extension
+// watches this to freeze the selection during the burst. 0 = none yet.
+std::atomic<long long> g_lastNewConnMs{0};
+// Per-connection unique object id for the type-7 handshake frame. Real Core
+// assigns a DISTINCT id to every plug-in (CAPTURED 2026-07-27, real SSL 360 on
+// lo0: 12 plug-ins → 12 different type-7 payloads). Our old hardcoded 0x9abc
+// went to every plug-in → all thought they were the SAME focused object and each
+// selected its own track = the load countdown. A fresh id per connect matches Core.
+std::atomic<uint32_t>  g_connIdCounter{0};
 
 struct Slot {
     std::vector<float>   current, peak;
@@ -148,6 +159,19 @@ std::map<socket_t, int>          g_clientIndex;    // per-client, awaiting its n
 std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 
+// Per-instance track identity — the fix for "GR follows the wrong channel".
+// Each plug-in announces, on its OWN TCP control connection at connect, its
+// HostTrackName + HostTrackIndex, but the UDP meter datagram carries no track
+// id (see the Instance comment). So we CORRELATE BY TIMING: capture {name,index}
+// per client, queue it once both are in, and the next NEW UDP source port claims
+// the front of the queue → g_portName / g_portIndex. That lets a track-keyed
+// getChannelStripMeter pick the FOCUSED track's channel strip instead of just
+// the first one. g_client*/g_pending/g_namedClients are worker-thread-only
+// (the select loop); g_portName/g_portIndex are read under g_meterMx.
+// (declared above: g_pending / g_namedClients / g_clientName / g_clientIndex /
+//  g_portName / g_portIndex — one mechanism, used both for V-Pot1 TRACK-order
+//  instance cycling and for GR channel-follow.)
+
 // Classify an instance from what it emits. ChannelStripMeterType only spans
 // 0..6, so ANY DataType >= 7 can only be a Meter/MeterPro plug-in (Rta,
 // Lissajous, Loudness…) — authoritative and sticky. Conversely a channel strip's
@@ -209,12 +233,26 @@ std::vector<uint8_t> serverConfig(int port) {
     putVarint(pb, (3 << 3) | 0); putVarint(pb, 1);
     return ctrlFrame(19, pb);
 }
-std::vector<uint8_t> openingSequence(int dataPort) {
+std::vector<uint8_t> openingSequence(int dataPort, uint32_t connId) {
     std::vector<uint8_t> out;
     auto add = [&](const std::vector<uint8_t>& f){ out.insert(out.end(), f.begin(), f.end()); };
     add(serverConfig(-1));
+    // Opening handshake: BOTH ctrlFrame(6) + ctrlFrame(7) are required before the
+    // plug-in streams meter UDP (proven: dropping them → 0 datagrams, dark gate LED).
+    // ctrlFrame(6) is empty and identical for every plug-in — matches real Core
+    // byte-for-byte (CAPTURED 2026-07-27, real SSL 360 on lo0).
     add(ctrlFrame(6, {}));
-    { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, 0x9abc); add(ctrlFrame(7, pb)); }
+    // ctrlFrame(7) carries a per-connection UNIQUE object id (field 1 varint) and
+    // its frame seq = that id. Real Core assigns a DISTINCT id to each plug-in (the
+    // capture showed 12 plug-ins → 12 different type-7 payloads). Our old hardcoded
+    // 0x9abc went to EVERY plug-in — that value was one focused channel's id from
+    // the original capture, so every plug-in thought it was THE focused object and
+    // each selected its own track in REAPER = the load-time countdown. A fresh
+    // connId per connection matches Core and removes the collision. (Real Core also
+    // sends type-7 AFTER the plug-in's type-4/5; we still send it in the opening —
+    // if the countdown persists, reorder to respond post-type-4.)
+    { std::vector<uint8_t> pb; putVarint(pb, (1<<3)|0); putVarint(pb, connId);
+      add(ctrlFrame(7, pb, connId)); }
     add(serverConfig(dataPort));
     return out;
 }
@@ -408,6 +446,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     socket_t annFd = makeUdp(0, false);
 
     std::vector<socket_t> clients;
+    // Clients we've already replied to. Real Core does NOT speak first: the
+    // plug-in sends type-4/type-5 (its identity), THEN Core sends the opening.
+    // We defer our opening until a client's first bytes arrive (see recv loop).
+    std::set<socket_t>    greeted;
     const std::vector<uint8_t> hb  = heartbeat();
     const std::vector<uint8_t> ann = announcement(actualTcp);
     double lastAnn = 0, lastHb = 0, lastSub = 0;
@@ -416,7 +458,15 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 
     while (g_running.load()) {
         const double t = secs();
-        if (annFd != kInvalid && t - lastAnn > 1.0) {
+        // Announce fast (was 1.0s). The plug-ins connect on the announce, so a
+        // 1 s cadence spaced their connects exactly 1 s apart → each selected its
+        // track 1/s = the visible ~12 s load countdown. Real Core's plug-ins
+        // connect ~40 ms apart. Announcing ~20/s compresses the connect burst so
+        // the selection sweep (which we can't suppress at the surface layer — the
+        // plug-in selects externally and REAPER paints it immediately) collapses
+        // into a brief flash instead of a slow count. Just more loopback UDP;
+        // does not touch metering or cause reconnects.
+        if (annFd != kInvalid && t - lastAnn > 0.05) {
             lastAnn = t;
             for (uint16_t dp : {16008, 16009}) {
                 sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(dp); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -457,14 +507,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             if (c != kInvalid) {
                 setNonBlocking(c);
                 int one = 1; setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&one), sizeof(one));
-                auto seq = openingSequence(dataPort);
-                ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
-                auto sub = subscribeInitial();
-                ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
                 clients.push_back(c);
-                g_connected.store(true);
-                slog("[%.1f] plugin CONNECTED (fd=%d), sent opening (%zu B) + subscribe "
-                     "(%zu B), data port %u", t, int(c), seq.size(), sub.size(), unsigned(dataPort));
+                // REACTIVE handshake (2026-07-27, CAPTURED from real Core): do NOT
+                // send the opening here. Real Core waits for the plug-in's type-4/
+                // type-5 hello, then replies. Sending type-7 ("you are object X")
+                // BEFORE the plug-in registers made every plug-in activate in the
+                // default context and select its track = the load countdown. We
+                // greet on the client's first bytes below instead.
+                slog("[%.1f] plugin CONNECTED (fd=%d), awaiting hello", t, int(c));
             }
         }
         for (socket_t d : dataFds) {
@@ -480,16 +530,15 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_lastDataMs.store(nowMs());
                     std::lock_guard<std::mutex> lk(g_meterMx);
                     const uint16_t sp = ntohs(from.sin_port);
-                    if (g_inst.find(sp) == g_inst.end()) {
+                    if (g_inst.find(sp) == g_inst.end() && !g_pending.empty()) {
                         // NEW instance. The datagram carries no track id, so tie
                         // this port to the {name,index} the just-connected plug-in
-                        // announced on the control socket (queued in connect order
-                        // above) — the timing correlation.
-                        if (!g_pending.empty()) {
-                            g_portName[sp]  = g_pending.front().name;
-                            g_portIndex[sp] = g_pending.front().index;
-                            g_pending.pop_front();
-                        }
+                        // announced on its control socket (queued in connect order).
+                        g_portName[sp]  = g_pending.front().name;
+                        g_portIndex[sp] = g_pending.front().index;
+                        slog("[corr] UDP src=%u -> track %d (%s)", unsigned(sp),
+                             g_pending.front().index, g_pending.front().name.c_str());
+                        g_pending.pop_front();
                     }
                     Instance& inst = g_inst[sp];
                     inst.lastMs = nowMs();
@@ -699,24 +748,37 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             socket_t c = clients[i];
             if (FD_ISSET(c, &rset)) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
-                if (n == 0) { SC_CLOSE(c); g_namedClients.erase(c);
-                              g_clientName.erase(c); g_clientIndex.erase(c);
-                              clients.erase(clients.begin() + long(i)); continue; }
-                // The plug-in TALKS BACK here, and we used to bin it unread
-                // ("we don't need their content yet"). It does need reading: the
-                // frames it sends carry the object ids it has registered, which
-                // is exactly what the RTA hunt is missing. We replay 4 subscribe
-                // frames lifted from an old capture; the real Core sends 178, and
-                // RTA is one we never ask for. Rather than re-capture a cold
-                // connect (the 880 MB pcap that had them lived in /tmp and is
-                // gone), log what the plug-in tells us and read the ids off that.
-                //
-                // TCP is a stream, so accumulate per client and only parse whole
-                // frames. Layout, confirmed against the frames we send in
-                // subscribeInitial():
-                //   efbc5100 | len32 | 12-B hdr | paylen32 | type32 | payload
-                //   type 2 = register, 18 = subscribe, 17 = prepare (names the
-                //   meter), 19 = data-port assignment. payload = 8-B objId + pb.
+                if (n == 0) {
+                    SC_CLOSE(c);
+                    greeted.erase(c);
+                    g_namedClients.erase(c);
+                    g_clientName.erase(c);
+                    g_clientIndex.erase(c);
+                    clients.erase(clients.begin() + long(i));
+                    continue;
+                }
+                // First bytes from this client = the plug-in's type-4/type-5
+                // hello. Reply with the opening NOW (reactive handshake, like real
+                // Core) — this is what keeps the plug-in from selecting its track.
+                if (n > 0 && greeted.find(c) == greeted.end()) {
+                    const uint32_t connId = 0x20000000u + g_connIdCounter.fetch_add(1);
+                    auto seq = openingSequence(dataPort, connId);
+                    ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
+                    auto sub = subscribeInitial();
+                    ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+                    greeted.insert(c);
+                    g_connected.store(true);
+                    g_lastNewConnMs.store(nowMs());
+                    slog("[%.1f] greeted fd=%d connId=0x%08x (opening %zu B + subscribe %zu B), data port %u",
+                         t, int(c), connId, seq.size(), sub.size(), unsigned(dataPort));
+                }
+                // The plug-in announces its HostTrackName + HostTrackIndex over
+                // this control connection at connect. We used to bin these unread;
+                // capture them so a UDP source port can be tied to a REAPER track
+                // (the datagram itself carries no track id). TCP is a stream, so
+                // accumulate per client and only parse whole frames. Frame layout
+                // (matches subscribeInitial): efbc5100 | len32 | 12-B hdr |
+                // paylen32 | type32 | payload(8-B objId + protobuf).
                 if (n > 0) {
                     static std::map<socket_t, std::vector<uint8_t>> sAcc;
                     auto& acc = sAcc[c];
@@ -724,7 +786,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     size_t off = 0;
                     for (;;) {
                         if (acc.size() - off < 8) break;
-                        // resync: the stream must start on the magic
+                        // resync: the stream must start on the frame magic
                         if (!(acc[off] == 0xef && acc[off+1] == 0xbc &&
                               acc[off+2] == 0x51 && acc[off+3] == 0x00)) { ++off; continue; }
                         uint32_t flen = 0;
@@ -1099,8 +1161,45 @@ bool getChannelStripMeter(int csType, std::vector<float>& current) {
     return false;
 }
 
+bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
+                                       std::vector<float>& current) {
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    if (trackIndex <= 0) return false;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    // Reconnect churn (MEASURED in /tmp/reaper_sslcore.log 2026-07-27): over a
+    // session the SAME track gets tied to 6-7 different UDP source ports as its
+    // plug-in reconnects, and dead ports LINGER in g_inst frozen at their last
+    // value (they're never pruned — the TCP close handler has no socket->port
+    // map). Taking the FIRST match returned the lowest-numbered port, which was
+    // usually a DEAD reconnect-orphan stuck at 0.0 → the gate LED stayed dark
+    // though the LIVE port for that track was streaming real reduction. So among
+    // all channel strips announcing THIS (1-based) track index, pick the
+    // FRESHEST (max lastMs) and require it to be recent — that is the instance
+    // actually streaming now; the gate GR then follows the focused channel.
+    const long long now = nowMs();
+    const Slot* best = nullptr;
+    long long   bestMs = -1;
+    for (const auto& kv : g_inst) {
+        if (kv.second.kind != Kind::ChannelStrip) continue;
+        auto pi = g_portIndex.find(kv.first);
+        if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+        const Slot& s = kv.second.meter[csType];
+        if (!s.have || s.current.empty()) continue;
+        if (kv.second.lastMs > bestMs) { bestMs = kv.second.lastMs; best = &s; }
+    }
+    if (!best || now - bestMs > 1000) return false;   // none, or all stale
+    current = best->current;
+    return true;
+}
+
 long long msSinceLastData() {
     const long long last = g_lastDataMs.load();
+    if (last == 0) return INT64_MAX;
+    return nowMs() - last;
+}
+
+long long msSinceLastNewConn() {
+    const long long last = g_lastNewConnMs.load();
     if (last == 0) return INT64_MAX;
     return nowMs() - last;
 }

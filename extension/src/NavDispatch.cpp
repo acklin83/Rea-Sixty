@@ -148,8 +148,19 @@ bool dispatchPushActionUc1(int act)
     auto markDirty = []{ reasixty_markNavOverlayDirty(); };
     auto doJump = [&]() {
         if (jumpIdx < 0) return;
-        if (isRgn) GoToRegion(nullptr, jumpIdx, false);
-        else        SetEditCurPos(jumpPos, true, true);
+        // GoToRegion only smooth-seeks DURING PLAYBACK (queues "seek at end of
+        // current region"); with the transport STOPPED it does nothing, so the
+        // UC1 nav push looked dead (Frank 2026-07-27, VERIFIED via a cursor
+        // before/after trace: SetEditCurPos moves + sticks, GoToRegion stopped
+        // did not). Move the edit cursor to the region start when stopped so the
+        // jump is always visible; keep GoToRegion while playing for the
+        // smooth-seek-at-region-end behaviour. Markers always use SetEditCurPos.
+        if (isRgn) {
+            if (GetPlayState() & 1) GoToRegion(nullptr, jumpIdx, false);
+            else                    SetEditCurPos(jumpPos, true, true);
+        } else {
+            SetEditCurPos(jumpPos, true, true);
+        }
         markDirty();
     };
 

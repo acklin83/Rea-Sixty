@@ -410,6 +410,14 @@ void UF8Device::workerLoop_()
             rc = libusb_bulk_transfer(handle_, kEpOut, hb3, sizeof(hb3), &t, 100);
             recordHeartbeatRc(rc);
             traceFrame_('O', hb3, sizeof(hb3), rc);
+            // Stamp live per-strip GATE GR bytes into hb4 + recompute checksum
+            // (same layout as hb3, opcode FF 66 09 16 = the sibling GR row).
+            const uint64_t packedGate = gateGrBytes_.load(std::memory_order_relaxed);
+            for (int i = 0; i < 8; ++i)
+                hb4[4 + i] = static_cast<uint8_t>((packedGate >> (i * 8)) & 0xFF);
+            uint32_t sumG = 0;
+            for (int k = 1; k < 12; ++k) sumG += hb4[k];
+            hb4[12] = static_cast<uint8_t>(sumG & 0xFF);
             rc = libusb_bulk_transfer(handle_, kEpOut, hb4, sizeof(hb4), &t, 100);
             recordHeartbeatRc(rc);
             traceFrame_('O', hb4, sizeof(hb4), rc);
