@@ -11140,6 +11140,10 @@ struct Uf1MeterVPot {
                        // repaints for such slots; a name+value frame leaves the
                        // value static (HW-verified 2026-07-23: name+value params
                        // repaint after the width fix, enum params did NOT).
+    double contStep = 0.0;  // >0 overrides kUf1MeterContStep for THIS continuous
+                       // (steps==0) entry, for wide-range params where the global
+                       // step is too coarse (RMS Integration spans 4990 ms → the
+                       // global 0.02 = ~100 ms/detent). Ignored for enum (steps>=2).
 };
 struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 // [screen][page]. screen: 0 Overview, 1 Analogue, 2 RTA. `param` = the TrackFX
@@ -11153,13 +11157,13 @@ struct Uf1MeterPage { Uf1MeterVPot v2, v3, v4; };
 const Uf1MeterPage kUf1MeterVPots[3][3] = {
     { // Overview
         { {4,2,"TruePk"},  {6,7,"Type",true},{16,7,"Fade"} },  // P1 Digital True Peak / Digital Type(name-only) / Lissajous Fade
-        { {-1,0,nullptr},  {3,5,"PkHld"},   {5,0,"Int"}    },  // P2 — / Peak Hold / RMS Integration
-        { {2,2,"TPkHQ"},   {17,2,"SmCp"},   {1,0,"Delay"}  },  // P3 True Peak HQ / Sum Compensation / Global Delay
+        { {-1,0,nullptr},  {3,5,"PkHld",true}, {5,0,"Int",false,0.004} }, // P2 — / Peak Hold(name-only slot) / RMS Integration(fine ~20ms/detent)
+        { {2,2,"TPkHQ"},   {17,2,"SmCp",true}, {1,0,"Delay"}  },  // P3 True Peak HQ / Sum Compensation(name-only slot) / Global Delay
     },
     { // Analogue
         { {8,2,"Mode",true},{11,3,"0 VU"},  {9,0,"Ref"}    },  // P1 Analogue Mode(name-only) / 0 VU Line-Up(+4/0/-2) / Reference Level(continuous, fine)
-        { {12,3,"Format"}, {13,0,"Cust L"}, {14,0,"Cust R"}},  // P2 Dual Format / Custom Left / Custom Right
-        { {10,3,"MaxN"},   {15,0,"Overld"}, {-1,0,nullptr} },  // P3 Max Needle / LED Overload / —
+        { {12,3,"Format",true}, {13,0,"Cust L"}, {14,0,"Cust R"}},  // P2 Dual Format(name-only slot) / Custom Left / Custom Right
+        { {10,3,"MaxN",true}, {15,0,"Overld"}, {-1,0,nullptr} },  // P3 Max Needle(name-only slot) / LED Overload / —
     },
     { // RTA
         { {51,0,"SlFreq"}, {22,0,"SclTop"}, {23,0,"SclBtm"}},  // P1 Selected Band / Scale Top / Scale Bottom
@@ -11191,7 +11195,7 @@ const Uf1MeterPage kUf1LoudnessVPots[10] = {
     // [1]
     { {47,3,"Range",true},  {48,2,"Disp",true},    {26,2,"Scroll",true} }, // Scale Range / Display Type / History Scroll
     // [2]
-    { {30,3,"Gate",true},   {36,0,"Target",true},  {28,2,"Dial"} },    // Int Gating Mode / Integrated Target / Dialogue Detection
+    { {30,3,"Gate",true},   {36,0,"Target",true,0.006},  {28,2,"Dial"} },    // Int Gating Mode / Integrated Target(fine ~0.9 LUFS/detent) / Dialogue Detection
     // [3]
     { {37,0,"Var"},         {33,0,"Short"},        {32,0,"Mom"} },     // Target Variance / Short-Term Integration / Momentary Integration
     // [4]
@@ -11456,7 +11460,8 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     sAccum[vi+1] -= notches;
 
     const double cur = TrackFX_GetParamNormalized(tr, fx, v.param);
-    const double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1)) : kUf1MeterContStep;
+    const double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1))
+                     : (v.contStep > 0.0 ? v.contStep : kUf1MeterContStep);
     double nv = cur + notches * dn;
     if (nv < 0.0) nv = 0.0;
     if (nv > 1.0) nv = 1.0;
@@ -16153,14 +16158,25 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
 
 // Overview bargraph scale: dBFS -> bar byte. index = round(dBFS) + 93, covering
 // -93..0 dBFS. Each DIGITAL TYPE (param 6) is its OWN scale — the K-System and
-// Linear/2x variants map dBFS to a different bar height than Non-Linear, so with
-// one fixed table the bars mis-aligned under K-modes ("garbage", Frank 2026-07-24).
-// Measured per type by ramping a signal on the StoerPC while correlating the
-// plug-in's dB readout (0x011c field 1) with the peak-bar byte (0x0126):
-// cap110/118/116/117/111/119/113. K-mode readouts are the K-scale value; converted
-// back to dBFS (dBFS = K-scale − 20/14/12) before tabulating. kUf1BarScale below is
-// Non-Linear (unchanged, cap89-verified). See docs/session-2026-07-24-uf1-bugd.md.
-constexpr uint8_t kUf1BarScale[94] = {       // Digital Type 0: Non-Linear
+// Linear/2x variants map the SAME true dBFS to a DIFFERENT bar byte than
+// Non-Linear (proven on the wire: at -20 dBFS the rms byte is Non-Linear 108,
+// K-20 109, K-12 89; cap110/111/113). With one fixed table the bars mis-align
+// under every non-Non-Linear mode ("garbage", Frank 2026-07-24).
+//
+// cap105 (which claimed the bytes are scale-independent) is a NULL capture: its
+// 0x0125/0126/0127 are payload 0x0000, distinct=1 for the whole file — the Types
+// were stepped over SILENCE, so it proves nothing about the dBFS->byte curve.
+//
+// Tables below rebuilt from the RMS bar (0x0125) paired with the RMS readout
+// (0x011c), top ~-8..0 region filled from the PEAK bar (0x0126) filtered to a
+// RISING readout only (instant attack, no hold-lag); rms & peak share one per-type
+// scale (agree +/-3 in overlap). K readouts are the K-scale value; dBFS = readout
+// - 20/14/12 (K-offset wire-verified: ramps top at ~0 dBFS true). This replaces
+// the reverted 4cc9177 tables, which were built from the peak-HOLD bar and went
+// FLAT in the program range. Method validated: Non-Linear rebuilt from cap110
+// matches this kUf1BarScale within +/-2 across -55..0 (55/56 bins, 98%).
+// Sources: cap110/118/116/117/111/119/113. See scratchpad meter-audit truth doc.
+constexpr uint8_t kUf1BarScale[94] = {       // Digital Type 0: Non-Linear (cap89 deep tail; KEEP)
       9,  10,  10,  11,  11,  12,  12,  12,  12,  13,  13,  13,  14,  14,  15,  15,
      16,  16,  16,  16,  17,  17,  17,  18,  18,  18,  19,  19,  19,  20,  20,  20,
      21,  21,  22,  24,  25,  27,  28,  30,  31,  33,  34,  35,  36,  38,  39,  40,
@@ -16168,53 +16184,53 @@ constexpr uint8_t kUf1BarScale[94] = {       // Digital Type 0: Non-Linear
      80,  83,  86,  89,  92,  95,  98, 101, 104, 107, 111, 115, 119, 123, 126, 130,
     134, 138, 142, 147, 151, 156, 162, 167, 172, 178, 183, 188, 194, 199,
 };
-constexpr uint8_t kUf1BarNonLin2x[94] = {    // Digital Type 1: Non-Linear 2x
-      8,   8,   8,   8,   8,   8,   9,   9,   9,  10,  10,  10,  10,  10,  11,  11,
-     11,  12,  12,  12,  12,  12,  12,  13,  13,  14,  14,  14,  14,  15,  15,  15,
-     15,  15,  15,  15,  16,  16,  16,  16,  17,  17,  17,  18,  18,  18,  18,  18,
-     19,  19,  19,  19,  19,  20,  20,  20,  20,  21,  21,  22,  22,  23,  24,  25,
-     28,  30,  32,  34,  36,  39,  42,  44,  46,  50,  55,  61,  67,  73,  80,  86,
-     92,  97, 103, 109, 115, 118, 124, 137, 148, 159, 168, 178, 190, 199,
+constexpr uint8_t kUf1BarNonLin2x[94] = {    // Digital Type 1: Non-Linear 2x (cap118)
+      0,   4,   8,   8,   8,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  11,
+     11,  12,  12,  12,  12,  12,  12,  13,  13,  13,  13,  13,  13,  14,  14,  14,
+     14,  14,  15,  16,  16,  16,  16,  17,  17,  17,  17,  18,  18,  18,  18,  18,
+     18,  18,  19,  19,  20,  20,  20,  20,  20,  20,  21,  21,  21,  21,  22,  22,
+     24,  28,  30,  32,  35,  38,  40,  43,  46,  49,  55,  60,  66,  72,  78,  83,
+     89,  96, 101, 106, 116, 121, 126, 135, 145, 154, 167, 175, 182, 199,
 };
-constexpr uint8_t kUf1BarLinear[94] = {      // Digital Type 2: Linear
-     44,  45,  46,  47,  48,  50,  51,  52,  54,  55,  56,  58,  59,  60,  61,  63,
-     64,  66,  67,  68,  70,  71,  72,  73,  74,  76,  77,  79,  80,  82,  83,  84,
-     86,  87,  88,  89,  90,  91,  93,  94,  95,  96,  98, 100, 101, 102, 104, 105,
-    106, 107, 109, 110, 111, 112, 114, 115, 116, 117, 118, 120, 121, 122, 124, 125,
-    127, 128, 129, 130, 132, 133, 134, 135, 136, 138, 139, 140, 142, 143, 145, 147,
-    149, 152, 156, 160, 164, 169, 173, 176, 180, 183, 187, 191, 194, 199,
+constexpr uint8_t kUf1BarLinear[94] = {      // Digital Type 2: Linear (cap116)
+     28,  29,  30,  31,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  42,  43,
+     44,  45,  46,  47,  48,  49,  51,  52,  53,  54,  54,  55,  56,  57,  58,  59,
+     60,  61,  62,  62,  63,  64,  65,  66,  68,  69,  70,  71,  72,  73,  74,  75,
+     76,  77,  78,  79,  79,  80,  81,  82,  84,  85,  86,  87,  87,  88,  89,  90,
+     92,  93,  95,  96, 100, 103, 108, 112, 114, 120, 124, 128, 132, 136, 140, 144,
+    148, 152, 156, 159, 164, 166, 170, 176, 181, 182, 188, 191, 193, 199,
 };
-constexpr uint8_t kUf1BarLinear2x[94] = {    // Digital Type 3: Linear 2x
-      3,   3,   3,   3,   4,   4,   5,   5,   5,   6,   6,   7,   7,   8,   8,   8,
-      9,   9,  10,  10,  10,  11,  11,  12,  12,  12,  13,  13,  14,  14,  14,  15,
-     15,  16,  16,  16,  17,  17,  17,  18,  18,  19,  19,  19,  20,  20,  21,  21,
-     21,  22,  22,  23,  23,  23,  24,  24,  25,  25,  25,  26,  26,  26,  27,  27,
-     28,  28,  28,  29,  30,  30,  30,  33,  39,  46,  52,  58,  66,  74,  82,  90,
-     98, 106, 114, 121, 128, 134, 141, 150, 159, 166, 172, 181, 190, 199,
+constexpr uint8_t kUf1BarLinear2x[94] = {    // Digital Type 3: Linear 2x (cap117)
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,
+      2,   4,   6,   8,  11,  15,  19,  24,  32,  39,  47,  56,  64,  72,  79,  88,
+     96, 104, 113, 118, 128, 134, 140, 150, 159, 169, 176, 183, 190, 199,
 };
-constexpr uint8_t kUf1BarK20[94] = {         // Digital Type 4: K-20
-     51,  52,  54,  55,  56,  57,  58,  58,  59,  60,  61,  62,  63,  64,  65,  66,
-     68,  69,  70,  71,  72,  73,  74,  75,  76,  77,  78,  79,  80,  81,  82,  83,
-     84,  85,  86,  87,  89,  90,  91,  92,  93,  94,  95,  96,  97,  98,  99, 100,
-    101, 102, 103, 104, 105, 106, 107, 108, 109, 111, 112, 113, 114, 115, 116, 117,
-    118, 119, 120, 121, 121, 121, 122, 122, 122, 122, 123, 123, 124, 128, 132, 136,
-    140, 144, 149, 154, 159, 163, 168, 172, 176, 180, 186, 190, 194, 199,
+constexpr uint8_t kUf1BarK20[94] = {         // Digital Type 4: K-20 (cap111)
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   2,   4,   6,  14,  17,  22,  26,  32,  36,  40,  45,  49,  54,  59,  63,
+     68,  73,  76,  82,  86,  91,  96, 101, 106, 109, 114, 117, 122, 127, 132, 132,
+    142, 146, 149, 154, 158, 162, 168, 172, 178, 178, 186, 186, 191, 199,
 };
-constexpr uint8_t kUf1BarK14[94] = {         // Digital Type 5: K-14
-     33,  34,  34,  35,  36,  37,  37,  38,  39,  40,  40,  41,  42,  43,  45,  46,
-     47,  48,  48,  49,  50,  50,  51,  52,  53,  53,  54,  55,  56,  57,  58,  59,
-     60,  60,  61,  62,  63,  64,  64,  65,  66,  66,  67,  68,  69,  70,  70,  71,
-     72,  73,  74,  74,  75,  76,  77,  78,  79,  79,  80,  81,  82,  82,  83,  84,
-     85,  86,  87,  88,  89,  90,  91,  92,  94,  96, 101, 106, 112, 117, 121, 126,
-    132, 138, 143, 148, 153, 158, 162, 166, 172, 177, 182, 188, 193, 199,
+constexpr uint8_t kUf1BarK14[94] = {         // Digital Type 5: K-14 (cap119)
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   4,   8,  14,  20,  26,  32,  35,  44,
+     47,  52,  59,  64,  68,  74,  79,  84,  88,  93, 100, 101, 106, 110, 115, 119,
+    124, 132, 142, 146, 151, 158, 158, 166, 173, 177, 185, 187, 190, 199,
 };
-constexpr uint8_t kUf1BarK12[94] = {         // Digital Type 6: K-12
-     45,  45,  45,  45,  45,  46,  47,  48,  49,  51,  52,  53,  54,  54,  55,  56,
-     57,  58,  59,  60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,
-     73,  74,  75,  76,  78,  79,  80,  81,  82,  82,  83,  84,  85,  86,  87,  88,
-     90,  91,  92,  93,  94,  95,  96,  96,  97,  98,  99, 100, 101, 102, 104, 105,
-    106, 107, 108, 109, 110, 110, 111, 112, 113, 113, 114, 115, 116, 116, 117, 120,
-    126, 132, 138, 144, 149, 153, 160, 165, 170, 177, 183, 188, 193, 200,
+constexpr uint8_t kUf1BarK12[94] = {         // Digital Type 6: K-12 (cap113)
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   4,  12,  12,  20,  26,  33,
+     37,  46,  50,  57,  62,  68,  72,  77,  84,  88,  95,  99, 105, 109, 116, 124,
+    127, 133, 139, 145, 150, 155, 157, 168, 169, 176, 182, 185, 190, 199,
 };
 
 // The bar scale for a Digital Type param value (param 6, enum 0..6 in the order
@@ -16722,7 +16738,12 @@ uint8_t uf1PpmByte_(float mark)
 // byte = 3 + (dBFS + 120) * 5/3, clamped to [3, 200]. Header baseline is 3.
 uint8_t uf1RtaByte_(float dbfs)
 {
-    if (!std::isfinite(dbfs)) return 3;
+    // Empty / below-floor band: SSL emits byte 0, NOT the baseline 3.
+    // Verified byte-exact against the wire (cap90_uf1_rta_level, cap81_uf1_meter_rta):
+    // byte 0 is the dominant empty-band value and byte 2 is never emitted, so the
+    // scale bottom is 0 (empty) -> 1 -> law baseline 3+. Emitting 3 here lit a
+    // permanent 1px floor across every quiet band.
+    if (!std::isfinite(dbfs) || dbfs <= -120.f) return 0;
     double b = 3.0 + (static_cast<double>(dbfs) + 120.0) * (5.0 / 3.0);
     if (b < 3.0)   b = 3.0;
     if (b > 200.0) b = 200.0;
@@ -16736,6 +16757,10 @@ std::string uf1FormatMeterDb_(float db)
     if (db <= -120.f) return "-inf";
     char buf[16];
     std::snprintf(buf, sizeof(buf), "%.1f", db);
+    // SSL never prints "-0.0": %.1f rounds any value in (-0.05, 0) to negative zero,
+    // but the plug-in shows "0.0" for that band (cap110/cap80/cap107). Normalise so
+    // our bytes match the wire. "%.1f" only ever yields the single form "-0.0".
+    if (std::strcmp(buf, "-0.0") == 0) return "0.0";
     return std::string(buf);
 }
 
@@ -16802,6 +16827,22 @@ std::vector<uint8_t> uf1BuildLoudnessReadouts_()
 // the change-throttle.
 void uf1PaintMeter_(MediaTrack* tr, bool force)
 {
+    // AUTO-MODE instance follow (Frank 2026-07-29 "der selektierten Spur folgen"):
+    // tell the impersonator which track is selected so that, with NO V-Pot1 pin,
+    // the meter view reads THAT track's Meter instance instead of sticking to
+    // whichever instance streamed signal first. 1-based; 0 = none/master. Main
+    // thread (this paint), so GetSelectedTrack is safe here.
+    {
+        int selIdx = 0;
+        if (MediaTrack* selTr = GetSelectedTrack(nullptr, 0))
+            selIdx = int(GetMediaTrackInfo_Value(selTr, "IP_TRACKNUMBER"));
+        sslcore::setAutoTrackIndex(selIdx);
+    }
+    // Transport state → the impersonator's frozen-at-stop blanking: a LEVEL meter
+    // whose value stops changing while the transport is stopped reads as silence, so
+    // the bars fall like SSL AND switching to an already-frozen instance blanks
+    // immediately (no 1 s phantom flash). Set before the getMeter reads below.
+    { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
     auto peakToDb = [](double p) -> float {
         if (!std::isfinite(p) || p <= 0.0) return -120.f;
         return static_cast<float>(20.0 * std::log10(p));
@@ -17029,9 +17070,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         const float barHoldL = haveHold ? holdL : sBarHold.l;
         const float barHoldR = haveHold ? holdR : sBarHold.r;
 
-        // The bargraph scale depends on Digital Type (param 6) — each type maps
-        // dBFS to a different bar height (StoerPC 2026-07-24). Pick the pinned
-        // instance's table; rms/peak/hold all ride the same scale.
+        // The bargraph scale depends on Digital Type (param 6) — each type maps the
+        // SAME dBFS to a different bar byte (cap110/111/113; -20 dBFS = 108/109/89
+        // for Non-Linear/K-20/K-12). Pick the pinned instance's table; rms/peak/hold
+        // all ride the same scale. (cap105's "scale-independent" claim was a NULL
+        // capture over silence.)
         const uint8_t* barScale = kUf1BarScale;
         {
             MediaTrack* dtr = nullptr; int dfx = -1;
@@ -17218,19 +17261,92 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 vuL = dbL - kVuRef; vuR = dbR - kVuRef;
             }
         }
-        const uint8_t nL = uf1VuByte_(vuL);
-        const uint8_t nR = uf1VuByte_(vuR);
-        // Peak-hold "second needle" — same law as the Overview markers: hold the
-        // maximum, snap to current every 3 s (cap88 line 33 shows it too, 0x0127
-        // holding at (4,180) while 0x0125 has already fallen).
-        // Hold rides the same VU units as the needle above — mixing the two
-        // sources here would park the marker on a different scale entirely.
-        static MediaTrack* sNdlTr = nullptr;
+        // ---- Analogue Mode branch (param 8: VU=0 / PPM=1) -----------------
+        // VU and PPM are DIFFERENT faceplates with DIFFERENT byte laws. VU is
+        // the curved kUf1VuScale dial (rest byte 4, cap88). PPM Type-II is
+        // LINEAR in marks via uf1PpmByte_ (rest byte 0, cap94_uf1_ppm_sweep,
+        // verified vs IEC 60268-10: 4.0 dB/mark, PPM 4.0 = Ref/-18 dBFS).
+        // Until 2026-07-28 this renderer mapped BOTH the live and the hold
+        // needle through uf1VuByte_ UNCONDITIONALLY, with no branch on the mode
+        // — so in PPM mode we drew PPM signal on the VU curve and rested the
+        // needle at 4 instead of 0. The firmware had already swapped to the PPM
+        // faceplate (SSL sends 0x011a=04, see uf1EmitMeterScaleSelector_) so the
+        // two laws were unrelated on screen — Frank: "PPM stimmt gar nicht mit
+        // der Hardware überein". uf1PpmByte_ existed (16652) but had 0 callers.
+        bool ppmMode = false;
+        {
+            MediaTrack* mtr = nullptr; int mfx = -1;
+            if (uf1PinnedMeterTrackFx_(mtr, mfx))
+                ppmMode = TrackFX_GetParamNormalized(mtr, mfx, 8) >= 0.5;   // kAnalogueModeSel: 0.5+ = 04 = PPM
+        }
+        uint8_t nL, nR, hL, hR;
+        // Peak-hold "second needle" — held max, snaps to current every 3 s
+        // (cap88 line 33: 0x0127 holds while 0x0125 has fallen). Used only as the
+        // REAPER-peak fallback; the live path rides the plug-in's own f4 hold.
+        static bool        sNdlPpm = false;
+        static MediaTrack* sNdlTr  = nullptr;
         static Uf1PeakHold sNdlHold;
-        if (force || tr != sNdlTr) { sNdlTr = tr; sNdlHold.reset(vuL, vuR, now); }
-        sNdlHold.step(vuL, vuR, now);
-        const uint8_t hL = uf1VuByte_(haveVuHold ? vuHoldL : sNdlHold.l);
-        const uint8_t hR = uf1VuByte_(haveVuHold ? vuHoldR : sNdlHold.r);
+        if (ppmMode) {
+            // PPM MARKS: the plug-in's OWN readout carries them. VuPpm(0) is
+            // CLAMPED to the VU faceplate's +3 end stop (see main.cpp:16871) and
+            // does NOT carry marks, so read TextVuPpm(1) — the un-clamped value
+            // cap94's mark→byte table was built against (0x011c field0). cur =
+            // live mark, pk = the plug-in's own lagging needle. Do NOT synthesise
+            // a PPM ballistic — plug-in computes, we render (§5 of the audit).
+            // ⚠ SOURCE is the one live-probe open item (needsHwCapture): if a
+            // probe shows VuPpm(0) itself carries marks in PPM mode, swap to it.
+            float mL, mR, mhL = 0.f, mhR = 0.f; bool havePpmHold = false;
+            std::vector<float> c, k;
+            const bool havePpm =
+                sslcore::isRunning() &&
+                sslcore::getMeter(int(sslmeter::DataType::TextVuPpm), c, k) &&
+                c.size() >= 2;
+            if (havePpm) {
+                mL = std::isfinite(c[0]) ? c[0] : 0.f;
+                mR = std::isfinite(c[1]) ? c[1] : 0.f;
+                if (k.size() >= 2 && (std::isfinite(k[0]) || std::isfinite(k[1]))) {
+                    mhL = std::isfinite(k[0]) ? k[0] : 0.f;
+                    mhR = std::isfinite(k[1]) ? k[1] : 0.f;
+                    havePpmHold = true;
+                }
+            } else {
+                // Fallback (impersonator off / REAPER peaks): mark from dBFS via
+                // the screen's Ref. PPM 4.0 = Ref dBFS, 4.0 dB/mark (IEC 60268-10
+                // Type II, cap94). Ref = param 9. Mirrors the VU fallback above.
+                float refDb = -18.f;
+                MediaTrack* mtr = nullptr; int mfx = -1;
+                if (uf1PinnedMeterTrackFx_(mtr, mfx))
+                    refDb = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
+                mL = 4.f + (dbL - refDb) / 4.f;
+                mR = 4.f + (dbR - refDb) / 4.f;
+            }
+            if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
+                sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(mL, mR, now);
+            }
+            sNdlHold.step(mL, mR, now);
+            nL = uf1PpmByte_(mL); nR = uf1PpmByte_(mR);
+            hL = uf1PpmByte_(havePpmHold ? mhL : sNdlHold.l);
+            hR = uf1PpmByte_(havePpmHold ? mhR : sNdlHold.r);
+        } else {
+            // VU — unchanged: curved dial, rest byte 4, VuPpm(0) already ballistic.
+            if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
+                sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(vuL, vuR, now);
+            }
+            sNdlHold.step(vuL, vuR, now);
+            nL = uf1VuByte_(vuL); nR = uf1VuByte_(vuR);
+            hL = uf1VuByte_(haveVuHold ? vuHoldL : sNdlHold.l);
+            hR = uf1VuByte_(haveVuHold ? vuHoldR : sNdlHold.r);
+            // SILENCE = hard rest at byte 4, mirroring SSL. cap107 (VU mode) shows
+            // SSL peg BOTH needle and hold at 0x04 with readout -inf at silence — it
+            // does NOT sit on a meter floor. But VuPpm(0) floors ABOVE -20 VU on a
+            // digitally silent instance (byte ~13-15, ~5deg up the dial), so
+            // uf1VuByte_ never reaches 4 from the float and the needle rests high
+            // (Frank: "Nadel steht im Stillstand zu hoch"). Gate on the independent
+            // peak dBFS, which collapses to the -120 floor at true silence unlike
+            // VuPpm; -100 is below any audible signal (16-bit floor -96), so no
+            // needle motion is swallowed. kUf1VuScale stays untouched (byte-exact).
+            if (peak <= -100.f) { nL = nR = 4; hL = hR = 4; }
+        }
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
         auto putNdl = [&](uint16_t addr, const std::array<uint8_t, 2>& v) {
@@ -17377,46 +17493,61 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // Strip the 13-float trailer; guard against a stray counter leaking in.
             const size_t histLen = hist.size() > 13 ? hist.size() - 13 : hist.size();
             std::array<uint8_t, 251> sf{};
-            sf[0] = 0x01;                                     // sub-frame 1
-            // The "NOW" is the newest written sample. The array's high end past it is an
-            // empty look-ahead region — mapping it to the right edge left ~20% of the plot
-            // blank with the now-point drawn INSIDE the image (Frank 2026-07-24). Find the
-            // last real sample (scan from the top) and anchor IT to the RIGHT edge; the
-            // 30 s window extends left from there, floor (pre-signal) on the LEFT.
-            // sf byte index 1 = LEFT column, 250 = RIGHT (UF1 photo).
+            sf[0] = 0x01;                                     // sub-frame 1 (LEFT 250 cols)
+            // ONE continuous scroll across 313 distinct time columns (loudness-truth.md,
+            // cap120/121/122 + cap95 step-propagation): sf1 = left 250 cols (sf1[1] oldest
+            // .. sf1[250]), sf2 LIVE = right 64 cols (sf2[1] == sf1[250] .. sf2[64] = NEWEST
+            // "now" at the far-right screen edge). The plug-in anchors the newest sample to
+            // sf2[64], NOT sf1[250]; the old anchor-to-sf1[250] + frozen-sf2 snapshot is why
+            // the live line stopped at 80% and the right 20% stayed stale. Byte index 1 =
+            // LEFT column. One target-relative law for every column (sf1 & sf2 are one
+            // buffer): byte = clamp((LUFS - target - rangeBottom)*180/span, 0, 180).
             size_t nowIdx = 0;
             for (size_t q = histLen; q-- > 0; )
                 if (hist[q] > -99.f && hist[q] < 60.f) { nowIdx = q; break; }
-            const double step = double(histLen) / 250.0;
-            for (int c = 0; c < 250; ++c) {
-                const long ai = long(nowIdx) - std::llround(double(249 - c) * step);
-                uint8_t b = 0;                                // off-window / floor -> bottom
+            // 313 distinct columns (sf1[1..250] then sf2[2..64]; sf2[1]==sf1[250]); phys col
+            // 312 = newest (age 0), phys col 0 = oldest (age 312). Spread the buffer across
+            // them with one uniform step so the sf1/sf2 boundary is seamless.
+            const double step = double(histLen) / 313.0;
+            auto colByte = [&](int ageCols) -> uint8_t {
+                const long ai = long(nowIdx) - std::llround(double(ageCols) * step);
                 if (ai >= 0) {
                     const float lufs = hist[size_t(ai)];
                     if (std::isfinite(lufs) && lufs > -99.f && lufs < 60.f) {
                         const double y = (double(lufs) - target - rb) * 180.0 / span;
-                        b = uint8_t(std::clamp(int(std::llround(y)), 0, 180));
+                        return uint8_t(std::clamp(int(std::llround(y)), 0, 180));
                     }
                 }
-                sf[size_t(1 + c)] = b;
-            }
+                return 0;                                     // off-window / floor -> bottom
+            };
+            // sf1 byte c (1..250) -> phys col c-1 -> age 313-c  (sf1[1]=age312 oldest,
+            // sf1[250]=age63 == sf2[1]).
+            for (int c = 0; c < 250; ++c)
+                sf[size_t(1 + c)] = colByte(312 - c);
             // Per-range chrome (kLoudR{0,1,2}{Sf0,Sf2,Sf3}, uf1_loudness_chrome.h). sf0 =
-            // axis+grid (sets up the plot), sf1 = the live short-term history line (rendered
-            // above), sf2 = the right-hand "now"/momentary region + target band, sf3 = cursor.
-            // ⚠ sf2/sf3 are the CAPTURED cap120/121/122 SNAPSHOTS — the momentary region is
-            // FROZEN (not live). HW-verified 2026-07-24: the sf1 history scrolls correctly;
-            // making sf2's momentary region live is the remaining follow-up (see the handoff).
+            // axis+grid (sets up the plot), sf1 = live short-term line (above), sf2 = the
+            // right-hand now-region + target band, sf3 = cursor. sf2 idx 1..64 is the LIVE
+            // now-region, rebuilt below from the SAME history; idx 0 selector + the 0x3c01
+            // marker + idx 65..250 target-band chrome are KEPT from the captured snapshot.
             const uint8_t* csf0 = (ri == 0) ? kLoudR0Sf0 : (ri == 1) ? kLoudR1Sf0 : kLoudR2Sf0;
             const uint8_t* csf2 = (ri == 0) ? kLoudR0Sf2 : (ri == 1) ? kLoudR1Sf2 : kLoudR2Sf2;
             const uint8_t* csf3 = (ri == 0) ? kLoudR0Sf3 : (ri == 1) ? kLoudR1Sf3 : kLoudR2Sf3;
+            std::array<uint8_t, 251> sf2{};
+            for (int i = 0; i < 251; ++i) sf2[size_t(i)] = csf2[i];  // selector + tail chrome
+            // sf2 byte c (1..64) -> phys col 248+c -> age 64-c  (sf2[1]=age63==sf1[250],
+            // sf2[64]=age0 NEWEST). Overwrite ONLY the live now-region.
+            for (int c = 1; c <= 64; ++c)
+                sf2[size_t(c)] = colByte(64 - c);
             static std::array<uint8_t, 251> sLoudSf{};
+            static std::array<uint8_t, 251> sLoudSf2{};
             static int sLoudRi = -1;
-            if (force || sf != sLoudSf || ri != sLoudRi) {
-                sLoudSf = sf; sLoudRi = ri;
+            if (force || sf != sLoudSf || sf2 != sLoudSf2 || ri != sLoudRi) {
+                sLoudSf = sf; sLoudSf2 = sf2; sLoudRi = ri;
                 g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf0, 251)));
                 g_uf1_dev->send(uf1::buildScreen(0x0122,
                     std::span<const uint8_t>(sf.data(), sf.size())));
-                g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf2, 251)));
+                g_uf1_dev->send(uf1::buildScreen(0x0122,
+                    std::span<const uint8_t>(sf2.data(), sf2.size())));
                 g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf3, 208)));
             }
         }
@@ -17753,6 +17884,15 @@ void uf1PaintChannel_()
     sMeterPage = meterPage;
     const bool changed = (tr != sTr) || viewChanged || screenChanged;
     sTr = tr;
+    // The meter INSTANCE the view reads can change with NO UF1 action: the
+    // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
+    // changes, the V-Pot1 name + V-Pot2/3/4 values must re-emit, or the name stays
+    // stale on the previous instance ("bleibt auf A"). Labels only — this must NOT
+    // re-fire the entry burst (a mid-stream layout reset SSL never sends).
+    static int sMeterInstIdx = -1;
+    const int  meterInstIdx  = meterView ? sslcore::currentMeterTrackIndex() : sMeterInstIdx;
+    const bool instChanged   = meterView && (meterInstIdx != sMeterInstIdx);
+    sMeterInstIdx = meterInstIdx;
 
     // Replicate SSL 360's exact per-transition frame (cap75 payload diff of the
     // 5 MODE presses): entering Meter view it writes 0x011f=00 once, entering
@@ -17849,7 +17989,12 @@ void uf1PaintChannel_()
     // LIVE formatted values (the entry burst above only sets page-1 statics, and on
     // some screens those name a different param than the V-Pot drives). On a page
     // change the burst does not re-fire, so this is the sole updater for pages 2/3.
-    if (meterView && (viewChanged || screenChanged || pageChanged)) {
+    // Auto-follow switched the meter instance (selection change, no UF1 action):
+    // refresh the V-Pot1 NAME label. Labels only — never the entry burst. The
+    // view/screen entry block above already emits the label on those changes.
+    if (meterView && instChanged && !viewChanged && !screenChanged)
+        uf1EmitMeterInstanceLabel_();
+    if (meterView && (viewChanged || screenChanged || pageChanged || instChanged)) {
         // Read the values off the instance V-Pot1 selected (the pin), not the
         // focused track — so the displayed values follow the selection.
         MediaTrack* mtr = nullptr; int mfx = -1;

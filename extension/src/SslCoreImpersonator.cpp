@@ -86,6 +86,17 @@ struct Slot {
     std::vector<uint8_t> overload;      // f5 OverloadValues     — flashes, per channel
     std::vector<uint8_t> overloadHold;  // f6 OverloadInfHoldValues — latched, per channel
     bool have = false;
+    long long lastMs = 0;   // wall-clock of the last COMPLETED store. A LEVEL slot
+                            // not refreshed within kSlotStaleMs is stale — the
+                            // plug-in stopped sending it (transport stop) and its
+                            // value is frozen; the meter then reads silence so the
+                            // bars/needle fall like SSL, not a frozen phantom.
+    long long lastChangedMs = 0;  // wall-clock the VALUE last CHANGED. A track that
+                            // played then STOPPED keeps streaming a frozen scale-floor
+                            // (~-27 dBFS, moves with Digital Type). If this is stale
+                            // while the transport is stopped, read as silence so the
+                            // bars fall like SSL — and switching to an already-frozen
+                            // instance blanks at once (no 1 s phantom flash).
     uint64_t seq = 0;   // bumped on every completed store — lets callers paint
                         // DATA-driven (once per plugin frame) instead of
                         // timer-driven, the way SSL does (cap89: 24.5 Hz, never
@@ -141,6 +152,16 @@ uint16_t                     g_srcPort = 0;
 // the g_meterSel-th Meter instance in port order, overriding the auto-pick.
 // Guarded by g_meterMx.
 int                          g_meterSel = -1;
+// AUTO-MODE follow (2026-07-29, Frank "der selektierten Spur folgen"): 1-based
+// HostTrackIndex of REAPER's SELECTED track, set each paint by the display. When
+// there is NO V-Pot1 pin (g_meterSel < 0), the read is steered to the Meter
+// instance on THIS track; if it has no live Meter, the sticky first-live pick
+// stands. 0 = none. Atomic — read under g_meterMx paths, written lock-free.
+std::atomic<int>             g_autoTrackIdx{0};
+// Transport is stopped/paused (set by the render each paint). Gates the frozen-at-
+// stop blanking of the LEVEL meters so playback + live input-monitoring are never
+// touched — only a value frozen WHILE stopped reads as silence.
+std::atomic<bool>            g_transportStopped{false};
 
 // Instance identity mapping for the V-Pot1 label + cycle order. Each plug-in
 // announces, on its own control connection at connect, its HostTrackName AND
@@ -400,7 +421,9 @@ socket_t makeUdp(uint16_t port, bool reuse) {
     if (s == kInvalid) return kInvalid;
     if (reuse) { int y = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char*>(&y), sizeof(y)); }
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (port && ::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { SC_CLOSE(s); return kInvalid; }
+    // Always bind — port 0 lets the OS assign an ephemeral port (used for the
+    // per-connection dedicated data sockets; getsockname reads back the number).
+    if (::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { SC_CLOSE(s); return kInvalid; }
     setNonBlocking(s);
     return s;
 }
@@ -450,6 +473,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     // plug-in sends type-4/type-5 (its identity), THEN Core sends the opening.
     // We defer our opening until a client's first bytes arrive (see recv loop).
     std::set<socket_t>    greeted;
+    // Dedicated UDP data socket per plug-in connection (like the real SSL Core:
+    // 2026-07-27 capture shows 12 plug-ins → 12 DISTINCT assigned ports). Maps the
+    // per-connection UDP dataFd → its TCP connection fd. A datagram's DEST socket
+    // then identifies the instance authoritatively — no stream-order timing guess.
+    std::map<socket_t, socket_t> dataFdConn;
     const std::vector<uint8_t> hb  = heartbeat();
     const std::vector<uint8_t> ann = announcement(actualTcp);
     double lastAnn = 0, lastHb = 0, lastSub = 0;
@@ -530,13 +558,26 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_lastDataMs.store(nowMs());
                     std::lock_guard<std::mutex> lk(g_meterMx);
                     const uint16_t sp = ntohs(from.sin_port);
-                    if (g_inst.find(sp) == g_inst.end() && !g_pending.empty()) {
-                        // NEW instance. The datagram carries no track id, so tie
-                        // this port to the {name,index} the just-connected plug-in
-                        // announced on its control socket (queued in connect order).
+                    // Correlate the stream to its track. The datagram carries no
+                    // track id, but each plug-in was given a DEDICATED UDP port at
+                    // greet, so the receiving socket `d` names the instance
+                    // AUTHORITATIVELY (this is how the real Core does it). Timing on
+                    // the shared ports is only a last-resort fallback.
+                    if (auto dc = dataFdConn.find(d); dc != dataFdConn.end()) {
+                        auto itN = g_clientName.find(dc->second);
+                        auto itI = g_clientIndex.find(dc->second);
+                        if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
+                            if (g_portName.find(sp) == g_portName.end())
+                                slog("[corr] UDP src=%u on dedicated port -> track %d (%s)",
+                                     unsigned(sp), itI->second, itN->second.c_str());
+                            g_portName[sp]  = itN->second;   // authoritative; overrides any guess
+                            g_portIndex[sp] = itI->second;
+                        }
+                    } else if (g_portName.find(sp) == g_portName.end() && !g_pending.empty()) {
+                        // Shared/fallback port, not yet named — old timing correlation.
                         g_portName[sp]  = g_pending.front().name;
                         g_portIndex[sp] = g_pending.front().index;
-                        slog("[corr] UDP src=%u -> track %d (%s)", unsigned(sp),
+                        slog("[corr] UDP src=%u -> track %d (%s) [timing fallback]", unsigned(sp),
                              g_pending.front().index, g_pending.front().name.c_str());
                         g_pending.pop_front();
                     }
@@ -599,11 +640,13 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 s.asmGot_ = 0;
                             }
                         } else {
+                            if (s.current != u.current) s.lastChangedMs = nowMs();  // value moved
                             s.current = std::move(u.current); s.peak = std::move(u.peak);
                             s.have = true;
                             ++s.seq;
                             completed = true;
                         }
+                        if (completed) s.lastMs = nowMs();   // freshness for stale-expiry
                         if (!u.overload.empty())     s.overload     = std::move(u.overload);
                         if (!u.overloadHold.empty()) s.overloadHold = std::move(u.overloadHold);
                         // Lissajous geometry dump — EVERY frame, deliberately NOT
@@ -754,6 +797,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_namedClients.erase(c);
                     g_clientName.erase(c);
                     g_clientIndex.erase(c);
+                    // Tear down this connection's dedicated UDP data socket.
+                    for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
+                        if (it->second != c) continue;
+                        const socket_t ufd = it->first;
+                        for (size_t k = 0; k < dataFds.size(); ++k)
+                            if (dataFds[k] == ufd) { dataFds.erase(dataFds.begin() + long(k));
+                                                     dataPorts.erase(dataPorts.begin() + long(k)); break; }
+                        SC_CLOSE(ufd);
+                        dataFdConn.erase(it);
+                        break;
+                    }
                     clients.erase(clients.begin() + long(i));
                     continue;
                 }
@@ -762,15 +816,30 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 // Core) — this is what keeps the plug-in from selecting its track.
                 if (n > 0 && greeted.find(c) == greeted.end()) {
                     const uint32_t connId = 0x20000000u + g_connIdCounter.fetch_add(1);
-                    auto seq = openingSequence(dataPort, connId);
+                    // Bind a DEDICATED UDP data port for THIS plug-in and advertise
+                    // exactly it, like the real Core (12 plug-ins → 12 distinct ports,
+                    // 2026-07-27 capture). The plug-in streams to it, so the receiving
+                    // socket names the instance — no timing guess. Fall back to the
+                    // shared dataPort only if the ephemeral bind fails.
+                    uint16_t udpPort = dataPort;
+                    socket_t udp = makeUdp(0, false);
+                    if (udp != kInvalid) {
+                        sockaddr_in ua{}; socklen_t ul = sizeof(ua);
+                        getsockname(udp, reinterpret_cast<sockaddr*>(&ua), &ul);
+                        udpPort = ntohs(ua.sin_port);
+                        dataFds.push_back(udp);
+                        dataPorts.push_back(udpPort);
+                        dataFdConn[udp] = c;
+                    }
+                    auto seq = openingSequence(udpPort, connId);
                     ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
                     auto sub = subscribeInitial();
                     ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
                     greeted.insert(c);
                     g_connected.store(true);
                     g_lastNewConnMs.store(nowMs());
-                    slog("[%.1f] greeted fd=%d connId=0x%08x (opening %zu B + subscribe %zu B), data port %u",
-                         t, int(c), connId, seq.size(), sub.size(), unsigned(dataPort));
+                    slog("[%.1f] greeted fd=%d connId=0x%08x (opening %zu B + subscribe %zu B), dedicated UDP port %u",
+                         t, int(c), connId, seq.size(), sub.size(), unsigned(udpPort));
                 }
                 // The plug-in announces its HostTrackName + HostTrackIndex over
                 // this control connection at connect. We used to bin these unread;
@@ -832,8 +901,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
                                     g_pending.push_back({ itN->second, itI->second });
                                     g_namedClients.insert(c);
-                                    g_clientName.erase(itN);
-                                    g_clientIndex.erase(itI);
+                                    // KEEP g_clientName/g_clientIndex keyed by this
+                                    // connection fd — the dedicated-port correlation
+                                    // reads them by fd; they are no longer a
+                                    // consume-once queue. Cleared on disconnect.
                                 }
                             }
 
@@ -969,8 +1040,56 @@ void cycleMeterSelection(int delta) {
     g_meterSel = (idx == 0) ? -1 : (idx - 1);
 }
 
+// AUTO-MODE source steering (g_autoTrackIdx). Caller MUST hold g_meterMx. When
+// not pinned, point g_srcPort at the SELECTED track's live Meter instance so the
+// whole meter view — data, V-Pot1 label, track resolution — follows the selection
+// instead of sticking to whichever instance streamed signal first. If the selected
+// track has no live Meter, g_srcPort is left untouched (the sticky first-live
+// fallback stands), so an un-metered selection never blanks the view.
+static void steerAutoPort_() {
+    if (g_meterSel >= 0) return;                     // manual V-Pot1 pin wins
+    const int want = g_autoTrackIdx.load();
+    if (want <= 0) return;
+    const long long cut = nowMs() - 2000;
+    for (const auto& kv : g_inst) {
+        if (kv.second.kind != Kind::Meter || kv.second.lastMs < cut) continue;
+        auto pi = g_portIndex.find(kv.first);
+        if (pi != g_portIndex.end() && pi->second == want) { g_srcPort = kv.first; return; }
+    }
+}
+
+void setAutoTrackIndex(int trackIndex1) { g_autoTrackIdx.store(trackIndex1); }
+void setTransportStopped(bool stopped)  { g_transportStopped.store(stopped); }
+
+// Stale-slot expiry for the LEVEL meters (bars + needle). On transport STOP the
+// plug-in stops sending BarPeak/BarRms/VuPpm and their last value freezes; the
+// instance still "lives" via the goniometer idle cycle, so getMeter would keep
+// handing out the frozen level ("phantom" bars/needle, Frank 2026-07-29). SSL
+// falls to silence instead. A level slot not refreshed within kSlotStaleMs reads
+// as absent so the view drops to the floor. Non-level types (readouts, loudness,
+// RTA, goniometer) keep their own hold/idle behaviour.
+static constexpr long long kSlotStaleMs = 400;
+static constexpr long long kFrozenMs    = 300;   // value unchanged this long while
+                                                 // stopped = a frozen scale floor
+static bool isLevelMeter_(int dt) {
+    return dt == int(sslmeter::DataType::VuPpm)
+        || dt == int(sslmeter::DataType::BarPeak)
+        || dt == int(sslmeter::DataType::BarRms);
+}
+static bool slotUsable_(const Slot& s, int dataType) {
+    if (!s.have) return false;
+    if (isLevelMeter_(dataType)) {
+        const long long now = nowMs();
+        if (s.lastMs < now - kSlotStaleMs) return false;          // plug-in stopped sending
+        if (g_transportStopped.load() && s.lastChangedMs < now - kFrozenMs)
+            return false;                                         // frozen at stop → silence
+    }
+    return true;
+}
+
 std::string currentMeterName() {
     std::lock_guard<std::mutex> lk(g_meterMx);
+    steerAutoPort_();   // auto-mode: label follows the selected track
     uint16_t port = 0;
     if (g_meterSel >= 0) {
         const auto ports = aliveMeterPorts_();
@@ -995,6 +1114,7 @@ std::string currentMeterName() {
 // whatever track happens to be focused. 0 = unknown/none. Thread-safe.
 int currentMeterTrackIndex() {
     std::lock_guard<std::mutex> lk(g_meterMx);
+    steerAutoPort_();   // auto-mode: resolve to the selected track's instance
     uint16_t port = 0;
     if (g_meterSel >= 0) {
         const auto ports = aliveMeterPorts_();
@@ -1012,6 +1132,7 @@ int currentMeterTrackIndex() {
 
 bool meterProAvailable() {
     std::lock_guard<std::mutex> lk(g_meterMx);
+    steerAutoPort_();   // auto-mode: follow the selected track
     // Prefer the instance the meter view is actually reading (pin, else the sticky
     // source, else the first alive Meter) — same resolution as currentMeterTrackIndex.
     uint16_t port = 0;
@@ -1040,9 +1161,10 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     // leak another instance's data into the pinned view.
     if (Instance* pin = pinnedMeterInstance_()) {
         const Slot& s = pin->meter[dataType];
-        if (s.have) { current = s.current; peak = s.peak; if (seq) *seq = s.seq; return true; }
+        if (slotUsable_(s, dataType)) { current = s.current; peak = s.peak; if (seq) *seq = s.seq; return true; }
         return false;
     }
+    steerAutoPort_();   // auto-mode: hold the SELECTED track's instance if it's live
     // Prefer a positively-identified Meter plug-in: a channel strip on the same
     // track publishes Output(2)/OutputRms(3) into the very indices the UF1 meter
     // view reads as BarPeak(2)/BarRms(3), so taking "whatever arrived last"
@@ -1071,7 +1193,7 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
             g_srcPort = 0;                      // stopped streaming — re-choose
         } else if (it->second.kind == Kind::Meter) {
             const Slot& s = it->second.meter[dataType];
-            if (s.have) {
+            if (slotUsable_(s, dataType)) {
                 current = s.current; peak = s.peak;
                 if (seq) *seq = s.seq;
                 return true;
@@ -1088,7 +1210,7 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
             }
             if (pass == 0 && in.lastLiveMs < liveCutoff) continue;
             const Slot& s = in.meter[dataType];
-            if (s.have) {
+            if (slotUsable_(s, dataType)) {
                 g_srcPort = kv.first;           // hold this one from now on
                 current = s.current; peak = s.peak;
                 if (seq) *seq = s.seq;
@@ -1099,7 +1221,7 @@ bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& pea
     // Nothing classified yet (single plug-in, first datagrams) — old behaviour.
     if (fallback) {
         const Slot& s = fallback->meter[dataType];
-        if (s.have) {
+        if (slotUsable_(s, dataType)) {
             current = s.current; peak = s.peak;
             if (seq) *seq = s.seq;
             return true;
@@ -1117,6 +1239,7 @@ bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& 
         if (s.have) { ovl = s.overload; ovlHold = s.overloadHold; return true; }
         return false;
     }
+    steerAutoPort_();   // auto-mode: follow the selected track (mirror getMeter)
     // Same STICKY instance as getMeter (see there) — the overload LEDs must
     // come from the plug-in whose meters are on screen, not from whichever one
     // happens to be first in port order this millisecond.

@@ -1,10 +1,13 @@
 #pragma once
 // UF1 Loudness history CHROME sub-frames (0x0122 sf0 axis+grid / sf2 target-band
-// + momentary snapshot / sf3 cursor), captured per Scale Range from cap120/121/122
+// + now-region / sf3 cursor), captured per Scale Range from cap120/121/122
 // (2026-07-24). Static replay — the UF1 needs the full sub-frame set to draw the
 // plot; sf1 (the live Short-Term line) is rendered live in main.cpp. Select the
 // range index by param 47 (0: -18..+9, 1: -36..+18, 2: -54..+27). sf0 timecodes
-// are frozen and sf2's left-64 momentary curve is a snapshot — live sf2 TODO.
+// are frozen. sf2 idx 1..64 (the live now-region) is NO LONGER a snapshot — it is
+// rebuilt live in main.cpp from the same LoudScrollableHistory; only idx 0 (0x02
+// selector), the 0x3c01 marker at idx 65..66, and idx 67..250 (target band) are
+// consumed here as per-range chrome (loudness-truth.md, 2026-07-28).
 #include <cstdint>
 
 static const uint8_t kLoudR0Sf0[251] = {

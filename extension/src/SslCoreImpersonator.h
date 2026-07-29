@@ -74,6 +74,8 @@ bool getOverload(int dataType, std::vector<uint8_t>& ovl, std::vector<uint8_t>& 
 int  meterInstanceCount();            // Meter instances currently streaming
 int  meterSelection();                // -1 = auto, else 0-based pinned ordinal
 void cycleMeterSelection(int delta);  // advance the pin over [auto, 0..N-1], wrapping
+void setAutoTrackIndex(int trackIndex1); // 1-based selected-track index; auto-mode follows it
+void setTransportStopped(bool stopped);  // gates the frozen-at-stop level-meter blanking
 // Track name of the instance currently being READ (the pin, or the auto-picked
 // one). Empty if not yet correlated. For the UF1 V-Pot1 label.
 std::string currentMeterName();
