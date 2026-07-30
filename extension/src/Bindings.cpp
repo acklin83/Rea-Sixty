@@ -763,22 +763,12 @@ void seedFactoryDefaults_(Config& c)
     }
 
     // ---- UF1 buttons (Phase 1) -----------------------------------------
-    // Layer-1 factory defaults reproduce the shipped hardcoded behaviour.
-    // Primary transport via uf1_transport (param = Uf1TransportOp:
-    // Play=0, Stop=1, Record=2, Rewind=3, Forward=4 — see main.cpp).
-    L1[ButtonId::Uf1Play] = mkBuiltin("uf1_transport", Behavior::Momentary, "PLAY",
-                                      255, 255, 255, /*op Play*/ 0);
-    L1[ButtonId::Uf1Stop] = mkBuiltin("uf1_transport", Behavior::Momentary, "STOP",
-                                      255, 255, 255, /*op Stop*/ 1);
-    L1[ButtonId::Uf1Rec]  = mkBuiltin("uf1_transport", Behavior::Momentary, "REC",
-                                      255, 255, 255, /*op Record*/ 2);
-    L1[ButtonId::Uf1Rwd]  = mkBuiltin("uf1_transport", Behavior::Momentary, "RWD",
-                                      255, 255, 255, /*op Rewind*/ 3);
-    L1[ButtonId::Uf1Ffw]  = mkBuiltin("uf1_transport", Behavior::Momentary, "FFW",
-                                      255, 255, 255, /*op Forward*/ 4);
-    // Cycle / Click — REAPER native actions (toggle repeat 1068 / metronome
-    // 40364), matching the shipped UF1 mapping. ActionType::Reaper funnels
-    // through the main-thread queue.
+    // Primary transport + Cycle/Click default to STOCK REAPER actions and
+    // stay user-rebindable (Frank 2026-07-30 "reaper actions als default").
+    // No bespoke uf1_* builtins — REAPER already owns these
+    // ([[feedback-dont-reinvent-reaper-builtins]]). Solo/Cut/Sel are the
+    // exception: NOT seeded, fired natively on the focused track from
+    // onUf1Event's direct handler (locked, not rebindable).
     {
         auto mkReaper = [](const char* id, const char* label) {
             Binding bd; bd.behavior = Behavior::Momentary; bd.label = label;
@@ -786,13 +776,20 @@ void seedFactoryDefaults_(Config& c)
             s.type = ActionType::Reaper; s.action = id;
             return bd;
         };
+        // Transport: Play 1007 / Stop 1016 / Record 1013; RWD = Go to start
+        // of project 40042 / FFW = Go to end of project 40043.
+        L1[ButtonId::Uf1Play] = mkReaper("1007",  "PLAY");
+        L1[ButtonId::Uf1Stop] = mkReaper("1016",  "STOP");
+        L1[ButtonId::Uf1Rec]  = mkReaper("1013",  "REC");
+        L1[ButtonId::Uf1Rwd]  = mkReaper("40042", "RWD");
+        L1[ButtonId::Uf1Ffw]  = mkReaper("40043", "FFW");
         L1[ButtonId::Uf1Cycle] = mkReaper("1068",  "CYCLE");
         L1[ButtonId::Uf1Click] = mkReaper("40364", "CLICK");
     }
-    // Channel strip — focused-track Solo / Cut / Sel.
-    L1[ButtonId::Uf1Solo] = mkBuiltin("uf1_solo_focused",   Behavior::Momentary, "SOLO");
-    L1[ButtonId::Uf1Cut]  = mkBuiltin("uf1_mute_focused",   Behavior::Momentary, "CUT");
-    L1[ButtonId::Uf1Sel]  = mkBuiltin("uf1_select_focused", Behavior::Momentary, "SEL");
+    // 360 key defaults to the UF1 time-display format step (rea-sixty
+    // built-in — REAPER has no equivalent). Rebindable like any other.
+    L1[ButtonId::Uf1Btn360] = mkBuiltin("uf1_time_display_step",
+                                        Behavior::Momentary, "360\xC2\xB0");
     // All other UF1 buttons (NAV block/cross, arrows, display soft-keys,
     // secondary transport, Flip/Master, V-Pot pushes) ship UNBOUND — the
     // user assigns them in Settings → Bindings → UF1, matching how UF8
@@ -1216,6 +1213,44 @@ void serializeBankPresets_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// True when a UF1 soft-key bank slot carries nothing (all modifier
+// short/long slots Noop + no label) — such slots are skipped on save.
+static bool uf1BankSlotEmpty_(const Binding& bd)
+{
+    for (int m = 0; m < kModifierCount; ++m) {
+        if (bd.shortPress[m].type != ActionType::Noop
+            || !bd.shortPress[m].action.empty()) return false;
+        if (bd.longPress[m].type != ActionType::Noop
+            || !bd.longPress[m].action.empty())  return false;
+    }
+    return bd.label.empty();
+}
+
+// UF1 soft-key banks — flat list of {bank, slot, body}; only non-empty
+// slots are written, so a virgin config stays clean.
+void serializeUf1SoftBanks_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+        for (int s = 0; s < kUf1SoftBankSlots; ++s)
+            if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) { any = true; break; }
+    if (!any) return;
+    os << ",\n  \"uf1_soft_banks\": [";
+    bool first = true;
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+            const Binding& bd = c.uf1SoftBanks[b][s];
+            if (uf1BankSlotEmpty_(bd)) continue;
+            if (!first) os << ",";
+            first = false;
+            os << "\n    {\"bank\": " << b << ", \"slot\": " << s
+               << ", \"body\": {";
+            serializeBindingBody_(bd, os);
+            os << "}}";
+        }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -1233,6 +1268,7 @@ std::string serialize(const Config& c)
     serializeSubBankLeds_(c, os);
     serializeSubBankDynamic_(c, os);
     serializeBankPresets_(c, os);
+    serializeUf1SoftBanks_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -1547,6 +1583,29 @@ void parseBankPresets_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseUf1SoftBanks_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf1_soft_banks");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int bank = -1, slot = -1;
+        if (auto* v = eo->get_item_by_name("bank"))
+            if (auto* s = v->get_string_value(true)) bank = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("slot"))
+            if (auto* s = v->get_string_value(true)) slot = std::atoi(s);
+        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (slot < 0 || slot >= kUf1SoftBankSlots) continue;
+        auto* bodyObj = eo->get_item_by_name("body");
+        if (!bodyObj || !bodyObj->is_object()) continue;
+        Binding& bd = out.uf1SoftBanks[bank][slot];
+        bd = Binding{};
+        parseBindingBody_(bodyObj, bd);
+    }
+}
+
 bool parseLayer_(wdl_json_element* lobj, Layer& out)
 {
     if (!lobj || !lobj->is_object()) return false;
@@ -1802,6 +1861,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSubBankLeds_(root, out);
     parseSubBankDynamic_(root, out);
     parseBankPresets_(root, out);
+    parseUf1SoftBanks_(root, out);
     return true;
 }
 
@@ -2111,6 +2171,48 @@ void upgradeRetireQuickSelect_(Config& c)
     }
 }
 
+// Rewrite bindings that reference the RETIRED UF1 builtins (removed
+// 2026-07-30 — REAPER already owns those functions). A stale reference
+// would dispatch to a missing builtin and silently no-op, which is exactly
+// the "transport geht nicht" bug on configs seeded by the earlier build.
+//   uf1_transport (param = Uf1TransportOp Play0/Stop1/Rec2/Rwd3/Ffw4)
+//     → the stock REAPER action it now defaults to (label preserved).
+//   uf1_solo_focused / uf1_mute_focused / uf1_select_focused
+//     → cleared; Solo/Cut/Sel now fire natively from onUf1Event's direct
+//       handler, so the binding is dead weight.
+// Idempotent (once rewritten to Reaper / cleared, nothing matches) — runs
+// on every load via the always-on sanitize pass.
+void upgradeRetireUf1Builtins_(Config& c)
+{
+    auto migrateSlot = [](ActionSlot& s) {
+        if (s.type != ActionType::Builtin) return;
+        const std::string& a = s.action;
+        if (a == "uf1_transport") {
+            static const char* kAct[5] =
+                { "1007", "1016", "1013", "40042", "40043" };
+            const int p = s.param;
+            s.type   = ActionType::Reaper;
+            s.action = (p >= 0 && p <= 4) ? kAct[p] : "1007";
+            s.param  = 0;
+            return;
+        }
+        if (a == "uf1_solo_focused" || a == "uf1_mute_focused"
+         || a == "uf1_select_focused") {
+            s = ActionSlot{};
+            return;
+        }
+    };
+    for (int li = 0; li < 3; ++li) {
+        for (auto& kv : c.layers[li].bindings) {
+            Binding& bd = kv.second;
+            for (int m = 0; m < kModifierCount; ++m) {
+                migrateSlot(bd.shortPress[m]);
+                migrateSlot(bd.longPress[m]);
+            }
+        }
+    }
+}
+
 // Sanitize the Sub-Bank-selector + Quick-button bindings against
 // data corruption from previous migrations. Two distinct cases:
 //
@@ -2139,18 +2241,16 @@ void upgradeRetireQuickSelect_(Config& c)
 //    only reset those when empty so user customizations to other
 //    builtins / REAPER actions / cross-layer jumps survive.
 //
-// v14→v15 (2026-06-10): UF1 buttons moved from a hardcoded dispatch in
-// main.cpp into the shared Bindings system. Existing configs predate the
-// UF1 ButtonIds entirely, so without this backfill the UF1's transport +
-// Solo/Cut/Sel would go DEAD on upgrade (old hardcoded path removed, no
-// binding present). Fill the Layer-1 factory defaults if missing — only
-// missing slots, so a user who already customised a UF1 button keeps it.
-// All other UF1 buttons stay unbound (their factory state).
+// v14→v15 (2026-06-10): UF1 buttons moved into the shared Bindings system.
+// Transport + Cycle/Click default to stock REAPER actions and are backfilled
+// here if an old config lacks them (missing slots only, so a user's own
+// customisation survives). Solo/Cut/Sel are NOT backfilled — they fire
+// natively on the focused track from onUf1Event's direct handler (Frank
+// 2026-07-30, don't reinvent REAPER's own functions), so they can't go dead.
 void upgradeBackfillUf1Buttons_(Config& c)
 {
     Layer& L1 = c.layers[0];
-    auto fillBuiltin = [&](ButtonId id, const char* action,
-                           const char* label, int param) {
+    auto fillBuiltin = [&](ButtonId id, const char* action, const char* label) {
         if (L1.bindings.find(id) != L1.bindings.end()) return;
         Binding bd;
         bd.behavior = Behavior::Momentary;
@@ -2158,7 +2258,6 @@ void upgradeBackfillUf1Buttons_(Config& c)
         auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
         sp.type   = ActionType::Builtin;
         sp.action = action;
-        sp.param  = param;
         L1.bindings[id] = bd;
     };
     auto fillReaper = [&](ButtonId id, const char* actionId, const char* label) {
@@ -2171,17 +2270,17 @@ void upgradeBackfillUf1Buttons_(Config& c)
         sp.action = actionId;
         L1.bindings[id] = bd;
     };
-    // Transport (param = Uf1TransportOp: Play=0/Stop=1/Record=2/Rwd=3/Ffw=4).
-    fillBuiltin(ButtonId::Uf1Play, "uf1_transport", "PLAY", 0);
-    fillBuiltin(ButtonId::Uf1Stop, "uf1_transport", "STOP", 1);
-    fillBuiltin(ButtonId::Uf1Rec,  "uf1_transport", "REC",  2);
-    fillBuiltin(ButtonId::Uf1Rwd,  "uf1_transport", "RWD",  3);
-    fillBuiltin(ButtonId::Uf1Ffw,  "uf1_transport", "FFW",  4);
+    // Transport + Cycle/Click backfill to stock REAPER actions (Frank
+    // 2026-07-30). Solo/Cut/Sel intentionally NOT filled — fired natively
+    // on the focused track from onUf1Event's direct handler, not a binding.
+    fillReaper(ButtonId::Uf1Play, "1007",  "PLAY");
+    fillReaper(ButtonId::Uf1Stop, "1016",  "STOP");
+    fillReaper(ButtonId::Uf1Rec,  "1013",  "REC");
+    fillReaper(ButtonId::Uf1Rwd,  "40042", "RWD");
+    fillReaper(ButtonId::Uf1Ffw,  "40043", "FFW");
     fillReaper(ButtonId::Uf1Cycle, "1068",  "CYCLE");
     fillReaper(ButtonId::Uf1Click, "40364", "CLICK");
-    fillBuiltin(ButtonId::Uf1Solo, "uf1_solo_focused",   "SOLO", 0);
-    fillBuiltin(ButtonId::Uf1Cut,  "uf1_mute_focused",   "CUT",  0);
-    fillBuiltin(ButtonId::Uf1Sel,  "uf1_select_focused", "SEL",  0);
+    fillBuiltin(ButtonId::Uf1Btn360, "uf1_time_display_step", "360\xC2\xB0");
 }
 
 // Both passes preserve color, brightness, inactive*, label, and
@@ -2449,6 +2548,10 @@ void load()
             // that somehow ended up past v10 without the action-name
             // migration sticking. Idempotent on already-migrated data.
             upgradeRetireQuickSelect_(tmp);
+            // Same, for the retired UF1 builtins (uf1_transport /
+            // uf1_*_focused) — fixes transport buttons stuck on the removed
+            // uf1_transport builtin in configs seeded by the earlier build.
+            upgradeRetireUf1Builtins_(tmp);
 
             // Bank/Quick action sanitize. Always runs. Fixes two
             // 2026-05-13 data-corruption patterns: (1) *Bank cells
@@ -3420,6 +3523,27 @@ void setUserQuickSlot(int layer, int quick, int subBank, int slot,
     persistLocked_();
 }
 
+static bool uf1SoftBankInRange_(int bank, int slot)
+{
+    return bank >= 0 && bank < kUf1SoftBankCount
+        && slot >= 0 && slot < kUf1SoftBankSlots;
+}
+
+Binding getUf1SoftBankSlot(int bank, int slot)
+{
+    if (!uf1SoftBankInRange_(bank, slot)) return {};
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.uf1SoftBanks[bank][slot];
+}
+
+void setUf1SoftBankSlot(int bank, int slot, const Binding& bd)
+{
+    if (!uf1SoftBankInRange_(bank, slot)) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.uf1SoftBanks[bank][slot] = bd;
+    persistLocked_();
+}
+
 static bool subBankLedInRange_(int layer, int quick, int subBank)
 {
     return layer    >= 0 && layer    < 3
@@ -3774,6 +3898,72 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
         || !shortP[slotMod].action.empty();
 }
 
+// UF1 soft-key bank slot dispatch — same long-press + modifier-matrix
+// logic as dispatchUserQuickSlot, but addressed by (bank, slot) on the
+// global uf1SoftBanks store, with a distinct press-timer keyspace.
+bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
+{
+    if (!uf1SoftBankInRange_(bank, slot)) return false;
+
+    Binding bd;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        bd = g_cfg.uf1SoftBanks[bank][slot];
+    }
+
+    const int      syntheticLayer = 200 + bank;   // clear of 0..2 + user-quick 100+
+    const ButtonId pseudoId       = static_cast<ButtonId>(0x5000 + slot);
+    const uint32_t k = pressKey(syntheticLayer, pseudoId);
+
+    const bool longPressArmed =
+        bd.hasLongPress && bd.behavior == Behavior::Momentary;
+    const auto& shortP = bd.shortPress;
+    const auto& longP  = bd.longPress;
+
+    if (longPressArmed) {
+        if (pressed) {
+            g_pressStart[k] = { std::chrono::steady_clock::now(),
+                                currentModifierSnapshot() };
+        } else {
+            auto it = g_pressStart.find(k);
+            if (it != g_pressStart.end()) {
+                const auto held = std::chrono::steady_clock::now() - it->second.start;
+                const int  m    = static_cast<int>(it->second.mod);
+                g_pressStart.erase(it);
+                if (held >= kLongPressThreshold)
+                    runSlot_(longP[m],  /*firing*/ true, /*pressed*/ false);
+                else
+                    runSlot_(shortP[m], /*firing*/ true, /*pressed*/ false);
+            }
+        }
+        return true;
+    }
+
+    int slotMod = static_cast<int>(Modifier::Plain);
+    if (bd.behavior == Behavior::Momentary) {
+        if (pressed) {
+            g_pressStart[k] = { std::chrono::steady_clock::now(),
+                                currentModifierSnapshot() };
+            slotMod = static_cast<int>(g_pressStart[k].mod);
+        } else {
+            auto it = g_pressStart.find(k);
+            if (it != g_pressStart.end()) {
+                slotMod = static_cast<int>(it->second.mod);
+                g_pressStart.erase(it);
+            }
+        }
+    }
+    bool firing;
+    switch (bd.behavior) {
+        case Behavior::Momentary: firing = pressed; break;
+        case Behavior::Toggle:    firing = pressed; break;
+        case Behavior::Hold:      firing = true;    break;
+    }
+    runSlot_(shortP[slotMod], firing, pressed);
+    return shortP[slotMod].type != ActionType::Noop
+        || !shortP[slotMod].action.empty();
+}
+
 void setLayerName(int layer, const std::string& name)
 {
     if (layer < 0 || layer > 2) return;
@@ -3895,6 +4085,7 @@ const char* builtinCategory(const std::string& n)
      || n == "surface_mirror_tcp"
      || n == "surface_mirror_mcp"
      || n.rfind("marker_overlay_", 0) == 0
+     || n == "uf1_time_display_step"
      || n == "restart")
         return "Hardware Modes";
 

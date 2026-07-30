@@ -407,6 +407,10 @@ std::atomic<int>      g_uf1ChannelSubMode{0};
 // 1 = selected+4..+7. The "5-8" button (0x22) toggles it. Reset to 0 whenever
 // DAW mode is (re)entered so you always land on the selected track's group.
 std::atomic<int>      g_uf1DawGroup{0};
+// UF1 soft-key bank (DAW mode): which of the 10 user soft-key banks is live.
+// The ← → keys page it (wrap); the 4 display soft-keys fire its slots. Global
+// (not per-layer). Persisted store lives in the bindings Config (uf1SoftBanks).
+std::atomic<int>      g_uf1SoftBank{0};
 // Bank ← / → (0x21 / 0x23) step: coarse track navigation, ±8 tracks by default
 // (Frank 2026-07-30). Moves the REAPER selection (applySelectRelative_), so it
 // works in every view — the strip / DAW window / meter all follow the selection.
@@ -15976,6 +15980,26 @@ void onUf1Input(const uint8_t* data, size_t len)
 }
 
 // Parsed control event — functional state updates always run; logging gated.
+// True when the active layer has an explicit user action for `id` in the
+// CURRENT modifier slot (same Ctrl>Cmd>Shift>Plain precedence dispatch uses).
+// Lets a user binding override a UF1 hardcoded factory default PER MODIFIER —
+// e.g. bind Shift+360 → HUD while plain 360 keeps its default. Worker-thread
+// safe (getBinding locks the config; the modifier snapshot reads atomics).
+bool uf1HasActionForCurrentMod_(uf8::bindings::ButtonId id)
+{
+    using namespace uf8::bindings;
+    if (id == ButtonId::None) return false;
+    const Binding bd = getBinding(getActiveLayer(), id);
+    const int m = static_cast<int>(currentModifierSnapshot());
+    const auto& sp = bd.shortPress[m];
+    if (sp.type != ActionType::Noop || !sp.action.empty()) return true;
+    if (bd.hasLongPress) {
+        const auto& lp = bd.longPress[m];
+        if (lp.type != ActionType::Noop || !lp.action.empty()) return true;
+    }
+    return false;
+}
+
 void onUf1Event(const uf1::InputEvent& ev)
 {
     FILE* f = g_uf1Trace ? std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a") : nullptr;
@@ -16054,6 +16078,28 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1ModeMenu.store(false);
                 break;
             }
+            // ── User bindings take precedence over the factory defaults ──
+            // Everything below (meter selector, arrows, 360, 5-8, soft-keys,
+            // channel push, bank, V-Pot pushes, FLIP, MASTER) is a hardcoded
+            // FACTORY DEFAULT for an UNBOUND button. If the user has assigned
+            // an action to THIS button in the CURRENT modifier slot, route it
+            // through the shared Bindings dispatch instead — so every UF1
+            // control is genuinely bindable (e.g. Shift+360 → HUD) while an
+            // unbound button keeps its default. Modifier-aware: plain-360 can
+            // keep its TC-format default while Shift+360 fires a user binding.
+            // Solo/Cut/Sel are exempt (locked, native focused-track path
+            // below). Release edges still reach the final dispatch() so a
+            // Momentary binding's press/release stays balanced. Frank
+            // 2026-07-30 ("noch nicht wirklich bindable").
+            if (const auto uBid = uf8::bindings::fromUf1DeviceId(ev.id);
+                uBid != uf8::bindings::ButtonId::None
+                && uBid != uf8::bindings::ButtonId::Uf1Solo
+                && uBid != uf8::bindings::ButtonId::Uf1Cut
+                && uBid != uf8::bindings::ButtonId::Uf1Sel
+                && uf1HasActionForCurrentMod_(uBid)) {
+                uf8::bindings::dispatch(uBid, ev.pressed);
+                break;
+            }
             // Display soft-key 1 is the "Meter Screen Selector" while the Meter
             // view is up (SSL UF1 User Guide Rev4.0 S.189-191) — it cycles
             // Overview -> Analogue -> RTA. The screen is host-driven (see
@@ -16097,15 +16143,20 @@ void onUf1Event(const uf1::InputEvent& ev)
             // painter on the main thread.
             if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
                 && ev.pressed && !g_uf1MeterView.load()) {
-                // ◄ ► page the SOFT-KEY pages in BOTH Plugin and DAW mode (Frank:
-                // "in DAW banken die buttons die Soft-Key Pages wie in Plugin Mode,
-                // mit den user-defined soft-keys — coming"). Plugin = the strip's
-                // p188 pages; DAW = the user soft-key pages (1 for now). Wrap within
-                // the count the painter last published (worker has no REAPER API).
-                int np = g_uf1CsActivePages.load();
-                if (np < 1) np = 1;
-                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (np - 1);
-                g_uf1CsPage.store((g_uf1CsPage.load() % np + dir) % np);
+                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : -1;
+                if (g_uf1ChannelSubMode.load() == 1) {
+                    // DAW mode: ← → page the 10 user soft-key banks (wrap). The
+                    // 4 display soft-keys fire the live bank's slots.
+                    constexpr int nb = uf8::bindings::kUf1SoftBankCount;
+                    g_uf1SoftBank.store((g_uf1SoftBank.load() + dir + nb) % nb);
+                } else {
+                    // Plugin mode: page the SSL strip's p188 param pages (shared
+                    // by the 4 V-Pots + CS section soft keys). Wrap within the
+                    // count the painter last published (worker has no REAPER API).
+                    int np = g_uf1CsActivePages.load();
+                    if (np < 1) np = 1;
+                    g_uf1CsPage.store((g_uf1CsPage.load() % np + (dir > 0 ? 1 : np - 1)) % np);
+                }
                 break;
             }
             // Channel view: Quick-Key-2 (transport soft-key, id 0x35) toggles the
@@ -16114,19 +16165,6 @@ void onUf1Event(const uf1::InputEvent& ev)
             // ships UNBOUND, so no user binding is lost. Channel view only.
             if (ev.id == uf1::btn::kT2 && ev.pressed && !g_uf1MeterView.load()) {
                 g_uf1CsFine.store(!g_uf1CsFine.load());
-                break;
-            }
-            // Channel view: the 360 button (id 0x25) cycles the 0x0119 time/position
-            // field format Measures(2) -> Time h:m:s:f(5) -> Samples(4) -> Measures.
-            // Uf1Btn360 ships UNBOUND (no Bindings.cpp factory seed), so this claims
-            // no user binding — same trade-off the arrows / Quick-Key-2 above make.
-            // Atomic store only; the painter formats + sends on the main thread and
-            // persists the choice to ExtState (threading rule). Channel view only —
-            // the field only exists there, and the 360 button stays free in Meter view.
-            if (ev.id == uf1::btn::k360 && ev.pressed && !g_uf1MeterView.load()) {
-                const int cur  = g_uf1TcMode.load();
-                const int next = (cur == 2) ? 5 : (cur == 5) ? 4 : 2;
-                g_uf1TcMode.store(next);
                 break;
             }
             // Channel view: the 4 display soft keys (0x19-0x1C) are the SSL
@@ -16141,6 +16179,21 @@ void onUf1Event(const uf1::InputEvent& ev)
             // blank / unassigned or the focused FX is not an SSL strip). Toggle
             // on the press edge only; the release falls through to dispatch
             // (unbound → no-op), exactly as the channel arrows do.
+            // DAW mode: the 4 display soft-keys fire the CURRENT user soft-key
+            // bank's slot (both press + release, so Momentary/Toggle bindings
+            // work). dispatchUf1SoftBankSlot is worker-thread safe (its builtins
+            // defer the REAPER API to the main-thread drain). No-op if the slot
+            // is empty. Wins over the CS-section block below in DAW mode.
+            if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
+                 ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
+                && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1
+                && !g_uf1ModeMenu.load()) {
+                uf8::bindings::dispatchUf1SoftBankSlot(
+                    g_uf1SoftBank.load(),
+                    static_cast<int>(ev.id - uf1::btn::kDisplaySoft1),
+                    ev.pressed);
+                break;
+            }
             if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
                 && ev.pressed && !g_uf1MeterView.load() && g_uf1ModeMenu.load() == false) {
@@ -16210,6 +16263,31 @@ void onUf1Event(const uf1::InputEvent& ev)
             if (ev.id == uf1::btn::kMaster && ev.pressed) {
                 g_uf1Master.store(!g_uf1Master.load());
                 break;
+            }
+            // Solo / Cut / Sel — fixed native functions on the FOCUSED track
+            // (Frank 2026-07-30: REAPER owns solo/mute/select, so UF1 doesn't
+            // reinvent them; always focused, "immer auf fokusiert"). Handled
+            // directly here (press edge) via the same main-thread drain, so
+            // behaviour is byte-identical. These ids never reach the Bindings
+            // dispatch below → not user-rebindable, matching the locked keys
+            // in the Settings → Bindings → UF1 schematic. (Primary transport
+            // IS bindable — it falls through to dispatch with REAPER-action
+            // factory defaults seeded in Bindings.cpp.)
+            {
+                bool nativeHandled = true;
+                switch (ev.id) {
+                    case uf1::btn::kSolo:
+                        if (ev.pressed) queueInput({PendingInput::Uf1SoloToggle, 0, 0.0});
+                        break;
+                    case uf1::btn::kCut:
+                        if (ev.pressed) queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
+                        break;
+                    case uf1::btn::kSel:
+                        if (ev.pressed) queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
+                        break;
+                    default: nativeHandled = false; break;
+                }
+                if (nativeHandled) break;
             }
             // All other UF1 buttons route through the shared Bindings
             // system (Phase 1) — fromUf1DeviceId maps the device byte to a
@@ -19306,8 +19384,14 @@ void uf1PaintChannel_()
         // atomics the V-Pot painter publishes (g_uf1CsActivePages may be one tick old
         // here — self-corrects next frame; g_uf1CsPage is live).
         {
-            const auto hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
-                                            std::max(1, g_uf1CsActivePages.load()));
+            // DAW mode: the header shows the live soft-key BANK "N/10"; Plugin
+            // mode shows the SSL strip's param-page "N/M".
+            const bool dawB = (g_uf1ChannelSubMode.load() == 1);
+            const auto hdr = dawB
+                ? uf1PageHeader_(g_uf1SoftBank.load() + 1,
+                                 uf8::bindings::kUf1SoftBankCount)
+                : uf1PageHeader_(g_uf1CsPage.load() + 1,
+                                 std::max(1, g_uf1CsActivePages.load()));
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -19785,10 +19869,32 @@ void uf1PaintChannel_()
             uf1LearnedStreamSlots_(snm, /*busComp*/skType == 4, /*wantButton*/true, skSlots);
         static std::array<int, 4> sSkLed{ -1, -1, -1, -1 };
         int abState = -1, hqState = -1;   // read once, only if an HQ/AB key is present
+        // DAW mode: the 4 soft-keys are the live user soft-key bank's slots,
+        // not the SSL strip's section keys.
+        const bool dawBanks = (g_uf1ChannelSubMode.load() == 1);
+        const int  bankNo   = g_uf1SoftBank.load();
         for (int i = 0; i < 4; ++i) {
             std::string label;
             bool haveLabel = false, on = false;
-            if (skLearned) {
+            uf8::bindings::Binding dawSlot;   // populated only in DAW mode
+            if (dawBanks) {
+                // Label from the bank slot (its own label, else the built-in's
+                // display name); blank = unassigned. LED follows the bound
+                // action's engaged state exactly like the UF8 soft-keys —
+                // `bindingHasActiveSlot_` is the same resolver (built-in state
+                // + REAPER GetToggleCommandState2, across all modifier slots),
+                // so bright = engaged, dim = idle. The LED COLOUR is driven from
+                // the binding too (see the LED block below).
+                dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
+                const auto& sp = dawSlot.shortPress[
+                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                if (!dawSlot.label.empty()) label = dawSlot.label;
+                else if (sp.type == uf8::bindings::ActionType::Builtin
+                         && !sp.action.empty())
+                    label = uf8::bindings::builtinDisplayName(sp.action);
+                haveLabel = true;
+                on = bindingHasActiveSlot_(dawSlot);
+            } else if (skLearned) {
                 // Learned: pack the button-mapped params; blank keys past the end.
                 const int flat = skPage * 4 + i;
                 const uf8::UserLinkSlot* sl =
@@ -19843,6 +19949,15 @@ void uf1PaintChannel_()
             // FF3B enable is (re)asserted on `changed`, like Solo/Cut. No SSL strip →
             // on=false → keys go dim/off. NB the exact channel-view on-COLOUR is the
             // guessed part; ids + scheme + the no-FF39-on-0x01 rule are captured.
+            // DAW + Plugin use the SAME HW-verified soft-key LED bytes
+            // (buildLedPrimary FF38 + buildLedLevel FF39 + the key-1-only rule,
+            // cap106). `on` follows the bound action's engaged state in DAW
+            // mode (bindingHasActiveSlot_, set above) and the SSL toggle in
+            // Plugin mode → bright engaged / dim idle. Per-binding LED COLOUR
+            // is NOT driven: the earlier buildColourRgb attempt dropped the
+            // FF39 the keys 2-4 need and the soft-key colour protocol isn't
+            // decoded — that needs a capture (Frank 2026-07-30). Until then the
+            // LEDs track STATE, not colour.
             const int ledState = on ? 1 : 0;
             if (changed || ledState != sSkLed[i]) {
                 sSkLed[i] = ledState;
@@ -28804,6 +28919,21 @@ void reasixty_setScribbleBrightnessLevel(int level)
     applyBrightness();
 }
 
+// UF1 soft-key bank (live, HW-synced). The Settings editor reads/writes this
+// so picking a bank in Settings and paging ← → on the UF1 stay in lockstep.
+int reasixty_uf1SoftBank()
+{
+    return g_uf1SoftBank.load();
+}
+
+void reasixty_setUf1SoftBank(int bank)
+{
+    if (bank < 0) bank = 0;
+    if (bank >= uf8::bindings::kUf1SoftBankCount)
+        bank = uf8::bindings::kUf1SoftBankCount - 1;
+    g_uf1SoftBank.store(bank);
+}
+
 void reasixty_identifyUf8()
 {
     g_identifyUf8UntilMs.store(nowMs_() + kIdentifyDurationMs);
@@ -31037,7 +31167,7 @@ const char* reasixty_reaperVersion()
 // .subBanks[SB].slots[s]. Picker editor calls Start for the matching mode;
 // the poll branches accordingly.
 namespace {
-    enum class PickerMode { Layer, UserQuick };
+    enum class PickerMode { Layer, UserQuick, Uf1Bank };
     bool                         g_pickerActive    = false;
     PickerMode                   g_pickerMode      = PickerMode::Layer;
     int                          g_pickerLayer     = 0;
@@ -31058,6 +31188,9 @@ namespace {
     int                          g_pickerUQQuick   = 0;
     int                          g_pickerUQSubBank = 0;
     int                          g_pickerUQSlot    = 0;
+    // UF1 soft-key bank destination coords. Only valid when mode == Uf1Bank.
+    int                          g_pickerUf1Bank   = 0;
+    int                          g_pickerUf1Slot   = 0;
 }
 
 void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
@@ -31113,6 +31246,30 @@ bool reasixty_actionPickerActiveForUserQuick(int uqLayer, int uqQuick,
         && g_pickerUQQuick == uqQuick
         && g_pickerUQSubBank == uqSubBank
         && g_pickerUQSlot == uqSlot
+        && g_pickerModIdx == modIdx
+        && g_pickerStepIdx == stepIdx;
+}
+
+void reasixty_actionPickerStartUf1Bank(int bank, int slot,
+                                       int modIdx, int stepIdx)
+{
+    g_pickerMode      = PickerMode::Uf1Bank;
+    g_pickerUf1Bank   = bank;
+    g_pickerUf1Slot   = slot;
+    g_pickerLongPress = false;   // bank editor exposes only shortPress[Plain]
+    g_pickerModIdx    = modIdx;
+    g_pickerStepIdx   = stepIdx;
+    g_pickerActive    = true;
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+}
+
+bool reasixty_actionPickerActiveForUf1Bank(int bank, int slot,
+                                           int modIdx, int stepIdx)
+{
+    return g_pickerActive
+        && g_pickerMode == PickerMode::Uf1Bank
+        && g_pickerUf1Bank == bank
+        && g_pickerUf1Slot == slot
         && g_pickerModIdx == modIdx
         && g_pickerStepIdx == stepIdx;
 }
@@ -31758,10 +31915,13 @@ void reasixty_actionPickerPoll()
     if (nc && *nc) actionStr = std::string("_") + nc;
     else           actionStr = std::to_string(r);
     using namespace uf8::bindings;
-    Binding bd = (g_pickerMode == PickerMode::UserQuick)
-        ? getUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
-                           g_pickerUQSubBank, g_pickerUQSlot)
-        : getBinding(g_pickerLayer, g_pickerId);
+    Binding bd =
+          (g_pickerMode == PickerMode::UserQuick)
+              ? getUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
+                                 g_pickerUQSubBank, g_pickerUQSlot)
+        : (g_pickerMode == PickerMode::Uf1Bank)
+              ? getUf1SoftBankSlot(g_pickerUf1Bank, g_pickerUf1Slot)
+              : getBinding(g_pickerLayer, g_pickerId);
     const int modIdx = (g_pickerModIdx < 0 || g_pickerModIdx >= kModifierCount)
                          ? static_cast<int>(Modifier::Plain)
                          : g_pickerModIdx;
@@ -31783,6 +31943,8 @@ void reasixty_actionPickerPoll()
     if (g_pickerMode == PickerMode::UserQuick) {
         setUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
                          g_pickerUQSubBank, g_pickerUQSlot, bd);
+    } else if (g_pickerMode == PickerMode::Uf1Bank) {
+        setUf1SoftBankSlot(g_pickerUf1Bank, g_pickerUf1Slot, bd);
     } else {
         setBinding(g_pickerLayer, g_pickerId, bd);
     }
@@ -32015,36 +32177,11 @@ void registerBindingHandlers()
     });
 
     // ---- UF1 button builtins (Phase 1) ----------------------------------
-    // Thin wrappers over the existing UF1 queueInput kinds so the bindings
-    // factory defaults reproduce the shipped hardcoded behaviour exactly
-    // (transport via CSurf_On*, Solo/Cut/Sel on the focused track). All
-    // defer the REAPER API to the main-thread drain (threading rule).
-    registerBuiltin("uf1_transport", DescBuilder{
-        [](bool firing, bool /*pressed*/, int op) {
-            if (firing)
-                queueInput({PendingInput::Uf1Transport, 0,
-                            static_cast<double>(op)});
-        },
-        nullptr, "", true  // usesParam: op = Uf1TransportOp
-    });
-    registerBuiltin("uf1_solo_focused", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) queueInput({PendingInput::Uf1SoloToggle, 0, 0.0});
-        },
-        nullptr, "", false
-    });
-    registerBuiltin("uf1_mute_focused", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
-        },
-        nullptr, "", false
-    });
-    registerBuiltin("uf1_select_focused", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
-        },
-        nullptr, "", false
-    });
+    // UF1 transport + Solo/Cut/Sel are NOT rea-sixty builtins — REAPER
+    // already owns those functions, so UF1 fires them natively (CSurf_On*
+    // / focused-track solo/mute/select) straight from onUf1Event's direct
+    // handler, no bespoke wrapper action. Frank 2026-07-30
+    // ([[feedback-dont-reinvent-reaper-builtins]]).
 
     registerBuiltin("flip", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -32494,6 +32631,23 @@ void registerBindingHandlers()
         },
         [](int) -> bool { return g_modeBanner.load(); },
         "Mode-change banner: show / hide (flashes Sel / Encoder mode)", false
+    });
+
+    // UF1 large-screen time display: step its format (Bars/Beats → Time
+    // h:m:s:f → Samples). This was the hardcoded 360-key behaviour; now a
+    // proper bindable built-in so the 360 key (or any UF1 key) can carry it
+    // and the user can rebind it. g_uf1TcMode is an atomic (store is input-
+    // thread safe); the painter formats + persists it on the main thread.
+    // No-op in Meter view — the time field only exists in Channel view.
+    registerBuiltin("uf1_time_display_step", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing || g_uf1MeterView.load()) return;
+            const int cur  = g_uf1TcMode.load();
+            const int next = (cur == 2) ? 5 : (cur == 5) ? 4 : 2;
+            g_uf1TcMode.store(next);
+        },
+        nullptr,
+        "UF1 time display: step format (Bars / Time / Samples)", false
     });
 
     registerBuiltin("tcp_follows_selection_toggle", DescBuilder{

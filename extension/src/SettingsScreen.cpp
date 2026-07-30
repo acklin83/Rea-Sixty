@@ -85,6 +85,10 @@ void reasixty_actionPickerStartUserQuick(int uqLayer, int uqQuick,
 bool reasixty_actionPickerActiveForUserQuick(int uqLayer, int uqQuick,
                                              int uqSubBank, int uqSlot,
                                              int modIdx = 0, int stepIdx = 0);
+void reasixty_actionPickerStartUf1Bank(int bank, int slot,
+                                       int modIdx = 0, int stepIdx = 0);
+bool reasixty_actionPickerActiveForUf1Bank(int bank, int slot,
+                                           int modIdx = 0, int stepIdx = 0);
 void reasixty_actionPickerCancel();
 std::string reasixty_resolveActionName(const std::string& action);
 bool        reasixty_actionIsToggle(const std::string& action);
@@ -93,6 +97,8 @@ int  reasixty_brightnessLevel();
 int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
 void reasixty_setScribbleBrightnessLevel(int level);
+int  reasixty_uf1SoftBank();
+void reasixty_setUf1SoftBank(int bank);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -1549,6 +1555,47 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uc1Encoder1:    return "UC1 Encoder 1";
         case ButtonId::Uc1Encoder2:    return "UC1 Encoder 2";
         case ButtonId::Uc1Encoder2Push: return "UC1 Encoder 2 Push";
+        // ---- UF1 ----
+        case ButtonId::Uf1ChannelSoftKey: return "SOFT KEY";
+        case ButtonId::Uf1DisplaySoft1: return "SOFT KEY 1";
+        case ButtonId::Uf1DisplaySoft2: return "SOFT KEY 2";
+        case ButtonId::Uf1DisplaySoft3: return "SOFT KEY 3";
+        case ButtonId::Uf1DisplaySoft4: return "SOFT KEY 4";
+        case ButtonId::Uf1Solo:        return "SOLO";
+        case ButtonId::Uf1Cut:         return "CUT";
+        case ButtonId::Uf1Sel:         return "SEL";
+        case ButtonId::Uf1Flip:        return "FLIP";
+        case ButtonId::Uf1Master:      return "MASTER";
+        case ButtonId::Uf1Shift:       return "SHIFT";
+        case ButtonId::Uf1Btn360:      return "360\xC2\xB0";
+        case ButtonId::Uf1Scrub:       return "SCRUB";
+        case ButtonId::Uf1FiveToEight: return "5-8";
+        case ButtonId::Uf1BankLeft:    return "BANK \xE2\x97\x82";
+        case ButtonId::Uf1BankRight:   return "BANK \xE2\x96\xB8";
+        case ButtonId::Uf1ArrowLeft:   return "PAGE \xE2\x97\x82";
+        case ButtonId::Uf1ArrowRight:  return "PAGE \xE2\x96\xB8";
+        case ButtonId::Uf1NavUp:       return "NAV \xE2\x96\xB2";
+        case ButtonId::Uf1NavDown:     return "NAV \xE2\x96\xBC";
+        case ButtonId::Uf1NavLeft:     return "NAV \xE2\x97\x82";
+        case ButtonId::Uf1NavRight:    return "NAV \xE2\x96\xB8";
+        case ButtonId::Uf1NavCentre:   return "NAV \xE2\x97\x8F";
+        case ButtonId::Uf1Play:        return "PLAY";
+        case ButtonId::Uf1Stop:        return "STOP";
+        case ButtonId::Uf1Rec:         return "REC";
+        case ButtonId::Uf1Rwd:         return "RWD";
+        case ButtonId::Uf1Ffw:         return "FFW";
+        case ButtonId::Uf1Cycle:       return "CYCLE";
+        case ButtonId::Uf1Click:       return "CLICK";
+        case ButtonId::Uf1SecLeft:     return "SEC \xE2\x97\x82";
+        case ButtonId::Uf1SecRight:    return "SEC \xE2\x96\xB8";
+        case ButtonId::Uf1SecKey1:     return "SEC 1";
+        case ButtonId::Uf1SecKey2:     return "SEC 2";
+        case ButtonId::Uf1VpotAbovePush: return "V-POT PUSH";
+        case ButtonId::Uf1Vpot1Push:   return "V-POT 1 PUSH";
+        case ButtonId::Uf1Vpot2Push:   return "V-POT 2 PUSH";
+        case ButtonId::Uf1Vpot3Push:   return "V-POT 3 PUSH";
+        case ButtonId::Uf1Vpot4Push:   return "V-POT 4 PUSH";
+        case ButtonId::Uf1ChannelPush: return "ENC PUSH";
         default:                     return uf8::bindings::toName(id);
     }
 }
@@ -2900,6 +2947,321 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
     ImGui_PopFont(ctx);
 }
 
+// Render the full UF1 schematic — SSL's single-fader surface. Same
+// click / hover / select model, primitives and palette as drawUf8Vector;
+// layout follows SSL UF1 User Guide page 16 (numbered controls 1–21).
+// Every hardware control maps to its own UF1 ButtonId (Bindings.h:152+)
+// so the shared per-layer editor below edits it exactly like a UF8
+// button. Rotary V-Pots + the CHANNEL encoder have no rotation ButtonId
+// yet (encoders = Phase 2), so a click on a dial selects its PUSH id;
+// the jog wheel (rotate-only) and the two LCDs are decorative. MODE
+// (0x20) is a firmware-local view toggle with no ButtonId → drawn locked.
+void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
+{
+    using namespace uf8::bindings;
+    constexpr float W = 600, H = 680;
+
+    // Lock the schematic font to Small (12 px) — same rationale as
+    // drawUf8Vector: labels stay readable regardless of the global
+    // font-size picker. Popped at function exit.
+    ImGui_PushFont(ctx, /*font*/ nullptr, 12.0);
+
+    double oxd = 0, oyd = 0;
+    ImGui_GetCursorScreenPos(ctx, &oxd, &oyd);
+    ImGui_InvisibleButton(ctx, "uf1_canvas", W, H, /*flags*/ nullptr);
+    const bool canvasHovered = ImGui_IsItemHovered(ctx, /*flags*/ nullptr);
+    int leftBtn = 0;
+    const bool canvasClicked = ImGui_IsItemClicked(ctx, &leftBtn);
+    int rightBtn = 1;
+    const bool canvasRightClicked = ImGui_IsItemClicked(ctx, &rightBtn);
+
+    double mxd = 0, myd = 0;
+    ImGui_GetMousePos(ctx, &mxd, &myd);
+    VCanvas c {
+        ctx, ImGui_GetWindowDrawList(ctx),
+        static_cast<float>(oxd), static_cast<float>(oyd)
+    };
+    const float mx = static_cast<float>(mxd) - c.ox;
+    const float my = static_cast<float>(myd) - c.oy;
+
+    const int bindLayer = getActiveLayer();
+
+    auto inside = [&](float x, float y, float w, float h) {
+        return canvasHovered
+            && mx >= x && mx <= x + w && my >= y && my <= y + h;
+    };
+
+    // Bindable button — hardware-face rect with hover / select / bound
+    // tint, click capture, right-click Copy/Paste arming, hover tooltip.
+    // Identical model to drawUf8Vector's drawHwBtn.
+    auto drawHwBtn = [&](float x, float y, float w, float h,
+                         ButtonId id, const char* label) -> bool {
+        const bool hot      = inside(x, y, w, h);
+        const bool selected = (id == sel);
+        const bool clicked  = hot && canvasClicked && leftBtn == 0;
+        if (clicked) sel = id;
+        if (hot && canvasRightClicked && id != ButtonId::None) {
+            s_bindingCtxBtn           = id;
+            s_bindingCtxOpenRequested = true;
+        }
+        const bool reg   = regularBindable_(id);
+        const bool bound = reg && bindingHasAnyAction_(getBinding(bindLayer, id));
+        const uint32_t fill   = selected ? 0x4477CCFF
+                              : hot       ? 0x3A4253FF
+                              : bound     ? 0x2C3A2EFF
+                                          : 0x252A33FF;
+        const uint32_t border = selected ? 0xAACCFFFF
+                              : bound     ? 0x6FA86FFF
+                                          : 0x4A5060FF;
+        const uint32_t txt    = selected ? 0xFFFFFFFF : 0xD0D4DAFF;
+        rect_(c, x, y, w, h, fill, border, /*rounding*/ 3.5);
+        ImGui_PushFont(ctx, nullptr, 10.0);
+        drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
+        ImGui_PopFont(ctx);
+        if (hot && reg && bound) {
+            const std::string tip = buildBindingTooltip_(bindLayer, id, label);
+            if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
+        }
+        return clicked;
+    };
+
+    // Locked (non-bindable) button — MODE + the fader/jog captions.
+    auto drawLocked = [&](float x, float y, float w, float h,
+                          const char* label) {
+        rect_(c, x, y, w, h, 0x1A1E24FF, 0x383C44FF, 3.0);
+        ImGui_PushFont(ctx, nullptr, 10.0);
+        drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, 0x70747CFF, label);
+        ImGui_PopFont(ctx);
+    };
+
+    auto drawGroupLabelCentered = [&](float cx, float y, const char* text) {
+        ImGui_PushFont(ctx, nullptr, 10.0);
+        double tw = 0, th = 0;
+        ImGui_CalcTextSize(c.ctx, text, &tw, &th, nullptr, nullptr);
+        drawText_(c, cx - static_cast<float>(tw) / 2.0f, y, 0x9CA0AAFF, text);
+        ImGui_PopFont(ctx);
+    };
+
+    // Clickable rotary. The encoder itself has no rotation ButtonId in v1,
+    // so selection / binding targets its PUSH id (Uf1*Push). `ticks`
+    // draws the notched-detent ring of the big CHANNEL encoder.
+    auto drawDial = [&](float cx, float cy, float r, ButtonId pushId,
+                        const char* cap, bool ticks) {
+        const bool hot      = inside(cx - r, cy - r, 2 * r, 2 * r);
+        const bool selected = (pushId == sel);
+        if (hot && canvasClicked && leftBtn == 0) sel = pushId;
+        if (hot && canvasRightClicked && pushId != ButtonId::None) {
+            s_bindingCtxBtn           = pushId;
+            s_bindingCtxOpenRequested = true;
+        }
+        const bool bound = regularBindable_(pushId)
+                        && bindingHasAnyAction_(getBinding(bindLayer, pushId));
+        const uint32_t face   = selected ? 0x33436AFF
+                              : hot       ? 0x2A3346FF
+                                          : 0x14181EFF;
+        const uint32_t border = selected ? 0xAACCFFFF
+                              : bound     ? 0x6FA86FFF
+                                          : 0x4A5060FF;
+        if (ticks) {
+            // Detent marks around the rim (mirrors drawUf8Vector's
+            // CHANNEL encoder ring).
+            for (int t = 0; t < 24; ++t) {
+                const float a  = static_cast<float>(t) / 24.0f * 6.2831853f;
+                const float c0 = std::cos(a), s0 = std::sin(a);
+                line_(c, cx + c0 * (r + 2), cy + s0 * (r + 2),
+                         cx + c0 * (r + 7), cy + s0 * (r + 7),
+                         0x555A66FF, 1.0);
+            }
+        }
+        circle_(c, cx, cy, r,     face,       border);
+        circle_(c, cx, cy, r - 4, 0x2A3038FF, 0x555A66FF);
+        line_(c, cx, cy - (r - 2), cx, cy - (r - 9), 0xCCCCCCFF, 2.0);
+        if (cap && *cap) {
+            ImGui_PushFont(ctx, nullptr, 9.0);
+            drawTextCentered_(c, cx, cy + r + 8, 0x9CA0AAFF, cap);
+            ImGui_PopFont(ctx);
+        }
+        if (hot && bound) {
+            const std::string tip = buildBindingTooltip_(bindLayer, pushId, cap);
+            if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
+        }
+    };
+
+    // ---- Chassis ----
+    rect_(c, 4, 4, W - 8, H - 8, 0x14181EFF, 0x2A3038FF, /*rounding*/ 8.0);
+    // Divider between the channel-strip column (left) and main section.
+    line_(c, 183, 16, 183, 560, 0x262C34FF, 1.0);
+
+    // ======================================================================
+    // LEFT COLUMN — channel strip (UG callouts 1–7)
+    // ======================================================================
+    // (1) Small-screen soft key
+    drawHwBtn(34, 22, 54, 20, ButtonId::Uf1ChannelSoftKey, "SOFT");
+
+    // (2) Small colour screen — plain scribble LCD (track name), UF8-style.
+    rect_(c, 26, 48, 124, 106, 0x080C12FF, 0x444A55FF, 3.0);
+    drawTextCentered_(c, 88, 64, 0x4488DDFF, "TRACK 1");
+
+    // (3) Small-screen V-Pot (above-fader) — push = Uf1VpotAbovePush
+    drawDial(88, 180, 16, ButtonId::Uf1VpotAbovePush, "V-POT", /*ticks*/ false);
+
+    // (5) SOLO / CUT / SEL — locked, exactly like UF8's per-strip keys.
+    // They stay hardcoded (focused-track solo/mute/select) and are not
+    // user-rebindable from the schematic (Frank 2026-07-30).
+    drawLocked(26, 214, 56, 24, "SOLO");
+    drawLocked(26, 242, 56, 24, "CUT");
+    drawLocked(26, 270, 56, 24, "SEL");
+
+    // (4) 100 mm motorised fader — scale ticks (right) + track + cap.
+    {
+        const float fx = 120, fyTop = 214, fyBot = 476;
+        for (int t = 0; t <= 10; ++t) {
+            const float ty  = fyTop + (fyBot - fyTop) * (t / 10.0f);
+            const float len = (t % 5 == 0) ? 6.0f : 3.0f;
+            line_(c, fx + 12 - len, ty, fx + 12, ty, 0x6A6E78FF, 1.0);
+        }
+        rect_(c, fx - 1.5f, fyTop, 3, fyBot - fyTop, 0x444B55FF, 0x000000FF, 1.0);
+        const float capY = fyTop + (fyBot - fyTop) * 0.30f;   // ~unity
+        rect_(c, fx - 12, capY - 7, 24, 14, 0x6A7080FF, 0x9CA0AAFF, 2.5);
+        line_(c, fx - 9, capY, fx + 9, capY, 0xE0E0E0FF, 1.5);
+    }
+
+    // (6) FLIP  (7) MASTER
+    drawHwBtn(26, 492, 56, 26, ButtonId::Uf1Flip,   "FLIP");
+    drawHwBtn(26, 522, 56, 26, ButtonId::Uf1Master, "MASTER");
+
+    // ======================================================================
+    // RIGHT SECTION — main display, navigation, transport (UG callouts 8–21)
+    // ======================================================================
+    constexpr float kScrX0 = 195, kScrW = 380, kColW = kScrW / 4.0f;
+    auto colCx = [&](int i) { return kScrX0 + i * kColW + kColW / 2.0f; };
+
+    // (8) 4 large-screen soft keys
+    const ButtonId dispSoft[4] = {
+        ButtonId::Uf1DisplaySoft1, ButtonId::Uf1DisplaySoft2,
+        ButtonId::Uf1DisplaySoft3, ButtonId::Uf1DisplaySoft4,
+    };
+    for (int i = 0; i < 4; ++i) {
+        char l[6]; snprintf(l, sizeof l, "SK%d", i + 1);
+        drawHwBtn(colCx(i) - 38, 22, 76, 20, dispSoft[i], l);
+    }
+
+    // (9) Large colour screen — plain LCD, UF8-style. Just the 4 soft-key
+    //     labels along the top (they map to the 4 keys above it).
+    rect_(c, kScrX0, 50, kScrW, 150, 0x080C12FF, 0x444A55FF, 3.0);
+    ImGui_PushFont(ctx, nullptr, 9.0);
+    // Soft-key labels come from the LIVE UF1 soft-key bank (DAW mode's 10
+    // banks × 4 slots) — the screen shows the current bank's 4 labels the
+    // way the UF8 scribbles show theirs. Blank slot falls back to "SOFT n".
+    const int uf1Bank = reasixty_uf1SoftBank();
+    for (int i = 0; i < 4; ++i) {
+        const Binding sb = getUf1SoftBankSlot(uf1Bank, i);
+        const auto& sp = sb.shortPress[static_cast<int>(Modifier::Plain)];
+        std::string lbl = !sp.label.empty() ? sp.label
+                        : (sp.type == ActionType::Builtin && !sp.action.empty())
+                              ? builtinDisplayName(sp.action)
+                              : std::string();
+        if (lbl.empty()) { char h[8]; snprintf(h, sizeof h, "SOFT %d", i + 1); lbl = h; }
+        if (lbl.size() > 12) lbl.resize(12);
+        drawTextCentered_(c, colCx(i), 64, 0x4488DDFF, lbl.c_str());
+    }
+    // Bank indicator (bottom of the screen), mirrors the hardware "N/10".
+    {
+        char bk[16];
+        snprintf(bk, sizeof bk, "BANK %d/%d",
+                      uf1Bank + 1, uf8::bindings::kUf1SoftBankCount);
+        drawTextCentered_(c, kScrX0 + kScrW / 2.0f, 186, 0x5A6270FF, bk);
+    }
+    ImGui_PopFont(ctx);
+
+    // (10) 4 large-screen V-Pots — push = Uf1Vpot1Push..4Push
+    const ButtonId vpotPush[4] = {
+        ButtonId::Uf1Vpot1Push, ButtonId::Uf1Vpot2Push,
+        ButtonId::Uf1Vpot3Push, ButtonId::Uf1Vpot4Push,
+    };
+    for (int i = 0; i < 4; ++i) {
+        char cap[6]; snprintf(cap, sizeof cap, "V%d", i + 1);
+        drawDial(colCx(i), 228, 20, vpotPush[i], cap, /*ticks*/ false);
+    }
+
+    // ---- Cluster (UG p16): CHANNEL encoder (15) on the LEFT; small control
+    // keys to its RIGHT — MODE/5-8 + page arrows on the top line; BANK
+    // arrows, 360 and SCRUB all on ONE line below. NAV cross (16) below
+    // the encoder, jog (17) below the keys.
+    drawDial(268, 336, 40, ButtonId::Uf1ChannelPush, "CHANNEL",        // (15)
+             /*ticks*/ true);
+    // (16) NAV cross — Up / Left / Centre / Right / Down (0x28..0x2C)
+    drawHwBtn(252, 408, 32, 30, ButtonId::Uf1NavUp,     "\xE2\x96\xB2");
+    drawHwBtn(212, 442, 36, 32, ButtonId::Uf1NavLeft,   "\xE2\x97\x84");
+    drawHwBtn(252, 442, 32, 32, ButtonId::Uf1NavCentre, "\xE2\x97\x8F");
+    drawHwBtn(288, 442, 36, 32, ButtonId::Uf1NavRight,  "\xE2\x96\xBA");
+    drawHwBtn(252, 476, 32, 30, ButtonId::Uf1NavDown,   "\xE2\x96\xBC");
+
+    // (13) MODE (locked view toggle) + 5-8  |  (14) soft-key page arrows
+    drawLocked(360, 266, 52, 24, "MODE");
+    drawHwBtn(416, 266, 52, 24, ButtonId::Uf1FiveToEight, "5-8");
+    drawHwBtn(490, 266, 38, 24, ButtonId::Uf1ArrowLeft,  "\xE2\x97\x84");   // (14)
+    drawHwBtn(530, 266, 38, 24, ButtonId::Uf1ArrowRight, "\xE2\x96\xBA");
+    // (12) BANK arrows + (11) 360°/LAYER + (18) SCRUB — all on one line
+    drawHwBtn(360, 300, 38, 24, ButtonId::Uf1BankLeft,  "\xE2\x97\x84");
+    drawHwBtn(400, 300, 38, 24, ButtonId::Uf1BankRight, "\xE2\x96\xBA");
+    drawGroupLabelCentered(399, 330, "BANK");
+    drawHwBtn(490, 300, 38, 24, ButtonId::Uf1Btn360, "360\xC2\xB0");
+    drawHwBtn(530, 300, 40, 24, ButtonId::Uf1Scrub,  "SCRUB");
+    drawGroupLabelCentered(509, 330, "LAYER");
+
+    // (17) Jog wheel (decorative — rotate-only, no ButtonId)
+    {
+        const float jx = 482, jy = 452, jr = 60;
+        circle_(c, jx, jy, jr,      0x181C22FF, 0x4A5060FF);
+        circle_(c, jx, jy, jr - 8,  0x101418FF, 0x333A44FF);
+        circle_(c, jx, jy - jr + 15, 6, 0x0C1016FF, 0x555A66FF);   // dimple
+        ImGui_PushFont(ctx, nullptr, 9.0);
+        drawTextCentered_(c, jx, jy, 0x5A6270FF, "JOG");
+        ImGui_PopFont(ctx);
+    }
+
+    // (20) Secondary transport — printed silk labels are the automation
+    //      modes reached with (21) SHIFT + SEL. All 6 are user-bindable.
+    drawGroupLabelCentered(355, 556, "SECONDARY TRANSPORT  \xC2\xB7  +SHIFT = AUTOMATION");
+    struct SecBtn { float x; ButtonId id; const char* lbl; };
+    const SecBtn sec[6] = {
+        { 204, ButtonId::Uf1SecLeft,  "OFF"  },
+        { 257, ButtonId::Uf1SecRight, "READ" },
+        { 310, ButtonId::Uf1Cycle,    "WRT"  },
+        { 363, ButtonId::Uf1Click,    "TRIM" },
+        { 416, ButtonId::Uf1SecKey1,  "LTCH" },
+        { 469, ButtonId::Uf1SecKey2,  "TCH"  },
+    };
+    for (const auto& b : sec) drawHwBtn(b.x, 572, 48, 28, b.id, b.lbl);
+    drawHwBtn(523, 572, 46, 28, ButtonId::Uf1Shift, "SHIFT");             // (21)
+
+    // (19) Primary transport — BINDABLE (Frank 2026-07-30). Factory
+    // defaults are stock REAPER actions (Play 1007 / Stop 1016 / Record
+    // 1013 / RWD = go-to-start 40042 / FFW = go-to-end 40043), so UF1
+    // reinvents nothing yet the user can rebind each. Square keys, spread
+    // evenly across the secondary-transport span (OFF … SHIFT = x 204 … 569).
+    const struct { ButtonId id; const char* lbl; } tr[5] = {
+        { ButtonId::Uf1Rwd,  "\xE2\x97\x84\xE2\x97\x84" },
+        { ButtonId::Uf1Ffw,  "\xE2\x96\xBA\xE2\x96\xBA" },
+        { ButtonId::Uf1Stop, "\xE2\x96\xA0" },
+        { ButtonId::Uf1Play, "\xE2\x96\xBA" },
+        { ButtonId::Uf1Rec,  "\xE2\x97\x8F" },
+    };
+    for (int i = 0; i < 5; ++i)
+        drawHwBtn(204 + i * 82.75f, 608, 34, 34, tr[i].id, tr[i].lbl);
+
+    // Brand
+    ImGui_PushFont(ctx, nullptr, 12.0);
+    drawGroupLabelCentered(300, 654, "Rea-Sixty");
+    ImGui_PopFont(ctx);
+
+    // Right-click context menu — same canvas ID scope as drawUf8Vector.
+    renderBindingContextMenu_(ctx, getActiveLayer());
+
+    ImGui_PopFont(ctx);
+}
+
 // Push a Rea-Sixty-themed colour set so the editor's combos / buttons /
 // inputs match the schematic palette (dark blue-grey, soft accents)
 // instead of the default ImGui orange/red. Returns count to pop.
@@ -3163,12 +3525,18 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       // never fired because the picker poll wrote to
                       // layers[-1].bindings[None] (a no-op).
                       int uqLayer = -1, int uqQuick = -1,
-                      int uqSubBank = -1, int uqSlot = -1)
+                      int uqSubBank = -1, int uqSlot = -1,
+                      // UF1 soft-key bank destination. When uf1Bank >= 0 the
+                      // async "Browse Action..." result routes into the UF1
+                      // bank store (setUf1SoftBankSlot) instead of a layer /
+                      // user-quick binding. Frank 2026-07-30.
+                      int uf1Bank = -1, int uf1Slot = -1)
 {
     using namespace uf8::bindings;
     bool dirty = false;
     char idbuf[80];
     const bool isUserQuick = (uqLayer >= 0);
+    const bool isUf1Bank   = (uf1Bank >= 0);
 
     auto sectionRadio = [&](const char* tag, const char* label, ActionType t) {
         const bool on = (*f.type == t);
@@ -3248,11 +3616,15 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // close it without picking. Polling is owned by main.cpp's
         // onTimer hook so the result lands even if the user navigates
         // away from this editor before the picker closes.
-        const bool pickerOpen = isUserQuick
-            ? reasixty_actionPickerActiveForUserQuick(
-                uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx)
-            : reasixty_actionPickerActiveFor(
-                layer, id, isLongPress, modIdx, stepIdx);
+        const bool pickerOpen =
+              isUserQuick
+                ? reasixty_actionPickerActiveForUserQuick(
+                    uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx)
+            : isUf1Bank
+                ? reasixty_actionPickerActiveForUf1Bank(
+                    uf1Bank, uf1Slot, modIdx, stepIdx)
+                : reasixty_actionPickerActiveFor(
+                    layer, id, isLongPress, modIdx, stepIdx);
         snprintf(idbuf, sizeof(idbuf), "%s##%s_browse",
                       pickerOpen ? "Cancel Action Pick" : "Browse Action...",
                       prefix);
@@ -3263,6 +3635,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             } else if (isUserQuick) {
                 reasixty_actionPickerStartUserQuick(
                     uqLayer, uqQuick, uqSubBank, uqSlot, modIdx, stepIdx);
+            } else if (isUf1Bank) {
+                reasixty_actionPickerStartUf1Bank(
+                    uf1Bank, uf1Slot, modIdx, stepIdx);
             } else {
                 reasixty_actionPickerStart(layer, id,
                                            isLongPress,
@@ -4127,13 +4502,18 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         id == ButtonId::Uc1Encoder1 || id == ButtonId::Uc1Encoder2
      || id == ButtonId::Uc1Encoder2Push || id == ButtonId::Uc1Magnifier
      || id == ButtonId::Uc1Btn360;
+    // UF1 shares the Layer map but has NO UF8 "Quick" concept — skip the
+    // Layer/Quick breadcrumb (same as UC1) so the UF1 page reads as UF1,
+    // not UF8 (Frank 2026-07-30). One contiguous ButtonId block.
+    const bool idIsUf1 =
+        id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Rec;
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
       : (id == ButtonId::Quick2) ? 2
       : (id == ButtonId::Quick3) ? 3 : 0;
 
-    if (idIsUc1) {
-        // No layer breadcrumb for UC1 — just the control face.
+    if (idIsUc1 || idIsUf1) {
+        // No layer/Quick breadcrumb for UC1 / UF1 — just the control face.
         snprintf(header, sizeof(header), "Editing: %s", hwFaceLabel(id));
     } else if (idIsLayer) {
         snprintf(header, sizeof(header),
@@ -4710,6 +5090,150 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     }
     ImGui_PopID(ctx);   // idtag
     ImGui_PopID(ctx);   // "uqslot_inline"
+}
+
+// UF1 soft-key bank slot editor — assign a label + action to one of the 4
+// display soft-keys within the selected bank (10 banks, DAW mode). Reuses
+// drawActionPicker via the slot's Plain short-press ref; built-ins, typed
+// REAPER command IDs, keyboard macros AND the async "Browse Action..."
+// dialog all persist (the picker routes to the bank store via uf1Bank/
+// uf1Slot). Frank 2026-07-30.
+void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
+{
+    using namespace uf8::bindings;
+    if (bank < 0 || bank >= kUf1SoftBankCount)       return;
+    if (slotIdx < 0 || slotIdx >= kUf1SoftBankSlots) return;
+
+    Binding bd = getUf1SoftBankSlot(bank, slotIdx);
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+
+    char hdr[120];
+    snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
+                  slotIdx + 1, bank + 1, kUf1SoftBankCount);
+    ImGui_Text(ctx, hdr);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    char idtag[32];
+    snprintf(idtag, sizeof(idtag), "uf1sb_%d_s%d", bank, slotIdx);
+    ImGui_PushID(ctx, idtag);
+
+    bool dirty = false;
+    char labelBuf[64] = {0};
+    std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
+    ImGui_PushItemWidth(ctx, 240);
+    if (ImGui_InputTextWithHint(ctx, "Label##uf1sblabel",
+                                "shown on the UF1 screen soft-key",
+                                labelBuf, sizeof(labelBuf), nullptr, nullptr)) {
+        bd.label = labelBuf;
+        dirty = true;
+    }
+    ImGui_PopItemWidth(ctx);
+
+    ActionFieldsRef ref{
+        &sp.type, &sp.action, &sp.param,
+        /*label*/ nullptr,
+        &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
+        &sp.midiData1, &sp.midiData2,
+        &sp.fireOnInactive,
+        &sp.stepValue, &sp.wrap,
+    };
+    if (drawActionPicker(ctx, idtag, ref,
+                         /*layer*/ -1, ButtonId::None,
+                         /*isLongPress*/ false, /*modIdx*/ 0, /*stepIdx*/ 0,
+                         /*uqLayer*/ -1, /*uqQuick*/ -1,
+                         /*uqSubBank*/ -1, /*uqSlot*/ -1,
+                         /*uf1Bank*/ bank, /*uf1Slot*/ slotIdx)) {
+        dirty = true;
+    }
+    if (ImGui_Button(ctx, "Clear slot##uf1sbclr",
+                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+        bd = Binding{};
+        dirty = true;
+    }
+
+    // LED — Active / Inactive colour + brightness, exactly like the UF8
+    // soft-key slots. The DAW-mode soft-key painter reads these back to
+    // drive the display-soft-key LEDs (bright/engaged uses Active, idle uses
+    // Inactive; empty slot stays dark unless "Show LED when empty").
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "LED");
+    ImGui_TextDisabled(ctx,
+        "Active = the bound action is engaged. Inactive = idle.");
+    ImGui_Spacing(ctx);
+
+    auto drawSlotLedRow = [&](const char* rowLabel, uint8_t (&rgb)[3],
+                              Brightness& bri, const char* rowTag) {
+        ImGui_Text(ctx, rowLabel);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetCursorPosX(ctx, 80.0);
+        const int curRgba = (int(rgb[0]) << 24) | (int(rgb[1]) << 16)
+                          | (int(rgb[2]) <<  8) | 0xFF;
+        char btnId[48];
+        snprintf(btnId, sizeof(btnId), "##uf1sbled_%s", rowTag);
+        int btnFlags = 0; double bw = 56.0, bh = 22.0;
+        if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh)) {
+            char popId[48];
+            snprintf(popId, sizeof(popId), "uf1sbled_pal_%s", rowTag);
+            ImGui_OpenPopup(ctx, popId, nullptr);
+        }
+        char popId[48];
+        snprintf(popId, sizeof(popId), "uf1sbled_pal_%s", rowTag);
+        if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+            int paletteCount = 0;
+            const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
+            const double sw = 26.0; const int perRow = 5;
+            for (int i = 0; i < paletteCount; ++i) {
+                const auto& p = palette[i];
+                const int packed = (int(p.r) << 24) | (int(p.g) << 16)
+                                 | (int(p.b) <<  8) | 0xFF;
+                char swId[48];
+                snprintf(swId, sizeof(swId), "##uf1sbled_pp_%s_%d", rowTag, i);
+                int swFlags = 0; double w = sw, h = sw;
+                if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                    rgb[0] = p.r; rgb[1] = p.g; rgb[2] = p.b;
+                    dirty = true;
+                    ImGui_CloseCurrentPopup(ctx);
+                }
+                if ((i % perRow) != (perRow - 1) && i != paletteCount - 1)
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+            }
+            ImGui_EndPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "  ");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        const char* names[] = {"Off", "Dim", "Bright"};
+        for (int i = 0; i < 3; ++i) {
+            char idbuf2[48];
+            snprintf(idbuf2, sizeof(idbuf2), "%s##uf1sbled_b_%s_%d",
+                          names[i], rowTag, i);
+            if (ImGui_RadioButton(ctx, idbuf2, static_cast<int>(bri) == i)) {
+                bri = static_cast<Brightness>(i);
+                dirty = true;
+            }
+            if (i < 2) ImGui_SameLine(ctx, nullptr, nullptr);
+        }
+    };
+    char tagA[32], tagI[32];
+    snprintf(tagA, sizeof(tagA), "act_%d_%d", bank, slotIdx);
+    snprintf(tagI, sizeof(tagI), "ina_%d_%d", bank, slotIdx);
+    drawSlotLedRow("Active",   bd.color,         bd.brightness,         tagA);
+    drawSlotLedRow("Inactive", bd.inactiveColor, bd.inactiveBrightness, tagI);
+
+    {
+        bool showEmpty = bd.ledShowWhenEmpty;
+        if (ImGui_Checkbox(ctx, "Show LED when empty##uf1sbled_swe",
+                           &showEmpty)) {
+            bd.ledShowWhenEmpty = showEmpty;
+            dirty = true;
+        }
+    }
+
+    if (dirty) setUf1SoftBankSlot(bank, slotIdx, bd);
+    ImGui_PopID(ctx);
 }
 
 // ---- User-Quick slot editor (OLD section-style) — UNUSED ---------------
@@ -5667,7 +6191,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // Which device tab is open drives the admin row below (UF8 = per-layer
     // save/load, UC1 = device-scoped UC1 save/load). Set inside the tab
     // bodies, which only run for the selected tab.
-    static int s_deviceTab = 0;   // 0 = UF8, 1 = UC1
+    static int s_deviceTab = 0;   // 0 = UF8, 1 = UC1, 2 = UF1
     int tabBarFlags = 0;
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
         if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
@@ -5694,6 +6218,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         if (ImGui_BeginTabItem(ctx, "UC1", nullptr, nullptr)) {
             s_deviceTab = 1;
             drawUc1BindingsVector(ctx, s_selected);
+            ImGui_EndTabItem(ctx);
+        }
+        if (ImGui_BeginTabItem(ctx, "UF1", nullptr, nullptr)) {
+            s_deviceTab = 2;
+            drawUf1Vector(ctx, s_selected);
             ImGui_EndTabItem(ctx);
         }
         ImGui_EndTabBar(ctx);
@@ -5741,10 +6270,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
      || s_selected == ButtonId::Uc1Encoder2Push
      || s_selected == ButtonId::Uc1Magnifier
      || s_selected == ButtonId::Uc1Btn360;
+    // UF1 ButtonIds are one contiguous block at the tail of the enum
+    // (Bindings.h: Uf1VpotAbovePush … Uf1Rec) — range-test covers them all.
+    const bool selIsUf1 =
+        s_selected >= ButtonId::Uf1VpotAbovePush
+     && s_selected <= ButtonId::Uf1Rec;
     const ButtonId editSel =
-        (s_deviceTab == 1 && !selIsUc1) ? ButtonId::None :   // UC1 tab: UC1 only
-        (s_deviceTab == 0 &&  selIsUc1) ? ButtonId::None :   // UF8 tab: hide UC1
-        s_selected;
+        (s_deviceTab == 2) ? (selIsUf1 ? s_selected : ButtonId::None) : // UF1 tab: UF1 only
+        (s_deviceTab == 1) ? (selIsUc1 ? s_selected : ButtonId::None) : // UC1 tab: UC1 only
+        ((selIsUc1 || selIsUf1) ? ButtonId::None : s_selected);         // UF8 tab: neither
 
     const bool isTopSoftKey =
         editSel >= ButtonId::TopSoftKey1
@@ -5814,6 +6348,26 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // selected + a Per-Quick LED override so the user can
         // distinguish (L, Q) contexts visually. Frank 2026-05-13.
         drawSubBankCellEditor_(ctx, s_editLayer, s_editQuick, editSel);
+    } else if (editSel >= ButtonId::Uf1DisplaySoft1
+               && editSel <= ButtonId::Uf1DisplaySoft4) {
+        // UF1 display soft-key → the 10-bank soft-key store (DAW mode). The
+        // Bank slider drives the LIVE bank (reasixty_uf1SoftBank), so picking
+        // here and paging ← → on the UF1 stay in lockstep.
+        const int slotIdx = static_cast<int>(editSel)
+                          - static_cast<int>(ButtonId::Uf1DisplaySoft1);
+        int bank1 = reasixty_uf1SoftBank() + 1;   // 1-based for the slider
+        ImGui_PushItemWidth(ctx, 240);
+        if (ImGui_SliderInt(ctx, "Soft-Key Bank##uf1_bank", &bank1,
+                            1, uf8::bindings::kUf1SoftBankCount,
+                            /*format*/ nullptr, /*flags*/ nullptr)) {
+            reasixty_setUf1SoftBank(bank1 - 1);
+        }
+        ImGui_PopItemWidth(ctx);
+        ImGui_TextDisabled(ctx,
+            "10 banks of 4 soft-keys, active in DAW mode. The UF1 "
+            "\xE2\x97\x82 \xE2\x96\xB8 keys page the same bank.");
+        ImGui_Spacing(ctx);
+        drawUf1SoftBankSlotEditor_(ctx, reasixty_uf1SoftBank(), slotIdx);
     } else {
         drawBindingEditor(ctx, s_editLayer, editSel);
     }

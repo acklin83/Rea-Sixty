@@ -411,12 +411,20 @@ struct SoftKeyBankPreset {
     Binding     slots[kSlotsPerSubBank];           // 8 top-soft-key bindings
 };
 
+// UF1 soft-key banks: the 4 large-screen display soft-keys × 10 pages =
+// 40 user-assignable slots (SSL UF1 native model). Active in DAW mode,
+// paged by the ← → keys. Global (not per-layer) — 10 banks is plenty.
+constexpr int kUf1SoftBankCount = 10;
+constexpr int kUf1SoftBankSlots = 4;
+
 struct Config {
     int                            version     = 1;
     int                            activeLayer = 0;
     Layer                          layers[3];
     LayerUserQuicks                userQuicks[3];     // per-layer user-Quick data
     std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
+    // UF1 soft-key banks (global). [bank 0..9][slot 0..3].
+    Binding uf1SoftBanks[kUf1SoftBankCount][kUf1SoftBankSlots];
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -668,6 +676,13 @@ int               loadFactoryReaSixtySet(int layer, int quick);
 // action; callers can fall through on empty.
 bool     dispatchUserQuickSlot(int layer, int quick, int subBank,
                                int slot, bool pressed);
+
+// ---- UF1 soft-key banks (global; 10 banks × 4 slots) -------------------
+Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
+void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
+// Run a UF1 bank slot's action (same long-press + modifier logic as
+// dispatchUserQuickSlot). Returns true if the slot has an action.
+bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);
 
 // Replace (or insert) a single binding and persist. Caller is the UI;
 // any in-flight USB-thread dispatch holding the lock blocks briefly.
