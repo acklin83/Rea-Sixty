@@ -1,5 +1,12 @@
 # HANDOFF — UF1 Loudness screen (capture + build), starting 2026-07-24
 
+> **2026-07-29 status (authoritative = memory `HANDOFF-uf1-meter-2026-07-29`):** Loudness
+> is BUILT (readouts + history + V-Pot layer, HW-verified) with two follow-ups. The
+> **left level bars** are now DECODED + BUILT + DEPLOYED (awaiting HW verify): they are
+> **0x0122 sub-frame 0, idx 26 = Momentary / idx 27 = Short-Term**, driven live on the
+> history plot law from `getMeter(11)/(12)`. Decoder: `analysis/uf1_loudness_bar_decode.py`.
+> The old "sf2 momentary FROZEN" item below is superseded (sf2 now-region is live).
+
 Fresh-context entry point. The meter operator layer (Overview/Analogue/RTA) is
 DONE + HW-verified; Bug D (per-Digital-Type Overview bar scales) shipped `4cc9177`.
 **Loudness is the one meter screen NOT yet built** and is the next job.

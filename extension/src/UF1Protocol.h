@@ -178,6 +178,10 @@ constexpr uint16_t kPanBar    = 0x000f;
 constexpr uint16_t kChNumber  = 0x0014;
 constexpr uint16_t kCsType    = 0x0017;
 // Large LCD (0x01xx)
+constexpr uint16_t kTimecode     = 0x0119;  // 11-char 7-segment time/position field
+                                            // (Channel view only). byte = (SEG7[d]<<1)|dp,
+                                            // dp = separator dot after the digit; 0x00 = blank.
+                                            // Decoded 2026-07-24, analysis/uf1_0119_timecode_decode.py.
 constexpr uint16_t kSoftKeyLabel = 0x0104;
 constexpr uint16_t kFocusedParam = 0x010e;  // single focused param text (name+value)
 constexpr uint16_t kVpotBars     = 0x010f;  // 4 V-pot readout bars

@@ -192,14 +192,33 @@ bool patchVstBlock(std::string& chunk,
     return true;
 }
 
-// Walk all <VST "VST3: SSL ..."> blocks in `chunk`, apply `patch` to
-// each, return count of successful patches. Mutates `chunk` in place.
+// Find the next <VST "VST3: …"> block whose plug-in is an SSL CS-family or BC —
+// i.e. its VST3 name starts with "SSL " (Channel Strip 2 / 4K G / 360 Link / Bus
+// Compressor, all "VST3: SSL …") OR "4K " (the 4K B / 4K E channel strips, whose
+// VST3 names are literally "VST3: 4K B" / "VST3: 4K E" with NO "SSL" prefix).
+// Returns the head '<' offset, or npos. FIX (Frank HW 2026-07-29): the old single
+// "<VST \"VST3: SSL " marker silently SKIPPED 4K B/E, so HQ Mode / A/B no-op'd on
+// them (they lack "SSL" in the name) — on every surface, not just UF1.
+size_t nextSslVstHead(const std::string& chunk, size_t from) {
+    constexpr std::string_view kVstPrefix = "<VST \"VST3: ";
+    for (size_t p = from; ; ) {
+        const size_t h = chunk.find(kVstPrefix, p);
+        if (h == std::string::npos) return std::string::npos;
+        const size_t nameStart = h + kVstPrefix.size();
+        if (chunk.compare(nameStart, 4, "SSL ") == 0 ||
+            chunk.compare(nameStart, 3, "4K ")  == 0)
+            return h;
+        p = nameStart;   // not an SSL/4K block — keep looking
+    }
+}
+
+// Walk all SSL CS-family / BC <VST> blocks in `chunk`, apply `patch` to each,
+// return count of successful patches. Mutates `chunk` in place.
 int forEachSslVstBlock(std::string& chunk, PatchFn patch) {
-    constexpr std::string_view kVstMarker = "<VST \"VST3: SSL ";
     int patched = 0;
     size_t searchFrom = 0;
     while (true) {
-        const size_t headStart = chunk.find(kVstMarker, searchFrom);
+        const size_t headStart = nextSslVstHead(chunk, searchFrom);
         if (headStart == std::string::npos) break;
         const size_t headEnd = chunk.find('\n', headStart);
         if (headEnd == std::string::npos) break;
@@ -249,8 +268,7 @@ namespace {
 // Decode the first <VST "VST3: SSL ..."> block's binary blob into the
 // XML payload. Returns empty string on any failure.
 std::string firstSslXml(const std::string& chunk) {
-    constexpr std::string_view kVstMarker = "<VST \"VST3: SSL ";
-    const size_t headStart = chunk.find(kVstMarker);
+    const size_t headStart = nextSslVstHead(chunk, 0);
     if (headStart == std::string::npos) return {};
     const size_t headEnd = chunk.find('\n', headStart);
     if (headEnd == std::string::npos) return {};

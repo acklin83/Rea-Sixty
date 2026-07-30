@@ -379,6 +379,14 @@ std::unique_ptr<uf1::UF1Device>   g_uf1_dev;
 std::atomic<uint16_t> g_uf1FaderPos{0};        // last 15-bit position from the fader
 std::atomic<bool>     g_uf1FaderHasPos{false}; // a position has been seen this session
 std::atomic<bool>     g_uf1FaderTouched{false};// capacitive touch state (motor limp while true)
+// UF1 FLIP (Flip key 0x38). SSL UF1 User Guide p16: "FLIP is used to assign the
+// current V-Pot parameter to the fader." On the UF1 the fader owns Volume and the
+// above-fader V-Pot owns Pan; FLIP swaps them (fader → Pan, V-Pot → Volume).
+// UF1-LOCAL — NOT the UF8/UC1 g_flip (which flips the 8-strip fader/V-Pot model).
+// Session-only (not persisted): least-surprise, so a restart never boots with the
+// fader silently riding Pan. Read by the fader follow/writeback + the above-fader
+// V-Pot handler. Atomic store from the input worker; read on the main thread.
+std::atomic<bool>     g_uf1Flip{false};
 // UF1 display view (Phase 3, Meter-Bridge). The MODE button (id 0x20) toggles
 // the firmware's Channel <-> Meter layout autonomously (cap75: no host switch
 // opcode — it re-purposes the same element addresses by view context, e.g.
@@ -422,6 +430,36 @@ std::atomic<int>      g_uf1MeterPage{0};
 // 7-9, 2026-07-24) into kUf1LoudnessVPots. Page 9 (Save Loudness History) has blank
 // V3/V4. Page 0 V4 ("Scroll Timeline") is a GUI action with no param → unassigned.
 constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 10 };
+
+// ---- UF1 Channel-view (SSL channel-strip) V-Pot state (p188 tables) --------
+// In Channel view the 4 main V-Pots drive the focused SSL channel-strip plug-in
+// — the twin of the Meter-view V-Pot layer above. SSL's UF1 User Guide p188
+// lays out 8 parameter PAGES per plug-in, shared by the 4 V-Pots and the 4 soft
+// keys; the ◄ ► arrows page 1..8 (wrap), Quick-Key-2 toggles Normal ↔ Fine
+// encoder resolution. Both are set from the input worker (atomic store only),
+// read by the main-thread V-Pot handler + painter (threading rule). See
+// docs/uf1-vpot-softkey-tables.md + docs/uf1-control-buildout-blueprint.md.
+constexpr int     kUf1CsPageCount = 8;  // max pages (channel-strip types); worker fallback
+// Pages per strip TYPE (index = uf1CsPluginType_): 0 CS2, 1 4K B, 2 4K E,
+// 3 360 Link = the 8 p188 channel-strip pages; 4 = SSL Bus Compressor 2, a
+// Rea-Sixty extra (NOT in SSL's UF1 manual — the UF1 guide covers only the four
+// channel strips + Meter) with just 2 V-Pot/soft-key pages of its own params.
+constexpr int     kUf1CsTypePageCount[6] = { 8, 8, 8, 8, 2, 8 };  // …4=BC(2p), 5=4K G(8p)
+constexpr int     kUf1CsTypeCount = 6;
+std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count-1 per type)
+// Strip type currently under the channel V-Pots (uf1CsPluginType_), or -1 = none.
+// Written by the main-thread painter each tick; read by the input-worker ◄ ► handler
+// so it wraps within the ACTIVE type's page count (BC has 2, strips have 8) without
+// the worker touching the REAPER API (threading rule).
+std::atomic<int>  g_uf1CsActiveType {-1};
+std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
+
+// UF1 main-LCD time/position field (element 0x0119, Channel view only). Holds a
+// format_timestr_pos mode: 2 = Measures/Beats (default), 5 = h:m:s:f, 4 = Samples.
+// Cycled Measures->Time->Samples by the 360 button (worker thread, atomic store
+// only — threading rule); the format + send happen main-thread in uf1PaintChannel_.
+// Persisted as ExtState "uf1_tc_mode" (load main.cpp near nav_lower_row).
+std::atomic<int>  g_uf1TcMode {2};      // 2 Measures / 5 Time (h:m:s:f) / 4 Samples
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -3456,6 +3494,11 @@ void loadBrightness()
         if (n < 0 || n > 2) n = 0;
         g_navLowerRow.store(n);
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1_tc_mode"); v && *v) {
+        int n = std::atoi(v);
+        if (n != 2 && n != 4 && n != 5) n = 2;   // Measures / Samples / h:m:s:f only
+        g_uf1TcMode.store(n);
+    }
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
         int n = std::atoi(v);
         if (n < 0 || n > 2) n = 0;
@@ -3934,6 +3977,16 @@ struct PendingInput {
         Uf1MuteToggle,   // toggle mute (CUT) on the focused track
         Uf1SelectFocused,// exclusive-select the focused track
         Uf1Encoder,      // strip = uf1::enc id, value = signed detent delta
+        Uf1CsSoftKey,    // strip = channel-strip soft-key index 0..3 (p188).
+                         // Channel view only; the drain resolves the on-screen
+                         // SSL strip FX + current-page soft-key param and
+                         // TOGGLES it. value unused.
+        Uf1CsVpotPush,   // strip = channel V-Pot index 0..3 (0x09-0x0C). Channel
+                         // view only; the drain resolves the on-screen SSL strip
+                         // (CS or BC) + current-page V-Pot param and resets it to
+                         // its DEFAULT (canonical LinkSlot.deflt / user-mapped
+                         // UserLinkSlot.defaultNorm, reusing the UF8 mechanism).
+                         // value unused.
     };
     Kind    kind;
     uint8_t strip;
@@ -11103,6 +11156,9 @@ std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Pan};
 
 // One detent ≈ 1/64 of the full pan sweep (−1..+1). Conservative; HW-tunable.
 constexpr double kUf1AboveFaderPanPerDetent = 1.0 / 64.0;
+// FLIP mode: the above-fader V-Pot rides Volume (the fader took Pan). dB nudged
+// per raw encoder count (~4 counts/detent → ~1 dB/detent). Conservative; HW-tunable.
+constexpr double kUf1FlipVolDbPerCount = 0.25;
 
 // Apply an above-fader V-Pot detent delta to the focused track. Main-thread only
 // (drained from the input queue). Mode-dispatched so it's trivially extensible.
@@ -11111,6 +11167,18 @@ void applyUf1AboveFaderVpot_(int step)
     if (step == 0) return;
     MediaTrack* tr = uf1FocusedTrack_();
     if (!tr) return;
+    // FLIP swaps fader/V-Pot: with the fader on Pan, the V-Pot rides Volume.
+    // Nudge in dB per raw count → linear, absolute set via the surface path. Top
+    // matches the fader (kUf1FaderTopDb = 12 dB); floor at −60 dB.
+    if (g_uf1Flip.load()) {
+        const double curLin = GetMediaTrackInfo_Value(tr, "D_VOL");
+        const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
+        double nDb = curDb + step * kUf1FlipVolDbPerCount;
+        if (nDb >  12.0) nDb =  12.0;
+        if (nDb < -60.0) nDb = -60.0;
+        CSurf_OnVolumeChange(tr, std::pow(10.0, nDb / 20.0), false);
+        return;
+    }
     switch (g_uf1AboveFaderMode.load()) {
         case Uf1AboveFaderMode::Pan:
             // Relative pan write — canonical surface path (applies + automation +
@@ -11470,6 +11538,25 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     uf1EmitMeterParamLabels_(tr, fx, screen, page);
 }
 
+// Channel-view twin of applyUf1MeterVpot_: the 4 V-Pots drive the focused SSL
+// channel-strip plug-in per the p188 page tables. DEFINED far below (it needs
+// uf1ParamByName_ / uf1FindEqFx_, which live next to the channel painter);
+// forward-declared here so the encoder drain (kVpot1..4) can call it in
+// Channel view. Main-thread only.
+void applyUf1ChannelVpot_(uint8_t id, int step);
+
+// Channel-view soft-key handler (p188 tables): TOGGLE the current-page soft-key
+// param on the focused SSL channel-strip plug-in. DEFINED far below next to the
+// V-Pot handler (shares uf1ResolveCsFx_ / uf1ParamByName_ + the kUf1CsSoftKeys
+// table); forward-declared here so the soft-key drain can call it. idx = 0..3.
+// Main-thread only.
+void applyUf1ChannelSoftKey_(int idx);
+
+// Channel-view V-Pot push handler: reset the current-page V-Pot param to its
+// default on the focused SSL strip (CS or BC). DEFINED next to the V-Pot handler;
+// forward-declared here so the push drain can call it. idx = 0..3. Main-thread only.
+void applyUf1ChannelVpotPush_(int idx);
+
 // Forward decls: diag helpers live OUTSIDE this anonymous namespace
 // (after the closing `} // anonymous`) so UC1Surface.cpp can call
 // them via extern. Defined just below the namespace close.
@@ -11616,13 +11703,27 @@ void drainInputQueue()
                 case uf1::enc::kVpot1:          // 4 plugin V-pots. In Meter view
                 case uf1::enc::kVpot2:          // they operate the SSL Meter plug-in
                 case uf1::enc::kVpot3:          // (V1 instance select, V2-4 the
-                case uf1::enc::kVpot4:          // per-screen/page params). In Channel
-                    // view they stay inert (channel-strip mapping is future work).
+                case uf1::enc::kVpot4:          // per-screen/page params); in Channel
+                    // view they drive the focused SSL channel-strip plug-in (step 3b,
+                    // p188 tables — applyUf1ChannelVpot_).
                     if (g_uf1MeterView.load()) applyUf1MeterVpot_(id, step);
+                    else                       applyUf1ChannelVpot_(id, step);
                     break;
                 default:
                     break;
             }
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1CsSoftKey) {
+            // Channel-view soft-key press (0x19-0x1C): toggle the current-page
+            // p188 soft-key param on the on-screen SSL strip (main thread).
+            applyUf1ChannelSoftKey_(static_cast<int>(e.strip));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1CsVpotPush) {
+            // Channel-view V-Pot push (0x09-0x0C): reset the current-page V-Pot
+            // param to its default on the on-screen SSL strip (main thread).
+            applyUf1ChannelVpotPush_(static_cast<int>(e.strip));
             continue;
         }
         if (e.kind == PendingInput::NavJumpStrip) {
@@ -15868,6 +15969,95 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterPage.store((g_uf1MeterPage.load() + dir) % n);
                 break;
             }
+            // Channel view: the SAME ◄ ► arrows page the SSL channel-strip
+            // parameter PAGE (1..8, wrap) shared by the 4 V-Pots + soft keys
+            // (SSL UF1 User Guide p188). Channel view only — the Meter block
+            // above owns them there. These ship UNBOUND (Bindings.cpp factory
+            // seed), so this claims no user binding; a page-view binding, if the
+            // user later adds one, is superseded here exactly as the Meter arrows
+            // do. Atomic store only (threading rule). Read by the V-Pot handler +
+            // painter on the main thread.
+            if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
+                && ev.pressed && !g_uf1MeterView.load()) {
+                // Wrap within the ACTIVE strip type's page count (BC 2 has 2, the
+                // channel strips 8) — read the type the painter last resolved
+                // (worker can't call the REAPER API). −1 (nothing resolved) →
+                // full 8-page fallback so paging still works before the first paint.
+                const int ty = g_uf1CsActiveType.load();
+                const int np = (ty >= 0 && ty < kUf1CsTypeCount)
+                                   ? kUf1CsTypePageCount[ty] : kUf1CsPageCount;
+                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (np - 1);
+                g_uf1CsPage.store((g_uf1CsPage.load() % np + dir) % np);
+                break;
+            }
+            // Channel view: Quick-Key-2 (transport soft-key, id 0x35) toggles the
+            // channel V-Pots between Normal and Fine resolution (p188). Consumed
+            // by applyUf1ChannelVpot_ via reasixty_uf8KnobScale(g_uf1CsFine). Also
+            // ships UNBOUND, so no user binding is lost. Channel view only.
+            if (ev.id == uf1::btn::kT2 && ev.pressed && !g_uf1MeterView.load()) {
+                g_uf1CsFine.store(!g_uf1CsFine.load());
+                break;
+            }
+            // Channel view: the 360 button (id 0x25) cycles the 0x0119 time/position
+            // field format Measures(2) -> Time h:m:s:f(5) -> Samples(4) -> Measures.
+            // Uf1Btn360 ships UNBOUND (no Bindings.cpp factory seed), so this claims
+            // no user binding — same trade-off the arrows / Quick-Key-2 above make.
+            // Atomic store only; the painter formats + sends on the main thread and
+            // persists the choice to ExtState (threading rule). Channel view only —
+            // the field only exists there, and the 360 button stays free in Meter view.
+            if (ev.id == uf1::btn::k360 && ev.pressed && !g_uf1MeterView.load()) {
+                const int cur  = g_uf1TcMode.load();
+                const int next = (cur == 2) ? 5 : (cur == 5) ? 4 : 2;
+                g_uf1TcMode.store(next);
+                break;
+            }
+            // Channel view: the 4 display soft keys (0x19-0x1C) are the SSL
+            // channel-strip section/toggle soft keys (p188). Display soft-key 1
+            // is the Meter Screen Selector in Meter view (block above, gated on
+            // g_uf1MeterView) — here we claim ALL FOUR only in Channel view, so
+            // meter-view behaviour is untouched. They ship UNBOUND (no factory
+            // seed), same trade-off the arrows / Quick-Key-2 / 360 make above, so
+            // no user binding is superseded. Queue the press for the main thread
+            // (threading rule); the drain resolves the on-screen strip FX + the
+            // current-page soft-key param and TOGGLES it (no-op if the slot is
+            // blank / unassigned or the focused FX is not an SSL strip). Toggle
+            // on the press edge only; the release falls through to dispatch
+            // (unbound → no-op), exactly as the channel arrows do.
+            if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
+                 ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
+                && ev.pressed && !g_uf1MeterView.load()) {
+                queueInput({PendingInput::Uf1CsSoftKey,
+                            static_cast<uint8_t>(ev.id - uf1::btn::kDisplaySoft1), 0.0});
+                break;
+            }
+            // Channel V-Pot pushes (0x09-0x0C): reset the current-page V-Pot
+            // param to its DEFAULT (SSL 360 push-to-default). Channel view only;
+            // the drain resolves the on-screen SSL strip (CS or BC) + page param
+            // and writes its stored default. Ship UNBOUND (no factory seed) — same
+            // trade-off the arrows / 360 / Quick-Key-2 / soft-keys make — so no
+            // user binding is lost. Press edge only; the release falls through to
+            // dispatch (unbound → no-op). The above-fader push (0x08) + channel
+            // push (0x0D) are NOT claimed here (still user-bindable).
+            if ((ev.id == uf1::btn::kVpot1Push || ev.id == uf1::btn::kVpot2Push ||
+                 ev.id == uf1::btn::kVpot3Push || ev.id == uf1::btn::kVpot4Push)
+                && ev.pressed && !g_uf1MeterView.load()) {
+                queueInput({PendingInput::Uf1CsVpotPush,
+                            static_cast<uint8_t>(ev.id - uf1::btn::kVpot1Push), 0.0});
+                break;
+            }
+            // FLIP key (0x38): "assign the current V-Pot parameter to the fader"
+            // (SSL UF1 User Guide p16). On the UF1 the fader owns Volume and the
+            // above-fader V-Pot owns Pan → FLIP swaps them (fader → Pan, V-Pot →
+            // Volume). Toggle the UF1-local g_uf1Flip (NOT the UF8/UC1 g_flip);
+            // the main-thread fader follow/writeback + applyUf1AboveFaderVpot_ read
+            // it. Applies in BOTH views (the fader tracks volume in both). Ships
+            // UNBOUND (no factory seed), so no user binding is superseded — same
+            // trade-off the arrows / 360 / Quick-Key-2 make above. Press edge only;
+            // atomic store (threading rule).
+            if (ev.id == uf1::btn::kFlip && ev.pressed) {
+                g_uf1Flip.store(!g_uf1Flip.load());
+                break;
+            }
             // All other UF1 buttons route through the shared Bindings
             // system (Phase 1) — fromUf1DeviceId maps the device byte to a
             // UF1-specific ButtonId, and dispatch() fires the bound action.
@@ -15987,6 +16177,24 @@ uint16_t uf1VolToPos_(double linear)
     double pos = slider / topSlider * static_cast<double>(kUf1FaderMax);
     if (pos < 0) pos = 0;
     if (pos > static_cast<double>(kUf1FaderMax)) pos = kUf1FaderMax;
+    return static_cast<uint16_t>(pos + 0.5);
+}
+
+// FLIP mode fader <-> Pan mapping. The fader travel (0..kUf1FaderMax) maps
+// LINEARLY to pan (−1..+1): bottom = hard L, centre = 0, top = hard R. No dB
+// curve — pan is already a linear −1..+1 control. Twin of uf1PosToVol_/…VolToPos_
+// used when g_uf1Flip is engaged (fader owns Pan). See g_uf1Flip.
+double uf1PosToPan_(uint16_t pos)
+{
+    if (pos > kUf1FaderMax) pos = kUf1FaderMax;
+    return static_cast<double>(pos) / static_cast<double>(kUf1FaderMax) * 2.0 - 1.0;
+}
+
+uint16_t uf1PanToPos_(double pan)
+{
+    if (pan < -1.0) pan = -1.0;
+    if (pan >  1.0) pan =  1.0;
+    const double pos = (pan + 1.0) * 0.5 * static_cast<double>(kUf1FaderMax);
     return static_cast<uint16_t>(pos + 0.5);
 }
 
@@ -17598,6 +17806,15 @@ int uf1ParamByName_(MediaTrack* tr, int fx, const char* want)
     const int pc = TrackFX_GetNumParams(tr, fx);
     const std::string w = uf1Lower_(want);
     char nm[128];
+    // Pass 1: EXACT (case-insensitive) match — so a short name never loses to a
+    // longer param it happens to be a substring of. 4K G in particular collides:
+    // "Pre" is inside "Dynamics Pre-EQ" (lower idx), "Width" inside "Width Mode" /
+    // "Width Frequency". Exact-first picks the real param; substring is the fallback.
+    for (int p = 0; p < pc; ++p)
+        if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) && uf1Lower_(nm) == w)
+            return p;
+    // Pass 2: substring fallback (e.g. "LF Freq" → "LF Frequency", "High Pass" →
+    // "High Pass Filter").
     for (int p = 0; p < pc; ++p)
         if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) &&
             uf1Lower_(nm).find(w) != std::string::npos)
@@ -17827,6 +18044,622 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefresh));
     g_uf1_dev->send(uf1::buildScreen(0x0122,
         std::span<const uint8_t>(col.data(), col.size())));
+}
+
+// ---- UF1 Channel-view V-Pot operator layer (p188 tables) -------------------
+// The twin of the Meter-view V-Pot layer (applyUf1MeterVpot_): in Channel view
+// the 4 main V-Pots drive the focused SSL channel-strip plug-in. SSL's UF1 User
+// Guide p188 (docs/uf1-vpot-softkey-tables.md) assigns each of the four
+// 360°-strip types 8 PAGES of 4 V-Pot params; ◄ ► page 1..8 (wrap), Quick-Key-2
+// toggles Fine. Every `param` string below is the EXACT REAPER param name from
+// docs/ssl-native-params/ (NOT guessed) used as a case-insensitive substring —
+// verified unambiguous within each plug-in's own param list. Blank doc cells →
+// an empty slot (no-op). Soft-key assignments are a separate layer (step B).
+struct Uf1CsVPot {
+    const char* param;      // REAPER param-name substring for uf1ParamByName_;
+                            //  nullptr = this V-Pot is unassigned on this page
+    const char* label;      // short name shown above the V-Pot value
+    bool        bipolar = false;  // centre-notch param (0 dB @ norm 0.5) — EQ
+                            //  gain / trim: gets the SSL magnet like the UF8 path
+};
+struct Uf1CsPage {
+    Uf1CsVPot v1, v2, v3, v4;
+    const Uf1CsVPot& slot(int i) const {
+        return (i == 0) ? v1 : (i == 1) ? v2 : (i == 2) ? v3 : v4;
+    }
+};
+// [type][page]. type: 0 = Channel Strip 2, 1 = 4K B, 2 = 4K E, 3 = 360 Link (the
+// 8 p188 channel-strip pages, transcribed verbatim from
+// docs/uf1-vpot-softkey-tables.md), 4 = SSL Bus Compressor 2 (Rea-Sixty extra —
+// the standalone BC is NOT in SSL's UF1 manual; 2 pages). param strings resolved
+// against docs/ssl-native-params/.
+constexpr Uf1CsPage kUf1CsVPots[6][8] = {
+    { // 0 — Channel Strip 2
+        { {"Width","Width"}, {}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
+        { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
+        { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
+        { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
+    },
+    { // 1 — 4K B
+        { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
+        { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
+        { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
+        { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K B has no Gate Hold
+    },
+    { // 2 — 4K E
+        { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
+        { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
+        { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
+        { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K E has no Gate Hold
+    },
+    { // 3 — 360 Link (param names are the wrapper's shorter "Comp …" forms)
+        { {"Width","Width"}, {"Saturation Amount","Sat Amt"}, {"Output Trim","Out Trim",true}, {"Comp Mix","Comp Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
+        { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
+        { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
+        { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
+        { {"Comp Ratio","Ratio"}, {"Comp Threshold","Thresh"}, {"Comp Release","Release"}, {} },
+        { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
+    },
+    { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra; standalone plug-in, NOT in the
+      //     UF1 manual). Names verified vs the BC2 dump docs/ssl-native-params/
+      //     VST3__SSL_Native_Bus_Compressor_2_(SSL).md — "Dry/Wet" (not "Mix") so
+      //     it does not also match "Mix Lock". Only 2 pages (kUf1CsTypePageCount[4]
+      //     = 2); pages 3-8 blank. None bipolar (BC params are monotonic; Makeup 0
+      //     dB sits at norm 0.25, not 0.5).
+        { {"Threshold","Thresh"}, {"Ratio","Ratio"}, {"Attack","Attack"}, {"Release","Release"} },
+        { {"Makeup","Makeup"}, {"Dry/Wet","Mix"}, {"Sidechain HPF","S/C HPF"}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+    },
+    { // 5 — SSL 4K G (Rea-Sixty extra; NOT in the p188 tables). Layout = 4K E (both
+      //     4000-series) — every param name verified vs the 4K G dump; exact-first
+      //     resolution in uf1ParamByName_ keeps "Width"/"Pre" off "Width Frequency"/
+      //     "Dynamics Pre-EQ". 8 pages like the other channel strips.
+        { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
+        { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
+        { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
+        { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },
+    },
+};
+// One physical detent = this much normalised movement (fine dial; ~50 clicks a
+// full sweep). Quartered in Fine mode via reasixty_uf8KnobScale. HW-tunable.
+constexpr double kUf1CsVPotStep = 0.02;
+
+// ---- UF1 Channel-view SOFT-KEY operator layer (p188 tables) ----------------
+// The 4 display soft keys (0x19-0x1C) surrounding the LCD are the SSL channel-
+// strip section / toggle keys — the twin of the V-Pot table above, sharing the
+// SAME page (g_uf1CsPage). SSL's UF1 User Guide p188 assigns each 360°-strip
+// type 8 pages of 4 soft keys (docs/uf1-vpot-softkey-tables.md, SOFT-KEY cols).
+// Almost all are 2-state TOGGLES (Ø phase, EQ In, LF/HF Bell, EQ Type G/E, S/C
+// Listen, Dynamics In, Gate Expander, Fast Attack, Peak, …). Each `param` string
+// is the EXACT REAPER param name from docs/ssl-native-params/ (NOT guessed), used
+// as a case-insensitive substring by uf1ParamByName_, verified to resolve to a
+// unique 2-state param within each plug-in's own list. `param == nullptr` = the
+// key is NOT param-driven on this page: either a blank doc cell (label "" → the
+// soft-key slot is cleared) or a label-only key SSL shows but that has no plug-in
+// param (PLUG-IN, SOLO SAFE, HQ MODE, A/B, S/C MODE — see the report). Those
+// paint their label but a press no-ops.
+// Soft-key action kind. Most keys toggle a VST3 param (Param, resolved by
+// `param` name). HQ MODE and A/B compare are NOT VST3 params on the SSL strips
+// (verified absent in docs/ssl-native-params/) — they live only in the plug-in
+// state chunk and are toggled via PluginChunkPatch (togglePluginHQ / …AB), the
+// SAME hook the UF8 soft-key bank uses ([[ssl-chunk-non-auto-params]]).
+enum class Uf1CsSkAct : uint8_t { Param, HQ, AB, StripMode };
+struct Uf1CsSoftKey {
+    const char* param;   // param-name substring for uf1ParamByName_; nullptr = not param-togglable
+    const char* label;   // p188 soft-key text painted on 0x0104 ("" = blank slot)
+    Uf1CsSkAct  act = Uf1CsSkAct::Param;  // HQ / AB → chunk-patch instead of `param`
+};
+struct Uf1CsSkPage {
+    Uf1CsSoftKey k1, k2, k3, k4;
+    const Uf1CsSoftKey& slot(int i) const {
+        return (i == 0) ? k1 : (i == 1) ? k2 : (i == 2) ? k3 : k4;
+    }
+};
+// [type][page]. type: 0 = Channel Strip 2, 1 = 4K B, 2 = 4K E, 3 = 360 Link, 4 =
+// SSL Bus Compressor 2 (Rea-Sixty extra, 2 pages). "\xd8" = the Ø (phase) glyph
+// SSL paints on soft-key 1 (cap77 idx0 = 0xd8; surface font is Latin-1, 0xd8 = Ø).
+// Channel-strip rows transcribed verbatim from the p188 SOFT-KEY columns; param
+// strings resolved against docs/ssl-native-params/.
+constexpr Uf1CsSkPage kUf1CsSoftKeys[6][8] = {
+    { // 0 — Channel Strip 2  (params: SSL Native Channel Strip 2)
+        { {"Polarity","\xd8"}, {nullptr,""}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {nullptr,"S/C MODE"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"LF Type","LF BELL"}, {nullptr,""}, {"EQ Type","E"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Type","E"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Type","E"}, {"EQ In","EQ"} },
+        { {"HF Type","HF BELL"}, {nullptr,""}, {"EQ Type","E"}, {"EQ In","EQ"} },
+        { {"Compressor Fast Attack","FAST ATTACK"}, {"Compressor Peak","PEAK"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYNAMICS"} },
+        { {"Gate Expander","EXPAND"}, {"Gate Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
+    },
+    { // 1 — 4K B  (params: 4K B; no EQ Type, no Comp/Gate Fast-Attack toggles)
+        { {"Polarity","\xd8"}, {"Pre IN","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"S/C Listen","S/C LISTEN"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"LF Type","LF BELL"}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
+        { {"HF Type","HF BELL"}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYNAMICS"} },
+        { {"Gate Expander","EXPAND"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
+    },
+    { // 2 — 4K E  (params: 4K E; "Pre" not "Pre IN"; EQ Colour 3-state; no legacy solo-safe)
+        { {"Polarity","\xd8"}, {"Pre","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"S/C Listen","S/C LISTEN"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"LF Type","LF BELL"}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {"HF Type","HF BELL"}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
+        { {"Gate Expander","EXPANDER"}, {"Gate Fast Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYN"} },
+    },
+    { // 3 — 360 Link  (params: SSL 360 Link wrapper; "Phase"/"Listen"; no solo-safe)
+        { {"Phase","\xd8"}, {"Saturation In","SATURATION IN"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"Listen","LISTEN"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {"LF Type","LF TYPE"}, {nullptr,""}, {"EQ Type","EQ TYPE"}, {"EQ In","EQ IN"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Type","EQ TYPE"}, {"EQ In","EQ IN"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Type","EQ TYPE"}, {"EQ In","EQ IN"} },
+        { {"HF Type","HF TYPE"}, {nullptr,""}, {"EQ Type","EQ TYPE"}, {"EQ In","EQ IN"} },
+        { {"Comp Fast Attack","CMP FST ATTK"}, {"Comp Peak","COMP PEAK"}, {"Listen","LISTEN"}, {"Dynamics In","DYNAMICS IN"} },
+        { {"Gate Expander","GTE EXPANDR"}, {"Gate Attack","GATE ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS IN"} },
+    },
+    { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra). Toggles verified vs the BC2
+      //     dump: "External S/C" (idx 0, 2-state), "Oversampling" (idx 1, OFF/2x/4x
+      //     — toggle flips OFF↔4x), A/B via the chunk StateASelected (togglePluginAB
+      //     works on BC too, [[ssl-chunk-non-auto-params]]). Only 2 pages; 3-8 blank.
+        { {"External S/C","EXT S/C"}, {"Oversampling","OVERSAMP"}, {nullptr,""}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+    },
+    { // 5 — SSL 4K G (Rea-Sixty extra). Soft-keys = 4K E (both 4000-series, same
+      //     "EQ Colour" 3-state); names verified vs the 4K G dump. HQ/A-B via chunk
+      //     ("SSL 4K G" → the walker's "SSL " prefix, and 4K G has HighQuality).
+        { {"Polarity","\xd8"}, {"Pre","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"S/C Listen","S/C LISTEN"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"LF Type","LF BELL"}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {"HF Type","HF BELL"}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
+        { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
+        { {"Gate Expander","EXPANDER"}, {"Gate Fast Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYN"} },
+    },
+};
+
+// Display soft-key LED ids (buttons 0x19-0x1C). The UF1 LED-id space is SEPARATE
+// from the button-id space, but every HW-confirmed pair follows led_id = btn_id −
+// 0x18: Solo 0x1D→0x05, Cut 0x1E→0x06, Sel 0x1F→0x07, ◄ 0x24→0x0c, ► 0x26→0x0e
+// (five points, cap64 + cap106). Applying the same offset to the display soft
+// keys (0x19-0x1C) gives 0x01-0x04. NOTE (decode-uncertain): no capture has
+// directly correlated the display soft-key LEDs, and 0x03 nominally overlaps the
+// speculative led::kEqGraph (which is never actually driven — the EQ graph is
+// screen element 0x0122, so no real conflict). The lit/off levels reuse the arrow
+// LEDs' proven encoding (0x11 lit / 0x00 off, FF38+FF39+FF3B). Needs a soft-key
+// LED capture to confirm on hardware.
+constexpr uint8_t kUf1CsSoftKeyLedId[4] = { 0x01, 0x02, 0x03, 0x04 };
+
+// Map the resolved FX to its p188 plugin-type index (0 CS2, 1 4K B, 2 4K E,
+// 3 360 Link), or -1 when it is not one of those four documented 360°-strip
+// types (non-SSL, 4K G, or a Bus Comp → V-Pots no-op, per the p188 tables which
+// cover only these four). Uses lookupPluginMapByName (its ordering already
+// resolves the 360-Link-BC-vs-CS name overlap), then the map's displayShort.
+// Main-thread only (fxIdentityName / TrackFX).
+int uf1CsPluginType_(MediaTrack* tr, int fx)
+{
+    if (!tr || fx < 0) return -1;
+    char nm[256] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return -1;
+    // 1. UC1-LEARNED CS/BC FIRST (a user plug-in map with domain CS/BC wins over a
+    //    built-in substring match — e.g. "bx_4K G" must NOT be mis-read as the SSL
+    //    "4K G"). Drive it on the UF1 with the CS2 / BC2 canonical layout (type 0 /
+    //    4); the resolvers resolve each position by canonical linkIdx + the user's
+    //    UserLinkSlot, unmapped positions blank. Frank 2026-07-29 (a future UF1
+    //    FX-learn will let params be mapped separately for the UF1). NB do NOT use
+    //    lookupPluginMapByName here — it also returns user maps, and its built-in
+    //    branch below would then swallow the learned plug-in (the "springt auf 4K E"
+    //    bug: displayShort ≠ the SSL names → −1 → the FindEq fallback grabs a real
+    //    SSL strip on the same track).
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm)) {
+        if (um->domain == uf8::Domain::ChannelStrip) return 0;   // learned CS → CS2 layout
+        if (um->domain == uf8::Domain::BusComp)      return 4;   // learned BC → BC2 layout
+    }
+    // 2. Built-in SSL types — kMaps ONLY (allPluginMaps), first-hit substring, same
+    //    order as lookupPluginMapByName's built-in stage.
+    for (const uf8::PluginMap& m : uf8::allPluginMaps()) {
+        if (std::string_view(nm).find(m.match) == std::string_view::npos) continue;
+        const std::string_view s = m.displayShort ? m.displayShort : "";
+        if (m.domain == uf8::Domain::ChannelStrip) {
+            if (s == "CS 2") return 0;
+            if (s == "4K B") return 1;
+            if (s == "4K E") return 2;
+            if (s == "Link") return 3;
+            if (s == "4K G") return 5;   // Rea-Sixty extra (not in p188); layout = 4K E
+            return -1;
+        }
+        // Standalone SSL Bus Compressor 2 (Rea-Sixty extra beyond SSL's UF1 scope):
+        // type 4. The 360 Link BC wrapper ("L-BC") has a different vst3 index set
+        // and is not mapped yet → no-op.
+        if (m.domain == uf8::Domain::BusComp) {
+            if (s == "BC 2") return 4;
+            return -1;
+        }
+        return -1;   // first built-in match decided it (e.g. 4K G non-CS branch)
+    }
+    return -1;
+}
+
+// ---- Learned-plugin linkIdx layout (UC1-learned CS/BC on the UF1) -----------
+// For a UC1-learned CS/BC plug-in the built-in name tables don't apply (arbitrary
+// param names), so each UF1 position resolves by canonical SSL linkIdx via the
+// user's UserLinkSlot. These mirror the CS2 / BC2 name-table POSITIONS 1:1; the
+// linkIdx values are verified against kCs2Slots / kBusComp2Slots (PluginMap.cpp).
+// −1 = no canonical slot at that position (Width/Mic/S-C-Mode/HQ/A-B/PLUG-IN are
+// built-in-only or non-slot) → blank for a learned plug-in.
+constexpr int kUf1Cs2VpotLink[8][4] = {
+    { -1, -1, 37, 23 },   // Width / _ / Output Trim / Comp Mix
+    {  4, -1,  7,  6 },   // Input Trim / _ / High Pass / Low Pass
+    { 20, 19, -1, -1 },   // LF Gain / LF Freq
+    { 16, 17, 18, -1 },   // LMF Gain / LMF Freq / LMF Q
+    { 11, 12, 13, -1 },   // HMF Gain / HMF Freq / HMF Q
+    {  9, 10, -1, -1 },   // HF Gain / HF Freq
+    { 26, 27, 28, -1 },   // Comp Ratio / Threshold / Release
+    { 29, 30, 31, 32 },   // Gate Range / Threshold / Release / Hold
+};
+constexpr int kUf1Cs2SoftKeyLink[8][4] = {
+    {  5, -1, -1, -1 },   // Polarity / _ / SOLO SAFE / PLUG-IN
+    { -1, -1, -1, -1 },   // S/C MODE / _ / HQ MODE / A/B  (all non-slot)
+    { 21, -1, 14, 15 },   // LF Type / _ / EQ Type / EQ In
+    { -1, -1, 14, 15 },
+    { -1, -1, 14, 15 },
+    {  8, -1, 14, 15 },   // HF Type / _ / EQ Type / EQ In
+    { 24, 25, 36, 22 },   // Comp Fast Attack / Comp Peak / S/C Listen / Dynamics In
+    { 33, 34, -1, 22 },   // Gate Expander / Gate Attack / _ / Dynamics In
+};
+constexpr int kUf1Bc2VpotLink[2][4] = {
+    { 1, 5, 3, 4 },       // Threshold / Ratio / Attack / Release
+    { 2, 7, 6, -1 },      // Makeup / Dry-Wet Mix / S-C HPF
+};
+constexpr int kUf1Bc2SoftKeyLink[2][4] = {   // learned-BC soft-keys blank for now
+    { -1, -1, -1, -1 },
+    { -1, -1, -1, -1 },
+};
+
+// True + fills fxName when (tr,fx) is a UC1-LEARNED CS/BC (a user map, NOT a
+// built-in SSL type). Main-thread only.
+bool uf1IsLearnedCsBc_(MediaTrack* tr, int fx, char* fxName, size_t n)
+{
+    // A user CS/BC map = learned (it WINS over any built-in substring collision —
+    // same precedence as uf1CsPluginType_). Do NOT gate on lookupPluginMapByName:
+    // it also returns user maps, so it would falsely classify a learned plug-in
+    // as built-in (the "bx_4K G → 4K E" bug).
+    if (!uf8::fxIdentityName(tr, fx, fxName, static_cast<int>(n))) return false;
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    return um && (um->domain == uf8::Domain::ChannelStrip
+               || um->domain == uf8::Domain::BusComp);
+}
+int uf1LearnedSlotParam_(const char* fxName, int link)
+{
+    if (link < 0) return -1;
+    const auto* usl = uf8::user_plugins::lookupOwnedSlot(fxName, link);
+    return (usl && usl->vst3Param >= 0) ? usl->vst3Param : -1;
+}
+// Resolve the vst3Param for a UF1 CS/BC V-Pot position (type/page/idx): built-in →
+// by name (kUf1CsVPots); learned → by canonical linkIdx. -1 = blank/absent.
+int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
+{
+    char nm[256];
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+        return uf1LearnedSlotParam_(nm,
+            (type == 4) ? kUf1Bc2VpotLink[page][idx] : kUf1Cs2VpotLink[page][idx]);
+    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
+    return v.param ? uf1ParamByName_(tr, fx, v.param) : -1;
+}
+// Same for a soft-key position.
+int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
+{
+    char nm[256];
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+        return uf1LearnedSlotParam_(nm,
+            (type == 4) ? kUf1Bc2SoftKeyLink[page][idx] : kUf1Cs2SoftKeyLink[page][idx]);
+    const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+    return sk.param ? uf1ParamByName_(tr, fx, sk.param) : -1;
+}
+
+// Resolve the SSL channel-strip FX the UF1 channel V-Pots + screen operate on,
+// and its p188 type. MUST match what uf1PaintEqGraph_ shows so the V-Pots drive
+// exactly the FX on screen (Frank: "welche Instanz auf UC1/UF8 aktiv ist muss
+// zusammenpassen"): the surface's active-FX cursor first (resolveActiveFx_),
+// then the focused plug-in window, then any strip FX on the focused track.
+// Returns the type index and fills outTr/outFx, or -1 (V-Pots no-op).
+// Main-thread only.
+int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
+{
+    outTr = nullptr; outFx = -1;
+    auto tryFx = [](MediaTrack* t, int fx) -> int {
+        if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return -1;
+        return uf1CsPluginType_(t, fx);
+    };
+    { const ActiveFxTarget a = resolveActiveFx_();
+      const int ty = tryFx(a.tr, a.fxIdx);
+      if (ty >= 0) { outTr = a.tr; outFx = a.fxIdx; return ty; } }
+    { int trNum = -1, itemNum = -1, fxNum = -1;
+      if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
+          MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+          const int candFx = fxNum & 0x00FFFFFF;
+          const int ty = tryFx(cand, candFx);
+          if (ty >= 0) { outTr = cand; outFx = candFx; return ty; } } }
+    if (focusTr) {
+        const int fx = uf1FindEqFx_(focusTr);
+        const int ty = tryFx(focusTr, fx);
+        if (ty >= 0) { outTr = focusTr; outFx = fx; return ty; }
+    }
+    return -1;
+}
+
+// Apply a Channel-view V-Pot detent to the focused SSL channel-strip plug-in.
+// id = uf1::enc::kVpot1..kVpot4. Twin of applyUf1MeterVpot_: per-slot detent
+// accumulation (one physical click = one step despite the ~4 raw counts the
+// encoder emits per click), resolves the on-screen strip FX + p188 page param
+// by name, writes it normalised. Bipolar (EQ gain / trim) slots get the SSL
+// centre notch-hold at 0 dB (norm 0.5) exactly like the UF8 V-Pot path; the
+// others move linearly. No-op when not a known SSL strip or the slot is blank
+// on this page. Main-thread only (drained). The screen readout follows via
+// uf1PaintChannel_ (change-detected), exactly as Pan / Vol do today.
+void applyUf1ChannelVpot_(uint8_t id, int step)
+{
+    if (step == 0) return;
+    const int vi = (id == uf1::enc::kVpot1) ? 0 :
+                   (id == uf1::enc::kVpot2) ? 1 :
+                   (id == uf1::enc::kVpot3) ? 2 :
+                   (id == uf1::enc::kVpot4) ? 3 : -1;
+    if (vi < 0) return;
+
+    MediaTrack* focusTr = uf1FocusedTrack_();
+    if (!focusTr) return;
+    MediaTrack* tr = nullptr; int fx = -1;
+    const int type = uf1ResolveCsFx_(focusTr, tr, fx);
+    if (type < 0) return;                       // non-SSL / unknown strip → no-op
+
+    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
+    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(vi);   // label + bipolar (CS2/BC2 layout)
+
+    const int p = uf1CsVpotParam_(tr, fx, type, page, vi);   // built-in by name / learned by linkIdx
+    if (p < 0) return;                           // blank / unmapped on this page
+
+    // Per-slot detent accumulator — one physical click = one step even though
+    // the encoder emits ~4 raw counts/click (kChannelEncoderScale, cap58). Reset
+    // when the addressed (type/page/slot) changes so a partial notch never leaks
+    // across a page flip or plug-in change.
+    static double sAccum[4] = {0,0,0,0};
+    static int    sType = -1, sPage = -1;
+    if (type != sType || page != sPage) {
+        sAccum[0]=sAccum[1]=sAccum[2]=sAccum[3]=0; sType=type; sPage=page;
+    }
+    sAccum[vi] += step / kChannelEncoderScale;
+    int notches = 0;
+    if (sAccum[vi] >= 1.0 || sAccum[vi] <= -1.0) notches = int(sAccum[vi]);
+    if (notches == 0) return;
+    sAccum[vi] -= notches;
+
+    // Fine (Quick-Key-2) quarters the step via the shared knob scale, mirroring
+    // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
+    // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
+    double delta = notches * kUf1CsVPotStep
+                 * reasixty_uf8KnobScale(g_uf1CsFine.load());
+    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+    double nv;
+    if (v.bipolar) {
+        // Finer step inside the notch zone, then the magnet — as the UF8 path.
+        // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
+        // UF1 channel V-Pots can't collide with either surface's detent state.
+        if (std::abs(cur - 0.5) <= 2.0 * g_notchZone.load())
+            delta *= g_notchFineStep.load();
+        nv = uf8::applyNotchHold(8 + vi, cur, delta, /*center*/0.5,
+                                 g_notchZone.load(), g_notchHold.load(), 0.0, 1.0);
+    } else {
+        nv = cur + delta;
+        if (nv < 0.0) nv = 0.0;
+        if (nv > 1.0) nv = 1.0;
+    }
+    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+}
+
+// Toggle a Channel-view soft-key param (p188). idx = 0..3 (display soft-keys
+// 0x19-0x1C). Resolves the SAME on-screen SSL strip FX + page as the V-Pots
+// (uf1ResolveCsFx_ + g_uf1CsPage), looks up the current-page soft-key param by
+// name, reads it normalised and writes the opposite ( >0.5 ? 0 : 1 ). No-op when
+// the slot is blank / label-only (no param), the param is absent, or the focused
+// FX is not one of the four p188 strip types. Multi-state params (4K E "EQ
+// Colour" = Brown/Black/Orange) flip between the extremes only — a plain toggle
+// never selects the middle state. Main-thread only (drained). The soft-key LED
+// follows via uf1PaintChannel_ (change-detected), like Pan / Vol / the V-Pots.
+void applyUf1ChannelSoftKey_(int idx)
+{
+    if (idx < 0 || idx > 3) return;
+    MediaTrack* focusTr = uf1FocusedTrack_();
+    if (!focusTr) return;
+    MediaTrack* tr = nullptr; int fx = -1;
+    const int type = uf1ResolveCsFx_(focusTr, tr, fx);
+    if (type < 0) return;                        // non-SSL / unknown strip → no-op
+
+    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
+    const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+    // HQ MODE / A/B compare live in the plug-in state chunk, not as VST3 params —
+    // toggle via the shared PluginChunkPatch hook on the resolved strip's track
+    // (it walks every SSL plug-in on the track), exactly as the UF8 soft-key bank
+    // does. Reads back its own state; no VST3 param to write. See
+    // [[ssl-chunk-non-auto-params]] and the UF8 PluginAB/PluginHQ dispatch.
+    if (sk.act == Uf1CsSkAct::HQ) { uf8::togglePluginHQ(tr); return; }
+    if (sk.act == Uf1CsSkAct::AB) { uf8::togglePluginAB(tr); return; }
+    if (sk.act == Uf1CsSkAct::StripMode) {
+        // PLUG-IN key = "Toggle SSL Strip Mode" (manual: the PLUG-IN/DAW toggle),
+        // implemented like the UF8 `ssl_strip_mode_toggle`: the fader then drives
+        // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
+        // instead of track volume. Shares the global g_pluginFaderMode so a combined
+        // UF8+UF1 rig toggles together; the UF1 fader path reads it (uf1PaintChannel_).
+        const bool next = !g_pluginFaderMode.load();
+        g_pluginFaderMode.store(next);
+        g_pluginFaderModeWithGui.store(false);
+        SetExtState("ReaSixty", "pluginFaderMode", next ? "1" : "0", true);
+        g_pageDirty.store(true);
+        return;
+    }
+    const int p = uf1CsSoftKeyParam_(tr, fx, type, page, idx);   // built-in by name / learned by linkIdx
+    if (p < 0) return;                            // blank / label-only / unmapped
+
+    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+    const double nv  = (cur > 0.5) ? 0.0 : 1.0;
+    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+}
+
+// Resolve a param's reset-to-default normalised value, REUSING the UF8 push-to-
+// default data (Frank: "default nicht neu erfinden"): the canonical
+// LinkSlot.deflt, overridden by a user-mapped UserLinkSlot.defaultNorm for self-
+// mapped plug-ins. The UF1 V-Pot tables resolve params by NAME (→ a vst3Param);
+// the default data is keyed by linkIdx, so bridge vst3Param → slot via the
+// PluginMap. No matching slot / no stored default → 0.5 (the UF8 fallback, which
+// for the bipolar EQ-gain/trim slots is exactly 0 dB). Main-thread only.
+static double uf1CsDefaultNorm_(MediaTrack* tr, int fx, int p)
+{
+    char nm[256] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return 0.5;
+    const uf8::PluginMap* m = uf8::lookupPluginMapByName(nm);
+    if (!m) {
+        // UC1-learned plug-in (no built-in map): its default lives on the matching
+        // UserLinkSlot.defaultNorm (the FX-Learn editor's reset value). Find the
+        // slot whose bound vst3Param == p. No match → 0.5.
+        if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm)) {
+            for (const auto& usl : um->slots) {
+                if (usl.vst3Param != p) continue;
+                const double d = usl.defaultNorm;
+                return (d < 0.0) ? 0.0 : (d > 1.0) ? 1.0 : d;
+            }
+        }
+        return 0.5;
+    }
+    for (const uf8::LinkSlot& sl : m->slots) {
+        if (sl.vst3Param != p) continue;
+        // User-mapped default wins over the canonical one (mirrors the UF8 push
+        // path: UserLinkSlot.defaultNorm honours the FX-Learn editor's reset value).
+        if (const uf8::UserLinkSlot* usl =
+                uf8::user_plugins::lookupOwnedSlot(nm, sl.linkIdx)) {
+            double d = usl->defaultNorm;
+            return (d < 0.0) ? 0.0 : (d > 1.0) ? 1.0 : d;
+        }
+        return sl.deflt.value_or(0.5);
+    }
+    return 0.5;   // param not in the canonical map → midpoint
+}
+
+// Reset a Channel-view V-Pot param to its default (SSL 360 push-to-default).
+// idx = 0..3 (V-Pot 0x09-0x0C). Resolves the SAME on-screen SSL strip (CS or BC)
+// + page as the rotate handler (uf1ResolveCsFx_ + g_uf1CsPage), then writes the
+// param's stored default (uf1CsDefaultNorm_). No-op when the slot is blank, the
+// param is absent, or the focused FX is not a mapped SSL strip. Main-thread only.
+void applyUf1ChannelVpotPush_(int idx)
+{
+    if (idx < 0 || idx > 3) return;
+    MediaTrack* focusTr = uf1FocusedTrack_();
+    if (!focusTr) return;
+    MediaTrack* tr = nullptr; int fx = -1;
+    const int type = uf1ResolveCsFx_(focusTr, tr, fx);
+    if (type < 0) return;                        // non-SSL / unknown strip → no-op
+
+    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
+    const int p = uf1CsVpotParam_(tr, fx, type, page, idx);   // built-in by name / learned by linkIdx
+    if (p < 0) return;                           // blank / unmapped on this page
+
+    const double dv  = uf1CsDefaultNorm_(tr, fx, p);
+    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+    if (dv != cur) TrackFX_SetParamNormalized(tr, fx, p, dv);
+}
+
+// Encode a REAPER position string (from format_timestr_pos) into the UF1's
+// 11-byte 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators
+// ':' '.' ',' set the dp (bit 0) on the PRECEDING digit — there is no colon or
+// period glyph on the field (decode 2026-07-24: "hatte nur punkte"). The result
+// is right-aligned into out[11], left-padded with 0x00 (blank). A '-' (negative
+// positions) has no minus glyph, so it is dropped, clamping to the digits alone.
+// A string with more than 11 digits keeps the rightmost 11 (low-order survive,
+// matching the right-aligned field). Mirrors uf1_0119_timecode_decode.py:31-36.
+// NB: right-align ORIGIN is unconfirmed on hardware — see the build blueprint.
+static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
+{
+    static const uint8_t SEG7[10] = {
+        0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x67 };
+    uint8_t digits[32];
+    int n = 0;
+    for (const char* p = s; *p; ++p) {
+        const char c = *p;
+        if (c >= '0' && c <= '9') {
+            if (n < static_cast<int>(sizeof(digits)))
+                digits[n++] = static_cast<uint8_t>(SEG7[c - '0'] << 1);
+        } else if (c == ':' || c == '.' || c == ',') {
+            if (n > 0) digits[n - 1] |= 0x01;   // dp on the preceding digit
+        }
+        // any other char (space, '-', …) is skipped — no glyph for it
+    }
+    if (n > 11) {                                // keep the rightmost 11 digits
+        const int drop = n - 11;
+        for (int k = 0; k < 11; ++k) digits[k] = digits[k + drop];
+        n = 11;
+    }
+    for (int k = 0; k < 11; ++k) out[k] = 0x00;              // left-pad blanks
+    for (int k = 0; k < n; ++k) out[11 - n + k] = digits[k]; // right-align
+}
+
+// Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
+// UF8/UC1: the SSL short type name (PluginMap.displayShort — "CS 2"/"4K E"/"BC 2"/…)
+// for SSL strips, the Short User Name (UserPluginMap.displayShort) for non-SSL
+// user-mapped plug-ins (Frank 2026-07-29), else the stripped plug-in name. Uses
+// resolveActiveFx_ so it names whatever FX is active (SSL or not), like the UF8
+// colour-bar / UC1 LCD. Empty when no FX resolves. Main-thread only.
+std::string uf1ActiveFxShortName_()
+{
+    const ActiveFxTarget a = resolveActiveFx_();
+    if (!a.tr || a.fxIdx < 0) return "";
+    char id[256] = {0};
+    if (uf8::fxIdentityName(a.tr, a.fxIdx, id, sizeof(id))) {
+        // User map WINS (same precedence as the control resolver) so a learned
+        // "bx_4K G" shows its Short User Name, not the SSL "4K G" it substring-hits.
+        if (const auto* um = uf8::user_plugins::lookupOwnedByName(id))
+            if (!um->displayShort.empty()) return um->displayShort;               // Short User Name
+        if (const auto* pm = uf8::lookupPluginMapByName(id))
+            if (pm->displayShort && *pm->displayShort) return pm->displayShort;   // SSL short
+    }
+    // Unmapped plug-in: strip the "VST3: "/"JS: " prefix + " (vendor)" suffix.
+    char raw[256] = {0};
+    TrackFX_GetFXName(a.tr, a.fxIdx, raw, sizeof(raw));
+    std::string s(raw);
+    if (const auto p = s.find(": ");  p != std::string::npos && p < 8) s.erase(0, p + 2);
+    if (const auto p = s.rfind(" ("); p != std::string::npos)          s.erase(p);
+    if (s.size() > 12) s.resize(12);
+    return s;
 }
 
 void uf1PaintChannel_()
@@ -18134,6 +18967,42 @@ void uf1PaintChannel_()
     const std::string ch = std::to_string(idx);
     if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
+    // Time/position (0x0119) — mirror REAPER's transport display, exactly as SSL
+    // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
+    // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
+    // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
+    // (Measures / h:m:s:f / Samples, cycled by the 360 button on the worker), then
+    // encode into the 11-byte 7-segment field. Send-on-change: only when the 11
+    // bytes differ (forced on view/gen change via `changed`), so a stable stopped
+    // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
+    {
+        const int    ps   = GetPlayState();
+        const double pos  = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
+        const int    mode = g_uf1TcMode.load();
+        char buf[64];
+        format_timestr_pos(pos, buf, sizeof(buf), mode);
+        std::array<uint8_t, 11> tc;
+        uf1EncodeTimecode_(buf, tc.data());
+
+        static std::array<uint8_t, 11> sTc{};
+        static int sTcMode = INT_MIN;
+        const bool modeChanged = (mode != sTcMode);
+        if (changed || modeChanged || tc != sTc) {
+            // Persist the format the moment it actually changes (not on the first
+            // paint of the session — sTcMode == INT_MIN then). SetExtState is a
+            // REAPER API, so this stays on the main thread; the worker only stored
+            // the atomic. Loaded at startup next to nav_lower_row.
+            if (modeChanged && sTcMode != INT_MIN) {
+                char mb[8];
+                snprintf(mb, sizeof(mb), "%d", mode);
+                SetExtState("rea_sixty", "uf1_tc_mode", mb, true);
+            }
+            sTc = tc;
+            sTcMode = mode;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
+        }
+    }
+
     // Track colour (Phase 1). Two consumers of the same track RGB:
     //  - SEL / track-colour element 0x07 (FF38 GRB).
     //  - The fader colour BAR (element 0x0018) — a palette INDEX, exactly the
@@ -18145,7 +19014,7 @@ void uf1PaintChannel_()
         sColor = rgb;
         g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, rgb));
         const std::array<uint8_t, 1> active{0x01};
-        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};
+        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
     }
@@ -18196,9 +19065,12 @@ void uf1PaintChannel_()
     // index 0..3 + 19-char "name...value" line). Painting these overwrites the
     // MCU residue the init left in the main display (the "MCU look") and brings
     // up the SSL Plugin-Mode channel-strip layout (where the colour bar lives).
-    // cap77 drove these with SSL plug-in params; for a generic track we show
-    // the most useful track params. (V-pot ROTATION wiring is separate — this
-    // is display only for now.)
+    // When the focused FX is one of the four p188 strip types, show the CURRENT
+    // page's 4 V-Pot params (what applyUf1ChannelVpot_ drives) with their live
+    // formatted values — re-emitted whenever a value or the page changes
+    // (change-detected on the composed line, so a knob turn or ◄ ► page updates
+    // the readout even without a full repaint). A non-SSL / unknown FX falls
+    // back to the generic Pan / Vol readout so a plain track still reads sensibly.
     {
         static std::array<std::string, 4> sVpot{};
         auto sendVpotParam = [&](uint8_t idx, const std::string& label,
@@ -18212,11 +19084,71 @@ void uf1PaintChannel_()
             p.insert(p.end(), line.begin(), line.end());
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
         };
-        const double panV = GetMediaTrackInfo_Value(tr, "D_PAN");
-        sendVpotParam(0, "Pan", formatPanReadout(panV));
-        sendVpotParam(1, "Vol", formatDbReadout(GetMediaTrackInfo_Value(tr, "D_VOL")) + "dB");
-        sendVpotParam(2, "", "");   // blank until V-pot mapping lands
-        sendVpotParam(3, "", "");
+        MediaTrack* csTr = nullptr; int csFx = -1;
+        const int csType = uf1ResolveCsFx_(tr, csTr, csFx);
+        // Publish the active strip type for the input-worker ◄ ► handler (so it
+        // wraps within this type's page count without the REAPER API). On a type
+        // change, only snap the page to the first when the retained page is OUT of
+        // range for the new type (a channel-strip page 3-8 → a 2-page BC) — so
+        // switching between two 8-page strips preserves the page (unchanged CS
+        // behaviour). Static: painter is single-threaded (onTimer).
+        {
+            static int sLastCsType = -2;
+            if (csType != sLastCsType) {
+                sLastCsType = csType;
+                g_uf1CsActiveType.store(csType);
+                if (csType >= 0 && g_uf1CsPage.load() >= kUf1CsTypePageCount[csType])
+                    g_uf1CsPage.store(0);
+            }
+        }
+        // 4 V-Pot readout bars (0x010f): 4× [position 0..100, mode] where mode =
+        // 0x80 bipolar (centre-origin bar, like the pan bar) / 0x00 unipolar (fill
+        // from the left). Grounded in cap77 (a [0x00,0x80] pair = a bipolar bar at
+        // position 0, which only reads as a MODE byte — a centre-only flag can't be
+        // set at position 0) + the HW-verified 0x000f pan-bar [pos,flag] format.
+        // Reuses the SAME unipolar/bipolar split the UF8 V-Pot bars use (Frank:
+        // "nimm die v-pot anzeigen vom uf8, die stimmen eh schon") — here the split
+        // is the per-slot `bipolar` flag already in the kUf1CsVPots table.
+        static std::array<uint8_t, 8> sVpotBars{};
+        static bool sVpotBarsValid = false;
+        std::array<uint8_t, 8> bars{};
+        auto setBar = [&](int i, double norm, bool bipolar) {
+            const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
+            bars[i * 2]     = static_cast<uint8_t>(pos);
+            bars[i * 2 + 1] = bipolar ? 0x80 : 0x00;
+        };
+        if (csType >= 0) {
+            const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[csType] - 1);
+            const Uf1CsPage& pg = kUf1CsVPots[csType][page];
+            for (int i = 0; i < 4; ++i) {
+                const Uf1CsVPot& v = pg.slot(i);
+                const int p = uf1CsVpotParam_(csTr, csFx, csType, page, i);
+                // Blank when the slot is empty, the param is absent, or (learned
+                // plug-in) the user didn't map this linkIdx — "Slots leer wo
+                // ungemappt" (Frank). The label still comes from the CS2/BC2 layout.
+                if (p < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                char val[64] = {0};
+                TrackFX_GetFormattedParamValue(csTr, csFx, p, val, int(sizeof(val)));
+                sendVpotParam(uint8_t(i), v.label, val);
+                setBar(i, TrackFX_GetParamNormalized(csTr, csFx, p), v.bipolar);
+            }
+        } else {
+            const double panV = GetMediaTrackInfo_Value(tr, "D_PAN");
+            const double volV = GetMediaTrackInfo_Value(tr, "D_VOL");
+            sendVpotParam(0, "Pan", formatPanReadout(panV));
+            sendVpotParam(1, "Vol", formatDbReadout(volV) + "dB");
+            sendVpotParam(2, "", "");
+            sendVpotParam(3, "", "");
+            setBar(0, (panV + 1.0) * 0.5, /*bipolar*/true);   // pan: centre-origin
+            setBar(1, static_cast<double>(uf1VolToPos_(volV))
+                        / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
+            setBar(2, 0.0, false);
+            setBar(3, 0.0, false);
+        }
+        if (changed || !sVpotBarsValid || bars != sVpotBars) {
+            sVpotBars = bars; sVpotBarsValid = true;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+        }
         }
 
     // ---- FAKE-CS layout trigger (2026-06-05) -------------------------------
@@ -18241,8 +19173,21 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
             std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
 
-        // 0x0017 CS TYPE: 0x00 + verbatim "4K E" (cap77: 00 34 4b 20 45).
-        sendZoneText(uf1::scr::kCsType, "4K E");
+        // 0x0017 CS TYPE: the REAL resolved strip type — cap18 confirms "CS 2" /
+        // "4K B" / "4K E" are the firmware-recognised strings. The firmware LATCHES
+        // its channel-strip LAYOUT on the FIRST type string it sees, so the old
+        // hardcoded "4K E" made every CS render as 4K E (Frank HW 2026-07-29 "für CS
+        // geht erst 4k E"). Send the real type so each renders its own layout. Link
+        // ("Link") / BC ("BC 2") strings are best-effort (unverified vs a capture);
+        // −1 (no SSL strip) keeps "4K E" so a plain track still triggers a layout.
+        {
+            MediaTrack* tt = nullptr; int tf = -1;
+            const int tty = uf1ResolveCsFx_(tr, tt, tf);
+            const char* cs = (tty == 0) ? "CS 2" : (tty == 1) ? "4K B"
+                           : (tty == 2) ? "4K E" : (tty == 3) ? "Link"
+                           : (tty == 4) ? "BC 2" : (tty == 5) ? "4K G" : "4K E";
+            sendZoneText(uf1::scr::kCsType, cs);
+        }
 
         // 0x0104 soft-key labels: <idx> + label (NOT 0x00-prefixed). cap77:
         // idx0 = 0xd8 glyph, idx1 "PRE", idx2 "SOLO SAFE", idx3 "PLUG-IN".
@@ -18263,10 +19208,111 @@ void uf1PaintChannel_()
         sendSoftKeyText(2, "SOLO SAFE");
         sendSoftKeyText(3, "PLUG-IN");
 
-        // 0x010f 4 V-pot readout bars: cap77 neutral payload, verbatim. Bar
-        // values aren't the point of this test — only the layout trigger is.
-        const std::array<uint8_t, 8> bars{0x32, 0x80, 0x00, 0x00, 0x00, 0x80, 0x64, 0x00};
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+        // 0x010f 4 V-pot readout bars: now driven LIVE (from param values) by the
+        // V-Pot label block above, which sends 0x010f every tick it changes AND on
+        // `changed` — so the layout "occupant set" {0x0017, 0x0104, 0x010f} is still
+        // satisfied without this neutral send re-blanking the live bars each repaint.
+    }
+
+    // Active-FX NAME on the CS-TYPE zone (0x0017), like UF8/UC1: the SSL short type
+    // name for CS/BC, the Short User Name for non-SSL user-mapped plug-ins (Frank
+    // 2026-07-29). Overrides the layout trigger's "4K E" placeholder above (which
+    // reliably establishes the layout with a known SSL type) with the real name,
+    // change-detected so it also follows an FX-instance cycle that doesn't raise
+    // `changed`. Only overrides when an FX resolves — a track with no FX keeps the
+    // placeholder. NB the zone is a short label; long names are clipped by the
+    // firmware (helper already trims to ~12). Colour stays TRACK colour (0x0018).
+    {
+        static std::string sFxName;
+        const std::string fxName = uf1ActiveFxShortName_();
+        if (!fxName.empty() && (changed || fxName != sFxName)) {
+            sFxName = fxName;
+            sendZoneText(uf1::scr::kCsType, fxName);
+        }
+    }
+
+    // ---- Channel-strip SOFT-KEY labels + LEDs (p188 tables) ----------------
+    // The 4 display soft keys (0x19-0x1C) show the current page's section /
+    // toggle names (0x0104, idx 0..3) and light their LEDs to reflect each toggle
+    // param's on/off state — the twin of the V-Pot label block above. Change-
+    // detected per key on the label text + LED state, forced on `changed`, and
+    // reactive to the ◄ ► page (which does NOT set `changed`, so this is the sole
+    // page-updater for the soft keys). Only OVERRIDES the labels when the on-screen
+    // FX is one of the four p188 strip types; on a non-SSL / unknown FX it leaves
+    // the labels to the layout-trigger block above and just parks the LEDs dark
+    // (nothing to toggle). Change-gating keeps the empty-init statics in sync with
+    // the screen: every non-SSL→SSL transition also raises `changed`, which force-
+    // sends here. Matches the sVpot block's empty-init + `changed`-force pattern.
+    {
+        static std::array<std::string, 4> sSkLabel{};
+        MediaTrack* skTr = nullptr; int skFx = -1;
+        const int skType = uf1ResolveCsFx_(tr, skTr, skFx);
+        // Page count follows the resolved type (BC = 2, strips = 8); skType < 0
+        // (no SSL strip) → the 8-page fallback, and skPage is only USED inside the
+        // skType >= 0 guard below, so the index is always valid.
+        const int skPages = (skType >= 0 && skType < kUf1CsTypeCount)
+                                ? kUf1CsTypePageCount[skType] : kUf1CsPageCount;
+        const int skPage = std::clamp(g_uf1CsPage.load(), 0, skPages - 1);
+        static std::array<int, 4> sSkLed{ -1, -1, -1, -1 };
+        int abState = -1, hqState = -1;   // read once, only if an HQ/AB key is present
+        for (int i = 0; i < 4; ++i) {
+            std::string label;
+            bool haveLabel = false, on = false;
+            if (skType >= 0) {
+                const Uf1CsSoftKey& sk = kUf1CsSoftKeys[skType][skPage].slot(i);
+                label = sk.label ? sk.label : "";
+                haveLabel = true;
+                // Toggle on-state for the LED (same resolution the press uses).
+                if (sk.act == Uf1CsSkAct::HQ) {
+                    if (hqState < 0 && skTr) uf8::readPluginToggleStates(skTr, abState, hqState);
+                    on = (hqState == 1);
+                } else if (sk.act == Uf1CsSkAct::AB) {
+                    if (abState < 0 && skTr) uf8::readPluginToggleStates(skTr, abState, hqState);
+                    on = (abState == 0);   // bright = comparing (B active), as the UF8 LED
+                } else if (sk.act == Uf1CsSkAct::StripMode) {
+                    on = g_pluginFaderMode.load();   // PLUG-IN = SSL Strip Mode engaged
+                } else {
+                    const int p = uf1CsSoftKeyParam_(skTr, skFx, skType, skPage, i);
+                    if (p >= 0) on = TrackFX_GetParamNormalized(skTr, skFx, p) > 0.5;
+                }
+            }
+            // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
+            if (haveLabel && (changed || label != sSkLabel[i])) {
+                sSkLabel[i] = label;
+                std::vector<uint8_t> pb;
+                pb.reserve(1 + label.size());
+                pb.push_back(uint8_t(i));
+                pb.insert(pb.end(), label.begin(), label.end());
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
+            }
+            // Soft-key LED (Frank-authorised guess 2026-07-29, grounded in cap106 +
+            // cap64/cap73). IDs 0x01-0x04 = btn − 0x18, HW-CONFIRMED as the display-
+            // soft-key LEDs by cap106. Scheme = the UF8 FF38+FF39(+FF3B) one, byte-
+            // identical to the working arrow/Solo LEDs: lit = FF38 0xff + FF39 0x00,
+            // off/dim = FF38 0x11 + FF39 0x11 (arrow-proven; cap106 id 0x02 time-
+            // ordered). SOFT-KEY 1 (id 0x01) is SPECIAL: cap106 drives it via FF38
+            // ALONE (enum values 0xf0/…), NEVER FF39 — sending FF39 to 0x01 is what
+            // stuck the rectangle, so key 1 gets FF38-only (0xf0 on / 0x00 off). The
+            // FF3B enable is (re)asserted on `changed`, like Solo/Cut. No SSL strip →
+            // on=false → keys go dim/off. NB the exact channel-view on-COLOUR is the
+            // guessed part; ids + scheme + the no-FF39-on-0x01 rule are captured.
+            const int ledState = on ? 1 : 0;
+            if (changed || ledState != sSkLed[i]) {
+                sSkLed[i] = ledState;
+                const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
+                if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
+                if (i == 0) {
+                    // FF38-only (cap106: 0x01 never gets FF39). on = 0xf0 bright;
+                    // off = 0x11 = the same dim level the FF38 side of keys 2-4 uses,
+                    // so key 1 dims when inactive instead of going fully dark
+                    // (Frank HW 2026-07-29: "leuchtet bright aktiv aber nicht dimm").
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
+                } else {
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
+                    g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
+                }
+            }
+        }
     }
 
     // 0x0122 EQ graph: rendered natively from the focused track's SSL
@@ -18277,11 +19323,11 @@ void uf1PaintChannel_()
     uf1PaintEqGraph_(tr, changed);
     }  // end channel-view painting (else of meterView)
 
-    // Fader <-> volume.
+    // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
-    //    volume (motor is limp — released on touch-down in onUf1Event).
-    //  - While released: drive the motor to follow the track's volume so the
-    //    fader reflects DAW edits and the selected track.
+    //    volume (or Pan under FLIP) — motor is limp (released on touch-down).
+    //  - While released: drive the motor to follow the track's volume (or Pan
+    //    under FLIP) so the fader reflects DAW edits and the selected track.
     //
     // Touch-release is DEBOUNCED (150 ms) — the capacitive sensor bounces
     // press/release ~9x/s during a sustained grip, and re-engaging the motor on
@@ -18296,10 +19342,26 @@ void uf1PaintChannel_()
     if (g_uf1FaderTouched.load()) sLastTouchSeen = nowT;
     const bool touched = g_uf1FaderTouched.load()
         || (nowT - sLastTouchSeen < std::chrono::milliseconds(150));
+    const bool flip = g_uf1Flip.load();   // FLIP: fader rides Pan instead of Volume
+    // SSL Strip Mode (PLUG-IN key → g_pluginFaderMode): the fader drives the SSL
+    // strip's Out-Gain / Fader Level plug-in param (csFaderForTrack — CS 2 / 4K B/
+    // E/G / 360 Link / user-CS) instead of track volume, exactly like the UF8. The
+    // plug-in fader is a plain 0..1 control → LINEAR pos↔norm (no dB curve). Wins
+    // over FLIP. No CS on the track → falls back to the normal volume/FLIP path so
+    // the fader still does something. (UF8-mode learned plug-ins with a faderVst3Param
+    // are a follow-up — csFaderForTrack already covers SSL + user-CS maps.)
+    const bool stripMode = g_pluginFaderMode.load();
+    const CsFaderHandle csf = stripMode ? csFaderForTrack(tr) : CsFaderHandle{ -1, -1 };
+    const bool stripFader = stripMode && csf.vst3Param >= 0;
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
-            CSurf_OnVolumeChange(tr, uf1PosToVol_(pos), false);
+            if (stripFader) {
+                const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                TrackFX_SetParamNormalized(tr, csf.fxIndex, csf.vst3Param, n);
+            }
+            else if (flip) CSurf_OnPanChange(tr, uf1PosToPan_(pos), /*relative*/false);
+            else      CSurf_OnVolumeChange(tr, uf1PosToVol_(pos), false);
             // Echo the user's hand position to the firmware's MOTOR TARGET every
             // tick while the motor is limp. FF 1E while limp only updates the
             // target (it doesn't drive — verified: no mid-drag motion). This is
@@ -18313,9 +19375,18 @@ void uf1PaintChannel_()
         sMotorEngaged = false;        // motor released under the finger
     } else {
         // Released: the target is already at the user's final position (last
-        // drag echo), so re-enable lands clean. Also keep following DAW volume
-        // edits when the fader is idle.
-        const uint16_t pos = uf1VolToPos_(GetMediaTrackInfo_Value(tr, "D_VOL"));
+        // drag echo), so re-enable lands clean. Also keep following DAW edits when
+        // the fader is idle — the SSL strip Fader Level under Strip Mode, Pan under
+        // FLIP, else track volume.
+        uint16_t pos;
+        if (stripFader) {
+            const double n = TrackFX_GetParamNormalized(tr, csf.fxIndex, csf.vst3Param);
+            pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
+        } else if (flip) {
+            pos = uf1PanToPos_(GetMediaTrackInfo_Value(tr, "D_PAN"));
+        } else {
+            pos = uf1VolToPos_(GetMediaTrackInfo_Value(tr, "D_VOL"));
+        }
         if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
         if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
     }
