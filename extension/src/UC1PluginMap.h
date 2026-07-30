@@ -157,6 +157,13 @@ bool hudControlExplicitOnLayer(const PluginBindings* b, int linkIdx);
 // Returns -1 when the control isn't in the table.
 int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton);
 
+// True when an SSL-Link `linkIdx` is driven by a UC1 BUTTON (its kCsLinkToUc1 /
+// kBcLinkToUc1 entry carries a buttonId) rather than a knob. Lets a learned
+// plug-in's mapped slots be routed the way the user learned them on the UC1 —
+// button-mapped params to soft-keys, everything else (knobs + linkIdx not in the
+// table) to V-Pots. Frank 2026-07-30. False for an unknown linkIdx.
+bool linkIdxIsButton(int linkIdx, bool busComp);
+
 // Semantic "kind" of the quantity a CS SSL-Link slot controls, derived from the
 // UC1 control the linkIdx drives (kCSHfFreq → Freq, kCSHfGain → Db,
 // kCSCompRatio → Ratio, kCSCompRelease → Time, kCSHmfQ → Q, …). Lets value

@@ -394,6 +394,28 @@ std::atomic<bool>     g_uf1Flip{false};
 // mirror that toggle here so the main-thread painter streams the matching
 // content. The cap66 init lands in Channel view (cap84 cold-start), so false.
 std::atomic<bool>     g_uf1MeterView{false};
+// UF1 MODE picker (Frank 2026-07-30). The view is CONTENT-driven, not an
+// autonomous firmware toggle (cap75: SSL re-sends the whole layout — 0x011c,
+// 0x0104 … — on every MODE press; the firmware only renders what the host
+// sends), so WE own the mode entirely. Three modes: Plugin (the CS/BC channel
+// strip), DAW (track faders on the V-Pots), Meter (the analyzer). Plugin + DAW
+// share the non-Meter "channel" layout and differ only in what we paint, so the
+// split is: g_uf1MeterView (Meter layout yes/no) + g_uf1ChannelSubMode below.
+// 0 = Plugin, 1 = DAW. Only meaningful when !g_uf1MeterView.
+std::atomic<int>      g_uf1ChannelSubMode{0};
+// DAW-mode 4-track group within the selected-track window: 0 = selected..+3,
+// 1 = selected+4..+7. The "5-8" button (0x22) toggles it. Reset to 0 whenever
+// DAW mode is (re)entered so you always land on the selected track's group.
+std::atomic<int>      g_uf1DawGroup{0};
+// Bank ← / → (0x21 / 0x23) step: coarse track navigation, ±8 tracks by default
+// (Frank 2026-07-30). Moves the REAPER selection (applySelectRelative_), so it
+// works in every view — the strip / DAW window / meter all follow the selection.
+constexpr int         kUf1BankStep = 8;
+// MODE-hold menu: while MODE is held the 4 display soft-keys become a mode
+// picker (SK1 Plugin, SK2 DAW, SK3 Meter, SK4 free). Set by the input worker on
+// the MODE down/up edges; the painter overlays the menu labels + LEDs and the
+// worker routes a soft-key press to the chosen mode. Atomic (worker↔painter).
+std::atomic<bool>     g_uf1ModeMenu{false};
 
 // Which Meter screen is shown (index into kUf1MeterScreens). Unlike the
 // Channel<->Meter view toggle above, the screen is NOT firmware-local: SSL 360
@@ -452,7 +474,18 @@ std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count
 // so it wraps within the ACTIVE type's page count (BC has 2, strips have 8) without
 // the worker touching the REAPER API (threading rule).
 std::atomic<int>  g_uf1CsActiveType {-1};
+// Page count for the ACTIVE strip — the fixed per-type count for a built-in SSL
+// strip, or the dynamic packed count for a learned plug-in (which shrinks to fit
+// the user's mapped params). Written by the main-thread painter each tick; read
+// by the input-worker ◄ ► handler so it wraps without the REAPER API. Default 8
+// (the pre-first-paint fallback, matching kUf1CsPageCount).
+std::atomic<int>  g_uf1CsActivePages {8};
 std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
+// MASTER button (id 0x39, under FLIP by the fader): when engaged the UF1 strip
+// follows the MASTER track (UC1 "track 00") instead of the selected/last-touched
+// one — uf1FocusedTrack_ returns GetMasterTrack. Toggle; set by the input worker.
+// Frank 2026-07-30.
+std::atomic<bool> g_uf1Master {false};
 
 // UF1 main-LCD time/position field (element 0x0119, Channel view only). Holds a
 // format_timestr_pos mode: 2 = Measures/Beats (default), 5 = h:m:s:f, 4 = Samples.
@@ -3987,6 +4020,10 @@ struct PendingInput {
                          // its DEFAULT (canonical LinkSlot.deflt / user-mapped
                          // UserLinkSlot.defaultNorm, reusing the UF8 mechanism).
                          // value unused.
+        Uf1ToggleGui,    // channel-encoder push (0x0D): toggle the focused plug-in
+                         // GUI (applyShowFocusedPluginGui_). value/strip unused.
+        Uf1SelectRelative,// Bank ◄ ► (0x21/0x23): move the REAPER selection by
+                         // value tracks (±kUf1BankStep). applySelectRelative_.
     };
     Kind    kind;
     uint8_t strip;
@@ -11141,8 +11178,19 @@ void queueInput(PendingInput e)
 // REAPER track API, so it must never run on the libusb worker thread.
 MediaTrack* uf1FocusedTrack_()
 {
+    MediaTrack* master = GetMasterTrack(nullptr);
+    // MASTER engaged → the strip follows the master track (UC1 "track 00"),
+    // overriding the selection (Frank 2026-07-30). Everything downstream reads
+    // this one resolver, so the strip / fader / GR all follow the master.
+    if (g_uf1Master.load() && master) return master;
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
+    // Toggling MASTER off must return to the SELECTED channel. But driving the
+    // master's fader / params while MASTER was on (esp. under FLIP → CSurf_OnPan
+    // Change) left GetLastTouchedTrack pointing AT the master, which would keep the
+    // strip stuck there ("geht nicht zurück zum gewählten channel", Frank). So when
+    // not in MASTER mode, ignore the master as last-touched and fall to the selection.
+    if (tr == master) tr = nullptr;
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
     return tr;
 }
@@ -11685,13 +11733,23 @@ void drainInputQueue()
             const int     step = static_cast<int>(e.value);
             switch (id) {
                 case uf1::enc::kChannel: {      // channel encoder → track nav
-                    // Accumulate the fine counts (~4 per click) into whole track
-                    // steps, like the UF8/UC1 channel encoder (kChannelEncoderScale).
+                    // Accumulate the fine counts (~4 per click) into whole steps,
+                    // like the UF8/UC1 channel encoder (kChannelEncoderScale).
                     g_uf1ChanEncAccum += step / kChannelEncoderScale;
                     int tracks = 0;
                     if (g_uf1ChanEncAccum >=  1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
                     if (g_uf1ChanEncAccum <= -1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
-                    if (tracks != 0) applySelectRelative_(tracks);
+                    // SHIFT held → Instance Cycle (walk the CS/BC instances on the
+                    // selected track, like the UC1/UF8 Shift+channel-encoder);
+                    // unshifted → track nav. Reads the SHARED Shift modifier so ANY
+                    // source (UF1 / UF8 / UC1 hardware / keyboard) counts. Frank
+                    // 2026-07-30.
+                    if (tracks != 0) {
+                        if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift))
+                            applyInstanceCycle_(tracks);
+                        else
+                            applySelectRelative_(tracks);
+                    }
                     break;
                 }
                 case uf1::enc::kJog:            // jog wheel → playhead / edit cursor
@@ -11724,6 +11782,18 @@ void drainInputQueue()
             // Channel-view V-Pot push (0x09-0x0C): reset the current-page V-Pot
             // param to its default on the on-screen SSL strip (main thread).
             applyUf1ChannelVpotPush_(static_cast<int>(e.strip));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1ToggleGui) {
+            // Channel-encoder push (0x0D): toggle the focused plug-in GUI (main
+            // thread — TrackFX_Show / AppKit windows).
+            applyShowFocusedPluginGui_();
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1SelectRelative) {
+            // Bank ◄ ► (0x21/0x23): move the track selection by ±kUf1BankStep
+            // (main thread — track select). Reuses the channel-encoder nav path.
+            applySelectRelative_(static_cast<int>(e.value));
             continue;
         }
         if (e.kind == PendingInput::NavJumpStrip) {
@@ -14510,6 +14580,20 @@ static const uint8_t kUf1PluginHeader[200] = {
     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0 };
 
+// Build the channel-view header (0x011c) with the LIVE "N/M" page indicator
+// patched over the template's static "1/8" (the ASCII digits at bytes 75 / 77;
+// byte 76 stays '/'). Frank 2026-07-30: the header must show the actual current
+// page / available page count. Digits clamped 1..9 (page counts never exceed 8).
+// Returns a copy the caller hands to buildScreen (which copies the payload).
+static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int total)
+{
+    std::array<uint8_t, sizeof(kUf1PluginHeader)> h{};
+    std::memcpy(h.data(), kUf1PluginHeader, sizeof(kUf1PluginHeader));
+    h[75] = static_cast<uint8_t>('0' + std::clamp(cur,   1, 9));
+    h[77] = static_cast<uint8_t>('0' + std::clamp(total, 1, 9));
+    return h;
+}
+
 // ---- Overview cycle pacer ---------------------------------------------------
 // SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
 // ~1 ms jitter and NEVER pauses. REAPER's ~33 ms timer cannot produce that
@@ -15928,12 +16012,46 @@ void onUf1Event(const uf1::InputEvent& ev)
             break;
         case uf1::InputKind::Button:
             if (f) std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
-            // MODE (0x20) toggles the firmware's Channel <-> Meter view. The
-            // device flips its own layout; we only mirror the state so the
-            // painter knows which content to stream. Atomic store only — no
-            // REAPER API on this thread (threading rule).
-            if (ev.id == uf1::btn::kMode && ev.pressed) {
-                g_uf1MeterView.store(!g_uf1MeterView.load());
+            // SHIFT (0x36): feeds the SAME shared Shift modifier as the UF8/UC1
+            // hardware shift + the keyboard (Frank 2026-07-30 "derselbe shift wie
+            // bei UC1/UF8 oder Keyboard"), NOT a UF1-local flag. Sets the bindings
+            // modifier (→ modifierHeld(Shift), which every surface reads) + mirrors
+            // g_shiftHeld (UF8 fine-mode + Fine LED) — the plain momentary path of
+            // the mod_shift builtin. Both are atomic stores (threading rule); the
+            // double-click latch is not replicated here (a later UF1-Bindings phase
+            // can bind 0x36 → mod_shift for full parity). setModifierHeld is safe
+            // off the main thread (it only stores atomics).
+            if (ev.id == uf1::btn::kShift) {
+                uf8::bindings::setModifierHeld(uf8::bindings::Modifier::Shift, ev.pressed);
+                g_shiftHeld.store(ev.pressed);
+                break;
+            }
+            // MODE button: HOLD shows a mode-picker on the 4 display soft-keys
+            // (SK1 Plugin / SK2 DAW / SK3 Meter / SK4 free); pressing a soft-key
+            // while held jumps to that mode (handled in the menu-select block
+            // right below). Down opens the menu, up closes it. The view is
+            // content-driven (cap75) so WE own it — no autonomous firmware toggle
+            // to mirror. Atomic store only (threading rule).
+            if (ev.id == uf1::btn::kMode) {
+                g_uf1ModeMenu.store(ev.pressed);
+                break;
+            }
+            // MODE-hold menu open: the 4 display soft-keys pick the mode (before
+            // the Meter-Screen-Selector / channel soft-key blocks so it wins in
+            // BOTH views). SK1 Plugin, SK2 DAW → the channel layout (sub-mode);
+            // SK3 Meter → the meter layout; SK4 free. Atomic stores; the painter
+            // switches content next tick. Closes the menu on select.
+            if (g_uf1ModeMenu.load() && ev.pressed &&
+                (ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
+                 ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)) {
+                switch (ev.id - uf1::btn::kDisplaySoft1) {
+                    case 0: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(0); break; // Plugin
+                    case 1: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(1);
+                            g_uf1DawGroup.store(0);                                     break; // DAW
+                    case 2: g_uf1MeterView.store(true);                                 break; // Meter
+                    default: break;                                                            // SK4 free
+                }
+                g_uf1ModeMenu.store(false);
                 break;
             }
             // Display soft-key 1 is the "Meter Screen Selector" while the Meter
@@ -15979,13 +16097,13 @@ void onUf1Event(const uf1::InputEvent& ev)
             // painter on the main thread.
             if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
                 && ev.pressed && !g_uf1MeterView.load()) {
-                // Wrap within the ACTIVE strip type's page count (BC 2 has 2, the
-                // channel strips 8) — read the type the painter last resolved
-                // (worker can't call the REAPER API). −1 (nothing resolved) →
-                // full 8-page fallback so paging still works before the first paint.
-                const int ty = g_uf1CsActiveType.load();
-                const int np = (ty >= 0 && ty < kUf1CsTypeCount)
-                                   ? kUf1CsTypePageCount[ty] : kUf1CsPageCount;
+                // ◄ ► page the SOFT-KEY pages in BOTH Plugin and DAW mode (Frank:
+                // "in DAW banken die buttons die Soft-Key Pages wie in Plugin Mode,
+                // mit den user-defined soft-keys — coming"). Plugin = the strip's
+                // p188 pages; DAW = the user soft-key pages (1 for now). Wrap within
+                // the count the painter last published (worker has no REAPER API).
+                int np = g_uf1CsActivePages.load();
+                if (np < 1) np = 1;
                 const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (np - 1);
                 g_uf1CsPage.store((g_uf1CsPage.load() % np + dir) % np);
                 break;
@@ -16025,9 +16143,37 @@ void onUf1Event(const uf1::InputEvent& ev)
             // (unbound → no-op), exactly as the channel arrows do.
             if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
-                && ev.pressed && !g_uf1MeterView.load()) {
+                && ev.pressed && !g_uf1MeterView.load() && g_uf1ModeMenu.load() == false) {
                 queueInput({PendingInput::Uf1CsSoftKey,
                             static_cast<uint8_t>(ev.id - uf1::btn::kDisplaySoft1), 0.0});
+                break;
+            }
+            // DAW mode: the "5-8" button (0x22) toggles the 4-track group between
+            // the selected track (0) and the next four (1). Channel view + DAW only;
+            // it stays free elsewhere. Atomic store (threading rule); the painter +
+            // V-Pot handlers read g_uf1DawGroup via uf1DawWindowStart_.
+            if (ev.id == uf1::btn::k5to8 && ev.pressed
+                && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1) {
+                g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
+                break;
+            }
+            // Channel-encoder push (0x0D) = Toggle Focused Plug-in GUI (Frank
+            // 2026-07-30 standard mapping). Queue for the main thread (TrackFX_Show
+            // is UI/main-thread only). Press edge only; ships as the default (was
+            // unbound), superseding any user binding like the other UF1 claims.
+            if (ev.id == uf1::btn::kChannelPush && ev.pressed) {
+                queueInput({PendingInput::Uf1ToggleGui, 0, 0.0});
+                break;
+            }
+            // Bank ◄ / ► (0x21 / 0x23) = coarse track select, ±8 by default (Frank
+            // 2026-07-30). Moves the REAPER selection so every view follows; queued
+            // for the main thread (applySelectRelative_ is REAPER-API). All views;
+            // ships as the default standard mapping. Press edge only.
+            if ((ev.id == uf1::btn::kBankLeft || ev.id == uf1::btn::kBankRight)
+                && ev.pressed) {
+                const double d = (ev.id == uf1::btn::kBankRight) ? kUf1BankStep
+                                                                 : -kUf1BankStep;
+                queueInput({PendingInput::Uf1SelectRelative, 0, d});
                 break;
             }
             // Channel V-Pot pushes (0x09-0x0C): reset the current-page V-Pot
@@ -16056,6 +16202,13 @@ void onUf1Event(const uf1::InputEvent& ev)
             // atomic store (threading rule).
             if (ev.id == uf1::btn::kFlip && ev.pressed) {
                 g_uf1Flip.store(!g_uf1Flip.load());
+                break;
+            }
+            // MASTER key (0x39, under FLIP): toggle the strip onto the MASTER track
+            // (UC1 "track 00"). uf1FocusedTrack_ reads g_uf1Master so the whole strip
+            // follows. Ships UNBOUND (standard mapping); atomic store (threading rule).
+            if (ev.id == uf1::btn::kMaster && ev.pressed) {
+                g_uf1Master.store(!g_uf1Master.load());
                 break;
             }
             // All other UF1 buttons route through the shared Bindings
@@ -18313,41 +18466,21 @@ int uf1CsPluginType_(MediaTrack* tr, int fx)
     return -1;
 }
 
-// ---- Learned-plugin linkIdx layout (UC1-learned CS/BC on the UF1) -----------
-// For a UC1-learned CS/BC plug-in the built-in name tables don't apply (arbitrary
-// param names), so each UF1 position resolves by canonical SSL linkIdx via the
-// user's UserLinkSlot. These mirror the CS2 / BC2 name-table POSITIONS 1:1; the
-// linkIdx values are verified against kCs2Slots / kBusComp2Slots (PluginMap.cpp).
-// −1 = no canonical slot at that position (Width/Mic/S-C-Mode/HQ/A-B/PLUG-IN are
-// built-in-only or non-slot) → blank for a learned plug-in.
-constexpr int kUf1Cs2VpotLink[8][4] = {
-    { -1, -1, 37, 23 },   // Width / _ / Output Trim / Comp Mix
-    {  4, -1,  7,  6 },   // Input Trim / _ / High Pass / Low Pass
-    { 20, 19, -1, -1 },   // LF Gain / LF Freq
-    { 16, 17, 18, -1 },   // LMF Gain / LMF Freq / LMF Q
-    { 11, 12, 13, -1 },   // HMF Gain / HMF Freq / HMF Q
-    {  9, 10, -1, -1 },   // HF Gain / HF Freq
-    { 26, 27, 28, -1 },   // Comp Ratio / Threshold / Release
-    { 29, 30, 31, 32 },   // Gate Range / Threshold / Release / Hold
-};
-constexpr int kUf1Cs2SoftKeyLink[8][4] = {
-    {  5, -1, -1, -1 },   // Polarity / _ / SOLO SAFE / PLUG-IN
-    { -1, -1, -1, -1 },   // S/C MODE / _ / HQ MODE / A/B  (all non-slot)
-    { 21, -1, 14, 15 },   // LF Type / _ / EQ Type / EQ In
-    { -1, -1, 14, 15 },
-    { -1, -1, 14, 15 },
-    {  8, -1, 14, 15 },   // HF Type / _ / EQ Type / EQ In
-    { 24, 25, 36, 22 },   // Comp Fast Attack / Comp Peak / S/C Listen / Dynamics In
-    { 33, 34, -1, 22 },   // Gate Expander / Gate Attack / _ / Dynamics In
-};
-constexpr int kUf1Bc2VpotLink[2][4] = {
-    { 1, 5, 3, 4 },       // Threshold / Ratio / Attack / Release
-    { 2, 7, 6, -1 },      // Makeup / Dry-Wet Mix / S-C HPF
-};
-constexpr int kUf1Bc2SoftKeyLink[2][4] = {   // learned-BC soft-keys blank for now
-    { -1, -1, -1, -1 },
-    { -1, -1, -1, -1 },
-};
+// ---- Learned-plugin SEQUENTIAL fill (UC1-learned CS/BC on the UF1) ----------
+// The built-in CS2/BC2 layout pins each UF1 position to a fixed canonical SSL
+// linkIdx. That works for a native strip (every slot exists) but leaves a
+// third-party learned plug-in FULL OF HOLES: a user who maps only a handful of
+// params gets them scattered across 8 mostly-empty pages (Frank 2026-07-30
+// "fehlen zum teil zu viele parameter"). So for a learned plug-in we IGNORE the
+// canonical positions and PACK the user's mapped slots densely, in order.
+//
+// The UC1 learn already encoded button-vs-knob (which physical UC1 control the
+// user assigned the param to), so we route each mapped slot the way it was
+// learned: a slot whose linkIdx is a UC1 BUTTON (uc1::linkIdxIsButton) fills the
+// SOFT-KEY stream, everything else fills the V-POT stream (Frank: "button-
+// mappings auf soft-keys, dreh-sachen auf v-pots. Sonst option 1"). Each stream
+// is ordered by linkIdx (the SSL channel-strip reading order) and packed
+// page-major, 4 per page; the page count shrinks to fit (uf1LearnedPageCount_).
 
 // True + fills fxName when (tr,fx) is a UC1-LEARNED CS/BC (a user map, NOT a
 // built-in SSL type). Main-thread only.
@@ -18362,32 +18495,88 @@ bool uf1IsLearnedCsBc_(MediaTrack* tr, int fx, char* fxName, size_t n)
     return um && (um->domain == uf8::Domain::ChannelStrip
                || um->domain == uf8::Domain::BusComp);
 }
-int uf1LearnedSlotParam_(const char* fxName, int link)
+// Ordered mapped slots of a learned plug-in for one UF1 stream. wantButton picks
+// the SOFT-KEY stream (linkIdx driven by a UC1 button) vs the V-POT stream
+// (knobs + any linkIdx not in the UC1 table). Only slots with a bound vst3Param
+// count; sorted by linkIdx (SSL reading order). busComp selects the CS vs BC
+// link space (type 4 = BC). Main-thread only (walks the owned catalog).
+void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
+                            std::vector<const uf8::UserLinkSlot*>& out)
 {
-    if (link < 0) return -1;
-    const auto* usl = uf8::user_plugins::lookupOwnedSlot(fxName, link);
-    return (usl && usl->vst3Param >= 0) ? usl->vst3Param : -1;
+    out.clear();
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (!um) return;
+    for (const auto& sl : um->slots) {
+        if (sl.vst3Param < 0) continue;                          // unmapped slot
+        if (uc1::linkIdxIsButton(sl.linkIdx, busComp) != wantButton) continue;
+        out.push_back(&sl);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const uf8::UserLinkSlot* a, const uf8::UserLinkSlot* b) {
+                  return a->linkIdx < b->linkIdx;
+              });
 }
-// Resolve the vst3Param for a UF1 CS/BC V-Pot position (type/page/idx): built-in →
-// by name (kUf1CsVPots); learned → by canonical linkIdx. -1 = blank/absent.
+// The learned plug-in's mapped slot at flat UF1 position page*4+idx of a stream,
+// or nullptr when that position is past the last mapped slot (→ blank).
+const uf8::UserLinkSlot* uf1LearnedSlotAt_(const char* fxName, bool busComp,
+                                           bool wantButton, int page, int idx)
+{
+    std::vector<const uf8::UserLinkSlot*> v;
+    uf1LearnedStreamSlots_(fxName, busComp, wantButton, v);
+    const int flat = page * 4 + idx;
+    return (flat >= 0 && flat < static_cast<int>(v.size())) ? v[flat] : nullptr;
+}
+// Pages a learned plug-in needs: enough to show both streams (V-Pots + soft-keys
+// share g_uf1CsPage). At least 1 so a strip with zero mapped slots still paints.
+int uf1LearnedPageCount_(const char* fxName, bool busComp)
+{
+    std::vector<const uf8::UserLinkSlot*> v;
+    uf1LearnedStreamSlots_(fxName, busComp, /*wantButton*/false, v);
+    const int pv = (static_cast<int>(v.size()) + 3) / 4;
+    uf1LearnedStreamSlots_(fxName, busComp, /*wantButton*/true, v);
+    const int ps = (static_cast<int>(v.size()) + 3) / 4;
+    return std::max(1, std::max(pv, ps));
+}
+// The learned slot's EFFECTIVE vst3Param under the currently-held FX-Learn layer
+// (Ctrl / Opt / Ctrl+Opt overlay, else Normal). -1 = the position is blank, or
+// both the held layer and Normal are unmapped for it.
+static int uf1LearnedEffParam_(const uf8::UserLinkSlot* sl)
+{
+    if (!sl) return -1;
+    return uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer()).vst3Param;
+}
+// Resolve the vst3Param for a UF1 CS/BC V-Pot position (type/page/idx): built-in
+// → by name (kUf1CsVPots); learned → sequential fill (V-Pot stream), through the
+// held modifier layer. -1 = blank.
 int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
     char nm[256];
     if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
-        return uf1LearnedSlotParam_(nm,
-            (type == 4) ? kUf1Bc2VpotLink[page][idx] : kUf1Cs2VpotLink[page][idx]);
+        return uf1LearnedEffParam_(
+            uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/false, page, idx));
     const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
     return v.param ? uf1ParamByName_(tr, fx, v.param) : -1;
 }
-// Same for a soft-key position.
+// Same for a soft-key position (learned → the button/soft-key fill stream).
 int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
     char nm[256];
     if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
-        return uf1LearnedSlotParam_(nm,
-            (type == 4) ? kUf1Bc2SoftKeyLink[page][idx] : kUf1Cs2SoftKeyLink[page][idx]);
+        return uf1LearnedEffParam_(
+            uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/true, page, idx));
     const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
     return sk.param ? uf1ParamByName_(tr, fx, sk.param) : -1;
+}
+// Page count for the strip under the UF1 channel V-Pots: the fixed per-type count
+// for a built-in SSL strip, or the dynamic packed count for a learned plug-in.
+// Main-thread only. type/tr/fx come from uf1ResolveCsFx_.
+int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx)
+{
+    if (type < 0 || type >= kUf1CsTypeCount) return kUf1CsPageCount;
+    char nm[256];
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+        return uf1LearnedPageCount_(nm, /*busComp*/type == 4);
+    return kUf1CsTypePageCount[type];
 }
 
 // Resolve the SSL channel-strip FX the UF1 channel V-Pots + screen operate on,
@@ -18404,15 +18593,22 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
         if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return -1;
         return uf1CsPluginType_(t, fx);
     };
+    // Plugin mode FOLLOWS the UF1-focused track (Frank 2026-07-30: "tracks ohne
+    // CS/BC werden ignoriert, v-pots steuern zuletzt gewählten"). So the active-FX
+    // cursor + focused-FX window count ONLY when they land on focusTr (this keeps
+    // instance cycling / GUI-follow on the CURRENT track), and a track without a
+    // CS/BC resolves to −1 (blank) instead of sticking to the previous strip.
     { const ActiveFxTarget a = resolveActiveFx_();
-      const int ty = tryFx(a.tr, a.fxIdx);
-      if (ty >= 0) { outTr = a.tr; outFx = a.fxIdx; return ty; } }
+      if (a.tr == focusTr) {
+          const int ty = tryFx(a.tr, a.fxIdx);
+          if (ty >= 0) { outTr = a.tr; outFx = a.fxIdx; return ty; } } }
     { int trNum = -1, itemNum = -1, fxNum = -1;
       if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
           MediaTrack* cand = GetTrack(nullptr, trNum - 1);
-          const int candFx = fxNum & 0x00FFFFFF;
-          const int ty = tryFx(cand, candFx);
-          if (ty >= 0) { outTr = cand; outFx = candFx; return ty; } } }
+          if (cand == focusTr) {
+              const int candFx = fxNum & 0x00FFFFFF;
+              const int ty = tryFx(cand, candFx);
+              if (ty >= 0) { outTr = cand; outFx = candFx; return ty; } } } }
     if (focusTr) {
         const int fx = uf1FindEqFx_(focusTr);
         const int ty = tryFx(focusTr, fx);
@@ -18421,15 +18617,27 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
     return -1;
 }
 
+// First 0-based track index of the DAW-mode 4-track window: the selected track
+// (its IP_TRACKNUMBER) offset by the "5-8" group. Shared by the DAW V-Pot painter,
+// rotate handler + push so the display and control always address the same tracks.
+// Main-thread only. Returns 0 when nothing is selected.
+static int uf1DawWindowStart_()
+{
+    MediaTrack* sel = GetSelectedTrack(nullptr, 0);
+    int base = sel ? static_cast<int>(GetMediaTrackInfo_Value(sel, "IP_TRACKNUMBER")) - 1 : 0;
+    if (base < 0) base = 0;
+    return base + g_uf1DawGroup.load() * 4;
+}
+
 // Apply a Channel-view V-Pot detent to the focused SSL channel-strip plug-in.
 // id = uf1::enc::kVpot1..kVpot4. Twin of applyUf1MeterVpot_: per-slot detent
 // accumulation (one physical click = one step despite the ~4 raw counts the
 // encoder emits per click), resolves the on-screen strip FX + p188 page param
 // by name, writes it normalised. Bipolar (EQ gain / trim) slots get the SSL
 // centre notch-hold at 0 dB (norm 0.5) exactly like the UF8 V-Pot path; the
-// others move linearly. No-op when not a known SSL strip or the slot is blank
-// on this page. Main-thread only (drained). The screen readout follows via
-// uf1PaintChannel_ (change-detected), exactly as Pan / Vol do today.
+// others move linearly. In DAW mode the 4 V-Pots ride the window tracks' volume
+// instead. No-op when not a known SSL strip or the slot is blank on this page.
+// Main-thread only (drained). The screen readout follows via uf1PaintChannel_.
 void applyUf1ChannelVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
@@ -18439,17 +18647,52 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
                    (id == uf1::enc::kVpot4) ? 3 : -1;
     if (vi < 0) return;
 
+    // DAW mode: V-Pot vi rides the volume of the window's track vi (dB nudge, same
+    // taper + 0.25 dB/count as the FLIP-volume V-Pot). Independent of any plug-in.
+    if (g_uf1ChannelSubMode.load() == 1) {
+        MediaTrack* t = GetTrack(nullptr, uf1DawWindowStart_() + vi);
+        if (!t) return;
+        const double curLin = GetMediaTrackInfo_Value(t, "D_VOL");
+        const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
+        double nDb = curDb + step * kUf1FlipVolDbPerCount;
+        if (nDb >  12.0) nDb =  12.0;
+        if (nDb < -60.0) nDb = -60.0;
+        CSurf_OnVolumeChange(t, std::pow(10.0, nDb / 20.0), false);
+        return;
+    }
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
     const int type = uf1ResolveCsFx_(focusTr, tr, fx);
     if (type < 0) return;                       // non-SSL / unknown strip → no-op
 
-    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
-    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(vi);   // label + bipolar (CS2/BC2 layout)
+    const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
 
-    const int p = uf1CsVpotParam_(tr, fx, type, page, vi);   // built-in by name / learned by linkIdx
-    if (p < 0) return;                           // blank / unmapped on this page
+    // Resolve the param + its bipolar (centre-detent) flag. For a learned plug-in
+    // both come from the packed user slot — its polarity, NOT the canonical CS2/BC2
+    // table (which would give a wrong notch/magnet feel to a packed param). Held
+    // Ctrl / Opt / Ctrl+Opt drive the slot's FX-Learn OVERLAY layer (same host-
+    // keyboard modifiers as the UC1/UF8; fxEffectiveLayer falls back to Normal when
+    // the held layer is unmapped for that slot).
+    int p; bool bipolar;
+    {
+        char lnm[256];
+        if (uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm))) {
+            const uf8::UserLinkSlot* sl =
+                uf1LearnedSlotAt_(lnm, /*busComp*/type == 4, /*wantButton*/false, page, vi);
+            if (sl) {
+                const uf8::SlotLayer& eff =
+                    uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer());
+                p = eff.vst3Param;
+                bipolar = eff.polarity == uf8::VPotPolarity::Bipolar;
+            } else { p = -1; bipolar = false; }
+        } else {
+            p = uf1CsVpotParam_(tr, fx, type, page, vi);   // built-in by name
+            bipolar = kUf1CsVPots[type][page].slot(vi).bipolar;   // CS2/BC2 layout
+        }
+    }
+    if (p < 0) return;                           // blank / unmapped on this page/layer
 
     // Per-slot detent accumulator — one physical click = one step even though
     // the encoder emits ~4 raw counts/click (kChannelEncoderScale, cap58). Reset
@@ -18466,25 +18709,54 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (notches == 0) return;
     sAccum[vi] -= notches;
 
-    // Fine (Quick-Key-2) quarters the step via the shared knob scale, mirroring
-    // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
-    // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
-    double delta = notches * kUf1CsVPotStep
-                 * reasixty_uf8KnobScale(g_uf1CsFine.load());
+    // STEPPED params (e.g. Townhouse Attack/Release, comp Ratio) advance by ONE
+    // discrete step per detent: a fixed continuous delta rounds back to the same
+    // value and never moves (Frank 2026-07-30 "gesteppte parameter sind noch nicht
+    // verstellbar"). Toggles flip; everything else keeps the smooth delta + bipolar
+    // magnet. pStep is REAPER's per-step size in normalised [0..1] space.
+    double pStep = 0.0, pSmall = 0.0, pLarge = 0.0; bool isToggle = false;
+    const bool stepped = TrackFX_GetParameterStepSizes(tr, fx, p,
+                                                       &pStep, &pSmall, &pLarge, &isToggle);
+    // JSFX reports step in slider VALUE units, not normalised — a continuous JSFX
+    // fader looks "stepped" with a coarse quantum. Classify: a bogus (continuous)
+    // step falls through to the smooth path; a real enum uses the native increment.
+    bool jsfxBogusStep = false;
+    if (stepped && !isToggle) {
+        double nrm = 0.0; bool cont = false;
+        if (uf8::jsfxStepClassify(tr, fx, p, pStep, nrm, cont)) {
+            jsfxBogusStep = cont;
+            if (!cont && nrm > 0.0) pStep = nrm;
+        }
+    }
     const double cur = TrackFX_GetParamNormalized(tr, fx, p);
     double nv;
-    if (v.bipolar) {
-        // Finer step inside the notch zone, then the magnet — as the UF8 path.
-        // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
-        // UF1 channel V-Pots can't collide with either surface's detent state.
-        if (std::abs(cur - 0.5) <= 2.0 * g_notchZone.load())
-            delta *= g_notchFineStep.load();
-        nv = uf8::applyNotchHold(8 + vi, cur, delta, /*center*/0.5,
-                                 g_notchZone.load(), g_notchHold.load(), 0.0, 1.0);
-    } else {
-        nv = cur + delta;
+    if (stepped && isToggle && !bipolar) {
+        nv = (cur >= 0.5) ? 0.0 : 1.0;
+    } else if (stepped && pStep > 0.0 && !jsfxBogusStep && !bipolar) {
+        // !bipolar: a centre-detent param (EQ gain/trim) is continuous by design —
+        // keep its magnet, never treat it as stepped even if it reports a step.
+        nv = cur + notches * pStep;          // one detent = one discrete step
         if (nv < 0.0) nv = 0.0;
         if (nv > 1.0) nv = 1.0;
+    } else {
+        // Fine (Quick-Key-2) quarters the step via the shared knob scale, mirroring
+        // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
+        // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
+        double delta = notches * kUf1CsVPotStep
+                     * reasixty_uf8KnobScale(g_uf1CsFine.load());
+        if (bipolar) {
+            // Finer step inside the notch zone, then the magnet — as the UF8 path.
+            // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
+            // UF1 channel V-Pots can't collide with either surface's detent state.
+            if (std::abs(cur - 0.5) <= 2.0 * g_notchZone.load())
+                delta *= g_notchFineStep.load();
+            nv = uf8::applyNotchHold(8 + vi, cur, delta, /*center*/0.5,
+                                     g_notchZone.load(), g_notchHold.load(), 0.0, 1.0);
+        } else {
+            nv = cur + delta;
+            if (nv < 0.0) nv = 0.0;
+            if (nv > 1.0) nv = 1.0;
+        }
     }
     if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
 }
@@ -18507,29 +18779,38 @@ void applyUf1ChannelSoftKey_(int idx)
     const int type = uf1ResolveCsFx_(focusTr, tr, fx);
     if (type < 0) return;                        // non-SSL / unknown strip → no-op
 
-    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
-    const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
-    // HQ MODE / A/B compare live in the plug-in state chunk, not as VST3 params —
-    // toggle via the shared PluginChunkPatch hook on the resolved strip's track
-    // (it walks every SSL plug-in on the track), exactly as the UF8 soft-key bank
-    // does. Reads back its own state; no VST3 param to write. See
-    // [[ssl-chunk-non-auto-params]] and the UF8 PluginAB/PluginHQ dispatch.
-    if (sk.act == Uf1CsSkAct::HQ) { uf8::togglePluginHQ(tr); return; }
-    if (sk.act == Uf1CsSkAct::AB) { uf8::togglePluginAB(tr); return; }
-    if (sk.act == Uf1CsSkAct::StripMode) {
-        // PLUG-IN key = "Toggle SSL Strip Mode" (manual: the PLUG-IN/DAW toggle),
-        // implemented like the UF8 `ssl_strip_mode_toggle`: the fader then drives
-        // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
-        // instead of track volume. Shares the global g_pluginFaderMode so a combined
-        // UF8+UF1 rig toggles together; the UF1 fader path reads it (uf1PaintChannel_).
-        const bool next = !g_pluginFaderMode.load();
-        g_pluginFaderMode.store(next);
-        g_pluginFaderModeWithGui.store(false);
-        SetExtState("ReaSixty", "pluginFaderMode", next ? "1" : "0", true);
-        g_pageDirty.store(true);
-        return;
+    const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
+    // The canonical HQ MODE / A/B / PLUG-IN soft-key ACTIONS live only on the
+    // built-in strips. A learned plug-in packs plain user params onto the soft-keys
+    // (uf1CsSoftKeyParam_), so it must NOT consult kUf1CsSoftKeys[type]'s `act` (its
+    // canonical positions don't correspond to the packed params) — skip straight to
+    // the param toggle.
+    char lnm[256];
+    const bool learned = uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm));
+    if (!learned) {
+        const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+        // HQ MODE / A/B compare live in the plug-in state chunk, not as VST3 params
+        // — toggle via the shared PluginChunkPatch hook on the resolved strip's
+        // track (it walks every SSL plug-in on the track), exactly as the UF8 soft-
+        // key bank does. Reads back its own state; no VST3 param to write. See
+        // [[ssl-chunk-non-auto-params]] and the UF8 PluginAB/PluginHQ dispatch.
+        if (sk.act == Uf1CsSkAct::HQ) { uf8::togglePluginHQ(tr); return; }
+        if (sk.act == Uf1CsSkAct::AB) { uf8::togglePluginAB(tr); return; }
+        if (sk.act == Uf1CsSkAct::StripMode) {
+            // PLUG-IN key = "Toggle SSL Strip Mode" (manual: the PLUG-IN/DAW toggle),
+            // implemented like the UF8 `ssl_strip_mode_toggle`: the fader then drives
+            // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
+            // instead of track volume. Shares the global g_pluginFaderMode so a combined
+            // UF8+UF1 rig toggles together; the UF1 fader path reads it (uf1PaintChannel_).
+            const bool next = !g_pluginFaderMode.load();
+            g_pluginFaderMode.store(next);
+            g_pluginFaderModeWithGui.store(false);
+            SetExtState("ReaSixty", "pluginFaderMode", next ? "1" : "0", true);
+            g_pageDirty.store(true);
+            return;
+        }
     }
-    const int p = uf1CsSoftKeyParam_(tr, fx, type, page, idx);   // built-in by name / learned by linkIdx
+    const int p = uf1CsSoftKeyParam_(tr, fx, type, page, idx);   // built-in by name / learned by fill
     if (p < 0) return;                            // blank / label-only / unmapped
 
     const double cur = TrackFX_GetParamNormalized(tr, fx, p);
@@ -18584,14 +18865,41 @@ static double uf1CsDefaultNorm_(MediaTrack* tr, int fx, int p)
 void applyUf1ChannelVpotPush_(int idx)
 {
     if (idx < 0 || idx > 3) return;
+
+    // DAW mode: push resets the window track's volume to unity (0 dB).
+    if (g_uf1ChannelSubMode.load() == 1) {
+        if (MediaTrack* t = GetTrack(nullptr, uf1DawWindowStart_() + idx))
+            CSurf_OnVolumeChange(t, 1.0, false);
+        return;
+    }
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
     const int type = uf1ResolveCsFx_(focusTr, tr, fx);
     if (type < 0) return;                        // non-SSL / unknown strip → no-op
 
-    const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[type] - 1);
-    const int p = uf1CsVpotParam_(tr, fx, type, page, idx);   // built-in by name / learned by linkIdx
+    const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
+
+    // Learned: the effective (held-layer) slot carries both the param and its reset
+    // value — the overlay's own UserLinkSlot/SlotLayer.defaultNorm from the FX-Learn
+    // editor, NOT the Normal one (uf1CsDefaultNorm_ matches by Normal vst3Param and
+    // would miss a modifier-layer param).
+    char lnm[256];
+    if (uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm))) {
+        const uf8::UserLinkSlot* sl =
+            uf1LearnedSlotAt_(lnm, /*busComp*/type == 4, /*wantButton*/false, page, idx);
+        if (!sl) return;
+        const uf8::SlotLayer& eff = uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer());
+        if (eff.vst3Param < 0) return;
+        double dv = eff.defaultNorm;
+        dv = (dv < 0.0) ? 0.0 : (dv > 1.0) ? 1.0 : dv;
+        const double cur = TrackFX_GetParamNormalized(tr, fx, eff.vst3Param);
+        if (dv != cur) TrackFX_SetParamNormalized(tr, fx, eff.vst3Param, dv);
+        return;
+    }
+
+    const int p = uf1CsVpotParam_(tr, fx, type, page, idx);   // built-in by name
     if (p < 0) return;                           // blank / unmapped on this page
 
     const double dv  = uf1CsDefaultNorm_(tr, fx, p);
@@ -18662,6 +18970,73 @@ std::string uf1ActiveFxShortName_()
     return s;
 }
 
+// Comp GR reader defined further down (Stream Deck bridge section); forward-
+// declared so the UF1 small-LCD meter can reuse it (|GainReduction_dB| of the
+// track's channel-strip FX, Acustica-skipped — the same source as the UF8 comp
+// GR row).
+static float sdGrDb_(MediaTrack* tr, uf8::Domain dom);
+// UF8 peak-dB → level byte (0x00..0x1F over -55..0 dBFS); defined further down.
+// Reused so the UF1 small-LCD level meter deflects 1:1 with the UF8.
+uint8_t dbToVuByte_(double dbfs);
+
+// Small channel-LCD LEVEL + GR meter bytes for the focused track — the UF8-strip
+// meter, mirrored onto the UF1's small LCD (Frank 2026-07-30 "kleines display
+// gleich aufgebaut wie UF8"). ★ Both the mapping (Frank's HW) AND the dB→byte
+// SCALING are now 1:1 with the UF8 — Frank: "sind beide zu tief … 1:1 wie das
+// UF8" (my first cut used the smaller cap78 ranges, so everything read low).
+// Channel-view wire format:
+//   0x0009 = LEVEL meter [L, R, 0, 0] — the two bytes are L / R (equal on mono).
+//   0x0015 = comp/dynamics GR LED, ONE byte; 0x0016 = gate GR LED. Both grow UP
+//            from rest with reduction (cap78: loud ↔ 0x0015 rises = normal comp).
+//   0x000a = a second [x,x,0,0] element, idle 0 in cap78 — meaning unknown, kept 0.
+// dB→byte is the EXACT UF8 encoding: level = dbToVuByte_ (0x00..0x1F over -55..0
+// dBFS); GR = the UF8 SSL 3/6/10/14/20 dB piecewise → 0x00 off / 0x02..0x18.
+// Sources also mirror the UF8: level = Track_GetPeakInfo (REAPER decays ~26.5
+// dB/s); comp GR = GainReduction_dB (sdGrDb_, any comp); gate GR = the SSL
+// impersonator's GateGain (SSL-only — a gate has no GainReduction_dB). Main-thread.
+static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
+                                  uint8_t& compByte, uint8_t& gateByte)
+{
+    // Level (0x0009 [L,R,0,0]): the UF8's own peak-dB → byte (0x00..0x1F). Guard
+    // pk<=0 before log10 (dbToVuByte_ maps -inf/-55 → 0).
+    auto peakByte = [](double pk) -> uint8_t {
+        return (pk <= 0.0) ? 0 : dbToVuByte_(20.0 * std::log10(pk));
+    };
+    lvL = peakByte(Track_GetPeakInfo(tr, 0));
+    lvR = peakByte(Track_GetPeakInfo(tr, 1));
+
+    // GR LED (0x0015 comp / 0x0016 gate): the EXACT UF8 GR ladder — SSL
+    // 3/6/10/14/20 dB piecewise → sub-step 0..30 → byte 0x00 off / 0x02..0x18.
+    auto grByte = [](double gr) -> uint8_t {
+        if (gr < 0.0)  gr = 0.0;
+        if (gr > 20.0) gr = 20.0;
+        double s;
+        if      (gr <= 3.0)  s = gr          * (6.0 / 3.0);
+        else if (gr <= 6.0)  s = 6.0  + (gr - 3.0)  * (6.0 / 3.0);
+        else if (gr <= 10.0) s = 12.0 + (gr - 6.0)  * (6.0 / 4.0);
+        else if (gr <= 14.0) s = 18.0 + (gr - 10.0) * (6.0 / 4.0);
+        else                 s = 24.0 + (gr - 14.0) * (6.0 / 6.0);
+        const int sub = std::clamp(static_cast<int>(std::lround(s)), 0, 30);
+        return sub == 0 ? uint8_t(0x00)
+                        : static_cast<uint8_t>(std::lround(0x02 + sub * (22.0 / 30.0)));
+    };
+
+    // Comp GR (→ 0x0015): |GainReduction_dB| of the strip's comp, like the UF8.
+    compByte = grByte(sdGrDb_(tr, uf8::Domain::ChannelStrip));
+
+    // Gate GR (→ 0x0016): the SSL impersonator's GateGain (SSL-only source).
+    double gateDb = 0.0;
+    if (sslcore::isRunning()) {
+        const int trackIdx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+        std::vector<float> gg;
+        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
+                static_cast<int>(sslcore::ChannelStripMeter::GateGain), trackIdx, gg)
+            && !gg.empty())
+            gateDb = std::fabs(gg[0]);
+    }
+    gateByte = grByte(gateDb);
+}
+
 void uf1PaintChannel_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -18715,7 +19090,15 @@ void uf1PaintChannel_()
                      kUf1MeterPageCount[std::clamp(meterScreen, 0, 3)] - 1) : 0;
     const bool pageChanged = meterView && (meterPage != sMeterPage);
     sMeterPage = meterPage;
-    const bool changed = (tr != sTr) || viewChanged || screenChanged;
+    // MODE-hold menu edge: opening OR closing forces a full repaint so the view
+    // painters re-lay their soft-keys correctly (the menu overlay at the end of
+    // this function overrides the 4 soft-keys while open; on close the view must
+    // restore its own labels). Read once here for the whole paint.
+    const bool modeMenu     = g_uf1ModeMenu.load();
+    static bool sModeMenu   = false;
+    const bool menuEdge     = (modeMenu != sModeMenu);
+    sModeMenu = modeMenu;
+    const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -18834,24 +19217,62 @@ void uf1PaintChannel_()
         if (uf1PinnedMeterTrackFx_(mtr, mfx))
             uf1EmitMeterParamLabels_(mtr, mfx, meterScreen, meterPage);
     }
-    // Page-arrow LEDs — SSL lights ► when a next page exists and ◄ when a previous
-    // one does, so only the reachable directions glow. LED id↔arrow correlated in
-    // cap106 (arrow-press IN vs LED OUT timing): 0x0e = ► (right), 0x0c = ◄ (left).
-    // buildLed = FF 3B 03 <id> 00 <on>. Both dark outside meter view. Gated on a
-    // view/screen/page change so it is not re-sent every frame.
-    if (g_uf1_dev && (viewChanged || screenChanged || pageChanged)) {
-        const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 3)];
-        auto arrowLed = [&](uint8_t id, bool on) {
-            // The nav-arrow LEDs need the FF38+FF39 PAIR (level 0x11 lit / 0x00
-            // off) — FF3B ALONE is inert for them (cap106: SSL sends FF38, FF39
-            // AND FF3B per arrow; Solo lights on FF3B alone but these do not).
+    // Nav LEDs — glow only when the move is possible (like the analyzer). THREE
+    // independent axes (Frank 2026-07-30):
+    //   ◄ ► (0x0c/0x0e, cap106-confirmed) = SOFT-KEY PAGES. Meter = meter pages;
+    //       channel = g_uf1CsPage / count (Plugin = strip pages; DAW = the user
+    //       soft-key pages, 1 for now → both dark until those land).
+    //   "5-8" (0x0a = btn 0x22 − 0x18, DERIVED — HW-verify) = the DAW 4-track group,
+    //       lit when the 2nd group (5-8) is engaged. DAW only.
+    //   Bank ◄ ► (0x09/0x0b = btn 0x21/0x23 − 0x18, DERIVED) = ±8 track select, lit
+    //       when a track exists that way. All views.
+    // Frame = FF38+FF39 (0x11 lit / 0x00 off) + FF3B, like the arrows. Change-
+    // detected per LED; `changed` re-asserts after a layout re-establish.
+    if (g_uf1_dev) {
+        auto navLed = [&](uint8_t id, bool on) {
             const uint8_t lvl = on ? 0x11 : 0x00;
-            g_uf1_dev->send(uf1::buildLedPrimary(id, lvl));
-            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));
-            g_uf1_dev->send(uf1::buildLed(id, on));
+            g_uf1_dev->send(uf1::buildLedPrimary(id, lvl));   // FF38
+            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));     // FF39
+            g_uf1_dev->send(uf1::buildLed(id, on));           // FF3B
         };
-        arrowLed(0x0e, meterView && meterPage < pgN - 1);   // ► right: next page exists
-        arrowLed(0x0c, meterView && meterPage > 0);          // ◄ left: previous page exists
+        // ◄ ► soft-key page availability.
+        bool leftOn, rightOn;
+        if (meterView) {
+            const int pgN = kUf1MeterPageCount[std::clamp(meterScreen, 0, 3)];
+            leftOn  = meterPage > 0;
+            rightOn = meterPage < pgN - 1;
+        } else {
+            const int cnt = std::max(1, g_uf1CsActivePages.load());
+            const int pg  = g_uf1CsPage.load();
+            leftOn  = pg > 0;
+            rightOn = pg < cnt - 1;
+        }
+        // DAW "5-8" 4-track group; clamp an empty 2nd group home so it stays honest.
+        MediaTrack* sel = GetSelectedTrack(nullptr, 0);
+        const int selIdx = sel ? std::max(0, static_cast<int>(
+                                    GetMediaTrackInfo_Value(sel, "IP_TRACKNUMBER")) - 1) : 0;
+        const int nTracks = CountTracks(nullptr);
+        bool five8On = false;
+        if (!meterView && g_uf1ChannelSubMode.load() == 1) {
+            if (g_uf1DawGroup.load() == 1 && selIdx + 4 >= nTracks) g_uf1DawGroup.store(0);
+            five8On = g_uf1DawGroup.load() == 1;
+        }
+        // Bank ±8 track-select availability (all views).
+        const bool bankLOn = selIdx > 0;
+        const bool bankROn = selIdx < nTracks - 1;
+
+        // MASTER (btn 0x39) engaged → the strip follows the master track. LED id
+        // 0x21 (= 0x39 − 0x18, DERIVED — HW-verify).
+        const bool masterOn = g_uf1Master.load();
+
+        static int sL = -1, sR = -1, s58 = -1, sBL = -1, sBR = -1, sM = -1;
+        const bool force = changed;
+        if (force || int(leftOn)  != sL)  { sL  = leftOn;  navLed(0x0c, leftOn); }
+        if (force || int(rightOn) != sR)  { sR  = rightOn; navLed(0x0e, rightOn); }
+        if (force || int(five8On) != s58) { s58 = five8On; navLed(0x0a, five8On); }
+        if (force || int(bankLOn) != sBL) { sBL = bankLOn; navLed(0x09, bankLOn); }
+        if (force || int(bankROn) != sBR) { sBR = bankROn; navLed(0x0b, bankROn); }
+        if (force || int(masterOn)!= sM)  { sM  = masterOn; navLed(0x21, masterOn); }
     }
 
     if (meterView) {
@@ -18865,15 +19286,31 @@ void uf1PaintChannel_()
     // meter entry.
     {
         auto parts = std::make_shared<Uf1CycleParts>();
-        static const uint8_t k0009i[] = {0xff,0xff,0x00,0x00};
-        static const uint8_t k000ai[] = {0x00,0x00,0x00,0x00};
-        const uint8_t kFfi = 0xff, kZeroi = 0x00;
+        // LIVE level + GR meter — the UF8-strip meter on the small LCD (Frank
+        // 2026-07-30). The pacer restreams this snapshot at ~24 Hz (SSL's own
+        // rate), so these bytes animate; the entry burst's 0xff idle state is
+        // overwritten within one cycle. ★ MAPPING per Frank's HW: LEVEL [L,R,0,0]
+        // = 0x0009; comp GR LED = 0x0015, gate GR LED = 0x0016 (0 rest .. 0x0f).
+        // 0x000a = a second element, meaning unknown → held idle 0.
+        uint8_t lvL = 0, lvR = 0, compByte = 0x00, gateByte = 0x00;
+        uf1ChannelMeterBytes_(tr, lvL, lvR, compByte, gateByte);
+        const uint8_t k0009i[] = {lvL, lvR, 0x00, 0x00};       // LEVEL L/R
+        const uint8_t k000ai[] = {0x00, 0x00, 0x00, 0x00};     // idle (unknown)
+        const uint8_t kZeroi = 0x00;
         parts->meters.push_back(uf1::buildScreen(0x0009, k0009i));
         parts->meters.push_back(uf1::buildScreen(0x000a, k000ai));
-        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFfi, 1)));
-        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFfi, 1)));
-        parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
-            std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
+        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&compByte, 1)));  // comp GR
+        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&gateByte, 1)));  // gate GR
+        // Header "Soft Key N/M" (0x011c): the live soft-key page / available count —
+        // Plugin = strip pages, DAW = the user soft-key pages (1 for now). Uses the
+        // atomics the V-Pot painter publishes (g_uf1CsActivePages may be one tick old
+        // here — self-corrects next frame; g_uf1CsPage is live).
+        {
+            const auto hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
+                                            std::max(1, g_uf1CsActivePages.load()));
+            parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
+                std::span<const uint8_t>(hdr.data(), hdr.size())));
+        }
         parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZeroi, 1)));
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
@@ -19086,19 +19523,49 @@ void uf1PaintChannel_()
         };
         MediaTrack* csTr = nullptr; int csFx = -1;
         const int csType = uf1ResolveCsFx_(tr, csTr, csFx);
-        // Publish the active strip type for the input-worker ◄ ► handler (so it
-        // wraps within this type's page count without the REAPER API). On a type
-        // change, only snap the page to the first when the retained page is OUT of
-        // range for the new type (a channel-strip page 3-8 → a 2-page BC) — so
-        // switching between two 8-page strips preserves the page (unchanged CS
-        // behaviour). Static: painter is single-threaded (onTimer).
+        // Publish the active strip type + its page count for the input-worker ◄ ►
+        // handler (which can't touch the REAPER API). The count is DYNAMIC for a
+        // learned plug-in (packed to fit its mapped params), so it can change with
+        // no type change — a different learned CS is still type 0 — hence recompute
+        // and clamp EVERY tick, not only on a type switch. An in-range page is left
+        // alone (preserves the page across two same-size strips); an out-of-range
+        // page (an 8-page strip → a 2-page BC, or a smaller learned map) snaps back
+        // into range. Painter is single-threaded (onTimer).
         {
-            static int sLastCsType = -2;
-            if (csType != sLastCsType) {
-                sLastCsType = csType;
-                g_uf1CsActiveType.store(csType);
-                if (csType >= 0 && g_uf1CsPage.load() >= kUf1CsTypePageCount[csType])
-                    g_uf1CsPage.store(0);
+            // DAW mode pages the USER soft-key pages (coming) — 1 for now; Plugin
+            // pages the resolved strip. ◄ ► + the "Soft Key N/M" header read this.
+            const int csPages = (g_uf1ChannelSubMode.load() == 1)
+                                    ? 1 : uf1CsPageCountFor_(csType, csTr, csFx);
+            g_uf1CsActiveType.store(csType);
+            g_uf1CsActivePages.store(csPages);
+            if (g_uf1CsPage.load() >= csPages) g_uf1CsPage.store(csPages - 1);
+        }
+        // Auto-jump the V-Pot PAGE to the last-manipulated param, like the UF8
+        // (Frank 2026-07-30). When the user touches a param on the resolved strip
+        // (its GUI, another surface), page to the page that shows it. Dedup on the
+        // touched (fx,param) so it fires ONCE per new touch — manual ◄ ► paging of
+        // an unchanged param is preserved. Plugin sub-mode only (not DAW). Main-
+        // thread (GetLastTouchedFX + the param resolve are REAPER-API).
+        if (csType >= 0 && g_uf1ChannelSubMode.load() == 0) {
+            int ltTr = 0, ltFx = 0, ltParam = 0;
+            static int sLtFx = INT_MIN, sLtParam = INT_MIN;
+            if (GetLastTouchedFX(&ltTr, &ltFx, &ltParam)) {
+                const int ltFxIdx = ltFx & 0xFFFFFF;
+                if (ltFxIdx != sLtFx || ltParam != sLtParam) {   // a NEW touch
+                    sLtFx = ltFxIdx; sLtParam = ltParam;
+                    const int ltTrIdx = ltTr & 0xFFFF;
+                    MediaTrack* ltTrack = (ltTrIdx == 0) ? GetMasterTrack(nullptr)
+                                                         : GetTrack(nullptr, ltTrIdx - 1);
+                    if (ltTrack == csTr && ltFxIdx == csFx) {
+                        const int pages = uf1CsPageCountFor_(csType, csTr, csFx);
+                        bool done = false;
+                        for (int pg = 0; pg < pages && !done; ++pg)
+                            for (int i = 0; i < 4; ++i)
+                                if (uf1CsVpotParam_(csTr, csFx, csType, pg, i) == ltParam) {
+                                    g_uf1CsPage.store(pg); done = true; break;
+                                }
+                    }
+                }
             }
         }
         // 4 V-Pot readout bars (0x010f): 4× [position 0..100, mode] where mode =
@@ -19117,20 +19584,69 @@ void uf1PaintChannel_()
             bars[i * 2]     = static_cast<uint8_t>(pos);
             bars[i * 2 + 1] = bipolar ? 0x80 : 0x00;
         };
-        if (csType >= 0) {
-            const int page = std::clamp(g_uf1CsPage.load(), 0, kUf1CsTypePageCount[csType] - 1);
-            const Uf1CsPage& pg = kUf1CsVPots[csType][page];
+        if (g_uf1ChannelSubMode.load() == 1) {
+            // DAW mode (Frank 2026-07-30): the 4 V-Pots are volume faders for the
+            // window tracks (selected + next 3, or +4..+7 via the "5-8" group).
+            // Rotate = volume, push = unity, "5-8" banks — all keyed off the SAME
+            // uf1DawWindowStart_ the handlers use. Assignable soft-keys are later.
+            const int base = uf1DawWindowStart_();
+            const int nTracks = CountTracks(nullptr);
             for (int i = 0; i < 4; ++i) {
-                const Uf1CsVPot& v = pg.slot(i);
-                const int p = uf1CsVpotParam_(csTr, csFx, csType, page, i);
-                // Blank when the slot is empty, the param is absent, or (learned
-                // plug-in) the user didn't map this linkIdx — "Slots leer wo
-                // ungemappt" (Frank). The label still comes from the CS2/BC2 layout.
+                MediaTrack* t = (base + i < nTracks) ? GetTrack(nullptr, base + i) : nullptr;
+                if (!t) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                char nm[64] = {0};
+                GetTrackName(t, nm, sizeof(nm));
+                const double vol = GetMediaTrackInfo_Value(t, "D_VOL");
+                sendVpotParam(uint8_t(i), nm, formatDbReadout(vol) + "dB");
+                setBar(i, static_cast<double>(uf1VolToPos_(vol))
+                            / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
+            }
+        } else if (csType >= 0) {
+            const int page = std::clamp(g_uf1CsPage.load(), 0,
+                                        uf1CsPageCountFor_(csType, csTr, csFx) - 1);
+            const Uf1CsPage& pg = kUf1CsVPots[csType][page];
+            // A learned plug-in fills the V-Pots sequentially (uf1CsVpotParam_),
+            // so its label + bipolar flag must come from the user's slot, NOT the
+            // canonical CS2/BC2 table (which would mislabel a packed param). Build
+            // the ordered V-Pot stream once and index it by flat position.
+            char lnm[256];
+            const bool learned = uf1IsLearnedCsBc_(csTr, csFx, lnm, sizeof(lnm));
+            std::vector<const uf8::UserLinkSlot*> lslots;
+            if (learned)
+                uf1LearnedStreamSlots_(lnm, /*busComp*/csType == 4,
+                                       /*wantButton*/false, lslots);
+            for (int i = 0; i < 4; ++i) {
+                int p; std::string label; bool bipolar;
+                if (learned) {
+                    const int flat = page * 4 + i;
+                    const uf8::UserLinkSlot* sl =
+                        (flat < static_cast<int>(lslots.size())) ? lslots[flat] : nullptr;
+                    // Resolve through the held FX-Learn layer so the readout follows
+                    // Ctrl / Opt / Ctrl+Opt live (label + value + bipolar swap).
+                    const uf8::SlotLayer* eff = sl
+                        ? &uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer())
+                        : nullptr;
+                    p = eff ? eff->vst3Param : -1;
+                    bipolar = eff && eff->polarity == uf8::VPotPolarity::Bipolar;
+                    if (eff && p >= 0) {
+                        if (!eff->customLabel.empty()) label = eff->customLabel;
+                        else { char pn[64] = {0};
+                               TrackFX_GetParamName(csTr, csFx, p, pn, sizeof(pn));
+                               label = pn; }
+                    }
+                } else {
+                    const Uf1CsVPot& v = pg.slot(i);
+                    p = uf1CsVpotParam_(csTr, csFx, csType, page, i);
+                    label = v.label ? v.label : "";
+                    bipolar = v.bipolar;
+                }
+                // Blank when the slot is empty / the param is absent / (learned)
+                // the fill ran out of mapped params on this page.
                 if (p < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
                 char val[64] = {0};
                 TrackFX_GetFormattedParamValue(csTr, csFx, p, val, int(sizeof(val)));
-                sendVpotParam(uint8_t(i), v.label, val);
-                setBar(i, TrackFX_GetParamNormalized(csTr, csFx, p), v.bipolar);
+                sendVpotParam(uint8_t(i), label, val);
+                setBar(i, TrackFX_GetParamNormalized(csTr, csFx, p), bipolar);
             }
         } else {
             const double panV = GetMediaTrackInfo_Value(tr, "D_PAN");
@@ -19167,11 +19683,16 @@ void uf1PaintChannel_()
     // Additive + change-gated → cannot regress the working channel-text view.
     if (changed) {
         // 0x011c header: overwrite the MCU "FADER SEL | 1/10" the cap66 init left
-        // with the Plugin-mode header "REAPER | 1/8 | OFF" (verbatim from cap85,
-        // the init that renders the EQ). We were stuck in a hybrid MCU/Plugin
-        // state — the EQ-graph view needs the plugin header, not the MCU one.
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
-            std::span<const uint8_t>(kUf1PluginHeader, sizeof(kUf1PluginHeader))));
+        // with the Plugin-mode header "REAPER | N/M | OFF". The N/M soft-key-page
+        // indicator is LIVE (Plugin = strip pages, DAW = user soft-key pages) — here
+        // g_uf1CsActivePages is already current (the V-Pot painter published it earlier
+        // this tick).
+        {
+            const auto hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
+                                            std::max(1, g_uf1CsActivePages.load()));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
+                std::span<const uint8_t>(hdr.data(), hdr.size())));
+        }
 
         // 0x0017 CS TYPE: the REAL resolved strip type — cap18 confirms "CS 2" /
         // "4K B" / "4K E" are the firmware-recognised strings. The firmware LATCHES
@@ -19247,18 +19768,44 @@ void uf1PaintChannel_()
         static std::array<std::string, 4> sSkLabel{};
         MediaTrack* skTr = nullptr; int skFx = -1;
         const int skType = uf1ResolveCsFx_(tr, skTr, skFx);
-        // Page count follows the resolved type (BC = 2, strips = 8); skType < 0
-        // (no SSL strip) → the 8-page fallback, and skPage is only USED inside the
+        // Page count follows the resolved strip (BC = 2, built-in strips = 8, a
+        // learned plug-in as many as its packed params need); skType < 0 (no SSL
+        // strip) → the 8-page fallback, and skPage is only USED inside the
         // skType >= 0 guard below, so the index is always valid.
-        const int skPages = (skType >= 0 && skType < kUf1CsTypeCount)
-                                ? kUf1CsTypePageCount[skType] : kUf1CsPageCount;
+        const int skPages = uf1CsPageCountFor_(skType, skTr, skFx);
         const int skPage = std::clamp(g_uf1CsPage.load(), 0, skPages - 1);
+        // A learned plug-in fills the soft-keys sequentially from its button-mapped
+        // slots (uf1CsSoftKeyParam_), so its labels + on-state come from the user's
+        // slots, not the canonical kUf1CsSoftKeys table. Build the ordered stream
+        // once and index it by flat position.
+        char snm[256];
+        const bool skLearned = skType >= 0 && uf1IsLearnedCsBc_(skTr, skFx, snm, sizeof(snm));
+        std::vector<const uf8::UserLinkSlot*> skSlots;
+        if (skLearned)
+            uf1LearnedStreamSlots_(snm, /*busComp*/skType == 4, /*wantButton*/true, skSlots);
         static std::array<int, 4> sSkLed{ -1, -1, -1, -1 };
         int abState = -1, hqState = -1;   // read once, only if an HQ/AB key is present
         for (int i = 0; i < 4; ++i) {
             std::string label;
             bool haveLabel = false, on = false;
-            if (skType >= 0) {
+            if (skLearned) {
+                // Learned: pack the button-mapped params; blank keys past the end.
+                const int flat = skPage * 4 + i;
+                const uf8::UserLinkSlot* sl =
+                    (flat < static_cast<int>(skSlots.size())) ? skSlots[flat] : nullptr;
+                haveLabel = true;   // owns its labels (blank when the fill runs out)
+                // Resolve through the held FX-Learn layer (Ctrl / Opt / Ctrl+Opt).
+                const uf8::SlotLayer* eff = sl
+                    ? &uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer())
+                    : nullptr;
+                if (eff && eff->vst3Param >= 0) {
+                    if (!eff->customLabel.empty()) label = eff->customLabel;
+                    else { char pn[64] = {0};
+                           TrackFX_GetParamName(skTr, skFx, eff->vst3Param, pn, sizeof(pn));
+                           label = pn; }
+                    on = TrackFX_GetParamNormalized(skTr, skFx, eff->vst3Param) > 0.5;
+                }
+            } else if (skType >= 0) {
                 const Uf1CsSoftKey& sk = kUf1CsSoftKeys[skType][skPage].slot(i);
                 label = sk.label ? sk.label : "";
                 haveLabel = true;
@@ -19389,6 +19936,45 @@ void uf1PaintChannel_()
         }
         if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
         if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
+    }
+
+    // ---- MODE-hold menu overlay (Frank 2026-07-30) -------------------------
+    // While MODE is held, the 4 display soft-keys become a mode picker: SK1
+    // PLUGIN / SK2 DAW / SK3 METER / SK4 free, the active mode lit. Runs in BOTH
+    // views and AFTER every view's own soft-key painting (channel block above +
+    // uf1PaintMeter_), so it OVERRIDES 0x0104 + the soft-key LEDs while open. On
+    // release, menuEdge forced `changed` this tick so the view painter already
+    // restored its own labels — the menu block just stops overriding. Change-
+    // detected on the highlighted mode so it doesn't re-send every tick.
+    {
+        static bool sMenuShown = false;
+        static int  sMenuSel   = -2;
+        if (modeMenu) {
+            const int sel = g_uf1MeterView.load() ? 2
+                          : (g_uf1ChannelSubMode.load() == 1 ? 1 : 0);
+            if (changed || !sMenuShown || sel != sMenuSel) {
+                sMenuShown = true; sMenuSel = sel;
+                static const char* const kMenu[4] = { "PLUGIN", "DAW", "METER", "" };
+                for (int i = 0; i < 4; ++i) {
+                    const std::string_view lbl = kMenu[i];
+                    std::vector<uint8_t> pb; pb.reserve(1 + lbl.size());
+                    pb.push_back(static_cast<uint8_t>(i));
+                    pb.insert(pb.end(), lbl.begin(), lbl.end());
+                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
+                    const bool    on = (i == sel);
+                    const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
+                    g_uf1_dev->send(uf1::buildLed(id, true));   // FF3B enable
+                    if (i == 0) {
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
+                    } else {
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
+                        g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
+                    }
+                }
+            }
+        } else {
+            sMenuShown = false; sMenuSel = -2;
+        }
     }
 }
 

@@ -774,6 +774,17 @@ int linkIdxForControl(uint8_t controlId, bool busComp, bool isButton)
     return -1;
 }
 
+bool linkIdxIsButton(int linkIdx, bool busComp)
+{
+    const LinkToUc1* table = busComp ? kBcLinkToUc1 : kCsLinkToUc1;
+    const int n = busComp
+        ? static_cast<int>(sizeof(kBcLinkToUc1) / sizeof(kBcLinkToUc1[0]))
+        : static_cast<int>(sizeof(kCsLinkToUc1) / sizeof(kCsLinkToUc1[0]));
+    for (int i = 0; i < n; ++i)
+        if (table[i].linkIdx == linkIdx) return table[i].buttonId != kNoUc1;
+    return false;   // not in the table → treat as a V-Pot ("Sonst Option 1")
+}
+
 // Common name aliases per UC1 knob — '|'-separated, lowercase. Lets value
 // transfer resolve a control on a plug-in that only NAMES its param differently
 // (e.g. Analog Molecule's "High Pass Filter (Hz)") and never got an explicit
