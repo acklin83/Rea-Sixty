@@ -1267,6 +1267,17 @@ These act on the FX the cursor currently points at on the focused track (the FX 
 - **FX param: step up** — step the FX-Learn slot a V-Pot is bound to upward from a button. Action-picker exposes the slot target (combo built from the built-in plug-in map registry — link IDs are stable across SSL CS / BC variants), a step-size slider, and a wrap-vs-clamp checkbox. Honours the slot's range, curve, and sensitivity, so a button bound to *FX param: step up* and a V-Pot bound to the same slot stay in sync. Useful for "+1 dB" or "next preset value" buttons.
 - **FX param: step down** — same as *FX param: step up* with the sign flipped.
 
+## Sticky Pot
+
+Pin one plug-in parameter to a track's V-Pot. The pin stays on that track — it moves with the track across banks and overrides the strip's normal V-Pot target (the focused parameter, or pan) until you clear it. Each track can hold its own pin. A pinned strip's value line shows the parameter's name (with a leading `*`) and value, and the readout ring follows it.
+
+- **Sticky Pot: Get next touched Parameter** — arm capture. The next plug-in parameter you touch — in the plug-in's own window, or on a controller — pins to the track it belongs to. Touch the parameter you want and it sticks. While capture is armed, a **V-Pot press** on a strip clears that strip's pin instead of capturing.
+- **Sticky Pot: Toggle active/inactive** — suspend every pin at once (so the V-Pots return to their normal view), then bring them all back. The pins themselves are kept. Lit while active.
+
+A **V-Pot press** on a pinned strip resets its parameter to the centre (a two-state parameter flips instead). Pins are **saved with the project** and restored on reload — keyed to the track and the plug-in, so they survive re-banking and FX-chain reorders.
+
+Sticky Pot steps aside automatically whenever a mode already owns the V-Pot: UF8 Plug-in Mode, SSL Strip Mode, FLIP, PAN held, and the Instance / Instance-Cycle Selection Modes. Release the mode and the pins reappear.
+
 ## Favourites
 
 Replace or duplicate the active plug-in, carrying values across (see chapter *Favourites*). All of these act on every selected track, else the surface-focused track. Each exists three times: for the Channel Strip, for the Bus Compressor, and in a **Focused Domain** form that follows whichever you are working on.
