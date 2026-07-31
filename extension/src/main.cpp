@@ -33504,6 +33504,71 @@ void registerBindingHandlers()
         "UF1: MASTER track", false
     });
 
+    // PLUG-IN / SSL Strip Mode for the UF1 (Frank 2026-07-31) — the UF1-LOCAL
+    // counterpart to the UF8/UC1 `ssl_strip_mode_toggle` (which drives the
+    // SHARED g_pluginFaderMode and is therefore a NO-OP on the UF1). This one
+    // toggles g_uf1StripMode so the UF1 fader drives the SSL strip's Out-Gain /
+    // Fader Level param (csFaderForTrack) instead of track volume — byte-for-byte
+    // what the hardcoded PLUG-IN CS soft-key already does (applyUf1ChannelSoftKey_
+    // Uf1CsSkAct::StripMode), just now bindable to any UF1 button. Atomic stores +
+    // SetExtState (persist) only → worker-safe. Parallels uf1_flip.
+    registerBuiltin("uf1_strip_mode", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_uf1StripMode.load();
+            g_uf1StripMode.store(next);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1StripMode.load(); },
+        "UF1: SSL Strip Mode (fader \xE2\x86\x92 Out-Gain)", false
+    });
+
+    // Channel-encoder MODE setters for the UF1 (Frank 2026-07-31). The UF1 has
+    // its OWN encoder mode (g_uf1EncoderMode), independent of the UF8's
+    // g_encoderMode — so the UF8 encoder_* setters (which write g_encoderMode)
+    // are a pure NO-OP on the UF1. These uf1_encoder_* counterparts write the
+    // UF1's mode + persist, mirroring the UF8 setOrToggleMode "re-tap while
+    // active → back to Channel Select" (SSL 360°) behaviour. uf1EncoderDispatch_
+    // already routes rotation for every one of these modes. BankBy1 is omitted
+    // on purpose (it banks the UF8 8-track fader bank — meaningless on the
+    // single-strip UF1, same reason kUf1EncoderModes drops it). Worker-safe:
+    // atomic store + SetExtState only (same pattern as encoder_nav; the
+    // long-press primarily fires from the main-thread threshold timer anyway).
+    // The uf1_ prefix scopes them UF1-only in the action picker (device mask).
+    // Seed of note: uf1_encoder_ch_select is the channel-push long-press default
+    // (Bindings.cpp) — a long push snaps home to Channel Select.
+    auto regUf1EncMode = [](const char* name, EncoderMode mode, const char* label) {
+        registerBuiltin(name, DescBuilder{
+            [mode](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                // Re-tap while already in this mode → back to ChSelect (SSL 360°).
+                // ChSelect itself never toggles away.
+                const bool already = (mode != EncoderMode::ChSelect
+                                      && g_uf1EncoderMode.load() == mode);
+                const EncoderMode next = already ? EncoderMode::ChSelect : mode;
+                g_uf1EncoderMode.store(next);
+                uf1EncoderPersistMode_(next);
+            },
+            [mode](int) { return g_uf1EncoderMode.load() == mode; },
+            label, false
+        });
+    };
+    regUf1EncMode("uf1_encoder_ch_select",          EncoderMode::ChSelect,          "UF1: Encoder \xE2\x86\x92 Channel Select");
+    regUf1EncMode("uf1_encoder_nudge",              EncoderMode::Nudge,             "UF1: Encoder \xE2\x86\x92 Nudge");
+    regUf1EncMode("uf1_encoder_mousewheel",         EncoderMode::Mousewheel,        "UF1: Encoder \xE2\x86\x92 Mousewheel");
+    regUf1EncMode("uf1_encoder_markers",            EncoderMode::Markers,           "UF1: Encoder \xE2\x86\x92 Markers (prev / next)");
+    regUf1EncMode("uf1_encoder_last_param",         EncoderMode::LastParam,         "UF1: Encoder \xE2\x86\x92 Last Touched Param");
+    regUf1EncMode("uf1_encoder_instance",           EncoderMode::Instance,          "UF1: Encoder \xE2\x86\x92 Instance Cycle");
+    regUf1EncMode("uf1_encoder_fx_cycle",           EncoderMode::FxCycle,           "UF1: Encoder \xE2\x86\x92 FX Cycle");
+    regUf1EncMode("uf1_encoder_fx_scroll_all",      EncoderMode::FxScrollAll,       "UF1: Encoder \xE2\x86\x92 FX Cycle (across tracks)");
+    regUf1EncMode("uf1_encoder_instance_scroll_all",EncoderMode::InstanceScrollAll, "UF1: Encoder \xE2\x86\x92 Instance Cycle (across tracks)");
+    regUf1EncMode("uf1_encoder_fx_move",            EncoderMode::FxMove,            "UF1: Encoder \xE2\x86\x92 FX Move (in chain)");
+    regUf1EncMode("uf1_encoder_cs_cycle",           EncoderMode::CsCycle,           "UF1: Encoder \xE2\x86\x92 CS Cycle (Favourites)");
+    regUf1EncMode("uf1_encoder_bc_cycle",           EncoderMode::BcCycle,           "UF1: Encoder \xE2\x86\x92 BC Cycle (Favourites)");
+    regUf1EncMode("uf1_encoder_fav_cycle",          EncoderMode::FavCycle,          "UF1: Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)");
+    regUf1EncMode("uf1_encoder_selset_cycle",       EncoderMode::SelsetCycle,       "UF1: Encoder \xE2\x86\x92 Selection Set Cycle");
+
     // "5-8" (0x22) — DAW mode: page the dynamic soft-key bank (if one is
     // active) else toggle the 4-track group; Sends mode: page the send
     // window. Gated on the channel sub-mode exactly as the two removed

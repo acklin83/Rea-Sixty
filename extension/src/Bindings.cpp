@@ -832,6 +832,17 @@ void seedFactoryDefaults_(Config& c)
     //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key / plug-in page).
     L1[ButtonId::Uf1Shift]       = mkBuiltin("mod_shift",              Behavior::Hold,      "SHIFT");
     L1[ButtonId::Uf1ChannelPush] = mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "ENC PUSH");
+    // …plus a LONG-PRESS on the channel encoder → back to Channel Select
+    // (Frank 2026-07-31). Short push still toggles the plug-in GUI; a hold
+    // past the long-press threshold snaps the UF1 encoder home. Fully
+    // rebindable/clearable like any other long-press slot.
+    {
+        Binding& encPush   = L1[ButtonId::Uf1ChannelPush];
+        encPush.hasLongPress = true;
+        auto& lp   = encPush.longPress[static_cast<int>(Modifier::Plain)];
+        lp.type    = ActionType::Builtin;
+        lp.action  = "uf1_encoder_ch_select";
+    }
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -2076,7 +2087,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 17;
+constexpr int kCurrentBindingsVersion = 18;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2456,6 +2467,28 @@ void upgradeBackfillUf1Automation_(Config& c)
     fillShift(ButtonId::Uf1SecKey2,  "auto_touch", "TCH");
 }
 
+// v17→v18 (2026-07-31): the channel encoder gains a LONG-PRESS factory
+// default → uf1_encoder_ch_select (snap back to Channel Select). Backfill
+// only when the user hasn't already set their own long-press on the push —
+// explicit assignments always win, and a slot the user deliberately cleared
+// stays cleared (hasLongPress off with an empty Plain slot is left alone,
+// matching the "don't resurrect a cleared default" rule).
+void upgradeBackfillUf1EncoderLong_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto it = L1.bindings.find(ButtonId::Uf1ChannelPush);
+    // Missing entirely → default-create so the push still gets the long-press
+    // (mirrors upgradeBackfillUf1Buttons_ default-create behaviour).
+    Binding& bd = (it == L1.bindings.end())
+                      ? L1.bindings[ButtonId::Uf1ChannelPush]
+                      : it->second;
+    if (bd.hasLongPress) return;   // user (or a prior run) already set one
+    bd.hasLongPress = true;
+    auto& lp  = bd.longPress[static_cast<int>(Modifier::Plain)];
+    lp.type   = ActionType::Builtin;
+    lp.action = "uf1_encoder_ch_select";
+}
+
 // Both passes preserve color, brightness, inactive*, label, and
 // any modifier-row / longPress slots. They only touch
 // shortPress[Plain].
@@ -2716,6 +2749,9 @@ void load()
             }
             if (tmp.version < 17) {
                 upgradeBackfillUf1Automation_(tmp);
+            }
+            if (tmp.version < 18) {
+                upgradeBackfillUf1EncoderLong_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -4441,7 +4477,7 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("selection_mode_", 0) == 0)
         return "Selection Modes";
 
-    if (n.rfind("encoder_", 0) == 0)
+    if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
     if (n == "flip" || n == "pan_force"
@@ -4461,6 +4497,7 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_time_display_step"
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
+     || n == "uf1_strip_mode"
      || n == "restart")
         return "Hardware Modes";
 
@@ -4535,9 +4572,20 @@ const std::vector<const char*>& builtinCategoryOrder()
 // bit0 = UF8, bit1 = UC1, bit2 = UF1. Universal builtins → all three.
 uint8_t builtinDeviceMask(const std::string& n)
 {
-    if (n.rfind("uf1_", 0) == 0) return 0b100;   // UF1-only (uf1_flip/master/…)
+    if (n.rfind("uf1_", 0) == 0) return 0b100;   // UF1-only (uf1_flip/master/uf1_encoder_*/…)
     if (n.rfind("uf8_", 0) == 0) return 0b001;   // UF8-only (uf8_plugin_mode_*)
     if (n.rfind("uc1_", 0) == 0) return 0b010;   // UC1-only (uc1_outgain_fader_toggle)
+    // UF8/UC1-semantics builtins that write SHARED state the UF1 does NOT read,
+    // so they are a pure no-op on the UF1 — hide them from the UF1 picker, keep
+    // them on UF8 + UC1 (same "not UF1" scope as the 8-strip SSL set below). The
+    // uf1_ check above already claimed the UF1 counterparts (uf1_encoder_* /
+    // uf1_flip / uf1_strip_mode), so this only catches the UF8/UC1 originals:
+    //   · encoder_* / encoder_mode_dispatch → g_encoderMode (UF1 = g_uf1EncoderMode)
+    //   · flip                              → g_flip         (UF1 = g_uf1Flip)
+    //   · ssl_strip_mode_*                  → g_pluginFaderMode (UF1 = g_uf1StripMode)
+    if (n.rfind("encoder_", 0) == 0
+     || n == "flip"
+     || n.rfind("ssl_strip_mode_", 0) == 0) return 0b011;   // UF8 + UC1, not UF1
     // 8-strip / per-strip SSL builtins — meaningless on the single-strip UF1
     // (the blueprint's UF1 drop-list). Kept on UF8 + UC1, hidden on UF1 only.
     if (n.rfind("send_all_", 0) == 0 || n.rfind("recv_all_", 0) == 0
