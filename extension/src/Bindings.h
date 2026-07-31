@@ -425,6 +425,11 @@ struct Config {
     std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
     // UF1 soft-key banks (global). [bank 0..9][slot 0..3].
     Binding uf1SoftBanks[kUf1SoftBankCount][kUf1SoftBankSlots];
+    // Per-bank dynamic kind. Non-None turns the whole bank into a computed
+    // bank (FX list / parameter groups / colours) whose 4 keys derive live
+    // from the focused track; the 4 static slots above are then ignored.
+    // Default None ⇒ classic static behaviour.
+    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount] = {};
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -481,6 +486,16 @@ const char* builtinCategory(const std::string& name);
 
 // Category display order (top-to-bottom), matching the action picker.
 const std::vector<const char*>& builtinCategoryOrder();
+
+// Device scoping for the action picker: a builtin should only appear in the
+// bindings picker of the surface(s) it actually applies to (Frank 2026-07-31 —
+// the uf1_* actions must not show in the UF8 menu, and vice versa).
+// builtinDeviceMask: bit0 = UF8, bit1 = UC1, bit2 = UF1; universal builtins = all.
+uint8_t builtinDeviceMask(const std::string& name);
+// The device a ButtonId belongs to: 0 = UF8, 1 = UC1, 2 = UF1.
+int     builtinDeviceForId(ButtonId id);
+// Convenience: is `name` shown in the picker for control `id`'s surface?
+bool    builtinShownForId(const std::string& name, ButtonId id);
 
 // Whether this builtin reads its `param` arg. UI uses this to hide the
 // param column for buttons whose action is param-less.
@@ -680,6 +695,11 @@ bool     dispatchUserQuickSlot(int layer, int quick, int subBank,
 // ---- UF1 soft-key banks (global; 10 banks × 4 slots) -------------------
 Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
 void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
+// Per-bank dynamic-kind flag. Non-None turns the bank into a computed
+// bank (FX list / parameter groups / colours); its 4 static slots are
+// then ignored. Out-of-range returns None / ignores writes.
+DynamicBankKind getUf1SoftBankDynamic(int bank);
+void            setUf1SoftBankDynamic(int bank, DynamicBankKind kind);
 // Run a UF1 bank slot's action (same long-press + modifier logic as
 // dispatchUserQuickSlot). Returns true if the slot has an action.
 bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);
@@ -734,6 +754,13 @@ bool slotIsEmpty(const ActionSlot& s);
 // ~30 Hz — fires any chain step whose `fireAt` has elapsed. Single-step
 // chains never sit in the queue (they run synchronously in dispatch).
 void tickPending();
+
+// Fire any armed long-press the instant it crosses the 0.5 s threshold
+// WHILE the button is still held, instead of on the release edge — the
+// UF1 can drop/reorder the release event, which would otherwise lose the
+// long-press. Called from main.cpp's onTimer (main thread, ~30 Hz) right
+// next to tickPending(). Applies to every surface (UF8 / UC1 / UF1).
+void tickLongPressThreshold();
 
 // Monotonic counter bumped on every Config mutation (setBinding,
 // clearBinding, layer setters, load, importFrom, importLayerFrom).

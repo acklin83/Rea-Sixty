@@ -99,6 +99,14 @@ void reasixty_setBrightnessLevel(int level);
 void reasixty_setScribbleBrightnessLevel(int level);
 int  reasixty_uf1SoftBank();
 void reasixty_setUf1SoftBank(int bank);
+// UF1 channel-encoder mode ring (user-editable order + visibility) — defined in
+// main.cpp at global scope. Rendered in the UF1 channel-encoder binding editor.
+int         reasixty_uf1EncoderModeTotal();
+int         reasixty_uf1EncoderSeqAt(int pos);
+bool        reasixty_uf1EncoderModeVisible(int modeInt);
+void        reasixty_setUf1EncoderModeVisible(int modeInt, bool on);
+void        reasixty_uf1EncoderMoveSeq(int pos, int dir);
+const char* reasixty_uf1EncoderModeName(int modeInt);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -167,6 +175,8 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+std::string reasixty_trackBankColourName(int i);
+void     reasixty_setTrackBankColourName(int i, const char* name);
 int      reasixty_dynBankCtrl(int kind);
 void     reasixty_setDynBankCtrl(int kind, int ctrl);
 double reasixty_overlayFillAlpha();
@@ -3804,6 +3814,10 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 const char* cat = categoryFor(n);
                 if (!cat || !*cat) continue;
                 if (!matches(n)) continue;
+                // Device scoping: a UF1-only action never appears in the UF8/UC1
+                // picker, and vice versa (Frank 2026-07-31). `id` is the control
+                // being edited → its surface decides which builtins are offered.
+                if (!uf8::bindings::builtinShownForId(n, id)) continue;
                 bucket[cat].emplace_back(n);
             }
             for (auto& v : bucket) std::sort(v.second.begin(), v.second.end());
@@ -4507,6 +4521,12 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // not UF8 (Frank 2026-07-30). One contiguous ButtonId block.
     const bool idIsUf1 =
         id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Rec;
+    // UF1 encoders + V-Pot pushes have NO physical button LED (they are rotary
+    // controls), so hide the LED block for them like the UC1 encoders (Frank
+    // 2026-07-31: "LED optionen wo sie keinen Sinn machen, z.B. auf Encoder").
+    // These 6 ids sit contiguously at the head of the UF1 block.
+    const bool idIsUf1NoLed =
+        id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1ChannelPush;
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
       : (id == ButtonId::Quick2) ? 2
@@ -4750,8 +4770,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
     // LED appearance is UF8-only — the UC1's encoders / 360 / MAGNIFY
     // don't expose user-settable RGB, so hide the whole LED block on the
-    // UC1 bindings page (idIsUc1 computed above).
-    if (!idIsUc1) {
+    // UC1 bindings page (idIsUc1 computed above). Same for the UF1 rotary
+    // controls (encoders + V-Pot pushes) which have no button LED.
+    if (!idIsUc1 && !idIsUf1NoLed) {
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
 
@@ -4876,6 +4897,54 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // default the user expects after a Clear.
         cleared = true;
         bd = Binding{};   // also reflect the cleared state in this frame's UI snapshot
+    }
+
+    // ---- UF1 channel-encoder mode ring (order + visibility) ----------------
+    // Shown below the normal binding editor when the selected control is the UF1
+    // channel encoder (ENC PUSH). Lets the user reorder + hide the modes the
+    // encoder cycles via the MODE-hold picker. Operates on main.cpp's runtime
+    // ring (reasixty_uf1Encoder* accessors), independent of `bd` / `dirty`.
+    if (id == ButtonId::Uf1ChannelPush) {
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Text(ctx, "Channel encoder modes");
+        ImGui_TextDisabled(ctx,
+            "Order + visibility of the modes the channel encoder cycles "
+            "(hold MODE + turn).");
+        ImGui_Spacing(ctx);
+
+        const int total = reasixty_uf1EncoderModeTotal();
+        for (int pos = 0; pos < total; ++pos) {
+            const int modeInt = reasixty_uf1EncoderSeqAt(pos);
+            char rowId[24];
+            snprintf(rowId, sizeof(rowId), "encmode_%d", pos);
+            ImGui_PushID(ctx, rowId);
+
+            bool vis = reasixty_uf1EncoderModeVisible(modeInt);
+            if (ImGui_Checkbox(ctx, "##vis", &vis))
+                reasixty_setUf1EncoderModeVisible(modeInt, vis);
+
+            // ▲ move up (disabled on the first row).
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (pos > 0) {
+                if (ImGui_SmallButton(ctx, "\xE2\x96\xB2##up"))
+                    reasixty_uf1EncoderMoveSeq(pos, -1);
+            } else {
+                ImGui_TextDisabled(ctx, "\xE2\x96\xB2");
+            }
+            // ▼ move down (disabled on the last row).
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (pos < total - 1) {
+                if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn"))
+                    reasixty_uf1EncoderMoveSeq(pos, +1);
+            } else {
+                ImGui_TextDisabled(ctx, "\xE2\x96\xBC");
+            }
+
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_Text(ctx, reasixty_uf1EncoderModeName(modeInt));
+            ImGui_PopID(ctx);
+        }
     }
 
     popBindingsTheme(ctx, themePushed);
@@ -5444,6 +5513,44 @@ void drawUserQuickSection_(ImGui_Context* ctx, int editLayer,
 }
 #endif
 
+// ---- Track-Colours palette editor (shared UF8 + UF1) --------------------
+// One global palette: 8 rows, each a colour swatch + an editable name. The
+// name defaults to "Col N" (empty stored name) and drives the surface key
+// label. Called from both the UF8 and the UF1 dynamic-bank editors.
+void drawTrackColourPalette_(ImGui_Context* ctx)
+{
+    static char nameBuf[8][64];
+    static std::string lastName[8];
+    int ceFlags = ImGui_ColorEditFlags_NoInputs;
+    for (int i = 0; i < 8; ++i) {
+        // Re-seed the row buffer only when the stored name changes (first
+        // frame, or edited elsewhere) so it never fights the user typing.
+        std::string cur = reasixty_trackBankColourName(i);
+        if (cur != lastName[i]) {
+            std::snprintf(nameBuf[i], sizeof(nameBuf[i]), "%s", cur.c_str());
+            lastName[i] = cur;
+        }
+
+        int col = static_cast<int>(reasixty_trackBankColour(i));
+        char cid[24]; std::snprintf(cid, sizeof(cid), "##tcpcol%d", i);
+        ImGui_SetNextItemWidth(ctx, 160.0);
+        if (ImGui_ColorEdit3(ctx, cid, &col, &ceFlags))
+            reasixty_setTrackBankColour(
+                i, static_cast<uint32_t>(col) & 0xFFFFFFu);
+
+        double sameOffs = 190.0;
+        ImGui_SameLine(ctx, &sameOffs, nullptr);
+        char nid[24]; std::snprintf(nid, sizeof(nid), "##tcpname%d", i);
+        int inFlags = 0;
+        ImGui_SetNextItemWidth(ctx, 200.0);
+        if (ImGui_InputText(ctx, nid, nameBuf[i], sizeof(nameBuf[i]),
+                            &inFlags, nullptr)) {
+            reasixty_setTrackBankColourName(i, nameBuf[i]);
+            lastName[i] = nameBuf[i];
+        }
+    }
+}
+
 // ---- Sub-Bank cell editor (V-POT / Soft 1-5 in the mockup) --------------
 // Replaces the regular drawBindingEditor for these cells — they don't
 // carry a user-editable action (the binding is always
@@ -5618,15 +5725,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         } else if (curKind == DynamicBankKind::TrackColours) {
             ImGui_TextDisabled(ctx,
                 "Track-Colours palette (global — 8 keys = these colours):");
-            int ceFlags = ImGui_ColorEditFlags_NoInputs;
-            for (int i = 0; i < 8; ++i) {
-                int col = static_cast<int>(reasixty_trackBankColour(i));
-                char lid[24]; std::snprintf(lid, sizeof(lid), "Colour %d", i + 1);
-                ImGui_SetNextItemWidth(ctx, 200.0);
-                if (ImGui_ColorEdit3(ctx, lid, &col, &ceFlags))
-                    reasixty_setTrackBankColour(
-                        i, static_cast<uint32_t>(col) & 0xFFFFFFu);
-            }
+            drawTrackColourPalette_(ctx);
         }
 
         ImGui_Spacing(ctx);
@@ -6367,7 +6466,61 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "10 banks of 4 soft-keys, active in DAW mode. The UF1 "
             "\xE2\x97\x82 \xE2\x96\xB8 keys page the same bank.");
         ImGui_Spacing(ctx);
-        drawUf1SoftBankSlotEditor_(ctx, reasixty_uf1SoftBank(), slotIdx);
+
+        // ---- Dynamic bank (per bank) --------------------------------
+        // Flag the whole bank as computed-from-context. Any non-Off kind
+        // makes the 4 keys derive live from the focused track (its FX,
+        // parameter groups, colours); the 4 static per-slot editors are
+        // then hidden. Mirrors the UF8 Sub-Bank combo (drawSubBankCellEditor_).
+        const int uf1Bank = reasixty_uf1SoftBank();
+        {
+            using uf8::bindings::DynamicBankKind;
+            struct DynOpt { DynamicBankKind kind; const char* label; };
+            static const DynOpt kUf1DynOpts[] = {
+                { DynamicBankKind::None,         "Off (static slots)" },
+                { DynamicBankKind::FxBank,       "FX (focused track)" },
+                { DynamicBankKind::ParamGroups,  "Parameter Groups" },
+                { DynamicBankKind::TrackColours, "Track Colours" },
+            };
+            const DynamicBankKind curKind =
+                uf8::bindings::getUf1SoftBankDynamic(uf1Bank);
+            const char* curLabel = kUf1DynOpts[0].label;
+            for (const auto& o : kUf1DynOpts)
+                if (o.kind == curKind) curLabel = o.label;
+
+            ImGui_Text(ctx, "Dynamic bank");
+            ImGui_SetNextItemWidth(ctx, 260.0);
+            if (ImGui_BeginCombo(ctx, "##uf1dynbank", curLabel,
+                                 /*flags*/ nullptr)) {
+                for (const auto& o : kUf1DynOpts) {
+                    bool sel = (o.kind == curKind);
+                    if (ImGui_Selectable(ctx, o.label, &sel,
+                                         /*flags*/ nullptr,
+                                         /*size_w*/ nullptr,
+                                         /*size_h*/ nullptr)) {
+                        uf8::bindings::setUf1SoftBankDynamic(uf1Bank, o.kind);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_Spacing(ctx);
+
+            if (curKind != DynamicBankKind::None) {
+                ImGui_TextDisabled(ctx,
+                    "Keys computed live from the focused track (4 at a time). "
+                    "The \"5-8\" key banks through them in groups of 4. The 4 "
+                    "static slots are ignored while this is on.");
+                if (curKind == DynamicBankKind::TrackColours) {
+                    ImGui_Spacing(ctx);
+                    ImGui_TextDisabled(ctx,
+                        "Track-Colours palette (global — 8 keys = these "
+                        "colours):");
+                    drawTrackColourPalette_(ctx);
+                }
+            } else {
+                drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
+            }
+        }
     } else {
         drawBindingEditor(ctx, s_editLayer, editSel);
     }

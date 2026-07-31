@@ -338,6 +338,8 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
+std::string reasixty_trackBankColourName(int i);
+void     reasixty_setTrackBankColourName(int i, const char* name);
 int      reasixty_overlayCsColor();   // Inserts-overlay palette (0xRRGGBB) —
 int      reasixty_overlayBcColor();   // shared with the FX-bank key colours so
 int      reasixty_overlaySelColor();  // the surface mirrors the MCP overlay.
@@ -352,6 +354,15 @@ void     reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 // when the engaged sub-bank is bankable AND its configured control matches —
 // the caller then skips the encoder's normal action. control: see BankControl.
 bool     reasixty_dynBankPageControl(int control, int delta);
+// UF1 channel-encoder mode ring (user-editable order + visibility). Defined at
+// global scope below (external linkage — SettingsScreen.cpp calls them). Fwd-
+// declared here so their definitions match a visible prototype in this TU.
+int         reasixty_uf1EncoderModeTotal();
+int         reasixty_uf1EncoderSeqAt(int pos);
+bool        reasixty_uf1EncoderModeVisible(int modeInt);
+void        reasixty_setUf1EncoderModeVisible(int modeInt, bool on);
+void        reasixty_uf1EncoderMoveSeq(int pos, int dir);
+const char* reasixty_uf1EncoderModeName(int modeInt);
 
 
 namespace {
@@ -387,6 +398,13 @@ std::atomic<bool>     g_uf1FaderTouched{false};// capacitive touch state (motor 
 // fader silently riding Pan. Read by the fader follow/writeback + the above-fader
 // V-Pot handler. Atomic store from the input worker; read on the main thread.
 std::atomic<bool>     g_uf1Flip{false};
+// UF1-LOCAL SSL Strip Mode (PLUG-IN key). Was the SHARED g_pluginFaderMode so a
+// UF8+UF1 rig toggled together; Frank 2026-07-30 made it per-surface (like FLIP)
+// so UF8 can sit in Strip Mode while UF1 shows normal volume faders. Read ONLY by
+// the UF1 fader follow/writeback + the PLUG-IN soft-key on-state; the UF8/UC1
+// fader path keeps reading g_pluginFaderMode. Session-only (not persisted), least-
+// surprise on restart. Atomic store from the input worker; read on the main thread.
+std::atomic<bool>     g_uf1StripMode{false};
 // UF1 display view (Phase 3, Meter-Bridge). The MODE button (id 0x20) toggles
 // the firmware's Channel <-> Meter layout autonomously (cap75: no host switch
 // opcode — it re-purposes the same element addresses by view context, e.g.
@@ -401,12 +419,32 @@ std::atomic<bool>     g_uf1MeterView{false};
 // strip), DAW (track faders on the V-Pots), Meter (the analyzer). Plugin + DAW
 // share the non-Meter "channel" layout and differ only in what we paint, so the
 // split is: g_uf1MeterView (Meter layout yes/no) + g_uf1ChannelSubMode below.
-// 0 = Plugin, 1 = DAW. Only meaningful when !g_uf1MeterView.
+// 0 = Plugin, 1 = DAW, 2 = Sends. Only meaningful when !g_uf1MeterView.
 std::atomic<int>      g_uf1ChannelSubMode{0};
 // DAW-mode 4-track group within the selected-track window: 0 = selected..+3,
 // 1 = selected+4..+7. The "5-8" button (0x22) toggles it. Reset to 0 whenever
 // DAW mode is (re)entered so you always land on the selected track's group.
 std::atomic<int>      g_uf1DawGroup{0};
+// SENDS-mode send-window offset (in groups of 4): the 4 V-Pots show the focused
+// track's sends [group*4 .. group*4+3]. The "5-8" button (0x22) banks it +1 (wrap
+// based on the send count); reset to 0 on Sends-mode entry / focus-track change.
+std::atomic<int>      g_uf1SendGroup{0};
+// SENDS-mode number of send groups = ceil(combined send layout size / 4), min 1.
+// Published by the painter (needs the REAPER API to build the layout — main-thread
+// only); read by the input-worker "5-8" handler to wrap the send-window bank (the
+// worker can't touch the API), exactly like g_uf1CsActivePages feeds the ◄ ►.
+std::atomic<int>      g_uf1SendGroupCount{1};
+// DAW-mode DYNAMIC soft-key bank paging (in groups of 4), the exact SENDS analogue:
+// when the live soft-key bank is flagged dynamic, its 4 keys show items
+// [page*4 .. page*4+3] of the focused track's FX / param-groups / colours. The
+// "5-8" button (0x22) banks it +1 (wrap on the count below). This is UF1-LOCAL and
+// ABSOLUTE — it deliberately does NOT reuse UF8's g_dynBankPage/dynBankSlotBase_
+// (which page in groups of 8). Reset to 0 on bank / kind / focus-track change.
+std::atomic<int>      g_uf1DynBankPage{0};
+// Number of dynamic-bank pages = ceil(item count / 4), min 1. Published by the
+// painter (item count needs the REAPER API — main-thread only); read by the
+// input-worker "5-8" handler to wrap the page, exactly like g_uf1SendGroupCount.
+std::atomic<int>      g_uf1DynBankPageCount{1};
 // UF1 soft-key bank (DAW mode): which of the 10 user soft-key banks is live.
 // The ← → keys page it (wrap); the 4 display soft-keys fire its slots. Global
 // (not per-layer). Persisted store lives in the bindings Config (uf1SoftBanks).
@@ -1525,6 +1563,12 @@ std::atomic<int>  g_fxMoveReq{0};
 // Encoding: 0 = none; else (1<<24) | (kind<<16) | (slot<<8) | gesture, where
 // gesture 0=plain push, 1=+Shift, 2=+Cmd, 3=+Ctrl, 4=long-press.
 std::atomic<uint32_t> g_dynBankReq{0};
+// UF1 dynamic soft-key bank press — a DISTINCT atomic from g_dynBankReq so UF1's
+// ABSOLUTE index (page*4 + slot) is executed straight, without UF8's
+// dynBankSlotBase_ page-offset leaking in. Drained on the main thread.
+// Encoding: 0 = none; else (1<<31) | (kind<<24) | (absIdx<<8) | gesture
+// (absIdx = 16-bit absolute item index; gesture 0 = plain push for v1).
+std::atomic<uint32_t> g_uf1DynBankReq{0};
 // Page-delta for a bankable dynamic bank (FX / Sends), posted from the input
 // thread (UF8 encoder / Bank buttons) and drained on the main thread.
 std::atomic<int> g_dynBankPageReq{0};
@@ -1533,6 +1577,8 @@ std::atomic<int> g_dynBankPageReq{0};
 // yank focus + the GUI back off the FX the user just picked. ms (nowMs_).
 std::atomic<int64_t> g_dynFxFocusLockUntilMs{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
+static void applyDynBankUf1Req_(uint32_t enc);       // main-thread executor (UF1)
+MediaTrack* uf1FocusedTrack_();                      // main-thread; defined later
 static int  engagedBankableKind_();                  // any thread
 static void pageDynBank_(int kind, int delta);       // main thread
 static void tickDynBankPaging_();                    // main thread (onTimer)
@@ -2271,6 +2317,9 @@ void drainSelsets_() {
     // main thread; the input thread only posts the encoded request.
     if (const uint32_t dyn = g_dynBankReq.exchange(0); dyn != 0)
         applyDynBankReq_(dyn);
+    // UF1 dynamic soft-key bank press — absolute-index path (see applyDynBankUf1_).
+    if (const uint32_t u1 = g_uf1DynBankReq.exchange(0); u1 != 0)
+        applyDynBankUf1Req_(u1);
     // Reset bankable-bank pages on track change + drain posted page deltas
     // (defined after favContextTrack_ / the page state).
     tickDynBankPaging_();
@@ -4098,6 +4147,162 @@ inline const char* encoderModeFriendly(EncoderMode m)
     return "Encoder";
 }
 
+// UF1 has its OWN encoder mode, INDEPENDENT of the UF8 g_encoderMode
+// (Frank 2026-07-30: "wär cool wenn wir auf uf8 und uf1 gleichzeitig
+// verschiedene Mode haben können"). Built-in dispatch carries no surface
+// identity, so a shared atomic would chain the two encoders together —
+// a per-surface atomic is the only way to let UF8 sit in FX-Cycle while
+// UF1 is in Instance. Reuses the SAME EncoderMode enum + apply* helpers
+// (uf1EncoderDispatch_ mirrors encoder_mode_dispatch), only the state is
+// local. Session-only for now (defaults to ChSelect on boot); the picker
+// lives on the MODE-hold menu (hold MODE + turn the channel encoder).
+std::atomic<EncoderMode> g_uf1EncoderMode{EncoderMode::ChSelect};
+constexpr int kEncoderModeCount =
+    static_cast<int>(EncoderMode::FavCycle) + 1;
+
+// The encoder modes the UF1 PICKER offers, in scroll order. BankBy1 is EXCLUDED —
+// it drives applyBankByOne_ (shift the UF8 8-track fader bank by one strip), which
+// is meaningless on the single-strip UF1; its send-window paging is already covered
+// by SENDS mode + "5-8" (Frank 2026-07-31). The shared EncoderMode enum keeps
+// BankBy1 for the UF8; the UF1 just never lands on it.
+constexpr EncoderMode kUf1EncoderModes[] = {
+    EncoderMode::ChSelect, EncoderMode::Nudge, EncoderMode::Mousewheel,
+    EncoderMode::Instance, EncoderMode::FxCycle, EncoderMode::SelsetCycle,
+    EncoderMode::Markers, EncoderMode::LastParam, EncoderMode::FxScrollAll,
+    EncoderMode::InstanceScrollAll, EncoderMode::FxMove,
+    EncoderMode::CsCycle, EncoderMode::BcCycle, EncoderMode::FavCycle,
+};
+constexpr int kUf1EncoderModeCount =
+    static_cast<int>(sizeof(kUf1EncoderModes) / sizeof(kUf1EncoderModes[0]));
+
+// --- Runtime, user-editable UF1 encoder-mode RING (order + visibility) ------
+// Replaces the hardcoded kUf1EncoderModes[] scroll for the MODE-hold picker.
+//   g_uf1EncoderSeq[]     = a PERMUTATION of every mode int 0..kEncoderModeCount-1,
+//                           giving the display / scroll order (position -> mode).
+//   g_uf1EncoderVisible[] = per-mode enabled flag, indexed by EncoderMode int.
+// Persisted to ExtState "uf1_enc_seq" / "uf1_enc_vis" and edited in
+// Settings -> Bindings -> UF1 (channel encoder). Defaults preserve today's ring:
+// the kUf1EncoderModes order with BankBy1 appended LAST and hidden, so out of the
+// box the picker behaves exactly as before but the user can reorder / reveal
+// BankBy1 (or hide anything). Main-thread only (picker drain + Settings both run
+// on the main thread); atomics keep the surface-thread reads (uf1EncoderDispatch_
+// reads only g_uf1EncoderMode, not these) safe.
+std::atomic<int>  g_uf1EncoderSeq[kEncoderModeCount];
+std::atomic<bool> g_uf1EncoderVisible[kEncoderModeCount];
+
+// Fill the ring with the factory default (kUf1EncoderModes order + BankBy1 last,
+// visible for all except BankBy1). Idempotent; run once before the ExtState
+// restore so a missing / malformed key falls back to today's behaviour.
+inline void uf1EncoderRingDefaults_()
+{
+    for (int k = 0; k < kUf1EncoderModeCount; ++k)
+        g_uf1EncoderSeq[k].store(static_cast<int>(kUf1EncoderModes[k]));
+    // BankBy1 is the one mode excluded from kUf1EncoderModes -> append it last.
+    g_uf1EncoderSeq[kUf1EncoderModeCount].store(
+        static_cast<int>(EncoderMode::BankBy1));
+    for (int m = 0; m < kEncoderModeCount; ++m)
+        g_uf1EncoderVisible[m].store(m != static_cast<int>(EncoderMode::BankBy1));
+}
+
+// Write the ring order + visibility back to ExtState (CSV). Main thread only.
+//   uf1_enc_seq = the mode ints in ring order.
+//   uf1_enc_vis = 0/1 flags indexed by mode int.
+inline void uf1EncoderRingPersist_()
+{
+    std::string seq, vis;
+    for (int k = 0; k < kEncoderModeCount; ++k) {
+        char b[16];
+        std::snprintf(b, sizeof(b), "%d", g_uf1EncoderSeq[k].load());
+        if (k) { seq += ','; vis += ','; }
+        seq += b;
+        vis += (g_uf1EncoderVisible[k].load() ? '1' : '0');
+    }
+    SetExtState("rea_sixty", "uf1_enc_seq", seq.c_str(), true);
+    SetExtState("rea_sixty", "uf1_enc_vis", vis.c_str(), true);
+}
+
+// Persist just the live UF1 mode (shared with the picker + hide-advance paths).
+inline void uf1EncoderPersistMode_(EncoderMode m)
+{
+    char eb[8];
+    std::snprintf(eb, sizeof(eb), "%d", static_cast<int>(m));
+    SetExtState("rea_sixty", "uf1EncoderMode", eb, true);
+}
+
+// Step the live UF1 encoder mode by `delta` positions through the VISIBLE modes
+// (in g_uf1EncoderSeq order), wrapping. Empty visible list -> ChSelect. Persists
+// uf1EncoderMode. This is the MODE-hold picker body. Main thread only.
+inline void uf1EncoderStepVisible_(int delta)
+{
+    int vis[kEncoderModeCount];
+    int n = 0;
+    for (int k = 0; k < kEncoderModeCount; ++k) {
+        const int m = g_uf1EncoderSeq[k].load();
+        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load())
+            vis[n++] = m;
+    }
+    EncoderMode nm = EncoderMode::ChSelect;
+    if (n > 0) {
+        const int cur = static_cast<int>(g_uf1EncoderMode.load());
+        int idx = 0;
+        for (int i = 0; i < n; ++i) if (vis[i] == cur) { idx = i; break; }
+        idx = ((idx + delta) % n + n) % n;
+        nm  = static_cast<EncoderMode>(vis[idx]);
+    }
+    g_uf1EncoderMode.store(nm);
+    uf1EncoderPersistMode_(nm);
+}
+
+// The live mode `hiddenMode` was just hidden -> move g_uf1EncoderMode to the
+// next VISIBLE mode after it in ring order (wrapping). Persists. Main thread.
+inline void uf1EncoderAdvancePastHidden_(int hiddenMode)
+{
+    int pos = 0;
+    for (int k = 0; k < kEncoderModeCount; ++k)
+        if (g_uf1EncoderSeq[k].load() == hiddenMode) { pos = k; break; }
+    for (int step = 1; step <= kEncoderModeCount; ++step) {
+        const int k = (pos + step) % kEncoderModeCount;
+        const int m = g_uf1EncoderSeq[k].load();
+        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load()) {
+            g_uf1EncoderMode.store(static_cast<EncoderMode>(m));
+            uf1EncoderPersistMode_(static_cast<EncoderMode>(m));
+            return;
+        }
+    }
+    // No visible mode at all (should not happen — the set-visible guard forces
+    // ChSelect visible first). Fall back to ChSelect.
+    g_uf1EncoderMode.store(EncoderMode::ChSelect);
+    uf1EncoderPersistMode_(EncoderMode::ChSelect);
+}
+
+// UF1 HEADER name for the encoder mode. The header's "REAPER" cell shows only
+// ~13 chars on the LCD, so "ENC <name>" must fit in 13 → the name is ≤9 chars.
+// The full encoderModeFriendly forms ("Instance Scroll (all)"…) get cut ugly, so
+// use these compact mixed-case, ASCII-only names (Frank 2026-07-31: the longest
+// that fits is "ENC Selset Cy"). Used ONLY by uf1SetEncoderField_; the desktop
+// mode-banner keeps the full encoderModeFriendly names.
+inline const char* uf1EncoderModeHdr_(EncoderMode m)
+{
+    switch (m) {
+        case EncoderMode::ChSelect:          return "Select";
+        case EncoderMode::Nudge:             return "Nudge";
+        case EncoderMode::Mousewheel:        return "Wheel";
+        case EncoderMode::Instance:          return "Instance";
+        case EncoderMode::FxCycle:           return "FX Cycle";
+        case EncoderMode::SelsetCycle:       return "Selsets";
+        case EncoderMode::Markers:           return "Markers";
+        case EncoderMode::BankBy1:           return "Bank by1";
+        case EncoderMode::LastParam:         return "Last Prm";
+        case EncoderMode::FxScrollAll:       return "FX Scroll";
+        case EncoderMode::InstanceScrollAll: return "Inst Scrl";
+        case EncoderMode::FxMove:            return "FX Move";
+        case EncoderMode::CsCycle:           return "CS Cycle";
+        case EncoderMode::BcCycle:           return "BC Cycle";
+        case EncoderMode::FavCycle:          return "Fav Cycle";
+    }
+    return "Enc";
+}
+
 // Send/Receive-routing modes for the V-Pots and faders. Four
 // independent state pairs (V-Pot vs Fader × Send vs Receive); each
 // pair carries one of three states:
@@ -4604,11 +4809,19 @@ void writeRouteVolumeLinear_(const StripRoute& r, double v)
 // the combined index (handles a send reorder between gestures) and the rest reuse
 // it. g_sendEdit* hold the in-flight edit so the touch-release path can issue the
 // SetTrackSendUIVol "end of edit" (isend=1) that finalises Touch recording.
-std::array<int64_t, 8>     g_sendGestureMs{};
-std::array<std::string, 8> g_sendGestureKey;
-std::array<MediaTrack*, 8> g_sendEditTrack{};
-std::array<int, 8>         g_sendEditUiIdx;   // SetTrackSendUIVol index, or INT_MIN
-std::array<double, 8>      g_sendEditVal{};
+// SLOT RESERVATION: 0..7 = UF8 physical strips; 8..11 = the 4 UF1 SENDS V-Pots;
+// 12 = the UF1 SENDS FLIP fader. writeRouteVolAutomation_ / finishRouteVolEdit_
+// index these arrays by that slot, so the UF1 SENDS mode reuses the same proven
+// value-diff-probe + Touch-finalise machinery as the UF8 8-strip send fader.
+constexpr int kSendGestureSlots = 13;
+std::array<int64_t, kSendGestureSlots>     g_sendGestureMs{};
+std::array<std::string, kSendGestureSlots> g_sendGestureKey;
+std::array<MediaTrack*, kSendGestureSlots> g_sendEditTrack{};
+std::array<int, kSendGestureSlots>         g_sendEditUiIdx;   // SetTrackSendUIVol index, or INT_MIN
+std::array<double, kSendGestureSlots>      g_sendEditVal{};
+// V-Pot vol edits have no touch-release; arm a timed end-of-edit (like send-pan's
+// g_sendPanEditUntilMs) so the onTimer drain finalises them once the knob is idle.
+std::array<int64_t, kSendGestureSlots>     g_sendVolEditUntilMs{};
 struct SendEditInit_ { SendEditInit_() { g_sendEditUiIdx.fill(INT_MIN); } } g_sendEditInit_;
 
 // Read the EFFECTIVE level of send/receive at the cached combined index `ci`
@@ -4642,7 +4855,7 @@ static int sendUiVolArg_(bool recv, int ci) { return recv ? (-1 - ci) : ci; }
 void writeRouteVolAutomation_(const StripRoute& r, int strip, double vLin)
 {
     if (!r.valid) return;
-    if (strip < 0 || strip >= 8) { writeRouteVolumeLinear_(r, vLin); return; }
+    if (strip < 0 || strip >= kSendGestureSlots) { writeRouteVolumeLinear_(r, vLin); return; }
     const bool   recv = (r.sendCategory == -1);
     const std::string key = routeCacheKey_(r);
     const int curCount = GetTrackNumSends(r.track, recv ? -1 : 0);
@@ -4694,7 +4907,7 @@ void writeRouteVolAutomation_(const StripRoute& r, int strip, double vLin)
 // isend=1 tells REAPER the edit ended so Touch stops writing + snaps back.
 void finishRouteVolEdit_(int strip)
 {
-    if (strip < 0 || strip >= 8) return;
+    if (strip < 0 || strip >= kSendGestureSlots) return;
     if (g_sendEditUiIdx[strip] == INT_MIN) return;
     if (g_sendEditTrack[strip]
         && ValidatePtr2(nullptr, g_sendEditTrack[strip], "MediaTrack*"))
@@ -4925,6 +5138,11 @@ std::atomic<uint32_t> g_trackBankColour[8] = {
     0xE53935, 0xFB8C00, 0xFDD835, 0x43A047,
     0x1E88E5, 0x5E35B1, 0xD81B60, 0x6D4C41,
 };
+// Optional user names for the 8 Track-Colours keys. Empty → the accessor
+// defaults to "Col N". Read by dynamicBankSlot_ (main thread), written by
+// Settings (main thread); std::string can't be atomic, so guard with a mutex.
+std::mutex  g_trackBankColourNameMx;
+std::string g_trackBankColourName[8];
 // Which control pages a bankable dynamic bank (FX / Sends). One setting per
 // dynamic kind, indexed by DynamicBankKind int (only FxBank / Sends use it).
 enum class BankControl : int {
@@ -4955,6 +5173,11 @@ static void ensureDynCfgLoaded_()
         if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
             const long c = std::strtol(v, nullptr, 16);
             g_trackBankColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
+        }
+        char nk[40]; std::snprintf(nk, sizeof(nk), "track_bank_col_name_%d", i);
+        if (const char* nv = GetExtState("rea_sixty", nk); nv && nv[0]) {
+            std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+            g_trackBankColourName[i] = nv;
         }
     }
     for (int i = 0; i < 8; ++i) {
@@ -5128,6 +5351,42 @@ static bool dynFxBankColour_(MediaTrack* tr, int fxIdx, uint32_t& rgbOut)
     return false;
 }
 
+// One FX-bank key resolved against an ABSOLUTE fx index (no page base). Shared by
+// the UF8 path (dynamicBankSlot_, which adds dynBankSlotBase_) and the UF1 path
+// (dynamicBankSlotUf1_, which uses its own page*4 index). Empty/out-of-range →
+// present=false. Main-thread only (touches REAPER FX API).
+static DynSlotInfo fxBankSlotInfo_(MediaTrack* tr, int fxIdx)
+{
+    DynSlotInfo info;
+    if (!tr || fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return info;  // empty slot
+    info.present = true;
+    char nm[256] = {0};
+    TrackFX_GetFXName(tr, fxIdx, nm, sizeof(nm));
+    std::string s(nm);
+    // Strip a leading "VST3: " / "JS: " type prefix + trailing " (vendor)"
+    // so the 12-char LCD shows the plug-in name.
+    if (const auto p = s.find(": "); p != std::string::npos && p < 8)
+        s.erase(0, p + 2);
+    if (const auto p = s.rfind(" ("); p != std::string::npos)
+        s.erase(p);
+    info.label = s.empty() ? "FX" : s;
+    const bool enabled = TrackFX_GetEnabled(tr, fxIdx);
+    const bool offline = TrackFX_GetOffline(tr, fxIdx);
+    // Focused FX bright, other enabled FX dim, bypassed/offline dark.
+    if (!enabled || offline)                    info.led = 0;
+    else if (fxIdx == stripInstanceActiveFx_(tr)) info.led = 2;
+    else                                          info.led = 1;
+    // Colour the key by SSL class so the surface mirrors the MCP inserts
+    // overlay (CS yellow / BC red / UF8-mapped blue); plain FX keep the
+    // default white. Independent of brightness above.
+    uint32_t clsRgb = 0;
+    if (dynFxBankColour_(tr, fxIdx, clsRgb)) {
+        info.hasRgb = true;
+        info.rgb    = clsRgb;
+    }
+    return info;
+}
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -5137,36 +5396,8 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     if (!tr || slot < 0 || slot >= 8) return info;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::FxBank: {
-            const int fxIdx = dynBankSlotBase_(kind) + slot;
-            if (fxIdx >= TrackFX_GetCount(tr)) return info;   // empty slot
-            info.present = true;
-            char nm[256] = {0};
-            TrackFX_GetFXName(tr, fxIdx, nm, sizeof(nm));
-            std::string s(nm);
-            // Strip a leading "VST3: " / "JS: " type prefix + trailing
-            // " (vendor)" so the 12-char LCD shows the plug-in name.
-            if (const auto p = s.find(": "); p != std::string::npos && p < 8)
-                s.erase(0, p + 2);
-            if (const auto p = s.rfind(" ("); p != std::string::npos)
-                s.erase(p);
-            info.label = s.empty() ? "FX" : s;
-            const bool enabled = TrackFX_GetEnabled(tr, fxIdx);
-            const bool offline = TrackFX_GetOffline(tr, fxIdx);
-            // Focused FX bright, other enabled FX dim, bypassed/offline dark.
-            if (!enabled || offline)                    info.led = 0;
-            else if (fxIdx == stripInstanceActiveFx_(tr)) info.led = 2;
-            else                                          info.led = 1;
-            // Colour the key by SSL class so the surface mirrors the MCP
-            // inserts overlay (CS yellow / BC red / UF8-mapped blue); plain
-            // FX keep the default white. Independent of brightness above.
-            uint32_t clsRgb = 0;
-            if (dynFxBankColour_(tr, fxIdx, clsRgb)) {
-                info.hasRgb = true;
-                info.rgb    = clsRgb;
-            }
-            return info;
-        }
+        case DK::FxBank:
+            return fxBankSlotInfo_(tr, dynBankSlotBase_(kind) + slot);
         case DK::ParamGroups: {
             // 8 fixed groups always exist; show all (empty name → "Grp N").
             info.present = true;
@@ -5181,8 +5412,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         }
         case DK::TrackColours: {
             info.present = true;
-            char b[12]; std::snprintf(b, sizeof(b), "Col %d", slot + 1);
-            info.label = b;
+            info.label = reasixty_trackBankColourName(slot);
             const uint32_t want = reasixty_trackBankColour(slot);
             info.hasRgb = true;
             info.rgb    = want;
@@ -5203,6 +5433,31 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         default:
             return info;
     }
+}
+
+// UF1 dynamic-bank paint entry point — resolves an ABSOLUTE item index (page*4 +
+// key) with NO UF8 page base. FX uses the shared per-index body; ParamGroups /
+// TrackColours have exactly 8 items and no base, so the shared per-slot fn is
+// correct for absIdx 0..7 (beyond → empty). Main-thread only.
+static DynSlotInfo dynamicBankSlotUf1_(uf8::bindings::DynamicBankKind kind,
+                                       MediaTrack* tr, int absIdx)
+{
+    using DK = uf8::bindings::DynamicBankKind;
+    if (kind == DK::FxBank)
+        return fxBankSlotInfo_(tr, absIdx);
+    if (absIdx < 0 || absIdx >= 8) return DynSlotInfo{};
+    return dynamicBankSlot_(kind, tr, absIdx);
+}
+
+// Number of dynamic-bank items for `kind` on `tr` (drives the page count). FX =
+// live FX count; ParamGroups / TrackColours = a fixed 8. Main-thread only.
+static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
+                                    MediaTrack* tr)
+{
+    using DK = uf8::bindings::DynamicBankKind;
+    if (kind == DK::FxBank) return tr ? TrackFX_GetCount(tr) : 0;
+    if (kind == DK::ParamGroups || kind == DK::TrackColours) return 8;
+    return 0;
 }
 
 // Input-thread press handler for a dynamic bank key. Tracks press timing +
@@ -5236,7 +5491,137 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
     g_dynBankReq.store(enc);
 }
 
-// Main-thread executor for a dynamic bank press (drained in onTimer).
+// Execute an FX-bank op on an ABSOLUTE fx index. Shared by the UF8 path
+// (applyDynBankReq_, index = dynBankSlotBase_ + slot) and the UF1 path
+// (applyDynBankUf1_, index = page*4 + slot). Main-thread only.
+static void applyDynBankFxOp_(MediaTrack* tr, int fxIdx, int gesture)
+{
+    if (!tr) return;
+    const int n = TrackFX_GetCount(tr);
+    if (fxIdx < 0 || fxIdx >= n) return;
+    const auto op = static_cast<FxBankOp>(reasixty_fxBankOp(gesture));
+    switch (op) {
+        case FxBankOp::Focus:
+            uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
+                                        std::memory_order_relaxed);
+            // Full focus landing (like the FX-Cycle): updates the
+            // colour-bar readout (setStripInstanceFx_) + the focused-
+            // plugin GUI follow immediately, not only after a param
+            // is touched. A single-element ring lands on this FX.
+            landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
+            // landFxCursor_ moves the floating focused-window; also
+            // re-point the plugin-mode master GUI (SSL Strip / UF8
+            // Plugin Mode with GUI) to the now-focused domain, else
+            // it keeps showing the previously focused plug-in.
+            triggerPluginModeFollowSync_();
+            fxBankRetargetFocusGui_(tr, fxIdx);
+            g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
+            break;
+        case FxBankOp::Float: {
+            const bool open =
+                TrackFX_GetFloatingWindow(tr, fxIdx) != nullptr;
+            TrackFX_Show(tr, fxIdx, open ? 2 : 3);
+            break;
+        }
+        case FxBankOp::Bypass:
+            TrackFX_SetEnabled(tr, fxIdx, !TrackFX_GetEnabled(tr, fxIdx));
+            break;
+        case FxBankOp::FxSolo:
+            fxSoloToggle_(tr, fxIdx);
+            // The soloed FX must also become the focused one — else
+            // the surface + GUI keep showing the previously focused
+            // plug-in instead of the one we just auditioned.
+            uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
+                                        std::memory_order_relaxed);
+            landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
+            triggerPluginModeFollowSync_();
+            fxBankRetargetFocusGui_(tr, fxIdx);
+            g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
+            break;
+        case FxBankOp::Offline:
+            TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
+            break;
+        case FxBankOp::Delete:
+            TrackFX_Delete(tr, fxIdx);
+            break;
+        case FxBankOp::MoveUp:
+            if (fxIdx > 0)
+                TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx - 1,
+                                    /*is_move*/ true);
+            break;
+        case FxBankOp::MoveDown:
+            if (fxIdx < n - 1)
+                TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx + 1,
+                                    /*is_move*/ true);
+            break;
+        case FxBankOp::None: break;
+    }
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Execute a Parameter-Groups membership op on `slot` (0..7). `tr` is the
+// no-selection fallback track (favContextTrack_ for UF8, uf1FocusedTrack_ for
+// UF1). Main-thread only.
+static void applyDynBankParamGroupsOp_(MediaTrack* tr, int slot, int gesture)
+{
+    if (!tr || slot < 0 || slot >= 8) return;
+    if (gesture == 4) {                 // long: toggle group broadcast
+        uf8::param_groups::toggleGroupActive(slot);
+    } else {
+        // Toggle membership. Multi-select: derive the target state
+        // from the context track (flip it), then apply it uniformly
+        // to every selected track so mixed states converge.
+        const uint8_t bit = static_cast<uint8_t>(1u << slot);
+        const bool add =
+            (uf8::param_groups::getMaskForTrack(tr) & bit) == 0;
+        auto applyOne = [&](MediaTrack* t) {
+            uint8_t m = uf8::param_groups::getMaskForTrack(t);
+            m = add ? static_cast<uint8_t>(m | bit)
+                    : static_cast<uint8_t>(m & ~bit);
+            uf8::param_groups::setMaskForTrack(t, m);
+        };
+        const int nSel = CountSelectedTracks(nullptr);
+        if (nSel > 0) {
+            for (int i = 0; i < nSel; ++i)
+                if (MediaTrack* t = GetSelectedTrack(nullptr, i))
+                    applyOne(t);
+        } else {
+            applyOne(tr);
+        }
+    }
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Execute a Track-Colours op on `slot` (0..7). `tr` is the no-selection fallback
+// track. Main-thread only.
+static void applyDynBankColourOp_(MediaTrack* tr, int slot, int gesture)
+{
+    if (!tr || slot < 0 || slot >= 8) return;
+    // long: clear custom colour, else apply the configured colour.
+    const uint32_t rgb = reasixty_trackBankColour(slot);
+    const double native = (gesture == 4)
+        ? 0.0
+        : static_cast<double>(
+              ColorToNative((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF,
+                            rgb & 0xFF) | 0x1000000);
+    // Apply to EVERY selected track (multi-select); fall back to the
+    // context track when nothing is selected.
+    const int nSel = CountSelectedTracks(nullptr);
+    if (nSel > 0) {
+        for (int i = 0; i < nSel; ++i)
+            if (MediaTrack* t = GetSelectedTrack(nullptr, i))
+                SetMediaTrackInfo_Value(t, "I_CUSTOMCOLOR", native);
+    } else {
+        SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", native);
+    }
+    UpdateArrange();
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
 static void applyDynBankReq_(uint32_t enc)
 {
     const auto kind    = static_cast<uf8::bindings::DynamicBankKind>(
@@ -5247,127 +5632,48 @@ static void applyDynBankReq_(uint32_t enc)
     if (!tr) return;
     using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
-        case DK::FxBank: {
-            const int fxIdx = dynBankSlotBase_(kind) + slot;
-            const int n = TrackFX_GetCount(tr);
-            if (fxIdx < 0 || fxIdx >= n) return;
-            const auto op = static_cast<FxBankOp>(reasixty_fxBankOp(gesture));
-            switch (op) {
-                case FxBankOp::Focus:
-                    uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
-                                                std::memory_order_relaxed);
-                    // Full focus landing (like the FX-Cycle): updates the
-                    // colour-bar readout (setStripInstanceFx_) + the focused-
-                    // plugin GUI follow immediately, not only after a param
-                    // is touched. A single-element ring lands on this FX.
-                    landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
-                    // landFxCursor_ moves the floating focused-window; also
-                    // re-point the plugin-mode master GUI (SSL Strip / UF8
-                    // Plugin Mode with GUI) to the now-focused domain, else
-                    // it keeps showing the previously focused plug-in.
-                    triggerPluginModeFollowSync_();
-                    fxBankRetargetFocusGui_(tr, fxIdx);
-                    g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
-                    break;
-                case FxBankOp::Float: {
-                    const bool open =
-                        TrackFX_GetFloatingWindow(tr, fxIdx) != nullptr;
-                    TrackFX_Show(tr, fxIdx, open ? 2 : 3);
-                    break;
-                }
-                case FxBankOp::Bypass:
-                    TrackFX_SetEnabled(tr, fxIdx, !TrackFX_GetEnabled(tr, fxIdx));
-                    break;
-                case FxBankOp::FxSolo:
-                    fxSoloToggle_(tr, fxIdx);
-                    // The soloed FX must also become the focused one — else
-                    // the surface + GUI keep showing the previously focused
-                    // plug-in instead of the one we just auditioned.
-                    uf8::g_focusedFxTrack.store(static_cast<void*>(tr),
-                                                std::memory_order_relaxed);
-                    landFxCursor_(tr, std::vector<int>{fxIdx}, 0);
-                    triggerPluginModeFollowSync_();
-                    fxBankRetargetFocusGui_(tr, fxIdx);
-                    g_dynFxFocusLockUntilMs.store(nowMs_() + 1500);
-                    break;
-                case FxBankOp::Offline:
-                    TrackFX_SetOffline(tr, fxIdx, !TrackFX_GetOffline(tr, fxIdx));
-                    break;
-                case FxBankOp::Delete:
-                    TrackFX_Delete(tr, fxIdx);
-                    break;
-                case FxBankOp::MoveUp:
-                    if (fxIdx > 0)
-                        TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx - 1,
-                                            /*is_move*/ true);
-                    break;
-                case FxBankOp::MoveDown:
-                    if (fxIdx < n - 1)
-                        TrackFX_CopyToTrack(tr, fxIdx, tr, fxIdx + 1,
-                                            /*is_move*/ true);
-                    break;
-                case FxBankOp::None: break;
-            }
-            g_softKeyDirty.store(true);
-            g_pageDirty.store(true);
+        case DK::FxBank:
+            applyDynBankFxOp_(tr, dynBankSlotBase_(kind) + slot, gesture);
             break;
-        }
-        case DK::ParamGroups: {
-            if (slot < 0 || slot >= 8) return;
-            if (gesture == 4) {                 // long: toggle group broadcast
-                uf8::param_groups::toggleGroupActive(slot);
-            } else {
-                // Toggle membership. Multi-select: derive the target state
-                // from the context track (flip it), then apply it uniformly
-                // to every selected track so mixed states converge.
-                const uint8_t bit = static_cast<uint8_t>(1u << slot);
-                const bool add =
-                    (uf8::param_groups::getMaskForTrack(tr) & bit) == 0;
-                auto applyOne = [&](MediaTrack* t) {
-                    uint8_t m = uf8::param_groups::getMaskForTrack(t);
-                    m = add ? static_cast<uint8_t>(m | bit)
-                            : static_cast<uint8_t>(m & ~bit);
-                    uf8::param_groups::setMaskForTrack(t, m);
-                };
-                const int nSel = CountSelectedTracks(nullptr);
-                if (nSel > 0) {
-                    for (int i = 0; i < nSel; ++i)
-                        if (MediaTrack* t = GetSelectedTrack(nullptr, i))
-                            applyOne(t);
-                } else {
-                    applyOne(tr);
-                }
-            }
-            g_softKeyDirty.store(true);
-            g_pageDirty.store(true);
+        case DK::ParamGroups:
+            applyDynBankParamGroupsOp_(tr, slot, gesture);
             break;
-        }
-        case DK::TrackColours: {
-            if (slot < 0 || slot >= 8) return;
-            // long: clear custom colour, else apply the configured colour.
-            const uint32_t rgb = reasixty_trackBankColour(slot);
-            const double native = (gesture == 4)
-                ? 0.0
-                : static_cast<double>(
-                      ColorToNative((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF,
-                                    rgb & 0xFF) | 0x1000000);
-            // Apply to EVERY selected track (multi-select); fall back to the
-            // context track when nothing is selected.
-            const int nSel = CountSelectedTracks(nullptr);
-            if (nSel > 0) {
-                for (int i = 0; i < nSel; ++i)
-                    if (MediaTrack* t = GetSelectedTrack(nullptr, i))
-                        SetMediaTrackInfo_Value(t, "I_CUSTOMCOLOR", native);
-            } else {
-                SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", native);
-            }
-            UpdateArrange();
-            g_softKeyDirty.store(true);
-            g_pageDirty.store(true);
+        case DK::TrackColours:
+            applyDynBankColourOp_(tr, slot, gesture);
             break;
-        }
         default: break;
     }
+}
+
+// Main-thread executor for a UF1 dynamic bank press — ABSOLUTE item index (no
+// UF8 page base). `tr` = uf1FocusedTrack_ (kept consistent with the UF1 painter).
+static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
+                             MediaTrack* tr, int absIdx, int gesture)
+{
+    if (!tr) return;
+    using DK = uf8::bindings::DynamicBankKind;
+    switch (kind) {
+        case DK::FxBank:
+            applyDynBankFxOp_(tr, absIdx, gesture);
+            break;
+        case DK::ParamGroups:
+            if (absIdx < 8) applyDynBankParamGroupsOp_(tr, absIdx, gesture);
+            break;
+        case DK::TrackColours:
+            if (absIdx < 8) applyDynBankColourOp_(tr, absIdx, gesture);
+            break;
+        default: break;
+    }
+}
+
+// Decode a g_uf1DynBankReq word (see its declaration) and run it. Main-thread.
+static void applyDynBankUf1Req_(uint32_t enc)
+{
+    const auto kind    = static_cast<uf8::bindings::DynamicBankKind>(
+                             (enc >> 24) & 0x7F);
+    const int  absIdx  = (enc >> 8) & 0xFFFF;
+    const int  gesture = enc & 0xFF;
+    applyDynBankUf1_(kind, uf1FocusedTrack_(), absIdx, gesture);
 }
 
 // Fallback nudge step per physical detent (seconds). Used only when
@@ -7051,6 +7357,35 @@ static void applyFxMoveSlotAware_(int step, bool carousel)
 }
 
 void applyFxMove_(int step) { applyFxMoveSlotAware_(step, /*carousel*/ true); }
+
+// UF1 channel-encoder dispatch by its LOCAL mode (g_uf1EncoderMode). Byte-
+// for-byte the same switch as the encoder_mode_dispatch builtin (which reads
+// the UF8 g_encoderMode) — same apply* helpers, same send-window/BankBy1
+// special-case — only the mode source is per-surface. Keeps UF8 and UF1
+// encoders independent (Frank 2026-07-30). Runs on the main thread (drain).
+void uf1EncoderDispatch_(int step)
+{
+    switch (g_uf1EncoderMode.load()) {
+        case EncoderMode::ChSelect:    applySelectRelative_(step); break;
+        case EncoderMode::Nudge:       applyPlayheadNudge_(step);  break;
+        case EncoderMode::Mousewheel:  applyMouseScroll_(step);    break;
+        case EncoderMode::Instance:    applyInstanceCycle_(step);  break;
+        case EncoderMode::FxCycle:     applyFxCycle_(step);        break;
+        case EncoderMode::FxScrollAll:       applyFxScrollAll_(step);       break;
+        case EncoderMode::InstanceScrollAll: applyInstanceScrollAll_(step); break;
+        case EncoderMode::FxMove:      applyFxMove_(step);         break;
+        case EncoderMode::CsCycle:     g_csCycleReq.fetch_add(step); break;
+        case EncoderMode::BcCycle:     g_bcCycleReq.fetch_add(step); break;
+        case EncoderMode::FavCycle:
+            (favDomainIsBc_() ? g_bcCycleReq : g_csCycleReq).fetch_add(step); break;
+        case EncoderMode::SelsetCycle: applySelsetCycle_(step);    break;
+        case EncoderMode::Markers:     applyMarkerStep_(step);     break;
+        case EncoderMode::BankBy1:
+            if (!applySendBankStep_(step)) applyBankByOne_(step);
+            break;
+        case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
+    }
+}
 
 // ===================== CS-Switch (2026-06-20) =========================
 // Favourite Channel-Strip swapping. switchCsTo_ replaces a track's active CS
@@ -11736,23 +12071,35 @@ void drainInputQueue()
             const uint8_t id   = e.strip;
             const int     step = static_cast<int>(e.value);
             switch (id) {
-                case uf1::enc::kChannel: {      // channel encoder → track nav
+                case uf1::enc::kChannel: {      // channel encoder
                     // Accumulate the fine counts (~4 per click) into whole steps,
                     // like the UF8/UC1 channel encoder (kChannelEncoderScale).
                     g_uf1ChanEncAccum += step / kChannelEncoderScale;
                     int tracks = 0;
                     if (g_uf1ChanEncAccum >=  1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
                     if (g_uf1ChanEncAccum <= -1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
-                    // SHIFT held → Instance Cycle (walk the CS/BC instances on the
-                    // selected track, like the UC1/UF8 Shift+channel-encoder);
-                    // unshifted → track nav. Reads the SHARED Shift modifier so ANY
-                    // source (UF1 / UF8 / UC1 hardware / keyboard) counts. Frank
-                    // 2026-07-30.
                     if (tracks != 0) {
-                        if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift))
+                        if (g_uf1ModeMenu.load()) {
+                            // MODE held → the channel encoder is the encoder-mode
+                            // PICKER: step g_uf1EncoderMode through the VISIBLE modes
+                            // in the user-configured ring order (wrap), don't nav
+                            // tracks. SK4 in the menu overlay shows the live mode name
+                            // (Frank 2026-07-30, MODE-menu picker). Order + visibility
+                            // are user-editable in Settings → Bindings → UF1; the
+                            // helper persists uf1EncoderMode. Drain runs on the main
+                            // thread → SetExtState is safe here.
+                            uf1EncoderStepVisible_(tracks);
+                        } else if (uf8::bindings::modifierHeld(
+                                       uf8::bindings::Modifier::Shift)) {
+                            // SHIFT = always-on Instance-Cycle quick layer, whatever
+                            // the selected mode is (Frank 2026-07-30). Reads the
+                            // SHARED Shift so ANY source (UF1/UF8/UC1/keyboard) counts.
                             applyInstanceCycle_(tracks);
-                        else
-                            applySelectRelative_(tracks);
+                        } else {
+                            // Otherwise dispatch by the UF1's OWN encoder mode
+                            // (default ChSelect = track nav) — independent of UF8.
+                            uf1EncoderDispatch_(tracks);
+                        }
                     }
                     break;
                 }
@@ -14598,6 +14945,21 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int
     return h;
 }
 
+// Overwrite the header's field 0 (the 25-byte cell that normally reads "REAPER")
+// with the channel-encoder mode "ENC <mode>". Applied ON TOP of a live page header
+// so the "N/M" page cell stays intact. Shown while MODE is held (picker feedback)
+// AND permanently while the encoder mode is non-default — so you always see which
+// mode the encoder is in without holding MODE (Frank 2026-07-30, "das feld wo sonst
+// reaper steht"). ChSelect (default track-nav) leaves "REAPER" alone.
+static void uf1SetEncoderField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
+                                EncoderMode m)
+{
+    std::string s = std::string("ENC ") + uf1EncoderModeHdr_(m);  // ≤13 chars, fits the cell
+    if (s.size() > 25) s.resize(25);
+    for (size_t k = 0; k < 25; ++k)
+        h[k] = (k < s.size()) ? static_cast<uint8_t>(s[k]) : 0;
+}
+
 // ---- Overview cycle pacer ---------------------------------------------------
 // SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
 // ~1 ms jitter and NEVER pauses. REAPER's ~33 ms timer cannot produce that
@@ -16036,20 +16398,17 @@ void onUf1Event(const uf1::InputEvent& ev)
             break;
         case uf1::InputKind::Button:
             if (f) std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
-            // SHIFT (0x36): feeds the SAME shared Shift modifier as the UF8/UC1
-            // hardware shift + the keyboard (Frank 2026-07-30 "derselbe shift wie
-            // bei UC1/UF8 oder Keyboard"), NOT a UF1-local flag. Sets the bindings
-            // modifier (→ modifierHeld(Shift), which every surface reads) + mirrors
-            // g_shiftHeld (UF8 fine-mode + Fine LED) — the plain momentary path of
-            // the mod_shift builtin. Both are atomic stores (threading rule); the
-            // double-click latch is not replicated here (a later UF1-Bindings phase
-            // can bind 0x36 → mod_shift for full parity). setModifierHeld is safe
-            // off the main thread (it only stores atomics).
-            if (ev.id == uf1::btn::kShift) {
-                uf8::bindings::setModifierHeld(uf8::bindings::Modifier::Shift, ev.pressed);
-                g_shiftHeld.store(ev.pressed);
-                break;
-            }
+            // SHIFT (0x36): now a normal binding — seeded to the shared
+            // `mod_shift` builtin (Bindings.cpp factory default) and routed
+            // through the dispatch below, giving full parity with the UF8/UC1
+            // shift incl. the double-click Fine latch (mod_shift sets the same
+            // modifierHeld(Shift) every surface reads AND mirrors g_shiftHeld).
+            // The release edge (Shift self-held → empty Shift slot) falls through
+            // the binding-first check to the final catch-all dispatch, where
+            // dispatch()'s Noop-slot fallback fires it against the Plain slot —
+            // so the modifier can't stick on. Worker-safe: mod_shift only stores
+            // atomics (threading rule). Frank 2026-07-31 (was a hardcoded early
+            // block that lacked the latch).
             // MODE button: HOLD shows a mode-picker on the 4 display soft-keys
             // (SK1 Plugin / SK2 DAW / SK3 Meter / SK4 free); pressing a soft-key
             // while held jumps to that mode (handled in the menu-select block
@@ -16073,7 +16432,9 @@ void onUf1Event(const uf1::InputEvent& ev)
                     case 1: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(1);
                             g_uf1DawGroup.store(0);                                     break; // DAW
                     case 2: g_uf1MeterView.store(true);                                 break; // Meter
-                    default: break;                                                            // SK4 free
+                    case 3: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(2);
+                            g_uf1SendGroup.store(0);                                    break; // Sends
+                    default: break;
                 }
                 g_uf1ModeMenu.store(false);
                 break;
@@ -16120,45 +16481,10 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
                 break;
             }
-            // Nav arrow keys ◄ ► page BIDIRECTIONALLY through the V-Pot parameter
-            // pages of the current meter screen (3 pages/screen, HW-verified
-            // 2026-07-22). Meter view only; in Channel view the arrows stay
-            // user-bindable. Atomic store only (threading rule). This frees Display
-            // soft-key 2 for its real Reset job (manual: soft-2 = RESET).
-            if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
-                && ev.pressed && g_uf1MeterView.load()) {
-                const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 3);
-                const int n   = kUf1MeterPageCount[scr];
-                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : (n - 1);
-                g_uf1MeterPage.store((g_uf1MeterPage.load() + dir) % n);
-                break;
-            }
-            // Channel view: the SAME ◄ ► arrows page the SSL channel-strip
-            // parameter PAGE (1..8, wrap) shared by the 4 V-Pots + soft keys
-            // (SSL UF1 User Guide p188). Channel view only — the Meter block
-            // above owns them there. These ship UNBOUND (Bindings.cpp factory
-            // seed), so this claims no user binding; a page-view binding, if the
-            // user later adds one, is superseded here exactly as the Meter arrows
-            // do. Atomic store only (threading rule). Read by the V-Pot handler +
-            // painter on the main thread.
-            if ((ev.id == uf1::btn::kArrowRight || ev.id == uf1::btn::kArrowLeft)
-                && ev.pressed && !g_uf1MeterView.load()) {
-                const int dir = (ev.id == uf1::btn::kArrowRight) ? 1 : -1;
-                if (g_uf1ChannelSubMode.load() == 1) {
-                    // DAW mode: ← → page the 10 user soft-key banks (wrap). The
-                    // 4 display soft-keys fire the live bank's slots.
-                    constexpr int nb = uf8::bindings::kUf1SoftBankCount;
-                    g_uf1SoftBank.store((g_uf1SoftBank.load() + dir + nb) % nb);
-                } else {
-                    // Plugin mode: page the SSL strip's p188 param pages (shared
-                    // by the 4 V-Pots + CS section soft keys). Wrap within the
-                    // count the painter last published (worker has no REAPER API).
-                    int np = g_uf1CsActivePages.load();
-                    if (np < 1) np = 1;
-                    g_uf1CsPage.store((g_uf1CsPage.load() % np + (dir > 0 ? 1 : np - 1)) % np);
-                }
-                break;
-            }
+            // Page ◄ ► arrows (0x24 / 0x26) — Meter-view V-Pot-page paging AND
+            // Channel-view soft-key-bank / SSL-strip-page paging are now the
+            // `uf1_page_step` builtin (factory-seeded to ArrowLeft/-1 and
+            // ArrowRight/+1 in Bindings.cpp), fired via the dispatch below.
             // Channel view: Quick-Key-2 (transport soft-key, id 0x35) toggles the
             // channel V-Pots between Normal and Fine resolution (p188). Consumed
             // by applyUf1ChannelVpot_ via reasixty_uf8KnobScale(g_uf1CsFine). Also
@@ -16188,10 +16514,28 @@ void onUf1Event(const uf1::InputEvent& ev)
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
                 && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1
                 && !g_uf1ModeMenu.load()) {
-                uf8::bindings::dispatchUf1SoftBankSlot(
-                    g_uf1SoftBank.load(),
-                    static_cast<int>(ev.id - uf1::btn::kDisplaySoft1),
-                    ev.pressed);
+                const int bank = g_uf1SoftBank.load();
+                const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
+                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank);
+                if (dk != uf8::bindings::DynamicBankKind::None) {
+                    // Dynamic bank: post the UF1 request atomic (distinct from the
+                    // UF8 g_dynBankReq so UF8's dynBankSlotBase_ can't leak into
+                    // our ABSOLUTE index). Fire at page*4 + slot — the same page
+                    // the "5-8" key banks. Encoding (see g_uf1DynBankReq decl):
+                    // (1<<31)|(kind<<24)|(absIdx<<8)|gesture; v1 = push-only,
+                    // gesture 0. The onTimer drain runs applyDynBankUf1Req_ on the
+                    // main thread — worker-thread safe (atomic store only, no API).
+                    // TODO: long/Shift gestures = follow-up.
+                    if (ev.pressed) {
+                        const int absIdx = g_uf1DynBankPage.load() * 4 + slot;
+                        g_uf1DynBankReq.store((1u << 31)
+                            | (static_cast<uint32_t>(dk) << 24)
+                            | ((static_cast<uint32_t>(absIdx) & 0xFFFFu) << 8)
+                            | 0u /*plain gesture (Push)*/);
+                    }
+                } else {
+                    uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, ev.pressed);
+                }
                 break;
             }
             if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
@@ -16201,69 +16545,15 @@ void onUf1Event(const uf1::InputEvent& ev)
                             static_cast<uint8_t>(ev.id - uf1::btn::kDisplaySoft1), 0.0});
                 break;
             }
-            // DAW mode: the "5-8" button (0x22) toggles the 4-track group between
-            // the selected track (0) and the next four (1). Channel view + DAW only;
-            // it stays free elsewhere. Atomic store (threading rule); the painter +
-            // V-Pot handlers read g_uf1DawGroup via uf1DawWindowStart_.
-            if (ev.id == uf1::btn::k5to8 && ev.pressed
-                && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1) {
-                g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
-                break;
-            }
-            // Channel-encoder push (0x0D) = Toggle Focused Plug-in GUI (Frank
-            // 2026-07-30 standard mapping). Queue for the main thread (TrackFX_Show
-            // is UI/main-thread only). Press edge only; ships as the default (was
-            // unbound), superseding any user binding like the other UF1 claims.
-            if (ev.id == uf1::btn::kChannelPush && ev.pressed) {
-                queueInput({PendingInput::Uf1ToggleGui, 0, 0.0});
-                break;
-            }
-            // Bank ◄ / ► (0x21 / 0x23) = coarse track select, ±8 by default (Frank
-            // 2026-07-30). Moves the REAPER selection so every view follows; queued
-            // for the main thread (applySelectRelative_ is REAPER-API). All views;
-            // ships as the default standard mapping. Press edge only.
-            if ((ev.id == uf1::btn::kBankLeft || ev.id == uf1::btn::kBankRight)
-                && ev.pressed) {
-                const double d = (ev.id == uf1::btn::kBankRight) ? kUf1BankStep
-                                                                 : -kUf1BankStep;
-                queueInput({PendingInput::Uf1SelectRelative, 0, d});
-                break;
-            }
-            // Channel V-Pot pushes (0x09-0x0C): reset the current-page V-Pot
-            // param to its DEFAULT (SSL 360 push-to-default). Channel view only;
-            // the drain resolves the on-screen SSL strip (CS or BC) + page param
-            // and writes its stored default. Ship UNBOUND (no factory seed) — same
-            // trade-off the arrows / 360 / Quick-Key-2 / soft-keys make — so no
-            // user binding is lost. Press edge only; the release falls through to
-            // dispatch (unbound → no-op). The above-fader push (0x08) + channel
-            // push (0x0D) are NOT claimed here (still user-bindable).
-            if ((ev.id == uf1::btn::kVpot1Push || ev.id == uf1::btn::kVpot2Push ||
-                 ev.id == uf1::btn::kVpot3Push || ev.id == uf1::btn::kVpot4Push)
-                && ev.pressed && !g_uf1MeterView.load()) {
-                queueInput({PendingInput::Uf1CsVpotPush,
-                            static_cast<uint8_t>(ev.id - uf1::btn::kVpot1Push), 0.0});
-                break;
-            }
-            // FLIP key (0x38): "assign the current V-Pot parameter to the fader"
-            // (SSL UF1 User Guide p16). On the UF1 the fader owns Volume and the
-            // above-fader V-Pot owns Pan → FLIP swaps them (fader → Pan, V-Pot →
-            // Volume). Toggle the UF1-local g_uf1Flip (NOT the UF8/UC1 g_flip);
-            // the main-thread fader follow/writeback + applyUf1AboveFaderVpot_ read
-            // it. Applies in BOTH views (the fader tracks volume in both). Ships
-            // UNBOUND (no factory seed), so no user binding is superseded — same
-            // trade-off the arrows / 360 / Quick-Key-2 make above. Press edge only;
-            // atomic store (threading rule).
-            if (ev.id == uf1::btn::kFlip && ev.pressed) {
-                g_uf1Flip.store(!g_uf1Flip.load());
-                break;
-            }
-            // MASTER key (0x39, under FLIP): toggle the strip onto the MASTER track
-            // (UC1 "track 00"). uf1FocusedTrack_ reads g_uf1Master so the whole strip
-            // follows. Ships UNBOUND (standard mapping); atomic store (threading rule).
-            if (ev.id == uf1::btn::kMaster && ev.pressed) {
-                g_uf1Master.store(!g_uf1Master.load());
-                break;
-            }
+            // "5-8" (0x22), ENC push (0x0D), Bank ◄ ► (0x21/0x23), channel
+            // V-Pot pushes (0x09-0x0C), FLIP (0x38) and MASTER (0x39) are now
+            // real factory-default bindings (Bindings.cpp seed): 5-8 →
+            // uf1_five_to_eight, ENC push → show_focused_plugin_gui, Bank →
+            // uf1_bank_step (±1 param), V-Pot pushes → uf1_vpot_reset (0..3
+            // param), FLIP → uf1_flip, MASTER → uf1_master. They fire through
+            // the binding-first check above / the final dispatch below, so the
+            // bindings editor shows their action and the user can rebind them.
+            // (The above-fader push 0x08 stays UNBOUND — no default.)
             // Solo / Cut / Sel — fixed native functions on the FOCUSED track
             // (Frank 2026-07-30: REAPER owns solo/mute/select, so UF1 doesn't
             // reinvent them; always focused, "immer auf fokusiert"). Handled
@@ -18739,6 +19029,47 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         return;
     }
 
+    // Sends mode: V-Pot vi rides the LEVEL of the focused track's send at the 7.75
+    // MIXER SLOT g_uf1SendGroup*4 + vi (combinedSendSlot_ — reorderable, gaps, hw
+    // outs, matching the mixer TCP order + the UF8 send views). Gap (apiIndex<0) →
+    // BLANK (no-op). NAME + level READ + WRITE all address this ONE physical send:
+    // the write goes through writeRouteVolAutomation_ (reserved gesture slot 8+vi),
+    // whose value-diff PROBE resolves the correct SetTrackSendUIVol UIVol index
+    // (slot index ≠ UIVol index under reorder — that's why the probe exists) and
+    // records automation. dB nudge like the DAW branch (0.25 dB/count, −60..+12).
+    // ACCUMULATOR RULE: seed the dB from the EFFECTIVE (post-envelope) read of the
+    // RESOLVED route ONCE at gesture start, accumulate in software, never re-read
+    // mid-gesture (the write records the envelope, re-reading would pin it).
+    if (g_uf1ChannelSubMode.load() == 2) {
+        MediaTrack* focusTr = uf1FocusedTrack_();
+        if (!focusTr) return;
+        const CombinedSlot cs = combinedSendSlot_(focusTr, g_uf1SendGroup.load() * 4 + vi);
+        if (cs.apiIndex < 0) return;            // gap slot → no-op
+        StripRoute r;
+        r.track = focusTr; r.sendCategory = cs.category;
+        r.sendIndex = cs.apiIndex; r.valid = true;
+        const int strip = 8 + vi;               // reserved UF1 SENDS V-Pot gesture slot
+
+        static double      sSAcc[4] = {0, 0, 0, 0};   // per-V-Pot dB accumulator
+        static std::string sSKey[4];
+        static int64_t     sSMs[4]  = {0, 0, 0, 0};
+        const int64_t now = nowMs_();
+        const std::string key = routeCacheKey_(r);
+        if (sSKey[vi] != key || now - sSMs[vi] > 300) {
+            const double v = readRouteVolumeLinear_(r, focusTr);   // EFFECTIVE, seed once
+            sSAcc[vi] = (v > 0.0) ? 20.0 * std::log10(v) : -60.0;
+            sSKey[vi] = key;
+        }
+        double nDb = sSAcc[vi] + step * kUf1FlipVolDbPerCount;
+        if (nDb >  12.0) nDb =  12.0;
+        if (nDb < -60.0) nDb = -60.0;
+        sSAcc[vi] = nDb;
+        sSMs[vi]  = now;
+        writeRouteVolAutomation_(r, strip, std::pow(10.0, nDb / 20.0));
+        g_sendVolEditUntilMs[strip] = now + 300;   // idle-timed Touch finalise
+        return;
+    }
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
@@ -18851,6 +19182,25 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
 void applyUf1ChannelSoftKey_(int idx)
 {
     if (idx < 0 || idx > 3) return;
+
+    // Sends mode: the 4 soft-keys toggle each shown send's PRE/POST-fader mode. Key
+    // i addresses the SAME 7.75 mixer slot as V-Pot i (combinedSendSlot_). Per the
+    // REAPER SDK I_SENDMODE = 0 post-fader / 1 pre-fx / 3 post-fx (= "Pre-Fader" in
+    // the send UI) — so the standard pre/post-fader toggle is 0 (POST) ↔ 3 (PRE);
+    // any pre state (1 or 3) flips back to POST. Gap slot → no-op. Main-thread
+    // (drained) so the send API is safe.
+    if (g_uf1ChannelSubMode.load() == 2) {
+        MediaTrack* sTr = uf1FocusedTrack_();
+        if (!sTr) return;
+        const CombinedSlot cs = combinedSendSlot_(sTr, g_uf1SendGroup.load() * 4 + idx);
+        if (cs.apiIndex < 0) return;
+        const int mode = static_cast<int>(GetTrackSendInfo_Value(
+            sTr, cs.category, cs.apiIndex, "I_SENDMODE"));
+        SetTrackSendInfo_Value(sTr, cs.category, cs.apiIndex, "I_SENDMODE",
+                               (mode != 0) ? 0.0 : 3.0);
+        return;
+    }
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
@@ -18878,12 +19228,11 @@ void applyUf1ChannelSoftKey_(int idx)
             // PLUG-IN key = "Toggle SSL Strip Mode" (manual: the PLUG-IN/DAW toggle),
             // implemented like the UF8 `ssl_strip_mode_toggle`: the fader then drives
             // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
-            // instead of track volume. Shares the global g_pluginFaderMode so a combined
-            // UF8+UF1 rig toggles together; the UF1 fader path reads it (uf1PaintChannel_).
-            const bool next = !g_pluginFaderMode.load();
-            g_pluginFaderMode.store(next);
-            g_pluginFaderModeWithGui.store(false);
-            SetExtState("ReaSixty", "pluginFaderMode", next ? "1" : "0", true);
+            // instead of track volume. UF1-LOCAL g_uf1StripMode (Frank 2026-07-30 —
+            // was the shared g_pluginFaderMode; now UF8 and UF1 toggle independently).
+            const bool nextStrip = !g_uf1StripMode.load();
+            g_uf1StripMode.store(nextStrip);
+            SetExtState("rea_sixty", "uf1StripMode", nextStrip ? "1" : "0", true);  // persist (Frank "ja")
             g_pageDirty.store(true);
             return;
         }
@@ -18948,6 +19297,24 @@ void applyUf1ChannelVpotPush_(int idx)
     if (g_uf1ChannelSubMode.load() == 1) {
         if (MediaTrack* t = GetTrack(nullptr, uf1DawWindowStart_() + idx))
             CSurf_OnVolumeChange(t, 1.0, false);
+        return;
+    }
+
+    // Sends mode: push resets the addressed send (7.75 mixer slot, same as V-Pot
+    // idx) to unity (0 dB, vol=1.0) through the same probe path so it records, then
+    // finalises the single-point edit at once. Gap slot → no-op.
+    if (g_uf1ChannelSubMode.load() == 2) {
+        MediaTrack* focusTr = uf1FocusedTrack_();
+        if (!focusTr) return;
+        const CombinedSlot cs = combinedSendSlot_(focusTr, g_uf1SendGroup.load() * 4 + idx);
+        if (cs.apiIndex < 0) return;
+        StripRoute r;
+        r.track = focusTr; r.sendCategory = cs.category;
+        r.sendIndex = cs.apiIndex; r.valid = true;
+        const int strip = 8 + idx;
+        writeRouteVolAutomation_(r, strip, 1.0);
+        finishRouteVolEdit_(strip);
+        g_sendVolEditUntilMs[strip] = 0;
         return;
     }
 
@@ -19351,6 +19718,150 @@ void uf1PaintChannel_()
         if (force || int(bankLOn) != sBL) { sBL = bankLOn; navLed(0x09, bankLOn); }
         if (force || int(bankROn) != sBR) { sBR = bankROn; navLed(0x0b, bankROn); }
         if (force || int(masterOn)!= sM)  { sM  = masterOn; navLed(0x21, masterOn); }
+
+        // General per-button LED pass — SHIFT + the other bindable transport/mode
+        // buttons LIGHT UP from their bound action's state, and MODIFIER-AWARE so
+        // each button shows its held-modifier slot's colour like the UF8 (Frank
+        // 2026-07-31: "bringst du shift zum leuchten und die ganzen anderen LEDs,
+        // off/read/wrt/trim etc." + "die buttons sollten ihre SHIFT-led-farbe zeigen
+        // wenn shift gehalten wird"). Mirrors the UF8 resolver (resolveLed_ ~25394):
+        //   • MODIFIER: currentModifierSnapshot() (same shift the UF1 SHIFT key feeds
+        //     via mod_shift). No modifier → Plain slot; hold SHIFT/Cmd/Ctrl → that
+        //     modifier's slot. Folded into the change-detect key so the LEDs repaint
+        //     on the modifier edge.
+        //   • STATE (Plain) = bindingHasActiveSlot_(bd) — built-in stateOf + REAPER
+        //     GetToggleCommandState2 across all modifier slots. So SHIFT (mod_shift),
+        //     FLIP (uf1_flip), Cycle (repeat 1068), Click (metronome 40364) and any
+        //     user-bound auto_read/write/trim/latch/touch toggle light when active.
+        //     Play/Rec are momentary → transport reality (GetPlayState), Plain only.
+        //   • STATE (modifier held) = the button is ARMED (has an action for that
+        //     modifier) → bright; unarmed with an engaged Plain action (e.g. the held
+        //     SHIFT key itself) stays lit; otherwise dark.
+        //   • COLOUR = the resolved slot's effective LED (effectiveLedActive/Inactive:
+        //     slot override wins, else binding-level) — this is the per-modifier
+        //     "shift colour" the user set — through the FF38 GRB frame (buildColourRgb)
+        //     + FF39 state (buildLedLevel), + FF3B enable on force. Empty binding →
+        //     dark unless label / per-slot LED / ledShowWhenEmpty. These are REGULAR
+        //     buttons: NO key-1-only FF38 special case (that was ONLY soft-key id 0x01).
+        // LED ids are DERIVED (device_btn_id − 0x18) — HW-CONFIRMED as the rule for
+        // every tested pair, but HW-UNVERIFIED for these specific buttons → HW-verify.
+        // Excludes buttons driven above/elsewhere (nav cross, arrows, bank ◄►, 5-8,
+        // master, solo/cut/sel, display soft-keys 1-4).
+        struct Uf1BtnLed { uf8::bindings::ButtonId id; uint8_t led; };
+        static const Uf1BtnLed kUf1BtnLeds[] = {
+            { uf8::bindings::ButtonId::Uf1Shift,          0x1e },  // btn 0x36
+            { uf8::bindings::ButtonId::Uf1Flip,           0x20 },  // btn 0x38
+            { uf8::bindings::ButtonId::Uf1Btn360,         0x0d },  // btn 0x25
+            { uf8::bindings::ButtonId::Uf1Scrub,          0x0f },  // btn 0x27
+            { uf8::bindings::ButtonId::Uf1Cycle,          0x1a },  // btn 0x32
+            { uf8::bindings::ButtonId::Uf1Click,          0x1b },  // btn 0x33
+            { uf8::bindings::ButtonId::Uf1SecLeft,        0x18 },  // btn 0x30
+            { uf8::bindings::ButtonId::Uf1SecRight,       0x19 },  // btn 0x31
+            { uf8::bindings::ButtonId::Uf1SecKey1,        0x1c },  // btn 0x34
+            { uf8::bindings::ButtonId::Uf1SecKey2,        0x1d },  // btn 0x35
+            { uf8::bindings::ButtonId::Uf1Rwd,            0x22 },  // btn 0x3a
+            { uf8::bindings::ButtonId::Uf1Ffw,            0x23 },  // btn 0x3b
+            { uf8::bindings::ButtonId::Uf1Stop,           0x24 },  // btn 0x3c
+            { uf8::bindings::ButtonId::Uf1Play,           0x25 },  // btn 0x3d
+            { uf8::bindings::ButtonId::Uf1Rec,            0x26 },  // btn 0x3e
+            { uf8::bindings::ButtonId::Uf1ChannelSoftKey, 0x00 },  // btn 0x18
+        };
+        constexpr size_t kUf1BtnLedN = sizeof(kUf1BtnLeds) / sizeof(kUf1BtnLeds[0]);
+        static int  sBtnLed[kUf1BtnLedN];
+        static bool sBtnLedInit = false;
+        if (!sBtnLedInit) { for (auto& v : sBtnLed) v = -1; sBtnLedInit = true; }
+        {
+            const int layer = uf8::bindings::getActiveLayer();
+            const int psNow = GetPlayState();
+            // Modifier-aware (Frank HW 2026-07-31: "die buttons sollten ihre
+            // SHIFT-led-farbe zeigen wenn shift gehalten wird"). One snapshot for the
+            // whole pass — the SAME modifier the UF1 SHIFT key feeds via mod_shift.
+            const auto mod = uf8::bindings::currentModifierSnapshot();
+            const int  mi  = static_cast<int>(mod);
+            for (size_t k = 0; k < kUf1BtnLedN; ++k) {
+                const uf8::bindings::Binding bd =
+                    uf8::bindings::getBinding(layer, kUf1BtnLeds[k].id);
+                const auto& plainSlot = bd.shortPress[
+                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                const auto& modSlot   = bd.shortPress[mi];
+                // Per-modifier resolution, mirroring the UF8 (resolveLed_ ~25394):
+                // pick the slot for the held modifier, decide state, then take that
+                // slot's effective LED (slot override wins, else binding-level).
+                bool on = false;              // ACTIVE vs INACTIVE colour + FF39 byte
+                bool show = false;            // false → LED dark
+                const uf8::bindings::ActionSlot* colSlot = &plainSlot;
+                if (mod == uf8::bindings::Modifier::Plain) {
+                    // Base view: today's behaviour. State across all modifier slots;
+                    // Play/Rec are momentary (no toggle state) → transport reality.
+                    on = bindingHasActiveSlot_(bd);
+                    if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Play)
+                        on = (psNow & 1) != 0;   // playing
+                    else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Rec)
+                        on = (psNow & 4) != 0;   // recording
+                    // Empty binding → dark, unless it carries a label / per-slot LED /
+                    // ledShowWhenEmpty (superset of the DAW soft-key emptiness test).
+                    const bool customLed =
+                        plainSlot.led.hasActive || plainSlot.led.hasInactive;
+                    show = !uf8::bindings::slotIsEmpty(plainSlot) || !bd.label.empty()
+                           || bd.ledShowWhenEmpty || customLed;
+                } else if (!uf8::bindings::slotIsEmpty(modSlot)) {
+                    // Held modifier + this button HAS an action for it. If that action
+                    // is STATEFUL (a mode/toggle like the auto_* automation modes on
+                    // +SHIFT), light it by its state — the ACTIVE mode bright, the
+                    // others dim (so you see which automation mode is live). A stateless
+                    // (momentary) shift action just shows bright (armed preview). Either
+                    // way the colour is the slot's "shift colour" the user set.
+                    show = true; colSlot = &modSlot;
+                    bool stateful = false, active = false;
+                    if (modSlot.type == uf8::bindings::ActionType::Builtin
+                        && uf8::bindings::builtinHasState(modSlot.action)) {
+                        stateful = true;
+                        active = uf8::bindings::builtinStateOf(modSlot.action, modSlot.param);
+                    } else if (modSlot.type == uf8::bindings::ActionType::Reaper
+                               && !modSlot.action.empty()) {
+                        int aid = std::atoi(modSlot.action.c_str());
+                        if (aid <= 0) aid = NamedCommandLookup(modSlot.action.c_str());
+                        if (aid > 0) {
+                            const int st = GetToggleCommandState2(SectionFromUniqueID(0), aid);
+                            if (st >= 0) { stateful = true; active = (st == 1); }
+                        }
+                    }
+                    on = stateful ? active : true;
+                } else if (bindingHasActiveSlot_(bd)) {
+                    // No action for the held modifier, but a Plain action is engaged
+                    // (the SHIFT key itself while held, or a toggled-on button) — keep
+                    // it lit with its Plain appearance instead of blacking out. Empty
+                    // modifier slots never force-show otherwise (Frank 2026-05-17).
+                    on = true; show = true;   // colSlot stays plainSlot
+                }
+                uint32_t scaled = 0;
+                if (show) {
+                    uint8_t rgb3[3];
+                    uf8::bindings::Brightness bri;
+                    if (on) uf8::bindings::effectiveLedActive  (bd, *colSlot, rgb3, bri);
+                    else    uf8::bindings::effectiveLedInactive(bd, *colSlot, rgb3, bri);
+                    const bool bright = (bri == uf8::bindings::Brightness::Bright);
+                    const uint32_t rgb = (uint32_t(rgb3[0]) << 16)
+                                       | (uint32_t(rgb3[1]) << 8)
+                                       |  static_cast<uint32_t>(rgb3[2]);
+                    scaled = bright ? rgb   // dim = quarter brightness, per channel
+                        : (((((rgb >> 16) & 0xFF) / 4) << 16)
+                         | ((((rgb >> 8)  & 0xFF) / 4) << 8)
+                         |  (( rgb        & 0xFF) / 4));
+                }
+                // Fold the held modifier into the change-detect key so holding /
+                // releasing SHIFT (Cmd/Ctrl) re-sends every LED on the edge.
+                const int packed = (mi << 25) | (on ? (1 << 24) : 0)
+                                 | static_cast<int>(scaled & 0xFFFFFF);
+                if (force || packed != sBtnLed[k]) {
+                    sBtnLed[k] = packed;
+                    const uint8_t led = kUf1BtnLeds[k].led;
+                    if (force) g_uf1_dev->send(uf1::buildLed(led, true));        // FF3B enable
+                    g_uf1_dev->send(uf1::buildColourRgb(led, scaled));           // FF38 colour
+                    g_uf1_dev->send(uf1::buildLedLevel(led, on ? 0x00 : 0x11));  // FF39 state
+                }
+            }
+        }
     }
 
     if (meterView) {
@@ -19384,14 +19895,32 @@ void uf1PaintChannel_()
         // atomics the V-Pot painter publishes (g_uf1CsActivePages may be one tick old
         // here — self-corrects next frame; g_uf1CsPage is live).
         {
-            // DAW mode: the header shows the live soft-key BANK "N/10"; Plugin
-            // mode shows the SSL strip's param-page "N/M".
-            const bool dawB = (g_uf1ChannelSubMode.load() == 1);
-            const auto hdr = dawB
+            // Sends mode: the header shows the send-window group "N/M" (M = the
+            // group count the V-Pot painter published). DAW mode: a DYNAMIC bank
+            // shows its page "N/M" (like Sends); a static bank shows the live
+            // soft-key BANK "N/10". Plugin mode = the SSL strip's param-page "N/M".
+            const int subMode = g_uf1ChannelSubMode.load();
+            const bool dawDynHdr = subMode == 1
+                && uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
+                   != uf8::bindings::DynamicBankKind::None;
+            // Page header with the LIVE "N/M" cell for the current view…
+            auto hdr = (subMode == 2)
+                ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
+                                 std::max(1, g_uf1SendGroupCount.load()))
+                : dawDynHdr
+                ? uf1PageHeader_(g_uf1DynBankPage.load() + 1,
+                                 std::max(1, g_uf1DynBankPageCount.load()))
+                : (subMode == 1)
                 ? uf1PageHeader_(g_uf1SoftBank.load() + 1,
                                  uf8::bindings::kUf1SoftBankCount)
                 : uf1PageHeader_(g_uf1CsPage.load() + 1,
                                  std::max(1, g_uf1CsActivePages.load()));
+            // …then overlay the channel-encoder mode in the "REAPER" cell while MODE
+            // is held (picker) OR whenever the mode is non-default, so the picked mode
+            // stays visible after release. The pacer re-emits every tick. N/M is kept.
+            const EncoderMode em = g_uf1EncoderMode.load();
+            if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+                uf1SetEncoderField_(hdr, em);
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -19668,7 +20197,40 @@ void uf1PaintChannel_()
             bars[i * 2]     = static_cast<uint8_t>(pos);
             bars[i * 2 + 1] = bipolar ? 0x80 : 0x00;
         };
-        if (g_uf1ChannelSubMode.load() == 1) {
+        if (g_uf1ChannelSubMode.load() == 2) {
+            // Sends mode: the 4 V-Pots follow the focused track's 7.75 MIXER-SLOT
+            // send order (combinedSendSlot_ — reorderable, empty-slot gaps, hw outs,
+            // matching the mixer TCP + the UF8 send views) at slots [group*4 .. +3].
+            // NAME = routeName_ (dest-track / hw-out / "CH n" — ground truth), value
+            // = EFFECTIVE level dB via readRouteVolumeLinear_ (post-envelope once the
+            // send's UIVol index has been probed by a write, else the trim), bar =
+            // unipolar (fill from left) on the fader taper. Gap slot (apiIndex<0) →
+            // BLANK. Group count = ceil(combined-layout size / 4) (spans gaps, NOT
+            // GetTrackNumSends) for the "5-8" bank; window resets on a focus-track
+            // change. Receives excluded (sends only, per scope).
+            static MediaTrack* sSendTrack = nullptr;
+            if (tr != sSendTrack) { g_uf1SendGroup.store(0); sSendTrack = tr; }
+            std::vector<CombinedSlot> layout;
+            buildCombinedSendLayout_(tr, layout);
+            const int layoutSize = static_cast<int>(layout.size());
+            const int groups = std::max(1, (layoutSize + 3) / 4);
+            g_uf1SendGroupCount.store(groups);
+            if (g_uf1SendGroup.load() >= groups) g_uf1SendGroup.store(0);
+            const int grp = g_uf1SendGroup.load();
+            for (int i = 0; i < 4; ++i) {
+                const int slot = grp * 4 + i;
+                const CombinedSlot cs =
+                    (slot < layoutSize) ? layout[slot] : CombinedSlot{0, -1};
+                if (cs.apiIndex < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                StripRoute r;
+                r.track = tr; r.sendCategory = cs.category;
+                r.sendIndex = cs.apiIndex; r.valid = true;
+                const double v = readRouteVolumeLinear_(r, tr);   // EFFECTIVE level
+                sendVpotParam(uint8_t(i), routeName_(r), formatDbReadout(v) + "dB");
+                setBar(i, static_cast<double>(uf1VolToPos_(v))
+                            / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
+            }
+        } else if (g_uf1ChannelSubMode.load() == 1) {
             // DAW mode (Frank 2026-07-30): the 4 V-Pots are volume faders for the
             // window tracks (selected + next 3, or +4..+7 via the "5-8" group).
             // Rotate = volume, push = unity, "5-8" banks — all keyed off the SAME
@@ -19772,8 +20334,18 @@ void uf1PaintChannel_()
         // g_uf1CsActivePages is already current (the V-Pot painter published it earlier
         // this tick).
         {
-            const auto hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
-                                            std::max(1, g_uf1CsActivePages.load()));
+            // Sends mode shows the send-window group N/M; the live cycle header
+            // (above) re-streams it every tick, so this one-shot just avoids a
+            // wrong-N/M flash on the repaint that establishes the layout.
+            const int subMode = g_uf1ChannelSubMode.load();
+            auto hdr = (subMode == 2)
+                ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
+                                 std::max(1, g_uf1SendGroupCount.load()))
+                : uf1PageHeader_(g_uf1CsPage.load() + 1,
+                                 std::max(1, g_uf1CsActivePages.load()));
+            const EncoderMode em = g_uf1EncoderMode.load();
+            if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+                uf1SetEncoderField_(hdr, em);   // mode in the "REAPER" cell
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -19872,12 +20444,87 @@ void uf1PaintChannel_()
         // DAW mode: the 4 soft-keys are the live user soft-key bank's slots,
         // not the SSL strip's section keys.
         const bool dawBanks = (g_uf1ChannelSubMode.load() == 1);
+        const bool sendsSk  = (g_uf1ChannelSubMode.load() == 2);
         const int  bankNo   = g_uf1SoftBank.load();
+        // A DAW soft-key bank can be flagged dynamic (per bank): its 4 keys are
+        // computed live from the focused track (FX list / parameter groups /
+        // colours) via the surface-agnostic engine, not the 4 static slots. It is
+        // BANKABLE in groups of 4 via the "5-8" key, exactly like SENDS mode:
+        // g_uf1DynBankPage selects items [page*4 .. page*4+3] (ABSOLUTE — the UF1
+        // path never uses UF8's dynBankSlotBase_).
+        const auto dawDynKind = dawBanks
+            ? uf8::bindings::getUf1SoftBankDynamic(bankNo)
+            : uf8::bindings::DynamicBankKind::None;
+        const bool dawDyn = dawDynKind != uf8::bindings::DynamicBankKind::None;
+        MediaTrack* dawDynTr = dawDyn ? uf1FocusedTrack_() : nullptr;
+        if (dawDyn) {
+            // Publish the page count (ceil(items/4), min 1) for the "5-8" worker,
+            // and reset/clamp the page on bank / kind / focus-track change — the
+            // exact SENDS reset (sSendTrack) generalised to (bank, kind, track).
+            static int         sDynBank  = -1;
+            static int         sDynKind  = -1;
+            static MediaTrack* sDynTrack = nullptr;
+            const int items  = dynamicBankItemCountUf1_(dawDynKind, dawDynTr);
+            const int pages  = std::max(1, (items + 3) / 4);
+            g_uf1DynBankPageCount.store(pages);
+            const int kindI = static_cast<int>(dawDynKind);
+            if (bankNo != sDynBank || kindI != sDynKind || dawDynTr != sDynTrack) {
+                g_uf1DynBankPage.store(0);
+                sDynBank = bankNo; sDynKind = kindI; sDynTrack = dawDynTr;
+            }
+            if (g_uf1DynBankPage.load() >= pages) g_uf1DynBankPage.store(0);
+        }
+        const int dawDynPage = dawDyn ? g_uf1DynBankPage.load() : 0;
         for (int i = 0; i < 4; ++i) {
             std::string label;
             bool haveLabel = false, on = false;
-            uf8::bindings::Binding dawSlot;   // populated only in DAW mode
-            if (dawBanks) {
+            uf8::bindings::Binding dawSlot;   // populated only in static DAW mode
+            // Per-key LED COLOUR (Frank HW-confirmed 2026-07-30: the display soft-key
+            // colour DOES work on the hardware). Driven only where there is an explicit
+            // colour — the DAW bank binding (color/inactiveColor) or a dynamic bank's
+            // class colour (DynSlotInfo.hasRgb). keyColRgb is the FULL rgb; keyColBright
+            // picks full vs quarter brightness in the LED block. Keys WITHOUT a colour
+            // keep the HW-verified state-only bytes (Plugin/CS/Sends/learned).
+            bool     keyHasColour = false;
+            bool     keyColBright = false;
+            uint32_t keyColRgb    = 0;
+            if (sendsSk) {
+                // Sends mode: soft-key i toggles the PRE/POST-fader mode of the send
+                // at the SAME 7.75 mixer slot as V-Pot i (combinedSendSlot_). Label =
+                // "PRE"/"POST" (blank for a gap); LED bright = PRE (I_SENDMODE != 0),
+                // dim = POST. STATE only — the display soft-key COLOUR protocol is
+                // undecoded, so NO buildColourRgb here (the LED block below sends the
+                // HW-verified buildLedPrimary/buildLedLevel state bytes off `on`).
+                haveLabel = true;
+                const CombinedSlot cs =
+                    combinedSendSlot_(tr, g_uf1SendGroup.load() * 4 + i);
+                if (cs.apiIndex >= 0) {
+                    const int mode = static_cast<int>(GetTrackSendInfo_Value(
+                        tr, cs.category, cs.apiIndex, "I_SENDMODE"));
+                    const bool pre = (mode != 0);
+                    label = pre ? "PRE" : "POST";
+                    on = pre;
+                }
+                // gap slot → blank label + LED off
+            } else if (dawDyn) {
+                // Computed key from the focused track at the ABSOLUTE item index
+                // page*4 + i. label + on-state + optional CLASS COLOUR come from the
+                // same DynSlotInfo the UF8/UC1 dynamic banks render (FxBank: CS yellow /
+                // BC red / UF8-mapped blue; TrackColours: the swatch). An empty slot
+                // yields a blank label (present=false). Colour drives the FF38 GRB path
+                // (Frank HW-confirmed the display soft-key colour works); led 2=bright,
+                // 1=dim, 0=dark. Plain FX (no hasRgb) keep the state-only bytes.
+                const DynSlotInfo di =
+                    dynamicBankSlotUf1_(dawDynKind, dawDynTr, dawDynPage * 4 + i);
+                label = di.label;
+                haveLabel = true;
+                on = (di.led >= 2);   // bright when the slot's LED hint is "on"
+                if (di.present && di.hasRgb) {
+                    keyHasColour = true;
+                    keyColBright = (di.led >= 2);
+                    keyColRgb    = (di.led == 0) ? 0u : di.rgb;   // dark when bypassed/off
+                }
+            } else if (dawBanks) {
                 // Label from the bank slot (its own label, else the built-in's
                 // display name); blank = unassigned. LED follows the bound
                 // action's engaged state exactly like the UF8 soft-keys —
@@ -19894,6 +20541,20 @@ void uf1PaintChannel_()
                     label = uf8::bindings::builtinDisplayName(sp.action);
                 haveLabel = true;
                 on = bindingHasActiveSlot_(dawSlot);
+                // LED colour from the binding (active vs inactive colour + brightness),
+                // like the UF8 soft-keys — Frank assigns these in Settings → Bindings →
+                // UF1 and HW-confirmed they render. An unassigned slot (blank label) goes
+                // dark unless ledShowWhenEmpty. Drives the FF38 GRB path in the LED block.
+                keyHasColour = true;
+                if (label.empty() && !dawSlot.ledShowWhenEmpty) {
+                    keyColRgb = 0; keyColBright = false;   // empty → dark
+                } else {
+                    const auto& c = on ? dawSlot.color : dawSlot.inactiveColor;
+                    keyColBright = (on ? dawSlot.brightness : dawSlot.inactiveBrightness)
+                                   == uf8::bindings::Brightness::Bright;
+                    keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
+                              | static_cast<uint32_t>(c[2]);
+                }
             } else if (skLearned) {
                 // Learned: pack the button-mapped params; blank keys past the end.
                 const int flat = skPage * 4 + i;
@@ -19923,7 +20584,7 @@ void uf1PaintChannel_()
                     if (abState < 0 && skTr) uf8::readPluginToggleStates(skTr, abState, hqState);
                     on = (abState == 0);   // bright = comparing (B active), as the UF8 LED
                 } else if (sk.act == Uf1CsSkAct::StripMode) {
-                    on = g_pluginFaderMode.load();   // PLUG-IN = SSL Strip Mode engaged
+                    on = g_uf1StripMode.load();   // PLUG-IN = SSL Strip Mode engaged (UF1-local)
                 } else {
                     const int p = uf1CsSoftKeyParam_(skTr, skFx, skType, skPage, i);
                     if (p >= 0) on = TrackFX_GetParamNormalized(skTr, skFx, p) > 0.5;
@@ -19938,36 +20599,35 @@ void uf1PaintChannel_()
                 pb.insert(pb.end(), label.begin(), label.end());
                 g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
             }
-            // Soft-key LED (Frank-authorised guess 2026-07-29, grounded in cap106 +
-            // cap64/cap73). IDs 0x01-0x04 = btn − 0x18, HW-CONFIRMED as the display-
-            // soft-key LEDs by cap106. Scheme = the UF8 FF38+FF39(+FF3B) one, byte-
-            // identical to the working arrow/Solo LEDs: lit = FF38 0xff + FF39 0x00,
-            // off/dim = FF38 0x11 + FF39 0x11 (arrow-proven; cap106 id 0x02 time-
-            // ordered). SOFT-KEY 1 (id 0x01) is SPECIAL: cap106 drives it via FF38
-            // ALONE (enum values 0xf0/…), NEVER FF39 — sending FF39 to 0x01 is what
-            // stuck the rectangle, so key 1 gets FF38-only (0xf0 on / 0x00 off). The
-            // FF3B enable is (re)asserted on `changed`, like Solo/Cut. No SSL strip →
-            // on=false → keys go dim/off. NB the exact channel-view on-COLOUR is the
-            // guessed part; ids + scheme + the no-FF39-on-0x01 rule are captured.
-            // DAW + Plugin use the SAME HW-verified soft-key LED bytes
-            // (buildLedPrimary FF38 + buildLedLevel FF39 + the key-1-only rule,
-            // cap106). `on` follows the bound action's engaged state in DAW
-            // mode (bindingHasActiveSlot_, set above) and the SSL toggle in
-            // Plugin mode → bright engaged / dim idle. Per-binding LED COLOUR
-            // is NOT driven: the earlier buildColourRgb attempt dropped the
-            // FF39 the keys 2-4 need and the soft-key colour protocol isn't
-            // decoded — that needs a capture (Frank 2026-07-30). Until then the
-            // LEDs track STATE, not colour.
-            const int ledState = on ? 1 : 0;
+            // Soft-key LED. IDs 0x01-0x04 = btn − 0x18 (cap106, HW-CONFIRMED). Scheme =
+            // the UF8 FF38(+FF39, +FF3B enable) one. SOFT-KEY 1 (id 0x01) is FF38-ONLY
+            // (cap106: sending FF39 to 0x01 sticks the rectangle). Two render paths:
+            //  • keyHasColour (a DAW static-bank binding colour, or a dynamic bank's
+            //    class colour) → the FF38 GRB frame (buildColourRgb) scaled by brightness,
+            //    PLUS the FF39 state byte on keys 2-4. Frank HW-confirmed the display
+            //    soft-key colour renders (2026-07-30). The earlier "revert to state-only"
+            //    was WRONG: its bug was DROPPING the FF39 keys 2-4 need — here we send
+            //    BOTH (FF38 colour + FF39), so the colour shows and keys 2-4 stay lit.
+            //  • otherwise (Plugin/CS, Sends, learned) → the HW-verified state-only bytes
+            //    (buildLedPrimary FF38 + buildLedLevel FF39, key-1-only rule), unchanged.
+            uint32_t scaled = keyColRgb;
+            if (!keyColBright)        // dim = quarter brightness, per channel
+                scaled = ((((keyColRgb >> 16) & 0xFF) / 4) << 16)
+                       | ((((keyColRgb >> 8)  & 0xFF) / 4) << 8)
+                       |  (( keyColRgb        & 0xFF) / 4);
+            const int ledState = keyHasColour
+                ? ((1 << 30) | (on ? (1 << 24) : 0) | static_cast<int>(scaled & 0xFFFFFF))
+                : (on ? 1 : 0);
             if (changed || ledState != sSkLed[i]) {
                 sSkLed[i] = ledState;
                 const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
                 if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
-                if (i == 0) {
-                    // FF38-only (cap106: 0x01 never gets FF39). on = 0xf0 bright;
-                    // off = 0x11 = the same dim level the FF38 side of keys 2-4 uses,
-                    // so key 1 dims when inactive instead of going fully dark
-                    // (Frank HW 2026-07-29: "leuchtet bright aktiv aber nicht dimm").
+                if (keyHasColour) {
+                    g_uf1_dev->send(uf1::buildColourRgb(id, scaled));            // FF38 colour
+                    if (i != 0)
+                        g_uf1_dev->send(uf1::buildLedLevel(id, on ? 0x00 : 0x11)); // FF39 state
+                } else if (i == 0) {
+                    // FF38-only. on = 0xf0 bright; off = 0x11 dim (Frank HW 2026-07-29).
                     g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
                 } else {
                     g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
@@ -20005,16 +20665,38 @@ void uf1PaintChannel_()
     const bool touched = g_uf1FaderTouched.load()
         || (nowT - sLastTouchSeen < std::chrono::milliseconds(150));
     const bool flip = g_uf1Flip.load();   // FLIP: fader rides Pan instead of Volume
-    // SSL Strip Mode (PLUG-IN key → g_pluginFaderMode): the fader drives the SSL
-    // strip's Out-Gain / Fader Level plug-in param (csFaderForTrack — CS 2 / 4K B/
+    // SSL Strip Mode (PLUG-IN key → g_uf1StripMode, UF1-LOCAL): the fader drives the
+    // SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack — CS 2 / 4K B/
     // E/G / 360 Link / user-CS) instead of track volume, exactly like the UF8. The
     // plug-in fader is a plain 0..1 control → LINEAR pos↔norm (no dB curve). Wins
     // over FLIP. No CS on the track → falls back to the normal volume/FLIP path so
     // the fader still does something. (UF8-mode learned plug-ins with a faderVst3Param
     // are a follow-up — csFaderForTrack already covers SSL + user-CS maps.)
-    const bool stripMode = g_pluginFaderMode.load();
+    const bool stripMode = g_uf1StripMode.load();
     const CsFaderHandle csf = stripMode ? csFaderForTrack(tr) : CsFaderHandle{ -1, -1 };
     const bool stripFader = stripMode && csf.vst3Param >= 0;
+    // SENDS + FLIP send-on-fader: the fader rides the FIRST of the 4 shown sends
+    // (7.75 mixer slot g_uf1SendGroup*4 + 0, combinedSendSlot_) of the focused
+    // track — motor FOLLOWS the EFFECTIVE level (readRouteVolumeLinear_), a MOVE
+    // writes through the SAME value-diff-probe path as the SENDS V-Pots
+    // (writeRouteVolAutomation_, reserved gesture slot 12) so it records automation
+    // and hits the same physical send the name shows, on the SAME dB fader curve as
+    // track volume. Strip Mode keeps its documented FLIP win; a blank/gap first slot
+    // leaves sendFader false so the fader falls back to track volume.
+    constexpr int kSendFaderStrip = 12;   // reserved UF1 SENDS FLIP-fader gesture slot
+    const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFader;
+    StripRoute sendRoute;
+    if (sendFlip) {
+        const CombinedSlot cs = combinedSendSlot_(tr, g_uf1SendGroup.load() * 4);
+        if (cs.apiIndex >= 0) {
+            sendRoute.track = tr; sendRoute.sendCategory = cs.category;
+            sendRoute.sendIndex = cs.apiIndex; sendRoute.valid = true;
+        }
+    }
+    const bool sendFader = sendRoute.valid;
+    // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
+    // so Touch-mode recording stops + snaps back like the surface send-fader path.
+    static bool sSendFaderEditing = false;
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
@@ -20022,7 +20704,11 @@ void uf1PaintChannel_()
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
                 TrackFX_SetParamNormalized(tr, csf.fxIndex, csf.vst3Param, n);
             }
-            else if (flip) CSurf_OnPanChange(tr, uf1PosToPan_(pos), /*relative*/false);
+            else if (sendFader) {
+                writeRouteVolAutomation_(sendRoute, kSendFaderStrip, uf1PosToVol_(pos));
+                sSendFaderEditing = true;
+            }
+            else if (flip && !sendFlip) CSurf_OnPanChange(tr, uf1PosToPan_(pos), /*relative*/false);
             else      CSurf_OnVolumeChange(tr, uf1PosToVol_(pos), false);
             // Echo the user's hand position to the firmware's MOTOR TARGET every
             // tick while the motor is limp. FF 1E while limp only updates the
@@ -20040,11 +20726,20 @@ void uf1PaintChannel_()
         // drag echo), so re-enable lands clean. Also keep following DAW edits when
         // the fader is idle — the SSL strip Fader Level under Strip Mode, Pan under
         // FLIP, else track volume.
+        // Finalise a send Touch edit ONCE on release (isend=1) before following —
+        // finishRouteVolEdit_ works from slot 12's stored gesture state, so it is
+        // correct even if the mode/route changed since the last write.
+        if (sSendFaderEditing) {
+            finishRouteVolEdit_(kSendFaderStrip);
+            sSendFaderEditing = false;
+        }
         uint16_t pos;
         if (stripFader) {
             const double n = TrackFX_GetParamNormalized(tr, csf.fxIndex, csf.vst3Param);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
-        } else if (flip) {
+        } else if (sendFader) {
+            pos = uf1VolToPos_(readRouteVolumeLinear_(sendRoute, tr));   // motor follows EFFECTIVE
+        } else if (flip && !sendFlip) {
             pos = uf1PanToPos_(GetMediaTrackInfo_Value(tr, "D_PAN"));
         } else {
             pos = uf1VolToPos_(GetMediaTrackInfo_Value(tr, "D_VOL"));
@@ -20065,11 +20760,17 @@ void uf1PaintChannel_()
         static bool sMenuShown = false;
         static int  sMenuSel   = -2;
         if (modeMenu) {
+            // 4 view modes on the 4 soft-keys (Frank 2026-07-30): SK1 PLUGIN /
+            // SK2 DAW / SK3 METER / SK4 SENDS. sel = the active soft-key INDEX
+            // (Sends lights SK4, not SK3). The encoder-mode picker is a separate
+            // gesture (hold MODE + turn the channel encoder); its feedback is the
+            // desktop mode-banner, so it needs no soft-key here.
+            const int sm = g_uf1ChannelSubMode.load();
             const int sel = g_uf1MeterView.load() ? 2
-                          : (g_uf1ChannelSubMode.load() == 1 ? 1 : 0);
+                          : (sm == 2 ? 3 : (sm == 1 ? 1 : 0));
             if (changed || !sMenuShown || sel != sMenuSel) {
                 sMenuShown = true; sMenuSel = sel;
-                static const char* const kMenu[4] = { "PLUGIN", "DAW", "METER", "" };
+                static const char* const kMenu[4] = { "PLUGIN", "DAW", "METER", "SENDS" };
                 for (int i = 0; i < 4; ++i) {
                     const std::string_view lbl = kMenu[i];
                     std::vector<uint8_t> pb; pb.reserve(1 + lbl.size());
@@ -25963,9 +26664,11 @@ void onTimer()
         static bool          mbInit = false;
         static SelectionMode mbLastSel = SelectionMode::Norm;
         static EncoderMode   mbLastEnc = EncoderMode::ChSelect;
+        static EncoderMode   mbLastUf1Enc = EncoderMode::ChSelect;
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
+        const EncoderMode   uf1em = g_uf1EncoderMode.load();
         // Persistent current-mode readout ("<sel>\t<enc>") for the focused panel's
         // always-on mode indicator — the banner below is transient/on-change only,
         // so a panel started mid-session needs the live state too. Diff-guarded.
@@ -25981,12 +26684,18 @@ void onTimer()
             mbInit = true;
             mbLastSel = sm;
             mbLastEnc = em;
-        } else if (sm != mbLastSel || em != mbLastEnc) {
+            mbLastUf1Enc = uf1em;
+        } else if (sm != mbLastSel || em != mbLastEnc || uf1em != mbLastUf1Enc) {
+            // UF1's own encoder mode (hold MODE + turn the channel encoder) gets its
+            // own banner so the picker has feedback without a UF1-screen readout.
             std::string text = (sm != mbLastSel)
                 ? std::string("Sel \xE2\x80\xA2 ") + selectionModeFriendly(sm)
-                : std::string("Encoder \xE2\x80\xA2 ") + encoderModeFriendly(em);
+                : (em != mbLastEnc)
+                  ? std::string("Encoder \xE2\x80\xA2 ") + encoderModeFriendly(em)
+                  : std::string("UF1 Enc \xE2\x80\xA2 ") + encoderModeFriendly(uf1em);
             mbLastSel = sm;
             mbLastEnc = em;
+            mbLastUf1Enc = uf1em;
             char buf[160];
             snprintf(buf, sizeof(buf), "%s\t%u", text.c_str(), ++mbSeq);
             SetExtState("rea_sixty", "mode_banner", buf, false);
@@ -27111,6 +27820,7 @@ void onTimer()
     g_followGuiPendingTr.store(nullptr, std::memory_order_relaxed);
     g_followGuiPendingFx.store(-1, std::memory_order_relaxed);
     uf8::bindings::tickPending();
+    uf8::bindings::tickLongPressThreshold();
     drainInputQueue();
     commitDebouncedTouchReleases();
     // V-Pot send-pan has no touch-release; finalise its automation edit once the
@@ -27122,6 +27832,14 @@ void onTimer()
                 && now > g_sendPanEditUntilMs[s]) {
                 finishRoutePanEdit_(s);
                 g_sendPanEditUntilMs[s] = 0;
+            }
+        // UF1 SENDS V-Pot VOL (slots 8..11) — same idle-timed finalise; the FLIP
+        // fader (slot 12) finalises on its own touch-release, not here.
+        for (int s = 8; s <= 11; ++s)
+            if (g_sendEditUiIdx[s] != INT_MIN && g_sendVolEditUntilMs[s]
+                && now > g_sendVolEditUntilMs[s]) {
+                finishRouteVolEdit_(s);
+                g_sendVolEditUntilMs[s] = 0;
             }
     }
     if (g_sync) {
@@ -28934,6 +29652,69 @@ void reasixty_setUf1SoftBank(int bank)
     g_uf1SoftBank.store(bank);
 }
 
+// ---- UF1 channel-encoder mode ring (user-editable order + visibility) ------
+// Read/written by the Settings → Bindings → UF1 editor. Main-thread only.
+// Total number of selectable modes (= kEncoderModeCount). Ring positions
+// 0..total-1 index g_uf1EncoderSeq; mode ints 0..total-1 index visibility.
+int reasixty_uf1EncoderModeTotal()
+{
+    return kEncoderModeCount;
+}
+
+// The mode int occupying ring position `pos` (0..total-1).
+int reasixty_uf1EncoderSeqAt(int pos)
+{
+    if (pos < 0 || pos >= kEncoderModeCount) return 0;
+    return g_uf1EncoderSeq[pos].load();
+}
+
+// Whether the picker offers `modeInt` (indexed by EncoderMode int).
+bool reasixty_uf1EncoderModeVisible(int modeInt)
+{
+    if (modeInt < 0 || modeInt >= kEncoderModeCount) return false;
+    return g_uf1EncoderVisible[modeInt].load();
+}
+
+// Friendly (long) display name for `modeInt`.
+const char* reasixty_uf1EncoderModeName(int modeInt)
+{
+    if (modeInt < 0 || modeInt >= kEncoderModeCount) return "";
+    return encoderModeFriendly(static_cast<EncoderMode>(modeInt));
+}
+
+// Toggle `modeInt`'s visibility, persist, and keep the live mode valid: never
+// leave zero visible (force ChSelect visible), and if we just hid the currently
+// active g_uf1EncoderMode, advance it to the next visible mode.
+void reasixty_setUf1EncoderModeVisible(int modeInt, bool on)
+{
+    if (modeInt < 0 || modeInt >= kEncoderModeCount) return;
+    g_uf1EncoderVisible[modeInt].store(on);
+    // Guard: at least one mode must stay visible.
+    bool any = false;
+    for (int m = 0; m < kEncoderModeCount; ++m)
+        if (g_uf1EncoderVisible[m].load()) { any = true; break; }
+    if (!any)
+        g_uf1EncoderVisible[static_cast<int>(EncoderMode::ChSelect)].store(true);
+    // If we just hid the live mode, move it onto a visible one.
+    if (!on && static_cast<int>(g_uf1EncoderMode.load()) == modeInt)
+        uf1EncoderAdvancePastHidden_(modeInt);
+    uf1EncoderRingPersist_();
+}
+
+// Swap the ring entry at `pos` with its neighbour `pos+dir` (dir = -1 up /
+// +1 down), then persist. Bounds-checked (out-of-range = no-op).
+void reasixty_uf1EncoderMoveSeq(int pos, int dir)
+{
+    const int other = pos + dir;
+    if (pos   < 0 || pos   >= kEncoderModeCount) return;
+    if (other < 0 || other >= kEncoderModeCount) return;
+    const int a = g_uf1EncoderSeq[pos].load();
+    const int b = g_uf1EncoderSeq[other].load();
+    g_uf1EncoderSeq[pos].store(b);
+    g_uf1EncoderSeq[other].store(a);
+    uf1EncoderRingPersist_();
+}
+
 void reasixty_identifyUf8()
 {
     g_identifyUf8UntilMs.store(nowMs_() + kIdentifyDurationMs);
@@ -29463,6 +30244,29 @@ void reasixty_setTrackBankColour(int i, uint32_t rgb)
     char k[32]; std::snprintf(k, sizeof(k), "track_bank_col_%d", i);
     char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
     SetExtState("rea_sixty", k, v, true);
+}
+std::string reasixty_trackBankColourName(int i)
+{
+    ensureDynCfgLoaded_();
+    if (i >= 0 && i < 8) {
+        std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+        if (!g_trackBankColourName[i].empty())
+            return g_trackBankColourName[i];
+    }
+    char b[16]; std::snprintf(b, sizeof(b), "Col %d",
+                              (i >= 0 && i < 8) ? i + 1 : 1);
+    return b;
+}
+void reasixty_setTrackBankColourName(int i, const char* name)
+{
+    if (i < 0 || i >= 8) return;
+    ensureDynCfgLoaded_();
+    {
+        std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+        g_trackBankColourName[i] = (name ? name : "");
+    }
+    char k[40]; std::snprintf(k, sizeof(k), "track_bank_col_name_%d", i);
+    SetExtState("rea_sixty", k, (name ? name : ""), true);
 }
 int  reasixty_dynBankCtrl(int kind)
 {
@@ -32650,6 +33454,123 @@ void registerBindingHandlers()
         "UF1 time display: step format (Bars / Time / Samples)", false
     });
 
+    // ── UF1 factory-default builtins ─────────────────────────────────
+    // These were hardcoded fall-through handlers in onUf1Event; they are
+    // now real, rebindable bindings (seeded as factory defaults in
+    // Bindings.cpp) so Settings → Bindings shows their action instead of
+    // "none". Every handler is worker-thread safe: atomic stores or
+    // queueInput only, mirroring EXACTLY what the removed hardcoded block
+    // did (threading rule feedback-reaper-api-input-thread — no REAPER API
+    // off the main thread). Frank 2026-07-31.
+
+    // Channel V-Pot push (0x09-0x0C) — reset the current-page V-Pot param
+    // to its SSL-360 default. param 0..3 selects the V-Pot. Channel view
+    // only (mirrors the removed !g_uf1MeterView gate; the drain resolves
+    // the on-screen CS/BC strip + page param on the main thread and no-ops
+    // on a non-SSL strip). queueInput only → worker-safe.
+    registerBuiltin("uf1_vpot_reset", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing || g_uf1MeterView.load()) return;
+            if (param < 0 || param > 3) return;
+            queueInput({PendingInput::Uf1CsVpotPush,
+                        static_cast<uint8_t>(param), 0.0});
+        },
+        nullptr, "UF1: V-Pot push to default", true
+    });
+
+    // FLIP (0x38) — swap the fader/V-Pot parameter assignment (UF1 UG p16:
+    // fader owns Volume, above-fader V-Pot owns Pan → FLIP swaps them).
+    // Toggles the UF1-local g_uf1Flip (NOT the UF8/UC1 g_flip); the main-
+    // thread fader follow / above-fader V-Pot read it. Both views. Atomic
+    // store only → worker-safe.
+    registerBuiltin("uf1_flip", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_uf1Flip.store(!g_uf1Flip.load());
+        },
+        [](int) { return g_uf1Flip.load(); },
+        "UF1: FLIP (swap V-Pot / fader)", false
+    });
+
+    // MASTER (0x39) — put the strip on the MASTER track (UC1 "track 00").
+    // uf1FocusedTrack_ reads g_uf1Master so the whole strip follows. Atomic
+    // store only → worker-safe.
+    registerBuiltin("uf1_master", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_uf1Master.store(!g_uf1Master.load());
+        },
+        [](int) { return g_uf1Master.load(); },
+        "UF1: MASTER track", false
+    });
+
+    // "5-8" (0x22) — DAW mode: page the dynamic soft-key bank (if one is
+    // active) else toggle the 4-track group; Sends mode: page the send
+    // window. Gated on the channel sub-mode exactly as the two removed
+    // hardcoded blocks. Atomic stores + a config-mutex read
+    // (getUf1SoftBankDynamic) only → worker-safe.
+    registerBuiltin("uf1_five_to_eight", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing || g_uf1MeterView.load()) return;
+            const int sub = g_uf1ChannelSubMode.load();
+            if (sub == 1) {
+                if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
+                    != uf8::bindings::DynamicBankKind::None) {
+                    const int cnt = std::max(1, g_uf1DynBankPageCount.load());
+                    g_uf1DynBankPage.store((g_uf1DynBankPage.load() + 1) % cnt);
+                } else {
+                    g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
+                }
+            } else if (sub == 2) {
+                const int cnt = std::max(1, g_uf1SendGroupCount.load());
+                g_uf1SendGroup.store((g_uf1SendGroup.load() + 1) % cnt);
+            }
+        },
+        nullptr, "UF1: 5-8 bank / group", false
+    });
+
+    // Bank ◄ / ► (0x21 / 0x23) — coarse track select, ±8 tracks. param
+    // sign = direction (>=0 → right/+, else left/-). queueInput only
+    // (applySelectRelative_ runs main-thread) → worker-safe. All views.
+    registerBuiltin("uf1_bank_step", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            const double d = (param >= 0) ? kUf1BankStep : -kUf1BankStep;
+            queueInput({PendingInput::Uf1SelectRelative, 0, d});
+        },
+        nullptr, "Bank \xC2\xB1""8 tracks", true
+    });
+
+    // Page ◄ / ► (0x24 / 0x26) — Meter view: page the meter screen's V-Pot
+    // parameter pages; Channel view: DAW mode pages the 10 soft-key banks,
+    // otherwise pages the SSL strip's p188 parameter pages (shared by the 4
+    // V-Pots + CS soft keys). param sign = direction. Atomic stores only →
+    // worker-safe. Mirrors the two removed arrow blocks EXACTLY.
+    registerBuiltin("uf1_page_step", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            const bool right = (param >= 0);
+            if (g_uf1MeterView.load()) {
+                const int scr = std::clamp(g_uf1MeterScreen.load(), 0, 3);
+                const int n   = kUf1MeterPageCount[scr];
+                const int dir = right ? 1 : (n - 1);
+                g_uf1MeterPage.store((g_uf1MeterPage.load() + dir) % n);
+                return;
+            }
+            const int dir = right ? 1 : -1;
+            if (g_uf1ChannelSubMode.load() == 1) {
+                constexpr int nb = uf8::bindings::kUf1SoftBankCount;
+                g_uf1SoftBank.store((g_uf1SoftBank.load() + dir + nb) % nb);
+            } else {
+                int np = g_uf1CsActivePages.load();
+                if (np < 1) np = 1;
+                g_uf1CsPage.store((g_uf1CsPage.load() % np
+                                   + (dir > 0 ? 1 : np - 1)) % np);
+            }
+        },
+        nullptr, "Soft-Key / Plug-in Page \xC2\xB1""1", true
+    });
+
     registerBuiltin("tcp_follows_selection_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -35045,6 +35966,66 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // 'Nav' (legacy) + anything else = ChSelect (factory default).
         else                                           g_encoderMode.store(EncoderMode::ChSelect);
     }
+    // UF1's OWN encoder mode + SSL Strip Mode persist across restart (Frank
+    // 2026-07-30 "ja"). Independent of the UF8 g_encoderMode above.
+    if (const char* v = GetExtState("rea_sixty", "uf1EncoderMode"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n >= kEncoderModeCount) n = 0;
+        g_uf1EncoderMode.store(static_cast<EncoderMode>(n));
+    }
+    // UF1 encoder-mode RING (user-editable order + visibility). Start from the
+    // factory default, then override from ExtState only if the stored CSV parses
+    // as a FULL permutation (seq) / full flag list (vis) — a malformed / partial
+    // value falls back to today's behaviour rather than a broken ring.
+    uf1EncoderRingDefaults_();
+    if (const char* v = GetExtState("rea_sixty", "uf1_enc_seq"); v && *v) {
+        int  seq[kEncoderModeCount];
+        bool seen[kEncoderModeCount] = { false };
+        int  n = 0;
+        bool ok = true;
+        for (const char* p = v; *p && n < kEncoderModeCount; ) {
+            char* end = nullptr;
+            long val = std::strtol(p, &end, 10);
+            if (end == p) { ok = false; break; }
+            if (val < 0 || val >= kEncoderModeCount || seen[val]) { ok = false; break; }
+            seen[val] = true;
+            seq[n++]  = static_cast<int>(val);
+            p = end;
+            while (*p == ',' || *p == ' ') ++p;
+        }
+        if (ok && n == kEncoderModeCount)
+            for (int k = 0; k < kEncoderModeCount; ++k)
+                g_uf1EncoderSeq[k].store(seq[k]);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1_enc_vis"); v && *v) {
+        bool vis[kEncoderModeCount];
+        int  n = 0;
+        bool ok = true;
+        for (const char* p = v; *p && n < kEncoderModeCount; ) {
+            char* end = nullptr;
+            long val = std::strtol(p, &end, 10);
+            if (end == p) { ok = false; break; }
+            vis[n++] = (val != 0);
+            p = end;
+            while (*p == ',' || *p == ' ') ++p;
+        }
+        if (ok && n == kEncoderModeCount) {
+            bool any = false;
+            for (int m = 0; m < kEncoderModeCount; ++m) if (vis[m]) { any = true; break; }
+            if (!any) vis[static_cast<int>(EncoderMode::ChSelect)] = true;
+            for (int m = 0; m < kEncoderModeCount; ++m)
+                g_uf1EncoderVisible[m].store(vis[m]);
+        }
+    }
+    // Guard: the restored live mode must be visible — otherwise the picker's
+    // first turn would jump unexpectedly. If it's hidden, advance to a visible.
+    {
+        const int lm = static_cast<int>(g_uf1EncoderMode.load());
+        if (lm < 0 || lm >= kEncoderModeCount || !g_uf1EncoderVisible[lm].load())
+            uf1EncoderAdvancePastHidden_(lm < 0 || lm >= kEncoderModeCount ? 0 : lm);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1StripMode"); v && *v)
+        g_uf1StripMode.store(std::atoi(v) != 0);
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
     // the user sees on the SSL plug-in immediately. The atomic's

@@ -23,6 +23,7 @@
 #include <initializer_list>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <sys/stat.h>
 #include <unordered_map>
 #include <utility>
@@ -390,19 +391,39 @@ std::unordered_map<std::string, BuiltinDescriptor> g_builtins;
 // we restore (or invalidate) this slot.
 int g_savedLayer = -1;
 
-// Long-press support — measured from press-edge to release-edge per
-// (layer, button-id). dispatch() runs single-threaded on the libusb
-// worker thread, so this map needs no locking. Threshold is 500 ms
-// (matches generic "tap vs hold" UX expectations).
+// Long-press support — measured from press-edge per (layer, button-id).
+// Threshold is 500 ms (matches generic "tap vs hold" UX expectations).
 constexpr std::chrono::milliseconds kLongPressThreshold{500};
+
+// dispatch() runs on the INPUT threads (UF8 / UC1 / UF1 — three distinct
+// threads), and tickLongPressThreshold() polls these same two maps from
+// the MAIN thread (onTimer). So every access to g_pressStart /
+// g_longPressStart MUST hold g_pressMx. The old "needs no locking"
+// comment predated the main-thread threshold poll and is no longer true.
+// Never call runSlot_ while holding this lock — a fired builtin can
+// re-enter dispatch on the same thread; collect under the lock, fire
+// after unlocking.
+std::mutex g_pressMx;
 
 // Per-press record so the long-press path knows both WHEN the press
 // started AND WHICH modifier was held at press time. Snapshot stays
 // stable across the press window even if the user releases the
 // modifier mid-hold — gives predictable Shift+button semantics.
+//
+// The long-press now fires WHILE HELD at the 0.5 s threshold (via
+// tickLongPressThreshold), not on the release edge — the UF1 sometimes
+// drops/reorders the button-release event, so a release-edge fire could
+// be lost. When a press arms a long-press, longArmed is set and longSlot
+// holds a COPY of the resolved long slot so the timer can fire it with no
+// binding lookup. longFired flips true the moment the timer fires it, so
+// the release edge cleans up without re-firing (short OR long).
 struct PressRecord {
     std::chrono::steady_clock::time_point start;
-    Modifier                              mod;
+    Modifier                              mod       = Modifier::Plain;
+    bool                                  longArmed = false;
+    bool                                  longFired = false;
+    ActionSlot                            longSlot;
+    ButtonId                              id        = ButtonId::None;
 };
 std::unordered_map<uint32_t, PressRecord> g_pressStart;
 
@@ -790,10 +811,64 @@ void seedFactoryDefaults_(Config& c)
     // built-in — REAPER has no equivalent). Rebindable like any other.
     L1[ButtonId::Uf1Btn360] = mkBuiltin("uf1_time_display_step",
                                         Behavior::Momentary, "360\xC2\xB0");
-    // All other UF1 buttons (NAV block/cross, arrows, display soft-keys,
-    // secondary transport, Flip/Master, V-Pot pushes) ship UNBOUND — the
-    // user assigns them in Settings → Bindings → UF1, matching how UF8
-    // ships Nav/Nudge unbound.
+    // NAV cross defaults to ZOOM (Frank 2026-07-30: "nav macht schon Sinn"),
+    // Up/Down/Left/Right → zoom in that axis, Centre → zoom-to-fit. Global
+    // REAPER-view actions, rebindable like any other UF1 control.
+    L1[ButtonId::Uf1NavUp]     = mkBuiltin("zoom_up",     Behavior::Momentary, "ZOOM \xE2\x96\xB2");
+    L1[ButtonId::Uf1NavDown]   = mkBuiltin("zoom_down",   Behavior::Momentary, "ZOOM \xE2\x96\xBC");
+    L1[ButtonId::Uf1NavLeft]   = mkBuiltin("zoom_left",   Behavior::Momentary, "ZOOM \xE2\x97\x82");
+    L1[ButtonId::Uf1NavRight]  = mkBuiltin("zoom_right",  Behavior::Momentary, "ZOOM \xE2\x96\xB8");
+    L1[ButtonId::Uf1NavCentre] = mkBuiltin("zoom_center", Behavior::Momentary, "FIT");
+    // Controls that used to be HARDCODED fall-throughs in onUf1Event now ship
+    // as real, rebindable factory defaults (their worker-safe builtins live in
+    // main.cpp) so the bindings editor shows the action instead of "none":
+    //  · SHIFT   → mod_shift  (Hold — same shared Shift modifier as UF8/UC1,
+    //                          incl. the double-click Fine latch).
+    //  · ENC push→ show_focused_plugin_gui (toggle the focused plug-in GUI).
+    //  · FLIP    → uf1_flip / MASTER → uf1_master (Toggle; LED = state).
+    //  · 5-8     → uf1_five_to_eight (DAW bank/group · Sends window).
+    //  · V-Pot 1-4 push → uf1_vpot_reset (param 0..3 = which V-Pot).
+    //  · Bank ◄ ►→ uf1_bank_step  (param -1/+1 = ±8 tracks).
+    //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key / plug-in page).
+    L1[ButtonId::Uf1Shift]       = mkBuiltin("mod_shift",              Behavior::Hold,      "SHIFT");
+    L1[ButtonId::Uf1ChannelPush] = mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "ENC PUSH");
+    L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
+    L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
+    L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
+    L1[ButtonId::Uf1Vpot1Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 1 PUSH", 255, 255, 255, 0);
+    L1[ButtonId::Uf1Vpot2Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 2 PUSH", 255, 255, 255, 1);
+    L1[ButtonId::Uf1Vpot3Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 3 PUSH", 255, 255, 255, 2);
+    L1[ButtonId::Uf1Vpot4Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 4 PUSH", 255, 255, 255, 3);
+    L1[ButtonId::Uf1BankLeft]    = mkBuiltin("uf1_bank_step", Behavior::Momentary, "BANK \xE2\x97\x82", 255, 255, 255, -1);
+    L1[ButtonId::Uf1BankRight]   = mkBuiltin("uf1_bank_step", Behavior::Momentary, "BANK \xE2\x96\xB8", 255, 255, 255, +1);
+    L1[ButtonId::Uf1ArrowLeft]   = mkBuiltin("uf1_page_step", Behavior::Momentary, "PAGE \xE2\x97\x82", 255, 255, 255, -1);
+    L1[ButtonId::Uf1ArrowRight]  = mkBuiltin("uf1_page_step", Behavior::Momentary, "PAGE \xE2\x96\xB8", 255, 255, 255, +1);
+    // Secondary transport +SHIFT = the 6 REAPER automation modes. The SSL UF1
+    // silk labels (OFF/READ/WRT/TRIM/LTCH/TCH) ARE this mapping (Frank 2026-07-31
+    // "steht schon in den abkürzungen der buttons"). Only the SHIFT slot is set —
+    // Plain stays user-bindable; the modifier-aware LED lights the active mode.
+    {
+        struct AutoSeed { ButtonId id; const char* action; const char* label; };
+        static const AutoSeed kAuto[6] = {
+            { ButtonId::Uf1SecLeft,  "auto_off",   "OFF"  },
+            { ButtonId::Uf1SecRight, "auto_read",  "READ" },
+            { ButtonId::Uf1Cycle,    "auto_write", "WRT"  },
+            { ButtonId::Uf1Click,    "auto_trim",  "TRIM" },
+            { ButtonId::Uf1SecKey1,  "auto_latch", "LTCH" },
+            { ButtonId::Uf1SecKey2,  "auto_touch", "TCH"  },
+        };
+        for (const auto& a : kAuto) {
+            auto& sp = L1[a.id].shortPress[static_cast<int>(Modifier::Shift)];
+            sp.type   = ActionType::Builtin;
+            sp.action = a.action;
+            sp.param  = 0;
+            sp.label  = a.label;
+        }
+    }
+    // The remaining UF1 buttons (above-fader V-Pot push, display soft-keys,
+    // channel soft-key, secondary transport, Scrub) ship UNBOUND — the user
+    // assigns them in Settings → Bindings → UF1, matching how UF8 ships
+    // Nav/Nudge unbound.
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -1251,6 +1326,27 @@ void serializeUf1SoftBanks_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Per-bank UF1 dynamic-kind flags. Flat list, only non-None entries written
+// (mirrors serializeSubBankDynamic_). Empty ⇒ nothing emitted.
+void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+        if (c.uf1SoftBankDynamic[b] != DynamicBankKind::None) any = true;
+    if (!any) return;
+    os << ",\n  \"uf1_soft_bank_dynamic\": [";
+    bool first = true;
+    for (int b = 0; b < kUf1SoftBankCount; ++b) {
+        const auto k = c.uf1SoftBankDynamic[b];
+        if (k == DynamicBankKind::None) continue;
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"bank\": " << b
+           << ", \"kind\": " << static_cast<int>(k) << "}";
+    }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -1269,6 +1365,7 @@ std::string serialize(const Config& c)
     serializeSubBankDynamic_(c, os);
     serializeBankPresets_(c, os);
     serializeUf1SoftBanks_(c, os);
+    serializeUf1SoftBankDynamic_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -1606,6 +1703,26 @@ void parseUf1SoftBanks_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf1_soft_bank_dynamic");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int bank = -1, kind = 0;
+        if (auto* v = eo->get_item_by_name("bank"))
+            if (auto* s = v->get_string_value(true)) bank = std::atoi(s);
+        if (auto* v = eo->get_item_by_name("kind"))
+            if (auto* s = v->get_string_value(true)) kind = std::atoi(s);
+        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
+            continue;
+        out.uf1SoftBankDynamic[bank] = static_cast<DynamicBankKind>(kind);
+    }
+}
+
 bool parseLayer_(wdl_json_element* lobj, Layer& out)
 {
     if (!lobj || !lobj->is_object()) return false;
@@ -1862,6 +1979,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSubBankDynamic_(root, out);
     parseBankPresets_(root, out);
     parseUf1SoftBanks_(root, out);
+    parseUf1SoftBankDynamic_(root, out);
     return true;
 }
 
@@ -1950,7 +2068,15 @@ bool invokeBuiltin(const std::string& name, int param)
 // configs (upgradeBackfillUf1Buttons_) so the UF1 keeps working post-upgrade.
 // (Was authored as v14 on the UF1 branch; renumbered to v15 on rebase since
 // main already took v14 for the Shift+360 migration.)
-constexpr int kCurrentBindingsVersion = 15;
+// v16 (2026-07-31): UF1 controls that were hardcoded fall-throughs in
+// onUf1Event (SHIFT, ENC push, FLIP, MASTER, 5-8, V-Pot pushes, Bank ◄ ►,
+// Page ◄ ►) become real factory-default bindings. Same upgradeBackfillUf1Buttons_
+// backfills their MISSING slots into older configs (find-guarded → idempotent,
+// so re-running the v15 transport/nav fills is a no-op).
+// v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
+// (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
+// fills the empty Shift slots into older configs (leaves Plain + any user edit).
+constexpr int kCurrentBindingsVersion = 17;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2250,14 +2376,16 @@ void upgradeRetireUf1Builtins_(Config& c)
 void upgradeBackfillUf1Buttons_(Config& c)
 {
     Layer& L1 = c.layers[0];
-    auto fillBuiltin = [&](ButtonId id, const char* action, const char* label) {
+    auto fillBuiltin = [&](ButtonId id, const char* action, const char* label,
+                           Behavior beh = Behavior::Momentary, int param = 0) {
         if (L1.bindings.find(id) != L1.bindings.end()) return;
         Binding bd;
-        bd.behavior = Behavior::Momentary;
+        bd.behavior = beh;
         bd.label    = label;
         auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
         sp.type   = ActionType::Builtin;
         sp.action = action;
+        sp.param  = param;
         L1.bindings[id] = bd;
     };
     auto fillReaper = [&](ButtonId id, const char* actionId, const char* label) {
@@ -2281,6 +2409,51 @@ void upgradeBackfillUf1Buttons_(Config& c)
     fillReaper(ButtonId::Uf1Cycle, "1068",  "CYCLE");
     fillReaper(ButtonId::Uf1Click, "40364", "CLICK");
     fillBuiltin(ButtonId::Uf1Btn360, "uf1_time_display_step", "360\xC2\xB0");
+    fillBuiltin(ButtonId::Uf1NavUp,     "zoom_up",     "ZOOM \xE2\x96\xB2");
+    fillBuiltin(ButtonId::Uf1NavDown,   "zoom_down",   "ZOOM \xE2\x96\xBC");
+    fillBuiltin(ButtonId::Uf1NavLeft,   "zoom_left",   "ZOOM \xE2\x97\x82");
+    fillBuiltin(ButtonId::Uf1NavRight,  "zoom_right",  "ZOOM \xE2\x96\xB8");
+    fillBuiltin(ButtonId::Uf1NavCentre, "zoom_center", "FIT");
+    // v15→v16 (2026-07-31): controls that were hardcoded fall-throughs in
+    // onUf1Event are now real factory-default bindings. Backfill the MISSING
+    // slots on older configs (a user's own customisation, if any, survives;
+    // a slot the user explicitly cleared to empty stays a stored empty entry
+    // and so is NOT refilled — intended, since the hardcoded default is gone).
+    fillBuiltin(ButtonId::Uf1Shift,       "mod_shift",               "SHIFT",       Behavior::Hold);
+    fillBuiltin(ButtonId::Uf1ChannelPush, "show_focused_plugin_gui", "ENC PUSH");
+    fillBuiltin(ButtonId::Uf1Flip,        "uf1_flip",                "FLIP",        Behavior::Toggle);
+    fillBuiltin(ButtonId::Uf1Master,      "uf1_master",              "MASTER",      Behavior::Toggle);
+    fillBuiltin(ButtonId::Uf1FiveToEight, "uf1_five_to_eight",       "5-8");
+    fillBuiltin(ButtonId::Uf1Vpot1Push, "uf1_vpot_reset", "V-POT 1 PUSH", Behavior::Momentary, 0);
+    fillBuiltin(ButtonId::Uf1Vpot2Push, "uf1_vpot_reset", "V-POT 2 PUSH", Behavior::Momentary, 1);
+    fillBuiltin(ButtonId::Uf1Vpot3Push, "uf1_vpot_reset", "V-POT 3 PUSH", Behavior::Momentary, 2);
+    fillBuiltin(ButtonId::Uf1Vpot4Push, "uf1_vpot_reset", "V-POT 4 PUSH", Behavior::Momentary, 3);
+    fillBuiltin(ButtonId::Uf1BankLeft,  "uf1_bank_step", "BANK \xE2\x97\x82", Behavior::Momentary, -1);
+    fillBuiltin(ButtonId::Uf1BankRight, "uf1_bank_step", "BANK \xE2\x96\xB8", Behavior::Momentary, +1);
+    fillBuiltin(ButtonId::Uf1ArrowLeft, "uf1_page_step", "PAGE \xE2\x97\x82", Behavior::Momentary, -1);
+    fillBuiltin(ButtonId::Uf1ArrowRight,"uf1_page_step", "PAGE \xE2\x96\xB8", Behavior::Momentary, +1);
+}
+
+// v16→v17: seed the SHIFT slots of the 6 secondary-transport buttons with the
+// automation modes (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). Fills ONLY
+// an EMPTY Shift slot, so a user's own Shift edit — and the Plain slot — survive.
+void upgradeBackfillUf1Automation_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto fillShift = [&](ButtonId id, const char* action, const char* label) {
+        Binding& bd = L1.bindings[id];   // default-creates the binding if missing
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Shift)];
+        if (sp.type != ActionType::Noop || !sp.action.empty()) return;  // already assigned
+        sp.type   = ActionType::Builtin;
+        sp.action = action;
+        sp.label  = label;
+    };
+    fillShift(ButtonId::Uf1SecLeft,  "auto_off",   "OFF");
+    fillShift(ButtonId::Uf1SecRight, "auto_read",  "READ");
+    fillShift(ButtonId::Uf1Cycle,    "auto_write", "WRT");
+    fillShift(ButtonId::Uf1Click,    "auto_trim",  "TRIM");
+    fillShift(ButtonId::Uf1SecKey1,  "auto_latch", "LTCH");
+    fillShift(ButtonId::Uf1SecKey2,  "auto_touch", "TCH");
 }
 
 // Both passes preserve color, brightness, inactive*, label, and
@@ -2538,8 +2711,11 @@ void load()
             if (tmp.version < 14) {
                 upgradeBackfillShift360LearnHud_(tmp);
             }
-            if (tmp.version < 15) {
+            if (tmp.version < 16) {
                 upgradeBackfillUf1Buttons_(tmp);
+            }
+            if (tmp.version < 17) {
+                upgradeBackfillUf1Automation_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -3146,6 +3322,23 @@ Modifier currentModifierSnapshot()
     return Modifier::Plain;
 }
 
+// Long-press slot resolution with PLAIN fallback. The arm records the
+// modifier held AT PRESS, so a long-press whose action lives only in the
+// Plain slot would resolve to an empty longPress[Shift] when the user
+// holds SHIFT before pressing the button and fire nothing. Prefer the
+// modifier-specific long slot; if it's empty, fall back to the Plain
+// long slot — so a Plain-only long fires whatever modifier is held,
+// regardless of press order ("machs wie uf8"). A modifier-specific long
+// (e.g. FLIP longPress[Shift]=recv_this) is unaffected: its slot is
+// non-empty, so no fallback happens. Short press is untouched — it still
+// fires shortPress[m] for the held modifier.
+static const ActionSlot& effectiveLongSlot_(const Binding& bd, int m)
+{
+    const ActionSlot& s = bd.longPress[m];
+    if (!slotIsEmpty_(s)) return s;
+    return bd.longPress[static_cast<int>(Modifier::Plain)];
+}
+
 bool dispatch(ButtonId id, bool pressed)
 {
     if (id == ButtonId::None) return false;
@@ -3176,10 +3369,13 @@ bool dispatch(ButtonId id, bool pressed)
         if (!pressed) {
             for (int L = 0; L < 3; ++L) {
                 const uint32_t k = pressKey(L, id);
-                if (g_pressStart.find(k)     == g_pressStart.end()
-                 && g_longPressStart.find(k) == g_longPressStart.end()) {
-                    continue;
+                bool tracked;
+                {   // brief g_pressMx read; g_cfgMutex is the outer lock
+                    std::lock_guard<std::mutex> lk(g_pressMx);
+                    tracked = g_pressStart.find(k)     != g_pressStart.end()
+                           || g_longPressStart.find(k) != g_longPressStart.end();
                 }
+                if (!tracked) continue;
                 auto altIt = g_cfg.layers[L].bindings.find(id);
                 if (altIt != g_cfg.layers[L].bindings.end()) {
                     it    = altIt;
@@ -3203,24 +3399,56 @@ bool dispatch(ButtonId id, bool pressed)
     if (longPressArmed) {
         const uint32_t k = pressKey(layer, id);
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            const Modifier mod = currentModifierSnapshot();
+            const int      m   = static_cast<int>(mod);
+            std::lock_guard<std::mutex> lk(g_pressMx);
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = mod;
+            // Arm the threshold timer only when the EFFECTIVE long slot
+            // (modifier-specific, else Plain fallback) is a real action —
+            // otherwise a long hold does nothing anyway and we don't want
+            // the timer to steal the release-edge short fire.
+            const ActionSlot& ls = effectiveLongSlot_(bd, m);
+            if (!slotIsEmpty_(ls)) {
+                rec.longArmed = true;
+                rec.longSlot  = ls;
+                rec.id        = id;
+            }
+            g_pressStart[k] = std::move(rec);
         } else {
-            auto it = g_pressStart.find(k);
-            if (it != g_pressStart.end()) {
-                const auto held = std::chrono::steady_clock::now() - it->second.start;
-                const int  m    = static_cast<int>(it->second.mod);
-                g_pressStart.erase(it);
+            // Pull the record out under the lock, then fire after unlock.
+            bool                                  have  = false;
+            bool                                  fired = false;
+            std::chrono::steady_clock::duration   held{};
+            int                                   m     = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_pressMx);
+                auto it = g_pressStart.find(k);
+                if (it != g_pressStart.end()) {
+                    have  = true;
+                    fired = it->second.longFired;
+                    held  = std::chrono::steady_clock::now() - it->second.start;
+                    m     = static_cast<int>(it->second.mod);
+                    g_pressStart.erase(it);
+                }
+            }
+            // If the threshold timer already fired the long slot, the
+            // release edge only cleans up — never re-fire short or long.
+            if (have && !fired) {
                 if (held >= kLongPressThreshold) {
-                    runSlot_(bd.longPress[m],
-                               /*firing*/ true, /*pressed*/ false);
+                    // Fallback: timer normally beats us here, but a fast
+                    // release right at the threshold can still land first.
+                    // Same Plain-fallback resolution as the arm.
+                    const ActionSlot& ls = effectiveLongSlot_(bd, m);
+                    runSlot_(ls, /*firing*/ true, /*pressed*/ false);
                     // Tag lastFired with the long-press marker (high bit)
                     // so the LED resolver reads from longPress[m] rather
                     // than shortPress[m]. Without this, a long-press
                     // action that toggles state ON (e.g. send_this) would
                     // render the LED via shortPress's LedOverride and
                     // ignore the user's per-long-press colour choice.
-                    if (bd.longPress[m].type != ActionType::Noop) {
+                    if (!slotIsEmpty_(ls)) {
                         const auto idx = static_cast<size_t>(id);
                         if (idx < kLastFiredModSize) {
                             g_lastFiredMod[idx].store(
@@ -3229,6 +3457,7 @@ bool dispatch(ButtonId id, bool pressed)
                         }
                     }
                 } else {
+                    // Pre-threshold TAP → short, exactly as before.
                     runSlot_(bd.shortPress[m],
                                /*firing*/ true, /*pressed*/ false);
                     if (bd.shortPress[m].type != ActionType::Noop) {
@@ -3255,9 +3484,15 @@ bool dispatch(ButtonId id, bool pressed)
     int slotIdx = static_cast<int>(Modifier::Plain);
     if (bd.behavior == Behavior::Momentary || bd.behavior == Behavior::Hold) {
         const uint32_t k = pressKey(layer, id);
+        // No runSlot_ inside this block, so holding g_pressMx is safe.
+        // This record is for modifier-slot matching only (longArmed stays
+        // false); the Toggle/Hold long-press timer lives in g_longPressStart.
+        std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = currentModifierSnapshot();
+            g_pressStart[k] = std::move(rec);
             slotIdx = static_cast<int>(g_pressStart[k].mod);
         } else {
             auto it = g_pressStart.find(k);
@@ -3308,32 +3543,102 @@ bool dispatch(ButtonId id, bool pressed)
     if (bd.hasLongPress && bd.behavior != Behavior::Momentary) {
         const uint32_t k = pressKey(layer, id);
         if (pressed) {
-            g_longPressStart[k] = { std::chrono::steady_clock::now(),
-                                    static_cast<Modifier>(slotIdx) };
+            const int m = slotIdx;
+            std::lock_guard<std::mutex> lk(g_pressMx);
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = static_cast<Modifier>(slotIdx);
+            // Arm the threshold timer only for a real EFFECTIVE long slot
+            // (modifier-specific, else Plain fallback).
+            const ActionSlot& ls = effectiveLongSlot_(bd, m);
+            if (!slotIsEmpty_(ls)) {
+                rec.longArmed = true;
+                rec.longSlot  = ls;
+                rec.id        = id;
+            }
+            g_longPressStart[k] = std::move(rec);
         } else {
-            auto lit = g_longPressStart.find(k);
-            if (lit != g_longPressStart.end()) {
-                const auto held = std::chrono::steady_clock::now() - lit->second.start;
-                const int  m    = static_cast<int>(lit->second.mod);
-                g_longPressStart.erase(lit);
-                if (held >= kLongPressThreshold
-                    && bd.longPress[m].type != ActionType::Noop)
-                {
-                    runSlot_(bd.longPress[m], /*firing*/ true, /*pressed*/ false);
-                    // Tag lastFired with the long-press marker so the LED
-                    // resolver picks up the long-press slot's LedOverride.
-                    const auto idx = static_cast<size_t>(id);
-                    if (idx < kLastFiredModSize) {
-                        g_lastFiredMod[idx].store(
-                            static_cast<uint8_t>(m | 0x80),
-                            std::memory_order_relaxed);
-                    }
+            bool                                have  = false;
+            bool                                fired = false;
+            std::chrono::steady_clock::duration held{};
+            int                                 m     = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_pressMx);
+                auto lit = g_longPressStart.find(k);
+                if (lit != g_longPressStart.end()) {
+                    have  = true;
+                    fired = lit->second.longFired;
+                    held  = std::chrono::steady_clock::now() - lit->second.start;
+                    m     = static_cast<int>(lit->second.mod);
+                    g_longPressStart.erase(lit);
+                }
+            }
+            // Skip if the threshold timer already fired the additive long.
+            const ActionSlot& ls = effectiveLongSlot_(bd, m);
+            if (have && !fired
+                && held >= kLongPressThreshold
+                && !slotIsEmpty_(ls))
+            {
+                // Fallback for a release landing right at the threshold.
+                runSlot_(ls, /*firing*/ true, /*pressed*/ false);
+                // Tag lastFired with the long-press marker so the LED
+                // resolver picks up the long-press slot's LedOverride.
+                const auto idx = static_cast<size_t>(id);
+                if (idx < kLastFiredModSize) {
+                    g_lastFiredMod[idx].store(
+                        static_cast<uint8_t>(m | 0x80),
+                        std::memory_order_relaxed);
                 }
             }
         }
     }
 
     return true;
+}
+
+// Fire any armed long-press the moment it crosses the 0.5 s threshold,
+// WHILE the button is still held — instead of waiting for the release
+// edge. The UF1 sometimes drops or reorders the button-release event, so
+// a release-edge long-press could be lost entirely; firing at the
+// threshold removes all release-timing dependence. Runs on the MAIN
+// thread from onTimer (~30 Hz), so worst-case latency past 500 ms is one
+// tick (~33 ms) — imperceptible. Collect under g_pressMx, fire after
+// unlocking: runSlot_ can re-enter dispatch on an input thread, and we
+// must never hold g_pressMx across it. Applies to every surface (UF8 /
+// UC1 / UF1) and every press-timer keyspace (real bindings, user-quick
+// slots, UF1 soft-bank slots) because they all share these two maps.
+void tickLongPressThreshold()
+{
+    std::vector<std::tuple<ActionSlot, ButtonId, Modifier>> toFire;
+    {
+        std::lock_guard<std::mutex> lk(g_pressMx);
+        const auto now = std::chrono::steady_clock::now();
+        for (auto& [k, rec] : g_pressStart) {
+            (void)k;
+            if (rec.longArmed && !rec.longFired
+                && now - rec.start >= kLongPressThreshold) {
+                rec.longFired = true;
+                toFire.push_back({rec.longSlot, rec.id, rec.mod});
+            }
+        }
+        for (auto& [k, rec] : g_longPressStart) {
+            (void)k;
+            if (rec.longArmed && !rec.longFired
+                && now - rec.start >= kLongPressThreshold) {
+                rec.longFired = true;
+                toFire.push_back({rec.longSlot, rec.id, rec.mod});
+            }
+        }
+    }
+    for (auto& [slot, id, mod] : toFire) {
+        runSlot_(slot, /*firing*/ true, /*pressed*/ false);
+        const auto idx = static_cast<size_t>(id);
+        if (idx < kLastFiredModSize) {
+            g_lastFiredMod[idx].store(
+                static_cast<uint8_t>(static_cast<int>(mod) | 0x80),
+                std::memory_order_relaxed);
+        }
+    }
 }
 
 int getActiveLayer()
@@ -3541,6 +3846,21 @@ void setUf1SoftBankSlot(int bank, int slot, const Binding& bd)
     if (!uf1SoftBankInRange_(bank, slot)) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBanks[bank][slot] = bd;
+    persistLocked_();
+}
+
+DynamicBankKind getUf1SoftBankDynamic(int bank)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return DynamicBankKind::None;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.uf1SoftBankDynamic[bank];
+}
+
+void setUf1SoftBankDynamic(int bank, DynamicBankKind kind)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.uf1SoftBankDynamic[bank] = kind;
     persistLocked_();
 }
 
@@ -3855,19 +4175,42 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
 
     if (longPressArmed) {
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            const Modifier mod = currentModifierSnapshot();
+            const int      m   = static_cast<int>(mod);
+            std::lock_guard<std::mutex> lk(g_pressMx);
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = mod;
+            // Plain-fallback long slot (see effectiveLongSlot_).
+            const ActionSlot& ls = effectiveLongSlot_(bd, m);
+            if (!slotIsEmpty_(ls)) {
+                rec.longArmed = true;
+                rec.longSlot  = ls;
+                rec.id        = pseudoId;   // > 256, so no LED tag (as before)
+            }
+            g_pressStart[k] = std::move(rec);
         } else {
-            auto it = g_pressStart.find(k);
-            if (it != g_pressStart.end()) {
-                const auto held = std::chrono::steady_clock::now() - it->second.start;
-                const int  m    = static_cast<int>(it->second.mod);
-                g_pressStart.erase(it);
-                if (held >= kLongPressThreshold) {
-                    runSlot_(longP[m], /*firing*/ true, /*pressed*/ false);
-                } else {
-                    runSlot_(shortP[m], /*firing*/ true, /*pressed*/ false);
+            bool                                have  = false;
+            bool                                fired = false;
+            std::chrono::steady_clock::duration held{};
+            int                                 m     = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_pressMx);
+                auto it = g_pressStart.find(k);
+                if (it != g_pressStart.end()) {
+                    have  = true;
+                    fired = it->second.longFired;
+                    held  = std::chrono::steady_clock::now() - it->second.start;
+                    m     = static_cast<int>(it->second.mod);
+                    g_pressStart.erase(it);
                 }
+            }
+            // Skip if the threshold timer already fired the long slot.
+            if (have && !fired) {
+                if (held >= kLongPressThreshold)
+                    runSlot_(effectiveLongSlot_(bd, m), /*firing*/ true, /*pressed*/ false);
+                else
+                    runSlot_(shortP[m], /*firing*/ true, /*pressed*/ false);
             }
         }
         return true;
@@ -3875,9 +4218,12 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
 
     int slotMod = static_cast<int>(Modifier::Plain);
     if (bd.behavior == Behavior::Momentary) {
+        std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = currentModifierSnapshot();
+            g_pressStart[k] = std::move(rec);
             slotMod = static_cast<int>(g_pressStart[k].mod);
         } else {
             auto it = g_pressStart.find(k);
@@ -3922,16 +4268,40 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
 
     if (longPressArmed) {
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            const Modifier mod = currentModifierSnapshot();
+            const int      m   = static_cast<int>(mod);
+            std::lock_guard<std::mutex> lk(g_pressMx);
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = mod;
+            // Plain-fallback long slot (see effectiveLongSlot_).
+            const ActionSlot& ls = effectiveLongSlot_(bd, m);
+            if (!slotIsEmpty_(ls)) {
+                rec.longArmed = true;
+                rec.longSlot  = ls;
+                rec.id        = pseudoId;   // > 256, so no LED tag (as before)
+            }
+            g_pressStart[k] = std::move(rec);
         } else {
-            auto it = g_pressStart.find(k);
-            if (it != g_pressStart.end()) {
-                const auto held = std::chrono::steady_clock::now() - it->second.start;
-                const int  m    = static_cast<int>(it->second.mod);
-                g_pressStart.erase(it);
+            bool                                have  = false;
+            bool                                fired = false;
+            std::chrono::steady_clock::duration held{};
+            int                                 m     = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_pressMx);
+                auto it = g_pressStart.find(k);
+                if (it != g_pressStart.end()) {
+                    have  = true;
+                    fired = it->second.longFired;
+                    held  = std::chrono::steady_clock::now() - it->second.start;
+                    m     = static_cast<int>(it->second.mod);
+                    g_pressStart.erase(it);
+                }
+            }
+            // Skip if the threshold timer already fired the long slot.
+            if (have && !fired) {
                 if (held >= kLongPressThreshold)
-                    runSlot_(longP[m],  /*firing*/ true, /*pressed*/ false);
+                    runSlot_(effectiveLongSlot_(bd, m), /*firing*/ true, /*pressed*/ false);
                 else
                     runSlot_(shortP[m], /*firing*/ true, /*pressed*/ false);
             }
@@ -3941,9 +4311,12 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
 
     int slotMod = static_cast<int>(Modifier::Plain);
     if (bd.behavior == Behavior::Momentary) {
+        std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
-            g_pressStart[k] = { std::chrono::steady_clock::now(),
-                                currentModifierSnapshot() };
+            PressRecord rec;
+            rec.start = std::chrono::steady_clock::now();
+            rec.mod   = currentModifierSnapshot();
+            g_pressStart[k] = std::move(rec);
             slotMod = static_cast<int>(g_pressStart[k].mod);
         } else {
             auto it = g_pressStart.find(k);
@@ -4086,6 +4459,8 @@ const char* builtinCategory(const std::string& n)
      || n == "surface_mirror_mcp"
      || n.rfind("marker_overlay_", 0) == 0
      || n == "uf1_time_display_step"
+     || n == "uf1_flip" || n == "uf1_master"
+     || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
      || n == "restart")
         return "Hardware Modes";
 
@@ -4109,7 +4484,8 @@ const char* builtinCategory(const std::string& n)
 
     if (n == "bank_left"  || n == "bank_right"
      || n == "page_left"  || n == "page_right"
-     || n == "bank_by_1_left" || n == "bank_by_1_right")
+     || n == "bank_by_1_left" || n == "bank_by_1_right"
+     || n == "uf1_bank_step" || n == "uf1_page_step")
         return "Bank / Page";
 
     if (n.rfind("auto_", 0) == 0) return "Automation";
@@ -4154,6 +4530,33 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Brightness", "Modifiers", "FX Param",
     };
     return kCats;
+}
+
+// bit0 = UF8, bit1 = UC1, bit2 = UF1. Universal builtins → all three.
+uint8_t builtinDeviceMask(const std::string& n)
+{
+    if (n.rfind("uf1_", 0) == 0) return 0b100;   // UF1-only (uf1_flip/master/…)
+    if (n.rfind("uf8_", 0) == 0) return 0b001;   // UF8-only (uf8_plugin_mode_*)
+    if (n.rfind("uc1_", 0) == 0) return 0b010;   // UC1-only (uc1_outgain_fader_toggle)
+    // 8-strip / per-strip SSL builtins — meaningless on the single-strip UF1
+    // (the blueprint's UF1 drop-list). Kept on UF8 + UC1, hidden on UF1 only.
+    if (n.rfind("send_all_", 0) == 0 || n.rfind("recv_all_", 0) == 0
+     || n == "ssl_softkey" || n.rfind("ssl_bank_", 0) == 0
+     || n.rfind("softkey_bank_", 0) == 0 || n.rfind("master_pin_", 0) == 0)
+        return 0b011;                            // UF8 + UC1, not UF1
+    return 0b111;                                // universal
+}
+
+int builtinDeviceForId(ButtonId id)
+{
+    if (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Rec)   return 2;
+    if (id >= ButtonId::Uc1Encoder1     && id <= ButtonId::Uc1Btn360) return 1;
+    return 0;
+}
+
+bool builtinShownForId(const std::string& n, ButtonId id)
+{
+    return (builtinDeviceMask(n) & (1u << builtinDeviceForId(id))) != 0;
 }
 
 bool builtinStateOf(const std::string& name, int param)

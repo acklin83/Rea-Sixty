@@ -93,6 +93,11 @@ private:
     std::thread           initThread_;
     InputHandler          inputHandler_;
     RawInputHandler       rawInputHandler_;
+    // Cross-URB residual: a frame (or header) split by a bulk-transfer boundary
+    // is kept here and prepended to the next URB so no input event is lost when
+    // two events land across two transfers. Touched only in readCallback_ (the
+    // single libusb event thread). Capped so a desync can't grow it unbounded.
+    std::vector<uint8_t>  readResidual_;
 
     struct PendingSend;
     std::unique_ptr<PendingSend> pending_;

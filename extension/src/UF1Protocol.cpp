@@ -64,27 +64,35 @@ bool decodeFrame(uint8_t op, std::span<const uint8_t> payload, InputEvent& ev) {
 
 }  // namespace
 
-void parseInputStream(std::span<const uint8_t> data, const InputHandler& cb) {
+size_t parseInputStream(std::span<const uint8_t> data, const InputHandler& cb) {
     size_t i = 0;
     const size_t n = data.size();
-    // Skip the leading `32 xx` report header (and any other non-FF bytes).
-    while (i < n && data[i] != kFrameMagic) ++i;
-    while (i + 3 <= n && data[i] == kFrameMagic) {
+    while (i < n) {
+        // Skip any non-FF byte. This eats the leading `32 60` report header AND
+        // any INNER header between concatenated messages in one URB — SSL batches
+        // closely-timed events (each with its own 32 60 prefix), and the old loop
+        // stopped at the first inner 32 60 and dropped every event after it. That
+        // was the "Shift+button must be pressed/released SIMULTANEOUSLY" bug
+        // (Frank 2026-07-31): sequential presses land as two 32-60 messages in one
+        // URB, and only the first survived.
+        if (data[i] != kFrameMagic) { ++i; continue; }
+        // At an FF frame start — need the 3-byte header, then the body + checksum.
+        if (i + 3 > n) break;                                // partial header at the tail
         const uint8_t op  = data[i + 1];
         const uint8_t len = data[i + 2];
-        const size_t total = static_cast<size_t>(len) + 4;  // FF op len <len> ck
-        if (i + total > n) break;                            // truncated tail
-        // Verify checksum; on mismatch resync to the next 0xFF.
+        const size_t total = static_cast<size_t>(len) + 4;   // FF op len <len> ck
+        if (i + total > n) break;                            // frame split by the URB edge
+        // Verify checksum; on mismatch resync to the next 0xFF (top of the loop).
         const uint8_t ck = data[i + total - 1];
-        if (checksum(data.subspan(i, total - 1)) != ck) {
-            ++i;
-            while (i < n && data[i] != kFrameMagic) ++i;
-            continue;
-        }
+        if (checksum(data.subspan(i, total - 1)) != ck) { ++i; continue; }
         InputEvent ev{};
         if (decodeFrame(op, data.subspan(i + 3, len), ev)) cb(ev);
         i += total;
     }
+    // Bytes consumed. data[i..] is the incomplete tail (a header/frame split by
+    // the URB boundary) — the caller keeps it as a residual and prepends it to the
+    // next URB so a frame straddling two transfers isn't lost.
+    return i;
 }
 
 // ---- Output builders -------------------------------------------------------

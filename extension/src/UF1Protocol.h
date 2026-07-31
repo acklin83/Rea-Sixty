@@ -81,11 +81,14 @@ constexpr uint8_t kFlip = 0x38, kMaster = 0x39, kRwd = 0x3A, kFfw = 0x3B, kStop 
 
 using InputHandler = std::function<void(const InputEvent&)>;
 
-// Parse a raw IN buffer (one bulk-read payload): strip the leading `32 xx`
-// report header, then walk the concatenated FF frames, invoking `cb` for each
-// recognised event. Frames with a bad length or checksum are skipped (the
-// walker resyncs to the next 0xFF). Pure; safe to call on the worker thread.
-void parseInputStream(std::span<const uint8_t> data, const InputHandler& cb);
+// Parse a raw IN buffer (one bulk-read payload): walk EVERY FF frame, skipping
+// any non-FF header bytes between them (the `32 60` report header AND inner
+// headers when SSL batches several messages in one URB), invoking `cb` for each
+// recognised event. Frames with a bad length or checksum are skipped (resync to
+// the next 0xFF). Returns the number of bytes CONSUMED — `data[returned..]` is an
+// incomplete tail split by the URB boundary, which the caller must keep as a
+// residual and prepend to the next transfer. Pure; safe on the worker thread.
+size_t parseInputStream(std::span<const uint8_t> data, const InputHandler& cb);
 
 // ---- Output (EP 0x02) ------------------------------------------------------
 

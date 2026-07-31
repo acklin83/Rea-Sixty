@@ -477,7 +477,20 @@ void UF1Device::readCallback_(libusb_transfer* xfer)
         self->traceFrame_('I', xfer->buffer, len, 0);
         if (self->rawInputHandler_) self->rawInputHandler_(xfer->buffer, len);
         if (self->inputHandler_) {
-            parseInputStream(std::span<const uint8_t>{xfer->buffer, len}, self->inputHandler_);
+            // Prepend any residual (a frame straddling the previous URB boundary),
+            // parse the combined stream, then keep whatever incomplete tail is
+            // left as the new residual so a split frame isn't dropped. This is the
+            // cross-URB stitching the old per-URB parse lacked (Frank 2026-07-31:
+            // Shift+button only worked when pressed/released simultaneously).
+            auto& res = self->readResidual_;
+            res.insert(res.end(), xfer->buffer, xfer->buffer + len);
+            const size_t consumed = parseInputStream(
+                std::span<const uint8_t>{res.data(), res.size()}, self->inputHandler_);
+            res.erase(res.begin(), res.begin() + consumed);
+            // Desync guard: a real incomplete tail is a few bytes; if it ever grows
+            // past a frame's worth the stream is out of sync — drop it and resync.
+            constexpr size_t kMaxResidual = 512;
+            if (res.size() > kMaxResidual) res.clear();
         }
     }
 
