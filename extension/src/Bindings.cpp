@@ -3764,6 +3764,9 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("fx_param_", 0) == 0)
         return "FX Param";
 
+    if (n.rfind("sticky_pot_", 0) == 0)
+        return "Sticky Pot";
+
     return "";
 }
 
@@ -3774,7 +3777,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
-        "Brightness", "Modifiers", "FX Param",
+        "Brightness", "Modifiers", "FX Param", "Sticky Pot",
     };
     return kCats;
 }

@@ -11053,6 +11053,288 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
 }
 
+// ============================ Sticky Pot =============================
+// Per-track pinned V-Pot parameter (Frank 2026-07-31). Each track can pin ONE
+// plug-in parameter onto its V-Pot; the pin moves with the track across banks
+// (keyed by track GUID, re-resolved to a live fx via the FX-GUID each tick) and
+// overrides the strip's normal V-Pot target (focused param / pan). Suspended
+// whenever a surface mode already owns the V-Pot layer: UF8 Plugin Mode,
+// Send/Receive routing (per strip), FLIP, PAN-held, and the Instance /
+// InstanceCycle selection modes (which re-route V-Pot rotation to FX cycling at
+// ingest). FLIP-to-fader honouring is a deliberate v1 follow-up — for now FLIP
+// simply suspends sticky.
+//
+// Two bindable actions:
+//   sticky_pot_get_next — arm; the NEXT touched FX param becomes the pin of the
+//                         track it lives on. A V-Pot PRESS while armed clears
+//                         that strip's pin instead.
+//   sticky_pot_toggle   — globally suspend / resume all pins (pins are kept).
+//
+// State is main-thread-owned (dispatch drain, render, onTimer, projectconfig all
+// run on the main thread); the two atomics carry the worker→main signal from the
+// builtins. Persisted per project via g_stickyProjConfig.
+struct StickyPin {
+    std::string fxGuid;         // uf8::fxGuidString — stable FX identity across reorder
+    int         vst3Param = -1;
+    bool        toggle    = false;   // push flips 0/1 (else push → midpoint)
+};
+std::unordered_map<std::string /*track GUID*/, StickyPin> g_stickyPins;
+std::atomic<bool> g_stickyActive{true};       // global active / suspended
+std::atomic<bool> g_stickyArmGetNext{false};  // "get next touched" armed (worker→main)
+// Set to nowMs_()+window after every sticky param WRITE. chaseLastTouchedFx absorbs
+// while it's live so a sticky move doesn't hijack the GLOBAL focused param (which
+// would drag every OTHER strip's V-Pot onto the equivalent slot). Same pattern as
+// g_dynFxFocusLockUntilMs. Sticky is a per-track pin, deliberately NOT the focus.
+std::atomic<int64_t> g_stickyFocusLockUntilMs{0};
+
+// Pins eligible to drive/render at all (independent of the individual strip):
+// active, and not inside a mode that owns the whole V-Pot layer.
+inline bool stickyGloballyEnabled_()
+{
+    if (!g_stickyActive.load())   return false;
+    if (g_uf8PluginMode.load())   return false;   // Plugin/FX-Learn owns all strips
+    if (g_pluginFaderMode.load()) return false;   // SSL Strip Mode (PLUG-IN) owns the V-Pot
+    if (g_flip.load())            return false;   // v1: FLIP suspends sticky
+    if (g_forcePan.load())        return false;   // PAN-held → show/drive pan
+    const auto sm = g_selectionMode.load();
+    if (sm == SelectionMode::Instance || sm == SelectionMode::InstanceCycle)
+        return false;                             // V-Pot re-routed to FX cycle
+    return true;
+}
+
+const StickyPin* stickyPinFor_(MediaTrack* tr)
+{
+    if (!tr || g_stickyPins.empty()) return nullptr;   // fast-path: no pins → no GUID read
+    const std::string g = trackGuidStr_(tr);
+    if (g.empty()) return nullptr;
+    auto it = g_stickyPins.find(g);
+    return (it == g_stickyPins.end()) ? nullptr : &it->second;
+}
+
+// Resolve a strip's track pin to a LIVE (fx, param). Returns false when there is
+// no pin or the pinned FX is gone (deleted / chunk-replaced) — the strip then
+// falls back to its normal V-Pot behaviour. Does NOT check the global gate or
+// routing; callers gate those.
+bool stickyResolveOnTrack_(MediaTrack* tr, int* fxOut, int* paramOut, bool* toggleOut)
+{
+    const StickyPin* pin = stickyPinFor_(tr);
+    if (!pin || pin->vst3Param < 0) return false;
+    const int fx = uf8::findFxIndexByGuid(tr, pin->fxGuid);
+    if (fx < 0) return false;
+    if (pin->vst3Param >= TrackFX_GetNumParams(tr, fx)) return false;
+    if (fxOut)     *fxOut     = fx;
+    if (paramOut)  *paramOut  = pin->vst3Param;
+    if (toggleOut) *toggleOut = pin->toggle;
+    return true;
+}
+
+// Assign the pin for a track (MAIN thread — called from the get-next tick).
+// fx/param come from GetLastTouchedFX; detect toggle so push flips vs resets.
+void stickyPotAssign_(MediaTrack* tr, int fx, int param)
+{
+    if (!tr || fx < 0 || param < 0) return;
+    const std::string fxg = uf8::fxGuidString(tr, fx);
+    if (fxg.empty()) return;
+    double s0=0.0, s1=0.0, s2=0.0; bool isToggle=false;
+    TrackFX_GetParameterStepSizes(tr, fx, param, &s0, &s1, &s2, &isToggle);
+    StickyPin pin;
+    pin.fxGuid    = fxg;
+    pin.vst3Param = param;
+    pin.toggle    = isToggle;
+    g_stickyPins[trackGuidStr_(tr)] = std::move(pin);
+    g_stickyActive.store(true);        // assigning implies active
+    g_pageDirty.store(true);
+    if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+}
+
+// Remove a track's pin (MAIN thread — from the V-Pot-press-while-armed clear).
+void stickyClearForTrack_(MediaTrack* tr)
+{
+    if (!tr) return;
+    if (g_stickyPins.erase(trackGuidStr_(tr)) > 0) {
+        g_pageDirty.store(true);
+        if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+    }
+}
+
+// V-Pot rotation on a pinned param — generic plug-in-param feel (arbitrary
+// third-party params carry no learned curve/sensitivity): toggle ignores
+// rotation (push flips it), stepped params step by their quantum, continuous
+// params scrub with the shared kVpotBoost + fine scaling. Mirrors the
+// non-learned branch of the focused-param path. `detent` = raw signed6/128.
+void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double detent)
+{
+    double pStep=0.0, pSmall=0.0, pLarge=0.0; bool isToggle=false;
+    const bool stepped = TrackFX_GetParameterStepSizes(
+        tr, fx, param, &pStep, &pSmall, &pLarge, &isToggle);
+    if (stepped && isToggle) return;   // toggle: rotation ignored; push flips it
+    const double cur = TrackFX_GetParamNormalized(tr, fx, param);
+    double effStep = pStep, jsfxNorm = 0.0; bool jsfxBogus = false;
+    if (stepped && pStep > 0.0) {
+        double nrm = 0.0; bool cont = false;
+        if (uf8::jsfxStepClassify(tr, fx, param, pStep, nrm, cont)) {
+            jsfxBogus = cont; jsfxNorm = nrm;
+            if (!cont) effStep = nrm;
+        }
+    }
+    (void)jsfxNorm;
+    double next;
+    if (stepped && pStep > 0.0 && !jsfxBogus) {
+        static float s_acc[8]{};
+        static std::chrono::steady_clock::time_point s_last[8]{};
+        const int sIdx = strip & 7;
+        const auto now = std::chrono::steady_clock::now();
+        if (s_last[sIdx].time_since_epoch().count() != 0
+            && now - s_last[sIdx] > std::chrono::milliseconds(150))
+            s_acc[sIdx] = 0.0f;
+        s_last[sIdx] = now;
+        const int signedDet = static_cast<int>(std::round(detent * 128.0));
+        const float sens = static_cast<float>(
+            reasixty_uf8KnobScale(vpotFineActive_()));
+        const auto r = uf8::tickStepped(s_acc[sIdx], signedDet, sens);
+        s_acc[sIdx] = r.newAccum;
+        if (r.logicalSteps == 0) return;
+        next = cur + r.logicalSteps * effStep;
+    } else {
+        constexpr double kVpotBoost = 1.25;
+        double delta;
+        if (jsfxBogus) {
+            const int rawDet = static_cast<int>(std::round(detent * 128.0));
+            delta = uf8::jsfxContinuousStep(rawDet);
+        } else {
+            delta = detent * kVpotBoost;
+        }
+        delta *= reasixty_uf8KnobScale(vpotFineActive_());
+        next = cur + delta;
+    }
+    if (next < 0.0) next = 0.0;
+    if (next > 1.0) next = 1.0;
+    TrackFX_SetParamNormalized(tr, fx, param, next);
+    g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
+}
+
+// V-Pot push on a pinned param: toggle flips 0/1, else reset to midpoint (0.5 —
+// the surface's generic "default" for a param with no learned deflt; correct
+// 0 dB for bipolar params, midpoint otherwise, same convention as CS push).
+void stickyPushDefault_(MediaTrack* tr, int fx, int param, bool toggle)
+{
+    if (toggle) {
+        const double cur = TrackFX_GetParamNormalized(tr, fx, param);
+        TrackFX_SetParamNormalized(tr, fx, param, cur >= 0.5 ? 0.0 : 1.0);
+    } else {
+        TrackFX_SetParamNormalized(tr, fx, param, 0.5);
+    }
+    g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the reset steal focus
+}
+
+// "Get next touched" poll — runs each onTimer (main thread). On the arm edge it
+// snapshots the current last-touched tuple as the baseline; captures the next
+// DIFFERENT touch (or, while stopped, a value wiggle of the same param) as the
+// pin of the track it lives on; auto-disarms after ~20 s. Decode mirrors
+// chaseLastTouchedFx (packed track/fx words; skips take-FX / master / rec-FX).
+void stickyPotTick_()
+{
+    static bool    wasArmed = false;
+    static int     baseTr=-2, baseFx=-2, baseParam=-2;
+    static double  baseVal = -1e9;
+    static int64_t armMs = 0;
+
+    if (!g_stickyArmGetNext.load()) { wasArmed = false; return; }
+
+    int trWord=-1, fxWord=-1, paramIdx=-1;
+    const bool have = GetLastTouchedFX(&trWord, &fxWord, &paramIdx);
+
+    if (!wasArmed) {                    // arm edge — snapshot baseline tuple
+        baseTr = trWord; baseFx = fxWord; baseParam = paramIdx;
+        baseVal = -1e9;
+        armMs = nowMs_();
+        wasArmed = true;
+        return;
+    }
+    if (nowMs_() - armMs > 20000) { g_stickyArmGetNext.store(false); return; }
+    if (!have) return;
+
+    if ((trWord & 0xFFFF0000) != 0) return;       // take-FX
+    const int trLow = trWord & 0xFFFF;
+    if (trLow <= 0) return;                        // master / invalid
+    if ((fxWord >> 24) & 0x01) return;            // record-FX
+    const int fxIdx = fxWord & 0x00FFFFFF;
+    MediaTrack* tr = GetTrack(nullptr, trLow - 1);
+    if (!tr || paramIdx < 0) return;
+
+    const double curVal = TrackFX_GetParamNormalized(tr, fxIdx, paramIdx);
+    const bool tupleChanged =
+        (trWord != baseTr || fxWord != baseFx || paramIdx != baseParam);
+    if (!tupleChanged && baseVal <= -1e8) baseVal = curVal;   // seed once
+    const bool valueWiggle = (!tupleChanged && baseVal > -1e8
+                              && curVal != baseVal && !(GetPlayState() & 1));
+    if (tupleChanged || valueWiggle) {
+        stickyPotAssign_(tr, fxIdx, paramIdx);
+        g_stickyArmGetNext.store(false);
+    }
+}
+
+// projectconfig — one line per pinned track plus the global-active flag:
+//   STICKY_PIN "<trackGUID>;<fxGUID>;<param>;<toggle01>"
+//   STICKY_ACTIVE 0            (only written when suspended; default = active)
+void stickySaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
+                    struct project_config_extension_t* /*reg*/)
+{
+    for (const auto& kv : g_stickyPins) {
+        const StickyPin& p = kv.second;
+        if (p.fxGuid.empty() || p.vst3Param < 0) continue;
+        ctx->AddLine("STICKY_PIN \"%s;%s;%d;%d\"",
+                     kv.first.c_str(), p.fxGuid.c_str(),
+                     p.vst3Param, p.toggle ? 1 : 0);
+    }
+    if (!g_stickyActive.load()) ctx->AddLine("STICKY_ACTIVE 0");
+}
+
+bool stickyProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                        bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "STICKY_ACTIVE", 13) == 0) {
+        p += 13; while (*p == ' ' || *p == '\t') ++p;
+        g_stickyActive.store(*p != '0');
+        return true;
+    }
+    if (std::strncmp(p, "STICKY_PIN", 10) != 0) return false;
+    p += 10; while (*p == ' ' || *p == '\t') ++p;
+    if (*p == '"') ++p;
+    std::string field;
+    while (*p && *p != '"') field += *p++;
+    // Split "trackGUID;fxGUID;param;toggle" on ';' (GUIDs contain no ';').
+    std::string parts[4];
+    int n = 0;
+    for (char c : field) {
+        if (c == ';' && n < 3) { ++n; continue; }
+        parts[n] += c;
+    }
+    if (parts[0].empty() || parts[1].empty()) return true;
+    StickyPin pin;
+    pin.fxGuid    = parts[1];
+    pin.vst3Param = std::atoi(parts[2].c_str());
+    pin.toggle    = (std::atoi(parts[3].c_str()) != 0);
+    if (pin.vst3Param >= 0) g_stickyPins[parts[0]] = std::move(pin);
+    return true;
+}
+
+void stickyBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*/)
+{
+    g_stickyPins.clear();
+    g_stickyActive.store(true);   // default active; STICKY_ACTIVE 0 restores suspended
+}
+
+project_config_extension_t g_stickyProjConfig{
+    stickyProcessLine_,
+    stickySaveExt_,
+    stickyBeginLoad_,
+    nullptr
+};
+
 void drainInputQueue()
 {
     std::vector<PendingInput> local;
@@ -11960,6 +12242,18 @@ void drainInputQueue()
                         break;
                     }
                 }
+                // Sticky Pot: a per-track pinned param overrides the strip's
+                // normal V-Pot target. Sits above focused-param / pan, below
+                // routes (which broke out above) and Plugin/Instance/FLIP/PAN
+                // modes (stickyGloballyEnabled_). Consumes the event.
+                if (stickyGloballyEnabled_() && tr) {
+                    int sfx = -1, sparam = -1; bool stg = false;
+                    if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
+                        stickyWriteRotation_(tr, sfx, sparam,
+                                             static_cast<int>(e.strip), e.value);
+                        break;
+                    }
+                }
                 // FX Learn UF8: when SSL Strip Mode is on AND the focused
                 // track has a user-mapped plug-in, the V-Pot drives the
                 // active bank's slot[strip] param on that focused
@@ -12501,6 +12795,23 @@ void drainInputQueue()
                                 writeRouteVolumeLinear_(vr, 1.0);
                             }
                         }
+                        break;
+                    }
+                }
+                // Sticky Pot push: while "get next" is armed, a V-Pot press
+                // CLEARS this strip's pin (instead of capturing a param) and
+                // disarms. Otherwise a press on a pinned strip resets the param
+                // to its default (or flips a toggle). Same precedence as the
+                // rotation injection.
+                if (g_stickyArmGetNext.load() && tr) {
+                    stickyClearForTrack_(tr);
+                    g_stickyArmGetNext.store(false);
+                    break;
+                }
+                if (stickyGloballyEnabled_() && tr) {
+                    int sfx = -1, sparam = -1; bool stg = false;
+                    if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
+                        stickyPushDefault_(tr, sfx, sparam, stg);
                         break;
                     }
                 }
@@ -18308,6 +18619,29 @@ void pushZonesForVisibleSlots()
         {
             valLine = composeValueLine("Folder", "");
         }
+        // Sticky Pot: a pinned strip shows the pinned param's name (prefixed
+        // with '*' as the sticky marker) + formatted value, and drives its
+        // readout bar. Same gate/precedence as the rotation dispatch; wins over
+        // the pan / focused-param / folder display so the readout matches what
+        // the V-Pot is driving. (Bar mode set in the vpotMode loop below.)
+        if (stickyGloballyEnabled_() && !routedVpot && !routedFader && tr) {
+            int sfx = -1, sparam = -1; bool stg = false;
+            if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
+                char pn[64] = {0}, vb[64] = {0};
+                TrackFX_GetParamName(tr, sfx, sparam, pn, sizeof(pn));
+                std::string nm(pn);
+                if (nm.size() > 9) nm.resize(9);
+                nm.insert(nm.begin(), '*');           // sticky marker
+                std::string val;
+                if (TrackFX_GetFormattedParamValue(tr, sfx, sparam, vb, sizeof(vb)))
+                    for (unsigned char c : std::string(vb))
+                        if (c >= 0x20 && c <= 0x7E) val += static_cast<char>(c);
+                valLine = composeValueLine(nm, val);
+                vpotBar[s] = stg ? 0
+                    : vpotPosFromUnipolar(
+                          TrackFX_GetParamNormalized(tr, sfx, sparam));
+            }
+        }
         // Phase 2.8c: when Nav Mode owns the strip's lower row (the
         // 'Index' or 'Timecode' setting), suppress the V-Pot value
         // write so the two don't fight each tick over g_lastValueLine
@@ -18399,6 +18733,17 @@ void pushZonesForVisibleSlots()
             }
             MediaTrack* tr = visibleTrackAt(realSlot);
             if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;  // Master-pin
+            // Sticky Pot bar mode: routes already continued above; a pinned
+            // strip drives a unipolar sweep (toggle → no bar). v1 treats every
+            // pinned param as unipolar (bipolar EQ-gain fills from the left, a
+            // cosmetic follow-up). Matches the value-line/bar override.
+            if (stickyGloballyEnabled_()) {
+                int sfx = -1, sp = -1; bool tg = false;
+                if (stickyResolveOnTrack_(tr, &sfx, &sp, &tg)) {
+                    vpotMode[s] = tg ? 0x03 : 0x01;
+                    continue;
+                }
+            }
             int fxIdx = -1;
             const uf8::LinkSlot* slot = slotForStrip(tr, focused, &fxIdx);
             // Pan-focus is treated as no-V-Pot-focus by the position +
@@ -18540,6 +18885,25 @@ void chaseLastTouchedFx()
     if (nowMs_() < g_dynFxFocusLockUntilMs.load()) {
         lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
         return;
+    }
+    // Sticky Pot lock: a sticky V-Pot move/reset just wrote its pinned param,
+    // which updates GetLastTouchedFX. Absorb it (update dedup, stay put) so the
+    // pin never becomes the GLOBAL focus — otherwise every other strip's V-Pot
+    // would chase onto the equivalent slot. Sticky is a per-track pin, not focus.
+    if (nowMs_() < g_stickyFocusLockUntilMs.load()) {
+        lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+        return;
+    }
+    // …and full independence: if the touched param IS this track's own pin,
+    // absorb regardless of timing (covers a GUI touch of the pinned param, not
+    // just a surface move). Narrow — only the EXACT pinned (track, fx, param) is
+    // decoupled; the same param on another track focuses normally.
+    if (const StickyPin* sp = stickyPinFor_(tr)) {
+        if (sp->vst3Param == paramIdx
+            && uf8::findFxIndexByGuid(tr, sp->fxGuid) == fxIdx) {
+            lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+            return;
+        }
     }
 
     const uf8::Domain prevDomain = uf8::getFocusedParam().domain;
@@ -22076,6 +22440,7 @@ void onTimer()
     }
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
+    stickyPotTick_();   // Sticky Pot: capture the next touched param while armed
     chaseFocusedFxWindow();
     // Touched-FX reveal expiry: the UF8 csType falls back to the mode-default
     // label on the next pushZonesForVisibleSlots tick (dedup). The UC1 used to
@@ -27116,6 +27481,30 @@ void registerBindingHandlers()
         "Toggle FLIP (fader ↔ V-Pot)", false
     });
 
+    // Sticky Pot — pin one plug-in param per track onto its V-Pot.
+    //   get_next : arm capture; the next touched FX param becomes the pin of
+    //              the track it lives on (V-Pot press while armed = clear).
+    //   toggle   : globally suspend / resume all pins (pins are kept).
+    // Both are worker-safe (atomics only; the main-thread tick + drain do the
+    // REAPER-API work). LEDs: get_next lit while armed, toggle lit while active.
+    registerBuiltin("sticky_pot_get_next", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_stickyArmGetNext.store(true);
+        },
+        [](int) { return g_stickyArmGetNext.load(); },
+        "Sticky Pot: Get next touched Parameter", false
+    });
+    registerBuiltin("sticky_pot_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_stickyActive.store(!g_stickyActive.load());
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_stickyActive.load(); },
+        "Sticky Pot: Toggle active/inactive", false
+    });
+
     // UC1 Out-Gain pot: SSL CS Fader Level param ↔ REAPER track volume.
     // Shares reasixty_toggleUc1OutGainFaderMode() with the REAPER action
     // REASIXTY_UC1_OUTGAIN_FADER_TOGGLE. stateOf drives the bound button's
@@ -29203,6 +29592,26 @@ void registerBindingHandlers()
     });
 
     auto pageStep = [](int delta) {
+        const int layer = uf8::bindings::getActiveLayer();
+        const int activeQuick = (layer >= 0 && layer <= 2)
+            ? g_activeQuick[layer].load() : -1;
+        // User-Quick context (e.g. Q3 = I/O): the top-soft-key "page" is the
+        // active SUB-BANK (V-POT + Soft 1..5) in g_activeSubBank, NOT
+        // g_softKeyBank. Step that so Page ◄ ► navigates the Quick's sub-banks.
+        // Mirrors softkey_bank_select's active-Quick branch — was the bug:
+        // pageStep only moved g_softKeyBank, a no-op while a Quick is engaged.
+        // Plugin Mode keeps the g_softKeyBank path (activeQuick is stale there).
+        if (activeQuick >= 0 && !g_uf8PluginMode.load()) {
+            int next = g_activeSubBank[layer].load() + delta;
+            if (next < 0) next = 0;
+            if (next >= uf8::bindings::kSubBanksPerQuick)
+                next = uf8::bindings::kSubBanksPerQuick - 1;
+            if (g_activeSubBank[layer].exchange(next) != next) {
+                g_softKeyDirty.store(true);
+                g_bankDirty.store(true);
+            }
+            return;
+        }
         const auto fp = uf8::getFocusedParam();
         const auto domain = (fp.domain == uf8::Domain::BusComp)
             ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
@@ -30051,6 +30460,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     plugin_register("projectconfig", &g_slotsProjConfig);
     // Parameter-Group ON/OFF flags per project (PG_ACTIVE) → .rpp.
     plugin_register("projectconfig", &g_pgActiveProjConfig);
+    plugin_register("projectconfig", &g_stickyProjConfig);
     // Per-favourite-instance memory for non-copied CS sections → .rpp.
     plugin_register("projectconfig", &g_csFavMemProjConfig);
     // BC analog — per-favourite BC memory (own-settings cycle) → .rpp.
