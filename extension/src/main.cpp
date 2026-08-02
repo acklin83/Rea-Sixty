@@ -523,6 +523,12 @@ std::atomic<int>  g_uf1CsActiveType {-1};
 // (the pre-first-paint fallback, matching kUf1CsPageCount).
 std::atomic<int>  g_uf1CsActivePages {8};
 std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
+// Meter-view FINE soft-key (SK3, 0x1B): finer V-Pot resolution for the CONTINUOUS
+// meter params (RMS Integration, Delay, Reference Level, RTA Scale Top/Bottom,
+// Overload). Enum params are already one-value-per-notch, so fine doesn't touch
+// them. Highlight = 0x0102 (05 active / 01 normal), the cap106-known soft-key byte.
+std::atomic<bool> g_uf1MeterFine {false};
+constexpr double  kUf1MeterFineFactor = 0.25;   // continuous step multiplier when fine
 // MASTER button (id 0x39, under FLIP by the fader): when engaged the UF1 strip
 // follows the MASTER track (UC1 "track 00") instead of the selected/last-touched
 // one — uf1FocusedTrack_ returns GetMasterTrack. Toggle; set by the input worker.
@@ -11995,8 +12001,11 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     sAccum[vi+1] -= notches;
 
     const double cur = TrackFX_GetParamNormalized(tr, fx, v.param);
-    const double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1))
+    double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1))
                      : (v.contStep > 0.0 ? v.contStep : kUf1MeterContStep);
+    // FINE (SK3): shrink the step for CONTINUOUS params only — enum params are
+    // one value per notch and must not be scaled.
+    if (v.steps < 2 && g_uf1MeterFine.load()) dn *= kUf1MeterFineFactor;
     double nv = cur + notches * dn;
     if (nv < 0.0) nv = 0.0;
     if (nv > 1.0) nv = 1.0;
@@ -16943,6 +16952,16 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
                 break;
             }
+            // Display soft-key 3 = FINE in the Meter view (SSL UF1 UG p189-191).
+            // Toggles the finer V-Pot resolution for continuous meter params. Atomic
+            // store only (worker-safe); the painter emits the 0x0102 highlight on the
+            // change (05 active / 01 normal). Channel view keeps SK3 as its own soft-key.
+            // Not on Loudness (screen 3) — there SK3 is PLAY, not FINE.
+            if (ev.id == uf1::btn::kDisplaySoft3 && ev.pressed &&
+                g_uf1MeterView.load() && g_uf1MeterScreen.load() != 3) {
+                g_uf1MeterFine.store(!g_uf1MeterFine.load());
+                break;
+            }
             // Page ◄ ► arrows (0x24 / 0x26) — Meter-view V-Pot-page paging AND
             // Channel-view soft-key-bank / SSL-strip-page paging are now the
             // `uf1_page_step` builtin (factory-seeded to ArrowLeft/-1 and
@@ -18038,6 +18057,23 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // the bars fall like SSL AND switching to an already-frozen instance blanks
     // immediately (no 1 s phantom flash). Set before the getMeter reads below.
     { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
+    // FINE soft-key highlight (0x0102): 05 = FINE active, 01 = normal — the cap106
+    // soft-key-row highlight byte. Only on the non-Loudness screens (SK3 = FINE
+    // there; on Loudness SK3 is PLAY, whose screen burst owns 0x0102). Change-
+    // detected + re-asserted on `force` (view/screen switch).
+    if (g_uf1_dev) {
+        static int sFineHi = -1;
+        if (g_uf1MeterScreen.load() != 3) {
+            const uint8_t hi = g_uf1MeterFine.load() ? 0x05 : 0x01;
+            if (force || hi != sFineHi) {
+                sFineHi = hi;
+                g_uf1_dev->send(uf1::buildScreen(0x0102,
+                                std::span<const uint8_t>(&hi, 1)));
+            }
+        } else {
+            sFineHi = -1;   // Loudness owns 0x0102 → re-send on return to a FINE screen
+        }
+    }
     auto peakToDb = [](double p) -> float {
         if (!std::isfinite(p) || p <= 0.0) return -120.f;
         return static_cast<float>(20.0 * std::log10(p));
