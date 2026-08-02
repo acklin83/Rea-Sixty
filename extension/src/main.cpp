@@ -529,6 +529,11 @@ std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(tru
 // them. Highlight = 0x0102 (05 active / 01 normal), the cap106-known soft-key byte.
 std::atomic<bool> g_uf1MeterFine {false};
 constexpr double  kUf1MeterFineFactor = 0.25;   // continuous step multiplier when fine
+// Meter-view RESET soft-key (SK2, 0x1A): SK2 press sets this; the painter flashes the
+// soft-key highlight (0x0102=03 for ~150 ms, capture-confirmed) and clears our own
+// peak-hold statics. (The plug-in's OWN held peak needs a Core→plug-in reset — not in
+// the SSL→UF1 stream — so this resets what WE hold/decay; HW-verify what remains.)
+std::atomic<bool> g_uf1MeterResetReq {false};
 // MASTER button (id 0x39, under FLIP by the fader): when engaged the UF1 strip
 // follows the MASTER track (UC1 "track 00") instead of the selected/last-touched
 // one — uf1FocusedTrack_ returns GetMasterTrack. Toggle; set by the input worker.
@@ -16962,6 +16967,14 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1MeterFine.store(!g_uf1MeterFine.load());
                 break;
             }
+            // Display soft-key 2 = RESET in the Meter view (capture 2026-08-02:
+            // 0x0102=03 flash). Requests the painter to flash + clear our peak-hold.
+            // Atomic store only (worker-safe). Channel view keeps SK2 as its own key.
+            if (ev.id == uf1::btn::kDisplaySoft2 && ev.pressed &&
+                g_uf1MeterView.load()) {
+                g_uf1MeterResetReq.store(true);
+                break;
+            }
             // Page ◄ ► arrows (0x24 / 0x26) — Meter-view V-Pot-page paging AND
             // Channel-view soft-key-bank / SSL-strip-page paging are now the
             // `uf1_page_step` builtin (factory-seeded to ArrowLeft/-1 and
@@ -16970,8 +16983,17 @@ void onUf1Event(const uf1::InputEvent& ev)
             // channel V-Pots between Normal and Fine resolution (p188). Consumed
             // by applyUf1ChannelVpot_ via reasixty_uf8KnobScale(g_uf1CsFine). Also
             // ships UNBOUND, so no user binding is lost. Channel view only.
-            if (ev.id == uf1::btn::kT2 && ev.pressed && !g_uf1MeterView.load()) {
-                g_uf1CsFine.store(!g_uf1CsFine.load());
+            if (ev.id == uf1::btn::kT2 && ev.pressed) {
+                // Quick-Key-2 (the bottom "2" key) toggles Fine on BOTH views (Frank
+                // 2026-08-02 "Fine gehört auch auf Taste 2 unten"): channel V-Pots in
+                // Channel view, meter V-Pots in Meter view. Same key, view-appropriate
+                // target. Not on Loudness (SK3=PLAY there); the SK3 soft-key still works.
+                if (g_uf1MeterView.load()) {
+                    if (g_uf1MeterScreen.load() != 3)
+                        g_uf1MeterFine.store(!g_uf1MeterFine.load());
+                } else {
+                    g_uf1CsFine.store(!g_uf1CsFine.load());
+                }
                 break;
             }
             // Above-fader V-Pot push (0x08) — Sticky Pot: clear the armed pin / reset
@@ -18057,21 +18079,29 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // the bars fall like SSL AND switching to an already-frozen instance blanks
     // immediately (no 1 s phantom flash). Set before the getMeter reads below.
     { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
-    // FINE soft-key highlight (0x0102): 05 = FINE active, 01 = normal — the cap106
-    // soft-key-row highlight byte. Only on the non-Loudness screens (SK3 = FINE
-    // there; on Loudness SK3 is PLAY, whose screen burst owns 0x0102). Change-
-    // detected + re-asserted on `force` (view/screen switch).
+    // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
+    // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
+    // sFallbackHold + sBarHold). The plug-in's OWN held peak needs a Core→plug-in reset
+    // (not in the SSL→UF1 stream) — this resets what WE hold/decay; HW-verify the rest.
+    static int64_t sResetFlashUntil = 0;
+    if (g_uf1MeterResetReq.exchange(false)) {
+        sResetFlashUntil = nowMs_() + 150;
+        force = true;                       // → sFallbackHold / sBarHold reset below
+    }
+    // Soft-key highlight (0x0102): RESET flash 03 > FINE active 05 > normal 01 (the
+    // capture-confirmed soft-key-row byte). Not on Loudness (SK3=PLAY owns 0x0102).
     if (g_uf1_dev) {
-        static int sFineHi = -1;
+        static int sHi = -1;
         if (g_uf1MeterScreen.load() != 3) {
-            const uint8_t hi = g_uf1MeterFine.load() ? 0x05 : 0x01;
-            if (force || hi != sFineHi) {
-                sFineHi = hi;
+            const uint8_t hi = (nowMs_() < sResetFlashUntil) ? 0x03
+                             : (g_uf1MeterFine.load()        ? 0x05 : 0x01);
+            if (force || hi != sHi) {
+                sHi = hi;
                 g_uf1_dev->send(uf1::buildScreen(0x0102,
                                 std::span<const uint8_t>(&hi, 1)));
             }
         } else {
-            sFineHi = -1;   // Loudness owns 0x0102 → re-send on return to a FINE screen
+            sHi = -1;   // Loudness owns 0x0102 → re-send on return to a FINE screen
         }
     }
     auto peakToDb = [](double p) -> float {
