@@ -5495,6 +5495,44 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
     g_dynBankReq.store(enc);
 }
 
+// UF1 twin of dispatchDynamicPress_: the UF1 dynamic soft-key bank must fire the
+// SAME FX-key gestures (Push / +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp)
+// as the UF8, not only Push (Frank 2026-08-02: "Dynamic Bank für FX hat die
+// modifikatoren-actions nicht drin"). Snapshot the modifier + page + time on PRESS,
+// resolve the gesture on RELEASE (so long-press is distinguishable), then post the
+// UF1's ABSOLUTE-index request (g_uf1DynBankReq, page*4+slot). Input-thread safe —
+// atomics + a local map only (sole accessor). 4 display soft-keys.
+static void dispatchUf1DynamicPress_(uf8::bindings::DynamicBankKind kind,
+                                     int slot, bool pressed)
+{
+    if (slot < 0 || slot >= 4) return;
+    struct Uf1DynPress {
+        std::chrono::steady_clock::time_point t;
+        uf8::bindings::Modifier               mod;
+        int                                   page;
+    };
+    static std::unordered_map<int, Uf1DynPress> s_press;
+    if (pressed) {
+        s_press[slot] = { std::chrono::steady_clock::now(),
+                          uf8::bindings::currentModifierSnapshot(),
+                          g_uf1DynBankPage.load() };
+        return;
+    }
+    auto it = s_press.find(slot);
+    if (it == s_press.end()) return;
+    const auto held = std::chrono::steady_clock::now() - it->second.t;
+    const int  mod  = static_cast<int>(it->second.mod);
+    const int  page = it->second.page;
+    s_press.erase(it);
+    const int gesture =
+        (held >= std::chrono::milliseconds(500)) ? 4 : mod;  // 4 = long-press
+    const int absIdx = page * 4 + slot;
+    g_uf1DynBankReq.store((1u << 31)
+        | (static_cast<uint32_t>(kind) << 24)
+        | ((static_cast<uint32_t>(absIdx) & 0xFFFFu) << 8)
+        | static_cast<uint32_t>(gesture));
+}
+
 // Execute an FX-bank op on an ABSOLUTE fx index. Shared by the UF8 path
 // (applyDynBankReq_, index = dynBankSlotBase_ + slot) and the UF1 path
 // (applyDynBankUf1_, index = page*4 + slot). Main-thread only.
@@ -16898,21 +16936,16 @@ void onUf1Event(const uf1::InputEvent& ev)
                 const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
                 const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank);
                 if (dk != uf8::bindings::DynamicBankKind::None) {
-                    // Dynamic bank: post the UF1 request atomic (distinct from the
-                    // UF8 g_dynBankReq so UF8's dynBankSlotBase_ can't leak into
-                    // our ABSOLUTE index). Fire at page*4 + slot — the same page
-                    // the "5-8" key banks. Encoding (see g_uf1DynBankReq decl):
-                    // (1<<31)|(kind<<24)|(absIdx<<8)|gesture; v1 = push-only,
-                    // gesture 0. The onTimer drain runs applyDynBankUf1Req_ on the
-                    // main thread — worker-thread safe (atomic store only, no API).
-                    // TODO: long/Shift gestures = follow-up.
-                    if (ev.pressed) {
-                        const int absIdx = g_uf1DynBankPage.load() * 4 + slot;
-                        g_uf1DynBankReq.store((1u << 31)
-                            | (static_cast<uint32_t>(dk) << 24)
-                            | ((static_cast<uint32_t>(absIdx) & 0xFFFFu) << 8)
-                            | 0u /*plain gesture (Push)*/);
-                    }
+                    // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
+                    // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
+                    // only Push (Frank 2026-08-02 bug). dispatchUf1DynamicPress_
+                    // snapshots the modifier on press, resolves the gesture on
+                    // release, and posts the UF1 request atomic (distinct from the
+                    // UF8 g_dynBankReq so UF8's dynBankSlotBase_ can't leak into our
+                    // ABSOLUTE page*4+slot index). Encoding: (1<<31)|(kind<<24)|
+                    // (absIdx<<8)|gesture. Worker-thread safe (atomics only); the
+                    // onTimer drain runs applyDynBankUf1Req_ on the main thread.
+                    dispatchUf1DynamicPress_(dk, slot, ev.pressed);
                 } else {
                     uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, ev.pressed);
                 }
