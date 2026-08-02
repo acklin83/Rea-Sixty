@@ -11764,6 +11764,7 @@ bool hudBridgeSlot_(int idx, int layer, void* csTrV, int csFx,
 //   3 sensitivity                  4 defaultNorm  5 rangeMin = live value
 //   6 rangeMax = live value        7 defaultNorm = live value
 //   8 reset range (0..1)           9 reset feel to default
+//  10 apply THIS slot's feel to every mapped slot in the map (current layer)
 bool hudSetField_(int idx, int layer, int field, double v,
                   void* csTrV, int csFx, void* bcTrV, int bcFx)
 {
@@ -11781,6 +11782,7 @@ bool hudSetField_(int idx, int layer, int field, double v,
                         setSlotRangeMax_(li, 1.0f); break;
                 case 9: applyFeelToLinkSlot_(li, feel_presets::KnobFeel{});
                         break;
+                case 10: applyFeelToAllSlots_(feelFromLinkSlot_(li)); break;
                 case 5: case 6: case 7: {
                     const int p = mappedVst3For_(li);
                     if (p < 0) break;
