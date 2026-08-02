@@ -8214,6 +8214,35 @@ void applyFeelToLinkSlot_(int linkIdx, const feel_presets::KnobFeel& f)
     }
 }
 
+// Apply one feel bundle to EVERY mapped slot in the current FX-learn map, on the
+// layer being edited. Frank 2026-08-02: "apply current feel to all" — unify the
+// whole map's knob feel from the current mapping in one action. Returns the slot
+// count touched. One upsert + persist for the whole map (not per slot).
+int applyFeelToAllSlots_(const feel_presets::KnobFeel& f)
+{
+    if (g_editingMatch.empty()) return 0;
+    auto cat = uf8::user_plugins::get();
+    int n = 0;
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        for (auto& s : m.slots) {
+            uf8::SlotLayer& lay = editLayerRef_(s);
+            lay.inverted    = f.inverted;
+            lay.rangeMin    = f.rangeMin;
+            lay.rangeMax    = f.rangeMax;
+            lay.sensitivity = f.sensitivity;
+            lay.curvePoints = f.curvePoints;
+            lay.polarity    = f.polarity;
+            lay.defaultNorm = f.defaultNorm;
+            ++n;
+        }
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+    return n;
+}
+
 // Copy the Normal-layer mapping of every slot into the layer currently being
 // edited (Option/Control). Lets the user seed an overlay from the Normal set
 // and then tweak only the controls that differ. No-op on the Normal tab.
@@ -10872,6 +10901,12 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     [lid](const feel_presets::KnobFeel& f) {
                         applyFeelToLinkSlot_(lid, f);
                     });
+                // Push THIS mapping's feel onto every other mapping in the map
+                // (current layer) in one go — Frank 2026-08-02.
+                if (ImGui_MenuItem(ctx, "Apply this feel to all mappings",
+                                   nullptr, nullptr, nullptr)) {
+                    applyFeelToAllSlots_(feelFromLinkSlot_(lid));
+                }
             }
 
             ImGui_Separator(ctx);
