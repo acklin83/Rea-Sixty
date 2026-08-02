@@ -534,6 +534,12 @@ constexpr double  kUf1MeterFineFactor = 0.25;   // continuous step multiplier wh
 // peak-hold statics. (The plug-in's OWN held peak needs a Core→plug-in reset — not in
 // the SSL→UF1 stream — so this resets what WE hold/decay; HW-verify what remains.)
 std::atomic<bool> g_uf1MeterResetReq {false};
+// Meter-view PRESETS soft-key (SK4, 0x1C): SK4 opens the preset browser for the pinned
+// Meter instance (0x0100=0403, 0x0102=09, cap 2026-08-02). V-Pot4 scrolls the plug-in's
+// presets (REAPER TrackFX_NavigatePresets → loads live), the current name shows in a
+// V-Pot label; SK3="Navigate Back" exits. NB: SSL draws the full name LIST as a 0x0122
+// bitmap — we show the CURRENT name as text instead (can't render an arbitrary bitmap).
+std::atomic<bool> g_uf1PresetsMode {false};
 // MASTER button (id 0x39, under FLIP by the fader): when engaged the UF1 strip
 // follows the MASTER track (UC1 "track 00") instead of the selected/last-touched
 // one — uf1FocusedTrack_ returns GetMasterTrack. Toggle; set by the input worker.
@@ -11945,6 +11951,20 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
 void applyUf1MeterVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
+    // PRESETS browser: V-Pot4 scrolls the pinned Meter instance's plug-in presets
+    // (loads live via TrackFX_NavigatePresets). Other V-Pots are inert while browsing.
+    // Main-thread (drained), so the REAPER FX-preset API is safe here.
+    if (g_uf1PresetsMode.load()) {
+        if (id != uf1::enc::kVpot4) return;
+        MediaTrack* ptr = nullptr; int pfx = -1;
+        if (!uf1PinnedMeterTrackFx_(ptr, pfx)) return;
+        static double sPresetAcc = 0.0;
+        sPresetAcc += step / kChannelEncoderScale;
+        int d = 0;
+        if (sPresetAcc >= 1.0 || sPresetAcc <= -1.0) { d = int(sPresetAcc); sPresetAcc -= d; }
+        if (d != 0) TrackFX_NavigatePresets(ptr, pfx, d);
+        return;
+    }
     const int screen = std::clamp(g_uf1MeterScreen.load(), 0, 3);
     const int page   = std::clamp(g_uf1MeterPage.load(), 0,
                                   kUf1MeterPageCount[screen] - 1);
@@ -16964,7 +16984,17 @@ void onUf1Event(const uf1::InputEvent& ev)
             // Not on Loudness (screen 3) — there SK3 is PLAY, not FINE.
             if (ev.id == uf1::btn::kDisplaySoft3 && ev.pressed &&
                 g_uf1MeterView.load() && g_uf1MeterScreen.load() != 3) {
-                g_uf1MeterFine.store(!g_uf1MeterFine.load());
+                // In the presets browser SK3 = "Navigate Back" → exit; otherwise FINE.
+                if (g_uf1PresetsMode.load()) g_uf1PresetsMode.store(false);
+                else                         g_uf1MeterFine.store(!g_uf1MeterFine.load());
+                break;
+            }
+            // Display soft-key 4 = PRESETS in the Meter view — open/close the preset
+            // browser for the pinned Meter instance (capture 2026-08-02). Atomic store
+            // only (worker-safe); the painter draws the browser chrome + current name.
+            if (ev.id == uf1::btn::kDisplaySoft4 && ev.pressed &&
+                g_uf1MeterView.load() && g_uf1MeterScreen.load() != 3) {
+                g_uf1PresetsMode.store(!g_uf1PresetsMode.load());
                 break;
             }
             // Display soft-key 2 = RESET in the Meter view (capture 2026-08-02:
@@ -18079,6 +18109,64 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // the bars fall like SSL AND switching to an already-frozen instance blanks
     // immediately (no 1 s phantom flash). Set before the getMeter reads below.
     { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
+    // ── PRESETS browser (SK4) ──────────────────────────────────────────────
+    // While open: pause the meter cycle, paint the browser chrome once (0x0100=0403,
+    // 0x0102=09, SK3→"Navigate Back", V-Pot4→"Select", styling), then stream the pinned
+    // instance's CURRENT preset name (0x010e idx1) + a cursor (0x011f) from the preset
+    // index. V-Pot4 scrolls (applyUf1MeterVpot_→NavigatePresets); SK3 exits. First cut:
+    // SSL draws the full name LIST as a 0x0122 bitmap we can't render — we show the
+    // current name as text. HW-verify the layout. Early-returns → no meter streaming.
+    {
+        static bool sPresets = false;
+        const bool presets = g_uf1PresetsMode.load();
+        if (presets && g_uf1_dev) {
+            g_uf1CycleActive.store(false, std::memory_order_relaxed);  // pause meter cycle
+            MediaTrack* ptr = nullptr; int pfx = -1;
+            const bool have = uf1PinnedMeterTrackFx_(ptr, pfx);
+            char pbuf[128] = {0}; int nPre = 0, curIdx = -1;
+            if (have) {
+                TrackFX_GetPreset(ptr, pfx, pbuf, sizeof(pbuf));
+                curIdx = TrackFX_GetPresetIndex(ptr, pfx, &nPre);
+            }
+            auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
+                g_uf1_dev->send(uf1::buildScreen(a,
+                    std::span<const uint8_t>(std::data(p), p.size())));
+            };
+            auto txt = [&](uint16_t a, uint8_t idx, const char* s) {
+                std::vector<uint8_t> b; b.push_back(idx);
+                for (const char* c = s; *c; ++c) b.push_back(uint8_t(*c));
+                g_uf1_dev->send(uf1::buildScreen(a, b));
+            };
+            const bool enter = !sPresets;
+            if (enter) {
+                put(0x0100, {0x04, 0x03});
+                put(0x0102, {0x09});
+                put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
+                txt(0x0104, 0x02, "Navigate Back");
+                txt(0x010e, 0x03, "Select");
+            }
+            static std::string sName; static int sCur = INT_MIN;
+            std::string nm = have ? std::string(pbuf) : "(no meter)";
+            if (nm.size() > 18) nm.resize(18);
+            if (enter || nm != sName) { sName = nm; txt(0x010e, 0x01, nm.c_str()); }
+            uint8_t cur = 0;
+            if (nPre > 1 && curIdx >= 0)
+                cur = uint8_t(std::clamp(int(std::lround(100.0 * curIdx / (nPre - 1))), 0, 100));
+            if (enter || int(cur) != sCur) {
+                sCur = cur;
+                g_uf1_dev->send(uf1::buildScreen(0x011f, std::span<const uint8_t>(&cur, 1)));
+            }
+            sPresets = true;
+            return;   // browsing → skip all meter streaming
+        }
+        if (!presets && sPresets) {
+            sPresets = false;   // exited → restore the meter screen + resume the cycle
+            for (const auto& f : uf1MeterScreenBurst_(std::clamp(g_uf1MeterScreen.load(), 0, 3)))
+                g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+            uf1EmitMeterInstanceLabel_();
+            force = true;
+        }
+    }
     // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
     // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
     // sFallbackHold + sBarHold). The plug-in's OWN held peak needs a Core→plug-in reset
