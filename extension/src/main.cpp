@@ -10900,6 +10900,13 @@ CsPanHandle csPanForTrack(MediaTrack* tr)
 std::array<std::atomic<uint16_t>, 8> g_touchOriginPb{};
 std::array<std::atomic<bool>, 8>     g_touchOriginPbValid{};
 
+// Sticky Pot (per-track pinned param, defined in the core block). Forward-declared
+// here for the UF8 fader paths: under FLIP the pin moves onto the fader, so
+// computeStripCurrentPb_ / the VolumeAbs writeback / the motor follow resolve it at
+// the same precedence as the focused-param flip (below routes, above focused).
+bool stickyResolveOnTrack_(MediaTrack* tr, int* fxOut, int* paramOut, bool* toggleOut);
+bool stickyFlipFaderEnabled_();
+
 // Capture the pb14 the fader's currently-active target is tracking.
 // Mirrors the writeback precedence in PendingInput::VolumeAbs +
 // commitDebouncedTouchReleases (routing → FLIP+slot → FLIP track-pan →
@@ -10941,6 +10948,15 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
         const double vol = GetTrackSendInfo_Value(
             fr.track, fr.sendCategory, fr.sendIndex, "D_VOL");
         return linearVolumeToPb(vol);
+    }
+
+    // Sticky Pot under FLIP: the pin rode the V-Pot, so FLIP parks it on the fader
+    // — same precedence as the focused-param flip below (above it, per routes >
+    // sticky > focused-param). Mirror the writeback so the snapshot round-trips.
+    if (tr && stickyFlipFaderEnabled_()) {
+        int sfx = -1, sp = -1;
+        if (stickyResolveOnTrack_(tr, &sfx, &sp, nullptr))
+            return normToPb(TrackFX_GetParamNormalized(tr, sfx, sp));
     }
 
     // FLIP + focused SSL slot — preferred over PM by the input writer, so
@@ -11099,6 +11115,26 @@ inline bool stickyGloballyEnabled_()
     const auto sm = g_selectionMode.load();
     if (sm == SelectionMode::Instance || sm == SelectionMode::InstanceCycle)
         return false;                             // V-Pot re-routed to FX cycle
+    return true;
+}
+
+// Sticky gate for the FADER under FLIP. The pin normally rides the V-Pot; FLIP swaps
+// fader↔V-Pot ("assign the current V-Pot parameter to the fader", manual p16), so the
+// pin must move onto the FADER. This is stickyGloballyEnabled_ with the flip test
+// INVERTED (flip REQUIRED). Callers place it below routes and above the focused-param
+// flip, matching the V-Pot precedence (routes > sticky > focused-param > pan). Frank
+// 2026-08-02: FLIP+sticky must carry the pin, not fall back to the focused V-Pot param
+// (e.g. HF Gain) or track pan.
+bool stickyFlipFaderEnabled_()
+{
+    if (!g_stickyActive.load())   return false;
+    if (!g_flip.load())           return false;   // only when FLIP moved the pin to the fader
+    if (g_uf8PluginMode.load())   return false;
+    if (g_pluginFaderMode.load()) return false;
+    if (g_forcePan.load())        return false;
+    const auto sm = g_selectionMode.load();
+    if (sm == SelectionMode::Instance || sm == SelectionMode::InstanceCycle)
+        return false;
     return true;
 }
 
@@ -11990,6 +12026,23 @@ void drainInputQueue()
                         break;
                     }
                     if (fr.active()) break;   // routed but slot doesn't exist — eat the event
+                }
+                // Sticky Pot under FLIP: the pin rode the V-Pot, so FLIP drives it
+                // from the fader instead of track volume. Same clean pb14/kUf8FaderPbMax
+                // sweep as the focused-param flip below; precedence below routes (broke
+                // out above) and above focused-param. Frank 2026-08-02.
+                if (tr && stickyFlipFaderEnabled_()) {
+                    int sfx = -1, sp = -1;
+                    if (stickyResolveOnTrack_(tr, &sfx, &sp, nullptr)) {
+                        const uint16_t pbS = linearVolumeToPb(e.value);
+                        double n = static_cast<double>(pbS) /
+                                   static_cast<double>(kUf8FaderPbMax);
+                        if (n < 0.0) n = 0.0;
+                        if (n > 1.0) n = 1.0;
+                        TrackFX_SetParamNormalized(tr, sfx, sp, n);
+                        g_stickyFocusLockUntilMs.store(nowMs_() + 400);
+                        break;
+                    }
                 }
                 // FLIP: fader drives the focused plug-in parameter on this
                 // strip's track instead of track volume. Read the raw
@@ -17812,6 +17865,14 @@ void pushZonesForVisibleSlots()
         // fader, so the strip falls back to normal mode silently.
         const bool flipActive = g_flip.load() && slot && fxIdx >= 0;
 
+        // Sticky Pot under FLIP: the per-track pin rides the FADER (resolved once
+        // for the fader value LABEL + MOTOR below). Wins over the focused-param
+        // flip (sticky > focused-param). The V-Pot bar under FLIP still shows
+        // volume (flipPanSwap, untouched). Frank 2026-08-02.
+        int stickyFlipFx = -1, stickyFlipParam = -1;
+        const bool stickyFlip = tr && stickyFlipFaderEnabled_()
+            && stickyResolveOnTrack_(tr, &stickyFlipFx, &stickyFlipParam, nullptr);
+
         // FLIP without a plug-in slot to swap onto: V-Pots show volume,
         // faders show pan (the simple swap). Used to require holding the
         // PAN button (g_forcePan); Frank 2026-05-08 wants FLIP alone to
@@ -18128,10 +18189,12 @@ void pushZonesForVisibleSlots()
             while (!s2.empty() && s2.front() == ' ') s2.erase(0, 1);
             if (s2.size() > 6) s2.resize(6);
             dbStr = s2;
-        } else if (flipActive || csFaderActive) {
+        } else if (stickyFlip || flipActive || csFaderActive) {
             char paramBuf[64] = {0};
-            const int useFx = flipActive ? fxIdx : cs.fxIndex;
-            const int useParam = flipActive ? slot->vst3Param : cs.vst3Param;
+            const int useFx = stickyFlip ? stickyFlipFx
+                            : (flipActive ? fxIdx : cs.fxIndex);
+            const int useParam = stickyFlip ? stickyFlipParam
+                               : (flipActive ? slot->vst3Param : cs.vst3Param);
             const double norm = TrackFX_GetParamNormalized(tr, useFx, useParam);
             TrackFX_FormatParamValueNormalized(tr, useFx, useParam,
                                                norm, paramBuf, sizeof(paramBuf));
@@ -18240,10 +18303,13 @@ void pushZonesForVisibleSlots()
                 if (p14 < 0)              p14 = 0;
                 if (p14 > kUf8FaderPbMax) p14 = kUf8FaderPbMax;
                 pb = static_cast<uint16_t>(p14);
-            } else if (flipActive || csFaderActive) {
-                const int useFx = flipActive ? fxIdx : cs.fxIndex;
-                const int useParam = flipActive ? slot->vst3Param : cs.vst3Param;
-                const bool inverted = flipActive ? slot->inverted : false;
+            } else if (stickyFlip || flipActive || csFaderActive) {
+                const int useFx = stickyFlip ? stickyFlipFx
+                                : (flipActive ? fxIdx : cs.fxIndex);
+                const int useParam = stickyFlip ? stickyFlipParam
+                                   : (flipActive ? slot->vst3Param : cs.vst3Param);
+                const bool inverted = stickyFlip ? false
+                                    : (flipActive ? slot->inverted : false);
                 const double norm = TrackFX_GetParamNormalized(tr, useFx, useParam);
                 const double v = inverted ? 1.0 - norm : norm;
                 // Scale to the actual hardware fader top (kUf8FaderPbMax)
