@@ -12504,6 +12504,12 @@ void drainInputQueue()
                 case uf1::enc::kChannel: {      // channel encoder
                     // Accumulate the fine counts (~4 per click) into whole steps,
                     // like the UF8/UC1 channel encoder (kChannelEncoderScale).
+                    // Direction reversal: drop the leftover fraction from the OLD
+                    // direction so reversing doesn't need an extra click to unwind it
+                    // (Frank 2026-08-02 — same fix the UF8 channel encoder got).
+                    if ((step > 0 && g_uf1ChanEncAccum < 0.0) ||
+                        (step < 0 && g_uf1ChanEncAccum > 0.0))
+                        g_uf1ChanEncAccum = 0.0;
                     g_uf1ChanEncAccum += step / kChannelEncoderScale;
                     int tracks = 0;
                     if (g_uf1ChanEncAccum >=  1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
@@ -20185,6 +20191,15 @@ void uf1PaintChannel_()
     if (viewChanged) {
         const std::array<uint8_t, 1> zero{0x00};
         g_uf1_dev->send(uf1::buildScreen(meterView ? 0x011f : 0x0123, zero));
+        if (!meterView) {
+            // Leaving the Meter view → clear the meter soft-key highlight (0x0102) so
+            // FINE(05)/PRESETS(09)/RESET(03) don't stay lit behind the Channel/DAW
+            // soft-key labels (Frank 2026-08-02). Drop presets-browser mode too; FINE
+            // state persists and its highlight re-asserts on the next meter entry.
+            g_uf1PresetsMode.store(false);
+            const std::array<uint8_t, 1> norm{0x01};
+            g_uf1_dev->send(uf1::buildScreen(0x0102, norm));
+        }
     }
 
     // Re-assert the large-LCD layout on any change. 0x0100 is the LARGE-LCD
