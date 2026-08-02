@@ -2493,6 +2493,9 @@ local function drawControlContextMenu()
       if reaper.ImGui_MenuItem(ctx, "Reset feel to default") then
         sendField(9, 0)
       end
+      if reaper.ImGui_MenuItem(ctx, "Apply this feel to all mappings") then
+        sendField(10, 0)
+      end
       reaper.ImGui_EndMenu(ctx)
     end
   end
