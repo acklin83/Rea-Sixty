@@ -3146,6 +3146,18 @@ static bool drawKeyboardChordField(ImGui_Context* ctx, const char* prefix,
     return dirty;
 }
 
+// The per-action "Display label" only renders where the control actually shows a
+// text label on the surface — the UF8 top-soft-keys (the LCD above the V-Pots).
+// Every other UF8 button and EVERY UF1 control has no such label slot, so the field
+// is dead there → hide it (Frank 2026-08-02: "display label nur wo es Sinn macht;
+// auf UF1 nirgends, auf den meisten UF8-Buttons auch nicht"). User-Quick bank slots
+// already pass f.label=nullptr (they have their own "Label" field), so unaffected.
+static bool controlHasDisplayLabel_(uf8::bindings::ButtonId id)
+{
+    using B = uf8::bindings::ButtonId;
+    return id >= B::TopSoftKey1 && id <= B::TopSoftKey8;
+}
+
 bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       ActionFieldsRef f, int layer,
                       uf8::bindings::ButtonId id, bool isLongPress,
@@ -3191,8 +3203,10 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
     // (e.g. user soft-key bank slot, or visible while the matching
     // modifier is held). Empty falls back to the binding's top-level
     // label / hardware-face name. Some callers (e.g. drawSlotPicker
-    // for short/long binding-editor slots) opt out by passing nullptr.
-    if (f.label) {
+    // for short/long binding-editor slots) opt out by passing nullptr. And it only
+    // renders on controls that HAVE an on-surface label (controlHasDisplayLabel_ =
+    // the UF8 top-soft-keys) — hidden on every other UF8 button + all UF1 controls.
+    if (f.label && controlHasDisplayLabel_(id)) {
         char lblBuf[64] = {0};
         std::strncpy(lblBuf, f.label->c_str(), sizeof(lblBuf) - 1);
         snprintf(idbuf, sizeof(idbuf),
