@@ -4077,6 +4077,10 @@ struct PendingInput {
                          // GUI (applyShowFocusedPluginGui_). value/strip unused.
         Uf1SelectRelative,// Bank ◄ ► (0x21/0x23): move the REAPER selection by
                          // value tracks (±kUf1BankStep). applySelectRelative_.
+        Uf1AboveVpotPush,// Above-fader V-Pot push (0x08). Main-thread drain:
+                         // Sticky armed → clear this track's pin; else pinned →
+                         // reset the pin to its default (toggle flips); else the
+                         // knob's own default = centre Pan. value/strip unused.
     };
     Kind    kind;
     uint8_t strip;
@@ -11534,6 +11538,15 @@ MediaTrack* uf1FocusedTrack_()
     return tr;
 }
 
+// Sticky Pot (per-track pinned plug-in param) — defined below in the core block
+// (~12060). Forward-declared here so the UF1 above-fader V-Pot dispatch can call
+// them: on the UF1 the pin overrides Pan on the per-track knob (the analog of the
+// UF8 strip V-Pot). stickyUf1AboveEnabled_ is the UF1-specific gate (global toggle
+// + UF1 FLIP only — NOT the UF8/UC1 gate, which reads g_flip/g_pluginFaderMode/…).
+bool stickyResolveOnTrack_(MediaTrack* tr, int* fxOut, int* paramOut, bool* toggleOut);
+void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double detent);
+bool stickyUf1AboveEnabled_();
+
 // What the UF1 above-fader V-Pot (enc id 0x00) drives. Today: Pan of the focused
 // track. The enum + dispatch is the extension seam Frank asked for — later modes
 // (a bound FX param, a send level, etc.) slot in as new cases without touching
@@ -11554,6 +11567,19 @@ void applyUf1AboveFaderVpot_(int step)
     if (step == 0) return;
     MediaTrack* tr = uf1FocusedTrack_();
     if (!tr) return;
+    // Sticky Pot: a per-track pinned plug-in param overrides Pan on this
+    // per-track knob (the UF1 analog of the UF8 strip V-Pot). Same generic
+    // feel as every surface (stickyWriteRotation_ — toggle/stepped/continuous).
+    // Gated by the global toggle; suspended under FLIP (the knob then rides
+    // Volume, below). strip 0 = the single UF1 strip. Raw counts → the UF8's
+    // signed6/128 detent unit (÷128) so the feel matches the other surfaces.
+    if (stickyUf1AboveEnabled_()) {
+        int sfx = -1, sparam = -1; bool stg = false;
+        if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
+            stickyWriteRotation_(tr, sfx, sparam, /*strip*/0, step / 128.0);
+            return;
+        }
+    }
     // FLIP swaps fader/V-Pot: with the fader on Pan, the V-Pot rides Volume.
     // Nudge in dB per raw count → linear, absolute set via the surface path. Top
     // matches the fader (kUf1FaderTopDb = 12 dB); floor at −60 dB.
@@ -12043,6 +12069,20 @@ inline bool stickyGloballyEnabled_()
     return true;
 }
 
+// UF1 above-fader V-Pot sticky gate. That knob (enc 0x00) is the UF1's per-track
+// V-Pot — Pan by default — and is live in EVERY channel sub-mode (Plugin/DAW/Meter
+// own only the 4 main V-Pots, not this one). So the only things that suspend the
+// pin here are the GLOBAL toggle (shared with UF8/UC1 via sticky_pot_toggle) and
+// UF1 FLIP (the knob then rides Volume). Deliberately independent of the UF8/UC1
+// gate stickyGloballyEnabled_(), which reads g_flip/g_pluginFaderMode/g_uf8PluginMode/
+// g_forcePan/g_selectionMode — all UF8/UC1 state that does not apply to the UF1.
+bool stickyUf1AboveEnabled_()
+{
+    if (!g_stickyActive.load()) return false;
+    if (g_uf1Flip.load())       return false;   // v1: FLIP → the knob rides Volume
+    return true;
+}
+
 const StickyPin* stickyPinFor_(MediaTrack* tr)
 {
     if (!tr || g_stickyPins.empty()) return nullptr;   // fast-path: no pins → no GUID read
@@ -12415,6 +12455,26 @@ void drainInputQueue()
             // Channel-view V-Pot push (0x09-0x0C): reset the current-page V-Pot
             // param to its default on the on-screen SSL strip (main thread).
             applyUf1ChannelVpotPush_(static_cast<int>(e.strip));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1AboveVpotPush) {
+            // Above-fader V-Pot push (0x08) — mirrors the UF8 sticky PanCenter push
+            // (main thread). Armed (get-next) → clear this track's pin; else a live
+            // pin → reset it to its default (toggle flips 0/1, else midpoint); else
+            // no pin → the knob's own default = centre Pan.
+            if (MediaTrack* tr = uf1FocusedTrack_()) {
+                if (g_stickyArmGetNext.load()) {
+                    stickyClearForTrack_(tr);
+                    g_stickyArmGetNext.store(false);
+                } else {
+                    int sfx = -1, sparam = -1; bool stg = false;
+                    if (stickyUf1AboveEnabled_()
+                        && stickyResolveOnTrack_(tr, &sfx, &sparam, &stg))
+                        stickyPushDefault_(tr, sfx, sparam, stg);
+                    else
+                        CSurf_OnPanChange(tr, 0.0, /*relative*/false);   // centre Pan
+                }
+            }
             continue;
         }
         if (e.kind == PendingInput::Uf1ToggleGui) {
@@ -16804,6 +16864,15 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1CsFine.store(!g_uf1CsFine.load());
                 break;
             }
+            // Above-fader V-Pot push (0x08) — Sticky Pot: clear the armed pin / reset
+            // a live pin / centre Pan when neither. ALL views (the above-fader V-Pot
+            // is the per-track knob in Plugin/DAW/Meter alike). queueInput only →
+            // worker-safe; the main-thread drain reads the pin + touches the REAPER
+            // API. This key shipped UNBOUND with no default, so nothing is superseded.
+            if (ev.id == uf1::btn::kVpotAboveFaderPush && ev.pressed) {
+                queueInput({PendingInput::Uf1AboveVpotPush, 0, 0.0});
+                break;
+            }
             // Channel view: the 4 display soft keys (0x19-0x1C) are the SSL
             // channel-strip section/toggle soft keys (p188). Display soft-key 1
             // is the Meter Screen Selector in Meter view (block above, gated on
@@ -20304,22 +20373,40 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
     }
 
-    // Pan (0x000e): 0x00 + 19-char value line
-    const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-    const std::string panLine = composeValueLine("Pan", formatPanReadout(pan));
+    // Pan value line (0x000e) + readout bar (0x000f) — the per-track knob readout
+    // ABOVE the fader (the above-fader V-Pot = enc 0x00). This is the UF1 analog of
+    // the UF8 strip V-Pot readout, so the Sticky Pot READOUT lives HERE (Frank
+    // 2026-08-02: "dort wo der pan-wert oberhalb des faders steht", NOT the big
+    // display header). When the focused track has an ACTIVE pin, the line shows the
+    // pinned param instead of Pan — "*name value", the UF8 sticky value-line style —
+    // and the bar reflects the param value (UNIPOLAR fill, v1: no polarity info for
+    // an arbitrary pin). Else the normal Pan line + centre-detent bar. The block
+    // runs every paint tick and is change-detected (sPan/sPanBar), so the value
+    // animates as the knob turns.
+    std::string panLine;
+    int         barPos = 50;      // 0..100
+    uint8_t     barCentre = 0x00; // 0x80 only for a real Pan centre-detent
+    int spFx = -1, spParam = -1; bool spTog = false;
+    if (stickyUf1AboveEnabled_() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
+        char nm[64] = {0}, val[64] = {0};
+        TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
+        TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
+        panLine = composeValueLine(std::string("*") + nm, val);   // '*' = pinned marker
+        const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
+        barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
+    } else {
+        // position = round((pan+1)*50): 0 = full L, 50 = centre, 100 = full R.
+        // centre byte = 0x80 only at exact centre (the firmware's detent marker).
+        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        panLine   = composeValueLine("Pan", formatPanReadout(pan));
+        barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
+        barCentre = (pan == 0.0) ? 0x80 : 0x00;
+    }
     if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
-
-    // Pan readout bar (0x000f): 2-byte payload [position, centre-flag] (cap77
-    // ground truth). position = round((pan+1)*50): 0 = full L, 50 = centre,
-    // 100 = full R. Second byte = 0x80 only at exact centre (pan == 0), else 0x00
-    // — the firmware's centre-detent marker. The label (0x000e) alone left the
-    // bar blank (Frank 2026-06-18: "Wert da, aber keine Linie wie auf UF8").
-    const int     panPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
-    const uint8_t panCentre = (pan == 0.0) ? 0x80 : 0x00;
-    const int     panBarKey = panPos * 2 + (panCentre ? 1 : 0);
+    const int panBarKey = barPos * 2 + (barCentre ? 1 : 0);
     if (changed || panBarKey != sPanBar) {
         sPanBar = panBarKey;
-        const std::vector<uint8_t> pb = { static_cast<uint8_t>(panPos), panCentre };
+        const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kPanBar, pb));
     }
 
