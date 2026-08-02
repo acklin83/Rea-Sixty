@@ -4581,6 +4581,12 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                           || id == ButtonId::Uc1Encoder1
                           || id == ButtonId::Uc1Encoder2);
     const bool longPressAvailable = !plainIsModifier && !isEncoder;
+    // Controls with no addressable button LED → hide the LED-appearance block.
+    // The rotate-gesture encoders (isEncoder) PLUS the channel-encoder PUSH —
+    // a real button (so it KEEPS long-press, hence not in isEncoder) but with
+    // no LED of its own (Frank 2026-07-31: "dreh weg, bei push nicht"). UC1
+    // controls are covered separately by idIsUc1.
+    const bool idNoLed = isEncoder || id == ButtonId::ChannelPush;
 
     // Two side-by-side columns. Each child sized half the available
     // width with matching height so the bordered panels read as a pair.
@@ -4770,9 +4776,10 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
     // LED appearance is UF8-only — the UC1's encoders / 360 / MAGNIFY
     // don't expose user-settable RGB, so hide the whole LED block on the
-    // UC1 bindings page (idIsUc1 computed above). Same for the UF1 rotary
-    // controls (encoders + V-Pot pushes) which have no button LED.
-    if (!idIsUc1 && !idIsUf1NoLed) {
+    // UC1 bindings page (idIsUc1 computed above). Also hide it for the UF8
+    // Channel Encoder ROTATE + PUSH (idNoLed) and the UF1 rotary controls
+    // (encoders + V-Pot pushes, idIsUf1NoLed) — none expose a button LED.
+    if (!idIsUc1 && !idNoLed && !idIsUf1NoLed) {
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
 
@@ -4882,7 +4889,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             dirty = true;
         }
     }
-    }   // end !idIsUc1 — LED block hidden for UC1 controls
+    }   // end !idIsUc1 && !idNoLed && !idIsUf1NoLed — LED block hidden for UC1 + UF8/UF1 encoders + pushes
 
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
