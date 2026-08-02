@@ -15295,6 +15295,8 @@ void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag
 void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
 void openUf1BringUp_();                                  // claim + handlers + colour proof
 void uf1PaintChannel_();                                 // main-thread channel-zone + colour painter
+static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
+                                  uint8_t& compByte, uint8_t& gateByte);  // small-LCD level+GR, both views
 // Bumped on every successful UF1 open(). The painters' send-on-change statics
 // describe what the DEVICE shows, so a reopen (USB re-plug, stale handle) must
 // invalidate them — see uf1PaintChannel_ for what surviving statics cost us.
@@ -18409,6 +18411,28 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // is required for the history line below (LoudScrollableHistory only streams there).
     sslcore::setView(screen);
 
+    // ── Small-LCD channel meter (0x0009 level / 0x0015 comp GR / 0x0016 gate GR) ──
+    // The channel strip above the fader keeps showing the FOCUSED track's level +
+    // GR meter in Meter mode too — identical to the Channel/DAW view (Frank
+    // 2026-08-02: "in meter mode ... keine pegel ... soll gleich bleiben wie in
+    // daw/plugin mode"). Same LIVE source as the Channel view (uf1ChannelMeterBytes_,
+    // tr = the fader's focused track), so it follows the channel selection. The
+    // 0x00xx zone is the manual's separate "small LCD" — it is NOT the big meter
+    // display (proven inert on it, [[uf1-vu-red-numbers-parked]]), so driving it
+    // live cannot disturb the goniometer / needles / bargraphs.
+    // Overview (screen 0) streams it in the per-image cycle below (replacing the
+    // captured ff placeholder); the other screens have no cycle → send per tick here.
+    uint8_t chLvL = 0, chLvR = 0, chComp = 0, chGate = 0;
+    uf1ChannelMeterBytes_(tr, chLvL, chLvR, chComp, chGate);
+    if (screen != 0) {
+        const uint8_t m0009[] = {chLvL, chLvR, 0x00, 0x00};
+        const uint8_t m000a[] = {0x00, 0x00, 0x00, 0x00};
+        g_uf1_dev->send(uf1::buildScreen(0x0009, m0009));
+        g_uf1_dev->send(uf1::buildScreen(0x000a, m000a));
+        g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&chComp, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&chGate, 1)));
+    }
+
     if (screen == 0) {
         // Overview: 0x0125 = (rms_L,rms_R), 0x0126 = (peak_L,peak_R),
         // 0x0127 = (hold_L,hold_R). All on the one dBFS bar scale.
@@ -18511,14 +18535,16 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             if (!uf1GonioReplayNext_(parts->img))
                 uf1PaintGoniometer_(liss, parts->img);
         }
-        static const uint8_t k0009[] = {0xff,0xff,0x00,0x00};
-        static const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
-        const uint8_t kFf   = 0xff;
+        // LIVE small-LCD channel meter (was the captured ff placeholder). The
+        // group rides the cycle so it animates at the plug-in's own rate, exactly
+        // like the Channel view. Source = chLvL/chComp/chGate computed above.
+        const uint8_t k0009[] = {chLvL, chLvR, 0x00, 0x00};
+        const uint8_t k000a[] = {0x00,0x00,0x00,0x00};
         const uint8_t kZero = 0x00;
         parts->meters.push_back(uf1::buildScreen(0x0009, k0009));
         parts->meters.push_back(uf1::buildScreen(0x000a, k000a));
-        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFf, 1)));
-        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFf, 1)));
+        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&chComp, 1)));
+        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&chGate, 1)));
         parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow, p));   // 011c
         auto barFrame = [](uint16_t addr, const std::array<uint8_t, 2>& v) {
             return uf1::buildScreen(addr,
@@ -18708,24 +18734,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             g_uf1_dev->send(uf1::buildScreen(addr,
                 std::span<const uint8_t>(v.data(), v.size())));
         };
-        // Re-assert the colour group per cycle with cap80's values (SSL driving
-        // the UF1, Analogue, clipping music: 0x0009=1e1e~1f1f, 0015/16=00). This
-        // matches SSL's stream faithfully — but it does NOT fix the "red numbers
-        // at high level" (current reddens hot, max latches red). PROVEN 2026-07-22:
-        // we streamed SSL's EXACT cap80 bytes and the numbers still redden. So
-        // 0x0009/0x0015/0x0016 do NOT gate the colour — the red is the hardware's
-        // own VU red-zone tint, tracking the value (our needle pegs at 0xb4/+3 VU
-        // far more than SSL's, which dances ~0x94). PARKED as cosmetic. Do not
-        // chase these three elements again — see the memory note.
-        {
-            static const uint8_t kColCur[4]  = {0x1e, 0x1e, 0x00, 0x00};
-            static const uint8_t kColZero[4] = {0x00, 0x00, 0x00, 0x00};
-            static const uint8_t kColOff     = 0x00;
-            g_uf1_dev->send(uf1::buildScreen(0x0009, std::span<const uint8_t>(kColCur, 4)));
-            g_uf1_dev->send(uf1::buildScreen(0x000a, std::span<const uint8_t>(kColZero, 4)));
-            g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kColOff, 1)));
-            g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kColOff, 1)));
-        }
+        // NB: 0x0009/0x000a/0x0015/0x0016 (the small-LCD channel level+GR group)
+        // are now streamed LIVE for every non-Overview screen at the top of this
+        // function — the strip above the fader follows the channel in Meter mode.
+        // The old static cap80 "VU-colour" re-assert here (0x0009=1e1e, 0015/16=00)
+        // was proven inert on the big display ([[uf1-vu-red-numbers-parked]]); it
+        // only ever wrote the small LCD, so the live group replaces it.
         // Unconditional, as on Overview — see the note there. The dedup that was
         // here is precisely why this screen painted one frame and then froze.
         putNdl(0x0125, ndl);
@@ -20108,6 +20122,144 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
     gateByte = grByte(gateDb);
 }
 
+// Small-LCD channel-strip zone (0x00xx): track name, output dB, pan line + bar,
+// channel number, colour bar / SEL colour / populated flag, and the Solo/Cut
+// button LEDs. This is the manual's separate "small LCD" above the fader — it is
+// NOT the big meter/plugin display (0x01xx), so it is painted IDENTICALLY in BOTH
+// the Channel/DAW view AND the Meter view (Frank 2026-08-02: "in meter mode ...
+// folgt nicht der kanal auswahl ... soll gleich bleiben wie in daw/plugin mode").
+// The level + GR meter (0x0009/0x0015/0x0016) is streamed separately — via the
+// cycle pacer in each view — so it is NOT here. `changed` forces a full repaint
+// on a track / view / reopen change (its own send-on-change statics live here).
+static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
+{
+    if (!g_uf1_dev || !tr) return;
+
+    static std::string sName, sDb, sPan, sCh;
+    static int         sPanBar = INT_MIN;      // encoded pos*2+centreFlag (−1 = unset)
+    static uint32_t    sColor  = 0xFFFFFFFFu;
+
+    // 0x00-prefixed text send for the channel-info plane.
+    auto sendZoneText = [&](uint16_t addr, const std::string& content) {
+        std::vector<uint8_t> p;
+        p.reserve(content.size() + 1);
+        p.push_back(0x00);
+        p.insert(p.end(), content.begin(), content.end());
+        g_uf1_dev->send(uf1::buildScreen(addr, p));
+    };
+
+    // Track name (0x000b) — the SAME string the UF8 scribble prints. Mirror the
+    // UF8 path: MASTER, else "CH <IP_TRACKNUMBER>" when unnamed, then
+    // abbreviateTrackName_ (forceMode -1 → follows Settings → Track-name mode).
+    std::string name;
+    {
+        char buf[256] = {0};
+        GetSetMediaTrackInfo_String(tr, "P_NAME", buf, false);
+        name = buf;
+        if (name.empty() && tr == GetMasterTrack(nullptr)) {
+            name = "MASTER";                       // its IP_TRACKNUMBER is -1
+        } else if (name.empty()) {
+            const int trkNo = static_cast<int>(
+                GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+            char fb[16];
+            snprintf(fb, sizeof(fb), "CH %d", trkNo > 0 ? trkNo : 0);
+            name = fb;
+        }
+        name = abbreviateTrackName_(name, 12, -1, /*foldLatin1*/ false);
+    }
+    if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+
+    // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
+    const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
+    const std::string dbv = formatDbReadout(volLin);
+    if (changed || dbv != sDb) {
+        sDb = dbv;
+        std::vector<uint8_t> p;
+        p.push_back(0x00);
+        for (size_t k = 0; k < 6; ++k)
+            p.push_back(k < dbv.size() ? static_cast<uint8_t>(dbv[k]) : 0x00);
+        p.push_back('d'); p.push_back('B');
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
+    }
+
+    // Pan value line (0x000e) + readout bar (0x000f) — the per-track knob readout
+    // ABOVE the fader. When the focused track has an ACTIVE pin, the line shows the
+    // pinned param instead of Pan ("*name value"); else the normal Pan line +
+    // centre-detent bar. Change-detected (sPan/sPanBar) so it animates as the knob
+    // turns.
+    std::string panLine;
+    int         barPos = 50;      // 0..100
+    uint8_t     barCentre = 0x00; // 0x80 only for a real Pan centre-detent
+    int spFx = -1, spParam = -1; bool spTog = false;
+    if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
+        char nm[64] = {0}, val[64] = {0};
+        TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
+        TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
+        panLine = composeValueLine(std::string("*") + nm, val);   // '*' = pinned marker
+        const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
+        barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
+    } else {
+        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        panLine   = composeValueLine("Pan", formatPanReadout(pan));
+        barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
+        barCentre = (pan == 0.0) ? 0x80 : 0x00;
+    }
+    if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
+    const int panBarKey = barPos * 2 + (barCentre ? 1 : 0);
+    if (changed || panBarKey != sPanBar) {
+        sPanBar = panBarKey;
+        const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kPanBar, pb));
+    }
+
+    // Channel number (0x0014)
+    const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    const std::string ch = std::to_string(idx);
+    if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
+
+    // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
+    // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
+    const uint32_t rgb = trackColorRgb(tr);
+    if (changed || rgb != sColor) {
+        sColor = rgb;
+        g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, rgb));
+        const std::array<uint8_t, 1> active{0x01};
+        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+    }
+
+    // Solo / Cut button LEDs (cap64/cap65 ground truth). FF39 level byte: 0x11 =
+    // green (soloed), 0x12 = bright red (muted), 0x00 = dim/off. Change-detected
+    // against the focused track's I_SOLO / B_MUTE. FACTORY solo/cut meaning; a user
+    // rebind supersedes this later. Re-enable (FF3B) on `changed` because the
+    // layout mode frames re-latch the button-LED bank.
+    {
+        static int sSolo = -1, sMute = -1;
+        const bool soloed = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
+        const bool muted  = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+        auto sendLed = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
+            const uint8_t prim = on ? litPrim          : dim;
+            const uint8_t lvl  = on ? uf1::led::kFf39Lit : dim;
+            g_uf1_dev->send(uf1::buildLedPrimary(id, prim));
+            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));
+        };
+        if (changed) {
+            g_uf1_dev->send(uf1::buildLed(uf1::led::kSolo, true));
+            g_uf1_dev->send(uf1::buildLed(uf1::led::kCut, true));
+            sSolo = sMute = -1;   // force re-send after a reopen/view change
+        }
+        if (static_cast<int>(soloed) != sSolo) {
+            sSolo = soloed;
+            sendLed(uf1::led::kSolo, soloed, uf1::led::kPrimSoloLit, uf1::led::kDimSolo);
+        }
+        if (static_cast<int>(muted) != sMute) {
+            sMute = muted;
+            sendLed(uf1::led::kCut, muted, uf1::led::kPrimCutLit, uf1::led::kDimCut);
+        }
+    }
+}
+
 void uf1PaintChannel_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -20116,9 +20268,8 @@ void uf1PaintChannel_()
     MediaTrack* tr = uf1FocusedTrack_();
 
     static MediaTrack* sTr = nullptr;
-    static std::string sName, sDb, sPan, sCh;
-    static int         sPanBar = INT_MIN;   // encoded pos*2+centreFlag (−1 = unset)
-    static uint32_t    sColor = 0xFFFFFFFFu;
+    // (Track name / dB / pan / ch / colour statics moved to uf1PaintChannelStrip_,
+    //  which now paints the small-LCD zone in BOTH views.)
     static bool        sMeterView = false;
     static int         sMeterScreen = -1;   // −1 = unset, forces the first burst
     static int         sMeterPage = -1;     // −1 = unset, forces the first labels
@@ -20138,8 +20289,7 @@ void uf1PaintChannel_()
     static uint32_t sGen = 0;
     if (const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed); gen != sGen) {
         sGen = gen;
-        sTr = nullptr; sName.clear(); sDb.clear(); sPan.clear(); sCh.clear();
-        sPanBar = INT_MIN; sColor = 0xFFFFFFFFu;
+        sTr = nullptr;                            // → changed=true → strip force-repaints
         sMeterView = false; sMeterScreen = -1;   // forces the entry burst
     }
 
@@ -20568,7 +20718,12 @@ void uf1PaintChannel_()
         uf1EnsurePacer_();
     }
 
-    // 0x00-prefixed text send for the channel-info plane.
+    // (Track name / output dB / pan line+bar / channel number moved to
+    //  uf1PaintChannelStrip_ — the small-LCD zone is now painted in BOTH views.)
+
+    // 0x00-prefixed text send for the channel-info plane. Still used below for the
+    // CS-TYPE cell (0x0017), whose content is resolved in the V-Pot block — Channel
+    // view only, so it stays here rather than in uf1PaintChannelStrip_.
     auto sendZoneText = [&](uint16_t addr, const std::string& content) {
         std::vector<uint8_t> p;
         p.reserve(content.size() + 1);
@@ -20576,101 +20731,6 @@ void uf1PaintChannel_()
         p.insert(p.end(), content.begin(), content.end());
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
-
-    // Track name (0x000b) — the SAME string the UF8 scribble prints (Frank
-    // 2026-07-18: UF8 showed "AdOnPst" / "CH 2" while the UF1 showed
-    // "Adi On P" / "Track 2").
-    //
-    // trackDisplayName_ was the wrong source. It exists to match REAPER's
-    // "FX: <track>" window title, so it returns the raw P_NAME and REAPER's
-    // own "Track N" label — and the UF1 then chopped that at 12 chars, which
-    // is truncation, not abbreviation. Mirror the UF8 path element for
-    // element: MASTER, else "CH <IP_TRACKNUMBER>" when unnamed, then
-    // abbreviateTrackName_ with forceMode -1 so it follows Settings →
-    // Track-name mode on both surfaces at once.
-    //
-    // Budget 12 — the zone's full width, Frank at the hardware. SSL never
-    // writes a real name into 0x000b in cap84/cap101, so there is no capture to
-    // read the width from; an earlier 8 here was inferred from one panel
-    // reading and was wrong.
-    std::string name;
-    {
-        char buf[256] = {0};
-        GetSetMediaTrackInfo_String(tr, "P_NAME", buf, false);
-        name = buf;
-        if (name.empty() && tr == GetMasterTrack(nullptr)) {
-            name = "MASTER";                       // its IP_TRACKNUMBER is -1
-        } else if (name.empty()) {
-            const int trkNo = static_cast<int>(
-                GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
-            char fb[16];
-            snprintf(fb, sizeof(fb), "CH %d", trkNo > 0 ? trkNo : 0);
-            name = fb;
-        }
-        // foldLatin1 stays FALSE. The UF8 scribble is a Latin-1 LCD and folds;
-        // this plane never has, and the UF1 large display's encoding is not
-        // established — folding it blind is a separate question from this one
-        // (see surface-lcd-latin1-umlauts: fold ONCE, at the source, never twice).
-        name = abbreviateTrackName_(name, 12, -1, /*foldLatin1*/ false);
-    }
-    if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
-
-    // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
-    const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
-    const std::string dbv = formatDbReadout(volLin);
-    if (changed || dbv != sDb) {
-        sDb = dbv;
-        std::vector<uint8_t> p;
-        p.push_back(0x00);
-        for (size_t k = 0; k < 6; ++k)
-            p.push_back(k < dbv.size() ? static_cast<uint8_t>(dbv[k]) : 0x00);
-        p.push_back('d'); p.push_back('B');
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
-    }
-
-    // Pan value line (0x000e) + readout bar (0x000f) — the per-track knob readout
-    // ABOVE the fader (the above-fader V-Pot = enc 0x00). This is the UF1 analog of
-    // the UF8 strip V-Pot readout, so the Sticky Pot READOUT lives HERE (Frank
-    // 2026-08-02: "dort wo der pan-wert oberhalb des faders steht", NOT the big
-    // display header). When the focused track has an ACTIVE pin, the line shows the
-    // pinned param instead of Pan — "*name value", the UF8 sticky value-line style —
-    // and the bar reflects the param value (UNIPOLAR fill, v1: no polarity info for
-    // an arbitrary pin). Else the normal Pan line + centre-detent bar. The block
-    // runs every paint tick and is change-detected (sPan/sPanBar), so the value
-    // animates as the knob turns.
-    std::string panLine;
-    int         barPos = 50;      // 0..100
-    uint8_t     barCentre = 0x00; // 0x80 only for a real Pan centre-detent
-    int spFx = -1, spParam = -1; bool spTog = false;
-    // Show the pin whenever it is ACTIVE (not just !flip): under FLIP the pin rides
-    // the fader (stickyFader below), so its value + bar still belong on this line.
-    if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
-        char nm[64] = {0}, val[64] = {0};
-        TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
-        TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
-        panLine = composeValueLine(std::string("*") + nm, val);   // '*' = pinned marker
-        const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
-        barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
-    } else {
-        // position = round((pan+1)*50): 0 = full L, 50 = centre, 100 = full R.
-        // centre byte = 0x80 only at exact centre (the firmware's detent marker).
-        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-        panLine   = composeValueLine("Pan", formatPanReadout(pan));
-        barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
-        barCentre = (pan == 0.0) ? 0x80 : 0x00;
-    }
-    if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
-    const int panBarKey = barPos * 2 + (barCentre ? 1 : 0);
-    if (changed || panBarKey != sPanBar) {
-        sPanBar = panBarKey;
-        const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kPanBar, pb));
-    }
-
-    // Channel number (0x0014)
-    const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
-    const std::string ch = std::to_string(idx);
-    if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
     // Time/position (0x0119) — mirror REAPER's transport display, exactly as SSL
     // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
@@ -20708,63 +20768,8 @@ void uf1PaintChannel_()
         }
     }
 
-    // Track colour (Phase 1). Two consumers of the same track RGB:
-    //  - SEL / track-colour element 0x07 (FF38 GRB).
-    //  - The fader colour BAR (element 0x0018) — a palette INDEX, exactly the
-    //    UF8 colour-bar mechanism (cap77: rot=02 grün=03 blau=04 cyan=05 gelb=07
-    //    = uf8::quantize's palette verbatim), gated by the 0x0006 "channel
-    //    populated" flag (=01) just like the UF8 plug-in-slot-active gate.
-    const uint32_t rgb = trackColorRgb(tr);
-    if (changed || rgb != sColor) {
-        sColor = rgb;
-        g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, rgb));
-        const std::array<uint8_t, 1> active{0x01};
-        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
-    }
-
-    // Solo / Cut button LEDs (cap64/cap65 ground truth). FF39 level byte:
-    // 0x11 = green (soloed), 0x12 = bright red (muted), 0x00 = dim/off. The
-    // Cut LED is never fully dark — 0x00 reads as dim red — matching cap65's
-    // observed dim-red-when-unmuted. Change-detected against the focused
-    // track's I_SOLO / B_MUTE so we don't re-send every tick (Sel 0x07 is the
-    // track-colour element painted above). NOTE: these follow the FACTORY
-    // solo/cut meaning; once a user rebinds the button via the UF1 page the
-    // bindings LED resolver supersedes this (later phase).
-    {
-        static int sSolo = -1, sMute = -1;
-        const bool soloed = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
-        const bool muted  = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
-
-        // Drive one button LED as SSL 360 does (cap64/cap65): the FF38 PRIMARY
-        // frame then the FF39 level — BOTH are required, FF39 alone is inert.
-        //   LIT  (on):  FF38 = bright primary, FF39 = 0x00
-        //   DIM  (off): FF38 = FF39 = dim colour pair (Cut stays dim red, not
-        //               fully dark — matches SSL + Frank's ground truth).
-        auto sendLed = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
-            const uint8_t prim = on ? litPrim          : dim;
-            const uint8_t lvl  = on ? uf1::led::kFf39Lit : dim;
-            g_uf1_dev->send(uf1::buildLedPrimary(id, prim));
-            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));
-        };
-
-        // Re-assert the FF3B enable on `changed`: init enables Solo/Cut, but
-        // the plugin-layout mode frames re-sent above (0x0100…) re-latch the
-        // button-LED bank. SSL 360 likewise re-enables at runtime (cap64).
-        if (changed) {
-            g_uf1_dev->send(uf1::buildLed(uf1::led::kSolo, true));
-            g_uf1_dev->send(uf1::buildLed(uf1::led::kCut, true));
-        }
-        if (changed || static_cast<int>(soloed) != sSolo) {
-            sSolo = soloed;
-            sendLed(uf1::led::kSolo, soloed, uf1::led::kPrimSoloLit, uf1::led::kDimSolo);
-        }
-        if (changed || static_cast<int>(muted) != sMute) {
-            sMute = muted;
-            sendLed(uf1::led::kCut, muted, uf1::led::kPrimCutLit, uf1::led::kDimCut);
-        }
-    }
+    // (Track colour + Solo/Cut LEDs moved to uf1PaintChannelStrip_ — painted in
+    //  BOTH views so the small-LCD zone follows the channel selection.)
 
     // Channel-strip MAIN display (0x01xx plane): 4 V-pot param slots (0x010e,
     // index 0..3 + 19-char "name...value" line). Painting these overwrites the
@@ -21299,6 +21304,14 @@ void uf1PaintChannel_()
     // change-detects the 251-byte output internally before transmitting.
     uf1PaintEqGraph_(tr, changed);
     }  // end channel-view painting (else of meterView)
+
+    // Small-LCD channel strip (name / dB / pan / ch# / colour / Solo·Cut LEDs) —
+    // painted in BOTH views so the strip above the fader always follows the channel
+    // selection, identical to the Channel/DAW view (Frank 2026-08-02). The level +
+    // GR meter (0x0009/0x0015/0x0016) rides each view's own cycle and is handled
+    // there, not here. Runs after the meter/channel paint so its Solo/Cut FF3B
+    // re-enable lands after any 0x0100 layout frames sent above.
+    uf1PaintChannelStrip_(tr, changed);
 
     // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
