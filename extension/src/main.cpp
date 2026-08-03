@@ -509,8 +509,8 @@ constexpr int     kUf1CsPageCount = 8;  // max pages (channel-strip types); work
 // 3 360 Link = the 8 p188 channel-strip pages; 4 = SSL Bus Compressor 2, a
 // Rea-Sixty extra (NOT in SSL's UF1 manual — the UF1 guide covers only the four
 // channel strips + Meter) with just 2 V-Pot/soft-key pages of its own params.
-constexpr int     kUf1CsTypePageCount[6] = { 8, 8, 8, 8, 2, 8 };  // …4=BC(2p), 5=4K G(8p)
-constexpr int     kUf1CsTypeCount = 6;
+constexpr int     kUf1CsTypePageCount[7] = { 8, 8, 8, 8, 2, 8, 2 };  // …4=BC(2p), 5=4K G(8p), 6=L-BC(2p)
+constexpr int     kUf1CsTypeCount = 7;
 std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count-1 per type)
 // Strip type currently under the channel V-Pots (uf1CsPluginType_), or -1 = none.
 // Written by the main-thread painter each tick; read by the input-worker ◄ ► handler
@@ -19502,7 +19502,7 @@ struct Uf1CsPage {
 // docs/uf1-vpot-softkey-tables.md), 4 = SSL Bus Compressor 2 (Rea-Sixty extra —
 // the standalone BC is NOT in SSL's UF1 manual; 2 pages). param strings resolved
 // against docs/ssl-native-params/.
-constexpr Uf1CsPage kUf1CsVPots[6][8] = {
+constexpr Uf1CsPage kUf1CsVPots[7][8] = {
     { // 0 — Channel Strip 2
         { {"Width","Width"}, {}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
         { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
@@ -19571,6 +19571,20 @@ constexpr Uf1CsPage kUf1CsVPots[6][8] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },
     },
+    { // 6 — SSL 360 Link Bus Compressor ("L-BC"). Same BC semantics as BC 2 but the
+      //     360-Link wrapper NAMES them "MIX" / "S/C HPF" (not BC 2's "Dry/Wet" /
+      //     "Sidechain HPF"), so it needs its own row. Names verified vs the dump
+      //     docs/ssl-native-params/VST3__SSL_360_Link_Bus_Compressor_(SSL).md and
+      //     resolve case-insensitively ("Threshold"→THRESHOLD, "Mix"→MIX …). 2 pages.
+        { {"Threshold","Thresh"}, {"Ratio","Ratio"}, {"Attack","Attack"}, {"Release","Release"} },
+        { {"Makeup","Makeup"}, {"Mix","Mix"}, {"S/C HPF","S/C HPF"}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+        { {}, {}, {}, {} },
+    },
 };
 // One physical detent = this much normalised movement (fine dial; ~50 clicks a
 // full sweep). Quartered in Fine mode via reasixty_uf8KnobScale. HW-tunable.
@@ -19612,7 +19626,7 @@ struct Uf1CsSkPage {
 // SSL paints on soft-key 1 (cap77 idx0 = 0xd8; surface font is Latin-1, 0xd8 = Ø).
 // Channel-strip rows transcribed verbatim from the p188 SOFT-KEY columns; param
 // strings resolved against docs/ssl-native-params/.
-constexpr Uf1CsSkPage kUf1CsSoftKeys[6][8] = {
+constexpr Uf1CsSkPage kUf1CsSoftKeys[7][8] = {
     { // 0 — Channel Strip 2  (params: SSL Native Channel Strip 2)
         { {"Polarity","\xd8"}, {nullptr,""}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
         { {nullptr,"S/C MODE"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
@@ -19678,6 +19692,18 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[6][8] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Gate Expander","EXPANDER"}, {"Gate Fast Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYN"} },
     },
+    { // 6 — L-BC (360 Link Bus Compressor). Blank soft-keys: the wrapper exposes no
+      //     External-S/C / Oversampling / HQ / A-B params (verified vs the dump), so
+      //     nothing to toggle here without guessing.
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+    },
 };
 
 // Display soft-key LED ids (buttons 0x19-0x1C). The UF1 LED-id space is SEPARATE
@@ -19731,10 +19757,11 @@ int uf1CsPluginType_(MediaTrack* tr, int fx)
             return -1;
         }
         // Standalone SSL Bus Compressor 2 (Rea-Sixty extra beyond SSL's UF1 scope):
-        // type 4. The 360 Link BC wrapper ("L-BC") has a different vst3 index set
-        // and is not mapped yet → no-op.
+        // type 4. The 360 Link BC wrapper ("L-BC") → type 6 (its own 2-page layout,
+        // params resolve by NAME so the different vst3 index set is irrelevant).
         if (m.domain == uf8::Domain::BusComp) {
             if (s == "BC 2") return 4;
+            if (s == "L-BC") return 6;
             return -1;
         }
         return -1;   // first built-in match decided it (e.g. 4K G non-CS branch)
@@ -21290,7 +21317,9 @@ void uf1PaintChannel_()
             const int tty = uf1ResolveCsFx_(tr, tt, tf);
             const char* cs = (tty == 0) ? "CS 2" : (tty == 1) ? "4K B"
                            : (tty == 2) ? "4K E" : (tty == 3) ? "Link"
-                           : (tty == 4) ? "BC 2" : (tty == 5) ? "4K G" : "4K E";
+                           : (tty == 4) ? "BC 2" : (tty == 5) ? "4K G"
+                           : (tty == 6) ? "BC 2"   // L-BC → the recognised BC LAYOUT latch
+                                        : "4K E";  // (the real "L-BC" name is shown by uf1ActiveFxShortName_)
             sendZoneText(uf1::scr::kCsType, cs);
         }
 
