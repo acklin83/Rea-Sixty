@@ -31,10 +31,16 @@ Enter: `0x0100=0403`, `0x0102=09`, and:
   idx3 PRESETS.
 - `0x010e` V-Pot labels: idx0 "HARDWARE OUTPUT" · idx1/idx2 empty · **idx3 "Select"** (V-Pot4).
 - `0x010d = 0a 06 06 0a` (per-V-Pot style: V1 active, V2/V3 dim, V4 active).
-- **Scroll cursor = `0x011f`** (1 byte 0x00..0x64) — driven by turning **V-Pot4**; sweeps the list.
+- **Scroll cursor = `0x011f`** (1 byte 0x00..0x64) — driven by turning **V-Pot4**; the scrollbar thumb.
 - `0x011e` = section/page byte (00 → 10 seen).
-- **The preset LIST (names) is drawn in the `0x0122` IMAGE bitmap**, NOT as text elements —
-  so replicating the list = rendering a name bitmap ourselves. Loading a preset = Core→plug-in.
+- **★ CORRECTED 2026-08-03 (re-decoded cap uf1_rp): the preset LIST is TEXT in `0x011c`, NOT a bitmap.**
+  `0x011c` = 8 fields × 25 bytes: **field 0 = "METER"** (header), **fields 1-7 = a 7-name scrolling
+  window** (e.g. `EBU R128 LU +9 / +18 / +27 / LUFS +9 / …`, SSL natural order). The selected preset
+  rides the top row and the window advances as you scroll. `0x0122` in this layout is NOT the names —
+  it's a small **scroll/highlight descriptor** (byte 0 = a highlight index, rest ~zero). The earlier
+  "names = 0x0122 bitmap" claim was WRONG (it confused the paused goniometer left in 0x0122 with the
+  list). **Loading** a preset does NOT need Core→plug-in either: SSL keeps its presets as XML on disk
+  (`…/Solid State Logic/PlugIns/Presets/{MeterPro|Meter}/*.xml`) and we set the params directly.
 Exit: `0x0100` back to the screen (0400/0401/…), `0x0102=01`.
 
 ## Loudness screen (0x0100=0405) — bonus (already built)
@@ -45,5 +51,6 @@ Soft-key idx2 = "PAUSE"; V-Pot labels "DAW Sync" / "30 secs" / "Scroll Timeline"
 - **FINE**: DONE (`b1b925b`), protocol-confirmed.
 - **RESET**: the 0x0102=03 flash is trivial. The real peak reset = Core→plug-in (needs another
   capture / decode). Half-feature without it.
-- **PRESETS**: chrome (mode/labels/cursor) is decodable, but the name LIST is a `0x0122` bitmap
-  + load is Core→plug-in → a large lift (preset enumeration + bitmap render + load command).
+- **PRESETS**: ✅ DONE 2026-08-03 — the name LIST is TEXT in `0x011c` (see the corrected note above),
+  not a bitmap; enumerate SSL's on-disk XML presets, fill `0x011c` (METER + 7 names) + `0x011f` cursor,
+  load by setting params from the XML. No bitmap render, no Core→plug-in command needed.
