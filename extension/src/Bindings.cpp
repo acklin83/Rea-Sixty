@@ -127,6 +127,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::SelectionNorm, "selection_norm" },
     { ButtonId::SelectionRec,  "selection_rec"  },
     { ButtonId::SelectionAuto, "selection_auto" },
+    { ButtonId::Uf8Select,     "uf8_select"     },
     { ButtonId::ChannelEncoder, "channel_encoder" },
     { ButtonId::Uc1Encoder1,      "uc1_encoder_1"      },
     { ButtonId::Uc1Encoder2,      "uc1_encoder_2"      },
@@ -432,6 +433,17 @@ std::unordered_map<uint32_t, PressRecord> g_pressStart;
 // their own map because the standard path consumes g_pressStart for Hold
 // before we can read the held duration. Keys are pressKey(layer, id).
 std::unordered_map<uint32_t, PressRecord> g_longPressStart;
+
+// Double-press support. A 2nd press of the same (layer, button) within
+// kDoubleClickMs of the previous PRESS fires the binding's doublePress
+// slot ADDITIVELY (the single press already fired normally). Mirrors the
+// host-keyboard Shift double-click window (main.cpp kShiftDoubleClickMs).
+// Guarded by g_pressMx like the other press maps. The map holds the last
+// press timestamp; it's reset the moment a double fires so a triple-tap
+// doesn't fire the double twice on the 3rd press.
+constexpr std::chrono::milliseconds kDoubleClickMs{400};
+std::unordered_map<uint32_t, std::chrono::steady_clock::time_point>
+    g_lastPressAt;
 
 // Modifier state, set by main.cpp's mod_shift / mod_cmd / mod_ctrl
 // builtin handlers. dispatch reads currentModifierSnapshot() at press
@@ -880,6 +892,24 @@ void seedFactoryDefaults_(Config& c)
     // channel soft-key, secondary transport, Scrub) ship UNBOUND — the user
     // assigns them in Settings → Bindings → UF1, matching how UF8 ships
     // Nav/Nudge unbound.
+
+    // SEL DOUBLE-press factory default (UF1 SEL + shared UF8 SEL) →
+    // `show_fx_chain`. Single-press select stays NATIVE on both surfaces;
+    // this only makes the double-tap open the FX chain of the just-
+    // selected track. Matches upgradeBackfillSelDouble_ (which fills the
+    // same default into pre-v19 configs). Frank 2026-08-03.
+    {
+        auto seedSelDouble = [&](ButtonId id) {
+            Binding& bd = L1[id];   // default-creates if missing
+            bd.hasDoublePress = true;
+            auto& dp  = bd.doublePress[static_cast<int>(Modifier::Plain)];
+            dp.type   = ActionType::Builtin;
+            dp.action = "show_fx_chain";
+            dp.label  = "FX Chain";
+        };
+        seedSelDouble(ButtonId::Uf1Sel);
+        seedSelDouble(ButtonId::Uf8Select);
+    }
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -1112,6 +1142,10 @@ void serializeBindingBody_(const Binding& bd, std::ostringstream& os)
         os << ", \"long\": ";
         serializeMatrixRow_(bd.longPress, os);
     }
+    if (bd.hasDoublePress) {
+        os << ", \"double\": ";
+        serializeMatrixRow_(bd.doublePress, os);
+    }
 }
 
 void serializeLayerBody_(const Layer& L, std::ostringstream& os,
@@ -1149,6 +1183,7 @@ void serializeUserQuicks_(const Config& c, std::ostringstream& os)
         for (int m = 0; m < kModifierCount; ++m) {
             if (!slotIsEmpty_(bd.shortPress[m])) return false;
             if (!slotIsEmpty_(bd.longPress[m]))  return false;
+            if (!slotIsEmpty_(bd.doublePress[m])) return false;
         }
         return bd.label.empty();
     };
@@ -1308,6 +1343,8 @@ static bool uf1BankSlotEmpty_(const Binding& bd)
             || !bd.shortPress[m].action.empty()) return false;
         if (bd.longPress[m].type != ActionType::Noop
             || !bd.longPress[m].action.empty())  return false;
+        if (bd.doublePress[m].type != ActionType::Noop
+            || !bd.doublePress[m].action.empty()) return false;
     }
     return bd.label.empty();
 }
@@ -1559,6 +1596,10 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
         bd.hasLongPress = true;
         parseMatrixRow_(v, bd.longPress);
     }
+    if (auto* v = be->get_item_by_name("double"); v && v->is_object()) {
+        bd.hasDoublePress = true;
+        parseMatrixRow_(v, bd.doublePress);
+    }
 }
 
 void parseUserQuicks_(wdl_json_element* root, Config& out)
@@ -1801,6 +1842,10 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
             bd.hasLongPress = true;
             parseMatrixRow_(v, bd.longPress);
         }
+        if (auto* v = be->get_item_by_name("double"); v && v->is_object()) {
+            bd.hasDoublePress = true;
+            parseMatrixRow_(v, bd.doublePress);
+        }
 
         // Old-schema fallback: pre-modifier-matrix configs carried bare
         // `type`/`action`/`param`/`midi` + `long_press` at the binding
@@ -1869,6 +1914,8 @@ void upgradeEmptyBuiltinSlots_(Layer& L)
             for (auto& step : bd.shortPress[m].extraSteps) fix(step);
             fix(bd.longPress[m]);
             for (auto& step : bd.longPress[m].extraSteps) fix(step);
+            fix(bd.doublePress[m]);
+            for (auto& step : bd.doublePress[m].extraSteps) fix(step);
         }
     }
 }
@@ -2087,7 +2134,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 18;
+constexpr int kCurrentBindingsVersion = 19;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2293,6 +2340,7 @@ void upgradeRetireQuickSelect_(Config& c)
             for (int m = 0; m < kModifierCount; ++m) {
                 migrateSlot(li, bd.shortPress[m]);
                 migrateSlot(li, bd.longPress[m]);
+                migrateSlot(li, bd.doublePress[m]);
             }
             // Behavior was Toggle for the Quick buttons under the old
             // model — flip to Momentary so the new softkey_bank_N
@@ -2345,6 +2393,7 @@ void upgradeRetireUf1Builtins_(Config& c)
             for (int m = 0; m < kModifierCount; ++m) {
                 migrateSlot(bd.shortPress[m]);
                 migrateSlot(bd.longPress[m]);
+                migrateSlot(bd.doublePress[m]);
             }
         }
     }
@@ -2487,6 +2536,31 @@ void upgradeBackfillUf1EncoderLong_(Config& c)
     auto& lp  = bd.longPress[static_cast<int>(Modifier::Plain)];
     lp.type   = ActionType::Builtin;
     lp.action = "uf1_encoder_ch_select";
+}
+
+// v18→v19 (2026-08-03): SEL becomes first-class bindable on UF1 + UF8.
+// The single-press select stays NATIVE (unchanged); this only seeds the
+// new DOUBLE-press factory default → `show_fx_chain` (open the FX chain
+// of the just-selected track). Seeded on Layer 1 (the UF8/UF1 default
+// layer) for both the UF1 SEL (ButtonId::Uf1Sel) and the shared UF8 SEL
+// (ButtonId::Uf8Select). Only fills an EMPTY double slot — an explicit
+// user assignment (or a slot they deliberately cleared) is never
+// resurrected (matches upgradeBackfillUf1EncoderLong_).
+void upgradeBackfillSelDouble_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto seedDouble = [&](ButtonId id) {
+        Binding& bd = L1.bindings[id];   // default-creates if missing
+        if (bd.hasDoublePress) return;   // user / prior run already set it
+        auto& dp = bd.doublePress[static_cast<int>(Modifier::Plain)];
+        if (dp.type != ActionType::Noop || !dp.action.empty()) return;
+        bd.hasDoublePress = true;
+        dp.type   = ActionType::Builtin;
+        dp.action = "show_fx_chain";
+        dp.label  = "FX Chain";
+    };
+    seedDouble(ButtonId::Uf1Sel);
+    seedDouble(ButtonId::Uf8Select);
 }
 
 // Both passes preserve color, brightness, inactive*, label, and
@@ -2752,6 +2826,9 @@ void load()
             }
             if (tmp.version < 18) {
                 upgradeBackfillUf1EncoderLong_(tmp);
+            }
+            if (tmp.version < 19) {
+                upgradeBackfillSelDouble_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -3375,6 +3452,14 @@ static const ActionSlot& effectiveLongSlot_(const Binding& bd, int m)
     return bd.longPress[static_cast<int>(Modifier::Plain)];
 }
 
+// Same Plain-fallback resolution for the double-press slot.
+static const ActionSlot& effectiveDoubleSlot_(const Binding& bd, int m)
+{
+    const ActionSlot& s = bd.doublePress[m];
+    if (!slotIsEmpty_(s)) return s;
+    return bd.doublePress[static_cast<int>(Modifier::Plain)];
+}
+
 bool dispatch(ButtonId id, bool pressed)
 {
     if (id == ButtonId::None) return false;
@@ -3422,6 +3507,37 @@ bool dispatch(ButtonId id, bool pressed)
         }
         if (it == g_cfg.layers[layer].bindings.end()) return false;
         bd = it->second;   // copy under lock so the rest runs lock-free
+    }
+
+    // ── Double-press (additive, every behaviour) ────────────────────────
+    // A 2nd press of THIS (layer, button) within kDoubleClickMs of the
+    // previous press fires doublePress[mod] IN ADDITION to the normal
+    // single-press handling below — the single press still fires; the
+    // double is an EXTRA gesture (Frank 2026-08-03: select-then-open FX
+    // chain is harmless). Independent of long-press (a binding can carry
+    // both). Collect the slot under g_pressMx, fire after unlock —
+    // runSlot_ can re-enter dispatch() on this input thread, and we never
+    // hold g_pressMx across it. Only the press edge participates.
+    if (pressed && bd.hasDoublePress) {
+        const int  m = static_cast<int>(currentModifierSnapshot());
+        ActionSlot dblToFire;   // stays empty unless a double actually landed
+        {
+            const uint32_t k = pressKey(layer, id);
+            std::lock_guard<std::mutex> lk(g_pressMx);
+            const auto now = std::chrono::steady_clock::now();
+            auto it2 = g_lastPressAt.find(k);
+            const bool isDouble = it2 != g_lastPressAt.end()
+                               && (now - it2->second) <= kDoubleClickMs;
+            if (isDouble) {
+                const ActionSlot& ds = effectiveDoubleSlot_(bd, m);
+                if (!slotIsEmpty_(ds)) dblToFire = ds;   // copy for firing
+                g_lastPressAt.erase(k);   // reset so a triple-tap starts fresh
+            } else {
+                g_lastPressAt[k] = now;
+            }
+        }
+        if (!slotIsEmpty_(dblToFire))
+            runSlot_(dblToFire, /*firing*/ true, /*pressed*/ true);
     }
 
     // Long-press support (Momentary primary only). Defer the primary-
@@ -3631,6 +3747,39 @@ bool dispatch(ButtonId id, bool pressed)
 
     return true;
 }
+
+// Fire a button's short / double slot on demand — resolve the active
+// layer's binding for `id`, pick the current-modifier slot (Plain
+// fallback), run it if non-empty. No press-timing, no g_pressStart / LED
+// bookkeeping: the caller (UF8 per-strip SEL) owns its own per-strip
+// double-tap detection, since the shared ButtonId::Uf8Select can't ride
+// dispatch()'s per-(layer,button) timer without false-doubling across
+// strips. Worker-thread-safe (runSlot_'s builtins defer the REAPER API).
+static bool fireResolvedSlot_(ButtonId id, bool wantDouble)
+{
+    if (id == ButtonId::None) return false;
+    Binding bd;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        int layer = g_cfg.activeLayer;
+        if (layer < 0 || layer > 2) layer = 0;
+        auto it = g_cfg.layers[layer].bindings.find(id);
+        if (it == g_cfg.layers[layer].bindings.end()) return false;
+        bd = it->second;
+    }
+    const int m = static_cast<int>(currentModifierSnapshot());
+    const ActionSlot& s = wantDouble ? effectiveDoubleSlot_(bd, m)
+                                     : (!slotIsEmpty_(bd.shortPress[m])
+                                            ? bd.shortPress[m]
+                                            : bd.shortPress[
+                                                static_cast<int>(Modifier::Plain)]);
+    if (slotIsEmpty_(s)) return false;
+    runSlot_(s, /*firing*/ true, /*pressed*/ true);
+    return true;
+}
+
+bool fireShortPress(ButtonId id)  { return fireResolvedSlot_(id, false); }
+bool fireDoublePress(ButtonId id) { return fireResolvedSlot_(id, true);  }
 
 // Fire any armed long-press the moment it crosses the 0.5 s threshold,
 // WHILE the button is still held — instead of waiting for the release

@@ -1404,6 +1404,16 @@ std::array<std::atomic<bool>, 8>    g_selSpillFired{};
 
 constexpr int64_t kSelLongPressMs = 500;
 
+// Per-strip SEL double-tap detection (Frank 2026-08-03: SEL first-class
+// bindable). Holds the epoch-ms of the previous plain SEL press per strip;
+// a 2nd plain SEL on the SAME strip within kUf8SelDoubleMs fires the shared
+// Uf8Select binding's doublePress (factory default show_fx_chain). Per-strip
+// so tapping SEL on two different strips never counts as a double. Mirrors
+// Bindings.cpp kDoubleClickMs (0.4 s). Shift+SEL (additive select) is
+// excluded — it keeps its own semantics.
+std::array<std::atomic<int64_t>, 8> g_uf8SelDblMs{};
+constexpr int64_t kUf8SelDoubleMs = 400;
+
 inline int visibleTrackCount() {
     return static_cast<int>(g_visibleTracks.size());
 }
@@ -16663,7 +16673,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                 case SelectionMode::Norm:
                                 case SelectionMode::Instance:
                                 case SelectionMode::InstanceCycle:
-                                default:
+                                default: {
                                     // Shift+SEL → additive multi-select.
                                     // Read through the unified modifier
                                     // API so the host-keyboard Shift
@@ -16672,8 +16682,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                     // UF8 hardware Shift modifier —
                                     // g_shiftHeld alone misses the
                                     // keyboard path. Frank 2026-05-22.
-                                    k = uf8::bindings::modifierHeld(
-                                            uf8::bindings::Modifier::Shift)
+                                    const bool selShift =
+                                        uf8::bindings::modifierHeld(
+                                            uf8::bindings::Modifier::Shift);
+                                    k = selShift
                                         ? PendingInput::SelectToggle
                                         : PendingInput::SelectExclusive;
                                     // Arm long-press detection — only
@@ -16683,7 +16695,35 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                     // before the spill timer touches.
                                     g_selPressMs[strip].store(nowMs_());
                                     g_selSpillFired[strip].store(false);
+                                    // SEL first-class bindable (Frank
+                                    // 2026-08-03). PLAIN SEL only (Shift+SEL
+                                    // stays pure additive-select): a 2nd tap
+                                    // on the SAME strip within kUf8SelDoubleMs
+                                    // fires the shared Uf8Select doublePress
+                                    // (factory default show_fx_chain — opens
+                                    // the just-selected strip's FX chain).
+                                    // A user-assigned single-press action
+                                    // fires additively on the same press. The
+                                    // native select above is unchanged; both
+                                    // fires are worker-thread-safe (their
+                                    // builtins defer the REAPER API). Per-strip
+                                    // timer so two DIFFERENT strips never
+                                    // count as a double.
+                                    if (!selShift) {
+                                        const int64_t nowSel = nowMs_();
+                                        const int64_t lastSel =
+                                            g_uf8SelDblMs[strip].exchange(nowSel);
+                                        if (lastSel > 0
+                                            && (nowSel - lastSel) <= kUf8SelDoubleMs) {
+                                            g_uf8SelDblMs[strip].store(0);
+                                            uf8::bindings::fireDoublePress(
+                                                uf8::bindings::ButtonId::Uf8Select);
+                                        }
+                                        uf8::bindings::fireShortPress(
+                                            uf8::bindings::ButtonId::Uf8Select);
+                                    }
                                     break;
+                                }
                             }
                         }
                         queueInput({k, strip, value});
@@ -17336,7 +17376,18 @@ void onUf1Event(const uf1::InputEvent& ev)
                         if (ev.pressed) queueInput({PendingInput::Uf1MuteToggle, 0, 0.0});
                         break;
                     case uf1::btn::kSel:
+                        // SEL is now first-class bindable (Frank 2026-08-03).
+                        // The native exclusive-select stays as the single-
+                        // press DEFAULT (queued on the press edge); the SEL
+                        // key ALSO routes through the shared Bindings dispatch
+                        // so a DOUBLE-press (factory default → show_fx_chain)
+                        // or a user-assigned short/long gesture fires ON TOP.
+                        // dispatch() owns both edges + the per-(layer,button)
+                        // double-tap timer. Solo / Cut stay purely native
+                        // (still excluded from the binding-first check above,
+                        // no dispatch here — "locked, LED-heikel").
                         if (ev.pressed) queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
+                        uf8::bindings::dispatch(uf8::bindings::ButtonId::Uf1Sel, ev.pressed);
                         break;
                     default: nativeHandled = false; break;
                 }
@@ -33028,6 +33079,10 @@ namespace {
     int                          g_pickerLayer     = 0;
     uf8::bindings::ButtonId      g_pickerId        = uf8::bindings::ButtonId::None;
     bool                         g_pickerLongPress = false;
+    // Double-press destination (SEL editor). When true the poll writes the
+    // picked action to bd.doublePress[modIdx] instead of short/long. Mutually
+    // exclusive with g_pickerLongPress. Frank 2026-08-03.
+    bool                         g_pickerDouble    = false;
     // Modifier slot (Plain/Shift/Cmd/Ctrl) being edited. -1 = legacy default
     // = Plain. Tracked so chains under non-Plain modifier slots route to
     // the right destination on poll.
@@ -33055,6 +33110,7 @@ void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
     g_pickerLayer     = layer;
     g_pickerId        = id;
     g_pickerLongPress = longPress;
+    g_pickerDouble    = false;
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
@@ -33066,9 +33122,38 @@ bool reasixty_actionPickerActiveFor(int layer, uf8::bindings::ButtonId id,
 {
     return g_pickerActive
         && g_pickerMode == PickerMode::Layer
+        && !g_pickerDouble
         && g_pickerLayer == layer
         && g_pickerId == id
         && g_pickerLongPress == longPress
+        && g_pickerModIdx == modIdx
+        && g_pickerStepIdx == stepIdx;
+}
+
+// Double-press variant — same Layer picker session, but routes the result
+// to bd.doublePress[modIdx] (SEL editor). See g_pickerDouble.
+void reasixty_actionPickerStartDouble(int layer, uf8::bindings::ButtonId id,
+                                      int modIdx, int stepIdx)
+{
+    g_pickerMode      = PickerMode::Layer;
+    g_pickerLayer     = layer;
+    g_pickerId        = id;
+    g_pickerLongPress = false;
+    g_pickerDouble    = true;
+    g_pickerModIdx    = modIdx;
+    g_pickerStepIdx   = stepIdx;
+    g_pickerActive    = true;
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+}
+
+bool reasixty_actionPickerActiveForDouble(int layer, uf8::bindings::ButtonId id,
+                                          int modIdx, int stepIdx)
+{
+    return g_pickerActive
+        && g_pickerMode == PickerMode::Layer
+        && g_pickerDouble
+        && g_pickerLayer == layer
+        && g_pickerId == id
         && g_pickerModIdx == modIdx
         && g_pickerStepIdx == stepIdx;
 }
@@ -33085,6 +33170,7 @@ void reasixty_actionPickerStartUserQuick(int uqLayer, int uqQuick,
     g_pickerLongPress = false;       // user-Quick editor currently exposes
                                      // only shortPress[Plain] — long-press
                                      // can be added later.
+    g_pickerDouble    = false;
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
@@ -33112,6 +33198,7 @@ void reasixty_actionPickerStartUf1Bank(int bank, int slot,
     g_pickerUf1Bank   = bank;
     g_pickerUf1Slot   = slot;
     g_pickerLongPress = false;   // bank editor exposes only shortPress[Plain]
+    g_pickerDouble    = false;
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
@@ -33780,7 +33867,8 @@ void reasixty_actionPickerPoll()
     const int modIdx = (g_pickerModIdx < 0 || g_pickerModIdx >= kModifierCount)
                          ? static_cast<int>(Modifier::Plain)
                          : g_pickerModIdx;
-    auto& slot = g_pickerLongPress ? bd.longPress[modIdx]
+    auto& slot = g_pickerDouble    ? bd.doublePress[modIdx]
+               : g_pickerLongPress ? bd.longPress[modIdx]
                                     : bd.shortPress[modIdx];
     // Walk to the step the picker was opened for. stepCount(slot) == 1 + N
     // extraSteps; idx 0 is the inline step, idx >= 1 indexes into

@@ -90,6 +90,17 @@ enum class ButtonId : uint16_t {
     // Settings → Bindings.
     SelectionNorm, SelectionRec, SelectionAuto,
 
+    // UF8 per-strip SEL (device ids 0x22/0x25/…/0x35, one per strip).
+    // ONE shared binding for all 8 SEL keys — the pressed strip's track
+    // is selected NATIVELY (unchanged), and this binding layers extra
+    // gestures on top: a bound short-press fires additively on the
+    // just-selected strip; a DOUBLE-press (2nd tap < 0.4 s on the SAME
+    // strip) fires doublePress (factory default `show_fx_chain`). Not in
+    // fromUf8DeviceId — the per-strip SEL block in onUf8Input dispatches
+    // it manually so the shared-binding + per-strip semantics hold.
+    // Frank 2026-08-03 ("SEL voll customizeable, Doppel-SEL → FX-Chain").
+    Uf8Select,
+
     // Channel encoder rotation — not a press-event button; dispatched
     // via dispatchEncoder(stepDelta). Carries 4 modifier slots like any
     // ButtonId, so Plain (default) / Shift / Cmd / Ctrl can each map to
@@ -162,8 +173,13 @@ enum class ButtonId : uint16_t {
     // Small-screen soft key (0x18) + 4 large-screen display soft keys
     // (0x19..0x1C). Ship UNBOUND — user assigns (keystrokes, actions, …).
     Uf1ChannelSoftKey, Uf1DisplaySoft1, Uf1DisplaySoft2, Uf1DisplaySoft3, Uf1DisplaySoft4,
-    // Channel strip Solo/Cut/Sel (0x1D..0x1F). Factory default =
-    // uf1_solo_focused / uf1_mute_focused / uf1_select_focused.
+    // Channel strip Solo/Cut/Sel (0x1D..0x1F). Solo/Cut fire NATIVELY from
+    // onUf1Event (focused-track solo/mute, LED-heikel) and stay LOCKED /
+    // non-bindable. Uf1Sel is FIRST-CLASS BINDABLE (Frank 2026-08-03): the
+    // native focused-track exclusive-select stays the single-press default,
+    // and onUf1Event ALSO routes kSel through dispatch() so a factory
+    // double-press (show_fx_chain) or a user short/long/double gesture
+    // fires ON TOP. (The old uf1_*_focused builtins were retired 2026-07-30.)
     Uf1Solo, Uf1Cut, Uf1Sel,
     // Nav block 0x21..0x27 (0x20 MODE excluded). Ship UNBOUND.
     Uf1BankLeft, Uf1FiveToEight, Uf1BankRight,
@@ -337,6 +353,18 @@ struct Binding {
     bool        hasLongPress = false;
     ActionSlot  shortPress[kModifierCount];
     ActionSlot  longPress[kModifierCount];
+
+    // doublePress[m] : fires ADDITIVELY when a 2nd press of this button
+    // lands within kDoubleClickMs (~0.4 s) of the previous press in the
+    // same modifier slot. Independent of short/long — the single press
+    // still fires normally; the double is an EXTRA gesture (Frank
+    // 2026-08-03: "Doppel-SEL öffnet FX-Chain", select-then-open is
+    // harmless). Available on every real button (not encoders / pure
+    // modifiers). hasDoublePress mirrors hasLongPress: it gates the
+    // editor's "DOUBLE PRESS" column and whether the JSON emits a
+    // "double" block.
+    bool        hasDoublePress = false;
+    ActionSlot  doublePress[kModifierCount];
 
     // LED-when-empty override. Default false → if the binding has no
     // action in any slot, the LED stays OFF. When the user wants to
@@ -583,6 +611,18 @@ void setActiveLayer(int layer);
 // layer (caller marks event as handled); false if no binding (caller
 // falls through to legacy paths).
 bool dispatch(ButtonId id, bool pressed);
+
+// Fire a button's double-press / short-press slot ON DEMAND (no press-
+// timing, no LED bookkeeping) — used by the UF8 per-strip SEL handler,
+// which owns its own PER-STRIP double-tap detection (the shared
+// ButtonId::Uf8Select can't ride dispatch()'s per-(layer,button) timer
+// without false-doubling across strips). Resolves the active layer's
+// binding for `id`, picks the current-modifier slot with Plain fallback,
+// and runs it if non-empty. Returns true if an action fired. Worker-
+// thread-safe (the builtins defer the REAPER API to the main-thread
+// drain, same contract as dispatch()).
+bool fireDoublePress(ButtonId id);
+bool fireShortPress(ButtonId id);
 
 // Dispatch a hardware encoder rotation event — fires the bound
 // builtin's run() with `param = stepDelta` (signed integer detents).

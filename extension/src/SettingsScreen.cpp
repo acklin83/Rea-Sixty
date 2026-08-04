@@ -89,6 +89,14 @@ void reasixty_actionPickerStartUf1Bank(int bank, int slot,
                                        int modIdx = 0, int stepIdx = 0);
 bool reasixty_actionPickerActiveForUf1Bank(int bank, int slot,
                                            int modIdx = 0, int stepIdx = 0);
+// Double-press destination variant — the picked REAPER action is stored
+// into the binding's doublePress[modIdx] slot (SEL only). Without this the
+// short/long-keyed picker wrote a browsed action onto the SHORT slot
+// (Frank 2026-08-03: "double press für Reaper Action belegt den short").
+void reasixty_actionPickerStartDouble(int layer, uf8::bindings::ButtonId id,
+                                      int modIdx = 0, int stepIdx = 0);
+bool reasixty_actionPickerActiveForDouble(int layer, uf8::bindings::ButtonId id,
+                                          int modIdx = 0, int stepIdx = 0);
 void reasixty_actionPickerCancel();
 std::string reasixty_resolveActionName(const std::string& action);
 bool        reasixty_actionIsToggle(const std::string& action);
@@ -1561,6 +1569,7 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::SelectionNorm: return "NORM";
         case ButtonId::SelectionRec:  return "REC";
         case ButtonId::SelectionAuto: return "AUTO";
+        case ButtonId::Uf8Select:     return "SEL";
         case ButtonId::ChannelEncoder: return "Channel Encoder";
         case ButtonId::Uc1Encoder1:    return "UC1 Encoder 1";
         case ButtonId::Uc1Encoder2:    return "UC1 Encoder 2";
@@ -1749,6 +1758,8 @@ bool bindingHasAnyAction_(const uf8::bindings::Binding& bd)
         if (sp.type != ActionType::Noop || !sp.action.empty()) return true;
         const auto& lp = bd.longPress[m];
         if (lp.type != ActionType::Noop || !lp.action.empty())  return true;
+        const auto& dp = bd.doublePress[m];
+        if (dp.type != ActionType::Noop || !dp.action.empty())  return true;
     }
     return false;
 }
@@ -1831,6 +1842,16 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
             const std::string d = describeActionStep_(bd.longPress[m]);
             if (d.empty()) continue;
             out += "\n  long";
+            if (m > 0) { out += " "; out += modName[m]; }
+            out += ": ";
+            out += d;
+        }
+    }
+    if (bd.hasDoublePress) {
+        for (int m = 0; m < kModifierCount; ++m) {
+            const std::string d = describeActionStep_(bd.doublePress[m]);
+            if (d.empty()) continue;
+            out += "\n  double";
             if (m > 0) { out += " "; out += modName[m]; }
             out += ": ";
             out += d;
@@ -2111,10 +2132,11 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         circle_(c, vx, vy, 18, 0x14181EFF, 0x4A5060FF);
         circle_(c, vx, vy, 14, 0x2A3038FF, 0x555A66FF);
         line_(c, vx, vy - 16, vx, vy - 8, 0xCCCCCCFF, 2.0);
-        // Solo / Cut / Sel (locked, per-strip)
+        // Solo / Cut locked; SEL clickable (shared ButtonId::Uf8Select) —
+        // TEMP re-enabled for the double-press-editor teardown diagnostic.
         drawLocked(sx + 8, 152, kStripW - 16, 16, "SOLO");
         drawLocked(sx + 8, 172, kStripW - 16, 16, "CUT");
-        drawLocked(sx + 8, 192, kStripW - 16, 16, "SEL");
+        drawHwBtn(sx + 8, 192, kStripW - 16, 16, ButtonId::Uf8Select, "SEL");
         // Fader: scale ticks + track + cap
         const float fx = sx + kStripW / 2.0f;
         const float fyTop = 220, fyBot = 440;
@@ -3115,12 +3137,11 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // (3) Small-screen V-Pot (above-fader) — push = Uf1VpotAbovePush
     drawDial(88, 180, 16, ButtonId::Uf1VpotAbovePush, "V-POT", /*ticks*/ false);
 
-    // (5) SOLO / CUT / SEL — locked, exactly like UF8's per-strip keys.
-    // They stay hardcoded (focused-track solo/mute/select) and are not
-    // user-rebindable from the schematic (Frank 2026-07-30).
+    // (5) SOLO / CUT locked; SEL clickable (ButtonId::Uf1Sel) — TEMP
+    // re-enabled for the double-press-editor teardown diagnostic.
     drawLocked(26, 214, 56, 24, "SOLO");
     drawLocked(26, 242, 56, 24, "CUT");
-    drawLocked(26, 270, 56, 24, "SEL");
+    drawHwBtn(26, 270, 56, 24, ButtonId::Uf1Sel, "SEL");
 
     // (4) 100 mm motorised fader — scale ticks (right) + track + cap.
     {
@@ -3552,7 +3573,11 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       // async "Browse Action..." result routes into the UF1
                       // bank store (setUf1SoftBankSlot) instead of a layer /
                       // user-quick binding. Frank 2026-07-30.
-                      int uf1Bank = -1, int uf1Slot = -1)
+                      int uf1Bank = -1, int uf1Slot = -1,
+                      // Double-press slot: route the async "Browse Action..."
+                      // result to bd.doublePress[modIdx] instead of short/long
+                      // (SEL editor). Frank 2026-08-03.
+                      bool isDoublePress = false)
 {
     using namespace uf8::bindings;
     bool dirty = false;
@@ -3647,6 +3672,9 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             : isUf1Bank
                 ? reasixty_actionPickerActiveForUf1Bank(
                     uf1Bank, uf1Slot, modIdx, stepIdx)
+            : isDoublePress
+                ? reasixty_actionPickerActiveForDouble(
+                    layer, id, modIdx, stepIdx)
                 : reasixty_actionPickerActiveFor(
                     layer, id, isLongPress, modIdx, stepIdx);
         snprintf(idbuf, sizeof(idbuf), "%s##%s_browse",
@@ -3662,6 +3690,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             } else if (isUf1Bank) {
                 reasixty_actionPickerStartUf1Bank(
                     uf1Bank, uf1Slot, modIdx, stepIdx);
+            } else if (isDoublePress) {
+                reasixty_actionPickerStartDouble(layer, id, modIdx, stepIdx);
             } else {
                 reasixty_actionPickerStart(layer, id,
                                            isLongPress,
@@ -4300,7 +4330,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
 bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
                      int layer, ButtonId id,
                      uf8::bindings::ActionStep& st,
-                     bool isLongPress, int modIdx = 0, int stepIdx = 0)
+                     bool isLongPress, int modIdx = 0, int stepIdx = 0,
+                     bool isDoublePress = false)
 {
     ActionFieldsRef ref{
         &st.type, &st.action, &st.param, &st.label,
@@ -4310,7 +4341,11 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
         &st.stepValue, &st.wrap,
     };
     return drawActionPicker(ctx, prefix, ref, layer, id, isLongPress,
-                            modIdx, stepIdx);
+                            modIdx, stepIdx,
+                            /*uqLayer*/ -1, /*uqQuick*/ -1,
+                            /*uqSubBank*/ -1, /*uqSlot*/ -1,
+                            /*uf1Bank*/ -1, /*uf1Slot*/ -1,
+                            isDoublePress);
 }
 
 // Helper: render an ActionSlot as an ordered chain of steps. Each step
@@ -4763,6 +4798,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_EndChild(ctx);
     };
 
+    // SEL (Uf8Select / Uf1Sel): single press = built-in track SELECT (native,
+    // per-strip on UF8 / focused on UF1), long press = native too (UF8 = the
+    // folder-select spill; UF1 = none). Neither routes through the binding's
+    // short/long slots, so DON'T show empty SHORT/LONG columns for them — only
+    // the double-press below is user-assignable. Frank 2026-08-03 ("nicht
+    // schluddrig — entweder Aktionen zuteilen oder nur double press").
+    const bool idIsSel = (id == ButtonId::Uf8Select || id == ButtonId::Uf1Sel);
+    if (!idIsSel) {
     drawColumn("SHORT PRESS", "sp", bd.shortPress, /*isLongCol*/ false);
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (longPressAvailable) {
@@ -4787,13 +4830,58 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         }
         ImGui_EndChild(ctx);
     }
+    } else {
+        // SEL: single press = built-in track select; long press stays native
+        // (UF8 folder-select spill / UF1 none). Only the double-press below
+        // is user-assignable — no empty SHORT/LONG columns.
+        ImGui_TextDisabled(ctx,
+            "Single press = Select the track (built-in). Long press stays");
+        ImGui_TextDisabled(ctx,
+            "native. Only the double-press below is user-assignable:");
+        ImGui_Spacing(ctx);
+    }
+
+    // DOUBLE PRESS — SEL ONLY. On a normal button the single (short) press
+    // fires first anyway, so an additive double is pointless (Frank
+    // 2026-08-03: "bringt so überhaupt nichts"); only SEL benefits (single =
+    // native select, double = a real extra action). A single, PLAIN action:
+    // no modifier rows (a double-tap fires plain only; Shift+SEL stays
+    // additive-select), no LED (a momentary tap has no lit/idle state).
+    // Rendered INLINE — NEVER a 3rd BeginChild: a culled child window reaped
+    // the whole ReaImGui Settings window a defer cycle later (2026-08-03
+    // diagnostic, learnings #19). drawStepPicker_ = action-type + arg only,
+    // with isDoublePress=true so a browsed REAPER action routes to the
+    // doublePress slot (not the short slot).
+    if (idIsSel) {
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Text(ctx, "DOUBLE PRESS  (2nd tap < 0.4 s — an extra action on "
+                        "top of the select)");
+        bool en = bd.hasDoublePress;
+        if (ImGui_Checkbox(ctx, "Enable double-press", &en)) {
+            bd.hasDoublePress = en;
+            if (en && bd.doublePress[0].type == ActionType::Noop)
+                bd.doublePress[0].type = ActionType::Builtin;
+            dirty = true;
+        }
+        if (bd.hasDoublePress) {
+            if (drawStepPicker_(ctx, "dp_pl", layer, id,
+                                bd.doublePress[0], /*isLongPress*/ false,
+                                /*modIdx*/ 0, /*stepIdx*/ 0,
+                                /*isDoublePress*/ true))
+                dirty = true;
+        }
+    }
 
     // LED appearance is UF8-only — the UC1's encoders / 360 / MAGNIFY
     // don't expose user-settable RGB, so hide the whole LED block on the
     // UC1 bindings page (idIsUc1 computed above). Also hide it for the UF8
     // Channel Encoder ROTATE + PUSH (idNoLed) and the UF1 rotary controls
     // (encoders + V-Pot pushes, idIsUf1NoLed) — none expose a button LED.
-    if (!idIsUc1 && !idNoLed && !idIsUf1NoLed) {
+    // SEL (idIsSel) is also hidden: its LED follows the REAPER track colour
+    // natively (SEL-follows-track-colour), not the binding, so an LED editor
+    // there would be a dead control (Frank 2026-08-03).
+    if (!idIsUc1 && !idNoLed && !idIsUf1NoLed && !idIsSel) {
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
 
