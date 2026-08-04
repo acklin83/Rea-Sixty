@@ -740,6 +740,10 @@ void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
 // then ignored. Out-of-range returns None / ignores writes.
 DynamicBankKind getUf1SoftBankDynamic(int bank);
 void            setUf1SoftBankDynamic(int bank, DynamicBankKind kind);
+// Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
+// dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
+// header denominator + bounds the DAW bank paging. Frank 2026-08-04.
+int             uf1SoftBankInUseCount();
 // Run a UF1 bank slot's action (same long-press + modifier logic as
 // dispatchUserQuickSlot). Returns true if the slot has an action.
 bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);

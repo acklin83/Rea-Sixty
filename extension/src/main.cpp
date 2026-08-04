@@ -15663,6 +15663,11 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int
     std::memcpy(h.data(), kUf1PluginHeader, sizeof(kUf1PluginHeader));
     h[75] = static_cast<uint8_t>('0' + std::clamp(cur,   1, 9));
     h[77] = static_cast<uint8_t>('0' + std::clamp(total, 1, 9));
+    // Field 4 (bytes 100-102) = the Quick-Key-2 "Fine Ctrl" state readout. The
+    // cap77 template hardcodes "OFF"; drive it from g_uf1CsFine so the header
+    // tracks the toggle live (Frank 2026-08-04: was stuck "OFF" in every
+    // channel mode). ON = "ON" + clear the 3rd byte so no stray 'F' remains.
+    if (g_uf1CsFine.load()) { h[100] = 'O'; h[101] = 'N'; h[102] = 0x00; }
     return h;
 }
 
@@ -20008,7 +20013,11 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         if (!t) return;
         const double curLin = GetMediaTrackInfo_Value(t, "D_VOL");
         const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
-        double nDb = curDb + step * kUf1FlipVolDbPerCount;
+        // Quick-Key-2 "Fine Ctrl" also applies in DAW mode (Frank 2026-08-04:
+        // Fine ging vorher nur im Plugin-Mode) — scale the dB nudge by the fine
+        // factor (not the full UF8 knob-speed; the UF1 dB/count is its own).
+        const double fine = g_uf1CsFine.load() ? g_fineFactorUf8.load() : 1.0;
+        double nDb = curDb + step * kUf1FlipVolDbPerCount * fine;
         if (nDb >  12.0) nDb =  12.0;
         if (nDb < -60.0) nDb = -60.0;
         CSurf_OnVolumeChange(t, std::pow(10.0, nDb / 20.0), false);
@@ -20046,7 +20055,9 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
             sSAcc[vi] = (v > 0.0) ? 20.0 * std::log10(v) : -60.0;
             sSKey[vi] = key;
         }
-        double nDb = sSAcc[vi] + step * kUf1FlipVolDbPerCount;
+        // Fine Ctrl (Quick-Key-2) applies in SENDS mode too (Frank 2026-08-04).
+        const double fine = g_uf1CsFine.load() ? g_fineFactorUf8.load() : 1.0;
+        double nDb = sSAcc[vi] + step * kUf1FlipVolDbPerCount * fine;
         if (nDb >  12.0) nDb =  12.0;
         if (nDb < -60.0) nDb = -60.0;
         sSAcc[vi] = nDb;
@@ -20929,12 +20940,21 @@ void uf1PaintChannel_()
                         on = (psNow & 1) != 0;   // playing
                     else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Rec)
                         on = (psNow & 4) != 0;   // recording
+                    else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
+                        // The "2" quick key is the hardcoded Fine-Ctrl toggle (not a
+                        // binding), so light it from the live Fine state — bright when
+                        // active, dim when off (Frank 2026-08-04). Meter view uses its
+                        // own Fine flag.
+                        on = g_uf1MeterView.load() ? g_uf1MeterFine.load()
+                                                   : g_uf1CsFine.load();
                     // Empty binding → dark, unless it carries a label / per-slot LED /
                     // ledShowWhenEmpty (superset of the DAW soft-key emptiness test).
+                    // SecKey2 (Fine) always renders — it's a hardcoded indicator.
                     const bool customLed =
                         plainSlot.led.hasActive || plainSlot.led.hasInactive;
                     show = !uf8::bindings::slotIsEmpty(plainSlot) || !bd.label.empty()
-                           || bd.ledShowWhenEmpty || customLed;
+                           || bd.ledShowWhenEmpty || customLed
+                           || kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2;
                 } else if (!uf8::bindings::slotIsEmpty(modSlot)) {
                     // Held modifier + this button HAS an action for it. If that action
                     // is STATEFUL (a mode/toggle like the auto_* automation modes on
@@ -21031,21 +21051,23 @@ void uf1PaintChannel_()
             // shows its page "N/M" (like Sends); a static bank shows the live
             // soft-key BANK "N/10". Plugin mode = the SSL strip's param-page "N/M".
             const int subMode = g_uf1ChannelSubMode.load();
-            const bool dawDynHdr = subMode == 1
-                && uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
-                   != uf8::bindings::DynamicBankKind::None;
-            // Page header with the LIVE "N/M" cell for the current view…
-            auto hdr = (subMode == 2)
-                ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
-                                 std::max(1, g_uf1SendGroupCount.load()))
-                : dawDynHdr
-                ? uf1PageHeader_(g_uf1DynBankPage.load() + 1,
-                                 std::max(1, g_uf1DynBankPageCount.load()))
-                : (subMode == 1)
-                ? uf1PageHeader_(g_uf1SoftBank.load() + 1,
-                                 uf8::bindings::kUf1SoftBankCount)
-                : uf1PageHeader_(g_uf1CsPage.load() + 1,
-                                 std::max(1, g_uf1CsActivePages.load()));
+            // Page header with the LIVE "N/M" cell for the current view.
+            auto hdr = uf1PageHeader_(1, 1);   // placeholder, set per-mode below
+            if (subMode == 2) {                // SENDS: send-window group N/M
+                hdr = uf1PageHeader_(g_uf1SendGroup.load() + 1,
+                                     std::max(1, g_uf1SendGroupCount.load()));
+            } else if (subMode == 1) {         // DAW: soft-key BANK N/M
+                // Denominator = the REAL number of assigned soft-key banks, not the
+                // fixed 10/9 (Frank 2026-08-04). Clamp a stale current bank into
+                // range so N never exceeds M and the painted bank matches the page.
+                const int inUse = uf8::bindings::uf1SoftBankInUseCount();
+                int cur = g_uf1SoftBank.load();
+                if (cur >= inUse) { cur = inUse - 1; g_uf1SoftBank.store(cur); }
+                hdr = uf1PageHeader_(cur + 1, inUse);
+            } else {                           // Plugin: SSL strip param-page N/M
+                hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
+                                     std::max(1, g_uf1CsActivePages.load()));
+            }
             // …then overlay the channel-encoder mode in the "REAPER" cell while MODE
             // is held (picker) OR whenever the mode is non-default, so the picked mode
             // stays visible after release. The pacer re-emits every tick. N/M is kept.
@@ -34787,8 +34809,10 @@ void registerBindingHandlers()
             }
             const int dir = right ? 1 : -1;
             if (g_uf1ChannelSubMode.load() == 1) {
-                constexpr int nb = uf8::bindings::kUf1SoftBankCount;
-                g_uf1SoftBank.store((g_uf1SoftBank.load() + dir + nb) % nb);
+                // Page only through the REALLY-ASSIGNED soft-key banks, so ◄ ►
+                // can't step onto empty banks (Frank 2026-08-04). Min 1.
+                const int nb = std::max(1, uf8::bindings::uf1SoftBankInUseCount());
+                g_uf1SoftBank.store((g_uf1SoftBank.load() % nb + dir + nb) % nb);
             } else {
                 int np = g_uf1CsActivePages.load();
                 if (np < 1) np = 1;

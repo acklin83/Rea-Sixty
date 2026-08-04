@@ -4041,6 +4041,24 @@ DynamicBankKind getUf1SoftBankDynamic(int bank)
     return g_cfg.uf1SoftBankDynamic[bank];
 }
 
+// Number of UF1 soft-key banks actually IN USE = (highest in-use bank index
+// + 1), min 1. A bank is in use if it is DYNAMIC (FX / param-groups / colours)
+// or has any non-empty static slot. Used for the DAW-mode header "N/M" so the
+// denominator reflects the real assigned banks (Frank 2026-08-04: was a fixed
+// 9/10) and to bound the DAW bank paging so you can't step past them.
+int uf1SoftBankInUseCount()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    int highest = -1;
+    for (int b = 0; b < kUf1SoftBankCount; ++b) {
+        bool inUse = (g_cfg.uf1SoftBankDynamic[b] != DynamicBankKind::None);
+        for (int s = 0; !inUse && s < kUf1SoftBankSlots; ++s)
+            if (!uf1BankSlotEmpty_(g_cfg.uf1SoftBanks[b][s])) inUse = true;
+        if (inUse) highest = b;
+    }
+    return highest + 1 >= 1 ? highest + 1 : 1;
+}
+
 void setUf1SoftBankDynamic(int bank, DynamicBankKind kind)
 {
     if (bank < 0 || bank >= kUf1SoftBankCount) return;
