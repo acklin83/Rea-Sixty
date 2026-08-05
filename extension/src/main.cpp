@@ -11580,10 +11580,10 @@ CsPanHandle csPanForTrack(MediaTrack* tr)
 std::array<std::atomic<uint16_t>, 8> g_touchOriginPb{};
 std::array<std::atomic<bool>, 8>     g_touchOriginPbValid{};
 
-// Sticky Pot (per-track pinned param, defined in the core block ~12100). Forward-
-// declared here for the UF8 fader paths: under FLIP the pin moves onto the fader,
-// so computeStripCurrentPb_ / the VolumeAbs writeback / the motor follow resolve it
-// at the same precedence as the focused-param flip (below routes, above focused).
+// Sticky Pot (per-track pinned param, defined in the core block). Forward-declared
+// here for the UF8 fader paths: under FLIP the pin moves onto the fader, so
+// computeStripCurrentPb_ / the VolumeAbs writeback / the motor follow resolve it at
+// the same precedence as the focused-param flip (below routes, above focused).
 bool stickyResolveOnTrack_(MediaTrack* tr, int* fxOut, int* paramOut, bool* toggleOut);
 bool stickyFlipFaderEnabled_();
 
