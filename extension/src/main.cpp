@@ -1606,6 +1606,10 @@ inline bool focusScopeUf1_() {
 // resolver branch → banking byte-identical to today.
 std::atomic<bool> g_uf1Extender{false};
 std::atomic<int>  g_uf1ExtenderSide{1};   // 1 = right (default), 0 = left
+// Set when pinning the Focus Set forced the Extender off (mutual exclusion) — so
+// releasing the pin RESTORES the Extender to where it was (Frank 2026-08-05).
+// Session-only; the restore is symmetric with the force-off in tempSelsetToggleRecall_.
+std::atomic<bool> g_uf1ExtenderSuspendedByPin{false};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -28205,6 +28209,13 @@ void onTimer()
         static SelectionMode mbLastSel = SelectionMode::Norm;
         static EncoderMode   mbLastEnc = EncoderMode::ChSelect;
         static EncoderMode   mbLastUf1Enc = EncoderMode::ChSelect;
+        // Toggle-mode trackers (Frank 2026-08-05: sticky / Focus Set / UF1 modes
+        // flash the banner too, not just sel/encoder). Each is an INDEPENDENT diff
+        // → its own label; the shared mbSeq restarts the companion's hide timer.
+        static bool          mbSticky = false, mbStickyArm = false, mbFocusPin = false;
+        static int           mbFocusScope = 0;
+        static bool          mbFlip = false, mbMaster = false, mbStrip = false, mbExt = false;
+        static int           mbExtSide = 1;
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
@@ -28220,25 +28231,64 @@ void onTimer()
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
-        if (!mbInit) {
-            mbInit = true;
-            mbLastSel = sm;
-            mbLastEnc = em;
-            mbLastUf1Enc = uf1em;
-        } else if (sm != mbLastSel || em != mbLastEnc || uf1em != mbLastUf1Enc) {
-            // UF1's own encoder mode (hold MODE + turn the channel encoder) gets its
-            // own banner so the picker has feedback without a UF1-screen readout.
-            std::string text = (sm != mbLastSel)
-                ? std::string("Sel \xE2\x80\xA2 ") + selectionModeFriendly(sm)
-                : (em != mbLastEnc)
-                  ? std::string("Encoder \xE2\x80\xA2 ") + encoderModeFriendly(em)
-                  : std::string("UF1 Enc \xE2\x80\xA2 ") + encoderModeFriendly(uf1em);
-            mbLastSel = sm;
-            mbLastEnc = em;
-            mbLastUf1Enc = uf1em;
-            char buf[160];
+        // Publish a transient banner label + an incrementing seq so the companion
+        // (re)starts its ~2 s hide timer on each fresh change.
+        auto fireBanner = [](const std::string& text) {
+            char buf[160];   // mbSeq is a static local → referenced directly (not captured)
             snprintf(buf, sizeof(buf), "%s\t%u", text.c_str(), ++mbSeq);
             SetExtState("rea_sixty", "mode_banner", buf, false);
+        };
+        auto onOff = [](bool b) -> const char* { return b ? "On" : "Off"; };
+        const bool sa   = g_stickyActive.load();
+        const bool sarm = g_stickyArmGetNext.load();
+        const bool fp   = g_tempSelsetActive.load();
+        const int  fsc  = g_focusSetScope.load();
+        const bool ufl  = g_uf1Flip.load();
+        const bool ufm  = g_uf1Master.load();
+        const bool ufs  = g_uf1StripMode.load();
+        const bool ufe  = g_uf1Extender.load();
+        const int  ufes = g_uf1ExtenderSide.load();
+        if (!mbInit) {
+            mbInit = true;
+            mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
+            mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
+            mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
+        } else {
+            // Collect EVERY change this tick into one label so simultaneous flips
+            // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
+            // just whichever wrote the ExtState last (Frank 2026-08-05). Joined with
+            // " | " and fired once.
+            std::vector<std::string> chg;
+            // Selection / encoder / UF1-encoder mode (one entry, priority order).
+            // UF1's own encoder mode (hold MODE + turn the channel encoder) gets its
+            // own label so the picker has feedback without a UF1-screen readout.
+            if (sm != mbLastSel || em != mbLastEnc || uf1em != mbLastUf1Enc) {
+                chg.push_back((sm != mbLastSel)
+                    ? std::string("Sel \xE2\x80\xA2 ") + selectionModeFriendly(sm)
+                    : (em != mbLastEnc)
+                      ? std::string("Encoder \xE2\x80\xA2 ") + encoderModeFriendly(em)
+                      : std::string("UF1 Enc \xE2\x80\xA2 ") + encoderModeFriendly(uf1em));
+                mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
+            }
+            // Sticky Pot: active/suspended + "arm next parameter".
+            if (sa != mbSticky)     { chg.push_back(std::string("Sticky \xE2\x80\xA2 ") + onOff(sa)); mbSticky = sa; }
+            if (sarm != mbStickyArm){ if (sarm) chg.push_back("Sticky \xE2\x80\xA2 Arm"); mbStickyArm = sarm; }
+            // Focus Set: pin + scope.
+            if (fp != mbFocusPin)   { chg.push_back(std::string("Focus Set \xE2\x80\xA2 ") + (fp ? "Pinned" : "Off")); mbFocusPin = fp; }
+            if (fsc != mbFocusScope){ const char* n = (fsc == 1) ? "UF1" : (fsc == 2) ? "UF8" : "Both";
+                                      chg.push_back(std::string("Focus Scope \xE2\x80\xA2 ") + n); mbFocusScope = fsc; }
+            // UF1 hardware modes: FLIP / MASTER / Strip Mode / Extender (+ side).
+            if (ufl != mbFlip)   { chg.push_back(std::string("FLIP \xE2\x80\xA2 ") + onOff(ufl)); mbFlip = ufl; }
+            if (ufm != mbMaster) { chg.push_back(std::string("MASTER \xE2\x80\xA2 ") + onOff(ufm)); mbMaster = ufm; }
+            if (ufs != mbStrip)  { chg.push_back(std::string("Strip Mode \xE2\x80\xA2 ") + onOff(ufs)); mbStrip = ufs; }
+            if (ufe != mbExt)    { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe)); mbExt = ufe; }
+            else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
+            mbExtSide = ufes;   // always sync (even when the on/off change took priority)
+            if (!chg.empty()) {
+                std::string joined = chg[0];
+                for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
+                fireBanner(joined);
+            }
         }
     }
 
@@ -30680,10 +30730,20 @@ void tempSelsetToggleRecall_()
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
     // Mutual exclusion: pinning the Focus Set releases the UF1 Extender (Frank
-    // 2026-08-05) so the two never fight in uf1FocusedTrack_.
-    if (!wasActive && g_uf1Extender.load()) {
-        g_uf1Extender.store(false);
-        SetExtState("rea_sixty", "uf1Extender", "0", true);
+    // 2026-08-05) so the two never fight in uf1FocusedTrack_. Symmetric: releasing
+    // the pin RESTORES the Extender if the pin was what suspended it (Frank
+    // 2026-08-05 "sollte der nicht wieder zurückschalten wenn Pin Off ist?").
+    if (!wasActive) {
+        if (g_uf1Extender.load()) {
+            g_uf1ExtenderSuspendedByPin.store(true);
+            g_uf1Extender.store(false);
+            SetExtState("rea_sixty", "uf1Extender", "0", true);
+        } else {
+            g_uf1ExtenderSuspendedByPin.store(false);   // nothing to restore later
+        }
+    } else if (g_uf1ExtenderSuspendedByPin.exchange(false)) {
+        g_uf1Extender.store(true);
+        SetExtState("rea_sixty", "uf1Extender", "1", true);
     }
     // Seed the UF1 held position when the pin turns ON: park on the currently
     // selected member if it is one, else member 0 (Frank 2026-08-04 — the UF1
