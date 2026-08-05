@@ -1273,6 +1273,8 @@ std::atomic<bool> g_masterPinShift{false};
 // bank-offset clamp in rebuildVisibleTrackList.
 int masterPinnedStrip_();
 int effectiveStripCount_();
+int bankWidth_();     // effectiveStripCount_() + UF1-Extender (+1); banking-window width
+int uf8StripBase_();  // +1 offset for the UF8 banked strips when the UF1 Extender is LEFT
 
 inline const char* selectionModeStr(SelectionMode m)
 {
@@ -1488,7 +1490,9 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
         const int pad = usable - vis;
         if (pad > 0) return pos - pad;
     }
-    return pos + bankOffset;
+    // uf8StripBase_() = 1 only when the UF1 Extender is LEFT (UF1 takes slot 0, so
+    // the UF8 banked strips show slots 1..8); 0 otherwise (unchanged).
+    return pos + bankOffset + uf8StripBase_();
 }
 
 // Active Selection-Set slot (1..8); 0 = none. selset_recall toggles
@@ -1572,6 +1576,16 @@ std::atomic<int> g_uf1HoldScrollRequest{0};
 // 2026-08-04 "beides?" → make it a switch). Only bites when a UF1 is present +
 // held-mode (Pin Set) is on; off = the two run independently. ExtState-persisted.
 std::atomic<bool> g_uf1SendsFollowHeld{true};
+// UF1 Extender (Frank 2026-08-05): the UF1 becomes a generic +1 strip of the UF8
+// fader bank — one continuous 9-wide bank. g_uf1ExtenderSide: 1 = RIGHT (UF1 =
+// strip 9, UF8 = 1..8; default), 0 = LEFT (UF1 = strip 1, UF8 = 2..9). Mutually
+// exclusive with the Focus-Set pin (g_tempSelsetActive) — turning either on clears
+// the other. The UF1 keeps its RICH layer (screen/V-Pots/soft-keys), only pointed at
+// the 9th track via uf1FocusedTrack_ (option A); only the FADER joins the bank.
+// ExtState-persisted. SAFETY: extender OFF → bankWidth_()==esc, no strip offset, no
+// resolver branch → banking byte-identical to today.
+std::atomic<bool> g_uf1Extender{false};
+std::atomic<int>  g_uf1ExtenderSide{1};   // 1 = right (default), 0 = left
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -1796,7 +1810,7 @@ void rebuildVisibleTrackList() {
     // user-intended positions and stay untouched. Frank 2026-05-16.
     const int vc     = static_cast<int>(g_visibleTracks.size());
     const int curOff = g_bankOffset.load();
-    const int esc    = effectiveStripCount_();
+    const int esc    = bankWidth_();   // window width (UF1 Extender widens it by 1)
     const int maxOff = (vc > esc) ? vc - esc : 0;
     if (curOff >= vc && curOff > maxOff) {
         g_bankOffset.store(maxOff);
@@ -4502,6 +4516,28 @@ int effectiveStripCount_()
     return (masterPinnedStrip_() >= 0 && g_masterPinShift.load()) ? 7 : 8;
 }
 
+// Bank WINDOW width for the banking maths (clamp / follow-selection / bank-step) —
+// distinct from effectiveStripCount_() which is the UF8's PHYSICAL strip count.
+// With the UF1 Extender on the window is one wider (the UF1 = the 9th strip), so
+// the bank tiles in 9s and the follow-selection keeps the selection inside all 9.
+// SAFETY: extender off → == effectiveStripCount_() → banking byte-identical to today.
+// The UF8 paint loop stays bound to effectiveStripCount_(); only the UF1 paints the
+// extra strip (via uf1FocusedTrack_).
+int bankWidth_()
+{
+    return effectiveStripCount_() + (g_uf1Extender.load() ? 1 : 0);
+}
+
+// +1 offset applied to the UF8's banked strips when the UF1 Extender is on the LEFT:
+// then the UF1 takes bank slot 0 and the UF8 strips show slots 1..8. RIGHT extender
+// (default) and extender-off → 0 (UF8 strip i = bankOffset + i, unchanged). Applied
+// only to the main banked path in stripToVisibleSlot (pins/master/dynamount are
+// edge-cases not expected to combine with the Extender).
+int uf8StripBase_()
+{
+    return (g_uf1Extender.load() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
+}
+
 // Size of the sticky pinned head (Focus Set ∪ honoured TCP pins) that
 // occupies the leftmost strips and does NOT bank — mirrors the `sticky`
 // gate in stripToVisibleSlot. 0 when no pin head is active. The bankable
@@ -6280,7 +6316,7 @@ void applyBankByOne_(int step)
 {
     if (step == 0) return;
     const int trackCount = visibleTrackCount();
-    const int esc        = effectiveStripCount_();
+    const int esc        = bankWidth_();   // window width (UF1 Extender widens it by 1)
     const int maxStart   = trackCount > esc ? trackCount - esc : 0;
     int next = g_bankOffset.load() + step;
     if (next < 0)        next = 0;
@@ -11124,7 +11160,7 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
     if (idx < 0) return;
 
     int bank      = g_bankOffset.load();
-    const int esc = effectiveStripCount_();          // usable strips (8 or 7)
+    const int esc = bankWidth_();                    // window width (UF1 Extender: +1)
     // Pinned head (Focus Set ∪ honoured TCP pins) occupies the leftmost
     // strips and does NOT bank — exactly as stripToVisibleSlot maps it
     // (strips 0..pinned-1 show list[pos]; banked strips show list[pos+bank]).
@@ -11711,6 +11747,18 @@ MediaTrack* uf1FocusedTrack_()
     // overriding the selection (Frank 2026-07-30). Everything downstream reads
     // this one resolver, so the strip / fader / GR all follow the master.
     if (g_uf1Master.load() && master) return master;
+    // Extender: the UF1 is the 9th strip of the UF8 bank (Frank 2026-08-05). It
+    // shows the bank slot to the RIGHT of the UF8 (bankOffset + physical UF8 count)
+    // or to the LEFT (bankOffset + 0; the UF8 strips shift +1 in stripToVisibleSlot).
+    // Everything on the UF1 (rich strip / V-Pots / meter / soft-keys / fader
+    // write-back) follows this track for free. Mutually exclusive with the Focus-Set
+    // pin → it wins over the branch below. Slot past the track list → fall through
+    // (UF1 shows the selection when there is no Nth track).
+    if (g_uf1Extender.load()) {
+        const int slot = g_bankOffset.load()
+                       + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
+        if (MediaTrack* et = visibleTrackAt(slot)) return et;
+    }
     // Held mode: the "focused track" clutch (= Focus Set pin, g_tempSelsetActive)
     // is on and the set is non-empty → the UF1 parks on member[g_uf1HeldIndex],
     // independent of the REAPER selection (Frank 2026-08-04). The channel encoder
@@ -30134,6 +30182,15 @@ custom_action_register_t g_actionUf1SendsFollowHeld{
     0, "REASIXTY_UF1_SENDS_FOLLOW_FOCUS", "Rea-Sixty: UF8 sends follow UF1 Focus Set track (toggle)", nullptr,
 };
 int g_cmdUf1SendsFollowHeld = 0;
+// UF1 Extender (9th fader of the UF8 bank) — mode change → REAPER actions too.
+custom_action_register_t g_actionUf1ExtenderToggle{
+    0, "REASIXTY_UF1_EXTENDER_TOGGLE", "Rea-Sixty: UF1 Extender on/off (9th fader / Selection)", nullptr,
+};
+int g_cmdUf1ExtenderToggle = 0;
+custom_action_register_t g_actionUf1ExtenderSide{
+    0, "REASIXTY_UF1_EXTENDER_SIDE", "Rea-Sixty: UF1 Extender side (left / right)", nullptr,
+};
+int g_cmdUf1ExtenderSide = 0;
 
 // CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
 // user 2026-06-25: "would be cool if these were available as Reaper actions").
@@ -30352,6 +30409,12 @@ void tempSelsetToggleRecall_()
     const bool wasActive = g_tempSelsetActive.load();
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
+    // Mutual exclusion: pinning the Focus Set releases the UF1 Extender (Frank
+    // 2026-08-05) so the two never fight in uf1FocusedTrack_.
+    if (!wasActive && g_uf1Extender.load()) {
+        g_uf1Extender.store(false);
+        SetExtState("rea_sixty", "uf1Extender", "0", true);
+    }
     // Seed the UF1 held position when the pin turns ON: park on the currently
     // selected member if it is one, else member 0 (Frank 2026-08-04 — the UF1
     // "focused track" lands on what you were looking at). Scroll moves it from there.
@@ -30417,6 +30480,25 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         g_uf1SendsFollowHeld.store(on);
         SetExtState("rea_sixty", "uf1SendsFollowHeld", on ? "1" : "0", true);
         g_bankDirty.store(true);
+        return true;
+    }
+    if (command == g_cmdUf1ExtenderToggle) {
+        // Selection <-> Extender (mutually exclusive with the Focus-Set pin). Inline
+        // mirror of reasixty_setUf1Extender (global, after this hook).
+        const bool on = !g_uf1Extender.load();
+        g_uf1Extender.store(on);
+        SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
+        if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+        return true;
+    }
+    if (command == g_cmdUf1ExtenderSide) {
+        const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
+        g_uf1ExtenderSide.store(s);
+        SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
         return true;
     }
     for (int i = 0; i < 8; ++i)
@@ -32225,6 +32307,30 @@ void reasixty_setUf1SendsFollowHeld(bool on)
     if (on == g_uf1SendsFollowHeld.exchange(on)) return;
     SetExtState("rea_sixty", "uf1SendsFollowHeld", on ? "1" : "0", true);
     g_bankDirty.store(true);   // re-resolve the sends-of-focused-track routes
+}
+
+// UF1 Extender on/off. Turning it ON releases the Focus-Set pin (mutual exclusion,
+// Frank 2026-08-05) so the two anchor behaviours never fight in uf1FocusedTrack_.
+// Main-thread only (settings / hookCommand2). g_bankDirty re-resolves the widened
+// bank; g_pageDirty repaints the UF1.
+bool reasixty_uf1Extender() { return g_uf1Extender.load(); }
+void reasixty_setUf1Extender(bool on)
+{
+    if (on == g_uf1Extender.exchange(on)) return;
+    SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
+    // Mutual exclusion: Extender on releases Pin Set (toggle it off if currently on).
+    if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+int  reasixty_uf1ExtenderSide() { return g_uf1ExtenderSide.load(); }   // 1=right, 0=left
+void reasixty_setUf1ExtenderSide(int side)
+{
+    const int s = (side != 0) ? 1 : 0;
+    if (s == g_uf1ExtenderSide.exchange(s)) return;
+    SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
 }
 
 int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
@@ -36363,7 +36469,9 @@ void registerBindingHandlers()
             // Step by the BANKABLE strip count (esc minus the pinned head),
             // not esc — a pinned head shrinks the banked window, so a full
             // esc step would skip `pinned` tracks per page (Frank 2026-06-23).
-            const int esc        = effectiveStripCount_();
+            // bankWidth_() folds in the UF1 Extender (+1) so a full bank tiles
+            // in 9s; extender off → == effectiveStripCount_() (identical).
+            const int esc        = bankWidth_();
             const int step       = esc - pinnedHeadCount_();
             const int maxStart   = trackCount > esc ? trackCount - esc : 0;
             int next = g_bankOffset.load() - (step > 0 ? step : esc);
@@ -36384,8 +36492,8 @@ void registerBindingHandlers()
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - esc: see applyBankByOne_ for rationale.
             // Step by the BANKABLE strip count (esc minus the pinned head) —
-            // see bank_left.
-            const int esc        = effectiveStripCount_();
+            // see bank_left. bankWidth_() folds in the UF1 Extender (+1).
+            const int esc        = bankWidth_();
             const int step       = esc - pinnedHeadCount_();
             const int maxStart   = trackCount > esc ? trackCount - esc : 0;
             int next = g_bankOffset.load() + (step > 0 ? step : esc);
@@ -37476,6 +37584,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         g_uf1StripMode.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1SendsFollowHeld"); v && *v)
         g_uf1SendsFollowHeld.store(std::atoi(v) != 0);   // default true if never set
+    if (const char* v = GetExtState("rea_sixty", "uf1Extender"); v && *v)
+        g_uf1Extender.store(std::atoi(v) != 0);          // default off
+    if (const char* v = GetExtState("rea_sixty", "uf1ExtenderSide"); v && *v)
+        g_uf1ExtenderSide.store(std::atoi(v) != 0 ? 1 : 0);  // default right (1)
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
     // the user sees on the SSL plug-in immediately. The atomic's
@@ -37554,6 +37666,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUf1HoldNext     = plugin_register("custom_action", &g_actionUf1HoldNext);
     g_cmdUf1HoldPrev     = plugin_register("custom_action", &g_actionUf1HoldPrev);
     g_cmdUf1SendsFollowHeld = plugin_register("custom_action", &g_actionUf1SendsFollowHeld);
+    g_cmdUf1ExtenderToggle = plugin_register("custom_action", &g_actionUf1ExtenderToggle);
+    g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
     for (int i = 0; i < 8; ++i)

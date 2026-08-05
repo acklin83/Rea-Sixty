@@ -119,6 +119,11 @@ const char* reasixty_uf1EncoderModeName(int modeInt);
 // UF1 held member (defined in main.cpp).
 bool        reasixty_uf1SendsFollowHeld();
 void        reasixty_setUf1SendsFollowHeld(bool on);
+// UF1 Extender (9th fader of the UF8 bank; defined in main.cpp).
+bool        reasixty_uf1Extender();
+void        reasixty_setUf1Extender(bool on);
+int         reasixty_uf1ExtenderSide();       // 1 = right, 0 = left
+void        reasixty_setUf1ExtenderSide(int side);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -6444,6 +6449,25 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 reasixty_setUf1SendsFollowHeld(sendsFollow);
             ImGui_TextDisabled(ctx,
                 "Off: UF8 sends stay on the last-touched track.");
+            // UF1 Extender: the UF1 becomes the 9th fader of the UF8 bank (one
+            // continuous 9-wide bank). Mutually exclusive with the Focus-Set pin.
+            ImGui_Spacing(ctx);
+            bool extender = reasixty_uf1Extender();
+            if (ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
+                reasixty_setUf1Extender(extender);
+            if (extender) {
+                int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left
+                ImGui_Text(ctx, "Side:");
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(ctx, "Left##uf1ext_side", side == 0))
+                    reasixty_setUf1ExtenderSide(0);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(ctx, "Right##uf1ext_side", side == 1))
+                    reasixty_setUf1ExtenderSide(1);
+                ImGui_TextDisabled(ctx,
+                    "Right: UF1 is strip 9 (UF8 = 1-8).  Left: UF1 is strip 1 "
+                    "(UF8 = 2-9).  Turning Extender on releases Pin Set.");
+            }
             ImGui_EndTabItem(ctx);
         }
         ImGui_EndTabBar(ctx);
