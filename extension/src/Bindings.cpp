@@ -4665,6 +4665,7 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
      || n == "uf1_strip_mode"
+     || n == "uf1_extender" || n == "uf1_extender_side"
      || n == "restart")
         return "Hardware Modes";
 
@@ -4701,7 +4702,8 @@ const char* builtinCategory(const std::string& n)
         return "Sends / Receives";
 
     if (n.rfind("selset_", 0) == 0
-     || n.rfind("temp_selset_", 0) == 0) return "Selection Sets";
+     || n.rfind("temp_selset_", 0) == 0
+     || n.rfind("focus_scope_", 0) == 0) return "Selection Sets";
 
     if (n.rfind("param_group_", 0) == 0
      || n == "multi_select_as_temp_group_toggle")

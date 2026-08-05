@@ -124,6 +124,9 @@ bool        reasixty_uf1Extender();
 void        reasixty_setUf1Extender(bool on);
 int         reasixty_uf1ExtenderSide();       // 1 = right, 0 = left
 void        reasixty_setUf1ExtenderSide(int side);
+// Focus Set scope: 0 Both, 1 UF1-only, 2 UF8-only (defined in main.cpp).
+int         reasixty_focusSetScope();
+void        reasixty_setFocusSetScope(int scope);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -6659,6 +6662,23 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
             reasixty_setUf1SendsFollowHeld(sendsFollow);
         ImGui_TextDisabled(ctx, "Off: UF8 sends stay on the last-touched track.");
+        ImGui_Spacing(ctx);
+        // Focus Set scope — where Pin Set applies (UF8 head vs UF1 park).
+        int scope = reasixty_focusSetScope();   // 0 Both, 1 UF1-only, 2 UF8-only
+        ImGui_Text(ctx, "Focus Set scope:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Both##focus_scope", scope == 0))
+            reasixty_setFocusSetScope(0);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF1 only##focus_scope", scope == 1))
+            reasixty_setFocusSetScope(1);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF8 only##focus_scope", scope == 2))
+            reasixty_setFocusSetScope(2);
+        ImGui_TextDisabled(ctx,
+            "Where Pin Set applies. UF1 only: the UF1 parks/scrolls the set, UF8 "
+            "bank untouched. UF8 only: members pin the UF8 head, UF1 follows the "
+            "selection.");
         ImGui_Spacing(ctx);
         bool extender = reasixty_uf1Extender();
         if (ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))

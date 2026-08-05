@@ -1576,6 +1576,26 @@ std::atomic<int> g_uf1HoldScrollRequest{0};
 // 2026-08-04 "beides?" → make it a switch). Only bites when a UF1 is present +
 // held-mode (Pin Set) is on; off = the two run independently. ExtState-persisted.
 std::atomic<bool> g_uf1SendsFollowHeld{true};
+// Focus Set SCOPE (Frank 2026-08-05): where the Pin applies. Both = today (members
+// float the UF8 head AND the UF1 parks/scrolls them). Uf1Only = the UF1 parks the
+// set but the members DON'T pin the UF8 head (the UF8 banks untouched). Uf8Only =
+// the members pin the UF8 head but the UF1 keeps following the selection. One set,
+// one clutch (g_tempSelsetActive) — the scope just redirects it. ExtState-persisted.
+// SAFETY: default Both → both gates true → banking + UF1 byte-identical to today.
+enum class FocusSetScope : int { Both = 0, Uf1Only = 1, Uf8Only = 2 };
+std::atomic<int> g_focusSetScope{static_cast<int>(FocusSetScope::Both)};
+// Members float the UF8 sticky head (pin partition) — Both / UF8-only.
+inline bool focusScopeUf8_() {
+    const int s = g_focusSetScope.load();
+    return s == static_cast<int>(FocusSetScope::Both)
+        || s == static_cast<int>(FocusSetScope::Uf8Only);
+}
+// The UF1 parks on a member + scrolls the set — Both / UF1-only.
+inline bool focusScopeUf1_() {
+    const int s = g_focusSetScope.load();
+    return s == static_cast<int>(FocusSetScope::Both)
+        || s == static_cast<int>(FocusSetScope::Uf1Only);
+}
 // UF1 Extender (Frank 2026-08-05): the UF1 becomes a generic +1 strip of the UF8
 // fader bank — one continuous 9-wide bank. g_uf1ExtenderSide: 1 = RIGHT (UF1 =
 // strip 9, UF8 = 1..8; default), 0 = LEFT (UF1 = strip 1, UF8 = 2..9). Mutually
@@ -1762,7 +1782,7 @@ void rebuildVisibleTrackList() {
         // Auto-Mode to Touch/Write if you want them auto-armed instead.)
         if (g_autoHideReadTrim.load()
             && g_selectionMode.load() == SelectionMode::Auto
-            && !isFocusMember_(tr))
+            && !(isFocusMember_(tr) && focusScopeUf8_()))   // exempt only when UF8-pinned
         {
             const int am = GetTrackAutomationMode(tr);
             if (am == 0 || am == 1) continue;
@@ -1794,7 +1814,10 @@ void rebuildVisibleTrackList() {
         auto firstNonPinned = std::stable_partition(
             g_visibleTracks.begin(), g_visibleTracks.end(),
             [tcpPins](MediaTrack* tr) {
-                if (isFocusMember_(tr)) return true;
+                // Focus members float the UF8 head only when the scope includes
+                // UF8 (Both / UF8-only). A UF1-only set does NOT pin here — but a
+                // member that is ALSO B_TCPPIN still floats via the TCP check below.
+                if (isFocusMember_(tr) && focusScopeUf8_()) return true;
                 return tcpPins
                     && GetMediaTrackInfo_Value(tr, "B_TCPPIN") > 0.5;
             });
@@ -6322,7 +6345,8 @@ void applyUf1HoldScroll_(int step)
 // only. Used by the sends-of-focused-track route + count + bank-step.
 MediaTrack* heldFocusTrack_()
 {
-    if (g_uf1SendsFollowHeld.load() && g_uf1_dev && g_tempSelsetActive.load()) {
+    if (g_uf1SendsFollowHeld.load() && g_uf1_dev && g_tempSelsetActive.load()
+        && focusScopeUf1_()) {   // only when the UF1 actually parks on a member
         auto members = focusSetMembersOrdered_();
         if (!members.empty()) {
             const int last = static_cast<int>(members.size()) - 1;
@@ -7674,8 +7698,9 @@ void uf1EncoderDispatch_(int step)
             // Held mode (Focus Set pin on + non-empty): the UF1 channel encoder
             // scrolls the held members INDEPENDENTLY (option A, Frank 2026-08-04) —
             // it moves only what the UF1 shows (g_uf1HeldIndex), leaving the REAPER
-            // selection and the UF8 bank untouched. Off → navigate the selection.
-            if (g_tempSelsetActive.load() && !g_tempSelsetGuids.empty())
+            // selection and the UF8 bank untouched. Off (or scope UF8-only, where the
+            // UF1 doesn't park) → navigate the selection.
+            if (g_tempSelsetActive.load() && !g_tempSelsetGuids.empty() && focusScopeUf1_())
                 applyUf1HoldScroll_(step);
             else
                 applySelectRelative_(step);
@@ -11873,8 +11898,9 @@ MediaTrack* uf1FocusedTrack_()
     // independent of the REAPER selection (Frank 2026-08-04). The channel encoder
     // scrolls the index (option A); selection + UF8 bank are untouched. Everything
     // on the UF1 reads this one resolver, so the whole strip/V-Pots/meter follow the
-    // held member for free. Empty set → fall through to normal follow.
-    if (g_tempSelsetActive.load()) {
+    // held member for free. Empty set → fall through to normal follow. Scope UF8-only
+    // → the UF1 does NOT park (follows the selection); the pin only floats the UF8 head.
+    if (g_tempSelsetActive.load() && focusScopeUf1_()) {
         auto members = focusSetMembersOrdered_();
         if (!members.empty()) {
             const int last = static_cast<int>(members.size()) - 1;
@@ -30430,6 +30456,11 @@ custom_action_register_t g_actionUf1ExtenderSide{
     0, "REASIXTY_UF1_EXTENDER_SIDE", "Rea-Sixty: UF1 Extender side (left / right)", nullptr,
 };
 int g_cmdUf1ExtenderSide = 0;
+// Focus Set scope: cycle Both -> UF1-only -> UF8-only -> Both.
+custom_action_register_t g_actionFocusScopeCycle{
+    0, "REASIXTY_FOCUS_SCOPE_CYCLE", "Rea-Sixty: Focus Set scope (cycle Both / UF1 / UF8)", nullptr,
+};
+int g_cmdFocusScopeCycle = 0;
 
 // CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
 // user 2026-06-25: "would be cool if these were available as Reaper actions").
@@ -30657,7 +30688,8 @@ void tempSelsetToggleRecall_()
     // Seed the UF1 held position when the pin turns ON: park on the currently
     // selected member if it is one, else member 0 (Frank 2026-08-04 — the UF1
     // "focused track" lands on what you were looking at). Scroll moves it from there.
-    if (!wasActive) {
+    // Skipped when the scope is UF8-only (the UF1 doesn't park then).
+    if (!wasActive && focusScopeUf1_()) {
         auto members = focusSetMembersOrdered_();
         int idx = 0;
         for (int i = 0; i < static_cast<int>(members.size()); ++i)
@@ -30736,6 +30768,16 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
         g_uf1ExtenderSide.store(s);
         SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+        return true;
+    }
+    if (command == g_cmdFocusScopeCycle) {
+        // Cycle Both(0) -> UF1-only(1) -> UF8-only(2) -> Both. Inline mirror of
+        // reasixty_setFocusSetScope (global, after this hook).
+        const int s = (g_focusSetScope.load() + 1) % 3;
+        g_focusSetScope.store(s);
+        SetExtState("rea_sixty", "focusSetScope", std::to_string(s).c_str(), true);
         g_bankDirty.store(true);
         g_pageDirty.store(true);
         return true;
@@ -32546,6 +32588,19 @@ void reasixty_setUf1SendsFollowHeld(bool on)
     if (on == g_uf1SendsFollowHeld.exchange(on)) return;
     SetExtState("rea_sixty", "uf1SendsFollowHeld", on ? "1" : "0", true);
     g_bankDirty.store(true);   // re-resolve the sends-of-focused-track routes
+}
+
+// Focus Set scope: 0 Both / 1 UF1-only / 2 UF8-only. Redirects where the pin
+// applies (UF8 head vs UF1 park). Main-thread only. Repaint both — the UF8 head
+// composition (g_pinnedCount via rebuild) and the UF1 resolver both depend on it.
+int  reasixty_focusSetScope() { return g_focusSetScope.load(); }
+void reasixty_setFocusSetScope(int scope)
+{
+    if (scope < 0 || scope > 2) scope = 0;
+    if (scope == g_focusSetScope.exchange(scope)) return;
+    SetExtState("rea_sixty", "focusSetScope", std::to_string(scope).c_str(), true);
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
 }
 
 // UF1 Extender on/off. Turning it ON releases the Focus-Set pin (mutual exclusion,
@@ -35225,6 +35280,36 @@ void registerBindingHandlers()
         "UF1: SSL Strip Mode (fader \xE2\x86\x92 Out-Gain)", false
     });
 
+    // UF1 Extender — bindable builtins (Frank 2026-08-05: every new action is a
+    // builtin; the REASIXTY_UF1_EXTENDER_* REAPER actions already exist too). Atomic
+    // store + SetExtState (persist) only → worker-safe (parallels uf1_strip_mode).
+    // Toggle ON releases the Focus-Set pin (mutual exclusion) via the recall request.
+    registerBuiltin("uf1_extender", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool on = !g_uf1Extender.load();
+            g_uf1Extender.store(on);
+            SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
+            if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+            g_bankDirty.store(true);
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1Extender.load(); },
+        "UF1 Extender: 9th fader of the UF8 bank", false
+    });
+    registerBuiltin("uf1_extender_side", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
+            g_uf1ExtenderSide.store(s);
+            SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+            g_bankDirty.store(true);
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1ExtenderSide.load() == 1; },   // lit = right (default)
+        "UF1 Extender: side (left / right)", false
+    });
+
     // Channel-encoder MODE setters for the UF1 (Frank 2026-07-31). The UF1 has
     // its OWN encoder mode (g_uf1EncoderMode), independent of the UF8's
     // g_encoderMode — so the UF8 encoder_* setters (which write g_encoderMode)
@@ -35635,6 +35720,43 @@ void registerBindingHandlers()
             if (firing) g_tempSelsetPinFocusedRequest.store(true);
         },
         nullptr, "Focus Set: pin focused track", false
+    });
+    // Focus Set SCOPE — where Pin Set applies (UF8 head vs UF1 park). Bindable to
+    // any surface button; paired with REASIXTY_FOCUS_SCOPE_CYCLE. Atomic store +
+    // SetExtState (persist) only → worker-safe (parallels uf1_strip_mode). The
+    // direct-set builtins light their LED when that scope is the active one.
+    auto setFocusScope = [](int s) {
+        g_focusSetScope.store(s);
+        SetExtState("rea_sixty", "focusSetScope", std::to_string(s).c_str(), true);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+    };
+    registerBuiltin("focus_scope_cycle", DescBuilder{
+        [setFocusScope](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) setFocusScope((g_focusSetScope.load() + 1) % 3);
+        },
+        nullptr, "Focus Set scope: cycle (Both / UF1 / UF8)", false
+    });
+    registerBuiltin("focus_scope_both", DescBuilder{
+        [setFocusScope](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) setFocusScope(0);
+        },
+        [](int) { return g_focusSetScope.load() == 0; },
+        "Focus Set scope: Both", false
+    });
+    registerBuiltin("focus_scope_uf1", DescBuilder{
+        [setFocusScope](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) setFocusScope(1);
+        },
+        [](int) { return g_focusSetScope.load() == 1; },
+        "Focus Set scope: UF1 only", false
+    });
+    registerBuiltin("focus_scope_uf8", DescBuilder{
+        [setFocusScope](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) setFocusScope(2);
+        },
+        [](int) { return g_focusSetScope.load() == 2; },
+        "Focus Set scope: UF8 only", false
     });
 
     // FX Learn lebt als Settings-Tab im Mixer-Window, nicht als Builtin —
@@ -37830,6 +37952,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         g_uf1Extender.store(std::atoi(v) != 0);          // default off
     if (const char* v = GetExtState("rea_sixty", "uf1ExtenderSide"); v && *v)
         g_uf1ExtenderSide.store(std::atoi(v) != 0 ? 1 : 0);  // default right (1)
+    if (const char* v = GetExtState("rea_sixty", "focusSetScope"); v && *v) {
+        const int s = std::atoi(v);
+        g_focusSetScope.store((s >= 0 && s <= 2) ? s : 0);   // default Both (0)
+    }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
     // the user sees on the SSL plug-in immediately. The atomic's
@@ -37910,6 +38036,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUf1SendsFollowHeld = plugin_register("custom_action", &g_actionUf1SendsFollowHeld);
     g_cmdUf1ExtenderToggle = plugin_register("custom_action", &g_actionUf1ExtenderToggle);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
+    g_cmdFocusScopeCycle   = plugin_register("custom_action", &g_actionFocusScopeCycle);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
     for (int i = 0; i < 8; ++i)
