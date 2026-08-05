@@ -67,7 +67,7 @@ Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
 - **Mac:** `rea-sixty-mac-v0.3.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
 - **Windows:** `rea-sixty-win-v0.3.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.3.2.tar.gz` — `.so` + udev rule + INSTALL.txt. Follow INSTALL.txt.
+- **Linux:** `rea-sixty-linux-v0.4.4.tar.gz` — `reaper_rea-sixty.so` plus the two bundled libraries (`libusb-1.0.so.0`, `libhidapi-hidraw.so.0`), the udev rule, and INSTALL.txt. Unpack **all three** files together into `~/.config/REAPER/UserPlugins/` — the plugin loads the libraries from its own folder, so no `apt install` is needed. Then apply the udev rule (or use the *Install Linux udev rule* button in Settings → About).
 
 The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to each release separately — it is not part of the ReaPack package. Download it and double-click it; the Stream Deck app installs it.
 
@@ -957,6 +957,7 @@ At the bottom of the right-click menu on a **UC1 knob** or **UF8 V-Pot**:
 - **Save feel to ▸** — pick a slot (`1: (empty)` … or an existing name to overwrite); a small dialog asks for a name. The current control's feel is captured into that slot.
 - **Apply feel from ▸** — lists the saved presets by name; picking one writes its feel onto the right-clicked control.
 - **Clear preset ▸** — lists the saved presets; picking one empties that slot.
+- **Apply this feel to all mappings** — takes the right-clicked control's current feel (invert · Min/Max range · sensitivity · curve · polarity · push-reset) and writes it onto **every mapped control in this plug-in's map**, on the layer you're editing — one action instead of re-applying a preset control by control. Knobs / V-Pots only (toggles have no travel). The same action is on the on-screen **Learn HUD** (Feel presets ▸ *Apply this feel to all mappings*).
 
 The ten slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 knob can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on knobs and V-Pots.
 
@@ -1276,7 +1277,9 @@ Pin one plug-in parameter to a track's V-Pot. The pin stays on that track — it
 
 A **V-Pot press** on a pinned strip resets its parameter to the centre (a two-state parameter flips instead). Pins are **saved with the project** and restored on reload — keyed to the track and the plug-in, so they survive re-banking and FX-chain reorders.
 
-Sticky Pot steps aside automatically whenever a mode already owns the V-Pot: UF8 Plug-in Mode, SSL Strip Mode, FLIP, PAN held, and the Instance / Instance-Cycle Selection Modes. Release the mode and the pins reappear.
+Under **FLIP**, the pin moves onto the **fader** instead of stepping aside. FLIP assigns the current V-Pot parameter to the fader, and the pin *is* that parameter — so the fader's value, motor follow and touch all track the pinned parameter, while the V-Pot rides Volume as it normally does under FLIP.
+
+Sticky Pot otherwise steps aside automatically whenever a mode already owns the V-Pot: UF8 Plug-in Mode, SSL Strip Mode, PAN held, and the Instance / Instance-Cycle Selection Modes. Release the mode and the pins reappear.
 
 ## Favourites
 
