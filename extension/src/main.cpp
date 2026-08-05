@@ -4538,6 +4538,36 @@ int uf8StripBase_()
     return (g_uf1Extender.load() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
 }
 
+// UF1 Extender — SENDS case (Step 4, Frank 2026-08-05). When the UF8 bank is
+// repurposed to show the FOCUSED track's sends/receives on its FADERS, the UF1
+// becomes the 9th SEND fader (not a 9th track — a send isn't a track). This gate
+// is TRUE only for a FADER route mode (V-Pot-only route modes leave the faders on
+// track volumes, so the UF1 fader stays the 9th TRACK's volume — the Step 1-3
+// track case). SAFETY: extender off → false → every send path byte-identical.
+bool uf1ExtenderRouteFader_()
+{
+    return g_uf1Extender.load()
+        && (g_sendFaderThisTrack.load() || g_recvFaderThisTrack.load());
+}
+
+// The send/receive WINDOW width: 8 physical UF8 strips + 1 when the UF1 Extender
+// contributes a 9th SEND fader. Distinct from bankWidth_() (track banking) — the
+// send window only widens for a FADER route mode. Used by the send-bank clamp +
+// the Bank ←/→ step so the 9-wide send window tiles without a gap.
+int sendWindowWidth_()
+{
+    return 8 + (uf1ExtenderRouteFader_() ? 1 : 0);
+}
+
+// +1 offset for the UF8's banked SEND strips when the Extender is LEFT (UF1 takes
+// send slot 0, UF8 shows slots 1..8). Mirrors uf8StripBase_() for the send case;
+// gated on the fader route mode so it never shifts the send strips in a non-route
+// or V-Pot-only mode. RIGHT / off → 0 (UF8 strip i = slot i, unchanged).
+int uf8SendStripBase_()
+{
+    return (uf1ExtenderRouteFader_() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
+}
+
 // Size of the sticky pinned head (Focus Set ∪ honoured TCP pins) that
 // occupies the leftmost strips and does NOT bank — mirrors the `sticky`
 // gate in stripToVisibleSlot. 0 when no pin head is active. The bankable
@@ -4786,8 +4816,11 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         r.track        = lt;
         r.sendCategory = category;
         // Paged send window: strip 0..7 maps onto VISUAL slots N..N+7 (N = the
-        // send-bank offset).
-        slotIdx        = strip + g_sendBankOffset.load();
+        // send-bank offset). UF1 Extender LEFT shifts the UF8 send strips +1 so
+        // the UF1 can take send slot 0 (uf8SendStripBase_ — 0 for RIGHT / off, so
+        // byte-identical there). The UF1's own +1 strip is resolved the same way
+        // with a synthetic strip index (see the Extender fader block).
+        slotIdx        = strip + g_sendBankOffset.load() + uf8SendStripBase_();
     } else {
         return r;  // not in this routing mode
     }
@@ -4859,6 +4892,67 @@ StripRoute resolveFaderRoute_(int strip, int bankOffset, int trackCount)
     return {};
 }
 
+// The UF1 Extender's 9th SEND route (Step 4). Resolves the send/receive slot one
+// beyond the UF8 edge — RIGHT = strip 8 (past 0..7), LEFT = strip -1 (→ slot 0,
+// UF8 shifts to 1..8 via uf8SendStripBase_). Reuses resolveFaderRoute_ so it hits
+// the EXACT send REAPER shows, with send-over-receive precedence. Invalid (empty
+// route) when not in a fader route mode, or the 9th slot has no send. Shared by
+// the UF1 strip readout, the fader write-back, the above-fader V-Pot (send pan)
+// and the CUT button (send mute) so all four address the same send. Main-thread.
+StripRoute uf1ExtenderSendRoute_()
+{
+    if (!uf1ExtenderRouteFader_()) return {};
+    const int uf1Strip = g_uf1ExtenderSide.load() ? 8 : -1;
+    return resolveFaderRoute_(uf1Strip, 0, 0);
+}
+
+// Send/receive SOLO = exclusive un-mute on the source track. A send has no solo
+// state, so soloing it MUTES every OTHER route entry and leaves this the only open
+// one — shown via the mute/Cut LEDs, NOT a solo LED (Frank 2026-08-05: "kein solo
+// auf dem soloed send, ist einfach der einzige, der nicht gemuted ist"). Toggle:
+// if this is already the only open route → un-mute all (clear); else mute all
+// except this one. SEND view (cat 0) also mutes the hardware outputs (cat 1) — the
+// list is combined. active-but-invalid → no-op (caller eats the press). Main-thread.
+// Shared by the UF8 strip SOLO + the UF1 Extender SOLO so both behave identically.
+void toggleRouteSolo_(const StripRoute& sr)
+{
+    if (!sr.valid || !sr.track) return;
+    std::vector<std::pair<int,int>> entries;   // (cat, idx) of every REAL route entry
+    auto collect = [&](int cat) {
+        if (cat == 1) {   // hardware outputs — no null-dest gaps
+            const int nhw = GetTrackNumSends(sr.track, 1);
+            for (int i = 0; i < nhw; ++i) entries.emplace_back(1, i);
+            return;
+        }
+        const int ext = sendIndexExtent_(sr.track, cat);   // spans empty-slot indices
+        const char* tag = (cat == -1) ? "P_SRCTRACK" : "P_DESTTRACK";
+        for (int i = 0; i < ext; ++i) {
+            auto* t = static_cast<MediaTrack*>(
+                GetSetTrackSendInfo(sr.track, cat, i, tag, nullptr));
+            if (t && ValidatePtr2(nullptr, t, "MediaTrack*"))
+                entries.emplace_back(cat, i);   // skip empty (null-dest) slots
+        }
+    };
+    if (sr.sendCategory == -1) collect(-1);
+    else { collect(0); collect(1); }
+
+    const bool thisOpen = GetTrackSendInfo_Value(
+        sr.track, sr.sendCategory, sr.sendIndex, "B_MUTE") < 0.5;
+    bool othersMuted = true;
+    for (const auto& [cat, i] : entries) {
+        if (cat == sr.sendCategory && i == sr.sendIndex) continue;
+        if (GetTrackSendInfo_Value(sr.track, cat, i, "B_MUTE") < 0.5) {
+            othersMuted = false; break;
+        }
+    }
+    const bool soloActive = thisOpen && othersMuted;   // already the exclusive solo?
+    for (const auto& [cat, i] : entries) {
+        const bool   isThis = (cat == sr.sendCategory && i == sr.sendIndex);
+        const double tgt    = soloActive ? 0.0 : (isThis ? 0.0 : 1.0);
+        SetTrackSendInfo_Value(sr.track, cat, i, "B_MUTE", tgt);
+    }
+}
+
 // Maps a StripRoute (GetTrackSendInfo_Value SLOT index — visual/7.75 order, with
 // gaps) to the CSurf_OnSend*/GetTrack*UIVolPan COMBINED index (lap-less, different
 // permutation; REAPER exposes no GUID there — see [[send-receive-automation]]).
@@ -4911,10 +5005,14 @@ void writeRouteVolumeLinear_(const StripRoute& r, double v)
 // it. g_sendEdit* hold the in-flight edit so the touch-release path can issue the
 // SetTrackSendUIVol "end of edit" (isend=1) that finalises Touch recording.
 // SLOT RESERVATION: 0..7 = UF8 physical strips; 8..11 = the 4 UF1 SENDS V-Pots;
-// 12 = the UF1 SENDS FLIP fader. writeRouteVolAutomation_ / finishRouteVolEdit_
-// index these arrays by that slot, so the UF1 SENDS mode reuses the same proven
+// 12 = the UF1 SENDS FLIP fader; 13 = the UF1 Extender send fader (the 9th strip
+// of the UF8 route bank). writeRouteVolAutomation_ / finishRouteVolEdit_ index
+// these arrays by that slot, so every UF1 send fader reuses the same proven
 // value-diff-probe + Touch-finalise machinery as the UF8 8-strip send fader.
-constexpr int kSendGestureSlots = 13;
+constexpr int kSendGestureSlots = 14;
+// The UF1 Extender's reserved send-gesture slot (fader vol + above-fader V-Pot pan
+// + the CUT mute all key off it). Must be < kSendGestureSlots.
+constexpr int kExtSendGestureSlot = 13;
 std::array<int64_t, kSendGestureSlots>     g_sendGestureMs{};
 std::array<std::string, kSendGestureSlots> g_sendGestureKey;
 std::array<MediaTrack*, kSendGestureSlots> g_sendEditTrack{};
@@ -5020,10 +5118,14 @@ void finishRouteVolEdit_(int strip)
 // ---- Send/receive PAN automation — exact analog of the volume path, sharing the
 // SAME index cache (a send's combined index is identical for vol and pan). Uses
 // SetTrackSendUIPan (UI path → records pan automation in Touch). Frank 2026-06-26.
-std::array<MediaTrack*, 8> g_sendPanEditTrack{};
-std::array<int, 8>         g_sendPanEditUiIdx;
-std::array<double, 8>      g_sendPanEditVal{};
-std::array<int64_t, 8>     g_sendPanEditUntilMs{};   // V-Pot pan: timed end-of-edit
+// Sized kSendGestureSlots (not 8) so the UF1 Extender send fader (slot 13) records
+// send PAN automation with the same value-diff-probe/UI-path quality as the UF8
+// strips — "wie beim UF8" (Frank 2026-08-05). Slots 0..7 UF8, 8..12 UF1-local, 13
+// Extender. The UF8 code only touches 0..7, so the extra slots are inert for it.
+std::array<MediaTrack*, kSendGestureSlots> g_sendPanEditTrack{};
+std::array<int, kSendGestureSlots>         g_sendPanEditUiIdx;
+std::array<double, kSendGestureSlots>      g_sendPanEditVal{};
+std::array<int64_t, kSendGestureSlots>     g_sendPanEditUntilMs{};   // V-Pot pan: timed end-of-edit
 struct SendPanEditInit_ { SendPanEditInit_() { g_sendPanEditUiIdx.fill(INT_MIN); } } g_sendPanEditInit_;
 void finishRoutePanEdit_(int strip);
 
@@ -5038,7 +5140,7 @@ static double routeUiPanAt_(MediaTrack* tr, bool recv, int ci)
 void writeRoutePanAutomation_(const StripRoute& r, int strip, double pan)
 {
     if (!r.valid) return;
-    if (strip < 0 || strip >= 8) {
+    if (strip < 0 || strip >= kSendGestureSlots) {
         SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
         return;
     }
@@ -5095,13 +5197,13 @@ static double readRoutePanEffective_(const StripRoute& r)
 // EFFECTIVE pan only at gesture start, then accumulate the delta in software and
 // never re-read mid-gesture — D_PAN trim does NOT reflect the recorded envelope,
 // so re-reading it pinned every point at centre (Frank 2026-06-26 send-pan bug).
-std::array<double, 8>      g_sendPanVpotAccum{};
-std::array<std::string, 8> g_sendPanVpotKey;
-std::array<int64_t, 8>     g_sendPanVpotMs{};
+std::array<double, kSendGestureSlots>      g_sendPanVpotAccum{};
+std::array<std::string, kSendGestureSlots> g_sendPanVpotKey;
+std::array<int64_t, kSendGestureSlots>     g_sendPanVpotMs{};
 
 void finishRoutePanEdit_(int strip)
 {
-    if (strip < 0 || strip >= 8) return;
+    if (strip < 0 || strip >= kSendGestureSlots) return;
     if (g_sendPanEditUiIdx[strip] == INT_MIN) return;
     if (g_sendPanEditTrack[strip]
         && ValidatePtr2(nullptr, g_sendPanEditTrack[strip], "MediaTrack*"))
@@ -6362,7 +6464,8 @@ bool applySendBankStep_(int step)
         if (g_sendBankOffset.exchange(0) != 0) g_bankDirty.store(true);
         return true;
     }
-    const int maxOff = count > 8 ? count - 8 : 0;
+    const int w      = sendWindowWidth_();   // 8, or 9 with the UF1 Extender send fader
+    const int maxOff = count > w ? count - w : 0;
     const int next   = std::clamp(g_sendBankOffset.load() + step, 0, maxOff);
     if (next != g_sendBankOffset.exchange(next)) g_bankDirty.store(true);
     return true;
@@ -6389,7 +6492,8 @@ void maintainSendBankWindow_()
         return;
     }
     const int count  = focusedRouteCount_();
-    const int maxOff = count > 8 ? count - 8 : 0;
+    const int w      = sendWindowWidth_();   // 8, or 9 with the UF1 Extender send fader
+    const int maxOff = count > w ? count - w : 0;
     const int cur    = g_sendBankOffset.load();
     if (cur > maxOff && g_sendBankOffset.exchange(maxOff) != maxOff)
         g_bankDirty.store(true);
@@ -11754,7 +11858,12 @@ MediaTrack* uf1FocusedTrack_()
     // write-back) follows this track for free. Mutually exclusive with the Focus-Set
     // pin → it wins over the branch below. Slot past the track list → fall through
     // (UF1 shows the selection when there is no Nth track).
-    if (g_uf1Extender.load()) {
+    // Suppressed in a FADER route mode: there the UF8 faders show the focused
+    // track's SENDS, so the UF1's +1 strip is the 9th SEND, not a 9th track —
+    // it falls through to the focused track (whose sends are on the bank) and
+    // the Extender fader block drives the send (Step 4). Track modes are
+    // unaffected → the HW-verified Step 1-3 case is byte-identical.
+    if (g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
         const int slot = g_bankOffset.load()
                        + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
         if (MediaTrack* et = visibleTrackAt(slot)) return et;
@@ -11816,6 +11925,34 @@ void applyUf1AboveFaderVpot_(int step)
     if (step == 0) return;
     MediaTrack* tr = uf1FocusedTrack_();
     if (!tr) return;
+    // Extender send fader (Step 4): the above-fader V-Pot drives the 9th SEND's
+    // PAN — "wie beim UF8" strip V-Pot in a route mode (Frank 2026-08-05), not the
+    // source track's pan. Software accumulator seeded from the EFFECTIVE send pan
+    // at gesture start (never re-read mid-gesture — the value records into the
+    // envelope, so the D_PAN trim would pin it at centre), virtual-notch centre
+    // detent, then writeRoutePanAutomation_ on slot 13 (full UI-path Touch
+    // recording). Owns the knob while this mode is engaged (over sticky / FLIP);
+    // empty/absent 9th slot → eat the gesture (never pan the source track).
+    if (uf1ExtenderRouteFader_()) {
+        const StripRoute er = uf1ExtenderSendRoute_();
+        if (er.valid) {
+            const int64_t     now = nowMs_();
+            const std::string key = routeCacheKey_(er);
+            if (now - g_sendPanVpotMs[kExtSendGestureSlot] > 300
+                || g_sendPanVpotKey[kExtSendGestureSlot] != key) {
+                g_sendPanVpotAccum[kExtSendGestureSlot] = readRoutePanEffective_(er);
+                g_sendPanVpotKey[kExtSendGestureSlot]   = key;
+            }
+            const double next = uf8::applyVirtualNotch(
+                g_sendPanVpotAccum[kExtSendGestureSlot],
+                step * kUf1AboveFaderPanPerDetent, /*center*/ 0.0,
+                /*zone*/ g_notchZone.load() * 2.0, -1.0, 1.0);
+            g_sendPanVpotAccum[kExtSendGestureSlot] = next;
+            g_sendPanVpotMs[kExtSendGestureSlot]    = now;
+            writeRoutePanAutomation_(er, kExtSendGestureSlot, next);
+        }
+        return;
+    }
     // Sticky Pot: a per-track pinned plug-in param overrides Pan on this
     // per-track knob (the UF1 analog of the UF8 strip V-Pot). Same generic
     // feel as every surface (stickyWriteRotation_ — toggle/stepped/continuous).
@@ -12847,6 +12984,14 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1SoloToggle) {
+            // Extender send fader: SOLO = exclusive un-mute of the 9th SEND (mute
+            // every other send of the source track) — like the UF8 strip SOLO in a
+            // route mode (Frank 2026-08-05). Shown via the mute/Cut LEDs, not a solo
+            // LED. Empty slot → toggleRouteSolo_ no-ops; eat the press either way.
+            if (uf1ExtenderRouteFader_()) {
+                toggleRouteSolo_(uf1ExtenderSendRoute_());
+                continue;
+            }
             if (MediaTrack* tr = uf1FocusedTrack_()) {
                 CSurf_OnSoloChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
@@ -12855,6 +13000,18 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1MuteToggle) {
+            // Extender send fader: CUT toggles the 9th SEND's mute (like the UF8
+            // strip CUT in a route mode), not the source track's (Frank 2026-08-05).
+            if (uf1ExtenderRouteFader_()) {
+                const StripRoute er = uf1ExtenderSendRoute_();
+                if (er.valid) {
+                    const double cur = GetTrackSendInfo_Value(
+                        er.track, er.sendCategory, er.sendIndex, "B_MUTE");
+                    SetTrackSendInfo_Value(er.track, er.sendCategory, er.sendIndex,
+                                           "B_MUTE", cur > 0.5 ? 0.0 : 1.0);
+                }
+                continue;   // route mode: never mute the source track (empty slot → eat)
+            }
             if (MediaTrack* tr = uf1FocusedTrack_()) {
                 CSurf_OnMuteChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
@@ -12948,6 +13105,20 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1AboveVpotPush) {
+            // Extender send fader: the V-Pot rides the 9th SEND's pan, so its PUSH
+            // centres that send's pan (Frank 2026-08-05) — like the UF8 PanCenter.
+            // Re-seed the software accumulator to centre so a following rotation
+            // continues from 0, not the pre-centre value. Empty slot → eat.
+            if (uf1ExtenderRouteFader_()) {
+                const StripRoute er = uf1ExtenderSendRoute_();
+                if (er.valid) {
+                    writeRoutePanAutomation_(er, kExtSendGestureSlot, 0.0);
+                    g_sendPanVpotAccum[kExtSendGestureSlot] = 0.0;
+                    g_sendPanVpotKey[kExtSendGestureSlot]   = routeCacheKey_(er);
+                    g_sendPanVpotMs[kExtSendGestureSlot]    = nowMs_();
+                }
+                continue;
+            }
             // Above-fader V-Pot push (0x08) — mirrors the UF8 sticky PanCenter push
             // (main thread). Armed (get-next) → clear this track's pin; else a live
             // pin → reset it to its default (toggle flips 0/1, else midpoint); else
@@ -13350,63 +13521,11 @@ void drainInputQueue()
                 if (!sr.active())
                     sr = resolveVpotRoute_(e.strip, bankOffset, surfaceCount);
                 if (sr.active()) {
-                    if (sr.valid && sr.track) {
-                        // Collect every REAL route entry to mute against. The
-                        // SEND view (cat 0/1) is COMBINED — soloing a send must
-                        // mute the other track sends AND the hardware outputs,
-                        // not just the soloed entry's own category. Iterate the
-                        // true extent (not GetTrackNumSends, which doesn't count
-                        // empty-slot indices and stopped the loop at strip 5 once
-                        // a gap existed). Empty track-send slots (null dest) are
-                        // skipped. Receive view (cat -1) is receives only.
-                        std::vector<std::pair<int,int>> entries;  // (cat, idx)
-                        auto collect = [&](int cat) {
-                            if (cat == 1) {
-                                const int nhw = GetTrackNumSends(sr.track, 1);
-                                for (int i = 0; i < nhw; ++i)
-                                    entries.emplace_back(1, i);
-                                return;
-                            }
-                            const int ext = sendIndexExtent_(sr.track, cat);
-                            const char* tag = (cat == -1) ? "P_SRCTRACK"
-                                                          : "P_DESTTRACK";
-                            for (int i = 0; i < ext; ++i) {
-                                auto* t = static_cast<MediaTrack*>(
-                                    GetSetTrackSendInfo(sr.track, cat, i, tag,
-                                                        nullptr));
-                                if (t && ValidatePtr2(nullptr, t, "MediaTrack*"))
-                                    entries.emplace_back(cat, i);
-                            }
-                        };
-                        if (sr.sendCategory == -1) collect(-1);
-                        else { collect(0); collect(1); }
-
-                        const bool thisOpen =
-                            GetTrackSendInfo_Value(sr.track,
-                                sr.sendCategory, sr.sendIndex,
-                                "B_MUTE") < 0.5;
-                        bool othersMuted = true;
-                        for (const auto& [cat, i] : entries) {
-                            if (cat == sr.sendCategory && i == sr.sendIndex)
-                                continue;
-                            if (GetTrackSendInfo_Value(sr.track, cat, i,
-                                    "B_MUTE") < 0.5) {
-                                othersMuted = false;
-                                break;
-                            }
-                        }
-                        const bool soloActive = thisOpen && othersMuted;
-                        for (const auto& [cat, i] : entries) {
-                            const bool isThis =
-                                (cat == sr.sendCategory && i == sr.sendIndex);
-                            const double tgt = soloActive ? 0.0
-                                                          : (isThis ? 0.0 : 1.0);
-                            SetTrackSendInfo_Value(sr.track, cat, i,
-                                                   "B_MUTE", tgt);
-                        }
-                    }
-                    // active-but-invalid (empty strip / hardware-output
-                    // send slot) → eat the press, do NOT fall through.
+                    // Exclusive send/receive solo = un-mute this, mute the rest
+                    // (toggleRouteSolo_ — shared with the UF1 Extender). active-but-
+                    // invalid (empty strip / hardware-output slot) → no-op, eat the
+                    // press, do NOT fall through.
+                    toggleRouteSolo_(sr);
                     break;
                 }
                 // FX Learn UF8: user-strip Solo toggles a bound vst3
@@ -20658,9 +20777,27 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
 // The level + GR meter (0x0009/0x0015/0x0016) is streamed separately — via the
 // cycle pacer in each view — so it is NOT here. `changed` forces a full repaint
 // on a track / view / reopen change (its own send-on-change statics live here).
-static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
+static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
+                                  const StripRoute* sendOverride = nullptr)
 {
     if (!g_uf1_dev || !tr) return;
+
+    // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
+    // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
+    // dB = its EFFECTIVE level. Pan / channel / colour / Solo / Cut still follow
+    // the focused SOURCE track below (the track the sends belong to), so the strip
+    // reads "this send, of that track". An empty/absent 9th slot blanks name + dB.
+    const bool sendZone  = sendOverride != nullptr;
+    const bool sendValid = sendZone && sendOverride->valid;
+    std::string ovName, ovDb;
+    double ovPan = 0.0; bool ovMuted = false;
+    if (sendValid) {
+        ovName  = abbreviateTrackName_(routeName_(*sendOverride), 12, -1, /*foldLatin1*/ false);
+        ovDb    = formatDbReadout(readRouteVolumeLinear_(*sendOverride, tr));
+        ovPan   = readRoutePanEffective_(*sendOverride);   // V-Pot drives this
+        ovMuted = GetTrackSendInfo_Value(sendOverride->track, sendOverride->sendCategory,
+                                         sendOverride->sendIndex, "B_MUTE") > 0.5;   // CUT toggles this
+    }
 
     static std::string sName, sDb, sPan, sCh;
     static int         sPanBar = INT_MIN;      // encoded pos*2+centreFlag (−1 = unset)
@@ -20694,11 +20831,13 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
         }
         name = abbreviateTrackName_(name, 12, -1, /*foldLatin1*/ false);
     }
+    if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
     const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
-    const std::string dbv = formatDbReadout(volLin);
+    std::string dbv = formatDbReadout(volLin);
+    if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
     if (changed || dbv != sDb) {
         sDb = dbv;
         std::vector<uint8_t> p;
@@ -20718,7 +20857,14 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
     int         barPos = 50;      // 0..100
     uint8_t     barCentre = 0x00; // 0x80 only for a real Pan centre-detent
     int spFx = -1, spParam = -1; bool spTog = false;
-    if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
+    if (sendZone) {
+        // Extender: the pan line/bar read out the 9th SEND's pan (what the above-
+        // fader V-Pot drives), so knob and readout agree. Empty slot → blank line,
+        // centred bar.
+        panLine   = sendValid ? composeValueLine("Pan", formatPanReadout(ovPan)) : std::string();
+        barPos    = std::clamp(static_cast<int>(std::lround((ovPan + 1.0) * 50.0)), 0, 100);
+        barCentre = (ovPan == 0.0) ? 0x80 : 0x00;
+    } else if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
         char nm[64] = {0}, val[64] = {0};
         TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
         TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
@@ -20790,8 +20936,14 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
     // layout mode frames re-latch the button-LED bank.
     {
         static int sSolo = -1, sMute = -1;
-        const bool soloed = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
-        const bool muted  = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
+        // Extender send mode: CUT reflects (+ toggles) the 9th SEND's mute; the
+        // soloed send is shown simply as the only UN-muted one, so the SOLO LED
+        // stays dark (a send has no solo state — Frank 2026-08-05). Off route mode:
+        // the source track's own I_SOLO / B_MUTE.
+        const bool soloed = sendZone ? false
+                                     : (GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
+        const bool muted  = sendValid ? ovMuted
+                                       : (GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
         auto sendLed = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
             const uint8_t prim = on ? litPrim          : dim;
             const uint8_t lvl  = on ? uf1::led::kFf39Lit : dim;
@@ -20820,6 +20972,17 @@ void uf1PaintChannel_()
 
     // Follow the user's focus: last-touched track, else the first selected.
     MediaTrack* tr = uf1FocusedTrack_();
+
+    // UF1 Extender — SENDS case (Step 4). When the UF8 bank shows the focused
+    // track's sends/receives on its FADERS, the UF1 is the 9th SEND strip: it
+    // drives + reads out the send one beyond the UF8 edge (uf1ExtenderSendRoute_).
+    // The strip readout, the fader write-back, the above-fader V-Pot (send pan)
+    // and the CUT button (send mute) all address THIS route. Empty/absent 9th
+    // slot → invalid → fader inert + strip blanks (like an empty UF8 send strip).
+    // Off / track modes → invalid → byte-identical to the Step 1-3 track case.
+    const StripRoute extRoute       = uf1ExtenderSendRoute_();
+    const bool       extSendFader   = extRoute.valid;
+    const bool       extRouteActive = uf1ExtenderRouteFader_();
 
     static MediaTrack* sTr = nullptr;
     // (Track name / dB / pan / ch / colour statics moved to uf1PaintChannelStrip_,
@@ -21883,7 +22046,7 @@ void uf1PaintChannel_()
     // GR meter (0x0009/0x0015/0x0016) rides each view's own cycle and is handled
     // there, not here. Runs after the meter/channel paint so its Solo/Cut FF3B
     // re-enable lands after any 0x0100 layout frames sent above.
-    uf1PaintChannelStrip_(tr, changed);
+    uf1PaintChannelStrip_(tr, changed, extRouteActive ? &extRoute : nullptr);
 
     // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
@@ -21934,6 +22097,15 @@ void uf1PaintChannel_()
         }
     }
     const bool sendFader = sendRoute.valid;
+    // UF1 Extender send fader (Step 4): the UF1 is the 9th SEND fader of the UF8
+    // route bank. extRoute / extSendFader / extRouteActive were resolved once at
+    // the top of uf1PaintChannel_ (so the strip readout uses the same route). A
+    // MOVE writes through the same value-diff-probe path as every other UF1 send
+    // fader (writeRouteVolAutomation_, reserved gesture slot 13). Yields to Strip
+    // Mode (its documented fader win); wins over the UF1-local SENDS/sticky/FLIP.
+    // Empty/absent 9th slot (extRouteActive && !extSendFader) → the fader is INERT
+    // (never drives the focused source track's volume) and the motor parks low.
+    static bool sExtFaderEditing = false;   // Extender send-fader slot = kExtSendGestureSlot
     // Sticky Pot under FLIP: the pin moves onto the FADER (the UF1 analog of the UF8
     // FLIP swap — "assign the current V-Pot parameter to the fader", manual p16).
     // fader = the pinned param (LINEAR pos↔norm, a plain 0..1 plug-in control), and
@@ -21954,6 +22126,15 @@ void uf1PaintChannel_()
             if (stripFader) {
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
                 TrackFX_SetParamNormalized(tr, csf.fxIndex, csf.vst3Param, n);
+            }
+            else if (extSendFader) {
+                writeRouteVolAutomation_(extRoute, kExtSendGestureSlot, uf1PosToVol_(pos));
+                sExtFaderEditing = true;
+            }
+            else if (extRouteActive) {
+                // Extender send mode, but the 9th slot is empty/absent → inert.
+                // Do NOT fall through to CSurf_OnVolumeChange (that would drive the
+                // focused SOURCE track's volume, which the strip does not show).
             }
             else if (sendFader) {
                 writeRouteVolAutomation_(sendRoute, kSendFaderStrip, uf1PosToVol_(pos));
@@ -21989,10 +22170,18 @@ void uf1PaintChannel_()
             finishRouteVolEdit_(kSendFaderStrip);
             sSendFaderEditing = false;
         }
+        if (sExtFaderEditing) {
+            finishRouteVolEdit_(kExtSendGestureSlot);   // Extender 9th-send Touch finalise
+            sExtFaderEditing = false;
+        }
         uint16_t pos;
         if (stripFader) {
             const double n = TrackFX_GetParamNormalized(tr, csf.fxIndex, csf.vst3Param);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
+        } else if (extSendFader) {
+            pos = uf1VolToPos_(readRouteVolumeLinear_(extRoute, tr));   // motor follows the 9th send
+        } else if (extRouteActive) {
+            pos = 0;   // empty/absent 9th slot → park the motor low, like a blank UF8 send strip
         } else if (sendFader) {
             pos = uf1VolToPos_(readRouteVolumeLinear_(sendRoute, tr));   // motor follows EFFECTIVE
         } else if (stickyFader) {
@@ -29153,12 +29342,21 @@ void onTimer()
     // knob has been idle past the window (the fader-flip path finalises on release).
     {
         const int64_t now = nowMs_();
+        // UF8 strips (0..7) + the UF1 Extender send V-Pot (slot 13) — send PAN has
+        // no touch-release, so finalise its automation edit once idle. (8..11 are
+        // the UF1-local sends V-Pots, which drive VOL not pan.)
         for (int s = 0; s < 8; ++s)
             if (g_sendPanEditUiIdx[s] != INT_MIN && g_sendPanEditUntilMs[s]
                 && now > g_sendPanEditUntilMs[s]) {
                 finishRoutePanEdit_(s);
                 g_sendPanEditUntilMs[s] = 0;
             }
+        if (g_sendPanEditUiIdx[kExtSendGestureSlot] != INT_MIN
+            && g_sendPanEditUntilMs[kExtSendGestureSlot]
+            && now > g_sendPanEditUntilMs[kExtSendGestureSlot]) {
+            finishRoutePanEdit_(kExtSendGestureSlot);
+            g_sendPanEditUntilMs[kExtSendGestureSlot] = 0;
+        }
         // UF1 SENDS V-Pot VOL (slots 8..11) — same idle-timed finalise; the FLIP
         // fader (slot 12) finalises on its own touch-release, not here.
         for (int s = 8; s <= 11; ++s)
@@ -36502,9 +36700,11 @@ void registerBindingHandlers()
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft, pressed);
             if (!firing) return;
             if (tryFaderBankNav(-1)) return;   // UF8 Plugin Mode fader-bank
-            // "Of focused track" send/receive mode: page the 8-send
-            // window instead of scrolling tracks (Frank 2026-06-15).
-            if (applySendBankStep_(-8)) return;
+            // "Of focused track" send/receive mode: page the send window
+            // instead of scrolling tracks (Frank 2026-06-15). The window is
+            // sendWindowWidth_() wide (9 with the UF1 Extender send fader), so a
+            // full-bank step tiles it without a gap.
+            if (applySendBankStep_(-sendWindowWidth_())) return;
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - esc: see applyBankByOne_ for rationale.
             // Step by the BANKABLE strip count (esc minus the pinned head),
@@ -36527,9 +36727,10 @@ void registerBindingHandlers()
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight, pressed);
             if (!firing) return;
             if (tryFaderBankNav(+1)) return;
-            // "Of focused track" send/receive mode: page the 8-send
-            // window instead of scrolling tracks (Frank 2026-06-15).
-            if (applySendBankStep_(+8)) return;
+            // "Of focused track" send/receive mode: page the send window
+            // instead of scrolling tracks (Frank 2026-06-15). Window width =
+            // sendWindowWidth_() (9 with the UF1 Extender send fader).
+            if (applySendBankStep_(+sendWindowWidth_())) return;
             const int trackCount = visibleTrackCount();
             // maxStart = trackCount - esc: see applyBankByOne_ for rationale.
             // Step by the BANKABLE strip count (esc minus the pinned head) —
