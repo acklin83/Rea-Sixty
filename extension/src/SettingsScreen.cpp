@@ -115,6 +115,10 @@ bool        reasixty_uf1EncoderModeVisible(int modeInt);
 void        reasixty_setUf1EncoderModeVisible(int modeInt, bool on);
 void        reasixty_uf1EncoderMoveSeq(int pos, int dir);
 const char* reasixty_uf1EncoderModeName(int modeInt);
+// UF1 held-track behaviour: does the UF8 "sends of focused track" follow the
+// UF1 held member (defined in main.cpp).
+bool        reasixty_uf1SendsFollowHeld();
+void        reasixty_setUf1SendsFollowHeld(bool on);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -6431,6 +6435,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         if (ImGui_BeginTabItem(ctx, "UF1", nullptr, nullptr)) {
             s_deviceTab = 2;
             drawUf1Vector(ctx, s_selected);
+            // Held-track behaviour (only bites when a UF1 holds a Focus-Set
+            // member via "Pin Set"): should the UF8 sends-on-faders follow that
+            // held channel (stable automation target) or the last-touched track?
+            ImGui_Spacing(ctx);
+            bool sendsFollow = reasixty_uf1SendsFollowHeld();
+            if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 held track", &sendsFollow))
+                reasixty_setUf1SendsFollowHeld(sendsFollow);
+            ImGui_TextDisabled(ctx,
+                "Off: UF8 sends stay on the last-touched track.");
             ImGui_EndTabItem(ctx);
         }
         ImGui_EndTabBar(ctx);

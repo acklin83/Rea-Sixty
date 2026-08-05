@@ -1557,6 +1557,21 @@ std::atomic<bool> g_tempSelsetClearRequest{false};
 std::atomic<bool> g_tempSelsetToggleSelRequest{false};
 std::atomic<bool> g_tempSelsetSetFromSelRequest{false};
 std::atomic<bool> g_tempSelsetPinFocusedRequest{false};
+// UF1 Held-Track ("focused track" clutch = the Focus Set pin, g_tempSelsetActive):
+// when the pin is on the UF1 parks on ONE Focus-Set member and its channel encoder
+// scrolls through the members INDEPENDENTLY of the REAPER selection / UF8 bank
+// (Frank 2026-08-04, option A). g_uf1HeldIndex = which member is on the UF1; the
+// scroll request is posted by the REAPER-action route (NEXT/PREV) and drained on
+// the timer (applyUf1HoldScroll_ runs main-thread). Session-only — the Focus Set
+// itself already persists per-project (g_tempSelsetProjConfig).
+std::atomic<int> g_uf1HeldIndex{0};
+std::atomic<int> g_uf1HoldScrollRequest{0};
+// When on (default), the UF8 "sends of focused track" mode follows the UF1 held
+// member instead of GetLastTouchedTrack — a STABLE target so sends automation
+// writes to the channel the UF1 shows, not whatever was last touched (Frank
+// 2026-08-04 "beides?" → make it a switch). Only bites when a UF1 is present +
+// held-mode (Pin Set) is on; off = the two run independently. ExtState-persisted.
+std::atomic<bool> g_uf1SendsFollowHeld{true};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -2320,6 +2335,8 @@ void tempSelsetClear_();
 void tempSelsetToggleSelected_();
 void tempSelsetSetFromSelection_();
 void tempSelsetPinFocused_();
+void applyUf1HoldScroll_(int step);   // defined near applyTempSelsetScroll_ (UF1 held-member scroll)
+MediaTrack* heldFocusTrack_();        // UF8 sends target: UF1 held member (if enabled) else last-touched
 
 // onTimer drain. Detect project switch, then process queued recall /
 // save requests, then refresh the active GUID set for Group slots so
@@ -2474,6 +2491,11 @@ void drainSelsets_() {
     if (g_tempSelsetPinFocusedRequest.exchange(false)) {
         tempSelsetPinFocused_();
     }
+    // UF1 held-member scroll posted by the REAPER-action route (NEXT/PREV).
+    // The surface channel-encoder calls applyUf1HoldScroll_ directly from the
+    // input drain; this drains the keyboard/toolbar path onto the main thread.
+    if (const int hs = g_uf1HoldScrollRequest.exchange(0); hs != 0)
+        applyUf1HoldScroll_(hs);
 }
 
 // Long-press SEL → folder spill toggle. Polled at the start of onTimer
@@ -4716,7 +4738,7 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         // cache: remember the last non-null result and reuse it after
         // validating against REAPER's pointer table.
         static MediaTrack* s_lastTouchedCache = nullptr;
-        MediaTrack* lt = GetLastTouchedTrack();
+        MediaTrack* lt = heldFocusTrack_();   // UF1 held member when enabled, else last-touched
         if (lt) {
             s_lastTouchedCache = lt;
         } else if (s_lastTouchedCache
@@ -6114,6 +6136,67 @@ void applyTempSelsetScroll_(int step)
     }
 }
 
+// Focus-Set members in project order (main-thread; walks CountTracks). Shared by
+// the UF1 held-track resolver + scroll so g_uf1HeldIndex maps consistently. Returns
+// empty when the set is empty. NOTE: this is the same walk applyTempSelsetScroll_
+// does inline — kept separate to avoid touching that working (selection-moving) path.
+std::vector<MediaTrack*> focusSetMembersOrdered_()
+{
+    std::vector<MediaTrack*> members;
+    if (g_tempSelsetGuids.empty()) return members;
+    const int n = CountTracks(nullptr);
+    members.reserve(g_tempSelsetGuids.size());
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        char gb[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", gb, false);
+        if (g_tempSelsetGuids.count(gb)) members.push_back(tr);
+    }
+    return members;
+}
+
+// UF1 held-member scroll (option A) — step g_uf1HeldIndex through the Focus-Set
+// members WITHOUT touching the REAPER selection or the UF8 bank (the whole point
+// of decoupling: the UF1 holds still while you work the UF8). Main-thread only
+// (drained from the input queue / the REAPER-action route). Clamps to the current
+// member count; a repaint is triggered via g_pageDirty.
+void applyUf1HoldScroll_(int step)
+{
+    if (step == 0) return;
+    auto members = focusSetMembersOrdered_();
+    if (members.empty()) return;
+    const int last = static_cast<int>(members.size()) - 1;
+    int idx = g_uf1HeldIndex.load();
+    if (idx < 0)    idx = 0;
+    if (idx > last) idx = last;
+    idx += step;
+    if (idx < 0)    idx = 0;
+    if (idx > last) idx = last;
+    if (idx != g_uf1HeldIndex.exchange(idx)) g_pageDirty.store(true);
+}
+
+// The track the UF8 "sends of focused track" mode targets. Default = the UF1
+// held member when a UF1 is present + held-mode (Pin Set) is on + the preference
+// g_uf1SendsFollowHeld is set — a STABLE target so sends automation lands on the
+// channel the UF1 shows. Otherwise (preference off, no UF1, no held member, or an
+// empty set) it falls back to GetLastTouchedTrack, exactly as before. Main-thread
+// only. Used by the sends-of-focused-track route + count + bank-step.
+MediaTrack* heldFocusTrack_()
+{
+    if (g_uf1SendsFollowHeld.load() && g_uf1_dev && g_tempSelsetActive.load()) {
+        auto members = focusSetMembersOrdered_();
+        if (!members.empty()) {
+            const int last = static_cast<int>(members.size()) - 1;
+            int idx = g_uf1HeldIndex.load();
+            if (idx < 0)    idx = 0;
+            if (idx > last) idx = last;
+            return members[static_cast<size_t>(idx)];
+        }
+    }
+    return GetLastTouchedTrack();
+}
+
 // Playhead nudge — move the edit cursor by the user's configured unit +
 // amount (Settings → Modes → Nudge). ApplyNudge with nudgewhat=6 honours
 // every REAPER unit (ms / seconds / grid / measures.beats / samples /
@@ -6215,7 +6298,7 @@ int focusedRouteCount_()
     const bool sendThis = g_sendFaderThisTrack.load() || g_sendVpotThisTrack.load();
     const bool recvThis = g_recvFaderThisTrack.load() || g_recvVpotThisTrack.load();
     if (!sendThis && !recvThis) return 0;
-    MediaTrack* tr = GetLastTouchedTrack();
+    MediaTrack* tr = heldFocusTrack_();   // UF1 held member when enabled, else last-touched
     if (!tr) return 0;
     int n = 0;
     // Extent (not GetTrackNumSends) so the window spans empty-slot indices too
@@ -6259,7 +6342,7 @@ void maintainSendBankWindow_()
     const bool engaged = g_sendFaderThisTrack.load() || g_sendVpotThisTrack.load()
                       || g_recvFaderThisTrack.load() || g_recvVpotThisTrack.load();
     if (!engaged) { s_lastRouteFocus = nullptr; return; }
-    MediaTrack* focus = GetLastTouchedTrack();
+    MediaTrack* focus = heldFocusTrack_();   // UF1 held member when enabled, else last-touched
     // GetLastTouchedTrack briefly returns null mid send-write (SetSurface-
     // Selected re-broadcast). Ignore those ticks so a send adjustment never
     // looks like a focus change and snaps the page back to 0.
@@ -7447,7 +7530,16 @@ void applyFxMove_(int step) { applyFxMoveSlotAware_(step, /*carousel*/ true); }
 void uf1EncoderDispatch_(int step)
 {
     switch (g_uf1EncoderMode.load()) {
-        case EncoderMode::ChSelect:    applySelectRelative_(step); break;
+        case EncoderMode::ChSelect:
+            // Held mode (Focus Set pin on + non-empty): the UF1 channel encoder
+            // scrolls the held members INDEPENDENTLY (option A, Frank 2026-08-04) —
+            // it moves only what the UF1 shows (g_uf1HeldIndex), leaving the REAPER
+            // selection and the UF8 bank untouched. Off → navigate the selection.
+            if (g_tempSelsetActive.load() && !g_tempSelsetGuids.empty())
+                applyUf1HoldScroll_(step);
+            else
+                applySelectRelative_(step);
+            break;
         case EncoderMode::Nudge:       applyPlayheadNudge_(step);  break;
         case EncoderMode::Mousewheel:  applyMouseScroll_(step);    break;
         case EncoderMode::Instance:    applyInstanceCycle_(step);  break;
@@ -11619,6 +11711,22 @@ MediaTrack* uf1FocusedTrack_()
     // overriding the selection (Frank 2026-07-30). Everything downstream reads
     // this one resolver, so the strip / fader / GR all follow the master.
     if (g_uf1Master.load() && master) return master;
+    // Held mode: the "focused track" clutch (= Focus Set pin, g_tempSelsetActive)
+    // is on and the set is non-empty → the UF1 parks on member[g_uf1HeldIndex],
+    // independent of the REAPER selection (Frank 2026-08-04). The channel encoder
+    // scrolls the index (option A); selection + UF8 bank are untouched. Everything
+    // on the UF1 reads this one resolver, so the whole strip/V-Pots/meter follow the
+    // held member for free. Empty set → fall through to normal follow.
+    if (g_tempSelsetActive.load()) {
+        auto members = focusSetMembersOrdered_();
+        if (!members.empty()) {
+            const int last = static_cast<int>(members.size()) - 1;
+            int idx = g_uf1HeldIndex.load();
+            if (idx < 0)    idx = 0;
+            if (idx > last) idx = last;
+            return members[static_cast<size_t>(idx)];
+        }
+    }
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
     // Toggling MASTER off must return to the SELECTED channel. But driving the
@@ -21058,12 +21166,17 @@ void uf1PaintChannel_()
                                      std::max(1, g_uf1SendGroupCount.load()));
             } else if (subMode == 1) {         // DAW: soft-key BANK N/M
                 // Denominator = the REAL number of assigned soft-key banks, not the
-                // fixed 10/9 (Frank 2026-08-04). Clamp a stale current bank into
-                // range so N never exceeds M and the painted bank matches the page.
+                // fixed 10/9 (Frank 2026-08-04). Do NOT store-clamp g_uf1SoftBank
+                // here: this painter runs every tick and fought the Settings bank
+                // slider, which drives g_uf1SoftBank directly and must reach EMPTY
+                // banks to assign them ("springt zurück auf 1", Frank 2026-08-05).
+                // Clamp for DISPLAY only; the ◄ ► paging (uf1_page_step, nb=inUse)
+                // owns keeping the live bank in range and recovers a stale one on the
+                // next step. M grows to include a deliberately-picked higher bank so
+                // N never exceeds M (editing empty bank 3 reads 3/3, not 3/1).
                 const int inUse = uf8::bindings::uf1SoftBankInUseCount();
-                int cur = g_uf1SoftBank.load();
-                if (cur >= inUse) { cur = inUse - 1; g_uf1SoftBank.store(cur); }
-                hdr = uf1PageHeader_(cur + 1, inUse);
+                const int cur   = g_uf1SoftBank.load();
+                hdr = uf1PageHeader_(cur + 1, std::max(inUse, cur + 1));
             } else {                           // Plugin: SSL strip param-page N/M
                 hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
                                      std::max(1, g_uf1CsActivePages.load()));
@@ -29997,6 +30110,29 @@ custom_action_register_t g_actionFocusPinFocused{
 };
 int g_cmdFocusPinFocused = 0;
 
+// UF1 Held-Track mode changes exposed as REAPER actions TOO — the UF1 has few
+// buttons, so every UF1 mode change must be reachable from keyboard/toolbar
+// (Frank 2026-08-04 standing convention; the "both routes" exception to
+// native=builtin). FOCUS_RECALL = the "focused track" clutch (pin on/off, the
+// same toggle "Pin Set" fires); HOLD_NEXT/PREV = scroll the held member. Each
+// posts the same request atomic the surface path uses → drained on the timer.
+custom_action_register_t g_actionFocusRecall{
+    0, "REASIXTY_FOCUS_RECALL", "Rea-Sixty: Focus Set pin on/off (UF1 held track)", nullptr,
+};
+int g_cmdFocusRecall = 0;
+custom_action_register_t g_actionUf1HoldNext{
+    0, "REASIXTY_UF1_HOLD_NEXT", "Rea-Sixty: UF1 held track \xE2\x86\x92 next Focus Set member", nullptr,
+};
+int g_cmdUf1HoldNext = 0;
+custom_action_register_t g_actionUf1HoldPrev{
+    0, "REASIXTY_UF1_HOLD_PREV", "Rea-Sixty: UF1 held track \xE2\x86\x92 previous Focus Set member", nullptr,
+};
+int g_cmdUf1HoldPrev = 0;
+custom_action_register_t g_actionUf1SendsFollowHeld{
+    0, "REASIXTY_UF1_SENDS_FOLLOW_HELD", "Rea-Sixty: UF8 sends follow UF1 held track (toggle)", nullptr,
+};
+int g_cmdUf1SendsFollowHeld = 0;
+
 // CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
 // user 2026-06-25: "would be cool if these were available as Reaper actions").
 // Same workers as the surface built-ins; dispatch posts the existing request
@@ -30214,6 +30350,19 @@ void tempSelsetToggleRecall_()
     const bool wasActive = g_tempSelsetActive.load();
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
+    // Seed the UF1 held position when the pin turns ON: park on the currently
+    // selected member if it is one, else member 0 (Frank 2026-08-04 — the UF1
+    // "focused track" lands on what you were looking at). Scroll moves it from there.
+    if (!wasActive) {
+        auto members = focusSetMembersOrdered_();
+        int idx = 0;
+        for (int i = 0; i < static_cast<int>(members.size()); ++i)
+            if (members[i] && GetMediaTrackInfo_Value(members[i], "I_SELECTED") > 0.5) {
+                idx = i;
+                break;
+            }
+        g_uf1HeldIndex.store(idx);
+    }
     // Focus-Set Auto-Mode (own knob, g_focusSetAutoMode — decoupled from
     // the slot Selsets). Recall ON in Sel Mode Auto with a non-disabled
     // mode → force every member track to that mode. Recall OFF → revert
@@ -30256,6 +30405,18 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdFocusToggleSel) { g_tempSelsetToggleSelRequest.store(true); return true; }
     if (command == g_cmdFocusSetFromSel){ g_tempSelsetSetFromSelRequest.store(true); return true; }
     if (command == g_cmdFocusPinFocused){ g_tempSelsetPinFocusedRequest.store(true); return true; }
+    if (command == g_cmdFocusRecall)    { g_tempSelsetRecallRequest.store(true);     return true; }
+    if (command == g_cmdUf1HoldNext)    { g_uf1HoldScrollRequest.fetch_add(1);       return true; }
+    if (command == g_cmdUf1HoldPrev)    { g_uf1HoldScrollRequest.fetch_add(-1);      return true; }
+    if (command == g_cmdUf1SendsFollowHeld) {
+        // Toggle inline (the setter lives at global scope after this hook; mirror
+        // its body rather than forward-declaring across the anon namespace).
+        const bool on = !g_uf1SendsFollowHeld.load();
+        g_uf1SendsFollowHeld.store(on);
+        SetExtState("rea_sixty", "uf1SendsFollowHeld", on ? "1" : "0", true);
+        g_bankDirty.store(true);
+        return true;
+    }
     for (int i = 0; i < 8; ++i)
         if (command == g_cmdCsSwitch[i]) { g_csSwitchReq.store(i); return true; }
     for (int i = 0; i < 8; ++i)
@@ -32054,6 +32215,14 @@ void reasixty_setFocusSetAutoMode(int mode)
     if (!g_tempSelsetActive.load()) return;
     if (mode >= 0)        tempSelsetApplyAutoMode_(mode);
     else if (prev >= 0)   tempSelsetApplyAutoMode_(0);
+}
+
+bool reasixty_uf1SendsFollowHeld() { return g_uf1SendsFollowHeld.load(); }
+void reasixty_setUf1SendsFollowHeld(bool on)
+{
+    if (on == g_uf1SendsFollowHeld.exchange(on)) return;
+    SetExtState("rea_sixty", "uf1SendsFollowHeld", on ? "1" : "0", true);
+    g_bankDirty.store(true);   // re-resolve the sends-of-focused-track routes
 }
 
 int  reasixty_cycleOpenMode()   { return g_cycleOpenMode.load(); }
@@ -35463,6 +35632,11 @@ void registerBindingHandlers()
         },
         nullptr, "Encoder: scroll Focus Set members", false
     });
+    // NB: the UF1 held-member scroll (applyUf1HoldScroll_) is NOT a bindable
+    // builtin on purpose — a button binding would pass a fixed param (default 0
+    // = no-op), and Frank wants fewer UF1 buttons, not more. It is reached two
+    // ways instead: the UF1 channel encoder in ChSelect (surface, live delta)
+    // and the REASIXTY_UF1_HOLD_NEXT/PREV REAPER actions (keyboard/toolbar).
     registerBuiltin("playhead_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
@@ -37298,6 +37472,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1StripMode"); v && *v)
         g_uf1StripMode.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf1SendsFollowHeld"); v && *v)
+        g_uf1SendsFollowHeld.store(std::atoi(v) != 0);   // default true if never set
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
     // the user sees on the SSL plug-in immediately. The atomic's
@@ -37372,6 +37548,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdFocusToggleSel  = plugin_register("custom_action", &g_actionFocusToggleSel);
     g_cmdFocusSetFromSel = plugin_register("custom_action", &g_actionFocusSetFromSel);
     g_cmdFocusPinFocused = plugin_register("custom_action", &g_actionFocusPinFocused);
+    g_cmdFocusRecall     = plugin_register("custom_action", &g_actionFocusRecall);
+    g_cmdUf1HoldNext     = plugin_register("custom_action", &g_actionUf1HoldNext);
+    g_cmdUf1HoldPrev     = plugin_register("custom_action", &g_actionUf1HoldPrev);
+    g_cmdUf1SendsFollowHeld = plugin_register("custom_action", &g_actionUf1SendsFollowHeld);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
     for (int i = 0; i < 8; ++i)
