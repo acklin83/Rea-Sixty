@@ -6440,7 +6440,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // held channel (stable automation target) or the last-touched track?
             ImGui_Spacing(ctx);
             bool sendsFollow = reasixty_uf1SendsFollowHeld();
-            if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 held track", &sendsFollow))
+            if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
                 reasixty_setUf1SendsFollowHeld(sendsFollow);
             ImGui_TextDisabled(ctx,
                 "Off: UF8 sends stay on the last-touched track.");

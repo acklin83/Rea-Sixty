@@ -30110,26 +30110,28 @@ custom_action_register_t g_actionFocusPinFocused{
 };
 int g_cmdFocusPinFocused = 0;
 
-// UF1 Held-Track mode changes exposed as REAPER actions TOO — the UF1 has few
+// UF1 Focus-Set mode changes exposed as REAPER actions TOO — the UF1 has few
 // buttons, so every UF1 mode change must be reachable from keyboard/toolbar
 // (Frank 2026-08-04 standing convention; the "both routes" exception to
-// native=builtin). FOCUS_RECALL = the "focused track" clutch (pin on/off, the
-// same toggle "Pin Set" fires); HOLD_NEXT/PREV = scroll the held member. Each
+// native=builtin). FOCUS_RECALL = the Focus-Set pin clutch (pin on/off, the same
+// toggle "Pin Set" fires); FOCUS_NEXT/PREV = scroll the UF1 through the set. Each
 // posts the same request atomic the surface path uses → drained on the timer.
+// User-facing IDs/labels say "Focus Set", never "held" (Frank 2026-08-05); the
+// internal g_uf1Held* / heldFocusTrack_ names stay.
 custom_action_register_t g_actionFocusRecall{
-    0, "REASIXTY_FOCUS_RECALL", "Rea-Sixty: Focus Set pin on/off (UF1 held track)", nullptr,
+    0, "REASIXTY_FOCUS_RECALL", "Rea-Sixty: Focus Set pin on/off (UF1 follows the set)", nullptr,
 };
 int g_cmdFocusRecall = 0;
 custom_action_register_t g_actionUf1HoldNext{
-    0, "REASIXTY_UF1_HOLD_NEXT", "Rea-Sixty: UF1 held track \xE2\x86\x92 next Focus Set member", nullptr,
+    0, "REASIXTY_UF1_FOCUS_NEXT", "Rea-Sixty: UF1 Focus Set \xE2\x86\x92 next member", nullptr,
 };
 int g_cmdUf1HoldNext = 0;
 custom_action_register_t g_actionUf1HoldPrev{
-    0, "REASIXTY_UF1_HOLD_PREV", "Rea-Sixty: UF1 held track \xE2\x86\x92 previous Focus Set member", nullptr,
+    0, "REASIXTY_UF1_FOCUS_PREV", "Rea-Sixty: UF1 Focus Set \xE2\x86\x92 previous member", nullptr,
 };
 int g_cmdUf1HoldPrev = 0;
 custom_action_register_t g_actionUf1SendsFollowHeld{
-    0, "REASIXTY_UF1_SENDS_FOLLOW_HELD", "Rea-Sixty: UF8 sends follow UF1 held track (toggle)", nullptr,
+    0, "REASIXTY_UF1_SENDS_FOLLOW_FOCUS", "Rea-Sixty: UF8 sends follow UF1 Focus Set track (toggle)", nullptr,
 };
 int g_cmdUf1SendsFollowHeld = 0;
 
@@ -35636,7 +35638,7 @@ void registerBindingHandlers()
     // builtin on purpose — a button binding would pass a fixed param (default 0
     // = no-op), and Frank wants fewer UF1 buttons, not more. It is reached two
     // ways instead: the UF1 channel encoder in ChSelect (surface, live delta)
-    // and the REASIXTY_UF1_HOLD_NEXT/PREV REAPER actions (keyboard/toolbar).
+    // and the REASIXTY_UF1_FOCUS_NEXT/PREV REAPER actions (keyboard/toolbar).
     registerBuiltin("playhead_nudge", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
