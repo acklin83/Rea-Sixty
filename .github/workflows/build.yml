@@ -107,3 +107,19 @@ jobs:
             extension/build/libusb-1.0.0.dylib
             extension/build/libhidapi.0.dylib
           if-no-files-found: error
+
+      # Same idea on Linux: the CMake POST_BUILD ("Linux libusb / hidapi
+      # bundling") drops the system libusb / hidapi next to the .so under
+      # their SONAME. They only exist on the CI runner, so ship them as a
+      # separate artifact the release runbook downloads into extension/build/
+      # before running dist/release-linux.sh. Globs so the SONAME version
+      # (libusb-1.0.so.0, libhidapi-hidraw.so.0) is picked up automatically.
+      - name: Upload Linux bundled libs
+        if: matrix.name == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-libs
+          path: |
+            extension/build/libusb-1.0.so.*
+            extension/build/libhidapi-*.so.*
+          if-no-files-found: error

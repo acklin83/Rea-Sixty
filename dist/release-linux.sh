@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
-# Rea-Sixty Linux release packer. Bundles the built .so for upload to
-# the GitHub Release that the ReaPack index.xml points at.
+# Rea-Sixty Linux release packer. Bundles the built .so plus the libusb /
+# hidapi it depends on, for upload to the GitHub Release that the ReaPack
+# index.xml points at.
 #
-# Unlike macOS, Linux doesn't bundle libusb / hidapi into the package —
-# users get them from their distro's package manager (Debian/Ubuntu:
-# libusb-1.0-0, libhidapi-hidraw0). Their ABI is stable enough that
-# system libs work; bundling versioned .so's with rpath rewrites is
-# unnecessary churn for the v0.1.x cycle.
+# The CMake build (extension/CMakeLists.txt, "Linux libusb / hidapi
+# bundling") copies the system libusb / hidapi next to the .so under their
+# SONAME and gives the .so an $ORIGIN RUNPATH. We ship all three so the
+# plugin is self-contained: no `apt install libhidapi-hidraw0` for the user.
+# That package is almost never preinstalled on minimal distros, and without
+# it REAPER's dlopen fails and the plugin is silently dropped — installed via
+# ReaPack yet absent from Control/OSC/Web (Frank forum support, 2026-08-04).
 #
 # Includes the udev rule that's mandatory for non-root USB access —
 # ReaPack's @provides will install it next to the .so (user copies
 # manually with sudo).
 #
 # Pre-reqs:
-#   - extension/build/reaper_rea-sixty.so built on the target box
+#   - extension/build/reaper_rea-sixty.so built on the target box, with the
+#     bundled libusb-1.0.so.* / libhidapi-*.so.* sitting beside it (the CMake
+#     POST_BUILD step drops them there).
 #
 # Run:
 #   ./dist/release-linux.sh
 #
-# Output: dist/rea-sixty-linux-v<VERSION>.tar.gz with the .so + udev
-# rule + README explaining the manual steps.
+# Output: dist/rea-sixty-linux-v<VERSION>.tar.gz with the .so + bundled libs
+# + udev rule + INSTALL.txt.
 
 set -euo pipefail
 
@@ -44,6 +49,30 @@ if [[ ! -f "$SRC" ]]; then
 fi
 cp -f "$SRC" "$STAGE/reaper_rea-sixty.so"
 
+# Bundled runtime libs the CMake POST_BUILD step dropped next to the .so,
+# named by their SONAME (= the .so's DT_NEEDED). Ship them so the plugin
+# loads without the user apt-installing anything. Fail loud if the build
+# didn't produce them — a tarball missing them silently reintroduces the
+# "installed but invisible" bug.
+BUNDLED_LIBS=()
+shopt -s nullglob
+# Patterns stay LITERAL here (single-quoted); they expand against $BUILD_DIR
+# below, not against the current directory.
+for pat in 'libusb-1.0.so.*' 'libhidapi-*.so.*'; do
+    for lib in "$BUILD_DIR"/$pat; do
+        cp -f "$lib" "$STAGE/$(basename "$lib")"
+        BUNDLED_LIBS+=("$(basename "$lib")")
+    done
+done
+shopt -u nullglob
+if [[ ${#BUNDLED_LIBS[@]} -lt 2 ]]; then
+    echo "ERROR: expected bundled libusb + hidapi next to $SRC, found: ${BUNDLED_LIBS[*]:-none}"
+    echo "       Rebuild so the CMake POST_BUILD 'Bundling ...' step runs:"
+    echo "         cmake --build extension/build"
+    exit 1
+fi
+echo "==> Bundled libs: ${BUNDLED_LIBS[*]}"
+
 # udev rule — same content the developer installs manually. End users
 # must root-copy this to /etc/udev/rules.d/ for libusb to talk to UF8
 # and UC1 without sudo.
@@ -58,14 +87,17 @@ RULES
 cat > "$STAGE/INSTALL.txt" <<EOF
 Rea-Sixty for Linux — manual install
 
-1. Copy reaper_rea-sixty.so to ~/.config/REAPER/UserPlugins/
+1. Copy reaper_rea-sixty.so AND the bundled libraries
+   (${BUNDLED_LIBS[*]}) to ~/.config/REAPER/UserPlugins/
+   — keep them together; the .so loads them from its own directory.
 2. As root: copy 99-rea-sixty.rules to /etc/udev/rules.d/, then run
        sudo udevadm control --reload-rules && sudo udevadm trigger
-3. Install dependencies (Debian/Ubuntu):
-       sudo apt install libusb-1.0-0 libhidapi-hidraw0
-4. Install ReaImGui from ReaPack inside REAPER (Extensions → ReaPack
+3. Install ReaImGui from ReaPack inside REAPER (Extensions → ReaPack
    → Browse packages → ReaImGui → Install)
-5. Restart REAPER, then Preferences → Control/OSC/Web → Add → Rea-Sixty
+4. Restart REAPER, then Preferences → Control/OSC/Web → Add → Rea-Sixty
+
+libusb / hidapi are bundled — no apt install needed. (They still rely on
+your system's libudev, present on every desktop Linux.)
 
 Known issue: USB stability depends on topology. Linux kernel (xhci_hcd)
 can power-cycle a USB hub port that has UF8 + UC1 daisy-chained on it,
@@ -76,7 +108,7 @@ EOF
 echo "==> Pack tar.gz"
 rm -f "$TGZ_PATH"
 tar -C "$STAGE" -czf "$TGZ_PATH" \
-    reaper_rea-sixty.so 99-rea-sixty.rules INSTALL.txt
+    reaper_rea-sixty.so "${BUNDLED_LIBS[@]}" 99-rea-sixty.rules INSTALL.txt
 
 echo ""
 echo "==> Done. Artifact: $TGZ_PATH"

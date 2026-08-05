@@ -545,6 +545,94 @@ if(APPLE)
     )
 endif()
 
+# ----- Linux libusb / hidapi bundling ----------------------------------------
+# The macOS mirror. Without this the .so hard-NEEDs libusb-1.0.so.0 and
+# libhidapi-hidraw.so.0 from the SYSTEM linker path. libusb is almost always
+# present; libhidapi-hidraw0 is almost never preinstalled (minimal Kubuntu /
+# MX). When it's missing REAPER's dlopen fails and the plugin is silently
+# dropped — installed via ReaPack yet absent from Control/OSC/Web with no
+# actions (Frank forum support, 2026-08-04).
+#
+# Fix: copy the system libusb / hidapi next to our .so under their SONAME and
+# give the .so an $ORIGIN RUNPATH so the loader resolves them from its own
+# directory. ReaPack installs every file of a type="extension" package into
+# UserPlugins (verified against reapack Source::targetPath — routing is by
+# package type, not per-file extension), so the bundled copies land in the
+# same dir as the .so (= $ORIGIN). Self-contained, no apt step for the user.
+if(UNIX AND NOT APPLE)
+    set_target_properties(reaper_uf8 PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN")
+
+    # readelf reads the DT_SONAME of the resolved dependency — the exact string
+    # our .so records as its DT_NEEDED, so the bundled copy must carry that
+    # name to be found. The dev symlink (libusb-1.0.so) and the realpath
+    # (libusb-1.0.so.0.3.0) are both the wrong name; only the SONAME matches.
+    find_program(READELF_EXECUTABLE NAMES readelf llvm-readelf)
+    if(NOT READELF_EXECUTABLE)
+        message(FATAL_ERROR
+            "readelf not found — needed to read the SONAME of the bundled "
+            "libusb / hidapi for the Linux self-contained package. "
+            "Install binutils.")
+    endif()
+
+    # pkg_check_modules(IMPORTED_TARGET) populated *_LINK_LIBRARIES with
+    # absolute paths; pick the entry for each library.
+    function(_reasixty_resolve_lib LIST_VAR NEEDLE OUT_PATH)
+        foreach(_cand IN LISTS ${LIST_VAR})
+            if(_cand MATCHES "${NEEDLE}" AND EXISTS "${_cand}")
+                set(${OUT_PATH} "${_cand}" PARENT_SCOPE)
+                return()
+            endif()
+        endforeach()
+        set(${OUT_PATH} "" PARENT_SCOPE)
+    endfunction()
+
+    function(_reasixty_soname LIB_PATH OUT_NAME)
+        execute_process(
+            COMMAND "${READELF_EXECUTABLE}" -d "${LIB_PATH}"
+            OUTPUT_VARIABLE _readelf_out
+            ERROR_QUIET)
+        string(REGEX MATCH "Library soname: \\[([^]]+)\\]" _ignored "${_readelf_out}")
+        set(${OUT_NAME} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+    endfunction()
+
+    _reasixty_resolve_lib(LIBUSB_LINK_LIBRARIES "usb-1\\.0" _reasixty_libusb_path)
+    _reasixty_resolve_lib(HIDAPI_LINK_LIBRARIES "hidapi" _reasixty_hidapi_path)
+    if(NOT _reasixty_libusb_path OR NOT _reasixty_hidapi_path)
+        message(FATAL_ERROR
+            "Could not resolve absolute paths to bundle "
+            "(libusb='${_reasixty_libusb_path}' hidapi='${_reasixty_hidapi_path}'). "
+            "LIBUSB_LINK_LIBRARIES='${LIBUSB_LINK_LIBRARIES}' "
+            "HIDAPI_LINK_LIBRARIES='${HIDAPI_LINK_LIBRARIES}'")
+    endif()
+
+    _reasixty_soname("${_reasixty_libusb_path}" _reasixty_libusb_soname)
+    _reasixty_soname("${_reasixty_hidapi_path}" _reasixty_hidapi_soname)
+    if(NOT _reasixty_libusb_soname OR NOT _reasixty_hidapi_soname)
+        message(FATAL_ERROR
+            "Could not read SONAME via ${READELF_EXECUTABLE} "
+            "(libusb='${_reasixty_libusb_soname}' hidapi='${_reasixty_hidapi_soname}').")
+    endif()
+
+    # copy_if_different dereferences the symlink and writes the real ELF under
+    # its SONAME next to the built .so.
+    add_custom_command(TARGET reaper_uf8 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_reasixty_libusb_path}"
+            "$<TARGET_FILE_DIR:reaper_uf8>/${_reasixty_libusb_soname}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_reasixty_hidapi_path}"
+            "$<TARGET_FILE_DIR:reaper_uf8>/${_reasixty_hidapi_soname}"
+        COMMENT "Bundling ${_reasixty_libusb_soname} + ${_reasixty_hidapi_soname} (Linux)"
+        VERBATIM
+    )
+
+    message(STATUS
+        "Rea-Sixty Linux bundle: ${_reasixty_libusb_soname}, "
+        "${_reasixty_hidapi_soname} (RUNPATH=\$ORIGIN)")
+endif()
+
 # ----- tests + CLI helpers (skipped on Windows for the initial port) ----------
 # Tests use POSIX-ish patterns; tools link directly against libusb / hidapi.
 # Gated off on Windows so a fresh checkout produces the DLL without forcing
