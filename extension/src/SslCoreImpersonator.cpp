@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdarg>
+#include <cmath>       // std::isfinite — GCC/libstdc++ needs this explicitly
 #include <array>
 #include <vector>
 #include <string>
