@@ -6440,34 +6440,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         if (ImGui_BeginTabItem(ctx, "UF1", nullptr, nullptr)) {
             s_deviceTab = 2;
             drawUf1Vector(ctx, s_selected);
-            // Held-track behaviour (only bites when a UF1 holds a Focus-Set
-            // member via "Pin Set"): should the UF8 sends-on-faders follow that
-            // held channel (stable automation target) or the last-touched track?
-            ImGui_Spacing(ctx);
-            bool sendsFollow = reasixty_uf1SendsFollowHeld();
-            if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
-                reasixty_setUf1SendsFollowHeld(sendsFollow);
-            ImGui_TextDisabled(ctx,
-                "Off: UF8 sends stay on the last-touched track.");
-            // UF1 Extender: the UF1 becomes the 9th fader of the UF8 bank (one
-            // continuous 9-wide bank). Mutually exclusive with the Focus-Set pin.
-            ImGui_Spacing(ctx);
-            bool extender = reasixty_uf1Extender();
-            if (ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
-                reasixty_setUf1Extender(extender);
-            if (extender) {
-                int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left
-                ImGui_Text(ctx, "Side:");
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                if (ImGui_RadioButton(ctx, "Left##uf1ext_side", side == 0))
-                    reasixty_setUf1ExtenderSide(0);
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                if (ImGui_RadioButton(ctx, "Right##uf1ext_side", side == 1))
-                    reasixty_setUf1ExtenderSide(1);
-                ImGui_TextDisabled(ctx,
-                    "Right: UF1 is strip 9 (UF8 = 1-8).  Left: UF1 is strip 1 "
-                    "(UF8 = 2-9).  Turning Extender on releases Pin Set.");
-            }
+            // NB: UF1 behaviour toggles (sends-follow / Extender) are rendered BELOW
+            // the binding editor, NOT here — putting them in the tab item pushed the
+            // tall 480px editor columns below the fold, which culls their BeginChild
+            // and tears the window down (Frank 2026-08-05 "UF1 tab crash"; learnings
+            // #31). See the s_deviceTab==2 block after the editor.
             ImGui_EndTabItem(ctx);
         }
         ImGui_EndTabBar(ctx);
@@ -6669,6 +6646,36 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         }
     } else {
         drawBindingEditor(ctx, s_editLayer, editSel);
+    }
+
+    // UF1 behaviour toggles — rendered BELOW the editor so they add NO height above
+    // the tall binding-editor columns (moving them here fixed the "UF1 tab crash":
+    // in the tab item they pushed the columns below the fold → BeginChild culled →
+    // window teardown, learnings #31). UF1 tab only.
+    if (s_deviceTab == 2) {
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        bool sendsFollow = reasixty_uf1SendsFollowHeld();
+        if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
+            reasixty_setUf1SendsFollowHeld(sendsFollow);
+        ImGui_TextDisabled(ctx, "Off: UF8 sends stay on the last-touched track.");
+        ImGui_Spacing(ctx);
+        bool extender = reasixty_uf1Extender();
+        if (ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
+            reasixty_setUf1Extender(extender);
+        if (extender) {
+            int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left
+            ImGui_Text(ctx, "Side:");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButton(ctx, "Left##uf1ext_side", side == 0))
+                reasixty_setUf1ExtenderSide(0);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButton(ctx, "Right##uf1ext_side", side == 1))
+                reasixty_setUf1ExtenderSide(1);
+            ImGui_TextDisabled(ctx,
+                "Right: UF1 is strip 9 (UF8 = 1-8).  Left: UF1 is strip 1 "
+                "(UF8 = 2-9).  Turning Extender on releases Pin Set.");
+        }
     }
 
     ImGui_Spacing(ctx);

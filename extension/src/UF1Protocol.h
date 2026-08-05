@@ -154,18 +154,17 @@ namespace led {
 constexpr uint8_t kSolo = 0x05, kCut = 0x06, kSel = 0x07;
 constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
 
-// FF39 level bytes (low nibble = colour index, high nibble 0x1 = bright).
-// cap65 Cut is visual ground truth; Solo green is cap64 frames + the pattern.
-// LED state encoding, corrected against HW (Frank live 2026-06-10) +
-// re-read of cap64/cap65 with BOTH FF38 and FF39 frames. The earlier cap65
-// .md labelled bright/dim backwards because it only tracked FF39.
-//   LIT  (soloed/muted):  FF38 = <bright primary>, FF39 = 0x00
-//   DIM/off:              FF38 = FF39 = <dim colour pair>
-constexpr uint8_t kPrimSoloLit = 0xef;  // FF38 Solo lit (bright green)
-constexpr uint8_t kPrimCutLit  = 0x3f;  // FF38 Cut  lit (bright red)
+// FF38 colour byte = (green_nibble << 4) | red_nibble, yy=0xF0 (no blue). These
+// are REAL RGB nibbles, NOT opaque primaries — Frank 2026-08-05: the old 0xef/0x3f
+// showed YELLOW / ORANGE on HW because they carried a stray green nibble (0xef=g14
+// r15=yellow, 0x3f=g3 r15=orange). Pure green/red isolate the nibbles.
+//   LIT  (soloed/muted):  FF38 = <colour>, FF39 = 0x00
+//   DIM/off:              FF38 = FF39 = <dim colour>
+constexpr uint8_t kPrimSoloLit = 0xf0;  // g=15,r=0  → pure bright green
+constexpr uint8_t kPrimCutLit  = 0x0f;  // g=0,r=15  → pure bright red
 constexpr uint8_t kFf39Lit     = 0x00;  // FF39 carries 0x00 on the lit transition
-constexpr uint8_t kDimSolo     = 0x11;  // FF38=FF39 Solo resting (dim green)
-constexpr uint8_t kDimCut      = 0x12;  // FF38=FF39 Cut  resting (dim red, never fully off)
+constexpr uint8_t kDimSolo     = 0x20;  // g=2,r=0   → dim green (resting)
+constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never fully off)
 }
 
 // Screen element addresses (FF 67) — the subset we drive natively first.

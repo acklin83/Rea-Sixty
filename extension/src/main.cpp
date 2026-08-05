@@ -12864,7 +12864,10 @@ void drainInputQueue()
         }
         if (e.kind == PendingInput::Uf1SelectFocused) {
             if (MediaTrack* tr = uf1FocusedTrack_()) {
-                SetOnlyTrackSelected(tr);
+                if (e.value > 0.5)                     // Shift held at press → additive
+                    CSurf_OnSelectedChange(tr, -1);    // toggle this track's selection
+                else
+                    SetOnlyTrackSelected(tr);          // plain press → exclusive select
                 followSelectedInMixer(tr);
             }
             continue;
@@ -17547,7 +17550,18 @@ void onUf1Event(const uf1::InputEvent& ev)
                         // double-tap timer. Solo / Cut stay purely native
                         // (still excluded from the binding-first check above,
                         // no dispatch here — "locked, LED-heikel").
-                        if (ev.pressed) queueInput({PendingInput::Uf1SelectFocused, 0, 0.0});
+                        if (ev.pressed) {
+                            // Capture SHIFT at PRESS time (like the UF8, main.cpp
+                            // ~16846) so a Shift+SEL is ADDITIVE — extend the existing
+                            // selection with the UF1's channel, not replace it. Without
+                            // this the UF1 SEL always did SetOnlyTrackSelected, so
+                            // "UF8-first, extend by the UF1 channel" cleared the UF8
+                            // selection (Frank 2026-08-05). Carried in the event value.
+                            const bool selShift = uf8::bindings::modifierHeld(
+                                uf8::bindings::Modifier::Shift);
+                            queueInput({PendingInput::Uf1SelectFocused, 0,
+                                        selShift ? 1.0 : 0.0});
+                        }
                         uf8::bindings::dispatch(uf8::bindings::ButtonId::Uf1Sel, ev.pressed);
                         break;
                     default: nativeHandled = false; break;
@@ -20733,9 +20747,36 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed)
     // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
     // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
     const uint32_t rgb = trackColorRgb(tr);
-    if (changed || rgb != sColor) {
-        sColor = rgb;
-        g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, rgb));
+    // The SEL LED (0x07) lights the track colour ONLY when this track is actually
+    // SELECTED. In Extender mode the UF1 shows a bank-slot track that is usually NOT
+    // selected → its SEL must stay dark (Frank 2026-08-05: "SEL bleibt an obwohl der
+    // Kanal nicht selektiert ist"). The fader-colour BAR below still shows the track
+    // colour regardless. `selected` folds into the change key so a selection change
+    // (colour unchanged) still repaints.
+    const bool     selSel = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
+    const uint32_t selKey = (rgb & 0x00FFFFFFu) | (selSel ? 0x01000000u : 0u);
+    if (changed || selKey != sColor) {
+        sColor = selKey;
+        // SEL LED (0x07) is FULL RGB (Frank 2026-08-05: Solo/Cut are multi-colour too —
+        // Cut showing ORANGE for the old 0x3f byte proves the LED reads xx=(g<<4)|r as
+        // real RGB nibbles). Earlier "bi-colour / strip blue" was WRONG — blue must go
+        // through the yy nibble. Send the FULL track colour, but NORMALISED to full
+        // brightness so the hue is vivid regardless of the track's tone (a mid-tone
+        // colour would otherwise quantise to a dim nibble). Uncoloured → white. Not
+        // selected → dark (off).
+        int cr = static_cast<int>((rgb >> 16) & 0xFF);
+        int cg = static_cast<int>((rgb >> 8)  & 0xFF);
+        int cb = static_cast<int>( rgb        & 0xFF);
+        int mx = cr; if (cg > mx) mx = cg; if (cb > mx) mx = cb;
+        const uint32_t boosted = (mx == 0)
+            ? 0xFFFFFFu
+            : ((static_cast<uint32_t>(cr * 255 / mx) << 16)
+             | (static_cast<uint32_t>(cg * 255 / mx) << 8)
+             |  static_cast<uint32_t>(cb * 255 / mx));
+        const uint32_t ledRgb = selSel ? boosted : 0x000000u;   // not selected → dark
+        if (changed) g_uf1_dev->send(uf1::buildLed(uf1::led::kSel, true));            // FF3B enable
+        g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, ledRgb));                 // FF38 full RGB (dark if unsel)
+        g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));      // FF39 = 0x00 → LIT
         const std::array<uint8_t, 1> active{0x01};
         const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
