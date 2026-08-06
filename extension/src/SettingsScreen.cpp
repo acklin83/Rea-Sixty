@@ -132,6 +132,10 @@ double      reasixty_uf1JogPickSpeed();
 void        reasixty_setUf1JogPickSpeed(double v);
 double      reasixty_uf1JogFineDiv();
 void        reasixty_setUf1JogFineDiv(double v);
+double      reasixty_uf1JogTrackDiv();
+void        reasixty_setUf1JogTrackDiv(double v);
+double      reasixty_uf1JogDeadzone();
+void        reasixty_setUf1JogDeadzone(double v);
 double      reasixty_uf1JogStep(int mode);
 void        reasixty_setUf1JogStep(int mode, double v);
 int         reasixty_uf1JogUnit(int mode);
@@ -4667,6 +4671,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_SetNextItemWidth(ctx, 140.0);
         if (ImGui_InputDouble(ctx, "Shift fine div##jog", &fine, &d1, &f1, "%.1f", &fl))
             reasixty_setUf1JogFineDiv(fine);
+        double dz = reasixty_uf1JogDeadzone();    // de-jitter: 0 = off
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputDouble(ctx, "Deadzone (0=off)##jog", &dz, &d1, &f1, "%.1f", &fl))
+            reasixty_setUf1JogDeadzone(dz);
+        double trk = reasixty_uf1JogTrackDiv();   // Items Ctrl+jog: counts per vertical hop
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputDouble(ctx, "Items vert. step (Ctrl)##jog", &trk, &d1, &f1, "%.1f", &fl))
+            reasixty_setUf1JogTrackDiv(trk);
         for (int m = 0; m <= 2; ++m) {   // Playhead / Scrub / Items (the wired modes)
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));

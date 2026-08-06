@@ -827,11 +827,11 @@ void seedFactoryDefaults_(Config& c)
     // NAV cross defaults to ZOOM (Frank 2026-07-30: "nav macht schon Sinn"),
     // Up/Down/Left/Right → zoom in that axis, Centre → zoom-to-fit. Global
     // REAPER-view actions, rebindable like any other UF1 control.
-    L1[ButtonId::Uf1NavUp]     = mkBuiltin("zoom_up",     Behavior::Momentary, "ZOOM \xE2\x96\xB2");
-    L1[ButtonId::Uf1NavDown]   = mkBuiltin("zoom_down",   Behavior::Momentary, "ZOOM \xE2\x96\xBC");
-    L1[ButtonId::Uf1NavLeft]   = mkBuiltin("zoom_left",   Behavior::Momentary, "ZOOM \xE2\x97\x82");
-    L1[ButtonId::Uf1NavRight]  = mkBuiltin("zoom_right",  Behavior::Momentary, "ZOOM \xE2\x96\xB8");
-    L1[ButtonId::Uf1NavCentre] = mkBuiltin("zoom_center", Behavior::Momentary, "FIT");
+    L1[ButtonId::Uf1NavUp]     = mkBuiltin("jog_nav_up",     Behavior::Momentary, "JOG \xE2\x96\xB2");
+    L1[ButtonId::Uf1NavDown]   = mkBuiltin("jog_nav_down",   Behavior::Momentary, "JOG \xE2\x96\xBC");
+    L1[ButtonId::Uf1NavLeft]   = mkBuiltin("jog_nav_left",   Behavior::Momentary, "JOG \xE2\x97\x82");
+    L1[ButtonId::Uf1NavRight]  = mkBuiltin("jog_nav_right",  Behavior::Momentary, "JOG \xE2\x96\xB8");
+    L1[ButtonId::Uf1NavCentre] = mkBuiltin("jog_nav_center", Behavior::Momentary, "FOCUS");
     // Controls that used to be HARDCODED fall-throughs in onUf1Event now ship
     // as real, rebindable factory defaults (their worker-safe builtins live in
     // main.cpp) so the bindings editor shows the action instead of "none":
@@ -1867,6 +1867,21 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
         if (sp.type == ActionType::Builtin && sp.action == "fine_modifier") {
             sp.action = "mod_shift";
         }
+        // Migration: the UF1 nav cross moved from the zoom pad to the Jog-Mode
+        // nav (Frank 2026-08-06). Rename the legacy zoom_* default in place on
+        // those FIVE buttons only — the UF8 zoom pad keeps zoom_*.
+        if (sp.type == ActionType::Builtin) {
+            struct NavMig { ButtonId id; const char* from; const char* to; };
+            static const NavMig kNavMig[] = {
+                { ButtonId::Uf1NavUp,     "zoom_up",     "jog_nav_up"     },
+                { ButtonId::Uf1NavDown,   "zoom_down",   "jog_nav_down"   },
+                { ButtonId::Uf1NavLeft,   "zoom_left",   "jog_nav_left"   },
+                { ButtonId::Uf1NavRight,  "zoom_right",  "jog_nav_right"  },
+                { ButtonId::Uf1NavCentre, "zoom_center", "jog_nav_center" },
+            };
+            for (const auto& m : kNavMig)
+                if (bid == m.id && sp.action == m.from) { sp.action = m.to; break; }
+        }
         // Migration: send/receive routing builtins were originally split
         // by physical output (`send_all_3_vpot`, `send_all_3_fader`,
         // `send_this_vpot`, `send_this_fader`, plus recv_* twins). They
@@ -2470,11 +2485,11 @@ void upgradeBackfillUf1Buttons_(Config& c)
     fillReaper(ButtonId::Uf1Cycle, "1068",  "CYCLE");
     fillReaper(ButtonId::Uf1Click, "40364", "CLICK");
     fillBuiltin(ButtonId::Uf1Btn360, "uf1_time_display_step", "360\xC2\xB0");
-    fillBuiltin(ButtonId::Uf1NavUp,     "zoom_up",     "ZOOM \xE2\x96\xB2");
-    fillBuiltin(ButtonId::Uf1NavDown,   "zoom_down",   "ZOOM \xE2\x96\xBC");
-    fillBuiltin(ButtonId::Uf1NavLeft,   "zoom_left",   "ZOOM \xE2\x97\x82");
-    fillBuiltin(ButtonId::Uf1NavRight,  "zoom_right",  "ZOOM \xE2\x96\xB8");
-    fillBuiltin(ButtonId::Uf1NavCentre, "zoom_center", "FIT");
+    fillBuiltin(ButtonId::Uf1NavUp,     "jog_nav_up",     "JOG \xE2\x96\xB2");
+    fillBuiltin(ButtonId::Uf1NavDown,   "jog_nav_down",   "JOG \xE2\x96\xBC");
+    fillBuiltin(ButtonId::Uf1NavLeft,   "jog_nav_left",   "JOG \xE2\x97\x82");
+    fillBuiltin(ButtonId::Uf1NavRight,  "jog_nav_right",  "JOG \xE2\x96\xB8");
+    fillBuiltin(ButtonId::Uf1NavCentre, "jog_nav_center", "FOCUS");
     // v15→v16 (2026-07-31): controls that were hardcoded fall-throughs in
     // onUf1Event are now real factory-default bindings. Backfill the MISSING
     // slots on older configs (a user's own customisation, if any, survives;
@@ -4648,7 +4663,7 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
-    if (n.rfind("jog_mode_", 0) == 0)
+    if (n.rfind("jog_mode_", 0) == 0 || n.rfind("jog_nav_", 0) == 0)
         return "Jog Modes";
 
     if (n == "flip" || n == "pan_force"

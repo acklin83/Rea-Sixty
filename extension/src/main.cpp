@@ -4188,6 +4188,11 @@ struct PendingInput {
                          // Sticky armed → clear this track's pin; else pinned →
                          // reset the pin to its default (toggle flips); else the
                          // knob's own default = centre Pan. value/strip unused.
+        Uf1JogNav,       // NAV cross in a Jog Mode (jog_nav_* builtins). strip =
+                         // axis|shift: bits0-1 = 0 horiz (←→) / 1 vert (↑↓) /
+                         // 2 centre; bit2 = Shift (add-to-selection). value =
+                         // signed direction (+1 = right/up/press). The drain
+                         // routes by g_uf1JogMode → applyUf1JogNav_.
     };
     Kind    kind;
     uint8_t strip;
@@ -4305,6 +4310,25 @@ constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Razor) + 1;
 //                       modes Playhead/Scrub/Items). Init by the struct below.
 std::atomic<double> g_uf1JogPickSpeed{4.0};
 std::atomic<double> g_uf1JogFineDiv{4.0};
+// Cross-axis (Ctrl + jog) track move: jog counts accumulated per ONE-track step
+// (the vertical axis is discrete — items hop track by track). ExtState
+// "uf1JogTrackDiv". Higher = slower. Baustein 3 (Items).
+std::atomic<double> g_uf1JogTrackDiv{4.0};
+// Jog de-jitter deadzone (raw counts): the weighted jog emits a stray count or two as
+// it physically settles → the cursor/items drift "by themselves". Absorb counts until
+// |accum| reaches this, then flush; reset on a direction reversal. ExtState
+// "uf1JogDeadzone". 0 = off (per-count, the old feel). Default 2.
+std::atomic<double> g_uf1JogDeadzone{2.0};
+// Copy gesture (Ctrl + jog in Items): true once a duplicate has been made for the
+// CURRENT Ctrl hold, so a continuous Ctrl+jog clones ONCE then drags the copies.
+// Cleared when Ctrl releases (onTimer) or on a non-copy jog. Not persisted.
+std::atomic<bool>   g_uf1JogCopyArmed{false};
+// NAV-cross centre (jog_nav_center) spotlight TOGGLE: press zooms the arrange view to
+// the current mode's object (Items → selected items, else the whole project); press
+// again restores the saved view (Frank 2026-08-06 "als Toggle: Zoom darauf / zurück").
+// Main thread only (jog drain). Saved view = horizontal arrange range in seconds.
+std::atomic<bool>   g_uf1JogNavZoomed{false};
+double              g_uf1JogNavSavedStart = 0.0, g_uf1JogNavSavedEnd = 0.0;
 // The per-mode step UNIT (Frank 2026-08-06: "Sekunden machen NULL Sinn für alles" —
 // keep as an option, but default ZoomRel for the scrub-y modes / Grid for the
 // place-precisely modes). ZoomRel = a fraction of the VISIBLE arrange range per
@@ -7803,19 +7827,325 @@ void uf1JogModeStep_(int rawStep)
 
 // Items mode: move the SELECTED media items in time by `dt` seconds (the jog's OWN
 // step × count, Shift-fine already applied — NOT g_nudgeAmount). Pure API (no action
-// ID to guess); main thread. Clamped at 0. Baustein 3 adds Cmd=track / Ctrl=copy.
+// ID to guess); main thread. The GROUP is clamped as a rigid block: when moving left,
+// dt is capped so the EARLIEST item lands exactly at the project start (0) and the
+// others keep their spacing — they no longer bunch up (Frank 2026-08-06).
 void applyUf1JogMoveItemsDelta_(double dt)
 {
     if (dt == 0.0) return;
     const int n = CountSelectedMediaItems(nullptr);
+    if (n <= 0) return;
+    if (dt < 0.0) {                       // group-clamp at the project start
+        double minPos = 1e18;
+        for (int i = 0; i < n; ++i)
+            if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) {
+                const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+                if (p < minPos) minPos = p;
+            }
+        if (minPos + dt < 0.0) dt = -minPos;   // earliest item stops at 0
+        if (dt >= 0.0) return;                 // already against the start
+    }
     for (int i = 0; i < n; ++i) {
         MediaItem* it = GetSelectedMediaItem(nullptr, i);
         if (!it) continue;
         double pos = GetMediaItemInfo_Value(it, "D_POSITION") + dt;
-        if (pos < 0.0) pos = 0.0;
+        if (pos < 0.0) pos = 0.0;              // paranoia; group-clamp already covers it
         SetMediaItemInfo_Value(it, "D_POSITION", pos);
     }
-    if (n > 0) UpdateArrange();
+    UpdateArrange();
+}
+
+// Drop the item/take GUID lines from a media-item state chunk so REAPER keeps the
+// FRESH GUID that AddMediaItemToTrack already assigned to the clone (leaving the
+// source GUID in would overwrite it → two items with the same GUID). Matches "GUID "
+// and "IGUID " at the start of any line (ignoring leading whitespace).
+static void uf1StripChunkGuids_(std::string& chunk)
+{
+    std::string out; out.reserve(chunk.size());
+    const size_t n = chunk.size();
+    size_t i = 0;
+    while (i < n) {
+        size_t eol = chunk.find('\n', i);
+        const size_t lineEnd = (eol == std::string::npos) ? n : eol + 1;
+        size_t s = i;
+        while (s < lineEnd && (chunk[s] == ' ' || chunk[s] == '\t')) ++s;
+        const bool isGuid = (chunk.compare(s, 5, "GUID ")  == 0)
+                         || (chunk.compare(s, 6, "IGUID ") == 0);
+        if (!isGuid) out.append(chunk, i, lineEnd - i);
+        i = lineEnd;
+    }
+    chunk.swap(out);
+}
+
+// Items COPY (Ctrl+jog): duplicate every selected item in place (state-chunk clone on
+// its OWN track, fresh GUIDs), then leave the CLONES selected and the originals
+// deselected — so the following jog drags the copies while the originals stay put
+// (REAPER copy-drag semantics). Pure API, no action ID to guess. Main thread. Fires
+// ONCE per Ctrl hold (g_uf1JogCopyArmed).
+static void uf1JogDuplicateSelectedItems_()
+{
+    const int n = CountSelectedMediaItems(nullptr);
+    if (n <= 0) return;
+    std::vector<MediaItem*> src; src.reserve(n);
+    for (int i = 0; i < n; ++i)
+        if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) src.push_back(it);
+    std::vector<MediaItem*> copies; copies.reserve(src.size());
+    std::string chunk;
+    for (MediaItem* it : src) {
+        MediaTrack* tr = GetMediaItem_Track(it);
+        if (!tr) continue;
+        int cap = 1 << 16;                    // grow until the whole chunk fits
+        chunk.resize(cap);
+        while (!GetItemStateChunk(it, chunk.data(), cap, false)) {
+            if (cap >= (1 << 23)) { chunk.clear(); break; }
+            cap <<= 1; chunk.resize(cap);
+        }
+        if (chunk.empty()) continue;
+        chunk.resize(std::strlen(chunk.c_str()));
+        uf1StripChunkGuids_(chunk);
+        MediaItem* nw = AddMediaItemToTrack(tr);
+        if (!nw) continue;
+        SetItemStateChunk(nw, chunk.c_str(), false);
+        copies.push_back(nw);
+    }
+    if (copies.empty()) return;
+    for (MediaItem* it : src)    SetMediaItemSelected(it, false);
+    for (MediaItem* it : copies) SetMediaItemSelected(it, true);
+    UpdateArrange();
+}
+
+// Move ONE item vertically by `steps` (signed; + = down). Fixed-lane AWARE: on a track
+// with fixed lanes VISIBLE (I_FREEMODE==2, not collapsed, >1 lane) the item hops between
+// lanes (I_FIXEDLANE) and only spills to the adjacent TRACK past the top/bottom lane —
+// entering the neighbour's near lane. Plain tracks hop track by track. Clamps at the
+// first/last track. Returns true if anything moved. Main thread.
+static bool uf1MoveItemVertical_(MediaItem* it, int steps, int nTr)
+{
+    if (steps == 0 || !it) return false;
+    const int dir = steps > 0 ? 1 : -1;
+    int remaining = steps > 0 ? steps : -steps;
+    MediaTrack* tr = GetMediaItem_Track(it);
+    if (!tr) return false;
+    int idx1 = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    if (idx1 <= 0) return false;
+    auto lanesVisible = [](MediaTrack* t, int& num) -> bool {
+        if (static_cast<int>(GetMediaTrackInfo_Value(t, "I_FREEMODE")) != 2) return false;
+        if (static_cast<int>(GetMediaTrackInfo_Value(t, "C_LANESCOLLAPSED")) == 1) return false;
+        num = static_cast<int>(GetMediaTrackInfo_Value(t, "I_NUMFIXEDLANES"));
+        return num > 1;
+    };
+    bool moved = false;
+    while (remaining-- > 0) {
+        int num = 0;
+        if (lanesVisible(tr, num)) {
+            const int lane = static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE"));
+            const int nl   = lane + dir;
+            if (nl >= 0 && nl < num) {           // stay on the track, hop one lane
+                SetMediaItemInfo_Value(it, "I_FIXEDLANE", static_cast<double>(nl));
+                moved = true; continue;
+            }
+            // past the top/bottom lane → spill to the adjacent track
+        }
+        const int tgt0 = (idx1 - 1) + dir;
+        if (tgt0 < 0 || tgt0 > nTr - 1) break;   // clamp at the ends
+        MediaTrack* dst = GetTrack(nullptr, tgt0);
+        if (!dst) break;
+        MoveMediaItemToTrack(it, dst);
+        int dnum = 0;
+        if (lanesVisible(dst, dnum))             // enter the neighbour's near lane
+            SetMediaItemInfo_Value(it, "I_FIXEDLANE",
+                                   static_cast<double>(dir > 0 ? 0 : dnum - 1));
+        tr = dst; idx1 = tgt0 + 1; moved = true;
+    }
+    return moved;
+}
+
+// Items CROSS axis (Ctrl+jog): move the selected items vertically. The jog is smooth but
+// the vertical axis is discrete, so counts accumulate (g_uf1JogTrackDiv per step) and
+// only whole hops fire; each item moves by the same signed step (fixed-lane aware, see
+// uf1MoveItemVertical_) — preserving the layout. Main thread.
+void applyUf1JogMoveItemsToTrack_(int count)
+{
+    if (count == 0) return;
+    static double accum = 0.0;
+    double div = g_uf1JogTrackDiv.load(); if (!(div > 0.0)) div = 1.0;
+    if ((count > 0 && accum < 0.0) || (count < 0 && accum > 0.0)) accum = 0.0;
+    accum += count / div;
+    int steps = 0;
+    if (accum >=  1.0) { steps = static_cast<int>(accum); accum -= steps; }
+    if (accum <= -1.0) { steps = static_cast<int>(accum); accum -= steps; }
+    if (steps == 0) return;
+    const int nTr = CountTracks(nullptr);
+    if (nTr <= 0) return;
+    const int n = CountSelectedMediaItems(nullptr);
+    std::vector<MediaItem*> items; items.reserve(n);
+    for (int i = 0; i < n; ++i)
+        if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) items.push_back(it);
+    bool moved = false;
+    for (MediaItem* it : items) if (uf1MoveItemVertical_(it, steps, nTr)) moved = true;
+    if (moved) { UpdateArrange(); UpdateTimeline(); }
+}
+
+// ---- NAV cross in a Jog Mode (jog_nav_* builtins) --------------------------------
+// The arrows SELECT / navigate the mode's object; the centre spotlight-zooms to it.
+// All main thread (jog drain). Reliable primitives only — pure API or the SAME action
+// IDs the zoom pad already uses (40111/40112 vertical zoom), no guessed command IDs.
+
+// Move the edit cursor one GRID line in `dir` (±1). Tempo-aware via the project grid,
+// same APIs as uf1JogGridSec_. Snaps to the grid first if the cursor sits off it.
+static void uf1MoveCursorByGrid_(int dir)
+{
+    double division = 1.0;   // QN fraction
+    GetSetProjectGrid(nullptr, false, &division, nullptr, nullptr);
+    if (!(division > 0.0)) division = 1.0;
+    const double cur   = GetCursorPosition();
+    const double qn    = TimeMap2_timeToQN(nullptr, cur);
+    const double steps = qn / division;
+    const double snap  = std::round(steps) * division;
+    double targetQn;
+    if (std::fabs(snap - qn) < 1e-6) targetQn = snap + dir * division;      // on a line → step
+    else targetQn = (dir > 0 ? std::ceil(steps) : std::floor(steps)) * division;  // off → nearest in dir
+    double t = TimeMap2_QNToTime(nullptr, targetQn);
+    if (t < 0.0) t = 0.0;
+    SetEditCurPos(t, true, false);
+}
+
+// Deselect every currently-selected media item (main thread).
+static void uf1DeselectAllItems_()
+{
+    for (int i = CountSelectedMediaItems(nullptr) - 1; i >= 0; --i)
+        if (MediaItem* it = GetSelectedMediaItem(nullptr, i))
+            SetMediaItemSelected(it, false);
+}
+
+// Items ← →: select the prev/next item on the anchor item's track. add (Shift) extends
+// the selection instead of replacing it. Anchor = the last selected item.
+static void uf1SelectAdjacentItem_(int dir, bool add)
+{
+    const int nsel = CountSelectedMediaItems(nullptr);
+    MediaItem* anchor = nsel > 0 ? GetSelectedMediaItem(nullptr, nsel - 1) : nullptr;
+    MediaTrack* tr = anchor ? GetMediaItem_Track(anchor) : GetLastTouchedTrack();
+    if (!tr) return;
+    const double anchorPos = anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION")
+                                    : GetCursorPosition();
+    MediaItem* best = nullptr; double bestPos = 0.0;
+    const int ni = CountTrackMediaItems(tr);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        if (!it || it == anchor) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        if (dir > 0 && p > anchorPos + 1e-9) { if (!best || p < bestPos) { best = it; bestPos = p; } }
+        if (dir < 0 && p < anchorPos - 1e-9) { if (!best || p > bestPos) { best = it; bestPos = p; } }
+    }
+    if (!best) return;
+    if (!add) uf1DeselectAllItems_();
+    SetMediaItemSelected(best, true);
+    UpdateArrange();
+}
+
+// Nearest item on `t` to position `pos` (0 distance if pos is inside an item), or
+// nullptr if the track has none. Helper for the vertical arrow nav.
+static MediaItem* uf1NearestItemOnTrack_(MediaTrack* t, double pos)
+{
+    MediaItem* best = nullptr; double bestD = 1e18;
+    const int ni = CountTrackMediaItems(t);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(t, i);
+        if (!it) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+        const double d = (pos < p) ? (p - pos) : (pos > p + l) ? (pos - (p + l)) : 0.0;
+        if (d < bestD) { bestD = d; best = it; }
+    }
+    return best;
+}
+
+// Items ↑ ↓: select the item on the nearest track above/below that ACTUALLY HAS an item
+// (empty tracks are skipped, Frank 2026-08-06), nearest the anchor's position. add
+// (Shift) extends. Anchor = the last selected item.
+static void uf1SelectItemAdjacentTrack_(int dir, bool add)
+{
+    const int nsel = CountSelectedMediaItems(nullptr);
+    MediaItem* anchor = nsel > 0 ? GetSelectedMediaItem(nullptr, nsel - 1) : nullptr;
+    if (!anchor) return;
+    MediaTrack* tr = GetMediaItem_Track(anchor);
+    if (!tr) return;
+    const int idx1 = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    if (idx1 <= 0) return;
+    const int nTr  = CountTracks(nullptr);
+    const double aPos = GetMediaItemInfo_Value(anchor, "D_POSITION");
+    // up (dir +1) → tracks above (smaller index). Walk in that direction, skipping
+    // tracks with no items, until one yields a target or we run off the ends.
+    MediaItem* best = nullptr;
+    for (int t0 = (idx1 - 1) - dir; t0 >= 0 && t0 <= nTr - 1; t0 -= dir) {
+        MediaTrack* cand = GetTrack(nullptr, t0);
+        if (!cand) break;
+        if ((best = uf1NearestItemOnTrack_(cand, aPos)) != nullptr) break;
+    }
+    if (!best) return;   // no item on any track in that direction
+    if (!add) uf1DeselectAllItems_();
+    SetMediaItemSelected(best, true);
+    UpdateArrange();
+}
+
+// NAV centre: spotlight TOGGLE. First press saves the current arrange view + zooms it
+// to the mode's object (Items → selected-items time span, else whole project); second
+// press restores the saved view. Horizontal (time) only. Main thread.
+static void uf1JogNavCenterToggle_(Uf1JogMode mode)
+{
+    double s = 0.0, e = 0.0;
+    GetSet_ArrangeView2(nullptr, false, 0, 0, &s, &e);
+    if (g_uf1JogNavZoomed.load()) {                       // restore
+        double rs = g_uf1JogNavSavedStart, re = g_uf1JogNavSavedEnd;
+        if (re > rs) GetSet_ArrangeView2(nullptr, true, 0, 0, &rs, &re);
+        g_uf1JogNavZoomed.store(false);
+        return;
+    }
+    double a = 0.0, b = 0.0; bool ok = false;
+    if (mode == Uf1JogMode::Items) {                      // span of selected items
+        const int n = CountSelectedMediaItems(nullptr);
+        for (int i = 0; i < n; ++i) {
+            MediaItem* it = GetSelectedMediaItem(nullptr, i);
+            if (!it) continue;
+            const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+            const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+            if (!ok) { a = p; b = p + l; ok = true; }
+            else { if (p < a) a = p; if (p + l > b) b = p + l; }
+        }
+    }
+    if (!ok) { a = 0.0; b = GetProjectLength(nullptr); ok = (b > a); }   // fallback: whole project
+    if (!ok) return;
+    double margin = (b - a) * 0.05; if (!(margin > 0.0)) margin = 1.0;
+    a -= margin; if (a < 0.0) a = 0.0;
+    b += margin;
+    g_uf1JogNavSavedStart = s; g_uf1JogNavSavedEnd = e;
+    GetSet_ArrangeView2(nullptr, true, 0, 0, &a, &b);
+    g_uf1JogNavZoomed.store(true);
+}
+
+// Route a NAV-cross press by the active Jog Mode. code = strip byte: bits0-1 axis
+// (0 horiz / 1 vert / 2 centre), bit2 = Shift (add-to-selection). dir = ±1.
+// Envelope / Razor arrows fall back to Playhead nav until their Bausteine land.
+void applyUf1JogNav_(uint8_t code, int dir)
+{
+    const int  axis  = code & 0x3;
+    const bool shift = (code & 0x4) != 0;
+    const auto mode  = g_uf1JogMode.load();
+    if (axis == 2) { uf1JogNavCenterToggle_(mode); return; }
+    switch (mode) {
+        case Uf1JogMode::Items:
+            if (axis == 0) uf1SelectAdjacentItem_(dir, shift);
+            else           uf1SelectItemAdjacentTrack_(dir, shift);
+            break;
+        case Uf1JogMode::Playhead:
+        case Uf1JogMode::Scrub:
+        case Uf1JogMode::Envelope:   // TODO Baustein 4: point nav / lane switch
+        case Uf1JogMode::Razor:      // TODO Baustein 5: edge / track nav
+        default:
+            if (axis == 0) uf1MoveCursorByGrid_(dir);
+            else           Main_OnCommand(dir > 0 ? 40111 : 40112, 0);   // vertical zoom in/out
+            break;
+    }
 }
 
 // Visible arrange range (seconds) — for ZoomRel unit. 0,0 = whole view (SDK).
@@ -7837,6 +8167,37 @@ static double uf1JogGridSec_()
     const double g   = TimeMap2_QNToTime(nullptr, qn + division) - cur;
     return (g > 0.0) ? g : 0.5;   // fallback
 }
+// Snap a time to the nearest CELL of `stepGrids` grid divisions (in QN), so Playhead in
+// Grid unit lands ON grid cells — no sub-grid drift when the jog is spun fast (Frank
+// 2026-08-06). stepGrids = the per-mode amount (1 = one grid, 0.25 = quarter, Shift
+// makes it finer). Tempo-aware.
+static double uf1SnapToGridCell_(double pos, double stepGrids)
+{
+    double gridQN = 1.0;   // QN per grid
+    GetSetProjectGrid(nullptr, false, &gridQN, nullptr, nullptr);
+    if (!(gridQN > 0.0)) gridQN = 1.0;
+    const double cell = gridQN * (stepGrids > 0.0 ? stepGrids : 1.0);
+    if (!(cell > 0.0)) return pos;
+    const double qn = TimeMap2_timeToQN(nullptr, pos);
+    const double t  = TimeMap2_QNToTime(nullptr, std::round(qn / cell) * cell);
+    return t < 0.0 ? 0.0 : t;
+}
+
+// De-jitter the raw jog counts (Frank 2026-08-06 "bewegt sich von alleine wenn das
+// Wheel physisch settled"). Accumulate; only flush once |accum| reaches the deadzone,
+// resetting on a direction reversal — a deliberate turn crosses it instantly, the one
+// or two stray settle-counts never accumulate. g_uf1JogDeadzone == 0 → off (per-count).
+static int uf1JogDeJitter_(int count)
+{
+    static double accum = 0.0;
+    const double dz = g_uf1JogDeadzone.load();
+    if (!(dz > 0.0)) return count;                                  // filter off
+    if ((count > 0 && accum < 0.0) || (count < 0 && accum > 0.0)) accum = 0.0;
+    accum += count;
+    if (std::fabs(accum) < dz) return 0;                           // absorbed as jitter
+    const int eff = static_cast<int>(accum); accum -= eff;         // flush the whole part
+    return eff;
+}
 
 // Dispatch a jog rotation by the active Jog Mode (main thread, jog drain). Step =
 // per-mode value in its per-mode UNIT (Seconds / ZoomRel = fraction of visible range
@@ -7844,6 +8205,7 @@ static double uf1JogGridSec_()
 // Playhead + Scrub move the edit cursor; Items moves the selection in time.
 void uf1JogDispatch_(int count)
 {
+    count = uf1JogDeJitter_(count);
     if (count == 0) return;
     const auto mode = g_uf1JogMode.load();
     double step = g_uf1JogStep[static_cast<int>(mode)].load();
@@ -7851,8 +8213,9 @@ void uf1JogDispatch_(int count)
         const double d = g_uf1JogFineDiv.load();
         if (d > 0.0) step /= d;
     }
+    const auto unit = static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load());
     double scale = 1.0;   // step unit → seconds
-    switch (static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load())) {
+    switch (unit) {
         case Uf1JogUnit::Seconds: scale = 1.0;                break;
         case Uf1JogUnit::ZoomRel: scale = uf1JogViewSec_();   break;
         case Uf1JogUnit::Grid:    scale = uf1JogGridSec_();   break;
@@ -7862,11 +8225,26 @@ void uf1JogDispatch_(int count)
         case Uf1JogMode::Playhead:
         case Uf1JogMode::Scrub: {        // TODO Baustein 3: real audio scrub for Scrub
             double np = GetCursorPosition() + delta;
+            // Grid unit → snap to grid cells so a fast spin can't land the cursor
+            // between grid lines (Frank 2026-08-06). Zoom/Seconds stay continuous.
+            if (unit == Uf1JogUnit::Grid) np = uf1SnapToGridCell_(np, step);
             if (np < 0.0) np = 0.0;
             SetEditCurPos(np, true, false);
             break;
         }
-        case Uf1JogMode::Items:    applyUf1JogMoveItemsDelta_(delta); break;
+        case Uf1JogMode::Items: {
+            // Cmd = copy (REAPER's Mac copy-drag modifier — duplicate once per hold,
+            // then drag the copies); Ctrl = cross axis (move vertically, lane-aware).
+            // Cmd+Ctrl = copy on the cross axis (Frank 2026-08-06: Cmd is REAPER's
+            // standard copy key on Mac, keep it consistent).
+            const bool copy  = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
+            const bool cross = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
+            if (copy) { if (!g_uf1JogCopyArmed.exchange(true)) uf1JogDuplicateSelectedItems_(); }
+            else      { g_uf1JogCopyArmed.store(false); }
+            if (cross) applyUf1JogMoveItemsToTrack_(count);
+            else       applyUf1JogMoveItemsDelta_(delta);
+            break;
+        }
         case Uf1JogMode::Envelope: /* TODO Baustein 4: move env point value/time */ break;
         case Uf1JogMode::Razor:    /* TODO Baustein 5: razor area */               break;
     }
@@ -13166,6 +13544,10 @@ void drainInputQueue()
         // per-strip track resolution below.
         if (e.kind == PendingInput::MainAction) {
             Main_OnCommand(static_cast<int>(e.value), 0);
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1JogNav) {
+            applyUf1JogNav_(e.strip, static_cast<int>(e.value));
             continue;
         }
         if (e.kind == PendingInput::AutomationMode) {
@@ -28314,6 +28696,14 @@ void onTimer()
         }
     }
 
+    // Jog Items copy latch: disarm as soon as Cmd (the copy modifier) is released, so
+    // releasing Cmd WITHOUT turning the jog (then re-pressing) makes a fresh copy on the
+    // next Cmd+jog. The dispatch also clears it on any non-copy jog; this catches the
+    // no-jog release. Cheap, main thread.
+    if (g_uf1JogCopyArmed.load()
+        && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd))
+        g_uf1JogCopyArmed.store(false);
+
     // Load-sweep selection safety net. Root cause is fixed at the source (the
     // impersonator no longer sends the "activate this channel" command frames
     // that made every connecting SSL plug-in select its own track → the load
@@ -32939,6 +33329,20 @@ void   reasixty_setUf1JogFineDiv(double v)
     if (!(v >= 1.0)) v = 1.0;
     g_uf1JogFineDiv.store(v);
     SetExtState("rea_sixty", "uf1JogFineDiv", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogTrackDiv() { return g_uf1JogTrackDiv.load(); }
+void   reasixty_setUf1JogTrackDiv(double v)
+{
+    if (!(v >= 1.0)) v = 1.0;
+    g_uf1JogTrackDiv.store(v);
+    SetExtState("rea_sixty", "uf1JogTrackDiv", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogDeadzone() { return g_uf1JogDeadzone.load(); }
+void   reasixty_setUf1JogDeadzone(double v)
+{
+    if (!(v >= 0.0)) v = 0.0;   // 0 = off
+    g_uf1JogDeadzone.store(v);
+    SetExtState("rea_sixty", "uf1JogDeadzone", std::to_string(v).c_str(), true);
 }
 double reasixty_uf1JogStep(int mode)
 {
@@ -37642,6 +38046,33 @@ void registerBindingHandlers()
     registerBuiltin("zoom_right",  zoomBuiltin(uf8::Uf8GlobalLed::ZoomRight,  1012,  "Zoom in horizontally"));
     registerBuiltin("zoom_center", zoomBuiltin(uf8::Uf8GlobalLed::ZoomCenter, 40295, "Zoom to fit project"));
 
+    // ---- Jog-Mode NAV cross -------------------------------------------------
+    // The UF1 nav cross, per the active Jog Mode: arrows SELECT/navigate the object,
+    // centre spotlight-zooms to it (toggle). Factory default on Uf1Nav* (replaces the
+    // zoom pad) but still user-rebindable. Shift on the arrows = add-to-selection,
+    // captured at the press edge. NO global LED send — the nav cross is UF1-only and the
+    // zoom-pad LEDs live on the UF8; sending them lit the UF8 during UF1 use (Frank
+    // 2026-08-06). The drain routes by g_uf1JogMode → applyUf1JogNav_.
+    auto jogNavBuiltin = [](int axis, int dir, const char* label) {
+        return DescBuilder{
+            [axis, dir](bool firing, bool /*pressed*/, int /*param*/) {
+                if (firing) {
+                    uint8_t code = static_cast<uint8_t>(axis & 0x3);
+                    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift))
+                        code |= 0x4;
+                    queueInput({PendingInput::Uf1JogNav, code,
+                                static_cast<double>(dir)});
+                }
+            },
+            nullptr, label, false
+        };
+    };
+    registerBuiltin("jog_nav_left",   jogNavBuiltin(0, -1, "Jog Mode: nav \xE2\x97\x82 (prev / left)"));
+    registerBuiltin("jog_nav_right",  jogNavBuiltin(0, +1, "Jog Mode: nav \xE2\x96\xB8 (next / right)"));
+    registerBuiltin("jog_nav_up",     jogNavBuiltin(1, +1, "Jog Mode: nav \xE2\x96\xB2 (above / zoom in)"));
+    registerBuiltin("jog_nav_down",   jogNavBuiltin(1, -1, "Jog Mode: nav \xE2\x96\xBC (below / zoom out)"));
+    registerBuiltin("jog_nav_center", jogNavBuiltin(2, +1, "Jog Mode: nav centre (spotlight zoom toggle)"));
+
     // ---- Parameter Groups ---------------------------------------------------
     // Multi-track parameter sync (8 persistent slots + temp group from
     // selection). State + persistence in ParameterGroups.{h,cpp}.
@@ -38408,6 +38839,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogFineDiv"); v && *v) {
         const double d = std::atof(v); if (d >= 1.0) g_uf1JogFineDiv.store(d);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogTrackDiv"); v && *v) {
+        const double d = std::atof(v); if (d >= 1.0) g_uf1JogTrackDiv.store(d);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogDeadzone"); v && *v) {
+        const double d = std::atof(v); if (d >= 0.0) g_uf1JogDeadzone.store(d);
     }
     for (int m = 0; m < kUf1JogModeCount; ++m) {
         char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", m);
