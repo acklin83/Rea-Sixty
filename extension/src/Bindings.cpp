@@ -177,6 +177,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1Stop,          "uf1_stop"            },
     { ButtonId::Uf1Play,          "uf1_play"            },
     { ButtonId::Uf1Rec,           "uf1_rec"             },
+    { ButtonId::Uf1Jog,           "uf1_jog"             },
 };
 
 } // namespace
@@ -4647,6 +4648,9 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
+    if (n.rfind("jog_mode_", 0) == 0)
+        return "Jog Modes";
+
     if (n == "flip" || n == "pan_force"
      || n == "mixer_toggle" || n == "home"
      || n == "folder_mode" || n == "show_only_selected"
@@ -4733,6 +4737,7 @@ const std::vector<const char*>& builtinCategoryOrder()
 {
     static const std::vector<const char*> kCats = {
         "Favourites", "Cycle Actions", "Selection Modes", "Encoder Modes",
+        "Jog Modes",
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
@@ -4769,7 +4774,7 @@ uint8_t builtinDeviceMask(const std::string& n)
 
 int builtinDeviceForId(ButtonId id)
 {
-    if (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Rec)   return 2;
+    if (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Jog)   return 2;
     if (id >= ButtonId::Uc1Encoder1     && id <= ButtonId::Uc1Btn360) return 1;
     return 0;
 }

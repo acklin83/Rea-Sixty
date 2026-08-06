@@ -127,6 +127,19 @@ void        reasixty_setUf1ExtenderSide(int side);
 // Focus Set scope: 0 Both, 1 UF1-only, 2 UF8-only (defined in main.cpp).
 int         reasixty_focusSetScope();
 void        reasixty_setFocusSetScope(int scope);
+// UF1 Jog Mode feel (defined in main.cpp).
+double      reasixty_uf1JogPickSpeed();
+void        reasixty_setUf1JogPickSpeed(double v);
+double      reasixty_uf1JogFineDiv();
+void        reasixty_setUf1JogFineDiv(double v);
+double      reasixty_uf1JogStep(int mode);
+void        reasixty_setUf1JogStep(int mode, double v);
+int         reasixty_uf1JogUnit(int mode);
+void        reasixty_setUf1JogUnit(int mode, int unit);
+const char* reasixty_uf1JogModeName(int mode);
+bool        reasixty_uf1JogModeVisible(int mode);
+void        reasixty_setUf1JogModeVisible(int mode, bool on);
+int         reasixty_uf1JogModeCount();
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -1627,6 +1640,7 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uf1Vpot3Push:   return "V-POT 3 PUSH";
         case ButtonId::Uf1Vpot4Push:   return "V-POT 4 PUSH";
         case ButtonId::Uf1ChannelPush: return "ENC PUSH";
+        case ButtonId::Uf1Jog:         return "JOG";
         default:                     return uf8::bindings::toName(id);
     }
 }
@@ -1822,6 +1836,7 @@ bool regularBindable_(ButtonId id)
         case ButtonId::SoftKey1Bank: case ButtonId::SoftKey2Bank:
         case ButtonId::SoftKey3Bank: case ButtonId::SoftKey4Bank:
         case ButtonId::SoftKey5Bank:
+        case ButtonId::Uf1Jog:   // rotate-only, mode-driven — settings only, no action
             return false;
         default:
             return true;
@@ -3253,14 +3268,19 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(530, 300, 40, 24, ButtonId::Uf1Scrub,  "SCRUB");
     drawGroupLabelCentered(509, 330, "LAYER");
 
-    // (17) Jog wheel (decorative — rotate-only, no ButtonId)
+    // (17) Jog wheel — SELECTABLE (rotate-only, not bindable, but selecting it shows
+    // the Jog Mode settings below the editor; Frank 2026-08-06).
     {
         const float jx = 482, jy = 452, jr = 60;
-        circle_(c, jx, jy, jr,      0x181C22FF, 0x4A5060FF);
+        const bool hot = inside(jx - jr, jy - jr, 2 * jr, 2 * jr);
+        if (hot && canvasClicked && leftBtn == 0) sel = ButtonId::Uf1Jog;
+        const bool selJog = (sel == ButtonId::Uf1Jog);
+        const uint32_t rim = selJog ? 0xAACCFFFF : hot ? 0x6A7080FF : 0x4A5060FF;
+        circle_(c, jx, jy, jr,      0x181C22FF, rim);
         circle_(c, jx, jy, jr - 8,  0x101418FF, 0x333A44FF);
         circle_(c, jx, jy - jr + 15, 6, 0x0C1016FF, 0x555A66FF);   // dimple
         ImGui_PushFont(ctx, nullptr, 9.0);
-        drawTextCentered_(c, jx, jy, 0x5A6270FF, "JOG");
+        drawTextCentered_(c, jx, jy, selJog ? 0xCCDDFFFF : 0x5A6270FF, "JOG");
         ImGui_PopFont(ctx);
     }
 
@@ -4581,13 +4601,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // Layer/Quick breadcrumb (same as UC1) so the UF1 page reads as UF1,
     // not UF8 (Frank 2026-07-30). One contiguous ButtonId block.
     const bool idIsUf1 =
-        id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Rec;
+        id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1Jog;
     // UF1 encoders + V-Pot pushes have NO physical button LED (they are rotary
     // controls), so hide the LED block for them like the UC1 encoders (Frank
     // 2026-07-31: "LED optionen wo sie keinen Sinn machen, z.B. auf Encoder").
     // These 6 ids sit contiguously at the head of the UF1 block.
     const bool idIsUf1NoLed =
-        id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1ChannelPush;
+        (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1ChannelPush)
+        || id == ButtonId::Uf1Jog;   // jog is rotary — no physical LED
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
       : (id == ButtonId::Quick2) ? 2
@@ -4620,6 +4641,57 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
     ImGui_PushID(ctx, uf8::bindings::toName(id));
     const int themePushed = pushBindingsTheme(ctx);
+
+    // JOG WHEEL: rotate-only, mode-driven → NO action binding. Show ONLY the Jog
+    // Mode settings (no action picker / LED block). Keyboard-enterable (InputDouble).
+    if (id == ButtonId::Uf1Jog) {
+        ImGui_Text(ctx, "JOG WHEEL \xE2\x80\x94 Jog Mode");
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Modes");
+        const int jn = reasixty_uf1JogModeCount();
+        for (int m = 0; m < jn; ++m) {
+            char cid[24]; snprintf(cid, sizeof(cid), "##jogvis%d", m);
+            bool vis = reasixty_uf1JogModeVisible(m);
+            if (ImGui_Checkbox(ctx, cid, &vis)) reasixty_setUf1JogModeVisible(m, vis);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+        }
+        ImGui_Spacing(ctx);
+        int    fl = 0;
+        double d1 = 0.1, f1 = 1.0;
+        double pick = reasixty_uf1JogPickSpeed();
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputDouble(ctx, "Picker speed##jog", &pick, &d1, &f1, "%.1f", &fl))
+            reasixty_setUf1JogPickSpeed(pick);
+        double fine = reasixty_uf1JogFineDiv();
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputDouble(ctx, "Shift fine div##jog", &fine, &d1, &f1, "%.1f", &fl))
+            reasixty_setUf1JogFineDiv(fine);
+        for (int m = 0; m <= 2; ++m) {   // Playhead / Scrub / Items (the wired modes)
+            const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
+            ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            char rid[40];
+            snprintf(rid, sizeof(rid), "Zoom##ju%d", m);
+            if (ImGui_RadioButton(ctx, rid, unit == 1)) reasixty_setUf1JogUnit(m, 1);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            snprintf(rid, sizeof(rid), "Grid##ju%d", m);
+            if (ImGui_RadioButton(ctx, rid, unit == 2)) reasixty_setUf1JogUnit(m, 2);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            snprintf(rid, sizeof(rid), "Seconds##ju%d", m);
+            if (ImGui_RadioButton(ctx, rid, unit == 0)) reasixty_setUf1JogUnit(m, 0);
+            const char* fmt = (unit == 0) ? "%.4f s" : (unit == 2) ? "%.2f grid" : "%.4f view";
+            double ds = (unit == 2) ? 0.05 : 0.005, fs = (unit == 2) ? 0.25 : 0.05;
+            double st = reasixty_uf1JogStep(m);
+            char sid[48]; snprintf(sid, sizeof(sid), "amount##jogstep%d", m);
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputDouble(ctx, sid, &st, &ds, &fs, fmt, &fl))
+                reasixty_setUf1JogStep(m, st);
+        }
+        popBindingsTheme(ctx, themePushed);
+        ImGui_PopID(ctx);   // balance the ImGui_PushID at the top (else window teardown)
+        return;
+    }
 
     // True when the binding's plain short slot maps a button to a
     // Modifier role. Combining a modifier with itself is undefined, so
@@ -5067,6 +5139,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             ImGui_PopID(ctx);
         }
     }
+
 
     popBindingsTheme(ctx, themePushed);
 
@@ -6499,7 +6572,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // (Bindings.h: Uf1VpotAbovePush … Uf1Rec) — range-test covers them all.
     const bool selIsUf1 =
         s_selected >= ButtonId::Uf1VpotAbovePush
-     && s_selected <= ButtonId::Uf1Rec;
+     && s_selected <= ButtonId::Uf1Jog;
     const ButtonId editSel =
         (s_deviceTab == 2) ? (selIsUf1 ? s_selected : ButtonId::None) : // UF1 tab: UF1 only
         (s_deviceTab == 1) ? (selIsUc1 ? s_selected : ButtonId::None) : // UC1 tab: UC1 only

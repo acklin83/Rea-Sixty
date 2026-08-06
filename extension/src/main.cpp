@@ -459,6 +459,11 @@ constexpr int         kUf1BankStep = 8;
 // the MODE down/up edges; the painter overlays the menu labels + LEDs and the
 // worker routes a soft-key press to the chosen mode. Atomic (worker↔painter).
 std::atomic<bool>     g_uf1ModeMenu{false};
+// Scrub button (0x27) HELD = the Jog-Mode picker modifier — hold Scrub + turn the
+// jog to pick g_uf1JogMode (the jog analog of MODE-hold for the channel encoder).
+// Set on the Scrub down/up edges by the input worker; read by the jog drain +
+// the header painter. Atomic (worker↔main).
+std::atomic<bool>     g_uf1ScrubHeld{false};
 
 // Which Meter screen is shown (index into kUf1MeterScreens). Unlike the
 // Channel<->Meter view toggle above, the screen is NOT firmware-local: SSL 360
@@ -4281,6 +4286,75 @@ constexpr EncoderMode kUf1EncoderModes[] = {
 constexpr int kUf1EncoderModeCount =
     static_cast<int>(sizeof(kUf1EncoderModes) / sizeof(kUf1EncoderModes[0]));
 
+// --- UF1 "Jog Mode" (Frank 2026-08-06) --------------------------------------
+// The jog wheel gets its own mode system like the channel encoder. Each mode =
+// an OBJECT; the JOG moves it (the ARROWS select it — later Bausteine). Picker =
+// hold Scrub (0x27) + turn the jog. The jog has its OWN step (NOT g_nudgeAmount —
+// it is extremely smooth). Persisted via ExtState "uf1JogMode". Baustein 1 wires
+// Playhead (edit cursor) + Items (move in time via API); Scrub/Envelope/Razor are
+// stubs for the later Bausteine.
+enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor };
+std::atomic<Uf1JogMode> g_uf1JogMode{Uf1JogMode::Playhead};
+constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Razor) + 1;
+// USER-ADJUSTABLE jog feel (Frank 2026-08-06 "alle speeds sollen einstellbar sein").
+// All ExtState-persisted + Settings-editable (UF1 tab). NOT g_nudgeAmount — the jog
+// is its own smooth thing, PER MODE:
+//   g_uf1JogPickSpeed = jog counts per Jog-Mode step in the Scrub-held picker.
+//   g_uf1JogFineDiv   = Shift divides the step by this (fine).
+//   g_uf1JogStep[m]   = per-mode step (units per jog count; seconds for the time
+//                       modes Playhead/Scrub/Items). Init by the struct below.
+std::atomic<double> g_uf1JogPickSpeed{4.0};
+std::atomic<double> g_uf1JogFineDiv{4.0};
+// The per-mode step UNIT (Frank 2026-08-06: "Sekunden machen NULL Sinn für alles" —
+// keep as an option, but default ZoomRel for the scrub-y modes / Grid for the
+// place-precisely modes). ZoomRel = a fraction of the VISIBLE arrange range per
+// count (zoom-independent feel). Grid = a fraction of the current GRID length per
+// count (musical). Seconds = absolute (opt-in). The step VALUE is in that unit.
+enum class Uf1JogUnit : uint8_t { Seconds = 0, ZoomRel = 1, Grid = 2 };
+std::atomic<int>    g_uf1JogUnit[kUf1JogModeCount];
+std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
+// Which Jog Modes the Scrub-held picker offers (user on/off, analog to the encoder
+// ring visibility). ExtState "uf1JogVis<m>". Default all on.
+std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
+struct Uf1JogStepInit_ {
+    Uf1JogStepInit_() {
+        for (int m = 0; m < kUf1JogModeCount; ++m) g_uf1JogVisible[m].store(true);
+        auto set = [](Uf1JogMode m, Uf1JogUnit u, double v) {
+            g_uf1JogUnit[static_cast<int>(m)].store(static_cast<int>(u));
+            g_uf1JogStep[static_cast<int>(m)].store(v);
+        };
+        set(Uf1JogMode::Playhead, Uf1JogUnit::ZoomRel, 0.01);  // 1% of view / count
+        set(Uf1JogMode::Scrub,    Uf1JogUnit::ZoomRel, 0.01);
+        set(Uf1JogMode::Items,    Uf1JogUnit::Grid,    0.25);  // 1 = grid, 0.5 half, 0.25 quarter
+        set(Uf1JogMode::Envelope, Uf1JogUnit::Grid,    0.25);
+        set(Uf1JogMode::Razor,    Uf1JogUnit::Grid,    0.25);
+    }
+} g_uf1JogStepInit_;
+// Full name (desktop mode-banner) + compact name (UF1 header "REAPER" cell, ≤ fits
+// with the "JOG " prefix in 25 bytes).
+inline const char* uf1JogModeFriendly(Uf1JogMode m)
+{
+    switch (m) {
+        case Uf1JogMode::Playhead: return "Playhead";
+        case Uf1JogMode::Scrub:    return "Scrub";
+        case Uf1JogMode::Items:    return "Items";
+        case Uf1JogMode::Envelope: return "Envelope";
+        case Uf1JogMode::Razor:    return "Razor Edit";
+    }
+    return "Jog";
+}
+inline const char* uf1JogModeHdr_(Uf1JogMode m)
+{
+    switch (m) {
+        case Uf1JogMode::Playhead: return "Playhead";
+        case Uf1JogMode::Scrub:    return "Scrub";
+        case Uf1JogMode::Items:    return "Items";
+        case Uf1JogMode::Envelope: return "Envelope";
+        case Uf1JogMode::Razor:    return "Razor";
+    }
+    return "Jog";
+}
+
 // --- Runtime, user-editable UF1 encoder-mode RING (order + visibility) ------
 // Replaces the hardcoded kUf1EncoderModes[] scroll for the MODE-hold picker.
 //   g_uf1EncoderSeq[]     = a PERMUTATION of every mode int 0..kEncoderModeCount-1,
@@ -7689,6 +7763,114 @@ static void applyFxMoveSlotAware_(int step, bool carousel)
 }
 
 void applyFxMove_(int step) { applyFxMoveSlotAware_(step, /*carousel*/ true); }
+
+// ── UF1 Jog Mode (Baustein 1) ───────────────────────────────────────────────
+// Persist the live Jog Mode (shared by the picker + the builtins). Main thread.
+inline void uf1JogPersistMode_(Uf1JogMode m)
+{
+    char b[8]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(m));
+    SetExtState("rea_sixty", "uf1JogMode", b, true);
+}
+
+// Scrub-held + jog turn = the Jog-Mode picker. Accumulates the smooth jog counts
+// (g_uf1JogPickSpeed per step) so one "notch" advances one mode; wraps. Main-thread
+// only (jog drain). Direction reversal drops the stale fraction (like the channel
+// encoder). Persists + repaints on a real change (banner fires from the onTimer
+// diff; the header shows "JOG <mode>").
+void uf1JogModeStep_(int rawStep)
+{
+    static double accum = 0.0;
+    double scale = g_uf1JogPickSpeed.load(); if (!(scale > 0.0)) scale = 1.0;
+    if ((rawStep > 0 && accum < 0.0) || (rawStep < 0 && accum > 0.0)) accum = 0.0;
+    accum += rawStep / scale;
+    int steps = 0;
+    if (accum >=  1.0) { steps = static_cast<int>(accum); accum -= steps; }
+    if (accum <= -1.0) { steps = static_cast<int>(accum); accum -= steps; }
+    if (steps == 0) return;
+    // Step through the VISIBLE modes only (user on/off, like the encoder ring).
+    const int dir = steps > 0 ? 1 : -1;
+    int m = static_cast<int>(g_uf1JogMode.load());
+    for (int i = 0, n = steps > 0 ? steps : -steps; i < n; ++i) {
+        int cand = m;
+        for (int guard = 0; guard < kUf1JogModeCount; ++guard) {
+            cand = (cand + dir + kUf1JogModeCount) % kUf1JogModeCount;
+            if (g_uf1JogVisible[cand].load()) { m = cand; break; }
+        }
+    }
+    const auto nm = static_cast<Uf1JogMode>(m);
+    if (g_uf1JogMode.exchange(nm) != nm) { uf1JogPersistMode_(nm); g_pageDirty.store(true); }
+}
+
+// Items mode: move the SELECTED media items in time by `dt` seconds (the jog's OWN
+// step × count, Shift-fine already applied — NOT g_nudgeAmount). Pure API (no action
+// ID to guess); main thread. Clamped at 0. Baustein 3 adds Cmd=track / Ctrl=copy.
+void applyUf1JogMoveItemsDelta_(double dt)
+{
+    if (dt == 0.0) return;
+    const int n = CountSelectedMediaItems(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaItem* it = GetSelectedMediaItem(nullptr, i);
+        if (!it) continue;
+        double pos = GetMediaItemInfo_Value(it, "D_POSITION") + dt;
+        if (pos < 0.0) pos = 0.0;
+        SetMediaItemInfo_Value(it, "D_POSITION", pos);
+    }
+    if (n > 0) UpdateArrange();
+}
+
+// Visible arrange range (seconds) — for ZoomRel unit. 0,0 = whole view (SDK).
+static double uf1JogViewSec_()
+{
+    double s = 0.0, e = 0.0;
+    GetSet_ArrangeView2(nullptr, false, 0, 0, &s, &e);
+    const double r = e - s;
+    return (r > 0.0) ? r : 4.0;   // fallback if unavailable
+}
+// Current grid length (seconds) at the edit cursor — for Grid unit (tempo-aware).
+static double uf1JogGridSec_()
+{
+    double division = 1.0;   // QN fraction
+    GetSetProjectGrid(nullptr, false, &division, nullptr, nullptr);
+    if (!(division > 0.0)) division = 1.0;
+    const double cur = GetCursorPosition();
+    const double qn  = TimeMap2_timeToQN(nullptr, cur);
+    const double g   = TimeMap2_QNToTime(nullptr, qn + division) - cur;
+    return (g > 0.0) ? g : 0.5;   // fallback
+}
+
+// Dispatch a jog rotation by the active Jog Mode (main thread, jog drain). Step =
+// per-mode value in its per-mode UNIT (Seconds / ZoomRel = fraction of visible range
+// / Grid = fraction of grid length), Shift = fine (÷ g_uf1JogFineDiv). Baustein 1/2:
+// Playhead + Scrub move the edit cursor; Items moves the selection in time.
+void uf1JogDispatch_(int count)
+{
+    if (count == 0) return;
+    const auto mode = g_uf1JogMode.load();
+    double step = g_uf1JogStep[static_cast<int>(mode)].load();
+    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
+        const double d = g_uf1JogFineDiv.load();
+        if (d > 0.0) step /= d;
+    }
+    double scale = 1.0;   // step unit → seconds
+    switch (static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load())) {
+        case Uf1JogUnit::Seconds: scale = 1.0;                break;
+        case Uf1JogUnit::ZoomRel: scale = uf1JogViewSec_();   break;
+        case Uf1JogUnit::Grid:    scale = uf1JogGridSec_();   break;
+    }
+    const double delta = step * scale * count;   // seconds
+    switch (mode) {
+        case Uf1JogMode::Playhead:
+        case Uf1JogMode::Scrub: {        // TODO Baustein 3: real audio scrub for Scrub
+            double np = GetCursorPosition() + delta;
+            if (np < 0.0) np = 0.0;
+            SetEditCurPos(np, true, false);
+            break;
+        }
+        case Uf1JogMode::Items:    applyUf1JogMoveItemsDelta_(delta); break;
+        case Uf1JogMode::Envelope: /* TODO Baustein 4: move env point value/time */ break;
+        case Uf1JogMode::Razor:    /* TODO Baustein 5: razor area */               break;
+    }
+}
 
 // UF1 channel-encoder dispatch by its LOCAL mode (g_uf1EncoderMode). Byte-
 // for-byte the same switch as the encoder_mode_dispatch builtin (which reads
@@ -13102,8 +13284,9 @@ void drainInputQueue()
                     }
                     break;
                 }
-                case uf1::enc::kJog:            // jog wheel → playhead / edit cursor
-                    applyPlayheadNudge_(step);
+                case uf1::enc::kJog:            // jog wheel — Jog Mode (Scrub-held = picker)
+                    if (g_uf1ScrubHeld.load()) uf1JogModeStep_(step);   // pick g_uf1JogMode
+                    else                       uf1JogDispatch_(step);   // move by the mode
                     break;
                 case uf1::enc::kVpotAboveFader: // above-fader V-pot → Pan (extensible)
                     applyUf1AboveFaderVpot_(step);
@@ -15993,6 +16176,16 @@ static void uf1SetEncoderField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h
     for (size_t k = 0; k < 25; ++k)
         h[k] = (k < s.size()) ? static_cast<uint8_t>(s[k]) : 0;
 }
+// Same cell, "JOG <mode>", for the Jog-Mode picker (Scrub-held) / a non-default
+// jog mode — the exact mirror of ENC. Frank 2026-08-06.
+static void uf1SetJogField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
+                            Uf1JogMode m)
+{
+    std::string s = std::string("JOG ") + uf1JogModeHdr_(m);
+    if (s.size() > 25) s.resize(25);
+    for (size_t k = 0; k < 25; ++k)
+        h[k] = (k < s.size()) ? static_cast<uint8_t>(s[k]) : 0;
+}
 
 // ---- Overview cycle pacer ---------------------------------------------------
 // SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
@@ -17481,6 +17674,13 @@ void onUf1Event(const uf1::InputEvent& ev)
             // to mirror. Atomic store only (threading rule).
             if (ev.id == uf1::btn::kMode) {
                 g_uf1ModeMenu.store(ev.pressed);
+                break;
+            }
+            // Scrub button (0x27): HELD = the Jog-Mode picker modifier (hold + turn
+            // the jog to pick g_uf1JogMode). Dedicated like MODE — not user-bindable.
+            // Atomic store only (threading rule); the jog drain reads it.
+            if (ev.id == uf1::btn::kScrub) {
+                g_uf1ScrubHeld.store(ev.pressed);
                 break;
             }
             // MODE-hold menu open: the 4 display soft-keys pick the mode (before
@@ -21066,7 +21266,18 @@ void uf1PaintChannel_()
     static bool sModeMenu   = false;
     const bool menuEdge     = (modeMenu != sModeMenu);
     sModeMenu = modeMenu;
-    const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge;
+    // The header "REAPER" cell shows the ENC / JOG mode field; a change there must
+    // force a repaint (the direct header send is `changed`-gated, and in Meter view
+    // the pacer snapshot doesn't restate it). Fold the mode-field key into `changed`
+    // so switching the jog mode (or encoder mode, or holding Scrub) re-sends it.
+    static int sModeField = INT_MIN;
+    const int modeFieldKey = (g_uf1ScrubHeld.load() ? (1 << 12) : 0)
+                           | (static_cast<int>(g_uf1JogMode.load()) << 8)
+                           |  static_cast<int>(g_uf1EncoderMode.load());
+    const bool modeFieldChanged = (modeFieldKey != sModeField);
+    sModeField = modeFieldKey;
+    const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
+                       || modeFieldChanged;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -21466,9 +21677,16 @@ void uf1PaintChannel_()
             // …then overlay the channel-encoder mode in the "REAPER" cell while MODE
             // is held (picker) OR whenever the mode is non-default, so the picked mode
             // stays visible after release. The pacer re-emits every tick. N/M is kept.
+            // Jog Mode shares this cell: Scrub-held (picker) → "JOG …" always wins;
+            // else the ENC rule; else a non-default jog mode persists (Frank 2026-08-06).
             const EncoderMode em = g_uf1EncoderMode.load();
-            if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+            const Uf1JogMode  jgm = g_uf1JogMode.load();
+            if (g_uf1ScrubHeld.load())
+                uf1SetJogField_(hdr, jgm);
+            else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
                 uf1SetEncoderField_(hdr, em);
+            else if (jgm != Uf1JogMode::Playhead)
+                uf1SetJogField_(hdr, jgm);
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -21767,8 +21985,13 @@ void uf1PaintChannel_()
                 : uf1PageHeader_(g_uf1CsPage.load() + 1,
                                  std::max(1, g_uf1CsActivePages.load()));
             const EncoderMode em = g_uf1EncoderMode.load();
-            if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+            const Uf1JogMode  jgm = g_uf1JogMode.load();
+            if (g_uf1ScrubHeld.load())                                   // Jog picker wins
+                uf1SetJogField_(hdr, jgm);
+            else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
                 uf1SetEncoderField_(hdr, em);   // mode in the "REAPER" cell
+            else if (jgm != Uf1JogMode::Playhead)
+                uf1SetJogField_(hdr, jgm);
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -28216,6 +28439,7 @@ void onTimer()
         static int           mbFocusScope = 0;
         static bool          mbFlip = false, mbMaster = false, mbStrip = false, mbExt = false;
         static int           mbExtSide = 1;
+        static int           mbJog = 0;
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
@@ -28248,11 +28472,13 @@ void onTimer()
         const bool ufs  = g_uf1StripMode.load();
         const bool ufe  = g_uf1Extender.load();
         const int  ufes = g_uf1ExtenderSide.load();
+        const int  jm   = static_cast<int>(g_uf1JogMode.load());
         if (!mbInit) {
             mbInit = true;
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
+            mbJog = jm;
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
             // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
@@ -28284,6 +28510,9 @@ void onTimer()
             if (ufe != mbExt)    { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe)); mbExt = ufe; }
             else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
             mbExtSide = ufes;   // always sync (even when the on/off change took priority)
+            // UF1 Jog Mode.
+            if (jm != mbJog) { chg.push_back(std::string("Jog \xE2\x80\xA2 ")
+                                   + uf1JogModeFriendly(static_cast<Uf1JogMode>(jm))); mbJog = jm; }
             if (!chg.empty()) {
                 std::string joined = chg[0];
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
@@ -30511,6 +30740,21 @@ custom_action_register_t g_actionFocusScopeCycle{
     0, "REASIXTY_FOCUS_SCOPE_CYCLE", "Rea-Sixty: Focus Set scope (cycle Both / UF1 / UF8)", nullptr,
 };
 int g_cmdFocusScopeCycle = 0;
+// UF1 Jog Mode — REAPER-native actions too (Frank 2026-08-06 asked explicitly).
+custom_action_register_t g_actionJogModeCycle{
+    0, "REASIXTY_JOG_MODE_CYCLE", "Rea-Sixty: UF1 Jog Mode (cycle)", nullptr };
+custom_action_register_t g_actionJogModePlayhead{
+    0, "REASIXTY_JOG_MODE_PLAYHEAD", "Rea-Sixty: UF1 Jog Mode = Playhead", nullptr };
+custom_action_register_t g_actionJogModeScrub{
+    0, "REASIXTY_JOG_MODE_SCRUB", "Rea-Sixty: UF1 Jog Mode = Scrub", nullptr };
+custom_action_register_t g_actionJogModeItems{
+    0, "REASIXTY_JOG_MODE_ITEMS", "Rea-Sixty: UF1 Jog Mode = Items", nullptr };
+custom_action_register_t g_actionJogModeEnvelope{
+    0, "REASIXTY_JOG_MODE_ENVELOPE", "Rea-Sixty: UF1 Jog Mode = Envelope", nullptr };
+custom_action_register_t g_actionJogModeRazor{
+    0, "REASIXTY_JOG_MODE_RAZOR", "Rea-Sixty: UF1 Jog Mode = Razor Edit", nullptr };
+int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
+    g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0;
 
 // CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
 // user 2026-06-25: "would be cool if these were available as Reaper actions").
@@ -30841,6 +31085,23 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         g_bankDirty.store(true);
         g_pageDirty.store(true);
         return true;
+    }
+    {
+        // UF1 Jog Mode actions — inline mirror of the jog_mode_* builtins.
+        int jm = -1;
+        if      (command == g_cmdJogModeCycle)    jm = (static_cast<int>(g_uf1JogMode.load()) + 1) % kUf1JogModeCount;
+        else if (command == g_cmdJogModePlayhead) jm = static_cast<int>(Uf1JogMode::Playhead);
+        else if (command == g_cmdJogModeScrub)    jm = static_cast<int>(Uf1JogMode::Scrub);
+        else if (command == g_cmdJogModeItems)    jm = static_cast<int>(Uf1JogMode::Items);
+        else if (command == g_cmdJogModeEnvelope) jm = static_cast<int>(Uf1JogMode::Envelope);
+        else if (command == g_cmdJogModeRazor)    jm = static_cast<int>(Uf1JogMode::Razor);
+        if (jm >= 0) {
+            g_uf1JogMode.store(static_cast<Uf1JogMode>(jm));
+            char b[8]; std::snprintf(b, sizeof(b), "%d", jm);
+            SetExtState("rea_sixty", "uf1JogMode", b, true);
+            g_pageDirty.store(true);
+            return true;
+        }
     }
     for (int i = 0; i < 8; ++i)
         if (command == g_cmdCsSwitch[i]) { g_csSwitchReq.store(i); return true; }
@@ -32661,6 +32922,81 @@ void reasixty_setFocusSetScope(int scope)
     SetExtState("rea_sixty", "focusSetScope", std::to_string(scope).c_str(), true);
     g_bankDirty.store(true);
     g_pageDirty.store(true);
+}
+
+// UF1 Jog Mode feel — user-adjustable speeds (Settings, UF1 tab). All global
+// (SettingsScreen drives them). Main-thread only.
+double reasixty_uf1JogPickSpeed() { return g_uf1JogPickSpeed.load(); }
+void   reasixty_setUf1JogPickSpeed(double v)
+{
+    if (!(v > 0.0)) v = 1.0;
+    g_uf1JogPickSpeed.store(v);
+    SetExtState("rea_sixty", "uf1JogPickSpeed", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogFineDiv() { return g_uf1JogFineDiv.load(); }
+void   reasixty_setUf1JogFineDiv(double v)
+{
+    if (!(v >= 1.0)) v = 1.0;
+    g_uf1JogFineDiv.store(v);
+    SetExtState("rea_sixty", "uf1JogFineDiv", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogStep(int mode)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return 0.0;
+    return g_uf1JogStep[mode].load();
+}
+void reasixty_setUf1JogStep(int mode, double v)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    if (!(v > 0.0)) v = 0.0001;
+    g_uf1JogStep[mode].store(v);
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", mode);
+    SetExtState("rea_sixty", key, std::to_string(v).c_str(), true);
+}
+int  reasixty_uf1JogUnit(int mode)
+{
+    return (mode >= 0 && mode < kUf1JogModeCount) ? g_uf1JogUnit[mode].load() : 0;
+}
+// Sensible starting amount per unit (the amounts mean different things per unit, so
+// switching unit reseeds it): Seconds/count, view-fraction/count, grid-multiple/count.
+static double uf1JogUnitDefault_(int unit)
+{
+    switch (static_cast<Uf1JogUnit>(unit)) {
+        case Uf1JogUnit::Seconds: return 0.02;
+        case Uf1JogUnit::ZoomRel: return 0.01;
+        case Uf1JogUnit::Grid:    return 0.25;   // 1 = grid, 0.5 half, 0.25 quarter
+    }
+    return 0.01;
+}
+void reasixty_setUf1JogUnit(int mode, int unit)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    if (unit < 0 || unit > 2) unit = 0;
+    if (g_uf1JogUnit[mode].exchange(unit) == unit) return;   // no change
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogUnit%d", mode);
+    SetExtState("rea_sixty", key, std::to_string(unit).c_str(), true);
+    // Reseed the amount to the new unit's default (0.01 view ≠ 0.25 grid ≠ 0.02 s).
+    const double v = uf1JogUnitDefault_(unit);
+    g_uf1JogStep[mode].store(v);
+    char skey[24]; std::snprintf(skey, sizeof(skey), "uf1JogStep%d", mode);
+    SetExtState("rea_sixty", skey, std::to_string(v).c_str(), true);
+}
+bool reasixty_uf1JogModeVisible(int mode)
+{
+    return (mode >= 0 && mode < kUf1JogModeCount) ? g_uf1JogVisible[mode].load() : true;
+}
+void reasixty_setUf1JogModeVisible(int mode, bool on)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    g_uf1JogVisible[mode].store(on);
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogVis%d", mode);
+    SetExtState("rea_sixty", key, on ? "1" : "0", true);
+}
+int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
+const char* reasixty_uf1JogModeName(int mode)   // for the Settings labels
+{
+    return (mode >= 0 && mode < kUf1JogModeCount)
+        ? uf1JogModeFriendly(static_cast<Uf1JogMode>(mode)) : "";
 }
 
 // UF1 Extender on/off. Turning it ON releases the Focus-Set pin (mutual exclusion,
@@ -35370,6 +35706,53 @@ void registerBindingHandlers()
         "UF1 Extender: side (left / right)", false
     });
 
+    // UF1 Jog Mode (Baustein 1) — cycle + direct-set builtins. Atomic store +
+    // SetExtState only → worker-safe (parallels uf1_strip_mode). Direct-sets light
+    // their LED when active. The primary picker is Scrub-held + jog; these make it
+    // bindable to any button too (every new action is a builtin).
+    auto setJogMode = [](Uf1JogMode m) {
+        if (g_uf1JogMode.exchange(m) == m) return;
+        char b[8]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(m));
+        SetExtState("rea_sixty", "uf1JogMode", b, true);
+        g_pageDirty.store(true);
+    };
+    registerBuiltin("jog_mode_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const int m = (static_cast<int>(g_uf1JogMode.load()) + 1) % kUf1JogModeCount;
+            g_uf1JogMode.store(static_cast<Uf1JogMode>(m));
+            char b[8]; std::snprintf(b, sizeof(b), "%d", m);
+            SetExtState("rea_sixty", "uf1JogMode", b, true);
+            g_pageDirty.store(true);
+        },
+        nullptr, "UF1 Jog Mode: cycle", false
+    });
+    registerBuiltin("jog_mode_playhead", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Playhead); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Playhead; },
+        "UF1 Jog Mode: Playhead", false
+    });
+    registerBuiltin("jog_mode_scrub", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Scrub); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Scrub; },
+        "UF1 Jog Mode: Scrub", false
+    });
+    registerBuiltin("jog_mode_items", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Items); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Items; },
+        "UF1 Jog Mode: Items", false
+    });
+    registerBuiltin("jog_mode_envelope", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Envelope); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Envelope; },
+        "UF1 Jog Mode: Envelope", false
+    });
+    registerBuiltin("jog_mode_razor", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Razor); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Razor; },
+        "UF1 Jog Mode: Razor Edit", false
+    });
+
     // Channel-encoder MODE setters for the UF1 (Frank 2026-07-31). The UF1 has
     // its OWN encoder mode (g_uf1EncoderMode), independent of the UF8's
     // g_encoderMode — so the UF8 encoder_* setters (which write g_encoderMode)
@@ -38016,6 +38399,29 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         const int s = std::atoi(v);
         g_focusSetScope.store((s >= 0 && s <= 2) ? s : 0);   // default Both (0)
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogMode"); v && *v) {
+        const int m = std::atoi(v);
+        if (m >= 0 && m < kUf1JogModeCount) g_uf1JogMode.store(static_cast<Uf1JogMode>(m));
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogPickSpeed"); v && *v) {
+        const double d = std::atof(v); if (d > 0.0) g_uf1JogPickSpeed.store(d);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogFineDiv"); v && *v) {
+        const double d = std::atof(v); if (d >= 1.0) g_uf1JogFineDiv.store(d);
+    }
+    for (int m = 0; m < kUf1JogModeCount; ++m) {
+        char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", m);
+        if (const char* v = GetExtState("rea_sixty", key); v && *v) {
+            const double d = std::atof(v); if (d > 0.0) g_uf1JogStep[m].store(d);
+        }
+        char ukey[24]; std::snprintf(ukey, sizeof(ukey), "uf1JogUnit%d", m);
+        if (const char* v = GetExtState("rea_sixty", ukey); v && *v) {
+            const int u = std::atoi(v); if (u >= 0 && u <= 2) g_uf1JogUnit[m].store(u);
+        }
+        char vkey[24]; std::snprintf(vkey, sizeof(vkey), "uf1JogVis%d", m);
+        if (const char* v = GetExtState("rea_sixty", vkey); v && *v)
+            g_uf1JogVisible[m].store(std::atoi(v) != 0);
+    }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
     // the user sees on the SSL plug-in immediately. The atomic's
@@ -38097,6 +38503,12 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUf1ExtenderToggle = plugin_register("custom_action", &g_actionUf1ExtenderToggle);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
     g_cmdFocusScopeCycle   = plugin_register("custom_action", &g_actionFocusScopeCycle);
+    g_cmdJogModeCycle    = plugin_register("custom_action", &g_actionJogModeCycle);
+    g_cmdJogModePlayhead = plugin_register("custom_action", &g_actionJogModePlayhead);
+    g_cmdJogModeScrub    = plugin_register("custom_action", &g_actionJogModeScrub);
+    g_cmdJogModeItems    = plugin_register("custom_action", &g_actionJogModeItems);
+    g_cmdJogModeEnvelope = plugin_register("custom_action", &g_actionJogModeEnvelope);
+    g_cmdJogModeRazor    = plugin_register("custom_action", &g_actionJogModeRazor);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
     for (int i = 0; i < 8; ++i)

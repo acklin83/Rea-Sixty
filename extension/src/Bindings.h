@@ -192,6 +192,9 @@ enum class ButtonId : uint16_t {
     // Flip / Master / primary transport 0x38..0x3E. Transport carries
     // factory defaults via uf1_transport; Flip/Master ship UNBOUND for now.
     Uf1Flip, Uf1Master, Uf1Rwd, Uf1Ffw, Uf1Stop, Uf1Play, Uf1Rec,
+    // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
+    // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
+    Uf1Jog,
 };
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None
