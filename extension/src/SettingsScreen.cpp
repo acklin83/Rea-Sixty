@@ -136,6 +136,8 @@ double      reasixty_uf1JogTrackDiv();
 void        reasixty_setUf1JogTrackDiv(double v);
 double      reasixty_uf1JogDeadzone();
 void        reasixty_setUf1JogDeadzone(double v);
+double      reasixty_uf1JogEnvValueStep();
+void        reasixty_setUf1JogEnvValueStep(double v);
 double      reasixty_uf1JogStep(int mode);
 void        reasixty_setUf1JogStep(int mode, double v);
 int         reasixty_uf1JogUnit(int mode);
@@ -4679,7 +4681,13 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_SetNextItemWidth(ctx, 140.0);
         if (ImGui_InputDouble(ctx, "Items vert. step (Ctrl)##jog", &trk, &d1, &f1, "%.1f", &fl))
             reasixty_setUf1JogTrackDiv(trk);
-        for (int m = 0; m <= 2; ++m) {   // Playhead / Scrub / Items (the wired modes)
+        double ev = reasixty_uf1JogEnvValueStep();   // Envelope plain jog = point VALUE
+        double ed = 0.005, ef = 0.05;
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputDouble(ctx, "Envelope value step##jog", &ev, &ed, &ef, "%.4f", &fl))
+            reasixty_setUf1JogEnvValueStep(ev);
+        // Per-mode TIME axis unit + amount. Envelope's time is the Ctrl axis (Cmd=copy).
+        for (int m = 0; m <= 3; ++m) {   // Playhead / Scrub / Items / Envelope (wired modes)
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
             ImGui_SameLine(ctx, nullptr, nullptr);

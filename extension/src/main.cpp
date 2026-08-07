@@ -4319,6 +4319,16 @@ std::atomic<double> g_uf1JogTrackDiv{4.0};
 // |accum| reaches this, then flush; reset on a direction reversal. ExtState
 // "uf1JogDeadzone". 0 = off (per-count, the old feel). Default 2.
 std::atomic<double> g_uf1JogDeadzone{2.0};
+// Envelope mode (Baustein 4) plain-jog VALUE step, per count, in the envelope's
+// FADER-scaled domain (ScaleFrom/ToEnvelopeMode → ~0..1 for volume, -1..1 pan, 0..1
+// params — consistent across types). Shift = fine. ExtState "uf1JogEnvValStep".
+std::atomic<double> g_uf1JogEnvValueStep{0.01};
+// Razor mode (Baustein 5a) target the nav cross picks and the jog moves. The nav-cross
+// LED shows the active target (0x10-0x14, Frank 2026-08-06). Session state. Default =
+// RightEdge so that with NO razor present, jogging CREATES one at the cursor and grows
+// it rightward (Frank 2026-08-06).
+enum class Uf1RazorTarget : uint8_t { Whole = 0, LeftEdge, RightEdge, TopEdge, BottomEdge };
+std::atomic<Uf1RazorTarget> g_uf1RazorTarget{Uf1RazorTarget::RightEdge};
 // Copy gesture (Ctrl + jog in Items): true once a duplicate has been made for the
 // CURRENT Ctrl hold, so a continuous Ctrl+jog clones ONCE then drags the copies.
 // Cleared when Ctrl releases (onTimer) or on a non-copy jog. Not persisted.
@@ -8091,6 +8101,74 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
 // NAV centre: spotlight TOGGLE. First press saves the current arrange view + zooms it
 // to the mode's object (Items → selected-items time span, else whole project); second
 // press restores the saved view. Horizontal (time) only. Main thread.
+// Envelope ← →: select the prev/next point of the selected envelope. add (Shift)
+// extends. Anchor = the last selected point (points are time-sorted, so index ±1 =
+// prev/next in time). With no selection, pick the nearest point in `dir` from the cursor.
+static void uf1SelectAdjacentEnvPoint_(int dir, bool add)
+{
+    TrackEnvelope* env = GetSelectedEnvelope(nullptr);
+    if (!env) return;
+    const int n = CountEnvelopePointsEx(env, -1);
+    if (n <= 0) return;
+    int anchor = -1;
+    for (int i = 0; i < n; ++i) {
+        bool sel = false;
+        if (GetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &sel) && sel)
+            anchor = i;                       // last selected
+    }
+    int target = -1;
+    if (anchor >= 0) {
+        target = anchor + dir;
+    } else {                                  // no selection → nearest point in dir of cursor
+        const double cur = GetCursorPosition();
+        double best = 0;
+        for (int i = 0; i < n; ++i) {
+            double t = 0;
+            if (!GetEnvelopePointEx(env, -1, i, &t, nullptr, nullptr, nullptr, nullptr)) continue;
+            if (dir > 0 && t > cur + 1e-9) { if (target < 0 || t < best) { target = i; best = t; } }
+            if (dir < 0 && t < cur - 1e-9) { if (target < 0 || t > best) { target = i; best = t; } }
+        }
+    }
+    if (target < 0 || target >= n) return;
+    if (!add)                                 // clear selection
+        for (int i = 0; i < n; ++i) {
+            bool sel = false;
+            if (GetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &sel) && sel) {
+                bool no = true, off = false;
+                SetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &off, &no);
+            }
+        }
+    bool no = true, on = true;
+    SetEnvelopePointEx(env, -1, target, nullptr, nullptr, nullptr, nullptr, &on, &no);
+    UpdateArrange();
+}
+
+// Envelope ↑ ↓: switch the selected envelope to the prev/next VISIBLE envelope on the
+// same track (up = the one above). Uses SetCursorContext(2, env) to select it.
+static void uf1SwitchEnvLane_(int dir)
+{
+    TrackEnvelope* env = GetSelectedEnvelope(nullptr);
+    MediaTrack* tr = env
+        ? reinterpret_cast<MediaTrack*>(
+              static_cast<intptr_t>(GetEnvelopeInfo_Value(env, "P_TRACK")))
+        : GetLastTouchedTrack();
+    if (!tr) return;
+    const int ne = CountTrackEnvelopes(tr);
+    if (ne <= 0) return;
+    int cur = -1;
+    for (int i = 0; i < ne; ++i) if (GetTrackEnvelope(tr, i) == env) { cur = i; break; }
+    // up (dir +1) → the envelope above (smaller index). Walk past hidden ones.
+    for (int t = (cur < 0 ? (dir > 0 ? ne - 1 : 0) : cur - dir);
+         t >= 0 && t <= ne - 1; t -= dir) {
+        TrackEnvelope* cand = GetTrackEnvelope(tr, t);
+        if (!cand) break;
+        if (GetEnvelopeInfo_Value(cand, "I_TCPH_USED") <= 0.0) continue;   // hidden lane
+        SetCursorContext(2, cand);
+        UpdateArrange();
+        return;
+    }
+}
+
 static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 {
     double s = 0.0, e = 0.0;
@@ -8112,6 +8190,18 @@ static void uf1JogNavCenterToggle_(Uf1JogMode mode)
             if (!ok) { a = p; b = p + l; ok = true; }
             else { if (p < a) a = p; if (p + l > b) b = p + l; }
         }
+    } else if (mode == Uf1JogMode::Envelope) {            // span of selected env points
+        if (TrackEnvelope* env = GetSelectedEnvelope(nullptr)) {
+            const int n = CountEnvelopePointsEx(env, -1);
+            for (int i = 0; i < n; ++i) {
+                double t = 0; bool sel = false;
+                if (!GetEnvelopePointEx(env, -1, i, &t, nullptr, nullptr, nullptr, &sel)) continue;
+                if (!sel) continue;
+                if (!ok) { a = b = t; ok = true; }
+                else { if (t < a) a = t; if (t > b) b = t; }
+            }
+            if (ok && b - a < 1.0) { a -= 0.5; b += 0.5; }   // give a lone/tight point some room
+        }
     }
     if (!ok) { a = 0.0; b = GetProjectLength(nullptr); ok = (b > a); }   // fallback: whole project
     if (!ok) return;
@@ -8125,21 +8215,35 @@ static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 
 // Route a NAV-cross press by the active Jog Mode. code = strip byte: bits0-1 axis
 // (0 horiz / 1 vert / 2 centre), bit2 = Shift (add-to-selection). dir = ±1.
-// Envelope / Razor arrows fall back to Playhead nav until their Bausteine land.
+// Razor arrows fall back to Playhead nav until Baustein 5.
 void applyUf1JogNav_(uint8_t code, int dir)
 {
     const int  axis  = code & 0x3;
     const bool shift = (code & 0x4) != 0;
     const auto mode  = g_uf1JogMode.load();
+    if (mode == Uf1JogMode::Razor) {
+        // Nav cross = razor target PICKER (all 5, incl. centre = whole). The jog then
+        // moves the picked target; the nav-cross LED shows it (uf1RazorSyncLeds_).
+        Uf1RazorTarget t;
+        if      (axis == 2) t = Uf1RazorTarget::Whole;
+        else if (axis == 0) t = (dir < 0) ? Uf1RazorTarget::LeftEdge : Uf1RazorTarget::RightEdge;
+        else                t = (dir > 0) ? Uf1RazorTarget::TopEdge  : Uf1RazorTarget::BottomEdge;
+        g_uf1RazorTarget.store(t);
+        g_pageDirty.store(true);
+        return;
+    }
     if (axis == 2) { uf1JogNavCenterToggle_(mode); return; }
     switch (mode) {
         case Uf1JogMode::Items:
             if (axis == 0) uf1SelectAdjacentItem_(dir, shift);
             else           uf1SelectItemAdjacentTrack_(dir, shift);
             break;
+        case Uf1JogMode::Envelope:
+            if (axis == 0) uf1SelectAdjacentEnvPoint_(dir, shift);   // ←→ prev/next point
+            else           uf1SwitchEnvLane_(dir);                   // ↑↓ switch lane
+            break;
         case Uf1JogMode::Playhead:
         case Uf1JogMode::Scrub:
-        case Uf1JogMode::Envelope:   // TODO Baustein 4: point nav / lane switch
         case Uf1JogMode::Razor:      // TODO Baustein 5: edge / track nav
         default:
             if (axis == 0) uf1MoveCursorByGrid_(dir);
@@ -8199,6 +8303,297 @@ static int uf1JogDeJitter_(int count)
     return eff;
 }
 
+// ---- Envelope mode (Baustein 4) --------------------------------------------------
+// Jog on the SELECTED envelope's SELECTED points: plain = VALUE, Ctrl = TIME, Cmd =
+// copy (duplicate once per hold, then move the copies in TIME — coincident points make
+// no sense otherwise). Arrows select points (←→) / switch lane (↑↓). All main thread.
+
+// Duplicate every SELECTED point of `env` in place, then leave the CLONES selected and
+// the originals deselected — so the following jog drags the copies (Cmd-copy). Uses the
+// underlying envelope (autoitem_idx = -1). Coincident points are valid; the time move
+// separates them.
+static void uf1JogDuplicateEnvPoints_(TrackEnvelope* env)
+{
+    if (!env) return;
+    const int n = CountEnvelopePointsEx(env, -1);
+    struct P { double t, v, tension; int shape; };
+    std::vector<P> pts;
+    for (int i = 0; i < n; ++i) {
+        double t = 0, v = 0, tn = 0; int sh = 0; bool sel = false;
+        if (!GetEnvelopePointEx(env, -1, i, &t, &v, &sh, &tn, &sel)) continue;
+        if (sel) pts.push_back({ t, v, tn, sh });
+    }
+    if (pts.empty()) return;
+    // Deselect all originals first.
+    for (int i = 0; i < n; ++i) {
+        bool sel = false;
+        if (!GetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &sel)) continue;
+        if (sel) { bool no = true, off = false;
+            SetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &off, &no); }
+    }
+    bool noSort = true;
+    for (const P& p : pts) {
+        bool selOn = true; double t = p.t, v = p.v, tn = p.tension; int sh = p.shape;
+        InsertEnvelopePointEx(env, -1, t, v, sh, tn, selOn, &noSort);
+    }
+    Envelope_SortPointsEx(env, -1);
+}
+
+// Jog dispatch for Envelope mode. count = de-jittered counts, timeDelta = seconds (the
+// per-mode TIME step, Shift-fine already applied) for the Ctrl/Cmd axis.
+void applyUf1JogEnvelope_(int count, double timeDelta)
+{
+    TrackEnvelope* env = GetSelectedEnvelope(nullptr);
+    if (!env) return;
+    const bool copy = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
+    const bool ctrl = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
+    const bool timeAxis = ctrl || copy;   // copying points only makes sense in time
+    if (copy) { if (!g_uf1JogCopyArmed.exchange(true)) uf1JogDuplicateEnvPoints_(env); }
+    else      { g_uf1JogCopyArmed.store(false); }
+    const int n = CountEnvelopePointsEx(env, -1);
+    bool any = false;
+    if (timeAxis) {
+        if (timeDelta == 0.0) return;
+        for (int i = 0; i < n; ++i) {
+            double t = 0; bool sel = false;
+            if (!GetEnvelopePointEx(env, -1, i, &t, nullptr, nullptr, nullptr, &sel)) continue;
+            if (!sel) continue;
+            double nt = t + timeDelta; if (nt < 0.0) nt = 0.0;
+            bool no = true;
+            SetEnvelopePointEx(env, -1, i, &nt, nullptr, nullptr, nullptr, nullptr, &no);
+            any = true;
+        }
+        if (any) Envelope_SortPointsEx(env, -1);
+    } else {                              // VALUE axis (plain jog)
+        double vstep = g_uf1JogEnvValueStep.load();
+        if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
+            const double d = g_uf1JogFineDiv.load(); if (d > 0.0) vstep /= d;
+        }
+        if (!(vstep != 0.0)) return;
+        const int    scaling = GetEnvelopeScalingMode(env);
+        const double vdelta  = vstep * count;
+        for (int i = 0; i < n; ++i) {
+            double v = 0; bool sel = false;
+            if (!GetEnvelopePointEx(env, -1, i, nullptr, &v, nullptr, nullptr, &sel)) continue;
+            if (!sel) continue;
+            double fader = ScaleFromEnvelopeMode(scaling, v) + vdelta;   // ~normalized domain
+            double nv    = ScaleToEnvelopeMode(scaling, fader);
+            bool no = true;
+            SetEnvelopePointEx(env, -1, i, nullptr, &nv, nullptr, nullptr, nullptr, &no);
+            any = true;
+        }
+    }
+    if (any) UpdateArrange();
+}
+
+// ---- Razor mode (Baustein 5a: SELECTION) -----------------------------------------
+// The nav cross PICKS the target (g_uf1RazorTarget, LED shows it); the jog moves it.
+// Edges resize the SELECTION (non-destructive, P_RAZOREDITS): ←→ start/end in time
+// (smooth), ↑↓ top/bottom across visible tracks, centre = whole rectangle (time / Ctrl
+// across tracks). Method ported from Frank's BirdBird "Razor Edit Utility" scripts.
+// Content move/copy = Baustein 5b. All main thread.
+struct Uf1RzTriple { double s, e; std::string guid; };
+
+static std::string uf1RazorGet_(MediaTrack* tr)
+{
+    static thread_local std::vector<char> buf(65536);   // P_RAZOREDITS is NeedBig (no size arg)
+    buf[0] = 0;
+    GetSetMediaTrackInfo_String(tr, "P_RAZOREDITS", buf.data(), false);
+    return std::string(buf.data());
+}
+static void uf1RazorSet_(MediaTrack* tr, const std::string& s)
+{
+    GetSetMediaTrackInfo_String(tr, "P_RAZOREDITS", const_cast<char*>(s.c_str()), true);
+}
+static std::vector<Uf1RzTriple> uf1RazorParse_(const std::string& str)
+{
+    std::vector<std::string> tok; tok.reserve(12);
+    for (size_t i = 0, n = str.size(); i < n; ) {
+        while (i < n && (str[i] == ' ' || str[i] == '\t')) ++i;
+        size_t j = i; while (j < n && str[j] != ' ' && str[j] != '\t') ++j;
+        if (j > i) tok.push_back(str.substr(i, j - i));
+        i = j;
+    }
+    std::vector<Uf1RzTriple> out;
+    for (size_t k = 0; k + 3 <= tok.size(); k += 3)
+        out.push_back({ std::strtod(tok[k].c_str(), nullptr),
+                        std::strtod(tok[k + 1].c_str(), nullptr), tok[k + 2] });
+    return out;
+}
+static std::string uf1RazorSerialize_(const std::vector<Uf1RzTriple>& t)
+{
+    std::string out; char num[64];
+    for (const auto& tp : t) {
+        if (!out.empty()) out += ' ';
+        std::snprintf(num, sizeof(num), "%.15g", tp.s); out += num; out += ' ';
+        std::snprintf(num, sizeof(num), "%.15g", tp.e); out += num; out += ' ';
+        out += tp.guid;
+    }
+    return out;
+}
+// Nearest VISIBLE track above / below (BirdBird get_previous/next_visible_track).
+static MediaTrack* uf1PrevVisibleTrack_(MediaTrack* tr)
+{
+    const int id = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));   // 1-based
+    for (int i = id - 2; i >= 0; --i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (t && IsTrackVisible(t, false)) return t;
+    }
+    return nullptr;
+}
+static MediaTrack* uf1NextVisibleTrack_(MediaTrack* tr)
+{
+    const int id = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    const int n = CountTracks(nullptr);
+    for (int i = id; i <= n - 1; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (t && IsTrackVisible(t, false)) return t;
+    }
+    return nullptr;
+}
+struct Uf1RzTrack { MediaTrack* tr; std::string str; };
+// Every track carrying a razor area, in ascending track order.
+static std::vector<Uf1RzTrack> uf1RazorTracks_()
+{
+    std::vector<Uf1RzTrack> out;
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (!t) continue;
+        std::string s = uf1RazorGet_(t);
+        if (!s.empty()) out.push_back({ t, std::move(s) });
+    }
+    return out;
+}
+// Slide razor boundaries in time. edge: 0 = whole (rigid, both), -1 = left (start),
+// +1 = right (end). Smooth (no grid-snap — Frank wanted the jog smooth).
+static void uf1RazorSlideTime_(double delta, int edge)
+{
+    if (delta == 0.0) return;
+    auto tracks = uf1RazorTracks_();
+    if (tracks.empty()) return;
+    const double eps = 1e-4;
+    if (edge == 0) {                       // whole: clamp so the earliest start stays >= 0
+        double minS = 1e18;
+        for (auto& rt : tracks) for (auto& tp : uf1RazorParse_(rt.str)) if (tp.s < minS) minS = tp.s;
+        if (minS + delta < 0.0) delta = -minS;
+        if (delta == 0.0) return;
+    }
+    for (auto& rt : tracks) {
+        auto tp = uf1RazorParse_(rt.str);
+        for (auto& t : tp) {
+            if (edge <= 0) {               // whole / left → start
+                double ns = t.s + delta;
+                if (edge == -1) { if (ns < 0.0) ns = 0.0; if (ns > t.e - eps) ns = t.e - eps; }
+                t.s = ns;
+            }
+            if (edge >= 0) {               // whole / right → end
+                double ne = t.e + delta;
+                if (edge == 1 && ne < t.s + eps) ne = t.s + eps;
+                t.e = ne;
+            }
+        }
+        uf1RazorSet_(rt.tr, uf1RazorSerialize_(tp));
+    }
+    UpdateArrange();
+}
+// Move the WHOLE razor rectangle one visible track (dir +1 down / -1 up). Two-pass
+// (collect+clear, then write) so adjacent razor tracks don't clobber. Blocked at the
+// track boundary (no data loss).
+static void uf1RazorShiftTracksOnce_(int dir)
+{
+    auto tracks = uf1RazorTracks_();
+    if (tracks.empty()) return;
+    struct Mv { MediaTrack* dst; std::string str; };
+    std::vector<Mv> mv; mv.reserve(tracks.size());
+    for (auto& rt : tracks) {
+        MediaTrack* dst = dir > 0 ? uf1NextVisibleTrack_(rt.tr) : uf1PrevVisibleTrack_(rt.tr);
+        if (!dst) return;                  // can't move the whole rectangle past the edge
+        mv.push_back({ dst, rt.str });
+    }
+    for (auto& rt : tracks) uf1RazorSet_(rt.tr, "");
+    for (auto& m : mv)       uf1RazorSet_(m.dst, m.str);
+    UpdateArrange();
+}
+// Grow / retract the top or bottom edge of the rectangle by one visible track. dir +1 =
+// the edge moves DOWN the track list, -1 = UP (so forward jog = down, like the rest).
+static void uf1RazorVertEdgeOnce_(bool topEdge, int dir)
+{
+    auto tracks = uf1RazorTracks_();
+    if (tracks.empty()) return;
+    Uf1RzTrack& topT = tracks.front();     // min track index
+    Uf1RzTrack& botT = tracks.back();      // max track index
+    if (topEdge) {
+        if (dir > 0) uf1RazorSet_(topT.tr, "");                 // top edge down → retract
+        else if (MediaTrack* a = uf1PrevVisibleTrack_(topT.tr)) uf1RazorSet_(a, topT.str);  // up → grow
+    } else {
+        if (dir > 0) { if (MediaTrack* b = uf1NextVisibleTrack_(botT.tr)) uf1RazorSet_(b, botT.str); }  // grow down
+        else uf1RazorSet_(botT.tr, "");                         // bottom edge up → retract
+    }
+    UpdateArrange();
+}
+// No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
+// growing right by |delta|, on every SELECTED track (fallback: last-touched), media lane
+// (guid ""). Non-zero on purpose — REAPER discards a zero-width razor, so we can't create
+// [cur,cur] and grow it. Returns false if there's no track. (Frank 2026-08-06.)
+static bool uf1RazorCreateAtCursor_(double delta)
+{
+    double a = GetCursorPosition();
+    if (a < 0.0) a = 0.0;
+    double w = std::fabs(delta);
+    if (w < 1e-4) w = 1e-4;               // ensure it renders even at fine steps
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "%.15g %.15g \"\"", a, a + w);
+    int created = 0;
+    const int nsel = CountSelectedTracks(nullptr);
+    for (int i = 0; i < nsel; ++i)
+        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) { uf1RazorSet_(t, buf); ++created; }
+    if (created == 0) {
+        MediaTrack* t = GetLastTouchedTrack();
+        if (!t) return false;
+        uf1RazorSet_(t, buf);
+    }
+    return true;
+}
+
+// Jog dispatch for Razor mode. count = de-jittered, timeDelta = seconds (per-mode step).
+void applyUf1JogRazor_(int count, double timeDelta)
+{
+    // No razor yet → CREATE a visible area at the cursor on the selected track(s), force
+    // the RightEdge target, and finish this tick (the next jogs grow/move it).
+    if (uf1RazorTracks_().empty()) {
+        if (!uf1RazorCreateAtCursor_(timeDelta)) return;
+        g_uf1RazorTarget.store(Uf1RazorTarget::RightEdge);
+        UpdateArrange();
+        return;
+    }
+    const auto target = g_uf1RazorTarget.load();
+    const bool ctrl   = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
+    auto vertSteps = [&]() -> int {        // counts → whole track steps (g_uf1JogTrackDiv feel)
+        static double accum = 0.0;
+        double div = g_uf1JogTrackDiv.load(); if (!(div > 0.0)) div = 1.0;
+        if ((count > 0 && accum < 0.0) || (count < 0 && accum > 0.0)) accum = 0.0;
+        accum += count / div;
+        int s = 0;
+        if (accum >=  1.0) { s = static_cast<int>(accum); accum -= s; }
+        if (accum <= -1.0) { s = static_cast<int>(accum); accum -= s; }
+        return s;
+    };
+    switch (target) {
+        case Uf1RazorTarget::LeftEdge:  uf1RazorSlideTime_(timeDelta, -1); break;
+        case Uf1RazorTarget::RightEdge: uf1RazorSlideTime_(timeDelta, +1); break;
+        case Uf1RazorTarget::Whole:
+            if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+                        for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorShiftTracksOnce_(d); }
+            else        uf1RazorSlideTime_(timeDelta, 0);
+            break;
+        case Uf1RazorTarget::TopEdge: { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorVertEdgeOnce_(true, d); break; }
+        case Uf1RazorTarget::BottomEdge: { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorVertEdgeOnce_(false, d); break; }
+    }
+}
+
 // Dispatch a jog rotation by the active Jog Mode (main thread, jog drain). Step =
 // per-mode value in its per-mode UNIT (Seconds / ZoomRel = fraction of visible range
 // / Grid = fraction of grid length), Shift = fine (÷ g_uf1JogFineDiv). Baustein 1/2:
@@ -8245,8 +8640,8 @@ void uf1JogDispatch_(int count)
             else       applyUf1JogMoveItemsDelta_(delta);
             break;
         }
-        case Uf1JogMode::Envelope: /* TODO Baustein 4: move env point value/time */ break;
-        case Uf1JogMode::Razor:    /* TODO Baustein 5: razor area */               break;
+        case Uf1JogMode::Envelope: applyUf1JogEnvelope_(count, delta); break;
+        case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
     }
 }
 
@@ -28681,6 +29076,29 @@ static void applyStartupBank_()
     g_softKeyDirty.store(true);
 }
 
+// Razor nav-cross LEDs: light the ONE arrow/centre matching the active target, dark the
+// others — only while Jog Mode == Razor (Frank 2026-08-06). Addresses 0x10-0x14 derived
+// from led = code − 0x18 (see [[uf1-led-reference-uf8-protocol]]); confirm on HW. Deduped
+// (only writes on a state change). Main thread (g_uf1_dev).
+static void uf1RazorSyncLeds_()
+{
+    if (!g_uf1_dev) return;
+    static int lastState = -2;                         // -2 uninit · -1 razor-off · 0..4 target
+    const int st = (g_uf1JogMode.load() == Uf1JogMode::Razor)
+                   ? static_cast<int>(g_uf1RazorTarget.load()) : -1;
+    if (st == lastState) return;
+    lastState = st;
+    // target enum {Whole,Left,Right,Top,Bottom} → LED byte
+    static const uint8_t kByTarget[5] = { 0x12, 0x11, 0x13, 0x10, 0x14 };
+    static const uint8_t kAll[5]      = { 0x10, 0x11, 0x12, 0x13, 0x14 };
+    for (uint8_t led : kAll) {
+        const bool on = (st >= 0 && kByTarget[st] == led);
+        g_uf1_dev->send(uf1::buildLed(led, true));                       // FF3B enable
+        g_uf1_dev->send(uf1::buildColourRgb(led, on ? 0x00FF66u : 0u));  // FF38 colour
+        g_uf1_dev->send(uf1::buildLedLevel(led, on ? 0x00 : 0x11));      // FF39 bright/off
+    }
+}
+
 void onTimer()
 {
     ++g_tickCounter;
@@ -28703,6 +29121,9 @@ void onTimer()
     if (g_uf1JogCopyArmed.load()
         && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd))
         g_uf1JogCopyArmed.store(false);
+
+    // Razor mode: keep the nav-cross LEDs showing the active edge target.
+    uf1RazorSyncLeds_();
 
     // Load-sweep selection safety net. Root cause is fixed at the source (the
     // impersonator no longer sends the "activate this channel" command frames
@@ -33343,6 +33764,13 @@ void   reasixty_setUf1JogDeadzone(double v)
     if (!(v >= 0.0)) v = 0.0;   // 0 = off
     g_uf1JogDeadzone.store(v);
     SetExtState("rea_sixty", "uf1JogDeadzone", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogEnvValueStep() { return g_uf1JogEnvValueStep.load(); }
+void   reasixty_setUf1JogEnvValueStep(double v)
+{
+    if (!(v > 0.0)) v = 0.0001;
+    g_uf1JogEnvValueStep.store(v);
+    SetExtState("rea_sixty", "uf1JogEnvValStep", std::to_string(v).c_str(), true);
 }
 double reasixty_uf1JogStep(int mode)
 {
@@ -38845,6 +39273,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogDeadzone"); v && *v) {
         const double d = std::atof(v); if (d >= 0.0) g_uf1JogDeadzone.store(d);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogEnvValStep"); v && *v) {
+        const double d = std::atof(v); if (d > 0.0) g_uf1JogEnvValueStep.store(d);
     }
     for (int m = 0; m < kUf1JogModeCount; ++m) {
         char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", m);
