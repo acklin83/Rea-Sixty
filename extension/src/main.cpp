@@ -4329,6 +4329,16 @@ std::atomic<double> g_uf1JogEnvValueStep{0.01};
 // it rightward (Frank 2026-08-06).
 enum class Uf1RazorTarget : uint8_t { Whole = 0, LeftEdge, RightEdge, TopEdge, BottomEdge };
 std::atomic<Uf1RazorTarget> g_uf1RazorTarget{Uf1RazorTarget::RightEdge};
+// The razor CONTENT being dragged (Whole target) — the source slices (move) or the clones
+// (copy). GRABBED ONCE at gesture start, then dragged; NEVER re-read from the razor, so the
+// razor can't sweep up the content it moves over (Frank 2026-08-07). Main-thread only.
+std::vector<MediaItem*> g_uf1RazorCopyClones;
+bool                    g_uf1RazorDragIsCopy = false;
+// Content drag = a HELD gesture on the NAV-CENTRE button (Razor mode) = a simulated
+// mouse-down (Frank 2026-08-07): while held the content drags as ONE gesture with auto-
+// crossfade OFF, so REAPER doesn't "drop" it + crossfade at every jog tick. Release = up.
+std::atomic<bool>       g_uf1RazorContentHeld{false};
+std::atomic<bool>       g_uf1RazorContentFresh{false};   // set on press → grab once
 // Copy gesture (Ctrl + jog in Items): true once a duplicate has been made for the
 // CURRENT Ctrl hold, so a continuous Ctrl+jog clones ONCE then drags the copies.
 // Cleared when Ctrl releases (onTimer) or on a non-copy jog. Not persisted.
@@ -8532,6 +8542,225 @@ static void uf1RazorVertEdgeOnce_(bool topEdge, int dir)
     }
     UpdateArrange();
 }
+
+// ---- Razor mode CONTENT (Baustein 5b) --------------------------------------------
+// The centre (Whole) target moves the CONTENT under the razor (destructive), grid-
+// stepped. Media areas (guid "") move/copy ITEMS via ApplyNudge (REAPER's own nudge —
+// so the "move envelope with items" + "trim content behind" prefs are honored, no config
+// var). Envelope areas (guid {…}) move/copy that envelope's POINTS. The razor follows the
+// content. Cmd = copy (duplicate ONCE per hold, then drag the copy — g_uf1JogCopyArmed).
+// The content is taken from the RAZOR, not from any item selection (Frank 2026-08-07).
+static bool uf1RazorIsMediaGuid_(const std::string& g) { return g == "\"\""; }
+
+// Resolve a razor triple's envelope-GUID token to the TrackEnvelope on `tr`.
+static TrackEnvelope* uf1EnvByGuidOnTrack_(MediaTrack* tr, const std::string& guid)
+{
+    if (!tr) return nullptr;
+    static thread_local std::vector<char> buf(256);
+    const int n = CountTrackEnvelopes(tr);
+    for (int i = 0; i < n; ++i) {
+        TrackEnvelope* e = GetTrackEnvelope(tr, i);
+        if (!e) continue;
+        buf[0] = 0;
+        GetSetEnvelopeInfo_String(e, "GUID", buf.data(), false);
+        if (guid == buf.data()) return e;
+    }
+    return nullptr;
+}
+// Move (or duplicate) the points of `env` in [s,e] by `amt` seconds.
+static void uf1RazorEnvStep_(TrackEnvelope* env, double s, double e, double amt, bool duplicate)
+{
+    if (!env) return;
+    const int n = CountEnvelopePointsEx(env, -1);
+    if (duplicate) {
+        struct P { double t, v, tn; int sh; };
+        std::vector<P> pts;
+        for (int i = 0; i < n; ++i) {
+            double t = 0, v = 0, tn = 0; int sh = 0; bool sel = false;
+            if (!GetEnvelopePointEx(env, -1, i, &t, &v, &sh, &tn, &sel)) continue;
+            if (t >= s - 1e-9 && t <= e + 1e-9) pts.push_back({ t, v, tn, sh });
+        }
+        bool no = true;
+        for (auto& p : pts) {
+            double nt = p.t + amt; if (nt < 0) nt = 0; bool on = false;
+            InsertEnvelopePointEx(env, -1, nt, p.v, p.sh, p.tn, on, &no);
+        }
+    } else {
+        for (int i = 0; i < n; ++i) {
+            double t = 0; bool sel = false;
+            if (!GetEnvelopePointEx(env, -1, i, &t, nullptr, nullptr, nullptr, &sel)) continue;
+            if (t < s - 1e-9 || t > e + 1e-9) continue;
+            double nt = t + amt; if (nt < 0) nt = 0; bool no = true;
+            SetEnvelopePointEx(env, -1, i, &nt, nullptr, nullptr, nullptr, nullptr, &no);
+        }
+    }
+    Envelope_SortPointsEx(env, -1);
+}
+// Split every item on `tr` at `pos` (BirdBird's split loop — collect first, then split).
+static void uf1RazorSplitAt_(MediaTrack* tr, double pos)
+{
+    std::vector<MediaItem*> items;
+    const int cnt = CountTrackMediaItems(tr);
+    items.reserve(cnt);
+    for (int k = 0; k < cnt; ++k) items.push_back(GetTrackMediaItem(tr, k));
+    for (MediaItem* it : items) SplitMediaItem(it, pos);
+}
+// Media items on `tr` fully inside [s,e] (after splitting at the bounds).
+static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double e)
+{
+    std::vector<MediaItem*> out;
+    const int cnt = CountTrackMediaItems(tr);
+    for (int k = 0; k < cnt; ++k) {
+        MediaItem* it = GetTrackMediaItem(tr, k);
+        const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
+        if (pos >= s - 1e-9 && pos + len <= e + 1e-9) out.push_back(it);
+    }
+    return out;
+}
+// Media items on `tr` OVERLAPPING [s,e] (BirdBird get_items_in_range — no split).
+static std::vector<MediaItem*> uf1ItemsInRange_(MediaTrack* tr, double s, double e)
+{
+    std::vector<MediaItem*> out;
+    const int cnt = CountTrackMediaItems(tr);
+    for (int k = 0; k < cnt; ++k) {
+        MediaItem* it = GetTrackMediaItem(tr, k);
+        const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double end = pos + GetMediaItemInfo_Value(it, "D_LENGTH");
+        if (end > s + 1e-9 && pos < e - 1e-9) out.push_back(it);
+    }
+    return out;
+}
+// Chunk-clone an item onto `tr` with fresh GUIDs (BirdBird copy_media_item_to_track).
+static MediaItem* uf1CloneItemToTrack_(MediaTrack* tr, MediaItem* item)
+{
+    if (!tr || !item) return nullptr;
+    std::string chunk; int cap = 1 << 16; chunk.resize(cap);
+    while (!GetItemStateChunk(item, chunk.data(), cap, false)) {
+        if (cap >= (1 << 23)) { chunk.clear(); break; }
+        cap <<= 1; chunk.resize(cap);
+    }
+    if (chunk.empty()) return nullptr;
+    chunk.resize(std::strlen(chunk.c_str()));
+    uf1StripChunkGuids_(chunk);
+    MediaItem* nw = AddMediaItemToTrack(tr);
+    if (nw) SetItemStateChunk(nw, chunk.c_str(), false);
+    return nw;
+}
+// Trim `item` (a clone) to [s,e] WITHOUT any SplitMediaItem — trim the right edge via
+// D_LENGTH and the left edge via D_POSITION/D_LENGTH + the take's D_STARTOFFS. No split
+// means no risk of cutting the ORIGINAL it overlaps (REAPER's razor COPY leaves the
+// original whole, Frank 2026-08-07). Deletes + returns nullptr if fully outside [s,e].
+static MediaItem* uf1BoundClone_(MediaTrack* tr, MediaItem* item, double s, double e)
+{
+    double pos = GetMediaItemInfo_Value(item, "D_POSITION");
+    double len = GetMediaItemInfo_Value(item, "D_LENGTH");
+    const double end = pos + len;
+    if (pos >= e - 1e-9 || end <= s + 1e-9) { DeleteTrackMediaItem(tr, item); return nullptr; }
+    if (end > e) { len -= (end - e); SetMediaItemInfo_Value(item, "D_LENGTH", len); }   // right
+    if (pos < s - 1e-9) {                             // left — shift start, advance take offset
+        const double d = s - pos;
+        MediaItem_Take* tk = GetActiveTake(item);
+        double rate = tk ? GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE") : 1.0;
+        if (!(rate > 0.0)) rate = 1.0;
+        SetMediaItemInfo_Value(item, "D_POSITION", s);
+        SetMediaItemInfo_Value(item, "D_LENGTH", len - d);
+        if (tk) SetMediaItemTakeInfo_Value(tk, "D_STARTOFFS",
+                    GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + d * rate);
+    }
+    return item;
+}
+// RAII: disable auto-crossfade + trim-behind (the whole `autoxfade` bitfield) for the
+// scope, restore after. A razor content move/copy that "drops" items at every jog tick
+// otherwise makes REAPER crossfade/trim at each intermediate position (Frank 2026-08-07);
+// with these off, the drag stays clean like a held mouse-down.
+struct Uf1NoAutoEdit_ {
+    int* p = nullptr; int saved = 0;
+    Uf1NoAutoEdit_() {
+        int sz = 0; p = static_cast<int*>(get_config_var("autoxfade", &sz));
+        if (p && sz == static_cast<int>(sizeof(int))) { saved = *p; *p = 0; }
+        else p = nullptr;
+    }
+    ~Uf1NoAutoEdit_() { if (p) *p = saved; }
+};
+// Razor CONTENT drag (Whole target). The content is GRABBED ONCE at gesture start — source
+// slices for a MOVE, trimmed clones for a COPY — into g_uf1RazorCopyClones, then DRAGGED:
+// time (D_POSITION += amt) or across tracks (MoveMediaItemToTrack to the adjacent visible
+// track). It is NEVER re-read from the razor, so the razor can't sweep up the content it
+// moves over (the "löscht alles unter sich" bug, Frank 2026-08-07). The gesture boundary is
+// the NAV-CENTRE HOLD: press = grab fresh (mouse-down), release = end. Auto-crossfade + trim
+// are OFF for the whole drag so REAPER doesn't crossfade at every jog tick. Razor follows.
+// Media items only via drag-tracking; envelope-area points move by re-read, time axis only.
+static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool copy)
+{
+    auto tracks = uf1RazorTracks_();
+    if (tracks.empty()) return;
+    if (vertical)                                      // boundary: block at the top/bottom
+        for (auto& rt : tracks) {
+            MediaTrack* d = dir > 0 ? uf1NextVisibleTrack_(rt.tr) : uf1PrevVisibleTrack_(rt.tr);
+            if (!d) return;
+        }
+    const bool fresh = g_uf1RazorContentFresh.exchange(false)   // NAV-CENTRE was just pressed
+                    || g_uf1RazorCopyClones.empty()
+                    || g_uf1RazorDragIsCopy != copy;
+    Uf1NoAutoEdit_ noEdit;                             // auto-crossfade + trim OFF for the drag
+    if (fresh) {                                       // GRAB the razor's content once
+        g_uf1RazorCopyClones.clear();
+        g_uf1RazorDragIsCopy = copy;
+        for (auto& rt : tracks)
+            for (auto& tp : uf1RazorParse_(rt.str)) {
+                if (!uf1RazorIsMediaGuid_(tp.guid)) continue;
+                if (copy) {
+                    for (MediaItem* it : uf1ItemsInRange_(rt.tr, tp.s, tp.e)) {
+                        MediaItem* cl = uf1CloneItemToTrack_(rt.tr, it);
+                        if (cl) if (MediaItem* sl = uf1BoundClone_(rt.tr, cl, tp.s, tp.e))
+                            g_uf1RazorCopyClones.push_back(sl);
+                    }
+                } else {
+                    uf1RazorSplitAt_(rt.tr, tp.s); uf1RazorSplitAt_(rt.tr, tp.e);
+                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e))
+                        g_uf1RazorCopyClones.push_back(it);
+                }
+            }
+    }
+    if (vertical) {                                    // DRAG across tracks
+        struct Mv { MediaItem* it; MediaTrack* dst; };
+        std::vector<Mv> jobs;
+        for (MediaItem* it : g_uf1RazorCopyClones) {
+            if (!ValidatePtr2(nullptr, it, "MediaItem*")) continue;
+            MediaTrack* tr  = GetMediaItem_Track(it);
+            MediaTrack* dst = dir > 0 ? uf1NextVisibleTrack_(tr) : uf1PrevVisibleTrack_(tr);
+            if (dst) jobs.push_back({ it, dst });
+        }
+        for (auto& j : jobs) MoveMediaItemToTrack(j.it, j.dst);
+        uf1RazorShiftTracksOnce_(dir);
+    } else {                                           // DRAG in time
+        for (MediaItem* it : g_uf1RazorCopyClones)
+            if (ValidatePtr2(nullptr, it, "MediaItem*"))
+                SetMediaItemInfo_Value(it, "D_POSITION",
+                                       GetMediaItemInfo_Value(it, "D_POSITION") + amt);
+        for (auto& rt : tracks)                        // envelope areas (points, re-read)
+            for (auto& tp : uf1RazorParse_(rt.str))
+                if (!uf1RazorIsMediaGuid_(tp.guid))
+                    uf1RazorEnvStep_(uf1EnvByGuidOnTrack_(rt.tr, tp.guid), tp.s, tp.e, amt, copy && fresh);
+        uf1RazorSlideTime_(amt, 0);
+    }
+    UpdateArrange();
+}
+// TRACK-step (Ctrl axis) — thin wrapper over the drag gesture.
+static void uf1RazorContentVertStep_(int dir, bool copy)
+{
+    uf1RazorContentGesture_(true, dir, 0.0, copy);
+}
+// Time-axis content dispatch (Whole, no Ctrl): drag smoothly by dt. Drag-tracking means no
+// re-split each tick, so no grid-quantizing needed.
+void applyUf1JogRazorContent_(double dt)
+{
+    if (dt == 0.0) return;
+    uf1RazorContentGesture_(false, dt > 0 ? 1 : -1, dt,
+                            uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd));
+}
+
 // No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
 // growing right by |delta|, on every SELECTED track (fallback: last-touched), media lane
 // (guid ""). Non-zero on purpose — REAPER discards a zero-width razor, so we can't create
@@ -8569,6 +8798,7 @@ void applyUf1JogRazor_(int count, double timeDelta)
     }
     const auto target = g_uf1RazorTarget.load();
     const bool ctrl   = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
+    const bool copy   = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
     auto vertSteps = [&]() -> int {        // counts → whole track steps (g_uf1JogTrackDiv feel)
         static double accum = 0.0;
         double div = g_uf1JogTrackDiv.load(); if (!(div > 0.0)) div = 1.0;
@@ -8583,9 +8813,20 @@ void applyUf1JogRazor_(int count, double timeDelta)
         case Uf1RazorTarget::LeftEdge:  uf1RazorSlideTime_(timeDelta, -1); break;
         case Uf1RazorTarget::RightEdge: uf1RazorSlideTime_(timeDelta, +1); break;
         case Uf1RazorTarget::Whole:
-            if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
-                        for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorShiftTracksOnce_(d); }
-            else        uf1RazorSlideTime_(timeDelta, 0);
+            if (g_uf1RazorContentHeld.load()) {
+                // NAV-CENTRE HELD = mouse-down CONTENT drag (Frank 2026-08-07). Ctrl =
+                // across tracks, else in time; Cmd = copy on either axis.
+                if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+                            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i)
+                                uf1RazorContentVertStep_(d, copy); }
+                else       applyUf1JogRazorContent_(timeDelta);
+            } else {
+                // NOT held = just slide the SELECTION rectangle (non-destructive).
+                if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+                            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i)
+                                uf1RazorShiftTracksOnce_(d); }
+                else       uf1RazorSlideTime_(timeDelta, 0);
+            }
             break;
         case Uf1RazorTarget::TopEdge: { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
             for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorVertEdgeOnce_(true, d); break; }
@@ -18458,6 +18699,20 @@ void onUf1Event(const uf1::InputEvent& ev)
             // Atomic store only (threading rule); the jog drain reads it.
             if (ev.id == uf1::btn::kScrub) {
                 g_uf1ScrubHeld.store(ev.pressed);
+                break;
+            }
+            // Razor mode: the NAV-CENTRE button is a HELD "mouse-down" for the content
+            // drag (Frank 2026-08-07). Held → the Whole target's jog drags content as one
+            // continuous gesture (auto-crossfade off); release commits. Press grabs fresh.
+            // Consumed here in Razor mode only; other modes keep the normal centre nav.
+            if (ev.id == uf1::btn::kNavCentre &&
+                g_uf1JogMode.load() == Uf1JogMode::Razor) {
+                g_uf1RazorContentHeld.store(ev.pressed);
+                if (ev.pressed) {
+                    g_uf1RazorTarget.store(Uf1RazorTarget::Whole);
+                    g_uf1RazorContentFresh.store(true);
+                }
+                g_pageDirty.store(true);
                 break;
             }
             // MODE-hold menu open: the 4 display soft-keys pick the mode (before
@@ -29119,8 +29374,10 @@ void onTimer()
     // next Cmd+jog. The dispatch also clears it on any non-copy jog; this catches the
     // no-jog release. Cheap, main thread.
     if (g_uf1JogCopyArmed.load()
-        && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd))
+        && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd)) {
         g_uf1JogCopyArmed.store(false);
+        g_uf1RazorCopyClones.clear();      // end the razor copy-drag gesture
+    }
 
     // Razor mode: keep the nav-cross LEDs showing the active edge target.
     uf1RazorSyncLeds_();
