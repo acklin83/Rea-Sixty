@@ -149,6 +149,7 @@ int         reasixty_hudUf8LearnArmed();
 void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
 bool        reasixty_uf1LearnTick();
 int         reasixty_uf1LearnArmed();
+void        reasixty_uf1CancelLearn();
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -23190,6 +23191,26 @@ void uf1PaintChannel_()
                     label = v.label ? v.label : "";
                     bipolar = v.bipolar;
                 }
+                // Touch-to-Learn: the ARMED V-Pot shows "Waiting" and breathes its
+                // bar instead of its value, the UF1's answer to the UC1 ring breath
+                // and the UF8 bar pulse (Frank 2026-08-08). The UF1 has no separate
+                // V-Pot LED ring — its pots are drawn on the SCREEN — so the effect
+                // has to live here in the painter rather than in
+                // pushTouchLearnFeedback_'s raw-frame path. That function forces a
+                // repaint every tick while armed so this actually animates.
+                {
+                    const int armed = reasixty_uf1LearnArmed();
+                    if (armed >= 0 && (armed & 0x100) == 0
+                        && (armed & 0xFF) == page * 4 + i) {
+                        constexpr double kTwoPi = 6.28318530717958647692;
+                        const double br = 0.5 + 0.5 * std::sin(
+                            static_cast<double>(nowMs_()) * (kTwoPi / 1400.0));
+                        sendVpotParam(uint8_t(i), label.empty() ? "Learn" : label,
+                                      "Waiting");
+                        setBar(i, br, false);
+                        continue;
+                    }
+                }
                 // Blank when the slot is empty / the param is absent / (learned)
                 // the fill ran out of mapped params on this page.
                 if (p < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
@@ -29191,12 +29212,14 @@ void pushTouchLearnFeedback_()
     if (g_touchLearnOffRequest.exchange(false)) {
         reasixty_hudCancelLearn();
         reasixty_hudUf8CancelLearn();
+        reasixty_uf1CancelLearn();     // v11 — else a UF1 arm outlives the mode
     }
 
     const bool modeOn  = g_hudTouchLearn.load();
     const int  uf8Armed = modeOn ? reasixty_hudUf8LearnArmed() : -1;
     const int  uc1Armed = modeOn ? reasixty_hudLearnArmed()    : -1;
-    const bool active   = (uf8Armed >= 0) || (uc1Armed >= 0);
+    const int  uf1Armed = modeOn ? reasixty_uf1LearnArmed()    : -1;
+    const bool active   = (uf8Armed >= 0) || (uc1Armed >= 0) || (uf1Armed >= 0);
 
     if (!active) {
         if (wasActive) {
@@ -29209,6 +29232,14 @@ void pushTouchLearnFeedback_()
             g_pageDirty.store(true);
             g_softKeyDirty.store(true);
             if (g_uc1_surface) g_uc1_surface->clearTouchLearnFeedback();
+            // UF1 display soft-key LEDs (0x01-0x04) are NOT in kUf1BtnLeds, so no
+            // normal render owns them — nothing would ever clear a blink we left
+            // lit. Turn them off explicitly here (v11).
+            if (g_uf1_dev)
+                for (uint8_t led = 0x01; led <= 0x04; ++led) {
+                    g_uf1_dev->send(uf1::buildColourRgb(led, 0u));
+                    g_uf1_dev->send(uf1::buildLedLevel(led, 0x11));
+                }
             wasActive = false;
         }
         return;
@@ -29220,6 +29251,27 @@ void pushTouchLearnFeedback_()
     const double  t      = static_cast<double>(ms);
     const double  breath = 0.5 + 0.5 * std::sin(t * (kTwoPi / 1400.0));
     const bool    blink  = ((ms / 350) & 1) != 0;
+
+    // ---- UF1 (v11) ----
+    // The UF1 has no independent V-Pot LED ring — its pots are drawn on the
+    // SCREEN — so the "Waiting" + breathing bar lives in the channel painter;
+    // all we do here is force a repaint every tick so it actually animates.
+    // Soft-keys DO have real LEDs, so those blink from here like the UC1's
+    // buttons. LED address = button code − 0x18 ([[uf1-led-reference-uf8-protocol]],
+    // holds for all 16 known buttons, HW-confirmed on the nav cross), so the
+    // display soft-keys 0x19-0x1C sit at 0x01-0x04.
+    if (uf1Armed >= 0) {
+        const bool isSoftKey = (uf1Armed & 0x100) != 0;
+        const int  pos       = uf1Armed & 0xFF;
+        if (isSoftKey && g_uf1_dev) {
+            const uint8_t led = static_cast<uint8_t>(0x01 + (pos % 4));
+            g_uf1_dev->send(uf1::buildLed(led, true));
+            g_uf1_dev->send(uf1::buildColourRgb(led, blink ? 0xFFAA00u : 0u));
+            g_uf1_dev->send(uf1::buildLedLevel(led, blink ? 0x00 : 0x11));
+        } else {
+            g_pageDirty.store(true);      // drive the painter's breathing bar
+        }
+    }
 
     // ---- UF8 ----
     if (uf8Armed >= 0 && g_dev) {

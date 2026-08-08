@@ -20236,6 +20236,7 @@ void reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx)
 }
 bool reasixty_uf1LearnTick()   { return uf8::hudUf1LearnTick_(); }
 int  reasixty_uf1LearnArmed()  { return uf8::hudUf1LearnArmed_(); }
+void reasixty_uf1CancelLearn() { uf8::hudUf1CancelLearn_(); }
 bool reasixty_uf8VpotGuiLearnArmed()
 {
     // HUD grid-click learn armed on a V-Pot cell (HUD kind 0), or the FX-Learn
