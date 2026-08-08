@@ -8758,6 +8758,84 @@ void mutateUf8_(F&& fn)
     }
 }
 
+// ---- UF1 plugin-mode map (v11) -------------------------------------------
+// Same shape as mutateUf8_, one field over. The UF1 map is layer-free by
+// design (see UserUf1Map), so there is no editLayerRef_ equivalent here.
+template <class F>
+void mutateUf1_(F&& fn)
+{
+    if (g_editingMatch.empty()) return;
+    auto cat = uf8::user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        fn(m.uf1);
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        break;
+    }
+}
+// Which UF1 page the editor shows. Streams share the page cursor exactly like
+// the hardware (g_uf1CsPage), so one selector drives both rows.
+int g_uf1EditingPage = 0;
+// The editing map's UF1 stream for `softKeys` (else the V-Pot stream), or
+// nullptr when there is no editing map. Read-only.
+const std::vector<uf8::UserUf1Slot>* uf1EditStream_(bool softKeys)
+{
+    if (g_editingMatch.empty()) return nullptr;
+    const auto& cat = uf8::user_plugins::get();
+    for (const auto& m : cat.maps)
+        if (m.match == g_editingMatch)
+            return softKeys ? &m.uf1.softKeys : &m.uf1.vpots;
+    return nullptr;
+}
+// Mutable slot at a flat position, creating it when absent. Only valid inside
+// a mutateUf1_ callback.
+uf8::UserUf1Slot& uf1SlotRef_(uf8::UserUf1Map& u, bool softKeys, int pos)
+{
+    auto& v = softKeys ? u.softKeys : u.vpots;
+    for (auto& s : v) if (s.pos == pos) return s;
+    uf8::UserUf1Slot ns{}; ns.pos = pos;
+    v.push_back(std::move(ns));
+    return v.back();
+}
+int  mappedVst3ForUf1_(bool softKeys, int pos)
+{
+    const auto* v = uf1EditStream_(softKeys);
+    if (!v) return -1;
+    const uf8::UserUf1Slot* s = uf8::uf1SlotAt(*v, pos);
+    return s ? s->vst3Param : -1;
+}
+void bindUf1_(bool softKeys, int pos, int vst3Param)
+{
+    if (vst3Param < 0 || pos < 0) return;
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        uf1SlotRef_(u, softKeys, pos).vst3Param = vst3Param;
+    });
+}
+// Drop the whole slot (not just the param) so label/invert/travel reset with
+// the binding — same semantic as unbindUf8_ for a V-Pot.
+void unbindUf1_(bool softKeys, int pos)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        auto& v = softKeys ? u.softKeys : u.vpots;
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].pos == pos) { v.erase(v.begin() + i); return; }
+    });
+}
+void toggleUf1Inverted_(bool softKeys, int pos)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        auto& s = uf1SlotRef_(u, softKeys, pos);
+        s.inverted = !s.inverted;
+    });
+}
+void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        uf1SlotRef_(u, softKeys, pos).customLabel = label ? label : "";
+    });
+}
+
 // Resolve mutable pointers to the {param, invert} fields of a UF8 control for
 // the UF8 control's base binding. (UF8 FX-Learn modifier layers were removed —
 // UC1-only feature — so this always targets the Normal/base struct.)
@@ -14216,6 +14294,168 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
     }
 }
 
+// ---- UF1 plugin-mode schematic (v11) --------------------------------------
+// Deliberately NOT a hardware face. In plugin mode the UF1 surfaces exactly 4
+// V-Pots and 4 soft-keys at a time, so the useful picture is the PAGE: two rows
+// of four, with a page selector. A face drawing would add chrome without
+// telling the user anything the two rows don't.
+// Interaction mirrors the UF8 cells: drop a param from the list to bind,
+// right-click for unbind/invert/rename. The UF1 map is layer-free, so there is
+// no layer tab and no inherited-Normal ghost.
+void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
+                         bool softKeys, int idx)
+{
+    const int pos = g_uf1EditingPage * uf8::kUserUf1PerPage + idx;
+    const int mapped = mappedVst3ForUf1_(softKeys, pos);
+    const bool isMapped = (mapped >= 0);
+
+    // Label: custom name if the user set one, else the plug-in's param name.
+    char shown[96];
+    const uf8::UserUf1Slot* slot = nullptr;
+    if (const auto* v = uf1EditStream_(softKeys)) slot = uf8::uf1SlotAt(*v, pos);
+    if (slot && !slot->customLabel.empty()) {
+        snprintf(shown, sizeof(shown), "%s", slot->customLabel.c_str());
+    } else if (isMapped) {
+        const UserPluginMap* editing = nullptr;
+        for (const auto& m : uf8::user_plugins::get().maps)
+            if (m.match == g_editingMatch) { editing = &m; break; }
+        char pn[64] = {};
+        if (!editing || !paramNameFor_(*editing, fx, mapped, pn, sizeof(pn)))
+            snprintf(pn, sizeof(pn), "param %d", mapped);
+        snprintf(shown, sizeof(shown), "%s", pn);
+    } else {
+        snprintf(shown, sizeof(shown), "—");
+    }
+
+    char id[48];
+    snprintf(id, sizeof(id), "%s##uf1cell_%d_%d", shown, softKeys ? 1 : 0, pos);
+    double bw = 168.0, bh = 44.0;
+    if (isMapped) {
+        ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0x2E5C3AFF);
+        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x3A7048FF);
+        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x468658FF);
+    }
+    ImGui_Button(ctx, id, &bw, &bh);
+    if (isMapped) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
+
+    if (ImGui_IsItemHovered(ctx, nullptr)) {
+        char tip[224];
+        const char* what = softKeys ? "Soft-key" : "V-Pot";
+        if (isMapped)
+            snprintf(tip, sizeof(tip), "%s %d  (page %d)\n  %s%s\n"
+                     "  right-click for options",
+                     what, idx + 1, g_uf1EditingPage + 1, shown,
+                     (slot && slot->inverted) ? "   [inverted]" : "");
+        else
+            snprintf(tip, sizeof(tip), "%s %d  (page %d)\n"
+                     "  unmapped — drag a parameter here",
+                     what, idx + 1, g_uf1EditingPage + 1);
+        ImGui_SetTooltip(ctx, tip);
+    }
+
+    // Bind by dropping a param from the parameter list (same payload the UC1
+    // and UF8 cells accept).
+    if (ImGui_BeginDragDropTarget(ctx)) {
+        char payload[16] = {};
+        int  dropFlags   = 0;
+        if (ImGui_AcceptDragDropPayload(ctx, "FXL_PARAM", payload,
+                                        int(sizeof(payload)), &dropFlags)) {
+            const int p = std::atoi(payload);
+            if (p >= 0) bindUf1_(softKeys, pos, p);
+        }
+        ImGui_EndDragDropTarget(ctx);
+    }
+
+    char popId[40];
+    snprintf(popId, sizeof(popId), "uf1ctx_%d_%d", softKeys ? 1 : 0, pos);
+    int rightBtn = 1;                       // ImGui_IsItemClicked takes it by pointer
+    if (ImGui_IsItemClicked(ctx, &rightBtn) && isMapped)
+        ImGui_OpenPopup(ctx, popId, nullptr);
+    if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+        if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
+            unbindUf1_(softKeys, pos);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        bool inv = slot && slot->inverted;
+        if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
+            toggleUf1Inverted_(softKeys, pos);
+        // Inline label field, not a native dialog — the rest of the Settings
+        // page renames this way, and native dialogs are unreliable on macOS 15
+        // ([[swell-dialogs-macos-broken]]). Seeded once per cell, like the UC1
+        // label field's g_fxlLabelBuf.
+        ImGui_Separator(ctx);
+        ImGui_TextDisabled(ctx, "Display name");
+        static char s_uf1LabelBuf[64] = {};
+        static int  s_uf1LabelPos = -1;
+        static bool s_uf1LabelSk  = false;
+        if (s_uf1LabelPos != pos || s_uf1LabelSk != softKeys) {
+            s_uf1LabelPos = pos; s_uf1LabelSk = softKeys;
+            snprintf(s_uf1LabelBuf, sizeof(s_uf1LabelBuf), "%s",
+                     slot ? slot->customLabel.c_str() : "");
+        }
+        int inputFlags = 0;
+        ImGui_SetNextItemWidth(ctx, 150.0);
+        if (ImGui_InputText(ctx, "##uf1_label", s_uf1LabelBuf,
+                            sizeof(s_uf1LabelBuf), &inputFlags, nullptr))
+            setUf1CustomLabel_(softKeys, pos, s_uf1LabelBuf);
+        if (slot && !slot->customLabel.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_SmallButton(ctx, "X##uf1_label_clear")) {
+                s_uf1LabelBuf[0] = '\0';
+                setUf1CustomLabel_(softKeys, pos, "");
+            }
+        }
+        ImGui_EndPopup(ctx);
+    }
+}
+
+void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
+{
+    // Page selector. Pages exist as far as the highest mapped position, plus
+    // one spare so the user can always start a new page — the hardware page
+    // count follows the map (uf1MapPageCount), so a page that ends up empty
+    // simply stops existing again.
+    int pages = 1;
+    if (!g_editingMatch.empty()) {
+        const auto& cat = uf8::user_plugins::get();
+        for (const auto& m : cat.maps)
+            if (m.match == g_editingMatch) { pages = uf8::uf1MapPageCount(m.uf1); break; }
+    }
+    const int shownPages = pages + 1;                 // always one spare
+    if (g_uf1EditingPage >= shownPages) g_uf1EditingPage = shownPages - 1;
+    for (int p = 0; p < shownPages; ++p) {
+        if (p) ImGui_SameLine(ctx, nullptr, nullptr);
+        const bool active = (p == g_uf1EditingPage);
+        char lbl[24];
+        snprintf(lbl, sizeof(lbl), "Page %d", p + 1);
+        if (active) {
+            ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0x60C060FF);
+            ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x70D070FF);
+            ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x80E080FF);
+        }
+        double bw = 76.0, bh = 22.0;
+        if (ImGui_Button(ctx, lbl, &bw, &bh)) g_uf1EditingPage = p;
+        if (active) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
+    }
+    ImGui_Spacing(ctx);
+
+    ImGui_TextDisabled(ctx, "V-Pots");
+    for (int i = 0; i < uf8::kUserUf1PerPage; ++i) {
+        if (i) ImGui_SameLine(ctx, nullptr, nullptr);
+        drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/false, i);
+    }
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx, "Soft-keys");
+    for (int i = 0; i < uf8::kUserUf1PerPage; ++i) {
+        if (i) ImGui_SameLine(ctx, nullptr, nullptr);
+        drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/true, i);
+    }
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx,
+        "Drag a parameter from the list onto a control. Leave the UF1 layer off "
+        "and the UF1 keeps filling itself from the UC1 mapping.");
+}
+
 void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
     // Fader-bank tab row (Frank 2026-05-17). Bidirectional sync with
@@ -14810,6 +15050,26 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 persistAndReport_();
             }
         }
+        // UF1 layer (v11). Off = the UF1 keeps filling itself from the UC1
+        // mapping (the shipped behaviour); on = this plug-in gets its own UF1
+        // page set, for params with no room on the UC1 or that otherwise only
+        // live on a held modifier. Frank 2026-08-08.
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx, "   ");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            bool uf1Now = editing->uf1Mode;
+            if (ImGui_Checkbox(ctx, "UF1 layer##fxl_mode_uf1layer", &uf1Now)) {
+                UserPluginMap copy = *editing;
+                copy.uf1Mode = uf1Now;
+                uf8::user_plugins::upsert(std::move(copy));
+                persistAndReport_();
+            }
+            if (ImGui_IsItemHovered(ctx, nullptr))
+                ImGui_SetTooltip(ctx,
+                    "Own UF1 mapping for this plug-in.\n"
+                    "Off: the UF1 fills itself from the UC1 mapping.");
+        }
     }
 
     // ---- CS-Switch favourite slot (CS maps only) ------------------------
@@ -14916,7 +15176,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     static int s_mockup = -1;
     if (s_mockup < 0) {
         const char* v = GetExtState("ReaSixty", "fxLearnMockup");
-        s_mockup = (v && *v == '1') ? 1 : 0;
+        s_mockup = (v && *v == '1') ? 1 : (v && *v == '2') ? 2 : 0;   // 2 = UF1 (v11)
     }
 
     // Coerce mockup to the map's available surfaces:
@@ -14925,12 +15185,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     //   CS+UF8 / BC+UF8 → both
     const bool hasUc1 = (editing->domain != uf8::Domain::None);
     const bool hasUf8 = editing->uf8Mode;
-    if (!hasUc1 && hasUf8 && s_mockup != 1) {
-        s_mockup = 1;
-        SetExtState("ReaSixty", "fxLearnMockup", "1", true);
-    } else if (hasUc1 && !hasUf8 && s_mockup != 0) {
-        s_mockup = 0;
-        SetExtState("ReaSixty", "fxLearnMockup", "0", true);
+    const bool hasUf1 = editing->uf1Mode;          // v11
+    // Coerce to a surface this map actually has. Written as "if the current
+    // pick is unavailable, fall to the first available one" so adding UF1
+    // didn't need a new case per combination.
+    auto haveMockup = [&](int m) {
+        return (m == 0) ? hasUc1 : (m == 1) ? hasUf8 : hasUf1;
+    };
+    if (!haveMockup(s_mockup)) {
+        const int fallback = hasUc1 ? 0 : hasUf8 ? 1 : hasUf1 ? 2 : 0;
+        if (s_mockup != fallback) {
+            s_mockup = fallback;
+            char v[2] = { char('0' + fallback), 0 };
+            SetExtState("ReaSixty", "fxLearnMockup", v, true);
+        }
     }
 
     ImGui_SameLine(ctx, nullptr, nullptr);
@@ -14947,6 +15215,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_RadioButton(ctx, "UF8##fxl_mock_uf8", s_mockup == 1)) {
             s_mockup = 1;
             SetExtState("ReaSixty", "fxLearnMockup", "1", true);
+        }
+    }
+    if (hasUf1) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF1##fxl_mock_uf1", s_mockup == 2)) {
+            s_mockup = 2;
+            SetExtState("ReaSixty", "fxLearnMockup", "2", true);
         }
     }
 
@@ -16342,7 +16617,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // (s_mockup == 1) shows no tabs and edits the base mapping only. Force the
     // edit layer back to Normal there so a layer left selected from a prior UC1
     // edit doesn't leak into the (now base-only) UF8 mutators.
-    if (s_mockup == 1) {
+    // Same for the UF1 editor (s_mockup == 2): an explicit UF1 map is layer-free
+    // by design (v11), so it must not inherit a layer either.
+    if (s_mockup == 1 || s_mockup == 2) {
         g_fxLearnEditLayer = uf8::FxLayer::Normal;
     } else {
         // Switch layers by TAPPING the modifier, like a toggle (Frank
@@ -16404,7 +16681,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     double hLeft = avY - 8.0;
     if (ImGui_BeginChild(ctx, "fxl_slots", &leftW, &hLeft,
                          &childFlags, &winFlags)) {
-        if (s_mockup == 1) {
+        if (s_mockup == 2) {
+            drawFxLearnUf1Schematic_(ctx, fx);
+        } else if (s_mockup == 1) {
             drawFxLearnUf8Schematic_(ctx, fx);
         } else if (topo) {
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
