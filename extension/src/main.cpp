@@ -145,6 +145,10 @@ bool        reasixty_hudUf8LearnTick();
 // input thread can turn a V-Pot push into the Toggle flag. Frank 2026-06-20.
 bool        reasixty_uf8VpotGuiLearnArmed();
 int         reasixty_hudUf8LearnArmed();
+// UF1 plugin-mode learn (v11). pos = page*4 + idx of the V-Pot / soft-key stream.
+void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
+bool        reasixty_uf1LearnTick();
+int         reasixty_uf1LearnArmed();
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -12064,6 +12068,7 @@ std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
 std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
+std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed position
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
@@ -21831,6 +21836,17 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
 
     const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
 
+    // Touch-to-Learn (v11): while the mode is on, TURNING a V-Pot arms a learn for
+    // that position instead of driving its param — parity with the UC1/UF8 surfaces
+    // ([[touch-to-learn-action]]). No-ops (and falls through to the normal action)
+    // when the plug-in has no UF1 layer, so enabling the mode can't hijack a strip
+    // that isn't UF1-mapped. Main thread (PendingInput drain), so the arm can call
+    // straight through instead of via an atomic like the UF8 input-thread path.
+    if (g_hudTouchLearn.load()) {   // = reasixty_hudTouchLearnActive(), defined below
+        reasixty_uf1ArmLearn(/*softKeys*/false, page * 4 + vi, tr, fx);
+        if (reasixty_uf1LearnArmed() >= 0) { g_pageDirty.store(true); return; }
+    }
+
     // Resolve the param + its bipolar (centre-detent) flag. For a learned plug-in
     // both come from the packed user slot — its polarity, NOT the canonical CS2/BC2
     // table (which would give a wrong notch/magnet feel to a packed param). Held
@@ -21961,6 +21977,16 @@ void applyUf1ChannelSoftKey_(int idx)
     if (type < 0) return;                        // non-SSL / unknown strip → no-op
 
     const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
+
+    // Touch-to-Learn (v11): a soft-key PRESS arms a learn for its position rather
+    // than toggling the param. Sits BEFORE the built-in HQ/AB/PLUG-IN actions on
+    // purpose — while the mode is on, the keys are learn targets, not transport-ish
+    // actions. Falls through untouched when the plug-in has no UF1 layer.
+    if (g_hudTouchLearn.load()) {   // = reasixty_hudTouchLearnActive(), defined below
+        reasixty_uf1ArmLearn(/*softKeys*/true, page * 4 + idx, tr, fx);
+        if (reasixty_uf1LearnArmed() >= 0) { g_pageDirty.store(true); return; }
+    }
+
     // The canonical HQ MODE / A/B / PLUG-IN soft-key ACTIONS live only on the
     // built-in strips. A learned plug-in packs plain user params onto the soft-keys
     // (uf1CsSoftKeyParam_), so it must NOT consult kUf1CsSoftKeys[type]'s `act` (its
@@ -30715,6 +30741,21 @@ void onTimer()
         if (uf8Pub != g_hudUf8LearnPublished) {
             g_hudUf8LearnPublished = uf8Pub;
             SetExtState("rea_sixty", "hud_uf8_learn", uf8Pub.c_str(), false);
+        }
+
+        // UF1 plugin-mode learn (v11): same poll + publish. The armed position is
+        // `pos | (softKeys << 8)` so one int carries both streams.
+        if (reasixty_uf1LearnTick()) {
+            g_pageDirty.store(true);            // repaint the UF1 with the new binding
+            publishHud_();
+        }
+        {
+            const int uf1Armed = reasixty_uf1LearnArmed();
+            std::string uf1Pub = (uf1Armed >= 0) ? std::to_string(uf1Armed) : std::string();
+            if (uf1Pub != g_hudUf1LearnPublished) {
+                g_hudUf1LearnPublished = uf1Pub;
+                SetExtState("rea_sixty", "hud_uf1_learn", uf1Pub.c_str(), false);
+            }
         }
     } else if (g_hudUf8AutoEngaged) {
         // HUD closed (or disabled) while it had auto-engaged UF8 Plugin Mode →

@@ -10338,6 +10338,99 @@ bool hudUf8LearnTick_()
     return false;
 }
 
+// ---- UF1 hardware learn (Touch-to-Learn / HUD), v11 -----------------------
+// Separate from the editor's g_listeningUf1: this one must work with the
+// Settings window CLOSED (the editor's polling only runs while the FX-Learn
+// page draws) and it times out. Same shape as the UF8 block above.
+bool        g_hudUf1LearnActive = false;
+bool        g_hudUf1LearnSk     = false;
+int         g_hudUf1LearnPos    = -1;
+std::string g_hudUf1LearnMatch;
+int         g_hudUf1LearnTicks  = 0;
+int         g_hudUf1LearnTr = -1, g_hudUf1LearnFx = -1, g_hudUf1LearnParam = -1;
+
+void hudUf1CancelLearn_()
+{
+    g_hudUf1LearnActive = false;
+    g_hudUf1LearnPos    = -1;
+    g_hudUf1LearnTicks  = 0;
+    g_hudUf1LearnMatch.clear();
+}
+// Resolve the plug-in identity at (tr,fx) IF it carries a UF1 layer. No UF1
+// layer → no-op: unlike UF8 there is no create-new path, because a UF1 map only
+// makes sense next to an existing learned plug-in (or an explicitly enabled
+// UF1-only map), and silently inventing one on a hardware touch would surprise.
+bool hudUf1ResolveMatch_(void* trV, int fx, std::string& out)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return false;
+    const auto* um = user_plugins::lookupOwnedByName(name);
+    if (!um || !um->uf1Mode) return false;
+    out = um->match;
+    return true;
+}
+// Bind a param onto a UF1 position of the map named `match`. upsert + save.
+bool hudUf1BindMatch_(const std::string& match, bool softKeys, int pos, int vst3Param)
+{
+    if (match.empty() || pos < 0 || vst3Param < 0) return false;
+    auto cat = user_plugins::get();                 // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        bool done = false;
+        for (auto& s : v) if (s.pos == pos) { s.vst3Param = vst3Param; done = true; break; }
+        if (!done) { UserUf1Slot ns{}; ns.pos = pos; ns.vst3Param = vst3Param;
+                     v.push_back(std::move(ns)); }
+        user_plugins::setAll(std::move(cat));
+        persistAndReport_();
+        return true;
+    }
+    return false;
+}
+void hudUf1ArmLearn_(bool softKeys, int pos, void* trV, int fx)
+{
+    hudUf1CancelLearn_();
+    std::string match;
+    if (!hudUf1ResolveMatch_(trV, fx, match)) return;    // no UF1 layer → no-op
+    g_hudUf1LearnActive = true;
+    g_hudUf1LearnSk     = softKeys;
+    g_hudUf1LearnPos    = pos;
+    g_hudUf1LearnMatch  = match;
+    g_hudUf1LearnTicks  = 600;                            // ~20 s at 30 Hz
+    int t = -1, f = -1, p = -1;
+    if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf1LearnTr = t; g_hudUf1LearnFx = f; g_hudUf1LearnParam = p; }
+    else                              { g_hudUf1LearnTr = -1; g_hudUf1LearnFx = -1; g_hudUf1LearnParam = -1; }
+}
+// Poll for the wiggle. True the tick a bind lands. Mirrors hudUf8LearnTick_.
+bool hudUf1LearnTick_()
+{
+    if (!g_hudUf1LearnActive) return false;
+    if (--g_hudUf1LearnTicks <= 0) { hudUf1CancelLearn_(); return false; }
+    int t = -1, f = -1, p = -1;
+    if (!GetLastTouchedFX(&t, &f, &p)) return false;
+    if (t == g_hudUf1LearnTr && f == g_hudUf1LearnFx && p == g_hudUf1LearnParam) return false;
+    g_hudUf1LearnTr = t; g_hudUf1LearnFx = f; g_hudUf1LearnParam = p;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    if (!tr) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    if (std::string(name).find(g_hudUf1LearnMatch) == std::string::npos) return false;
+    if (hudUf1BindMatch_(g_hudUf1LearnMatch, g_hudUf1LearnSk, g_hudUf1LearnPos, p)) {
+        hudUf1CancelLearn_();
+        return true;
+    }
+    return false;
+}
+// Armed position for the surface highlight: pos | (softKeys << 8); -1 = none.
+int hudUf1LearnArmed_()
+{
+    if (!g_hudUf1LearnActive) return -1;
+    return g_hudUf1LearnPos | (g_hudUf1LearnSk ? 0x100 : 0);
+}
+
 // Armed cell encoded for the companion highlight (kind*8 + strip), -1 = none.
 int hudUf8LearnArmed_()
 {
@@ -20133,6 +20226,16 @@ void reasixty_hudUf8ArmLearn(int kind, int strip, int fb, int vb, void* tr,
 }
 bool reasixty_hudUf8LearnTick()   { return uf8::hudUf8LearnTick_(); }
 int  reasixty_hudUf8LearnArmed()  { return uf8::hudUf8LearnArmed_(); }
+
+// UF1 plugin-mode learn (v11). pos = flat stream position (page*4 + idx);
+// softKeys picks the soft-key stream over the V-Pot one. tr/fx = the CS/BC FX
+// the UF1 is currently showing (uf1ResolveCsFx_).
+void reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx)
+{
+    uf8::hudUf1ArmLearn_(softKeys, pos, tr, fx);
+}
+bool reasixty_uf1LearnTick()   { return uf8::hudUf1LearnTick_(); }
+int  reasixty_uf1LearnArmed()  { return uf8::hudUf1LearnArmed_(); }
 bool reasixty_uf8VpotGuiLearnArmed()
 {
     // HUD grid-click learn armed on a V-Pot cell (HUD kind 0), or the FX-Learn
