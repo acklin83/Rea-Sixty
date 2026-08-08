@@ -10424,6 +10424,83 @@ bool hudUf1LearnTick_()
     }
     return false;
 }
+// ---- UF1 HUD publish + match-based mutators (v11) --------------------------
+// The HUD addresses a UF1 position by (pos, softKeys) and resolves the map from
+// the live UF1 target, so these take a match rather than leaning on
+// g_editingMatch — no swap-and-restore bridge needed (the UF1 map is layer-free,
+// which is what makes the UF8/UC1 bridge dance unnecessary here).
+template <class F>
+bool hudUf1MutateMatch_(const std::string& match, bool softKeys, int pos, F&& fn)
+{
+    if (match.empty() || pos < 0) return false;
+    auto cat = user_plugins::get();                 // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].pos == pos) {
+                fn(v, i);
+                user_plugins::setAll(std::move(cat));
+                persistAndReport_();
+                return true;
+            }
+        return false;
+    }
+    return false;
+}
+bool hudUf1UnbindMatch_(const std::string& match, bool softKeys, int pos)
+{
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [](std::vector<UserUf1Slot>& v, size_t i) { v.erase(v.begin() + i); });
+}
+bool hudUf1InvertMatch_(const std::string& match, bool softKeys, int pos)
+{
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [](std::vector<UserUf1Slot>& v, size_t i) { v[i].inverted = !v[i].inverted; });
+}
+bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
+                       const std::string& label)
+{
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel = label; });
+}
+// Build the HUD's UF1 payload for the plug-in at (tr,fx):
+//   "P;<pages>;<curPage>" then one "\n<pos>;<sk>;<param>;<inv>;<label>" per
+// mapped position. Empty when the plug-in has no UF1 layer, which the Lua reads
+// as "no UF1 tab content".
+void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
+{
+    out.clear();
+    MediaTrack* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return;
+    const auto* um = user_plugins::lookupOwnedByName(name);
+    if (!um || !um->uf1Mode) return;
+    char hdr[64];
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d", uf1MapPageCount(um->uf1), page);
+    out = hdr;
+    auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
+        for (const auto& s : v) {
+            if (s.vst3Param < 0) continue;
+            std::string label = s.customLabel;
+            if (label.empty()) {
+                char pn[64] = {0};
+                TrackFX_GetParamName(tr, fx, s.vst3Param, pn, sizeof(pn));
+                label = pn;
+            }
+            // The label rides last so a stray ';' in a param name can't shift
+            // the numeric fields — the Lua splits the first four, rest = label.
+            char row[320];
+            std::snprintf(row, sizeof(row), "\n%d;%d;%d;%d;%s",
+                          s.pos, sk, s.vst3Param, s.inverted ? 1 : 0, label.c_str());
+            out += row;
+        }
+    };
+    emit(um->uf1.vpots,    0);
+    emit(um->uf1.softKeys, 1);
+}
+
 // Armed position for the surface highlight: pos | (softKeys << 8); -1 = none.
 int hudUf1LearnArmed_()
 {
@@ -20237,6 +20314,28 @@ void reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx)
 bool reasixty_uf1LearnTick()   { return uf8::hudUf1LearnTick_(); }
 int  reasixty_uf1LearnArmed()  { return uf8::hudUf1LearnArmed_(); }
 void reasixty_uf1CancelLearn() { uf8::hudUf1CancelLearn_(); }
+void reasixty_hudPublishUf1(void* tr, int fx, int page, std::string& out)
+{
+    uf8::hudPublishUf1_(tr, fx, page, out);
+}
+// Edit verbs from the HUD. Each resolves the map from the live UF1 target, so a
+// rename of the plug-in between publish and command can't write to a stale map.
+bool reasixty_hudUf1Unbind(void* tr, int fx, bool softKeys, int pos)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m) && uf8::hudUf1UnbindMatch_(m, softKeys, pos);
+}
+bool reasixty_hudUf1Invert(void* tr, int fx, bool softKeys, int pos)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m) && uf8::hudUf1InvertMatch_(m, softKeys, pos);
+}
+bool reasixty_hudUf1Label(void* tr, int fx, bool softKeys, int pos, const char* label)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1LabelMatch_(m, softKeys, pos, label ? label : "");
+}
 bool reasixty_uf8VpotGuiLearnArmed()
 {
     // HUD grid-click learn armed on a V-Pot cell (HUD kind 0), or the FX-Learn

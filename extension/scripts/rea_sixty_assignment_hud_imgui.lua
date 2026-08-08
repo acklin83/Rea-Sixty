@@ -334,6 +334,31 @@ local function readPush()
   return pd
 end
 
+-- UF1 plugin-mode map (v11). Payload: "P;<pages>;<curPage>" then one
+--   "<pos>;<sk>;<param>;<inv>;<label>"
+-- per mapped position (label LAST so a ';' inside a param name can't shift the
+-- numeric fields). Empty channel = the shown plug-in has no UF1 layer.
+local function readUf1()
+  local raw = reaper.GetExtState(SECT, "hud_uf1_assign")
+  if raw == "" then return nil end
+  local u = { pages = 1, page = 0, cells = { [0] = {}, [1] = {} } }
+  for ln in raw:gmatch("[^\n]+") do
+    if ln:sub(1, 2) == "P;" then
+      local pg, cur = ln:match("^P;(%d+);(%d+)$")
+      u.pages = tonumber(pg) or 1
+      u.page  = tonumber(cur) or 0
+    else
+      local pos, sk, param, inv, label =
+        ln:match("^(%d+);(%d);(%-?%d+);(%d);(.*)$")
+      if pos then
+        u.cells[tonumber(sk)][tonumber(pos)] =
+          { param = tonumber(param), inv = (inv == "1"), label = label or "" }
+      end
+    end
+  end
+  return u
+end
+
 -- UF8 V-Pot step-cycle data (same wire format as readPush, but the first line
 -- is the STRIP and the channel is "hud_uf8_push"). Request via "hud_uf8_push_req".
 local function readUf8Push()
@@ -626,12 +651,14 @@ local function drawTabs(st, ust)
   local function tab(dom, present, x)
     local label = (dom == "cs") and "Channel Strip"
               or  (dom == "bc") and "Bus Comp"
+              or  (dom == "uf1") and "UF1"
               or  "UF8"
     local px    = 10   -- fixed chrome, matches the top-right toggle buttons
     local w, h  = measure(label, px); w = w + 28
     local active = (activeTab == dom)
     local rgb    = (dom == "cs") and csRgb()
                or  (dom == "bc") and bcRgb()
+               or  (dom == "uf1") and 0x50C8A0       -- UF1 accent (teal)
                or  0x4A90D8                          -- UF8 accent (blue)
     if active then rect(x, 4, w, TAB_H - 6, col(rgb, present and 0.30 or 0.16))
     else           rect(x, 4, w, TAB_H - 6, col(0x242429, 1)) end
@@ -644,6 +671,13 @@ local function drawTabs(st, ust)
   x = tab("cs",  st.csPresent,            x)
   x = tab("bc",  st.bcPresent,            x)
   x = tab("uf8", ust and ust.present,     x)
+  -- UF1 tab appears only when the shown plug-in actually carries a UF1 layer —
+  -- an empty hud_uf1_assign means "no UF1 map", so the tab would be dead chrome.
+  if reaper.GetExtState(SECT, "hud_uf1_assign") ~= "" then
+    x = tab("uf1", true, x)
+  elseif activeTab == "uf1" then
+    activeTab = "cs"                        -- layer turned off while we were on it
+  end
 
   -- UF8 has no modifier layers, so skip the badge. Both toggles ARE supported on
   -- UF8: Touch-to-Learn (move a UF8 control to arm it, then wiggle a param) and
@@ -1397,6 +1431,84 @@ local UF8_KINDS = {
 }
 local UF8_ACCENT = 0x4A90D8
 
+-- UF1 plugin-mode tab (v11). Deliberately the same picture as the Settings
+-- editor's UF1 mockup: a page selector over two rows of four (V-Pots then
+-- soft-keys), because that is exactly what the UF1 surfaces at once. Click a
+-- cell to arm a learn on the hardware position; right-click for unbind/invert.
+local uf1Rects     = {}
+local uf1PageRects = {}
+local uf1EditPage  = 0
+local function renderUf1Tab(u1)
+  uf1Rects, uf1PageRects = {}, {}
+  local px = 12
+  local y  = TAB_H + 10
+  if not u1 then
+    dtext(14, y, col(0x9A9AA2, 1),
+          "This plug-in has no UF1 layer — turn it on in Settings \xE2\x86\x92 FX Learn.", px)
+    return
+  end
+  if uf1EditPage >= u1.pages then uf1EditPage = u1.pages - 1 end
+  if uf1EditPage < 0 then uf1EditPage = 0 end
+
+  -- Page selector.
+  local x = 14
+  for p = 0, u1.pages - 1 do
+    local lbl  = "Page " .. (p + 1)
+    local w, h = measure(lbl, px); w = w + 20
+    local on   = (p == uf1EditPage)
+    rect(x, y, w, h + 8, col(on and 0x4A90D8 or 0x242429, on and 0.35 or 1))
+    if on then rect(x, y, w, 3, col(0x4A90D8, 1)) end
+    dtext(x + 10, y + 4, col(on and 0xE8E8EE or 0x9A9AA2, 1), lbl, px)
+    uf1PageRects[#uf1PageRects + 1] = { p = p, x = x, y = y, w = w, h = h + 8 }
+    x = x + w + 6
+  end
+  y = y + 34
+
+  local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
+  local CW, CH, GAP = 150, 46, 8
+  for _, row in ipairs({ { sk = 0, name = "V-Pots" }, { sk = 1, name = "Soft-keys" } }) do
+    dtext(14, y, col(0x9A9AA2, 1), row.name, px - 1)
+    y = y + 18
+    for i = 0, 3 do
+      local pos  = uf1EditPage * 4 + i
+      local cell = u1.cells[row.sk][pos]
+      local cx   = 14 + i * (CW + GAP)
+      local isArmed = (armed >= 0) and (armed & 0xFF) == pos
+                      and (((armed & 0x100) ~= 0) == (row.sk == 1))
+      local bg = isArmed and 0x8A6A20 or (cell and 0x2E5C3A or 0x242429)
+      rect(cx, y, CW, CH, col(bg, 1))
+      local label = isArmed and "\xE2\x97\x8F listening\xE2\x80\xA6"
+                 or (cell and (cell.label ~= "" and cell.label
+                               or ("param " .. tostring(cell.param))) or "\xE2\x80\x94")
+      dtext(cx + 8, y + 8,
+            col((cell or isArmed) and 0xE8E8EE or 0x6A6A72, 1), label, px)
+      if cell and cell.inv then
+        dtext(cx + 8, y + 26, col(0xD8A050, 1), "inverted", px - 2)
+      end
+      uf1Rects[#uf1Rects + 1] = { sk = row.sk, pos = pos, x = cx, y = y, w = CW, h = CH }
+    end
+    y = y + CH + 12
+  end
+  dtext(14, y + 2, col(0x6A6A72, 1),
+        "Click a control to learn it \xC2\xB7 right-click to unbind or invert", px - 2)
+end
+local function uf1CellAt(mx, my)
+  for _, h in ipairs(uf1Rects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      return h.sk, h.pos
+    end
+  end
+  return nil
+end
+local function uf1PageAt(mx, my)
+  for _, h in ipairs(uf1PageRects) do
+    if mx >= h.x and mx <= h.x + h.w and my >= h.y and my <= h.y + h.h then
+      return h.p
+    end
+  end
+  return nil
+end
+
 local function renderUf8Grid(ust, uasn)
   ctrlRects = {}                                  -- no UC1 hit-rects on this tab
   uf8Rects  = {}
@@ -1882,6 +1994,13 @@ local function render()
   -- UF8 device tab: list view = strip-grid, mockup view = hardware face. Mirrors
   -- the CS/BC list/mockup toggle (shared hud_imgui_view). Independent of the UC1
   -- geometry.
+  -- UF1 device tab (v11): one view only — the page grid mirrors the hardware,
+  -- so there is no list/mockup split to make.
+  if activeTab == "uf1" then
+    renderUf1Tab(readUf1())
+    return
+  end
+
   if onUf8 then
     if reaper.GetExtState(SECT, "hud_imgui_view") == "mockup" then
       renderUf8Face(ust, uasn)
@@ -1985,6 +2104,9 @@ end
 local POPUP          = "##hud_ctx"
 local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
+local UF1_CTRL_POPUP = "##hud_uf1_ctrl_ctx"
+local ctxUf1Sk, ctxUf1Pos = -1, -1
+local uf1NameBuf, uf1NameFor = nil, nil   -- inline rename field, seeded per cell
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
 local UF8_STRIPCOL_POPUP      = "##hud_uf8_stripcol"       -- left-click: this strip
 local UF8_STRIPCOL_FILL_POPUP = "##hud_uf8_stripcol_fill"  -- right-click: fill all
@@ -2739,6 +2861,59 @@ end
 -- Acts on (ctxUf8Kind, ctxUf8Strip) at the live banks (resolved C++-side) via
 -- the hud_cmd channel. UF8 has no modifier layers and no rename (the grid shows
 -- the plug-in's own param name, not a per-control label).
+-- UF1 cell right-click menu: Learn / Invert / Rename / Unbind. Acts on
+-- (ctxUf1Sk, ctxUf1Pos); the target plug-in is resolved C++-side from whatever
+-- the UF1 is actually showing, so nothing about it rides in the command.
+-- The UF1 map is layer-free, hence no layer argument anywhere here.
+local function drawUf1ControlContextMenu()
+  if ctxUf1Pos < 0 then return end
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 10, 7)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 7, 4)
+  if not reaper.ImGui_BeginPopup(ctx, UF1_CTRL_POPUP) then
+    reaper.ImGui_PopStyleVar(ctx, 3)
+    return
+  end
+  local u1   = readUf1()
+  local cell = u1 and u1.cells[ctxUf1Sk] and u1.cells[ctxUf1Sk][ctxUf1Pos]
+  local arg  = ctxUf1Pos .. ";" .. ctxUf1Sk
+
+  reaper.ImGui_BeginDisabled(ctx)
+  local hdr = ((ctxUf1Sk == 1) and "Soft-key " or "V-Pot ") .. ((ctxUf1Pos % 4) + 1)
+           .. "  (page " .. (math.floor(ctxUf1Pos / 4) + 1) .. ")"
+  if cell then hdr = hdr .. "  \xE2\x86\x92  " .. (cell.label ~= "" and cell.label
+                                                   or ("param " .. cell.param)) end
+  reaper.ImGui_MenuItem(ctx, hdr)
+  reaper.ImGui_EndDisabled(ctx)
+  reaper.ImGui_Separator(ctx)
+
+  if reaper.ImGui_MenuItem(ctx, "Learn\xE2\x80\xA6") then
+    sendCmd("uf1learn;" .. arg)
+  end
+  if cell then
+    if reaper.ImGui_MenuItem(ctx, "Invert", nil, cell.inv) then
+      sendCmd("uf1invert;" .. arg)
+    end
+    -- Rename writes an inline field rather than a native dialog, matching the
+    -- Settings side (native dialogs are unreliable on macOS 15).
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Text(ctx, "Display name")
+    if uf1NameBuf == nil or uf1NameFor ~= arg then
+      uf1NameFor = arg
+      uf1NameBuf = cell.label or ""
+    end
+    reaper.ImGui_SetNextItemWidth(ctx, 160)
+    local ch, v = reaper.ImGui_InputText(ctx, "##uf1name", uf1NameBuf)
+    if ch then uf1NameBuf = v; sendCmd("uf1rename;" .. arg .. ";" .. v) end
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Unbind") then
+      sendCmd("uf1unbind;" .. arg)
+    end
+  end
+  reaper.ImGui_EndPopup(ctx)
+  reaper.ImGui_PopStyleVar(ctx, 3)
+end
+
 local function drawUf8ControlContextMenu()
   if ctxUf8Kind < 0 then return end
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
@@ -3134,7 +3309,15 @@ local function loop()
       if reaper.ImGui_IsMouseClicked(ctx, 1) and ly >= 0 then
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
-        if activeTab == "uf8" then
+        if activeTab == "uf1" then
+          local sk, pos = uf1CellAt(lx, ly)
+          if sk then
+            ctxUf1Sk, ctxUf1Pos = sk, pos
+            reaper.ImGui_OpenPopup(ctx, UF1_CTRL_POPUP)
+          else
+            reaper.ImGui_OpenPopup(ctx, POPUP)
+          end
+        elseif activeTab == "uf8" then
           -- Over a colour bar → fill-all palette; over a V-Pot bank → rename
           -- menu; over a grid cell → per-cell menu; else the main HUD menu.
           local cs = uf8ColAt(lx, ly)
@@ -3177,6 +3360,18 @@ local function loop()
         elseif nameRect and hitRect(nameRect, lx, ly) then
           -- LCD / UF8 header plug-in name → edit the Kurzname inline.
           editPluginShort(nameRect.dom)
+        elseif activeTab == "uf1" then
+          -- Tab row first, then page selector, then a cell (arms a learn on the
+          -- hardware position — the same arm Touch-to-Learn uses).
+          if handleTabClick(lx, ly) then
+          else
+            local p = uf1PageAt(lx, ly)
+            if p then uf1EditPage = p
+            else
+              local sk, pos = uf1CellAt(lx, ly)
+              if sk then sendCmd("uf1learn;" .. pos .. ";" .. sk) end
+            end
+          end
         elseif activeTab == "uf8" then
           -- Tab → toggles (Touch-to-Learn / Parameter List) → param row → bank
           -- row → grid cell. A click that misses everything cancels any armed
@@ -3258,6 +3453,7 @@ local function loop()
     drawControlContextMenu()
     drawCurveEditor()
     drawUf8ControlContextMenu()
+    drawUf1ControlContextMenu()
     drawUf8BankContextMenu()
     drawUf8StripColPopups()
 

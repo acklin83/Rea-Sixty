@@ -150,6 +150,10 @@ void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
 bool        reasixty_uf1LearnTick();
 int         reasixty_uf1LearnArmed();
 void        reasixty_uf1CancelLearn();
+void        reasixty_hudPublishUf1(void* tr, int fx, int page, std::string& out);
+bool        reasixty_hudUf1Unbind(void* tr, int fx, bool softKeys, int pos);
+bool        reasixty_hudUf1Invert(void* tr, int fx, bool softKeys, int pos);
+bool        reasixty_hudUf1Label(void* tr, int fx, bool softKeys, int pos, const char* label);
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -1681,6 +1685,10 @@ std::atomic<int64_t> g_dynFxFocusLockUntilMs{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static void applyDynBankUf1Req_(uint32_t enc);       // main-thread executor (UF1)
 MediaTrack* uf1FocusedTrack_();                      // main-thread; defined later
+// UF1 channel-strip target + page count — defined with the UF1 painter far below,
+// but publishHud_ (v11 UF1 HUD tab) needs them well before that.
+int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx);
+int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx);
 static int  engagedBankableKind_();                  // any thread
 static void pageDynBank_(int kind, int delta);       // main thread
 static void tickDynBankPaging_();                    // main thread (onTimer)
@@ -12070,6 +12078,7 @@ std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed position
+std::string g_hudUf1AssignPublished; // last-published "hud_uf1_assign" payload
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
@@ -12501,6 +12510,23 @@ void publishHud_()
         if (uf8Assign != g_hudUf8AssignPublished) {
             g_hudUf8AssignPublished = uf8Assign;
             SetExtState("rea_sixty", "hud_uf8_assign", uf8Assign.c_str(), false);
+        }
+        // UF1 plugin-mode map (v11). Resolved from the SAME target the UF1 itself
+        // shows (uf1ResolveCsFx_) so the HUD tab and the hardware never disagree.
+        // Empty payload = this plug-in has no UF1 layer → the tab shows nothing.
+        {
+            std::string uf1Assign;
+            MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+            const int u1Type = uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx);
+            if (u1Type >= 0) {
+                const int u1Page = std::clamp(g_uf1CsPage.load(), 0,
+                                              uf1CsPageCountFor_(u1Type, u1Tr, u1Fx) - 1);
+                reasixty_hudPublishUf1(u1Tr, u1Fx, u1Page, uf1Assign);
+            }
+            if (uf1Assign != g_hudUf1AssignPublished) {
+                g_hudUf1AssignPublished = uf1Assign;
+                SetExtState("rea_sixty", "hud_uf1_assign", uf1Assign.c_str(), false);
+            }
         }
         // Per-V-Pot tuning detail for the UF8 tab's full-parity menu (only
         // when a real UF8 map is present; bootstrap/virgin tabs carry none).
@@ -30442,6 +30468,40 @@ void onTimer()
                         g_hudUf8AssignPublished.clear();
                         g_hudUf8DetailPublished.clear();
                         publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1", 0) == 0
+                       && (s.rfind("uf1learn;", 0) == 0 || s.rfind("uf1unbind;", 0) == 0
+                        || s.rfind("uf1invert;", 0) == 0 || s.rfind("uf1rename;", 0) == 0)) {
+                // UF1 plugin-mode verbs (v11): "uf1<verb>;<pos>;<sk>[;<label>]".
+                // The target is resolved live (uf1ResolveCsFx_) rather than carried
+                // in the command, so it always addresses whatever the UF1 is
+                // actually showing — the same rule the UF8 verbs follow.
+                int pos = -1, sk = 0;
+                const char* semi = std::strchr(s.c_str(), ';');
+                if (semi && std::sscanf(semi + 1, "%d;%d", &pos, &sk) == 2 && pos >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0) {
+                        bool changed = false;
+                        if (s.rfind("uf1learn;", 0) == 0) {
+                            reasixty_uf1ArmLearn(sk != 0, pos, u1Tr, u1Fx);
+                        } else if (s.rfind("uf1unbind;", 0) == 0) {
+                            changed = reasixty_hudUf1Unbind(u1Tr, u1Fx, sk != 0, pos);
+                        } else if (s.rfind("uf1invert;", 0) == 0) {
+                            changed = reasixty_hudUf1Invert(u1Tr, u1Fx, sk != 0, pos);
+                        } else {                                   // uf1rename
+                            // Label is everything after the 3rd ';' — a param name
+                            // may itself contain ';', so don't sscanf it.
+                            const char* p2 = std::strchr(semi + 1, ';');
+                            const char* p3 = p2 ? std::strchr(p2 + 1, ';') : nullptr;
+                            changed = reasixty_hudUf1Label(u1Tr, u1Fx, sk != 0, pos,
+                                                           p3 ? p3 + 1 : "");
+                        }
+                        if (changed) {
+                            g_hudUf1AssignPublished.clear();   // force re-publish
+                            g_pageDirty.store(true);           // repaint the UF1
+                            publishHud_();
+                        }
                     }
                 }
             } else if (s.rfind("uf8curve;", 0) == 0) {
