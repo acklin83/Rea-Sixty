@@ -156,7 +156,13 @@ CREATE TABLE IF NOT EXISTS maps (
   -- From the envelope. `surfaces` is derived in the extension by surfaceScope()
   -- from the (domain, uf8Mode) pair; the server stores both so it can filter on
   -- the surface and still pick the right coverage denominator.
-  surfaces       TEXT    NOT NULL CHECK (surfaces IN ('uc1', 'uf8', 'uc1+uf8')),
+  -- ⚠ This list GROWS with the hardware (v11 added the UF1). A CHECK on an
+  -- EXISTING table is not updated by re-running this file — SQLite keeps the
+  -- constraint the table was created with — so widening it needs the explicit
+  -- rebuild in migrate(). Keep it in step with VALID_SURFACES in rea60map.js.
+  surfaces       TEXT    NOT NULL CHECK (surfaces IN (
+                   'uc1', 'uf8', 'uc1+uf8',
+                   'uf1', 'uc1+uf1', 'uf8+uf1', 'uc1+uf8+uf1')),
   domain         TEXT    NOT NULL CHECK (domain IN ('ChannelStrip', 'BusComp', 'None')),
   author_name    TEXT    NOT NULL,          -- as typed in the file
   description    TEXT    NOT NULL DEFAULT '',
@@ -250,6 +256,25 @@ CREATE TABLE IF NOT EXISTS ext_funcs (
   vst3_param  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_extfuncs_map ON ext_funcs(map_id);
+
+-- UF1 plugin-mode positions (catalog v11). The UF1 surfaces 4 V-Pots + 4
+-- soft-keys per page; a map is a SPARSE set of flat positions (page*4 + idx),
+-- so one row per bound position rather than a fixed grid. Layer-free by design,
+-- hence no mod_layer column (unlike the UC1 bindings).
+-- A new TABLE reaches existing databases on its own — schema.sql is exec'd with
+-- CREATE TABLE IF NOT EXISTS — whereas a new COLUMN would not.
+CREATE TABLE IF NOT EXISTS uf1_slots (
+  map_id      INTEGER NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL,   -- 'vpot' | 'softkey'
+  pos         INTEGER NOT NULL,   -- flat: page*4 + idx
+  page        INTEGER NOT NULL,
+  idx         INTEGER NOT NULL,   -- 0..3 within the page
+  label       TEXT,               -- the user's custom name, empty = param name
+  param_name  TEXT,               -- resolved via paramSnapshot
+  vst3_param  INTEGER NOT NULL,
+  inverted    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_uf1slots_map ON uf1_slots(map_id);
 
 -- ------------------------------------------------------- rating + moderation
 

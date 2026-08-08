@@ -187,7 +187,23 @@ export function getMap(id) {
     alsoMapped: alsoMapped(m.id),
     modifierLayers: modifierBindings(m.id, m.domain),
     extFuncs: extFuncsOf(m.id),
+    // UF1 plugin-mode positions (v11). Returned for EVERY domain — a UC1+UF1
+    // map keeps its CS/BC domain, so gating it like `uf8` would hide the half
+    // the user actually wanted to share. Empty array = no UF1 layer.
+    uf1: uf1Positions(m.id),
   };
+}
+
+/** The bound UF1 positions for the detail page, in surface reading order. */
+function uf1Positions(mapId) {
+  const db = getDb();
+  return db.prepare(
+    `SELECT kind, pos, page, idx, label, param_name, inverted
+       FROM uf1_slots WHERE map_id = ? ORDER BY kind, pos`,
+  ).all(mapId).map((r) => ({
+    kind: r.kind, pos: r.pos, page: r.page, idx: r.idx,
+    label: r.label ?? '', param: r.param_name ?? '', inverted: r.inverted === 1,
+  }));
 }
 
 /** The bound UF8 slots for the detail page's per-bank grid. */

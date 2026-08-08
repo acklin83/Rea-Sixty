@@ -19,19 +19,27 @@ import {
  * regardless of author, description, timestamp or cached param NAMES (a stale
  * name doesn't change what the knob does). Sorted so key order never matters.
  */
-export function mappingFingerprint(domain, bindings, uf8) {
+export function mappingFingerprint(domain, bindings, uf8, uf1) {
   const slots = (bindings ?? [])
     .map((b) => `${b.linkIdx}:${b.vst3Param}:${b.modLayer}`).sort();
   const vpots = (uf8?.vpots ?? [])
     .map((v) => `${v.faderBank}:${v.vpotBank}:${v.strip}:${v.vst3Param}`).sort();
   const strips = (uf8?.strips ?? [])
     .map((s) => `${s.kind}:${s.faderBank}:${s.strip}:${s.vst3Param}`).sort();
+  // UF1 positions (v11) MUST be in the hash. Without them two maps that are
+  // identical on the UC1 but completely different on the UF1 fingerprint the
+  // same, and the duplicate guard rejects the second with 409 "identical
+  // mapping already exists" — which is precisely the map a UC1+UF1 owner wants
+  // to publish. Appended as its own field so existing hashes are unchanged for
+  // maps without a UF1 layer (an empty list yields the same canon as before).
+  const uf1s = (uf1 ?? [])
+    .map((u) => `${u.kind}:${u.pos}:${u.vst3Param}`).sort();
   const canon = [
     `domain=${domain}`,
     `slots=${slots.join(',')}`,
     `vpots=${vpots.join(',')}`,
     `strips=${strips.join(',')}`,
-  ].join('|');
+  ].join('|') + (uf1s.length ? `|uf1=${uf1s.join(',')}` : '');
   return createHash('sha256').update(canon, 'utf8').digest('hex');
 }
 
@@ -104,7 +112,7 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
   const parsed = parseRea60Map(text);
   const db = getDb();
 
-  const { envelope, map, bindings, coverage, uf8, extFuncs, paramCoverage } = parsed;
+  const { envelope, map, bindings, coverage, uf8, uf1, extFuncs, paramCoverage } = parsed;
 
   // Identity source, best-first: the v2 `original_name` is the full factory
   // name and carries the vendor; `match` is a user-editable substring that may
@@ -118,7 +126,7 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
 
   const sha = createHash('sha256').update(text, 'utf8').digest('hex');
   const bytes = Buffer.byteLength(text, 'utf8');
-  const contentHash = mappingFingerprint(map.domain, bindings, uf8);
+  const contentHash = mappingFingerprint(map.domain, bindings, uf8, uf1);
 
   const tx = db.transaction(() => {
     const vendorId = resolveVendor(db, vendorName);
@@ -203,6 +211,16 @@ export function ingestMap(text, { accountId, preferredPluginName = null, replace
     }
     for (const s of uf8?.strips ?? []) {
       insU.run(mapId, s.kind, s.faderBank, null, s.strip, s.label, s.paramName, s.vst3Param, null);
+    }
+
+    // UF1 plugin-mode positions (v11), one row per bound position. Persisted for
+    // every domain — a UC1+UF1 map keeps its CS/BC domain.
+    const insU1 = db.prepare(`
+      INSERT INTO uf1_slots (map_id, kind, pos, page, idx, label, param_name, vst3_param, inverted)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `);
+    for (const u of uf1 ?? []) {
+      insU1.run(mapId, u.kind, u.pos, u.page, u.idx, u.label, u.paramName, u.vst3Param, u.inverted ? 1 : 0);
     }
 
     // UC1 EXT FUNCS — the hidden BACK-menu slots (CS mode). One row per curated

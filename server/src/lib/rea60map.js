@@ -42,7 +42,15 @@ const ENVELOPE_KEYS = [
   'vendor', 'surfaces', 'author', 'description', 'licence', 'created_at', 'map',
 ];
 
-const VALID_SURFACES = new Set(['uc1', 'uf8', 'uc1+uf8']);
+// v11 (catalog format 11) adds the UF1 as a third surface, so every combination
+// the extension's surfaceScope() can emit has to be listed here or a perfectly
+// good map is rejected at the door.
+const VALID_SURFACES = new Set([
+  'uc1', 'uf8', 'uc1+uf8',
+  'uf1', 'uc1+uf1', 'uf8+uf1', 'uc1+uf8+uf1',
+]);
+// UF1 plugin mode surfaces 4 V-Pots + 4 soft-keys per page.
+const UF1_PER_PAGE = 4;
 const VALID_DOMAINS = new Set(['ChannelStrip', 'BusComp', 'None']);
 
 /**
@@ -139,6 +147,43 @@ export function extractUf8(map) {
   });
 
   return { vpots, strips };
+}
+
+/**
+ * Extract the explicit UF1 plugin-mode map (catalog v11). Two sparse streams,
+ * `uf1.vpots` and `uf1.softKeys`, each entry keyed by its flat position
+ * (page*4 + idx). Layer-free by design, so unlike the UC1 slots there is no
+ * modLayer dimension here.
+ *
+ * Read for EVERY domain, not just `None`: a UC1+UF1 map carries a CS/BC domain
+ * and its UF1 half would otherwise be dropped — the same "decoupled from
+ * `slots`, so the bindings extractor never sees it" gap that swallowed the
+ * EXT FUNCS until 2026-07-21.
+ */
+export function extractUf1(map) {
+  const u = map.uf1 ?? {};
+  const paramNames = new Map((map.paramSnapshot ?? []).map((p) => [p.vst3Param, p.name ?? '']));
+  const nameOf = (v) => paramNames.get(v) ?? '';
+  const out = [];
+  for (const [key, stream] of [['vpot', u.vpots], ['softkey', u.softKeys]]) {
+    (stream ?? []).forEach((s) => {
+      const v = s?.vst3Param ?? -1;
+      const pos = s?.pos ?? -1;
+      if (!(v >= 0) || !(pos >= 0)) return;
+      out.push({
+        kind: key,
+        pos,
+        page: Math.floor(pos / UF1_PER_PAGE),
+        idx: pos % UF1_PER_PAGE,
+        vst3Param: v,
+        label: s.customLabel ?? '',
+        inverted: s.inverted === true,
+        paramName: nameOf(v),
+      });
+    });
+  }
+  out.sort((a, b) => (a.kind === b.kind ? a.pos - b.pos : (a.kind < b.kind ? -1 : 1)));
+  return out;
 }
 
 /**
@@ -309,9 +354,13 @@ export function parseRea60Map(text) {
   }
   // (domain=None, uf8Mode=false) is the invalid pair the extension filters at
   // load/save — UserPluginCatalog.h:492-499.
-  if (map.domain === 'None' && map.uf8Mode !== true) {
+  // domain None needs SOME surface layer. v11 added the UF1 as a second way to
+  // qualify, so a UF1-only map (uf8Mode false, uf1Mode true) is valid — this
+  // gate mirrors the extension's own load/save filter and the two must stay in
+  // step, else one side silently discards what the other happily writes.
+  if (map.domain === 'None' && map.uf8Mode !== true && map.uf1Mode !== true) {
     throw new IngestError('bad_domain',
-      'domain None with uf8Mode false is not a valid map');
+      'domain None with neither a UF8 nor a UF1 layer is not a valid map');
   }
   if (!VALID_SURFACES.has(root.surfaces)) {
     throw new IngestError('bad_surfaces', `unknown surfaces value ${root.surfaces}`);
@@ -328,6 +377,9 @@ export function parseRea60Map(text) {
   // The curated UC1 EXT FUNCS (CS mode) — separate from `slots`, so extracted
   // on their own and counted toward parameter coverage below.
   const extFuncs = extractExtFuncs(map);
+  // The explicit UF1 map (v11). Read for EVERY domain — a UC1+UF1 map keeps its
+  // CS/BC domain, so gating this the way uf8 is gated would drop its UF1 half.
+  const uf1 = extractUf1(map);
 
   // Parameter coverage: how many distinct plug-in params the map controls, out
   // of the plug-in's functional params (v3 envelope). The pruned paramSnapshot
@@ -337,6 +389,7 @@ export function parseRea60Map(text) {
   for (const v of uf8.vpots) if (v.vst3Param >= 0) mappedParams.add(v.vst3Param);
   for (const s of uf8.strips) if (s.vst3Param >= 0) mappedParams.add(s.vst3Param);
   for (const e of extFuncs) mappedParams.add(e.vst3Param);
+  for (const u of uf1) mappedParams.add(u.vst3Param);
   const functionalParams = Number.isInteger(root.functional_params) && root.functional_params > 0
     ? root.functional_params : null;
   const paramCoverage = functionalParams
@@ -361,6 +414,7 @@ export function parseRea60Map(text) {
     domain: map.domain,
     bindings,
     uf8,
+    uf1,
     extFuncs,
     coverage,
     paramCoverage,
