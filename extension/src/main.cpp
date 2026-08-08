@@ -21924,7 +21924,18 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     int p; bool bipolar;
     {
         char lnm[256];
-        if (uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm))) {
+        // ⚠ The EXPLICIT UF1 map must be checked here too, not only in
+        // uf1CsVpotParam_. This dispatch resolves the param on its own (it also
+        // needs the slot's polarity), so without this branch the SCREEN painted
+        // the explicit map while TURNING the pot drove the sequential fallback —
+        // display and control disagreeing, which is the one thing this surface
+        // must never do (Frank 2026-08-08).
+        if (const auto* u1 = uf1ExplicitMapAt_(tr, fx)) {
+            const uf8::UserUf1Slot* s =
+                uf8::uf1SlotAt(u1->vpots, page * uf8::kUserUf1PerPage + vi);
+            p = s ? s->vst3Param : -1;
+            bipolar = s && s->polarity == uf8::VPotPolarity::Bipolar;
+        } else if (uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm))) {
             const uf8::UserLinkSlot* sl =
                 uf1LearnedSlotAt_(lnm, /*busComp*/type == 4, /*wantButton*/false, page, vi);
             if (sl) {
