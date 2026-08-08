@@ -10643,7 +10643,30 @@ bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
 // "the param has no room on the UC1" — you are already in the UC1 map when you
 // notice, so the shortcut lives there rather than making you go build a UF1 map.
 // Returns the position used, or -1.
-int sendToUf1_(const std::string& match, int vst3Param, const std::string& label)
+// Copy the TUNING of one SlotLayer onto another: everything that makes a
+// control feel the way it does, minus the identity (vst3Param) and position.
+// Both UC1 slots and UF1 slots derive from SlotLayer, so a param moved between
+// the surfaces keeps its range, curve, sensitivity, polarity, invert, label and
+// push-cycle instead of arriving as a bare parameter (Frank 2026-08-08: "schau
+// dass bei kopieren eines parameters vom uc1 auf den uf1 die ganze feel/button
+// geschichte auch mitwandert").
+void copySlotFeel_(const uf8::SlotLayer& src, uf8::SlotLayer& dst)
+{
+    dst.inverted    = src.inverted;
+    dst.rangeMin    = src.rangeMin;
+    dst.rangeMax    = src.rangeMax;
+    dst.sensitivity = src.sensitivity;
+    dst.curvePoints = src.curvePoints;
+    dst.polarity    = src.polarity;
+    dst.defaultNorm = src.defaultNorm;
+    dst.pushSteps   = src.pushSteps;      // the multi-param button cycle
+    if (!src.customLabel.empty()) dst.customLabel = src.customLabel;
+}
+
+// `src` carries the tuning to bring along (the UC1 slot layer the user is
+// looking at); null for sources that have none, like an EXT FUNCS entry.
+int sendToUf1_(const std::string& match, int vst3Param, const std::string& label,
+               const uf8::SlotLayer* src = nullptr)
 {
     if (match.empty() || vst3Param < 0) return -1;
     user_plugins::enableUf1Layer(match);          // seeds when empty; no-op after
@@ -10661,6 +10684,7 @@ int sendToUf1_(const std::string& match, int vst3Param, const std::string& label
         }
         UserUf1Slot ns{};
         ns.pos = pos; ns.vst3Param = vst3Param; ns.customLabel = label;
+        if (src) copySlotFeel_(*src, ns);     // range/curve/sens/polarity/push…
         m.uf1.vpots.push_back(std::move(ns));
         m.uf1Mode = true;
         user_plugins::setAll(std::move(cat));
@@ -12397,8 +12421,17 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 const int cur = mappedVst3For_(lid);
                 if (cur >= 0) {
                     ImGui_Separator(ctx);
-                    if (ImGui_MenuItem(ctx, "Send to UF1", nullptr, nullptr, nullptr))
-                        sendToUf1_(g_editingMatch, cur, std::string());
+                    if (ImGui_MenuItem(ctx, "Send to UF1", nullptr, nullptr, nullptr)) {
+                        // Carry the tuning of the layer being EDITED, not the
+                        // Normal one: `cur` already came from editLayerRef_, so
+                        // sending from a Ctrl/Opt overlay must bring that
+                        // overlay's feel — which is the whole point of moving an
+                        // overlay param onto the (layer-free) UF1.
+                        uf8::UserLinkSlot snap{};
+                        const bool haveSnap = fetchSlotSnapshot_(lid, snap);
+                        sendToUf1_(g_editingMatch, cur, std::string(),
+                                   haveSnap ? &editLayerRef_(snap) : nullptr);
+                    }
                 }
             }
 
