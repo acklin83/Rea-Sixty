@@ -15332,9 +15332,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // silently nuke their bindings. Toggling UF8 just flips the flag —
     // the uf8 block is preserved either way.
     {
+        // 4 = UF1 only (v11): domain None, no UF8 layer, UF1 layer on. Without
+        // this the mode was unreachable — the data model and the load filter
+        // accept a UF1-only map, but nothing could create one (Frank 2026-08-08).
         const int curPrimary =
             (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
-            (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+            (editing->domain == uf8::Domain::BusComp)      ? 2 :
+            (!editing->uf8Mode && editing->uf1Mode)        ? 4 : 3;
 
         ImGui_Text(ctx, "Mode:");
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -15367,7 +15371,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 copy.slots.clear();
             }
             copy.domain  = newDom;
-            copy.uf8Mode = (newDom == uf8::Domain::None) ? true : copy.uf8Mode;
+            // domain None needs SOME surface layer or the map is meaningless and
+            // the load filter drops it. "UF8 only" forces UF8; "UF1 only" (4)
+            // forces UF1 and clears UF8 — otherwise the two would both be on and
+            // the mode would read back as UF8-only next frame.
+            if (newPrimary == 4)      { copy.uf8Mode = false; copy.uf1Mode = true; }
+            else if (newDom == uf8::Domain::None) copy.uf8Mode = true;
             uf8::user_plugins::upsert(std::move(copy));
             persistAndReport_();
         };
@@ -15376,6 +15385,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_RadioButton(ctx, "BC##fxl_mode_bc",   curPrimary == 2)) applyPrimary(2);
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "UF8 only##fxl_mode_uf8", curPrimary == 3)) applyPrimary(3);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "UF1 only##fxl_mode_uf1", curPrimary == 4)) applyPrimary(4);
 
         ImGui_SameLine(ctx, nullptr, nullptr);
         ImGui_TextDisabled(ctx, "   ");
@@ -15398,7 +15409,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         ImGui_TextDisabled(ctx, "   ");
         ImGui_SameLine(ctx, nullptr, nullptr);
-        {
+        if (curPrimary == 4) {
+            ImGui_TextDisabled(ctx, "UF1 layer: on (required)");
+        } else {
             bool uf1Now = editing->uf1Mode;
             if (ImGui_Checkbox(ctx, "UF1 layer##fxl_mode_uf1layer", &uf1Now)) {
                 if (uf1Now) {

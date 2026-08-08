@@ -21561,6 +21561,13 @@ int uf1CsPluginType_(MediaTrack* tr, int fx)
     if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm)) {
         if (um->domain == uf8::Domain::ChannelStrip) return 0;   // learned CS → CS2 layout
         if (um->domain == uf8::Domain::BusComp)      return 4;   // learned BC → BC2 layout
+        // v11: a map with its OWN UF1 layer but no CS/BC domain — a UF1-only map,
+        // or a UF8-only one the user extended onto the UF1. Without this it fell
+        // through to the built-in substring match, missed, and the UF1 showed
+        // nothing at all (Frank 2026-08-08: "was passiert, wenn UF1 das einzige
+        // Gerät ist"). The canonical layout is irrelevant here — every position
+        // resolves from the explicit map — so CS2 just serves as the canvas.
+        if (um->uf1Mode) return 0;
     }
     // 2. Built-in SSL types — kMaps ONLY (allPluginMaps), first-hit substring, same
     //    order as lookupPluginMapByName's built-in stage.
@@ -21686,28 +21693,37 @@ static int uf1ExplicitParam_(const std::vector<uf8::UserUf1Slot>& v, int page, i
     const uf8::UserUf1Slot* s = uf8::uf1SlotAt(v, page * uf8::kUserUf1PerPage + idx);
     return s ? s->vst3Param : -1;
 }
+// The explicit UF1 map for whatever plug-in sits at (tr,fx), REGARDLESS of its
+// domain. Deliberately not gated on uf1IsLearnedCsBc_: a UF1-only map (domain
+// None) has no CS/BC domain, and gating on one made its map unreadable — the
+// UF1 showed nothing (Frank 2026-08-08). If a map exists, it is authoritative.
+static const uf8::UserUf1Map* uf1ExplicitMapAt_(MediaTrack* tr, int fx)
+{
+    if (!tr || fx < 0) return nullptr;
+    char nm[256];
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return nullptr;
+    return uf1ExplicitMap_(nm);
+}
 int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx))   // explicit map wins, any domain
+        return uf1ExplicitParam_(u1->vpots, page, idx);
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
-        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
-            return uf1ExplicitParam_(u1->vpots, page, idx);
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/false, page, idx));
-    }
     const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
     return v.param ? uf1ParamByName_(tr, fx, v.param) : -1;
 }
 // Same for a soft-key position (learned → the button/soft-key fill stream).
 int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx))   // explicit map wins, any domain
+        return uf1ExplicitParam_(u1->softKeys, page, idx);
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
-        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
-            return uf1ExplicitParam_(u1->softKeys, page, idx);
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/true, page, idx));
-    }
     const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
     return sk.param ? uf1ParamByName_(tr, fx, sk.param) : -1;
 }
@@ -21717,12 +21733,11 @@ int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx)
 {
     if (type < 0 || type >= kUf1CsTypeCount) return kUf1CsPageCount;
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx))   // explicit map wins, any domain
+        return uf8::uf1MapPageCount(*u1);
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
-        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
-            return uf8::uf1MapPageCount(*u1);
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
         return uf1LearnedPageCount_(nm, /*busComp*/type == 4);
-    }
     return kUf1CsTypePageCount[type];
 }
 
