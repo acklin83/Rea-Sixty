@@ -161,6 +161,10 @@ bool        reasixty_hudUf1SetField(void* tr, int fx, bool softKeys, int pos, in
 bool        reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos, const char* csv);
 bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, int slot, const char* name);
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
+// UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
+// "hud_uf1_uc1slots") and the write behind the "uf1touc1;" verb.
+std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer);
+bool        reasixty_hudUf1SendToUc1(void* tr, int fx, bool softKeys, int pos, int linkIdx, int layer);
 // UF1 soft-key push-cycle editor — request/response ("hud_uf1_push_req" →
 // "hud_uf1_push") plus the edit verbs, mirroring the UF8 pair.
 std::string reasixty_hudUf1BuildPush(int pos, void* tr, int fx);
@@ -12096,6 +12100,7 @@ std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed pos
 std::string g_hudUf1AssignPublished; // last-published "hud_uf1_assign" payload
 std::string g_hudUf1DetailPublished; // last-published "hud_uf1_detail" (V-Pot tuning)
 std::string g_hudUf1PushPublished;   // last-published "hud_uf1_push" (soft-key steps)
+std::string g_hudUf1Uc1Published;    // last-published "hud_uf1_uc1slots" (Send to UC1)
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
@@ -12563,6 +12568,17 @@ void publishHud_()
             if (uf1Push != g_hudUf1PushPublished) {
                 g_hudUf1PushPublished = uf1Push;
                 SetExtState("rea_sixty", "hud_uf1_push", uf1Push.c_str(), false);
+            }
+            // "Send to UC1" slot list — same request/response shape; the HUD
+            // writes the LAYER it wants (the one live at right-click) while its
+            // submenu is open, empty otherwise.
+            const char* u1ur = GetExtState("rea_sixty", "hud_uf1_uc1_req");
+            const std::string uf1Uc1 = (u1ur && *u1ur && u1Type >= 0)
+                ? reasixty_hudUf1Uc1Slots(u1Tr, u1Fx, std::atoi(u1ur))
+                : std::string();
+            if (uf1Uc1 != g_hudUf1Uc1Published) {
+                g_hudUf1Uc1Published = uf1Uc1;
+                SetExtState("rea_sixty", "hud_uf1_uc1slots", uf1Uc1.c_str(), false);
             }
         }
         // Per-V-Pot tuning detail for the UF8 tab's full-parity menu (only
@@ -30757,6 +30773,25 @@ void onTimer()
                                                     slot)) {
                         g_hudUf1AssignPublished.clear();
                         g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1touc1;", 0) == 0) {
+                // "uf1touc1;<pos>;<sk>;<linkIdx>;<layer>" — copy this UF1
+                // position's param + feel onto a PICKED UC1 slot, on the layer
+                // that was live when the menu opened. The UF1 slot stays.
+                int pos = -1, sk = 0, linkIdx = -1, layer = 0;
+                if (std::sscanf(s.c_str(), "uf1touc1;%d;%d;%d;%d",
+                                &pos, &sk, &linkIdx, &layer) == 4
+                    && pos >= 0 && linkIdx >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1SendToUc1(u1Tr, u1Fx, sk != 0, pos,
+                                                    linkIdx, layer)) {
+                        g_hudAssignPublished.clear();     // the UC1 tab changed
+                        g_hudDetailPublished.clear();
+                        g_hudUf1Uc1Published.clear();
                         g_pageDirty.store(true);
                         publishHud_();
                     }

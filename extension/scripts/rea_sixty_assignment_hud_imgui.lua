@@ -457,6 +457,28 @@ local function readUf1Push()
   return pd
 end
 
+-- "Send to UC1" target list for the UF1 menu. The UC1's slots are NAMED and
+-- finite, so the extension publishes them rather than the HUD guessing:
+--   first line "N" → this plug-in's map has no UC1 domain (a UF1-only map)
+--   else "<linkIdx>;<boundParam>;<slotName>;<boundName>" per slot.
+-- Requested via "hud_uf1_uc1_req" = the layer to show, while the submenu is open.
+local function readUf1Uc1Slots()
+  local raw = reaper.GetExtState(SECT, "hud_uf1_uc1slots")
+  if raw == "" then return nil end
+  if raw:sub(1, 1) == "N" then return { noDomain = true, slots = {} } end
+  local out = { noDomain = false, slots = {} }
+  for line in raw:gmatch("[^\n]+") do
+    local li, bp, sname, bname = line:match("^(%-?%d+);(%-?%d+);([^;]*);(.*)$")
+    if li then
+      out.slots[#out.slots + 1] = {
+        linkIdx = tonumber(li), param = tonumber(bp),
+        name = sname or "", bound = bname or "",
+      }
+    end
+  end
+  return out
+end
+
 -- Global feel-preset list: "slot;used;name" per line (10 slots).
 local function readFeel()
   local raw = reaper.GetExtState(SECT, "hud_feel")
@@ -2170,6 +2192,9 @@ local CTRL_POPUP     = "##hud_ctrl_ctx"
 local UF8_CTRL_POPUP = "##hud_uf8_ctrl_ctx"
 local UF1_CTRL_POPUP = "##hud_uf1_ctrl_ctx"
 local ctxUf1Sk, ctxUf1Pos = -1, -1
+local ctxUf1Layer = 0     -- modifier layer captured AT right-click; only the
+                          -- "Send to UC1" target uses it (the UF1 map itself is
+                          -- layer-free)
 local uf1NameBuf, uf1NameFor = nil, nil   -- inline rename field, seeded per cell
 local UF8_BANK_POPUP = "##hud_uf8_bank_ctx"
 local UF8_STRIPCOL_POPUP      = "##hud_uf8_stripcol"       -- left-click: this strip
@@ -3030,6 +3055,36 @@ local function drawUf1ControlContextMenu()
       sendCmd("uf1invert;" .. arg)
     end
 
+    -- Send to UC1 — the reverse of the UC1 menu's "Send to UF1". The UC1's
+    -- slots are named and finite, so the user picks one; the list (and what
+    -- each slot currently holds on this layer) is published by the extension
+    -- while this submenu is open. The param is COPIED — it keeps its UF1 spot.
+    local uc1Req = ""
+    if reaper.ImGui_BeginMenu(ctx, "Send to UC1") then
+      uc1Req = tostring(ctxUf1Layer)
+      local sl = readUf1Uc1Slots()
+      if not sl then
+        reaper.ImGui_TextDisabled(ctx, "Loading\xE2\x80\xA6")
+      elseif sl.noDomain then
+        reaper.ImGui_TextDisabled(ctx, "This map has no UC1 domain")
+        reaper.ImGui_TextDisabled(ctx, "(set one on the FX-Learn page)")
+      else
+        for _, s in ipairs(sl.slots) do
+          local lbl = s.name
+          if s.param >= 0 then
+            lbl = lbl .. "  \xE2\x86\x92 " ..
+                  ((s.bound ~= "") and s.bound or ("param " .. s.param))
+          end
+          if reaper.ImGui_MenuItem(ctx, lbl .. "##u1tuc" .. s.linkIdx) then
+            sendCmd(string.format("uf1touc1;%d;%d;%d;%d",
+              ctxUf1Pos, ctxUf1Sk, s.linkIdx, ctxUf1Layer))
+          end
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+    reaper.SetExtState(SECT, "hud_uf1_uc1_req", uc1Req, false)
+
     -- Full tuning — V-Pot only (a soft-key is a press; same rule that keeps
     -- UF8 faders out of this menu). Parity with the FX-Learn UF1 cell menu:
     -- polarity / knob travel / push reset / curve + sensitivity / feel presets.
@@ -3592,6 +3647,11 @@ local function loop()
           local sk, pos = uf1CellAt(lx, ly)
           if sk then
             ctxUf1Sk, ctxUf1Pos = sk, pos
+            -- Freeze the modifier layer at right-click, like the UC1 menu does:
+            -- "Send to UC1" lands on THIS layer even after the modifier is
+            -- released to navigate the menu. (The UF1 map itself is layer-free;
+            -- the layer only picks where the param arrives on the UC1.)
+            ctxUf1Layer = readState().layer
             reaper.ImGui_OpenPopup(ctx, UF1_CTRL_POPUP)
           else
             reaper.ImGui_OpenPopup(ctx, POPUP)

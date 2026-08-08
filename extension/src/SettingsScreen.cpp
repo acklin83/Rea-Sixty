@@ -11116,6 +11116,50 @@ int sendToUf1_(const std::string& match, int vst3Param, const std::string& label
     }
     return -1;
 }
+// ---- "Send to UC1" — the reverse direction (Frank 2026-08-08) -------------
+// NOT symmetric with sendToUf1_: the UC1 has NAMED, FINITE slots, so "next free
+// position" has no meaning here — the caller PICKS a linkIdx from the domain's
+// canonical topology (Frank's decision: a submenu, not a guess). The param
+// lands on `layer` (the layer being edited, matching the outbound direction)
+// and brings its whole feel. The UF1 slot is KEPT — this copies, it doesn't
+// move, so the param then sits on both surfaces.
+// `match` + `layer` are explicit because the HUD cannot lean on g_editingMatch /
+// g_fxLearnEditLayer; the swap-and-restore below is the same idiom
+// hudBridgeSlot_ uses, so editLayerRef_ keeps being the single layer accessor.
+bool sendToUc1_(const std::string& match, int linkIdx, int layer,
+                const uf8::SlotLayer& src)
+{
+    if (match.empty() || linkIdx < 0 || src.vst3Param < 0) return false;
+    const std::string savedMatch = g_editingMatch;
+    const int         savedLayer = g_fxLearnEditLayer;
+    g_editingMatch     = match;
+    g_fxLearnEditLayer = (layer >= 0 && layer < kNumFxLayers)
+                             ? layer : uf8::FxLayer::Normal;
+    bool ok = false;
+    auto cat = uf8::user_plugins::get();       // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        uf8::UserLinkSlot* target = nullptr;
+        for (auto& s : m.slots) if (s.linkIdx == linkIdx) { target = &s; break; }
+        if (!target) {
+            uf8::UserLinkSlot ns{};
+            ns.linkIdx = linkIdx;
+            m.slots.push_back(std::move(ns));
+            target = &m.slots.back();
+        }
+        uf8::SlotLayer& lay = editLayerRef_(*target);
+        lay.vst3Param = src.vst3Param;
+        copySlotFeel_(src, lay);               // range/curve/sens/polarity/push
+        uf8::user_plugins::upsert(m);
+        persistAndReport_();
+        ok = true;
+        break;
+    }
+    g_editingMatch     = savedMatch;
+    g_fxLearnEditLayer = savedLayer;
+    return ok;
+}
+
 // Pack every functional param that is NOT already on the UC1 (Normal layer) or
 // the UF1 onto the free UF1 V-Pot positions, in paramSnapshot order. Turns the
 // UF1 into the overflow surface in one action. Returns how many were added.
@@ -13653,6 +13697,53 @@ bool hudUf8PushAdd_(int strip, int fb, int vb, int param, double norm,
     return true;
 }
 
+// ---- "Send to UC1" for the HUD --------------------------------------------
+// The submenu needs the UC1's NAMED slots, so the list is published rather than
+// guessed Lua-side. Request/response like the push editor: the Lua writes the
+// layer it wants to "hud_uf1_uc1_req" only while the submenu is open.
+//   first line "N"  → the plug-in's map has no UC1 domain (UF1-only)
+//   else one line per slot: "<linkIdx>;<boundParam>;<slotName>;<boundName>"
+// Both names are sanitised of ';' so the field order can't shift.
+std::string hudUf1Uc1Slots_(void* trV, int fx, int layer)
+{
+    std::string match;
+    if (!hudUf1ResolveMatch_(trV, fx, match)) return {};
+    auto* tr = static_cast<MediaTrack*>(trV);
+    const bool liveFx = tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*");
+    auto sanitize = [](std::string s) {
+        for (char& c : s) if (c == ';' || c == '\n') c = ' ';
+        return s;
+    };
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        if (m.domain == uf8::Domain::None) return "N";
+        const uf8::PluginMap* topo = canonicalTopology_(m.domain);
+        if (!topo) return "N";
+        const int lay = (layer >= 0 && layer < kNumFxLayers)
+                            ? layer : uf8::FxLayer::Normal;
+        std::string out;
+        for (const auto& ls : topo->slots) {
+            int boundParam = -1;
+            for (const auto& s : m.slots)
+                if (s.linkIdx == ls.linkIdx) {
+                    boundParam = uf8::fxEffectiveLayer(s, lay).vst3Param;
+                    break;
+                }
+            char bn[64] = {0};
+            if (boundParam >= 0 && liveFx)
+                TrackFX_GetParamName(tr, fx, boundParam, bn, sizeof(bn));
+            char line[224];
+            std::snprintf(line, sizeof(line), "%d;%d;%s;%s\n",
+                          ls.linkIdx, boundParam,
+                          sanitize(ls.name ? ls.name : "(slot)").c_str(),
+                          sanitize(bn).c_str());
+            out += line;
+        }
+        return out;
+    }
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // UF1 soft-key push cycle — HUD bridge. Same request/response shape as the UF8
 // one, addressed by the flat soft-key position; the plug-in comes from the live
@@ -15245,6 +15336,51 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         bool inv = snap().inverted;
         if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
             toggleUf1Inverted_(softKeys, pos);
+
+        // Send to UC1 — the reverse of the UC1 menu's "Send to UF1". The UC1's
+        // slots are named and finite, so the user PICKS one (Frank 2026-08-08)
+        // rather than the code guessing a "next free" that means nothing here.
+        // The param is COPIED: it keeps its UF1 position too.
+        if (ImGui_BeginMenu(ctx, "Send to UC1", nullptr)) {
+            const UserPluginMap* em = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps)
+                if (m.match == g_editingMatch) { em = &m; break; }
+            const uf8::PluginMap* topo =
+                em ? canonicalTopology_(em->domain) : nullptr;
+            if (!em || em->domain == uf8::Domain::None) {
+                // A UF1-only map has no UC1 domain to land in; inventing one
+                // here would silently decide CS-vs-BC for the user.
+                ImGui_TextDisabled(ctx, "This map has no UC1 domain");
+                ImGui_TextDisabled(ctx, "(set one in the mode picker)");
+            } else if (!topo) {
+                ImGui_TextDisabled(ctx, "No canonical layout for this domain");
+            } else {
+                for (const auto& ls : topo->slots) {
+                    // Show what each slot currently holds on the layer being
+                    // edited, so overwriting is a decision, not an accident.
+                    char cur[80] = {0};
+                    uf8::UserLinkSlot snapSlot{};
+                    if (fetchSlotSnapshot_(ls.linkIdx, snapSlot)) {
+                        const uf8::SlotLayer& lay = editLayerRef_(snapSlot);
+                        if (lay.vst3Param >= 0) {
+                            char pn[64] = {};
+                            if (!paramNameFor_(*em, fx, lay.vst3Param, pn, sizeof(pn)))
+                                snprintf(pn, sizeof(pn), "param %d", lay.vst3Param);
+                            snprintf(cur, sizeof(cur), "  \xE2\x86\x92 %s", pn);
+                        }
+                    }
+                    char item[160];
+                    snprintf(item, sizeof(item), "%s%s##uf1_touc1_%d",
+                             ls.name ? ls.name : "(slot)", cur, ls.linkIdx);
+                    if (ImGui_MenuItem(ctx, item, nullptr, nullptr, nullptr)) {
+                        const uf8::UserUf1Slot s = snap();
+                        sendToUc1_(g_editingMatch, ls.linkIdx,
+                                   g_fxLearnEditLayer, s);
+                    }
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
         // Knob tuning — V-Pots only. A soft-key is a press, so range/curve/
         // sensitivity have nothing to act on there (same reason the UF8 tab
         // offers this on V-Pots and not on faders/buttons).
@@ -21140,6 +21276,28 @@ bool reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1FeelApplyMatch_(m, softKeys, pos, slot);
+}
+// UF1 → UC1 ("Send to UC1"): the pickable slot list, then the write. The layer
+// comes from the HUD (the layer that was live at right-click), matching the
+// Settings side's g_fxLearnEditLayer.
+std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer)
+{
+    return uf8::hudUf1Uc1Slots_(tr, fx, layer);
+}
+bool reasixty_hudUf1SendToUc1(void* tr, int fx, bool softKeys, int pos,
+                              int linkIdx, int layer)
+{
+    std::string match;
+    if (!uf8::hudUf1ResolveMatch_(tr, fx, match)) return false;
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != match) continue;
+        const auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        const uf8::UserUf1Slot* s = uf8::uf1SlotAt(v, pos);
+        if (!s || s->vst3Param < 0) return false;
+        const uf8::UserUf1Slot copy = *s;   // the write reallocates m.slots
+        return uf8::sendToUc1_(match, linkIdx, layer, copy);
+    }
+    return false;
 }
 // UF1 soft-key push-cycle editor (request/response + edit verbs).
 std::string reasixty_hudUf1BuildPush(int pos, void* tr, int fx)
