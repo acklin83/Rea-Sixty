@@ -161,6 +161,14 @@ bool        reasixty_hudUf1SetField(void* tr, int fx, bool softKeys, int pos, in
 bool        reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos, const char* csv);
 bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, int slot, const char* name);
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
+// UF1 soft-key push-cycle editor — request/response ("hud_uf1_push_req" →
+// "hud_uf1_push") plus the edit verbs, mirroring the UF8 pair.
+std::string reasixty_hudUf1BuildPush(int pos, void* tr, int fx);
+bool        reasixty_hudUf1PushToggle(int pos, int stepIdx, void* tr, int fx);
+bool        reasixty_hudUf1PushMove(int pos, int stepIdx, int dir, void* tr, int fx);
+bool        reasixty_hudUf1PushRemove(int pos, int stepIdx, void* tr, int fx);
+bool        reasixty_hudUf1PushReset(int pos, void* tr, int fx);
+bool        reasixty_hudUf1PushAdd(int pos, int param, double norm, void* tr, int fx);
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -12087,6 +12095,7 @@ std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cel
 std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed position
 std::string g_hudUf1AssignPublished; // last-published "hud_uf1_assign" payload
 std::string g_hudUf1DetailPublished; // last-published "hud_uf1_detail" (V-Pot tuning)
+std::string g_hudUf1PushPublished;   // last-published "hud_uf1_push" (soft-key steps)
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
@@ -12542,6 +12551,18 @@ void publishHud_()
             if (uf1Detail != g_hudUf1DetailPublished) {
                 g_hudUf1DetailPublished = uf1Detail;
                 SetExtState("rea_sixty", "hud_uf1_detail", uf1Detail.c_str(), false);
+            }
+            // Soft-key push-cycle data — request/response like hud_push: the
+            // HUD writes the focused position to "hud_uf1_push_req" only while
+            // its submenu is open, so we build just that key's steps + catalog.
+            const char* u1pr = GetExtState("rea_sixty", "hud_uf1_push_req");
+            const int u1PushPos = (u1pr && *u1pr) ? std::atoi(u1pr) : -1;
+            const std::string uf1Push = (u1PushPos >= 0 && u1Type >= 0)
+                ? reasixty_hudUf1BuildPush(u1PushPos, u1Tr, u1Fx)
+                : std::string();
+            if (uf1Push != g_hudUf1PushPublished) {
+                g_hudUf1PushPublished = uf1Push;
+                SetExtState("rea_sixty", "hud_uf1_push", uf1Push.c_str(), false);
             }
         }
         // Per-V-Pot tuning detail for the UF8 tab's full-parity menu (only
@@ -30736,6 +30757,50 @@ void onTimer()
                                                     slot)) {
                         g_hudUf1AssignPublished.clear();
                         g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1push", 0) == 0) {
+                // UF1 soft-key push-cycle edits — position-keyed, target live:
+                //   uf1pushtoggle;<pos>;<stepIdx>
+                //   uf1pushmove;<pos>;<stepIdx>;<dir>
+                //   uf1pushremove;<pos>;<stepIdx>
+                //   uf1pushreset;<pos>
+                //   uf1pushadd;<pos>;<param>;<norm>
+                MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0) {
+                    bool changed = false;
+                    int pos = -1, stepIdx = -1, dir = 0, param = -1;
+                    double norm = 0.0;
+                    if (s.rfind("uf1pushtoggle;", 0) == 0) {
+                        if (std::sscanf(s.c_str(), "uf1pushtoggle;%d;%d",
+                                        &pos, &stepIdx) == 2)
+                            changed = reasixty_hudUf1PushToggle(pos, stepIdx,
+                                                                u1Tr, u1Fx);
+                    } else if (s.rfind("uf1pushmove;", 0) == 0) {
+                        if (std::sscanf(s.c_str(), "uf1pushmove;%d;%d;%d",
+                                        &pos, &stepIdx, &dir) == 3)
+                            changed = reasixty_hudUf1PushMove(pos, stepIdx, dir,
+                                                              u1Tr, u1Fx);
+                    } else if (s.rfind("uf1pushremove;", 0) == 0) {
+                        if (std::sscanf(s.c_str(), "uf1pushremove;%d;%d",
+                                        &pos, &stepIdx) == 2)
+                            changed = reasixty_hudUf1PushRemove(pos, stepIdx,
+                                                                u1Tr, u1Fx);
+                    } else if (s.rfind("uf1pushreset;", 0) == 0) {
+                        if (std::sscanf(s.c_str(), "uf1pushreset;%d", &pos) == 1)
+                            changed = reasixty_hudUf1PushReset(pos, u1Tr, u1Fx);
+                    } else if (s.rfind("uf1pushadd;", 0) == 0) {
+                        if (std::sscanf(s.c_str(), "uf1pushadd;%d;%d;%lf",
+                                        &pos, &param, &norm) == 3)
+                            changed = reasixty_hudUf1PushAdd(pos, param, norm,
+                                                             u1Tr, u1Fx);
+                    }
+                    if (changed) {
+                        g_hudUf1AssignPublished.clear();
+                        g_hudUf1DetailPublished.clear();
+                        g_hudUf1PushPublished.clear();
                         g_pageDirty.store(true);
                         publishHud_();
                     }

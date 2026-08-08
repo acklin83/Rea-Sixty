@@ -8910,6 +8910,24 @@ void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
         uf1SlotRef_(u, softKeys, pos).customLabel = label ? label : "";
     });
 }
+// Soft-key push cycle — the curated step list the UF1 runtime already honours
+// (applyUf1ChannelSoftKey_): each press advances to the next ENABLED step and
+// writes only that step's param. An empty list is the plain binary toggle,
+// which is what every unedited soft-key does — so unlike the UC1, storing the
+// full option list is NOT equivalent to storing nothing here.
+std::vector<uf8::PushStep> uf1PushSteps_(bool softKeys, int pos)
+{
+    const auto* v = uf1EditStream_(softKeys);
+    const uf8::UserUf1Slot* s = v ? uf8::uf1SlotAt(*v, pos) : nullptr;
+    return s ? s->pushSteps : std::vector<uf8::PushStep>{};
+}
+void setUf1PushSteps_(bool softKeys, int pos, std::vector<uf8::PushStep> steps)
+{
+    mutateUf1_([steps = std::move(steps), softKeys, pos]
+               (uf8::UserUf1Map& u) mutable {
+        uf1SlotRef_(u, softKeys, pos).pushSteps = std::move(steps);
+    });
+}
 // Push-to-default target. Unlike the UC1 (whose knobs have no push), the UF1
 // V-Pots DO push — applyUf1ChannelVpotPush_ reads this very field for an
 // explicit slot, so the value is live, not a mirror-only hint.
@@ -9202,6 +9220,217 @@ void setUf8VpotSteps_(int strip, int bank, std::vector<uf8::PushStep> steps)
         u.banks.banks[g_uf8EditingFaderBank][bank][strip].vpotSteps =
             std::move(steps);
     });
+}
+
+// ---- Shared push / step-cycle list editor ---------------------------------
+// One implementation for every surface that curates a PushStep list: the UF8
+// V-Pot step cycle and the UF1 soft-key push cycle both draw this. (The UC1
+// button editor predates it and keeps its own copy — it has the extra
+// "canonical list ⇒ store nothing" rule, where an empty list means auto-cycle;
+// on UF8/UF1 an empty list means something else entirely, so the rule can't be
+// shared.) `idScope` uniquifies the widget ids AND the drag-drop payload,
+// `addKey` keys the "+ Add step" picker state so switching controls resets it,
+// `boundParam` (-1 = none) is the control's own param — its discrete options
+// are materialised as the starting list so the cycle is visible and orderable
+// from the first frame. read/write own the persistence.
+void drawPushStepEditor_(ImGui_Context* ctx, const char* idScope, int addKey,
+                         const EditingFx& fx, const UserPluginMap* editing,
+                         int boundParam,
+                         const std::function<std::vector<uf8::PushStep>()>& read,
+                         const std::function<void(std::vector<uf8::PushStep>)>& write)
+{
+    if (g_fxlAddLinkIdx != addKey) {
+        g_fxlAddLinkIdx   = addKey;
+        g_fxlAddParam     = -1;
+        g_fxlAddNorm      = 0.5f;
+        g_fxlAddFilter[0] = '\0';
+    }
+    // Discrete-options probe: option count (>= 2) for a param, 0 when it has
+    // none (continuous → useless in a cycle). Live FX step sizes when an
+    // instance is loaded, else the snapshot's wasEnum flag.
+    auto optionCountFor = [&](int p, double& pStepOut) -> int {
+        pStepOut = 1.0;
+        if (fx.ok) {
+            double s = 0.0, a = 0.0, b = 0.0; bool isT = false;
+            if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, p, &s, &a, &b, &isT))
+                return 0;
+            if (isT) { pStepOut = 1.0; return 2; }          // on/off
+            if (s > 0.0 && s < 1.0) {
+                pStepOut = s;
+                return uf8::numStepsFor(static_cast<float>(s));
+            }
+            return 0;
+        }
+        if (editing)
+            for (const auto& pi : editing->paramSnapshot)
+                if (pi.vst3Param == p) return pi.wasEnum ? 2 : 0;
+        return 0;
+    };
+
+    double boundStep = 1.0;
+    const int boundOpts = (boundParam >= 0) ? optionCountFor(boundParam, boundStep) : 0;
+    const bool boundDiscrete = boundOpts >= 2;
+
+    std::vector<uf8::PushStep> view = read();
+    if (view.empty() && boundDiscrete) {
+        for (int i = 0; i < boundOpts; ++i) {
+            float nrm = static_cast<float>(i * boundStep);
+            if (nrm > 1.0f) nrm = 1.0f;
+            view.push_back(uf8::PushStep{boundParam, nrm, true});
+        }
+    }
+    auto commit = [&](std::vector<uf8::PushStep> v) { write(std::move(v)); };
+
+    char payloadId[32];
+    snprintf(payloadId, sizeof(payloadId), "%s_PSORD", idScope);
+
+    if (!view.empty()) {
+        ImGui_TextDisabled(ctx,
+            "Drag \xE2\x89\xA1 to reorder \xC2\xB7 untick to exclude:");
+        int dragFrom = -1, dragTo = -1, removeIdx = -1;
+        for (int i = 0; i < static_cast<int>(view.size()); ++i) {
+            const uf8::PushStep& st = view[i];
+            const bool foreign = (boundParam < 0) || st.vst3Param != boundParam;
+            char pn[96] = {0};
+            if (foreign && editing)
+                paramNameFor_(*editing, fx, st.vst3Param, pn, sizeof(pn));
+            char vb[64] = {0};
+            if (fx.ok)
+                TrackFX_FormatParamValueNormalized(fx.tr, fx.fxIdx,
+                    st.vst3Param, st.norm, vb, sizeof(vb));
+            char disp[180];
+            if (foreign)
+                snprintf(disp, sizeof(disp), "%s = %s",
+                         pn[0] ? pn : "(param)", vb[0] ? vb : "?");
+            else
+                snprintf(disp, sizeof(disp), "%s", vb[0] ? vb : "(option)");
+            char cbId[224];
+            snprintf(cbId, sizeof(cbId), "%s##%s_cb_%d", disp, idScope, i);
+            char hId[48];
+            snprintf(hId, sizeof(hId), "\xE2\x89\xA1##%s_h_%d", idScope, i);
+            ImGui_SmallButton(ctx, hId);
+            int dndF = 0;
+            if (ImGui_BeginDragDropSource(ctx, &dndF)) {
+                char pl[8]; snprintf(pl, sizeof(pl), "%d", i);
+                ImGui_SetDragDropPayload(ctx, payloadId, pl, nullptr);
+                ImGui_Text(ctx, disp);
+                ImGui_EndDragDropSource(ctx);
+            }
+            if (ImGui_BeginDragDropTarget(ctx)) {
+                char buf[8] = {0}; int af = 0;
+                if (ImGui_AcceptDragDropPayload(ctx, payloadId, buf,
+                        static_cast<int>(sizeof(buf)), &af)) {
+                    dragFrom = std::atoi(buf); dragTo = i;
+                }
+                ImGui_EndDragDropTarget(ctx);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            bool en = st.enabled;
+            if (ImGui_Checkbox(ctx, cbId, &en)) {
+                std::vector<uf8::PushStep> v = view;
+                v[i].enabled = en;
+                commit(v);
+            }
+            if (foreign) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                char rmId[48];
+                snprintf(rmId, sizeof(rmId), "x##%s_rm_%d", idScope, i);
+                if (ImGui_SmallButton(ctx, rmId)) removeIdx = i;
+            }
+        }
+        if (removeIdx >= 0) {
+            std::vector<uf8::PushStep> v = view;
+            v.erase(v.begin() + removeIdx);
+            commit(v);
+        } else if (dragFrom >= 0 && dragTo >= 0 && dragFrom != dragTo
+                   && dragFrom < static_cast<int>(view.size())) {
+            std::vector<uf8::PushStep> v = view;
+            uf8::PushStep moved = v[dragFrom];
+            v.erase(v.begin() + dragFrom);
+            int dst = dragTo > dragFrom ? dragTo - 1 : dragTo;
+            if (dst < 0) dst = 0;
+            if (dst > static_cast<int>(v.size())) dst = static_cast<int>(v.size());
+            v.insert(v.begin() + dst, moved);
+            commit(v);
+        }
+        if (!read().empty()) {
+            char clrId[64];
+            snprintf(clrId, sizeof(clrId), "Clear steps##%s_reset", idScope);
+            if (ImGui_SmallButton(ctx, clrId)) write({});
+        }
+    }
+
+    // + Add step — pick a param that exposes discrete options, then one of its
+    // values. Appends to the EFFECTIVE list so a materialised bound-param cycle
+    // isn't dropped by writing only the new macro step.
+    char addId[64];
+    snprintf(addId, sizeof(addId), "+ Add step##%s_add", idScope);
+    if (ImGui_BeginMenu(ctx, addId, nullptr)) {
+        const int pcount = editing ? paramCountFor_(*editing, fx) : 0;
+        int fFlags = 0;
+        char filtId[48];
+        snprintf(filtId, sizeof(filtId), "##%s_filter", idScope);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        ImGui_InputText(ctx, filtId, g_fxlAddFilter, sizeof(g_fxlAddFilter),
+                        &fFlags, nullptr);
+        auto icontains = [](const char* hay, const char* needle) {
+            if (!needle || !needle[0]) return true;
+            if (!hay) return false;
+            return searchAllTokensCI_(searchTokensLower_(needle), hay);
+        };
+        char curPName[96] = {0};
+        if (g_fxlAddParam >= 0 && editing)
+            paramNameFor_(*editing, fx, g_fxlAddParam, curPName, sizeof(curPName));
+        char comboId[48];
+        snprintf(comboId, sizeof(comboId), "##%s_param", idScope);
+        if (ImGui_BeginCombo(ctx, comboId,
+                g_fxlAddParam >= 0 ? (curPName[0] ? curPName : "(param)")
+                                   : "Choose param\xE2\x80\xA6",
+                nullptr)) {
+            int shown = 0;
+            for (int p = 0; p < pcount && shown < 1024; ++p) {
+                char pn[96] = {0};
+                if (editing) paramNameFor_(*editing, fx, p, pn, sizeof(pn));
+                if (isReaperMidiParam_(pn)) continue;
+                if (!icontains(pn, g_fxlAddFilter)) continue;
+                double dummyStep = 1.0;
+                if (optionCountFor(p, dummyStep) < 2) continue;
+                ++shown;
+                bool sel = (g_fxlAddParam == p);
+                char rid[128];
+                snprintf(rid, sizeof(rid), "%s##%s_p_%d",
+                         pn[0] ? pn : "(param)", idScope, p);
+                if (ImGui_Selectable(ctx, rid, &sel, nullptr, nullptr, nullptr))
+                    g_fxlAddParam = p;
+            }
+            ImGui_EndCombo(ctx);
+        }
+        if (g_fxlAddParam >= 0) {
+            double pStep = 1.0;
+            const int numSteps = optionCountFor(g_fxlAddParam, pStep);
+            if (numSteps >= 2) {
+                ImGui_TextDisabled(ctx, "Add option:");
+                for (int i = 0; i < numSteps; ++i) {
+                    float nrm = static_cast<float>(i * pStep);
+                    if (nrm > 1.0f) nrm = 1.0f;
+                    char vbuf[64] = {0};
+                    if (fx.ok)
+                        TrackFX_FormatParamValueNormalized(fx.tr, fx.fxIdx,
+                            g_fxlAddParam, nrm, vbuf, sizeof(vbuf));
+                    char oid[112];
+                    snprintf(oid, sizeof(oid), "%s##%s_opt_%d",
+                             vbuf[0] ? vbuf : (i == 0 ? "OFF" : "ON"),
+                             idScope, i);
+                    if (ImGui_SmallButton(ctx, oid)) {
+                        std::vector<uf8::PushStep> v = view;
+                        v.push_back(uf8::PushStep{g_fxlAddParam, nrm, true});
+                        commit(v);
+                    }
+                }
+            }
+        }
+        ImGui_EndMenu(ctx);
+    }
 }
 
 uf8::VPotPolarity getUf8VPotPolarity_(int strip, int bank)
@@ -13243,52 +13472,20 @@ bool hudPushAdd_(int idx, int layer, int param, double norm,
 // FX like hudUf8SetField_. Commands carry the strip only; fb/vb/tr/fx come from
 // the publish-side resolver. ------------------------------------------------
 
-std::vector<uf8::PushStep> hudUf8ComputePushView_(MediaTrack* tr, int fx,
-        const std::string& match, int fb, int vb, int strip, int& boundParamOut)
+// Shared body of a hud_*_push payload: the ordered step lines, then the
+// discrete-param catalog the "+ Add step" picker offers. The caller prepends
+// its own header line (strip / position), which is the only difference between
+// the UF8 and UF1 channels.
+std::string hudPushStepsPayload_(MediaTrack* tr, int fx,
+                                 const std::vector<uf8::PushStep>& view,
+                                 int boundParam)
 {
-    boundParamOut = -1;
-    std::vector<uf8::PushStep> view;
-    for (const auto& m : user_plugins::get().maps) {
-        if (m.match != match) continue;
-        const auto& bs = m.uf8.banks.banks[fb][vb][strip];
-        view = bs.vpotSteps;
-        boundParamOut = bs.vst3Param;
-        break;
-    }
-    if (view.empty() && boundParamOut >= 0) {
-        double step = 1.0;
-        const int n = hudParamOptions_(tr, fx, boundParamOut, step);
-        for (int i = 0; i < n; ++i) {
-            float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
-            view.push_back(uf8::PushStep{boundParamOut, nrm, true});
-        }
-    }
-    return view;
-}
-
-bool hudUf8PushResolve_(int strip, int fb, int vb, void* trV, int fx,
-                        MediaTrack*& tr, std::string& match, int& boundParam,
-                        std::vector<uf8::PushStep>& view)
-{
-    if (strip < 0 || strip > 7) return false;
-    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
-    tr = static_cast<MediaTrack*>(trV);
-    view = hudUf8ComputePushView_(tr, fx, match, fb, vb, strip, boundParam);
-    return true;
-}
-
-std::string hudUf8BuildPush_(int strip, int fb, int vb, void* trV, int fx)
-{
-    MediaTrack* tr = nullptr; std::string match; int boundParam = -1;
-    std::vector<uf8::PushStep> view;
-    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, boundParam, view))
-        return {};
     auto sanitize = [](std::string s) {
         for (char& c : s) if (c == ';' || c == '|' || c == '~' || c == '\n')
             c = ' ';
         return s;
     };
-    std::string out = std::to_string(strip) + "\n";
+    std::string out;
     char vbuf[80], pn[128];
     for (const auto& st : view) {
         vbuf[0] = 0;
@@ -13337,6 +13534,50 @@ std::string hudUf8BuildPush_(int strip, int fb, int vb, void* trV, int fx)
         }
     }
     return out;
+}
+
+std::vector<uf8::PushStep> hudUf8ComputePushView_(MediaTrack* tr, int fx,
+        const std::string& match, int fb, int vb, int strip, int& boundParamOut)
+{
+    boundParamOut = -1;
+    std::vector<uf8::PushStep> view;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        const auto& bs = m.uf8.banks.banks[fb][vb][strip];
+        view = bs.vpotSteps;
+        boundParamOut = bs.vst3Param;
+        break;
+    }
+    if (view.empty() && boundParamOut >= 0) {
+        double step = 1.0;
+        const int n = hudParamOptions_(tr, fx, boundParamOut, step);
+        for (int i = 0; i < n; ++i) {
+            float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+            view.push_back(uf8::PushStep{boundParamOut, nrm, true});
+        }
+    }
+    return view;
+}
+
+bool hudUf8PushResolve_(int strip, int fb, int vb, void* trV, int fx,
+                        MediaTrack*& tr, std::string& match, int& boundParam,
+                        std::vector<uf8::PushStep>& view)
+{
+    if (strip < 0 || strip > 7) return false;
+    if (!hudUf8ResolveMatch_(trV, fx, match)) return false;
+    tr = static_cast<MediaTrack*>(trV);
+    view = hudUf8ComputePushView_(tr, fx, match, fb, vb, strip, boundParam);
+    return true;
+}
+
+std::string hudUf8BuildPush_(int strip, int fb, int vb, void* trV, int fx)
+{
+    MediaTrack* tr = nullptr; std::string match; int boundParam = -1;
+    std::vector<uf8::PushStep> view;
+    if (!hudUf8PushResolve_(strip, fb, vb, trV, fx, tr, match, boundParam, view))
+        return {};
+    return std::to_string(strip) + "\n"
+         + hudPushStepsPayload_(tr, fx, view, boundParam);
 }
 
 // Apply a step list and keep vpotMode coherent: non-empty list ⇒ StepCycle,
@@ -13410,6 +13651,118 @@ bool hudUf8PushAdd_(int strip, int fb, int vb, int param, double norm,
     v.push_back(uf8::PushStep{param, (float)norm, true});
     hudUf8PushSet_(strip, fb, vb, trV, fx, v);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// UF1 soft-key push cycle — HUD bridge. Same request/response shape as the UF8
+// one, addressed by the flat soft-key position; the plug-in comes from the live
+// UF1 target, so nothing about it rides in the command. No layer and no
+// swap-and-restore bridge — the UF1 map is layer-free, so the mutators go
+// through hudUf1MutateMatch_ like the rest of the UF1 verbs.
+// ---------------------------------------------------------------------------
+
+std::vector<uf8::PushStep> hudUf1ComputePushView_(MediaTrack* tr, int fx,
+        const std::string& match, int pos, int& boundParamOut)
+{
+    boundParamOut = -1;
+    std::vector<uf8::PushStep> view;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        if (const UserUf1Slot* s = uf8::uf1SlotAt(m.uf1.softKeys, pos)) {
+            view          = s->pushSteps;
+            boundParamOut = s->vst3Param;
+        }
+        break;
+    }
+    // Nothing stored yet but the bound param is discrete → show all its options
+    // as the starting list, exactly like the Settings editor does.
+    if (view.empty() && boundParamOut >= 0) {
+        double step = 1.0;
+        const int n = hudParamOptions_(tr, fx, boundParamOut, step);
+        for (int i = 0; i < n; ++i) {
+            float nrm = (float)(i * step); if (nrm > 1.0f) nrm = 1.0f;
+            view.push_back(uf8::PushStep{boundParamOut, nrm, true});
+        }
+    }
+    return view;
+}
+
+bool hudUf1PushResolve_(int pos, void* trV, int fx, MediaTrack*& tr,
+                        std::string& match, int& boundParam,
+                        std::vector<uf8::PushStep>& view)
+{
+    if (pos < 0) return false;
+    if (!hudUf1ResolveMatch_(trV, fx, match)) return false;
+    tr = static_cast<MediaTrack*>(trV);
+    view = hudUf1ComputePushView_(tr, fx, match, pos, boundParam);
+    return true;
+}
+
+std::string hudUf1BuildPush_(int pos, void* trV, int fx)
+{
+    MediaTrack* tr = nullptr; std::string match; int boundParam = -1;
+    std::vector<uf8::PushStep> view;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, boundParam, view))
+        return {};
+    return std::to_string(pos) + "\n"
+         + hudPushStepsPayload_(tr, fx, view, boundParam);
+}
+
+bool hudUf1PushSet_(const std::string& match, int pos,
+                    std::vector<uf8::PushStep> v)
+{
+    return hudUf1MutateMatch_(match, /*softKeys*/true, pos,
+        [&](std::vector<UserUf1Slot>& vec, size_t i) {
+            vec[i].pushSteps = v;
+        });
+}
+
+bool hudUf1PushToggle_(int pos, int stepIdx, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, bp, v)) return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v[stepIdx].enabled = !v[stepIdx].enabled;
+    return hudUf1PushSet_(match, pos, std::move(v));
+}
+bool hudUf1PushMove_(int pos, int stepIdx, int dir, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, bp, v)) return false;
+    const int dst = stepIdx + dir;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()
+        || dst < 0 || dst >= (int)v.size()) return false;
+    std::swap(v[stepIdx], v[dst]);
+    return hudUf1PushSet_(match, pos, std::move(v));
+}
+bool hudUf1PushRemove_(int pos, int stepIdx, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, bp, v)) return false;
+    if (stepIdx < 0 || stepIdx >= (int)v.size()) return false;
+    v.erase(v.begin() + stepIdx);
+    return hudUf1PushSet_(match, pos, std::move(v));
+}
+// Clearing the list restores the plain binary toggle (the UF1 runtime's
+// no-pushSteps behaviour) — there is no "cycle all" default to fall back to.
+bool hudUf1PushReset_(int pos, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, bp, v)) return false;
+    return hudUf1PushSet_(match, pos, {});
+}
+bool hudUf1PushAdd_(int pos, int param, double norm, void* trV, int fx)
+{
+    MediaTrack* tr; std::string match; int bp;
+    std::vector<uf8::PushStep> v;
+    if (!hudUf1PushResolve_(pos, trV, fx, tr, match, bp, v)) return false;
+    if (param < 0) return false;
+    v.push_back(uf8::PushStep{param, (float)norm, true});
+    return hudUf1PushSet_(match, pos, std::move(v));
 }
 
 // ---------------------------------------------------------------------------
@@ -14340,220 +14693,19 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (curMode == uf8::VPotMode::StepCycle) {
                     ImGui_Separator(ctx);
                     ImGui_Text(ctx, "Step cycle:");
-
                     // +Add picker state — keyed on a synthetic id distinct
                     // from any UC1 linkIdx so switching popups resets it.
                     const int addKey = -(1000 + g_uf8EditingFaderBank * 64
                                          + bank * 8 + ctrl.strip);
-                    if (g_fxlAddLinkIdx != addKey) {
-                        g_fxlAddLinkIdx   = addKey;
-                        g_fxlAddParam     = -1;
-                        g_fxlAddNorm      = 0.5f;
-                        g_fxlAddFilter[0] = '\0';
-                    }
                     const UserPluginMap* vEditing = nullptr;
                     for (const auto& m : uf8::user_plugins::get().maps)
                         if (m.match == g_editingMatch) { vEditing = &m; break; }
-
-                    auto optionCountFor = [&](int p, double& pStepOut) -> int {
-                        pStepOut = 1.0;
-                        if (fx.ok) {
-                            double s=0.0, a=0.0, b=0.0; bool isT=false;
-                            if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx,
-                                    p, &s, &a, &b, &isT)) return 0;
-                            if (isT) { pStepOut = 1.0; return 2; }
-                            if (s > 0.0 && s < 1.0) {
-                                pStepOut = s;
-                                return uf8::numStepsFor(static_cast<float>(s));
-                            }
-                            return 0;
-                        }
-                        if (vEditing)
-                            for (const auto& pi : vEditing->paramSnapshot)
-                                if (pi.vst3Param == p) return pi.wasEnum ? 2 : 0;
-                        return 0;
-                    };
-
-                    double boundStep = 1.0;
-                    const int boundOpts =
-                        (mapped >= 0) ? optionCountFor(mapped, boundStep) : 0;
-                    const bool boundDiscrete = boundOpts >= 2;
-
-                    std::vector<uf8::PushStep> view =
-                        uf8VpotSteps_(ctrl.strip, bank);
-                    if (view.empty() && boundDiscrete) {
-                        for (int i = 0; i < boundOpts; ++i) {
-                            float nrm = static_cast<float>(i * boundStep);
-                            if (nrm > 1.0f) nrm = 1.0f;
-                            view.push_back(uf8::PushStep{mapped, nrm, true});
-                        }
-                    }
-                    auto commit = [&](std::vector<uf8::PushStep> v) {
-                        setUf8VpotSteps_(ctrl.strip, bank, std::move(v));
-                    };
-
-                    if (!view.empty()) {
-                        ImGui_TextDisabled(ctx,
-                            "Drag \xE2\x89\xA1 to reorder \xC2\xB7 untick to exclude:");
-                        int dragFrom = -1, dragTo = -1, removeIdx = -1;
-                        for (int i = 0; i < static_cast<int>(view.size()); ++i) {
-                            const uf8::PushStep& st = view[i];
-                            const bool foreign =
-                                (mapped < 0) || st.vst3Param != mapped;
-                            char pn[96] = {0};
-                            if (foreign && vEditing)
-                                paramNameFor_(*vEditing, fx, st.vst3Param,
-                                              pn, sizeof(pn));
-                            char vb[64] = {0};
-                            if (fx.ok)
-                                TrackFX_FormatParamValueNormalized(fx.tr,
-                                    fx.fxIdx, st.vst3Param, st.norm,
-                                    vb, sizeof(vb));
-                            char disp[180];
-                            if (foreign)
-                                snprintf(disp, sizeof(disp), "%s = %s",
-                                         pn[0] ? pn : "(param)",
-                                         vb[0] ? vb : "?");
-                            else
-                                snprintf(disp, sizeof(disp), "%s",
-                                         vb[0] ? vb : "(option)");
-                            char cbId[208];
-                            snprintf(cbId, sizeof(cbId),
-                                     "%s##uf8sc_cb_%d", disp, i);
-                            char hId[40];
-                            snprintf(hId, sizeof(hId),
-                                     "\xE2\x89\xA1##uf8sc_h_%d", i);
-                            ImGui_SmallButton(ctx, hId);
-                            int dndF = 0;
-                            if (ImGui_BeginDragDropSource(ctx, &dndF)) {
-                                char pl[8]; snprintf(pl, sizeof(pl), "%d", i);
-                                ImGui_SetDragDropPayload(ctx, "UF8_PSORD",
-                                                         pl, nullptr);
-                                ImGui_Text(ctx, disp);
-                                ImGui_EndDragDropSource(ctx);
-                            }
-                            if (ImGui_BeginDragDropTarget(ctx)) {
-                                char buf[8] = {0}; int af = 0;
-                                if (ImGui_AcceptDragDropPayload(ctx, "UF8_PSORD",
-                                        buf, static_cast<int>(sizeof(buf)),
-                                        &af)) {
-                                    dragFrom = std::atoi(buf); dragTo = i;
-                                }
-                                ImGui_EndDragDropTarget(ctx);
-                            }
-                            ImGui_SameLine(ctx, nullptr, nullptr);
-                            bool en = st.enabled;
-                            if (ImGui_Checkbox(ctx, cbId, &en)) {
-                                std::vector<uf8::PushStep> v = view;
-                                v[i].enabled = en;
-                                commit(v);
-                            }
-                            if (foreign) {
-                                ImGui_SameLine(ctx, nullptr, nullptr);
-                                char rmId[40];
-                                snprintf(rmId, sizeof(rmId),
-                                         "x##uf8sc_rm_%d", i);
-                                if (ImGui_SmallButton(ctx, rmId)) removeIdx = i;
-                            }
-                        }
-                        if (removeIdx >= 0) {
-                            std::vector<uf8::PushStep> v = view;
-                            v.erase(v.begin() + removeIdx);
-                            commit(v);
-                        } else if (dragFrom >= 0 && dragTo >= 0
-                                   && dragFrom != dragTo
-                                   && dragFrom < static_cast<int>(view.size())) {
-                            std::vector<uf8::PushStep> v = view;
-                            uf8::PushStep moved = v[dragFrom];
-                            v.erase(v.begin() + dragFrom);
-                            int dst = dragTo > dragFrom ? dragTo - 1 : dragTo;
-                            if (dst < 0) dst = 0;
-                            if (dst > static_cast<int>(v.size()))
-                                dst = static_cast<int>(v.size());
-                            v.insert(v.begin() + dst, moved);
-                            commit(v);
-                        }
-                        if (!uf8VpotSteps_(ctrl.strip, bank).empty()) {
-                            if (ImGui_SmallButton(ctx, "Clear steps##uf8sc_reset"))
-                                setUf8VpotSteps_(ctrl.strip, bank, {});
-                        }
-                    }
-
-                    if (ImGui_BeginMenu(ctx, "+ Add step##uf8sc_add", nullptr)) {
-                        const int pcount =
-                            vEditing ? paramCountFor_(*vEditing, fx) : 0;
-                        int fFlags = 0;
-                        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
-                        ImGui_InputText(ctx, "##uf8sc_filter", g_fxlAddFilter,
-                                        sizeof(g_fxlAddFilter), &fFlags, nullptr);
-                        auto icontains = [](const char* hay, const char* needle) {
-                            if (!needle || !needle[0]) return true;
-                            if (!hay) return false;
-                            std::string h, n;
-                            for (const char* p = hay; *p; ++p)
-                                h += static_cast<char>(std::tolower((unsigned char)*p));
-                            for (const char* p = needle; *p; ++p)
-                                n += static_cast<char>(std::tolower((unsigned char)*p));
-                            return h.find(n) != std::string::npos;
-                        };
-                        char curPName[96] = {0};
-                        if (g_fxlAddParam >= 0 && vEditing)
-                            paramNameFor_(*vEditing, fx, g_fxlAddParam,
-                                          curPName, sizeof(curPName));
-                        if (ImGui_BeginCombo(ctx, "##uf8sc_param",
-                                g_fxlAddParam >= 0 ? (curPName[0] ? curPName
-                                                                  : "(param)")
-                                                   : "Choose param…",
-                                nullptr)) {
-                            int shown = 0;
-                            for (int p = 0; p < pcount && shown < 1024; ++p) {
-                                char pn[96] = {0};
-                                if (vEditing)
-                                    paramNameFor_(*vEditing, fx, p, pn, sizeof(pn));
-                                if (isReaperMidiParam_(pn)) continue;
-                                if (!icontains(pn, g_fxlAddFilter)) continue;
-                                double dummyStep = 1.0;
-                                if (optionCountFor(p, dummyStep) < 2) continue;
-                                ++shown;
-                                bool sel = (g_fxlAddParam == p);
-                                char rid[112];
-                                snprintf(rid, sizeof(rid), "%s##uf8sc_p_%d",
-                                         pn[0] ? pn : "(param)", p);
-                                if (ImGui_Selectable(ctx, rid, &sel, nullptr,
-                                                     nullptr, nullptr))
-                                    g_fxlAddParam = p;
-                            }
-                            ImGui_EndCombo(ctx);
-                        }
-                        if (g_fxlAddParam >= 0) {
-                            double pStep = 1.0;
-                            const int numSteps =
-                                optionCountFor(g_fxlAddParam, pStep);
-                            if (numSteps >= 2) {
-                                ImGui_TextDisabled(ctx, "Add option:");
-                                for (int i = 0; i < numSteps; ++i) {
-                                    float nrm = static_cast<float>(i * pStep);
-                                    if (nrm > 1.0f) nrm = 1.0f;
-                                    char vbuf[64] = {0};
-                                    if (fx.ok)
-                                        TrackFX_FormatParamValueNormalized(fx.tr,
-                                            fx.fxIdx, g_fxlAddParam, nrm,
-                                            vbuf, sizeof(vbuf));
-                                    char oid[96];
-                                    snprintf(oid, sizeof(oid), "%s##uf8sc_opt_%d",
-                                             vbuf[0] ? vbuf
-                                                     : (i == 0 ? "OFF" : "ON"), i);
-                                    if (ImGui_SmallButton(ctx, oid)) {
-                                        std::vector<uf8::PushStep> v = view;
-                                        v.push_back(uf8::PushStep{
-                                            g_fxlAddParam, nrm, true});
-                                        commit(v);
-                                    }
-                                }
-                            }
-                        }
-                        ImGui_EndMenu(ctx);
-                    }
+                    const int st = ctrl.strip, bk = bank;
+                    drawPushStepEditor_(ctx, "uf8sc", addKey, fx, vEditing, mapped,
+                        [st, bk] { return uf8VpotSteps_(st, bk); },
+                        [st, bk](std::vector<uf8::PushStep> v) {
+                            setUf8VpotSteps_(st, bk, std::move(v));
+                        });
                     ImGui_Separator(ctx);
                 }
 
@@ -15150,6 +15302,25 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                 [sk, pp] { return feelFromUf1_(sk, pp); },
                 [sk, pp](const feel_presets::KnobFeel& f) {
                     applyFeelToUf1_(sk, pp, f);
+                });
+        } else {
+            // Push cycle — soft-keys only (a V-Pot turns, it doesn't step).
+            // The UF1 runtime has honoured pushSteps since eec4bdf; this is
+            // the first thing that can author them. Same editor the UF8 V-Pot
+            // step cycle uses, so curate / reorder / exclude / macro all behave
+            // identically. Empty list ⇒ the plain binary toggle.
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Push cycle:");
+            const UserPluginMap* pcEditing = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps)
+                if (m.match == g_editingMatch) { pcEditing = &m; break; }
+            const int pp = pos;
+            // +Add picker key: distinct from any UC1 linkIdx and from the UF8
+            // step-cycle keys (which live around -1000).
+            drawPushStepEditor_(ctx, "uf1pc", -(5000 + pos), fx, pcEditing, mapped,
+                [pp] { return uf1PushSteps_(true, pp); },
+                [pp](std::vector<uf8::PushStep> v) {
+                    setUf1PushSteps_(true, pp, std::move(v));
                 });
         }
         // Inline label field, not a native dialog — the rest of the Settings
@@ -20969,6 +21140,31 @@ bool reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1FeelApplyMatch_(m, softKeys, pos, slot);
+}
+// UF1 soft-key push-cycle editor (request/response + edit verbs).
+std::string reasixty_hudUf1BuildPush(int pos, void* tr, int fx)
+{
+    return uf8::hudUf1BuildPush_(pos, tr, fx);
+}
+bool reasixty_hudUf1PushToggle(int pos, int stepIdx, void* tr, int fx)
+{
+    return uf8::hudUf1PushToggle_(pos, stepIdx, tr, fx);
+}
+bool reasixty_hudUf1PushMove(int pos, int stepIdx, int dir, void* tr, int fx)
+{
+    return uf8::hudUf1PushMove_(pos, stepIdx, dir, tr, fx);
+}
+bool reasixty_hudUf1PushRemove(int pos, int stepIdx, void* tr, int fx)
+{
+    return uf8::hudUf1PushRemove_(pos, stepIdx, tr, fx);
+}
+bool reasixty_hudUf1PushReset(int pos, void* tr, int fx)
+{
+    return uf8::hudUf1PushReset_(pos, tr, fx);
+}
+bool reasixty_hudUf1PushAdd(int pos, int param, double norm, void* tr, int fx)
+{
+    return uf8::hudUf1PushAdd_(pos, param, norm, tr, fx);
 }
 bool reasixty_uf8VpotGuiLearnArmed()
 {

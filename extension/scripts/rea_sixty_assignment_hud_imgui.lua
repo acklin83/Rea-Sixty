@@ -422,6 +422,41 @@ local function readUf8Push()
   return pd
 end
 
+-- UF1 soft-key push-cycle data (same wire format again; the first line is the
+-- flat POSITION and the channel is "hud_uf1_push"). Request via
+-- "hud_uf1_push_req". Soft-keys only — a V-Pot turns, it doesn't step.
+local function readUf1Push()
+  local raw = reaper.GetExtState(SECT, "hud_uf1_push")
+  if raw == "" then return nil end
+  local first = true
+  local pd = { pos = -1, steps = {}, params = {} }
+  for ln in raw:gmatch("[^\n]+") do
+    if first then pd.pos = tonumber(ln) or -1; first = false
+    elseif ln:sub(1, 2) == "S;" then
+      local param, norm, en, foreign, label =
+        ln:match("^S;(%-?%d+);([%-%d%.]+);(%d);(%d);(.*)$")
+      if param then
+        pd.steps[#pd.steps + 1] = {
+          param = tonumber(param), norm = tonumber(norm),
+          en = (en == "1"), foreign = (foreign == "1"), label = label or "" }
+      end
+    elseif ln:sub(1, 2) == "P;" then
+      local param, name, opts = ln:match("^P;(%-?%d+);([^;]*);(.*)$")
+      if param then
+        local olist = {}
+        for o in (opts .. "|"):gmatch("([^|]*)|") do
+          local n, l = o:match("^([%-%d%.]+)~(.*)$")
+          if n then olist[#olist + 1] = { norm = tonumber(n), label = l or "" } end
+        end
+        pd.params[#pd.params + 1] =
+          { param = tonumber(param), name = name or "", opts = olist }
+      end
+    end
+  end
+  if pd.pos < 0 then return nil end
+  return pd
+end
+
 -- Global feel-preset list: "slot;used;name" per line (10 slots).
 local function readFeel()
   local raw = reaper.GetExtState(SECT, "hud_feel")
@@ -2464,6 +2499,65 @@ local function drawPushCycleUf8(strip)
   end
 end
 
+-- UF1 soft-key push cycle — same editor again, position-keyed over the
+-- uf1push* commands / readUf1Push() channel. Pressing the key steps to the next
+-- enabled entry; an empty list is the plain on/off toggle, so "Clear steps"
+-- means "back to a normal toggle" here (there is no cycle-all default).
+local function drawPushCycleUf1(pos)
+  local pd = readUf1Push()
+  if not pd or pd.pos ~= pos then
+    reaper.ImGui_TextDisabled(ctx, "Loading\xE2\x80\xA6")
+    return
+  end
+  if #pd.steps == 0 and #pd.params == 0 then
+    reaper.ImGui_TextDisabled(ctx, "No discrete options on this plug-in")
+    return
+  end
+  if #pd.steps > 0 then
+    reaper.ImGui_TextDisabled(ctx, "Steps \xC2\xB7 untick to exclude:")
+    for i, st in ipairs(pd.steps) do
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xB2##pu1_up" .. i) then
+        sendCmd(string.format("uf1pushmove;%d;%d;-1", pos, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      if reaper.ImGui_SmallButton(ctx, "\xE2\x96\xBC##pu1_dn" .. i) then
+        sendCmd(string.format("uf1pushmove;%d;%d;1", pos, i - 1))
+      end
+      reaper.ImGui_SameLine(ctx)
+      local rv = reaper.ImGui_Checkbox(ctx, st.label .. "##pu1_cb" .. i, st.en)
+      if rv then
+        sendCmd(string.format("uf1pushtoggle;%d;%d", pos, i - 1))
+      end
+      if st.foreign then
+        reaper.ImGui_SameLine(ctx)
+        if reaper.ImGui_SmallButton(ctx, "x##pu1_rm" .. i) then
+          sendCmd(string.format("uf1pushremove;%d;%d", pos, i - 1))
+        end
+      end
+    end
+    if reaper.ImGui_SmallButton(ctx, "Clear steps (plain toggle)##pu1_reset") then
+      sendCmd(string.format("uf1pushreset;%d", pos))
+    end
+  end
+  if #pd.params > 0 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "+ Add step") then
+      for _, p in ipairs(pd.params) do
+        if reaper.ImGui_BeginMenu(ctx, p.name .. "##pu1_p" .. p.param) then
+          for oi, o in ipairs(p.opts) do
+            if reaper.ImGui_Selectable(ctx,
+                o.label .. "##pu1_o" .. p.param .. "_" .. oi, false, SEL_NOCLOSE) then
+              sendCmd(string.format("uf1pushadd;%d;%d;%.6f", pos, p.param, o.norm))
+            end
+          end
+          reaper.ImGui_EndMenu(ctx)
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+end
+
 local function drawControlContextMenu()
   if ctxCtrlIdx < 0 then
     reaper.SetExtState(SECT, "hud_push_req", "", false)
@@ -3064,6 +3158,20 @@ local function drawUf1ControlContextMenu()
         uf1Field(9, 0)
       end
     end
+
+    -- Push cycle — soft-keys only (a V-Pot turns, it doesn't step). Writes
+    -- hud_uf1_push_req only while the submenu is open, so the extension builds
+    -- just this key's steps + param catalog.
+    local u1PushReq = ""
+    if ctxUf1Sk == 1 then
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_BeginMenu(ctx, "Push cycle") then
+        u1PushReq = tostring(ctxUf1Pos)
+        drawPushCycleUf1(ctxUf1Pos)
+        reaper.ImGui_EndMenu(ctx)
+      end
+    end
+    reaper.SetExtState(SECT, "hud_uf1_push_req", u1PushReq, false)
 
     -- Rename writes an inline field rather than a native dialog, matching the
     -- Settings side (native dialogs are unreliable on macOS 15).
