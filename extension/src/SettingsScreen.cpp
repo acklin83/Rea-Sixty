@@ -8730,6 +8730,19 @@ struct Uf8ListenSlot {
 };
 Uf8ListenSlot g_listeningUf8;
 
+// UF1 listen state (v11) — the third arm target beside g_listeningLinkIdx
+// (UC1) and g_listeningUf8. All three are mutually exclusive: arming one
+// clears the others. A UF1 position is just (stream, flat pos), so this is
+// the simplest of the three.
+struct Uf1ListenSlot {
+    int  pos      = -1;      // -1 = none; else page*4 + idx
+    bool softKeys = false;
+    bool active() const { return pos >= 0; }
+    void clear() { pos = -1; softKeys = false; }
+    bool matches(bool sk, int p) const { return pos == p && softKeys == sk; }
+};
+Uf1ListenSlot g_listeningUf1;
+
 // Bank index currently shown on the UF8 mockup — drives which
 // banks.banks[fb][bank][s] entries are visible/editable.
 int g_uf8EditingBank = 0;
@@ -11283,6 +11296,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     int lbtn = 0;
     if (exists && ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
         g_listeningLinkIdx = isListen ? -1 : ctrl.linkIdx;
+        g_listeningUf1.clear();          // all three listens are exclusive (v11)
     }
 
     if (exists && ImGui_IsItemHovered(ctx, nullptr)) {
@@ -13258,6 +13272,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             g_listeningUf8.strip = ctrl.strip;
             g_listeningUf8.bank  = bank;
             g_listeningLinkIdx   = -1;   // mutually exclusive with UC1 listen
+            g_listeningUf1.clear();      // …and with the UF1 listen (v11)
             // Fresh GUI listen → default continuous; a HW V-Pot PRESS while this
             // slot listens flags the bind Toggle instead (Frank 2026-06-20).
             reasixty_setUf8LearnAsToggle(false);
@@ -14308,6 +14323,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     const int pos = g_uf1EditingPage * uf8::kUserUf1PerPage + idx;
     const int mapped = mappedVst3ForUf1_(softKeys, pos);
     const bool isMapped = (mapped >= 0);
+    const bool isListen = g_listeningUf1.matches(softKeys, pos);
 
     // Label: custom name if the user set one, else the plug-in's param name.
     char shown[96];
@@ -14327,28 +14343,54 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         snprintf(shown, sizeof(shown), "—");
     }
 
-    char id[48];
-    snprintf(id, sizeof(id), "%s##uf1cell_%d_%d", shown, softKeys ? 1 : 0, pos);
+    char id[64];
+    snprintf(id, sizeof(id), "%s##uf1cell_%d_%d",
+             isListen ? "\xE2\x97\x8F listening\xE2\x80\xA6" : shown,
+             softKeys ? 1 : 0, pos);
     double bw = 168.0, bh = 44.0;
-    if (isMapped) {
-        ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0x2E5C3AFF);
-        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x3A7048FF);
-        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x468658FF);
+    const bool tinted = isListen || isMapped;
+    if (tinted) {
+        // Amber while armed, green when bound — same reading as the UC1/UF8
+        // schematics (listen state wins over mapped state).
+        ImGui_PushStyleColor(ctx, ImGui_Col_Button,
+                             isListen ? 0x8A6A20FF : 0x2E5C3AFF);
+        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered,
+                             isListen ? 0xA07E28FF : 0x3A7048FF);
+        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,
+                             isListen ? 0xB89030FF : 0x468658FF);
     }
-    ImGui_Button(ctx, id, &bw, &bh);
-    if (isMapped) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
+    // Click ARMS the cell (click-and-turn learn), like the UC1/UF8 controls:
+    // arm, then touch the parameter in the plug-in GUI or on the hardware.
+    // Clicking the armed cell again disarms. Arming clears the other two
+    // listen states — all three are mutually exclusive.
+    if (ImGui_Button(ctx, id, &bw, &bh)) {
+        if (isListen) {
+            g_listeningUf1.clear();
+        } else {
+            g_listeningUf1.pos      = pos;
+            g_listeningUf1.softKeys = softKeys;
+            g_listeningLinkIdx      = -1;
+            g_listeningUf8.clear();
+        }
+    }
+    if (tinted) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
 
     if (ImGui_IsItemHovered(ctx, nullptr)) {
-        char tip[224];
+        char tip[288];
         const char* what = softKeys ? "Soft-key" : "V-Pot";
-        if (isMapped)
+        if (isListen)
+            snprintf(tip, sizeof(tip), "%s %d  (page %d)\n"
+                     "  listening — touch a parameter to bind it\n"
+                     "  click again to cancel",
+                     what, idx + 1, g_uf1EditingPage + 1);
+        else if (isMapped)
             snprintf(tip, sizeof(tip), "%s %d  (page %d)\n  %s%s\n"
-                     "  right-click for options",
+                     "  click to re-learn \xC2\xB7 right-click for options",
                      what, idx + 1, g_uf1EditingPage + 1, shown,
                      (slot && slot->inverted) ? "   [inverted]" : "");
         else
             snprintf(tip, sizeof(tip), "%s %d  (page %d)\n"
-                     "  unmapped — drag a parameter here",
+                     "  unmapped — click to listen, or drag a parameter here",
                      what, idx + 1, g_uf1EditingPage + 1);
         ImGui_SetTooltip(ctx, tip);
     }
@@ -14361,7 +14403,10 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         if (ImGui_AcceptDragDropPayload(ctx, "FXL_PARAM", payload,
                                         int(sizeof(payload)), &dropFlags)) {
             const int p = std::atoi(payload);
-            if (p >= 0) bindUf1_(softKeys, pos, p);
+            if (p >= 0) {
+                bindUf1_(softKeys, pos, p);
+                if (isListen) g_listeningUf1.clear();
+            }
         }
         ImGui_EndDragDropTarget(ctx);
     }
@@ -14675,16 +14720,19 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (!editing) {
         g_editingMatch.clear();
         g_listeningLinkIdx = -1;
+        g_listeningUf8.clear();
+        g_listeningUf1.clear();
         return;
     }
 
-    // ESC clears any in-progress listening (UC1 or UF8 — mutually
+    // ESC clears any in-progress listening (UC1, UF8 or UF1 — all mutually
     // exclusive). Only fires when nothing else is capturing keyboard.
-    if (g_listeningLinkIdx >= 0 || g_listeningUf8.active()) {
+    if (g_listeningLinkIdx >= 0 || g_listeningUf8.active() || g_listeningUf1.active()) {
         bool repeat = false;
         if (ImGui_IsKeyPressed(ctx, ImGui_Key_Escape, &repeat)) {
             g_listeningLinkIdx = -1;
             g_listeningUf8.clear();
+            g_listeningUf1.clear();
         }
     }
 
@@ -14981,6 +15029,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // the old pointer.
     if (editing->match != g_editingMatch) {
         g_listeningLinkIdx = -1;
+        g_listeningUf8.clear();
+        g_listeningUf1.clear();   // an arm must not survive a map switch (v11)
         return;
     }
 
@@ -16567,6 +16617,52 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     }
                 }
                 g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
+            }
+        }
+    }
+
+    // Same click-and-turn polling for the UF1 listen state (v11). Identical
+    // shape to the UF8 block above: on ARM, snapshot the current last-touched
+    // param so a stale one can't bind instantly; then bind on the first change
+    // that lands on this map's plug-in.
+    {
+        static int  s_uf1PrevPos = -1;
+        static bool s_uf1PrevSk  = false;
+        const bool listenChanged = (g_listeningUf1.pos      != s_uf1PrevPos ||
+                                    g_listeningUf1.softKeys != s_uf1PrevSk);
+        if (g_listeningUf1.active() && listenChanged) {
+            int t = -1, f = -1, p = -1;
+            if (GetLastTouchedFX(&t, &f, &p)) {
+                g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
+            } else {
+                g_lastTouchedTr = -1; g_lastTouchedFx = -1; g_lastTouchedParam = -1;
+            }
+        }
+        s_uf1PrevPos = g_listeningUf1.pos;
+        s_uf1PrevSk  = g_listeningUf1.softKeys;
+
+        if (g_listeningUf1.active()) {
+            int t = -1, f = -1, p = -1;
+            if (GetLastTouchedFX(&t, &f, &p)) {
+                const bool changed = (t != g_lastTouchedTr ||
+                                      f != g_lastTouchedFx ||
+                                      p != g_lastTouchedParam);
+                if (changed) {
+                    MediaTrack* tr = nullptr;
+                    if (t == 0)      tr = GetMasterTrack(nullptr);
+                    else if (t > 0)  tr = GetTrack(nullptr, t - 1);
+                    if (tr) {
+                        char fxName[256] = {};
+                        if (uf8::fxIdentityName(tr, f, fxName, sizeof(fxName)) &&
+                            std::string(fxName).find(editing->match) != std::string::npos)
+                        {
+                            bindUf1_(g_listeningUf1.softKeys,
+                                     g_listeningUf1.pos, p);
+                            g_listeningUf1.clear();
+                        }
+                    }
+                    g_lastTouchedTr = t; g_lastTouchedFx = f; g_lastTouchedParam = p;
+                }
             }
         }
     }
