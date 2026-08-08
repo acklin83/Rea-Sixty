@@ -114,6 +114,9 @@ Rea-Sixty for Linux — manual install
 libusb / hidapi are bundled — no apt install needed. (They still rely on
 your system's libudev, present on every desktop Linux.)
 
+Requires glibc 2.34 or newer: Ubuntu 22.04+, Debian 12+, MX Linux 23+,
+Fedora 35+. On anything older, build from source.
+
 Known issue: USB stability depends on topology. Linux kernel (xhci_hcd)
 can power-cycle a USB hub port that has UF8 + UC1 daisy-chained on it,
 producing "disabled by hub (EMI?), re-enabling..." in dmesg. Plug UF8
