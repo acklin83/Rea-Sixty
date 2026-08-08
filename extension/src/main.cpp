@@ -4349,6 +4349,14 @@ std::atomic<bool>   g_uf1JogCopyArmed{false};
 // Main thread only (jog drain). Saved view = horizontal arrange range in seconds.
 std::atomic<bool>   g_uf1JogNavZoomed{false};
 double              g_uf1JogNavSavedStart = 0.0, g_uf1JogNavSavedEnd = 0.0;
+// Envelope mode: what the JOG edits. false = the selected envelope's POINTS (B4, the
+// default), true = the PLAYHEAD — so the cursor can be nudged without leaving Envelope
+// editing (Frank 2026-08-08). The NAV-CROSS CENTRE toggles it INSTEAD of the generic
+// spotlight-zoom, and nav-centre LED 0x12 shows which: lit = points, dark = playhead.
+// Arrows keep selecting points in BOTH sub-modes — with nothing selected they pick the
+// next point from the cursor, so jog-the-playhead then arrow-to-grab reads as one move.
+// Session-only (like the razor target), main thread + LED sync read it.
+std::atomic<bool>   g_uf1EnvJogPlayhead{false};
 // The per-mode step UNIT (Frank 2026-08-06: "Sekunden machen NULL Sinn für alles" —
 // keep as an option, but default ZoomRel for the scrub-y modes / Grid for the
 // place-precisely modes). ZoomRel = a fraction of the VISIBLE arrange range per
@@ -8259,6 +8267,15 @@ void applyUf1JogNav_(uint8_t code, int dir)
         g_pageDirty.store(true);
         return;
     }
+    if (axis == 2 && mode == Uf1JogMode::Envelope) {
+        // Envelope: the centre toggles WHAT the jog edits (points ⇄ playhead) instead of
+        // the spotlight-zoom — nudging the cursor is worth more here than a zoom, and the
+        // centre LED can show the state (Frank 2026-08-08). Razor already special-cases
+        // the centre above; this is the same idea for Envelope.
+        g_uf1EnvJogPlayhead.store(!g_uf1EnvJogPlayhead.load());
+        g_pageDirty.store(true);
+        return;
+    }
     if (axis == 2) { uf1JogNavCenterToggle_(mode); return; }
     switch (mode) {
         case Uf1JogMode::Items:
@@ -8973,6 +8990,17 @@ void applyUf1JogRazor_(int count, double timeDelta)
     }
 }
 
+// Move the edit cursor by `delta` seconds. Grid unit → snap to grid cells so a fast spin
+// can't land the cursor between grid lines (Frank 2026-08-06); Zoom/Seconds stay
+// continuous. Shared by Playhead mode and Envelope mode's playhead sub-target.
+static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step)
+{
+    double np = GetCursorPosition() + delta;
+    if (unit == Uf1JogUnit::Grid) np = uf1SnapToGridCell_(np, step);
+    if (np < 0.0) np = 0.0;
+    SetEditCurPos(np, true, false);
+}
+
 // Dispatch a jog rotation by the active Jog Mode (main thread, jog drain). Step =
 // per-mode value in its per-mode UNIT (Seconds / ZoomRel = fraction of visible range
 // / Grid = fraction of grid length), Shift = fine (÷ g_uf1JogFineDiv). Baustein 1/2:
@@ -8996,15 +9024,9 @@ void uf1JogDispatch_(int count)
     }
     const double delta = step * scale * count;   // seconds
     switch (mode) {
-        case Uf1JogMode::Playhead: {
-            double np = GetCursorPosition() + delta;
-            // Grid unit → snap to grid cells so a fast spin can't land the cursor
-            // between grid lines (Frank 2026-08-06). Zoom/Seconds stay continuous.
-            if (unit == Uf1JogUnit::Grid) np = uf1SnapToGridCell_(np, step);
-            if (np < 0.0) np = 0.0;
-            SetEditCurPos(np, true, false);
+        case Uf1JogMode::Playhead:
+            uf1JogMovePlayhead_(delta, unit, step);
             break;
-        }
         case Uf1JogMode::Scrub: {
             // REAL audio scrub (Frank 2026-08-08) — this is what separates Scrub from
             // Playhead, which only moves the cursor silently. CSurf_ScrubAmt is the only
@@ -9034,7 +9056,12 @@ void uf1JogDispatch_(int count)
             else       applyUf1JogMoveItemsDelta_(delta);
             break;
         }
-        case Uf1JogMode::Envelope: applyUf1JogEnvelope_(count, delta); break;
+        case Uf1JogMode::Envelope:
+            // NAV-centre picks the target: playhead (nudge the cursor without leaving
+            // Envelope editing) or the selected envelope's points (Frank 2026-08-08).
+            if (g_uf1EnvJogPlayhead.load()) uf1JogMovePlayhead_(delta, unit, step);
+            else                            applyUf1JogEnvelope_(count, delta);
+            break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
     }
 }
@@ -29507,6 +29534,29 @@ static void uf1RazorSyncLeds_()
     }
 }
 
+// Envelope mode: the nav-centre LED (0x12) shows what the jog edits — LIT = the selected
+// envelope's POINTS, DARK = the PLAYHEAD (Frank 2026-08-08). Same colour/level bytes as
+// the razor edge LEDs so the nav cross looks like one thing.
+// Ordering matters: this runs AFTER uf1RazorSyncLeds_ and DELIBERATELY leaves the LED
+// alone while Razor owns the nav cross — else the two would fight over 0x12 on every
+// mode change (razor→envelope: razor blanks all 5, we light ours; envelope→razor: we keep
+// our hands off and razor's target write stands).
+static void uf1EnvSyncLed_()
+{
+    if (!g_uf1_dev) return;
+    static int lastState = -2;                    // -2 uninit · -1 not envelope · 0 playhead · 1 points
+    const auto mode = g_uf1JogMode.load();
+    const int  st   = (mode == Uf1JogMode::Envelope)
+                      ? (g_uf1EnvJogPlayhead.load() ? 0 : 1) : -1;
+    if (st == lastState) return;
+    lastState = st;
+    if (st < 0 && mode == Uf1JogMode::Razor) return;          // razor owns the nav LEDs now
+    const bool on = (st == 1);
+    g_uf1_dev->send(uf1::buildLed(0x12, true));                       // FF3B enable
+    g_uf1_dev->send(uf1::buildColourRgb(0x12, on ? 0x00FF66u : 0u));  // FF38 colour
+    g_uf1_dev->send(uf1::buildLedLevel(0x12, on ? 0x00 : 0x11));      // FF39 bright/off
+}
+
 void onTimer()
 {
     ++g_tickCounter;
@@ -29544,8 +29594,10 @@ void onTimer()
                                            // the drop commit above owns the clones while held)
     }
 
-    // Razor mode: keep the nav-cross LEDs showing the active edge target.
+    // Razor mode: keep the nav-cross LEDs showing the active edge target. Envelope's
+    // centre-LED sync runs right after (and only touches 0x12) — see uf1EnvSyncLed_.
     uf1RazorSyncLeds_();
+    uf1EnvSyncLed_();
 
     // Load-sweep selection safety net. Root cause is fixed at the source (the
     // impersonator no longer sends the "activate this channel" command frames
@@ -29673,6 +29725,7 @@ void onTimer()
         static bool          mbFlip = false, mbMaster = false, mbStrip = false, mbExt = false;
         static int           mbExtSide = 1;
         static int           mbJog = 0;
+        static bool          mbEnvPh = false;
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
@@ -29706,12 +29759,13 @@ void onTimer()
         const bool ufe  = g_uf1Extender.load();
         const int  ufes = g_uf1ExtenderSide.load();
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
+        const bool eph  = g_uf1EnvJogPlayhead.load();
         if (!mbInit) {
             mbInit = true;
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
-            mbJog = jm;
+            mbJog = jm; mbEnvPh = eph;
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
             // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
@@ -29746,6 +29800,9 @@ void onTimer()
             // UF1 Jog Mode.
             if (jm != mbJog) { chg.push_back(std::string("Jog \xE2\x80\xA2 ")
                                    + uf1JogModeFriendly(static_cast<Uf1JogMode>(jm))); mbJog = jm; }
+            // Envelope mode's jog target (nav-centre): points ⇄ playhead.
+            if (eph != mbEnvPh) { chg.push_back(std::string("Envelope \xE2\x80\xA2 ")
+                                      + (eph ? "Playhead" : "Points")); mbEnvPh = eph; }
             if (!chg.empty()) {
                 std::string joined = chg[0];
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
