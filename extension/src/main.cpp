@@ -21693,6 +21693,34 @@ static int uf1ExplicitParam_(const std::vector<uf8::UserUf1Slot>& v, int page, i
     const uf8::UserUf1Slot* s = uf8::uf1SlotAt(v, page * uf8::kUserUf1PerPage + idx);
     return s ? s->vst3Param : -1;
 }
+// Touch-to-Learn arm for a UF1 position, including the VIRGIN case. The channel
+// handlers bail on `type < 0` (no SSL strip, no learned CS/BC), which is exactly
+// what a not-yet-mapped plug-in looks like — so arming from there alone could
+// never create a map. When the strip resolve fails we fall back to the FOCUSED
+// FX window, i.e. the plug-in the user is actually looking at, and let
+// hudUf1ArmLearn_ arm in create mode (Frank 2026-08-08). Returns true when the
+// touch was consumed for learn. Main thread.
+static bool uf1TouchLearnArmAt_(bool softKeys, int idx)
+{
+    if (!g_hudTouchLearn.load()) return false;
+    MediaTrack* tr = nullptr; int fx = -1;
+    int page = 0;
+    const int type = uf1ResolveCsFx_(uf1FocusedTrack_(), tr, fx);
+    if (type >= 0) {
+        page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
+    } else {
+        int trNum = -1, itemNum = -1, fxNum = -1;
+        if (!(GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) || trNum <= 0) return false;
+        tr = GetTrack(nullptr, trNum - 1);
+        fx = fxNum & 0x00FFFFFF;
+        if (!tr || fx < 0) return false;
+    }
+    reasixty_uf1ArmLearn(softKeys, page * 4 + idx, tr, fx);
+    if (reasixty_uf1LearnArmed() < 0) return false;
+    g_pageDirty.store(true);
+    return true;
+}
+
 // The explicit UF1 map for whatever plug-in sits at (tr,fx), REGARDLESS of its
 // domain. Deliberately not gated on uf1IsLearnedCsBc_: a UF1-only map (domain
 // None) has no CS/BC domain, and gating on one made its map unreadable — the
@@ -21870,6 +21898,15 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         return;
     }
 
+    // Touch-to-Learn (v11): while the mode is on, TURNING a V-Pot arms a learn for
+    // that position instead of driving its param — parity with the UC1/UF8
+    // surfaces ([[touch-to-learn-action]]). BEFORE the strip resolve below,
+    // because a not-yet-mapped plug-in fails that resolve and would never get the
+    // chance to be learned. Falls through to the normal action when the arm
+    // declines. Main thread (PendingInput drain), so it arms straight through
+    // instead of via an atomic like the UF8 input-thread path.
+    if (uf1TouchLearnArmAt_(/*softKeys*/false, vi)) return;
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
@@ -21877,17 +21914,6 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (type < 0) return;                       // non-SSL / unknown strip → no-op
 
     const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
-
-    // Touch-to-Learn (v11): while the mode is on, TURNING a V-Pot arms a learn for
-    // that position instead of driving its param — parity with the UC1/UF8 surfaces
-    // ([[touch-to-learn-action]]). No-ops (and falls through to the normal action)
-    // when the plug-in has no UF1 layer, so enabling the mode can't hijack a strip
-    // that isn't UF1-mapped. Main thread (PendingInput drain), so the arm can call
-    // straight through instead of via an atomic like the UF8 input-thread path.
-    if (g_hudTouchLearn.load()) {   // = reasixty_hudTouchLearnActive(), defined below
-        reasixty_uf1ArmLearn(/*softKeys*/false, page * 4 + vi, tr, fx);
-        if (reasixty_uf1LearnArmed() >= 0) { g_pageDirty.store(true); return; }
-    }
 
     // Resolve the param + its bipolar (centre-detent) flag. For a learned plug-in
     // both come from the packed user slot — its polarity, NOT the canonical CS2/BC2
@@ -22012,6 +22038,12 @@ void applyUf1ChannelSoftKey_(int idx)
         return;
     }
 
+    // Touch-to-Learn (v11): a soft-key PRESS arms a learn for its position rather
+    // than toggling the param. Sits BEFORE both the strip resolve (a virgin
+    // plug-in fails it) and the built-in HQ/AB/PLUG-IN actions — while the mode
+    // is on, the keys are learn targets, not actions.
+    if (uf1TouchLearnArmAt_(/*softKeys*/true, idx)) return;
+
     MediaTrack* focusTr = uf1FocusedTrack_();
     if (!focusTr) return;
     MediaTrack* tr = nullptr; int fx = -1;
@@ -22019,15 +22051,6 @@ void applyUf1ChannelSoftKey_(int idx)
     if (type < 0) return;                        // non-SSL / unknown strip → no-op
 
     const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
-
-    // Touch-to-Learn (v11): a soft-key PRESS arms a learn for its position rather
-    // than toggling the param. Sits BEFORE the built-in HQ/AB/PLUG-IN actions on
-    // purpose — while the mode is on, the keys are learn targets, not transport-ish
-    // actions. Falls through untouched when the plug-in has no UF1 layer.
-    if (g_hudTouchLearn.load()) {   // = reasixty_hudTouchLearnActive(), defined below
-        reasixty_uf1ArmLearn(/*softKeys*/true, page * 4 + idx, tr, fx);
-        if (reasixty_uf1LearnArmed() >= 0) { g_pageDirty.store(true); return; }
-    }
 
     // The canonical HQ MODE / A/B / PLUG-IN soft-key ACTIONS live only on the
     // built-in strips. A learned plug-in packs plain user params onto the soft-keys

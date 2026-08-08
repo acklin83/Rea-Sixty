@@ -10344,6 +10344,7 @@ bool hudUf8LearnTick_()
 // Settings window CLOSED (the editor's polling only runs while the FX-Learn
 // page draws) and it times out. Same shape as the UF8 block above.
 bool        g_hudUf1LearnActive = false;
+bool        g_hudUf1LearnCreate = false;   // armed on a plug-in with NO map yet
 bool        g_hudUf1LearnSk     = false;
 int         g_hudUf1LearnPos    = -1;
 std::string g_hudUf1LearnMatch;
@@ -10353,6 +10354,7 @@ int         g_hudUf1LearnTr = -1, g_hudUf1LearnFx = -1, g_hudUf1LearnParam = -1;
 void hudUf1CancelLearn_()
 {
     g_hudUf1LearnActive = false;
+    g_hudUf1LearnCreate = false;
     g_hudUf1LearnPos    = -1;
     g_hudUf1LearnTicks  = 0;
     g_hudUf1LearnMatch.clear();
@@ -10410,13 +10412,91 @@ bool hudUf1BindMatch_(const std::string& match, bool softKeys, int pos, int vst3
     }
     return false;
 }
+// CREATE-NEW: the touched plug-in has no map at all. Build a fresh UF1-ONLY map
+// (domain None, uf8Mode false, uf1Mode true) with a param snapshot and bind the
+// wiggled param onto the armed position. Mirrors hudUf8CreateAndBind_ — the UF8
+// tab has done exactly this for a virgin plug-in since day one, and without it a
+// UF1 owner with no UC1 had to visit Settings before the hardware would do
+// anything (Frank 2026-08-08).
+bool hudUf1CreateAndBind_(MediaTrack* tr, int fx, bool softKeys, int pos, int vst3Param)
+{
+    if (!tr || fx < 0 || pos < 0 || vst3Param < 0) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return false;
+    const std::string match = name;
+    if (user_plugins::collidesWithBuiltin(match)) return false;   // SSL built-in
+    // Raced with another create (or the plug-in gained a map meanwhile)? Bind
+    // into the existing one instead of shadowing it with a second entry.
+    if (user_plugins::lookupOwnedByName(match)) {
+        user_plugins::enableUf1Layer(match);
+        return hudUf1BindMatch_(match, softKeys, pos, vst3Param);
+    }
+
+    UserPluginMap m;
+    m.match        = match;
+    m.displayShort = hudShortLabel_(name);
+    m.domain       = uf8::Domain::None;    // no UC1 domain — UF1-only map
+    m.uf8Mode      = false;
+    m.uf1Mode      = true;
+    m.isDefault    = false;
+
+    if (!uf8::fxIsAcustica(tr, fx)) {
+        const int n = TrackFX_GetNumParams(tr, fx);
+        m.paramSnapshot.reserve(static_cast<size_t>(n));
+        char pn[256];
+        for (int p = 0; p < n; ++p) {
+            UserParamInfo pi{};
+            pi.vst3Param = p;
+            if (TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn))) pi.name = pn;
+            if (isReaperMidiParam_(pi.name.c_str())) continue;
+            double mn = 0, mx = 1, def = 0;
+            TrackFX_GetParamEx(tr, fx, p, &mn, &mx, &def);
+            const double range = mx - mn;
+            pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
+            double step = 0, smallStep = 0, largeStep = 0; bool isToggle = false;
+            TrackFX_GetParameterStepSizes(tr, fx, p, &step, &smallStep,
+                                          &largeStep, &isToggle);
+            pi.wasEnum = isToggle || step >= 0.5;
+            m.paramSnapshot.push_back(std::move(pi));
+        }
+        m.functionalParamCount = countFunctionalParams_(tr, fx);
+        m.snapshotTakenAt = static_cast<int64_t>(std::time(nullptr));
+    }
+
+    UserUf1Slot ns{};
+    ns.pos = pos; ns.vst3Param = vst3Param;
+    (softKeys ? m.uf1.softKeys : m.uf1.vpots).push_back(std::move(ns));
+    user_plugins::upsert(std::move(m));
+    persistAndReport_();
+    return true;
+}
+
 void hudUf1ArmLearn_(bool softKeys, int pos, void* trV, int fx)
 {
     hudUf1CancelLearn_();
     std::string match;
     // Arming CREATES the layer (seeded) when the plug-in is learned but has none
     // yet — the first touch is the gesture that makes the UF1 editable.
-    if (!hudUf1ResolveOrCreate_(trV, fx, match)) return;  // not learned → no-op
+    if (!hudUf1ResolveOrCreate_(trV, fx, match)) {
+        // No map at all → arm in CREATE mode: whatever param gets wiggled next
+        // defines a brand-new UF1-only map for the touched plug-in.
+        MediaTrack* tr = static_cast<MediaTrack*>(trV);
+        if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+        char nm[512] = {0};
+        if (!fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return;
+        if (user_plugins::collidesWithBuiltin(nm)) return;   // SSL built-in → no
+        g_hudUf1LearnActive = true;
+        g_hudUf1LearnCreate = true;
+        g_hudUf1LearnSk     = softKeys;
+        g_hudUf1LearnPos    = pos;
+        g_hudUf1LearnMatch.clear();
+        g_hudUf1LearnTicks  = 600;
+        int t0 = -1, f0 = -1, p0 = -1;
+        if (GetLastTouchedFX(&t0, &f0, &p0)) { g_hudUf1LearnTr = t0; g_hudUf1LearnFx = f0; g_hudUf1LearnParam = p0; }
+        else                                 { g_hudUf1LearnTr = -1; g_hudUf1LearnFx = -1; g_hudUf1LearnParam = -1; }
+        return;
+    }
     g_hudUf1LearnActive = true;
     g_hudUf1LearnSk     = softKeys;
     g_hudUf1LearnPos    = pos;
@@ -10440,6 +10520,15 @@ bool hudUf1LearnTick_()
     if (!tr) return false;
     char name[512] = {0};
     if (!fxIdentityName(tr, f, name, sizeof(name))) return false;
+    // CREATE mode: any wiggled FX defines the (virgin) plug-in — build a fresh
+    // UF1-only map for it, no match filter (mirrors the UF8 create-new branch).
+    if (g_hudUf1LearnCreate) {
+        if (hudUf1CreateAndBind_(tr, f, g_hudUf1LearnSk, g_hudUf1LearnPos, p)) {
+            hudUf1CancelLearn_();
+            return true;
+        }
+        return false;
+    }
     if (std::string(name).find(g_hudUf1LearnMatch) == std::string::npos) return false;
     if (hudUf1BindMatch_(g_hudUf1LearnMatch, g_hudUf1LearnSk, g_hudUf1LearnPos, p)) {
         hudUf1CancelLearn_();
