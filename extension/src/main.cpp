@@ -8773,6 +8773,127 @@ void applyUf1JogRazorContent_(double dt)
                             uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd));
 }
 
+// Default crossfade length for the drop — follows REAPER's auto-crossfade length pref if
+// present, else 10 ms. Guarded read: an unknown key returns null → fallback (no crash).
+static double uf1DropXfadeLen_()
+{
+    int sz = 0;
+    if (double* p = static_cast<double*>(get_config_var("defsplitxfadelen", &sz)))
+        if (sz == static_cast<int>(sizeof(double)) && *p > 0.0) return *p;
+    return 0.010;
+}
+
+// Razor content DROP — on the NAV-CENTRE release, make the just-dropped items behave like a
+// REAPER mouse-drop with trim-behind + auto-crossfade (both are OFF during the drag via
+// Uf1NoAutoEdit_ so REAPER doesn't edit at every jog tick; applied ONCE here — Frank
+// 2026-08-08). For each dropped item: split the items underneath at its edges, delete the
+// covered portion (so the drop REPLACES what's under it), then re-extend the surviving
+// neighbours by the crossfade length and set the AUTO fades — a native crossfade IS the pair
+// of AUTO fades over the overlap. Each item's LIVE track is scanned, so a cross-track drop
+// trims/crossfades on the destination track. Move + copy alike. Main thread.
+static void uf1RazorContentCommitXfades_()
+{
+    if (g_uf1RazorCopyClones.empty()) return;
+    // Auto-crossfade + trim-behind must be OFF for OUR splits too. The drag's guard lives in
+    // uf1RazorContentGesture_; this runs later (onTimer) with the pref already restored, so
+    // REAPER was splitting WITH auto-crossfade and pushing the cut edges apart by the xfade
+    // length (10 ms) — the covered slice then started before ds and escaped the "fully
+    // inside" delete, leaving a ghost under the drop (Frank 2026-08-08, verified in the razor
+    // log: middle slice came back as 5.99 instead of 6.00). Clean cuts here, fades set below.
+    Uf1NoAutoEdit_ noEdit;
+    const double X = uf1DropXfadeLen_();
+    std::unordered_set<MediaItem*> dropped(g_uf1RazorCopyClones.begin(),
+                                           g_uf1RazorCopyClones.end());
+    // Snapshot the drops first — the edits below mutate the tracks' item lists.
+    struct Drop { MediaItem* it; MediaTrack* tr; double s, e; };
+    std::vector<Drop> drops;
+    for (MediaItem* d : g_uf1RazorCopyClones) {
+        if (!ValidatePtr2(nullptr, d, "MediaItem*")) continue;
+        MediaTrack* tr = GetMediaItem_Track(d);
+        if (!tr) continue;
+        const double s = GetMediaItemInfo_Value(d, "D_POSITION");
+        drops.push_back({ d, tr, s, s + GetMediaItemInfo_Value(d, "D_LENGTH") });
+    }
+    for (const Drop& dp : drops) {
+        MediaTrack* tr = dp.tr; MediaItem* d = dp.it;
+        const double ds = dp.s, de = dp.e;
+        if (de - ds <= 1e-9) continue;
+        const double x = std::min(X, (de - ds) * 0.5);         // never exceed half the drop
+
+        // 1) Split the underlying items at the drop's edges. Splitting at D's OWN edges is a
+        //    no-op for D, so only the neighbours get cut.
+        uf1RazorSplitAt_(tr, ds);
+        uf1RazorSplitAt_(tr, de);
+
+        // 2) Delete every non-dropped slice the drop now covers. Own scan (not
+        //    uf1RazorSlices_, which the grab shares) with a tolerant edge test: a slice
+        //    counts as covered when its MIDPOINT is inside [ds,de], so a boundary that
+        //    landed a hair outside can't leave a ghost under the drop.
+        {
+            std::vector<MediaItem*> kill;
+            const int nb = CountTrackMediaItems(tr);
+            for (int i = 0; i < nb; ++i) {
+                MediaItem* it = GetTrackMediaItem(tr, i);
+                if (!it || it == d || dropped.count(it)) continue;
+                const double ip = GetMediaItemInfo_Value(it, "D_POSITION");
+                const double il = GetMediaItemInfo_Value(it, "D_LENGTH");
+                const double mid = ip + il * 0.5;
+                if (mid > ds + 1e-9 && mid < de - 1e-9) kill.push_back(it);
+            }
+            for (MediaItem* it : kill)
+                if (ValidatePtr2(nullptr, it, "MediaItem*")) DeleteTrackMediaItem(tr, it);
+        }
+
+        // 3) Neighbours: find them GEOMETRICALLY (nearest edge within a window), never by
+        //    exact equality — REAPER's split-crossfade pulls the new edge back by the xfade
+        //    length, so an exact `== de` test finds nothing and the fades never get set
+        //    (Frank 2026-08-08 "rechts sitzt nicht", confirmed in the log: right=0x0 while
+        //    the piece sat at de-0.01). Then NORMALISE the overlap to exactly x, so the
+        //    result is the same whether or not the split already extended the piece.
+        const double win = x + 1e-3;                            // edge-search window
+        MediaItem* left = nullptr; double leftEnd = -1e18;
+        MediaItem* right = nullptr; double rightPos = 1e18;
+        const int ni = CountTrackMediaItems(tr);
+        for (int i = 0; i < ni; ++i) {
+            MediaItem* it = GetTrackMediaItem(tr, i);
+            if (!it || it == d || dropped.count(it)) continue;
+            const double ip = GetMediaItemInfo_Value(it, "D_POSITION");
+            const double ie = ip + GetMediaItemInfo_Value(it, "D_LENGTH");
+            if (ie >= ds - win && ie <= ds + win && ie > leftEnd)  { left  = it; leftEnd  = ie; }
+            if (ip >= de - win && ip <= de + win && ip < rightPos) { right = it; rightPos = ip; }
+        }
+        if (x > 1e-9 && left) {                                 // right edge → exactly ds + x
+            const double lp = GetMediaItemInfo_Value(left, "D_POSITION");
+            const double nl = (ds + x) - lp;
+            if (nl > 1e-6) {
+                SetMediaItemInfo_Value(left, "D_LENGTH", nl);
+                SetMediaItemInfo_Value(left, "D_FADEOUTLEN_AUTO", x);
+                SetMediaItemInfo_Value(d,    "D_FADEINLEN_AUTO",  x);
+            }
+        }
+        if (x > 1e-9 && right) {                                // front → exactly de - x
+            const double rp  = GetMediaItemInfo_Value(right, "D_POSITION");
+            const double rl  = GetMediaItemInfo_Value(right, "D_LENGTH");
+            const double np  = de - x;
+            const double dlt = np - rp;                         // >0 = later, <0 = earlier
+            const double nl  = rl - dlt;                        // keep the end fixed
+            if (nl > 1e-6) {
+                MediaItem_Take* tk = GetActiveTake(right);
+                double rate = tk ? GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE") : 1.0;
+                if (!(rate > 0.0)) rate = 1.0;
+                SetMediaItemInfo_Value(right, "D_POSITION", np);
+                SetMediaItemInfo_Value(right, "D_LENGTH",   nl);
+                if (tk) SetMediaItemTakeInfo_Value(tk, "D_STARTOFFS",
+                            GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + dlt * rate);
+                SetMediaItemInfo_Value(d,     "D_FADEOUTLEN_AUTO", x);
+                SetMediaItemInfo_Value(right, "D_FADEINLEN_AUTO",  x);
+            }
+        }
+    }
+    g_uf1RazorCopyClones.clear();                               // gesture done
+    UpdateArrange();
+}
+
 // No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
 // growing right by |delta|, on every SELECTED track (fallback: last-touched), media lane
 // (guid ""). Non-zero on purpose — REAPER discards a zero-width razor, so we can't create
@@ -29381,6 +29502,16 @@ void onTimer()
         }
     }
 
+    // Razor content DROP: on the NAV-CENTRE falling edge (mouse-up) after a content drag,
+    // create the crossfades once (Frank 2026-08-08). Runs before the copy-latch clear below
+    // so the just-dragged clones are still present. Only Razor mode ever toggles the flag.
+    {
+        static bool s_prevRazorHeld = false;
+        const bool held = g_uf1RazorContentHeld.load();
+        if (s_prevRazorHeld && !held) uf1RazorContentCommitXfades_();
+        s_prevRazorHeld = held;
+    }
+
     // Jog Items copy latch: disarm as soon as Cmd (the copy modifier) is released, so
     // releasing Cmd WITHOUT turning the jog (then re-pressing) makes a fresh copy on the
     // next Cmd+jog. The dispatch also clears it on any non-copy jog; this catches the
@@ -29388,7 +29519,9 @@ void onTimer()
     if (g_uf1JogCopyArmed.load()
         && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd)) {
         g_uf1JogCopyArmed.store(false);
-        g_uf1RazorCopyClones.clear();      // end the razor copy-drag gesture
+        if (!g_uf1RazorContentHeld.load())
+            g_uf1RazorCopyClones.clear();  // end the razor copy-drag gesture (not mid-drag —
+                                           // the drop commit above owns the clones while held)
     }
 
     // Razor mode: keep the nav-cross LEDs showing the active edge target.
