@@ -11,6 +11,8 @@
 
 #include "UserPluginCatalog.h"
 #include "LogPath.h"
+#include "UC1PluginMap.h"   // uc1::linkIdxIsButton — the UF1 seed splits the UC1
+                            // slots into the same two streams the runtime does
 
 #include <algorithm>
 #include <atomic>
@@ -1683,6 +1685,62 @@ bool captureOriginalName(std::string_view match, std::string_view originalName)
 // and never re-snapshotted — ships functionalParamCount == -1 and the exchange
 // records NO parameter coverage. Called from the Share-time FX scan (which has
 // the live plug-in in hand) so a re-Share fills it, exactly as original_name is.
+// Seed an EMPTY UF1 map with exactly what the sequential fallback currently
+// shows, so switching a plug-in's UF1 layer on changes NOTHING visible — the
+// layout the user already sees simply becomes editable. Without this, enabling
+// the layer (or auto-enabling it on the first learn gesture) would replace a
+// working automatic layout with a blank grid, which is a downgrade dressed as a
+// feature (Frank 2026-08-08). No-op when the UF1 map already carries anything.
+//
+// Mirrors uf1LearnedStreamSlots_ in main.cpp: mapped slots only, split by
+// uc1::linkIdxIsButton (buttons → soft-keys, rest → V-Pots), each stream sorted
+// by linkIdx and packed from position 0. Keep the two in step.
+void seedUf1FromSlots(UserPluginMap& m)
+{
+    if (uf1MapHasContent(m.uf1)) return;
+    const bool busComp = (m.domain == Domain::BusComp);
+    std::vector<const UserLinkSlot*> vp, sk;
+    for (const auto& s : m.slots) {
+        if (s.vst3Param < 0) continue;
+        (uc1::linkIdxIsButton(s.linkIdx, busComp) ? sk : vp).push_back(&s);
+    }
+    auto byLink = [](const UserLinkSlot* a, const UserLinkSlot* b) {
+        return a->linkIdx < b->linkIdx;
+    };
+    std::sort(vp.begin(), vp.end(), byLink);
+    std::sort(sk.begin(), sk.end(), byLink);
+    auto fill = [](const std::vector<const UserLinkSlot*>& src,
+                   std::vector<UserUf1Slot>& dst) {
+        dst.clear();
+        for (size_t i = 0; i < src.size(); ++i) {
+            UserUf1Slot s{};
+            s.pos         = static_cast<int>(i);
+            s.vst3Param   = src[i]->vst3Param;
+            s.inverted    = src[i]->inverted;
+            s.customLabel = src[i]->customLabel;
+            dst.push_back(std::move(s));
+        }
+    };
+    fill(vp, m.uf1.vpots);
+    fill(sk, m.uf1.softKeys);
+}
+// Turn the UF1 layer on for `match`, seeding it on the way. Returns true when
+// the catalog changed. Safe to call repeatedly — a populated map is left alone.
+bool enableUf1Layer(std::string_view match)
+{
+    auto cat = get();                       // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        if (m.uf1Mode && uf1MapHasContent(m.uf1)) return false;
+        seedUf1FromSlots(m);
+        m.uf1Mode = true;
+        setAll(std::move(cat));
+        save();
+        return true;
+    }
+    return false;
+}
+
 bool captureFunctionalParamCount(std::string_view match, int count)
 {
     if (match.empty() || count < 0) return false;

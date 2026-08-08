@@ -10,6 +10,7 @@
 #include <cstring>
 #include <ctime>
 #include <functional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -10371,6 +10372,26 @@ bool hudUf1ResolveMatch_(void* trV, int fx, std::string& out)
     out = um->match;
     return true;
 }
+// Same, but ENABLES the layer first when the plug-in is learned and simply has
+// no UF1 layer yet. Enabling seeds the map from the sequential fallback, so the
+// UF1 keeps showing what it showed a moment ago and the user never has to
+// "create a UF1 map" as a separate act (Frank 2026-08-08: "Zuerst eine UF1 map
+// anlegen wäre umständlich"). Used by the LEARN paths only — read-only paths
+// keep using hudUf1ResolveMatch_ so merely looking at a plug-in creates nothing.
+bool hudUf1ResolveOrCreate_(void* trV, int fx, std::string& out)
+{
+    if (hudUf1ResolveMatch_(trV, fx, out)) return true;
+    MediaTrack* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char name[512] = {0};
+    if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return false;
+    const auto* um = user_plugins::lookupOwnedByName(name);
+    if (!um) return false;                       // not learned at all → nothing to seed
+    const std::string match = um->match;
+    user_plugins::enableUf1Layer(match);
+    out = match;
+    return true;
+}
 // Bind a param onto a UF1 position of the map named `match`. upsert + save.
 bool hudUf1BindMatch_(const std::string& match, bool softKeys, int pos, int vst3Param)
 {
@@ -10393,7 +10414,9 @@ void hudUf1ArmLearn_(bool softKeys, int pos, void* trV, int fx)
 {
     hudUf1CancelLearn_();
     std::string match;
-    if (!hudUf1ResolveMatch_(trV, fx, match)) return;    // no UF1 layer → no-op
+    // Arming CREATES the layer (seeded) when the plug-in is learned but has none
+    // yet — the first touch is the gesture that makes the UF1 editable.
+    if (!hudUf1ResolveOrCreate_(trV, fx, match)) return;  // not learned → no-op
     g_hudUf1LearnActive = true;
     g_hudUf1LearnSk     = softKeys;
     g_hudUf1LearnPos    = pos;
@@ -10464,6 +10487,78 @@ bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
     return hudUf1MutateMatch_(match, softKeys, pos,
         [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel = label; });
 }
+// ---- "Send to UF1" (Frank 2026-08-08) --------------------------------------
+// Put `vst3Param` on the next FREE V-Pot position of `match`'s UF1 map,
+// enabling + seeding the layer first if it has none. This is the answer to
+// "the param has no room on the UC1" — you are already in the UC1 map when you
+// notice, so the shortcut lives there rather than making you go build a UF1 map.
+// Returns the position used, or -1.
+int sendToUf1_(const std::string& match, int vst3Param, const std::string& label)
+{
+    if (match.empty() || vst3Param < 0) return -1;
+    user_plugins::enableUf1Layer(match);          // seeds when empty; no-op after
+    auto cat = user_plugins::get();               // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        // Already on the UF1? Don't duplicate — report where it sits.
+        for (const auto& s : m.uf1.vpots)
+            if (s.vst3Param == vst3Param) return s.pos;
+        int pos = 0;
+        for (;; ++pos) {
+            bool taken = false;
+            for (const auto& s : m.uf1.vpots) if (s.pos == pos) { taken = true; break; }
+            if (!taken) break;
+        }
+        UserUf1Slot ns{};
+        ns.pos = pos; ns.vst3Param = vst3Param; ns.customLabel = label;
+        m.uf1.vpots.push_back(std::move(ns));
+        m.uf1Mode = true;
+        user_plugins::setAll(std::move(cat));
+        persistAndReport_();
+        return pos;
+    }
+    return -1;
+}
+// Pack every functional param that is NOT already on the UC1 (Normal layer) or
+// the UF1 onto the free UF1 V-Pot positions, in paramSnapshot order. Turns the
+// UF1 into the overflow surface in one action. Returns how many were added.
+int fillUf1WithRest_(const std::string& match)
+{
+    if (match.empty()) return 0;
+    user_plugins::enableUf1Layer(match);
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        std::set<int> used;
+        for (const auto& s : m.slots)       if (s.vst3Param >= 0) used.insert(s.vst3Param);
+        for (const auto& s : m.uf1.vpots)   if (s.vst3Param >= 0) used.insert(s.vst3Param);
+        for (const auto& s : m.uf1.softKeys)if (s.vst3Param >= 0) used.insert(s.vst3Param);
+        int pos = 0, added = 0;
+        auto nextFree = [&]() {
+            for (;; ++pos) {
+                bool taken = false;
+                for (const auto& s : m.uf1.vpots) if (s.pos == pos) { taken = true; break; }
+                if (!taken) return pos;
+            }
+        };
+        for (const auto& p : m.paramSnapshot) {
+            if (p.vst3Param < 0 || used.count(p.vst3Param)) continue;
+            UserUf1Slot ns{};
+            ns.pos = nextFree(); ns.vst3Param = p.vst3Param;
+            m.uf1.vpots.push_back(std::move(ns));
+            used.insert(p.vst3Param);
+            ++added;
+        }
+        if (added > 0) {
+            m.uf1Mode = true;
+            user_plugins::setAll(std::move(cat));
+            persistAndReport_();
+        }
+        return added;
+    }
+    return 0;
+}
+
 // Build the HUD's UF1 payload for the plug-in at (tr,fx):
 //   "P;<pages>;<curPage>" then one "\n<pos>;<sk>;<param>;<inv>;<label>" per
 // mapped position. Empty when the plug-in has no UF1 layer, which the Lua reads
@@ -12138,6 +12233,22 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 if (ImGui_MenuItem(ctx, "Apply this feel to all mappings",
                                    nullptr, nullptr, nullptr)) {
                     applyFeelToAllSlots_(feelFromLinkSlot_(lid));
+                }
+            }
+
+            // Send to UF1 (v11): put this slot's param on the next free UF1
+            // V-Pot, creating + seeding the UF1 layer if there is none. The
+            // shortcut lives HERE because this is where you notice the UC1 has
+            // no room for it — the alternative was building a UF1 map first,
+            // which Frank rightly called umständlich (2026-08-08). Keeps the UC1
+            // binding; the param simply exists on both surfaces.
+            {
+                const int lid = ctrl.linkIdx;
+                const int cur = mappedVst3For_(lid);
+                if (cur >= 0) {
+                    ImGui_Separator(ctx);
+                    if (ImGui_MenuItem(ctx, "Send to UF1", nullptr, nullptr, nullptr))
+                        sendToUf1_(g_editingMatch, cur, std::string());
                 }
             }
 
@@ -14666,9 +14777,19 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/true, i);
     }
     ImGui_Spacing(ctx);
+    // Fill the rest: every functional param not already on the UC1 or the UF1,
+    // packed onto the free V-Pot positions — makes the UF1 the overflow surface
+    // in one action instead of one drag per param (Frank 2026-08-08).
+    if (ImGui_Button(ctx, "Fill with unmapped parameters##uf1_fill", nullptr, nullptr))
+        fillUf1WithRest_(g_editingMatch);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx,
+            "Append every parameter that isn't mapped on the UC1 or here yet,\n"
+            "in the plug-in's own order, onto the free UF1 V-Pots.");
+    ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
-        "Drag a parameter from the list onto a control. Leave the UF1 layer off "
-        "and the UF1 keeps filling itself from the UC1 mapping.");
+        "Click a control to learn it, or drag a parameter from the list. Leave "
+        "the UF1 layer off and the UF1 keeps filling itself from the UC1 mapping.");
 }
 
 void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
@@ -15280,15 +15401,23 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         {
             bool uf1Now = editing->uf1Mode;
             if (ImGui_Checkbox(ctx, "UF1 layer##fxl_mode_uf1layer", &uf1Now)) {
-                UserPluginMap copy = *editing;
-                copy.uf1Mode = uf1Now;
-                uf8::user_plugins::upsert(std::move(copy));
-                persistAndReport_();
+                if (uf1Now) {
+                    // SEED on enable so the UF1 keeps showing exactly what it
+                    // showed a second ago — the sequential layout simply becomes
+                    // editable. Enabling into a blank grid would trade a working
+                    // layout for an empty one (Frank 2026-08-08).
+                    uf8::user_plugins::enableUf1Layer(editing->match);
+                } else {
+                    UserPluginMap copy = *editing;
+                    copy.uf1Mode = false;
+                    uf8::user_plugins::upsert(std::move(copy));
+                    persistAndReport_();
+                }
             }
             if (ImGui_IsItemHovered(ctx, nullptr))
                 ImGui_SetTooltip(ctx,
-                    "Own UF1 mapping for this plug-in.\n"
-                    "Off: the UF1 fills itself from the UC1 mapping.");
+                    "Own UF1 mapping for this plug-in, started from the layout the\n"
+                    "UF1 already shows. Off: the UF1 fills itself from the UC1 mapping.");
         }
     }
 
@@ -17088,6 +17217,19 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         }
                     }
                     ImGui_EndCombo(ctx);
+                }
+                // Send to UF1 (v11). EXT FUNCS have NO physical control at all —
+                // they live only in the hidden BACK menu — so putting one on a UF1
+                // V-Pot is the first time it gets a knob (Frank 2026-08-08).
+                if (e.vst3Param >= 0) {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    char bId[40];
+                    snprintf(bId, sizeof(bId), "\xE2\x86\x92UF1##fxl_ef_uf1_%d", slot);
+                    if (ImGui_SmallButton(ctx, bId))
+                        sendToUf1_(g_editingMatch, e.vst3Param, e.name);
+                    if (ImGui_IsItemHovered(ctx, nullptr))
+                        ImGui_SetTooltip(ctx, "Put this parameter on the next free "
+                                              "UF1 V-Pot (creates the UF1 layer if needed)");
                 }
                 ImGui_EndGroup(ctx);
             };

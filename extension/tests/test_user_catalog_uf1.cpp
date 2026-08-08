@@ -18,6 +18,14 @@
 #define REAPERAPI_IMPLEMENT
 #include "UserPluginCatalog.cpp"
 
+// seedUf1FromSlots splits the UC1 slots by uc1::linkIdxIsButton. Linking the
+// real one drags in most of the UC1 stack, and a unit test wants a rule it
+// controls anyway — so: odd linkIdx counts as a button here. The test asserts
+// the SPLIT and the ORDER, which is the seed's actual contract.
+namespace uc1 {
+bool linkIdxIsButton(int linkIdx, bool /*busComp*/) { return (linkIdx % 2) == 1; }
+}
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -171,6 +179,40 @@ int main()
         EXPECT(std::string(surfaceScope(m)) == "uc1+uf8+uf1");
         m.uf1Mode = false;
         EXPECT(std::string(surfaceScope(m)) == "uc1+uf8");
+    }
+
+    // --- seeding: enabling the layer must not lose the automatic layout ------
+    // This is what makes implicit creation safe. Enabling on a blank grid would
+    // trade the working sequential layout for nothing.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];
+        m.slots.clear();
+        auto add = [&](int linkIdx, int param) {
+            UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
+            m.slots.push_back(s);
+        };
+        add(6, 60);   // even → V-Pot stream (per the stub above)
+        add(2, 20);
+        add(3, 30);   // odd  → soft-key stream
+        add(9, 90);
+        add(4, -1);   // unmapped → must be skipped entirely
+        seedUf1FromSlots(m);
+
+        // Split by stream, each ORDERED BY linkIdx and packed from position 0.
+        EXPECT(m.uf1.vpots.size() == 2);
+        EXPECT(m.uf1.softKeys.size() == 2);
+        EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 20);   // linkIdx 2 before 6
+        EXPECT(uf1SlotAt(m.uf1.vpots, 1)->vst3Param == 60);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 1)->vst3Param == 90);
+
+        // Idempotent: seeding a populated map must leave it alone, else enabling
+        // twice (or a later auto-enable) would stomp the user's own edits.
+        m.uf1.vpots[0].vst3Param = 999;
+        seedUf1FromSlots(m);
+        EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 999);
     }
 
     std::printf("test_user_catalog_uf1: all passed\n");

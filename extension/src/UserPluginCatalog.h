@@ -769,6 +769,13 @@ bool captureOriginalName(std::string_view match, std::string_view originalName);
 // v3 or never re-snapshotted this session.
 bool captureFunctionalParamCount(std::string_view match, int count);
 
+// Seed an EMPTY UF1 map from the UC1 slots so enabling the layer changes nothing
+// visible (the sequential fallback's layout becomes editable). No-op when the
+// UF1 map already carries something.
+void seedUf1FromSlots(UserPluginMap& m);
+// Enable + seed the UF1 layer for `match`. True when the catalog changed.
+bool enableUf1Layer(std::string_view match);
+
 // Lookup by match-substring on an FX name. Mirrors built-in lookup
 // semantics — first hit on substring wins. Returns a synthesised
 // PluginMap view (lifetime: until the next mutation). Slot list and
