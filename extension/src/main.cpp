@@ -8038,16 +8038,23 @@ static void uf1DeselectAllItems_()
             SetMediaItemSelected(it, false);
 }
 
-// Items ← →: select the prev/next item on the anchor item's track. add (Shift) extends
-// the selection instead of replacing it. Anchor = the last selected item.
+// Items ← →: select the prev/next item on the anchor item's track. add (Shift) extends.
+// Anchor = the selected item on the EDGE we extend toward (→ the right-most, ← the
+// left-most) — else extending left never grows past the left-most selected item
+// (Frank 2026-08-07).
 static void uf1SelectAdjacentItem_(int dir, bool add)
 {
     const int nsel = CountSelectedMediaItems(nullptr);
-    MediaItem* anchor = nsel > 0 ? GetSelectedMediaItem(nullptr, nsel - 1) : nullptr;
+    MediaItem* anchor = nullptr; double anchorPos = 0.0;
+    for (int i = 0; i < nsel; ++i) {
+        MediaItem* it = GetSelectedMediaItem(nullptr, i);
+        if (!it) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        if (!anchor || (dir > 0 ? p > anchorPos : p < anchorPos)) { anchor = it; anchorPos = p; }
+    }
     MediaTrack* tr = anchor ? GetMediaItem_Track(anchor) : GetLastTouchedTrack();
     if (!tr) return;
-    const double anchorPos = anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION")
-                                    : GetCursorPosition();
+    if (!anchor) anchorPos = GetCursorPosition();
     MediaItem* best = nullptr; double bestPos = 0.0;
     const int ni = CountTrackMediaItems(tr);
     for (int i = 0; i < ni; ++i) {
@@ -8112,20 +8119,25 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
 // to the mode's object (Items → selected-items time span, else whole project); second
 // press restores the saved view. Horizontal (time) only. Main thread.
 // Envelope ← →: select the prev/next point of the selected envelope. add (Shift)
-// extends. Anchor = the last selected point (points are time-sorted, so index ±1 =
-// prev/next in time). With no selection, pick the nearest point in `dir` from the cursor.
+// extends. Anchor = the selected point on the EDGE we're extending toward (→ highest
+// index, ← lowest) — else extending left never grows past the top of the selection
+// (Frank 2026-08-07). Points are time-sorted, so index ±1 = prev/next in time. With no
+// selection, pick the nearest point in `dir` from the cursor.
 static void uf1SelectAdjacentEnvPoint_(int dir, bool add)
 {
     TrackEnvelope* env = GetSelectedEnvelope(nullptr);
     if (!env) return;
     const int n = CountEnvelopePointsEx(env, -1);
     if (n <= 0) return;
-    int anchor = -1;
+    int firstSel = -1, lastSel = -1;
     for (int i = 0; i < n; ++i) {
         bool sel = false;
-        if (GetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &sel) && sel)
-            anchor = i;                       // last selected
+        if (GetEnvelopePointEx(env, -1, i, nullptr, nullptr, nullptr, nullptr, &sel) && sel) {
+            if (firstSel < 0) firstSel = i;
+            lastSel = i;
+        }
     }
+    const int anchor = (dir > 0) ? lastSel : firstSel;   // extend from the edge in `dir`
     int target = -1;
     if (anchor >= 0) {
         target = anchor + dir;
