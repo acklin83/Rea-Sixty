@@ -21922,6 +21922,11 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     // keyboard modifiers as the UC1/UF8; fxEffectiveLayer falls back to Normal when
     // the held layer is unmapped for that slot).
     int p; bool bipolar;
+    // The explicit UF1 slot, when there is one — it carries the knob-travel
+    // fields (range / curve / sensitivity / inverted) that the smooth path below
+    // applies. Null for the built-in and sequential-fallback cases, which keep
+    // their existing untuned behaviour exactly.
+    const uf8::UserUf1Slot* uslUf1 = nullptr;
     {
         char lnm[256];
         // ⚠ The EXPLICIT UF1 map must be checked here too, not only in
@@ -21935,6 +21940,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
                 uf8::uf1SlotAt(u1->vpots, page * uf8::kUserUf1PerPage + vi);
             p = s ? s->vst3Param : -1;
             bipolar = s && s->polarity == uf8::VPotPolarity::Bipolar;
+            uslUf1 = s;                       // carries range / curve / sensitivity
         } else if (uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm))) {
             const uf8::UserLinkSlot* sl =
                 uf1LearnedSlotAt_(lnm, /*busComp*/type == 4, /*wantButton*/false, page, vi);
@@ -22001,6 +22007,29 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
         double delta = notches * kUf1CsVPotStep
                      * reasixty_uf8KnobScale(g_uf1CsFine.load());
+        // Knob travel from the explicit UF1 slot (v11): sensitivity scales the
+        // delta BEFORE the curve (keeping the inverse exact — see applyCurve's
+        // contract), then the move happens in ENCODER space and is re-mapped
+        // through range + curve. Absent slot ⇒ untouched linear path, so the
+        // built-in strips and the sequential fallback behave exactly as before.
+        if (uslUf1) {
+            if (uslUf1->sensitivity > 0.0f) delta *= uslUf1->sensitivity;
+            const float t  = uf8::inverseCurve(*uslUf1, static_cast<float>(cur));
+            float       nt = t + static_cast<float>(delta);
+            if (nt < 0.0f) nt = 0.0f;
+            if (nt > 1.0f) nt = 1.0f;
+            double mapped = uf8::applyCurve(*uslUf1, nt);
+            if (uslUf1->inverted) {
+                // Invert within the slot's own range, not the raw 0..1 — else an
+                // inverted knob with a custom range would jump outside it.
+                const double lo = std::min(uslUf1->rangeMin, uslUf1->rangeMax);
+                const double hi = std::max(uslUf1->rangeMin, uslUf1->rangeMax);
+                mapped = lo + hi - mapped;
+            }
+            nv = mapped;
+            if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+            return;
+        }
         if (bipolar) {
             // Finer step inside the notch zone, then the magnet — as the UF8 path.
             // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
@@ -22092,6 +22121,56 @@ void applyUf1ChannelSoftKey_(int idx)
             return;
         }
     }
+    // PUSH-CYCLE (v11): an explicit UF1 soft-key may carry a curated step list —
+    // several on/off params in any order, or a subset of one param's discrete
+    // options. Each press advances to the next ENABLED step and writes only that
+    // step's param, so a multi-param macro leaves its siblings alone. Mirrors the
+    // UC1 button path (UC1Surface handleButton_); an empty list falls through to
+    // the plain toggle below, which is what every existing binding does.
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx)) {
+        const uf8::UserUf1Slot* s =
+            uf8::uf1SlotAt(u1->softKeys, page * uf8::kUserUf1PerPage + idx);
+        if (s && !s->pushSteps.empty()) {
+            const auto& steps = s->pushSteps;
+            const int n = static_cast<int>(steps.size());
+            auto live = [&](int i) { return steps[i].vst3Param >= 0 && steps[i].enabled; };
+            auto matches = [&](int i) {
+                if (i < 0 || i >= n || steps[i].vst3Param < 0) return false;
+                const double v = TrackFX_GetParamNormalized(tr, fx, steps[i].vst3Param);
+                const double d = v - static_cast<double>(steps[i].norm);
+                return d < 1e-3 && d > -1e-3;
+            };
+            int firstEnabled = -1, enabled = 0;
+            for (int i = 0; i < n; ++i) if (live(i)) { if (firstEnabled < 0) firstEnabled = i; ++enabled; }
+            if (enabled == 0) return;
+            // Remembered index per (stream position). A multi-param macro can have
+            // SEVERAL steps matching at once (an earlier param still holds its
+            // value), so "first match" would stick — trust the remembered index
+            // while its step still matches, else re-derive. Same reasoning as UC1.
+            static int sIdx[16] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
+            const int key = std::clamp(page * 4 + idx, 0, 15);
+            int curIdx = sIdx[key];
+            if (!matches(curIdx)) {
+                curIdx = -1;
+                for (int i = 0; i < n; ++i) if (matches(i)) { curIdx = i; break; }
+            }
+            int nextIdx = firstEnabled;
+            if (curIdx >= 0) {
+                nextIdx = curIdx;
+                for (int k = 0; k < n; ++k) {
+                    nextIdx = (nextIdx + 1) % n;
+                    if (live(nextIdx)) break;
+                }
+            }
+            sIdx[key] = nextIdx;
+            const auto& sel = steps[nextIdx];
+            if (sel.vst3Param < 0) return;
+            TrackFX_SetParamNormalized(tr, fx, sel.vst3Param, sel.norm);
+            g_pageDirty.store(true);
+            return;
+        }
+    }
+
     const int p = uf1CsSoftKeyParam_(tr, fx, type, page, idx);   // built-in by name / learned by fill
     if (p < 0) return;                            // blank / label-only / unmapped
 

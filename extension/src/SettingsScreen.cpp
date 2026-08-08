@@ -8228,6 +8228,67 @@ void openCurveEditor_(CurveEditorTarget t)
     g_curveEditorRequestOpen = true;
 }
 
+// UF1 map helpers — defined with the other UF1 mutators further down, but the
+// curve target below needs them here.
+template <class F> void mutateUf1_(F&& fn);
+const std::vector<uf8::UserUf1Slot>* uf1EditStream_(bool softKeys);
+uf8::UserUf1Slot& uf1SlotRef_(uf8::UserUf1Map& u, bool softKeys, int pos);
+int  mappedVst3ForUf1_(bool softKeys, int pos);
+
+// Build a target wrapping a UF1 V-Pot position (v11). The UF1 map is layer-free,
+// so no editLayerRef_ here — the slot IS the layer. Everything else is the same
+// contract, which means the existing Advanced popup gives the UF1 range,
+// sensitivity and the curve editor without a second implementation.
+CurveEditorTarget curveTargetForUf1_(bool softKeys, int pos, const char* displayName)
+{
+    CurveEditorTarget t;
+    char suf[40]; snprintf(suf, sizeof(suf), "uf1_%d_%d", softKeys ? 1 : 0, pos);
+    t.idSuffix    = suf;
+    t.titleSuffix = displayName ? displayName : "UF1";
+    t.supportsSensitivity = true;
+    t.read = [softKeys, pos](uf8::KnobTravel& out) -> bool {
+        const auto* v = uf1EditStream_(softKeys);
+        if (!v) return false;
+        const uf8::UserUf1Slot* s = uf8::uf1SlotAt(*v, pos);
+        if (!s) return false;
+        out.rangeMin    = s->rangeMin;
+        out.rangeMax    = s->rangeMax;
+        out.sensitivity = s->sensitivity;
+        out.curvePoints = s->curvePoints;
+        return true;
+    };
+    auto mut = [softKeys, pos](std::function<void(uf8::UserUf1Slot&)> fn) {
+        mutateUf1_([&](uf8::UserUf1Map& u) { fn(uf1SlotRef_(u, softKeys, pos)); });
+    };
+    t.setRangeMin    = [mut](float v) { mut([v](uf8::UserUf1Slot& s) { s.rangeMin = v; }); };
+    t.setRangeMax    = [mut](float v) { mut([v](uf8::UserUf1Slot& s) { s.rangeMax = v; }); };
+    t.setSensitivity = [mut](float v) { mut([v](uf8::UserUf1Slot& s) { s.sensitivity = v; }); };
+    t.setCurvePoints = [mut](std::vector<std::pair<float, float>> pts) {
+        mut([&pts](uf8::UserUf1Slot& s) { s.curvePoints = pts; });
+    };
+    t.isBipolar = [softKeys, pos]() {
+        const auto* v = uf1EditStream_(softKeys);
+        const uf8::UserUf1Slot* s = v ? uf8::uf1SlotAt(*v, pos) : nullptr;
+        return s && s->polarity == uf8::VPotPolarity::Bipolar;
+    };
+    t.fetchSteppedInfo = [softKeys, pos](double& pStep, int& numSteps) -> bool {
+        const int mapped = mappedVst3ForUf1_(softKeys, pos);
+        if (mapped < 0) return false;
+        auto list = findEditingFxAll_(g_editingMatch);
+        if (list.empty()) return false;
+        auto fx = pickEditingFx_(list);
+        if (!fx.ok) return false;
+        double pS = 0.0, pSm = 0.0, pL = 0.0; bool isT = false;
+        if (!TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, mapped, &pS, &pSm, &pL, &isT))
+            return false;
+        if (!(pS > 0.0)) return false;
+        pStep = pS;
+        numSteps = static_cast<int>(1.0 / pS + 0.5) + 1;
+        return true;
+    };
+    return t;
+}
+
 // Build a target wrapping a UserLinkSlot (FX-Learn schematic).
 CurveEditorTarget curveTargetForSlot_(int linkIdx, const char* displayName)
 {
@@ -14794,6 +14855,23 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         bool inv = slot && slot->inverted;
         if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
             toggleUf1Inverted_(softKeys, pos);
+        // Knob tuning — V-Pots only. A soft-key is a press, so range/curve/
+        // sensitivity have nothing to act on there (same reason the UF8 tab
+        // offers this on V-Pots and not on faders/buttons).
+        if (!softKeys) {
+            bool bip = slot && slot->polarity == uf8::VPotPolarity::Bipolar;
+            if (ImGui_MenuItem(ctx, "Bipolar (centre detent)", nullptr, &bip, nullptr))
+                mutateUf1_([&](uf8::UserUf1Map& u) {
+                    auto& s = uf1SlotRef_(u, softKeys, pos);
+                    s.polarity = bip ? uf8::VPotPolarity::Bipolar
+                                     : uf8::VPotPolarity::Unipolar;
+                });
+            // Range + sensitivity + curve all live in the shared Advanced popup,
+            // so the UF1 gets the whole knob-travel editor without a second
+            // implementation of it.
+            if (ImGui_MenuItem(ctx, "Knob travel\xE2\x80\xA6", nullptr, nullptr, nullptr))
+                openCurveEditor_(curveTargetForUf1_(softKeys, pos, shown));
+        }
         // Inline label field, not a native dialog — the rest of the Settings
         // page renames this way, and native dialogs are unreliable on macOS 15
         // ([[swell-dialogs-macos-broken]]). Seeded once per cell, like the UC1
