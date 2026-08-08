@@ -434,6 +434,26 @@ if(UNIX AND NOT APPLE)
     # Folded into libc from glibc 2.34, but older distributions still need -ldl
     # and CMAKE_DL_LIBS is empty where it isn't wanted.
     target_link_libraries(reaper_uf8 PRIVATE ${CMAKE_DL_LIBS})
+
+    # Link the C++ runtime IN rather than depending on the build machine's.
+    # A GCC 13 host records GLIBCXX_3.4.31 in the .so (std::string's
+    # _M_replace_cold); the user's older libstdc++ has no such version and
+    # REAPER's dlopen fails outright — v0.4.4 was unloadable on MX Linux 23 /
+    # Debian 12, whose GCC 12 runtime tops out at GLIBCXX_3.4.30. Statically
+    # linking removes the dependency instead of merely lowering it, so the
+    # package no longer cares which GCC built it. (The glibc floor is handled
+    # separately, by building on the baseline image — see
+    # .github/workflows/build.yml and dist/check-linux-abi.py.)
+    #
+    # --exclude-libs,ALL localises the symbols pulled from the static
+    # libstdc++.a / libgcc.a so this module cannot interpose on the C++
+    # runtime of REAPER or of any other extension. Safe here because nothing
+    # C++ crosses the plugin boundary: the REAPER SDK is a C API, and no
+    # SWELL sources are compiled into this target.
+    target_link_options(reaper_uf8 PRIVATE
+        -static-libstdc++
+        -static-libgcc
+        -Wl,--exclude-libs,ALL)
 endif()
 
 add_dependencies(reaper_uf8 reasixty_commit_count_gen)

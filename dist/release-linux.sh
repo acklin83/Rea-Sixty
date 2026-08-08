@@ -73,6 +73,21 @@ if [[ ${#BUNDLED_LIBS[@]} -lt 2 ]]; then
 fi
 echo "==> Bundled libs: ${BUNDLED_LIBS[*]}"
 
+# The .so and the bundled libs must not demand a newer glibc / libstdc++ than
+# the oldest distro we support. Nothing about this shows up on the build box —
+# it only breaks at the user's dlopen ("version `GLIBCXX_3.4.31' not found"),
+# which is how v0.4.4 shipped unloadable on MX Linux 23 and Debian 12. Checked
+# here because this script also runs on the Mac against CI artifacts, where a
+# wrong build image would otherwise pass unnoticed.
+CHECK_ABI="$REPO_ROOT/dist/check-linux-abi.py"
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 not found — needed for the ABI floor check ($CHECK_ABI)."
+    echo "       Install python3; do not ship an unverified Linux package."
+    exit 1
+fi
+python3 "$CHECK_ABI" "$STAGE/reaper_rea-sixty.so" \
+    "${BUNDLED_LIBS[@]/#/$STAGE/}"
+
 # udev rule — same content the developer installs manually. End users
 # must root-copy this to /etc/udev/rules.d/ for libusb to talk to UF8
 # and UC1 without sudo.

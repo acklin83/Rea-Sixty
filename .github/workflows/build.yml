@@ -21,12 +21,31 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # Only the Linux entry sets `container`; everywhere else this expression is
+    # empty, which the runner treats as "no container" and the job runs on the
+    # host image as before.
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Built inside ubuntu:22.04, NOT on ubuntu-latest. The shipped .so
+          # must load on the OLDEST distro we support, and an ELF hard-codes
+          # the symbol versions of the machine that linked it: ubuntu-latest
+          # (24.04, glibc 2.39 / GCC 13) stamps GLIBC_2.38 + GLIBCXX_3.4.31
+          # into the binary, and REAPER's dlopen then fails on anything older
+          # — v0.4.4 was unloadable on MX Linux 23 and Debian 12 (glibc 2.36).
+          # 22.04's glibc 2.35 is below every currently supported distro, so
+          # its binaries load everywhere. libstdc++ is linked statically on
+          # top (extension/CMakeLists.txt), and dist/check-linux-abi.py fails
+          # the packaging step if this ever regresses.
+          #
+          # The container also pins the bundled libusb / hidapi: they are
+          # copied out of this image and carry its glibc floor too — the
+          # v0.4.4 libusb-1.0.so.0 needed GLIBC_2.38 for exactly that reason.
           - name: linux-x86_64
             os: ubuntu-latest
+            container: ubuntu:22.04
             artifact: reaper_rea-sixty.so
             artifact_path: extension/build/reaper_rea-sixty.so
           - name: macos-arm64
@@ -49,16 +68,28 @@ jobs:
             artifact_path: extension/build/Release/reaper_rea-sixty.dll
 
     steps:
+      # Runs BEFORE checkout on purpose: the ubuntu:22.04 image is bare, and
+      # without git installed actions/checkout falls back to downloading a
+      # tarball — no .git, so `git describe --tags` finds no tag and the
+      # release codename never reaches REASIXTY_VERSION_NAME. Everything the
+      # build needs is installed here (no sudo: we are root in the container).
+      # binutils supplies the readelf that the CMake bundling step uses to read
+      # the SONAME of libusb / hidapi; python3 runs the ABI guard below.
+      - name: Bootstrap container (Linux)
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git ca-certificates pkg-config binutils \
+            python3-minimal libusb-1.0-0-dev libhidapi-dev
+          # The workspace belongs to the runner user, the container is root:
+          # without this git refuses to touch it ("dubious ownership").
+          git config --global --add safe.directory '*'
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # git describe --tags drives version + codename
-
-      - name: Install deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev libhidapi-dev pkg-config
 
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
@@ -86,6 +117,18 @@ jobs:
 
       - name: Build
         run: cmake --build extension/build --config Release --parallel
+
+      # Fail here rather than in a user's REAPER. Checks the symbol versions
+      # the .so and the two bundled libs demand of the system, against the
+      # oldest distro we support. Catches a bumped container image, a dropped
+      # -static-libstdc++, or a bundled lib picked up from the wrong place.
+      - name: Verify ABI floor (Linux)
+        if: matrix.container != ''
+        run: |
+          python3 dist/check-linux-abi.py \
+            extension/build/reaper_rea-sixty.so \
+            extension/build/libusb-1.0.so.* \
+            extension/build/libhidapi-*.so.*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
