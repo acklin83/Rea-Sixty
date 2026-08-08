@@ -475,6 +475,59 @@ struct UserUf8Map {
     UserUf8TopSoftKeyLed topSoftKeyLeds[kUserUf8VpotBankCount] = {};
 };
 
+// ---- UF1 plugin-mode mapping (Frank 2026-08-08) ---------------------------
+// Without one of these the UF1 shows a learned plug-in by SEQUENTIALLY filling
+// the UC1 `slots` (buttons -> soft-keys, knobs -> V-Pots, sorted by linkIdx,
+// 4 per page — uf1LearnedStreamSlots_ in main.cpp). That stays the fallback.
+// An EXPLICIT map lets a UC1+UF1 owner put params on the UF1 that have no room
+// on the UC1, or that today only live on a held modifier overlay.
+//
+// DELIBERATELY layer-free: no `modLayers`. The whole point is permanent,
+// hold-nothing access — the fallback path keeps following the held layer
+// (uf1LearnedEffParam_), an explicit map does not. UF8 layers were removed for
+// related reasons 2026-06-15; don't reintroduce the pattern here.
+//
+// SPARSE: `pos` is the flat position (page*4 + idx) of the stream the slot
+// lives in, so mapping only V-Pot position 7 costs one entry, and a map with
+// no UF1 layer costs nothing. Inherits SlotLayer, so every existing tuning
+// mutator (range/curve/sensitivity/polarity/label/invert/pushSteps) applies.
+struct UserUf1Slot : SlotLayer {
+    int pos = -1;                 // flat stream position: page*4 + idx
+};
+// Scope decided with Frank 2026-08-08: V-Pots + soft-keys ONLY. The
+// above-fader V-Pot and the fader stay out — the fader collides with Sticky
+// Pot and the motor/inverse-curve echo (the same reason UF8 faders are
+// excluded from FX-Learn/HUD tuning).
+struct UserUf1Map {
+    std::vector<UserUf1Slot> vpots;      // 4 per page
+    std::vector<UserUf1Slot> softKeys;   // 4 per page
+};
+constexpr int kUserUf1PerPage = 4;
+// True when the UF1 layer carries anything at all — the "is there an explicit
+// map?" test used by runtime, the v10->v11 migration and the save filter.
+inline bool uf1MapHasContent(const UserUf1Map& u)
+{
+    for (const auto& s : u.vpots)    if (s.vst3Param >= 0 || !s.pushSteps.empty()) return true;
+    for (const auto& s : u.softKeys) if (s.vst3Param >= 0 || !s.pushSteps.empty()) return true;
+    return false;
+}
+// The slot at flat position `pos` of a stream, or nullptr when unmapped.
+inline const UserUf1Slot* uf1SlotAt(const std::vector<UserUf1Slot>& v, int pos)
+{
+    if (pos < 0) return nullptr;
+    for (const auto& s : v) if (s.pos == pos) return &s;
+    return nullptr;
+}
+// Pages needed to show every mapped UF1 position (both streams share the page
+// cursor, exactly like the sequential fallback). At least 1.
+inline int uf1MapPageCount(const UserUf1Map& u)
+{
+    int hi = -1;
+    for (const auto& s : u.vpots)    if (s.vst3Param >= 0 && s.pos > hi) hi = s.pos;
+    for (const auto& s : u.softKeys) if (s.vst3Param >= 0 && s.pos > hi) hi = s.pos;
+    return (hi < 0) ? 1 : (hi / kUserUf1PerPage) + 1;
+}
+
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an
 // instance is present so the editor can offer the param list (V-Pot picker,
 // GR-meter picker, listening fallback) even on sessions where the plug-in
@@ -519,6 +572,11 @@ struct UserPluginMap {
     std::vector<UserLinkSlot>  slots;
     UserMetering               metering;
     UserUf8Map                 uf8;            // optional UF8 strip-mode bindings
+    // Optional EXPLICIT UF1 plugin-mode mapping. Empty = the UF1 keeps
+    // sequentially filling from `slots` (the shipped behaviour), so a map
+    // without this block behaves byte-identically. Frank 2026-08-08.
+    UserUf1Map                 uf1;
+    bool                       uf1Mode = false;
     std::vector<UserParamInfo> paramSnapshot;  // last-seen VST3 param list
     int64_t                    snapshotTakenAt = 0;  // unix-sec; 0 = never
     // Per-domain slot caches (Frank 2026-05-15). When the user toggles
@@ -597,7 +655,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 10;  // v10: + Control+Option modifier layer (modLayers.ctrlOption). v9 files load byte-identical (key absent = empty overlay).
+constexpr int kCurrentFormatVersion = 11;  // v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). v10 files load byte-identical (block absent = no UF1 layer = sequential fallback).
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

@@ -660,6 +660,14 @@ if(NOT WIN32)
     target_include_directories(test_ssl_meter PRIVATE src)
     add_test(NAME ssl_meter COMMAND test_ssl_meter)
 
+    # Includes UserPluginCatalog.cpp directly (see the file header) — do NOT
+    # also list it as a source or every symbol lands twice.
+    add_executable(test_user_catalog_uf1 tests/test_user_catalog_uf1.cpp
+        src/PluginMap.cpp src/LogPath.cpp)
+    target_include_directories(test_user_catalog_uf1 PRIVATE
+        src "${REAPER_SDK_DIR}/sdk" "${WDL_DIR}")
+    add_test(NAME user_catalog_uf1 COMMAND test_user_catalog_uf1)
+
     add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
     target_include_directories(uf8_color_test PRIVATE src)
     target_link_libraries(uf8_color_test PRIVATE reasixty_libusb)

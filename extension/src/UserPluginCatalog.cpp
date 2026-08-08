@@ -299,6 +299,10 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "      \"displayShort\": "; appendEscaped_(os, m.displayShort); os << ",\n";
         os << "      \"isDefault\": "     << (m.isDefault ? "true" : "false") << ",\n";
         os << "      \"uf8Mode\": "       << (m.uf8Mode   ? "true" : "false") << ",\n";
+        // v11, additive — only written when ON, so v10 catalogs round-trip
+        // byte-identically and an older reader ignores it (absent = false).
+        if (m.uf1Mode)
+            os << "      \"uf1Mode\": true,\n";
         // Additive (Frank 2026-06-02) — only written when the user has turned
         // the default off, so pre-feature catalogs stay byte-identical.
         if (!m.useReaperTrackPolarity)
@@ -606,6 +610,34 @@ std::string serialize_(const UserPluginCatalog& c)
             os << "\n        ]\n";
             os << "      }";
         }
+        // UF1 plugin-mode map (v11). Additive + SPARSE: only mapped positions
+        // are written, and the whole block is omitted when the UF1 layer is
+        // empty — so a v10 catalog round-trips byte-identically and an older
+        // reader just ignores the key. Reuses emitLayerBody, so a UF1 slot
+        // carries the same tuning fields as a UC1 slot. No modLayers by design
+        // (an explicit UF1 map is layer-free — see UserUf1Map in the header).
+        if (uf8::uf1MapHasContent(m.uf1)) {
+            os << ",\n      \"uf1\": {\n";
+            auto emitUf1Stream = [&](const char* key,
+                                     const std::vector<uf8::UserUf1Slot>& v,
+                                     bool last) {
+                os << "        \"" << key << "\": [";
+                bool first = true;
+                for (const auto& s : v) {
+                    if (s.pos < 0) continue;
+                    if (s.vst3Param < 0 && s.pushSteps.empty()) continue;
+                    if (!first) os << ",";
+                    first = false;
+                    os << "\n          { \"pos\": " << s.pos << ", ";
+                    emitLayerBody(s);
+                    os << " }";
+                }
+                os << "\n        ]" << (last ? "\n" : ",\n");
+            };
+            emitUf1Stream("vpots",    m.uf1.vpots,    false);
+            emitUf1Stream("softKeys", m.uf1.softKeys, true);
+            os << "      }";
+        }
         if (!m.paramSnapshot.empty()) {
             os << ",\n      \"paramSnapshot\": [";
             bool firstParam = true;
@@ -722,6 +754,11 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         bool uf8ModeRead = false;
         const bool hadUf8Mode = getBoolI_(po, "uf8Mode", uf8ModeRead);
         if (hadUf8Mode) m.uf8Mode = uf8ModeRead;
+        // v11 uf1Mode. Absent on v10 files → derived from the uf1 block below
+        // (which is also absent there, so it stays false = sequential fallback).
+        bool uf1ModeRead = false;
+        const bool hadUf1Mode = getBoolI_(po, "uf1Mode", uf1ModeRead);
+        if (hadUf1Mode) m.uf1Mode = uf1ModeRead;
         // Additive; missing key keeps the struct default (true).
         getBoolI_(po, "useReaperTrackPolarity", m.useReaperTrackPolarity);
         int snapTs = 0;
@@ -831,6 +868,30 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         readSlotArr("slots",        m.slots);
         readSlotArr("csSlotCache",  m.csSlotCache);
         readSlotArr("bcSlotCache",  m.bcSlotCache);
+
+        // UF1 plugin-mode map (v11). Additive + sparse; absent on v10 files,
+        // which then keep the sequential fallback. Mirrors readSlotArr but
+        // keys on `pos` instead of `linkIdx` and has NO modLayers by design.
+        if (auto* u1 = po->get_item_by_name("uf1"); u1 && u1->is_object()) {
+            auto readUf1Stream = [&](const char* key,
+                                     std::vector<uf8::UserUf1Slot>& dest) {
+                auto* arr = u1->get_item_by_name(key);
+                if (!arr || !arr->is_array() || !arr->m_array) return;
+                const int n = arr->m_array->GetSize();
+                for (int i = 0; i < n; ++i) {
+                    wdl_json_element* so = arr->enum_item(i);
+                    if (!so || !so->is_object()) continue;
+                    uf8::UserUf1Slot us{};
+                    getIntI_(so, "pos", us.pos);
+                    parseLayerBody(so, us);
+                    if (us.pos < 0) continue;
+                    if (us.vst3Param < 0 && us.pushSteps.empty()) continue;
+                    dest.push_back(std::move(us));
+                }
+            };
+            readUf1Stream("vpots",    m.uf1.vpots);
+            readUf1Stream("softKeys", m.uf1.softKeys);
+        }
 
         if (auto* met = po->get_item_by_name("metering");
             met && met->is_object())
@@ -1149,10 +1210,18 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         // the uf8 block. Maps with non-empty bank/strip bindings keep the
         // UF8 layer active; everything else opts out.
         if (!hadUf8Mode) m.uf8Mode = uf8MapHasContent_(m.uf8);
+        // v10 → v11 the same way: no uf1Mode key → derive it from the uf1
+        // block. A v10 file has neither, so it stays false (= the UF1 keeps
+        // filling sequentially from `slots`, exactly as before).
+        if (!hadUf1Mode) m.uf1Mode = uf8::uf1MapHasContent(m.uf1);
 
-        // A map with no domain and no UF8 layer is meaningless — drop it
-        // rather than carrying around dead entries.
-        if (m.domain == Domain::None && !m.uf8Mode) continue;
+        // A map with no domain and no surface layer is meaningless — drop it
+        // rather than carrying around dead entries. ⚠ UF1-ONLY maps are VALID
+        // (Frank 2026-08-08), so uf1Mode counts here exactly like uf8Mode —
+        // miss it and every UF1-only map is silently deleted on the next save.
+        // The exchange server mirrors this rule (lib/rea60map.js) and must be
+        // kept in step.
+        if (m.domain == Domain::None && !m.uf8Mode && !m.uf1Mode) continue;
 
         out.maps.push_back(std::move(m));
     }
@@ -1369,10 +1438,19 @@ void collectUsedParams_(const UserPluginMap& m, std::set<int>& used)
 
 } // namespace
 
+// Surface taxonomy — also the exchange envelope's `surfaces` value, so the
+// server's VALID_SURFACES set must carry every string produced here (v11 adds
+// the uf1 combinations; ship the server BEFORE a build that can emit them).
 const char* surfaceScope(const UserPluginMap& m)
 {
-    if (m.domain == Domain::None) return m.uf8Mode ? "uf8" : "";
-    return m.uf8Mode ? "uc1+uf8" : "uc1";
+    if (m.domain == Domain::None) {
+        if (m.uf8Mode && m.uf1Mode) return "uf8+uf1";
+        if (m.uf8Mode)              return "uf8";
+        return m.uf1Mode ? "uf1" : "";
+    }
+    if (m.uf8Mode && m.uf1Mode) return "uc1+uf8+uf1";
+    if (m.uf8Mode)              return "uc1+uf8";
+    return m.uf1Mode ? "uc1+uf1" : "uc1";
 }
 
 bool serializeMapShare(const MapShare& share, std::string& out,

@@ -21638,12 +21638,31 @@ static int uf1LearnedEffParam_(const uf8::UserLinkSlot* sl)
 // Resolve the vst3Param for a UF1 CS/BC V-Pot position (type/page/idx): built-in
 // → by name (kUf1CsVPots); learned → sequential fill (V-Pot stream), through the
 // held modifier layer. -1 = blank.
+// The EXPLICIT UF1 map for a learned plug-in, or nullptr when it has none (→
+// the sequential fallback below). Main-thread only (walks the owned catalog).
+static const uf8::UserUf1Map* uf1ExplicitMap_(const char* fxName)
+{
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    if (!um || !um->uf1Mode) return nullptr;
+    return uf8::uf1MapHasContent(um->uf1) ? &um->uf1 : nullptr;
+}
+// An explicit UF1 slot's param. NOT layer-resolved on purpose: an explicit map
+// is permanent, hold-nothing access (Frank 2026-08-08) — only the sequential
+// FALLBACK follows the held FX-Learn layer (uf1LearnedEffParam_).
+static int uf1ExplicitParam_(const std::vector<uf8::UserUf1Slot>& v, int page, int idx)
+{
+    const uf8::UserUf1Slot* s = uf8::uf1SlotAt(v, page * uf8::kUserUf1PerPage + idx);
+    return s ? s->vst3Param : -1;
+}
 int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
+        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
+            return uf1ExplicitParam_(u1->vpots, page, idx);
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/false, page, idx));
+    }
     const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
     return v.param ? uf1ParamByName_(tr, fx, v.param) : -1;
 }
@@ -21651,9 +21670,12 @@ int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
+        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
+            return uf1ExplicitParam_(u1->softKeys, page, idx);
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/true, page, idx));
+    }
     const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
     return sk.param ? uf1ParamByName_(tr, fx, sk.param) : -1;
 }
@@ -21664,8 +21686,11 @@ int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx)
 {
     if (type < 0 || type >= kUf1CsTypeCount) return kUf1CsPageCount;
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
+        if (const auto* u1 = uf1ExplicitMap_(nm))     // explicit map wins
+            return uf8::uf1MapPageCount(*u1);
         return uf1LearnedPageCount_(nm, /*busComp*/type == 4);
+    }
     return kUf1CsTypePageCount[type];
 }
 
