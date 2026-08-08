@@ -4368,7 +4368,12 @@ struct Uf1JogStepInit_ {
             g_uf1JogStep[static_cast<int>(m)].store(v);
         };
         set(Uf1JogMode::Playhead, Uf1JogUnit::ZoomRel, 0.01);  // 1% of view / count
-        set(Uf1JogMode::Scrub,    Uf1JogUnit::ZoomRel, 0.01);
+        // Scrub is the one mode that must NOT be zoom-relative: it feeds real audio scrub
+        // (CSurf_ScrubAmt), and 1% of a zoomed-out view is seconds per count. Absolute time
+        // instead. 0.5 s/count is Frank's tuned-by-ear value (2026-08-08) — 10 ms and 50 ms
+        // both crawled ("viiiieeeel zu langsam für sound"); real scrub wants far more tape
+        // per detent than the cursor modes do. Tune in Settings → jog wheel → amount.
+        set(Uf1JogMode::Scrub,    Uf1JogUnit::Seconds, 0.500);
         set(Uf1JogMode::Items,    Uf1JogUnit::Grid,    0.25);  // 1 = grid, 0.5 half, 0.25 quarter
         set(Uf1JogMode::Envelope, Uf1JogUnit::Grid,    0.25);
         set(Uf1JogMode::Razor,    Uf1JogUnit::Grid,    0.25);
@@ -8991,14 +8996,29 @@ void uf1JogDispatch_(int count)
     }
     const double delta = step * scale * count;   // seconds
     switch (mode) {
-        case Uf1JogMode::Playhead:
-        case Uf1JogMode::Scrub: {        // TODO Baustein 3: real audio scrub for Scrub
+        case Uf1JogMode::Playhead: {
             double np = GetCursorPosition() + delta;
             // Grid unit → snap to grid cells so a fast spin can't land the cursor
             // between grid lines (Frank 2026-08-06). Zoom/Seconds stay continuous.
             if (unit == Uf1JogUnit::Grid) np = uf1SnapToGridCell_(np, step);
             if (np < 0.0) np = 0.0;
             SetEditCurPos(np, true, false);
+            break;
+        }
+        case Uf1JogMode::Scrub: {
+            // REAL audio scrub (Frank 2026-08-08) — this is what separates Scrub from
+            // Playhead, which only moves the cursor silently. CSurf_ScrubAmt is the only
+            // scrub entry point the SDK has (there is NO CSurf_OnScrub — verified against
+            // reaper_plugin_functions.h); it takes a position delta in seconds, is meant to
+            // be called continuously, and scrubbing stops by itself once we stop calling it
+            // (SDK reference use: reaper-plugins/reaper_csurf/csurf_alphatrack.cpp).
+            // Never grid-snap here — scrubbing has to stay continuous to sound like tape.
+            if (CSurf_ScrubAmt) CSurf_ScrubAmt(delta);
+            else {                        // API missing (older REAPER) → silent cursor move
+                double np = GetCursorPosition() + delta;
+                if (np < 0.0) np = 0.0;
+                SetEditCurPos(np, true, false);
+            }
             break;
         }
         case Uf1JogMode::Items: {
