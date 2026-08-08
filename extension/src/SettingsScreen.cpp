@@ -16698,7 +16698,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // with a Clear button. UC1 only; UF8 has no Link slots. on-face = the
         // linkIdx has a control in kUc1Controls for this domain (the same table
         // the schematic draws from).
-        if (s_mockup != 1 && topo) {
+        // Gate on "is the UC1 mockup" (== 0), not "is not UF8" — with the UF1
+        // mockup added (== 2) the old negative form leaked this UC1-only list
+        // onto the UF1 tab (Frank 2026-08-08).
+        if (s_mockup == 0 && topo) {
             auto onFace = [&](int li) {
                 for (const auto& c : kUc1Controls)
                     if (c.domain == editing->domain && c.linkIdx == li) return true;
@@ -16754,8 +16757,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // (non-SSL) CS plug-in the user fills 10 slots (2×5 grid, same
         // 860 px width as the mockup) with name + param. SSL built-ins
         // keep their fixed list (handled in UC1Surface, never reach here).
-        // Shown only under the UC1 face (not UF8) and only in CS mode.
-        if (s_mockup != 1 && editing->domain == uf8::Domain::ChannelStrip) {
+        // Shown only under the UC1 face and only in CS mode. Gate on == 0
+        // (is UC1), not != 1 (is not UF8) — the latter also matched the new
+        // UF1 mockup and leaked EXT FUNCS onto it (Frank 2026-08-08).
+        if (s_mockup == 0 && editing->domain == uf8::Domain::ChannelStrip) {
             ImGui_Spacing(ctx);
             ImGui_Separator(ctx);
             ImGui_Spacing(ctx);
