@@ -154,6 +154,13 @@ void        reasixty_hudPublishUf1(void* tr, int fx, int page, std::string& out)
 bool        reasixty_hudUf1Unbind(void* tr, int fx, bool softKeys, int pos);
 bool        reasixty_hudUf1Invert(void* tr, int fx, bool softKeys, int pos);
 bool        reasixty_hudUf1Label(void* tr, int fx, bool softKeys, int pos, const char* label);
+// UF1-tab full parity (V-Pot tuning + feel) — hud_uf1_detail publisher + the
+// mutating command handlers behind "uf1field;" / "uf1curve;" / "uf1feel*;".
+std::string reasixty_hudBuildUf1Detail(void* tr, int fx);
+bool        reasixty_hudUf1SetField(void* tr, int fx, bool softKeys, int pos, int field, double v);
+bool        reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos, const char* csv);
+bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, int slot, const char* name);
+bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
 void        reasixty_hudUf8CancelLearn();
 bool        reasixty_hudUf8Unbind(int kind, int strip, int fb, int vb, void* tr, int fx);
 bool        reasixty_hudUf8Invert(int kind, int strip, int fb, int vb, void* tr, int fx);
@@ -12079,6 +12086,7 @@ std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot 
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed position
 std::string g_hudUf1AssignPublished; // last-published "hud_uf1_assign" payload
+std::string g_hudUf1DetailPublished; // last-published "hud_uf1_detail" (V-Pot tuning)
 std::string g_hudBootPublished;    // last-published "hud_boot" (virgin-FX bootstrap)
 std::string g_hudDetailPublished;  // last-published "hud_detail" (per-knob tuning)
 std::string g_hudFeelPublished;    // last-published "hud_feel" (feel-preset list)
@@ -12515,17 +12523,25 @@ void publishHud_()
         // shows (uf1ResolveCsFx_) so the HUD tab and the hardware never disagree.
         // Empty payload = this plug-in has no UF1 layer → the tab shows nothing.
         {
-            std::string uf1Assign;
+            std::string uf1Assign, uf1Detail;
             MediaTrack* u1Tr = nullptr; int u1Fx = -1;
             const int u1Type = uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx);
             if (u1Type >= 0) {
                 const int u1Page = std::clamp(g_uf1CsPage.load(), 0,
                                               uf1CsPageCountFor_(u1Type, u1Tr, u1Fx) - 1);
                 reasixty_hudPublishUf1(u1Tr, u1Fx, u1Page, uf1Assign);
+                // Per-V-Pot tuning for the tab's full-parity menu. Same target,
+                // so the menu can never describe a different plug-in than the
+                // cells above it.
+                uf1Detail = reasixty_hudBuildUf1Detail(u1Tr, u1Fx);
             }
             if (uf1Assign != g_hudUf1AssignPublished) {
                 g_hudUf1AssignPublished = uf1Assign;
                 SetExtState("rea_sixty", "hud_uf1_assign", uf1Assign.c_str(), false);
+            }
+            if (uf1Detail != g_hudUf1DetailPublished) {
+                g_hudUf1DetailPublished = uf1Detail;
+                SetExtState("rea_sixty", "hud_uf1_detail", uf1Detail.c_str(), false);
             }
         }
         // Per-V-Pot tuning detail for the UF8 tab's full-parity menu (only
@@ -22260,6 +22276,23 @@ void applyUf1ChannelVpotPush_(int idx)
 
     const int page = std::clamp(g_uf1CsPage.load(), 0, uf1CsPageCountFor_(type, tr, fx) - 1);
 
+    // The EXPLICIT UF1 map wins here too — this handler resolves its param on its
+    // own, exactly like the rotate handler did before a17c99f. Without this branch
+    // a UC1+UF1 map pushed through the SEQUENTIAL FALLBACK and reset the wrong
+    // param, and a UF1-only map got its reset value from uf1CsDefaultNorm_ (which
+    // matches UC1 slots by vst3Param) instead of the UF1 slot's own defaultNorm.
+    // Layer-free like every other explicit-map path.
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx)) {
+        const uf8::UserUf1Slot* s =
+            uf8::uf1SlotAt(u1->vpots, page * uf8::kUserUf1PerPage + idx);
+        if (!s || s->vst3Param < 0) return;        // blank position → no-op
+        double dv = s->defaultNorm;
+        dv = (dv < 0.0) ? 0.0 : (dv > 1.0) ? 1.0 : dv;
+        const double cur = TrackFX_GetParamNormalized(tr, fx, s->vst3Param);
+        if (dv != cur) TrackFX_SetParamNormalized(tr, fx, s->vst3Param, dv);
+        return;
+    }
+
     // Learned: the effective (held-layer) slot carries both the param and its reset
     // value — the overlay's own UserLinkSlot/SlotLayer.defaultNorm from the FX-Learn
     // editor, NOT the Normal one (uf1CsDefaultNorm_ matches by Normal vst3Param and
@@ -30627,20 +30660,98 @@ void onTimer()
                         }
                         if (changed) {
                             g_hudUf1AssignPublished.clear();   // force re-publish
+                            g_hudUf1DetailPublished.clear();
                             g_pageDirty.store(true);           // repaint the UF1
                             publishHud_();
                         }
                     }
                 }
-            } else if (s.rfind("uf8curve;", 0) == 0) {
-                // "uf8curve;<strip>;<t0:v0,…>" — V-Pot curve breakpoints.
-                int strip = -1;
-                if (std::sscanf(s.c_str(), "uf8curve;%d", &strip) == 1) {
+            } else if (s.rfind("uf1field;", 0) == 0) {
+                // "uf1field;<pos>;<sk>;<field>;<value>" — V-Pot tuning, the same
+                // field ids as the UC1 "field;" and UF8 "uf8field;" verbs. No
+                // layer argument: the UF1 map is layer-free. Target live.
+                int pos = -1, sk = 0, field = -1; double v = 0.0;
+                if (std::sscanf(s.c_str(), "uf1field;%d;%d;%d;%lf",
+                                &pos, &sk, &field, &v) == 4 && pos >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1SetField(u1Tr, u1Fx, sk != 0, pos,
+                                                   field, v)) {
+                        g_hudUf1AssignPublished.clear();
+                        g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1curve;", 0) == 0) {
+                // "uf1curve;<pos>;<sk>;<t0:v0,…>" — TWO numeric fields, so the
+                // CSV starts after the second ';' past the verb.
+                int pos = -1, sk = 0;
+                if (std::sscanf(s.c_str(), "uf1curve;%d;%d", &pos, &sk) == 2
+                    && pos >= 0) {
                     const auto c1 = s.find(';', 9);
                     const auto c2 = (c1 == std::string::npos)
                                       ? std::string::npos : s.find(';', c1 + 1);
                     const std::string csv = (c2 != std::string::npos)
                                               ? s.substr(c2 + 1) : std::string();
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1SetCurve(u1Tr, u1Fx, sk != 0, pos,
+                                                   csv.c_str())) {
+                        g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1feelsave;", 0) == 0) {
+                // "uf1feelsave;<pos>;<sk>;<slot>;<name>" — three numerics, then
+                // the free-text name.
+                int pos = -1, sk = 0, slot = -1;
+                if (std::sscanf(s.c_str(), "uf1feelsave;%d;%d;%d",
+                                &pos, &sk, &slot) == 3 && pos >= 0) {
+                    const auto c1 = s.find(';', 12);
+                    const auto c2 = (c1 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c1 + 1);
+                    const auto c3 = (c2 == std::string::npos)
+                                      ? std::string::npos : s.find(';', c2 + 1);
+                    const std::string name = (c3 != std::string::npos)
+                                               ? s.substr(c3 + 1) : std::string();
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1FeelSave(u1Tr, u1Fx, sk != 0, pos,
+                                                   slot, name.c_str())) {
+                        g_hudFeelPublished.clear();
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1feelapply;", 0) == 0) {
+                // "uf1feelapply;<pos>;<sk>;<slot>". Clearing a preset reuses the
+                // global "feelclear;<slot>" verb, like the UF8 tab does.
+                int pos = -1, sk = 0, slot = -1;
+                if (std::sscanf(s.c_str(), "uf1feelapply;%d;%d;%d",
+                                &pos, &sk, &slot) == 3 && pos >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1FeelApply(u1Tr, u1Fx, sk != 0, pos,
+                                                    slot)) {
+                        g_hudUf1AssignPublished.clear();
+                        g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf8curve;", 0) == 0) {
+                // "uf8curve;<strip>;<t0:v0,…>" — V-Pot curve breakpoints.
+                // ⚠ ONE numeric field, so the CSV starts after the FIRST ';'
+                // past the verb. Reading it after the second (copied from the
+                // UC1 "curve;<idx>;<layer>;<csv>" verb, which has two) made
+                // every breakpoint edit send an EMPTY curve — the editor
+                // silently reset the curve it was drawing.
+                int strip = -1;
+                if (std::sscanf(s.c_str(), "uf8curve;%d", &strip) == 1) {
+                    const auto c1 = s.find(';', 9);
+                    const std::string csv = (c1 != std::string::npos)
+                                              ? s.substr(c1 + 1) : std::string();
                     MediaTrack* tr = nullptr; int fx = -1; const void* mp = nullptr;
                     resolveFocusedUf8Target_(tr, fx, mp);
                     const int fb = std::clamp(g_uf8FaderBank.load(),

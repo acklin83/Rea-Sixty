@@ -8910,6 +8910,17 @@ void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
         uf1SlotRef_(u, softKeys, pos).customLabel = label ? label : "";
     });
 }
+// Push-to-default target. Unlike the UC1 (whose knobs have no push), the UF1
+// V-Pots DO push — applyUf1ChannelVpotPush_ reads this very field for an
+// explicit slot, so the value is live, not a mirror-only hint.
+void setUf1DefaultNorm_(bool softKeys, int pos, double v)
+{
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        uf1SlotRef_(u, softKeys, pos).defaultNorm = v;
+    });
+}
 
 // Resolve mutable pointers to the {param, invert} fields of a UF8 control for
 // the UF8 control's base binding. (UF8 FX-Learn modifier layers were removed —
@@ -9429,6 +9440,51 @@ void applyFeelToUf8VPot_(int strip, int bank, const feel_presets::KnobFeel& f)
         s.travel.rangeMax    = f.rangeMax;
         s.travel.sensitivity = f.sensitivity;
         s.travel.curvePoints = f.curvePoints;
+    });
+}
+
+// UF1 V-Pot adapters — same feel bundle, addressed by (softKeys, pos) in the
+// map being edited. The UF1 map is layer-free, so the slot IS the layer: no
+// editLayerRef_, no bank. Reading a position that carries no slot yields the
+// default-constructed bundle, which is exactly "untouched feel".
+// Slot-level pair — used by the Settings adapters below AND by the HUD's
+// match-based mutators, which cannot go through g_editingMatch.
+feel_presets::KnobFeel feelFromUf1Slot_(const uf8::UserUf1Slot& s)
+{
+    feel_presets::KnobFeel f;
+    f.inverted    = s.inverted;
+    f.rangeMin    = s.rangeMin;
+    f.rangeMax    = s.rangeMax;
+    f.sensitivity = s.sensitivity;
+    f.curvePoints = s.curvePoints;
+    f.polarity    = s.polarity;
+    f.defaultNorm = s.defaultNorm;
+    return f;
+}
+void applyFeelToUf1Slot_(uf8::UserUf1Slot& s, const feel_presets::KnobFeel& f)
+{
+    // Assign every field outright, like applyFeelToUf8VPot_ — chaining the
+    // per-field setters lets a clamp reorder the range mid-apply.
+    s.inverted    = f.inverted;
+    s.rangeMin    = f.rangeMin;
+    s.rangeMax    = f.rangeMax;
+    s.sensitivity = f.sensitivity;
+    s.curvePoints = f.curvePoints;
+    s.polarity    = f.polarity;
+    s.defaultNorm = f.defaultNorm;
+}
+
+feel_presets::KnobFeel feelFromUf1_(bool softKeys, int pos)
+{
+    const auto* v = uf1EditStream_(softKeys);
+    const uf8::UserUf1Slot* s = v ? uf8::uf1SlotAt(*v, pos) : nullptr;
+    return s ? feelFromUf1Slot_(*s) : feel_presets::KnobFeel{};
+}
+
+void applyFeelToUf1_(bool softKeys, int pos, const feel_presets::KnobFeel& f)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        applyFeelToUf1Slot_(uf1SlotRef_(u, softKeys, pos), f);
     });
 }
 
@@ -10636,6 +10692,144 @@ bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
 {
     return hudUf1MutateMatch_(match, softKeys, pos,
         [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel = label; });
+}
+
+// ---- UF1 tab full parity — tuning + feel ----------------------------------
+// [[feedback-fx-learn-changes-mirror-to-hud]] is a hard rule: what the FX-Learn
+// UF1 cell menu can do, the HUD's must do too. Same field ids as the UC1/UF8
+// verbs, so the Lua's editors stay one implementation.
+//
+// Build hud_uf1_detail: one line per MAPPED V-Pot —
+//   pos;sk;pol;rmin;rmax;sens;dn;stepped;nsteps;t0:v0,…
+// V-Pots ONLY (`sk` rides along for symmetry with hud_uf1_assign and is always
+// 0): a soft-key is a press, so travel/curve have nothing to act on — the same
+// rule that keeps UF8 faders out of the UF8 tab's tuning menu.
+std::string hudBuildUf1Detail_(void* trV, int fx)
+{
+    std::string match;
+    if (!hudUf1ResolveMatch_(trV, fx, match)) return {};
+    auto* tr = static_cast<MediaTrack*>(trV);
+    const bool liveFx = tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*");
+    std::string out;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (const auto& s : m.uf1.vpots) {
+            if (s.vst3Param < 0) continue;
+            // Stepped probe on the live param so the curve editor can disable
+            // the canvas + snap Min/Max, exactly like the UC1/UF8 detail rows.
+            int stepped = 0, nsteps = 0;
+            if (liveFx) {
+                double pS = 0, pSm = 0, pL = 0; bool isT = false;
+                if (TrackFX_GetParameterStepSizes(tr, fx, s.vst3Param,
+                        &pS, &pSm, &pL, &isT) && !isT && pS > 0.0) {
+                    stepped = 1;
+                    nsteps  = uf8::numStepsFor(static_cast<float>(pS));
+                }
+            }
+            char head[176];
+            std::snprintf(head, sizeof(head),
+                "%d;0;%d;%.4f;%.4f;%.3f;%.4f;%d;%d;",
+                s.pos,
+                (s.polarity == uf8::VPotPolarity::Bipolar) ? 1 : 0,
+                s.rangeMin, s.rangeMax, s.sensitivity, s.defaultNorm,
+                stepped, nsteps);
+            out += head;
+            for (size_t k = 0; k < s.curvePoints.size(); ++k) {
+                char pc[48];
+                std::snprintf(pc, sizeof(pc), "%s%.4f:%.4f", k ? "," : "",
+                              s.curvePoints[k].first, s.curvePoints[k].second);
+                out += pc;
+            }
+            out += '\n';
+        }
+        break;
+    }
+    return out;
+}
+
+// Field ids match hudSetField_ / hudUf8SetField_: 0 polarity, 1 rangeMin,
+// 2 rangeMax, 3 sensitivity, 4 defaultNorm, 5/6/7 capture the live value into
+// rangeMin/rangeMax/defaultNorm, 8 reset range, 9 reset feel.
+bool hudUf1SetFieldMatch_(const std::string& match, bool softKeys, int pos,
+                          int field, double v, void* trV, int fx)
+{
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [&](std::vector<UserUf1Slot>& vec, size_t i) {
+            auto& s = vec[i];
+            const auto clamp01 = [](double x) {
+                return x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x);
+            };
+            switch (field) {
+                case 0: s.polarity = (v != 0.0) ? uf8::VPotPolarity::Bipolar
+                                                : uf8::VPotPolarity::Unipolar; break;
+                case 1: s.rangeMin    = static_cast<float>(clamp01(v)); break;
+                case 2: s.rangeMax    = static_cast<float>(clamp01(v)); break;
+                case 3: s.sensitivity = static_cast<float>(v);          break;
+                case 4: s.defaultNorm = clamp01(v);                     break;
+                case 8: s.rangeMin = 0.0f; s.rangeMax = 1.0f;           break;
+                case 9: applyFeelToUf1Slot_(s, feel_presets::KnobFeel{}); break;
+                case 5: case 6: case 7: {
+                    auto* tr = static_cast<MediaTrack*>(trV);
+                    if (!tr || fx < 0 || s.vst3Param < 0
+                        || !ValidatePtr2(nullptr, tr, "MediaTrack*")) break;
+                    const double cur =
+                        TrackFX_GetParamNormalized(tr, fx, s.vst3Param);
+                    if (field == 5)      s.rangeMin = static_cast<float>(cur);
+                    else if (field == 6) s.rangeMax = static_cast<float>(cur);
+                    else                 s.defaultNorm = cur;
+                } break;
+            }
+        });
+}
+
+// Parse "t:v,t:v,…" → curve breakpoints on the UF1 slot (empty = linear).
+bool hudUf1SetCurveMatch_(const std::string& match, bool softKeys, int pos,
+                          const char* csv)
+{
+    std::vector<std::pair<float, float>> pts;
+    if (csv) {
+        const char* p = csv;
+        while (*p) {
+            float t = 0, vv = 0;
+            if (std::sscanf(p, "%f:%f", &t, &vv) == 2) pts.emplace_back(t, vv);
+            const char* comma = std::strchr(p, ',');
+            if (!comma) break;
+            p = comma + 1;
+        }
+        std::sort(pts.begin(), pts.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].curvePoints = pts; });
+}
+
+// Saving a feel READS the slot — it must not go through hudUf1MutateMatch_,
+// which would re-save the whole catalog for an edit that never happened.
+bool hudUf1FeelSaveMatch_(const std::string& match, bool softKeys, int pos,
+                          int slot, const char* name)
+{
+    if (slot < 0 || slot >= feel_presets::kCount || match.empty()) return false;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        const auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        const UserUf1Slot* s = uf8::uf1SlotAt(v, pos);
+        if (!s) return false;
+        feel_presets::KnobFeel f = feelFromUf1Slot_(*s);
+        f.name = name ? name : "";
+        feel_presets::set(slot, f);
+        return true;
+    }
+    return false;
+}
+bool hudUf1FeelApplyMatch_(const std::string& match, bool softKeys, int pos,
+                           int slot)
+{
+    if (slot < 0 || slot >= feel_presets::kCount) return false;
+    return hudUf1MutateMatch_(match, softKeys, pos,
+        [&](std::vector<UserUf1Slot>& v, size_t i) {
+            const auto& arr = feel_presets::get();
+            if (arr[slot].used) applyFeelToUf1Slot_(v[i], arr[slot]);
+        });
 }
 // ---- "Send to UF1" (Frank 2026-08-08) --------------------------------------
 // Put `vst3Param` on the next FREE V-Pot position of `match`'s UF1 map,
@@ -14881,18 +15075,29 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     if (ImGui_IsItemClicked(ctx, &rightBtn) && isMapped)
         ImGui_OpenPopup(ctx, popId, nullptr);
     if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+        // ⚠ Every mutator below re-upserts the map, which REPLACES the slot
+        // vectors in the global catalog — the `slot` pointer resolved above
+        // dangles from the first edit onwards. Snapshot by value at each use.
+        auto snap = [softKeys, pos] {
+            uf8::UserUf1Slot s{};
+            if (const auto* v = uf1EditStream_(softKeys))
+                if (const uf8::UserUf1Slot* p = uf8::uf1SlotAt(*v, pos)) s = *p;
+            return s;
+        };
         if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
             unbindUf1_(softKeys, pos);
             ImGui_CloseCurrentPopup(ctx);
+            ImGui_EndPopup(ctx);
+            return;                      // the slot is gone — nothing left to draw
         }
-        bool inv = slot && slot->inverted;
+        bool inv = snap().inverted;
         if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
             toggleUf1Inverted_(softKeys, pos);
         // Knob tuning — V-Pots only. A soft-key is a press, so range/curve/
         // sensitivity have nothing to act on there (same reason the UF8 tab
         // offers this on V-Pots and not on faders/buttons).
         if (!softKeys) {
-            bool bip = slot && slot->polarity == uf8::VPotPolarity::Bipolar;
+            bool bip = snap().polarity == uf8::VPotPolarity::Bipolar;
             if (ImGui_MenuItem(ctx, "Bipolar (centre detent)", nullptr, &bip, nullptr))
                 mutateUf1_([&](uf8::UserUf1Map& u) {
                     auto& s = uf1SlotRef_(u, softKeys, pos);
@@ -14904,6 +15109,48 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             // implementation of it.
             if (ImGui_MenuItem(ctx, "Knob travel\xE2\x80\xA6", nullptr, nullptr, nullptr))
                 openCurveEditor_(curveTargetForUf1_(softKeys, pos, shown));
+
+            // Push reset value — the UF1 V-Pot press (0x09-0x0C) writes this,
+            // so unlike the UC1's dormant mirror it acts on the hardware.
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Push reset value:");
+            {
+                double tmpDn = snap().defaultNorm;
+                int dnFlags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 110.0));
+                if (ImGui_SliderDouble(ctx, "##uf1_dn_s", &tmpDn, 0.0, 1.0,
+                                       "%.3f", &dnFlags))
+                    setUf1DefaultNorm_(softKeys, pos, tmpDn);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                double dnStep = 0.0, dnFast = 0.0;
+                int dnInFlags = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 70.0));
+                if (ImGui_InputDouble(ctx, "##uf1_dn_i", &tmpDn, &dnStep,
+                                      &dnFast, "%.3f", &dnInFlags))
+                    setUf1DefaultNorm_(softKeys, pos, tmpDn);
+                if (bip && std::abs(tmpDn - 0.5) > 0.01) {
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                    if (ImGui_SmallButton(ctx, "0.5##uf1_dn_centre"))
+                        setUf1DefaultNorm_(softKeys, pos, 0.5);
+                }
+                if (fx.ok && mapped >= 0
+                    && ImGui_MenuItem(ctx, "Capture current value", nullptr,
+                                      nullptr, nullptr))
+                    setUf1DefaultNorm_(softKeys, pos,
+                        TrackFX_GetParamNormalized(fx.tr, fx.fxIdx, mapped));
+            }
+
+            // Feel presets — the same ten global slots the UC1 knob and UF8
+            // V-Pot popups share, so a feel dialled on one surface transfers.
+            ImGui_Separator(ctx);
+            char fpScope[32];
+            snprintf(fpScope, sizeof(fpScope), "uf1_%d_%d", softKeys ? 1 : 0, pos);
+            const bool sk = softKeys; const int pp = pos;
+            drawFeelPresetMenu_(ctx, fpScope,
+                [sk, pp] { return feelFromUf1_(sk, pp); },
+                [sk, pp](const feel_presets::KnobFeel& f) {
+                    applyFeelToUf1_(sk, pp, f);
+                });
         }
         // Inline label field, not a native dialog — the rest of the Settings
         // page renames this way, and native dialogs are unreliable on macOS 15
@@ -14917,14 +15164,14 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         if (s_uf1LabelPos != pos || s_uf1LabelSk != softKeys) {
             s_uf1LabelPos = pos; s_uf1LabelSk = softKeys;
             snprintf(s_uf1LabelBuf, sizeof(s_uf1LabelBuf), "%s",
-                     slot ? slot->customLabel.c_str() : "");
+                     snap().customLabel.c_str());
         }
         int inputFlags = 0;
         ImGui_SetNextItemWidth(ctx, 150.0);
         if (ImGui_InputText(ctx, "##uf1_label", s_uf1LabelBuf,
                             sizeof(s_uf1LabelBuf), &inputFlags, nullptr))
             setUf1CustomLabel_(softKeys, pos, s_uf1LabelBuf);
-        if (slot && !slot->customLabel.empty()) {
+        if (!snap().customLabel.empty()) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_SmallButton(ctx, "X##uf1_label_clear")) {
                 s_uf1LabelBuf[0] = '\0';
@@ -20690,6 +20937,38 @@ bool reasixty_hudUf1Label(void* tr, int fx, bool softKeys, int pos, const char* 
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1LabelMatch_(m, softKeys, pos, label ? label : "");
+}
+// UF1 tab tuning + feel (hard-rule parity with the FX-Learn UF1 cell menu).
+std::string reasixty_hudBuildUf1Detail(void* tr, int fx)
+{
+    return uf8::hudBuildUf1Detail_(tr, fx);
+}
+bool reasixty_hudUf1SetField(void* tr, int fx, bool softKeys, int pos,
+                             int field, double v)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1SetFieldMatch_(m, softKeys, pos, field, v, tr, fx);
+}
+bool reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos,
+                             const char* csv)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1SetCurveMatch_(m, softKeys, pos, csv);
+}
+bool reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos,
+                             int slot, const char* name)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1FeelSaveMatch_(m, softKeys, pos, slot, name);
+}
+bool reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1FeelApplyMatch_(m, softKeys, pos, slot);
 }
 bool reasixty_uf8VpotGuiLearnArmed()
 {
