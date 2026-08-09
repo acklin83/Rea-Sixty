@@ -1529,7 +1529,10 @@ local uf1EditPage  = 0
 local function renderUf1Tab(u1)
   uf1Rects, uf1PageRects = {}, {}
   local px = 12
-  local y  = TAB_H + 10
+  -- BELOW the edit row (Name / favourites), which drawHudEditRow paints for
+  -- every tab at TAB_H. Starting at TAB_H + 10 drew the page buttons straight
+  -- over the Name field (Frank 2026-08-09). bodyTop() is what a tab body may use.
+  local y  = bodyTop() + 6
   if not u1 then
     dtext(14, y, col(0x9A9AA2, 1),
           "This plug-in has no UF1 layer — turn it on in Settings \xE2\x86\x92 FX Learn.", px)
