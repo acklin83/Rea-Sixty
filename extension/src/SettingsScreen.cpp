@@ -21787,6 +21787,25 @@ bool reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int para
     return uf8::hudUf1CreateAndBind_(static_cast<MediaTrack*>(tr), fx,
                                      softKeys, pos, param);
 }
+// "Extend, don't mirror": append every parameter the UC1 doesn't already carry
+// onto the UF1's free V-Pots. Same one-action fill the FX-Learn page has had
+// since 2026-08-08 — this is only its second door (Frank 2026-08-09 asked for a
+// right-click route). Returns how many parameters landed.
+int reasixty_hudUf1FillRest(void* tr, int fx)
+{
+    std::string m;
+    if (!uf8::hudUf1ResolveOrCreate_(tr, fx, m)) {
+        // No user map yet: the fill needs one, and enableUf1Layer creates the
+        // layer but not the map itself. Factory strips have no map by design.
+        char nm[512] = {0};
+        auto* t = static_cast<MediaTrack*>(tr);
+        if (!t || fx < 0 || !uf8::fxIdentityName(t, fx, nm, sizeof(nm)) || !nm[0])
+            return 0;
+        if (uf8::user_plugins::collidesWithBuiltin(nm)) return 0;
+        m = nm;
+    }
+    return uf8::fillUf1WithRest_(m);
+}
 bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
 {
     if (special < 0 || special > int(uf8::Uf1SkSpecial::StripModeGui)) return false;

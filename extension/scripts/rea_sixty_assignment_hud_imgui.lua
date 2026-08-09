@@ -3363,6 +3363,19 @@ local function drawUf1ControlContextMenu()
       end
     end
 
+    -- Extend rather than mirror: the UF1's pages are spare real estate, so
+    -- pack them with everything the UC1 does NOT already carry (Frank
+    -- 2026-08-09). Same one-action fill the FX-Learn page has.
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Fill with parameters the UC1 doesn't have") then
+      sendCmd("uf1fill")
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx,
+        "Append every parameter that isn't mapped on the UC1 or here yet,\n"
+        .. "in the plug-in's own order, onto the free UF1 V-Pots.")
+    end
+
     -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld
     -- PLUG-IN to soft-key 4 of page 1 and HQ / A/B to page 2; this moves them
     -- to any key. Overrides the parameter binding on that key.

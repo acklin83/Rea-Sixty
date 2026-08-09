@@ -164,6 +164,7 @@ bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, i
 bool        reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb);
 bool        reasixty_hudUf1Special(void* tr, int fx, int pos, int special);
 bool        reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int param);
+int         reasixty_hudUf1FillRest(void* tr, int fx);
 // UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
 // "hud_uf1_uc1slots") and the write behind the "uf1touc1;" verb.
 std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer);
@@ -31170,6 +31171,17 @@ void onTimer()
                 reasixty_uf1CancelLearn();
                 g_hudUf1AssignPublished.clear();
                 publishHud_();
+            } else if (s == "uf1fill") {
+                // "Extend, don't mirror": pack every parameter the UC1 doesn't
+                // carry onto the UF1's free V-Pots (Frank 2026-08-09).
+                MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                    && reasixty_hudUf1FillRest(u1Tr, u1Fx) > 0) {
+                    g_hudUf1AssignPublished.clear();
+                    g_hudUf1DetailPublished.clear();
+                    g_pageDirty.store(true);
+                    publishHud_();
+                }
             } else if (s.rfind("uf1bind;", 0) == 0) {
                 // "uf1bind;<pos>;<sk>;<param>" — the Parameter List's software
                 // bind, the twin of uf8bind. Click-to-learn needs the hardware;
