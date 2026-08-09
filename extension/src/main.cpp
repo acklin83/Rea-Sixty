@@ -1310,7 +1310,7 @@ std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 // Selection Sets / Auto mode / routing / UF8 Plug-in mode. Frank 2026-06-12.
 enum class MasterPin : uint8_t { None = 0, Strip1, Strip8 };
 std::atomic<MasterPin> g_masterPinSlot{MasterPin::None};
-// Master-pin Replace vs Shift (Settings → Device → Master track). false =
+// Master-pin Replace vs Shift (Settings → Behaviour → Master track). false =
 // Replace (pinned strip hides its banked track). true = Shift (regular
 // tracks bank over the remaining 7 strips, no track hidden). Persisted.
 std::atomic<bool> g_masterPinShift{false};
@@ -2831,7 +2831,7 @@ enum BrightnessLevel {
 };
 // `g_brightness` is the LED step. `g_scribbleBrightness` is the LCD /
 // scribble-strip / mech-VU step. Originally both followed a single index;
-// Settings → Device exposes them as two sliders so users can crank LCD
+// Settings → Devices → Brightness exposes them as two sliders so users can crank LCD
 // while keeping LEDs dim (or vice-versa). UC1 LCD + status follow the
 // scribble step (visually they're all "displays"); UC1 LEDs follow the
 // LED step.
@@ -2849,7 +2849,7 @@ std::atomic<bool> g_selFollowsColor{true};
 // PreSonus GainReduction_dB convention if no SSL CS / user-mapped
 // CS plug-in is on the focused track. When false, GR is shown only
 // when an SSL CS / mapped plug-in is present (matches pre-2026-05-06
-// behaviour). Controlled via Settings → Device.
+// behaviour). Controlled via Settings → Devices → Metering.
 std::atomic<bool> g_grAnyFx{true};
 
 // When true (and g_grAnyFx), the GR meter SUMS the GainReduction_dB of
@@ -2858,7 +2858,7 @@ std::atomic<bool> g_grAnyFx{true};
 // a single source is shown (the CS if present, else the first GR-exposing
 // FX). Default off (preserves the single-source behaviour). Separate flags
 // for the UF8 CS-GR strip and the UC1 Comp meter so each surface can be
-// set independently. Frank 2026-06-12. Settings → Device → GR meter source.
+// set independently. Frank 2026-06-12. Settings → Devices → Metering → GR meter source.
 std::atomic<bool> g_grCombineUf8{false};
 
 // Whether Rea-Sixty writes to REAPER's Console. Default OFF: REAPER pops the
@@ -2877,7 +2877,7 @@ void consoleMsg_(const char* msg)
 }
 std::atomic<bool> g_grCombineUc1{false};
 
-// On-screen "active instance" marker (Settings → Device → Inserts). When
+// On-screen "active instance" marker (Settings → Appearance → On-screen). When
 // enabled, the active CS / BC instance on a track that hosts ≥2 of that
 // domain gets a marker prefix in REAPER's TCP/MCP Inserts list — written
 // into the FX "renamed_name" (the only text REAPER draws there). Off by
@@ -3260,7 +3260,7 @@ std::atomic<bool> g_modeBannerToggleRequest{false};
 //      2026-05-15. Silently applied to every output. New users start
 //      here without needing to calibrate.
 //   2. User delta (g_uc1*Cal atomics, persisted in ExtState) — what
-//      the Settings → Device → Calibrate UI edits. Default 0 = no
+//      the Settings → Devices → UC1 GR calibration UI edits. Default 0 = no
 //      extra adjustment beyond the factory baseline. Reset zeroes it.
 //
 // The effective per-tick cal is factory + user; the apply path uses
@@ -3997,7 +3997,7 @@ void loadBrightness()
 }
 
 // ---- Identify Unit (LCD/LED flash) ----------------------------------------
-// Settings → Device exposes per-device "Identify" buttons. Pulses LED + LCD
+// Settings → Devices → Connected devices exposes per-device "Identify" buttons. Pulses LED + LCD
 // brightness between Dark and Full at 4 Hz for kIdentifyDurationMs to make
 // it obvious which physical box is selected when several are connected.
 // State machine ticks on onTimer so we don't block the main thread.
@@ -11505,7 +11505,7 @@ std::string shortFxName_(MediaTrack* tr, int fxIdx)
 
 // ── Insert-list active-instance marker — prefix helpers ──────────────
 // Every marker prefix the extension may write into an FX "renamed_name"
-// (Settings → Device → Inserts). Kept as a fixed list — stripping checks
+// (Settings → Appearance → On-screen). Kept as a fixed list — stripping checks
 // ALL of them regardless of the currently-selected style, so switching
 // style (or opening a project marked under a different style) still
 // cleans up correctly. UTF-8 byte escapes keep the literals encoding-
@@ -18749,7 +18749,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // idempotent.
                     if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
                     g_faderMotorEngaged[strip].store(false);
-                    // Settings → Device → "Touch selects channel": queue
+                    // Settings → Behaviour → Tracks → "Touch selects channel": queue
                     // an exclusive selection for this strip's track. Runs
                     // through the main-thread drain (SetOnlyTrackSelected
                     // is not safe from the libusb input thread).
@@ -28384,7 +28384,9 @@ bool vpotFineActive_()
 // Recompute the active FX-Learn modifier layer from host-keyboard state.
 // Called once per onTimer tick (main thread) so the per-track lookup loops
 // don't each hit CGEventSourceFlagsState, and so every read within a frame is
-// consistent. Both modifiers held is treated as ambiguous → Normal.
+// consistent. Both modifiers held = the Control+Option layer when that layer
+// is enabled (it is by default); only with it off does both-held fall back to
+// Normal. See the note at the ctrl && opt branch below.
 void refreshFxActiveLayer_()
 {
     bool ctrl = g_fxLayerCtrlEnable.load() && hostCtrlHeld_();
@@ -30585,7 +30587,7 @@ void onTimer()
     // Keyboard modifier mirrors. Polled here so the host-OS Shift / Cmd /
     // Ctrl keys engage the matching slots the same as a HW `mod_*` press
     // would. OR'd inside the bindings layer (see Bindings.cpp
-    // `g_mod*KbHeld`). Gated by Settings → Device → Keyboard Options.
+    // `g_mod*KbHeld`). Gated by Settings → Behaviour → Keyboard.
     // Frank 2026-05-22.
     uf8::bindings::setKeyboardShiftHeld(
         g_keyboardShiftModifier.load() && hostShiftHeld_());
@@ -32359,8 +32361,8 @@ void onTimer()
                             if (gr < 0) gr = 0;
                         }
                         // Device-level per-tick calibration (Settings →
-                        // Device → Calibrate CS LEDs). Hardware trim,
-                        // applied after the per-plug-in cal so UF8 and
+                        // Devices → UC1 GR calibration, CS DYN GR LEDs).
+                        // Hardware trim, applied after the per-plug-in cal so UF8 and
                         // UC1 LED strip stay aligned. Effective =
                         // factory baseline + user delta.
                         double devCal[5];
@@ -32370,8 +32372,8 @@ void onTimer()
                         gr = uf8::applyGrCalibration(
                             gr, uf8::kLedsBpDb, devCal, 5);
                         if (gr < 0) gr = 0;
-                        // Test-tick override (Settings → Device →
-                        // Calibrate). When active, force the matching
+                        // Test-tick override (Settings → Devices → UC1
+                        // GR calibration). When active, force the matching
                         // tick value so the user sees what the renderer
                         // would draw at exactly that tick.
                         const int testT = g_uc1CalActiveTest.load();
@@ -34822,7 +34824,7 @@ void reasixty_setOverlayTopPad(int px)
     SetExtState("rea_sixty", "overlay_toppad", b, true);
 }
 
-// Per-tick device calibration accessors (Settings → Device).
+// Per-tick device calibration accessors (Settings → Devices → UC1 GR calibration).
 // Section: 0 = BC VU motor (6 ticks 0/4/8/12/16/20 dB),
 //          1 = CS DYN GR LEDs (5 ticks 3/6/10/14/20 dB).
 // Clamped to ±10 dB hard cap on set.

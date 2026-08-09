@@ -100,9 +100,9 @@ bool reasixty_dynBankPageControl(int control, int delta);
 int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
-bool reasixty_grAnyFx();   // GR-source toggle (Settings → Device)
-bool reasixty_grCombineUc1();  // UC1 combined-GR toggle (Settings → Device)
-bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Device)
+bool reasixty_grAnyFx();   // GR-source toggle (Settings → Devices → Metering)
+bool reasixty_grCombineUc1();  // UC1 combined-GR toggle (Settings → Devices → Metering)
+bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Behaviour → Master track)
 // UC1 Out-Gain → REAPER fader toggle (main.cpp). When on, the Out-Gain
 // pot drives REAPER track volume instead of the SSL CS Fader Level param.
 // trackVolNorm/setTrackVolNorm use the shared vol↔pb fader law so the
@@ -126,7 +126,7 @@ int  reasixty_cycleControlMask();
 bool reasixty_dispatchSelModeCycle(int step);
 constexpr int kCycleCtrlUc1Enc1 = 0x04;
 constexpr int kCycleCtrlUc1Enc2 = 0x08;
-// Per-tick device calibration (Settings → Device → Calibrate BC/CS).
+// Per-tick device calibration (Settings → Devices → UC1 GR calibration).
 // section: 0=BC VU (6 ticks 0/4/8/12/16/20 dB), 1=CS LEDs (5 ticks
 // 3/6/10/14/20 dB). Active test: -1 normal, 0..5 = force BC tick,
 // 100..104 = force CS tick.
@@ -4348,15 +4348,16 @@ void UC1Surface::pollGainReduction_()
         }
     }
 
-    // Device-level per-tick calibration (Settings → Device → Calibrate).
+    // Device-level per-tick calibration (Settings → Devices → UC1 GR
+    // calibration).
     // Applied AFTER per-plugin FX-Learn cal — this is a hardware-trim,
     // independent of which plug-in produced the reading. Both renderers
     // get their own cal table because the BC VU motor and the DYN LED
     // strip have unrelated physical response curves.
     //
     // Calibration test mode override: when the user is in Settings →
-    // Device Calibrate, the live GR feed is bypassed and the matching
-    // tick's calibrated value is sent. -1 (default) = normal poll.
+    // Devices → UC1 GR calibration, the live GR feed is bypassed and the
+    // matching tick's calibrated value is sent. -1 (default) = normal poll.
     const int testTick = ::reasixty_uc1CalActiveTest();
     if (testTick >= 0 && testTick < 6) {
         bcGr      = static_cast<float>(::reasixty_uc1CalTickDb(0, testTick)

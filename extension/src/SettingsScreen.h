@@ -14,14 +14,38 @@
 // JSON config (global) per bindings.md §"Config File".
 //
 
+#include <string>
+#include <vector>
+
 class ImGui_Context;
 
 namespace uf8 {
 
+// ---- Shared with MixerWindow's rail search box ----------------------------
+// The additive matcher every Settings search field already uses (implemented
+// once in SettingsScreen.cpp as searchTokensLower_ / searchAllTokensCI_).
+// Exposed rather than duplicated so the rail search behaves identically to
+// the map / action / parameter pickers. Frank 2026-08-09.
+std::vector<std::string> settingsSearchTokens(const char* query);
+bool settingsSearchMatches(const std::vector<std::string>& tokens,
+                           const std::string& hay);
+
+// Best-effort scroll-to: the rail search names the section heading a clicked
+// result lives under; the owning pane scrolls to that heading once, then the
+// request clears itself.
+void settingsRequestSectionScroll(const char* title);
+// Called by MixerWindow once per pane draw, immediately before the pane's draw
+// function. Takes ownership of a pending request for exactly that one draw —
+// whatever no heading claims dies there. Must run for EVERY pane, not just the
+// three that own headings, or a request the target pane never sees stays armed
+// and fires on an unrelated visit later.
+void settingsLatchSectionScroll();
+
 class SettingsScreen {
 public:
-    static void drawDevice(ImGui_Context* ctx);
+    static void drawDevices(ImGui_Context* ctx);
     static void drawAppearance(ImGui_Context* ctx);
+    static void drawBehaviour(ImGui_Context* ctx);
     static void drawBindings(ImGui_Context* ctx);
     static void drawModes(ImGui_Context* ctx);
     static void drawFxLearn(ImGui_Context* ctx);

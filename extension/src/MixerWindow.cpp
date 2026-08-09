@@ -6,6 +6,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
 
 #include "reaper_plugin_functions.h"
 
@@ -42,8 +45,12 @@ namespace {
 // 2026-05-14 after the worktree-mixer-standalone experiment was
 // reverted; the Plugin Mixer view will land later as its own
 // dedicated window, not as a tab in here.
+// Rail ORDER is set by kRail below, not by this enum. The active tab now
+// persists as RailEntry::id (a stable lowercase string), so adding or
+// renumbering a section no longer repoints anybody's saved "last tab" —
+// see persistSelected / applyReopenLastTab. Frank 2026-08-09.
 enum Section : int {
-    kSecDevice = 0,
+    kSecDevices = 0,
     kSecAppearance,
     kSecBindings,
     kSecModes,
@@ -54,31 +61,256 @@ enum Section : int {
     kSecExchange,
     kSecManual,
     kSecAbout,
-    kSecCount,
+    kSecBehaviour,
 };
 
 struct RailEntry {
     const char* label;
+    // Stable id written to ExtState as the "last tab". Never change one of
+    // these once shipped — a user's saved tab is matched against it.
+    const char* id;
     Section     section;
     bool        separatorBefore;
     void (*draw)(ImGui_Context*);
 };
 
 constexpr RailEntry kRail[] = {
-    { "Device",         kSecDevice,        false, &SettingsScreen::drawDevice        },
-    { "Appearance",     kSecAppearance,    false, &SettingsScreen::drawAppearance    },
-    { "Bindings",       kSecBindings,      false, &SettingsScreen::drawBindings      },
-    { "Modes",          kSecModes,         false, &SettingsScreen::drawModes         },
-    { "FX Learn",       kSecFxLearn,       false, &SettingsScreen::drawFxLearn       },
-    { "Favourites",     kSecFavourites,    false, &SettingsScreen::drawFavourites    },
-    { "Selection Sets",  kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets },
-    { "Parameter Groups",kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
-    { "Exchange",        kSecExchange,       true,  &ExchangeView::draw                },
-    { "Manual",          kSecManual,         false, &ManualView::draw                  },
-    { "About",           kSecAbout,          false, &SettingsScreen::drawAbout         },
+    { "Devices",         "devices",         kSecDevices,        false, &SettingsScreen::drawDevices         },
+    { "Appearance",      "appearance",      kSecAppearance,     false, &SettingsScreen::drawAppearance      },
+    { "Behaviour",       "behaviour",       kSecBehaviour,      false, &SettingsScreen::drawBehaviour       },
+    { "Bindings",        "bindings",        kSecBindings,       false, &SettingsScreen::drawBindings        },
+    { "Modes",           "modes",           kSecModes,          false, &SettingsScreen::drawModes           },
+    { "FX Learn",        "fxlearn",         kSecFxLearn,        false, &SettingsScreen::drawFxLearn         },
+    { "Favourites",      "favourites",      kSecFavourites,     false, &SettingsScreen::drawFavourites      },
+    { "Selection Sets",  "selectionsets",   kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets   },
+    { "Parameter Groups","parametergroups", kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
+    { "Exchange",        "exchange",        kSecExchange,       true,  &ExchangeView::draw                  },
+    { "Manual",          "manual",          kSecManual,         false, &ManualView::draw                    },
+    { "About",           "about",           kSecAbout,          false, &SettingsScreen::drawAbout           },
 };
 
+// Section ⇄ stable id. Twelve entries, scanned on a rail click and on
+// window open — a linear scan is the whole implementation.
+const char* railIdFor(int section)
+{
+    for (const RailEntry& e : kRail)
+        if (e.section == section) return e.id;
+    return kRail[0].id;
+}
+// -1 when the string matches no rail entry (unknown / legacy / empty).
+int railSectionFor(const char* id)
+{
+    if (!id || !*id) return -1;
+    for (const RailEntry& e : kRail)
+        if (std::strcmp(e.id, id) == 0) return (int)e.section;
+    return -1;
+}
+
+// Before 2026-08-09 the last tab was persisted as a raw index into the
+// Section enum, whose order back then is reproduced here. A stored value
+// that is nothing but digits is one of those indices and gets migrated
+// once; anything else falls through to the first pane, exactly as an
+// unparsable value always did.
+constexpr const char* kLegacyTabIds[] = {
+    "devices", "appearance", "bindings", "modes", "fxlearn", "favourites",
+    "selectionsets", "parametergroups", "exchange", "manual", "about",
+};
+bool isLegacyTabIndex(const char* v)
+{
+    if (!v || !*v) return false;
+    for (const char* p = v; *p; ++p)
+        if (*p < '0' || *p > '9') return false;
+    return true;
+}
+
 constexpr double kRailWidthPx = 160.0;
+
+// ---- Rail search ----------------------------------------------------------
+// A filter field sits above the pane list. Empty query → the rail renders
+// exactly as it always did. Non-empty → the pane list is replaced by a result
+// list; clicking a result selects that result's pane (persisted through the
+// normal persistSelected path) and asks it to scroll to the owning heading.
+//
+// Every label below is copied verbatim out of SettingsScreen.cpp — the index
+// is a mirror of the code, not a description of it. The Devices / Appearance /
+// Behaviour panes are indexed control by control; the other nine panes are
+// indexed by their section headings only (going control-deep in Bindings or
+// FX Learn is out of scope). Frank 2026-08-09.
+struct SearchEntry {
+    const char* label;    // the control's own label
+    Section     section;  // pane it lives in
+    const char* group;    // section heading inside that pane ("" = pane-level)
+};
+
+constexpr SearchEntry kSearchIndex[] = {
+    // -- Appearance ---------------------------------------------------------
+    { "Show MCP Inserts overlay",              kSecAppearance, "On-screen" },
+    { "Show focused-track panel",              kSecAppearance, "On-screen" },
+    { "Show mode-change banner",               kSecAppearance, "On-screen" },
+    { "CS colour",                             kSecAppearance, "On-screen" },
+    { "BC colour",                             kSecAppearance, "On-screen" },
+    { "Selected FX colour",                    kSecAppearance, "On-screen" },
+    { "Fill opacity",                          kSecAppearance, "On-screen" },
+    { "Border opacity",                        kSecAppearance, "On-screen" },
+    { "Inserts row height",                    kSecAppearance, "On-screen" },
+    { "Inserts top offset",                    kSecAppearance, "On-screen" },
+    { "SEL LED follows REAPER track colour",   kSecAppearance, "Surface display" },
+    { "Long track-name handling",              kSecAppearance, "Surface display" },
+    { "Theme",                                 kSecAppearance, "Theme" },
+    { "Font Size",                             kSecAppearance, "Font Size" },
+    { "Spelling",                              kSecAppearance, "Spelling" },
+    { "Reopen on last tab viewed",             kSecAppearance, "Settings window" },
+    // -- Devices ------------------------------------------------------------
+    { "Connected devices",                     kSecDevices, "Connected devices" },
+    // Drawn as "  LEDs" / "  LCDs" — the two leading spaces are layout
+    // indent, not part of the name.
+    { "LEDs",                                  kSecDevices, "Brightness" },
+    { "LCDs",                                  kSecDevices, "Brightness" },
+    { "GR meter source",                       kSecDevices, "Metering" },
+    { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering" },
+    { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering" },
+    { "UC1 Input",                             kSecDevices, "Metering" },
+    { "UC1 Output",                            kSecDevices, "Metering" },
+    { "UF8 Strips",                            kSecDevices, "Metering" },
+    { "Copy Input to Output",                  kSecDevices, "Metering" },
+    { "Shift activates Fine mode (V-Pots / encoders, not faders)",
+                                               kSecDevices, "V-Pot / encoder feel" },
+    { "Fine mode steps JSFX sliders by their native increment",
+                                               kSecDevices, "V-Pot / encoder feel" },
+    { "UF8 V-Pot speed",                       kSecDevices, "V-Pot / encoder feel" },
+    { "UF8 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
+    { "UC1 encoder speed",                     kSecDevices, "V-Pot / encoder feel" },
+    { "UC1 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
+    { "Virtual notch zone",                    kSecDevices, "V-Pot / encoder feel" },
+    { "Notch fine step",                       kSecDevices, "V-Pot / encoder feel" },
+    { "Notch hold",                            kSecDevices, "V-Pot / encoder feel" },
+    { "BC VU meter (0/4/8/12/16/20 dB)",       kSecDevices, "UC1 GR calibration" },
+    { "CS DYN GR LEDs (3/6/10/14/20 dB)",      kSecDevices, "UC1 GR calibration" },
+    // -- Behaviour ----------------------------------------------------------
+    { "TCP follows UF8 selection",             kSecBehaviour, "Tracks" },
+    { "Surface mirrors:",                      kSecBehaviour, "Tracks" },
+    { "Pinned tracks survive banking",         kSecBehaviour, "Tracks" },
+    { "Touch selects channel",                 kSecBehaviour, "Tracks" },
+    { "Track selection follows parameter change",
+                                               kSecBehaviour, "Tracks" },
+    { "Show Master as Track 0 on UC1",         kSecBehaviour, "Master track" },
+    { "Pinned Master",                         kSecBehaviour, "Master track" },
+    { "Don't show offline FX",                 kSecBehaviour, "Plug-ins" },
+    { "Wrap Plug-in Cycle",                    kSecBehaviour, "Plug-ins" },
+    { "SSL Strip Mode follows focused plug-in window",
+                                               kSecBehaviour, "Plug-ins" },
+    { "Plug-in GUI follows active Instance",   kSecBehaviour, "Plug-ins" },
+    { "UF1 PLUG-IN key opens the plug-in GUI", kSecBehaviour, "Plug-ins" },
+    { "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
+                                               kSecBehaviour, "Plug-ins" },
+    { "Pin plug-in GUI position",              kSecBehaviour, "Plug-ins" },
+    { "Pin FX-chain GUI position",             kSecBehaviour, "Plug-ins" },
+    { "Parameter change switches soft-key bank",
+                                               kSecBehaviour, "Soft-keys" },
+    { "Engage a fixed soft-key bank at startup",
+                                               kSecBehaviour, "Soft-keys" },
+    { "Use current hardware bank",             kSecBehaviour, "Soft-keys" },
+    { "Alt/Option + fader drag \xE2\x86\x92 snap back to original on release",
+                                               kSecBehaviour, "Keyboard" },
+    { "Keyboard Shift acts as Shift modifier", kSecBehaviour, "Keyboard" },
+    { "Keyboard Cmd (\xE2\x8C\x98) acts as Cmd modifier",
+                                               kSecBehaviour, "Keyboard" },
+    { "Keyboard Ctrl acts as Ctrl modifier",   kSecBehaviour, "Keyboard" },
+    // -- Remaining panes: headings only -------------------------------------
+    { "Bindings",                              kSecBindings,        "" },
+    { "Modes",                                 kSecModes,           "" },
+    { "AUTO",                                  kSecModes,           "" },
+    { "FX / Cycle",                            kSecModes,           "" },
+    { "REC",                                   kSecModes,           "" },
+    { "NAV",                                   kSecModes,           "" },
+    { "Nudge",                                 kSecModes,           "" },
+    { "Dynamount",                             kSecModes,           "" },
+    { "FX Learn",                              kSecFxLearn,         "" },
+    // The three modifier-layer flags moved out of Behaviour → Keyboard into
+    // the FX Learn pane (2026-08-09), so they are indexed control-deep even
+    // though the rest of that pane is not — a setting that changed home is
+    // the one a user is most likely to go looking for. Frank 2026-08-09.
+    { "Hold Option for the FX-Learn Option layer",
+                                               kSecFxLearn, "Modifier layers" },
+    { "Hold Control for the FX-Learn Control layer",
+                                               kSecFxLearn, "Modifier layers" },
+    { "Hold Control+Option for the combined FX-Learn layer",
+                                               kSecFxLearn, "Modifier layers" },
+    { "Favourites",                            kSecFavourites,      "" },
+    { "Selection Sets",                        kSecSelectionSets,   "" },
+    { "Parameter Groups",                      kSecParameterGroups, "" },
+    { "Exchange",                              kSecExchange,        "" },
+    { "Mapping Exchange",                      kSecExchange,        "" },
+    { "Manual",                                kSecManual,          "" },
+    { "About",                                 kSecAbout,           "" },
+    { "Versions",                              kSecAbout,           "" },
+};
+
+// "Devices › Metering › GR meter source". The pane name always leads; the
+// heading is dropped when it would only repeat the label (pane-level entries),
+// and on request — the rail is 160 px wide, so the middle term is the first
+// thing to go when the full trail won't fit.
+std::string searchBreadcrumb(const SearchEntry& e, bool withGroup)
+{
+    const char* pane = kRail[0].label;
+    for (const RailEntry& r : kRail)
+        if (r.section == e.section) { pane = r.label; break; }
+    static const char kSep[] = " \xE2\x80\xBA ";   // " › "
+    std::string s = pane;
+    if (withGroup && e.group && *e.group
+        && std::strcmp(e.group, e.label) != 0) {
+        s += kSep;
+        s += e.group;
+    }
+    if (std::strcmp(e.label, pane) != 0) {
+        s += kSep;
+        s += e.label;
+    }
+    return s;
+}
+
+bool searchTextFits(ImGui_Context* ctx, const std::string& s, double maxW)
+{
+    double w = 0.0, h = 0.0;
+    ImGui_CalcTextSize(ctx, s.c_str(), &w, &h, /*hide_after_##*/ nullptr,
+                       /*wrap_width*/ nullptr);
+    return w <= maxW;
+}
+
+// Trim to the rail width, cutting on a UTF-8 boundary (the separator and a
+// couple of labels are multi-byte) and appending "…".
+std::string searchEllipsise(ImGui_Context* ctx, const std::string& s,
+                            double maxW)
+{
+    static const char kEll[] = "\xE2\x80\xA6";     // "…"
+    double w = 0.0, h = 0.0;
+    ImGui_CalcTextSize(ctx, s.c_str(), &w, &h, nullptr, nullptr);
+    if (w <= maxW || w <= 0.0) return s;
+    // Guess the cut from the average glyph width so the walk-back below is
+    // two or three measurements, not one per character.
+    size_t n = static_cast<size_t>(s.size() * (maxW / w));
+    if (n > s.size()) n = s.size();
+    while (n > 0) {
+        while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+        std::string probe = s.substr(0, n) + kEll;
+        ImGui_CalcTextSize(ctx, probe.c_str(), &w, &h, nullptr, nullptr);
+        if (w <= maxW) return probe;
+        --n;
+    }
+    return kEll;
+}
+
+// What a result row actually shows. Only ~20 characters fit the rail, so:
+// the full trail when it fits, else pane + setting, else the setting alone,
+// ellipsised. The untruncated trail is always on the hover tooltip.
+std::string searchRailText(ImGui_Context* ctx, const SearchEntry& e,
+                           const std::string& full, double maxW)
+{
+    if (searchTextFits(ctx, full, maxW)) return full;
+    const std::string paneAndLabel = searchBreadcrumb(e, /*withGroup*/ false);
+    if (searchTextFits(ctx, paneAndLabel, maxW)) return paneAndLabel;
+    return searchEllipsise(ctx, e.label, maxW);
+}
 
 } // namespace
 
@@ -131,7 +363,7 @@ struct MixerWindow::Impl {
     ImGui_Font*    fontBold = nullptr;
     ImGui_Font*    fontMono = nullptr;
     bool           visible = false;
-    int            selected = kSecDevice;
+    int            selected = kSecDevices;
     // Session counter — bumped on every closed→open transition. Used to
     // suffix the Begin window-id so each session is a fresh ImGui
     // window object. Required because ReaImGui v0.10 retains stale
@@ -147,18 +379,22 @@ struct MixerWindow::Impl {
     double         saveX = 60.0, saveY = 60.0;
     double         saveW = 1500.0, saveH = 1080.0;
     bool           poseLoaded = false;
+    // Rail search query. Session-only — a filter is a momentary lens, not a
+    // preference, so it is deliberately NOT persisted to ExtState.
+    char           searchBuf[96] = {0};
 
     // Persist the active tab so "Reopen on last tab" (Settings → Appearance)
     // can restore it across REAPER restarts. Written on every selection
-    // change; read only when the setting is enabled.
+    // change; read only when the setting is enabled. Stored as the rail
+    // entry's stable string id, never as the enum index — the index shifts
+    // whenever a pane is added or reordered.
     void persistSelected()
     {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", selected);
-        SetExtState("rea_sixty", "settings_last_tab", buf, /*persist*/ true);
+        SetExtState("rea_sixty", "settings_last_tab", railIdFor(selected),
+                    /*persist*/ true);
     }
     // On open: if the user opted in, jump to the last tab they viewed; if NOT,
-    // reset to the default Device tab. The reset matters because `selected` is
+    // reset to the default Devices pane. The reset matters because `selected` is
     // a member that survives a close/open within a session — without it the
     // window would always reopen on the last tab even with the setting off
     // (Frank 2026-06-20).
@@ -166,10 +402,22 @@ struct MixerWindow::Impl {
     {
         const char* en = GetExtState("rea_sixty", "settings_reopen_last_tab");
         const bool on  = en && *en && std::atoi(en) != 0;
-        if (!on) { selected = kSecDevice; return; }
+        if (!on) { selected = kSecDevices; return; }
         const char* v = GetExtState("rea_sixty", "settings_last_tab");
-        const int t = (v && *v) ? std::atoi(v) : -1;
-        selected = (t >= 0 && t < kSecCount) ? t : kSecDevice;
+        int sec = railSectionFor(v);
+        if (sec < 0 && isLegacyTabIndex(v)) {
+            // Pre-2026-08-09 install: the value is an index into the old
+            // enum order. Translate it, then write the id back so this
+            // branch never fires again for this user.
+            const int i = std::atoi(v);
+            if (i >= 0 && i < (int)(sizeof(kLegacyTabIds) /
+                                    sizeof(kLegacyTabIds[0])))
+                sec = railSectionFor(kLegacyTabIds[i]);
+            if (sec >= 0)
+                SetExtState("rea_sixty", "settings_last_tab", railIdFor(sec),
+                            /*persist*/ true);
+        }
+        selected = (sec >= 0) ? sec : kSecDevices;
     }
 
     void loadPose()
@@ -361,16 +609,68 @@ void MixerWindow::onRunTick()
                                  /*size_h*/ nullptr, /*border*/ nullptr,
                                  /*flags*/ nullptr);
             if (railVisible) {
-                for (const RailEntry& e : kRail) {
-                    if (e.separatorBefore) ImGui_Separator(impl_->ctx);
-                    bool isSelected = (impl_->selected == e.section);
-                    if (ImGui_Selectable(impl_->ctx, e.label, &isSelected,
-                                         /*flags*/ nullptr,
-                                         /*size_w*/ nullptr,
-                                         /*size_h*/ nullptr)) {
-                        impl_->selected = e.section;
-                        impl_->persistSelected();
+                // Filter field. Width set explicitly (rail minus ImGui's
+                // 8 px window padding on each side) so it can never spill
+                // past the 160 px rail at any Font Size.
+                ImGui_SetNextItemWidth(impl_->ctx, kRailWidthPx - 16.0);
+                ImGui_InputTextWithHint(impl_->ctx, "##rail_search",
+                                        "Search settings\xE2\x80\xA6",
+                                        impl_->searchBuf,
+                                        (int)sizeof(impl_->searchBuf),
+                                        /*flags*/ nullptr,
+                                        /*callback*/ nullptr);
+                ImGui_Spacing(impl_->ctx);
+
+                // One token vector per frame, shared by every candidate —
+                // the same additive matcher every other Settings search
+                // field uses (SettingsScreen.cpp searchTokensLower_ /
+                // searchAllTokensCI_, exposed via SettingsScreen.h).
+                const std::vector<std::string> toks =
+                    settingsSearchTokens(impl_->searchBuf);
+
+                if (toks.empty()) {
+                    for (const RailEntry& e : kRail) {
+                        if (e.separatorBefore) ImGui_Separator(impl_->ctx);
+                        bool isSelected = (impl_->selected == e.section);
+                        if (ImGui_Selectable(impl_->ctx, e.label, &isSelected,
+                                             /*flags*/ nullptr,
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr)) {
+                            impl_->selected = e.section;
+                            impl_->persistSelected();
+                        }
                     }
+                } else {
+                    double availW = 0.0, availH = 0.0;
+                    ImGui_GetContentRegionAvail(impl_->ctx, &availW, &availH);
+                    int hits = 0;
+                    for (const SearchEntry& s : kSearchIndex) {
+                        const std::string crumb =
+                            searchBreadcrumb(s, /*withGroup*/ true);
+                        if (!settingsSearchMatches(toks, crumb)) continue;
+                        ++hits;
+                        // Two results can truncate to the same string, so the
+                        // ImGui id carries the hit number, not the text.
+                        char rowId[288];
+                        snprintf(rowId, sizeof(rowId), "%s##hit_%d",
+                                 searchRailText(impl_->ctx, s, crumb,
+                                                availW).c_str(), hits);
+                        bool picked = false;
+                        if (ImGui_Selectable(impl_->ctx, rowId, &picked,
+                                             /*flags*/ nullptr,
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr)) {
+                            impl_->selected = s.section;
+                            impl_->persistSelected();
+                            // Best-effort: the pane scrolls to this heading
+                            // on the very next draw, which is this frame.
+                            settingsRequestSectionScroll(s.group);
+                        }
+                        if (ImGui_IsItemHovered(impl_->ctx, /*flags*/ nullptr))
+                            ImGui_SetTooltip(impl_->ctx, crumb.c_str());
+                    }
+                    if (hits == 0)
+                        ImGui_TextDisabled(impl_->ctx, "No matches");
                 }
             }
             ImGui_EndChild(impl_->ctx);
@@ -390,6 +690,13 @@ void MixerWindow::onRunTick()
                 ImGui_Indent(impl_->ctx, &padX);
                 for (const RailEntry& e : kRail) {
                     if (e.section == impl_->selected) {
+                        // Take any pending rail-search scroll request for this
+                        // one draw. Has to happen for EVERY pane, not just the
+                        // three that own headings — otherwise a request whose
+                        // target pane never draws (the user clicks a different
+                        // rail entry first) stays armed and fires on an
+                        // unrelated visit later. Frank 2026-08-09.
+                        settingsLatchSectionScroll();
                         e.draw(impl_->ctx);
                         break;
                     }

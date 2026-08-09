@@ -72,11 +72,17 @@ FAQs, Q&A, compatibility info (effectively a links page).
 
 ## Gap analysis vs Rea-Sixty Phase 2.7 plan
 
+*Pane names corrected 2026-08-09: what this table called the "Device" tab
+shipped as **Devices**, and that pane has since been split into **Devices /
+Appearance / Behaviour**. Only the names are updated below — the status column
+still reads as it did when this analysis was written. It is a record of the
+Phase 2.7 plan, not a description of the current build.*
+
 | SSL 360° feature | Rea-Sixty status | Recommendation |
 |---|---|---|
-| HOME → Connected Units | Settings → **Device** tab — planned | **Add**: Identify (LCD-flash), Drag-to-Reorder, serial number, firmware-update integration (defer firmware to Phase 4 per existing Non-Goal) |
+| HOME → Connected Units | Settings → **Devices** tab — planned | **Add**: Identify (LCD-flash), Drag-to-Reorder, serial number, firmware-update integration (defer firmware to Phase 4 per existing Non-Goal) |
 | HOME → Software Version + Update | Settings → **About** tab — planned | Add ReaPack auto-update check |
-| HOME → Export Report | not planned | **Add** to Device tab. One button → produces `~/Desktop/rea_sixty_diag_<date>.zip` (build hash, REAPER version, recent extension log, USB device tree). Cheap and pays for itself the first time we debug a remote user |
+| HOME → Export Report | not planned | **Add** to Devices tab. One button → produces `~/Desktop/rea_sixty_diag_<date>.zip` (build hash, REAPER version, recent extension log, USB device tree). Cheap and pays for itself the first time we debug a remote user |
 | UF8 page → 3 Layer tabs (per-DAW) | N/A | **Skip**. Rea-Sixty is REAPER-only by architectural decision |
 | UF8 page → DAW Profile dropdown | N/A | **Skip**. Same reason |
 | UF8 page → Transport Master | N/A | **Skip**. Single REAPER instance |
@@ -87,7 +93,7 @@ FAQs, Q&A, compatibility info (effectively a links page).
 | Profile Management (SAVE/LOAD/SAVE AS XML) | Settings → Bindings → Import/Export — planned 2.7e | Use **JSON** not XML (we own the format). One-time SSL 360° XML import for migration is a non-goal |
 | ADVANCED → Always Fine Pan/Sends | not planned | **Add** to Modes tab as "V-Pot Behaviour" subsection: `Always fine pan` / `Always fine sends` toggles |
 | ADVANCED → Show Auto State | not planned | **Add** to Modes tab — toggle to surface REAPER's `GetTrackAutomationMode()` on the scribble strip |
-| UC1 page (mirror of UF8 page for UC1) | not planned | **Add** UC1-specific section in Device tab (or split: separate "UC1" tab if config diverges). UC1 has fewer user-assignable keys — minor section, not a top-level tab |
+| UC1 page (mirror of UF8 page for UC1) | not planned | **Add** UC1-specific section in Devices tab (or split: separate "UC1" tab if config diverges). UC1 has fewer user-assignable keys — minor section, not a top-level tab |
 | PLUG-IN MIXER | **Mixer tab** (Phase 2.6) | Already planned, in flight |
 | LCD / SOFTWARE MESSAGES catalogue | not planned | **Skip**. We log to file, not modal popups. About tab can link to log location |
 | Support / FAQs | About tab links — planned | Sufficient |
@@ -111,4 +117,4 @@ FAQs, Q&A, compatibility info (effectively a links page).
   it the default tab in the same dockable window. SSL splits HOME from the
   mixer; we don't have to.
 - Our "About" replaces SSL's HOME for version/update info, since we have no
-  multi-device management surface beyond the Device tab.
+  multi-device management surface beyond the Devices tab.

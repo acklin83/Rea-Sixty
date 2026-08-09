@@ -22,7 +22,9 @@ PDF, web).
 | `settings-modes-dynamount.png` | Two live studio LAN addresses in the IP column | Filled with the field background, so both rows read as empty IP fields like the six below them |
 
 The unedited originals are not in the repo. If a screenshot needs re-taking,
-re-capture rather than trying to restore these.
+re-capture rather than trying to restore these. `settings-device-1.png` is on
+the re-shoot list below — redact the serials again on the new capture, and
+note that the list now has a third line, UF1, which also prints an `SN`.
 
 ## Index
 
@@ -40,26 +42,52 @@ re-capture rather than trying to restore these.
 
 ### Settings window
 
-| File | Shows |
-| --- | --- |
-| `settings-device-1.png` | Device tab — connected devices, LED/LCD brightness, display behaviour, overlay colours |
-| `settings-device-2.png` | Device tab scrolled — master track, meter fall rates, track and plug-in options, keyboard modifiers |
-| `settings-device-3.png` | Device tab scrolled further — V-Pot resolution, virtual notch, UC1 GR calibration tables |
-| `settings-appearance.png` | Appearance tab — theme, font size, spelling, settings-window options |
-| `settings-bindings-uf8.png` | Bindings tab, UF8 sub-tab — full surface mockup plus the short-press / long-press editor |
-| `settings-bindings-uc1.png` | Bindings tab, UC1 sub-tab — UC1 mockup with encoder rotate / push targets |
-| `settings-modes-auto.png` | Modes → AUTO — automation-arm filtering, fill direction, selection-set auto-mode |
-| `settings-modes-fx-cycle.png` | Modes → FX / Cycle — which controls drive the FX cycle, V-Pot push behaviour |
-| `settings-modes-rec.png` | Modes → REC — RME / TotalReaper preamp mapping (gain, 48V, pad, phase) |
-| `settings-modes-nav.png` | Modes → NAV — marker and region navigation, per-surface overlay, encoder push actions |
-| `settings-modes-nudge.png` | Modes → Nudge — playhead nudge unit and amount per detent |
-| `settings-modes-dynamount.png` | Modes → Dynamount — up to 8 robotic mic stands, fill direction, calibration |
-| `settings-fx-learn.png` | FX Learn tab — a ReaComp snapshot bound to the BC mockup, parameter list, VU calibration |
-| `settings-favourites.png` | Favourites tab — copy behaviour plus the Channel Strip and Bus Compressor set lists |
-| `settings-selection-sets.png` | Selection Sets tab — eight slots, six bound to REAPER track groups |
-| `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated |
-| `settings-manual.png` | Manual tab — the manual rendered in-app, chapter list on the left |
-| `settings-about.png` | About tab — version, codename, build, repository, setup export/import, log paths |
+The rail read **Device · Appearance · Bindings · Modes · FX Learn ·
+Favourites · Selection Sets · Parameter Groups · Manual · About** when these
+were captured — ten entries. It now has twelve: the Device pane has been split
+into **Devices · Appearance · Behaviour**, and **Exchange** landed in v0.4.0.
+A **Search settings** field has also been added at the top of the rail. Any
+shot with the rail in frame is therefore two entries short and shows a pane
+name that no longer exists.
+
+**Nothing here can be regenerated from the repo.** Screenshots have to be
+re-taken by hand in REAPER, on macOS, at Retina scale. No file has been
+deleted and no filename below is invented — every row names a `.png` that is
+in this folder today. The *Status* column says which ones no longer match the
+UI; until they are re-shot the old files stay in place, because the website
+references them directly.
+
+| File | Shows | Status |
+| --- | --- | --- |
+| `settings-device-1.png` | The old Device tab — connected devices, LED/LCD brightness, display behaviour, overlay colours | **Re-shoot.** That pane no longer exists. Connected devices (a UF1 line has since been added) and Brightness are in **Devices**; the Inserts-overlay / focused-track-panel / mode-banner controls and their colours are in **Appearance → On-screen**. One shot can no longer cover both |
+| `settings-device-2.png` | The old Device tab scrolled — master track, meter fall rates, track and plug-in options, keyboard modifiers | **Re-shoot.** Split three ways: the meter fall-rate table is **Devices → Metering**; Tracks, Master track, Plug-ins and Keyboard are all in **Behaviour**; the three FX-Learn layer checkboxes that sat at the end of Keyboard Options are now in **FX Learn → Modifier layers** |
+| `settings-device-3.png` | The old Device tab scrolled further — V-Pot resolution, virtual notch, UC1 GR calibration tables | **Re-shoot** — lowest priority. These controls are unchanged and still share one pane, but the pane is now **Devices** and the heading reads **V-Pot / encoder feel**, not *V-Pot / encoder resolution* |
+| `settings-appearance.png` | Appearance tab — theme, font size, spelling, settings-window options | **Re-shoot.** Those four sections are unchanged, but Appearance now opens with **On-screen** and **Surface display** above them, so a shot from the top of the pane no longer reaches Theme |
+| `settings-bindings-uf8.png` | Bindings tab, UF8 sub-tab — full surface mockup plus the short-press / long-press editor | |
+| `settings-bindings-uc1.png` | Bindings tab, UC1 sub-tab — UC1 mockup with encoder rotate / push targets | |
+| `settings-modes-auto.png` | Modes → AUTO — automation-arm filtering, fill direction, selection-set auto-mode | |
+| `settings-modes-fx-cycle.png` | Modes → FX / Cycle — which controls drive the FX cycle, V-Pot push behaviour | |
+| `settings-modes-rec.png` | Modes → REC — RME / TotalReaper preamp mapping (gain, 48V, pad, phase) | |
+| `settings-modes-nav.png` | Modes → NAV — marker and region navigation, per-surface overlay, encoder push actions | |
+| `settings-modes-nudge.png` | Modes → Nudge — playhead nudge unit and amount per detent | |
+| `settings-modes-dynamount.png` | Modes → Dynamount — up to 8 robotic mic stands, fill direction, calibration | |
+| `settings-fx-learn.png` | FX Learn tab — a ReaComp snapshot bound to the BC mockup, parameter list, VU calibration | **Re-shoot** eventually — the pane has since gained a **Modifier layers** section (collapsed by default) above the editor |
+| `settings-favourites.png` | Favourites tab — copy behaviour plus the Channel Strip and Bus Compressor set lists | |
+| `settings-selection-sets.png` | Selection Sets tab — eight slots, six bound to REAPER track groups | |
+| `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated | |
+| `settings-manual.png` | Manual tab — the manual rendered in-app, chapter list on the left | |
+| `settings-about.png` | About tab — version, codename, build, repository, setup export/import, log paths | |
+
+### Panes with no screenshot at all
+
+No file in this folder covers these. Worth capturing in the same sitting as
+the re-shoots above; again, only a hand capture in REAPER can produce them.
+
+- the **Behaviour** pane — new, and the destination for most of what
+  `settings-device-2.png` used to show
+- the **Exchange** pane — a live rail entry since v0.4.0, never captured
+- the rail **Search settings** field with a query typed in, showing the
+  breadcrumb result list
 
 ## Notes for reuse
 

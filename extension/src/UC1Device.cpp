@@ -136,7 +136,8 @@ bool UC1Device::open()
         return false;
     }
 
-    // Read iSerialNumber for Settings → Device display. Best-effort —
+    // Read iSerialNumber for Settings → Devices → Connected devices
+    // display. Best-effort —
     // empty string on failure or absence. See UF8Device::open() for the
     // identical pattern.
     {

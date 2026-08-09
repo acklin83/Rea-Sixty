@@ -83,7 +83,8 @@ bool UF8Device::open()
         return false;
     }
 
-    // Read the iSerialNumber descriptor for Settings → Device display.
+    // Read the iSerialNumber descriptor for the Settings → Devices →
+    // Connected devices display.
     // Best-effort: if the device doesn't advertise one or the string read
     // fails, leave serial_ empty rather than failing open(). Done before
     // the init replay so it lands even if a later step has issues.

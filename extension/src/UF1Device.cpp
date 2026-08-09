@@ -79,7 +79,8 @@ bool UF1Device::open()
         return false;
     }
 
-    // iSerialNumber for Settings → Device display (best-effort).
+    // iSerialNumber for Settings → Devices → Connected devices display
+    // (best-effort).
     {
         libusb_device_descriptor desc{};
         if (libusb_device* d = libusb_get_device(handle_)) {
