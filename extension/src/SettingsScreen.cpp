@@ -8964,7 +8964,7 @@ bool setSharedParamLabel_(const std::string& match, int vst3Param,
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
         if (!uf8::user_plugins::setParamLabel(m, vst3Param, label)) return false;
-        uf8::user_plugins::setAll(std::move(cat));
+        uf8::user_plugins::upsert(m);   // NOT setAll — see setUf1CustomLabel_
         persistAndReport_();
         return true;
     }
@@ -8991,7 +8991,11 @@ void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
         auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
         for (auto& s : v)
             if (s.pos == pos) { s.customLabel.clear(); break; }  // no shadowing
-        uf8::user_plugins::setAll(std::move(cat));
+        // ⚠ upsert, NOT setAll: setAll does g_catalog = std::move(c), replacing
+        // the whole catalog — every pointer the FX-Learn frame is holding into
+        // it dies mid-draw, which is the rename crash. upsert assigns the one
+        // map in place, which is why every other editor mutator uses it.
+        uf8::user_plugins::upsert(m);
         persistAndReport_();
         return;
     }
@@ -9578,7 +9582,7 @@ void setUf8Label_(int strip, int bank, const std::string& label)
         if (m.match != g_editingMatch) continue;
         uf8::user_plugins::setParamLabel(m, param, trimmed);
         m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].label.clear();
-        uf8::user_plugins::setAll(std::move(cat));
+        uf8::user_plugins::upsert(m);   // NOT setAll — see setUf1CustomLabel_
         persistAndReport_();
         return;
     }
