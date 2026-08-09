@@ -11451,9 +11451,21 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     // gar nicht wenn nicht gemappt"). Before this the payload stayed empty and
     // the Lua read that as "no tab".
     const bool haveMap = um && um->uf1Mode;
-    char hdr[64];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d",
-                  haveMap ? uf1MapPageCount(um->uf1) : 1, page);
+    // The header carries WHICH plug-in this grid belongs to. The HUD's Name
+    // field is the shared edit row (the CS/BC plug-in), and the UF1 can be on a
+    // different track than the UC1/UF8 — so an unmapped UF1 target rendered as
+    // an empty grid under someone else's name, which reads as "my map is gone"
+    // (Frank 2026-08-09). Name rides LAST: a plug-in name may contain ';'.
+    std::string shortName = name;
+    for (std::string_view p : { "VST3: ", "VST: ", "AU: ", "CLAP: ", "AUi: " })
+        if (shortName.rfind(p, 0) == 0) { shortName.erase(0, p.size()); break; }
+    if (const auto par = shortName.rfind(" ("); par != std::string::npos)
+        shortName.erase(par);                      // drop the vendor tail
+    for (char& c : shortName) if (c == ';' || c == '\n') c = ' ';
+    char hdr[600];
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%s",
+                  haveMap ? uf1MapPageCount(um->uf1) : 1, page,
+                  haveMap ? 1 : 0, shortName.c_str());
     out = hdr;
     if (!haveMap) return;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {

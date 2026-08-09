@@ -342,12 +342,18 @@ end
 local function readUf1()
   local raw = reaper.GetExtState(SECT, "hud_uf1_assign")
   if raw == "" then return nil end
-  local u = { pages = 1, page = 0, cells = { [0] = {}, [1] = {} } }
+  local u = { pages = 1, page = 0, mapped = true, name = "",
+              cells = { [0] = {}, [1] = {} } }
   for ln in raw:gmatch("[^\n]+") do
     if ln:sub(1, 2) == "P;" then
-      local pg, cur = ln:match("^P;(%d+);(%d+)$")
-      u.pages = tonumber(pg) or 1
-      u.page  = tonumber(cur) or 0
+      -- "P;<pages>;<page>;<hasMap>;<plug-in name>" — the name rides last
+      -- because it may contain ';'. The two-field form is the pre-v14 header.
+      local pg, cur, mapped, nm = ln:match("^P;(%d+);(%d+);(%d);(.*)$")
+      if not pg then pg, cur = ln:match("^P;(%d+);(%d+)$") end
+      u.pages  = tonumber(pg) or 1
+      u.page   = tonumber(cur) or 0
+      u.mapped = (mapped ~= "0")
+      u.name   = nm or ""
     else
       local pos, sk, param, inv, rgb, label =
         ln:match("^(%d+);(%d);(%-?%d+);(%d);(%d+);(.*)$")
@@ -1544,6 +1550,18 @@ local function renderUf1Tab(u1)
   end
   if uf1EditPage >= u1.pages then uf1EditPage = u1.pages - 1 end
   if uf1EditPage < 0 then uf1EditPage = 0 end
+
+  -- WHICH plug-in this grid is. The Name field above belongs to the shared edit
+  -- row (the CS/BC plug-in), and the UF1 can be focused on a different track —
+  -- so without this an unmapped UF1 target looked like the named plug-in's map
+  -- had vanished (Frank 2026-08-09).
+  if u1.name ~= "" then
+    dtext(14, y, col(u1.mapped and 0x50C8A0 or 0xD8A050, 1),
+          u1.mapped and ("UF1 map: " .. u1.name)
+                     or ("No UF1 map yet: " .. u1.name
+                         .. " \xE2\x80\x94 click a control to create one"), px - 1)
+    y = y + 20
+  end
 
   -- Page selector.
   local x = 14
