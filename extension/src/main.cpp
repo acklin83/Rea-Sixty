@@ -1377,7 +1377,11 @@ std::string composeValueLine(std::string_view label, std::string_view value);
 // into the value zone and turns yellow. Frank 2026-08-09: "LPF Frequency 22.0k"
 // rendered as "LPF Frequ" + a yellow "ency 22.0k". Every UF1 line with a VARIABLE
 // label must go through uf1ValueLine, never composeValueLine directly.
-constexpr size_t kUf1LabelChars = 9;
+// SETTLED 2026-08-09 on the hardware (Frank): the white label field is
+// officially 11 characters wide — from character 12 on the text is drawn in
+// the YELLOW value zone. 9 was the shipped guess, 13 overran. Both dialogs
+// that name this limit (Settings FX-Learn cell, HUD UF1 cell) say 11 too.
+constexpr size_t kUf1LabelChars = 11;
 std::string uf1ValueLine(std::string_view label, std::string_view value);
 std::string formatDbReadout(double linearAmp);
 constexpr int64_t kPanOverlayMs = 600;
@@ -22602,13 +22606,19 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
     // Comp GR (→ 0x0015): |GainReduction_dB| of the strip's comp, like the UF8.
     compByte = grByte(sdGrDb_(tr, uf8::Domain::ChannelStrip));
 
-    // Gate GR (→ 0x0016): the SSL impersonator's GateGain (SSL-only source).
+    // Gate GR (→ 0x0016): the SSL impersonator's GateGain (SSL-only source),
+    // read from the ACTIVE CS instance — with two SSL strips on one channel the
+    // per-track read alternated between their gates (Frank 2026-08-09).
     double gateDb = 0.0;
     if (sslcore::isRunning()) {
         const int trackIdx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+        const int csFx = uc1::lookupBindingsOnTrack(tr).channelFxIdx;
+        const int inst = (csFx >= 0) ? uf8::sslCoreInstanceOrdinal(tr, csFx) : 0;
         std::vector<float> gg;
-        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
-                static_cast<int>(sslcore::ChannelStripMeter::GateGain), trackIdx, gg)
+        if (trackIdx > 0 && inst >= 0 &&
+            sslcore::getChannelStripMeterForTrackInstance(
+                static_cast<int>(sslcore::ChannelStripMeter::GateGain),
+                trackIdx, inst, gg)
             && !gg.empty())
             gateDb = std::fabs(gg[0]);
     }
@@ -32101,10 +32111,18 @@ void onTimer()
                     if (sslcore::isRunning()) {
                         const int trackIdx = static_cast<int>(
                             GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+                        // Keyed to the ACTIVE CS instance (csFxIdx above), not to
+                        // the track: two SSL strips on one channel disagree about
+                        // the gate, and reading "the freshest of them" made the row
+                        // flicker between them (Frank 2026-08-09). No mapped CS →
+                        // first strip, as before; a mapped non-SSL CS → dark.
+                        const int inst = (csFxIdx >= 0)
+                                           ? uf8::sslCoreInstanceOrdinal(tr, csFxIdx) : 0;
                         std::vector<float> gg;
-                        if (trackIdx > 0 && sslcore::getChannelStripMeterForTrackIndex(
+                        if (trackIdx > 0 && inst >= 0 &&
+                            sslcore::getChannelStripMeterForTrackInstance(
                                 static_cast<int>(sslcore::ChannelStripMeter::GateGain),
-                                trackIdx, gg) && !gg.empty()) {
+                                trackIdx, inst, gg) && !gg.empty()) {
                             ggr = std::fabs(gg[0]);
                         }
                     }
