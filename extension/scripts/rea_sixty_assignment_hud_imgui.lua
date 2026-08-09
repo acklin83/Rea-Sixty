@@ -222,8 +222,11 @@ local function clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
 -- UF8-mapped FX, or the virgin cursor FX so its params can be picked + bound.
 local function resolveTarget()
   local trN, fx
-  if activeTab == "uf8" then
-    local raw = reaper.GetExtState(SECT, "hud_uf8_target")
+  if activeTab == "uf8" or activeTab == "uf1" then
+    -- Same contract for both device tabs; the UF1's target is whatever plug-in
+    -- the UF1 itself is showing, which may be a different track than the UC1's.
+    local raw = reaper.GetExtState(SECT,
+      (activeTab == "uf1") and "hud_uf1_target" or "hud_uf8_target")
     local uN, uFx = raw:match("^(%-?%d+);(%-?%d+)$")
     if not uN then return nil end
     trN, fx = tonumber(uN), tonumber(uFx)
@@ -354,16 +357,17 @@ local function readUf1()
               cells = { [0] = {}, [1] = {} } }
   for ln in raw:gmatch("[^\n]+") do
     if ln:sub(1, 2) == "P;" then
-      -- "P;<pages>;<page>;<hasMap>;<isBc>;<plug-in name>" — the name rides last
+      -- "P;<pages>;<page>;<hasMap>;<isBc>;<factory>;<plug-in name>" — name last
       -- because it may contain ';'. The two-field form is the pre-v14 header.
-      local pg, cur, mapped, bc, nm =
-        ln:match("^P;(%d+);(%d+);(%d);(%d);(.*)$")
+      local pg, cur, mapped, bc, fac, nm =
+        ln:match("^P;(%d+);(%d+);(%d);(%d);(%d);(.*)$")
       if not pg then pg, cur = ln:match("^P;(%d+);(%d+)$") end
-      u.pages  = tonumber(pg) or 1
-      u.page   = tonumber(cur) or 0
-      u.mapped = (mapped ~= "0")
-      u.isBc   = (bc == "1")
-      u.name   = nm or ""
+      u.pages   = tonumber(pg) or 1
+      u.page    = tonumber(cur) or 0
+      u.mapped  = (mapped ~= "0")
+      u.isBc    = (bc == "1")
+      u.factory = (fac == "1")
+      u.name    = nm or ""
     else
       -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
       -- marks a position the UF1 drives from the plug-in's own map rather than
@@ -801,7 +805,10 @@ local function drawTabs(st, ust)
   -- the Parameter List drawer (software pick-a-param → click-a-cell bind). They
   -- walk LEFT from the right edge, mirroring the UC1 layout.
   local px = 10   -- fixed chrome (badge + the top toggle buttons)
-  if activeTab == "uf8" then
+  -- Both DEVICE tabs get the two toggles: Touch to Learn (move a control on the
+  -- hardware to arm it) and the Parameter List drawer. The UF1 tab had neither,
+  -- so touch-to-learn could not be switched on from it at all (Frank 2026-08-09).
+  if activeTab == "uf8" or activeTab == "uf1" then
     local by, bh = 6, TAB_H - 12
     local rx = WW - 8
     local function uf8Toggle(lbl, on, onRgb)
@@ -1486,7 +1493,18 @@ local function renderParamPanel(st, asn)
   -- Active-domain mapped param NAMES (for the green-dot tint). hud_assign only
   -- carries names, so we match on name — exact enough for a visual hint.
   local mappedNames = {}
-  if activeTab == "uf8" then
+  local mappedIdx   = nil     -- UF1 cells carry param INDICES, not names
+  if activeTab == "uf1" then
+    mappedIdx = {}
+    local u1 = readUf1()
+    if u1 then
+      for _, cells in pairs(u1.cells) do
+        for _, c in pairs(cells) do
+          if c.param and c.param >= 0 then mappedIdx[c.param] = true end
+        end
+      end
+    end
+  elseif activeTab == "uf8" then
     -- UF8 assign is uasn[strip][kind] = { name, ... } — dot every bound param.
     for _, kinds in pairs(asn) do
       for _, a in pairs(kinds) do
@@ -1521,7 +1539,7 @@ local function renderParamPanel(st, asn)
   for _, pr in ipairs(rows) do
     if y + lineH >= listTop and y <= listBot then
       local sel    = (pr.p == selectedParam)
-      local mapped = mappedNames[pr.name]
+      local mapped = mappedIdx and mappedIdx[pr.p] or mappedNames[pr.name]
       if sel then rect(x0 + 2, y - 1, PW - 4, lineH, col(rgb, 0.34)) end
       local tc = sel and 0xFFFFFF or (mapped and 0x78C898 or 0xC0C4CC)
       dtext(x0 + pad, y + 1, col(tc, 1), fit(pr.name, PW - 2 * pad - 12, rf), rf)
@@ -1583,10 +1601,22 @@ local function renderUf1Tab(u1)
   -- so without this an unmapped UF1 target looked like the named plug-in's map
   -- had vanished (Frank 2026-08-09).
   if u1.name ~= "" then
-    dtext(14, y, col(u1.mapped and 0x50C8A0 or 0xD8A050, 1),
-          u1.mapped and ("UF1 map: " .. u1.name)
-                     or ("No UF1 map yet: " .. u1.name
-                         .. " \xE2\x80\x94 click a control to create one"), px - 1)
+    -- A FACTORY strip drives the UF1 from SSL's own p188 pages and cannot be
+    -- re-bound (the catalog refuses a map that collides with a built-in), so
+    -- say that rather than let clicks silently do nothing (Frank 2026-08-09).
+    local hdrTxt, hdrCol
+    if u1.factory then
+      hdrTxt = "Factory map \xE2\x80\x94 not editable: " .. u1.name
+      hdrCol = 0x8890A0
+    elseif u1.mapped then
+      hdrTxt = "UF1 map: " .. u1.name
+      hdrCol = 0x50C8A0
+    else
+      hdrTxt = "No UF1 map yet: " .. u1.name
+               .. " \xE2\x80\x94 click a control to create one"
+      hdrCol = 0xD8A050
+    end
+    dtext(14, y, col(hdrCol, 1), hdrTxt, px - 1)
     y = y + 20
   end
 
@@ -1652,8 +1682,10 @@ local function renderUf1Tab(u1)
     y = y + CH + 12
   end
   dtext(14, y + 2, col(0x6A6A72, 1),
-        "Click a control to learn it \xC2\xB7 click it again (or empty space) to cancel"
-        .. " \xC2\xB7 right-click to unbind or invert", px - 2)
+        u1.factory
+          and "SSL's own layout \xC2\xB7 learn a plug-in of your own to edit its UF1 page"
+          or ("Click a control to learn it \xC2\xB7 click it again (or empty space)"
+              .. " to cancel \xC2\xB7 right-click to unbind or invert"), px - 2)
 end
 local function uf1CellAt(mx, my)
   for _, h in ipairs(uf1Rects) do
@@ -2169,6 +2201,7 @@ local function render()
   -- so there is no list/mockup split to make.
   if activeTab == "uf1" then
     renderUf1Tab(readUf1())
+    if paramPanelOpen then renderParamPanel(st, {}) end
     return
   end
 
@@ -3832,9 +3865,13 @@ local function loop()
           -- LCD / UF8 header plug-in name → edit the Kurzname inline.
           editPluginShort(nameRect.dom)
         elseif activeTab == "uf1" then
-          -- Tab row first, then page selector, then a cell (arms a learn on the
-          -- hardware position — the same arm Touch-to-Learn uses).
+          -- Tab row → the two toggles → the param drawer → page selector → a
+          -- cell. With a param PICKED in the list a cell click binds it in
+          -- software; otherwise it arms a learn on the hardware position.
           if handleTabClick(lx, ly) then
+          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+          elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
+            handleParamClick(lx, ly)
           else
             local p = uf1PageAt(lx, ly)
             if p then uf1View.page = p
@@ -3843,7 +3880,12 @@ local function loop()
               local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
               local armedPos = (armed >= 0) and (armed & 0xFF) or -1
               local armedSk  = (armed >= 0) and (((armed & 0x100) ~= 0) and 1 or 0) or -1
-              if sk then
+              if sk and selectedParam >= 0 then
+                -- A param is picked in the list → bind it here, no hardware
+                -- gesture needed (the UF8 tab's flow).
+                sendCmd(string.format("uf1bind;%d;%d;%d", pos, sk, selectedParam))
+                selectedParam = -1
+              elseif sk then
                 -- Clicking the ARMED cell disarms, exactly like the FX-Learn
                 -- cell. Anything else arms that cell.
                 if pos == armedPos and sk == armedSk then

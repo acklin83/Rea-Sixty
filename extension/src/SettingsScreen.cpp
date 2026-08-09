@@ -115,6 +115,13 @@ const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = non
 // editors show INHERITED params through this, so they can't drift from the
 // device the way a second resolver would.
 int  reasixty_uf1EffectiveParam(void* tr, int fx, bool softKeys, int page, int idx);
+// The p188 label at a position on a FACTORY strip that carries no parameter
+// (PLUG-IN / SOLO SAFE / HQ MODE / A/B / S/C MODE). "" for learned plug-ins.
+const char* reasixty_uf1FactoryLabel(void* tr, int fx, bool softKeys,
+                                     int page, int idx);
+// BC or CS? Learned plug-ins carry a domain; a factory strip only says so
+// through its p188 type, which the catalog doesn't know.
+bool reasixty_uf1TargetIsBc(void* tr, int fx);
 void reasixty_setUf1SoftBank(int bank);
 // UF1 channel-encoder mode ring (user-editable order + visibility) — defined in
 // main.cpp at global scope. Rendered in the UF1 channel-encoder binding editor.
@@ -11471,11 +11478,16 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     // UF1 shows a Channel Strip or a Bus Comp, and the favourite is the SAME
     // shared base bank the UC1 uses, never a UF1-local one (Frank 2026-08-09
     // "geteilt mit UC1 — immer gleich!").
-    const int isBc = (um && um->domain == Domain::BusComp) ? 1 : 0;
+    const int isBc = reasixty_uf1TargetIsBc(tr, fx) ? 1 : 0;
+    // A FACTORY strip (SSL's own Channel Strip 2 / 4K B/E/G / Link / BC2) drives
+    // the UF1 from the built-in p188 table, and user_plugins refuses to create a
+    // map that collides with a built-in — which is exactly why arming a learn on
+    // one silently did nothing. Say so instead (Frank 2026-08-09).
+    const int factory = user_plugins::collidesWithBuiltin(name) ? 1 : 0;
     char hdr[600];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%s",
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%s",
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
-                  haveMap ? 1 : 0, isBc, shortName.c_str());
+                  haveMap ? 1 : 0, isBc, factory, shortName.c_str());
     out = hdr;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
@@ -11527,14 +11539,23 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
                 if (s && (s->vst3Param >= 0 || s->special)) continue;  // explicit wins
             }
             const int p = reasixty_uf1EffectiveParam(tr, fx, sk != 0, page, i);
-            if (p < 0) continue;
-            std::string label = user_plugins::paramLabelFor(name, p);
-            if (label.empty())
-                label = canonicalSlotNameForParam_(um ? um->match : std::string(name), p);
-            if (label.empty()) {
-                char pn[64] = {0};
-                TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
-                label = pn;
+            std::string label;
+            if (p < 0) {
+                // No parameter — but a FACTORY strip still paints something
+                // there: PLUG-IN, SOLO SAFE, HQ MODE, A/B, S/C MODE are label-
+                // only actions. Listing positions by their param alone dropped
+                // them from both editors while the hardware showed them.
+                label = reasixty_uf1FactoryLabel(tr, fx, sk != 0, page, i);
+                if (label.empty()) continue;
+            } else {
+                label = user_plugins::paramLabelFor(name, p);
+                if (label.empty())
+                    label = canonicalSlotNameForParam_(um ? um->match : std::string(name), p);
+                if (label.empty()) {
+                    char pn[64] = {0};
+                    TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+                    label = pn;
+                }
             }
             char row[320];
             std::snprintf(row, sizeof(row), "\n%d;%d;%d;0;0;1;%s",
@@ -21753,6 +21774,18 @@ bool reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb)
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1LedRgbMatch_(m, pos, rgb);
+}
+// Bind a param picked in the HUD's Parameter List to a UF1 position — the
+// software half of click-to-learn, the same thing the UF8 tab's list does.
+bool reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int param)
+{
+    if (pos < 0 || param < 0) return false;
+    std::string m;
+    if (uf8::hudUf1ResolveOrCreate_(tr, fx, m))
+        return uf8::hudUf1BindMatch_(m, softKeys, pos, param);
+    // No map yet — the first bind creates one, exactly as arming a learn does.
+    return uf8::hudUf1CreateAndBind_(static_cast<MediaTrack*>(tr), fx,
+                                     softKeys, pos, param);
 }
 bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
 {

@@ -163,6 +163,7 @@ bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, in
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
 bool        reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb);
 bool        reasixty_hudUf1Special(void* tr, int fx, int pos, int special);
+bool        reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int param);
 // UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
 // "hud_uf1_uc1slots") and the write behind the "uf1touc1;" verb.
 std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer);
@@ -12132,6 +12133,7 @@ std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot 
 std::string g_hudUf8LearnPublished;  // last-published "hud_uf8_learn" armed cell
 std::string g_hudUf1LearnPublished;  // last-published "hud_uf1_learn" armed position
 std::string g_hudUf1AssignPublished; // last-published "hud_uf1_assign" payload
+std::string g_hudUf1TargetPublished; // last-published "hud_uf1_target" payload
 std::string g_hudUf1DetailPublished; // last-published "hud_uf1_detail" (V-Pot tuning)
 std::string g_hudUf1PushPublished;   // last-published "hud_uf1_push" (soft-key steps)
 std::string g_hudUf1Uc1Published;    // last-published "hud_uf1_uc1slots" (Send to UC1)
@@ -12586,6 +12588,20 @@ void publishHud_()
             if (uf1Assign != g_hudUf1AssignPublished) {
                 g_hudUf1AssignPublished = uf1Assign;
                 SetExtState("rea_sixty", "hud_uf1_assign", uf1Assign.c_str(), false);
+            }
+            // Param-list target ("trNum;fx") for the UF1 tab's drawer — same
+            // contract as hud_uf8_target, so the companion enumerates the
+            // plug-in the UF1 is actually on. Without it the list had no target
+            // on this tab and simply wasn't drawn (Frank 2026-08-09).
+            {
+                char u1t[48];
+                std::snprintf(u1t, sizeof(u1t), "%d;%d",
+                              (u1Type >= 0) ? hudTrNum_(u1Tr) : -1,
+                              (u1Type >= 0) ? u1Fx : -1);
+                if (u1t != g_hudUf1TargetPublished) {
+                    g_hudUf1TargetPublished = u1t;
+                    SetExtState("rea_sixty", "hud_uf1_target", u1t, false);
+                }
             }
             if (uf1Detail != g_hudUf1DetailPublished) {
                 g_hudUf1DetailPublished = uf1Detail;
@@ -31142,6 +31158,22 @@ void onTimer()
                 reasixty_uf1CancelLearn();
                 g_hudUf1AssignPublished.clear();
                 publishHud_();
+            } else if (s.rfind("uf1bind;", 0) == 0) {
+                // "uf1bind;<pos>;<sk>;<param>" — the Parameter List's software
+                // bind, the twin of uf8bind. Click-to-learn needs the hardware;
+                // this is how the UF1 tab binds without touching the surface.
+                int pos = -1, sk = 0, param = -1;
+                if (std::sscanf(s.c_str(), "uf1bind;%d;%d;%d", &pos, &sk, &param) == 3
+                    && pos >= 0 && param >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1BindParam(u1Tr, u1Fx, sk != 0, pos, param)) {
+                        g_hudUf1AssignPublished.clear();
+                        g_hudUf1DetailPublished.clear();
+                        g_pageDirty.store(true);
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("uf1special;", 0) == 0) {
                 // "uf1special;<pos>;<n>" — fixed non-parameter soft-key action
                 // (v14): 0 = plug-in param, 1 = HQ, 2 = A/B, 3 = Strip Mode,
@@ -33859,6 +33891,49 @@ int reasixty_uf1EffectiveParam(void* trV, int fx, bool softKeys, int page, int i
     if (type < 0) return -1;
     return softKeys ? uf1CsSoftKeyParam_(tr, fx, type, page, idx)
                     : uf1CsVpotParam_(tr, fx, type, page, idx);
+}
+
+// Is the plug-in the UF1 is showing a BUS COMP rather than a Channel Strip?
+// A learned plug-in carries its own domain; a FACTORY strip only says so
+// through its p188 type (4 = SSL Bus Compressor 2), which the catalog knows
+// nothing about — so the editors read every factory strip as CS and offered the
+// CS favourite bank on a BC2 (Frank 2026-08-09 "UF1 unterscheidet nicht zwischen
+// CS Fave und BC Fave"). One resolver, here, where the type lives.
+bool reasixty_uf1TargetIsBc(void* trV, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    char nm[256];
+    if (uf8::fxIdentityName(tr, fx, nm, sizeof(nm)))
+        if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm))
+            return um->domain == uf8::Domain::BusComp;
+    return uf1CsPluginType_(tr, fx) == 4;      // built-in: type 4 = SSL BC 2
+}
+
+// The label a FACTORY (built-in) strip paints at a position, for the positions
+// that carry no parameter at all: PLUG-IN, SOLO SAFE, HQ MODE, A/B, S/C MODE.
+// The editors list positions by their bound param, so those keys were simply
+// absent there while the hardware printed them (Frank 2026-08-09: "PLUG-IN wird
+// bei factory maps nicht angezeigt"). Empty for a learned/explicit plug-in —
+// its positions are params and already listed. Main-thread only.
+const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
+                                     int page, int idx)
+{
+    auto* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || idx < 0 || idx > 3 || page < 0) return "";
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return "";
+    const int type = uf1CsPluginType_(tr, fx);
+    if (type < 0) return "";
+    if (uf1ExplicitMapAt_(tr, fx)) return "";        // explicit map owns its labels
+    char nm[256];
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return "";   // learned: params only
+    if (page >= uf1CsPageCountFor_(type, tr, fx)) return "";
+    if (softKeys) {
+        const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+        return sk.label ? sk.label : "";
+    }
+    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
+    return v.label ? v.label : "";
 }
 
 // The map MATCH of whatever the UF1 is showing right now, or "" when it shows
