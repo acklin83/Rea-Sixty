@@ -1394,6 +1394,11 @@ std::string composeValueLine(std::string_view label, std::string_view value);
 // the YELLOW value zone. 9 was the shipped guess, 13 overran. Both dialogs
 // that name this limit (Settings FX-Learn cell, HUD UF1 cell) say 11 too.
 constexpr size_t kUf1LabelChars = 11;
+// The UF1's SOFT-KEY label field (screen 0x0104) is 13 characters — measured on
+// the hardware 2026-08-09. It was the one UF1 text zone with no cap at all, so a
+// long user name or param name simply ran off the key. Abbreviated, never
+// truncated: SmartAbbrev keeps every word visible ("LPF Frequency" → "LPFFrqncy").
+constexpr size_t kUf1SoftKeyChars = 13;
 std::string uf1ValueLine(std::string_view label, std::string_view value);
 std::string formatDbReadout(double linearAmp);
 constexpr int64_t kPanOverlayMs = 600;
@@ -24131,6 +24136,11 @@ void uf1PaintChannel_()
                 }
             }
             // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
+            // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
+            if (label.size() > kUf1SoftKeyChars)
+                label = abbreviateTrackName_(label,
+                                             static_cast<int>(kUf1SoftKeyChars),
+                                             TNM_SmartAbbrev, /*foldLatin1*/ false);
             if (haveLabel && (changed || label != sSkLabel[i])) {
                 sSkLabel[i] = label;
                 std::vector<uint8_t> pb;

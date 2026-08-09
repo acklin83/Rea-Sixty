@@ -3449,7 +3449,7 @@ local function drawUf1ControlContextMenu()
   -- measured on the hardware 2026-08-09. Mirrors kUf1LabelChars (main.cpp)
   -- and the Settings FX-Learn cell; keep all three in step.
   reaper.ImGui_Text(ctx, (ctxUf1Sk == 0) and "Display name (11 chars)"
-                                          or "Display name")
+                                          or "Display name (13 chars)")
   if uf1NameBuf == nil or uf1NameFor ~= arg then
     uf1NameFor = arg
     uf1NameBuf = (cell and cell.label) or ""   -- nil on an unbound / action-only key
