@@ -15819,7 +15819,11 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     char popId[40];
     snprintf(popId, sizeof(popId), "uf1ctx_%d_%d", softKeys ? 1 : 0, pos);
     int rightBtn = 1;                       // ImGui_IsItemClicked takes it by pointer
-    if (ImGui_IsItemClicked(ctx, &rightBtn) && isMapped)
+    // Opens on ANY cell, bound or not. An empty soft-key is exactly where you
+    // want to put a fixed Action (SSL Strip Mode, HQ, A/B) — gating the menu on
+    // "is mapped" made that the one place you couldn't (Frank 2026-08-09). The
+    // param-specific items below gate on isMapped instead.
+    if (ImGui_IsItemClicked(ctx, &rightBtn))
         ImGui_OpenPopup(ctx, popId, nullptr);
     if (ImGui_BeginPopup(ctx, popId, nullptr)) {
         // ⚠ Every mutator below re-upserts the map, which REPLACES the slot
@@ -15831,21 +15835,24 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                 if (const uf8::UserUf1Slot* p = uf8::uf1SlotAt(*v, pos)) s = *p;
             return s;
         };
-        if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
-            unbindUf1_(softKeys, pos);
-            ImGui_CloseCurrentPopup(ctx);
-            ImGui_EndPopup(ctx);
-            return;                      // the slot is gone — nothing left to draw
+        if (isMapped) {
+            if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
+                unbindUf1_(softKeys, pos);
+                ImGui_CloseCurrentPopup(ctx);
+                ImGui_EndPopup(ctx);
+                return;                  // the slot is gone — nothing left to draw
+            }
+            bool inv = snap().inverted;
+            if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
+                toggleUf1Inverted_(softKeys, pos);
         }
-        bool inv = snap().inverted;
-        if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
-            toggleUf1Inverted_(softKeys, pos);
 
         // Send to UC1 — the reverse of the UC1 menu's "Send to UF1". The UC1's
         // slots are named and finite, so the user PICKS one (Frank 2026-08-08)
         // rather than the code guessing a "next free" that means nothing here.
-        // The param is COPIED: it keeps its UF1 position too.
-        if (ImGui_BeginMenu(ctx, "Send to UC1", nullptr)) {
+        // The param is COPIED: it keeps its UF1 position too. Needs a param, so
+        // it stays out of an empty cell's menu.
+        if (isMapped && ImGui_BeginMenu(ctx, "Send to UC1", nullptr)) {
             const UserPluginMap* em = nullptr;
             for (const auto& m : uf8::user_plugins::get().maps)
                 if (m.match == g_editingMatch) { em = &m; break; }

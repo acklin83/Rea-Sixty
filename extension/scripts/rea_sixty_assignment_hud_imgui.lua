@@ -1692,6 +1692,29 @@ local function renderUf1Tab(u1)
           and "SSL's own layout \xC2\xB7 learn a plug-in of your own to edit its UF1 page"
           or ("Click a control to learn it \xC2\xB7 click it again (or empty space)"
               .. " to cancel \xC2\xB7 right-click to unbind or invert"), px - 2)
+
+  -- Whole-layer actions UNDER the assignments, not inside a tile's right-click
+  -- menu — they act on the map, not on the tile you happened to aim at (Frank
+  -- 2026-08-09). Same row FX-Learn has under its schematic, so the two editors
+  -- read the same. A factory strip has no editable map: no row.
+  uf1View.actRects = {}
+  if not u1.factory then
+    y = y + 24
+    local ax = 14
+    local function actBtn(lbl, id, on)
+      local w, h = measure(lbl, px - 1); w = w + 20
+      rect(ax, y, w, h + 8, col(on and 0x2E5C3A or 0x242429, 1))
+      dtext(ax + 10, y + 4, col(on and 0xE8E8EE or 0x9A9AA2, 1), lbl, px - 1)
+      uf1View.actRects[#uf1View.actRects + 1] =
+        { id = id, x = ax, y = y, w = w, h = h + 8 }
+      ax = ax + w + 6
+    end
+    actBtn("Fill: Replace",  "1")
+    actBtn("Fill: Append",   "0")
+    actBtn("Fill from UC1",  "2")
+    actBtn("Unbind all",     "3")
+    actBtn("Show EQ Graph",  "eq", u1.eqGraph)
+  end
 end
 local function uf1CellAt(mx, my)
   for _, h in ipairs(uf1Rects) do
@@ -3197,33 +3220,25 @@ local function drawUf1ControlContextMenu()
   if reaper.ImGui_MenuItem(ctx, "Learn\xE2\x80\xA6") then
     sendCmd("uf1learn;" .. arg)
   end
-  -- Whole-layer actions. "The rest" = every parameter the UC1 does NOT carry,
-  -- which is what makes the UF1 an EXTENSION of the UC1 instead of a second
-  -- copy of it. The same four sit in FX-Learn; both drive one implementation.
-  reaper.ImGui_Separator(ctx)
-  if reaper.ImGui_BeginMenu(ctx, "Fill") then
-    if reaper.ImGui_MenuItem(ctx, "Replace \xE2\x80\x94 only what the UC1 lacks") then
-      sendCmd("uf1fill;1")
-    end
-    if reaper.ImGui_MenuItem(ctx, "Append \xE2\x80\x94 add to the end") then
-      sendCmd("uf1fill;0")
-    end
+  -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld
+  -- PLUG-IN to soft-key 4 of page 1 and HQ / A/B to page 2; this moves them
+  -- to any key. Overrides the parameter binding on that key.
+  if ctxUf1Sk == 1 then
     reaper.ImGui_Separator(ctx)
-    if reaper.ImGui_MenuItem(ctx, "From UC1 \xE2\x80\x94 mirror its mapping") then
-      sendCmd("uf1fill;2")
-    end
-    reaper.ImGui_EndMenu(ctx)
-  end
-  if reaper.ImGui_MenuItem(ctx, "Unbind all") then
-    sendCmd("uf1fill;3")
-  end
-  -- Our EQ curve for a LEARNED CS: its EQ params are read from the UC1 slots
-  -- the user mapped, since a learned plug-in doesn't call them "HF Gain".
-  do
-    local u1e = readUf1()
-    local on  = u1e and u1e.eqGraph or false
-    if reaper.ImGui_MenuItem(ctx, "Show EQ Graph on the UF1", nil, on) then
-      sendCmd("uf1eqgraph;" .. (on and "0" or "1"))
+    if reaper.ImGui_BeginMenu(ctx, "Action") then
+      local UF1_SPECIALS = {
+        { 0, "Plug-in parameter"    },
+        { 3, "SSL Strip Mode"       },
+        { 4, "SSL Strip Mode + GUI" },
+        { 1, "HQ Mode"              },
+        { 2, "A/B compare"          },
+      }
+      for _, sp in ipairs(UF1_SPECIALS) do
+        if reaper.ImGui_MenuItem(ctx, sp[2]) then
+          sendCmd(string.format("uf1special;%d;%d", ctxUf1Pos, sp[1]))
+        end
+      end
+      reaper.ImGui_EndMenu(ctx)
     end
   end
 
@@ -3407,28 +3422,6 @@ local function drawUf1ControlContextMenu()
         reaper.ImGui_Separator(ctx)
         if reaper.ImGui_MenuItem(ctx, "No colour (state only)") then
           sendCmd(string.format("uf1ledcol;%d;000000", ctxUf1Pos))
-        end
-        reaper.ImGui_EndMenu(ctx)
-      end
-    end
-
-    -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld
-    -- PLUG-IN to soft-key 4 of page 1 and HQ / A/B to page 2; this moves them
-    -- to any key. Overrides the parameter binding on that key.
-    if ctxUf1Sk == 1 then
-      reaper.ImGui_Separator(ctx)
-      if reaper.ImGui_BeginMenu(ctx, "Action") then
-        local UF1_SPECIALS = {
-          { 0, "Plug-in parameter"    },
-          { 3, "SSL Strip Mode"       },
-          { 4, "SSL Strip Mode + GUI" },
-          { 1, "HQ Mode"              },
-          { 2, "A/B compare"          },
-        }
-        for _, sp in ipairs(UF1_SPECIALS) do
-          if reaper.ImGui_MenuItem(ctx, sp[2]) then
-            sendCmd(string.format("uf1special;%d;%d", ctxUf1Pos, sp[1]))
-          end
         end
         reaper.ImGui_EndMenu(ctx)
       end
@@ -3936,7 +3929,22 @@ local function loop()
             local p = uf1PageAt(lx, ly)
             if p then uf1View.page = p
             else
-              local sk, pos = uf1CellAt(lx, ly)
+              -- The whole-layer row under the assignments (Fill / Unbind all /
+              -- Show EQ Graph) takes the click before any cell logic.
+              local hitAct = nil
+              for _, h in ipairs(uf1View.actRects or {}) do
+                if lx >= h.x and lx <= h.x + h.w and ly >= h.y and ly <= h.y + h.h then
+                  hitAct = h.id
+                end
+              end
+              local sk, pos
+              if hitAct == "eq" then
+                local u1e = readUf1()
+                sendCmd("uf1eqgraph;" .. ((u1e and u1e.eqGraph) and "0" or "1"))
+              elseif hitAct then
+                sendCmd("uf1fill;" .. hitAct)
+              else
+              sk, pos = uf1CellAt(lx, ly)
               local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
               local armedPos = (armed >= 0) and (armed & 0xFF) or -1
               local armedSk  = (armed >= 0) and (((armed & 0x100) ~= 0) and 1 or 0) or -1
@@ -3955,6 +3963,7 @@ local function loop()
                 end
               elseif armed >= 0 then
                 sendCmd("uf1cancel")   -- click into empty space = escape
+              end
               end
             end
           end
