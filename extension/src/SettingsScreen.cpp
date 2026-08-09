@@ -7950,7 +7950,11 @@ void autoAdvanceListening_(const uf8::PluginMap& topo)
     g_listeningLinkIdx = -1;
 }
 
-// Set or clear the custom display label on a mapped slot.
+// Set or clear the display label for a UC1 slot. Names the PARAMETER, not just
+// this control (v13) — the same name then shows on the UF8 and the UF1. The
+// slot's own customLabel is cleared so it can't shadow the shared one. On a
+// MODIFIER layer the name stays slot-local: that layer's param is a different
+// binding of the same control, and naming it must not rename the Normal one.
 void setCustomLabel_(int linkIdx, const std::string& label)
 {
     if (g_editingMatch.empty() || linkIdx < 0) return;
@@ -7959,7 +7963,14 @@ void setCustomLabel_(int linkIdx, const std::string& label)
         if (m.match != g_editingMatch) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
-                editLayerRef_(s).customLabel = label;
+                uf8::SlotLayer& lay = editLayerRef_(s);
+                if (g_fxLearnEditLayer == uf8::FxLayer::Normal
+                    && lay.vst3Param >= 0) {
+                    uf8::user_plugins::setParamLabel(m, lay.vst3Param, label);
+                    lay.customLabel.clear();
+                } else {
+                    lay.customLabel = label;
+                }
                 uf8::user_plugins::upsert(m);
                 persistAndReport_();
                 return;
@@ -8967,11 +8978,23 @@ bool setSharedParamLabel_(const std::string& match, int vst3Param,
 void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
 {
     const int param = mappedVst3ForUf1_(softKeys, pos);
-    if (param >= 0)
-        setSharedParamLabel_(g_editingMatch, param, label ? label : "");
-    mutateUf1_([&](uf8::UserUf1Map& u) {
-        uf1SlotRef_(u, softKeys, pos).customLabel.clear();
-    });
+    if (param < 0 || g_editingMatch.empty()) return;   // nothing bound to name
+    const std::string text = label ? label : "";
+    // ONE catalog write for both halves. The first cut did two (setParamLabel
+    // then a separate mutateUf1_) and ran uf1SlotRef_, which CREATES a slot when
+    // none exists — two rewrites plus a save per keystroke, on a position that
+    // might not exist. Do it in a single pass and never create anything here.
+    auto cat = uf8::user_plugins::get();          // copy
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        uf8::user_plugins::setParamLabel(m, param, text);
+        auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        for (auto& s : v)
+            if (s.pos == pos) { s.customLabel.clear(); break; }  // no shadowing
+        uf8::user_plugins::setAll(std::move(cat));
+        persistAndReport_();
+        return;
+    }
 }
 // Soft-key push cycle — the curated step list the UF1 runtime already honours
 // (applyUf1ChannelSoftKey_): each press advances to the next ENABLED step and
@@ -9529,13 +9552,36 @@ void setUf8DefaultNorm_(int strip, int bank, double norm)
     });
 }
 
+// Names the PARAMETER, not just this V-Pot (v13) — the same name then shows on
+// the UC1 and the UF1. The cell's own label is cleared so it can't shadow the
+// shared one. Unbound cell → nothing to name, keep the old slot-local behaviour.
 void setUf8Label_(int strip, int bank, const std::string& label)
 {
     std::string trimmed = label;
     if (trimmed.size() > 7) trimmed.resize(7);
-    mutateUf8_([&](uf8::UserUf8Map& u) {
-        u.banks.banks[g_uf8EditingFaderBank][bank][strip].label = trimmed;
-    });
+    int param = -1;
+    if (!g_editingMatch.empty()) {
+        for (const auto& m : uf8::user_plugins::get().maps) {
+            if (m.match != g_editingMatch) continue;
+            param = m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].vst3Param;
+            break;
+        }
+    }
+    if (param < 0) {
+        mutateUf8_([&](uf8::UserUf8Map& u) {
+            u.banks.banks[g_uf8EditingFaderBank][bank][strip].label = trimmed;
+        });
+        return;
+    }
+    auto cat = uf8::user_plugins::get();          // copy
+    for (auto& m : cat.maps) {
+        if (m.match != g_editingMatch) continue;
+        uf8::user_plugins::setParamLabel(m, param, trimmed);
+        m.uf8.banks.banks[g_uf8EditingFaderBank][bank][strip].label.clear();
+        uf8::user_plugins::setAll(std::move(cat));
+        persistAndReport_();
+        return;
+    }
 }
 
 void setUf8FaderLabel_(int strip, const std::string& label)
@@ -15652,7 +15698,6 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                 setUf1CustomLabel_(softKeys, pos, "");
             }
         }
-        ImGui_TextDisabled(ctx, "Applies to this parameter on UC1 + UF8 too");
         ImGui_EndPopup(ctx);
     }
 }

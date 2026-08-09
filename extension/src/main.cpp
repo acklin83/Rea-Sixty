@@ -21802,6 +21802,13 @@ static std::string uf1CanonicalParamName_(MediaTrack* tr, int fx, int p)
     if (!tr || fx < 0 || p < 0) return {};
     char nm[256] = {0};
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return {};
+    // ⚠ BUILT-IN STRIPS ONLY. lookupPluginMapByName also matches a LEARNED
+    // plug-in against a built-in map by substring — the "bx_4K G → 4K E" trap
+    // the type resolver warns about. Frank 2026-08-09: bx_console 4K showed
+    // "Out Gain" in FX-Learn but "FdrLvl" on the display, because the SSL map's
+    // LinkSlot for that vst3Param carries the SSL name. A learned plug-in owns
+    // its parameter names; the canonical table has no say over it.
+    if (uf8::user_plugins::lookupOwnedByName(nm)) return {};
     const uf8::PluginMap* m = uf8::lookupPluginMapByName(nm);
     if (!m) return {};
     for (const uf8::LinkSlot& sl : m->slots)
