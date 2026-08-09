@@ -15835,66 +15835,26 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                 if (const uf8::UserUf1Slot* p = uf8::uf1SlotAt(*v, pos)) s = *p;
             return s;
         };
-        if (isMapped) {
-            if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
-                unbindUf1_(softKeys, pos);
-                ImGui_CloseCurrentPopup(ctx);
-                ImGui_EndPopup(ctx);
-                return;                  // the slot is gone — nothing left to draw
-            }
-            bool inv = snap().inverted;
-            if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
-                toggleUf1Inverted_(softKeys, pos);
+        // Menu shape is SHARED with the HUD's UF1 cell menu, item for item and
+        // in this order — header, Learn, the type-specific blocks, Invert, Send
+        // to UC1, Display name, Unbind (Frank 2026-08-09 "mach die menus komplett
+        // identisch"). Change one, change the other.
+        {
+            char hdr[160];
+            snprintf(hdr, sizeof(hdr), "%s %d  (page %d)%s%s",
+                     softKeys ? "Soft-key" : "V-Pot", idx + 1,
+                     g_uf1EditingPage + 1, (mapped >= 0) ? "   \xE2\x86\x92  " : "",
+                     (mapped >= 0) ? shown : "");
+            ImGui_TextDisabled(ctx, hdr);
         }
-
-        // Send to UC1 — the reverse of the UC1 menu's "Send to UF1". The UC1's
-        // slots are named and finite, so the user PICKS one (Frank 2026-08-08)
-        // rather than the code guessing a "next free" that means nothing here.
-        // The param is COPIED: it keeps its UF1 position too. Needs a param, so
-        // it stays out of an empty cell's menu.
-        if (isMapped && ImGui_BeginMenu(ctx, "Send to UC1", nullptr)) {
-            const UserPluginMap* em = nullptr;
-            for (const auto& m : uf8::user_plugins::get().maps)
-                if (m.match == g_editingMatch) { em = &m; break; }
-            const uf8::PluginMap* topo =
-                em ? canonicalTopology_(em->domain) : nullptr;
-            if (!em || em->domain == uf8::Domain::None) {
-                // A UF1-only map has no UC1 domain to land in; inventing one
-                // here would silently decide CS-vs-BC for the user.
-                ImGui_TextDisabled(ctx, "This map has no UC1 domain");
-                ImGui_TextDisabled(ctx, "(set one in the mode picker)");
-            } else if (!topo) {
-                ImGui_TextDisabled(ctx, "No canonical layout for this domain");
-            } else {
-                for (const auto& ls : topo->slots) {
-                    // Show what each slot currently holds on the layer being
-                    // edited, so overwriting is a decision, not an accident.
-                    char cur[80] = {0};
-                    uf8::UserLinkSlot snapSlot{};
-                    if (fetchSlotSnapshot_(ls.linkIdx, snapSlot)) {
-                        const uf8::SlotLayer& lay = editLayerRef_(snapSlot);
-                        if (lay.vst3Param >= 0) {
-                            char pn[64] = {};
-                            if (!paramNameFor_(*em, fx, lay.vst3Param, pn, sizeof(pn)))
-                                snprintf(pn, sizeof(pn), "param %d", lay.vst3Param);
-                            snprintf(cur, sizeof(cur), "  \xE2\x86\x92 %s", pn);
-                        }
-                    }
-                    char item[160];
-                    snprintf(item, sizeof(item), "%s%s##uf1_touc1_%d",
-                             ls.name ? ls.name : "(slot)", cur, ls.linkIdx);
-                    if (ImGui_MenuItem(ctx, item, nullptr, nullptr, nullptr)) {
-                        const uf8::UserUf1Slot s = snap();
-                        sendToUc1_(g_editingMatch, ls.linkIdx,
-                                   g_fxLearnEditLayer, s);
-                    }
-                }
-            }
-            ImGui_EndMenu(ctx);
+        ImGui_Separator(ctx);
+        if (ImGui_MenuItem(ctx, "Learn\xE2\x80\xA6", nullptr, nullptr, nullptr)) {
+            g_listeningUf1.pos      = pos;
+            g_listeningUf1.softKeys = softKeys;
+            g_listeningLinkIdx      = -1;
+            g_listeningUf8.clear();
+            ImGui_CloseCurrentPopup(ctx);
         }
-        // Knob tuning — V-Pots only. A soft-key is a press, so range/curve/
-        // sensitivity have nothing to act on there (same reason the UF8 tab
-        // offers this on V-Pots and not on faders/buttons).
         if (!softKeys) {
             bool bip = snap().polarity == uf8::VPotPolarity::Bipolar;
             if (ImGui_MenuItem(ctx, "Bipolar (centre detent)", nullptr, &bip, nullptr))
@@ -15955,6 +15915,33 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             // of its own, it is drawn on the screen. Same shared palette the UF8
             // Solo/Cut/Sel swatches use. 0 = no override → the state-only bytes
             // every key had before. Brightness carries the on-state.
+            // Fixed action (v14) — soft-keys only. Overrides the parameter
+            // binding on this key, so it sits ABOVE the push cycle: SSL's own
+            // pages put PLUG-IN / HQ / A/B on fixed positions, and this is how
+            // the user moves them (Frank 2026-08-09).
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Action:");
+            {
+                const uint8_t curSpecial = snap().special;
+                int curIdx = 0;
+                for (int i = 0; i < int(std::size(kUf1Specials)); ++i)
+                    if (kUf1Specials[i].v == curSpecial) { curIdx = i; break; }
+                ImGui_SetNextItemWidth(ctx, 200.0);
+                if (ImGui_BeginCombo(ctx, "##uf1_special",
+                                     kUf1Specials[curIdx].label, nullptr)) {
+                    for (int i = 0; i < int(std::size(kUf1Specials)); ++i) {
+                        bool sel = (i == curIdx);
+                        if (ImGui_Selectable(ctx, kUf1Specials[i].label, &sel,
+                                             nullptr, nullptr, nullptr))
+                            setUf1Special_(pos, kUf1Specials[i].v);
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                if (curSpecial)
+                    ImGui_TextDisabled(ctx, "Fires this action \xE2\x80\x94 "
+                                            "the parameter below is ignored.");
+            }
+
             ImGui_Separator(ctx);
             ImGui_Text(ctx, "LED colour");
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -15998,33 +15985,6 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                 }
             }
 
-            // Fixed action (v14) — soft-keys only. Overrides the parameter
-            // binding on this key, so it sits ABOVE the push cycle: SSL's own
-            // pages put PLUG-IN / HQ / A/B on fixed positions, and this is how
-            // the user moves them (Frank 2026-08-09).
-            ImGui_Separator(ctx);
-            ImGui_Text(ctx, "Action:");
-            {
-                const uint8_t curSpecial = snap().special;
-                int curIdx = 0;
-                for (int i = 0; i < int(std::size(kUf1Specials)); ++i)
-                    if (kUf1Specials[i].v == curSpecial) { curIdx = i; break; }
-                ImGui_SetNextItemWidth(ctx, 200.0);
-                if (ImGui_BeginCombo(ctx, "##uf1_special",
-                                     kUf1Specials[curIdx].label, nullptr)) {
-                    for (int i = 0; i < int(std::size(kUf1Specials)); ++i) {
-                        bool sel = (i == curIdx);
-                        if (ImGui_Selectable(ctx, kUf1Specials[i].label, &sel,
-                                             nullptr, nullptr, nullptr))
-                            setUf1Special_(pos, kUf1Specials[i].v);
-                    }
-                    ImGui_EndCombo(ctx);
-                }
-                if (curSpecial)
-                    ImGui_TextDisabled(ctx, "Fires this action \xE2\x80\x94 "
-                                            "the parameter below is ignored.");
-            }
-
             // Push cycle — soft-keys only (a V-Pot turns, it doesn't step).
             // The UF1 runtime has honoured pushSteps since eec4bdf; this is
             // the first thing that can author them. Same editor the UF8 V-Pot
@@ -16048,6 +16008,59 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         // page renames this way, and native dialogs are unreliable on macOS 15
         // ([[swell-dialogs-macos-broken]]). Seeded once per cell, like the UC1
         // label field's g_fxlLabelBuf.
+        if (isMapped) {
+            bool inv = snap().inverted;
+            if (ImGui_MenuItem(ctx, "Invert", nullptr, &inv, nullptr))
+                toggleUf1Inverted_(softKeys, pos);
+        }
+        // Send to UC1 — the reverse of the UC1 menu's "Send to UF1". The UC1's
+        // slots are named and finite, so the user PICKS one (Frank 2026-08-08)
+        // rather than the code guessing a "next free" that means nothing here.
+        // The param is COPIED: it keeps its UF1 position too. Needs a param, so
+        // it stays out of an empty cell's menu.
+        if (isMapped && ImGui_BeginMenu(ctx, "Send to UC1", nullptr)) {
+            const UserPluginMap* em = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps)
+                if (m.match == g_editingMatch) { em = &m; break; }
+            const uf8::PluginMap* topo =
+                em ? canonicalTopology_(em->domain) : nullptr;
+            if (!em || em->domain == uf8::Domain::None) {
+                // A UF1-only map has no UC1 domain to land in; inventing one
+                // here would silently decide CS-vs-BC for the user.
+                ImGui_TextDisabled(ctx, "This map has no UC1 domain");
+                ImGui_TextDisabled(ctx, "(set one in the mode picker)");
+            } else if (!topo) {
+                ImGui_TextDisabled(ctx, "No canonical layout for this domain");
+            } else {
+                for (const auto& ls : topo->slots) {
+                    // Show what each slot currently holds on the layer being
+                    // edited, so overwriting is a decision, not an accident.
+                    char cur[80] = {0};
+                    uf8::UserLinkSlot snapSlot{};
+                    if (fetchSlotSnapshot_(ls.linkIdx, snapSlot)) {
+                        const uf8::SlotLayer& lay = editLayerRef_(snapSlot);
+                        if (lay.vst3Param >= 0) {
+                            char pn[64] = {};
+                            if (!paramNameFor_(*em, fx, lay.vst3Param, pn, sizeof(pn)))
+                                snprintf(pn, sizeof(pn), "param %d", lay.vst3Param);
+                            snprintf(cur, sizeof(cur), "  \xE2\x86\x92 %s", pn);
+                        }
+                    }
+                    char item[160];
+                    snprintf(item, sizeof(item), "%s%s##uf1_touc1_%d",
+                             ls.name ? ls.name : "(slot)", cur, ls.linkIdx);
+                    if (ImGui_MenuItem(ctx, item, nullptr, nullptr, nullptr)) {
+                        const uf8::UserUf1Slot s = snap();
+                        sendToUc1_(g_editingMatch, ls.linkIdx,
+                                   g_fxLearnEditLayer, s);
+                    }
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
+        // Knob tuning — V-Pots only. A soft-key is a press, so range/curve/
+        // sensitivity have nothing to act on there (same reason the UF8 tab
+        // offers this on V-Pots and not on faders/buttons).
         ImGui_Separator(ctx);
         // The UF1 shows 11 characters of label before the yellow value zone
         // starts (measured on the hardware, Frank 2026-08-09), so name the
@@ -16077,6 +16090,15 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             if (ImGui_SmallButton(ctx, "X##uf1_label_clear")) {
                 s_uf1LabelBuf[0] = '\0';
                 setUf1CustomLabel_(softKeys, pos, "");
+            }
+        }
+        if (isMapped) {
+            ImGui_Separator(ctx);
+            if (ImGui_MenuItem(ctx, "Unbind", nullptr, nullptr, nullptr)) {
+                unbindUf1_(softKeys, pos);
+                ImGui_CloseCurrentPopup(ctx);
+                ImGui_EndPopup(ctx);
+                return;                  // the slot is gone — nothing left to draw
             }
         }
         ImGui_EndPopup(ctx);

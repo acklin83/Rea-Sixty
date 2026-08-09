@@ -3242,6 +3242,41 @@ local function drawUf1ControlContextMenu()
     end
   end
 
+  -- Per-key LED colour (v12) — soft-keys only: a UF1 V-Pot has no LED, it is
+  -- drawn on the screen. Same palette as the UF8 bank/strip swatches; the key
+  -- carries its on-state in the brightness, so a coloured key still reads.
+  if ctxUf1Sk == 1 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "LED colour") then
+      for i, rgb in ipairs(UF8_BANK_PALETTE) do
+        local swatch = (rgb << 8) | 0xFF          -- 0xRRGGBBAA for ReaImGui
+        if i % 5 ~= 1 then reaper.ImGui_SameLine(ctx) end
+        if reaper.ImGui_ColorButton(ctx, "##u1led" .. i, swatch, 0, 24, 24) then
+          sendCmd(string.format("uf1ledcol;%d;%06X", ctxUf1Pos, rgb))
+        end
+      end
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_MenuItem(ctx, "No colour (state only)") then
+        sendCmd(string.format("uf1ledcol;%d;000000", ctxUf1Pos))
+      end
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+
+  -- Push cycle — soft-keys only (a V-Pot turns, it doesn't step). Writes
+  -- hud_uf1_push_req only while the submenu is open, so the extension builds
+  -- just this key's steps + param catalog.
+  local u1PushReq = ""
+  if ctxUf1Sk == 1 then
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_BeginMenu(ctx, "Push cycle") then
+      u1PushReq = tostring(ctxUf1Pos)
+      drawPushCycleUf1(ctxUf1Pos)
+      reaper.ImGui_EndMenu(ctx)
+    end
+  end
+  reaper.SetExtState(SECT, "hud_uf1_push_req", u1PushReq, false)
+
   if cell then
     if reaper.ImGui_MenuItem(ctx, "Invert", nil, cell.inv) then
       sendCmd("uf1invert;" .. arg)
@@ -3406,57 +3441,24 @@ local function drawUf1ControlContextMenu()
       end
     end
 
-    -- Per-key LED colour (v12) — soft-keys only: a UF1 V-Pot has no LED, it is
-    -- drawn on the screen. Same palette as the UF8 bank/strip swatches; the key
-    -- carries its on-state in the brightness, so a coloured key still reads.
-    if ctxUf1Sk == 1 then
-      reaper.ImGui_Separator(ctx)
-      if reaper.ImGui_BeginMenu(ctx, "LED colour") then
-        for i, rgb in ipairs(UF8_BANK_PALETTE) do
-          local swatch = (rgb << 8) | 0xFF          -- 0xRRGGBBAA for ReaImGui
-          if i % 5 ~= 1 then reaper.ImGui_SameLine(ctx) end
-          if reaper.ImGui_ColorButton(ctx, "##u1led" .. i, swatch, 0, 24, 24) then
-            sendCmd(string.format("uf1ledcol;%d;%06X", ctxUf1Pos, rgb))
-          end
-        end
-        reaper.ImGui_Separator(ctx)
-        if reaper.ImGui_MenuItem(ctx, "No colour (state only)") then
-          sendCmd(string.format("uf1ledcol;%d;000000", ctxUf1Pos))
-        end
-        reaper.ImGui_EndMenu(ctx)
-      end
-    end
-
-    -- Push cycle — soft-keys only (a V-Pot turns, it doesn't step). Writes
-    -- hud_uf1_push_req only while the submenu is open, so the extension builds
-    -- just this key's steps + param catalog.
-    local u1PushReq = ""
-    if ctxUf1Sk == 1 then
-      reaper.ImGui_Separator(ctx)
-      if reaper.ImGui_BeginMenu(ctx, "Push cycle") then
-        u1PushReq = tostring(ctxUf1Pos)
-        drawPushCycleUf1(ctxUf1Pos)
-        reaper.ImGui_EndMenu(ctx)
-      end
-    end
-    reaper.SetExtState(SECT, "hud_uf1_push_req", u1PushReq, false)
-
-    -- Rename writes an inline field rather than a native dialog, matching the
-    -- Settings side (native dialogs are unreliable on macOS 15).
-    reaper.ImGui_Separator(ctx)
-    -- 11 characters before the UF1's yellow value zone starts (V-Pots) —
-    -- measured on the hardware 2026-08-09. Mirrors kUf1LabelChars (main.cpp)
-    -- and the Settings FX-Learn cell; keep all three in step.
-    reaper.ImGui_Text(ctx, (ctxUf1Sk == 0) and "Display name (11 chars)"
-                                            or "Display name")
-    if uf1NameBuf == nil or uf1NameFor ~= arg then
-      uf1NameFor = arg
-      uf1NameBuf = cell.label or ""
-    end
-    reaper.ImGui_SetNextItemWidth(ctx, 160)
-    local ch, v = reaper.ImGui_InputText(ctx, "##uf1name", uf1NameBuf)
-    if ch then uf1NameBuf = v; sendCmd("uf1rename;" .. arg .. ";" .. v) end
-    reaper.ImGui_Separator(ctx)
+  end
+  -- Rename writes an inline field rather than a native dialog, matching the
+  -- Settings side (native dialogs are unreliable on macOS 15).
+  reaper.ImGui_Separator(ctx)
+  -- 11 characters before the UF1's yellow value zone starts (V-Pots) —
+  -- measured on the hardware 2026-08-09. Mirrors kUf1LabelChars (main.cpp)
+  -- and the Settings FX-Learn cell; keep all three in step.
+  reaper.ImGui_Text(ctx, (ctxUf1Sk == 0) and "Display name (11 chars)"
+                                          or "Display name")
+  if uf1NameBuf == nil or uf1NameFor ~= arg then
+    uf1NameFor = arg
+    uf1NameBuf = (cell and cell.label) or ""   -- nil on an unbound / action-only key
+  end
+  reaper.ImGui_SetNextItemWidth(ctx, 160)
+  local ch, v = reaper.ImGui_InputText(ctx, "##uf1name", uf1NameBuf)
+  if ch then uf1NameBuf = v; sendCmd("uf1rename;" .. arg .. ";" .. v) end
+  reaper.ImGui_Separator(ctx)
+  if cell then
     if reaper.ImGui_MenuItem(ctx, "Unbind") then
       sendCmd("uf1unbind;" .. arg)
     end
