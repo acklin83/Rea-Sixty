@@ -132,6 +132,23 @@ bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize)
 // FX in the GR "Any FX" poll walk and in the auto-GUI window-chase.
 bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
 
+// True when `fx` is an SSL 360°-family plug-in, i.e. one that streams its
+// meters to SSL 360° Core (and therefore to our impersonator). Same name test
+// the chunk patcher uses (nextSslVstHead): the plug-in name starts with "SSL "
+// (Channel Strip 2 / 4K G / 360 Link / Bus Compressor) or with "4K " (4K B /
+// 4K E, whose names carry no "SSL" at all). A "VST3: "/"VST: "/"AU: " prefix is
+// skipped first, so it works on both fxIdentityName spellings.
+bool fxIsSsl360(void* track /*MediaTrack**/, int fx);
+
+// Position of `fx` among the track's SSL 360° plug-ins in FX-chain order
+// (0-based), or -1 when `fx` is not one of them. This is the ordinal that
+// indexes the impersonator's per-track instance list: the plug-ins connect to
+// Core in chain order, so the Nth SSL plug-in on the track is the Nth stream.
+// It is what ties the ACTIVE instance (the one Rea-Sixty rings in the MCP and
+// shows on the surfaces) to its own meter stream, instead of taking whichever
+// instance on the track answered last. Main-thread-only (REAPER FX API).
+int sslCoreInstanceOrdinal(void* track /*MediaTrack**/, int fx);
+
 // True when the FX slot is a JSFX (REAPER "fx_type" == "JS"). JSFX
 // numeric sliders mis-report their step size as 1.0 (= full range)
 // via TrackFX_GetParameterStepSizes, so the knob/encoder handlers

@@ -180,6 +180,15 @@ std::map<socket_t, std::string>  g_clientName;     // per-client, awaiting its i
 std::map<socket_t, int>          g_clientIndex;    // per-client, awaiting its name
 std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
+// Order in which UDP ports were first seen — the instance ORDER. REAPER builds
+// an FX chain slot by slot, so the plug-ins connect to Core in chain order and
+// the n-th SSL stream on a track is the n-th SSL plug-in on it. That is what
+// lets a caller ask for the ACTIVE instance's meters instead of "any strip on
+// this track" (see getChannelStripMeterForTrackInstance). Guarded by g_meterMx;
+// stable for the life of a connection (MEASURED 2026-08-09: within one session
+// the port set per track does not churn — 3 ports per track, start to finish).
+std::map<uint16_t, uint64_t>     g_portSeq;        // UDP port -> first-seen seq
+uint64_t                         g_portSeqNext = 0;
 
 // Per-instance track identity — the fix for "GR follows the wrong channel".
 // Each plug-in announces, on its OWN TCP control connection at connect, its
@@ -582,6 +591,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                              g_pending.front().index, g_pending.front().name.c_str());
                         g_pending.pop_front();
                     }
+                    if (g_portSeq.find(sp) == g_portSeq.end())
+                        g_portSeq[sp] = g_portSeqNext++;   // instance order
                     Instance& inst = g_inst[sp];
                     inst.lastMs = nowMs();
                     // Signal detector for instance preference: any level-type
@@ -962,7 +973,8 @@ bool start(uint16_t tcpPort, uint16_t dataPort) {
         g_forceView = std::atoi(fv);
         g_view.store(g_forceView); g_viewDirty.store(true);
     }
-    { std::lock_guard<std::mutex> lk(g_meterMx); g_inst.clear(); }
+    { std::lock_guard<std::mutex> lk(g_meterMx);
+      g_inst.clear(); g_portSeq.clear(); g_portSeqNext = 0; }
     g_lastDataMs.store(0);
     g_running.store(true);
     slog("[start] tcpPort=%u dataPort=%u", unsigned(tcpPort), unsigned(dataPort));
@@ -1296,23 +1308,57 @@ bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
     // value (they're never pruned — the TCP close handler has no socket->port
     // map). Taking the FIRST match returned the lowest-numbered port, which was
     // usually a DEAD reconnect-orphan stuck at 0.0 → the gate LED stayed dark
-    // though the LIVE port for that track was streaming real reduction. So among
-    // all channel strips announcing THIS (1-based) track index, pick the
-    // FRESHEST (max lastMs) and require it to be recent — that is the instance
-    // actually streaming now; the gate GR then follows the focused channel.
+    // though the LIVE port for that track was streaming real reduction. So every
+    // candidate is tested for freshness INDIVIDUALLY and orphans drop out.
+    //
+    // ★ A track can carry SEVERAL live channel strips (MEASURED 2026-08-09 in the
+    // same trace: Frank's project runs TWO strip instances on every one of its 17
+    // tracks — e.g. src=60709 and src=64220 both correlate to track 5 on their own
+    // dedicated ports, and they DISAGREE: 5[1]=-25.2 vs 5[1]=0.0, i.e. one strip's
+    // gate is engaged and closed, the other's is off). Picking the FRESHEST of the
+    // two made the winner alternate at ~25 Hz between -25.2 dB and 0 dB — that is
+    // the gate-GR "shake" Frank saw on ALL THREE displays at once (UF8 gate row,
+    // UC1 LED strip, UF1), because all three read through this one function. Comp
+    // GR looked fine only because it comes from REAPER's GainReduction_dB, not
+    // from here — the flicker was never about DataType 5 being the ambiguous index.
+    //
+    // Which of the strips is right is NOT this layer's guess to make: it is the
+    // instance the user made active. Callers pass that instance's ordinal to
+    // getChannelStripMeterForTrackInstance below; this un-keyed entry point keeps
+    // the first instance on the track for callers that have no instance context.
+    return getChannelStripMeterForTrackInstance(csType, trackIndex, 0, current);
+}
+
+bool getChannelStripMeterForTrackInstance(int csType, int trackIndex,
+                                          int instanceOrdinal,
+                                          std::vector<float>& current) {
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    if (trackIndex <= 0 || instanceOrdinal < 0) return false;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    // Every live channel strip announcing THIS track, in instance order (the
+    // order their plug-ins connected = FX-chain order, see g_portSeq). The
+    // caller's ordinal is the position of the ACTIVE instance among the track's
+    // SSL plug-ins, so index N here is the stream of the plug-in the surfaces
+    // are showing — never another strip's gate, and never a per-frame coin toss.
     const long long now = nowMs();
-    const Slot* best = nullptr;
-    long long   bestMs = -1;
+    std::vector<std::pair<uint64_t, const Slot*>> live;
     for (const auto& kv : g_inst) {
         if (kv.second.kind != Kind::ChannelStrip) continue;
         auto pi = g_portIndex.find(kv.first);
         if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+        // Dead reconnect-orphans linger in g_inst frozen at their last value
+        // (see above), so each candidate is tested for freshness on its own.
+        if (now - kv.second.lastMs > 1000) continue;
         const Slot& s = kv.second.meter[csType];
         if (!s.have || s.current.empty()) continue;
-        if (kv.second.lastMs > bestMs) { bestMs = kv.second.lastMs; best = &s; }
+        auto sq = g_portSeq.find(kv.first);
+        live.emplace_back(sq == g_portSeq.end() ? UINT64_MAX : sq->second, &s);
     }
-    if (!best || now - bestMs > 1000) return false;   // none, or all stale
-    current = best->current;
+    if (live.empty()) return false;
+    std::sort(live.begin(), live.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (size_t(instanceOrdinal) >= live.size()) return false;  // dark, not wrong
+    current = live[size_t(instanceOrdinal)].second->current;
     return true;
 }
 

@@ -4252,9 +4252,11 @@ void UC1Surface::pollGainReduction_()
     // the user is mixing with a non-SSL compressor.
     float csCompGr = 0.0f;
     MediaTrack* csTr = static_cast<MediaTrack*>(focusedTrack_);
+    // The ACTIVE CS instance's FX index — also what keys the gate GR below, so
+    // it outlives this block. -1 = the track has no mapped CS plug-in.
+    int csFxIdx = -1;
     if (csTr) {
         UC1Bindings b = lookupBindingsOnTrack(csTr);
-        int csFxIdx = -1;
         if (b.channelMap) {
             csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
                               b.channelGrOffsetDb,
@@ -4320,17 +4322,27 @@ void UC1Surface::pollGainReduction_()
     // the Toms (Frank 2026-07-26). No un-keyed fallback: it takes the first
     // g_inst entry = lowest UDP port = usually a DEAD reconnect-orphan frozen at
     // its last value, so it would show a stale wrong channel — worse than dark.
-    // getChannelStripMeterForTrackIndex now picks the FRESHEST live instance for
-    // the track (2026-07-27 fix; the correlation itself was verified working in
-    // the trace, the dead-lowest-port pick was the real bug behind the dark LED).
+    // Keyed to the ACTIVE INSTANCE, not just the track (Frank 2026-08-09): with
+    // two SSL strips on one channel, "the freshest instance on this track" made
+    // the winner alternate at ~25 Hz between the closed gate of one strip and the
+    // open gate of the other — the gate-GR shake, on all three displays at once.
+    // csFxIdx is the instance the user selected; its ordinal among the track's
+    // SSL 360° plug-ins is the ordinal of its meter stream.
     float csGateGr = 0.0f;
     if (sslcore::isRunning() && csTr) {
         const int trackIdx =
             static_cast<int>(GetMediaTrackInfo_Value(csTr, "IP_TRACKNUMBER"));
         const int gateType = int(sslcore::ChannelStripMeter::GateGain);
+        // No mapped CS plug-in at all → keep the old "first strip on the track"
+        // reading. A mapped CS that is NOT an SSL 360° plug-in (bx_console, …)
+        // has no gate stream of its own, so the strip stays dark rather than
+        // borrowing the other instance's gate.
+        const int inst = (csFxIdx >= 0)
+                           ? uf8::sslCoreInstanceOrdinal(csTr, csFxIdx) : 0;
         std::vector<float> gg;
-        if (trackIdx > 0 &&
-            sslcore::getChannelStripMeterForTrackIndex(gateType, trackIdx, gg) &&
+        if (trackIdx > 0 && inst >= 0 &&
+            sslcore::getChannelStripMeterForTrackInstance(gateType, trackIdx,
+                                                          inst, gg) &&
             !gg.empty()) {
             csGateGr = std::abs(gg[0]);
         }

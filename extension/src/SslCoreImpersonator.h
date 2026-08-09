@@ -109,12 +109,26 @@ enum class ChannelStripMeter : int {
 // (closed) with the ramp in between, CompGain tracked the compressor.
 bool getChannelStripMeter(int csType, std::vector<float>& current);
 
-// Like getChannelStripMeter, but only the channel-strip instance that announced
+// Like getChannelStripMeter, but only the channel-strip instances that announced
 // the given 1-based REAPER track index (HostTrackIndex, correlated per UDP source
 // port at connect). Returns false when no strip on that track has published —
 // so the caller's GR goes dark rather than showing another channel's reduction.
+// A track may run SEVERAL strips; this un-keyed form takes the FIRST instance
+// on the track. Prefer getChannelStripMeterForTrackInstance whenever the caller
+// knows which instance is active.
 bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
                                        std::vector<float>& current);
+
+// The same read, but for ONE named instance on the track: `instanceOrdinal` is
+// the position of the plug-in among the track's SSL 360° plug-ins in FX-chain
+// order (uf8::sslCoreInstanceOrdinal), which is the order they connect to Core
+// in. Pass the ACTIVE instance's ordinal — the one Rea-Sixty rings in the MCP
+// and drives the surfaces with — and the gate GR is that plug-in's own, not the
+// other strip's. Returns false (→ meter dark) when that instance has no live
+// stream, rather than falling back to a neighbour's reading. Thread-safe.
+bool getChannelStripMeterForTrackInstance(int csType, int trackIndex,
+                                          int instanceOrdinal,
+                                          std::vector<float>& current);
 
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();

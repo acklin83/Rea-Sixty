@@ -490,6 +490,41 @@ bool fxIsAcustica(void* trackOpaque, int fx)
     return false;
 }
 
+// An SSL 360° plug-in is one whose name starts with "SSL " or "4K " once the
+// format prefix is stripped — the same test PluginChunkPatch::nextSslVstHead
+// uses, and the same reason the "4K " arm exists (4K B / 4K E carry no "SSL"
+// in their names at all, Frank HW 2026-07-29).
+bool fxIsSsl360(void* trackOpaque, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return false;
+    char buf[256];
+    if (!fxIdentityName(tr, fx, buf, sizeof(buf)) || !buf[0]) return false;
+    std::string_view n{buf};
+    // fxIdentityName yields either the factory name ("SSL Native Channel Strip
+    // 2 (SSL)") or the display name, which carries a format prefix.
+    for (std::string_view p : { "VST3: ", "VST: ", "AU: ", "CLAP: ", "AUi: " }) {
+        if (n.rfind(p, 0) == 0) { n.remove_prefix(p.size()); break; }
+    }
+    return n.rfind("SSL ", 0) == 0 || n.rfind("4K ", 0) == 0;
+}
+
+int sslCoreInstanceOrdinal(void* trackOpaque, int fx)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0) return -1;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return -1;
+    const int n = TrackFX_GetCount(tr);
+    if (fx >= n) return -1;
+    int seen = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!fxIsSsl360(tr, i)) continue;
+        if (i == fx) return seen;
+        ++seen;
+    }
+    return -1;
+}
+
 bool fxIsJsfx(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
