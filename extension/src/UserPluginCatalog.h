@@ -491,8 +491,21 @@ struct UserUf8Map {
 // lives in, so mapping only V-Pot position 7 costs one entry, and a map with
 // no UF1 layer costs nothing. Inherits SlotLayer, so every existing tuning
 // mutator (range/curve/sensitivity/polarity/label/invert/pushSteps) applies.
+// v14 — the fixed non-parameter actions a UF1 soft-key can carry. The p188
+// built-in pages hardcode some of these (PLUG-IN on soft-key 4 of page 1, HQ
+// MODE / A/B on page 2); this lets the user put them on any soft-key, or take
+// them off. None = the slot behaves exactly as it did before: plug-in param /
+// push-cycle, or the built-in table's own action for that position.
+// NOT a general action binding by design (Frank 2026-08-09 chose the small
+// version): these five are the ones the UF1's plug-in mode actually needs.
+enum class Uf1SkSpecial : uint8_t {
+    None = 0, HQ = 1, AB = 2, StripMode = 3, StripModeGui = 4,
+};
 struct UserUf1Slot : SlotLayer {
     int pos = -1;                 // flat stream position: page*4 + idx
+    // Soft-keys only — a V-Pot has no use for these. Stored as the raw enum
+    // value so the JSON stays a plain int.
+    uint8_t special = 0;          // Uf1SkSpecial; 0 = plug-in param as before
     // Per-soft-key LED colour, 0xRRGGBB. 0 = no override → the HW-verified
     // state-only bytes (what every key did before). Soft-keys only: a UF1
     // V-Pot has no LED of its own, it is drawn on the screen (v12, Frank
@@ -512,8 +525,11 @@ constexpr int kUserUf1PerPage = 4;
 // map?" test used by runtime, the v10->v11 migration and the save filter.
 inline bool uf1MapHasContent(const UserUf1Map& u)
 {
+    // A soft-key carrying only a special action (v14) is content too — without
+    // this it would be dropped by the save filter and never survive a restart.
     for (const auto& s : u.vpots)    if (s.vst3Param >= 0 || !s.pushSteps.empty()) return true;
-    for (const auto& s : u.softKeys) if (s.vst3Param >= 0 || !s.pushSteps.empty()) return true;
+    for (const auto& s : u.softKeys) if (s.vst3Param >= 0 || !s.pushSteps.empty()
+                                       || s.special) return true;
     return false;
 }
 // The slot at flat position `pos` of a stream, or nullptr when unmapped.
@@ -677,7 +693,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 13;  // v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
+constexpr int kCurrentFormatVersion = 14;  // v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

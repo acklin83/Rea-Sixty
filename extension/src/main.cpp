@@ -162,6 +162,7 @@ bool        reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos, co
 bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, int slot, const char* name);
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
 bool        reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb);
+bool        reasixty_hudUf1Special(void* tr, int fx, int pos, int special);
 // UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
 // "hud_uf1_uc1slots") and the write behind the "uf1touc1;" verb.
 std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer);
@@ -22242,6 +22243,76 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
 }
 
+// The fixed non-parameter soft-key actions, in ONE place: the built-in p188
+// pages reach them through kUf1CsSoftKeys' `act`, and a user map reaches the
+// same code through UserUf1Slot::special (v14). `tr` is the resolved strip's
+// track — HQ / A/B patch the plug-in chunk on it, the Strip Mode pair is
+// device-global. Main-thread only (the chunk patch and TrackFX_Show are).
+void uf1FireSkSpecial_(uf8::Uf1SkSpecial act, MediaTrack* tr)
+{
+    switch (act) {
+        case uf8::Uf1SkSpecial::HQ: if (tr) uf8::togglePluginHQ(tr); return;
+        case uf8::Uf1SkSpecial::AB: if (tr) uf8::togglePluginAB(tr); return;
+        case uf8::Uf1SkSpecial::StripMode:
+        case uf8::Uf1SkSpecial::StripModeGui: {
+            // Byte-for-byte the `uf1_strip_mode_toggle[_with_gui]` builtins:
+            // the fader drives the SSL strip's Out-Gain / Fader Level param
+            // (csFaderForTrack) instead of track volume, and the GUI variant
+            // additionally lets the shared main-thread drain open the CS
+            // plug-in window.
+            const bool gui  = (act == uf8::Uf1SkSpecial::StripModeGui);
+            const bool next = !g_uf1StripMode.load();
+            g_uf1StripMode.store(next);
+            g_uf1StripModeWithGui.store(gui && next);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
+            SetExtState("rea_sixty", "uf1StripModeGui",
+                        (gui && next) ? "1" : "0", true);
+            g_pluginGuiSyncRequest.store(true);
+            g_pageDirty.store(true);
+            return;
+        }
+        case uf8::Uf1SkSpecial::None: return;
+    }
+}
+
+// Lit state of a special soft-key — the LED/on-state twin of uf1FireSkSpecial_.
+// `ab`/`hq` are the painter's per-frame cache of readPluginToggleStates (-1 =
+// not read yet); one chunk read serves every special key on the page.
+bool uf1SkSpecialOn_(uf8::Uf1SkSpecial act, MediaTrack* tr, int& ab, int& hq)
+{
+    switch (act) {
+        case uf8::Uf1SkSpecial::HQ:
+            if (hq < 0 && tr) uf8::readPluginToggleStates(tr, ab, hq);
+            return hq == 1;
+        case uf8::Uf1SkSpecial::AB:
+            if (ab < 0 && tr) uf8::readPluginToggleStates(tr, ab, hq);
+            return ab == 0;   // bright = comparing (B active), as the UF8 LED
+        // Both Strip Mode keys light while Strip Mode is on. Unlike the two
+        // BUILTINS (whose LEDs distinguish the variants so a button bound to
+        // the plain one goes dark in a with-GUI session), a soft-key sits on
+        // the plug-in page where "is Strip Mode engaged" is the only question.
+        case uf8::Uf1SkSpecial::StripMode:
+        case uf8::Uf1SkSpecial::StripModeGui:
+            return g_uf1StripMode.load();
+        case uf8::Uf1SkSpecial::None: return false;
+    }
+    return false;
+}
+
+// The label the UF1 paints on a special soft-key when the user set no name of
+// their own — the same words SSL's p188 pages print.
+const char* uf1SkSpecialLabel_(uf8::Uf1SkSpecial act)
+{
+    switch (act) {
+        case uf8::Uf1SkSpecial::HQ:           return "HQ MODE";
+        case uf8::Uf1SkSpecial::AB:           return "A/B";
+        case uf8::Uf1SkSpecial::StripMode:    return "PLUG-IN";
+        case uf8::Uf1SkSpecial::StripModeGui: return "PLUG-IN G";
+        case uf8::Uf1SkSpecial::None:         return "";
+    }
+    return "";
+}
+
 // Toggle a Channel-view soft-key param (p188). idx = 0..3 (display soft-keys
 // 0x19-0x1C). Resolves the SAME on-screen SSL strip FX + page as the V-Pots
 // (uf1ResolveCsFx_ + g_uf1CsPage), looks up the current-page soft-key param by
@@ -22292,6 +22363,19 @@ void applyUf1ChannelSoftKey_(int idx)
     // (uf1CsSoftKeyParam_), so it must NOT consult kUf1CsSoftKeys[type]'s `act` (its
     // canonical positions don't correspond to the packed params) — skip straight to
     // the param toggle.
+    // v14: the user may have put one of the fixed actions on THIS soft-key (or
+    // taken it off), which overrides both the built-in table and the param
+    // toggle. Frank 2026-08-09 — the PLUG-IN key was welded to soft-key 4 of
+    // page 1. Applies to learned plug-ins too: the action doesn't touch params.
+    if (const auto* u1s = uf1ExplicitMapAt_(tr, fx)) {
+        const uf8::UserUf1Slot* s =
+            uf8::uf1SlotAt(u1s->softKeys, page * uf8::kUserUf1PerPage + idx);
+        if (s && s->special) {
+            uf1FireSkSpecial_(static_cast<uf8::Uf1SkSpecial>(s->special), tr);
+            return;
+        }
+    }
+
     char lnm[256];
     const bool learned = uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm));
     if (!learned) {
@@ -22301,24 +22385,17 @@ void applyUf1ChannelSoftKey_(int idx)
         // track (it walks every SSL plug-in on the track), exactly as the UF8 soft-
         // key bank does. Reads back its own state; no VST3 param to write. See
         // [[ssl-chunk-non-auto-params]] and the UF8 PluginAB/PluginHQ dispatch.
-        if (sk.act == Uf1CsSkAct::HQ) { uf8::togglePluginHQ(tr); return; }
-        if (sk.act == Uf1CsSkAct::AB) { uf8::togglePluginAB(tr); return; }
+        if (sk.act == Uf1CsSkAct::HQ) { uf1FireSkSpecial_(uf8::Uf1SkSpecial::HQ, tr); return; }
+        if (sk.act == Uf1CsSkAct::AB) { uf1FireSkSpecial_(uf8::Uf1SkSpecial::AB, tr); return; }
         if (sk.act == Uf1CsSkAct::StripMode) {
             // PLUG-IN key = "Toggle SSL Strip Mode" (manual: the PLUG-IN/DAW toggle),
             // implemented like the UF8 `ssl_strip_mode_toggle`: the fader then drives
             // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
             // instead of track volume. UF1-LOCAL g_uf1StripMode (Frank 2026-07-30 —
             // was the shared g_pluginFaderMode; now UF8 and UF1 toggle independently).
-            const bool nextStrip = !g_uf1StripMode.load();
-            g_uf1StripMode.store(nextStrip);
-            // Headless, like the plain `uf1_strip_mode_toggle` builtin: clear the
-            // with-GUI flag so a key press after a with-GUI session stops
-            // following the window, and let the drain close it.
-            g_uf1StripModeWithGui.store(false);
-            SetExtState("rea_sixty", "uf1StripMode", nextStrip ? "1" : "0", true);  // persist (Frank "ja")
-            SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
-            g_pluginGuiSyncRequest.store(true);
-            g_pageDirty.store(true);
+            // Headless variant: a user who wants the GUI puts StripModeGui on the
+            // key in FX-Learn (v14).
+            uf1FireSkSpecial_(uf8::Uf1SkSpecial::StripMode, tr);
             return;
         }
     }
@@ -23898,7 +23975,20 @@ void uf1PaintChannel_()
                 const uf8::UserUf1Slot* s = uf8::uf1SlotAt(
                     skXmap->softKeys, skPage * uf8::kUserUf1PerPage + i);
                 haveLabel = true;          // blank when the position is empty
-                if (s && s->vst3Param >= 0) {
+                // v14: a special (non-parameter) action wins over the param —
+                // same precedence the press path uses. Its label is the p188
+                // wording unless the user named the key themselves.
+                if (s && s->special) {
+                    const auto act = static_cast<uf8::Uf1SkSpecial>(s->special);
+                    label = s->customLabel.empty() ? uf1SkSpecialLabel_(act)
+                                                   : s->customLabel;
+                    on = uf1SkSpecialOn_(act, skTr, abState, hqState);
+                    if (s->ledRgb) {
+                        keyHasColour = true;
+                        keyColRgb    = s->ledRgb;
+                        keyColBright = on;
+                    }
+                } else if (s && s->vst3Param >= 0) {
                     label = uf1ParamDisplayName_(skTr, skFx, s->vst3Param,
                                                  s->customLabel);
                     on = TrackFX_GetParamNormalized(skTr, skFx, s->vst3Param) > 0.5;
@@ -31024,6 +31114,21 @@ void onTimer()
                         && reasixty_hudUf1LedRgb(u1Tr, u1Fx, pos, rgb)) {
                         g_hudUf1AssignPublished.clear();
                         g_pageDirty.store(true);       // re-render the key LED
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("uf1special;", 0) == 0) {
+                // "uf1special;<pos>;<n>" — fixed non-parameter soft-key action
+                // (v14): 0 = plug-in param, 1 = HQ, 2 = A/B, 3 = Strip Mode,
+                // 4 = Strip Mode + GUI. Mirrors the Settings cell's picker.
+                int pos = -1, sp = 0;
+                if (std::sscanf(s.c_str(), "uf1special;%d;%d", &pos, &sp) == 2
+                    && pos >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1Special(u1Tr, u1Fx, pos, sp)) {
+                        g_hudUf1AssignPublished.clear();
+                        g_pageDirty.store(true);   // label + LED change
                         publishHud_();
                     }
                 }

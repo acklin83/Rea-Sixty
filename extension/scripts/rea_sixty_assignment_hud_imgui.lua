@@ -3247,6 +3247,28 @@ local function drawUf1ControlContextMenu()
       end
     end
 
+    -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld
+    -- PLUG-IN to soft-key 4 of page 1 and HQ / A/B to page 2; this moves them
+    -- to any key. Overrides the parameter binding on that key.
+    if ctxUf1Sk == 1 then
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_BeginMenu(ctx, "Action") then
+        local UF1_SPECIALS = {
+          { 0, "Plug-in parameter"    },
+          { 3, "SSL Strip Mode"       },
+          { 4, "SSL Strip Mode + GUI" },
+          { 1, "HQ Mode"              },
+          { 2, "A/B compare"          },
+        }
+        for _, sp in ipairs(UF1_SPECIALS) do
+          if reaper.ImGui_MenuItem(ctx, sp[2]) then
+            sendCmd(string.format("uf1special;%d;%d", ctxUf1Pos, sp[1]))
+          end
+        end
+        reaper.ImGui_EndMenu(ctx)
+      end
+    end
+
     -- Push cycle — soft-keys only (a V-Pot turns, it doesn't step). Writes
     -- hud_uf1_push_req only while the submenu is open, so the extension builds
     -- just this key's steps + param catalog.

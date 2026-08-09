@@ -627,13 +627,15 @@ std::string serialize_(const UserPluginCatalog& c)
                 bool first = true;
                 for (const auto& s : v) {
                     if (s.pos < 0) continue;
-                    if (s.vst3Param < 0 && s.pushSteps.empty()) continue;
+                    if (s.vst3Param < 0 && s.pushSteps.empty() && !s.special) continue;
                     if (!first) os << ",";
                     first = false;
                     os << "\n          { \"pos\": " << s.pos << ", ";
                     // v12: per-key LED colour, only when set (0 = no override),
                     // so a v11-shaped map still serialises byte-identically.
                     if (s.ledRgb) os << "\"ledRgb\": " << s.ledRgb << ", ";
+                    // v14: fixed non-parameter soft-key action, likewise sparse.
+                    if (s.special) os << "\"special\": " << int(s.special) << ", ";
                     emitLayerBody(s);
                     os << " }";
                 }
@@ -908,9 +910,14 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     int ledRgb = 0;                       // v12, absent on v11
                     getIntI_(so, "ledRgb", ledRgb);
                     us.ledRgb = static_cast<uint32_t>(ledRgb < 0 ? 0 : ledRgb);
+                    int special = 0;                      // v14, absent before
+                    getIntI_(so, "special", special);
+                    us.special = static_cast<uint8_t>(
+                        (special >= 0 && special <= int(uf8::Uf1SkSpecial::StripModeGui))
+                            ? special : 0);
                     parseLayerBody(so, us);
                     if (us.pos < 0) continue;
-                    if (us.vst3Param < 0 && us.pushSteps.empty()) continue;
+                    if (us.vst3Param < 0 && us.pushSteps.empty() && !us.special) continue;
                     dest.push_back(std::move(us));
                 }
             };

@@ -9026,6 +9026,24 @@ void setUf1LedRgb_(int pos, uint32_t rgb)
         uf1SlotRef_(u, /*softKeys*/true, pos).ledRgb = rgb;
     });
 }
+// Fixed non-parameter soft-key action (v14). The p188 pages weld PLUG-IN to
+// soft-key 4 of page 1 and HQ / A/B to page 2; this puts them on any soft-key
+// the user wants (Frank 2026-08-09). 0 = none → plug-in param, as before.
+void setUf1Special_(int pos, uint8_t special)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        uf1SlotRef_(u, /*softKeys*/true, pos).special = special;
+    });
+}
+// The five choices, in picker order. Index 0 is "no special action".
+struct Uf1SpecialChoice { uint8_t v; const char* label; };
+constexpr Uf1SpecialChoice kUf1Specials[] = {
+    { uint8_t(uf8::Uf1SkSpecial::None),         "Plug-in parameter"      },
+    { uint8_t(uf8::Uf1SkSpecial::StripMode),    "SSL Strip Mode"         },
+    { uint8_t(uf8::Uf1SkSpecial::StripModeGui), "SSL Strip Mode + GUI"   },
+    { uint8_t(uf8::Uf1SkSpecial::HQ),           "HQ Mode"                },
+    { uint8_t(uf8::Uf1SkSpecial::AB),           "A/B compare"            },
+};
 // Push-to-default target. Unlike the UC1 (whose knobs have no push), the UF1
 // V-Pots DO push — applyUf1ChannelVpotPush_ reads this very field for an
 // explicit slot, so the value is live, not a mirror-only hint.
@@ -11077,6 +11095,12 @@ bool hudUf1LedRgbMatch_(const std::string& match, int pos, uint32_t rgb)
 {
     return hudUf1MutateMatch_(match, /*softKeys*/true, pos,
         [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].ledRgb = rgb; });
+}
+// Fixed non-parameter soft-key action from the HUD (v14); 0 = plug-in param.
+bool hudUf1SpecialMatch_(const std::string& match, int pos, uint8_t special)
+{
+    return hudUf1MutateMatch_(match, /*softKeys*/true, pos,
+        [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].special = special; });
 }
 
 // ---- UF1 tab full parity — tuning + feel ----------------------------------
@@ -15656,6 +15680,33 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                     }
                     ImGui_EndPopup(ctx);
                 }
+            }
+
+            // Fixed action (v14) — soft-keys only. Overrides the parameter
+            // binding on this key, so it sits ABOVE the push cycle: SSL's own
+            // pages put PLUG-IN / HQ / A/B on fixed positions, and this is how
+            // the user moves them (Frank 2026-08-09).
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "Action:");
+            {
+                const uint8_t curSpecial = snap().special;
+                int curIdx = 0;
+                for (int i = 0; i < int(std::size(kUf1Specials)); ++i)
+                    if (kUf1Specials[i].v == curSpecial) { curIdx = i; break; }
+                ImGui_SetNextItemWidth(ctx, 200.0);
+                if (ImGui_BeginCombo(ctx, "##uf1_special",
+                                     kUf1Specials[curIdx].label, nullptr)) {
+                    for (int i = 0; i < int(std::size(kUf1Specials)); ++i) {
+                        bool sel = (i == curIdx);
+                        if (ImGui_Selectable(ctx, kUf1Specials[i].label, &sel,
+                                             nullptr, nullptr, nullptr))
+                            setUf1Special_(pos, kUf1Specials[i].v);
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                if (curSpecial)
+                    ImGui_TextDisabled(ctx, "Fires this action \xE2\x80\x94 "
+                                            "the parameter below is ignored.");
             }
 
             // Push cycle — soft-keys only (a V-Pot turns, it doesn't step).
@@ -21541,6 +21592,13 @@ bool reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb)
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1LedRgbMatch_(m, pos, rgb);
+}
+bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
+{
+    if (special < 0 || special > int(uf8::Uf1SkSpecial::StripModeGui)) return false;
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1SpecialMatch_(m, pos, static_cast<uint8_t>(special));
 }
 // UF1 → UC1 ("Send to UC1"): the pickable slot list, then the write. The layer
 // comes from the HUD (the layer that was live at right-click), matching the
