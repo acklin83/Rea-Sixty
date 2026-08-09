@@ -21868,11 +21868,39 @@ static std::string uf1ParamDisplayName_(MediaTrack* tr, int fx, int p,
                                         const std::string& slotLabel)
 {
     if (!slotLabel.empty()) return slotLabel;
-    if (std::string s = userParamLabel_(tr, fx, p); !s.empty()) return s;
-    if (std::string s = uf1CanonicalParamName_(tr, fx, p); !s.empty()) return s;
-    char pn[64] = {0};
-    if (tr && fx >= 0 && p >= 0) TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
-    return pn;
+    if (tr == nullptr || fx < 0 || p < 0) return {};
+    // ⚠ CACHED — this is called PER STRIP, PER TICK from the painters, and the
+    // lookups behind it are not cheap: an identity-name read, a catalog walk,
+    // and canonicalLinkName_ scanning every canonical map's slot table. Doing
+    // that 8× per tick starved the painter enough to make the gate-GR row
+    // flicker, which follows directly with no decay (Frank 2026-08-09).
+    // Invalidated whenever the catalog changes (a rename, a bind, a load).
+    struct Key {
+        MediaTrack* tr; int fx; int p;
+        bool operator<(const Key& o) const {
+            if (tr != o.tr) return tr < o.tr;
+            if (fx != o.fx) return fx < o.fx;
+            return p < o.p;
+        }
+    };
+    static std::map<Key, std::string> sCache;
+    static int sGen = -1;
+    const int gen = uf8::user_plugins::generation();
+    if (gen != sGen) { sGen = gen; sCache.clear(); }
+    const Key k{tr, fx, p};
+    if (auto it = sCache.find(k); it != sCache.end()) return it->second;
+
+    std::string out;
+    if (out = userParamLabel_(tr, fx, p); out.empty())
+        if (out = uf1CanonicalParamName_(tr, fx, p); out.empty()) {
+            char pn[64] = {0};
+            TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+            out = pn;
+        }
+    // Bound so a project with many plug-ins can't grow this without limit.
+    if (sCache.size() > 512) sCache.clear();
+    sCache.emplace(k, out);
+    return out;
 }
 
 // The explicit UF1 map for whatever plug-in sits at (tr,fx), REGARDLESS of its
