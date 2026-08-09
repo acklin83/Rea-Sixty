@@ -21844,7 +21844,14 @@ static const uf8::UserUf1Map* uf1ExplicitMap_(const char* fxName)
 {
     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
     if (!um || !um->uf1Mode) return nullptr;
-    return uf8::uf1MapHasContent(um->uf1) ? &um->uf1 : nullptr;
+    // An EMPTY explicit map is authoritative: it means "show nothing on the
+    // UF1", not "fall back to the UC1 mapping". Gating on uf1MapHasContent made
+    // Unbind All a no-op on the hardware — the map went empty, the fallback took
+    // over, and the parameters were all still there (Frank 2026-08-09). The
+    // layer flag is the switch; emptiness is a state within it. Enabling the
+    // layer seeds it from the fallback, so an empty map only ever comes from a
+    // deliberate clear.
+    return &um->uf1;
 }
 // An explicit UF1 slot's param. NOT layer-resolved on purpose: an explicit map
 // is permanent, hold-nothing access (Frank 2026-08-08) — only the sequential

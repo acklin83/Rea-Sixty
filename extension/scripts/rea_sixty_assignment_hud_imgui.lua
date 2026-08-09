@@ -3176,6 +3176,19 @@ local function drawUf1ControlContextMenu()
   reaper.ImGui_EndDisabled(ctx)
   reaper.ImGui_Separator(ctx)
 
+  -- A FACTORY strip has no editable map (the catalog refuses one that collides
+  -- with a built-in), so every editing item below is a no-op on it. Grey them
+  -- out rather than let the menu promise something that cannot happen -- Frank
+  -- 2026-08-09: "ich kann bei factory map unbind machen. sollte nicht gehen".
+  local factory = u1 and u1.factory or false
+  if factory then
+    reaper.ImGui_BeginDisabled(ctx)
+    reaper.ImGui_MenuItem(ctx, "Factory map \xE2\x80\x94 not editable")
+    reaper.ImGui_EndDisabled(ctx)
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_BeginDisabled(ctx)
+  end
+
   if reaper.ImGui_MenuItem(ctx, "Learn\xE2\x80\xA6") then
     sendCmd("uf1learn;" .. arg)
   end
@@ -3450,6 +3463,7 @@ local function drawUf1ControlContextMenu()
       sendCmd("uf1unbind;" .. arg)
     end
   end
+  if factory then reaper.ImGui_EndDisabled(ctx) end
   reaper.ImGui_EndPopup(ctx)
   reaper.ImGui_PopStyleVar(ctx, 3)
 end

@@ -1782,10 +1782,16 @@ bool enableUf1Layer(std::string_view match)
     auto cat = get();                       // copy
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
-        if (m.uf1Mode && uf1MapHasContent(m.uf1)) return false;
+        // Seed ONLY when the layer was off. An empty layer that is already on
+        // is a deliberate clear ("show nothing on the UF1"), and re-seeding it
+        // from the UC1 slots would resurrect every parameter the user just
+        // unbound as soon as they learned one control (Frank 2026-08-09).
+        if (m.uf1Mode) return false;
         seedUf1FromSlots(m);
         m.uf1Mode = true;
-        setAll(std::move(cat));
+        // upsert, not setAll: this is reachable from an editor frame (the UF1
+        // fills call it), and setAll replaces the whole catalog mid-draw.
+        upsert(m);
         save();
         return true;
     }
