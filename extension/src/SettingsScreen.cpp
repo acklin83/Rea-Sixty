@@ -18799,6 +18799,26 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         it->second += " (+)";
                 }
             };
+            // In the UF1 view the list must describe the UF1, not the UC1: it
+            // showed (and DISABLED) every param bound on the UC1 while the user
+            // was mapping the UF1, which both named the wrong device and blocked
+            // params that are free on this surface. The HUD's UF1 list already
+            // marks only UF1 bindings — match it (Frank 2026-08-09).
+            if (s_mockup == 2) {
+                auto noteUf1_ = [&](const std::vector<uf8::UserUf1Slot>& v,
+                                    const char* what) {
+                    for (const auto& sl : v) {
+                        if (sl.vst3Param < 0 || sl.pos < 0) continue;
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "UF1 %s p%d.%d", what,
+                                 sl.pos / uf8::kUserUf1PerPage + 1,
+                                 sl.pos % uf8::kUserUf1PerPage + 1);
+                        noteUse_(sl.vst3Param, buf);
+                    }
+                };
+                noteUf1_(editing->uf1.vpots,    "V-Pot");
+                noteUf1_(editing->uf1.softKeys, "Soft-key");
+            } else {
             // Slot list is empty for UF8-only maps (no schematic).
             if (topo) {
                 for (const auto& slt : editing->slots) {
@@ -18851,6 +18871,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                                                   : ("EXT: " + e.name);
                 noteUse_(e.vst3Param, std::move(lbl));
             }
+            }   // end of the non-UF1 (UC1 / UF8) reverse-map
 
             const int paramCount = paramCountFor_(*editing, fx);
             // Cap iteration so a 5000-param plugin doesn't tank the
