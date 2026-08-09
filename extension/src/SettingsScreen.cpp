@@ -16154,7 +16154,8 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/false);
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
-            "Same, but KEEPS what the UF1 already has and adds to the end.");
+            "Same, but adds to the end instead of clearing first — so the UC1\n"
+            "mapping the UF1 starts from is kept, and the rest lands after it.");
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Fill from UC1##uf1_fill_uc1", nullptr, nullptr))
         fillUf1FromUc1_(g_editingMatch);

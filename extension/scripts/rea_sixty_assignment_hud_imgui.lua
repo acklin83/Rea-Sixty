@@ -1594,7 +1594,12 @@ local function renderUf1Tab(u1)
     uf1View.hw   = u1.page
     uf1View.page = u1.page
   end
-  if uf1View.page >= u1.pages then uf1View.page = u1.pages - 1 end
+  -- One SPARE page beyond the last mapped one, exactly like the FX-Learn
+  -- schematic: it is the only way to start a new page, and without it the HUD
+  -- could edit the pages the hardware already had but never add one (Frank
+  -- 2026-08-09). A factory strip has fixed pages — no spare there.
+  local shownPages = u1.pages + ((u1.factory or not u1.mapped) and 0 or 1)
+  if uf1View.page >= shownPages then uf1View.page = shownPages - 1 end
   if uf1View.page < 0 then uf1View.page = 0 end
 
   -- WHICH plug-in this grid is. The Name field above belongs to the shared edit
@@ -1623,8 +1628,8 @@ local function renderUf1Tab(u1)
 
   -- Page selector.
   local x = 14
-  for p = 0, u1.pages - 1 do
-    local lbl  = "Page " .. (p + 1)
+  for p = 0, shownPages - 1 do
+    local lbl  = (p >= u1.pages) and "+" or ("Page " .. (p + 1))
     local w, h = measure(lbl, px); w = w + 20
     local on   = (p == uf1View.page)
     rect(x, y, w, h + 8, col(on and 0x4A90D8 or 0x242429, on and 0.35 or 1))
@@ -3192,6 +3197,36 @@ local function drawUf1ControlContextMenu()
   if reaper.ImGui_MenuItem(ctx, "Learn\xE2\x80\xA6") then
     sendCmd("uf1learn;" .. arg)
   end
+  -- Whole-layer actions. "The rest" = every parameter the UC1 does NOT carry,
+  -- which is what makes the UF1 an EXTENSION of the UC1 instead of a second
+  -- copy of it. The same four sit in FX-Learn; both drive one implementation.
+  reaper.ImGui_Separator(ctx)
+  if reaper.ImGui_BeginMenu(ctx, "Fill") then
+    if reaper.ImGui_MenuItem(ctx, "Replace \xE2\x80\x94 only what the UC1 lacks") then
+      sendCmd("uf1fill;1")
+    end
+    if reaper.ImGui_MenuItem(ctx, "Append \xE2\x80\x94 add to the end") then
+      sendCmd("uf1fill;0")
+    end
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "From UC1 \xE2\x80\x94 mirror its mapping") then
+      sendCmd("uf1fill;2")
+    end
+    reaper.ImGui_EndMenu(ctx)
+  end
+  if reaper.ImGui_MenuItem(ctx, "Unbind all") then
+    sendCmd("uf1fill;3")
+  end
+  -- Our EQ curve for a LEARNED CS: its EQ params are read from the UC1 slots
+  -- the user mapped, since a learned plug-in doesn't call them "HF Gain".
+  do
+    local u1e = readUf1()
+    local on  = u1e and u1e.eqGraph or false
+    if reaper.ImGui_MenuItem(ctx, "Show EQ Graph on the UF1", nil, on) then
+      sendCmd("uf1eqgraph;" .. (on and "0" or "1"))
+    end
+  end
+
   if cell then
     if reaper.ImGui_MenuItem(ctx, "Invert", nil, cell.inv) then
       sendCmd("uf1invert;" .. arg)
@@ -3374,36 +3409,6 @@ local function drawUf1ControlContextMenu()
           sendCmd(string.format("uf1ledcol;%d;000000", ctxUf1Pos))
         end
         reaper.ImGui_EndMenu(ctx)
-      end
-    end
-
-    -- Whole-layer actions. "The rest" = every parameter the UC1 does NOT carry,
-    -- which is what makes the UF1 an EXTENSION of the UC1 instead of a second
-    -- copy of it. The same four sit in FX-Learn; both drive one implementation.
-    reaper.ImGui_Separator(ctx)
-    if reaper.ImGui_BeginMenu(ctx, "Fill") then
-      if reaper.ImGui_MenuItem(ctx, "Replace \xE2\x80\x94 only what the UC1 lacks") then
-        sendCmd("uf1fill;1")
-      end
-      if reaper.ImGui_MenuItem(ctx, "Append \xE2\x80\x94 add to the end") then
-        sendCmd("uf1fill;0")
-      end
-      reaper.ImGui_Separator(ctx)
-      if reaper.ImGui_MenuItem(ctx, "From UC1 \xE2\x80\x94 mirror its mapping") then
-        sendCmd("uf1fill;2")
-      end
-      reaper.ImGui_EndMenu(ctx)
-    end
-    if reaper.ImGui_MenuItem(ctx, "Unbind all") then
-      sendCmd("uf1fill;3")
-    end
-    -- Our EQ curve for a LEARNED CS: its EQ params are read from the UC1 slots
-    -- the user mapped, since a learned plug-in doesn't call them "HF Gain".
-    do
-      local u1e = readUf1()
-      local on  = u1e and u1e.eqGraph or false
-      if reaper.ImGui_MenuItem(ctx, "Show EQ Graph on the UF1", nil, on) then
-        sendCmd("uf1eqgraph;" .. (on and "0" or "1"))
       end
     end
 
