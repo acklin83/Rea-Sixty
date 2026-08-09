@@ -15391,13 +15391,22 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     if (slot && !slot->customLabel.empty()) {
         snprintf(shown, sizeof(shown), "%s", slot->customLabel.c_str());
     } else if (isMapped) {
-        const UserPluginMap* editing = nullptr;
-        for (const auto& m : uf8::user_plugins::get().maps)
-            if (m.match == g_editingMatch) { editing = &m; break; }
-        char pn[64] = {};
-        if (!editing || !paramNameFor_(*editing, fx, mapped, pn, sizeof(pn)))
-            snprintf(pn, sizeof(pn), "param %d", mapped);
-        snprintf(shown, sizeof(shown), "%s", pn);
+        // Same order the devices and the HUD use: slot override → the shared
+        // per-parameter name → the plug-in's own. Without the middle step the
+        // editor showed "Out Gain" where the HUD and the UF1 showed "Out"
+        // (Frank 2026-08-09).
+        const std::string shared = sharedParamLabel_(g_editingMatch, mapped);
+        if (!shared.empty()) {
+            snprintf(shown, sizeof(shown), "%s", shared.c_str());
+        } else {
+            const UserPluginMap* editing = nullptr;
+            for (const auto& m : uf8::user_plugins::get().maps)
+                if (m.match == g_editingMatch) { editing = &m; break; }
+            char pn[64] = {};
+            if (!editing || !paramNameFor_(*editing, fx, mapped, pn, sizeof(pn)))
+                snprintf(pn, sizeof(pn), "param %d", mapped);
+            snprintf(shown, sizeof(shown), "%s", pn);
+        }
     } else {
         snprintf(shown, sizeof(shown), "—");
     }
