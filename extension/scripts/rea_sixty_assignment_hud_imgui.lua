@@ -10,6 +10,14 @@
 --   pure `gfx`. Wins: hi-res/DPI-aware text, freely movable + multi-monitor,
 --   ReaImGui's built-in title-bar docking, hover tooltips for free.
 --
+--   ⚠ THIS FILE IS AT LUA'S 200-LOCAL CEILING FOR THE MAIN CHUNK. A new
+--   top-level `local` (including `local function`) makes the whole script fail
+--   to load with "too many local variables ... in main function" — and the
+--   reported line is wherever the 201st landed, not the one you added. Put new
+--   file-scope state as a FIELD on an existing table (see uf1View). Check with
+--   `luac -p extension/scripts/rea_sixty_assignment_hud_imgui.lua` before
+--   deploying; it reproduces the failure exactly.
+--
 --   Data layer is ported VERBATIM from the gfx HUD and reads the exact same
 --   ExtState the extension publishes:
 --     • hud_geom_uc1 / hud_state / hud_assign / hud_learn / hud_hint
@@ -1546,8 +1554,9 @@ local UF8_ACCENT = 0x4A90D8
 -- cell to arm a learn on the hardware position; right-click for unbind/invert.
 local uf1Rects     = {}
 local uf1PageRects = {}
-local uf1EditPage  = 0
-local uf1HwPage    = -1     -- last hardware page we followed
+-- One table, not two locals: the main chunk is at Lua's 200-local ceiling, so
+-- every new top-level `local` here costs a slot that isn't there.
+local uf1View      = { page = 0, hw = -1 }   -- shown page, last hardware page
 local function renderUf1Tab(u1)
   uf1Rects, uf1PageRects = {}, {}
   local px = 12
@@ -1562,12 +1571,12 @@ local function renderUf1Tab(u1)
   end
   -- Follow the hardware page (Frank 2026-08-09). Only when it CHANGES, so
   -- clicking a page here still browses freely until the UF1 pages itself.
-  if u1.page ~= uf1HwPage then
-    uf1HwPage   = u1.page
-    uf1EditPage = u1.page
+  if u1.page ~= uf1View.hw then
+    uf1View.hw   = u1.page
+    uf1View.page = u1.page
   end
-  if uf1EditPage >= u1.pages then uf1EditPage = u1.pages - 1 end
-  if uf1EditPage < 0 then uf1EditPage = 0 end
+  if uf1View.page >= u1.pages then uf1View.page = u1.pages - 1 end
+  if uf1View.page < 0 then uf1View.page = 0 end
 
   -- WHICH plug-in this grid is. The Name field above belongs to the shared edit
   -- row (the CS/BC plug-in), and the UF1 can be focused on a different track —
@@ -1586,7 +1595,7 @@ local function renderUf1Tab(u1)
   for p = 0, u1.pages - 1 do
     local lbl  = "Page " .. (p + 1)
     local w, h = measure(lbl, px); w = w + 20
-    local on   = (p == uf1EditPage)
+    local on   = (p == uf1View.page)
     rect(x, y, w, h + 8, col(on and 0x4A90D8 or 0x242429, on and 0.35 or 1))
     if on then rect(x, y, w, 3, col(0x4A90D8, 1)) end
     dtext(x + 10, y + 4, col(on and 0xE8E8EE or 0x9A9AA2, 1), lbl, px)
@@ -1603,7 +1612,7 @@ local function renderUf1Tab(u1)
     dtext(14, y, col(0x9A9AA2, 1), row.name, px - 1)
     y = y + 18
     for i = 0, 3 do
-      local pos  = uf1EditPage * 4 + i
+      local pos  = uf1View.page * 4 + i
       local cell = u1.cells[row.sk][pos]
       local cx   = 14 + i * (CW + GAP)
       local isArmed = (armed >= 0) and (armed & 0xFF) == pos
@@ -3828,7 +3837,7 @@ local function loop()
           if handleTabClick(lx, ly) then
           else
             local p = uf1PageAt(lx, ly)
-            if p then uf1EditPage = p
+            if p then uf1View.page = p
             else
               local sk, pos = uf1CellAt(lx, ly)
               local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
