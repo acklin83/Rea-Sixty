@@ -30464,6 +30464,11 @@ void onTimer()
         // along because the strip toggle turns it OFF by mutex — exactly the
         // simultaneous-flip case the joined label exists for.
         static bool          mbUf8Strip = false, mbUf8Plugin = false;
+        // Touch-to-Learn is a MODE like any other here — it changes what every
+        // control does — so it flashes the banner too (Frank 2026-08-09). It is
+        // also the one mode with no dedicated LED anywhere, which makes the
+        // on-screen announcement the only sign that it is armed.
+        static bool          mbTouch = false;
         static int           mbExtSide = 1;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
@@ -30503,13 +30508,14 @@ void onTimer()
         const bool eph  = g_uf1EnvJogPlayhead.load();
         const bool u8s  = g_pluginFaderMode.load();
         const bool u8p  = g_uf8PluginMode.load();
+        const bool tch  = g_hudTouchLearn.load();
         if (!mbInit) {
             mbInit = true;
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
             mbJog = jm; mbEnvPh = eph;
-            mbUf8Strip = u8s; mbUf8Plugin = u8p;
+            mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
             // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
@@ -30552,6 +30558,7 @@ void onTimer()
             // UF8/UC1: SSL Strip Mode + the UF8 Plugin Mode it is mutex'd with.
             if (u8s != mbUf8Strip)  { chg.push_back(std::string("UF8 Strip \xE2\x80\xA2 ") + onOff(u8s)); mbUf8Strip = u8s; }
             if (u8p != mbUf8Plugin) { chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p)); mbUf8Plugin = u8p; }
+            if (tch != mbTouch) { chg.push_back(std::string("Touch to Learn \xE2\x80\xA2 ") + onOff(tch)); mbTouch = tch; }
             if (!chg.empty()) {
                 std::string joined = chg[0];
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
