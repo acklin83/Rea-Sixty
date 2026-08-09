@@ -30256,6 +30256,13 @@ void onTimer()
         static bool          mbSticky = false, mbStickyArm = false, mbFocusPin = false;
         static int           mbFocusScope = 0;
         static bool          mbFlip = false, mbMaster = false, mbStrip = false, mbExt = false;
+        // UF8/UC1 side of the SAME feature. SSL Strip Mode is per-device: the UF8
+        // toggle flips g_pluginFaderMode, the UF1's PLUG-IN key flips the UF1-local
+        // g_uf1StripMode. Only the UF1 half was tracked here, so toggling Strip
+        // Mode on the UF8 flashed nothing (Frank 2026-08-09). UF8 Plugin Mode rides
+        // along because the strip toggle turns it OFF by mutex — exactly the
+        // simultaneous-flip case the joined label exists for.
+        static bool          mbUf8Strip = false, mbUf8Plugin = false;
         static int           mbExtSide = 1;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
@@ -30293,12 +30300,15 @@ void onTimer()
         const int  ufes = g_uf1ExtenderSide.load();
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
         const bool eph  = g_uf1EnvJogPlayhead.load();
+        const bool u8s  = g_pluginFaderMode.load();
+        const bool u8p  = g_uf8PluginMode.load();
         if (!mbInit) {
             mbInit = true;
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
             mbJog = jm; mbEnvPh = eph;
+            mbUf8Strip = u8s; mbUf8Plugin = u8p;
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
             // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
@@ -30326,7 +30336,9 @@ void onTimer()
             // UF1 hardware modes: FLIP / MASTER / Strip Mode / Extender (+ side).
             if (ufl != mbFlip)   { chg.push_back(std::string("FLIP \xE2\x80\xA2 ") + onOff(ufl)); mbFlip = ufl; }
             if (ufm != mbMaster) { chg.push_back(std::string("MASTER \xE2\x80\xA2 ") + onOff(ufm)); mbMaster = ufm; }
-            if (ufs != mbStrip)  { chg.push_back(std::string("Strip Mode \xE2\x80\xA2 ") + onOff(ufs)); mbStrip = ufs; }
+            // Strip Mode is per-device, so both halves name their device — "Strip
+            // Mode • On" alone couldn't say which surface just changed.
+            if (ufs != mbStrip)  { chg.push_back(std::string("UF1 Strip \xE2\x80\xA2 ") + onOff(ufs)); mbStrip = ufs; }
             if (ufe != mbExt)    { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe)); mbExt = ufe; }
             else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
             mbExtSide = ufes;   // always sync (even when the on/off change took priority)
@@ -30336,6 +30348,9 @@ void onTimer()
             // Envelope mode's jog target (nav-centre): points ⇄ playhead.
             if (eph != mbEnvPh) { chg.push_back(std::string("Envelope \xE2\x80\xA2 ")
                                       + (eph ? "Playhead" : "Points")); mbEnvPh = eph; }
+            // UF8/UC1: SSL Strip Mode + the UF8 Plugin Mode it is mutex'd with.
+            if (u8s != mbUf8Strip)  { chg.push_back(std::string("UF8 Strip \xE2\x80\xA2 ") + onOff(u8s)); mbUf8Strip = u8s; }
+            if (u8p != mbUf8Plugin) { chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p)); mbUf8Plugin = u8p; }
             if (!chg.empty()) {
                 std::string joined = chg[0];
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
