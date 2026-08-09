@@ -21797,18 +21797,48 @@ static bool uf1TouchLearnArmAt_(bool softKeys, int idx)
 // table is only the fallback for positions no PluginMap describes. The lookup
 // is by vst3Param, the same way uf1CsDefaultNorm_ already finds its slot.
 // Main-thread only (REAPER API).
+// The canonical name of a link slot in a domain — the exact string the UC1 and
+// the UF8 print for that control ("HF Gain", "Comp Thr"). Prefers the 360 Link
+// map for its broad slot coverage, like the FX-Learn editor's topology pick.
+static const char* canonicalLinkName_(uf8::Domain d, int linkIdx)
+{
+    const uf8::PluginMap* pick = nullptr;
+    for (const uf8::PluginMap& m : uf8::allPluginMaps()) {
+        if (m.domain != d) continue;
+        if (!pick) pick = &m;
+        if (m.displayShort && std::string_view(m.displayShort) == "Link") {
+            pick = &m;
+            break;
+        }
+    }
+    if (!pick) return nullptr;
+    const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*pick, linkIdx);
+    return (sl && sl->name && *sl->name) ? sl->name : nullptr;
+}
+
 static std::string uf1CanonicalParamName_(MediaTrack* tr, int fx, int p)
 {
     if (!tr || fx < 0 || p < 0) return {};
     char nm[256] = {0};
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return {};
-    // ⚠ BUILT-IN STRIPS ONLY. lookupPluginMapByName also matches a LEARNED
-    // plug-in against a built-in map by substring — the "bx_4K G → 4K E" trap
-    // the type resolver warns about. Frank 2026-08-09: bx_console 4K showed
-    // "Out Gain" in FX-Learn but "FdrLvl" on the display, because the SSL map's
-    // LinkSlot for that vst3Param carries the SSL name. A learned plug-in owns
-    // its parameter names; the canonical table has no say over it.
-    if (uf8::user_plugins::lookupOwnedByName(nm)) return {};
+    // LEARNED plug-in: the UC1 and the UF8 print the SLOT's name — "HF Gain" is
+    // engraved on the UC1, so whatever you map there shows up under that name.
+    // The UF1 has no engraved slots, so it used to fall through to the plug-in's
+    // own param name ("EQ High Gain" → abbreviated "EQHghGn") while the other
+    // two said "HF Gain". Bridge it: find the UC1 slot this param sits on and
+    // take THAT slot's canonical name — the identical string the others print.
+    // Not on any UC1 slot → nothing canonical exists, use the plug-in's name.
+    // (Resolved through the plug-in's OWN map, never by substring against a
+    // built-in one — that was the "bx_4K G → 4K E" / "FdrLvl" mistake.)
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm)) {
+        for (const auto& s : um->slots) {
+            if (s.vst3Param != p) continue;
+            if (const char* cn = canonicalLinkName_(um->domain, s.linkIdx))
+                return cn;
+            break;
+        }
+        return {};
+    }
     const uf8::PluginMap* m = uf8::lookupPluginMapByName(nm);
     if (!m) return {};
     for (const uf8::LinkSlot& sl : m->slots)
