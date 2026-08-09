@@ -3261,7 +3261,9 @@ local function drawUf1ControlContextMenu()
     -- Rename writes an inline field rather than a native dialog, matching the
     -- Settings side (native dialogs are unreliable on macOS 15).
     reaper.ImGui_Separator(ctx)
-    reaper.ImGui_Text(ctx, "Display name")
+    -- 9 characters before the UF1's yellow value zone starts (V-Pots).
+    reaper.ImGui_Text(ctx, (ctxUf1Sk == 0) and "Display name (9 chars)"
+                                            or "Display name")
     if uf1NameBuf == nil or uf1NameFor ~= arg then
       uf1NameFor = arg
       uf1NameBuf = cell.label or ""

@@ -1370,6 +1370,15 @@ int64_t nowMs_();
 // formatters live further down with the other strip caches.
 std::string formatPanReadout(double pan);
 std::string composeValueLine(std::string_view label, std::string_view value);
+// ⚠ The UF1 paints a value line in TWO FIXED ZONES, not as one 19-char string:
+// characters 0-8 are the LABEL (white), 9-18 the VALUE (yellow). composeValueLine
+// only trims the label when label+value+1 exceeds the full 19, which is true of
+// the BUFFER but not of what the hardware draws — so a label longer than 9 spills
+// into the value zone and turns yellow. Frank 2026-08-09: "LPF Frequency 22.0k"
+// rendered as "LPF Frequ" + a yellow "ency 22.0k". Every UF1 line with a VARIABLE
+// label must go through uf1ValueLine, never composeValueLine directly.
+constexpr size_t kUf1LabelChars = 9;
+std::string uf1ValueLine(std::string_view label, std::string_view value);
 std::string formatDbReadout(double linearAmp);
 constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
@@ -22587,7 +22596,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         char nm[64] = {0}, val[64] = {0};
         TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
         TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
-        panLine = composeValueLine(std::string("*") + nm, val);   // '*' = pinned marker
+        // Same 9-char label zone as the V-Pot readout — a pinned param's own
+        // name is regularly longer than that.
+        panLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
         const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
         barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
     } else {
@@ -23255,7 +23266,9 @@ void uf1PaintChannel_()
         static std::array<std::string, 4> sVpot{};
         auto sendVpotParam = [&](uint8_t idx, const std::string& label,
                                  const std::string& value) {
-            const std::string line = composeValueLine(label, value);  // 19 chars
+            // 9-char label zone + 10-char value zone (uf1ValueLine) — a longer
+            // param name would otherwise bleed into the yellow value field.
+            const std::string line = uf1ValueLine(label, value);
             if (!changed && line == sVpot[idx]) return;
             sVpot[idx] = line;
             std::vector<uint8_t> p;
@@ -24410,6 +24423,16 @@ std::string formatPanReadout(double pan)
 // Compose the Value Line (19 chars) — e.g. "Vol        -6.0dB".
 // Left-justified label, right-justified value. Truncates both if needed
 // so the total fits within 19 chars.
+// Cap the label at the UF1's 9-character label zone, then lay the line out as
+// usual. A value longer than the 10-char value zone still steals from the label
+// (composeValueLine's own rule) — showing the whole value matters more than the
+// name, which the user can shorten with a display label.
+std::string uf1ValueLine(std::string_view label, std::string_view value)
+{
+    if (label.size() > kUf1LabelChars) label = label.substr(0, kUf1LabelChars);
+    return composeValueLine(label, value);
+}
+
 std::string composeValueLine(std::string_view label, std::string_view value)
 {
     constexpr size_t kWidth = 19;

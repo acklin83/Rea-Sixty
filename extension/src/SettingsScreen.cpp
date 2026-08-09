@@ -15569,7 +15569,10 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         // ([[swell-dialogs-macos-broken]]). Seeded once per cell, like the UC1
         // label field's g_fxlLabelBuf.
         ImGui_Separator(ctx);
-        ImGui_TextDisabled(ctx, "Display name");
+        // The UF1 shows 9 characters of label before the yellow value zone
+        // starts, so name the limit instead of letting the user discover it on
+        // the hardware (Frank 2026-08-09).
+        ImGui_TextDisabled(ctx, softKeys ? "Display name" : "Display name (9 chars)");
         static char s_uf1LabelBuf[64] = {};
         static int  s_uf1LabelPos = -1;
         static bool s_uf1LabelSk  = false;
