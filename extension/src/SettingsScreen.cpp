@@ -11467,10 +11467,15 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     if (const auto par = shortName.rfind(" ("); par != std::string::npos)
         shortName.erase(par);                      // drop the vendor tail
     for (char& c : shortName) if (c == ';' || c == '\n') c = ' ';
+    // Domain rides along so the tab can offer the right favourite bank — the
+    // UF1 shows a Channel Strip or a Bus Comp, and the favourite is the SAME
+    // shared base bank the UC1 uses, never a UF1-local one (Frank 2026-08-09
+    // "geteilt mit UC1 — immer gleich!").
+    const int isBc = (um && um->domain == Domain::BusComp) ? 1 : 0;
     char hdr[600];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%s",
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%s",
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
-                  haveMap ? 1 : 0, shortName.c_str());
+                  haveMap ? 1 : 0, isBc, shortName.c_str());
     out = hdr;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {

@@ -346,13 +346,15 @@ local function readUf1()
               cells = { [0] = {}, [1] = {} } }
   for ln in raw:gmatch("[^\n]+") do
     if ln:sub(1, 2) == "P;" then
-      -- "P;<pages>;<page>;<hasMap>;<plug-in name>" — the name rides last
+      -- "P;<pages>;<page>;<hasMap>;<isBc>;<plug-in name>" — the name rides last
       -- because it may contain ';'. The two-field form is the pre-v14 header.
-      local pg, cur, mapped, nm = ln:match("^P;(%d+);(%d+);(%d);(.*)$")
+      local pg, cur, mapped, bc, nm =
+        ln:match("^P;(%d+);(%d+);(%d);(%d);(.*)$")
       if not pg then pg, cur = ln:match("^P;(%d+);(%d+)$") end
       u.pages  = tonumber(pg) or 1
       u.page   = tonumber(cur) or 0
       u.mapped = (mapped ~= "0")
+      u.isBc   = (bc == "1")
       u.name   = nm or ""
     else
       -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
@@ -1545,6 +1547,7 @@ local UF8_ACCENT = 0x4A90D8
 local uf1Rects     = {}
 local uf1PageRects = {}
 local uf1EditPage  = 0
+local uf1HwPage    = -1     -- last hardware page we followed
 local function renderUf1Tab(u1)
   uf1Rects, uf1PageRects = {}, {}
   local px = 12
@@ -1556,6 +1559,12 @@ local function renderUf1Tab(u1)
     dtext(14, y, col(0x9A9AA2, 1),
           "This plug-in has no UF1 layer — turn it on in Settings \xE2\x86\x92 FX Learn.", px)
     return
+  end
+  -- Follow the hardware page (Frank 2026-08-09). Only when it CHANGES, so
+  -- clicking a page here still browses freely until the UF1 pages itself.
+  if u1.page ~= uf1HwPage then
+    uf1HwPage   = u1.page
+    uf1EditPage = u1.page
   end
   if uf1EditPage >= u1.pages then uf1EditPage = u1.pages - 1 end
   if uf1EditPage < 0 then uf1EditPage = 0 end
@@ -1614,9 +1623,15 @@ local function renderUf1Tab(u1)
       if cell and row.sk == 1 and (cell.ledRgb or 0) ~= 0 and not isArmed then
         labCol = cell.ledRgb
       end
-      dtext(cx + 8, y + 8, col(labCol, 1), label, px)
+      -- Centred like the FX-Learn cells (which are ImGui buttons, and those
+      -- centre their text) — Frank 2026-08-09. Clipped to the cell first so a
+      -- long name can't centre itself out past the edges.
+      local shown  = fit(label, CW - 16, px)
+      local lw, lh = measure(shown, px)
+      dtext(cx + (CW - lw) / 2, y + (CH - lh) / 2 - 4, col(labCol, 1), shown, px)
       if cell and cell.inv then
-        dtext(cx + 8, y + 26, col(0xD8A050, 1), "inverted", px - 2)
+        local iw = measure("inverted", px - 2)
+        dtext(cx + (CW - iw) / 2, y + CH - 15, col(0xD8A050, 1), "inverted", px - 2)
       end
       -- Per-key LED colour (soft-keys, v12): a stripe down the right edge so
       -- the tab shows what the hardware key will light up as.
@@ -2019,8 +2034,16 @@ local function drawHudEditRow()
   -- Favourite dropdown — CS tab shows the CS-Fav list, BC tab the BC-Fav list
   -- (Phase 4b; BC mirrors the CS row Frank knew from 2026-06-24).
   local rightX = nbx + nbW + 22
-  if activeTab == "cs" or activeTab == "bc" then
-    local isCs = (activeTab == "cs")
+  -- The UF1 tab carries the SAME favourite bank — it is the shared CS/BC base
+  -- the UC1 uses, not a UF1-local one (Frank 2026-08-09 "geteilt mit UC1 —
+  -- immer gleich!"). Which of the two depends on what the UF1 is showing.
+  local uf1FavIsCs = nil
+  if activeTab == "uf1" then
+    local u1 = readUf1()
+    if u1 then uf1FavIsCs = not u1.isBc end
+  end
+  if activeTab == "cs" or activeTab == "bc" or uf1FavIsCs ~= nil then
+    local isCs = (uf1FavIsCs ~= nil) and uf1FavIsCs or (activeTab == "cs")
     -- NB: `isCs and readCsFav() or readBcFav()` would collapse the returns to
     -- the first — call explicitly so has/slots/src survive.
     local cur, has, slots, src
