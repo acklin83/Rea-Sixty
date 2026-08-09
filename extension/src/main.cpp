@@ -23380,19 +23380,40 @@ void uf1PaintChannel_()
             const int page = std::clamp(g_uf1CsPage.load(), 0,
                                         uf1CsPageCountFor_(csType, csTr, csFx) - 1);
             const Uf1CsPage& pg = kUf1CsVPots[csType][page];
+            // ⚠ The EXPLICIT UF1 map wins here too. This painter resolves its own
+            // labels/params, which makes it the FOURTH V-Pot resolver next to
+            // uf1CsVpotParam_, applyUf1ChannelVpot_ and applyUf1ChannelVpotPush_ —
+            // and the only one that was never taught about the explicit map. On a
+            // plug-in learned as CS/BC it painted the SEQUENTIAL FALLBACK while the
+            // pots drove the explicit map, so a fresh FX-Learn assignment never
+            // appeared on the UF1 at all (Frank 2026-08-09: "neue Zuweisungen
+            // erscheinen nicht auf dem UF1"). Layer-free, like every explicit path.
+            const uf8::UserUf1Map* xmap = uf1ExplicitMapAt_(csTr, csFx);
             // A learned plug-in fills the V-Pots sequentially (uf1CsVpotParam_),
             // so its label + bipolar flag must come from the user's slot, NOT the
             // canonical CS2/BC2 table (which would mislabel a packed param). Build
             // the ordered V-Pot stream once and index it by flat position.
             char lnm[256];
-            const bool learned = uf1IsLearnedCsBc_(csTr, csFx, lnm, sizeof(lnm));
+            const bool learned = !xmap
+                              && uf1IsLearnedCsBc_(csTr, csFx, lnm, sizeof(lnm));
             std::vector<const uf8::UserLinkSlot*> lslots;
             if (learned)
                 uf1LearnedStreamSlots_(lnm, /*busComp*/csType == 4,
                                        /*wantButton*/false, lslots);
             for (int i = 0; i < 4; ++i) {
                 int p; std::string label; bool bipolar;
-                if (learned) {
+                if (xmap) {
+                    const uf8::UserUf1Slot* s = uf8::uf1SlotAt(
+                        xmap->vpots, page * uf8::kUserUf1PerPage + i);
+                    p = s ? s->vst3Param : -1;
+                    bipolar = s && s->polarity == uf8::VPotPolarity::Bipolar;
+                    if (s && p >= 0) {
+                        if (!s->customLabel.empty()) label = s->customLabel;
+                        else { char pn[64] = {0};
+                               TrackFX_GetParamName(csTr, csFx, p, pn, sizeof(pn));
+                               label = pn; }
+                    }
+                } else if (learned) {
                     const int flat = page * 4 + i;
                     const uf8::UserLinkSlot* sl =
                         (flat < static_cast<int>(lslots.size())) ? lslots[flat] : nullptr;
@@ -23590,8 +23611,13 @@ void uf1PaintChannel_()
         // slots (uf1CsSoftKeyParam_), so its labels + on-state come from the user's
         // slots, not the canonical kUf1CsSoftKeys table. Build the ordered stream
         // once and index it by flat position.
+        // Explicit UF1 map first — same rule (and same missing branch) as the
+        // V-Pot painter above.
+        const uf8::UserUf1Map* skXmap = (skType >= 0)
+            ? uf1ExplicitMapAt_(skTr, skFx) : nullptr;
         char snm[256];
-        const bool skLearned = skType >= 0 && uf1IsLearnedCsBc_(skTr, skFx, snm, sizeof(snm));
+        const bool skLearned = !skXmap && skType >= 0
+                            && uf1IsLearnedCsBc_(skTr, skFx, snm, sizeof(snm));
         std::vector<const uf8::UserLinkSlot*> skSlots;
         if (skLearned)
             uf1LearnedStreamSlots_(snm, /*busComp*/skType == 4, /*wantButton*/true, skSlots);
@@ -23710,6 +23736,18 @@ void uf1PaintChannel_()
                                    == uf8::bindings::Brightness::Bright;
                     keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
                               | static_cast<uint32_t>(c[2]);
+                }
+            } else if (skXmap) {
+                // Explicit UF1 map: the soft-key owns its label + on-state.
+                const uf8::UserUf1Slot* s = uf8::uf1SlotAt(
+                    skXmap->softKeys, skPage * uf8::kUserUf1PerPage + i);
+                haveLabel = true;          // blank when the position is empty
+                if (s && s->vst3Param >= 0) {
+                    if (!s->customLabel.empty()) label = s->customLabel;
+                    else { char pn[64] = {0};
+                           TrackFX_GetParamName(skTr, skFx, s->vst3Param, pn, sizeof(pn));
+                           label = pn; }
+                    on = TrackFX_GetParamNormalized(skTr, skFx, s->vst3Param) > 0.5;
                 }
             } else if (skLearned) {
                 // Learned: pack the button-mapped params; blank keys past the end.
