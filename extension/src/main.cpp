@@ -33837,6 +33837,30 @@ void reasixty_setUf1CsPage(int page)
     if (pages > 0 && page >= pages) page = pages - 1;
     if (g_uf1CsPage.exchange(page) != page) g_pageDirty.store(true);
 }
+// The param the UF1 would ACTUALLY drive at (softKeys, page, idx) for the
+// plug-in at (tr, fx) — explicit UF1 map, else the learned CS/BC sequential
+// fill, else the built-in p188 table. -1 = nothing there.
+//
+// This is the resolver the hardware runs, exposed so the two EDITORS can show
+// the same thing. Frank 2026-08-09: "Das Plugin hat aber eine Map (UC1) die wir
+// ja eh übernehmen wenn sie da ist. Sollten beim HUD und FX learn bei aktiver FX
+// instanz nicht automatisch die params gemappt sein?" — they should: FX-Learn
+// and the HUD were reading ONLY the explicit UF1 layer, so a plug-in whose UC1
+// map the UF1 happily inherits looked unmapped in both editors while the
+// hardware was driving its parameters. Reusing this one function is also why the
+// editors cannot drift from the device (the four-resolver trap).
+// Main-thread only (REAPER FX API + catalog walk).
+int reasixty_uf1EffectiveParam(void* trV, int fx, bool softKeys, int page, int idx)
+{
+    auto* tr = static_cast<MediaTrack*>(trV);
+    if (!tr || fx < 0 || idx < 0 || idx > 3 || page < 0) return -1;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return -1;
+    const int type = uf1CsPluginType_(tr, fx);
+    if (type < 0) return -1;
+    return softKeys ? uf1CsSoftKeyParam_(tr, fx, type, page, idx)
+                    : uf1CsVpotParam_(tr, fx, type, page, idx);
+}
+
 // The map MATCH of whatever the UF1 is showing right now, or "" when it shows
 // no strip. The editor gates its page sync on this: syncing while the user
 // edits a DIFFERENT plug-in would silently page the hardware away from what it

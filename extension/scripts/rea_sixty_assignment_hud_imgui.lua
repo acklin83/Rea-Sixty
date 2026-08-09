@@ -355,12 +355,21 @@ local function readUf1()
       u.mapped = (mapped ~= "0")
       u.name   = nm or ""
     else
-      local pos, sk, param, inv, rgb, label =
-        ln:match("^(%d+);(%d);(%-?%d+);(%d);(%d+);(.*)$")
+      -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
+      -- marks a position the UF1 drives from the plug-in's own map rather than
+      -- from an explicit UF1 binding. Pre-v14 rows have no such field.
+      local pos, sk, param, inv, rgb, inh, label =
+        ln:match("^(%d+);(%d);(%-?%d+);(%d);(%d+);(%d);(.*)$")
+      if not pos then
+        pos, sk, param, inv, rgb, label =
+          ln:match("^(%d+);(%d);(%-?%d+);(%d);(%d+);(.*)$")
+        inh = "0"
+      end
       if pos then
         u.cells[tonumber(sk)][tonumber(pos)] =
           { param = tonumber(param), inv = (inv == "1"),
-            ledRgb = tonumber(rgb) or 0, label = label or "" }
+            ledRgb = tonumber(rgb) or 0, inherited = (inh == "1"),
+            label = label or "" }
       end
     end
   end
@@ -1590,7 +1599,10 @@ local function renderUf1Tab(u1)
       local cx   = 14 + i * (CW + GAP)
       local isArmed = (armed >= 0) and (armed & 0xFF) == pos
                       and (((armed & 0x100) ~= 0) == (row.sk == 1))
-      local bg = isArmed and 0x8A6A20 or (cell and 0x2E5C3A or 0x242429)
+      -- Muted green for an INHERITED position: live on the hardware, but taken
+      -- from the plug-in's own map rather than bound here.
+      local bg = isArmed and 0x8A6A20
+              or (cell and (cell.inherited and 0x24402E or 0x2E5C3A) or 0x242429)
       rect(cx, y, CW, CH, col(bg, 1))
       local label = isArmed and "\xE2\x97\x8F listening\xE2\x80\xA6"
                  or (cell and (cell.label ~= "" and cell.label

@@ -110,6 +110,11 @@ int  reasixty_uf1SoftBank();
 int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
 void reasixty_setUf1CsPage(int page);
 const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
+// The param the UF1 would actually drive at a position — explicit UF1 map, else
+// the learned CS/BC fill, else the built-in p188 table. -1 = nothing. The
+// editors show INHERITED params through this, so they can't drift from the
+// device the way a second resolver would.
+int  reasixty_uf1EffectiveParam(void* tr, int fx, bool softKeys, int page, int idx);
 void reasixty_setUf1SoftBank(int bank);
 // UF1 channel-encoder mode ring (user-editable order + visibility) — defined in
 // main.cpp at global scope. Rendered in the UF1 channel-encoder binding editor.
@@ -11467,7 +11472,6 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
                   haveMap ? 1 : 0, shortName.c_str());
     out = hdr;
-    if (!haveMap) return;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
             // v14: an action-only soft-key has no param but IS a binding.
@@ -11490,16 +11494,49 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
             }
             // The label rides last so a stray ';' in a param name can't shift
             // the numeric fields — the Lua splits the leading numerics, rest =
-            // label. `ledRgb` (v12) joins them as a number, before the label.
+            // label. `ledRgb` (v12) and the inherited flag join them as numbers.
             char row[320];
-            std::snprintf(row, sizeof(row), "\n%d;%d;%d;%d;%u;%s",
+            std::snprintf(row, sizeof(row), "\n%d;%d;%d;%d;%u;0;%s",
                           s.pos, sk, s.vst3Param, s.inverted ? 1 : 0,
                           s.ledRgb, label.c_str());
             out += row;
         }
     };
-    emit(um->uf1.vpots,    0);
-    emit(um->uf1.softKeys, 1);
+    if (haveMap) {
+        emit(um->uf1.vpots,    0);
+        emit(um->uf1.softKeys, 1);
+    }
+    // INHERITED positions on the shown page: what the UF1 actually drives where
+    // this map binds nothing — the plug-in's learned CS/BC fill, or a built-in
+    // strip's p188 slot. Same resolver the hardware runs
+    // (reasixty_uf1EffectiveParam), so the tab cannot describe a different
+    // layout than the device. Without these the tab drew "—" across a plug-in
+    // whose UC1 map the UF1 was happily using (Frank 2026-08-09).
+    for (int sk = 0; sk <= 1; ++sk) {
+        const auto& v = haveMap ? (sk ? um->uf1.softKeys : um->uf1.vpots)
+                                : std::vector<UserUf1Slot>{};
+        for (int i = 0; i < kUserUf1PerPage; ++i) {
+            const int flat = page * kUserUf1PerPage + i;
+            if (haveMap) {
+                const UserUf1Slot* s = uf1SlotAt(v, flat);
+                if (s && (s->vst3Param >= 0 || s->special)) continue;  // explicit wins
+            }
+            const int p = reasixty_uf1EffectiveParam(tr, fx, sk != 0, page, i);
+            if (p < 0) continue;
+            std::string label = user_plugins::paramLabelFor(name, p);
+            if (label.empty())
+                label = canonicalSlotNameForParam_(um ? um->match : std::string(name), p);
+            if (label.empty()) {
+                char pn[64] = {0};
+                TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+                label = pn;
+            }
+            char row[320];
+            std::snprintf(row, sizeof(row), "\n%d;%d;%d;0;0;1;%s",
+                          flat, sk, p, label.c_str());
+            out += row;
+        }
+    }
 }
 
 // Armed position for the surface highlight: pos | (softKeys << 8); -1 = none.
@@ -15487,8 +15524,17 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                          bool softKeys, int idx)
 {
     const int pos = g_uf1EditingPage * uf8::kUserUf1PerPage + idx;
-    const int mapped = mappedVst3ForUf1_(softKeys, pos);
-    const bool isMapped = (mapped >= 0);
+    const int explicitParam = mappedVst3ForUf1_(softKeys, pos);
+    // INHERITED: what the UF1 actually drives here when this position carries no
+    // explicit binding — the plug-in's learned CS/BC map filled sequentially, or
+    // a built-in strip's p188 slot. The editor used to draw "—" for those while
+    // the hardware was moving the parameter (Frank 2026-08-09).
+    const int inherited = (explicitParam >= 0) ? -1
+        : reasixty_uf1EffectiveParam(fx.tr, fx.fxIdx, softKeys,
+                                     g_uf1EditingPage, idx);
+    const int mapped = (explicitParam >= 0) ? explicitParam : inherited;
+    const bool isMapped = (explicitParam >= 0);
+    const bool isInherited = (explicitParam < 0 && inherited >= 0);
     const bool isListen = g_listeningUf1.matches(softKeys, pos);
 
     // Label: custom name if the user set one, else the plug-in's param name.
@@ -15503,7 +15549,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         // ignored, so showing its name here was a lie (Frank 2026-08-09
         // "mouse-over zeigt immer noch alten parameter").
         snprintf(shown, sizeof(shown), "%s", uf1SpecialLabel_(special));
-    } else if (isMapped) {
+    } else if (mapped >= 0) {
         // Same order the devices and the HUD use: slot override → the shared
         // per-parameter name → the UC1's engraved slot name → the plug-in's own.
         // Without the middle steps the editor showed "Out Gain" where the HUD
@@ -15540,16 +15586,17 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     if (tintText)
         ImGui_PushStyleColor(ctx, ImGui_Col_Text,
                              (slot->ledRgb << 8) | 0xFF);   // 0xRRGGBBAA
-    const bool tinted = isListen || isMapped;
+    const bool tinted = isListen || isMapped || isInherited;
     if (tinted) {
-        // Amber while armed, green when bound — same reading as the UC1/UF8
-        // schematics (listen state wins over mapped state).
+        // Amber while armed, green when bound, a MUTED green when the binding is
+        // inherited rather than authored here — it is live on the hardware, but
+        // a click still replaces it with an explicit one.
         ImGui_PushStyleColor(ctx, ImGui_Col_Button,
-                             isListen ? 0x8A6A20FF : 0x2E5C3AFF);
+                             isListen ? 0x8A6A20FF : isInherited ? 0x24402EFF : 0x2E5C3AFF);
         ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered,
-                             isListen ? 0xA07E28FF : 0x3A7048FF);
+                             isListen ? 0xA07E28FF : isInherited ? 0x2C4E38FF : 0x3A7048FF);
         ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,
-                             isListen ? 0xB89030FF : 0x468658FF);
+                             isListen ? 0xB89030FF : isInherited ? 0x365E44FF : 0x468658FF);
     }
     // Click ARMS the cell (click-and-turn learn), like the UC1/UF8 controls:
     // arm, then touch the parameter in the plug-in GUI or on the hardware.
@@ -15588,6 +15635,11 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                      "  click to re-learn \xC2\xB7 right-click for options",
                      what, idx + 1, g_uf1EditingPage + 1, shown,
                      (slot && slot->inverted) ? "   [inverted]" : "");
+        else if (isInherited)
+            snprintf(tip, sizeof(tip), "%s %d  (page %d)\n  %s\n"
+                     "  inherited from this plug-in's map \xE2\x80\x94 live on the UF1\n"
+                     "  click to bind something else here",
+                     what, idx + 1, g_uf1EditingPage + 1, shown);
         else
             snprintf(tip, sizeof(tip), "%s %d  (page %d)\n"
                      "  unmapped — click to listen, or drag a parameter here",
