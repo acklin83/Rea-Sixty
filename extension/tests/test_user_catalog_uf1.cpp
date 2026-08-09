@@ -158,6 +158,35 @@ int main()
         EXPECT(serialize_(back) == out);
     }
 
+    // --- v13: ONE shared name per parameter, read by all three surfaces ------
+    // Sparse + additive: a map that names nothing must serialise exactly like a
+    // v12 one, and setParamLabel("") must REMOVE the entry rather than store an
+    // empty string (an empty label would shadow the canonical name forever).
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];
+        EXPECT(serialize_(c).find("paramLabels") == std::string::npos);
+
+        EXPECT(setParamLabel(m, 21, "Gate Thr"));
+        EXPECT(setParamLabel(m, 27, "Comp Thr"));
+        EXPECT(!setParamLabel(m, 21, "Gate Thr"));      // no-op stays a no-op
+        const std::string out = serialize_(c);
+        EXPECT(out.find("\"paramLabels\"") != std::string::npos);
+
+        UserPluginCatalog back{};
+        EXPECT(parse_(out, back));
+        EXPECT(back.maps[0].paramLabels.size() == 2);
+        EXPECT(serialize_(back) == out);                 // idempotent
+
+        // Clearing removes the entry entirely.
+        auto& m2 = back.maps[0];
+        EXPECT(setParamLabel(m2, 21, ""));
+        EXPECT(m2.paramLabels.size() == 1);
+        EXPECT(m2.paramLabels[0].vst3Param == 27);
+        EXPECT(!setParamLabel(m2, 999, ""));             // clearing an unset one
+    }
+
     // --- a v11 file (uf1 block, no ledRgb) still loads, colour defaults to 0 --
     {
         UserPluginCatalog c{};

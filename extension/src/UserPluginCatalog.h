@@ -546,6 +546,14 @@ struct UserParamInfo {
     bool         wasEnum     = false;
 };
 
+// One user-chosen display name for a PARAMETER, read by every surface (v13).
+// Kept separate from UserParamInfo because that one is a SNAPSHOT of the
+// plug-in (re-taken on rescan and therefore not a safe home for user data).
+struct UserParamLabel {
+    int          vst3Param = -1;
+    std::string  label;
+};
+
 // Plugin "mode" is encoded by (domain, uf8Mode) per the new domain
 // structure (2026-05-12):
 //   domain=ChannelStrip, uf8Mode=false → CS only
@@ -582,6 +590,15 @@ struct UserPluginMap {
     // without this block behaves byte-identically. Frank 2026-08-08.
     UserUf1Map                 uf1;
     bool                       uf1Mode = false;
+    // ONE user name per PARAMETER, shared by UC1, UF8 and UF1 (v13). The old
+    // per-slot customLabel still wins where it is set (a deliberate per-control
+    // override), but a name typed into any surface's "Display name" field lands
+    // here, so it shows up on all three instead of drifting apart — the three
+    // surfaces used to keep three independent names for the same parameter
+    // (SlotLayer::customLabel, UserUf8BankSlot::label, UserUf1Slot::customLabel).
+    // Sparse and additive: absent = no user name, and a map without one
+    // serialises exactly as it did in v12. Frank 2026-08-09.
+    std::vector<UserParamLabel> paramLabels;
     std::vector<UserParamInfo> paramSnapshot;  // last-seen VST3 param list
     int64_t                    snapshotTakenAt = 0;  // unix-sec; 0 = never
     // Per-domain slot caches (Frank 2026-05-15). When the user toggles
@@ -660,7 +677,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 12;  // v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb", emitted only when set; absent = no override). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). v10 files load byte-identical (block absent = no UF1 layer = sequential fallback).
+constexpr int kCurrentFormatVersion = 13;  // v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
@@ -801,6 +818,13 @@ const UserPluginMap* lookupOwnedByName(std::string_view fxName);
 // the V-Pot delta site to fetch knob-travel customisation (range,
 // sensitivity, curve points) for user-learned FX params.
 const UserLinkSlot* lookupOwnedSlot(std::string_view fxName, int linkIdx);
+
+// v13 — ONE user name per parameter, read by UC1, UF8 and UF1 alike.
+// paramLabelFor returns "" when the plug-in has no map or the param no name.
+// setParamLabel writes into a map the caller then upserts + saves; an empty
+// label clears the entry. Returns true when something actually changed.
+std::string paramLabelFor(std::string_view fxName, int vst3Param);
+bool        setParamLabel(UserPluginMap& m, int vst3Param, std::string_view label);
 
 // Return true iff `match` would also be matched by any built-in
 // PluginMap's `match` substring (or vice versa). Used by the editor to

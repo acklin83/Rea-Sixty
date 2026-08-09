@@ -21784,6 +21784,60 @@ static bool uf1TouchLearnArmAt_(bool softKeys, int idx)
     return true;
 }
 
+// ---- ONE name per parameter, across all three surfaces --------------------
+// Frank 2026-08-09: "Wieso sind nicht mal bei den SSL eigenen CS strips die
+// Labels gleich?? Gate Thr auf UF8 und UC1, nur Tresh (für Gate UND Comp!) auf
+// UF1." Two independently maintained tables were the cause: the UF1's own
+// kUf1CsVPots labels are transcribed verbatim from SSL's p188 manual, where BOTH
+// the compressor and the gate page simply say "Threshold" — the page is the
+// context. The LinkSlot table that UC1 and UF8 read is unambiguous ("Comp Thr",
+// "Gate Thr") and fits the 9-char zone anyway.
+//
+// So the canonical LinkSlot name WINS for a built-in strip, and the per-device
+// table is only the fallback for positions no PluginMap describes. The lookup
+// is by vst3Param, the same way uf1CsDefaultNorm_ already finds its slot.
+// Main-thread only (REAPER API).
+static std::string uf1CanonicalParamName_(MediaTrack* tr, int fx, int p)
+{
+    if (!tr || fx < 0 || p < 0) return {};
+    char nm[256] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return {};
+    const uf8::PluginMap* m = uf8::lookupPluginMapByName(nm);
+    if (!m) return {};
+    for (const uf8::LinkSlot& sl : m->slots)
+        if (sl.vst3Param == p && sl.name && *sl.name) return sl.name;
+    return {};
+}
+
+// The user's own name for a parameter, shared by every surface (v13). Empty
+// when the plug-in has no map or the param has no name. This is the layer the
+// per-slot customLabel overrides and that beats the plug-in's raw param name.
+static std::string userParamLabel_(MediaTrack* tr, int fx, int p)
+{
+    if (!tr || fx < 0 || p < 0) return {};
+    char nm[256] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return {};
+    return uf8::user_plugins::paramLabelFor(nm, p);
+}
+
+// The name a control should show for (tr, fx, param), in the ONE order every
+// surface now follows:
+//   1. the slot's own customLabel (a deliberate per-control override)
+//   2. the map-wide user name for this parameter   (paramLabels, v13)
+//   3. the canonical LinkSlot name                 (built-in SSL strips)
+//   4. the plug-in's own param name                (last resort)
+// Callers pass whatever they have for (1); everything below it is shared.
+static std::string uf1ParamDisplayName_(MediaTrack* tr, int fx, int p,
+                                        const std::string& slotLabel)
+{
+    if (!slotLabel.empty()) return slotLabel;
+    if (std::string s = userParamLabel_(tr, fx, p); !s.empty()) return s;
+    if (std::string s = uf1CanonicalParamName_(tr, fx, p); !s.empty()) return s;
+    char pn[64] = {0};
+    if (tr && fx >= 0 && p >= 0) TrackFX_GetParamName(tr, fx, p, pn, sizeof(pn));
+    return pn;
+}
+
 // The explicit UF1 map for whatever plug-in sits at (tr,fx), REGARDLESS of its
 // domain. Deliberately not gated on uf1IsLearnedCsBc_: a UF1-only map (domain
 // None) has no CS/BC domain, and gating on one made its map unreadable — the
@@ -23421,12 +23475,8 @@ void uf1PaintChannel_()
                         xmap->vpots, page * uf8::kUserUf1PerPage + i);
                     p = s ? s->vst3Param : -1;
                     bipolar = s && s->polarity == uf8::VPotPolarity::Bipolar;
-                    if (s && p >= 0) {
-                        if (!s->customLabel.empty()) label = s->customLabel;
-                        else { char pn[64] = {0};
-                               TrackFX_GetParamName(csTr, csFx, p, pn, sizeof(pn));
-                               label = pn; }
-                    }
+                    if (s && p >= 0)
+                        label = uf1ParamDisplayName_(csTr, csFx, p, s->customLabel);
                 } else if (learned) {
                     const int flat = page * 4 + i;
                     const uf8::UserLinkSlot* sl =
@@ -23438,16 +23488,18 @@ void uf1PaintChannel_()
                         : nullptr;
                     p = eff ? eff->vst3Param : -1;
                     bipolar = eff && eff->polarity == uf8::VPotPolarity::Bipolar;
-                    if (eff && p >= 0) {
-                        if (!eff->customLabel.empty()) label = eff->customLabel;
-                        else { char pn[64] = {0};
-                               TrackFX_GetParamName(csTr, csFx, p, pn, sizeof(pn));
-                               label = pn; }
-                    }
+                    if (eff && p >= 0)
+                        label = uf1ParamDisplayName_(csTr, csFx, p, eff->customLabel);
                 } else {
                     const Uf1CsVPot& v = pg.slot(i);
                     p = uf1CsVpotParam_(csTr, csFx, csType, page, i);
-                    label = v.label ? v.label : "";
+                    // Built-in SSL strip: the CANONICAL LinkSlot name wins over
+                    // this table's p188 label, so "Gate Thr" / "Comp Thr" read
+                    // the same here as on the UC1 and the UF8 (SSL's own manual
+                    // calls both pages just "Threshold" — see
+                    // uf1CanonicalParamName_). The table stays the fallback.
+                    label = uf1ParamDisplayName_(csTr, csFx, p, std::string());
+                    if (label.empty() && v.label) label = v.label;
                     bipolar = v.bipolar;
                 }
                 // Touch-to-Learn: the ARMED V-Pot shows "Waiting" and breathes its
@@ -23757,10 +23809,8 @@ void uf1PaintChannel_()
                     skXmap->softKeys, skPage * uf8::kUserUf1PerPage + i);
                 haveLabel = true;          // blank when the position is empty
                 if (s && s->vst3Param >= 0) {
-                    if (!s->customLabel.empty()) label = s->customLabel;
-                    else { char pn[64] = {0};
-                           TrackFX_GetParamName(skTr, skFx, s->vst3Param, pn, sizeof(pn));
-                           label = pn; }
+                    label = uf1ParamDisplayName_(skTr, skFx, s->vst3Param,
+                                                 s->customLabel);
                     on = TrackFX_GetParamNormalized(skTr, skFx, s->vst3Param) > 0.5;
                     // v12: per-key colour. Brightness carries the on-state, so a
                     // coloured key still reads as on/off — dim when off, exactly
@@ -23782,10 +23832,8 @@ void uf1PaintChannel_()
                     ? &uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer())
                     : nullptr;
                 if (eff && eff->vst3Param >= 0) {
-                    if (!eff->customLabel.empty()) label = eff->customLabel;
-                    else { char pn[64] = {0};
-                           TrackFX_GetParamName(skTr, skFx, eff->vst3Param, pn, sizeof(pn));
-                           label = pn; }
+                    label = uf1ParamDisplayName_(skTr, skFx, eff->vst3Param,
+                                                 eff->customLabel);
                     on = TrackFX_GetParamNormalized(skTr, skFx, eff->vst3Param) > 0.5;
                 }
             } else if (skType >= 0) {
@@ -24423,14 +24471,22 @@ std::string formatPanReadout(double pan)
 // Compose the Value Line (19 chars) — e.g. "Vol        -6.0dB".
 // Left-justified label, right-justified value. Truncates both if needed
 // so the total fits within 19 chars.
-// Cap the label at the UF1's 9-character label zone, then lay the line out as
-// usual. A value longer than the 10-char value zone still steals from the label
-// (composeValueLine's own rule) — showing the whole value matters more than the
-// name, which the user can shorten with a display label.
+// Fit the label into the UF1's 9-character label zone, then lay the line out as
+// usual. ABBREVIATES rather than truncating (Frank 2026-08-09) — the same
+// smart-abbreviation the track scribbles use, so "LPF Frequency" becomes
+// "LPFFrqncy" instead of "LPF Frequ": every word stays visible. Acronyms (LPF,
+// HMF, EQ) survive untouched. A value longer than its own 10-char zone still
+// steals from the label (composeValueLine's rule) — the whole value matters more
+// than the name.
+// foldLatin1 = false: the UF1 text path folds at its own source; folding twice
+// would double-encode umlauts ([[surface-lcd-latin1-umlauts]]).
 std::string uf1ValueLine(std::string_view label, std::string_view value)
 {
-    if (label.size() > kUf1LabelChars) label = label.substr(0, kUf1LabelChars);
-    return composeValueLine(label, value);
+    std::string lab(label);
+    if (lab.size() > kUf1LabelChars)
+        lab = abbreviateTrackName_(lab, static_cast<int>(kUf1LabelChars),
+                                   TNM_SmartAbbrev, /*foldLatin1*/ false);
+    return composeValueLine(lab, value);
 }
 
 std::string composeValueLine(std::string_view label, std::string_view value)
@@ -27095,11 +27151,14 @@ void pushZonesForVisibleSlots()
                 if (bs.vst3Param >= 0) {
                     char pn[64]  = {0};
                     char vbuf[64] = {0};
-                    if (!bs.label.empty())
-                        std::strncpy(pn, bs.label.c_str(), sizeof(pn) - 1);
-                    else
-                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
-                            bs.vst3Param, pn, sizeof(pn));
+                    // Same name order as the UC1 and the UF1 (v13): this cell's
+                    // own label, then the map-wide user name, then the canonical
+                    // LinkSlot name, then the plug-in's own.
+                    {
+                        const std::string nm = uf1ParamDisplayName_(
+                            uctx.tr, uctx.fxIdx, bs.vst3Param, bs.label);
+                        std::strncpy(pn, nm.c_str(), sizeof(pn) - 1);
+                    }
                     const double norm = TrackFX_GetParamNormalized(
                         uctx.tr, uctx.fxIdx, bs.vst3Param);
                     // Readout shows the TRUE value — invert only reverses input.

@@ -643,6 +643,23 @@ std::string serialize_(const UserPluginCatalog& c)
             emitUf1Stream("softKeys", m.uf1.softKeys, true);
             os << "      }";
         }
+        // v13: the shared per-parameter display names. Sparse, emitted only
+        // when the user has named something, so a map without them serialises
+        // exactly as it did in v12.
+        if (!m.paramLabels.empty()) {
+            os << ",\n      \"paramLabels\": [";
+            bool firstLabel = true;
+            for (const auto& pl : m.paramLabels) {
+                if (pl.vst3Param < 0 || pl.label.empty()) continue;
+                if (!firstLabel) os << ",";
+                firstLabel = false;
+                os << "\n        { \"vst3Param\": " << pl.vst3Param
+                   << ", \"label\": ";
+                appendEscaped_(os, pl.label);
+                os << " }";
+            }
+            os << "\n      ]";
+        }
         if (!m.paramSnapshot.empty()) {
             os << ",\n      \"paramSnapshot\": [";
             bool firstParam = true;
@@ -1177,6 +1194,23 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         }
 
         // Parse paramSnapshot array (v4+; absent in v3 files).
+        // v13 shared per-parameter display names; absent on v12 and older.
+        if (auto* plArr = po->get_item_by_name("paramLabels");
+            plArr && plArr->is_array() && plArr->m_array)
+        {
+            const int ln = plArr->m_array->GetSize();
+            m.paramLabels.reserve(static_cast<size_t>(ln));
+            for (int i = 0; i < ln; ++i) {
+                wdl_json_element* lo = plArr->enum_item(i);
+                if (!lo || !lo->is_object()) continue;
+                UserParamLabel pl{};
+                getIntI_(lo, "vst3Param", pl.vst3Param);
+                getStrI_(lo, "label", pl.label);
+                if (pl.vst3Param < 0 || pl.label.empty()) continue;
+                m.paramLabels.push_back(std::move(pl));
+            }
+        }
+
         if (auto* psArr = po->get_item_by_name("paramSnapshot");
             psArr && psArr->is_array() && psArr->m_array)
         {
@@ -1855,6 +1889,35 @@ const UserLinkSlot* lookupOwnedSlot(std::string_view fxName, int linkIdx)
         if (sl.linkIdx == linkIdx) return &sl;
     }
     return nullptr;
+}
+
+// The user's shared display name for a parameter (v13), or "" when unset.
+// Read by ALL THREE surfaces so one rename shows up everywhere.
+std::string paramLabelFor(std::string_view fxName, int vst3Param)
+{
+    if (vst3Param < 0) return {};
+    const UserPluginMap* m = lookupOwnedByName(fxName);
+    if (!m) return {};
+    for (const auto& pl : m->paramLabels)
+        if (pl.vst3Param == vst3Param) return pl.label;
+    return {};
+}
+
+// Set / clear (empty label) the shared name. Returns true when the catalog
+// changed; the caller persists.
+bool setParamLabel(UserPluginMap& m, int vst3Param, std::string_view label)
+{
+    if (vst3Param < 0) return false;
+    for (size_t i = 0; i < m.paramLabels.size(); ++i) {
+        if (m.paramLabels[i].vst3Param != vst3Param) continue;
+        if (label.empty()) { m.paramLabels.erase(m.paramLabels.begin() + i); return true; }
+        if (m.paramLabels[i].label == label) return false;      // no-op
+        m.paramLabels[i].label = std::string(label);
+        return true;
+    }
+    if (label.empty()) return false;
+    m.paramLabels.push_back(UserParamLabel{vst3Param, std::string(label)});
+    return true;
 }
 
 bool collidesWithBuiltin(std::string_view match)

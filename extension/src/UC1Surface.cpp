@@ -3052,6 +3052,18 @@ void UC1Surface::pushFocusedParamReadout_()
         }
     }
 
+    // The user's SHARED name for this parameter (v13) — one rename shows up on
+    // the UC1, the UF8 and the UF1 alike. A per-layer customLabel (resolved
+    // above into pNameOwned) is a deliberate override and still wins; otherwise
+    // the shared name beats the canonical slot.name.
+    if (pNameOwned.empty() && pParam >= 0) {
+        char fxn2[512] = {};
+        if (uf8::fxIdentityName(tr, match.fxIndex, fxn2, sizeof(fxn2))) {
+            std::string shared = uf8::user_plugins::paramLabelFor(fxn2, pParam);
+            if (!shared.empty()) { pNameOwned = std::move(shared); pName = pNameOwned.c_str(); }
+        }
+    }
+
     char formatted[64] = {};
     const double cur = TrackFX_GetParamNormalized(tr, match.fxIndex, pParam);
     TrackFX_FormatParamValueNormalized(tr, match.fxIndex, pParam,

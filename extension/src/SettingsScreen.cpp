@@ -8930,10 +8930,47 @@ void toggleUf1Inverted_(bool softKeys, int pos)
         s.inverted = !s.inverted;
     });
 }
+// Read the SHARED per-parameter name (v13) off the map being edited.
+std::string sharedParamLabel_(const std::string& match, int vst3Param)
+{
+    if (match.empty() || vst3Param < 0) return {};
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (const auto& pl : m.paramLabels)
+            if (pl.vst3Param == vst3Param) return pl.label;
+        break;
+    }
+    return {};
+}
+
+// Write the SHARED per-parameter name (v13) for `vst3Param` on the map `match`,
+// so the rename shows up on the UC1, the UF8 and the UF1 alike. Empty clears it.
+bool setSharedParamLabel_(const std::string& match, int vst3Param,
+                          const std::string& label)
+{
+    if (match.empty() || vst3Param < 0) return false;
+    auto cat = uf8::user_plugins::get();          // copy
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        if (!uf8::user_plugins::setParamLabel(m, vst3Param, label)) return false;
+        uf8::user_plugins::setAll(std::move(cat));
+        persistAndReport_();
+        return true;
+    }
+    return false;
+}
+
+// The UF1 cell's "Display name". Renaming here names the PARAMETER, not just
+// this control (Frank 2026-08-09: "ein Name pro Parameter, den alle drei Geräte
+// lesen"), so the slot-local override is cleared at the same time — otherwise it
+// would keep shadowing the shared name on this one control.
 void setUf1CustomLabel_(bool softKeys, int pos, const char* label)
 {
+    const int param = mappedVst3ForUf1_(softKeys, pos);
+    if (param >= 0)
+        setSharedParamLabel_(g_editingMatch, param, label ? label : "");
     mutateUf1_([&](uf8::UserUf1Map& u) {
-        uf1SlotRef_(u, softKeys, pos).customLabel = label ? label : "";
+        uf1SlotRef_(u, softKeys, pos).customLabel.clear();
     });
 }
 // Soft-key push cycle — the curated step list the UF1 runtime already honours
@@ -10966,11 +11003,24 @@ bool hudUf1InvertMatch_(const std::string& match, bool softKeys, int pos)
     return hudUf1MutateMatch_(match, softKeys, pos,
         [](std::vector<UserUf1Slot>& v, size_t i) { v[i].inverted = !v[i].inverted; });
 }
+// Renaming from the HUD names the PARAMETER too (v13) — same rule as the
+// Settings field, so a name typed here reaches the UC1 and the UF8 as well.
 bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
                        const std::string& label)
 {
-    return hudUf1MutateMatch_(match, softKeys, pos,
-        [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel = label; });
+    int param = -1;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        const auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
+        if (const UserUf1Slot* s = uf8::uf1SlotAt(v, pos)) param = s->vst3Param;
+        break;
+    }
+    bool changed = false;
+    if (param >= 0) changed = setSharedParamLabel_(match, param, label);
+    // Drop the slot-local override so it can't shadow the shared name.
+    changed |= hudUf1MutateMatch_(match, softKeys, pos,
+        [](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel.clear(); });
+    return changed;
 }
 // Per-soft-key LED colour from the HUD (v12); 0 clears the override.
 bool hudUf1LedRgbMatch_(const std::string& match, int pos, uint32_t rgb)
@@ -11275,7 +11325,11 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
             if (s.vst3Param < 0) continue;
+            // Same order the surfaces use: slot override → shared param name →
+            // the plug-in's own (the canonical LinkSlot name is resolved
+            // device-side; the tab shows what the user actually named).
             std::string label = s.customLabel;
+            if (label.empty()) label = user_plugins::paramLabelFor(name, s.vst3Param);
             if (label.empty()) {
                 char pn[64] = {0};
                 TrackFX_GetParamName(tr, fx, s.vst3Param, pn, sizeof(pn));
@@ -15578,21 +15632,27 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         static bool s_uf1LabelSk  = false;
         if (s_uf1LabelPos != pos || s_uf1LabelSk != softKeys) {
             s_uf1LabelPos = pos; s_uf1LabelSk = softKeys;
-            snprintf(s_uf1LabelBuf, sizeof(s_uf1LabelBuf), "%s",
-                     snap().customLabel.c_str());
+            // Seed from the slot override if one survives from before v13,
+            // else from the shared per-parameter name.
+            std::string seed = snap().customLabel;
+            if (seed.empty())
+                seed = sharedParamLabel_(g_editingMatch, mapped);
+            snprintf(s_uf1LabelBuf, sizeof(s_uf1LabelBuf), "%s", seed.c_str());
         }
         int inputFlags = 0;
         ImGui_SetNextItemWidth(ctx, 150.0);
         if (ImGui_InputText(ctx, "##uf1_label", s_uf1LabelBuf,
                             sizeof(s_uf1LabelBuf), &inputFlags, nullptr))
             setUf1CustomLabel_(softKeys, pos, s_uf1LabelBuf);
-        if (!snap().customLabel.empty()) {
+        if (!snap().customLabel.empty()
+            || !sharedParamLabel_(g_editingMatch, mapped).empty()) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_SmallButton(ctx, "X##uf1_label_clear")) {
                 s_uf1LabelBuf[0] = '\0';
                 setUf1CustomLabel_(softKeys, pos, "");
             }
         }
+        ImGui_TextDisabled(ctx, "Applies to this parameter on UC1 + UF8 too");
         ImGui_EndPopup(ctx);
     }
 }
