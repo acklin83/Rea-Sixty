@@ -3373,7 +3373,8 @@ local function drawUf1ControlContextMenu()
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx,
         "Append every parameter that isn't mapped on the UC1 or here yet,\n"
-        .. "in the plug-in's own order, onto the free UF1 V-Pots.")
+        .. "in the plug-in's own order: switches onto the free soft-keys,\n"
+        .. "everything else onto the free V-Pots.")
     end
 
     -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld

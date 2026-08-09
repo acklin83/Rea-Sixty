@@ -11408,36 +11408,64 @@ bool sendToUc1_(const std::string& match, int linkIdx, int layer,
 // Pack every functional param that is NOT already on the UC1 (Normal layer) or
 // the UF1 onto the free UF1 V-Pot positions, in paramSnapshot order. Turns the
 // UF1 into the overflow surface in one action. Returns how many were added.
-int fillUf1WithRest_(const std::string& match)
+// Fill the UF1's free positions with everything the UC1 doesn't already carry.
+// `tr`/`fxIdx` are a LIVE instance when one is available: a switch belongs on a
+// soft-key and a continuous parameter on a V-Pot, and REAPER answers that
+// exactly (TrackFX_GetParameterStepSizes' isToggle). Frank 2026-08-09: "soft-
+// keys auch füllen, nicht nur v-pots! wir wissen ja, was buttons und was potis
+// sind in plugins". With no instance the snapshot's `wasEnum` stands in — it is
+// `isToggle || step >= 0.5`, i.e. coarse-stepped counts as a switch, which is
+// the right way to be wrong here (a stepped param on a soft-key still cycles).
+int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx)
 {
     if (match.empty()) return 0;
     user_plugins::enableUf1Layer(match);
     auto cat = user_plugins::get();
+    const bool live = tr && fxIdx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*");
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
         std::set<int> used;
         for (const auto& s : m.slots)       if (s.vst3Param >= 0) used.insert(s.vst3Param);
         for (const auto& s : m.uf1.vpots)   if (s.vst3Param >= 0) used.insert(s.vst3Param);
         for (const auto& s : m.uf1.softKeys)if (s.vst3Param >= 0) used.insert(s.vst3Param);
-        int pos = 0, added = 0;
-        auto nextFree = [&]() {
-            for (;; ++pos) {
+        int vPos = 0, kPos = 0, added = 0;
+        // Each stream fills its OWN positions — they are separate rows on the
+        // hardware and share only the page cursor.
+        auto nextFree = [](const std::vector<UserUf1Slot>& v, int& cur) {
+            for (;; ++cur) {
                 bool taken = false;
-                for (const auto& s : m.uf1.vpots) if (s.pos == pos) { taken = true; break; }
-                if (!taken) return pos;
+                for (const auto& s : v) if (s.pos == cur) { taken = true; break; }
+                if (!taken) return cur;
             }
         };
         for (const auto& p : m.paramSnapshot) {
             if (p.vst3Param < 0 || used.count(p.vst3Param)) continue;
+            bool isSwitch = p.wasEnum;
+            if (live) {
+                double st = 0, sm = 0, lg = 0;
+                bool   tg = false;
+                if (TrackFX_GetParameterStepSizes(tr, fxIdx, p.vst3Param,
+                                                  &st, &sm, &lg, &tg))
+                    isSwitch = tg || st >= 0.5;
+            }
             UserUf1Slot ns{};
-            ns.pos = nextFree(); ns.vst3Param = p.vst3Param;
-            m.uf1.vpots.push_back(std::move(ns));
+            ns.vst3Param = p.vst3Param;
+            if (isSwitch) {
+                ns.pos = nextFree(m.uf1.softKeys, kPos);
+                m.uf1.softKeys.push_back(std::move(ns));
+            } else {
+                ns.pos = nextFree(m.uf1.vpots, vPos);
+                m.uf1.vpots.push_back(std::move(ns));
+            }
             used.insert(p.vst3Param);
             ++added;
         }
         if (added > 0) {
             m.uf1Mode = true;
-            user_plugins::setAll(std::move(cat));
+            // ⚠ upsert, NOT setAll: this runs from an editor frame (the FX-Learn
+            // button), and setAll does g_catalog = std::move(c), which kills every
+            // pointer the frame holds into the catalog — the rename crash.
+            user_plugins::upsert(m);
             persistAndReport_();
         }
         return added;
@@ -16027,11 +16055,12 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     // packed onto the free V-Pot positions — makes the UF1 the overflow surface
     // in one action instead of one drag per param (Frank 2026-08-08).
     if (ImGui_Button(ctx, "Fill with unmapped parameters##uf1_fill", nullptr, nullptr))
-        fillUf1WithRest_(g_editingMatch);
+        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx);
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
             "Append every parameter that isn't mapped on the UC1 or here yet,\n"
-            "in the plug-in's own order, onto the free UF1 V-Pots.");
+            "in the plug-in's own order: switches onto the free soft-keys,\n"
+            "everything else onto the free V-Pots.");
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
         "Click a control to learn it, or drag a parameter from the list. Leave "
@@ -21804,7 +21833,7 @@ int reasixty_hudUf1FillRest(void* tr, int fx)
         if (uf8::user_plugins::collidesWithBuiltin(nm)) return 0;
         m = nm;
     }
-    return uf8::fillUf1WithRest_(m);
+    return uf8::fillUf1WithRest_(m, static_cast<MediaTrack*>(tr), fx);
 }
 bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
 {
