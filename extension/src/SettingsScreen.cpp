@@ -11416,7 +11416,67 @@ bool sendToUc1_(const std::string& match, int linkIdx, int layer,
 // sind in plugins". With no instance the snapshot's `wasEnum` stands in — it is
 // `isToggle || step >= 0.5`, i.e. coarse-stepped counts as a switch, which is
 // the right way to be wrong here (a stepped param on a soft-key still cycles).
-int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx)
+// Empty the UF1 layer. Returns how many bindings went. The layer flag stays on:
+// an empty explicit map is a deliberate state ("this plug-in shows nothing on
+// the UF1"), not the same as never having had one.
+int uf1ClearAll_(const std::string& match)
+{
+    if (match.empty()) return 0;
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        const int had = int(m.uf1.vpots.size() + m.uf1.softKeys.size());
+        if (!had) return 0;
+        m.uf1.vpots.clear();
+        m.uf1.softKeys.clear();
+        user_plugins::upsert(m);        // never setAll from an editor frame
+        persistAndReport_();
+        return had;
+    }
+    return 0;
+}
+
+// Mirror the UC1 mapping onto the UF1 — the state the UF1 starts in before any
+// UF1 editing, made explicit. Splits the same way the implicit fill does: a
+// linkIdx driven by a UC1 BUTTON goes to the soft-keys, everything else to the
+// V-Pots, both in linkIdx (SSL reading) order. Replaces what the UF1 held.
+int fillUf1FromUc1_(const std::string& match)
+{
+    if (match.empty()) return 0;
+    user_plugins::enableUf1Layer(match);
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        const bool busComp = (m.domain == Domain::BusComp);
+        std::vector<const UserLinkSlot*> ordered;
+        for (const auto& s : m.slots)
+            if (s.vst3Param >= 0) ordered.push_back(&s);
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const UserLinkSlot* a, const UserLinkSlot* b) {
+                      return a->linkIdx < b->linkIdx;
+                  });
+        m.uf1.vpots.clear();
+        m.uf1.softKeys.clear();
+        int added = 0;
+        for (const UserLinkSlot* s : ordered) {
+            UserUf1Slot ns{};
+            ns.vst3Param = s->vst3Param;
+            auto& dst = uc1::linkIdxIsButton(s->linkIdx, busComp) ? m.uf1.softKeys
+                                                                  : m.uf1.vpots;
+            ns.pos = int(dst.size());
+            dst.push_back(std::move(ns));
+            ++added;
+        }
+        m.uf1Mode = true;
+        user_plugins::upsert(m);
+        persistAndReport_();
+        return added;
+    }
+    return 0;
+}
+
+int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx,
+                     bool replace)
 {
     if (match.empty()) return 0;
     user_plugins::enableUf1Layer(match);
@@ -11424,6 +11484,9 @@ int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx)
     const bool live = tr && fxIdx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*");
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
+        // Replace = start from an empty UF1 and take only what the UC1 lacks;
+        // append = keep what is there and add to the end.
+        if (replace) { m.uf1.vpots.clear(); m.uf1.softKeys.clear(); }
         std::set<int> used;
         for (const auto& s : m.slots)       if (s.vst3Param >= 0) used.insert(s.vst3Param);
         for (const auto& s : m.uf1.vpots)   if (s.vst3Param >= 0) used.insert(s.vst3Param);
@@ -16051,16 +16114,36 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/false, i);
     }
     ImGui_Spacing(ctx);
-    // Fill the rest: every functional param not already on the UC1 or the UF1,
-    // packed onto the free V-Pot positions — makes the UF1 the overflow surface
-    // in one action instead of one drag per param (Frank 2026-08-08).
-    if (ImGui_Button(ctx, "Fill with unmapped parameters##uf1_fill", nullptr, nullptr))
-        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx);
+    // The whole-layer actions, one row. "The rest" = every functional param not
+    // already on the UC1 — that is what makes the UF1 an EXTENSION of the UC1
+    // rather than a second copy of it (Frank 2026-08-08/09). Same four sit in
+    // the HUD's right-click menu; both drive the same functions.
+    if (ImGui_Button(ctx, "Fill: Replace##uf1_fill_rep", nullptr, nullptr))
+        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/true);
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
-            "Append every parameter that isn't mapped on the UC1 or here yet,\n"
-            "in the plug-in's own order: switches onto the free soft-keys,\n"
-            "everything else onto the free V-Pots.");
+            "Clear the UF1 layer, then take every parameter the UC1 does NOT\n"
+            "carry, in the plug-in's own order: switches onto the soft-keys,\n"
+            "everything else onto the V-Pots.");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Fill: Append##uf1_fill", nullptr, nullptr))
+        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/false);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx,
+            "Same, but KEEPS what the UF1 already has and adds to the end.");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Fill from UC1##uf1_fill_uc1", nullptr, nullptr))
+        fillUf1FromUc1_(g_editingMatch);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx,
+            "Mirror the UC1 mapping onto the UF1 — what the UF1 shows on its\n"
+            "own before any UF1 editing, written out as an explicit map.\n"
+            "Replaces the UF1 layer.");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Unbind all##uf1_unbind_all", nullptr, nullptr))
+        uf1ClearAll_(g_editingMatch);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx, "Empty the UF1 layer. The layer itself stays on.");
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
         "Click a control to learn it, or drag a parameter from the list. Leave "
@@ -21820,7 +21903,7 @@ bool reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int para
 // onto the UF1's free V-Pots. Same one-action fill the FX-Learn page has had
 // since 2026-08-08 — this is only its second door (Frank 2026-08-09 asked for a
 // right-click route). Returns how many parameters landed.
-int reasixty_hudUf1FillRest(void* tr, int fx)
+int reasixty_hudUf1FillRest(void* tr, int fx, int mode)
 {
     std::string m;
     if (!uf8::hudUf1ResolveOrCreate_(tr, fx, m)) {
@@ -21833,7 +21916,13 @@ int reasixty_hudUf1FillRest(void* tr, int fx)
         if (uf8::user_plugins::collidesWithBuiltin(nm)) return 0;
         m = nm;
     }
-    return uf8::fillUf1WithRest_(m, static_cast<MediaTrack*>(tr), fx);
+    // mode: 0 = append, 1 = replace, 2 = mirror the UC1, 3 = unbind all.
+    switch (mode) {
+        case 1:  return uf8::fillUf1WithRest_(m, static_cast<MediaTrack*>(tr), fx, true);
+        case 2:  return uf8::fillUf1FromUc1_(m);
+        case 3:  return uf8::uf1ClearAll_(m);
+        default: return uf8::fillUf1WithRest_(m, static_cast<MediaTrack*>(tr), fx, false);
+    }
 }
 bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
 {

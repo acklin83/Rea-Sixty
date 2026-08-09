@@ -3363,18 +3363,25 @@ local function drawUf1ControlContextMenu()
       end
     end
 
-    -- Extend rather than mirror: the UF1's pages are spare real estate, so
-    -- pack them with everything the UC1 does NOT already carry (Frank
-    -- 2026-08-09). Same one-action fill the FX-Learn page has.
+    -- Whole-layer actions. "The rest" = every parameter the UC1 does NOT carry,
+    -- which is what makes the UF1 an EXTENSION of the UC1 instead of a second
+    -- copy of it. The same four sit in FX-Learn; both drive one implementation.
     reaper.ImGui_Separator(ctx)
-    if reaper.ImGui_MenuItem(ctx, "Fill with parameters the UC1 doesn't have") then
-      sendCmd("uf1fill")
+    if reaper.ImGui_BeginMenu(ctx, "Fill") then
+      if reaper.ImGui_MenuItem(ctx, "Replace \xE2\x80\x94 only what the UC1 lacks") then
+        sendCmd("uf1fill;1")
+      end
+      if reaper.ImGui_MenuItem(ctx, "Append \xE2\x80\x94 add to the end") then
+        sendCmd("uf1fill;0")
+      end
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_MenuItem(ctx, "From UC1 \xE2\x80\x94 mirror its mapping") then
+        sendCmd("uf1fill;2")
+      end
+      reaper.ImGui_EndMenu(ctx)
     end
-    if reaper.ImGui_IsItemHovered(ctx) then
-      reaper.ImGui_SetTooltip(ctx,
-        "Append every parameter that isn't mapped on the UC1 or here yet,\n"
-        .. "in the plug-in's own order: switches onto the free soft-keys,\n"
-        .. "everything else onto the free V-Pots.")
+    if reaper.ImGui_MenuItem(ctx, "Unbind all") then
+      sendCmd("uf1fill;3")
     end
 
     -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld
