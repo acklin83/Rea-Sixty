@@ -3138,13 +3138,13 @@ std::atomic<bool> g_hudAutoStartDone{false};
 // refreshed in onTimer. The pending request is set from the UC1 input drain
 // (main thread, in UC1Surface::poll) and consumed in onTimer's HUD block.
 std::atomic<bool> g_hudTouchLearn{false};
-// The HUD is showing its UF1 tab (mirror of the ExtState "hud_uf1_tab",
-// refreshed in onTimer). Touch-to-Learn is otherwise standalone and device-wide
-// — a deliberate 2026-06-20 decision for the UF8 — but while the UF1 tab is up,
-// the thing you are editing is the UF1, and touching a UC1 knob armed a UC1
-// learn behind the tab you were looking at (Frank 2026-08-09: "touch to learn in
-// uf1 mode listened auch auf das uc1"). So the OTHER surfaces stand down for as
-// long as that tab is showing; every other tab keeps the standalone behaviour.
+// The HUD is showing its UF1 tab (mirror of the ExtState "hud_uf1_tab").
+// Touch-to-Learn deliberately stays STANDALONE and device-wide — every surface
+// arms whenever the mode is on, HUD or no HUD, because that is what lets the
+// surfaces be driven blind (Frank 2026-08-09: "sollte trotzdem für alle surfaces
+// gelten, sonst kann man sie ja nicht blind ohne hud starten"). Scoping the arm
+// to the shown tab, tried briefly the same day, broke exactly that. Kept as a
+// published flag only — no behaviour hangs off it.
 std::atomic<bool> g_hudUf1Tab{false};
 std::atomic<int>  g_hudHwLearnReqLink{-1};   // armed control's linkIdx (-1 = none)
 std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
@@ -17807,9 +17807,8 @@ static bool uf8TouchLearnArm_(int kind, int strip)
 {
     // Standalone (Frank 2026-06-20): no longer requires the HUD open or its UF8
     // tab active — touching any UF8 control arms its learn whenever the mode is
-    // on, driven by the bindable touch_to_learn_toggle action. The ONE exception
-    // is the HUD's UF1 tab, which owns the mode while it is showing (g_hudUf1Tab).
-    if (!g_hudTouchLearn.load() || g_hudUf1Tab.load()) return false;
+    // on, driven by the bindable touch_to_learn_toggle action.
+    if (!g_hudTouchLearn.load()) return false;
     if (strip < 0 || strip > 7) return false;
     g_hudUf8HwLearnReq.store(kind * 8 + strip);
     return true;
@@ -34583,8 +34582,6 @@ void reasixty_setUf8LearnAsToggle(bool v)
 }
 void reasixty_hudHwLearnRequest(int linkIdx, int domain, bool isKnob)
 {
-    // The UF1 tab owns Touch-to-Learn while it is showing — see g_hudUf1Tab.
-    if (g_hudUf1Tab.load()) return;
     g_hudHwLearnReqLink.store(linkIdx);
     g_hudHwLearnReqDom.store(domain);
     g_hudHwLearnReqIsKnob.store(isKnob);

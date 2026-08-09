@@ -10972,7 +10972,7 @@ bool hudUf1BindMatch_(const std::string& match, bool softKeys, int pos, int vst3
         if (!done) { UserUf1Slot ns{}; ns.pos = pos; ns.vst3Param = vst3Param;
                      ns.customLabel = inherited;
                      v.push_back(std::move(ns)); }
-        user_plugins::setAll(std::move(cat));
+        user_plugins::upsert(m);           // never setAll from an editor frame
         persistAndReport_();
         return true;
     }
@@ -11095,7 +11095,19 @@ bool hudUf1LearnTick_()
         }
         return false;
     }
-    if (std::string(name).find(g_hudUf1LearnMatch) == std::string::npos) return false;
+    // Is the wiggled FX the plug-in we armed on? Ask the CATALOG, don't compare
+    // strings: the arm resolved its match through lookupOwnedByName (substring,
+    // and fxIdentityName may hand back the factory name here and the display
+    // name there), so a raw find() on the identity could reject a legitimate
+    // wiggle and the learn would sit there registering nothing. Frank
+    // 2026-08-09: "touch to learn registriert keine plugin änderungen".
+    {
+        const auto* um = user_plugins::lookupOwnedByName(name);
+        const bool same = um ? (um->match == g_hudUf1LearnMatch)
+                             : (std::string(name).find(g_hudUf1LearnMatch)
+                                != std::string::npos);
+        if (!same) return false;
+    }
     if (hudUf1BindMatch_(g_hudUf1LearnMatch, g_hudUf1LearnSk, g_hudUf1LearnPos, p)) {
         hudUf1CancelLearn_();
         return true;
@@ -11118,7 +11130,7 @@ bool hudUf1MutateMatch_(const std::string& match, bool softKeys, int pos, F&& fn
         for (size_t i = 0; i < v.size(); ++i)
             if (v[i].pos == pos) {
                 fn(v, i);
-                user_plugins::setAll(std::move(cat));
+                user_plugins::upsert(m);   // never setAll from an editor frame
                 persistAndReport_();
                 return true;
             }
