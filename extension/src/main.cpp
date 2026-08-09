@@ -26769,14 +26769,12 @@ void pushZonesForVisibleSlots()
             // plug-in's own short name so the Fader Label field in
             // Settings → FX Learn actually affects the scribble.
             if (userFaderActive) {
-                if (!userF.label.empty()) {
-                    n = userF.label;
-                } else {
-                    char pn[64] = {0};
-                    TrackFX_GetParamName(userF.tr, userF.fxIdx,
-                        userF.vst3Param, pn, sizeof(pn));
-                    if (pn[0]) n = pn;
-                }
+                // Shared name order, like every other surface — the scribble is
+                // the second fader path and used to fall straight through to the
+                // plug-in's raw name.
+                const std::string nm = uf1ParamDisplayName_(
+                    userF.tr, userF.fxIdx, userF.vst3Param, userF.label);
+                if (!nm.empty()) n = nm;
             }
             // FX Learn UF8: in user-strip mode without a fader binding
             // for this strip, blank the upper scribble — Frank's
@@ -27179,11 +27177,15 @@ void pushZonesForVisibleSlots()
                     // fader-only mapping is still visible on the scribble.
                     char pn[64]  = {0};
                     char vbuf[64] = {0};
-                    if (!fb.faderLabel.empty())
-                        std::strncpy(pn, fb.faderLabel.c_str(), sizeof(pn) - 1);
-                    else
-                        TrackFX_GetParamName(uctx.tr, uctx.fxIdx,
-                            fb.faderVst3Param, pn, sizeof(pn));
+                    // FADER = its own path. It used to jump straight from
+                    // faderLabel to the plug-in's raw name, which is why
+                    // bx_console 4K read "Fader Lavel" here while the UC1 and
+                    // the UF1 showed the shared name (Frank 2026-08-09).
+                    {
+                        const std::string nm = uf1ParamDisplayName_(
+                            uctx.tr, uctx.fxIdx, fb.faderVst3Param, fb.faderLabel);
+                        std::strncpy(pn, nm.c_str(), sizeof(pn) - 1);
+                    }
                     const double norm = TrackFX_GetParamNormalized(
                         uctx.tr, uctx.fxIdx, fb.faderVst3Param);
                     // Readout shows the TRUE value — invert only reverses input.

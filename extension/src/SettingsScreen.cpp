@@ -15731,18 +15731,29 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     for (int p = 0; p < shownPages; ++p) {
         if (p) ImGui_SameLine(ctx, nullptr, nullptr);
         const bool active = (p == g_uf1EditingPage);
+        // The LAST entry is the spare page — it does not exist on the hardware
+        // or in the HUD tab (both follow uf1MapPageCount), so labelling it
+        // "Page N" made the editor claim a page the other two didn't have
+        // (Frank 2026-08-09). It becomes a page as soon as something is bound.
         char lbl[24];
-        snprintf(lbl, sizeof(lbl), "Page %d", p + 1);
+        if (p == shownPages - 1 && p >= pages)
+            snprintf(lbl, sizeof(lbl), "+##uf1_newpage");
+        else
+            snprintf(lbl, sizeof(lbl), "Page %d", p + 1);
         if (active) {
             ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0x60C060FF);
             ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0x70D070FF);
             ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x80E080FF);
         }
-        double bw = 76.0, bh = 22.0;
+        const bool isSpare = (p == shownPages - 1 && p >= pages);
+        double bw = isSpare ? 28.0 : 76.0, bh = 22.0;
         if (ImGui_Button(ctx, lbl, &bw, &bh)) {
             g_uf1EditingPage = p;
-            if (pageLinked) reasixty_setUf1CsPage(p);  // editor → hardware
+            // Never page the hardware onto the spare — it has no such page.
+            if (pageLinked && !isSpare) reasixty_setUf1CsPage(p);
         }
+        if (isSpare && ImGui_IsItemHovered(ctx, nullptr))
+            ImGui_SetTooltip(ctx, "New page — exists once you bind something here");
         if (active) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
     }
     if (pageLinked) {
