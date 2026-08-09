@@ -2193,6 +2193,16 @@ local function render()
     lastUf8Tab = onUf8
     reaper.SetExtState(SECT, "hud_uf8_tab", onUf8 and "1" or "0", false)
   end
+  -- Same edge-write for the UF1 tab: while it is showing, Touch-to-Learn
+  -- belongs to the UF1 alone, so touching a UC1 knob no longer arms a UC1 learn
+  -- behind the tab you are editing (Frank 2026-08-09). Its OWN edge tracker —
+  -- CS→UF1 never changes onUf8, so piggybacking on that one would miss it. The
+  -- flag lives on uf1View because the main chunk is at Lua's 200-local ceiling.
+  local onUf1 = (activeTab == "uf1")
+  if uf1View.tabPub ~= onUf1 then
+    uf1View.tabPub = onUf1
+    reaper.SetExtState(SECT, "hud_uf1_tab", onUf1 and "1" or "0", false)
+  end
 
   -- UF8 device tab: list view = strip-grid, mockup view = hardware face. Mirrors
   -- the CS/BC list/mockup toggle (shared hud_imgui_view). Independent of the UC1
@@ -4010,6 +4020,7 @@ shutdown = function()
   reaper.SetExtState(SECT, RUNKEY, "0", false)
   reaper.SetExtState(SECT, "hud_touch_learn", "0", false)   -- don't leave UC1 inert
   reaper.SetExtState(SECT, "hud_uf8_tab", "0", false)       -- let C++ revert Plugin Mode
+  reaper.SetExtState(SECT, "hud_uf1_tab", "0", false)       -- else UC1 touch-learn stays blocked
   setToggle(false)
 end
 

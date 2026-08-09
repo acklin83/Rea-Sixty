@@ -3135,6 +3135,14 @@ std::atomic<bool> g_hudAutoStartDone{false};
 // refreshed in onTimer. The pending request is set from the UC1 input drain
 // (main thread, in UC1Surface::poll) and consumed in onTimer's HUD block.
 std::atomic<bool> g_hudTouchLearn{false};
+// The HUD is showing its UF1 tab (mirror of the ExtState "hud_uf1_tab",
+// refreshed in onTimer). Touch-to-Learn is otherwise standalone and device-wide
+// — a deliberate 2026-06-20 decision for the UF8 — but while the UF1 tab is up,
+// the thing you are editing is the UF1, and touching a UC1 knob armed a UC1
+// learn behind the tab you were looking at (Frank 2026-08-09: "touch to learn in
+// uf1 mode listened auch auf das uc1"). So the OTHER surfaces stand down for as
+// long as that tab is showing; every other tab keeps the standalone behaviour.
+std::atomic<bool> g_hudUf1Tab{false};
 std::atomic<int>  g_hudHwLearnReqLink{-1};   // armed control's linkIdx (-1 = none)
 std::atomic<int>  g_hudHwLearnReqDom{0};     // 0 = ChannelStrip, 1 = BusComp
 std::atomic<bool> g_hudHwLearnReqIsKnob{false}; // true = a KNOB was touched (vs button)
@@ -17796,8 +17804,9 @@ static bool uf8TouchLearnArm_(int kind, int strip)
 {
     // Standalone (Frank 2026-06-20): no longer requires the HUD open or its UF8
     // tab active — touching any UF8 control arms its learn whenever the mode is
-    // on, driven by the bindable touch_to_learn_toggle action.
-    if (!g_hudTouchLearn.load()) return false;
+    // on, driven by the bindable touch_to_learn_toggle action. The ONE exception
+    // is the HUD's UF1 tab, which owns the mode while it is showing (g_hudUf1Tab).
+    if (!g_hudTouchLearn.load() || g_hudUf1Tab.load()) return false;
     if (strip < 0 || strip > 7) return false;
     g_hudUf8HwLearnReq.store(kind * 8 + strip);
     return true;
@@ -30597,6 +30606,9 @@ void onTimer()
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
         if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))
             g_hudTouchLearn.store(tl[0] == '1');
+        // …and which device tab owns it: on the UF1 tab, only the UF1 arms.
+        if (const char* u1t = GetExtState("rea_sixty", "hud_uf1_tab"))
+            g_hudUf1Tab.store(u1t[0] == '1');
 
         // UF8 tab auto-engages UF8 Plugin Mode so the hardware Top-Soft-Keys
         // navigate V-Pot banks while the user maps from the HUD. Edge-triggered:
@@ -31620,12 +31632,17 @@ void onTimer()
                 SetExtState("rea_sixty", "hud_uf1_learn", uf1Pub.c_str(), false);
             }
         }
-    } else if (g_hudUf8AutoEngaged) {
-        // HUD closed (or disabled) while it had auto-engaged UF8 Plugin Mode →
-        // revert so the surface doesn't stay parked in Plugin Mode unexpectedly.
-        disengageUf8PluginMode_();
-        g_hudUf8AutoEngaged = false;
-        g_hudUf8TabActive   = false;
+    } else {
+        // HUD closed / disabled: it can no longer own Touch-to-Learn, so the
+        // UF1-tab claim must not outlive it — otherwise the UC1 stays inert.
+        g_hudUf1Tab.store(false);
+        if (g_hudUf8AutoEngaged) {
+            // …and revert the UF8 Plugin Mode we auto-engaged for its tab, so
+            // the surface doesn't stay parked there unexpectedly.
+            disengageUf8PluginMode_();
+            g_hudUf8AutoEngaged = false;
+            g_hudUf8TabActive   = false;
+        }
     }
 
     // Mid-session stale-handle recovery. Triggered when a device's
@@ -34483,6 +34500,8 @@ void reasixty_setUf8LearnAsToggle(bool v)
 }
 void reasixty_hudHwLearnRequest(int linkIdx, int domain, bool isKnob)
 {
+    // The UF1 tab owns Touch-to-Learn while it is showing — see g_hudUf1Tab.
+    if (g_hudUf1Tab.load()) return;
     g_hudHwLearnReqLink.store(linkIdx);
     g_hudHwLearnReqDom.store(domain);
     g_hudHwLearnReqIsKnob.store(isKnob);
