@@ -394,6 +394,8 @@ void reasixty_setRecUc1Polarity(int v);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
+bool reasixty_uf1StripKeyWithGui();
+void reasixty_setUf1StripKeyWithGui(bool withGui);
 void reasixty_setPluginGuiFollowsInstance(bool follow);
 bool reasixty_pluginGuiPinPos();
 void reasixty_setPluginGuiPinPos(bool on);
@@ -890,6 +892,14 @@ void SettingsScreen::drawDevice(ImGui_Context* ctx)
     bool pgfi = reasixty_pluginGuiFollowsInstance();
     if (ImGui_Checkbox(ctx, "Plug-in GUI follows active Instance", &pgfi)) {
         reasixty_setPluginGuiFollowsInstance(pgfi);
+    }
+
+    // The UF1's PLUG-IN soft-key on a NATIVE SSL strip. An explicit UF1 map
+    // chooses per key (FX-Learn → UF1 cell → Action); the built-in p188 pages
+    // have no per-key storage, so they follow this.
+    bool uskg = reasixty_uf1StripKeyWithGui();
+    if (ImGui_Checkbox(ctx, "UF1 PLUG-IN key opens the plug-in GUI", &uskg)) {
+        reasixty_setUf1StripKeyWithGui(uskg);
     }
 
     // Two independent, persistent cues for the active CS / BC instance, both
@@ -9026,6 +9036,40 @@ void setUf1LedRgb_(int pos, uint32_t rgb)
         uf1SlotRef_(u, /*softKeys*/true, pos).ledRgb = rgb;
     });
 }
+// The UC1's ENGRAVED slot name for a parameter of the map being edited — the
+// same bridge uf1CanonicalParamName_ builds on the device side. The UC1 and the
+// UF8 print the slot's name ("HF Gain" is engraved on the panel); the UF1 has no
+// engraved slots, so without this the editor and the HUD showed the plug-in's
+// own wording where the hardware showed the UC1's (Frank 2026-08-09: "auch die
+// Namen vom UC1 nehmen, ausser User-defined name"). Empty when the param sits on
+// no UC1 slot. Resolved through the plug-in's OWN map — never by substring
+// against a built-in one, which is the "bx_4K G → 4K E" trap.
+std::string canonicalSlotNameForParam_(const std::string& match, int vst3Param)
+{
+    if (match.empty() || vst3Param < 0) return {};
+    auto slotName = [](uf8::Domain d, int linkIdx) -> const char* {
+        const uf8::PluginMap* topo = canonicalTopology_(d);
+        if (!topo) return nullptr;
+        const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*topo, linkIdx);
+        return (sl && sl->name && *sl->name) ? sl->name : nullptr;
+    };
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (const auto& s : m.slots) {
+            if (s.vst3Param != vst3Param) continue;
+            if (const char* cn = slotName(m.domain, s.linkIdx)) return cn;
+            break;
+        }
+        return {};
+    }
+    // Built-in strip: its own LinkSlot table already carries the names.
+    if (const uf8::PluginMap* bm = uf8::lookupPluginMapByName(match)) {
+        for (const uf8::LinkSlot& sl : bm->slots)
+            if (sl.vst3Param == vst3Param && sl.name && *sl.name) return sl.name;
+    }
+    return {};
+}
+
 // Fixed non-parameter soft-key action (v14). The p188 pages weld PLUG-IN to
 // soft-key 4 of page 1 and HQ / A/B to page 2; this puts them on any soft-key
 // the user wants (Frank 2026-08-09). 0 = none → plug-in param, as before.
@@ -9044,6 +9088,15 @@ constexpr Uf1SpecialChoice kUf1Specials[] = {
     { uint8_t(uf8::Uf1SkSpecial::HQ),           "HQ Mode"                },
     { uint8_t(uf8::Uf1SkSpecial::AB),           "A/B compare"            },
 };
+// What a special-action key calls itself in the editor — the picker's wording,
+// so the cell, its tooltip and the menu all say the same thing. (The HARDWARE
+// prints SSL's shorter p188 word instead; see uf1SkSpecialLabel_ in main.cpp.)
+const char* uf1SpecialLabel_(uint8_t special)
+{
+    for (const auto& c : kUf1Specials)
+        if (c.v == special) return c.label;
+    return "";
+}
 // Push-to-default target. Unlike the UC1 (whose knobs have no push), the UF1
 // V-Pots DO push — applyUf1ChannelVpotPush_ reads this very field for an
 // explicit slot, so the value is live, not a mirror-only hint.
@@ -11392,18 +11445,32 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     char name[512] = {0};
     if (!fxIdentityName(tr, fx, name, sizeof(name)) || !name[0]) return;
     const auto* um = user_plugins::lookupOwnedByName(name);
-    if (!um || !um->uf1Mode) return;
+    // An UNMAPPED plug-in still gets a header, so the tab draws its empty grid
+    // and the user can learn / touch-to-learn right there — the same thing the
+    // FX-Learn UF1 schematic does (Frank 2026-08-09: "UF1 tab erscheint beim HUD
+    // gar nicht wenn nicht gemappt"). Before this the payload stayed empty and
+    // the Lua read that as "no tab".
+    const bool haveMap = um && um->uf1Mode;
     char hdr[64];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d", uf1MapPageCount(um->uf1), page);
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d",
+                  haveMap ? uf1MapPageCount(um->uf1) : 1, page);
     out = hdr;
+    if (!haveMap) return;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
-            if (s.vst3Param < 0) continue;
+            // v14: an action-only soft-key has no param but IS a binding.
+            if (s.vst3Param < 0 && !s.special) continue;
             // Same order the surfaces use: slot override → shared param name →
-            // the plug-in's own (the canonical LinkSlot name is resolved
-            // device-side; the tab shows what the user actually named).
+            // the UC1's engraved slot name → the plug-in's own. The canonical
+            // step used to be device-side only, so the tab said "EQ High Gain"
+            // where the UC1 and the UF1 said "HF Gain" (Frank 2026-08-09).
             std::string label = s.customLabel;
+            if (label.empty() && s.special)
+                label = uf1SpecialLabel_(s.special);
             if (label.empty()) label = user_plugins::paramLabelFor(name, s.vst3Param);
+            // Keyed by the MAP's match, not the raw FX name — the catalog is
+            // keyed that way (lookupOwnedByName matches by substring).
+            if (label.empty()) label = canonicalSlotNameForParam_(um->match, s.vst3Param);
             if (label.empty()) {
                 char pn[64] = {0};
                 TrackFX_GetParamName(tr, fx, s.vst3Param, pn, sizeof(pn));
@@ -15416,16 +15483,26 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     char shown[96];
     const uf8::UserUf1Slot* slot = nullptr;
     if (const auto* v = uf1EditStream_(softKeys)) slot = uf8::uf1SlotAt(*v, pos);
+    const uint8_t special = slot ? slot->special : 0;
     if (slot && !slot->customLabel.empty()) {
         snprintf(shown, sizeof(shown), "%s", slot->customLabel.c_str());
+    } else if (special) {
+        // A fixed action (v14) names itself — the parameter underneath is
+        // ignored, so showing its name here was a lie (Frank 2026-08-09
+        // "mouse-over zeigt immer noch alten parameter").
+        snprintf(shown, sizeof(shown), "%s", uf1SpecialLabel_(special));
     } else if (isMapped) {
         // Same order the devices and the HUD use: slot override → the shared
-        // per-parameter name → the plug-in's own. Without the middle step the
-        // editor showed "Out Gain" where the HUD and the UF1 showed "Out"
-        // (Frank 2026-08-09).
+        // per-parameter name → the UC1's engraved slot name → the plug-in's own.
+        // Without the middle steps the editor showed "Out Gain" where the HUD
+        // and the UF1 showed "Out" (Frank 2026-08-09).
         const std::string shared = sharedParamLabel_(g_editingMatch, mapped);
         if (!shared.empty()) {
             snprintf(shown, sizeof(shown), "%s", shared.c_str());
+        } else if (const std::string canon =
+                       canonicalSlotNameForParam_(g_editingMatch, mapped);
+                   !canon.empty()) {
+            snprintf(shown, sizeof(shown), "%s", canon.c_str());
         } else {
             const UserPluginMap* editing = nullptr;
             for (const auto& m : uf8::user_plugins::get().maps)
@@ -15444,6 +15521,13 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
              isListen ? "\xE2\x97\x8F listening\xE2\x80\xA6" : shown,
              softKeys ? 1 : 0, pos);
     double bw = 168.0, bh = 44.0;
+    // Soft-key labels carry their LED colour (v12) so the editor reads like the
+    // hardware does — you find the key by its colour, not by counting positions
+    // (Frank 2026-08-09). Not while listening: amber owns the cell then.
+    const bool tintText = softKeys && slot && slot->ledRgb && !isListen;
+    if (tintText)
+        ImGui_PushStyleColor(ctx, ImGui_Col_Text,
+                             (slot->ledRgb << 8) | 0xFF);   // 0xRRGGBBAA
     const bool tinted = isListen || isMapped;
     if (tinted) {
         // Amber while armed, green when bound — same reading as the UC1/UF8
@@ -15470,6 +15554,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         }
     }
     if (tinted) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
+    if (tintText) { int popT = 1; ImGui_PopStyleColor(ctx, &popT); }
 
     if (ImGui_IsItemHovered(ctx, nullptr)) {
         char tip[288];
@@ -15479,6 +15564,13 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                      "  listening — touch a parameter to bind it\n"
                      "  click again to cancel",
                      what, idx + 1, g_uf1EditingPage + 1);
+        else if (special)
+            // The action IS the binding here — naming the parameter would
+            // describe something the key no longer fires.
+            snprintf(tip, sizeof(tip), "%s %d  (page %d)\n  %s\n"
+                     "  right-click \xE2\x86\x92 Action to change it",
+                     what, idx + 1, g_uf1EditingPage + 1,
+                     uf1SpecialLabel_(special));
         else if (isMapped)
             snprintf(tip, sizeof(tip), "%s %d  (page %d)\n  %s%s\n"
                      "  click to re-learn \xC2\xB7 right-click for options",

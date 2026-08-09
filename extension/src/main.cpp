@@ -3285,6 +3285,14 @@ std::atomic<bool> g_stripFollowsFocusedFx{false};
 // (with GUI) or UF8 Plugin Mode (with GUI), Instance Cycle switches the
 // GUI to the new target instance. Default on — Frank 2026-05-15.
 std::atomic<bool> g_pluginGuiFollowsInstance{true};
+// The p188 PLUG-IN soft-key on a NATIVE SSL strip: with or without the plug-in
+// GUI. A learned/explicit UF1 map picks this per key (UserUf1Slot::special,
+// v14), but a built-in strip's soft-keys come from kUf1CsSoftKeys and have no
+// per-key storage — turning the plug-in into an explicit UF1 map just to reach
+// the choice would blank the whole p188 layout. So the built-in pages read this
+// one setting instead (Frank 2026-08-09: "für native SSL CS will ich auch
+// entscheiden können, ob mit oder ohne GUI"). Default off = what it always did.
+std::atomic<bool> g_uf1StripKeyWithGui{false};
 
 // Pin plug-in GUI position — when on, every TrackFX_Show(..., 3) we run
 // on a managed path is followed by a SetWindowPos to (pinX, pinY). Size
@@ -3921,6 +3929,8 @@ void loadBrightness()
     if (pgfi && *pgfi) {
         g_pluginGuiFollowsInstance.store(std::atoi(pgfi) != 0);
     }
+    const char* uskg = GetExtState("rea_sixty", "uf1_strip_key_with_gui");
+    if (uskg && *uskg) g_uf1StripKeyWithGui.store(std::atoi(uskg) != 0);
     const char* pgpp = GetExtState("rea_sixty", "plugin_gui_pin_pos");
     if (pgpp && *pgpp) g_pluginGuiPinPos.store(std::atoi(pgpp) != 0);
     const char* pgpx = GetExtState("rea_sixty", "plugin_gui_pin_x");
@@ -22306,8 +22316,11 @@ const char* uf1SkSpecialLabel_(uf8::Uf1SkSpecial act)
     switch (act) {
         case uf8::Uf1SkSpecial::HQ:           return "HQ MODE";
         case uf8::Uf1SkSpecial::AB:           return "A/B";
-        case uf8::Uf1SkSpecial::StripMode:    return "PLUG-IN";
-        case uf8::Uf1SkSpecial::StripModeGui: return "PLUG-IN G";
+        // Both Strip Mode variants print SSL's own word. The GUI variant is a
+        // property of what the key DOES, not of what it is — "PLUG-IN G" was
+        // just noise on the screen (Frank 2026-08-09).
+        case uf8::Uf1SkSpecial::StripMode:
+        case uf8::Uf1SkSpecial::StripModeGui: return "PLUG-IN";
         case uf8::Uf1SkSpecial::None:         return "";
     }
     return "";
@@ -22393,9 +22406,12 @@ void applyUf1ChannelSoftKey_(int idx)
             // the SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack)
             // instead of track volume. UF1-LOCAL g_uf1StripMode (Frank 2026-07-30 —
             // was the shared g_pluginFaderMode; now UF8 and UF1 toggle independently).
-            // Headless variant: a user who wants the GUI puts StripModeGui on the
-            // key in FX-Learn (v14).
-            uf1FireSkSpecial_(uf8::Uf1SkSpecial::StripMode, tr);
+            // With or without the plug-in GUI is the user's call — per key on an
+            // explicit UF1 map (v14), and for a NATIVE strip via the one setting
+            // (Settings → …, g_uf1StripKeyWithGui). Default off = as before.
+            uf1FireSkSpecial_(g_uf1StripKeyWithGui.load()
+                                  ? uf8::Uf1SkSpecial::StripModeGui
+                                  : uf8::Uf1SkSpecial::StripMode, tr);
             return;
         }
     }
@@ -31117,6 +31133,15 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s == "uf1cancel") {
+                // Disarm a UF1 learn from the HUD. Without this the tab could
+                // only ARM one — clicking the armed cell re-armed it and there
+                // was no way out (Frank 2026-08-09 "HUD Listening kann nicht
+                // abgebrochen werden"). The Settings cell has always disarmed
+                // on a second click; this is the same escape.
+                reasixty_uf1CancelLearn();
+                g_hudUf1AssignPublished.clear();
+                publishHud_();
             } else if (s.rfind("uf1special;", 0) == 0) {
                 // "uf1special;<pos>;<n>" — fixed non-parameter soft-key action
                 // (v14): 0 = plug-in param, 1 = HQ, 2 = A/B, 3 = Strip Mode,
@@ -35990,6 +36015,17 @@ void reasixty_setPluginGuiFollowsInstance(bool follow)
     g_pluginGuiFollowsInstance.store(follow);
     SetExtState("rea_sixty", "plugin_gui_follows_instance",
                 follow ? "1" : "0", true);
+}
+
+bool reasixty_uf1StripKeyWithGui()
+{
+    return g_uf1StripKeyWithGui.load();
+}
+
+void reasixty_setUf1StripKeyWithGui(bool withGui)
+{
+    g_uf1StripKeyWithGui.store(withGui);
+    SetExtState("rea_sixty", "uf1_strip_key_with_gui", withGui ? "1" : "0", true);
 }
 
 // Request a "View active plug-in" follow — if the focused-FX floating

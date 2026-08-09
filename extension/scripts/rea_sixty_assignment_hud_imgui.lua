@@ -759,12 +759,16 @@ local function drawTabs(st, ust)
   x = tab("cs",  st.csPresent,            x)
   x = tab("bc",  st.bcPresent,            x)
   x = tab("uf8", ust and ust.present,     x)
-  -- UF1 tab appears only when the shown plug-in actually carries a UF1 layer —
-  -- an empty hud_uf1_assign means "no UF1 map", so the tab would be dead chrome.
+  -- UF1 tab appears whenever the UF1 is showing a plug-in at all — mapped or
+  -- not. It used to require a non-empty hud_uf1_assign, i.e. an existing UF1
+  -- layer, which meant an UNMAPPED plug-in had no tab and therefore no way to
+  -- create one from the HUD, while FX-Learn (and Touch-to-Learn) could
+  -- (Frank 2026-08-09). The extension now publishes a bare header for the
+  -- unmapped case, so the tab draws its empty grid and a click learns.
   if reaper.GetExtState(SECT, "hud_uf1_assign") ~= "" then
     x = tab("uf1", true, x)
   elseif activeTab == "uf1" then
-    activeTab = "cs"                        -- layer turned off while we were on it
+    activeTab = "cs"                        -- the UF1 shows no plug-in at all
   end
 
   -- UF8 has no modifier layers, so skip the badge. Both toggles ARE supported on
@@ -1573,8 +1577,14 @@ local function renderUf1Tab(u1)
       local label = isArmed and "\xE2\x97\x8F listening\xE2\x80\xA6"
                  or (cell and (cell.label ~= "" and cell.label
                                or ("param " .. tostring(cell.param))) or "\xE2\x80\x94")
-      dtext(cx + 8, y + 8,
-            col((cell or isArmed) and 0xE8E8EE or 0x6A6A72, 1), label, px)
+      -- A soft-key's label carries its LED colour so the tab reads like the
+      -- hardware — you find the key by colour, not by counting (Frank
+      -- 2026-08-09). Listening keeps the amber wording.
+      local labCol = (cell or isArmed) and 0xE8E8EE or 0x6A6A72
+      if cell and row.sk == 1 and (cell.ledRgb or 0) ~= 0 and not isArmed then
+        labCol = cell.ledRgb
+      end
+      dtext(cx + 8, y + 8, col(labCol, 1), label, px)
       if cell and cell.inv then
         dtext(cx + 8, y + 26, col(0xD8A050, 1), "inverted", px - 2)
       end
@@ -1588,7 +1598,8 @@ local function renderUf1Tab(u1)
     y = y + CH + 12
   end
   dtext(14, y + 2, col(0x6A6A72, 1),
-        "Click a control to learn it \xC2\xB7 right-click to unbind or invert", px - 2)
+        "Click a control to learn it \xC2\xB7 click it again (or empty space) to cancel"
+        .. " \xC2\xB7 right-click to unbind or invert", px - 2)
 end
 local function uf1CellAt(mx, my)
   for _, h in ipairs(uf1Rects) do
@@ -3767,7 +3778,20 @@ local function loop()
             if p then uf1EditPage = p
             else
               local sk, pos = uf1CellAt(lx, ly)
-              if sk then sendCmd("uf1learn;" .. pos .. ";" .. sk) end
+              local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
+              local armedPos = (armed >= 0) and (armed & 0xFF) or -1
+              local armedSk  = (armed >= 0) and (((armed & 0x100) ~= 0) and 1 or 0) or -1
+              if sk then
+                -- Clicking the ARMED cell disarms, exactly like the FX-Learn
+                -- cell. Anything else arms that cell.
+                if pos == armedPos and sk == armedSk then
+                  sendCmd("uf1cancel")
+                else
+                  sendCmd("uf1learn;" .. pos .. ";" .. sk)
+                end
+              elseif armed >= 0 then
+                sendCmd("uf1cancel")   -- click into empty space = escape
+              end
             end
           end
         elseif activeTab == "uf8" then
