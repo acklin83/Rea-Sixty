@@ -11416,6 +11416,29 @@ bool sendToUc1_(const std::string& match, int linkIdx, int layer,
 // sind in plugins". With no instance the snapshot's `wasEnum` stands in — it is
 // `isToggle || step >= 0.5`, i.e. coarse-stepped counts as a switch, which is
 // the right way to be wrong here (a stepped param on a soft-key still cycles).
+// "Show EQ Graph" (v15) — draw our EQ curve on the UF1 for this LEARNED CS by
+// resolving the EQ parameters through its UC1 link slots. Built-in SSL strips
+// get the curve from their own parameter names and ignore this.
+void setUf1EqGraph_(const std::string& match, bool on)
+{
+    if (match.empty()) return;
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        if (m.uf1EqGraph == on) return;
+        m.uf1EqGraph = on;
+        user_plugins::upsert(m);        // never setAll from an editor frame
+        persistAndReport_();
+        return;
+    }
+}
+bool uf1EqGraphOn_(const std::string& match)
+{
+    for (const auto& m : user_plugins::get().maps)
+        if (m.match == match) return m.uf1EqGraph;
+    return false;
+}
+
 // Empty the UF1 layer. Returns how many bindings went. The layer flag stays on:
 // an empty explicit map is a deliberate state ("this plug-in shows nothing on
 // the UF1"), not the same as never having had one.
@@ -11575,10 +11598,11 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     // map that collides with a built-in — which is exactly why arming a learn on
     // one silently did nothing. Say so instead (Frank 2026-08-09).
     const int factory = user_plugins::collidesWithBuiltin(name) ? 1 : 0;
+    const int eqg = (um && um->uf1EqGraph) ? 1 : 0;      // v15, for the menu tick
     char hdr[600];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%s",
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%d;%s",
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
-                  haveMap ? 1 : 0, isBc, factory, shortName.c_str());
+                  haveMap ? 1 : 0, isBc, factory, eqg, shortName.c_str());
     out = hdr;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
@@ -16144,6 +16168,18 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         uf1ClearAll_(g_editingMatch);
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx, "Empty the UF1 layer. The layer itself stays on.");
+    // Our EQ graph for a LEARNED CS. The built-in strips draw it from SSL's own
+    // parameter names; a learned plug-in names them differently, so the curve
+    // stayed blank until it could be resolved through the UC1 slots instead.
+    ImGui_Spacing(ctx);
+    bool eqg = uf1EqGraphOn_(g_editingMatch);
+    if (ImGui_Checkbox(ctx, "Show EQ Graph on the UF1", &eqg))
+        setUf1EqGraph_(g_editingMatch, eqg);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx,
+            "Draw our EQ curve on the UF1 for this plug-in. The EQ parameters\n"
+            "are read from the UC1 slots you mapped (HF Gain, HMF Freq, …), so\n"
+            "the more of the EQ section is mapped there, the fuller the curve.");
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
         "Click a control to learn it, or drag a parameter from the list. Leave "
@@ -21944,6 +21980,19 @@ int reasixty_hudUf1FillRest(void* tr, int fx, int mode)
         case 3:  return uf8::uf1ClearAll_(m);
         default: return uf8::fillUf1WithRest_(m, static_cast<MediaTrack*>(tr), fx, false);
     }
+}
+bool reasixty_hudUf1EqGraph(void* tr, int fx, int on)
+{
+    std::string m;
+    if (!uf8::hudUf1ResolveMatch_(tr, fx, m)) return false;
+    uf8::setUf1EqGraph_(m, on != 0);
+    return true;
+}
+int reasixty_hudUf1EqGraphOn(void* tr, int fx)
+{
+    std::string m;
+    if (!uf8::hudUf1ResolveMatch_(tr, fx, m)) return 0;
+    return uf8::uf1EqGraphOn_(m) ? 1 : 0;
 }
 bool reasixty_hudUf1Special(void* tr, int fx, int pos, int special)
 {

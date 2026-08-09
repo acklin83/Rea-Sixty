@@ -305,6 +305,8 @@ std::string serialize_(const UserPluginCatalog& c)
         // byte-identically and an older reader ignores it (absent = false).
         if (m.uf1Mode)
             os << "      \"uf1Mode\": true,\n";
+        if (m.uf1EqGraph)                      // v15, sparse
+            os << "      \"uf1EqGraph\": true,\n";
         // Additive (Frank 2026-06-02) — only written when the user has turned
         // the default off, so pre-feature catalogs stay byte-identical.
         if (!m.useReaperTrackPolarity)
@@ -783,6 +785,8 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         bool uf1ModeRead = false;
         const bool hadUf1Mode = getBoolI_(po, "uf1Mode", uf1ModeRead);
         if (hadUf1Mode) m.uf1Mode = uf1ModeRead;
+        bool uf1EqRead = false;                // v15, absent before
+        if (getBoolI_(po, "uf1EqGraph", uf1EqRead)) m.uf1EqGraph = uf1EqRead;
         // Additive; missing key keeps the struct default (true).
         getBoolI_(po, "useReaperTrackPolarity", m.useReaperTrackPolarity);
         int snapTs = 0;

@@ -163,6 +163,8 @@ bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, in
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
 bool        reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb);
 bool        reasixty_hudUf1Special(void* tr, int fx, int pos, int special);
+bool        reasixty_hudUf1EqGraph(void* tr, int fx, int on);
+int         reasixty_hudUf1EqGraphOn(void* tr, int fx);
 bool        reasixty_hudUf1BindParam(void* tr, int fx, bool softKeys, int pos, int param);
 int         reasixty_hudUf1FillRest(void* tr, int fx, int mode);
 // UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
@@ -21248,6 +21250,42 @@ double uf1LpfDb_(double f, double fc)
 
 } // namespace
 
+// The vst3Param a LEARNED map has on the UC1 slot with this canonical name.
+// The UC1's slot names ARE the SSL names the EQ painter asks for ("HF Gain",
+// "HMF Freq", "LPF", "EQ In", …), so a learned plug-in that named its own
+// parameters differently is still fully described — through the map the user
+// already built for the UC1. -1 = that slot is unmapped here. Main-thread only.
+static int userParamForCanonicalName_(const uf8::UserPluginMap& um, const char* name)
+{
+    const uf8::PluginMap* topo = nullptr;
+    for (const uf8::PluginMap& m : uf8::allPluginMaps()) {
+        if (m.domain != um.domain) continue;
+        if (!topo) topo = &m;
+        if (m.displayShort && std::string_view(m.displayShort) == "Link") {
+            topo = &m;
+            break;
+        }
+    }
+    if (!topo) return -1;
+    int linkIdx = -1;
+    for (const uf8::LinkSlot& sl : topo->slots)
+        if (sl.name && std::strcmp(sl.name, name) == 0) { linkIdx = sl.linkIdx; break; }
+    if (linkIdx < 0) return -1;
+    for (const auto& s : um.slots)
+        if (s.linkIdx == linkIdx) return s.vst3Param;
+    return -1;
+}
+
+// The learned map at (tr,fx) that asked for our EQ graph, else nullptr.
+static const uf8::UserPluginMap* uf1EqGraphMapAt_(MediaTrack* tr, int fx)
+{
+    if (!tr || fx < 0) return nullptr;
+    char nm[256];
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return nullptr;
+    const auto* um = uf8::user_plugins::lookupOwnedByName(nm);
+    return (um && um->uf1EqGraph) ? um : nullptr;
+}
+
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -21272,6 +21310,9 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // selected track's first EQ (the old behaviour) picked the wrong one.
     auto fxHasEq = [](MediaTrack* t, int fx) -> bool {
         if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return false;
+        // A learned CS that opted in (v15) counts even though none of its
+        // parameters are called "HF Gain" — its UC1 map says which ones are.
+        if (uf1EqGraphMapAt_(t, fx)) return true;
         const int pc = TrackFX_GetNumParams(t, fx);
         char pn[128];
         for (int p = 0; p < pc && p < 96; ++p)
@@ -21297,7 +21338,13 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         sFxTr = eqTr;
         sFx = eqFx;
         if (sFx >= 0) {
-            for (int k = 0; k < 15; ++k) ix[k] = uf1ParamByName_(eqTr, sFx, names[k]);
+            // A learned CS resolves through its UC1 link slots (v15 opt-in);
+            // everything else by SSL's own parameter names.
+            const uf8::UserPluginMap* eqMap = uf1EqGraphMapAt_(eqTr, sFx);
+            for (int k = 0; k < 15; ++k)
+                ix[k] = eqMap ? userParamForCanonicalName_(*eqMap, names[k])
+                              : uf1ParamByName_(eqTr, sFx, names[k]);
+            if (!eqMap) {
             // LPF/HPF: the SSL CS params are "Low Pass" (kHz) / "High Pass" (Hz),
             // not "LPF"/"HPF" — resolve by the documented names, preferring the
             // param whose value reads as a frequency (skip a "...Pass In" toggle).
@@ -21318,6 +21365,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             };
             ix[12] = passFreq("Low Pass");
             ix[13] = passFreq("High Pass");
+            }   // !eqMap — a learned map already gave LPF/HPF by slot
             // Diagnostic (OFF unless REASIXTY_UF1_TRACE): dump exactly what
             // resolved so a wrong grab is visible instead of guessed.
             if (g_uf1Trace)
@@ -31171,6 +31219,17 @@ void onTimer()
                 reasixty_uf1CancelLearn();
                 g_hudUf1AssignPublished.clear();
                 publishHud_();
+            } else if (s.rfind("uf1eqgraph;", 0) == 0) {
+                // "uf1eqgraph;<0|1>" — draw our EQ curve on the UF1 for this
+                // LEARNED CS, resolved through its UC1 slots (v15).
+                const int on = std::atoi(s.c_str() + 11);
+                MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                    && reasixty_hudUf1EqGraph(u1Tr, u1Fx, on)) {
+                    g_hudUf1AssignPublished.clear();
+                    g_pageDirty.store(true);
+                    publishHud_();
+                }
             } else if (s.rfind("uf1fill", 0) == 0) {
                 // "uf1fill[;<mode>]" — whole-layer actions on the UF1 map:
                 // 0 = append what the UC1 lacks, 1 = replace with it,

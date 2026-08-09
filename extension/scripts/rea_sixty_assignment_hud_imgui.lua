@@ -357,16 +357,17 @@ local function readUf1()
               cells = { [0] = {}, [1] = {} } }
   for ln in raw:gmatch("[^\n]+") do
     if ln:sub(1, 2) == "P;" then
-      -- "P;<pages>;<page>;<hasMap>;<isBc>;<factory>;<plug-in name>" — name last
+      -- "P;<pages>;<page>;<hasMap>;<isBc>;<factory>;<eqGraph>;<name>" — name last
       -- because it may contain ';'. The two-field form is the pre-v14 header.
-      local pg, cur, mapped, bc, fac, nm =
-        ln:match("^P;(%d+);(%d+);(%d);(%d);(%d);(.*)$")
+      local pg, cur, mapped, bc, fac, eqg, nm =
+        ln:match("^P;(%d+);(%d+);(%d);(%d);(%d);(%d);(.*)$")
       if not pg then pg, cur = ln:match("^P;(%d+);(%d+)$") end
       u.pages   = tonumber(pg) or 1
       u.page    = tonumber(cur) or 0
       u.mapped  = (mapped ~= "0")
       u.isBc    = (bc == "1")
       u.factory = (fac == "1")
+      u.eqGraph = (eqg == "1")
       u.name    = nm or ""
     else
       -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
@@ -3382,6 +3383,15 @@ local function drawUf1ControlContextMenu()
     end
     if reaper.ImGui_MenuItem(ctx, "Unbind all") then
       sendCmd("uf1fill;3")
+    end
+    -- Our EQ curve for a LEARNED CS: its EQ params are read from the UC1 slots
+    -- the user mapped, since a learned plug-in doesn't call them "HF Gain".
+    do
+      local u1e = readUf1()
+      local on  = u1e and u1e.eqGraph or false
+      if reaper.ImGui_MenuItem(ctx, "Show EQ Graph on the UF1", nil, on) then
+        sendCmd("uf1eqgraph;" .. (on and "0" or "1"))
+      end
     end
 
     -- Fixed action (v14) — soft-keys only. SSL's own plug-in pages weld

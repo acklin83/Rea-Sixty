@@ -606,6 +606,13 @@ struct UserPluginMap {
     // without this block behaves byte-identically. Frank 2026-08-08.
     UserUf1Map                 uf1;
     bool                       uf1Mode = false;
+    // v15 — draw OUR EQ graph on the UF1 for this plug-in. The built-in SSL
+    // strips get it automatically because uf1PaintEqGraph_ finds their params by
+    // SSL's own names ("HF Gain", "HMF Freq", …); a learned CS names them
+    // differently, so the curve stayed blank. With this on, the EQ params are
+    // resolved through the map's UC1 link slots instead — the same canonical
+    // names the UC1 has engraved (Frank 2026-08-09).
+    bool                       uf1EqGraph = false;
     // ONE user name per PARAMETER, shared by UC1, UF8 and UF1 (v13). The old
     // per-slot customLabel still wins where it is set (a deliberate per-control
     // override), but a name typed into any surface's "Display name" field lands
@@ -693,7 +700,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 14;  // v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
+constexpr int kCurrentFormatVersion = 15;  // v15: + "uf1EqGraph" — draw our EQ graph on the UF1 for a LEARNED CS (params resolved via the UC1 link slots), emitted only when set. v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused
