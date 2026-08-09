@@ -435,6 +435,13 @@ std::atomic<bool>     g_uf1Flip{false};
 // fader path keeps reading g_pluginFaderMode. Session-only (not persisted), least-
 // surprise on restart. Atomic store from the input worker; read on the main thread.
 std::atomic<bool>     g_uf1StripMode{false};
+// …and its with-GUI variant, the twin of g_pluginFaderModeWithGui: when set, the
+// same main-thread drain that serves the UF8's ssl_strip_mode_toggle_with_gui
+// opens/closes the focused track's CS plug-in window for the UF1 too. Separate
+// flag per device so one surface leaving Strip Mode doesn't shut the other's
+// window (the drain ORs the two). Frank 2026-08-09 — "gleich machen wie UF8,
+// mit/ohne GUI".
+std::atomic<bool>     g_uf1StripModeWithGui{false};
 // UF1 display view (Phase 3, Meter-Bridge). The MODE button (id 0x20) toggles
 // the firmware's Channel <-> Meter layout autonomously (cap75: no host switch
 // opcode — it re-purposes the same element addresses by view context, e.g.
@@ -7104,9 +7111,11 @@ void triggerPluginModeFollowSync_()
     if (!g_pluginGuiFollowsInstance.load()) return;
     const bool sslGui = g_pluginFaderMode.load()
                      && g_pluginFaderModeWithGui.load();
+    const bool uf1Gui = g_uf1StripMode.load()
+                     && g_uf1StripModeWithGui.load();
     const bool uf8Gui = g_uf8PluginMode.load()
                      && g_uf8PluginModeWithGui.load();
-    if (sslGui || uf8Gui) g_pluginGuiSyncRequest.store(true);
+    if (sslGui || uf1Gui || uf8Gui) g_pluginGuiSyncRequest.store(true);
 }
 
 // One learned-Instance hit on a track: FX index + its SSL domain + the
@@ -22302,7 +22311,13 @@ void applyUf1ChannelSoftKey_(int idx)
             // was the shared g_pluginFaderMode; now UF8 and UF1 toggle independently).
             const bool nextStrip = !g_uf1StripMode.load();
             g_uf1StripMode.store(nextStrip);
+            // Headless, like the plain `uf1_strip_mode_toggle` builtin: clear the
+            // with-GUI flag so a key press after a with-GUI session stops
+            // following the window, and let the drain close it.
+            g_uf1StripModeWithGui.store(false);
             SetExtState("rea_sixty", "uf1StripMode", nextStrip ? "1" : "0", true);  // persist (Frank "ja")
+            SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+            g_pluginGuiSyncRequest.store(true);
             g_pageDirty.store(true);
             return;
         }
@@ -32376,9 +32391,14 @@ void onTimer()
         // Only open a CS GUI when SSL Strip Mode's with-GUI variant is
         // active. The plain variant raises the sync request too (so it
         // can close a GUI opened by a previous with-GUI session) but
-        // must not pop a new one.
-        const bool wantOpen = g_pluginFaderMode.load()
-                           && g_pluginFaderModeWithGui.load();
+        // must not pop a new one. EITHER surface can want it: the UF8's
+        // ssl_strip_mode_toggle_with_gui or the UF1's twin — both target
+        // the focused track's CS plug-in, so they share this drain and
+        // the window survives one of the two leaving Strip Mode.
+        const bool wantOpen = (g_pluginFaderMode.load()
+                            && g_pluginFaderModeWithGui.load())
+                           || (g_uf1StripMode.load()
+                            && g_uf1StripModeWithGui.load());
         MediaTrack* targetTr = nullptr;
         int         targetFx = -1;
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
@@ -37767,16 +37787,49 @@ void registerBindingHandlers()
     // what the hardcoded PLUG-IN CS soft-key already does (applyUf1ChannelSoftKey_
     // Uf1CsSkAct::StripMode), just now bindable to any UF1 button. Atomic stores +
     // SetExtState (persist) only → worker-safe. Parallels uf1_flip.
-    registerBuiltin("uf1_strip_mode", DescBuilder{
+    // Named to match the UF8/UC1 pair (`ssl_strip_mode_toggle[_with_gui]`) so
+    // the two devices read as one feature with two halves — Frank 2026-08-09:
+    // "für UF8 haben wir andere built-ins als UF1, und sie heissen auch anders.
+    // Gleich machen wie UF8, mit/ohne GUI." The old `uf1_strip_mode` name is
+    // migrated in loadBindings (see kBuiltinRenames).
+    registerBuiltin("uf1_strip_mode_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
             const bool next = !g_uf1StripMode.load();
             g_uf1StripMode.store(next);
+            // Plain variant is headless — drop the with-GUI flag so switching
+            // from the GUI builtin to this one stops following the GUI; the
+            // sync drain then closes any window we'd opened (as the UF8 pair).
+            g_uf1StripModeWithGui.store(false);
             SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
+            SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+            g_pluginGuiSyncRequest.store(true);
             g_pageDirty.store(true);
         },
-        [](int) { return g_uf1StripMode.load(); },
-        "UF1: SSL Strip Mode (fader \xE2\x86\x92 Out-Gain)", false
+        [](int) { return g_uf1StripMode.load()
+                       && !g_uf1StripModeWithGui.load(); },
+        "UF1: Toggle SSL Strip Mode (fader \xE2\x86\x92 Out-Gain)", false
+    });
+
+    // Same, plus the focused track's CS plug-in GUI — the UF1 twin of
+    // ssl_strip_mode_toggle_with_gui. TrackFX_Show creates an AppKit window and
+    // this handler runs on the libusb input thread, so it only raises the sync
+    // request; the main-thread drain opens/closes the window (one shared drain
+    // for both devices, so whichever half still wants the GUI keeps it open).
+    registerBuiltin("uf1_strip_mode_toggle_with_gui", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_uf1StripMode.load();
+            g_uf1StripMode.store(next);
+            g_uf1StripModeWithGui.store(next);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
+            SetExtState("rea_sixty", "uf1StripModeGui", next ? "1" : "0", true);
+            g_pluginGuiSyncRequest.store(true);
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1StripMode.load()
+                       && g_uf1StripModeWithGui.load(); },
+        "UF1: Toggle SSL Strip Mode (with GUI)", false
     });
 
     // UF1 Extender — bindable builtins (Frank 2026-08-05: every new action is a

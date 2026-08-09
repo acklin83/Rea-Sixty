@@ -1867,6 +1867,13 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
         if (sp.type == ActionType::Builtin && sp.action == "fine_modifier") {
             sp.action = "mod_shift";
         }
+        // Migration: the UF1's Strip Mode builtin was `uf1_strip_mode`; it is
+        // now named after its UF8 counterpart (ssl_strip_mode_toggle) because
+        // the two are one feature with a half per device, and the UF1 gained
+        // the with-GUI variant too (Frank 2026-08-09).
+        if (sp.type == ActionType::Builtin && sp.action == "uf1_strip_mode") {
+            sp.action = "uf1_strip_mode_toggle";
+        }
         // Migration: the UF1 nav cross moved from the zoom pad to the Jog-Mode
         // nav (Frank 2026-08-06). Rename the legacy zoom_* default in place on
         // those FIVE buttons only — the UF8 zoom pad keeps zoom_*.
@@ -4683,7 +4690,7 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_time_display_step"
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
-     || n == "uf1_strip_mode"
+     || n.rfind("uf1_strip_mode_", 0) == 0
      || n == "uf1_extender" || n == "uf1_extender_side"
      || n == "restart")
         return "Hardware Modes";
