@@ -493,6 +493,11 @@ struct UserUf8Map {
 // mutator (range/curve/sensitivity/polarity/label/invert/pushSteps) applies.
 struct UserUf1Slot : SlotLayer {
     int pos = -1;                 // flat stream position: page*4 + idx
+    // Per-soft-key LED colour, 0xRRGGBB. 0 = no override → the HW-verified
+    // state-only bytes (what every key did before). Soft-keys only: a UF1
+    // V-Pot has no LED of its own, it is drawn on the screen (v12, Frank
+    // 2026-08-09 "Soft-Key LEDs sollen pro Soft-Key einstellbar sein").
+    uint32_t ledRgb = 0;
 };
 // Scope decided with Frank 2026-08-08: V-Pots + soft-keys ONLY. The
 // above-fader V-Pot and the fader stay out — the fader collides with Sticky
@@ -655,7 +660,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 11;  // v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). v10 files load byte-identical (block absent = no UF1 layer = sequential fallback).
+constexpr int kCurrentFormatVersion = 12;  // v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb", emitted only when set; absent = no override). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). v10 files load byte-identical (block absent = no UF1 layer = sequential fallback).
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

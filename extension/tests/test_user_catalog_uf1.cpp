@@ -128,6 +128,53 @@ int main()
         EXPECT(uf1MapPageCount(r.uf1) == 2);
     }
 
+    // --- v12: per-soft-key LED colour round-trips, and 0 stays ABSENT --------
+    // The writer emits "ledRgb" only when set, so a map without colours must
+    // serialise exactly like a v11 one — the same writer/parser asymmetry that
+    // silently wiped the overlays in June is the trap this pins down.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];
+        m.uf1Mode = true;
+        UserUf1Slot lit{};  lit.pos = 0; lit.vst3Param = 21; lit.ledRgb = 0xFF8000;
+        UserUf1Slot dark{}; dark.pos = 1; dark.vst3Param = 22;   // no colour set
+        m.uf1.softKeys.push_back(lit);
+        m.uf1.softKeys.push_back(dark);
+
+        const std::string out = serialize_(c);
+        EXPECT(out.find("\"ledRgb\": 16744448") != std::string::npos);  // 0xFF8000
+        // Exactly ONE ledRgb key: the uncoloured key must not emit a 0.
+        EXPECT(out.find("ledRgb", out.find("ledRgb") + 1) == std::string::npos);
+
+        UserPluginCatalog back{};
+        EXPECT(parse_(out, back));
+        const auto& r = back.maps[0];
+        const UserUf1Slot* a2 = uf1SlotAt(r.uf1.softKeys, 0);
+        const UserUf1Slot* b2 = uf1SlotAt(r.uf1.softKeys, 1);
+        EXPECT(a2 && a2->ledRgb == 0xFF8000u);
+        EXPECT(b2 && b2->ledRgb == 0u);
+        // Idempotent: a second pass produces the identical document.
+        EXPECT(serialize_(back) == out);
+    }
+
+    // --- a v11 file (uf1 block, no ledRgb) still loads, colour defaults to 0 --
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];
+        m.uf1Mode = true;
+        UserUf1Slot k{}; k.pos = 0; k.vst3Param = 31;
+        m.uf1.softKeys.push_back(k);
+        std::string v11 = serialize_(c);
+        // Whatever version the writer stamps, the READER must not require v12.
+        EXPECT(v11.find("ledRgb") == std::string::npos);
+        UserPluginCatalog back{};
+        EXPECT(parse_(v11, back));
+        const UserUf1Slot* k2 = uf1SlotAt(back.maps[0].uf1.softKeys, 0);
+        EXPECT(k2 && k2->vst3Param == 31 && k2->ledRgb == 0u);
+    }
+
     // --- ⚠ UF1-ONLY maps must NOT be dropped by the load filter -------------
     // domain=None + uf8Mode=false was "meaningless" before v11 and got silently
     // discarded. With uf1Mode it is a valid map; miss this and every UF1-only

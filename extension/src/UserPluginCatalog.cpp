@@ -631,6 +631,9 @@ std::string serialize_(const UserPluginCatalog& c)
                     if (!first) os << ",";
                     first = false;
                     os << "\n          { \"pos\": " << s.pos << ", ";
+                    // v12: per-key LED colour, only when set (0 = no override),
+                    // so a v11-shaped map still serialises byte-identically.
+                    if (s.ledRgb) os << "\"ledRgb\": " << s.ledRgb << ", ";
                     emitLayerBody(s);
                     os << " }";
                 }
@@ -885,6 +888,9 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                     if (!so || !so->is_object()) continue;
                     uf8::UserUf1Slot us{};
                     getIntI_(so, "pos", us.pos);
+                    int ledRgb = 0;                       // v12, absent on v11
+                    getIntI_(so, "ledRgb", ledRgb);
+                    us.ledRgb = static_cast<uint32_t>(ledRgb < 0 ? 0 : ledRgb);
                     parseLayerBody(so, us);
                     if (us.pos < 0) continue;
                     if (us.vst3Param < 0 && us.pushSteps.empty()) continue;

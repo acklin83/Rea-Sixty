@@ -107,6 +107,9 @@ int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
 void reasixty_setScribbleBrightnessLevel(int level);
 int  reasixty_uf1SoftBank();
+int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
+void reasixty_setUf1CsPage(int page);
+const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
 void reasixty_setUf1SoftBank(int bank);
 // UF1 channel-encoder mode ring (user-editable order + visibility) — defined in
 // main.cpp at global scope. Rendered in the UF1 channel-encoder binding editor.
@@ -8880,11 +8883,34 @@ int  mappedVst3ForUf1_(bool softKeys, int pos)
     const uf8::UserUf1Slot* s = uf8::uf1SlotAt(*v, pos);
     return s ? s->vst3Param : -1;
 }
+// The UC1's display label for `vst3Param` on the map being edited, or "" when
+// the param isn't on the UC1 or carries no custom name. The UF1's value line is
+// only 19 characters wide and the label shares it with the value, so a plug-in's
+// own param name is usually far too long — if the user already shortened it on
+// the UC1, that is the name they want here too (Frank 2026-08-09).
+std::string uc1LabelForParam_(int vst3Param)
+{
+    if (g_editingMatch.empty() || vst3Param < 0) return {};
+    for (const auto& m : uf8::user_plugins::get().maps) {
+        if (m.match != g_editingMatch) continue;
+        for (const auto& s : m.slots)
+            if (s.vst3Param == vst3Param && !s.customLabel.empty())
+                return s.customLabel;
+        break;
+    }
+    return {};
+}
+
 void bindUf1_(bool softKeys, int pos, int vst3Param)
 {
     if (vst3Param < 0 || pos < 0) return;
+    const std::string inherited = uc1LabelForParam_(vst3Param);
     mutateUf1_([&](uf8::UserUf1Map& u) {
-        uf1SlotRef_(u, softKeys, pos).vst3Param = vst3Param;
+        auto& s = uf1SlotRef_(u, softKeys, pos);
+        s.vst3Param = vst3Param;
+        // Never overwrite a name the user typed on the UF1 itself.
+        if (s.customLabel.empty() && !inherited.empty())
+            s.customLabel = inherited;
     });
 }
 // Drop the whole slot (not just the param) so label/invert/travel reset with
@@ -8926,6 +8952,14 @@ void setUf1PushSteps_(bool softKeys, int pos, std::vector<uf8::PushStep> steps)
     mutateUf1_([steps = std::move(steps), softKeys, pos]
                (uf8::UserUf1Map& u) mutable {
         uf1SlotRef_(u, softKeys, pos).pushSteps = std::move(steps);
+    });
+}
+// Per-soft-key LED colour (v12). 0 clears the override. Soft-keys only — a UF1
+// V-Pot is drawn on the screen and has no LED to colour.
+void setUf1LedRgb_(int pos, uint32_t rgb)
+{
+    mutateUf1_([&](uf8::UserUf1Map& u) {
+        uf1SlotRef_(u, /*softKeys*/true, pos).ledRgb = rgb;
     });
 }
 // Push-to-default target. Unlike the UC1 (whose knobs have no push), the UF1
@@ -10747,10 +10781,26 @@ bool hudUf1BindMatch_(const std::string& match, bool softKeys, int pos, int vst3
     auto cat = user_plugins::get();                 // copy
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
+        // Inherit the UC1's display label for the same param — the UF1's value
+        // line is 19 chars shared between label and value, so a name the user
+        // already shortened on the UC1 is the one they want here too (Frank
+        // 2026-08-09). Same rule as the Settings-side bindUf1_, resolved here
+        // against `match` because the HUD has no g_editingMatch.
+        std::string inherited;
+        for (const auto& s : m.slots)
+            if (s.vst3Param == vst3Param && !s.customLabel.empty()) {
+                inherited = s.customLabel;
+                break;
+            }
         auto& v = softKeys ? m.uf1.softKeys : m.uf1.vpots;
         bool done = false;
-        for (auto& s : v) if (s.pos == pos) { s.vst3Param = vst3Param; done = true; break; }
+        for (auto& s : v) if (s.pos == pos) {
+            s.vst3Param = vst3Param;
+            if (s.customLabel.empty()) s.customLabel = inherited;   // never overwrite
+            done = true; break;
+        }
         if (!done) { UserUf1Slot ns{}; ns.pos = pos; ns.vst3Param = vst3Param;
+                     ns.customLabel = inherited;
                      v.push_back(std::move(ns)); }
         user_plugins::setAll(std::move(cat));
         persistAndReport_();
@@ -10921,6 +10971,12 @@ bool hudUf1LabelMatch_(const std::string& match, bool softKeys, int pos,
 {
     return hudUf1MutateMatch_(match, softKeys, pos,
         [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].customLabel = label; });
+}
+// Per-soft-key LED colour from the HUD (v12); 0 clears the override.
+bool hudUf1LedRgbMatch_(const std::string& match, int pos, uint32_t rgb)
+{
+    return hudUf1MutateMatch_(match, /*softKeys*/true, pos,
+        [&](std::vector<UserUf1Slot>& v, size_t i) { v[i].ledRgb = rgb; });
 }
 
 // ---- UF1 tab full parity — tuning + feel ----------------------------------
@@ -11226,10 +11282,12 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
                 label = pn;
             }
             // The label rides last so a stray ';' in a param name can't shift
-            // the numeric fields — the Lua splits the first four, rest = label.
+            // the numeric fields — the Lua splits the leading numerics, rest =
+            // label. `ledRgb` (v12) joins them as a number, before the label.
             char row[320];
-            std::snprintf(row, sizeof(row), "\n%d;%d;%d;%d;%s",
-                          s.pos, sk, s.vst3Param, s.inverted ? 1 : 0, label.c_str());
+            std::snprintf(row, sizeof(row), "\n%d;%d;%d;%d;%u;%s",
+                          s.pos, sk, s.vst3Param, s.inverted ? 1 : 0,
+                          s.ledRgb, label.c_str());
             out += row;
         }
     };
@@ -15440,6 +15498,53 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                     applyFeelToUf1_(sk, pp, f);
                 });
         } else {
+            // Per-key LED colour (v12) — soft-keys only: a UF1 V-Pot has no LED
+            // of its own, it is drawn on the screen. Same shared palette the UF8
+            // Solo/Cut/Sel swatches use. 0 = no override → the state-only bytes
+            // every key had before. Brightness carries the on-state.
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "LED colour");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            {
+                const uint32_t curRgb = snap().ledRgb;
+                const int curRgba = curRgb
+                    ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
+                                     | ((curRgb & 0x00FF00u) << 8)
+                                     | ((curRgb & 0x0000FFu) << 8) | 0xFF)
+                    : 0x30303CFF;                       // "none" swatch
+                char btnId[48];
+                snprintf(btnId, sizeof(btnId), "##uf1led_%d", pos);
+                int btnFlags = 0; double bw = 40.0, bh = 18.0;
+                char popId[48];
+                snprintf(popId, sizeof(popId), "uf1ledpal_%d", pos);
+                if (ImGui_ColorButton(ctx, btnId, curRgba, &btnFlags, &bw, &bh))
+                    ImGui_OpenPopup(ctx, popId, nullptr);
+                if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+                    int paletteCount = 0;
+                    const uf8::PaletteRgb* palette = uf8::selPaletteRgb(&paletteCount);
+                    for (int j = 0; j < paletteCount; ++j) {
+                        const auto& pc = palette[j];
+                        const int packed = (int(pc.r) << 24) | (int(pc.g) << 16)
+                                         | (int(pc.b) << 8) | 0xFF;
+                        char swId[48];
+                        snprintf(swId, sizeof(swId), "##uf1sw_%d_%d", pos, j);
+                        int swFlags = 0; double w = 26.0, h = 26.0;
+                        if (j % 5) ImGui_SameLine(ctx, nullptr, nullptr);
+                        if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                            setUf1LedRgb_(pos, (uint32_t(pc.r) << 16)
+                                             | (uint32_t(pc.g) << 8) | pc.b);
+                            ImGui_CloseCurrentPopup(ctx);
+                        }
+                    }
+                    if (ImGui_MenuItem(ctx, "No colour (state only)", nullptr,
+                                       nullptr, nullptr)) {
+                        setUf1LedRgb_(pos, 0);
+                        ImGui_CloseCurrentPopup(ctx);
+                    }
+                    ImGui_EndPopup(ctx);
+                }
+            }
+
             // Push cycle — soft-keys only (a V-Pot turns, it doesn't step).
             // The UF1 runtime has honoured pushSteps since eec4bdf; this is
             // the first thing that can author them. Same editor the UF8 V-Pot
@@ -15503,6 +15608,18 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     }
     const int shownPages = pages + 1;                 // always one spare
     if (g_uf1EditingPage >= shownPages) g_uf1EditingPage = shownPages - 1;
+    // Page follows the HARDWARE and vice versa (Frank 2026-08-09), so paging
+    // ◄ ► on the UF1 moves the editor and clicking a page here moves the UF1.
+    // Gated on the device actually showing THIS map — otherwise editing one
+    // plug-in would silently page the hardware away from another.
+    const char* shownMatch = reasixty_uf1ShownMatch();
+    const bool  pageLinked = shownMatch && *shownMatch
+                          && g_editingMatch == shownMatch;
+    if (pageLinked) {
+        const int hw = reasixty_uf1CsPage();
+        if (hw >= 0 && hw < shownPages && hw != g_uf1EditingPage)
+            g_uf1EditingPage = hw;                     // hardware → editor
+    }
     for (int p = 0; p < shownPages; ++p) {
         if (p) ImGui_SameLine(ctx, nullptr, nullptr);
         const bool active = (p == g_uf1EditingPage);
@@ -15514,21 +15631,30 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive,  0x80E080FF);
         }
         double bw = 76.0, bh = 22.0;
-        if (ImGui_Button(ctx, lbl, &bw, &bh)) g_uf1EditingPage = p;
+        if (ImGui_Button(ctx, lbl, &bw, &bh)) {
+            g_uf1EditingPage = p;
+            if (pageLinked) reasixty_setUf1CsPage(p);  // editor → hardware
+        }
         if (active) { int popN = 3; ImGui_PopStyleColor(ctx, &popN); }
+    }
+    if (pageLinked) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx, "\xE2\x86\x94 UF1");    // the pages are linked
     }
     ImGui_Spacing(ctx);
 
-    ImGui_TextDisabled(ctx, "V-Pots");
-    for (int i = 0; i < uf8::kUserUf1PerPage; ++i) {
-        if (i) ImGui_SameLine(ctx, nullptr, nullptr);
-        drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/false, i);
-    }
-    ImGui_Spacing(ctx);
+    // Soft-keys ABOVE the V-Pots — that is how they sit on the hardware, so the
+    // editor reads like the device instead of mirroring it (Frank 2026-08-09).
     ImGui_TextDisabled(ctx, "Soft-keys");
     for (int i = 0; i < uf8::kUserUf1PerPage; ++i) {
         if (i) ImGui_SameLine(ctx, nullptr, nullptr);
         drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/true, i);
+    }
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx, "V-Pots");
+    for (int i = 0; i < uf8::kUserUf1PerPage; ++i) {
+        if (i) ImGui_SameLine(ctx, nullptr, nullptr);
+        drawFxLearnUf1Cell_(ctx, fx, /*softKeys*/false, i);
     }
     ImGui_Spacing(ctx);
     // Fill the rest: every functional param not already on the UC1 or the UF1,
@@ -21276,6 +21402,12 @@ bool reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot
     std::string m;
     return uf8::hudUf1ResolveMatch_(tr, fx, m)
         && uf8::hudUf1FeelApplyMatch_(m, softKeys, pos, slot);
+}
+bool reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb)
+{
+    std::string m;
+    return uf8::hudUf1ResolveMatch_(tr, fx, m)
+        && uf8::hudUf1LedRgbMatch_(m, pos, rgb);
 }
 // UF1 → UC1 ("Send to UC1"): the pickable slot list, then the write. The layer
 // comes from the HUD (the layer that was live at right-click), matching the

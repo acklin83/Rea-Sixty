@@ -161,6 +161,7 @@ bool        reasixty_hudUf1SetField(void* tr, int fx, bool softKeys, int pos, in
 bool        reasixty_hudUf1SetCurve(void* tr, int fx, bool softKeys, int pos, const char* csv);
 bool        reasixty_hudUf1FeelSave(void* tr, int fx, bool softKeys, int pos, int slot, const char* name);
 bool        reasixty_hudUf1FeelApply(void* tr, int fx, bool softKeys, int pos, int slot);
+bool        reasixty_hudUf1LedRgb(void* tr, int fx, int pos, unsigned int rgb);
 // UF1 → UC1 ("Send to UC1"): the pickable UC1 slot list ("hud_uf1_uc1_req" →
 // "hud_uf1_uc1slots") and the write behind the "uf1touc1;" verb.
 std::string reasixty_hudUf1Uc1Slots(void* tr, int fx, int layer);
@@ -23748,6 +23749,14 @@ void uf1PaintChannel_()
                            TrackFX_GetParamName(skTr, skFx, s->vst3Param, pn, sizeof(pn));
                            label = pn; }
                     on = TrackFX_GetParamNormalized(skTr, skFx, s->vst3Param) > 0.5;
+                    // v12: per-key colour. Brightness carries the on-state, so a
+                    // coloured key still reads as on/off — dim when off, exactly
+                    // like a DAW-bank binding's colour/inactiveColor pair.
+                    if (s->ledRgb) {
+                        keyHasColour = true;
+                        keyColRgb    = s->ledRgb;
+                        keyColBright = on;
+                    }
                 }
             } else if (skLearned) {
                 // Learned: pack the button-mapped params; blank keys past the end.
@@ -30815,6 +30824,20 @@ void onTimer()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("uf1ledcol;", 0) == 0) {
+                // "uf1ledcol;<pos>;<RRGGBB>" — per-soft-key LED colour (v12);
+                // 0 clears the override back to the state-only bytes.
+                int pos = -1; unsigned int rgb = 0;
+                if (std::sscanf(s.c_str(), "uf1ledcol;%d;%x", &pos, &rgb) == 2
+                    && pos >= 0) {
+                    MediaTrack* u1Tr = nullptr; int u1Fx = -1;
+                    if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
+                        && reasixty_hudUf1LedRgb(u1Tr, u1Fx, pos, rgb)) {
+                        g_hudUf1AssignPublished.clear();
+                        g_pageDirty.store(true);       // re-render the key LED
+                        publishHud_();
+                    }
+                }
             } else if (s.rfind("uf1touc1;", 0) == 0) {
                 // "uf1touc1;<pos>;<sk>;<linkIdx>;<layer>" — copy this UF1
                 // position's param + feel onto a PICKED UC1 slot, on the layer
@@ -33466,6 +33489,38 @@ void reasixty_setUf1SoftBank(int bank)
     if (bank >= uf8::bindings::kUf1SoftBankCount)
         bank = uf8::bindings::kUf1SoftBankCount - 1;
     g_uf1SoftBank.store(bank);
+}
+
+// UF1 plugin-mode PAGE (the ◄ ► page the V-Pots + soft-keys show), so the
+// FX-Learn editor and the hardware stay in lockstep both ways (Frank
+// 2026-08-09: "Soft-Key Pages sollen Hardware folgen und umgekehrt").
+int reasixty_uf1CsPage()
+{
+    return g_uf1CsPage.load();
+}
+void reasixty_setUf1CsPage(int page)
+{
+    if (page < 0) page = 0;
+    const int pages = g_uf1CsActivePages.load();
+    if (pages > 0 && page >= pages) page = pages - 1;
+    if (g_uf1CsPage.exchange(page) != page) g_pageDirty.store(true);
+}
+// The map MATCH of whatever the UF1 is showing right now, or "" when it shows
+// no strip. The editor gates its page sync on this: syncing while the user
+// edits a DIFFERENT plug-in would silently page the hardware away from what it
+// is showing. Main-thread only (REAPER API).
+const char* reasixty_uf1ShownMatch()
+{
+    static std::string s;
+    s.clear();
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (uf1ResolveCsFx_(uf1FocusedTrack_(), tr, fx) >= 0 && tr && fx >= 0) {
+        char nm[256];
+        if (uf8::fxIdentityName(tr, fx, nm, sizeof(nm)))
+            if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm))
+                s = um->match;
+    }
+    return s.c_str();
 }
 
 // ---- UF1 channel-encoder mode ring (user-editable order + visibility) ------

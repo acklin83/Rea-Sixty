@@ -334,10 +334,11 @@ local function readPush()
   return pd
 end
 
--- UF1 plugin-mode map (v11). Payload: "P;<pages>;<curPage>" then one
---   "<pos>;<sk>;<param>;<inv>;<label>"
+-- UF1 plugin-mode map (v12). Payload: "P;<pages>;<curPage>" then one
+--   "<pos>;<sk>;<param>;<inv>;<ledRgb>;<label>"
 -- per mapped position (label LAST so a ';' inside a param name can't shift the
--- numeric fields). Empty channel = the shown plug-in has no UF1 layer.
+-- numeric fields). ledRgb = 0xRRGGBB as a decimal number, 0 = no LED override.
+-- Empty channel = the shown plug-in has no UF1 layer.
 local function readUf1()
   local raw = reaper.GetExtState(SECT, "hud_uf1_assign")
   if raw == "" then return nil end
@@ -348,11 +349,12 @@ local function readUf1()
       u.pages = tonumber(pg) or 1
       u.page  = tonumber(cur) or 0
     else
-      local pos, sk, param, inv, label =
-        ln:match("^(%d+);(%d);(%-?%d+);(%d);(.*)$")
+      local pos, sk, param, inv, rgb, label =
+        ln:match("^(%d+);(%d);(%-?%d+);(%d);(%d+);(.*)$")
       if pos then
         u.cells[tonumber(sk)][tonumber(pos)] =
-          { param = tonumber(param), inv = (inv == "1"), label = label or "" }
+          { param = tonumber(param), inv = (inv == "1"),
+            ledRgb = tonumber(rgb) or 0, label = label or "" }
       end
     end
   end
@@ -1552,7 +1554,9 @@ local function renderUf1Tab(u1)
 
   local armed = tonumber(reaper.GetExtState(SECT, "hud_uf1_learn")) or -1
   local CW, CH, GAP = 150, 46, 8
-  for _, row in ipairs({ { sk = 0, name = "V-Pots" }, { sk = 1, name = "Soft-keys" } }) do
+  -- Soft-keys ABOVE the V-Pots, matching the hardware layout and the FX-Learn
+  -- page (Frank 2026-08-09).
+  for _, row in ipairs({ { sk = 1, name = "Soft-keys" }, { sk = 0, name = "V-Pots" } }) do
     dtext(14, y, col(0x9A9AA2, 1), row.name, px - 1)
     y = y + 18
     for i = 0, 3 do
@@ -1570,6 +1574,11 @@ local function renderUf1Tab(u1)
             col((cell or isArmed) and 0xE8E8EE or 0x6A6A72, 1), label, px)
       if cell and cell.inv then
         dtext(cx + 8, y + 26, col(0xD8A050, 1), "inverted", px - 2)
+      end
+      -- Per-key LED colour (soft-keys, v12): a stripe down the right edge so
+      -- the tab shows what the hardware key will light up as.
+      if cell and row.sk == 1 and (cell.ledRgb or 0) ~= 0 then
+        rect(cx + CW - 6, y + 4, 3, CH - 8, col(cell.ledRgb, 1))
       end
       uf1Rects[#uf1Rects + 1] = { sk = row.sk, pos = pos, x = cx, y = y, w = CW, h = CH }
     end
@@ -3211,6 +3220,27 @@ local function drawUf1ControlContextMenu()
       end
       if reaper.ImGui_MenuItem(ctx, "Reset feel to default##u1fdef") then
         uf1Field(9, 0)
+      end
+    end
+
+    -- Per-key LED colour (v12) — soft-keys only: a UF1 V-Pot has no LED, it is
+    -- drawn on the screen. Same palette as the UF8 bank/strip swatches; the key
+    -- carries its on-state in the brightness, so a coloured key still reads.
+    if ctxUf1Sk == 1 then
+      reaper.ImGui_Separator(ctx)
+      if reaper.ImGui_BeginMenu(ctx, "LED colour") then
+        for i, rgb in ipairs(UF8_BANK_PALETTE) do
+          local swatch = (rgb << 8) | 0xFF          -- 0xRRGGBBAA for ReaImGui
+          if i % 5 ~= 1 then reaper.ImGui_SameLine(ctx) end
+          if reaper.ImGui_ColorButton(ctx, "##u1led" .. i, swatch, 0, 24, 24) then
+            sendCmd(string.format("uf1ledcol;%d;%06X", ctxUf1Pos, rgb))
+          end
+        end
+        reaper.ImGui_Separator(ctx)
+        if reaper.ImGui_MenuItem(ctx, "No colour (state only)") then
+          sendCmd(string.format("uf1ledcol;%d;000000", ctxUf1Pos))
+        end
+        reaper.ImGui_EndMenu(ctx)
       end
     end
 
