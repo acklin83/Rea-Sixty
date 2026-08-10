@@ -4255,9 +4255,14 @@ void UC1Surface::pollGainReduction_()
     // The ACTIVE CS instance's FX index — also what keys the gate GR below, so
     // it outlives this block. -1 = the track has no mapped CS plug-in.
     int csFxIdx = -1;
+    // …and its MODEL ("4K E" / "4K B" / "CS 2"), which is how the gate GR below
+    // finds the right stream. Two strips on one track are indistinguishable on
+    // the wire except by this (see getChannelStripMeterForTrackModel).
+    const char* csModel = nullptr;
     if (csTr) {
         UC1Bindings b = lookupBindingsOnTrack(csTr);
         if (b.channelMap) {
+            csModel = b.channelMap->shortName;
             csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
                               b.channelGrOffsetDb,
                               b.channelGrLedsCal, uf8::kLedsBpDb, uf8::kLedsBpCount);
@@ -4341,8 +4346,8 @@ void UC1Surface::pollGainReduction_()
                            ? uf8::sslCoreInstanceOrdinal(csTr, csFxIdx) : 0;
         std::vector<float> gg;
         if (trackIdx > 0 && inst >= 0 &&
-            sslcore::getChannelStripMeterForTrackInstance(gateType, trackIdx,
-                                                          inst, gg) &&
+            sslcore::getChannelStripMeterForTrackModel(gateType, trackIdx,
+                                                       csModel, inst, gg) &&
             !gg.empty()) {
             csGateGr = std::abs(gg[0]);
         }

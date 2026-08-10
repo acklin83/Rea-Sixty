@@ -22861,13 +22861,18 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
     double gateDb = 0.0;
     if (sslcore::isRunning()) {
         const int trackIdx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
-        const int csFx = uc1::lookupBindingsOnTrack(tr).channelFxIdx;
+        const auto csB = uc1::lookupBindingsOnTrack(tr);
+        const int csFx = csB.channelFxIdx;
+        // Pick the stream by the strip's MODEL; the ordinal is only the fallback
+        // for two strips of the same model (Frank 2026-08-10 — the 4K B's gate
+        // was showing on the 4K E because port order had drifted from FX order).
+        const char* csModel = csB.channelMap ? csB.channelMap->shortName : nullptr;
         const int inst = (csFx >= 0) ? uf8::sslCoreInstanceOrdinal(tr, csFx) : 0;
         std::vector<float> gg;
         if (trackIdx > 0 && inst >= 0 &&
-            sslcore::getChannelStripMeterForTrackInstance(
+            sslcore::getChannelStripMeterForTrackModel(
                 static_cast<int>(sslcore::ChannelStripMeter::GateGain),
-                trackIdx, inst, gg)
+                trackIdx, csModel, inst, gg)
             && !gg.empty())
             gateDb = std::fabs(gg[0]);
     }
@@ -32558,13 +32563,18 @@ void onTimer()
                         // the gate, and reading "the freshest of them" made the row
                         // flicker between them (Frank 2026-08-09). No mapped CS →
                         // first strip, as before; a mapped non-SSL CS → dark.
+                        // …and by MODEL first: port order drifts out of FX-chain
+                        // order on a plug-in reconnect, which put the 4K B's gate
+                        // on the 4K E (Frank 2026-08-10). Ordinal = fallback.
+                        const char* csModel = b.channelMap ? b.channelMap->shortName
+                                                           : nullptr;
                         const int inst = (csFxIdx >= 0)
                                            ? uf8::sslCoreInstanceOrdinal(tr, csFxIdx) : 0;
                         std::vector<float> gg;
                         if (trackIdx > 0 && inst >= 0 &&
-                            sslcore::getChannelStripMeterForTrackInstance(
+                            sslcore::getChannelStripMeterForTrackModel(
                                 static_cast<int>(sslcore::ChannelStripMeter::GateGain),
-                                trackIdx, inst, gg) && !gg.empty()) {
+                                trackIdx, csModel, inst, gg) && !gg.empty()) {
                             ggr = std::fabs(gg[0]);
                         }
                     }

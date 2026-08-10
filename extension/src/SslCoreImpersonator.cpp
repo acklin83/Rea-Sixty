@@ -30,6 +30,8 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <cctype>     // std::isspace / std::toupper — squashModel_ (explicit:
+                      // clang pulls it in transitively, GCC does not)
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -179,6 +181,15 @@ std::set<socket_t>               g_namedClients;   // clients already queued
 std::map<socket_t, std::string>  g_clientName;     // per-client, awaiting its index
 std::map<socket_t, int>          g_clientIndex;    // per-client, awaiting its name
 std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g_meterMx)
+// ★ Which channel-strip MODEL each connection is — the only thing on the wire
+// that tells two strips on ONE track apart (TRACED 2026-08-10, see the note on
+// getChannelStripMeterForTrackModel). The plug-in declares its EQ-curve object
+// under a model-prefixed name — "4KEEQCurveData" / "4KBEQCurveData" — in a
+// type=16 frame at connect. Everything else it announces (SlotIndex, PluginIdent,
+// UniqueId, SessionDataId) is IDENTICAL across instances, because a 4K E and a
+// 4K B are the same plug-in binary with a different analogue type.
+std::map<socket_t, std::string>  g_clientModel;    // per-client, e.g. "4KE"
+std::map<uint16_t, std::string>  g_portModel;      // UDP port -> model (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 // Order in which UDP ports were first seen — the instance ORDER. REAPER builds
 // an FX chain slot by slot, so the plug-ins connect to Core in chain order and
@@ -582,6 +593,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                      unsigned(sp), itI->second, itN->second.c_str());
                             g_portName[sp]  = itN->second;   // authoritative; overrides any guess
                             g_portIndex[sp] = itI->second;
+                            // …and the model, from the same connection, so the
+                            // reader can pick the 4K E's gate off the 4K E.
+                            if (auto itM = g_clientModel.find(dc->second);
+                                itM != g_clientModel.end())
+                                g_portModel[sp] = itM->second;
                         }
                     } else if (g_portName.find(sp) == g_portName.end() && !g_pending.empty()) {
                         // Shared/fallback port, not yet named — old timing correlation.
@@ -809,6 +825,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_namedClients.erase(c);
                     g_clientName.erase(c);
                     g_clientIndex.erase(c);
+                    g_clientModel.erase(c);
                     // Tear down this connection's dedicated UDP data socket.
                     for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
                         if (it->second != c) continue;
@@ -890,6 +907,33 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // datagram carries no track id). Later re-sends of the
                             // shared object (on selection change) are ignored via
                             // g_namedClients so a name is only tied at connect.
+                            // ── Instance MODEL correlation ─────────────────────
+                            // A type=16 frame declares an object's wire name as
+                            // pb field 2 (`12 <len> <ascii>`). The channel strip
+                            // declares its EQ-curve object model-prefixed —
+                            // "4KEEQCurveData", "4KBEQCurveData" — which is the
+                            // ONLY per-instance discriminator on this protocol.
+                            // Keep the prefix ("4KE"); first one wins, so a later
+                            // re-declaration cannot flip a live connection.
+                            if (ftype == 16 && avail > 8 &&
+                                g_clientModel.find(c) == g_clientModel.end()) {
+                                for (size_t k = 8; k + 1 < avail; ++k) {
+                                    if (pay[k] != 0x12) continue;
+                                    const size_t sl = pay[k + 1];
+                                    if (sl < 12 || k + 2 + sl > avail) continue;
+                                    const char* s = reinterpret_cast<const char*>(pay + k + 2);
+                                    const std::string nm(s, sl);
+                                    const std::string suf = "EQCurveData";
+                                    if (nm.size() > suf.size() &&
+                                        nm.compare(nm.size() - suf.size(), suf.size(), suf) == 0) {
+                                        g_clientModel[c] = nm.substr(0, nm.size() - suf.size());
+                                        slog("[corr] client model = %s",
+                                             g_clientModel[c].c_str());
+                                    }
+                                    break;
+                                }
+                            }
+
                             static const uint8_t kHostTrackNameObj[8] =
                                 { 0xf0,0x63,0x0f,0x41,0xc7,0x66,0x7f,0x0c };
                             static const uint8_t kHostTrackIndexObj[8] =
@@ -1340,8 +1384,20 @@ bool getChannelStripMeterForTrackInstance(int csType, int trackIndex,
     // caller's ordinal is the position of the ACTIVE instance among the track's
     // SSL plug-ins, so index N here is the stream of the plug-in the surfaces
     // are showing — never another strip's gate, and never a per-frame coin toss.
+    // ★ The list must hold EVERY live strip on the track, NOT only the ones that
+    // have this meter — otherwise the ordinal counts a different set than the
+    // caller does. The caller's ordinal comes from sslCoreInstanceOrdinal(), the
+    // position among the track's SSL plug-ins in FX-CHAIN order, and it counts
+    // all of them. Filtering by `meter[csType].have` here used to drop the strips
+    // that never streamed this type, so the survivors slid down into the free
+    // slots: with a 4K E in slot 1 whose gate never emits and a 4K B in slot 2
+    // whose gate does, `live` held only the 4K B and ordinal 0 — the 4K E —
+    // returned the 4K B's gate. Every surface showed the second strip's gate
+    // reduction on the first strip (Frank 2026-08-10, UC1 + UF1 + UF8 alike).
+    // Comp GR was unaffected because both strips always stream CompGain, so the
+    // filtered list happened to match the real one.
     const long long now = nowMs();
-    std::vector<std::pair<uint64_t, const Slot*>> live;
+    std::vector<std::pair<uint64_t, const Instance*>> live;
     for (const auto& kv : g_inst) {
         if (kv.second.kind != Kind::ChannelStrip) continue;
         auto pi = g_portIndex.find(kv.first);
@@ -1349,17 +1405,88 @@ bool getChannelStripMeterForTrackInstance(int csType, int trackIndex,
         // Dead reconnect-orphans linger in g_inst frozen at their last value
         // (see above), so each candidate is tested for freshness on its own.
         if (now - kv.second.lastMs > 1000) continue;
-        const Slot& s = kv.second.meter[csType];
-        if (!s.have || s.current.empty()) continue;
         auto sq = g_portSeq.find(kv.first);
-        live.emplace_back(sq == g_portSeq.end() ? UINT64_MAX : sq->second, &s);
+        live.emplace_back(sq == g_portSeq.end() ? UINT64_MAX : sq->second, &kv.second);
     }
     if (live.empty()) return false;
     std::sort(live.begin(), live.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
     if (size_t(instanceOrdinal) >= live.size()) return false;  // dark, not wrong
-    current = live[size_t(instanceOrdinal)].second->current;
+    // …and only NOW ask whether that particular strip carries this meter. It may
+    // not — a strip whose gate has never moved has no GateGain slot yet. Dark is
+    // the correct answer there; borrowing a neighbour's value is what this whole
+    // function exists to prevent.
+    const Slot& s = live[size_t(instanceOrdinal)].second->meter[csType];
+    if (!s.have || s.current.empty()) return false;
+    current = s.current;
     return true;
+}
+
+// Squash a strip name to the wire's model spelling: "4K E" -> "4KE". Both sides
+// are compared this way so REAPER's short name and SSL's object prefix meet.
+static std::string squashModel_(const char* s)
+{
+    std::string o;
+    for (; s && *s; ++s)
+        if (!std::isspace(static_cast<unsigned char>(*s)))
+            o += char(std::toupper(static_cast<unsigned char>(*s)));
+    return o;
+}
+
+bool getChannelStripMeterForTrackModel(int csType, int trackIndex,
+                                       const char* model, int instanceOrdinal,
+                                       std::vector<float>& current) {
+    // ★ Why this exists (Frank, HW 2026-08-10: "4K B hat Gate-GR, wird aber in
+    // der 4K E Instanz angezeigt" — on UC1, UF1 and UF8 alike).
+    //
+    // The ordinal route below can only be right if the UDP ports of a track sort
+    // into FX-CHAIN order. They sort by g_portSeq = the order the ports were
+    // first seen, and the trace shows plug-ins reconnecting constantly (a track
+    // collects dozens of ports over a session). One reconnect of the FIRST strip
+    // puts it BEHIND the second, and from then on ordinal 0 reads the other
+    // plug-in's gate. Comp GR never showed it because that reading does not come
+    // through here at all — it is GainReduction_dB, read from REAPER.
+    //
+    // So match on identity, not order. Traced 2026-08-10: everything a strip
+    // announces about itself — SlotIndex(1), PluginIdent(2048), UniqueId,
+    // SessionDataId — is IDENTICAL for both instances, because a 4K E and a 4K B
+    // ARE the same plug-in with a different analogue type. The one thing that
+    // differs is the name it declares its EQ-curve object under:
+    // "4KEEQCurveData" vs "4KBEQCurveData" (type=16 frame, at connect). That
+    // prefix is captured per connection into g_portModel.
+    //
+    // Falls back to the ordinal when the model is unknown or both strips are the
+    // same model — there the wire genuinely cannot tell them apart, and order is
+    // all there is.
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    if (trackIndex <= 0) return false;
+    const std::string want = squashModel_(model);
+    if (!want.empty()) {
+        std::lock_guard<std::mutex> lk(g_meterMx);
+        const long long now = nowMs();
+        const Slot* hit = nullptr;
+        int matches = 0;
+        for (const auto& kv : g_inst) {
+            if (kv.second.kind != Kind::ChannelStrip) continue;
+            auto pi = g_portIndex.find(kv.first);
+            if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+            if (now - kv.second.lastMs > 1000) continue;
+            auto pm = g_portModel.find(kv.first);
+            if (pm == g_portModel.end() || squashModel_(pm->second.c_str()) != want) continue;
+            ++matches;
+            const Slot& s = kv.second.meter[csType];
+            if (s.have && !s.current.empty() && !hit) hit = &s;
+        }
+        // Exactly one strip of this model on the track → unambiguous, take it.
+        // Two of the same model → ambiguous, drop through to the ordinal.
+        if (matches == 1) {
+            if (!hit) return false;      // it is the right strip; it has no such meter
+            current = hit->current;
+            return true;
+        }
+    }
+    return getChannelStripMeterForTrackInstance(csType, trackIndex,
+                                                instanceOrdinal, current);
 }
 
 long long msSinceLastData() {

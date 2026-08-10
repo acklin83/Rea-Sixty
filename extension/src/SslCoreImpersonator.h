@@ -130,6 +130,20 @@ bool getChannelStripMeterForTrackInstance(int csType, int trackIndex,
                                           int instanceOrdinal,
                                           std::vector<float>& current);
 
+// ★ PREFER THIS over the ordinal form. Same read, but it picks the strip by its
+// MODEL — "4K E", "4K B", … — which is the only per-instance discriminator the
+// protocol carries (the plug-in declares its EQ-curve object as "4KEEQCurveData"
+// / "4KBEQCurveData" at connect; SlotIndex, PluginIdent, UniqueId and
+// SessionDataId are identical across instances). The ordinal form assumes the
+// track's UDP ports sort into FX-chain order, and a single plug-in reconnect
+// breaks that — which is how a 4K B's gate reduction ended up on the 4K E
+// (Frank, HW 2026-08-10). Pass the ACTIVE strip's short name; `instanceOrdinal`
+// is the fallback used when the model is unknown or the track runs two strips of
+// the SAME model, where the wire cannot tell them apart. Thread-safe.
+bool getChannelStripMeterForTrackModel(int csType, int trackIndex,
+                                       const char* model, int instanceOrdinal,
+                                       std::vector<float>& current);
+
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();
 
