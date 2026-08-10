@@ -213,6 +213,11 @@ constexpr uint16_t kGraphic      = 0x0122;  // EQ graph (Channel) / meter graphi
 // for the ASCII failed.
 constexpr uint16_t kSoloActive   = 0x0120;
 }
+// ⚠ 0x011b is a COMMAND element, not data — the one thing the init replay writes
+// with a ZERO-length payload. Writing bytes to it tears the whole channel layout
+// down (every text field gone, only the EQ graph and timecode survive) and needs
+// a REAPER restart. Proven on hardware 2026-08-10. If it is ever wanted, send it
+// EMPTY, the way SSL does. 0x0100..0x011a render nothing at all — swept, blank.
 // NB: 0x011d is NOT a view selector (disproven — cap84=0x11, cap77=0x19, cap66=0xfb;
 // too variable, streaming it switched nothing). The Channel<->Meter view is toggled
 // by the MODE button (btn::kMode) on the device itself; the host does not command it

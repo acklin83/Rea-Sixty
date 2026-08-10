@@ -570,15 +570,6 @@ std::atomic<int>  g_uf1CsActiveType {-1};
 // (the pre-first-paint fallback, matching kUf1CsPageCount).
 std::atomic<int>  g_uf1CsActivePages {8};
 std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
-// TEMPORARY zone-sweep probe (2026-08-10) — the candidate element address the
-// sweep is currently holding, or -1 when off. The channel painter drives it; the
-// header builder stamps it into the HOST cell so the screen names the zone that
-// lights something up. See the sweep block in uf1PaintChannel_.
-std::atomic<int>  g_uf1ZoneSweepZone {-1};
-// One-shot request for a full channel-view layout repaint. Folded into the
-// painter's `changed` gate, so anything that knocks the layout over (a probe
-// write to a command zone, e.g. 0x011b) can ask for it to be rebuilt.
-std::atomic<bool> g_uf1ForceRepaint {false};
 // Meter-view FINE soft-key (SK3, 0x1B): finer V-Pot resolution for the CONTINUOUS
 // meter params (RMS Integration, Delay, Reference Level, RTA Scale Top/Bottom,
 // Overload). Enum params are already one-value-per-notch, so fine doesn't touch
@@ -17567,46 +17558,12 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int
     // tracks the toggle live (Frank 2026-08-04: was stuck "OFF" in every
     // channel mode). ON = "ON" + clear the 3rd byte so no stray 'F' remains.
     if (g_uf1CsFine.load()) { h[100] = 'O'; h[101] = 'N'; h[102] = 0x00; }
-    // ---- FIELD PROBE (2026-08-10) — ANSWERED, kept as the evidence ---------
-    // Manual p187 ("Large LCD Layout - Channel Strip Mode") names FOUR
-    // caption/value pairs in this block: HOST/<host>, SOLO CLR [1]/<solo state>,
-    // SOFT KEYS/<n/m>, FINE CTRL [2]/<off|on>. We drive three cells — 0 = host,
-    // 3 = page, 4 = fine — yet the row is eight, and SSL writes "-------" into
-    // cells 1 and 2 as well (cap52 idle, cap86 EQ sweep, cap123-127). So this
-    // marked every cell we do not own with its own index, to map field -> region
-    // in ONE round trip instead of a probe per cell.
-    // ★ RESULT (Frank, HW): F1/F2/F5/F6/F7 render NOWHERE. In Channel-Strip mode
-    // only cells 0, 3 and 4 are bound to screen regions — proven, because the
-    // HOST stamp below rides the SAME 200-byte frame and does show up. SSL's
-    // dashes in 1/2 are leftovers from the MCU layout, where those cells DO
-    // render ("1/10" @1, "FOCUS" @2 in cap58). The Solo-Active region is not a
-    // 0x011c cell at all; it is the 1-byte flag 0x0120 (uf1::scr::kSoloActive).
-    {
-        static const struct { int field; const char* code; } kFieldProbe[] = {
-            { 1, "F1" }, { 2, "F2" }, { 5, "F5" }, { 6, "F6" }, { 7, "F7" },
-        };
-        for (const auto& p : kFieldProbe) {
-            const std::string_view code(p.code);
-            const size_t base = static_cast<size_t>(p.field) * 25;
-            for (size_t k = 0; k < 25; ++k)
-                h[base + k] = (k < code.size()) ? static_cast<uint8_t>(code[k]) : 0;
-        }
-    }
-    // Zone-sweep probe: name the candidate zone in the HOST cell (field 0) — the
-    // one cell we KNOW renders. Whatever lights up elsewhere on the LCD is then
-    // self-identifying without a capture. Off (-1) leaves "REAPER" alone.
-    // Bit 16 set = phase A, an FF 38/39 LED / colour id ("L2f"); clear = an FF 67
-    // element address ("Z11e").
-    if (const int z = g_uf1ZoneSweepZone.load(); z >= 0) {
-        static const char* kHex = "0123456789abcdef";
-        const bool led = (z & 0x10000) != 0;
-        const char s[4] = { led ? 'L' : 'Z',
-                            kHex[led ? ((z >> 4) & 0xf) : ((z >> 8) & 0xf)],
-                            kHex[led ? (z & 0xf)        : ((z >> 4) & 0xf)],
-                            led ? '\0' : kHex[z & 0xf] };
-        const size_t n = led ? 3u : 4u;
-        for (size_t k = 0; k < 25; ++k) h[k] = (k < n) ? uint8_t(s[k]) : 0;
-    }
+    // Cells 1, 2 and 5-7 are deliberately left at zero: in Channel-Strip mode the
+    // firmware binds only 0 (HOST), 3 (SOFT KEYS page) and 4 (FINE CTRL) to screen
+    // regions. Proven on hardware 2026-08-10 by writing markers into the other five
+    // — nothing rendered, while the marker in cell 0 of the SAME frame did. SSL's
+    // "-------" in cells 1/2 is a leftover from the MCU layout, where they DO show
+    // ("1/10" @1, "FOCUS" @2 in cap58). Don't go looking there again.
     return h;
 }
 
@@ -23209,8 +23166,7 @@ void uf1PaintChannel_()
     const bool modeFieldChanged = (modeFieldKey != sModeField);
     sModeField = modeFieldKey;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
-                       || modeFieldChanged
-                       || g_uf1ForceRepaint.exchange(false);
+                       || modeFieldChanged;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -24010,120 +23966,6 @@ void uf1PaintChannel_()
         // V-Pot label block above, which sends 0x010f every tick it changes AND on
         // `changed` — so the layout "occupant set" {0x0017, 0x0104, 0x010f} is still
         // satisfied without this neutral send re-blanking the live bars each repaint.
-    }
-
-    // ---- TEMPORARY zone-sweep probe (2026-08-10) ---------------------------
-    // "SOLO CLR 1" / "FINE CTRL 2" are firmware CAPTIONS (manual p187) and the
-    // regions under them are NOT the spare 0x011c cells — the F1/F2/F5/F6/F7
-    // field probe rendered nothing there. Whatever drives the Solo-Active region
-    // is a zone SSL never wrote in any of the 265 captures (no track was ever
-    // soloed while capturing), so only the hardware can name it.
-    //
-    // Rotate ONE candidate element address at a time, ~2.5 s each, and stamp the
-    // candidate's id into the HOST cell (uf1PageHeader_) — the screen names the
-    // zone itself, so ONE run maps the whole plane instead of one round trip per
-    // zone. Each candidate gets a TEXT write (<idx 0> + "Zxxx") and THEN a flag
-    // write ({0x01}), in that order, so both element kinds are covered and the
-    // flag write cannot clear the text one (it lands on index 1). The previous
-    // candidate is zeroed before moving on.
-    //   Toggle: ExtState  rea_sixty / uf1_zone_sweep  = "1".
-    {
-        // Run 1 (Frank, HW 2026-08-10) swept 0x0100..0x011a: NOTHING appeared
-        // anywhere on the LCD — that whole span is ruled out and is not repeated.
-        // ★ 0x011b IS A COMMAND ZONE, NOT DATA — it is the one element the init
-        // replay writes with a ZERO-length payload (2 frames). Our 5-byte text
-        // write to it tore the whole channel layout down: every text field gone,
-        // only the EQ graph and the timecode survived. It is PERMANENTLY OUT of
-        // the sweep; if it is ever wanted, send it empty, the way SSL does.
-        // So this run continues past it, plus the 0x00xx channel-info plane —
-        // minus everything the channel view already drives there (0x0004 SOFT,
-        // 0x0006 active, 0x0009/0a/15/16 meters, 0x000b name, 0x000c out dB,
-        // 0x000e pan, 0x000f pan bar, 0x0017 CS type, 0x0018 colour).
-        static constexpr uint16_t kSweepZones[] = {
-            // large LCD, after the 0x011b crater
-            0x011e, 0x011f, 0x0120, 0x0121, 0x0123, 0x0124, 0x0125, 0x0126,
-            0x0127, 0x0128, 0x0129, 0x012a, 0x012b, 0x012c, 0x012d, 0x012e,
-            0x012f, 0x0130, 0x0131, 0x0132, 0x0133, 0x0134, 0x0135, 0x0136,
-            0x0137,
-            // channel-info plane
-            0x0000, 0x0001, 0x0002, 0x0003, 0x0005, 0x0007, 0x0008, 0x000d,
-            0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0019, 0x001a, 0x0021,
-            0x002b, 0x002c, 0x002d, 0x002e, 0x002f, 0x0030, 0x0031, 0x0032,
-            0x0033, 0x0034, 0x0035,
-        };
-        // ★ Phase A runs FIRST and is a different MECHANISM, not another address.
-        // Colour/indicator state does not ride FF 67 at all — cap70 proved the EQ
-        // graph's colour is FF 38 id 0x03, i.e. the LED id space already addresses
-        // SCREEN elements, not just buttons. The init lights 39 ids (0x00..0x26).
-        // If the Solo-Active region is a screen-side mirror of the Quick-Key-1
-        // indicator, it is an LED id — which is exactly why 265 captures hold no
-        // ASCII for it. Sweep to 0x2f to cover a few past the init's last id.
-        constexpr uint8_t kLedIdFirst = 0x00, kLedIdLast = 0x2f;
-        constexpr int kLedCount  = kLedIdLast - kLedIdFirst + 1;
-        constexpr int kLedDwell  = 1800;   // LEDs read faster than a text region
-        constexpr int kDwellMs   = 2500;
-        static bool     sOn      = false;
-        static int      sStep    = -1;
-        static uint32_t sPollMs  = 0;
-        static uint32_t sStartMs = 0;
-        const uint32_t nowMs = uint32_t(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        if (nowMs - sPollMs >= 250) {              // ExtState poll, not per tick
-            sPollMs = nowMs;
-            const char* v = GetExtState("rea_sixty", "uf1_zone_sweep");
-            const bool want = (v && *v == '1');
-            if (want != sOn) {
-                sOn = want;
-                sStep = -1;
-                sStartMs = nowMs;
-                if (!sOn) g_uf1ZoneSweepZone.store(-1);
-            }
-        }
-        if (sOn) {
-            // Elapsed-time schedule so the run always starts at step 0 (phase A,
-            // LED id 0x00) instead of wherever the wall clock happens to land.
-            const uint32_t el = nowMs - sStartMs;
-            const int nZones  = int(std::size(kSweepZones));
-            const int step    = (el < uint32_t(kLedCount) * kLedDwell)
-                ? int(el / kLedDwell)
-                : kLedCount + int(((el - uint32_t(kLedCount) * kLedDwell) / kDwellMs)
-                                  % uint32_t(nZones));
-            if (step != sStep) {
-                if (sStep >= 0) {                  // clear the outgoing candidate
-                    if (sStep < kLedCount) {
-                        const uint8_t id = uint8_t(kLedIdFirst + sStep);
-                        g_uf1_dev->send(uf1::buildLedPrimary(id, 0x00));
-                        g_uf1_dev->send(uf1::buildLedLevel(id, 0x00));
-                    } else {
-                        const uint8_t off[2] = { 0x00, 0x00 };
-                        g_uf1_dev->send(uf1::buildScreen(kSweepZones[sStep - kLedCount], off));
-                    }
-                }
-                sStep = step;
-                static const char* kHex = "0123456789abcdef";
-                if (step < kLedCount) {            // ---- phase A: LED / colour ids
-                    const uint8_t id = uint8_t(kLedIdFirst + step);
-                    g_uf1ZoneSweepZone.store(0x10000 | int(id));
-                    g_uf1_dev->send(uf1::buildLedPrimary(id, 0x0f));
-                    g_uf1_dev->send(uf1::buildLedLevel(id, 0x0f));
-                } else {                           // ---- phase B: FF 67 elements
-                const uint16_t z = kSweepZones[step - kLedCount];
-                g_uf1ZoneSweepZone.store(int(z));
-                const uint8_t txt[5] = { 0x00, 'Z', uint8_t(kHex[(z >> 8) & 0xf]),
-                                         uint8_t(kHex[(z >> 4) & 0xf]),
-                                         uint8_t(kHex[z & 0xf]) };
-                g_uf1_dev->send(uf1::buildScreen(z, txt));      // text element
-                const uint8_t flag = 0x01;
-                g_uf1_dev->send(uf1::buildScreen(z, std::span<const uint8_t>(&flag, 1)));
-                }
-                // Self-heal: a candidate that turns out to be a command zone can
-                // tear the layout down (0x011b did, run 1). Ask for a full layout
-                // repaint on the next tick so ONE bad zone cannot end the run —
-                // and so the HOST cell keeps naming the candidates after it.
-                g_uf1ForceRepaint.store(true);
-            }
-        }
     }
 
     // The SOFT key's label goes out OUTSIDE the `changed` gate: it changes when
