@@ -171,6 +171,13 @@ constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never
 // Full map in docs/protocol-notes-uf1 / docs/uf1-native-build-plan.
 namespace scr {
 // Channel-info zone (0x00xx)
+// The soft-key label above the CHANNEL display (the small LCD). One byte of
+// index (always 0 — there is one such key) then the text. Found in our own
+// init replay as `ff 67 09 00 04 00 'BYPASS'`: we shipped SSL's captured
+// default and never drove it again, which is why every channel read BYPASS
+// regardless of the binding. Distinct from kSoftKeyLabel (0x0104), which is
+// the BIG display's four keys. Frank 2026-08-10.
+constexpr uint16_t kChSoftKey = 0x0004;
 constexpr uint16_t kChActive  = 0x0006;  // 1-byte "channel populated" flag (01) — gates the colour bar
 constexpr uint16_t kColourBar = 0x0018;  // 1-byte palette index of the fader colour bar (uf8::quantize)
 constexpr uint16_t kTrackName = 0x000b;

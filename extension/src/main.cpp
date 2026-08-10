@@ -23956,15 +23956,25 @@ void uf1PaintChannel_()
         sendSoftKeyText(1, "PRE");
         sendSoftKeyText(2, "SOLO SAFE");
         sendSoftKeyText(3, "PLUG-IN");
-        // NOT sent: a label for the single SOFT key above the channel display.
-        // cap77 is a full capture of SSL 360's own channel view and it writes
-        // exactly five text zones — 0x000b name, 0x000e pan, 0x0017 strip type,
-        // 0x0104 idx 1..3 (the big display's keys), 0x010e focused param. There
-        // is no sixth, and 0x0104 has no index 4. SSL never labels that key, so
-        // the word sitting there is drawn by the FIRMWARE as part of the
-        // channel-strip layout, and no host frame can rename it. The layout is
-        // latched by the type string we send to 0x0017, so a different layout is
-        // the only lever that could change it. Frank 2026-08-10.
+        // The SOFT key above the channel display (zone 0x0004, index 0). Its
+        // text comes from the key's own binding label — Settings → Bindings →
+        // UF1 → SOFT → Label. We used to ship SSL's captured "BYPASS" in the
+        // init replay and never touch it again, so it read BYPASS on every
+        // channel no matter what the key was bound to (Frank 2026-08-10).
+        // Change-detected; forced on `changed` like every other zone here.
+        {
+            static std::string sChSoft;
+            const auto bdSoft = uf8::bindings::getBinding(
+                0, uf8::bindings::ButtonId::Uf1ChannelSoftKey);
+            const std::string lbl = bdSoft.label;
+            if (changed || lbl != sChSoft) {
+                sChSoft = lbl;
+                std::vector<uint8_t> p;
+                p.push_back(0x00);                       // the one index
+                p.insert(p.end(), lbl.begin(), lbl.end());
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChSoftKey, p));
+            }
+        }
         // 0x010f 4 V-pot readout bars: now driven LIVE (from param values) by the
         // V-Pot label block above, which sends 0x010f every tick it changes AND on
         // `changed` — so the layout "occupant set" {0x0017, 0x0104, 0x010f} is still
