@@ -695,50 +695,47 @@ void MixerWindow::onRunTick()
                             searchBreadcrumb(s, /*withGroup*/ true);
                         if (!settingsSearchMatches(toks, crumb)) continue;
                         ++hits;
-                        // Two lines per hit: the setting on top, "Pane › Section"
-                        // under it a size down. The rail is 160 px, so a single
-                        // line could only ever fit the label — which left two
-                        // hits from two different panes looking identical unless
-                        // you hovered for the tooltip (Frank 2026-08-10).
-                        // Rendered as a label-less Selectable of the right height
-                        // with both lines painted over it, so the whole block is
-                        // one click target.
-                        const double lineH = ImGui_GetFontSize(impl_->ctx);
-                        const double subPx = lineH * 0.82;
-                        double rowH = lineH + subPx + 3.0;
-                        double rowX = 0.0, rowY = 0.0;
-                        ImGui_GetCursorScreenPos(impl_->ctx, &rowX, &rowY);
+                        // Two lines per hit: the setting, then "Pane › Section"
+                        // under it. The rail is 160 px, so a single line could
+                        // only ever fit the label, which left two hits from two
+                        // different panes looking identical unless you hovered
+                        // for the tooltip (Frank 2026-08-10).
+                        //
+                        // The newline goes INSIDE the Selectable's label. ImGui
+                        // sizes a Selectable from CalcTextSize, which counts
+                        // lines, so the item grows to two rows on its own and
+                        // the whole block stays one click target.
+                        //
+                        // The first attempt did this the "proper" way — a
+                        // label-less Selectable with an explicit height, the two
+                        // lines painted over it via Set/GetCursorScreenPos, and
+                        // PushFont for a smaller second line. It tore the
+                        // Settings window down on the first keystroke. All three
+                        // of those were new call shapes in this file; rather than
+                        // guess which one ReaImGui objected to, this uses only
+                        // the all-optional-null Selectable that was already
+                        // working here. Cost: the second line is neither dimmed
+                        // nor smaller. Don't "improve" that without testing on
+                        // the hardware — see memory reaimgui-index.
+                        std::string row =
+                            searchEllipsise(impl_->ctx, s.label, availW);
+                        row += '\n';
+                        row += searchEllipsise(impl_->ctx,
+                                               searchParentTrail(s), availW);
                         // The id carries the hit number, not the text: two
                         // labels can ellipsise to the same string.
-                        char rowId[32];
-                        snprintf(rowId, sizeof(rowId), "##hit_%d", hits);
+                        char idSuffix[24];
+                        snprintf(idSuffix, sizeof(idSuffix), "##hit_%d", hits);
+                        row += idSuffix;
+
                         bool picked = false;
                         const bool clicked =
-                            ImGui_Selectable(impl_->ctx, rowId, &picked,
+                            ImGui_Selectable(impl_->ctx, row.c_str(), &picked,
                                              /*flags*/ nullptr,
-                                             /*size_w*/ nullptr, &rowH);
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr);
                         const bool hovered =
                             ImGui_IsItemHovered(impl_->ctx, /*flags*/ nullptr);
-                        // Where the layout continues once the row is done.
-                        double contX = 0.0, contY = 0.0;
-                        ImGui_GetCursorScreenPos(impl_->ctx, &contX, &contY);
-
-                        ImGui_SetCursorScreenPos(impl_->ctx, rowX, rowY);
-                        ImGui_Text(impl_->ctx,
-                                   searchEllipsise(impl_->ctx, s.label,
-                                                   availW).c_str());
-                        ImGui_SetCursorScreenPos(impl_->ctx, rowX,
-                                                 rowY + lineH);
-                        // Push the smaller face BEFORE measuring — ellipsising
-                        // against the big font would cut the small line short.
-                        if (impl_->font)
-                            ImGui_PushFont(impl_->ctx, impl_->font, subPx);
-                        ImGui_TextDisabled(
-                            impl_->ctx,
-                            searchEllipsise(impl_->ctx, searchParentTrail(s),
-                                            availW).c_str());
-                        if (impl_->font) ImGui_PopFont(impl_->ctx);
-                        ImGui_SetCursorScreenPos(impl_->ctx, contX, contY);
 
                         if (clicked) {
                             impl_->selected = s.section;
