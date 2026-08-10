@@ -519,7 +519,7 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | `◄` `►` (page arrows) | Step the strip page. |
 | `5-8` | Jump to V-Pots 5-8 of the page. |
 | `BANK ◄` `►` | Step one parameter left / right. |
-| **SOLO ACTIVE** (screen, left) | Lights whenever anything in the project is soloed. It is an indication only — the wording is the UF1's own. Quick-key `1` beneath it is yours to bind; bind it to *Unsolo all* if you want SSL's factory behaviour. |
+| Quick-key `1` (bottom row) | **Clear every solo** in the project (REAPER's *Unsolo all tracks*). Factory default; rebindable. The **SOLO ACTIVE** indication above it lights by itself whenever anything is soloed — that part is the UF1's own wording and is not ours to change. |
 | Quick-key `2` (bottom row) | Toggle **Fine** resolution for the channel V-Pots. The **FINE CTRL** readout next to it follows the toggle. |
 | V-Pot push (V1-V4) | Reset that parameter to its default. |
 

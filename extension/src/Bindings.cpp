@@ -898,6 +898,18 @@ void seedFactoryDefaults_(Config& c)
             sp.label  = a.label;
         }
     }
+    // Key 1 PLAIN = REAPER's "Unsolo all tracks" (40340) — SSL's own factory
+    // assignment for this key, and the one the display already assumes: the
+    // SOLO CLR 1 caption sits over it and its SOLO ACTIVE indicator lights by
+    // itself whenever anything is soloed. The key was unbound, so the lit
+    // indicator pointed at a key that did nothing. Rebindable like every other.
+    {
+        auto& sp = L1[ButtonId::Uf1SecKey1].shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Reaper;
+        sp.action = "40340";
+        sp.param  = 0;
+        sp.label  = "SOLO CLR";
+    }
     // The remaining UF1 buttons (above-fader V-Pot push, display soft-keys,
     // channel soft-key, secondary transport, Scrub) ship UNBOUND — the user
     // assigns them in Settings → Bindings → UF1, matching how UF8 ships
@@ -2166,7 +2178,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 21;
+constexpr int kCurrentBindingsVersion = 22;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2613,6 +2625,22 @@ void upgradeUf1SoftKeyPinChannel_(Config& c)
     sp.action = "temp_selset_pin_uf1_channel";
 }
 
+// v21→v22 (2026-08-10): key 1 (the one under the SOLO CLR caption) gains its
+// SSL factory assignment, REAPER action 40340 "Unsolo all tracks". Backfill
+// ONLY when the plain slot is still empty — a key the user has bound is theirs,
+// and this runs on every existing config. The Shift slot (LTCH / auto_latch) is
+// untouched.
+void upgradeBackfillUf1SoloClear_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    Binding& bd = L1.bindings[ButtonId::Uf1SecKey1];   // default-creates
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (sp.type != ActionType::Noop || !sp.action.empty()) return;
+    sp.type   = ActionType::Reaper;
+    sp.action = "40340";
+    sp.label  = "SOLO CLR";
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -2902,6 +2930,9 @@ void load()
             }
             if (tmp.version < 21) {
                 upgradeUf1SoftKeyPinChannel_(tmp);
+            }
+            if (tmp.version < 22) {
+                upgradeBackfillUf1SoloClear_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
