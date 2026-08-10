@@ -41371,12 +41371,20 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 const int p = std::atoi(dv);
                 if (p > 0 && p < 65536) dataPort = p;
             }
-            // Trace log (/tmp or %TEMP%): on while the impersonator runs, since
-            // it is still young. Opt out with ssl_core_trace=0.
+            // Trace log (/tmp or %TEMP%). ★ OPT-IN — set ssl_core_trace=1.
+            // It used to be on by default "while the impersonator is still
+            // young", with an opt-OUT. It is not young any more, and the log has
+            // no size cap: on Frank's machine it had grown to 823 MB unnoticed
+            // (2026-08-10). It is still the right tool the moment a meter reads
+            // wrong — every GR root cause so far came out of it, never out of
+            // guessing — so turn it on deliberately, then off again.
             // setenv() is POSIX and absent on MSVC — _putenv_s is the Windows
             // spelling.
             const char* trv = GetExtState("rea_sixty", "ssl_core_trace");
-            if (!(trv && *trv && !strcmp(trv, "0"))) {
+            const bool wantTrace = trv && *trv &&
+                (!strcmp(trv, "1") || !strcmp(trv, "on")
+                 || !strcmp(trv, "true") || !strcmp(trv, "yes"));
+            if (wantTrace) {
 #if defined(_WIN32)
                 _putenv_s("REASIXTY_SSLCORE_TRACE", "1");
 #else
