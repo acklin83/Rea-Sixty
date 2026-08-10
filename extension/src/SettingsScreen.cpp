@@ -3975,6 +3975,26 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // short/long slots, so DON'T show empty SHORT/LONG columns for them — only
     // the double-press below is user-assignable. Frank 2026-08-03 ("nicht
     // schluddrig — entweder Aktionen zuteilen oder nur double press").
+    // UF1 buttons carry a user LABEL, shown on the surface next to the key.
+    // The UF8's top-soft-keys have had one forever (the user-Quick slot editor);
+    // UF1 keys never got the field, so there was no way to name one — Frank
+    // 2026-08-10 ("lass ihn mich anschreiben however the fuck i want").
+    if (idIsUf1) {
+        char lblBuf[64] = {0};
+        std::strncpy(lblBuf, bd.label.c_str(), sizeof(lblBuf) - 1);
+        ImGui_PushItemWidth(ctx, scaleW_(ctx, 220.0));
+        if (ImGui_InputTextWithHint(ctx, "Label##uf1_btn_label",
+                                    "shown on the surface",
+                                    lblBuf, sizeof(lblBuf),
+                                    nullptr, nullptr)) {
+            bd.label = lblBuf;
+            uf8::bindings::setBinding(layer, id, bd);
+            uf8::bindings::save();
+        }
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+    }
+
     const bool idIsSel = (id == ButtonId::Uf8Select || id == ButtonId::Uf1Sel);
     if (!idIsSel) {
     drawColumn("SHORT PRESS", "sp", bd.shortPress, /*isLongCol*/ false);

@@ -23956,6 +23956,33 @@ void uf1PaintChannel_()
         sendSoftKeyText(1, "PRE");
         sendSoftKeyText(2, "SOLO SAFE");
         sendSoftKeyText(3, "PLUG-IN");
+        // The single SOFT key above the channel display. Its label is the user's
+        // (Settings → Bindings → UF1 → SOFT → Label); the firmware's own default
+        // sits there otherwise, which is why every channel read "Bypass".
+        //
+        // We never drove this zone, so its index is not decoded — cap77 left it
+        // open and cap78 only ruled out a bypass TEXT frame. 4 is the natural
+        // next slot after the big display's 0..3, but it is a guess, so the
+        // index is an ExtState: set rea_sixty / uf1_softkey_label_idx to another
+        // number and restart REAPER to probe without a rebuild. -1 disables the
+        // send entirely and gives the firmware's label back.
+        {
+            static int  sIdx  = -2;          // -2 = not read yet
+            static std::string sSoftLbl;
+            if (sIdx == -2) {
+                sIdx = 4;
+                if (const char* v = GetExtState("rea_sixty", "uf1_softkey_label_idx");
+                    v && *v) sIdx = std::atoi(v);
+            }
+            if (sIdx >= 0) {
+                const auto bdSoft = uf8::bindings::getBinding(
+                    0, uf8::bindings::ButtonId::Uf1ChannelSoftKey);
+                if (changed || bdSoft.label != sSoftLbl) {
+                    sSoftLbl = bdSoft.label;
+                    sendSoftKeyText(static_cast<uint8_t>(sIdx), sSoftLbl);
+                }
+            }
+        }
 
         // 0x010f 4 V-pot readout bars: now driven LIVE (from param values) by the
         // V-Pot label block above, which sends 0x010f every tick it changes AND on
