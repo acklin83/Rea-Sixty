@@ -132,10 +132,16 @@ constexpr double kRailWidthPx = 160.0;
 // normal persistSelected path) and asks it to scroll to the owning heading.
 //
 // Every label below is copied verbatim out of SettingsScreen.cpp — the index
-// is a mirror of the code, not a description of it. The Devices / Appearance /
-// Behaviour panes are indexed control by control; the other nine panes are
-// indexed by their section headings only (going control-deep in Bindings or
-// FX Learn is out of scope). Frank 2026-08-09.
+// is a mirror of the code, not a description of it. All twelve panes are
+// indexed control by control. They were not at first, and "rme" (Modes → REC →
+// Enable RME / TotalReaper integration) found nothing, so the scope note that
+// used to sit here was wrong in practice. Still headings-only: the per-slot and
+// per-plug-in rows (Favourite slots, FX-Learn maps, Selection-Set slots), which
+// are user data rather than settings and change under the index.
+//
+// A result row is TWO lines — the setting, then "Pane › Section" a size down.
+// One line could only ever fit the label at 160 px, which made two hits from
+// two different panes indistinguishable. Frank 2026-08-10.
 struct SearchEntry {
     const char* label;    // the control's own label
     Section     section;  // pane it lives in
@@ -288,16 +294,18 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Multi-Select acts as temporary Parameter Group",    kSecParameterGroups, "" },
 };
 
-// "Devices › Metering › GR meter source". The pane name always leads; the
-// heading is dropped when it would only repeat the label (pane-level entries),
-// and on request — the rail is 160 px wide, so the middle term is the first
-// thing to go when the full trail won't fit.
+// Breadcrumb separator, shared by the tooltip trail and a row's second line.
+constexpr const char kCrumbSep[] = " \xE2\x80\xBA ";   // " › "
+
+// "Devices › Metering › GR meter source" — the full trail, used for matching
+// and for the hover tooltip. The pane name always leads; the heading is
+// dropped when it would only repeat the label (pane-level entries).
 std::string searchBreadcrumb(const SearchEntry& e, bool withGroup)
 {
     const char* pane = kRail[0].label;
     for (const RailEntry& r : kRail)
         if (r.section == e.section) { pane = r.label; break; }
-    static const char kSep[] = " \xE2\x80\xBA ";   // " › "
+    const char* kSep = kCrumbSep;
     std::string s = pane;
     if (withGroup && e.group && *e.group
         && std::strcmp(e.group, e.label) != 0) {
@@ -309,14 +317,6 @@ std::string searchBreadcrumb(const SearchEntry& e, bool withGroup)
         s += e.label;
     }
     return s;
-}
-
-bool searchTextFits(ImGui_Context* ctx, const std::string& s, double maxW)
-{
-    double w = 0.0, h = 0.0;
-    ImGui_CalcTextSize(ctx, s.c_str(), &w, &h, /*hide_after_##*/ nullptr,
-                       /*wrap_width*/ nullptr);
-    return w <= maxW;
 }
 
 // Trim to the rail width, cutting on a UTF-8 boundary (the separator and a
@@ -342,16 +342,20 @@ std::string searchEllipsise(ImGui_Context* ctx, const std::string& s,
     return kEll;
 }
 
-// What a result row actually shows. Only ~20 characters fit the rail, so:
-// the full trail when it fits, else pane + setting, else the setting alone,
-// ellipsised. The untruncated trail is always on the hover tooltip.
-std::string searchRailText(ImGui_Context* ctx, const SearchEntry& e,
-                           const std::string& full, double maxW)
+// The second line of a result row: "Modes \xE2\x80\xBA REC", or just the pane
+// when the entry is the heading itself. The label goes on line one, so it is
+// deliberately NOT repeated here.
+std::string searchParentTrail(const SearchEntry& e)
 {
-    if (searchTextFits(ctx, full, maxW)) return full;
-    const std::string paneAndLabel = searchBreadcrumb(e, /*withGroup*/ false);
-    if (searchTextFits(ctx, paneAndLabel, maxW)) return paneAndLabel;
-    return searchEllipsise(ctx, e.label, maxW);
+    const char* pane = kRail[0].label;
+    for (const RailEntry& r : kRail)
+        if (r.section == e.section) { pane = r.label; break; }
+    std::string s = pane;
+    if (e.group && *e.group && std::strcmp(e.group, e.label) != 0) {
+        s += kCrumbSep;
+        s += e.group;
+    }
+    return s;
 }
 
 } // namespace
@@ -691,24 +695,59 @@ void MixerWindow::onRunTick()
                             searchBreadcrumb(s, /*withGroup*/ true);
                         if (!settingsSearchMatches(toks, crumb)) continue;
                         ++hits;
-                        // Two results can truncate to the same string, so the
-                        // ImGui id carries the hit number, not the text.
-                        char rowId[288];
-                        snprintf(rowId, sizeof(rowId), "%s##hit_%d",
-                                 searchRailText(impl_->ctx, s, crumb,
-                                                availW).c_str(), hits);
+                        // Two lines per hit: the setting on top, "Pane › Section"
+                        // under it a size down. The rail is 160 px, so a single
+                        // line could only ever fit the label — which left two
+                        // hits from two different panes looking identical unless
+                        // you hovered for the tooltip (Frank 2026-08-10).
+                        // Rendered as a label-less Selectable of the right height
+                        // with both lines painted over it, so the whole block is
+                        // one click target.
+                        const double lineH = ImGui_GetFontSize(impl_->ctx);
+                        const double subPx = lineH * 0.82;
+                        double rowH = lineH + subPx + 3.0;
+                        double rowX = 0.0, rowY = 0.0;
+                        ImGui_GetCursorScreenPos(impl_->ctx, &rowX, &rowY);
+                        // The id carries the hit number, not the text: two
+                        // labels can ellipsise to the same string.
+                        char rowId[32];
+                        snprintf(rowId, sizeof(rowId), "##hit_%d", hits);
                         bool picked = false;
-                        if (ImGui_Selectable(impl_->ctx, rowId, &picked,
+                        const bool clicked =
+                            ImGui_Selectable(impl_->ctx, rowId, &picked,
                                              /*flags*/ nullptr,
-                                             /*size_w*/ nullptr,
-                                             /*size_h*/ nullptr)) {
+                                             /*size_w*/ nullptr, &rowH);
+                        const bool hovered =
+                            ImGui_IsItemHovered(impl_->ctx, /*flags*/ nullptr);
+                        // Where the layout continues once the row is done.
+                        double contX = 0.0, contY = 0.0;
+                        ImGui_GetCursorScreenPos(impl_->ctx, &contX, &contY);
+
+                        ImGui_SetCursorScreenPos(impl_->ctx, rowX, rowY);
+                        ImGui_Text(impl_->ctx,
+                                   searchEllipsise(impl_->ctx, s.label,
+                                                   availW).c_str());
+                        ImGui_SetCursorScreenPos(impl_->ctx, rowX,
+                                                 rowY + lineH);
+                        // Push the smaller face BEFORE measuring — ellipsising
+                        // against the big font would cut the small line short.
+                        if (impl_->font)
+                            ImGui_PushFont(impl_->ctx, impl_->font, subPx);
+                        ImGui_TextDisabled(
+                            impl_->ctx,
+                            searchEllipsise(impl_->ctx, searchParentTrail(s),
+                                            availW).c_str());
+                        if (impl_->font) ImGui_PopFont(impl_->ctx);
+                        ImGui_SetCursorScreenPos(impl_->ctx, contX, contY);
+
+                        if (clicked) {
                             impl_->selected = s.section;
                             impl_->persistSelected();
                             // Best-effort: the pane scrolls to this heading
                             // on the very next draw, which is this frame.
                             settingsRequestSectionScroll(s.group);
                         }
-                        if (ImGui_IsItemHovered(impl_->ctx, /*flags*/ nullptr))
+                        if (hovered)
                             ImGui_SetTooltip(impl_->ctx, crumb.c_str());
                     }
                     if (hits == 0)
