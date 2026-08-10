@@ -92,7 +92,7 @@ so none of them may be published before that tag.
 | `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated | |
 | `settings-manual.png` | Manual tab — the manual rendered in-app, chapter list on the left | |
 | `settings-about.png` | About tab — version, codename, build, repository, setup export/import, log paths | |
-| `settings-search.png` | The rail **search** with `rme` typed — two hits, and the pane behind it switched to Modes → REC | Shows the 160 px rail truncating result rows to the label alone; the full breadcrumb is on the hover tooltip |
+| `settings-search.png` | The rail **search** with `rme` typed — two hits, each two lines (setting, then `Pane › Section`), and the pane behind it switched to Modes → REC | **2000 px wide, not Retina** — supplied as a re-encoded webp and converted, so it is the one shot that breaks the rule below. Re-take at full scale when convenient |
 
 ### Panes with no screenshot at all
 
