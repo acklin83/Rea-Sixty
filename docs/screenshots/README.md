@@ -1,8 +1,14 @@
 # Screenshots
 
-UI screenshots of Rea-Sixty, captured 2026-07-19 on macOS against a
-`v0.3.2-8-g940a43f` build. Source for the website (`reasixty.com`) — the site
-references these directly.
+UI screenshots of Rea-Sixty, macOS. Two capture rounds:
+
+- **2026-07-19**, `v0.3.2-8-g940a43f` — the Learn-HUD shots and everything
+  under Modes / Favourites / Selection Sets / Parameter Groups / Manual / About.
+- **2026-08-10**, `v0.4.4-215-ge52b288` — the eight Settings shots re-taken
+  after the Device pane was split (Devices, Appearance, Behaviour, the three
+  Bindings sub-tabs, FX Learn, Exchange).
+
+Source for the website (`reasixty.com`) — the site references these directly.
 
 **These are published on a public website.** Anything captured here is public.
 Two files were edited before landing; see *Redactions* below.
@@ -18,13 +24,12 @@ PDF, web).
 
 | File | What was removed | How |
 | --- | --- | --- |
-| `settings-device-1.png` | Hardware serial numbers of the author's UF8 and UC1 | Filled with the panel background; the row now reads `UF8 [connected] [Identify]` |
+| `settings-devices.png` | Hardware serial numbers of the author's UF8, UC1 and UF1 | Filled with the panel background (26,26,26); all three rows now read `<device> [connected]`, with the Identify buttons left intact |
 | `settings-modes-dynamount.png` | Two live studio LAN addresses in the IP column | Filled with the field background, so both rows read as empty IP fields like the six below them |
 
 The unedited originals are not in the repo. If a screenshot needs re-taking,
-re-capture rather than trying to restore these. `settings-device-1.png` is on
-the re-shoot list below — redact the serials again on the new capture, and
-note that the list now has a third line, UF1, which also prints an `SN`.
+re-capture rather than trying to restore these — and redact the serials again,
+on all three device rows.
 
 ## Index
 
@@ -42,36 +47,44 @@ note that the list now has a third line, UF1, which also prints an `SN`.
 
 ### Settings window
 
-The rail read **Device · Appearance · Bindings · Modes · FX Learn ·
-Favourites · Selection Sets · Parameter Groups · Manual · About** when these
-were captured — ten entries. It now has twelve: the Device pane has been split
-into **Devices · Appearance · Behaviour**, and **Exchange** landed in v0.4.0.
-A **Search settings** field has also been added at the top of the rail. Any
-shot with the rail in frame is therefore two entries short and shows a pane
-name that no longer exists.
+Eight files were re-captured 2026-08-10 against the Settings reorganisation
+(`e52b288`, branch `uf1-native-build`): the rail now reads **Devices ·
+Appearance · Behaviour · Bindings · Modes · FX Learn · Favourites · Selection
+Sets · Parameter Groups · Exchange · Manual · About** — twelve entries — with a
+**Search settings** field above it. `settings-device-1/2/3.png` were removed in
+the same commit; that pane no longer exists and there is nothing to re-point
+them at.
+
+The rows still marked *Re-shoot* below predate the reorganisation. They are
+Modes / Favourites / Selection Sets / Parameter Groups / Manual / About, whose
+CONTENT is unchanged — only the rail down the left edge is two entries short
+and lacks the search field. Cosmetic, but visible on a full-window shot.
 
 **Nothing here can be regenerated from the repo.** Screenshots have to be
-re-taken by hand in REAPER, on macOS, at Retina scale. No file has been
-deleted and no filename below is invented — every row names a `.png` that is
-in this folder today. The *Status* column says which ones no longer match the
-UI; until they are re-shot the old files stay in place, because the website
-references them directly.
+re-taken by hand in REAPER, on macOS, at Retina scale. Every filename below
+names a `.png` that is in this folder today.
+
+**These do not ship yet.** Per Frank 2026-08-10 the manual and the website —
+including everything UF1 — go public at tag **v0.5**. `settings-devices.png`,
+`settings-bindings-uf1.png` and `settings-fx-learn.png` all show UF1 on screen,
+so none of them may be published before that tag.
 
 | File | Shows | Status |
 | --- | --- | --- |
-| `settings-device-1.png` | The old Device tab — connected devices, LED/LCD brightness, display behaviour, overlay colours | **Re-shoot.** That pane no longer exists. Connected devices (a UF1 line has since been added) and Brightness are in **Devices**; the Inserts-overlay / focused-track-panel / mode-banner controls and their colours are in **Appearance → On-screen**. One shot can no longer cover both |
-| `settings-device-2.png` | The old Device tab scrolled — master track, meter fall rates, track and plug-in options, keyboard modifiers | **Re-shoot.** Split three ways: the meter fall-rate table is **Devices → Metering**; Tracks, Master track, Plug-ins and Keyboard are all in **Behaviour**; the three FX-Learn layer checkboxes that sat at the end of Keyboard Options are now in **FX Learn → Modifier layers** |
-| `settings-device-3.png` | The old Device tab scrolled further — V-Pot resolution, virtual notch, UC1 GR calibration tables | **Re-shoot** — lowest priority. These controls are unchanged and still share one pane, but the pane is now **Devices** and the heading reads **V-Pot / encoder feel**, not *V-Pot / encoder resolution* |
-| `settings-appearance.png` | Appearance tab — theme, font size, spelling, settings-window options | **Re-shoot.** Those four sections are unchanged, but Appearance now opens with **On-screen** and **Surface display** above them, so a shot from the top of the pane no longer reaches Theme |
-| `settings-bindings-uf8.png` | Bindings tab, UF8 sub-tab — full surface mockup plus the short-press / long-press editor | |
-| `settings-bindings-uc1.png` | Bindings tab, UC1 sub-tab — UC1 mockup with encoder rotate / push targets | |
+| `settings-devices.png` | **Devices** pane — connected devices (UF8 / UC1 / UF1), LED + LCD brightness, Metering, V-Pot / encoder feel | Serials redacted, see above. Cut off below *Notch hold* — **UC1 GR calibration** is further down the pane and has no shot |
+| `settings-appearance.png` | **Appearance** pane — On-screen (overlay, focused-track panel, mode banner, colours, geometry), Surface display, Theme, Font Size, Spelling, Settings window | Whole pane in one shot |
+| `settings-behaviour.png` | **Behaviour** pane — Tracks, Master track, Plug-ins, Soft-keys, Keyboard | Whole pane in one shot |
+| `settings-bindings-uf8.png` | Bindings → **UF8** — full surface mockup, layer / quick selectors, scroll-bank radio | |
+| `settings-bindings-uc1.png` | Bindings → **UC1** — UC1 mockup with the Encoder 1 rotate binding open, modifier rows below | |
+| `settings-bindings-uf1.png` | Bindings → **UF1** — UF1 mockup: soft-keys, four V-Pots, channel encoder, jog wheel, secondary transport | **v0.5 only** |
+| `settings-exchange.png` | **Exchange** pane — the live Mapping Exchange listing with vendor, map count, surface and coverage | |
 | `settings-modes-auto.png` | Modes → AUTO — automation-arm filtering, fill direction, selection-set auto-mode | |
 | `settings-modes-fx-cycle.png` | Modes → FX / Cycle — which controls drive the FX cycle, V-Pot push behaviour | |
 | `settings-modes-rec.png` | Modes → REC — RME / TotalReaper preamp mapping (gain, 48V, pad, phase) | |
 | `settings-modes-nav.png` | Modes → NAV — marker and region navigation, per-surface overlay, encoder push actions | |
 | `settings-modes-nudge.png` | Modes → Nudge — playhead nudge unit and amount per detent | |
 | `settings-modes-dynamount.png` | Modes → Dynamount — up to 8 robotic mic stands, fill direction, calibration | |
-| `settings-fx-learn.png` | FX Learn tab — a ReaComp snapshot bound to the BC mockup, parameter list, VU calibration | **Re-shoot** eventually — the pane has since gained a **Modifier layers** section (collapsed by default) above the editor |
+| `settings-fx-learn.png` | **FX Learn** pane — a bx_console SSL 4000 G snapshot on the UF1 mockup, Modifier layers header, page tabs, parameter list, GR Cal | **v0.5 only** — shows the UF1 layer |
 | `settings-favourites.png` | Favourites tab — copy behaviour plus the Channel Strip and Bus Compressor set lists | |
 | `settings-selection-sets.png` | Selection Sets tab — eight slots, six bound to REAPER track groups | |
 | `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated | |
@@ -83,9 +96,11 @@ references them directly.
 No file in this folder covers these. Worth capturing in the same sitting as
 the re-shoots above; again, only a hand capture in REAPER can produce them.
 
-- the **Behaviour** pane — new, and the destination for most of what
-  `settings-device-2.png` used to show
-- the **Exchange** pane — a live rail entry since v0.4.0, never captured
+- **Devices → UC1 GR calibration** — below the fold of `settings-devices.png`;
+  needs a second, scrolled shot
+- **FX Learn → Modifier layers** expanded — the header is visible in
+  `settings-fx-learn.png` but collapsed, so the three checkboxes that moved
+  there from the old Keyboard Options are not shown anywhere
 - the rail **Search settings** field with a query typed in, showing the
   breadcrumb result list
 
