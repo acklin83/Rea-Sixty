@@ -4,7 +4,7 @@ UI screenshots of Rea-Sixty, macOS. Two capture rounds:
 
 - **2026-07-19**, `v0.3.2-8-g940a43f` — the Learn-HUD shots and everything
   under Modes / Favourites / Selection Sets / Parameter Groups / Manual / About.
-- **2026-08-10**, `v0.4.4-215-ge52b288` — the eight Settings shots re-taken
+- **2026-08-10**, `v0.4.4-215-ge52b288` and `745285e` — ten Settings shots re-taken
   after the Device pane was split (Devices, Appearance, Behaviour, the three
   Bindings sub-tabs, FX Learn, Exchange).
 
@@ -71,7 +71,8 @@ so none of them may be published before that tag.
 
 | File | Shows | Status |
 | --- | --- | --- |
-| `settings-devices.png` | **Devices** pane — connected devices (UF8 / UC1 / UF1), LED + LCD brightness, Metering, V-Pot / encoder feel | Serials redacted, see above. Cut off below *Notch hold* — **UC1 GR calibration** is further down the pane and has no shot |
+| `settings-devices.png` | **Devices** pane — connected devices (UF8 / UC1 / UF1), LED + LCD brightness, Metering, V-Pot / encoder feel | Serials redacted, see above. Ends below *Notch hold*; the rest of the pane is the next row |
+| `settings-devices-gr-cal.png` | **Devices → UC1 GR calibration** — the two per-tick offset tables (BC VU meter, CS DYN GR LEDs) | Scrolled continuation of the row above |
 | `settings-appearance.png` | **Appearance** pane — On-screen (overlay, focused-track panel, mode banner, colours, geometry), Surface display, Theme, Font Size, Spelling, Settings window | Whole pane in one shot |
 | `settings-behaviour.png` | **Behaviour** pane — Tracks, Master track, Plug-ins, Soft-keys, Keyboard | Whole pane in one shot |
 | `settings-bindings-uf8.png` | Bindings → **UF8** — full surface mockup, layer / quick selectors, scroll-bank radio | |
@@ -85,6 +86,7 @@ so none of them may be published before that tag.
 | `settings-modes-nudge.png` | Modes → Nudge — playhead nudge unit and amount per detent | |
 | `settings-modes-dynamount.png` | Modes → Dynamount — up to 8 robotic mic stands, fill direction, calibration | |
 | `settings-fx-learn.png` | **FX Learn** pane — a bx_console SSL 4000 G snapshot on the UF1 mockup, Modifier layers header, page tabs, parameter list, GR Cal | **v0.5 only** — shows the UF1 layer |
+| `settings-fx-learn-modifier-layers.png` | **FX Learn → Modifier layers** expanded — the three hold-to-switch checkboxes that moved here out of the old Keyboard Options | |
 | `settings-favourites.png` | Favourites tab — copy behaviour plus the Channel Strip and Bus Compressor set lists | |
 | `settings-selection-sets.png` | Selection Sets tab — eight slots, six bound to REAPER track groups | |
 | `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated | |
@@ -96,13 +98,8 @@ so none of them may be published before that tag.
 No file in this folder covers these. Worth capturing in the same sitting as
 the re-shoots above; again, only a hand capture in REAPER can produce them.
 
-- **Devices → UC1 GR calibration** — below the fold of `settings-devices.png`;
-  needs a second, scrolled shot
-- **FX Learn → Modifier layers** expanded — the header is visible in
-  `settings-fx-learn.png` but collapsed, so the three checkboxes that moved
-  there from the old Keyboard Options are not shown anywhere
 - the rail **Search settings** field with a query typed in, showing the
-  breadcrumb result list
+  breadcrumb result list — the last one still missing
 
 ## Notes for reuse
 

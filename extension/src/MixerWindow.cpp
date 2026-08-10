@@ -244,6 +244,48 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Manual",                                kSecManual,          "" },
     { "About",                                 kSecAbout,           "" },
     { "Versions",                              kSecAbout,           "" },
+    // The nine older panes were indexed by section heading only, which meant a
+    // setting like "Enable RME / TotalReaper integration" was unreachable —
+    // Frank typed "rme" and got nothing. Their checkbox / radio / combo labels
+    // now sit here too. Still headings-only for the per-slot and per-plug-in
+    // rows (Favourite slots, FX-Learn maps, Selection-Set slots): those are
+    // user data, not settings, and they change under us.
+    // -- Bindings --
+    { "Scroll banks:",                                     kSecBindings, "" },
+    { "Focus Set scope:",                                  kSecBindings, "" },
+    { "UF1 Extender - 9th fader of the UF8 bank",          kSecBindings, "Focus Set scope" },
+    { "UF8 sends follow the UF1 Focus Set track",          kSecBindings, "Focus Set scope" },
+    { "Reset this layer to factory defaults",              kSecBindings, "" },
+    // -- Modes --
+    { "Show only tracks armed for automation writing",     kSecModes, "AUTO" },
+    { "Selection-Set Auto-Mode:",                          kSecModes, "AUTO" },
+    { "Focus-Set Auto-Mode:",                              kSecModes, "AUTO" },
+    { "V-Pot push opens active FX as:",                    kSecModes, "FX / Cycle" },
+    { "Enable RME / TotalReaper integration",              kSecModes, "REC" },
+    { "V-Pot rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
+                                                           kSecModes, "REC" },
+    { "Encoder 2 rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
+                                                           kSecModes, "REC" },
+    { "Auto-follow playhead / edit cursor",                kSecModes, "NAV" },
+    { "Take over LCD",                                     kSecModes, "NAV" },
+    { "Lower-row format:",                                 kSecModes, "NAV" },
+    { "Region press (UF8 top-soft-key):",                  kSecModes, "NAV" },
+    { "Playhead nudge step",                               kSecModes, "Nudge" },
+    { "Amount per detent",                                 kSecModes, "Nudge" },
+    // -- FX Learn --
+    { "Quick-Learn skip list",                             kSecFxLearn, "" },
+    { "Show EQ Graph on the UF1",                          kSecFxLearn, "UF1 layer" },
+    { "Fill from UC1",                                     kSecFxLearn, "UF1 layer" },
+    { "Unbind all",                                        kSecFxLearn, "UF1 layer" },
+    // -- Favourites --
+    { "Copy only mapped parameters",                       kSecFavourites, "" },
+    { "Favourites remember non-copied sections",           kSecFavourites, "" },
+    { "This project uses its own Favourites",              kSecFavourites, "" },
+    { "Multi-select: unify sets to focused track",         kSecFavourites, "" },
+    { "Channel Strip: use own settings (vs copy values)",  kSecFavourites, "" },
+    { "Bus Compressor: use own settings (vs copy values)", kSecFavourites, "" },
+    // -- Parameter Groups --
+    { "Multi-Select acts as temporary Parameter Group",    kSecParameterGroups, "" },
 };
 
 // "Devices › Metering › GR meter source". The pane name always leads; the
