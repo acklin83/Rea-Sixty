@@ -1161,17 +1161,6 @@ std::atomic<double>       g_knobSpeedUc1         {1.0};
 // the frame IS the speed. (Velocity-from-timing is the documented dead end on
 // the UF8; this is the plug-in's own count, not a stopwatch.)
 //
-// ★ DEFAULT 0 = OFF, and it should probably stay that way. The multiplier is
-// delta * (1 + (|delta|-1) * accel), which is LINEAR IN THE MAGNITUDE on top of
-// a step that is ALREADY linear in the magnitude — so the result is quadratic
-// and a fast spin slams. At accel 0.25 a magnitude-8 frame moves 34% of the
-// range in one go; at 1.0 it moves 100%. Frank tried it: "völliger blödsinn!
-// unbrauchbar!" — correct, and the mistake was mine: the firmware's detent count
-// already carries the speed proportionally, so multiplying by it again is not
-// acceleration, it is squaring.
-// Kept only as a knob to experiment with; 0 reproduces the old behaviour byte
-// for byte. If a curve is ever wanted here it has to be SUB-linear or bounded.
-std::atomic<double>       g_knobAccelUc1         {0.0};
 // ── UC1 detent census (measurement, not a feature) ───────────────────────────
 // The question Frank's "schnelle Drehbewegung macht extrem kleine Distanz" comes
 // down to: does the SAME physical rotation deliver the same number of detents
@@ -3975,9 +3964,6 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "knob_speed_uc1"); v && *v) {
         g_knobSpeedUc1.store(std::clamp(std::atof(v), 0.01, 8.0));
-    }
-    if (const char* v = GetExtState("rea_sixty", "knob_accel_uc1"); v && *v) {
-        g_knobAccelUc1.store(std::clamp(std::atof(v), 0.0, 2.0));
     }
     if (const char* v = GetExtState("rea_sixty", "fine_factor_uf8"); v && *v) {
         g_fineFactorUf8.store(std::clamp(std::atof(v), 0.02, 1.0));
@@ -36045,12 +36031,6 @@ void reasixty_uc1KnobCensus(int id, int mag, bool wire)
         g_uc1KnobHandSum[i].fetch_add(mag, std::memory_order_relaxed);
         g_uc1KnobHandFrames[i].fetch_add(1, std::memory_order_relaxed);
     }
-}
-double reasixty_knobAccelUc1()        { return g_knobAccelUc1.load(); }
-void reasixty_setKnobAccelUc1(double v)
-{
-    g_knobAccelUc1.store(std::clamp(v, 0.0, 2.0));
-    SetExtState("rea_sixty", "knob_accel_uc1", std::to_string(v).c_str(), true);
 }
 bool reasixty_uf1EqGraphLearned()     { return g_uf1EqGraphLearned.load(); }
 void reasixty_setUf1EqGraphLearned(bool on)

@@ -186,7 +186,6 @@ constexpr SearchEntry kSearchIndex[] = {
     { "UF8 V-Pot speed",                       kSecDevices, "V-Pot / encoder feel" },
     { "UF8 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
     { "UC1 encoder speed",                     kSecDevices, "V-Pot / encoder feel" },
-    { "UC1 encoder acceleration",              kSecDevices, "V-Pot / encoder feel" },
     { "UC1 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
     { "UF1 V-Pot speed",                      kSecDevices, "V-Pot / encoder feel" },
     { "UF1 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
