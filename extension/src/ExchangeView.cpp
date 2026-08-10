@@ -100,6 +100,10 @@ struct Uf8Vpot  { int faderBank = 0, vpotBank = 0, strip = 0; std::string label,
 struct Uf8Strip { int faderBank = 0, strip = 0; std::string kind, param; };
 struct ModBind  { std::string layer, control, param; };
 struct ExtFunc  { std::string name, param; };   // UC1 EXT FUNCS (hidden BACK-menu)
+// One bound UF1 plugin-mode position. kind is "vpot" or "softkey"; page/idx
+// are derived server-side from the flat pos (4 per page, both streams).
+struct Uf1Slot  { int pos = 0, page = 0, idx = 0; bool inverted = false;
+                  std::string kind, label, param; };
 struct MapDetail {
     int id = 0;
     std::string pluginName, vendor, surfaces, domain, author, description, licence;
@@ -113,6 +117,10 @@ struct MapDetail {
     std::vector<std::pair<int, std::string>> alsoMapped;              // linkIdx, param
     std::vector<ModBind> modLayers;
     std::vector<ExtFunc> extFuncs;                                    // UC1 EXT FUNCS
+    // The explicit UF1 layer. Carried for EVERY domain — a UC1+UF1 map keeps
+    // its CS/BC domain, so gating this the way uf8 is gated would hide the
+    // half the author meant to share. Empty = the map has no UF1 layer.
+    std::vector<Uf1Slot> uf1Slots;
     // "Works for me" — the count everyone sees, and whether THIS account is
     // one of them. -1 means the server could not say because we sent no token,
     // which is NOT the same as "no": showing an un-pressed button to someone
@@ -593,6 +601,21 @@ void pumpMap() {
                 s.kind = jstr(o, "kind"); s.param = jstr(o, "param");
                 d.uf8StripBindings.push_back(std::move(s));
             }
+        }
+    }
+    if (auto* u1 = root->get_item_by_name("uf1"); u1 && u1->is_array() && u1->m_array) {
+        for (int i = 0; i < u1->m_array->GetSize(); ++i) {
+            wdl_json_element* o = u1->enum_item(i);
+            if (!o || !o->is_object()) continue;
+            Uf1Slot u;
+            u.kind  = jstr(o, "kind");
+            u.pos   = jint(o, "pos");
+            u.page  = jint(o, "page");
+            u.idx   = jint(o, "idx");
+            u.label = jstr(o, "label");
+            u.param = jstr(o, "param");
+            u.inverted = jstr(o, "inverted") == "true";
+            d.uf1Slots.push_back(std::move(u));
         }
     }
     if (auto* secs = root->get_item_by_name("sections"); secs && secs->is_array() && secs->m_array) {
@@ -1205,6 +1228,59 @@ void drawMap(ImGui_Context* ctx) {
             }
             ImGui_Spacing(ctx);
         }
+    }
+
+    // The UF1 layer, when the map carries one. Shown for every domain, next to
+    // whatever the map does on the UC1 or UF8 — the point of a UF1 layer is
+    // that it differs from the UC1 fill, so seeing it BEFORE taking the map is
+    // the whole reason it is here. Grouped by page, the way the surface pages.
+    if (!d.uf1Slots.empty()) {
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "UF1 layer");
+        int lastPage = -1;
+        bool tableOpen = false;
+        auto closeTable = [&]() {
+            if (tableOpen) { ImGui_EndTable(ctx); tableOpen = false; }
+        };
+        for (const auto& u : d.uf1Slots) {
+            if (u.page != lastPage) {
+                closeTable();
+                lastPage = u.page;
+                char hdr[32];
+                std::snprintf(hdr, sizeof(hdr), "Page %d", u.page + 1);
+                ImGui_Text(ctx, hdr);
+                char tid[48];
+                std::snprintf(tid, sizeof(tid), "##exch_uf1_p%d", u.page);
+                int tFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH;
+                double wA = 1.0, wB = 2.0;
+                int stretch = ImGui_TableColumnFlags_WidthStretch;
+                tableOpen = ImGui_BeginTable(ctx, tid, 2, &tFlags,
+                                             nullptr, nullptr, nullptr);
+                if (tableOpen) {
+                    ImGui_TableSetupColumn(ctx, "Control",   &stretch, &wA, nullptr);
+                    ImGui_TableSetupColumn(ctx, "Parameter", &stretch, &wB, nullptr);
+                }
+            }
+            if (!tableOpen) continue;
+            ImGui_TableNextRow(ctx, nullptr, nullptr);
+            ImGui_TableSetColumnIndex(ctx, 0);
+            // "V-Pot 3" / "Soft-key 2" — idx is 0-based within the page.
+            char ctrl[48];
+            std::snprintf(ctrl, sizeof(ctrl), "%s %d",
+                          u.kind == "softkey" ? "Soft-key" : "V-Pot",
+                          u.idx + 1);
+            ImGui_Text(ctx, ctrl);
+            ImGui_TableSetColumnIndex(ctx, 1);
+            // The author's own display name wins when they set one; otherwise
+            // the plug-in's parameter name. Inverted is worth seeing here — it
+            // changes which way the control travels.
+            std::string cell = !u.label.empty() ? u.label
+                             : (u.param.empty() ? std::string("(bound)") : u.param);
+            if (u.inverted) cell += "  (inverted)";
+            ImGui_Text(ctx, cell.c_str());
+        }
+        closeTable();
+        ImGui_Spacing(ctx);
     }
 
     // Off-face bindings that have no control on the face — never dropped.
