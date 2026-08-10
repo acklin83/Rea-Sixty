@@ -1,4 +1,7 @@
 #include "UC1Device.h"
+
+// Detent census (main.cpp) — see g_uc1KnobCount.
+void reasixty_uc1KnobCensus(int id, int mag, bool wire);
 #include "LogPath.h"
 
 #include <libusb.h>
@@ -562,6 +565,10 @@ void UC1Device::readCallback_(libusb_transfer* xfer)
                 if (self->buttonHandler_) self->buttonHandler_(*ev);
                 i += 7;
             } else if (auto kn = parseKnobEvent(rest)) {
+                // Detent census, WIRE side — counts what the firmware actually
+                // delivered, before anything of ours can lose it. Atomics only,
+                // and a no-op unless the census is armed.
+                reasixty_uc1KnobCensus(kn->id, kn->delta, /*wire*/ true);
                 if (self->knobHandler_) self->knobHandler_(*kn);
                 i += 6;
             } else {

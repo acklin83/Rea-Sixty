@@ -46,6 +46,7 @@ double reasixty_fineFactorUc1();
 // Acceleration from the firmware's own multi-detent count (main.cpp). 1.0 at a
 // single detent, so slow work is untouched.
 double reasixty_knobAccelUc1();
+void   reasixty_uc1KnobCensus(int id, int mag, bool wire);
 // Virtual-notch tuning (defined in main.cpp) — shared UF8/UC1 so the EQ-gain
 // magnet + soft-detent feel identical on both surfaces.
 double reasixty_notchZone();
@@ -904,6 +905,9 @@ double UC1Surface::clickToDelta_(int8_t delta) const
 
 void UC1Surface::handleKnob_(const KnobEvent& ev)
 {
+    // Detent census, CONSUMER side. Compared against the wire count it says
+    // whether a fast spin loses detents in the firmware or in us.
+    reasixty_uc1KnobCensus(ev.id, ev.delta, /*wire*/ false);
     // Touch-to-Learn: while the HUD's hardware-learn mode is on, moving a
     // bindable knob arms a learn for it instead of writing its param (parity
     // with clicking the control in the HUD mockup). Non-bindable nav/menu

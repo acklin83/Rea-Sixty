@@ -1172,6 +1172,25 @@ std::atomic<double>       g_knobSpeedUc1         {1.0};
 // Kept only as a knob to experiment with; 0 reproduces the old behaviour byte
 // for byte. If a curve is ever wanted here it has to be SUB-linear or bounded.
 std::atomic<double>       g_knobAccelUc1         {0.0};
+// ── UC1 detent census (measurement, not a feature) ───────────────────────────
+// The question Frank's "schnelle Drehbewegung macht extrem kleine Distanz" comes
+// down to: does the SAME physical rotation deliver the same number of detents
+// slow and fast? If yes, we are losing them somewhere in here. If no, the
+// firmware is dropping them and no amount of scaling brings them back — that is
+// what the UF8 notes already say about that surface.
+//
+// Counted at TWO points on purpose: WIRE (the moment a frame is parsed off USB)
+// and HANDLED (the consumer that actually moves a parameter). Equal totals with
+// a short fast run = the firmware; wire high but handled low = ours.
+//
+// No file I/O on the input thread — atomics only, dumped from the timer when the
+// switch goes off (the 438 MB per-packet-log lesson, [[uf8-vpot-responsiveness]]).
+std::atomic<bool>     g_uc1KnobCount{false};
+std::atomic<int64_t>  g_uc1KnobWireSum[32];
+std::atomic<int64_t>  g_uc1KnobWireFrames[32];
+std::atomic<int64_t>  g_uc1KnobWireMax[32];
+std::atomic<int64_t>  g_uc1KnobHandSum[32];
+std::atomic<int64_t>  g_uc1KnobHandFrames[32];
 std::atomic<double>       g_fineFactorUf8        {0.25};
 std::atomic<double>       g_fineFactorUc1        {0.25};
 // The UF1's own pair. Until 2026-08-10 the UF1 borrowed the UF8's numbers and
@@ -2653,6 +2672,45 @@ void drainSelsets_() {
     }
     if (g_uf1PinChannelRequest.exchange(false)) {
         uf1PinChannel_();
+    }
+    // UC1 detent census: ExtState rea_sixty/uc1_knob_count = 1 arms + zeroes the
+    // counters, back to 0 writes the tally. Main thread, once per drain — the
+    // counting itself is atomics on the input thread.
+    {
+        static bool sOn = false;
+        const char* v = GetExtState("rea_sixty", "uc1_knob_count");
+        const bool want = (v && *v == '1');
+        if (want != sOn) {
+            sOn = want;
+            if (want) {
+                for (int i = 0; i < 32; ++i) {
+                    g_uc1KnobWireSum[i]    = 0; g_uc1KnobWireFrames[i] = 0;
+                    g_uc1KnobWireMax[i]    = 0; g_uc1KnobHandSum[i]    = 0;
+                    g_uc1KnobHandFrames[i] = 0;
+                }
+                g_uc1KnobCount.store(true);
+            } else {
+                g_uc1KnobCount.store(false);
+                if (FILE* f = std::fopen(
+                        uf8::logPath("rea_sixty_uc1_knob.log").c_str(), "a")) {
+                    std::fprintf(f, "=== UC1 detent census ===\n");
+                    std::fprintf(f, "%-6s %10s %10s %8s %10s %10s\n",
+                                 "knob", "wireSum", "wireFrm", "wireMax",
+                                 "handSum", "handFrm");
+                    for (int i = 0; i < 32; ++i) {
+                        const int64_t ws = g_uc1KnobWireSum[i].load();
+                        if (!ws && !g_uc1KnobHandSum[i].load()) continue;
+                        std::fprintf(f, "0x%02x   %10lld %10lld %8lld %10lld %10lld\n",
+                                     i, (long long)ws,
+                                     (long long)g_uc1KnobWireFrames[i].load(),
+                                     (long long)g_uc1KnobWireMax[i].load(),
+                                     (long long)g_uc1KnobHandSum[i].load(),
+                                     (long long)g_uc1KnobHandFrames[i].load());
+                    }
+                    std::fclose(f);
+                }
+            }
+        }
     }
     // UF1 held-member scroll posted by the REAPER-action route (NEXT/PREV).
     // The surface channel-encoder calls applyUf1HoldScroll_ directly from the
@@ -35971,6 +36029,23 @@ static void writeCsCopyMask_()
 // Global switch: draw our EQ curve on the UF1 for LEARNED Channel Strips. A
 // single map can override it either way (UserPluginMap::uf1EqGraph tri-state);
 // maps left on "follow" read this.
+// Called from the USB input thread (wire) and the poll consumer (handled).
+// Atomics only — see the note on g_uc1KnobCount.
+void reasixty_uc1KnobCensus(int id, int mag, bool wire)
+{
+    if (!g_uc1KnobCount.load(std::memory_order_relaxed)) return;
+    const int i = id & 0x1F;
+    if (mag < 0) mag = -mag;
+    if (wire) {
+        g_uc1KnobWireSum[i].fetch_add(mag, std::memory_order_relaxed);
+        g_uc1KnobWireFrames[i].fetch_add(1, std::memory_order_relaxed);
+        int64_t m = g_uc1KnobWireMax[i].load(std::memory_order_relaxed);
+        while (mag > m && !g_uc1KnobWireMax[i].compare_exchange_weak(m, mag)) {}
+    } else {
+        g_uc1KnobHandSum[i].fetch_add(mag, std::memory_order_relaxed);
+        g_uc1KnobHandFrames[i].fetch_add(1, std::memory_order_relaxed);
+    }
+}
 double reasixty_knobAccelUc1()        { return g_knobAccelUc1.load(); }
 void reasixty_setKnobAccelUc1(double v)
 {
