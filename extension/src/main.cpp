@@ -13511,6 +13511,17 @@ void applyUf1AboveFaderVpot_(int step)
     if (step == 0) return;
     MediaTrack* tr = uf1FocusedTrack_();
     if (!tr) return;
+    // The per-track knob obeys the UF1's own speed + Fine, like the four
+    // channel V-Pots do (Frank 2026-08-10). Applied to every target below —
+    // send pan, a Sticky-Pot param, FLIP volume, plain pan — because from the
+    // hand's point of view it is one knob whose resolution should not depend
+    // on what it happens to be driving. stickyWriteRotation_ takes a scaled
+    // detent safely: it ignores rotation on toggles outright, and stepped
+    // params accumulate, so Fine just means more turning per step.
+    // NOTE: the UF8's own Sticky-Pot path passes its detent UNSCALED, so this
+    // is deliberately not symmetric with the UF8 — the UF1 pair exists to be
+    // tuned apart from it.
+    const double kScale = reasixty_uf1KnobScale(g_uf1CsFine.load());
     // Extender send fader (Step 4): the above-fader V-Pot drives the 9th SEND's
     // PAN — "wie beim UF8" strip V-Pot in a route mode (Frank 2026-08-05), not the
     // source track's pan. Software accumulator seeded from the EFFECTIVE send pan
@@ -13531,7 +13542,7 @@ void applyUf1AboveFaderVpot_(int step)
             }
             const double next = uf8::applyVirtualNotch(
                 g_sendPanVpotAccum[kExtSendGestureSlot],
-                step * kUf1AboveFaderPanPerDetent, /*center*/ 0.0,
+                step * kUf1AboveFaderPanPerDetent * kScale, /*center*/ 0.0,
                 /*zone*/ g_notchZone.load() * 2.0, -1.0, 1.0);
             g_sendPanVpotAccum[kExtSendGestureSlot] = next;
             g_sendPanVpotMs[kExtSendGestureSlot]    = now;
@@ -13548,7 +13559,8 @@ void applyUf1AboveFaderVpot_(int step)
     if (stickyUf1AboveEnabled_()) {
         int sfx = -1, sparam = -1; bool stg = false;
         if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
-            stickyWriteRotation_(tr, sfx, sparam, /*strip*/0, step / 128.0);
+            stickyWriteRotation_(tr, sfx, sparam, /*strip*/0,
+                                 step / 128.0 * kScale);
             return;
         }
     }
@@ -13558,7 +13570,7 @@ void applyUf1AboveFaderVpot_(int step)
     if (g_uf1Flip.load()) {
         const double curLin = GetMediaTrackInfo_Value(tr, "D_VOL");
         const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
-        double nDb = curDb + step * kUf1FlipVolDbPerCount;
+        double nDb = curDb + step * kUf1FlipVolDbPerCount * kScale;
         if (nDb >  12.0) nDb =  12.0;
         if (nDb < -60.0) nDb = -60.0;
         CSurf_OnVolumeChange(tr, std::pow(10.0, nDb / 20.0), false);
@@ -13568,7 +13580,8 @@ void applyUf1AboveFaderVpot_(int step)
         case Uf1AboveFaderMode::Pan:
             // Relative pan write — canonical surface path (applies + automation +
             // notifies the painter, which repaints the Pan label/bar).
-            CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent, /*relative*/true);
+            CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent * kScale,
+                              /*relative*/true);
             break;
     }
 }
