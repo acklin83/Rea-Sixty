@@ -3009,6 +3009,15 @@ std::atomic<bool> g_grAnyFx{true};
 // set independently. Frank 2026-06-12. Settings → Devices → Metering → GR meter source.
 std::atomic<bool> g_grCombineUf8{false};
 
+// UF1: the four display soft-key LEDs double as a Bus-Compressor GR meter
+// (Frank 2026-08-10 — "wir lassen die vier LEDs oben tanzen", the analogue BC
+// needle in four steps). Value = dB PER LED, so it is also the resolution:
+// 0 = off, 1 = 1 dB/LED (4 dB full scale), 2 = 2 dB/LED (8 dB full scale).
+// Each LED has two steps: it goes GREEN at its half-way dB and RED at its full
+// dB — so 1 dB/LED lights LED 1 green at 0.5 dB and red at 1.0 dB, giving eight
+// visible steps across the four keys.
+std::atomic<int>  g_uf1BcGrLeds{0};
+
 // Whether Rea-Sixty writes to REAPER's Console. Default OFF: REAPER pops the
 // Console window open unbidden for each message, which is pure noise when a
 // device is simply not connected. The same text still goes to the stale.log
@@ -3706,6 +3715,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "gr_combine_uf8"); v && *v) {
         g_grCombineUf8.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1_bc_gr_leds"); v && *v) {
+        g_uf1BcGrLeds.store(std::clamp(std::atoi(v), 0, 2));
     }
     if (const char* v = GetExtState("rea_sixty", "console_output"); v && *v) {
         g_consoleOutput.store(std::atoi(v) != 0);
@@ -23128,6 +23140,63 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
     gateByte = grByte(gateDb);
 }
 
+// ---- Bus-Compressor GR on the four display soft-key LEDs -------------------
+// Resolve the track the Bus Compressor lives on. The BC is almost never on the
+// focused channel — it sits on the master or a mix bus — so reading GR off the
+// focused track would leave the meter dark all day. Same anchor rule the UC1's
+// BC needle uses: its live carousel anchor when a UC1 is present (so both
+// surfaces show the SAME compressor), else master first (a BC on the master
+// wins), else the first BC-bearing track. Main thread only.
+static MediaTrack* uf1BcGrTrack_()
+{
+    if (g_uc1_surface) {
+        auto* t = static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic());
+        if (t && ValidatePtr2(nullptr, t, "MediaTrack*")) return t;
+    }
+    if (MediaTrack* m = GetMasterTrack(nullptr))
+        if (uc1::lookupBindingsOnTrack(m).busCompMap) return m;
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (uc1::lookupBindingsOnTrack(t).busCompMap) return t;
+    }
+    return nullptr;
+}
+
+// |GR| in dB of that Bus Compressor, or −1 when there is none to read (which is
+// what hands the LEDs back to the soft-key labels). Mirrors the UC1 needle's
+// source exactly (UC1Surface's readGr): an FX-Learn-designated GR param is read
+// as its FORMATTED value — the raw param is often normalised, e.g. Brainworx
+// returns 0..1 for 0..20 dB — else the PreSonus GainReduction_dB config-parm.
+// The user's calibration offset applies before the magnitude. No breakpoint
+// table: that one belongs to the BC VU motor's travel, not to a 4-LED ladder.
+static double uf1BcGrDb_()
+{
+    MediaTrack* tr = uf1BcGrTrack_();
+    if (!tr) return -1.0;
+    const auto b = uc1::lookupBindingsOnTrack(tr);
+    if (!b.busCompMap || b.busCompFxIdx < 0) return -1.0;
+    double v = 0.0;
+    if (b.busCompGrParam >= 0) {
+        char fbuf[64] = {0};
+        if (TrackFX_GetFormattedParamValue(tr, b.busCompFxIdx, b.busCompGrParam,
+                                           fbuf, sizeof(fbuf)) && fbuf[0]) {
+            v = std::atof(fbuf);
+        } else {
+            double mn = 0.0, mx = 0.0;
+            v = TrackFX_GetParam(tr, b.busCompFxIdx, b.busCompGrParam, &mn, &mx);
+        }
+    } else {
+        char buf[64] = {0};
+        if (!TrackFX_GetNamedConfigParm(tr, b.busCompFxIdx, "GainReduction_dB",
+                                        buf, sizeof(buf)))
+            return -1.0;
+        v = std::atof(buf);
+    }
+    v += b.busCompGrOffsetDb;
+    return v < 0 ? -v : v;
+}
+
 // Small-LCD channel-strip zone (0x00xx): track name, output dB, pan line + bar,
 // channel number, colour bar / SEL colour / populated flag, and the Solo/Cut
 // button LEDs. This is the manual's separate "small LCD" above the fader — it is
@@ -23425,6 +23494,17 @@ void uf1PaintChannel_()
     sIdentGen = identGen;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
                        || modeFieldChanged || identChanged;
+    // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
+    // Metering). Read ONCE per tick, here, because two places need it: the p188
+    // soft-key block must know whether to leave those LEDs alone, and the meter
+    // block near the end of this function needs the value. Suspended while the
+    // MODE menu is held — that overlay owns the four keys, and it is
+    // change-detected, so a GR write would overwrite it on the next tick.
+    const int    grLedStep = g_uf1BcGrLeds.load();      // dB per LED, 0 = off
+    const double bcGrDb    = (grLedStep > 0 && !modeMenu) ? uf1BcGrDb_() : -1.0;
+    // Only take the LEDs when there IS a Bus Compressor to show; without one
+    // they keep their normal soft-key on/off state instead of sitting dark.
+    const bool   grOwnsSk  = (bcGrDb >= 0.0);
     // …but a MODE / SCRUB hold or an encoder-mode step is NOT a layout event. It
     // only rewrites the header's mode cell, and dragging the plane re-assert along
     // is what made the display flicker on every MODE or SCRUB tap and on EVERY
@@ -24591,7 +24671,12 @@ void uf1PaintChannel_()
             const int ledState = keyHasColour
                 ? ((1 << 30) | (on ? (1 << 24) : 0) | static_cast<int>(scaled & 0xFFFFFF))
                 : (on ? 1 : 0);
-            if (changed || ledState != sSkLed[i]) {
+            // While the BC-GR meter owns these four LEDs, poison the cache
+            // instead of sending: the meter paints them later this same tick, so
+            // a send here is pure churn — and the poisoned entry is what makes
+            // every LED re-send the moment the meter hands them back.
+            if (grOwnsSk) { sSkLed[i] = INT_MIN; }
+            else if (changed || ledState != sSkLed[i]) {
                 sSkLed[i] = ledState;
                 const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
                 if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
@@ -24772,6 +24857,41 @@ void uf1PaintChannel_()
         }
         if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
         if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
+    }
+
+    // ---- Bus-Comp GR meter on the display soft-key LEDs (Frank 2026-08-10) --
+    // "Wir lassen die vier LEDs oben tanzen" — the analogue BC needle in four
+    // steps. Each LED is TWO steps: green at its half-way dB, red at its full
+    // dB, so 1 dB/LED reads 0.5 · 1 · 1.5 · 2 · 2.5 · 3 · 3.5 · 4 dB across the
+    // four keys. Runs in BOTH views — these LEDs have only two other owners (the
+    // p188 soft-key block, channel view only, which stands down above; and the
+    // MODE menu, which suspends the meter) so the Meter view gets it for free.
+    // Change-detected per LED: at 33 Hz an unchanged step must not re-send.
+    if (g_uf1_dev) {
+        static int sGrLed[4] = { -1, -1, -1, -1 };
+        if (!grOwnsSk) {
+            // Not ours this tick — forget the state so re-entry repaints all four.
+            for (int i = 0; i < 4; ++i) sGrLed[i] = -1;
+        } else {
+            const double step = static_cast<double>(grLedStep);   // dB per LED
+            for (int i = 0; i < 4; ++i) {
+                const double full = step * (i + 1);
+                const double half = full - step * 0.5;
+                const int lvl = (bcGrDb >= full) ? 2 : (bcGrDb >= half) ? 1 : 0;
+                if (lvl == sGrLed[i] && !changed) continue;
+                sGrLed[i] = lvl;
+                const uint8_t  id  = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
+                const uint32_t rgb = (lvl == 2) ? 0xFF0000u    // full step: red
+                                   : (lvl == 1) ? 0x00FF00u    // half step: green
+                                                : 0x000000u;
+                g_uf1_dev->send(uf1::buildLed(id, true));         // FF3B enable
+                g_uf1_dev->send(uf1::buildColourRgb(id, rgb));    // FF38 colour
+                // Key 1 is FF38-ONLY (cap106: an FF39 to id 0x01 sticks the
+                // rectangle on). Keys 2-4 need the state byte or they stay dark.
+                if (i != 0)
+                    g_uf1_dev->send(uf1::buildLedLevel(id, lvl ? 0x00 : 0x11));
+            }
+        }
     }
 
     // ---- MODE-hold menu overlay (Frank 2026-07-30) -------------------------
@@ -34735,6 +34855,16 @@ void reasixty_setGrCombineUf8(bool on)
 {
     g_grCombineUf8.store(on);
     SetExtState("rea_sixty", "gr_combine_uf8", on ? "1" : "0", true);
+}
+
+int reasixty_uf1BcGrLeds() { return g_uf1BcGrLeds.load(); }
+void reasixty_setUf1BcGrLeds(int dbPerLed)
+{
+    const int v = std::clamp(dbPerLed, 0, 2);
+    g_uf1BcGrLeds.store(v);
+    char b[8]; std::snprintf(b, sizeof(b), "%d", v);
+    SetExtState("rea_sixty", "uf1_bc_gr_leds", b, true);
+    g_pageDirty.store(true);   // release the soft-key LEDs back to their labels
 }
 
 bool reasixty_consoleOutput() { return g_consoleOutput.load(); }

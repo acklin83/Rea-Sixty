@@ -41,6 +41,8 @@ bool reasixty_grCombineUf8();
 void reasixty_setGrCombineUf8(bool on);
 bool reasixty_grCombineUc1();
 void reasixty_setGrCombineUc1(bool on);
+int  reasixty_uf1BcGrLeds();
+void reasixty_setUf1BcGrLeds(int dbPerLed);
 bool reasixty_insertMarkers();
 void reasixty_setInsertMarkers(bool on);
 bool reasixty_focusedPanel();
@@ -585,6 +587,32 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UC1 Comp)",
                        &cUc1)) {
         reasixty_setGrCombineUc1(cUc1);
+    }
+
+    // UF1: the four display soft-key LEDs as a Bus-Compressor GR meter. The
+    // value is dB PER LED, which is also the resolution — each LED goes green at
+    // its half-way dB and red at its full dB. Off returns the LEDs to the
+    // soft-key on/off states. Reads the same BC the UC1 needle does.
+    static const char* kBcGrLabels[3] = {
+        "Off", "1 dB per LED (4 dB)", "2 dB per LED (8 dB)"
+    };
+    int bcGr = reasixty_uf1BcGrLeds();
+    if (bcGr < 0 || bcGr > 2) bcGr = 0;
+    ImGui_Text(ctx, "UF1 soft-key LEDs = BC gain reduction");
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    ImGui_SetNextItemWidth(ctx, 220.0);
+    if (ImGui_BeginCombo(ctx, "##uf1_bc_gr_leds", kBcGrLabels[bcGr],
+                         /*flags*/ nullptr)) {
+        for (int i = 0; i < 3; ++i) {
+            bool sel = (bcGr == i);
+            if (ImGui_Selectable(ctx, kBcGrLabels[i], &sel,
+                                 /*flags*/ nullptr,
+                                 /*size_w*/ nullptr,
+                                 /*size_h*/ nullptr)) {
+                reasixty_setUf1BcGrLeds(i);
+            }
+        }
+        ImGui_EndCombo(ctx);
     }
 
     // ── Metering ─────────────────────────────────────────────────────

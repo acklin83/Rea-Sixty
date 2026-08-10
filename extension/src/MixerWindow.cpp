@@ -175,6 +175,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "GR meter source",                       kSecDevices, "Metering" },
     { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering" },
     { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering" },
+    { "UF1 soft-key LEDs = BC gain reduction", kSecDevices, "Metering" },
     { "UC1 Input",                             kSecDevices, "Metering" },
     { "UC1 Output",                            kSecDevices, "Metering" },
     { "UF8 Strips",                            kSecDevices, "Metering" },
