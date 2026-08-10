@@ -23956,34 +23956,15 @@ void uf1PaintChannel_()
         sendSoftKeyText(1, "PRE");
         sendSoftKeyText(2, "SOLO SAFE");
         sendSoftKeyText(3, "PLUG-IN");
-        // The single SOFT key above the channel display. Its label is the user's
-        // (Settings → Bindings → UF1 → SOFT → Label); the firmware's own default
-        // sits there otherwise, which is why every channel read "Bypass".
-        //
-        // We never drove this zone, so its index is not decoded — cap77 left it
-        // open and cap78 only ruled out a bypass TEXT frame. 4 is the natural
-        // next slot after the big display's 0..3, but it is a guess, so the
-        // index is an ExtState: set rea_sixty / uf1_softkey_label_idx to another
-        // number and restart REAPER to probe without a rebuild. -1 disables the
-        // send entirely and gives the firmware's label back.
-        {
-            static int  sIdx  = -2;          // -2 = not read yet
-            static std::string sSoftLbl;
-            if (sIdx == -2) {
-                sIdx = 4;
-                if (const char* v = GetExtState("rea_sixty", "uf1_softkey_label_idx");
-                    v && *v) sIdx = std::atoi(v);
-            }
-            if (sIdx >= 0) {
-                const auto bdSoft = uf8::bindings::getBinding(
-                    0, uf8::bindings::ButtonId::Uf1ChannelSoftKey);
-                if (changed || bdSoft.label != sSoftLbl) {
-                    sSoftLbl = bdSoft.label;
-                    sendSoftKeyText(static_cast<uint8_t>(sIdx), sSoftLbl);
-                }
-            }
-        }
-
+        // NOT sent: a label for the single SOFT key above the channel display.
+        // cap77 is a full capture of SSL 360's own channel view and it writes
+        // exactly five text zones — 0x000b name, 0x000e pan, 0x0017 strip type,
+        // 0x0104 idx 1..3 (the big display's keys), 0x010e focused param. There
+        // is no sixth, and 0x0104 has no index 4. SSL never labels that key, so
+        // the word sitting there is drawn by the FIRMWARE as part of the
+        // channel-strip layout, and no host frame can rename it. The layout is
+        // latched by the type string we send to 0x0017, so a different layout is
+        // the only lever that could change it. Frank 2026-08-10.
         // 0x010f 4 V-pot readout bars: now driven LIVE (from param values) by the
         // V-Pot label block above, which sends 0x010f every tick it changes AND on
         // `changed` — so the layout "occupant set" {0x0017, 0x0104, 0x010f} is still
