@@ -919,6 +919,53 @@ extern "C" int reasixty_navUc1LongPress();
 // also fires it on bank shifts, which don't touch g_focusedParam.
 std::atomic<bool> g_pageDirty{false};
 
+// ---- UF1 view / "hardware mode" -------------------------------------------
+// The four modes the MODE-hold menu offers on the display soft-keys. ONE
+// definition, shared by that soft-key handler, the uf1_view_* builtins and the
+// REASIXTY_UF1_MODE_* actions, so the three routes cannot drift apart.
+// Meter is a LAYOUT flag ON TOP of the channel sub-mode, which is why it leaves
+// g_uf1ChannelSubMode alone — leaving Meter returns you to the sub-mode you came
+// from. Entering DAW / Sends resets that mode's group to 0 so you always land on
+// the focused track's first group. Atomic stores only → safe from the input
+// thread ([[feedback-reaper-api-input-thread]]).
+// Order matters: it IS the MODE-menu soft-key order (SK1..SK4), so the handler
+// can pass the key index straight in, and it is the cycle order.
+enum : int { kUf1ViewPlugin = 0, kUf1ViewDaw = 1, kUf1ViewMeter = 2, kUf1ViewSends = 3,
+             kUf1ViewCount = 4 };
+inline void uf1SetViewMode_(int v)
+{
+    switch (v) {
+        case kUf1ViewPlugin: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(0);
+                             break;
+        case kUf1ViewDaw:    g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(1);
+                             g_uf1DawGroup.store(0);  break;
+        case kUf1ViewMeter:  g_uf1MeterView.store(true);
+                             break;
+        case kUf1ViewSends:  g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(2);
+                             g_uf1SendGroup.store(0); break;
+        default: return;
+    }
+    // A bound UF8/UC1 button's LED reads these through the builtin's stateOf, so
+    // the surface has to re-push after a mode change it didn't originate.
+    g_pageDirty.store(true);
+}
+// Which of the four is live right now — LED state, the cycle step, the banner.
+inline int uf1ViewMode_()
+{
+    if (g_uf1MeterView.load()) return kUf1ViewMeter;
+    const int sub = g_uf1ChannelSubMode.load();
+    return (sub == 1) ? kUf1ViewDaw : (sub == 2) ? kUf1ViewSends : kUf1ViewPlugin;
+}
+inline const char* uf1ViewModeFriendly_(int v)
+{
+    switch (v) {
+        case kUf1ViewDaw:   return "DAW";
+        case kUf1ViewMeter: return "Meter";
+        case kUf1ViewSends: return "Sends";
+        default:            return "Plugin";
+    }
+}
+
 // Selection-burst coalescing. REAPER fires SetSurfaceSelected once per
 // track when an action flips many tracks at once (e.g. "Select all
 // tracks → set heights → restore selection"). Acting on every callback
@@ -19198,15 +19245,11 @@ void onUf1Event(const uf1::InputEvent& ev)
             if (g_uf1ModeMenu.load() && ev.pressed &&
                 (ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)) {
-                switch (ev.id - uf1::btn::kDisplaySoft1) {
-                    case 0: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(0); break; // Plugin
-                    case 1: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(1);
-                            g_uf1DawGroup.store(0);                                     break; // DAW
-                    case 2: g_uf1MeterView.store(true);                                 break; // Meter
-                    case 3: g_uf1MeterView.store(false); g_uf1ChannelSubMode.store(2);
-                            g_uf1SendGroup.store(0);                                    break; // Sends
-                    default: break;
-                }
+                // SK1 Plugin, SK2 DAW, SK3 Meter, SK4 Sends — the kUf1View* order,
+                // so this is a straight index. The bodies live in uf1SetViewMode_
+                // (shared with the uf1_view_* builtins + the REASIXTY_UF1_MODE_*
+                // actions) — do not re-inline them here.
+                uf1SetViewMode_(ev.id - uf1::btn::kDisplaySoft1);
                 g_uf1ModeMenu.store(false);
                 break;
             }
@@ -30862,6 +30905,11 @@ void onTimer()
         // on-screen announcement the only sign that it is armed.
         static bool          mbTouch = false;
         static int           mbExtSide = 1;
+        // UF1 view / hardware mode (Plugin / DAW / Meter / Sends). Reachable from
+        // three places now — the MODE-hold soft-keys, the uf1_view_* builtins and
+        // the REASIXTY_UF1_MODE_* actions — and the last two can fire with the UF1
+        // out of sight, so the announcement is the only feedback (Frank 2026-08-10).
+        static int           mbView = 0;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
         static unsigned      mbSeq     = 0;
@@ -30896,6 +30944,7 @@ void onTimer()
         const bool ufs  = g_uf1StripMode.load();
         const bool ufe  = g_uf1Extender.load();
         const int  ufes = g_uf1ExtenderSide.load();
+        const int  ufv  = uf1ViewMode_();
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
         const bool eph  = g_uf1EnvJogPlayhead.load();
         const bool u8s  = g_pluginFaderMode.load();
@@ -30906,7 +30955,7 @@ void onTimer()
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
-            mbJog = jm; mbEnvPh = eph;
+            mbView = ufv; mbJog = jm; mbEnvPh = eph;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
@@ -30941,6 +30990,9 @@ void onTimer()
             if (ufe != mbExt)    { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe)); mbExt = ufe; }
             else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
             mbExtSide = ufes;   // always sync (even when the on/off change took priority)
+            // UF1 view / hardware mode.
+            if (ufv != mbView) { chg.push_back(std::string("UF1 Mode \xE2\x80\xA2 ")
+                                     + uf1ViewModeFriendly_(ufv)); mbView = ufv; }
             // UF1 Jog Mode.
             if (jm != mbJog) { chg.push_back(std::string("Jog \xE2\x80\xA2 ")
                                    + uf1JogModeFriendly(static_cast<Uf1JogMode>(jm))); mbJog = jm; }
@@ -33497,6 +33549,58 @@ custom_action_register_t g_actionJogModeRazor{
 int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
     g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0;
 
+// UF1 channel-encoder MODE + the four hardware VIEW modes as REAPER-native
+// actions too (Frank 2026-08-10, the same both-routes ask the Jog Modes got).
+// Each mirrors its uf1_encoder_* / uf1_view_* built-in exactly — including the
+// encoder set's "re-tap the live mode → back to Channel Select" toggle — so a
+// keyboard shortcut and a surface button behave identically. hookCommand2 runs
+// on the main thread, so uf1EncoderStepVisible_ (main-thread only) is safe here.
+// The register_t needs stable idStr/name storage: the tables hold the literals
+// and the register step fills the arrays from them.
+struct Uf1EncActionDef { EncoderMode mode; const char* idStr; const char* name; };
+static const Uf1EncActionDef kUf1EncActions[] = {
+    { EncoderMode::ChSelect,          "REASIXTY_UF1_ENCODER_CH_SELECT",          "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Channel Select" },
+    { EncoderMode::Nudge,             "REASIXTY_UF1_ENCODER_NUDGE",              "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Nudge" },
+    { EncoderMode::Mousewheel,        "REASIXTY_UF1_ENCODER_MOUSEWHEEL",         "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Mousewheel" },
+    { EncoderMode::Markers,           "REASIXTY_UF1_ENCODER_MARKERS",            "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Markers (prev / next)" },
+    { EncoderMode::LastParam,         "REASIXTY_UF1_ENCODER_LAST_PARAM",         "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Last Touched Param" },
+    { EncoderMode::Instance,          "REASIXTY_UF1_ENCODER_INSTANCE",           "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Instance Cycle" },
+    { EncoderMode::FxCycle,           "REASIXTY_UF1_ENCODER_FX_CYCLE",           "Rea-Sixty: UF1 Encoder \xE2\x86\x92 FX Cycle" },
+    { EncoderMode::FxScrollAll,       "REASIXTY_UF1_ENCODER_FX_SCROLL_ALL",      "Rea-Sixty: UF1 Encoder \xE2\x86\x92 FX Cycle (across tracks)" },
+    { EncoderMode::InstanceScrollAll, "REASIXTY_UF1_ENCODER_INSTANCE_SCROLL_ALL","Rea-Sixty: UF1 Encoder \xE2\x86\x92 Instance Cycle (across tracks)" },
+    { EncoderMode::FxMove,            "REASIXTY_UF1_ENCODER_FX_MOVE",            "Rea-Sixty: UF1 Encoder \xE2\x86\x92 FX Move (in chain)" },
+    { EncoderMode::CsCycle,           "REASIXTY_UF1_ENCODER_CS_CYCLE",           "Rea-Sixty: UF1 Encoder \xE2\x86\x92 CS Cycle (Favourites)" },
+    { EncoderMode::BcCycle,           "REASIXTY_UF1_ENCODER_BC_CYCLE",           "Rea-Sixty: UF1 Encoder \xE2\x86\x92 BC Cycle (Favourites)" },
+    { EncoderMode::FavCycle,          "REASIXTY_UF1_ENCODER_FAV_CYCLE",          "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)" },
+    { EncoderMode::SelsetCycle,       "REASIXTY_UF1_ENCODER_SELSET_CYCLE",       "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Selection Set Cycle" },
+};
+constexpr int kUf1EncActionCount =
+    static_cast<int>(sizeof(kUf1EncActions) / sizeof(kUf1EncActions[0]));
+custom_action_register_t g_actionUf1Enc[kUf1EncActionCount];
+int g_cmdUf1Enc[kUf1EncActionCount] = { 0 };
+// Cycle steps the VISIBLE ring in the user's configured order — the exact body
+// the MODE-hold + channel-encoder picker uses, not a raw enum++.
+custom_action_register_t g_actionUf1EncCycle{
+    0, "REASIXTY_UF1_ENCODER_CYCLE", "Rea-Sixty: UF1 Encoder Mode (next)", nullptr };
+custom_action_register_t g_actionUf1EncPrev{
+    0, "REASIXTY_UF1_ENCODER_PREV", "Rea-Sixty: UF1 Encoder Mode (previous)", nullptr };
+int g_cmdUf1EncCycle = 0, g_cmdUf1EncPrev = 0;
+
+struct Uf1ViewActionDef { int view; const char* idStr; const char* name; };
+static const Uf1ViewActionDef kUf1ViewActions[] = {
+    { kUf1ViewPlugin, "REASIXTY_UF1_MODE_PLUGIN", "Rea-Sixty: UF1 Mode = Plugin" },
+    { kUf1ViewDaw,    "REASIXTY_UF1_MODE_DAW",    "Rea-Sixty: UF1 Mode = DAW" },
+    { kUf1ViewMeter,  "REASIXTY_UF1_MODE_METER",  "Rea-Sixty: UF1 Mode = Meter" },
+    { kUf1ViewSends,  "REASIXTY_UF1_MODE_SENDS",  "Rea-Sixty: UF1 Mode = Sends" },
+};
+constexpr int kUf1ViewActionCount =
+    static_cast<int>(sizeof(kUf1ViewActions) / sizeof(kUf1ViewActions[0]));
+custom_action_register_t g_actionUf1View[kUf1ViewActionCount];
+int g_cmdUf1View[kUf1ViewActionCount] = { 0 };
+custom_action_register_t g_actionUf1ViewCycle{
+    0, "REASIXTY_UF1_MODE_CYCLE", "Rea-Sixty: UF1 Mode (cycle Plugin / DAW / Meter / Sends)", nullptr };
+int g_cmdUf1ViewCycle = 0;
+
 // CS-Switch / CS-Cycle / FX-move exposed as REAPER-native actions (Frank's Win
 // user 2026-06-25: "would be cool if these were available as Reaper actions").
 // Same workers as the surface built-ins; dispatch posts the existing request
@@ -33878,6 +33982,34 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
             char b[8]; std::snprintf(b, sizeof(b), "%d", jm);
             SetExtState("rea_sixty", "uf1JogMode", b, true);
             g_pageDirty.store(true);
+            return true;
+        }
+    }
+    {
+        // UF1 channel-encoder mode — inline mirror of the uf1_encoder_* builtins,
+        // toggle semantics included (re-firing the live mode returns to Channel
+        // Select; ChSelect itself never toggles away).
+        for (int i = 0; i < kUf1EncActionCount; ++i) {
+            if (command != g_cmdUf1Enc[i] || command == 0) continue;
+            const EncoderMode m = kUf1EncActions[i].mode;
+            const bool already = (m != EncoderMode::ChSelect
+                                  && g_uf1EncoderMode.load() == m);
+            const EncoderMode next = already ? EncoderMode::ChSelect : m;
+            g_uf1EncoderMode.store(next);
+            uf1EncoderPersistMode_(next);
+            g_pageDirty.store(true);
+            return true;
+        }
+        if (command == g_cmdUf1EncCycle) { uf1EncoderStepVisible_(+1); g_pageDirty.store(true); return true; }
+        if (command == g_cmdUf1EncPrev)  { uf1EncoderStepVisible_(-1); g_pageDirty.store(true); return true; }
+        // UF1 view / hardware mode — same bodies as the MODE-hold soft-keys.
+        for (int i = 0; i < kUf1ViewActionCount; ++i) {
+            if (command != g_cmdUf1View[i] || command == 0) continue;
+            uf1SetViewMode_(kUf1ViewActions[i].view);
+            return true;
+        }
+        if (command == g_cmdUf1ViewCycle) {
+            uf1SetViewMode_((uf1ViewMode_() + 1) % kUf1ViewCount);
             return true;
         }
     }
@@ -38783,6 +38915,34 @@ void registerBindingHandlers()
     regUf1EncMode("uf1_encoder_fav_cycle",          EncoderMode::FavCycle,          "UF1: Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)");
     regUf1EncMode("uf1_encoder_selset_cycle",       EncoderMode::SelsetCycle,       "UF1: Encoder \xE2\x86\x92 Selection Set Cycle");
 
+    // UF1 VIEW ("hardware mode") setters — the four modes the MODE-hold menu puts
+    // on the display soft-keys (Frank 2026-08-10). Until now the ONLY way in was
+    // holding MODE and hitting a soft-key; these make each one bindable to any
+    // button on any surface, and pair with the REASIXTY_UF1_MODE_* actions.
+    // Bodies live in uf1SetViewMode_ so all three routes stay identical. Atomic
+    // stores only → worker-safe. Re-tapping the live mode is a deliberate no-op:
+    // unlike the encoder modes there is no "off" to fall back to, and Plugin is a
+    // mode in its own right, not a home position.
+    auto regUf1View = [](const char* name, int view, const char* label) {
+        registerBuiltin(name, DescBuilder{
+            [view](bool firing, bool /*pressed*/, int /*param*/) {
+                if (firing) uf1SetViewMode_(view);
+            },
+            [view](int) { return uf1ViewMode_() == view; },
+            label, false
+        });
+    };
+    regUf1View("uf1_view_plugin", kUf1ViewPlugin, "UF1 Mode: Plugin");
+    regUf1View("uf1_view_daw",    kUf1ViewDaw,    "UF1 Mode: DAW");
+    regUf1View("uf1_view_meter",  kUf1ViewMeter,  "UF1 Mode: Meter");
+    regUf1View("uf1_view_sends",  kUf1ViewSends,  "UF1 Mode: Sends");
+    registerBuiltin("uf1_view_cycle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) uf1SetViewMode_((uf1ViewMode_() + 1) % kUf1ViewCount);
+        },
+        nullptr, "UF1 Mode: cycle", false
+    });
+
     // "5-8" (0x22) — DAW mode: page the dynamic soft-key bank (if one is
     // active) else toggle the 4-track group; Sends mode: page the send
     // window. Gated on the channel sub-mode exactly as the two removed
@@ -41561,6 +41721,26 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdJogModeItems    = plugin_register("custom_action", &g_actionJogModeItems);
     g_cmdJogModeEnvelope = plugin_register("custom_action", &g_actionJogModeEnvelope);
     g_cmdJogModeRazor    = plugin_register("custom_action", &g_actionJogModeRazor);
+    // UF1 encoder modes + the four hardware view modes. idStr/name come from the
+    // static tables next to the declarations (the register_t only stores the
+    // pointers, so they must outlive registration — string literals do).
+    for (int i = 0; i < kUf1EncActionCount; ++i) {
+        g_actionUf1Enc[i].uniqueSectionId = 0;
+        g_actionUf1Enc[i].idStr = kUf1EncActions[i].idStr;
+        g_actionUf1Enc[i].name  = kUf1EncActions[i].name;
+        g_actionUf1Enc[i].extra = nullptr;
+        g_cmdUf1Enc[i] = plugin_register("custom_action", &g_actionUf1Enc[i]);
+    }
+    g_cmdUf1EncCycle = plugin_register("custom_action", &g_actionUf1EncCycle);
+    g_cmdUf1EncPrev  = plugin_register("custom_action", &g_actionUf1EncPrev);
+    for (int i = 0; i < kUf1ViewActionCount; ++i) {
+        g_actionUf1View[i].uniqueSectionId = 0;
+        g_actionUf1View[i].idStr = kUf1ViewActions[i].idStr;
+        g_actionUf1View[i].name  = kUf1ViewActions[i].name;
+        g_actionUf1View[i].extra = nullptr;
+        g_cmdUf1View[i] = plugin_register("custom_action", &g_actionUf1View[i]);
+    }
+    g_cmdUf1ViewCycle = plugin_register("custom_action", &g_actionUf1ViewCycle);
     for (int i = 0; i < 8; ++i)
         g_cmdCsSwitch[i] = plugin_register("custom_action", &g_actionCsSwitch[i]);
     for (int i = 0; i < 8; ++i)
