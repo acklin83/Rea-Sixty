@@ -244,6 +244,14 @@ struct FpSet {
 };
 // objId -> fingerprint slot, learned per connection from the type=16 declarations.
 std::map<socket_t, std::map<uint64_t, int>> g_clientFpObj;
+// ★ Values are collected against the CONNECTION first, not the port. The plug-in
+// dumps its whole parameter set on TCP at connect, and the UDP stream — which is
+// what gives the connection a port — starts only AFTER that. Writing straight to
+// the port dropped the entire opening set, so the fingerprint stayed empty until
+// the user happened to move a control (Frank 2026-08-10: "er machts richtig, aber
+// erst wenn ich mit einem parameter kurz was mache"). The port copy is taken when
+// the port appears, and kept in step afterwards.
+std::map<socket_t, FpSet>                   g_clientFp;   // conn -> values   (g_meterMx)
 std::map<socket_t, uint16_t>                g_connPort;   // conn -> its UDP port (g_meterMx)
 std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
@@ -658,6 +666,12 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // frames arriving on the TCP side (worker thread,
                             // no port in hand) can be filed under this stream.
                             g_connPort[dc->second] = sp;
+                            // Flush whatever this connection already told us —
+                            // that is the opening parameter dump, which arrived
+                            // before any port existed to file it under.
+                            if (auto itF = g_clientFp.find(dc->second);
+                                itF != g_clientFp.end())
+                                g_portFp[sp] = itF->second;
                         }
                     } else if (g_portName.find(sp) == g_portName.end() && !g_pending.empty()) {
                         // Shared/fallback port, not yet named — old timing correlation.
@@ -893,6 +907,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             g_portFp.erase(it->second);   // stale settings help nobody
                             g_connPort.erase(it);
                         }
+                        g_clientFp.erase(c);
                     }
                     // Tear down this connection's dedicated UDP data socket.
                     for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
@@ -1025,6 +1040,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         double v = 0;
                                         std::memcpy(&v, pay + 9, 8);
                                         std::lock_guard<std::mutex> lk(g_meterMx);
+                                        // Always against the connection…
+                                        FpSet& cs = g_clientFp[c];
+                                        cs.val[itF->second]  = v;
+                                        cs.have[itF->second] = true;
+                                        // …and mirrored to the port once it has one.
                                         if (auto itP = g_connPort.find(c);
                                             itP != g_connPort.end()) {
                                             FpSet& fs = g_portFp[itP->second];
