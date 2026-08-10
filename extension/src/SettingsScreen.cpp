@@ -4875,10 +4875,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                       sbLabels[sbIdx],
                       editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
         ImGui_Text(ctx, hdr);
-        ImGui_TextDisabled(ctx,
+        ImGui_TextDisabled(ctx, reasixty_sp(
             "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) are plug-in-driven and "
             "carry no user Sub-Bank slots. Pick Q3 (or Layer 2/3) above "
-            "to edit Sub-Bank presets and LED colours.");
+            "to edit Sub-Bank presets and LED colours.",
+            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) are plug-in-driven and "
+            "carry no user Sub-Bank slots. Pick Q3 (or Layer 2/3) above "
+            "to edit Sub-Bank presets and LED colors."));
         return;
     }
 
@@ -4917,7 +4920,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             { DynamicBankKind::None,         "Off (static slots)" },
             { DynamicBankKind::FxBank,       "FX (focused track, paged)" },
             { DynamicBankKind::ParamGroups,  "Parameter Groups" },
-            { DynamicBankKind::TrackColours, "Track Colours" },
+            { DynamicBankKind::TrackColours,
+              reasixty_sp("Track Colours", "Track Colors") },
         };
         const DynamicBankKind curKind =
             getSubBankDynamic(editLayer, engagedQ, sbIdx);
@@ -5005,7 +5009,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             }
         } else if (curKind == DynamicBankKind::TrackColours) {
             ImGui_TextDisabled(ctx,
-                "Track-Colours palette (global — 8 keys = these colours):");
+                reasixty_sp("Track-Colours palette (global — 8 keys = these colours):",
+                            "Track-Colors palette (global — 8 keys = these colors):"));
             drawTrackColourPalette_(ctx);
         }
 
@@ -5424,7 +5429,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
     snprintf(ledHdr, sizeof(ledHdr),
-                  "LED colours for %s on (Layer %d, Quick %d)",
+                  reasixty_sp("LED colours for %s on (Layer %d, Quick %d)",
+                              "LED colors for %s on (Layer %d, Quick %d)"),
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, ledHdr);
     ImGui_TextDisabled(ctx,
@@ -5766,7 +5772,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::None,         "Off (static slots)" },
                 { DynamicBankKind::FxBank,       "FX (focused track)" },
                 { DynamicBankKind::ParamGroups,  "Parameter Groups" },
-                { DynamicBankKind::TrackColours, "Track Colours" },
+                { DynamicBankKind::TrackColours,
+              reasixty_sp("Track Colours", "Track Colors") },
             };
             const DynamicBankKind curKind =
                 uf8::bindings::getUf1SoftBankDynamic(uf1Bank);
@@ -5799,8 +5806,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 if (curKind == DynamicBankKind::TrackColours) {
                     ImGui_Spacing(ctx);
                     ImGui_TextDisabled(ctx,
-                        "Track-Colours palette (global — 8 keys = these "
-                        "colours):");
+                        reasixty_sp(
+                            "Track-Colours palette (global — 8 keys = these colours):",
+                            "Track-Colors palette (global — 8 keys = these colors):"));
                     drawTrackColourPalette_(ctx);
                 }
             } else {
@@ -13721,7 +13729,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             // pattern used elsewhere. Active = Bright, inactive = Dim
             // is fixed on the hardware side.
             const uint32_t curRgb = getUf8TopSoftKeyColour_(softKeyBank);
-            ImGui_Text(ctx, "Colour");
+            ImGui_Text(ctx, reasixty_sp("Colour", "Color"));
             ImGui_SameLine(ctx, nullptr, nullptr);
             const int curRgba = curRgb
                 ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
@@ -14363,7 +14371,8 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             setUf8DefaultNorm_(ctrl.strip, bank, 0.5);
                         }
                         ImGui_TextDisabled(ctx,
-                            "Bipolar params usually centre at 0.5.");
+                            reasixty_sp("Bipolar params usually centre at 0.5.",
+                                        "Bipolar params usually center at 0.5."));
                     }
                     if (fx.ok) {
                         if (ImGui_MenuItem(ctx, "Capture current value",
@@ -14404,7 +14413,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 ctrl.kind == Uf8Control::SelBtn)
             {
                 const uint32_t curRgb = getUf8Colour_(ctrl.kind, ctrl.strip, bank);
-                ImGui_Text(ctx, "Colour");
+                ImGui_Text(ctx, reasixty_sp("Colour", "Color"));
                 ImGui_SameLine(ctx, nullptr, nullptr);
                 const int curRgba = curRgb
                     ? static_cast<int>(((curRgb & 0xFF0000u) << 8)
@@ -14578,9 +14587,12 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         if (ImGui_IsItemHovered(ctx, nullptr)) {
             char tip[128];
             snprintf(tip, sizeof(tip),
-                "Strip %d colour bar (bank %d)\n"
-                "  left-click: pick this strip\n"
-                "  right-click: fill all 8 strips",
+                reasixty_sp("Strip %d colour bar (bank %d)\n"
+                            "  left-click: pick this strip\n"
+                            "  right-click: fill all 8 strips",
+                            "Strip %d color bar (bank %d)\n"
+                            "  left-click: pick this strip\n"
+                            "  right-click: fill all 8 strips"),
                 s + 1, bank + 1);
             ImGui_SetTooltip(ctx, tip);
         }
@@ -14595,7 +14607,8 @@ void drawFxLearnUf8StripBars_(ImGui_Context* ctx, ImGui_DrawList* dl,
         snprintf(ctxId, sizeof(ctxId),
                       "fxl_uf8_stripbar_ctx_%d", s);
         if (ImGui_BeginPopupContextItem(ctx, ctxId, nullptr)) {
-            if (ImGui_MenuItem(ctx, "Fill all (pick colour)...",
+            if (ImGui_MenuItem(ctx, reasixty_sp("Fill all (pick colour)...",
+                                            "Fill all (pick color)..."),
                                nullptr, nullptr, nullptr))
             {
                 s_pendingFillAllStrip = s;
@@ -14898,7 +14911,9 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         }
         if (!softKeys) {
             bool bip = snap().polarity == uf8::VPotPolarity::Bipolar;
-            if (ImGui_MenuItem(ctx, "Bipolar (centre detent)", nullptr, &bip, nullptr))
+            if (ImGui_MenuItem(ctx, reasixty_sp("Bipolar (centre detent)",
+                                            "Bipolar (center detent)"),
+                               nullptr, &bip, nullptr))
                 mutateUf1_([&](uf8::UserUf1Map& u) {
                     auto& s = uf1SlotRef_(u, softKeys, pos);
                     s.polarity = bip ? uf8::VPotPolarity::Bipolar
@@ -14984,7 +14999,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             }
 
             ImGui_Separator(ctx);
-            ImGui_Text(ctx, "LED colour");
+            ImGui_Text(ctx, reasixty_sp("LED colour", "LED color"));
             ImGui_SameLine(ctx, nullptr, nullptr);
             {
                 const uint32_t curRgb = snap().ledRgb;
@@ -15017,7 +15032,8 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                             ImGui_CloseCurrentPopup(ctx);
                         }
                     }
-                    if (ImGui_MenuItem(ctx, "No colour (state only)", nullptr,
+                    if (ImGui_MenuItem(ctx, reasixty_sp("No colour (state only)",
+                                                    "No color (state only)"), nullptr,
                                        nullptr, nullptr)) {
                         setUf1LedRgb_(pos, 0);
                         ImGui_CloseCurrentPopup(ctx);
@@ -19064,7 +19080,8 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
         ImGui_TableSetupColumn(ctx, "On",         &wFlag, &wOn,   nullptr);
         ImGui_TableSetupColumn(ctx, "Name",       &wFlag, &wName, nullptr);
         ImGui_TableSetupColumn(ctx, "IP address", &wFlag, &wIp,   nullptr);
-        ImGui_TableSetupColumn(ctx, "Colour",     &wFlag, &wCol,  nullptr);
+        ImGui_TableSetupColumn(ctx, reasixty_sp("Colour", "Color"),
+                               &wFlag, &wCol,  nullptr);
         ImGui_TableSetupColumn(ctx, "",           &wFlag, &wDet,  nullptr);
         ImGui_TableSetupColumn(ctx, "Calibrate",  &wFlag, &wHome, nullptr);
         ImGui_TableSetupColumn(ctx, "Status",     &wFlag, &wStat, nullptr);

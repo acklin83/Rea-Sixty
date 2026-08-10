@@ -458,6 +458,143 @@ If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their pri
 
 \newpage
 
+# UF1 hardware
+
+One channel, a colour screen and a jog wheel. The UF1 is not a small UF8: its
+screen is host-driven, so what the keys do depends on which **view** is up, and
+almost every key is rebindable in *Settings → Bindings → UF1*.
+
+Two keys are deliberately **not** rebindable: `MODE` and `SCRUB`. Both are held
+modifiers that open a picker, so a binding on them would have nothing to fire.
+`SOLO` and `CUT` are also fixed — they act on the focused track through REAPER's
+own solo/mute, and Rea-Sixty does not reinvent those. `SEL` is a hybrid: a single
+press always selects the focused track exclusively (hold **Shift** to extend the
+selection instead), and the key *also* runs through the binding system, so a
+double-press or a modifier gesture can fire an action on top.
+
+## Views
+
+`MODE` is a **hold**: keep it down and the four display soft-keys become a view
+picker. Press one while holding to switch, release to close.
+
+| Soft-key while `MODE` is held | View |
+|---|---|
+| SK1 | **Plugin** — the channel strip: EQ graph, section soft-keys, four V-Pots |
+| SK2 | **DAW** — the same channel layout, but the four soft-keys fire your own soft-key bank |
+| SK3 | **Meter** — the metering screens |
+| SK4 | **Sends** — the channel layout showing the send group |
+
+While `MODE` is held the **`CHANNEL` encoder** does a second job: it steps the
+**Encoder Mode** through the ring you configured, and SK4's label shows the live
+mode name as you turn. So one held key gives you both pickers — soft-keys for the
+view, encoder for the encoder mode. Which modes appear in the ring, and in what
+order, is set in *Settings → Bindings → UF1*.
+
+The view survives until you change it. Everything below is described per view,
+because the same physical key does different work in each.
+
+## The channel (all views)
+
+| Control | Function |
+|---|---|
+| Fader | Volume of the UF1's channel. Touch-sensitive, drives touch automation. |
+| V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. |
+| `SOLO` / `CUT` | Solo / mute the focused track. Fixed, not rebindable. |
+| `SEL` | Select the focused track exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. |
+| `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. |
+| `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
+| `CHANNEL` encoder | Step the UF1's channel through the track list. **Shift +** turn is always Instance Cycle, whatever mode is selected. **Push** opens the focused plug-in's GUI. Both are factory defaults and rebindable. |
+
+## Plugin view
+
+The channel strip of the plug-in on the focused track. When the plug-in is an SSL
+channel strip — or a third-party plug-in you have taught through *FX Learn* — the
+EQ curve is drawn on the screen and the four V-Pots carry that page's parameters.
+
+| Control | Function |
+|---|---|
+| SK1-SK4 | The channel-strip section toggles for the current page (EQ In, HF Type, …). A blank slot does nothing. |
+| V1-V4 | The current page's four parameters. |
+| `◄` `►` (page arrows) | Step the strip page. |
+| `5-8` | Jump to V-Pots 5-8 of the page. |
+| `BANK ◄` `►` | Step one parameter left / right. |
+| Quick-key `2` (bottom row) | Toggle **Fine** resolution for the channel V-Pots. |
+| V-Pot push (V1-V4) | Reset that parameter to its default. |
+
+## Meter view
+
+| Control | Function |
+|---|---|
+| SK1 | **Meter Screen Selector** — cycles Overview → Analogue → RTA. A Meter **Pro** adds Loudness as a fourth screen; a plain Meter never streams that data, so it is not offered. |
+| SK2 | **Reset** — clears the peak hold. |
+| SK3 | **Fine** — finer V-Pot resolution. In the preset browser it is *Navigate Back* instead. Not on the Loudness screen, where SK3 is *Play*. |
+| SK4 | **Presets** — open / close the preset browser for the pinned Meter instance. |
+| V4 | In the preset browser, scroll to highlight. **Push V4** loads the highlighted preset — browsing never loads on its own. |
+| `◄` `►` | Page the meter V-Pots. |
+| Quick-key `2` | Toggle Fine, same as SK3. |
+
+## DAW view
+
+Identical to Plugin view except the four display soft-keys fire the current
+**UF1 soft-key bank** instead of the channel-strip sections. Banks are built in
+*Settings → Bindings → UF1*; a bank slot can also be a **dynamic** bank, in which
+case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
+**+Ctrl** and long-press each do something different.
+
+Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
+are abbreviated rather than truncated, so every word stays readable.
+
+## Secondary transport row
+
+`OFF` `READ` `WRT` `TRIM` `LTCH` `TCH` and `SHIFT` along the bottom, with the
+primary transport (`◄◄` `►►` `■` `►` `●`) below. `SHIFT` is the UF1's Shift
+modifier. The primary transport ships bound to REAPER's own transport actions and
+can be rebound; the secondary row ships **unbound** and is yours.
+
+## Nav cross and jog wheel
+
+The five-key cross (up / left / centre / right / down) and the jog wheel belong to
+**Jog Mode** — its own chapter, next.
+
+\newpage
+
+# Jog Mode
+
+The jog wheel does not have one job. It has an **object**, and the object decides
+what turning the wheel means. `SCRUB` is a hold: keep it down and turn the jog to
+pick the object.
+
+| Object | Jog turns |
+|---|---|
+| **Playhead** | Moves the play cursor. Step is 1 % of the visible view per count, so the feel follows your zoom. |
+| **Scrub** | Audible scrub, 0.5 s per count. |
+| **Items** | Moves the selected item(s). Default one quarter of a grid step per count. |
+| **Envelope** | Moves the selected envelope points, same default step. |
+| **Razor** | Moves the razor edit — which edge, see below. |
+
+The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
+never have to let go of the wheel to change what you are working on.
+
+Three modifiers stack on the jog:
+
+- **Shift** — fine. Divides the step (default ÷4).
+- **Cmd** — copy instead of move.
+- **Ctrl** — cross axis. In Items, that means moving track by track rather than in
+  time; the vertical axis is discrete, so it steps one track at a time.
+
+## Razor
+
+Razor mode aims at one of five targets: the whole razor area, or its left, right,
+top or bottom edge. The **centre** key of the nav cross is a held gesture — press
+and hold it and the whole razor area drags its content as one continuous move;
+release commits. Holding it grabs the content once at the start, so the razor
+cannot sweep up material it is dragging across.
+
+Every speed here is adjustable — the picker speed, the fine divisor and the step
+per object all live in *Settings → Bindings → UF1*.
+
+\newpage
+
 # Settings window
 
 The Settings window is a dockable ReaImGui context. Open with the `360°` key (default), the **Open / Close Rea-Sixty Settings** action, or REAPER's Action `Rea-Sixty: Toggle Settings window`.
@@ -665,7 +802,7 @@ The three FX-Learn modifier-layer switches used to sit here. They now live in *F
 
 ## Bindings pane
 
-Top of the pane: a tab bar with **UF8** and **UC1**, each rendering its hardware as a vector schematic. Click any button, knob, encoder, or fader to select it; the per-button editor opens below the schematic.
+Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its hardware as a vector schematic. Click any button, knob, encoder, or fader to select it; the per-button editor opens below the schematic.
 
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
@@ -977,6 +1114,34 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 - **Push reset** slider (Value-mode V-Pot) — the value the V-Pot snaps to when pushed. On a Bipolar V-Pot, a small "0.5" quick-set button + hint appears when the slider isn't already at centre.
 - **Display label** (inline text field) — per-slot override for the scribble-strip name (1..7 ASCII chars). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump. Re-binding a slot to a *different* parameter clears its custom label (the label named the old param), so the field and the readout stay in agreement.
 - **Save feel to** / **Apply feel from** / **Clear preset** (UC1 knobs + UF8 V-Pots only) — reusable tuning presets; see *Feel presets* below.
+
+### UF1 layer
+
+A map can carry a **UF1 layer** of its own, next to the UC1 one. The `UF1 layer`
+tick-box turns it on and the `Mockup:` radio swaps the schematic between the UC1
+and the UF1, so you lay parameters onto whichever surface you are editing.
+
+Leave the UF1 layer **off** and the UF1 fills itself from the UC1 mapping — one
+map, both surfaces, nothing to maintain twice. Turn it on when the UF1 should
+differ, and the four buttons below the schematic manage it:
+
+| Button | Does |
+|---|---|
+| **Fill: Replace** | Fill the page from the plug-in's parameters, discarding what is there |
+| **Fill: Append** | Fill only the empty slots |
+| **Fill from UC1** | Copy the UC1 layer's assignments onto the UF1 |
+| **Unbind all** | Clear the page |
+
+One warning about *Unbind all*: an **empty UF1 layer is authoritative**. Clearing
+the layer does not hand the UF1 back to the UC1 fill — it leaves the UF1 empty,
+which is what "I want nothing here" has to mean. Untick `UF1 layer` to go back to
+inheriting.
+
+**Show EQ Graph on the UF1** draws the EQ curve for a *learned* channel strip.
+Rea-Sixty normally finds the fifteen EQ parameters by SSL's own parameter names,
+which a third-party plug-in does not use; with this ticked it resolves each one
+through the map instead. It only makes sense on a map whose domain is a channel
+strip.
 
 ### Modifier layers (Normal / Option / Control / Control+Option)
 
@@ -2039,6 +2204,45 @@ Which edits travel — and onto which tracks:
 This deliberately does **not** copy across *different* plug-ins: the same internal value rarely means the same thing on another plug-in, so only identical plug-ins mirror.
 
 Storage: each track's member-of-which-slots state is a bitmask in P_EXT (`P_EXT:rea_sixty:param_groups`). Slot metadata is in a project-scoped JSON sidecar.
+
+\newpage
+
+# Mapping Exchange
+
+A shared library of plug-in maps, reachable from *Settings → Exchange*. If someone
+has already taught Rea-Sixty a plug-in you own, you can pull their map instead of
+learning it again.
+
+## Browsing
+
+The landing table lists every plug-in the exchange knows:
+
+| Column | Meaning |
+|---|---|
+| Plug-in | The plug-in name |
+| Vendor | Its maker |
+| Maps | How many maps exist for it |
+| Surfaces | Which surfaces those maps target (`uc1`, `uf8`, `uf1`) |
+| Coverage | How much of the surface the best map fills |
+
+Pick a plug-in and you get its maps, one row each, with the author, the surface,
+the coverage and a **Works** column — whether other people report the map working.
+Open a map and you see exactly what it does before you take it: a Control /
+Parameter table, an *Also mapped* list for parameters with no fixed control, the
+**Modifier layers** if the author used any, and the **EXT FUNCS** list for the
+UC1's hidden menu.
+
+## Taking a map
+
+If you already have a map for that plug-in, Rea-Sixty asks rather than
+overwriting: **Replace mine** or **Keep mine**. Nothing is replaced silently.
+
+## Publishing
+
+*Server settings* holds the server address and a **device token**. The token is
+what lets you upload; getting one is a browser round-trip you start from that
+pane. Without a token you can browse and download — publishing is the only part
+that needs it.
 
 \newpage
 

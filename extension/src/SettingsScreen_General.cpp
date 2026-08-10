@@ -153,6 +153,9 @@ int                reasixty_activeSubBankFor(int layer);
 // Pinned startup soft-key bank (fixed user-Quick engaged at boot).
 bool               reasixty_startupBank(int* layer, int* quick, int* sub);
 void               reasixty_setStartupBank(bool on, int layer, int quick, int sub);
+// British / American spelling picked at render time (Appearance → Spelling).
+// Defined in main.cpp; same declaration as SettingsScreen.cpp carries.
+const char* reasixty_sp(const char* uk, const char* us);
 
 namespace uf8 {
 
@@ -285,12 +288,14 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         int ceFlags = ImGui_ColorEditFlags_NoInputs;
         int csCol = reasixty_overlayCsColor();
         ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_ColorEdit3(ctx, "CS colour", &csCol, &ceFlags)) {
+        if (ImGui_ColorEdit3(ctx, reasixty_sp("CS colour", "CS color"),
+                             &csCol, &ceFlags)) {
             reasixty_setOverlayCsColor(csCol);
         }
         int bcCol = reasixty_overlayBcColor();
         ImGui_SetNextItemWidth(ctx, 220.0);
-        if (ImGui_ColorEdit3(ctx, "BC colour", &bcCol, &ceFlags)) {
+        if (ImGui_ColorEdit3(ctx, reasixty_sp("BC colour", "BC color"),
+                             &bcCol, &ceFlags)) {
             reasixty_setOverlayBcColor(bcCol);
         }
         // Selected-FX box (the surface-focused non-CS/BC plug-in) — MCP overlay
@@ -298,7 +303,9 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         if (insMark) {
             int selCol = reasixty_overlaySelColor();
             ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_ColorEdit3(ctx, "Selected FX colour", &selCol, &ceFlags)) {
+            if (ImGui_ColorEdit3(ctx, reasixty_sp("Selected FX colour",
+                                              "Selected FX color"),
+                                 &selCol, &ceFlags)) {
                 reasixty_setOverlaySelColor(selCol);
             }
         }
@@ -340,7 +347,8 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     sectionHeader("Surface display");
 
     bool selFollow = reasixty_selFollowsColor();
-    if (ImGui_Checkbox(ctx, "SEL LED follows REAPER track colour",
+    if (ImGui_Checkbox(ctx, reasixty_sp("SEL LED follows REAPER track colour",
+                                        "SEL LED follows REAPER track color"),
                        &selFollow)) {
         reasixty_setSelFollowsColor(selFollow);
     }
@@ -984,7 +992,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         const bool centerMode = reasixty_pluginGuiPinCenter();
         char hint[96];
         if (centerMode) {
-            snprintf(hint, sizeof(hint), "  Pin: center");
+            snprintf(hint, sizeof(hint), "  Pin: %s",
+                     reasixty_sp("centre", "center"));
         } else if (px < 0 || py < 0) {
             snprintf(hint, sizeof(hint),
                 "  Pin: (none captured yet)");
@@ -999,7 +1008,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             reasixty_capturePluginGuiPin();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Center on Screen",
+        if (ImGui_Button(ctx, reasixty_sp("Centre on Screen",
+                                          "Center on Screen"),
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
             reasixty_setPluginGuiPinCenter(true);
         }
@@ -1020,7 +1030,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         const bool chainCenter = reasixty_fxChainPinCenter();
         char hint[96];
         if (chainCenter) {
-            snprintf(hint, sizeof(hint), "  Pin: center");
+            snprintf(hint, sizeof(hint), "  Pin: %s",
+                     reasixty_sp("centre", "center"));
         } else if (cx < 0 || cy < 0) {
             snprintf(hint, sizeof(hint),
                 "  Pin: (none captured yet)");
@@ -1035,7 +1046,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             reasixty_captureFxChainPin();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Center on Screen##fx_chain_pin",
+        if (ImGui_Button(ctx, reasixty_sp("Centre on Screen##fx_chain_pin",
+                                          "Center on Screen##fx_chain_pin"),
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
             reasixty_setFxChainPinCenter(true);
         }
