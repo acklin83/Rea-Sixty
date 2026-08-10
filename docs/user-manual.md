@@ -501,7 +501,7 @@ because the same physical key does different work in each.
 | V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. |
 | `SOLO` / `CUT` | Solo / mute the focused track. Fixed, not rebindable. |
 | `SEL` | Select the focused track exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. |
-| `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. LED lit while pinned. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept. |
+| `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. While pinned, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
 | `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
 | `CHANNEL` encoder | Step the UF1's channel through the track list. **Shift +** turn is always Instance Cycle, whatever mode is selected. **Push** opens the focused plug-in's GUI. Both are factory defaults and rebindable. |
@@ -519,7 +519,8 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | `◄` `►` (page arrows) | Step the strip page. |
 | `5-8` | Jump to V-Pots 5-8 of the page. |
 | `BANK ◄` `►` | Step one parameter left / right. |
-| Quick-key `2` (bottom row) | Toggle **Fine** resolution for the channel V-Pots. |
+| **SOLO ACTIVE** (screen, left) | Lights whenever anything in the project is soloed. It is an indication only — the wording is the UF1's own. Quick-key `1` beneath it is yours to bind; bind it to *Unsolo all* if you want SSL's factory behaviour. |
+| Quick-key `2` (bottom row) | Toggle **Fine** resolution for the channel V-Pots. The **FINE CTRL** readout next to it follows the toggle. |
 | V-Pot push (V1-V4) | Reset that parameter to its default. |
 
 ## Meter view
@@ -604,6 +605,22 @@ pick the object.
 
 The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
 never have to let go of the wheel to change what you are working on.
+
+## What the cross does in each object
+
+The cross is not one thing either — it follows the object, exactly like the wheel.
+
+| Object | `←` `→` | `↑` `↓` | centre |
+|---|---|---|---|
+| **Playhead** | Move the edit cursor one grid step. | Zoom vertically in / out. | Zoom to the whole project; press again to restore the view you came from. |
+| **Scrub** | As Playhead. | As Playhead. | As Playhead. |
+| **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | Zoom to the span of the selected items; press again to restore. |
+| **Envelope** | Select the previous / next point. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here — nudging the cursor while shaping an envelope is worth more. |
+| **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | Aim at the **whole area** — and see *Razor* below, where the centre is also a held gesture. |
+
+In **Items** and **Envelope**, holding `SHIFT` while pressing `←` `→` **adds** to
+the selection instead of replacing it, so you can walk a run of items or points
+onto the wheel. The cross keys light to show the Razor target you have aimed at.
 
 Three modifiers stack on the jog:
 
