@@ -100,24 +100,17 @@ enum class ChannelStripMeter : int {
 };
 
 // Copy the most recent channel-strip meter values for `csType` (a
-// ChannelStripMeter) into `current`. Returns false if no channel-strip instance
-// has published that type yet. Thread-safe.
+// ChannelStripMeter) for ONE instance on a track. CompGain/GateGain are THE
+// gain-reduction source: REAPER's GainReduction_dB named-config parm exposes
+// only one number per FX and nothing at all for the gate. Verified on the wire
+// 2026-07-14: GateGain swept 0 dB (open) to -42 dB (closed) with the ramp in
+// between, CompGain tracked the compressor.
 //
-// CompGain/GateGain are THE gain-reduction source: REAPER's GainReduction_dB
-// named-config parm exposes only one number per FX and nothing at all for the
-// gate. Verified on the wire 2026-07-14: GateGain swept 0 dB (open) to -42 dB
-// (closed) with the ramp in between, CompGain tracked the compressor.
-bool getChannelStripMeter(int csType, std::vector<float>& current);
-
-// Like getChannelStripMeter, but only the channel-strip instances that announced
-// the given 1-based REAPER track index (HostTrackIndex, correlated per UDP source
-// port at connect). Returns false when no strip on that track has published —
-// so the caller's GR goes dark rather than showing another channel's reduction.
-// A track may run SEVERAL strips; this un-keyed form takes the FIRST instance
-// on the track. Prefer getChannelStripMeterForTrackInstance whenever the caller
-// knows which instance is active.
-bool getChannelStripMeterForTrackIndex(int csType, int trackIndex,
-                                       std::vector<float>& current);
+// The un-keyed getChannelStripMeter() and the track-only
+// getChannelStripMeterForTrackIndex() are GONE (2026-08-10). Both took "the
+// first instance that has this meter", which is the exact mistake the whole
+// identification chain below exists to undo — on a track with two strips they
+// returned a coin toss, and they were the tempting thing to reach for.
 
 // The same read, but for ONE named instance on the track: `instanceOrdinal` is
 // the position of the plug-in among the track's SSL 360° plug-ins in FX-chain
@@ -185,6 +178,20 @@ bool getChannelStripMeterForTrackStrip(int csType, int trackIndex,
                                        const StripParam* fp, int nfp,
                                        int instanceOrdinal,
                                        std::vector<float>& current);
+
+// The plug-in's OWN EQ curve for that same strip — the one its GUI plots, not a
+// reconstruction of it. `dbValues` comes back as dB per frequency point
+// (PluginEQCurveDataValueEventArgs.m_dBValues), `minHz`/`maxHz` as the axis the
+// plug-in announced in its Prepare message, or 0 when it never did (assume
+// 20 Hz .. 20 kHz then). Same instance resolution as above.
+//
+// This has streamed since the impersonator existed and was unusable purely
+// because a curve could not be tied to an FX. It replaces our parametric render,
+// which never modelled SSL's proportional-Q behaviour exactly.
+bool getChannelStripEqCurve(int trackIndex, const char* model,
+                            const StripParam* fp, int nfp, int instanceOrdinal,
+                            std::vector<float>& dbValues,
+                            float& minHz, float& maxHz);
 
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();

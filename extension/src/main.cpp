@@ -21496,6 +21496,66 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         }
     }
 
+    // ── SSL's OWN curve, when we can get it ─────────────────────────────────
+    // The plug-in streams the exact curve its GUI plots, in dB per frequency
+    // point (PluginEQCurveDataValueEventArgs.m_dBValues). Everything below this
+    // block is our parametric reconstruction of that curve — good, but it never
+    // modelled SSL's proportional-Q behaviour exactly, which is why "EQ curve
+    // byte-exact" sat parked. The stream was always there; what was missing was
+    // being able to say WHICH instance a curve belonged to, and that is what the
+    // strip identification now answers.
+    // Falls through to the parametric render whenever the strip is not an SSL
+    // 360 plug-in, is not streaming, or the impersonator is off — so nothing
+    // that worked before can stop working.
+    if (eqOn && sslcore::isRunning() && sFxTr && sFx >= 0) {
+        const int trackIdx =
+            static_cast<int>(GetMediaTrackInfo_Value(sFxTr, "IP_TRACKNUMBER"));
+        const char* fpId[12]; double fpVal[12];
+        const int nfp = uf8::sslStripFingerprint(sFxTr, sFx, fpId, fpVal, 12);
+        sslcore::StripParam fp[12];
+        for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
+        char csn[128] = {0};
+        TrackFX_GetFXName(sFxTr, sFx, csn, sizeof(csn));
+        const uf8::PluginMap* pm = uf8::lookupPluginMapByName(csn);
+        std::vector<float> wire; float wMin = 0.0f, wMax = 0.0f;
+        if (trackIdx > 0 &&
+            sslcore::getChannelStripEqCurve(trackIdx,
+                                            pm ? pm->displayShort : nullptr,
+                                            fp, nfp,
+                                            uf8::sslCoreInstanceOrdinal(sFxTr, sFx),
+                                            wire, wMin, wMax)) {
+            // The plug-in's axis, or the render's own 20 Hz..20 kHz when it never
+            // announced one. Both are log, so the mapping is a log-space lerp.
+            const double aMin = (wMin > 0.0f) ? double(wMin) : 20.0;
+            const double aMax = (wMax > aMin)  ? double(wMax) : 20000.0;
+            const double lMin = std::log(aMin), lSpan = std::log(aMax) - lMin;
+            const int    n    = static_cast<int>(wire.size());
+            for (int x = 2; x < 251; ++x) {
+                const double frac = (x - 2) / 248.0;
+                const double f    = 20.0 * std::pow(1000.0, frac);   // our columns
+                double pos = (lSpan > 0.0)
+                    ? (std::log(f) - lMin) / lSpan * (n - 1)
+                    : 0.0;
+                if (pos < 0.0) pos = 0.0;
+                if (pos > n - 1) pos = n - 1;
+                const int    i0 = static_cast<int>(pos);
+                const int    i1 = (i0 + 1 < n) ? i0 + 1 : i0;
+                const double fr = pos - i0;
+                col[x] = dbToH(wire[i0] * (1.0 - fr) + wire[i1] * fr);
+            }
+            col[0] = 0x00; col[1] = 0x01;
+            // Same change-gate and same two-frame send as the parametric path
+            // below — one way to put columns on the device, not two.
+            if (sHave && !force && col == sLast) return;
+            sLast = col; sHave = true;
+            const std::array<uint8_t, 2> eqRefreshW{0x01, 0x64};
+            g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefreshW));
+            g_uf1_dev->send(uf1::buildScreen(0x0122,
+                std::span<const uint8_t>(col.data(), col.size())));
+            return;
+        }
+    }
+
     if (!eqOn) {
         col.fill(100);
     } else {
