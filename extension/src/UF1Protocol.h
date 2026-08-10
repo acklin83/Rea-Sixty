@@ -178,6 +178,12 @@ namespace scr {
 // regardless of the binding. Distinct from kSoftKeyLabel (0x0104), which is
 // the BIG display's four keys. Frank 2026-08-10.
 constexpr uint16_t kChSoftKey = 0x0004;
+// Backdrop BEHIND that soft-key label — the highlight that says "engaged".
+// Found by the 2026-08-10 hardware sweep (nothing in 265 captures pointed at it,
+// because it carries no text). 2 bytes; the init leaves it at {0x03, 0x00} =
+// normal, and 0x01 lights it. Lets a stateful SOFT binding show its state
+// WITHOUT overwriting the label, which belongs to the user.
+constexpr uint16_t kChSoftKeyBg = 0x0000;
 constexpr uint16_t kChActive  = 0x0006;  // 1-byte "channel populated" flag (01) — gates the colour bar
 constexpr uint16_t kColourBar = 0x0018;  // 1-byte palette index of the fader colour bar (uf8::quantize)
 constexpr uint16_t kTrackName = 0x000b;
@@ -199,6 +205,13 @@ constexpr uint16_t kHeaderRow    = 0x011c;  // Channel view: 8 x 25-byte ASCII h
                                             // dB readout grid [PkHold|PkL|PkR|RmsHold|RmsL|RmsR].
                                             // Same address, content re-purposed by firmware view.
 constexpr uint16_t kGraphic      = 0x0122;  // EQ graph (Channel) / meter graphic (Meter view)
+// Solo-Active indication — the region under the firmware's "SOLO CLR 1" caption
+// (manual p187). 1 byte, SSL's own values: 0x00 off / 0xff on. It is a FLAG, not
+// a text field: non-zero makes the firmware draw its own "SOLO ACTIVE", so the
+// wording is not ours to choose. Found by the 2026-08-10 hardware sweep; the
+// corpus holds only two 0xff frames (cap55, cap64), which is why every search
+// for the ASCII failed.
+constexpr uint16_t kSoloActive   = 0x0120;
 }
 // NB: 0x011d is NOT a view selector (disproven — cap84=0x11, cap77=0x19, cap66=0xfb;
 // too variable, streaming it switched nothing). The Channel<->Meter view is toggled
