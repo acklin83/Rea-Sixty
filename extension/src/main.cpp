@@ -1150,6 +1150,21 @@ std::atomic<bool>         g_uc1Fine              {false}; // UC1 Fine button hel
 // Read live each tick (atomics) so changes apply without a reload.
 std::atomic<double>       g_knobSpeedUf8         {1.0};
 std::atomic<double>       g_knobSpeedUc1         {1.0};
+// UC1 encoder ACCELERATION. The UC1 path is otherwise strictly linear —
+// delta x 1/64 — so a fast spin covers exactly as much per detent as a slow one
+// and gets no credit for being fast (Frank 2026-08-10: "schnelle Drehbewegung
+// macht extrem kleine Distanz").
+//
+// Unlike the UF8, we do NOT have to guess the speed: the UC1's firmware already
+// reports MULTI-DETENT magnitudes. Counted over the existing UC1 captures —
+// |delta| 1:9297  2:1280  3:327  4:143  5:48  6:16  7:5  8:3 — so the number in
+// the frame IS the speed. (Velocity-from-timing is the documented dead end on
+// the UF8; this is the plug-in's own count, not a stopwatch.)
+//
+// Applied as delta * (1 + (|delta|-1) * accel), so magnitude 1 — 87% of all
+// packets — is byte-identical and slow work, the 0 dB notch and Fine are
+// untouched. 0 = off (pure linear, the old behaviour).
+std::atomic<double>       g_knobAccelUc1         {0.25};
 std::atomic<double>       g_fineFactorUf8        {0.25};
 std::atomic<double>       g_fineFactorUc1        {0.25};
 // The UF1's own pair. Until 2026-08-10 the UF1 borrowed the UF8's numbers and
@@ -3895,6 +3910,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "knob_speed_uc1"); v && *v) {
         g_knobSpeedUc1.store(std::clamp(std::atof(v), 0.01, 8.0));
+    }
+    if (const char* v = GetExtState("rea_sixty", "knob_accel_uc1"); v && *v) {
+        g_knobAccelUc1.store(std::clamp(std::atof(v), 0.0, 2.0));
     }
     if (const char* v = GetExtState("rea_sixty", "fine_factor_uf8"); v && *v) {
         g_fineFactorUf8.store(std::clamp(std::atof(v), 0.02, 1.0));
@@ -35946,6 +35964,12 @@ static void writeCsCopyMask_()
 // Global switch: draw our EQ curve on the UF1 for LEARNED Channel Strips. A
 // single map can override it either way (UserPluginMap::uf1EqGraph tri-state);
 // maps left on "follow" read this.
+double reasixty_knobAccelUc1()        { return g_knobAccelUc1.load(); }
+void reasixty_setKnobAccelUc1(double v)
+{
+    g_knobAccelUc1.store(std::clamp(v, 0.0, 2.0));
+    SetExtState("rea_sixty", "knob_accel_uc1", std::to_string(v).c_str(), true);
+}
 bool reasixty_uf1EqGraphLearned()     { return g_uf1EqGraphLearned.load(); }
 void reasixty_setUf1EqGraphLearned(bool on)
 {

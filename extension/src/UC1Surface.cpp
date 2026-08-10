@@ -43,6 +43,9 @@ bool reasixty_jsfxGridFine();
 // while Fine is engaged (default 0.25). uc1KnobScale_ folds both.
 double reasixty_knobSpeedUc1();
 double reasixty_fineFactorUc1();
+// Acceleration from the firmware's own multi-detent count (main.cpp). 1.0 at a
+// single detent, so slow work is untouched.
+double reasixty_knobAccelUc1();
 // Virtual-notch tuning (defined in main.cpp) — shared UF8/UC1 so the EQ-gain
 // magnet + soft-detent feel identical on both surfaces.
 double reasixty_notchZone();
@@ -884,6 +887,15 @@ double UC1Surface::clickToDelta_(int8_t delta) const
     // per click — slightly snappier but responsive).
     constexpr double kStepPerClick = 1.0 / 64.0;
     double d = delta * kStepPerClick;
+    // Acceleration from the firmware's OWN detent count — see the note on
+    // g_knobAccelUc1. A single-detent frame is untouched, so nothing about slow
+    // work changes; only a spin fast enough to pack several detents into one
+    // frame gets credit for it. NOT applied on the stepped/detent path below,
+    // where one detent must stay one step.
+    {
+        const int mag = delta < 0 ? -delta : delta;
+        if (mag > 1) d *= 1.0 + (mag - 1) * reasixty_knobAccelUc1();
+    }
     const bool fine = fineMode_.load(std::memory_order_relaxed)
                    || reasixty_shiftFineActive();
     d *= uc1KnobScale_(fine);

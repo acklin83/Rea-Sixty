@@ -102,6 +102,8 @@ double reasixty_knobSpeedUf8();
 void   reasixty_setKnobSpeedUf8(double v);
 double reasixty_knobSpeedUc1();
 void   reasixty_setKnobSpeedUc1(double v);
+double reasixty_knobAccelUc1();
+void   reasixty_setKnobAccelUc1(double v);
 double reasixty_fineFactorUf8();
 void   reasixty_setFineFactorUf8(double v);
 double reasixty_fineFactorUc1();
@@ -687,6 +689,11 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
               0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
         field("UC1 Fine factor", reasixty_fineFactorUc1(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
+        // Speed scales EVERY turn; this one only pays out when the firmware
+        // packs several detents into one frame, i.e. when you actually spin.
+        // 0 = the old strictly-linear behaviour.
+        field("UC1 encoder acceleration", reasixty_knobAccelUc1(),
+              0.0, 1.0, 0.25, "%.2f", reasixty_setKnobAccelUc1);
         ImGui_Spacing(ctx);
         // The UF1's own pair. Its Fine is Quick-Key-2 on the surface, not the
         // Shift/FINE the other two use, so it wants its own numbers.
