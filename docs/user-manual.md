@@ -699,6 +699,8 @@ Below the two toggles, per-surface speed and 0 dB / centre-pan detent feel for *
 | UF8 Fine factor | 0.25× | How much the UF8 step shrinks while Fine is engaged (Shift / `FINE` / UC1 `Fine`). Lower = finer. |
 | UC1 encoder speed | 1.00× | Same as UF8 V-Pot speed, for the UC1 knobs / encoders. Independent so the two surfaces can be tuned separately. |
 | UC1 Fine factor | 0.25× | UC1 equivalent of the UF8 Fine factor. |
+| UF1 V-Pot speed | 1.00× | The UF1's four channel V-Pots. Its own value since v0.5 — before that the UF1 borrowed the UF8's, so tuning the UF8 silently retuned the UF1. On upgrade it is seeded from whatever your UF8 was set to, so nothing moves until you change it. |
+| UF1 Fine factor | 0.25× | How much the UF1 step shrinks while its Fine is on. The UF1's Fine is **Quick-Key 2**, the bottom `2` key — not the Shift / `FINE` the other two surfaces use. |
 
 **Effective step** = base × per-control sensitivity (FX-Learn) × surface speed × (Fine factor while Fine held).
 

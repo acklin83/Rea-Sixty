@@ -106,6 +106,10 @@ double reasixty_fineFactorUf8();
 void   reasixty_setFineFactorUf8(double v);
 double reasixty_fineFactorUc1();
 void   reasixty_setFineFactorUc1(double v);
+double reasixty_knobSpeedUf1();
+void   reasixty_setKnobSpeedUf1(double v);
+double reasixty_fineFactorUf1();
+void   reasixty_setFineFactorUf1(double v);
 double reasixty_notchZone();
 void   reasixty_setNotchZone(double v);
 double reasixty_notchFineStep();
@@ -683,6 +687,13 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
               0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
         field("UC1 Fine factor", reasixty_fineFactorUc1(),
               0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
+        ImGui_Spacing(ctx);
+        // The UF1's own pair. Its Fine is Quick-Key-2 on the surface, not the
+        // Shift/FINE the other two use, so it wants its own numbers.
+        field("UF1 V-Pot speed", reasixty_knobSpeedUf1(),
+              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf1);
+        field("UF1 Fine factor", reasixty_fineFactorUf1(),
+              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf1);
         ImGui_Spacing(ctx);
         // Virtual-notch zone: how close to the neutral point (0 dB / centre
         // pan) a V-Pot must land for the magnet to snap. 0 % disables the

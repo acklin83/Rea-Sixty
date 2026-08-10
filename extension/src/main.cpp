@@ -1146,6 +1146,13 @@ std::atomic<double>       g_knobSpeedUf8         {1.0};
 std::atomic<double>       g_knobSpeedUc1         {1.0};
 std::atomic<double>       g_fineFactorUf8        {0.25};
 std::atomic<double>       g_fineFactorUc1        {0.25};
+// The UF1's own pair. Until 2026-08-10 the UF1 borrowed the UF8's numbers and
+// only its Fine FLAG was its own, which meant tuning the UF8 silently retuned
+// the UF1. Defaults match the UF8's so a fresh install feels unchanged; an
+// existing install is seeded from the UF8 value on first load (see the
+// ExtState block) so nobody's tuned feel moves under them.
+std::atomic<double>       g_knobSpeedUf1         {1.0};
+std::atomic<double>       g_fineFactorUf1        {0.25};
 // Virtual-notch zone half-width in normalised (0..1) units. The SSL-style
 // centre magnet snaps to the neutral point when a rotation lands within this
 // zone (or crosses the centre — crossing always snaps regardless of zone).
@@ -1191,6 +1198,11 @@ inline double reasixty_uc1KnobScale(bool fine)
 {
     return g_knobSpeedUc1.load()
          * (fine ? g_fineFactorUc1.load() : 1.0);
+}
+inline double reasixty_uf1KnobScale(bool fine)
+{
+    return g_knobSpeedUf1.load()
+         * (fine ? g_fineFactorUf1.load() : 1.0);
 }
 // Settings-window appearance. `g_themeSelection` maps to uf8::Theme
 // (0 = Vanilla / default, 1 = Mixnote). `g_fontScale` maps to font
@@ -3867,6 +3879,23 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "fine_factor_uc1"); v && *v) {
         g_fineFactorUc1.store(std::clamp(std::atof(v), 0.02, 1.0));
+    }
+    // UF1 pair. Absent key = an install from before the UF1 had its own: seed
+    // from the UF8 value, which is what the UF1 was actually using, so the
+    // feel does not jump on upgrade. Written back so the seed happens once.
+    if (const char* v = GetExtState("rea_sixty", "knob_speed_uf1"); v && *v) {
+        g_knobSpeedUf1.store(std::clamp(std::atof(v), 0.01, 8.0));
+    } else {
+        g_knobSpeedUf1.store(g_knobSpeedUf8.load());
+        char b[32]; snprintf(b, sizeof(b), "%.4f", g_knobSpeedUf1.load());
+        SetExtState("rea_sixty", "knob_speed_uf1", b, true);
+    }
+    if (const char* v = GetExtState("rea_sixty", "fine_factor_uf1"); v && *v) {
+        g_fineFactorUf1.store(std::clamp(std::atof(v), 0.02, 1.0));
+    } else {
+        g_fineFactorUf1.store(g_fineFactorUf8.load());
+        char b[32]; snprintf(b, sizeof(b), "%.4f", g_fineFactorUf1.load());
+        SetExtState("rea_sixty", "fine_factor_uf1", b, true);
     }
     if (const char* v = GetExtState("rea_sixty", "notch_zone"); v && *v) {
         g_notchZone.store(std::clamp(std::atof(v), 0.0, 0.05));
@@ -22138,7 +22167,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // Quick-Key-2 "Fine Ctrl" also applies in DAW mode (Frank 2026-08-04:
         // Fine ging vorher nur im Plugin-Mode) — scale the dB nudge by the fine
         // factor (not the full UF8 knob-speed; the UF1 dB/count is its own).
-        const double fine = g_uf1CsFine.load() ? g_fineFactorUf8.load() : 1.0;
+        const double fine = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
         double nDb = curDb + step * kUf1FlipVolDbPerCount * fine;
         if (nDb >  12.0) nDb =  12.0;
         if (nDb < -60.0) nDb = -60.0;
@@ -22178,7 +22207,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
             sSKey[vi] = key;
         }
         // Fine Ctrl (Quick-Key-2) applies in SENDS mode too (Frank 2026-08-04).
-        const double fine = g_uf1CsFine.load() ? g_fineFactorUf8.load() : 1.0;
+        const double fine = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
         double nDb = sSAcc[vi] + step * kUf1FlipVolDbPerCount * fine;
         if (nDb >  12.0) nDb =  12.0;
         if (nDb < -60.0) nDb = -60.0;
@@ -22297,7 +22326,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
         // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
         double delta = notches * kUf1CsVPotStep
-                     * reasixty_uf8KnobScale(g_uf1CsFine.load());
+                     * reasixty_uf1KnobScale(g_uf1CsFine.load());
         // Knob travel from the explicit UF1 slot (v11): sensitivity scales the
         // delta BEFORE the curve (keeping the inverse exact — see applyCurve's
         // contract), then the move happens in ENCODER space and is re-mapped
@@ -35761,6 +35790,22 @@ double reasixty_knobSpeedUf8()        { return g_knobSpeedUf8.load(); }
 double reasixty_knobSpeedUc1()        { return g_knobSpeedUc1.load(); }
 double reasixty_fineFactorUf8()       { return g_fineFactorUf8.load(); }
 double reasixty_fineFactorUc1()       { return g_fineFactorUc1.load(); }
+double reasixty_knobSpeedUf1()        { return g_knobSpeedUf1.load(); }
+double reasixty_fineFactorUf1()       { return g_fineFactorUf1.load(); }
+void reasixty_setKnobSpeedUf1(double v)
+{
+    v = std::clamp(v, 0.01, 8.0);
+    g_knobSpeedUf1.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "knob_speed_uf1", b, true);
+}
+void reasixty_setFineFactorUf1(double v)
+{
+    v = std::clamp(v, 0.02, 1.0);
+    g_fineFactorUf1.store(v);
+    char b[32]; snprintf(b, sizeof(b), "%.4f", v);
+    SetExtState("rea_sixty", "fine_factor_uf1", b, true);
+}
 void reasixty_setKnobSpeedUf8(double v)
 {
     v = std::clamp(v, 0.01, 8.0);
