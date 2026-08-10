@@ -19222,19 +19222,10 @@ void onUf1Event(const uf1::InputEvent& ev)
             // channel V-Pots between Normal and Fine resolution (p188). Consumed
             // by applyUf1ChannelVpot_ via reasixty_uf8KnobScale(g_uf1CsFine). Also
             // ships UNBOUND, so no user binding is lost. Channel view only.
-            if (ev.id == uf1::btn::kT2 && ev.pressed) {
-                // Quick-Key-2 (the bottom "2" key) toggles Fine on BOTH views (Frank
-                // 2026-08-02 "Fine gehört auch auf Taste 2 unten"): channel V-Pots in
-                // Channel view, meter V-Pots in Meter view. Same key, view-appropriate
-                // target. Not on Loudness (SK3=PLAY there); the SK3 soft-key still works.
-                if (g_uf1MeterView.load()) {
-                    if (g_uf1MeterScreen.load() != 3)
-                        g_uf1MeterFine.store(!g_uf1MeterFine.load());
-                } else {
-                    g_uf1CsFine.store(!g_uf1CsFine.load());
-                }
-                break;
-            }
+            // Key 2's Fine toggle is a BINDING now (uf1_fine_toggle, factory-seeded
+            // on this key) — it used to be hardcoded here AND the key shipped
+            // unbound, so a user who bound it got Fine as well, on top, with no way
+            // to get rid of it. Falls through to the dispatch below.
             // Above-fader V-Pot push (0x08) — Sticky Pot: clear the armed pin / reset
             // a live pin / centre Pan when neither. ALL views (the above-fader V-Pot
             // is the per-track knob in Plugin/DAW/Meter alike). queueInput only →
@@ -39009,6 +39000,30 @@ void registerBindingHandlers()
             if (firing) g_tempSelsetSetFromSelRequest.store(true);
         },
         nullptr, "Focus Set: set from selection", false
+    });
+    // Fine resolution for the UF1's V-Pots. Was a hardcoded block on key 2's
+    // event; now a real builtin, so it appears in the editor, carries a label and
+    // can be moved — while STAYING on key 2 by factory default, because the
+    // firmware prints "FINE CTRL 2" over that key and that caption is drawn by
+    // the device, not sent by us (Frank 2026-08-10). View-aware exactly as before:
+    // Channel view fines the channel V-Pots, Meter view the meter V-Pots — except
+    // on Loudness, where SK3 is PLAY and there is nothing to fine.
+    // Worker-safe: atomics only, no REAPER API (threading rule).
+    registerBuiltin("uf1_fine_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            if (g_uf1MeterView.load()) {
+                if (g_uf1MeterScreen.load() != 3)
+                    g_uf1MeterFine.store(!g_uf1MeterFine.load());
+            } else {
+                g_uf1CsFine.store(!g_uf1CsFine.load());
+            }
+        },
+        [](int) {
+            return g_uf1MeterView.load() ? g_uf1MeterFine.load()
+                                         : g_uf1CsFine.load();
+        },
+        "UF1: Fine resolution (toggle)", true
     });
     registerBuiltin("temp_selset_pin_uf1_channel", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

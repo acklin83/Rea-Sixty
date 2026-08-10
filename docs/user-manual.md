@@ -520,7 +520,7 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | `5-8` | Jump to V-Pots 5-8 of the page. |
 | `BANK ◄` `►` | Step one parameter left / right. |
 | Quick-key `1` (bottom row) | **Clear every solo** in the project (REAPER's *Unsolo all tracks*). Factory default; rebindable. The **SOLO ACTIVE** indication above it lights by itself whenever anything is soloed — that part is the UF1's own wording and is not ours to change. |
-| Quick-key `2` (bottom row) | Toggle **Fine** resolution for the channel V-Pots. The **FINE CTRL** readout next to it follows the toggle. |
+| Quick-key `2` (bottom row) | Toggle **Fine** resolution — the channel V-Pots in Channel view, the meter V-Pots in Meter view. The **FINE CTRL** readout next to it follows the toggle. Factory default, and rebindable — but think twice: the UF1 prints **FINE CTRL 2** over that key itself, and that text is drawn by the device, so anything else you put there will be labelled wrongly by the hardware. |
 | V-Pot push (V1-V4) | Reset that parameter to its default. |
 
 ## Meter view

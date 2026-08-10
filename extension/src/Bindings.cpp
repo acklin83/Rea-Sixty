@@ -898,6 +898,20 @@ void seedFactoryDefaults_(Config& c)
             sp.label  = a.label;
         }
     }
+    // Key 2 PLAIN = Fine. Not a free choice: the UF1's firmware prints
+    // "FINE CTRL 2" over this key with its own On/Off readout, and that caption
+    // is not ours to change (it is drawn by the device, not sent). Anything else
+    // bound here makes the display lie. It stays rebindable — but the factory
+    // default has to be the one the hardware already promises.
+    {
+        Binding& bd = L1[ButtonId::Uf1SecKey2];
+        auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = "uf1_fine_toggle";
+        sp.param  = 0;
+        sp.label  = "FINE";
+        bd.behavior = Behavior::Toggle;
+    }
     // Key 1 PLAIN = REAPER's "Unsolo all tracks" (40340) — SSL's own factory
     // assignment for this key, and the one the display already assumes: the
     // SOLO CLR 1 caption sits over it and its SOLO ACTIVE indicator lights by
@@ -2178,7 +2192,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 22;
+constexpr int kCurrentBindingsVersion = 23;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2641,6 +2655,23 @@ void upgradeBackfillUf1SoloClear_(Config& c)
     sp.label  = "SOLO CLR";
 }
 
+// v22→v23 (2026-08-10): Fine stops being a hardcoded special case on key 2 and
+// becomes the `uf1_fine_toggle` builtin, so it shows up in the editor with a
+// label and can be moved like anything else. Backfill only into an empty plain
+// slot. Frank's reason for keeping it THERE by default: the firmware prints
+// "FINE CTRL 2" above that key and we cannot change that text.
+void upgradeBackfillUf1Fine_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    Binding& bd = L1.bindings[ButtonId::Uf1SecKey2];   // default-creates
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (sp.type != ActionType::Noop || !sp.action.empty()) return;
+    sp.type     = ActionType::Builtin;
+    sp.action   = "uf1_fine_toggle";
+    sp.label    = "FINE";
+    bd.behavior = Behavior::Toggle;
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -2933,6 +2964,9 @@ void load()
             }
             if (tmp.version < 22) {
                 upgradeBackfillUf1SoloClear_(tmp);
+            }
+            if (tmp.version < 23) {
+                upgradeBackfillUf1Fine_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -4825,7 +4859,8 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("master_pin_", 0) == 0) return "Master";
     if (n.rfind("brightness_", 0) == 0) return "Brightness";
 
-    if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl")
+    if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl"
+     || n == "uf1_fine_toggle")
         return "Modifiers";
 
     if (n.rfind("fx_param_", 0) == 0)
