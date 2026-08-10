@@ -570,6 +570,12 @@ std::atomic<int>  g_uf1CsActiveType {-1};
 // (the pre-first-paint fallback, matching kUf1CsPageCount).
 std::atomic<int>  g_uf1CsActivePages {8};
 std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
+// Draw our EQ curve on the UF1 for LEARNED Channel Strips (the built-in SSL
+// strips always draw it — their parameters are found by SSL's own names). One
+// switch for the normal case; a single map can still override it either way
+// (UserPluginMap::uf1EqGraph). Default ON: a learned CS that mapped its EQ has
+// nothing to gain from a blank graph, and turning it off globally is one click.
+std::atomic<bool> g_uf1EqGraphLearned {true};
 // Meter-view FINE soft-key (SK3, 0x1B): finer V-Pot resolution for the CONTINUOUS
 // meter params (RMS Integration, Delay, Reference Level, RTA Scale Top/Bottom,
 // Overload). Enum params are already one-value-per-notch, so fine doesn't touch
@@ -3836,6 +3842,8 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "jsfx_grid_fine"); v && *v) {
         g_jsfxGridFine.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1_eq_graph_learned"); v && *v)
+        g_uf1EqGraphLearned.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "cs_copy_mask"); v && *v) {
         // 4 chars: EQ Dyn Gate Fader. Tolerate a short string (leaves rest on).
         g_csCopyEq.store   (v[0] && v[0] != '0');
@@ -21345,7 +21353,11 @@ static const uf8::UserPluginMap* uf1EqGraphMapAt_(MediaTrack* tr, int fx)
     char nm[256];
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return nullptr;
     const auto* um = uf8::user_plugins::lookupOwnedByName(nm);
-    return (um && um->uf1EqGraph) ? um : nullptr;
+    if (!um) return nullptr;
+    using G = uf8::UserPluginMap::Uf1EqGraph;
+    const bool on = (um->uf1EqGraph == G::On)
+                 || (um->uf1EqGraph == G::Follow && g_uf1EqGraphLearned.load());
+    return on ? um : nullptr;
 }
 
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
@@ -31511,8 +31523,9 @@ void onTimer()
                 g_hudUf1AssignPublished.clear();
                 publishHud_();
             } else if (s.rfind("uf1eqgraph;", 0) == 0) {
-                // "uf1eqgraph;<0|1>" — draw our EQ curve on the UF1 for this
-                // LEARNED CS, resolved through its UC1 slots (v15).
+                // "uf1eqgraph;<0|1|2>" — our EQ curve on the UF1 for this
+                // LEARNED CS, resolved through its UC1 slots. v16: the value is
+                // the tri-state, 0 = follow the global switch / 1 = on / 2 = off.
                 const int on = std::atoi(s.c_str() + 11);
                 MediaTrack* u1Tr = nullptr; int u1Fx = -1;
                 if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
@@ -35929,6 +35942,16 @@ static void writeCsCopyMask_()
         '\0'
     };
     SetExtState("rea_sixty", "cs_copy_mask", m, true);
+}
+// Global switch: draw our EQ curve on the UF1 for LEARNED Channel Strips. A
+// single map can override it either way (UserPluginMap::uf1EqGraph tri-state);
+// maps left on "follow" read this.
+bool reasixty_uf1EqGraphLearned()     { return g_uf1EqGraphLearned.load(); }
+void reasixty_setUf1EqGraphLearned(bool on)
+{
+    g_uf1EqGraphLearned.store(on);
+    SetExtState("rea_sixty", "uf1_eq_graph_learned", on ? "1" : "0", true);
+    g_pageDirty.store(true);
 }
 bool reasixty_csCopyEq()              { return g_csCopyEq.load(); }
 bool reasixty_csCopyDyn()             { return g_csCopyDyn.load(); }

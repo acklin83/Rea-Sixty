@@ -305,6 +305,7 @@ void reasixty_setWrapPluginCycle(bool on);
 bool reasixty_jsfxGridFine();
 void reasixty_setJsfxGridFine(bool on);
 bool reasixty_csCopyEq();    void reasixty_setCsCopyEq(bool on);
+bool reasixty_uf1EqGraphLearned(); void reasixty_setUf1EqGraphLearned(bool on);
 bool reasixty_csCopyDyn();   void reasixty_setCsCopyDyn(bool on);
 bool reasixty_csCopyGate();  void reasixty_setCsCopyGate(bool on);
 bool reasixty_csCopyFader(); void reasixty_setCsCopyFader(bool on);
@@ -10500,24 +10501,38 @@ bool sendToUc1_(const std::string& match, int linkIdx, int layer,
 // "Show EQ Graph" (v15) — draw our EQ curve on the UF1 for this LEARNED CS by
 // resolving the EQ parameters through its UC1 link slots. Built-in SSL strips
 // get the curve from their own parameter names and ignore this.
-void setUf1EqGraph_(const std::string& match, bool on)
+// v16: `mode` is the tri-state — 0 follow the global switch, 1 on, 2 off.
+void setUf1EqGraph_(const std::string& match, int mode)
 {
-    if (match.empty()) return;
+    if (match.empty() || mode < 0 || mode > 2) return;
+    const auto want = UserPluginMap::Uf1EqGraph(mode);
     auto cat = user_plugins::get();
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
-        if (m.uf1EqGraph == on) return;
-        m.uf1EqGraph = on;
+        if (m.uf1EqGraph == want) return;
+        m.uf1EqGraph = want;
         user_plugins::upsert(m);        // never setAll from an editor frame
         persistAndReport_();
         return;
     }
 }
-bool uf1EqGraphOn_(const std::string& match)
+// The map's own setting, NOT the resolved answer — the editor needs to show
+// "Follow" as its own state, or the user cannot tell an override from the
+// global agreeing with it.
+int uf1EqGraphMode_(const std::string& match)
 {
     for (const auto& m : user_plugins::get().maps)
-        if (m.match == match) return m.uf1EqGraph;
-    return false;
+        if (m.match == match) return int(m.uf1EqGraph);
+    return int(UserPluginMap::Uf1EqGraph::Follow);
+}
+// What actually happens for this map right now — mode resolved against the
+// global. Used for the HUD's lit/unlit state.
+bool uf1EqGraphOn_(const std::string& match)
+{
+    const int mode = uf1EqGraphMode_(match);
+    if (mode == int(UserPluginMap::Uf1EqGraph::On))  return true;
+    if (mode == int(UserPluginMap::Uf1EqGraph::Off)) return false;
+    return ::reasixty_uf1EqGraphLearned();
 }
 
 // Empty the UF1 layer. Returns how many bindings went. The layer flag stays on:
@@ -10679,7 +10694,13 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     // map that collides with a built-in — which is exactly why arming a learn on
     // one silently did nothing. Say so instead (Frank 2026-08-09).
     const int factory = user_plugins::collidesWithBuiltin(name) ? 1 : 0;
-    const int eqg = (um && um->uf1EqGraph) ? 1 : 0;      // v15, for the menu tick
+    // v16: the menu needs BOTH — the map's own mode (so it can cycle
+    // Follow → On → Off) and whether it is on right now (so the button lights
+    // correctly while following a global that is on). Packed as mode*2+lit to
+    // keep the header field count unchanged.
+    const int eqMode = um ? int(um->uf1EqGraph) : 0;
+    const int eqLit  = (um && uf1EqGraphOn_(um->match)) ? 1 : 0;
+    const int eqg    = eqMode * 2 + eqLit;
     char hdr[600];
     std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%d;%s",
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
@@ -15292,14 +15313,48 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     // parameter names; a learned plug-in names them differently, so the curve
     // stayed blank until it could be resolved through the UC1 slots instead.
     ImGui_Spacing(ctx);
-    bool eqg = uf1EqGraphOn_(g_editingMatch);
-    if (ImGui_Checkbox(ctx, "Show EQ Graph on the UF1", &eqg))
-        setUf1EqGraph_(g_editingMatch, eqg);
-    if (ImGui_IsItemHovered(ctx, nullptr))
-        ImGui_SetTooltip(ctx,
-            "Draw our EQ curve on the UF1 for this plug-in. The EQ parameters\n"
-            "are read from the UC1 slots you mapped (HF Gain, HMF Freq, …), so\n"
-            "the more of the EQ section is mapped there, the fuller the curve.");
+    {
+        // The GLOBAL switch sits directly above the per-map override so the
+        // relationship is visible: the combo below spells out what "follow"
+        // currently resolves to. Applies to learned Channel Strips only — the
+        // built-in SSL strips find their EQ params by SSL's own names and always
+        // draw the curve.
+        bool globOn = ::reasixty_uf1EqGraphLearned();
+        if (ImGui_Checkbox(ctx, "EQ Graph on learned Channel Strips (global)",
+                           &globOn))
+            ::reasixty_setUf1EqGraphLearned(globOn);
+        if (ImGui_IsItemHovered(ctx, nullptr))
+            ImGui_SetTooltip(ctx,
+                "The default for every learned Channel Strip. Each map can still\n"
+                "override it below; new maps follow this.");
+        int eqm = uf1EqGraphMode_(g_editingMatch);
+        const bool glob = globOn;
+        char follow[64];
+        std::snprintf(follow, sizeof(follow), "Follow global (%s)",
+                      glob ? "on" : "off");
+        ImGui_SetNextItemWidth(ctx, 240.0);
+        if (ImGui_BeginCombo(ctx, "EQ Graph on the UF1",
+                             eqm == 1 ? "Always on"
+                           : eqm == 2 ? "Never" : follow, 0)) {
+            // ReaImGui's Selectable takes bool* for the selected flag, not a
+            // value — see the signature audit note in the ReaImGui memory.
+            bool s0 = (eqm == 0), s1 = (eqm == 1), s2 = (eqm == 2);
+            if (ImGui_Selectable(ctx, follow,      &s0, nullptr, nullptr, nullptr))
+                setUf1EqGraph_(g_editingMatch, 0);
+            if (ImGui_Selectable(ctx, "Always on", &s1, nullptr, nullptr, nullptr))
+                setUf1EqGraph_(g_editingMatch, 1);
+            if (ImGui_Selectable(ctx, "Never",     &s2, nullptr, nullptr, nullptr))
+                setUf1EqGraph_(g_editingMatch, 2);
+            ImGui_EndCombo(ctx);
+        }
+        if (ImGui_IsItemHovered(ctx, nullptr))
+            ImGui_SetTooltip(ctx,
+                "Draw our EQ curve on the UF1 for this plug-in. The EQ parameters\n"
+                "are read from the UC1 slots you mapped (HF Gain, HMF Freq, …), so\n"
+                "the more of the EQ section is mapped there, the fuller the curve.\n"
+                "Follow global uses the switch on the FX Learn page; new maps\n"
+                "start there.");
+    }
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
         "Click a control to learn it, or drag a parameter from the list. Leave "
@@ -21140,7 +21195,7 @@ bool reasixty_hudUf1EqGraph(void* tr, int fx, int on)
 {
     std::string m;
     if (!uf8::hudUf1ResolveMatch_(tr, fx, m)) return false;
-    uf8::setUf1EqGraph_(m, on != 0);
+    uf8::setUf1EqGraph_(m, on);        // v16: 0 follow global / 1 on / 2 off
     return true;
 }
 int reasixty_hudUf1EqGraphOn(void* tr, int fx)

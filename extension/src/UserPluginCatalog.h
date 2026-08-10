@@ -612,7 +612,14 @@ struct UserPluginMap {
     // differently, so the curve stayed blank. With this on, the EQ params are
     // resolved through the map's UC1 link slots instead — the same canonical
     // names the UC1 has engraved (Frank 2026-08-09).
-    bool                       uf1EqGraph = false;
+    // v16 — TRI-STATE. 0 = follow the global switch (Settings → FX Learn →
+    // "EQ graph on learned Channel Strips"), 1 = always on for this plug-in,
+    // 2 = never. New maps start at 0 so one global switch covers the normal case
+    // and a map only carries a value when the user overrode it (Frank
+    // 2026-08-10). A v15 file's `"uf1EqGraph": true` loads as 1: it WAS an
+    // explicit choice back when there was no global, so it stays one.
+    enum class Uf1EqGraph : int { Follow = 0, On = 1, Off = 2 };
+    Uf1EqGraph                 uf1EqGraph = Uf1EqGraph::Follow;
     // ONE user name per PARAMETER, shared by UC1, UF8 and UF1 (v13). The old
     // per-slot customLabel still wins where it is set (a deliberate per-control
     // override), but a name typed into any surface's "Display name" field lands
@@ -700,7 +707,7 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 15;  // v15: + "uf1EqGraph" — draw our EQ graph on the UF1 for a LEARNED CS (params resolved via the UC1 link slots), emitted only when set. v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
+constexpr int kCurrentFormatVersion = 16;  // v16: "uf1EqGraph" became a tri-state (0 follow global / 1 on / 2 off); a v15 `true` loads as 1. v15: + "uf1EqGraph" — draw our EQ graph on the UF1 for a LEARNED CS (params resolved via the UC1 link slots), emitted only when set. v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

@@ -367,7 +367,12 @@ local function readUf1()
       u.mapped  = (mapped ~= "0")
       u.isBc    = (bc == "1")
       u.factory = (fac == "1")
-      u.eqGraph = (eqg == "1")
+      -- v16: packed mode*2+lit — mode 0 follow global / 1 on / 2 off, lit = what
+      -- it resolves to right now (so the button lights while following an "on"
+      -- global). Clicking cycles Follow -> On -> Off.
+      local e = tonumber(eqg) or 0
+      u.eqMode  = math.floor(e / 2)
+      u.eqGraph = (e % 2) == 1
       u.name    = nm or ""
     else
       -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
@@ -1713,7 +1718,10 @@ local function renderUf1Tab(u1)
     actBtn("Fill: Append",   "0")
     actBtn("Fill from UC1",  "2")
     actBtn("Unbind all",     "3")
-    actBtn("Show EQ Graph",  "eq", u1.eqGraph)
+    actBtn(({ [0] = "EQ Graph: global",
+              [1] = "EQ Graph: on",
+              [2] = "EQ Graph: off" })[u1.eqMode or 0],
+           "eq", u1.eqGraph)
   end
 end
 local function uf1CellAt(mx, my)
@@ -3942,7 +3950,9 @@ local function loop()
               local sk, pos
               if hitAct == "eq" then
                 local u1e = readUf1()
-                sendCmd("uf1eqgraph;" .. ((u1e and u1e.eqGraph) and "0" or "1"))
+                -- cycle Follow -> On -> Off -> Follow
+              local m = (u1e and u1e.eqMode) or 0
+              sendCmd("uf1eqgraph;" .. tostring((m + 1) % 3))
               elseif hitAct then
                 sendCmd("uf1fill;" .. hitAct)
               else

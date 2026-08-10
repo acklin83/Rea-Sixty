@@ -305,8 +305,8 @@ std::string serialize_(const UserPluginCatalog& c)
         // byte-identically and an older reader ignores it (absent = false).
         if (m.uf1Mode)
             os << "      \"uf1Mode\": true,\n";
-        if (m.uf1EqGraph)                      // v15, sparse
-            os << "      \"uf1EqGraph\": true,\n";
+        if (m.uf1EqGraph != UserPluginMap::Uf1EqGraph::Follow)   // v16, sparse
+            os << "      \"uf1EqGraph\": " << int(m.uf1EqGraph) << ",\n";
         // Additive (Frank 2026-06-02) — only written when the user has turned
         // the default off, so pre-feature catalogs stay byte-identical.
         if (!m.useReaperTrackPolarity)
@@ -786,7 +786,15 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         const bool hadUf1Mode = getBoolI_(po, "uf1Mode", uf1ModeRead);
         if (hadUf1Mode) m.uf1Mode = uf1ModeRead;
         bool uf1EqRead = false;                // v15, absent before
-        if (getBoolI_(po, "uf1EqGraph", uf1EqRead)) m.uf1EqGraph = uf1EqRead;
+        // v16 reads a NUMBER (0/1/2); v15 wrote `true`. Accept both — a v15
+        // `true` was an explicit choice made before the global existed, so it
+        // becomes On, not Follow.
+        if (int uf1EqNum = 0; getIntI_(po, "uf1EqGraph", uf1EqNum))
+            m.uf1EqGraph = (uf1EqNum >= 0 && uf1EqNum <= 2)
+                ? UserPluginMap::Uf1EqGraph(uf1EqNum)
+                : UserPluginMap::Uf1EqGraph::Follow;
+        else if (getBoolI_(po, "uf1EqGraph", uf1EqRead) && uf1EqRead)
+            m.uf1EqGraph = UserPluginMap::Uf1EqGraph::On;
         // Additive; missing key keeps the struct default (true).
         getBoolI_(po, "useReaperTrackPolarity", m.useReaperTrackPolarity);
         int snapTs = 0;

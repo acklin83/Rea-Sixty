@@ -1186,11 +1186,24 @@ the layer does not hand the UF1 back to the UC1 fill — it leaves the UF1 empty
 which is what "I want nothing here" has to mean. Untick `UF1 layer` to go back to
 inheriting.
 
-**Show EQ Graph on the UF1** draws the EQ curve for a *learned* channel strip.
+**EQ Graph on the UF1** draws the EQ curve for a *learned* channel strip.
 Rea-Sixty normally finds the fifteen EQ parameters by SSL's own parameter names,
-which a third-party plug-in does not use; with this ticked it resolves each one
+which a third-party plug-in does not use; when this is on it resolves each one
 through the map instead. It only makes sense on a map whose domain is a channel
 strip.
+
+Two controls, one above the other:
+
+- **EQ Graph on learned Channel Strips (global)** — the default for all of them.
+- **EQ Graph on the UF1** (per map) — *Follow global* · *Always on* · *Never*.
+  New maps start on **Follow global**, and the entry spells out what that
+  currently resolves to, so you can tell an override from the global agreeing
+  with it. The same three-way sits on the Learn-HUD's UF1 tab: the button reads
+  *EQ Graph: global / on / off* and cycles through them.
+
+The built-in SSL strips ignore all of this — they find their parameters by name
+and always draw the curve. And when the impersonator is running, the curve on an
+SSL strip is the plug-in's own, not our reconstruction of it.
 
 ### Modifier layers (Normal / Option / Control / Control+Option)
 
