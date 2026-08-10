@@ -36,8 +36,11 @@ Protocol was reverse-engineered & live-verified; reference material lives in the
 
 Speed fixed global 9 (not user-exposed). Rotation clamps 0–180.
 
-## Done & on `main` (phase 4 — UF8 mode, code-complete 2026-06-28)
-Built + compiles clean + tests pass + deployed; **awaiting Frank HW test.**
+## Done & on `main` (phase 4 — UF8 mode)
+**HW-verified and in use since 2026-06-28.** The test ran the same day and produced three
+fixes that only real mounts could surface: `f4e5ef1` X/Y/R nomenclature + inverted Y fader
++ Home calibration, `bfbdb18` persist ALL mounts (ExtState newline bug) + detect-all on
+start, `5e34718` corrected H/V axis binding + 1 s rotation debounce. Nothing is pending.
 - New `SelectionMode::DynaMount` (`main.cpp:1010`) + friendly/str/parse strings.
 - `selection_mode_dynamount` builtin (registerSelectionModeToggle) — toggles in/out
   like the other selection modes; appears in the action picker under "Selection Modes"
@@ -88,7 +91,7 @@ cmake --build build --target test_dynamount && ./build/test_dynamount
 cp build/reaper_rea-sixty.dylib ~/Library/Application\ Support/REAPER/UserPlugins/
 ```
 
-## Phase 4 — UF8 mode (DONE, see "Done & on main (phase 4)" above; awaiting HW)
+## Phase 4 — UF8 mode (DONE + HW-verified, see "Done & on main (phase 4)" above)
 Original plan kept below for reference.
 
 
