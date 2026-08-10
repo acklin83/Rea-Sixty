@@ -23382,6 +23382,15 @@ void uf1PaintChannel_()
     sIdentGen = identGen;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
                        || modeFieldChanged || identChanged;
+    // …but a MODE / SCRUB hold or an encoder-mode step is NOT a layout event. It
+    // only rewrites the header's mode cell, and dragging the plane re-assert along
+    // is what made the display flicker on every MODE or SCRUB tap and on EVERY
+    // detent of MODE+encoder (Frank 2026-08-10, "flackert immer leicht"): that
+    // burst re-sends 0x0100 (the large-LCD LAYOUT SELECTOR) and slams the small-LCD
+    // meters to their idle 0xff state, which the pacer then undoes a frame later.
+    // Layout-establishing sends use THIS gate; text/label repaints keep `changed`.
+    const bool layoutChanged = (tr != sTr) || viewChanged || screenChanged
+                             || identChanged;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -23420,7 +23429,9 @@ void uf1PaintChannel_()
     // cap75 (SSL 360 driving the UF1 across the MODE-button transitions). Without
     // the Meter burst the firmware stays in the plugin layout even after MODE, so
     // the Meter view never appeared (diagnosed 2026-07-10 via frame trace + cap75).
-    if (changed) {
+    // `layoutChanged`, NOT `changed`: a mode-field / MODE-menu edge must not
+    // re-establish the plane (see the gate's definition above).
+    if (layoutChanged) {
         auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
             g_uf1_dev->send(uf1::buildScreen(a,
                 std::span<const uint8_t>(std::data(p), p.size())));
@@ -24099,6 +24110,37 @@ void uf1PaintChannel_()
         }
         }
 
+    // 0x011c header one-shot: overwrite the MCU "FADER SEL | 1/10" the cap66 init
+    // left with the Plugin-mode header "REAPER | N/M | OFF". The N/M soft-key-page
+    // indicator is LIVE (Plugin = strip pages, DAW = user soft-key pages) — here
+    // g_uf1CsActivePages is already current (the V-Pot painter published it earlier
+    // this tick). Gated on `changed`, not `layoutChanged`: the ENC / JOG mode cell
+    // must appear the instant MODE or SCRUB is held or the encoder mode steps. It
+    // is a pure text rewrite of a cell the pacer restates every cycle anyway, so it
+    // costs nothing visually — unlike the layout bursts, which is why the mode-field
+    // edge was split off them.
+    if (changed) {
+        // Sends mode shows the send-window group N/M; the live cycle header
+        // (above) re-streams it every tick, so this one-shot just avoids a
+        // wrong-N/M flash on the repaint that establishes the layout.
+        const int subMode = g_uf1ChannelSubMode.load();
+        auto hdr = (subMode == 2)
+            ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
+                             std::max(1, g_uf1SendGroupCount.load()))
+            : uf1PageHeader_(g_uf1CsPage.load() + 1,
+                             std::max(1, g_uf1CsActivePages.load()));
+        const EncoderMode em = g_uf1EncoderMode.load();
+        const Uf1JogMode  jgm = g_uf1JogMode.load();
+        if (g_uf1ScrubHeld.load())                                   // Jog picker wins
+            uf1SetJogField_(hdr, jgm);
+        else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+            uf1SetEncoderField_(hdr, em);   // mode in the "REAPER" cell
+        else if (jgm != Uf1JogMode::Playhead)
+            uf1SetJogField_(hdr, jgm);
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
+            std::span<const uint8_t>(hdr.data(), hdr.size())));
+    }
+
     // ---- FAKE-CS layout trigger (2026-06-05) -------------------------------
     // The Plugin-Mode channel-strip LAYOUT + colour bar do not render on a
     // generic track even though we drive 0x0018 (colour) + 0x0006 (active) +
@@ -24113,34 +24155,13 @@ void uf1PaintChannel_()
     // payloads (NOT synthetic) — the firmware may validate the CS-TYPE string
     // against its known plug-in set; a fake label would risk a false negative.
     // Additive + change-gated → cannot regress the working channel-text view.
-    if (changed) {
-        // 0x011c header: overwrite the MCU "FADER SEL | 1/10" the cap66 init left
-        // with the Plugin-mode header "REAPER | N/M | OFF". The N/M soft-key-page
-        // indicator is LIVE (Plugin = strip pages, DAW = user soft-key pages) — here
-        // g_uf1CsActivePages is already current (the V-Pot painter published it earlier
-        // this tick).
-        {
-            // Sends mode shows the send-window group N/M; the live cycle header
-            // (above) re-streams it every tick, so this one-shot just avoids a
-            // wrong-N/M flash on the repaint that establishes the layout.
-            const int subMode = g_uf1ChannelSubMode.load();
-            auto hdr = (subMode == 2)
-                ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
-                                 std::max(1, g_uf1SendGroupCount.load()))
-                : uf1PageHeader_(g_uf1CsPage.load() + 1,
-                                 std::max(1, g_uf1CsActivePages.load()));
-            const EncoderMode em = g_uf1EncoderMode.load();
-            const Uf1JogMode  jgm = g_uf1JogMode.load();
-            if (g_uf1ScrubHeld.load())                                   // Jog picker wins
-                uf1SetJogField_(hdr, jgm);
-            else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
-                uf1SetEncoderField_(hdr, em);   // mode in the "REAPER" cell
-            else if (jgm != Uf1JogMode::Playhead)
-                uf1SetJogField_(hdr, jgm);
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
-                std::span<const uint8_t>(hdr.data(), hdr.size())));
-        }
-
+    // `layoutChanged`, NOT `changed`: this burst writes PLACEHOLDERS into the
+    // CS-TYPE cell and the four soft-key labels ("PRE" / "SOLO SAFE" / "PLUG-IN"),
+    // which the real-value blocks further down overwrite in the same tick but in
+    // LATER frames. Re-running it on a MODE tap or on every encoder detent put that
+    // placeholder pair on screen for a frame each time — the second half of the
+    // flicker Frank saw (2026-08-10).
+    if (layoutChanged) {
         // 0x0017 CS TYPE: the REAL resolved strip type — cap18 confirms "CS 2" /
         // "4K B" / "4K E" are the firmware-recognised strings. The firmware LATCHES
         // its channel-strip LAYOUT on the FIRST type string it sees, so the old
@@ -24481,6 +24502,18 @@ void uf1PaintChannel_()
                     const int p = uf1CsSoftKeyParam_(skTr, skFx, skType, skPage, i);
                     if (p >= 0) on = TrackFX_GetParamNormalized(skTr, skFx, p) > 0.5;
                 }
+            } else {
+                // Plugin sub-mode on a track with no SSL / mapped strip: there is
+                // nothing to name the keys after, so they carry the cap77 placeholder
+                // set the FAKE-CS layout trigger establishes. Owning them HERE — rather
+                // than leaning on that burst to re-send them on every `changed` — is
+                // what lets the burst stay on `layoutChanged`: the labels are change-
+                // detected, so the MODE-menu overlay is still undone on release (same
+                // as every other sub-mode) without re-running the layout writes.
+                static const char* const kFakeCsSk[4] =
+                    { "\xd8", "PRE", "SOLO SAFE", "PLUG-IN" };
+                label = kFakeCsSk[i];
+                haveLabel = true;
             }
             // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
             // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
