@@ -21480,6 +21480,22 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     if (eqOn && ix[14] >= 0)                       // EQ In toggle
         eqOn = TrackFX_GetParamNormalized(sFxTr, sFx, ix[14]) >= 0.5;
 
+    // The OTHER way "no graph" happens: the graph IS drawn, dead flat, because
+    // EQ In is off or a band param never resolved. Indistinguishable from the
+    // wrong-instance case by eye, so say which one it is. Change-gated.
+    if (g_uf1Trace) {
+        static bool sOn = true; static int sOnFx = INT_MIN;
+        if (eqOn != sOn || sFx != sOnFx) {
+            sOn = eqOn; sOnFx = sFx;
+            if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
+                std::fprintf(lg, "EQ-ON fx=%d eqOn=%d ix[EQIn]=%d ix[HFg]=%d "
+                                 "ix[HMFg]=%d ix[LMFg]=%d ix[LFg]=%d\n",
+                             sFx, int(eqOn), ix[14], ix[0], ix[3], ix[6], ix[10]);
+                std::fclose(lg);
+            }
+        }
+    }
+
     if (!eqOn) {
         col.fill(100);
     } else {
