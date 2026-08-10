@@ -3011,12 +3011,17 @@ std::atomic<bool> g_grCombineUf8{false};
 
 // UF1: the four display soft-key LEDs double as a Bus-Compressor GR meter
 // (Frank 2026-08-10 — "wir lassen die vier LEDs oben tanzen", the analogue BC
-// needle in four steps). Value = dB PER LED, so it is also the resolution:
-// 0 = off, 1 = 1 dB/LED (4 dB full scale), 2 = 2 dB/LED (8 dB full scale).
-// Each LED has two steps: it goes GREEN at its half-way dB and RED at its full
-// dB — so 1 dB/LED lights LED 1 green at 0.5 dB and red at 1.0 dB, giving eight
-// visible steps across the four keys.
+// needle in four steps). RANGE and RESOLUTION are separate settings, because one
+// knob for both means every gain in resolution costs range (Frank 2026-08-10):
+//   g_uf1BcGrLeds  = FULL-SCALE dB across all four LEDs. 0 = off; 4 / 8 / 12 / 20.
+//   g_uf1BcGrSteps = colour steps PER LED. 2 = green·red; 4 = green·yellow·
+//                    orange·red. Total steps = 4 × this.
+// The LED frame carries 4 bits per channel (UF1Protocol buildColour: xx =
+// (g4<<4)|r4), so the colour ramp is free — the limit is what the eye separates.
+// ★ The stored value USED to be dB-per-LED (1 or 2) for a few hours on 2026-08-10;
+// the loader maps those onto 4 / 8 dB full scale, which is the same meter.
 std::atomic<int>  g_uf1BcGrLeds{0};
+std::atomic<int>  g_uf1BcGrSteps{2};
 
 // Whether Rea-Sixty writes to REAPER's Console. Default OFF: REAPER pops the
 // Console window open unbidden for each message, which is pure noise when a
@@ -3717,7 +3722,13 @@ void loadBrightness()
         g_grCombineUf8.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_bc_gr_leds"); v && *v) {
-        g_uf1BcGrLeds.store(std::clamp(std::atoi(v), 0, 2));
+        int fs = std::atoi(v);
+        // Migrate the few-hours-old dB-per-LED encoding (1 / 2) to full scale.
+        if (fs == 1 || fs == 2) fs *= 4;
+        g_uf1BcGrLeds.store(std::clamp(fs, 0, 20));
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1_bc_gr_steps"); v && *v) {
+        g_uf1BcGrSteps.store(std::atoi(v) >= 4 ? 4 : 2);
     }
     if (const char* v = GetExtState("rea_sixty", "console_output"); v && *v) {
         g_consoleOutput.store(std::atoi(v) != 0);
@@ -23500,8 +23511,8 @@ void uf1PaintChannel_()
     // block near the end of this function needs the value. Suspended while the
     // MODE menu is held — that overlay owns the four keys, and it is
     // change-detected, so a GR write would overwrite it on the next tick.
-    const int    grLedStep = g_uf1BcGrLeds.load();      // dB per LED, 0 = off
-    const double bcGrDb    = (grLedStep > 0 && !modeMenu) ? uf1BcGrDb_() : -1.0;
+    const int    grFullDb  = g_uf1BcGrLeds.load();      // full-scale dB, 0 = off
+    const double bcGrDb    = (grFullDb > 0 && !modeMenu) ? uf1BcGrDb_() : -1.0;
     // Only take the LEDs when there IS a Bus Compressor to show; without one
     // they keep their normal soft-key on/off state instead of sitting dark.
     const bool   grOwnsSk  = (bcGrDb >= 0.0);
@@ -24861,11 +24872,18 @@ void uf1PaintChannel_()
 
     // ---- Bus-Comp GR meter on the display soft-key LEDs (Frank 2026-08-10) --
     // "Wir lassen die vier LEDs oben tanzen" — the analogue BC needle in four
-    // steps. Each LED is TWO steps: green at its half-way dB, red at its full
-    // dB, so 1 dB/LED reads 0.5 · 1 · 1.5 · 2 · 2.5 · 3 · 3.5 · 4 dB across the
-    // four keys. Runs in BOTH views — these LEDs have only two other owners (the
-    // p188 soft-key block, channel view only, which stands down above; and the
-    // MODE menu, which suspends the meter) so the Meter view gets it for free.
+    // keys. RANGE (g_uf1BcGrLeds = full-scale dB) and RESOLUTION (g_uf1BcGrSteps
+    // = colour steps per LED) are independent, so 20 dB of range no longer costs
+    // resolution. Each LED walks its own share of the scale through the colour
+    // ramp before the next one starts: at 8 dB / 4 steps that is 0.5 dB a step,
+    // sixteen steps across the row — finer than the analogue needle.
+    // Runs in ALL FOUR modes. These LEDs have only two other owners: the p188
+    // soft-key block (channel view, stands down above) and the MODE menu (which
+    // suspends the meter) — so Meter view gets it for free. ⚠ In DAW / Sends that
+    // costs the bank-slot / PRE-POST state LEDs; the trade is deliberate (Frank:
+    // CS/BC V-Pot work already pins you to Plugin mode, so a Plugin-only meter
+    // would be visible exactly when you don't need it).
+    // Deliberately UNSMOOTHED (Frank chose raw over peak-hold ballistics).
     // Change-detected per LED: at 33 Hz an unchanged step must not re-send.
     if (g_uf1_dev) {
         static int sGrLed[4] = { -1, -1, -1, -1 };
@@ -24873,17 +24891,24 @@ void uf1PaintChannel_()
             // Not ours this tick — forget the state so re-entry repaints all four.
             for (int i = 0; i < 4; ++i) sGrLed[i] = -1;
         } else {
-            const double step = static_cast<double>(grLedStep);   // dB per LED
+            const int    nStep  = (g_uf1BcGrSteps.load() >= 4) ? 4 : 2;
+            const double perLed = static_cast<double>(grFullDb) / 4.0;
+            // Ramp read at [step-1]; the 2-step case takes the ends, so "green
+            // then red" stays exactly what it was before the ramp existed.
+            static const uint32_t kRamp4[4] =
+                { 0x00FF00u, 0xFFFF00u, 0xFF8000u, 0xFF0000u };  // green→yellow→orange→red
+            static const uint32_t kRamp2[2] = { 0x00FF00u, 0xFF0000u };
             for (int i = 0; i < 4; ++i) {
-                const double full = step * (i + 1);
-                const double half = full - step * 0.5;
-                const int lvl = (bcGrDb >= full) ? 2 : (bcGrDb >= half) ? 1 : 0;
+                const double base = perLed * i;
+                // Highest sub-step whose threshold the GR has passed; 0 = dark.
+                int lvl = 0;
+                for (int k = 1; k <= nStep; ++k)
+                    if (bcGrDb >= base + perLed * k / nStep) lvl = k;
                 if (lvl == sGrLed[i] && !changed) continue;
                 sGrLed[i] = lvl;
                 const uint8_t  id  = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
-                const uint32_t rgb = (lvl == 2) ? 0xFF0000u    // full step: red
-                                   : (lvl == 1) ? 0x00FF00u    // half step: green
-                                                : 0x000000u;
+                const uint32_t rgb = (lvl == 0) ? 0x000000u
+                                   : (nStep == 4) ? kRamp4[lvl - 1] : kRamp2[lvl - 1];
                 g_uf1_dev->send(uf1::buildLed(id, true));         // FF3B enable
                 g_uf1_dev->send(uf1::buildColourRgb(id, rgb));    // FF38 colour
                 // Key 1 is FF38-ONLY (cap106: an FF39 to id 0x01 sticks the
@@ -34858,13 +34883,22 @@ void reasixty_setGrCombineUf8(bool on)
 }
 
 int reasixty_uf1BcGrLeds() { return g_uf1BcGrLeds.load(); }
-void reasixty_setUf1BcGrLeds(int dbPerLed)
+void reasixty_setUf1BcGrLeds(int fullScaleDb)
 {
-    const int v = std::clamp(dbPerLed, 0, 2);
+    const int v = std::clamp(fullScaleDb, 0, 20);
     g_uf1BcGrLeds.store(v);
     char b[8]; std::snprintf(b, sizeof(b), "%d", v);
     SetExtState("rea_sixty", "uf1_bc_gr_leds", b, true);
     g_pageDirty.store(true);   // release the soft-key LEDs back to their labels
+}
+int reasixty_uf1BcGrSteps() { return g_uf1BcGrSteps.load(); }
+void reasixty_setUf1BcGrSteps(int stepsPerLed)
+{
+    const int v = (stepsPerLed >= 4) ? 4 : 2;
+    g_uf1BcGrSteps.store(v);
+    char b[8]; std::snprintf(b, sizeof(b), "%d", v);
+    SetExtState("rea_sixty", "uf1_bc_gr_steps", b, true);
+    g_pageDirty.store(true);
 }
 
 bool reasixty_consoleOutput() { return g_consoleOutput.load(); }

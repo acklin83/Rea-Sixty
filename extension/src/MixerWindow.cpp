@@ -176,6 +176,9 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering" },
     { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering" },
     { "UF1 soft-key LEDs = BC gain reduction", kSecDevices, "Metering" },
+    // Drawn as "  Full scale" / "  Steps per LED" — leading spaces are indent.
+    { "Full scale",                            kSecDevices, "Metering" },
+    { "Steps per LED",                         kSecDevices, "Metering" },
     { "UC1 Input",                             kSecDevices, "Metering" },
     { "UC1 Output",                            kSecDevices, "Metering" },
     { "UF8 Strips",                            kSecDevices, "Metering" },

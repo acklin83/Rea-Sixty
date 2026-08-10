@@ -42,7 +42,9 @@ void reasixty_setGrCombineUf8(bool on);
 bool reasixty_grCombineUc1();
 void reasixty_setGrCombineUc1(bool on);
 int  reasixty_uf1BcGrLeds();
-void reasixty_setUf1BcGrLeds(int dbPerLed);
+void reasixty_setUf1BcGrLeds(int fullScaleDb);
+int  reasixty_uf1BcGrSteps();
+void reasixty_setUf1BcGrSteps(int stepsPerLed);
 bool reasixty_insertMarkers();
 void reasixty_setInsertMarkers(bool on);
 bool reasixty_focusedPanel();
@@ -589,30 +591,102 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
         reasixty_setGrCombineUc1(cUc1);
     }
 
-    // UF1: the four display soft-key LEDs as a Bus-Compressor GR meter. The
-    // value is dB PER LED, which is also the resolution — each LED goes green at
-    // its half-way dB and red at its full dB. Off returns the LEDs to the
-    // soft-key on/off states. Reads the same BC the UC1 needle does.
-    static const char* kBcGrLabels[3] = {
-        "Off", "1 dB per LED (4 dB)", "2 dB per LED (8 dB)"
-    };
-    int bcGr = reasixty_uf1BcGrLeds();
-    if (bcGr < 0 || bcGr > 2) bcGr = 0;
-    ImGui_Text(ctx, "UF1 soft-key LEDs = BC gain reduction");
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_SetNextItemWidth(ctx, 220.0);
-    if (ImGui_BeginCombo(ctx, "##uf1_bc_gr_leds", kBcGrLabels[bcGr],
-                         /*flags*/ nullptr)) {
-        for (int i = 0; i < 3; ++i) {
-            bool sel = (bcGr == i);
-            if (ImGui_Selectable(ctx, kBcGrLabels[i], &sel,
-                                 /*flags*/ nullptr,
-                                 /*size_w*/ nullptr,
-                                 /*size_h*/ nullptr)) {
-                reasixty_setUf1BcGrLeds(i);
+    // UF1: the four display soft-key LEDs as a Bus-Compressor GR meter. Range
+    // (full-scale dB) and resolution (colour steps per LED) are separate — one
+    // knob for both meant every gain in resolution cost range. The preset row
+    // sets the pair; the two below stay free, and the preset reads "Custom" when
+    // they don't match one. Off returns the LEDs to the soft-key on/off states.
+    // Reads the same Bus Compressor the UC1 needle does.
+    {
+        struct BcGrPreset { const char* label; int fullDb; int steps; };
+        static const BcGrPreset kBcGrPresets[] = {
+            { "Off",                      0,  2 },
+            { "Fine \xE2\x80\x94 4 dB, 16 steps",   4,  4 },
+            { "Bus \xE2\x80\x94 8 dB, 16 steps",    8,  4 },
+            { "Calm \xE2\x80\x94 8 dB, 8 steps",    8,  2 },
+            { "Wide \xE2\x80\x94 12 dB, 16 steps", 12,  4 },
+            { "SSL VU \xE2\x80\x94 20 dB, 16 steps",20, 4 },
+        };
+        constexpr int kNBcGrPresets =
+            static_cast<int>(sizeof(kBcGrPresets) / sizeof(kBcGrPresets[0]));
+        const int fullDb = reasixty_uf1BcGrLeds();
+        const int steps  = reasixty_uf1BcGrSteps();
+        int cur = -1;
+        for (int i = 0; i < kNBcGrPresets; ++i)
+            if (kBcGrPresets[i].fullDb == fullDb
+                && (fullDb == 0 || kBcGrPresets[i].steps == steps)) { cur = i; break; }
+
+        ImGui_Text(ctx, "UF1 soft-key LEDs = BC gain reduction");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, "##uf1_bc_gr_preset",
+                             cur >= 0 ? kBcGrPresets[cur].label : "Custom",
+                             /*flags*/ nullptr)) {
+            for (int i = 0; i < kNBcGrPresets; ++i) {
+                bool sel = (cur == i);
+                if (ImGui_Selectable(ctx, kBcGrPresets[i].label, &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr,
+                                     /*size_h*/ nullptr)) {
+                    reasixty_setUf1BcGrLeds(kBcGrPresets[i].fullDb);
+                    reasixty_setUf1BcGrSteps(kBcGrPresets[i].steps);
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+
+        if (fullDb > 0) {
+            static const int   kFullDbs[4]   = { 4, 8, 12, 20 };
+            static const char* kFullLabels[4] = { "4 dB", "8 dB", "12 dB", "20 dB" };
+            int fi = 1;
+            for (int i = 0; i < 4; ++i) if (kFullDbs[i] == fullDb) fi = i;
+            ImGui_Text(ctx, "  Full scale");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_BeginCombo(ctx, "##uf1_bc_gr_full", kFullLabels[fi],
+                                 /*flags*/ nullptr)) {
+                for (int i = 0; i < 4; ++i) {
+                    bool sel = (fi == i);
+                    if (ImGui_Selectable(ctx, kFullLabels[i], &sel,
+                                         /*flags*/ nullptr,
+                                         /*size_w*/ nullptr,
+                                         /*size_h*/ nullptr)) {
+                        reasixty_setUf1BcGrLeds(kFullDbs[i]);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+
+            // Steps per LED — the colour ramp. 2 = green·red, 4 adds yellow and
+            // orange between them. Total steps = 4 keys × this.
+            static const char* kStepLabels[2] = {
+                "2 \xE2\x80\x94 green, red", "4 \xE2\x80\x94 green to red"
+            };
+            int si = (steps >= 4) ? 1 : 0;
+            ImGui_Text(ctx, "  Steps per LED");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, 190.0);
+            if (ImGui_BeginCombo(ctx, "##uf1_bc_gr_steps", kStepLabels[si],
+                                 /*flags*/ nullptr)) {
+                for (int i = 0; i < 2; ++i) {
+                    bool sel = (si == i);
+                    if (ImGui_Selectable(ctx, kStepLabels[i], &sel,
+                                         /*flags*/ nullptr,
+                                         /*size_w*/ nullptr,
+                                         /*size_h*/ nullptr)) {
+                        reasixty_setUf1BcGrSteps(i == 1 ? 4 : 2);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            // The number that actually matters when judging it on the hardware.
+            {
+                char res[64];
+                std::snprintf(res, sizeof(res), "  %.2f dB per step",
+                              static_cast<double>(fullDb) / (4.0 * (steps >= 4 ? 4 : 2)));
+                ImGui_Text(ctx, res);
             }
         }
-        ImGui_EndCombo(ctx);
     }
 
     // ── Metering ─────────────────────────────────────────────────────
