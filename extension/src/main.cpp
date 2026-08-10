@@ -22965,9 +22965,20 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         barPos    = std::clamp(static_cast<int>(std::lround((ovPan + 1.0) * 50.0)), 0, 100);
         barCentre = (ovPan == 0.0) ? 0x80 : 0x00;
     } else if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
-        char nm[64] = {0}, val[64] = {0};
-        TrackFX_GetParamName(tr, spFx, spParam, nm, sizeof(nm));
+        char val[64] = {0};
         TrackFX_GetFormattedParamValue(tr, spFx, spParam, val, sizeof(val));
+        // The user's own name for the parameter wins, exactly as it does on
+        // every other readout — this line used to call TrackFX_GetParamName
+        // directly, so a Sticky Pot pinned to "Bypass" printed the plug-in's
+        // raw name and renaming the parameter changed nothing here (Frank
+        // 2026-08-10). uf1ParamDisplayName_ is the shared, cached resolver:
+        // user label → canonical name → the plug-in's own name.
+        std::string nm = uf1ParamDisplayName_(tr, spFx, spParam, std::string());
+        if (nm.empty()) {
+            char pn[64] = {0};
+            TrackFX_GetParamName(tr, spFx, spParam, pn, sizeof(pn));
+            nm = pn;
+        }
         // Same 9-char label zone as the V-Pot readout — a pinned param's own
         // name is regularly longer than that.
         panLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
